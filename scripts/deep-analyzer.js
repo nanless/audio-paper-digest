@@ -4842,7 +4842,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const before = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
             const after = value.slice(span.index + span[0].length).replace(/^[\s，,*_~]+/u, '');
             return !/[“”‘’「」"'`]|所谓|否认|否定|反驳|证伪|推翻|并非|不是/u.test(before)
-                && !/^(?:[“”‘’「」"'`]|(?:这(?:一|种)?|该|上述|的)?(?:说法|判断|结论|声明|否定)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳))/u.test(after);
+                && !/^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|否定|区分)(?:已经|已被|已|被)?(?:撤回|撤销|推翻|否定)/u.test(after)
+                && !/^(?:[“”‘’「」"'`]|(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|否定|区分)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳))/u.test(after);
         };
         const bounded = pattern => [...value.matchAll(pattern)].some(span => contains(span) && safe(span));
         const resource = '(?:源代码|代码仓库|模型权重|数据集|语料库|代码|模型|权重|检查点|数据|资源)';
@@ -4856,7 +4857,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const properties = property + '(?:(?:、|与|和)' + property + '){1,3}';
         // Bare, owner-free concepts followed by an explicit distinction or
         // pending state are not present availability. Ownership is not optional.
-        const lists = new RegExp('(' + properties + ')(?:是(?:三件独立的事|三件事|不同的)|三件事|要分开说|要当作三件未确认的事|(?:同样)?未确认|在本篇中均未给出明确证据|更需要分别核验)(?=[，,。！？!?；;]|$)', 'gu');
+        const lists = new RegExp('(' + properties + ')(?:是(?:三件独立的事|三件事|不同的)|三件事|要分开说|要当作三件未确认的事|(?:同样)?未确认|在本篇中均未给出明确证据|更需要分别核验|(?:要|应|需)(?:分开|分别)(?:核实|核对|确认))(?=[，,。！？!?；;]|$)', 'gu');
         for (const span of value.matchAll(lists)) {
             if (!contains(span) || !safe(span)) continue;
             const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
@@ -4871,6 +4872,13 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const items = span[1].split(/、|与|和/u);
             if (contains(span) && safe(span) && new Set(items).size === items.length) return true;
         }
+        // 接口访问和权重下载是两个裸概念；只放过完整区分中的谓词，
+        // 不让作者归属、引述否认或后续真正的权重声明借此获得可用资格。
+        for (const span of value.matchAll(/商用接口与可下载(?:模型)?权重是\s*(?:两|2)\s*回事/gu)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (contains(span) && safe(span) && /^\s*$/u.test(prefix)) return true;
+        }
+        if (bounded(/不能(?:把|将)代码(?:可用|可访问)(?:当成|等同于|视为|当作)(?:模型)?权重已公开(?:或|与|和)系统可运行/gu)) return true;
         if (bounded(/这与代码公开是两回事/gu)
             || bounded(/即使(?:模型)?权重可下载也不能等同(?:系统|端到端系统)可一键运行/gu)) return true;
         // Functional availability has a different grammatical object from a
@@ -8662,7 +8670,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             earlyDecision = require('./lib/reader-pre-image-check').checkReaderBeforeImages({
                 recovered: priorCandidate, maxAttempts,
                 hasPendingGrant: () => retryApi.hasPreparedOrScopedRound(candidateDirectory, identity),
-                hasUnusedAllowance: repair.hasUnusedImplementationAllowance(priorCandidate),
+                // 旧实现许可只保留作历史证明，正常三条生产链不据此追加付费响应。
+                hasUnusedAllowance: false,
                 canEscalate: shouldEscalateApiReaderRepairBudget(priorCandidate, priorCandidate.draft,
                     repairMaxTokens, repairTruncationRetryMaxTokens, maxAttempts, {
                         lineageIssued: priorCandidate.implementationRepairAllowanceLineage
@@ -8738,7 +8747,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
     recovered = operatorCorrection?.payload || require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, { ...recoveryOptions,
-            ...(conference.getConferenceAnalysisContext() ? { allowNewImplementationAllowance: false } : {}),
+            allowNewImplementationAllowance: false,
             ...(options.savedReaderInputContinuity ? { savedReaderInputContinuity: options.savedReaderInputContinuity, paper } : {}),
             normalizeReplayDraft: (draft, issues) => normalizeReplayDraft(draft, issues, allImageInputs, false),
             ...(options.resolvedReaderCandidate !== undefined ? { resolvedReaderCandidate:options.resolvedReaderCandidate, paper:options.resolvedReaderCandidateParent || paper } : {}),
@@ -8869,7 +8878,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             currentIssues = collectReaderDraftIssues(candidate, error); }
     }
     const explicitRetry = require('./lib/explicit-reader-retry-round');
-    if (!repair.hasUnusedImplementationAllowance(recovered)) {
+    {
         const newRound = explicitRetry.beginExplicitRound(candidateDirectory, identity, recovered, paper);
         if (newRound) {
             recovered = newRound;
@@ -8889,18 +8898,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     // 普通 8000 token 配额继续浪费在同一个重推理的补丁上。重试预算被截断之后不会重复
     // 升级，因为 shouldEscalate 只认基础上限。已保存的内容尝试计数只增不减，每次返回的响应
     // 仍然消耗一次尝试。
-    const boundedRecoveryAllowance = repair.hasUnusedImplementationAllowance(recovered)
-        || useEscalatedRepairBudget ? 1 : 0;
-    const readerRules = readerRequirements({ version: 3, availableTableCount });
-    const implementationMigrationNeedsFullRegeneration = Boolean(
-        candidate && implementationRepairAllowanceProof
-        && ((Array.isArray(candidate.conceptBridges)
-            && candidate.conceptBridges.length < readerRules.minimumConceptBridges
-            && !repair.buildMissingConceptBridgesOperation(candidate, currentIssues)
-            && !repair.sectionReorganizationOperation(candidate))
-            || (Array.isArray(candidate.sections)
-                && candidate.sections.length < readerRules.minimumSections))
-    );
+    // 实现或截断修复都不能扩展原内容/全文次数；新额度仅来自显式付费轮。
+    const boundedRecoveryAllowance = 0;
     const attemptLimit = explicitRound ? explicitRound.maxResponses : repair.readerAttemptLimit(
         maxAttempts, completedAttempts, candidate, boundedRecoveryAllowance);
     const changedValidationWithinOriginalBudget = repair.canContinueRevalidatedIssuesWithinBudget({
@@ -8909,7 +8908,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     });
     const revalidatedPatchOnly = changedValidationWithinOriginalBudget && fullAttempts === 2;
     if (completedAttempts >= attemptLimit
-        || !useEscalatedRepairBudget && !changedValidationWithinOriginalBudget
+        || !changedValidationWithinOriginalBudget
             && (noProgress >= 2 || validationFailureStreak >= 2)) {
         if (mechanicalNoFigureCleanupChanged) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
@@ -8966,7 +8965,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             recovered, candidate, fullAttempts, currentIssues, readerCapabilityPolicy,
             options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy,
             proposedRepairContext
-        ) || implementationMigrationNeedsFullRegeneration
+        )
             || Boolean(explicitRound?.fullRegenerationReasonSha256 && fullAttempts === 0);
         const metadataRepair = repair;
         const metadataOperation = !candidate && !sourceBindingNeedsFullRetry
@@ -9013,9 +9012,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw readerRepairStopped('READER_RESOURCE_LOCAL_NO_SAFE_TARGET', '资源局部修订缺少安全补丁范围，保留已签Reader与现有付费记录');
         }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
-        if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses ?? 2)
-            && (explicitRound || !repair.hasUnusedImplementationAllowance({ ...recovered,
-                attempts: attempt - 1, fullAttempts, implementationRepairAllowanceProof }))) {
+        if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses ?? 2)) {
             throw readerRepairStopped('READER_FULL_ATTEMPTS_EXHAUSTED',
                 lastError?.message || '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。', lastError);
         }

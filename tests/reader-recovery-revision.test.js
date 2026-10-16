@@ -12,6 +12,11 @@ const { saveFailedCandidate, loadFailedCandidate, hashDraft,
 const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
 const directContext = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const conferenceContext = require('../scripts/lib/conference-analysis-context.js');
+const { saveSyntheticLegacyAllowance } = require('./helpers/synthetic-legacy-reader-allowance');
+const retainedDiagnosticKeys = ['attempts','fullAttempts','transportFailures','noProgress','failureSignature',
+    'validationFailureStreak','validationFailureSignature'];
+const syntheticLegacy = f => f.enabled(() => saveSyntheticLegacyAllowance({directory:f.directory,
+    fromIdentity:f.oldIdentity,toIdentity:f.identity,payload:f.payload}).payload);
 
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-revision-'));
@@ -107,18 +112,15 @@ test('真实表格歧义的旧失败仍以失败状态迁移，原草稿、归�
     const names = fs.readdirSync(f.directory);
     assert.deepEqual(f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, pixels)), migrated);
     assert.deepEqual(fs.readdirSync(f.directory), names);
-    assert.match(migrated.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
-    const consumedProof = migrated.implementationRepairAllowanceProof;
-    saveFailedCandidate(f.directory, f.identity, {
-        ...migrated, attempts: migrated.attempts + 1, implementationRepairAllowanceProof: null
-    });
+    assert.equal(migrated.implementationRepairAllowanceProof, null);
+    for (const key of retainedDiagnosticKeys) assert.equal(migrated[key],f.payload[key],key);
     const nextIdentity = { ...f.identity, repairImplementationSha256: '9'.repeat(64) };
     const next = f.enabled(() => loadReaderRecoveryRevision(f.directory, nextIdentity, pixels));
-    assert.equal(next.attempts, f.payload.attempts + 1);
+    assert.equal(next.attempts, f.payload.attempts);
     assert.equal(next.fullAttempts, f.payload.fullAttempts);
     assert.equal(next.transportFailures, f.payload.transportFailures);
     assert.equal(next.implementationRepairAllowanceProof, null);
-    assert.ok(next.consumedImplementationAllowanceSha256.includes(consumedProof.allowanceSha256));
+    assert.equal(next.implementationRepairAllowanceLineage, undefined);
     assert.deepEqual(next.draft, oldDraft);
     assert.equal(next.rawDraft, f.payload.rawDraft);
     assert.deepEqual(next.draftOrderMappings, []);
@@ -219,9 +221,8 @@ test('显式的同一次运行修订保留已付费额度、记录映射、归�
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     for (const key of ['attempts', 'fullAttempts', 'transportFailures']) assert.equal(migrated[key], f.payload[key]);
-    assert.equal(migrated.noProgress, 0); assert.equal(migrated.failureSignature, '');
-    assert.equal(migrated.validationFailureStreak, 0); assert.equal(migrated.validationFailureSignature, '');
-    assert.match(migrated.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    for (const key of retainedDiagnosticKeys) assert.equal(migrated[key],f.payload[key],key);
+    assert.equal(migrated.implementationRepairAllowanceProof,null);
     assert.deepEqual(migrated.draft, normalizeReaderDraftOrder(f.payload.draft).draft);
     assert.equal(migrated.draftOrderMappings.length, 1);
     assert.equal(migrated.readerRecoveryRevisions[0].oldNoProgress, 2);
@@ -378,8 +379,8 @@ test('表格编译器实现变化会迁移草稿以做完整重新校验，但�
     saveFailedCandidate(f.directory, oldIdentity, f.payload);
     const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, currentIdentity));
     assert.equal(loaded.attempts, f.payload.attempts); assert.equal(loaded.fullAttempts, f.payload.fullAttempts);
-    assert.equal(loaded.noProgress, 0); assert.equal(loaded.validationFailureStreak, 0);
-    assert.match(loaded.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    for (const key of retainedDiagnosticKeys) assert.equal(loaded[key],f.payload[key],key);
+    assert.equal(loaded.implementationRepairAllowanceProof,null);
     assert.ok(loaded.readerRecoveryRevisions[0].changedFields.includes('tableCompilerSha256'));
 });
 
@@ -409,53 +410,52 @@ test('历史直接范围在表格编译器修复后迁移同一个绑定来源�
     };
     const migrated = enabled(() => loadReaderRecoveryRevision(directory, identity));
     assert.equal(migrated.attempts, base.payload.attempts);
-    assert.equal(migrated.validationFailureStreak, 0);
+    for (const key of retainedDiagnosticKeys) assert.equal(migrated[key],base.payload[key],key);
     assert.equal(migrated.readerRecoveryRevisions.at(-1).scope, 'historical-direct');
     assert.equal(migrated.readerRecoveryRevisions.at(-1).runId, runId);
-    assert.match(migrated.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    assert.equal(migrated.implementationRepairAllowanceProof,null);
     assert.deepEqual(enabled(() => loadReaderRecoveryRevision(directory, identity)), migrated);
     const wrong = { ...identity, sourceSha256: '0'.repeat(64) };
     assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, wrong)), /historical direct run\/source scope/);
     assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, identity), { runId: crypto.randomUUID() }),
-        /implementation repair allowance|historical direct/i);
+        /implementation repair allowance|historical direct|diagnostic revision archive audit/i);
     const otherPaper = '2609.99969'; const otherDetails = { ...sourceDetails, paperId: `arxiv:${otherPaper}` };
     assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, identity), {
-        paperId: `arxiv:${otherPaper}`, sourceDetails: otherDetails }), /implementation repair allowance|historical direct/i);
+        paperId: `arxiv:${otherPaper}`, sourceDetails: otherDetails }), /implementation repair allowance|historical direct|diagnostic revision archive audit/i);
     const differentText = 'different sealed historical source';
     const differentDetails = { ...sourceDetails, text: differentText };
     assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, identity), {
         sourceDetails: differentDetails,
         sourceSha256: crypto.createHash('sha256').update(differentText).digest('hex')
-    }), /implementation repair allowance|historical direct/i);
+    }), /implementation repair allowance|historical direct|diagnostic revision archive audit/i);
     const moved = path.join(root, 'moved-reader-attempts'); fs.cpSync(directory, moved, { recursive: true });
     assert.throws(() => enabled(() => loadReaderRecoveryRevision(moved, identity)),
-        /implementation repair allowance|historical direct/i);
+        /implementation repair allowance|historical direct|diagnostic revision archive audit/i);
     assert.throws(() => loadReaderRecoveryRevision(directory, identity),
-        /implementation repair allowance|historical direct/i);
+        /implementation repair allowance|historical direct|diagnostic revision archive audit/i);
 });
 
-test('已耗尽的付费额度保留计数，但恰好得到一个实现修复名额', t => {
+test('已耗尽的付费额度及失败诊断完整保留，实现变化不增加第七次请求', t => {
     const f = fixture(t); const pointer = '/sections/8/body';
     const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2,
         issues: [{ path: null, message: `Reader patch rejected: Reader patch has stale node SHA: ${pointer}` }] };
     saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
     const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     assert.equal(loaded.attempts, 6); assert.equal(loaded.fullAttempts, 2);
-    assert.equal(loaded.implementationRepairAllowanceLineage,
-        'reader-implementation-repair-lineage-v1');
-    assert.match(loaded.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    assert.equal(loaded.implementationRepairAllowanceLineage,undefined);
+    assert.equal(loaded.implementationRepairAllowanceProof,null);
+    for (const key of retainedDiagnosticKeys) assert.equal(loaded[key],exhausted[key],key);
     const repair = require('../scripts/lib/reader-repair.js');
     const targets = repair.buildRepairTargets(loaded.draft, loaded.issues);
     assert.deepEqual(targets.map(target => target.path), [pointer]);
     assert.equal(targets[0].oldSha256, repair.hashDraft(loaded.draft.sections[8].body));
     assert.equal(repair.readerAttemptLimit(6, loaded.attempts, loaded.draft,
-        loaded.implementationRepairAllowanceProof ? 1 : 0), 7);
-    assert.equal(repair.readerAttemptLimit(6, 7, loaded.draft, 0), 7);
+        loaded.implementationRepairAllowanceProof ? 1 : 0), 6);
 });
 
-test('实现更新带来的额外修复名额只能使用一次，不能重新启用', t => {
-    const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
-    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+test('合成旧历史许可的消费证明仍可读取，但不能重新启用', t => {
+    const f = fixture(t);
+    const migrated = syntheticLegacy(f);
     const proof = migrated.implementationRepairAllowanceProof;
     saveFailedCandidate(f.directory, f.identity, { ...migrated, implementationRepairAllowanceProof: null });
     const consumed = loadFailedCandidate(f.directory, f.identity);
@@ -464,10 +464,10 @@ test('实现更新带来的额外修复名额只能使用一次，不能重新�
         { ...consumed, implementationRepairAllowanceProof: proof }), /already consumed/);
 });
 
-test('额外修复名额用完后，再次更新实现不会增加尝试次数', t => {
+test('合成旧历史中已发生的第七次保留审计，再次迁移不增加次数', t => {
     const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
-    saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
-    const first = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    f.payload=exhausted;
+    const first = syntheticLegacy(f);
     assert.match(first.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
     saveFailedCandidate(f.directory, f.identity, { ...first, attempts: 7,
         implementationRepairAllowanceProof: null });
@@ -488,10 +488,10 @@ test('额外修复名额用完后，再次更新实现不会增加尝试次数',
     assert.equal(repair.readerAttemptLimit(6, next.attempts, next.draft, 0), 7);
 });
 
-test('未使用的沿袭额度在身份变化后转移，不会产生第二个名额', t => {
+test('合成旧历史未消费证明可只读转交，不授予当前第七次请求', t => {
     const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
-    saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
-    const first = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    f.payload=exhausted;
+    const first = syntheticLegacy(f);
     const firstProof = first.implementationRepairAllowanceProof;
     const nextIdentity = { ...f.identity, repairImplementationSha256: '8'.repeat(64) };
     const transferred = f.enabled(() => loadReaderRecoveryRevision(f.directory, nextIdentity));
@@ -501,7 +501,8 @@ test('未使用的沿袭额度在身份变化后转移，不会产生第二个�
     assert.ok(transferred.consumedImplementationAllowanceSha256.includes(firstProof.allowanceSha256));
     assert.equal(transferred.attempts, 6);
     const repair = require('../scripts/lib/reader-repair.js');
-    assert.equal(repair.readerAttemptLimit(6, transferred.attempts, transferred.draft, 1), 7);
+    assert.equal(repair.validateImplementationAllowance(transferred,nextIdentity,f.directory),true);
+    assert.equal(repair.readerAttemptLimit(6,transferred.attempts,transferred.draft,0),6);
 });
 
 test('解析器、文字检查及固定规则检查的实现变化，各允许迁移一次诊断记录', async t => {
@@ -515,7 +516,8 @@ test('解析器、文字检查及固定规则检查的实现变化，各允许�
             const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, currentIdentity));
             assert.equal(loaded.attempts, f.payload.attempts);
             assert.equal(loaded.fullAttempts, f.payload.fullAttempts);
-            assert.equal(loaded.validationFailureStreak, 0);
+            for (const key of retainedDiagnosticKeys) assert.equal(loaded[key],f.payload[key],key);
+            assert.equal(loaded.implementationRepairAllowanceProof,null);
             assert.deepEqual(loaded.readerRecoveryRevisions.at(-1).changedFields, [field]);
         });
     }
@@ -617,7 +619,9 @@ test('精确候选重入时拒绝归档路径穿越和归档符号链接', t => 
     const outside = path.join(f.root, 'archive-copy.json'); fs.renameSync(archive, outside); fs.symlinkSync(outside, archive);
     assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /ELOOP|symlink/i);
     const tampered = structuredClone(migrated); tampered.readerRecoveryRevisions[0].archivedName = '../outside.json';
-    assert.throws(() => saveFailedCandidate(f.directory, f.identity, tampered), /allowance lacks a valid recovery-revision proof|ELOOP|symbolic/i);
+    saveFailedCandidate(f.directory, f.identity, tampered);
+    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)),
+        /Invalid Reader diagnostic revision archive audit/);
 });
 
 
@@ -830,16 +834,16 @@ test('输入未变的恢复仍拒绝缺失正文、损坏JSON和超过64节', t 
     }
 });
 
-test('实现许可后的索引分组与后续失败不污染迁移审计，下一次读取及再次迁移可恢复', t => {
+test('合成旧许可的索引分组及后续历史失败不污染迁移审计', t => {
     const repair = require('../scripts/lib/reader-repair');
     const f = fixture(t);
     f.payload.draft.sections.push(...Array.from({ length: 8 }, (_, index) => ({
         kind: 'component', heading: `补充组件 ${index}`, body: '原组件正文与条件保持。'.repeat(20)
     })));
+    f.payload.draft=normalizeReaderDraftOrder(f.payload.draft).draft;
     f.payload.rawDraft = JSON.stringify(f.payload.draft);
-    saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const pixels = { pixelEvidenceSha256: hashDraft(f.payload.imageEvidence) };
-    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, pixels));
+    const migrated = syntheticLegacy(f);
     const allowance = migrated.implementationRepairAllowanceProof;
     assert.ok(allowance?.allowanceSha256);
     assert.equal(repair.validateImplementationAllowance(migrated, f.identity, f.directory), true);
@@ -854,7 +858,7 @@ test('实现许可后的索引分组与后续失败不污染迁移审计，下�
         draftSha256: context.draftSha256, sectionsSha256: context.targets[0].oldSha256, groups };
     const compiled = repair.compileSectionIndexGroupPlan(migrated.draft, plan, context);
     const draft = repair.applyReaderPatch(migrated.draft, compiled.patch, ['/sections'], { atomicOperation: context.atomicOperation });
-    // 新模型回包占用原许可；编译证明仅在真实请求/响应日志或返回值里，不混入迁移审计。
+    // 这里只构造已发生的历史失败，不发模型请求或授予当前调用许可。
     const failed = { ...migrated, draft, rawDraft: JSON.stringify(draft),
         attempts: migrated.attempts + 1, implementationRepairAllowanceProof: null,
         noProgress: 0, validationFailureStreak: 0, failureSignature: '后续完整来源检查仍失败',

@@ -240,6 +240,9 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         && typeof options.allowNewImplementationAllowance !== 'boolean') {
         throw new TypeError('Reader implementation allowance policy must be boolean');
     }
+    if (options.allowNewImplementationAllowance === true) {
+        throw new Error('Reader implementation allowance grants are retired; new budget requires an explicit paid round');
+    }
     return require('./reader-proof-read-scope').withReaderProofReadScope(
         () => require('./reader-proof-read-scope').withReaderReceiptScan(() => {
             try { return loadReaderRecoveryRevisionInternal(directory, identity, options); }
@@ -618,21 +621,14 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     }
     const diagnosticImplementationChanged = options.savedReaderInputContinuity === undefined && !compatibleReplay && !identity.readerFactLocalRevisionContract && !old.plainChinesePromptUpgrade
         && implementationFields.some(field => old.changedFields.includes(field));
-    const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
-        === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     const previousActiveAllowance = hasUnusedImplementationAllowance(updated)
         ? updated.implementationRepairAllowanceProof : null;
-    // 实现变化时，只有尚未发放过许可、仍有未使用的许可，或恢复规则版本变化，
-    // 才会新增或转交一次正文尝试的许可。用过的许可不会因普通实现变化再次发放。
-    const recoveryEpochChanged = old.changedFields.includes('readerRecoveryEpochSha256');
+    // 只迁移真实既存的历史许可证明；实现和恢复版本变化均不能创造新付费额度。
     const transferExistingCompatibleAllowance = Boolean(options.savedReaderInputContinuity === undefined && compatibleReplay && previousActiveAllowance
         && !updated.explicitReaderRetryRound && old.changedFields.some(field => implementationFields.includes(field)));
-    const allowNewImplementationAllowance = options.allowNewImplementationAllowance !== false;
     const grantOrTransferAllowance = transferExistingCompatibleAllowance || !compatibleReplay && !updated.explicitReaderRetryRound && diagnosticImplementationChanged
-        && (Boolean(previousActiveAllowance) || allowNewImplementationAllowance && (!lineageAlreadyIssued || recoveryEpochChanged));
-    // A caller may preserve an already funded unused allowance while refusing
-    // new funding. Such a transfer must also retain the original failure state.
-    const clearDiagnosticState = allowNewImplementationAllowance && diagnosticImplementationChanged && grantOrTransferAllowance;
+        && Boolean(previousActiveAllowance);
+    const clearDiagnosticState = false;
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
     const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(), scope: revisionScope,
         runId: revisionRunId, paperId: identity.paperId,
@@ -647,12 +643,6 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         outputDraftSha256: updated.draft ? hashDraft(updated.draft) : null,
         ...(compatibleReplay ? { compatibleCandidateReplay: compatibleReplay.proof } : {}),
         ...(transferExistingCompatibleAllowance ? { transferredExistingImplementationAllowanceSha256: previousActiveAllowance.allowanceSha256 } : {}) };
-    if (clearDiagnosticState) {
-        updated.noProgress = 0; updated.failureSignature = '';
-        updated.validationFailureStreak = 0; updated.validationFailureSignature = '';
-        // 保留已有调用次数，清除旧检查留下的连续失败计数；
-        // 新增尝试仍受下方恢复许可规则限制。
-    }
     updated.readerRecoveryRevisions = [...(updated.readerRecoveryRevisions || []), audit];
     delete updated.implementationRepairAllowance;
     if (grantOrTransferAllowance) {

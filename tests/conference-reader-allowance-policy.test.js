@@ -6,6 +6,7 @@ const deep = require('../scripts/deep-analyzer');
 const context = require('../scripts/lib/conference-analysis-context');
 const repair = require('../scripts/lib/reader-repair');
 const { loadReaderRecoveryRevision } = require('../scripts/lib/reader-recovery-revision');
+const { saveSyntheticLegacyAllowance } = require('./helpers/synthetic-legacy-reader-allowance');
 
 async function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-reader-allowance-'));
@@ -41,16 +42,15 @@ async function fixture(t) {
         issues: [{ path: '/sections/0/body', message: '原正文尚未完成' }], attempts: 6,
         fullAttempts: 1, noProgress: 2, failureSignature: 'original failed', transportFailures: 2,
         validationFailureStreak: 2, validationFailureSignature: 'original validation', imageEvidence: [] };
-    return { run, identity, oldIdentity, payload, paper, evidence, options,
+    return { run, identity, oldIdentity, payload, paper, evidence, options, executionId,
         directory: path.join(executionDir, 'reader-attempts') };
 }
 
-test('禁止新实现额度时保留全部计数与无进展，恢复版本再变也不授权', async t => {
+test('默认及false保留全部计数与无进展，恢复版本再变也不授权', async t => {
     const f = await fixture(t);
     const oldFile = repair.saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const originalBytes = fs.readFileSync(oldFile);
-    const migrated = f.run(() => loadReaderRecoveryRevision(f.directory, f.identity,
-        { allowNewImplementationAllowance: false }));
+    const migrated = f.run(() => loadReaderRecoveryRevision(f.directory, f.identity));
     assert.equal(migrated.implementationRepairAllowanceProof, null);
     assert.equal(migrated.implementationRepairAllowanceLineage, undefined);
     const counters = ['attempts', 'fullAttempts', 'transportFailures', 'noProgress', 'failureSignature',
@@ -67,11 +67,12 @@ test('禁止新实现额度时保留全部计数与无进展，恢复版本再�
         repair.hasUnusedImplementationAllowance(next) ? 1 : 0), 6);
 });
 
-test('禁止新额度仍转交原已核验未消费许可，消费后不能再次授予', async t => {
+test('合成旧会议许可仍可验证与转交，消费后不能再次授予', async t => {
     const f = await fixture(t);
-    repair.saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
-    // The default compatibility policy remains unchanged for other callers.
-    const first = f.run(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    // Construct archival bytes only; never call a production grant API.
+    const first = f.run(() => saveSyntheticLegacyAllowance({directory:f.directory,
+        fromIdentity:f.oldIdentity,toIdentity:f.identity,payload:f.payload,
+        scope:'conference-process',runId:f.executionId}).payload);
     assert.ok(first.implementationRepairAllowanceProof);
     const existing = { ...first, noProgress: 1, failureSignature: 'retained failure',
         validationFailureStreak: 1, validationFailureSignature: 'retained validation' };
@@ -86,13 +87,14 @@ test('禁止新额度仍转交原已核验未消费许可，消费后不能再�
     for (const key of ['attempts', 'fullAttempts', 'transportFailures', 'noProgress', 'failureSignature',
         'validationFailureStreak', 'validationFailureSignature']) assert.equal(transferred[key], existing[key], key);
     assert.equal(transferred.readerRecoveryRevisions.at(-1).clearedNoProgress, false);
-    f.run(() => repair.saveFailedCandidate(f.directory, nextIdentity, { ...transferred, attempts: 7,
+    // Consuming a stored historical marker need not spend a new model request.
+    f.run(() => repair.saveFailedCandidate(f.directory, nextIdentity, { ...transferred,
         implementationRepairAllowanceProof: null }));
     const finalIdentity = { ...nextIdentity, readerRecoveryEpochSha256: '7'.repeat(64) };
     const final = f.run(() => loadReaderRecoveryRevision(f.directory, finalIdentity,
         { allowNewImplementationAllowance: false }));
     assert.equal(final.implementationRepairAllowanceProof, null);
-    assert.equal(final.attempts, 7);
+    assert.equal(final.attempts, 6);
     assert.equal(final.noProgress, 1);
 });
 
@@ -102,7 +104,7 @@ test('正常会议生成器在原第六次耗尽时不发第七次请求，原�
         failureSignature: '', validationFailureStreak: 0, validationFailureSignature: '' });
     let calls = 0;
     await assert.rejects(f.run(() => deep.generateApiReaderArticleDetailed(f.paper, f.paper.analysis, f.evidence,
-        { ...f.options, allowNewImplementationAllowance: true, readerCallModel: async () => { calls++; throw new Error('unexpected model request'); } })),
+        { ...f.options, readerCallModel: async () => { calls++; throw new Error('unexpected model request'); } })),
     error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED');
     assert.equal(calls, 0);
     const loaded = f.run(() => repair.loadFailedCandidate(f.directory, f.identity));
@@ -123,4 +125,6 @@ test('正常会议生成器在原第六次耗尽时不发第七次请求，原�
 test('额度策略非法类型在读取候选或写入记录前拒绝', () => {
     for (const value of [null, 0, 'false', {}]) assert.throws(() =>
         loadReaderRecoveryRevision('/does-not-exist', {}, { allowNewImplementationAllowance: value }), /policy must be boolean/);
+    assert.throws(() => loadReaderRecoveryRevision('/does-not-exist', {},
+        {allowNewImplementationAllowance:true}), /grants are retired/);
 });

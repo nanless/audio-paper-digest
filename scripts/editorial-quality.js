@@ -1168,6 +1168,32 @@ function maskExplicitTurnRangeAxis(text) {
     });
 }
 
+// A closed distribution counts pairs before reporting their rates. Only the
+// final singleton in that distribution is a count; an isolated “1 对 99%”
+// remains an asymmetric numeric comparison and still needs both units.
+function isFinalCountedPairRate(value, finding) {
+    const count = '(?<![A-Za-z0-9_.+\\-−])[1-9]\\d*';
+    const rate = '\\d+(?:\\.\\d+)?';
+    const distribution = new RegExp(`(${count})\\s*对\\s*(?:在|到|为)\\s*(${rate})\\s*%\\s*[、，,]\\s*最后\\s*((?:一|1)\\s*对\\s*(${rate})\\s*%)(?:\\s*[，,]\\s*共\\s*([1-9]\\d*)\\s*对)?`, 'gu');
+    for (const match of value.matchAll(distribution)) {
+        const singletonStart = match.index + match[0].indexOf(match[3]);
+        if (finding.index !== singletonStart || finding.match !== match[3]) continue;
+        const precedingCount = Number(match[1]);
+        if (!Number.isSafeInteger(precedingCount) || ![match[2], match[4]].every(v => Number(v) >= 0 && Number(v) <= 100)) continue;
+        if (match[5] !== undefined) {
+            if (Number.isSafeInteger(Number(match[5])) && Number(match[5]) === precedingCount + 1) return true;
+            continue;
+        }
+        if (/^\s*[，,]\s*共/u.test(value.slice(match.index + match[0].length))) continue;
+        // Without an explicit total, require the same sentence to identify
+        // the out-of-chain rejection subject and introduce a subset with 其中.
+        const start = Math.max(...['。', '；', ';', '\n', '|'].map(mark => value.lastIndexOf(mark, match.index - 1))) + 1;
+        const prefix = value.slice(start, match.index);
+        if (/其中\s*$/u.test(prefix) && /(?:不兼容对|链外(?:拒绝|\s*TNR)|out-of-chain\s+TNR)/iu.test(prefix)) return true;
+    }
+    return false;
+}
+
 function findMissingComparisonUnits(text) {
     const value = stripCodeLinksAndUrls(text)
         // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
@@ -1179,6 +1205,7 @@ function findMissingComparisonUnits(text) {
     const unit = '(?:%|个百分点|点|分|毫秒|秒|分钟|小时|毫焦|Hz|kHz|MHz|dB|mJ|GB|MB|KB|倍)';
     const asymmetric = new RegExp(`(?<![A-Za-z0-9_.])${quantity}\\s*(?:对|vs\\.?|相比)\\s*${quantity}\\s*${unit}(?!之)`, 'giu');
     for (const match of collectRegexMatches(value, asymmetric, 'comparison_unit_only_on_second_value')) {
+        if (isFinalCountedPairRate(value, match)) continue;
         // “对”也可量化共轭零点；明确声学/滤波上下文中的零点是术语，不是零分。
         const end = match.index + match.match.length;
         const sentenceStart = Math.max(value.lastIndexOf('。', match.index), value.lastIndexOf('；', match.index)) + 1;

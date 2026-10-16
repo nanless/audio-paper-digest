@@ -1,0 +1,9 @@
+{
+  "paperId": "2610.22296",
+  "candidateSha256": "33034acd3e63128ecfd15bd7c2cb9968dbece47c12418baf11bc8dac3ef2883e",
+  "sourceSha256": "17779ee2c8a2645f2ac2a6cd080782842d47ed76e5a9e05382a2a8ad28bf5c30",
+  "sourceParagraph": "Out-of-chain rejection, the failure mode of the base setup, is recovered: mean TNR rises from 11.3%11.3\\% to 99.98%99.98\\% (2727 of 2828 incompatible pairs at 100%100\\%, the last at 99.3%99.3\\%), with no residual failure cluster. The version boundary holds within the convolutional family (v1v_{1}–v4v_{4}), within the transformer family (v5v_{5}–v8v_{8}), and across the v4→v5v_{4}\\rightarrow v_{5} family switch, enforcing separation across both within- and cross-family transitions.",
+  "paidResultSection": "读这张基准矩阵时，先明确横轴是检测器版本从一到八，纵轴是嵌入器版本从一到八，格内同时标真阳性率或真阴性率与数值，绿色越深分数越高，红色为低分区，重点看对角线下三角是否出现大片红色。下三角对应新嵌入器被旧检测器检验，正是版本边界是否成立的位置。\n\n[[FIGURE_1]]\n\n上图可见下三角几乎全红，链内检出虽高，但链外拒绝整体很低，变换器块内甚至为零，跨族也只有百分之一左右，唯一例外是较早检测器对嵌入器第四版仍保持高拒绝。这说明问题不在阈值没有调好，而是新水印长得太像旧水印，旧检测器自然放行。\n\n下面比较基准与完整方法在干净音频下的主数字，比较问题是加多样性损失能否在不丢链内检出的前提下恢复链外拒绝，条件是同一阈值、同一八版本、无撤销，链内看检出能否保持，链外看拒绝能否恢复。\n\n| 训练条件 | 链内TPR区间 | 链内TPR均值 | 链外TNR均值 | 不兼容对分布 |\n| --- | --- | --- | --- | --- |\n| 基准，无多样性损失 | 99.3%到100% | 99.8% | 11.3% | 24对在3%及以下，共28对 |\n| 完整方法，加入角度多样性损失 | 99.3到100% | 99.9% | 99.98% | 27对在100%，最后一对99.3%，共28对 |\n\n从上表看，完整方法把链外拒绝从很低拉到近乎完全，其中27对到100%、最后一对99.3%，而链内检出前后基本持平，说明分离代价很小。这个整理把多对取了均值，掩盖了个别版本的差异，具体哪几对最差、撤销时单版本表现如何，还要结合矩阵和撤销实验再看，失真下的表现则要看鲁棒性评估。",
+  "tableCell": "27对在100%，最后一对99.3%，共28对",
+  "proseParagraph": "从上表看，完整方法把链外拒绝从很低拉到近乎完全，其中27对到100%、最后一对99.3%，而链内检出前后基本持平，说明分离代价很小。这个整理把多对取了均值，掩盖了个别版本的差异，具体哪几对最差、撤销时单版本表现如何，还要结合矩阵和撤销实验再看，失真下的表现则要看鲁棒性评估。"
+}

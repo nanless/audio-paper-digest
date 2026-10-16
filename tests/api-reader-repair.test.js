@@ -1694,20 +1694,13 @@ test('收到截断或不完整的补丁回复只消耗内容额度，不改动�
         assert.equal(envelope.payload.fullAttempts, 1, '补丁截断不增加整篇回复的尝试次数');
         assert.equal(envelope.payload.transportFailures || 0, 0);
         assert.equal(hashDraft(envelope.payload.draft), hashDraft(draft));
-        if (code === 'MODEL_OUTPUT_TRUNCATED') {
-            await assert.rejects(generateApiReaderArticleDetailed(
-                paper, 'canonical', '', options
-            ), error => error.code === code);
-            assert.equal(calls, 3, '达到原输出上限的截断只允许一次更大额度的补丁回复');
-            const retried = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
-            assert.equal(retried.payload.attempts, 3);
-            assert.equal(retried.payload.lastContentError.maxOutputTokens, 16000);
-            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
-            assert.equal(calls, 3, '扩大额度后的回复仍截断时，不再请求另一份回复');
-        } else {
-            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
-            assert.equal(calls, 2, '未达到输出上限的不完整回复，不获得扩大额度的机会');
-        }
+        await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error =>
+            error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
+        assert.equal(calls,2,'原内容次数耗尽后，截断或不完整回复都不能自动增加一次请求');
+        const stopped=JSON.parse(fs.readFileSync(path.join(directory,fs.readdirSync(directory)[0]),'utf8'));
+        assert.equal(stopped.payload.attempts,2);
+        assert.equal(stopped.payload.fullAttempts,1);
+        assert.equal(stopped.payload.lastContentError.maxOutputTokens,8000);
     }
 });
 
@@ -1764,7 +1757,7 @@ test('普通尝试尚未耗尽时，8000 token 补丁截断后续跑一次 16000
     assert.equal(afterRetry.payload.fullAttempts, 1, '续跑没有增加整篇 Reader 请求次数');
 });
 
-test('最后一次普通补丁在 8000 token 截断后，只能再请求一次 16000 token 补丁', async t => {
+test('最后一次普通补丁在 8000 token 截断后原次数已耗尽，不得追加16000 token请求', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1796,22 +1789,21 @@ test('最后一次普通补丁在 8000 token 截断后，只能再请求一次 1
     );
     await assert.rejects(
         generateApiReaderArticleDetailed(paper, 'canonical', '', options),
-        /body 至少/
+        error=>error.code==='READER_REPAIR_ATTEMPTS_EXHAUSTED'&&error.retryable===false
     );
     assert.deepEqual(calls, [
         { stage: 'apiReaderArticle', tokens: 48000 },
-        { stage: 'apiReaderRepair', tokens: 8000 },
-        { stage: 'apiReaderRepair', tokens: 16000 }
+        { stage: 'apiReaderRepair', tokens: 8000 }
     ]);
     const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
     const envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
-    assert.equal(envelope.payload.attempts, 3);
+    assert.equal(envelope.payload.attempts, 2);
     assert.equal(envelope.payload.fullAttempts, 1);
-    assert.equal(envelope.payload.lastContentError, undefined);
-    assert.equal(envelope.payload.implementationRepairAllowanceLineage,
-        'reader-implementation-repair-lineage-v1');
+    assert.equal(envelope.payload.lastContentError.maxOutputTokens,8000);
+    assert.equal(envelope.payload.implementationRepairAllowanceLineage,undefined);
+    assert.equal(envelope.payload.implementationRepairAllowanceProof,null);
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
-    assert.equal(calls.length, 3, '唯一一次扩大额度的重试不能再次使用');
+    assert.equal(calls.length,2,'重复续跑仍不能产生超出原额度的请求');
 });
 
 test('补丁在 8000 token 截断后，已标记使用实现恢复额度的草稿不再获得额外请求', async t => {
@@ -1846,7 +1838,7 @@ test('补丁在 8000 token 截断后，已标记使用实现恢复额度的草�
     assert.equal(calls, 2, '已使用的实现恢复额度不能再叠加一次 16000 token 回复');
 });
 
-test('最后一次 16000 token 补丁遇到传输失败时，保留重试且不增加内容尝试次数', async t => {
+test('原剩余一次内16000 token补丁传输失败可重试，收到内容后耗尽即停止', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1856,7 +1848,7 @@ test('最后一次 16000 token 补丁遇到传输失败时，保留重试且不�
     const paper = { arxivId: '2609.99970', title: '末尾截断网络恢复' };
     const draft = fixture(); draft.readerTitle = '短';
     const calls = [];
-    const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 2,
+    const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 3,
         readerRecordDisposition: () => {}, readerMaterializeFigures: async () => [],
         readerCallModel: async (_messages, tokens, requestOptions) => {
             calls.push({ stage: requestOptions.usageContext.stage, tokens });
@@ -1888,8 +1880,9 @@ test('最后一次 16000 token 补丁遇到传输失败时，保留重试且不�
     envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(envelope.payload.attempts, 3);
     assert.equal(envelope.payload.lastContentError.maxOutputTokens, 16000);
-    assert.equal(envelope.payload.implementationRepairAllowanceLineage,
-        'reader-implementation-repair-lineage-v1');
+    // 旧表层标记只记录已发生的容量升级，不是新付费许可；内容次数仍止于原3次。
+    assert.equal(envelope.payload.implementationRepairAllowanceLineage,'reader-implementation-repair-lineage-v1');
+    assert.equal(envelope.payload.implementationRepairAllowanceProof,null);
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     assert.deepEqual(calls.map(call => call.tokens), [48000, 8000, 16000, 16000]);
 });
@@ -3237,10 +3230,10 @@ test('普通诊断对象和无效或参考实际 Error 保留原证据，但不�
     assert.equal(context.atomicOperation, null);
 });
 
-test('无目标真实续跑保留实际迁移的未用凭证，消耗后也不会恢复旧凭证', async t => {
+test('无目标真实续跑只读保留合成历史未用凭证，消费后也不会恢复旧凭证', async t => {
     const crypto = require('node:crypto'), Config = require('../scripts/config.js');
     const fresh = require('../scripts/lib/fresh-analysis-context.js');
-    const revision = require('../scripts/lib/reader-recovery-revision.js');
+    const {saveSyntheticLegacyAllowance}=require('./helpers/synthetic-legacy-reader-allowance');
     const deep = require('../scripts/deep-analyzer.js'), repair = require('../scripts/lib/reader-repair.js');
     const root = temporary(t), previousRoot = Config.FILES.freshRewriteRunsDir;
     Config.FILES.freshRewriteRunsDir = root;
@@ -3284,9 +3277,9 @@ test('无目标真实续跑保留实际迁移的未用凭证，消耗后也不�
         const original = storedReaderFailure(directory);
         assert.equal(original.payload.attempts, 1);
         const oldIdentity = { ...original.identity, repairImplementationSha256: '0'.repeat(64) };
-        saveFailedCandidate(directory, oldIdentity, original.payload);
         fs.unlinkSync(original.filename); // 只把隔离出来的测试候选移进迁移输入。
-        const migrated = revision.loadReaderRecoveryRevision(directory, original.identity);
+        const migrated=saveSyntheticLegacyAllowance({directory,fromIdentity:oldIdentity,
+            toIdentity:original.identity,payload:original.payload,runId}).payload;
         const proof = migrated.implementationRepairAllowanceProof;
         assert.match(proof.allowanceSha256, /^[a-f0-9]{64}$/);
         assert.equal(migrated.attempts, 1);

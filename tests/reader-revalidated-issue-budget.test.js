@@ -231,14 +231,26 @@ test('normalization failure before the complete parser never releases a historic
         assert.ok(fs.readFileSync(f.filename).equals(bytes));
     });
 
-    test('an existing implementation-allowance branch cannot reopen a stale full-limit gate', async t => {
-        const f = await fixture(t);
+    test('legacy allowance presence cannot expand or disable a valid original final patch', async t => {
+        let f;
+        f = await fixture(t, context => context, context => {
+            const saved = repair.loadFailedCandidate(f.directory, f.identity);
+            for (const key of ['attempts', 'fullAttempts', 'noProgress', 'validationFailureStreak',
+                'failureSignature', 'validationFailureSignature']) assert.deepEqual(saved[key], f.payload[key], key);
+            assert.equal(saved.implementationRepairAllowanceProof, undefined);
+            return JSON.stringify({ version: 1, draftSha256: context.draftSha256,
+                replacements: context.targets.map(target => ({ path: target.path, oldSha256: target.oldSha256,
+                    value: target.value.replace(/\n\n表后解释：\s*$/u, '') })) });
+        });
         const original = repair.hasUnusedImplementationAllowance;
         repair.hasUnusedImplementationAllowance = () => true;
         t.after(() => { repair.hasUnusedImplementationAllowance = original; });
-        await assert.rejects(f.run, error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED');
-        assert.equal(f.calls, 0);
-        assert.ok(fs.readFileSync(f.filename).equals(f.originalBytes));
+        const result = await f.run();
+        assert.equal(f.calls, 1);
+        assert.equal(result.attempts, 3);
+        assert.equal(result.fullAttempts, 2);
+        assert.equal(result.transportFailures, 0);
+        assert.ok(result.article.length > 5000);
     });
 
     test('actual generator refuses global unknown or partially uncovered current issues before any request', async t => {
