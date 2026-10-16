@@ -11,6 +11,7 @@ const extractors = new Map([
         [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]]
 ]);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const DISTUTILS_STARTUP = "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n";
 function withPdfExtractionScope(callback) {
     if (scope.getStore()?.active) return callback();
     const state = { active: true, entries: new Map(), bytes: 0 };
@@ -44,16 +45,28 @@ function runtimeIdentity() {
     try {
         fs.accessSync(python, fs.constants.X_OK);
         const cfg = path.join(root, '.venv/pyvenv.cfg');
+        const config = fs.readFileSync(cfg);
+        const isolation = [...config.toString('utf8').matchAll(/^\s*include-system-site-packages\s*=\s*([^\r\n]*)$/gmi)];
+        if (isolation.length !== 1 || isolation[0][1].trim().toLowerCase() !== 'false') return null;
         const libraries = path.join(root, '.venv/lib');
         const versions = fs.readdirSync(libraries).filter(n => /^python3\.\d+$/.test(n));
         if (versions.length !== 1) return null;
         const packages = path.join(libraries, versions[0], 'site-packages');
-        const names = fs.readdirSync(packages).filter(n => n === 'fitz' || n === 'pymupdf'
+        const packageNames = fs.readdirSync(packages);
+        const startupRoots = [packages, root, path.join(root, 'scripts'),
+            path.join(path.dirname(path.dirname(fs.realpathSync(python))), 'lib', versions[0])];
+        if (startupRoots.some(directory => ['sitecustomize', 'usercustomize'].some(name =>
+            ['', '.py', '.pyc'].some(suffix => fs.lstatSync(path.join(directory, name + suffix), { throwIfNoEntry: false }))))) return null;
+        const startup = packageNames.filter(n => n.endsWith('.pth'));
+        if (startup.some(name => name !== 'distutils-precedence.pth'
+            || fs.readFileSync(path.join(packages, name), 'utf8') !== DISTUTILS_STARTUP)) return null;
+        const names = packageNames.filter(n => n === 'fitz' || n === 'pymupdf'
             || /^pymupdf-.*\.dist-info$/i.test(n) || n.endsWith('.pth')
-            || ['sitecustomize.py', 'usercustomize.py'].includes(n)).sort();
+            || (startup.length === 1 && n === '_distutils_hack')).sort();
         if (!names.includes('fitz') || !names.includes('pymupdf')) return null;
+        if (startup.length === 1 && !names.includes('_distutils_hack')) return null;
         return { python: [metadata(python), metadata(fs.realpathSync(python))],
-            configSha256: sha(fs.readFileSync(cfg)), packages: metadata(packages),
+            configSha256: sha(config), packages: metadata(packages),
             modules: names.flatMap(n => {
                 const file = path.join(packages, n);
                 return fs.lstatSync(file).isDirectory() ? treeMetadata(file) : [metadata(file)];

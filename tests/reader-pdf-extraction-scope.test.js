@@ -8,7 +8,8 @@ function fixture(t) {
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const dependency = path.join(dir, 'dependency.py'); fs.writeFileSync(dependency, 'original');
     const root = path.resolve('.'), venv = path.join(dir, '.venv');
-    for (const [file, text] of Object.entries({ 'bin/python': 'isolated interpreter', 'pyvenv.cfg': 'version = 3.11',
+    for (const [file, text] of Object.entries({ 'bin/python': 'isolated interpreter',
+        'pyvenv.cfg': 'version = 3.11\ninclude-system-site-packages = false\n',
         'lib/python3.11/site-packages/fitz/__init__.py': 'from pymupdf import *',
         'lib/python3.11/site-packages/pymupdf/__init__.py': 'isolated pymupdf',
         'lib/python3.11/site-packages/pymupdf-1.0.dist-info/METADATA': 'Version: 1.0' })) {
@@ -35,7 +36,7 @@ function fixture(t) {
         const fd = fs.openSync(file, 'r');
         try { return api.runPdfExtractor(program, fd, deps); } finally { fs.closeSync(fd); }
     };
-    return { run, dependency, roleFile, dir };
+    return { run, dependency, roleFile, dir, venv };
 }
 test('未知Python布局只按正常提取执行，作用域不伪造缓存能力', t => {
     const { run } = fixture(t); let calls = 0;
@@ -118,5 +119,32 @@ test('缓存命中之前仍实时检查sandbox及角色文件权限、硬链接�
         const link = path.join(dir, 'role-link'); fs.linkSync(roleFile, link);
         assert.throws(() => run({ same: true }), /硬链接/); fs.unlinkSync(link);
         run({ same: true }); assert.equal(calls, 1, 'all guard failures occurred before any subprocess');
+    });
+});
+test('未知startup hook或非隔离venv不缓存；唯一标准distutils及其真实模块变化入key', t => {
+    const { run, venv } = fixture(t); let calls = 0;
+    t.mock.method(child, 'execFileSync', () => { calls++; return Buffer.from('{"ok":true}'); });
+    const packages = path.join(venv, 'lib/python3.11/site-packages'), cfg = path.join(venv, 'pyvenv.cfg');
+    const originalCfg = fs.readFileSync(cfg), same = { same: true };
+    api.withPdfExtractionScope(() => {
+        run(same); run(same); assert.equal(calls, 1);
+        for (const name of ['evil.pth', 'sitecustomize.py', 'usercustomize.py']) {
+            const file = path.join(packages, name); fs.writeFileSync(file, 'import outside_graph');
+            run(same); run(same); assert.equal(calls % 2, 1);
+            fs.unlinkSync(file);
+        }
+        assert.equal(calls, 7);
+        for (const contents of ['version = 3.11\n', 'include-system-site-packages = true\n',
+            'include-system-site-packages = false\ninclude-system-site-packages = true\n']) {
+            fs.writeFileSync(cfg, contents); run(same); run(same);
+        }
+        assert.equal(calls, 13); fs.writeFileSync(cfg, originalCfg);
+        const pth = path.join(packages, 'distutils-precedence.pth');
+        fs.writeFileSync(pth, 'import evil_same_filename\n'); run(same); run(same); assert.equal(calls, 15);
+        fs.writeFileSync(pth, "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n");
+        const hack = path.join(packages, '_distutils_hack'); fs.mkdirSync(hack);
+        const moduleFile = path.join(hack, '__init__.py'); fs.writeFileSync(moduleFile, 'original shim');
+        run(same); run(same); assert.equal(calls, 16);
+        fs.writeFileSync(moduleFile, 'changed shim'); run(same); assert.equal(calls, 17);
     });
 });
