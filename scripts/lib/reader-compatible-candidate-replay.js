@@ -398,7 +398,7 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
     if (compatible.length < (requireLatestPaidResponse ? 1 : 2) || !fresh.isDailyFreshSourceScope() || !context?.refreshReaderDiagnostics
         || compatible.some(candidate => !sameInput(candidate.identity, identity))
         || !engine.paperAnalysisLockHeld({ arxivId: identity.paperId })) return null;
-    const currentSource = require('./model-text-sanitization').currentModelInputSource({ arxivId: identity.paperId });
+    const currentSource = require('./model-text-sanitization').currentModelInputSourceForPaperId(identity.paperId);
     if (!currentSource || repair.shaText(currentSource.text) !== identity.sourceSha256
         || !isDeepStrictEqual(fresh.freshAnalysisIdentity(identity.paperId), identity.freshAnalysis)) return null;
     const dominance = requireLatestPaidResponse ? null : migrationDominance(compatible);
@@ -474,7 +474,7 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
         for (const [file, sha] of [[match.requestFile, match.request.sha256], [match.responseFile, match.response.sha256], [usage.file, usage.sha256]])
             readProof(file, sha);
         if (!engine.paperAnalysisLockHeld({ arxivId: identity.paperId })
-            || repair.shaText(require('./model-text-sanitization').currentModelInputSource({ arxivId: identity.paperId }).text) !== identity.sourceSha256)
+            || repair.shaText(require('./model-text-sanitization').currentModelInputSourceForPaperId(identity.paperId).text) !== identity.sourceSha256)
             throw new Error('Reader replay source or paper lock changed before migration');
     } };
 }

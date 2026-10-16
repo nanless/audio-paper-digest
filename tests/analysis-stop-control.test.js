@@ -15,6 +15,25 @@ const request = (transport, usageSink) => utils.requestLlmJson(
     { transportRequestFn: transport, recordUsage: false, usageSink, timeoutMs: 1000 });
 const response = () => ({ statusCode: 200, body: { choices: [{ message: { content: '已返回的内容。' } }] } });
 
+test('只读候选模型禁令在用量和HTTP之前拒绝，异步与并行论文互不污染', async () => {
+    let transports = 0; const events = [];
+    await stop.withAnalysisStopControl(async () => {
+        await Promise.all([
+            stop.withModelRequestsForbidden(async () => {
+                await Promise.resolve();
+                await assert.rejects(request(async () => { transports++; return response(); }, event => events.push(event)),
+                    { code: stop.MODEL_REQUESTS_FORBIDDEN, scope: 'paper', retryable: false });
+                assert.equal(stop.isAnalysisStopRequested(), false);
+            }),
+            (async () => { await Promise.resolve(); assert.doesNotThrow(stop.assertMayStartRequest); })()
+        ]);
+        assert.equal(transports, 0); assert.equal(events.length, 0);
+        assert.doesNotThrow(stop.assertMayStartRequest);
+        await assert.rejects(stop.withModelRequestsForbidden(async () => { throw new Error('fixture content failure'); }), /content failure/);
+        assert.doesNotThrow(stop.assertMayStartRequest);
+    });
+});
+
 test('嵌套停止状态共享，并行主动停止不串扰，信号监听器均移除', async () => {
     const before = ['SIGTERM', 'SIGINT'].map(signal => process.listenerCount(signal));
     await stop.withAnalysisStopControl(async () => {

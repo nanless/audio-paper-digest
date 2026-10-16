@@ -1,8 +1,10 @@
 'use strict';
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage();
+const forbiddenRequests = new AsyncLocalStorage();
 const active = new Set();
 const CODE = 'ANALYSIS_STOP_REQUESTED';
+const MODEL_REQUESTS_FORBIDDEN = 'MODEL_REQUESTS_FORBIDDEN_FOR_REPLAY';
 let processStopReason = null;
 function stopState(state, reason) {
     if (!state.stopped) { state.stopped = true; state.reason = reason; }
@@ -19,6 +21,12 @@ function requestAnalysisStop(reason = 'operator') {
 }
 function isAnalysisStopRequested() { return scope.getStore()?.stopped === true; }
 function assertMayStartRequest() {
+    if (forbiddenRequests.getStore() === true) {
+        throw Object.assign(new Error('付费候选只读重放禁止发送新的模型请求。'), {
+            code: MODEL_REQUESTS_FORBIDDEN, category: 'reader_recovery', scope: 'paper',
+            retryable: false, modelRequestClassified: true
+        });
+    }
     const state = scope.getStore();
     if (!state?.stopped) return;
     const error = new Error('已请求停止分析；保留已返回内容，不再发送新的模型请求。');
@@ -26,6 +34,7 @@ function assertMayStartRequest() {
         modelRequestClassified: true, stopReason: state.reason });
     throw error;
 }
+function withModelRequestsForbidden(callback) { return forbiddenRequests.run(true, callback); }
 async function withAnalysisStopControl(callback) {
     if (scope.getStore()) return callback();
     const state = { stopped: Boolean(processStopReason), reason: processStopReason };
@@ -43,5 +52,6 @@ async function withAnalysisStopControl(callback) {
         }
     }
 }
-module.exports = { CODE, withAnalysisStopControl, requestAnalysisStop,
+module.exports = { CODE, MODEL_REQUESTS_FORBIDDEN, withModelRequestsForbidden,
+    withAnalysisStopControl, requestAnalysisStop,
     isAnalysisStopRequested, assertMayStartRequest };

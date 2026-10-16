@@ -76,6 +76,44 @@ function success(item) {
     pageProof: { manifestSha256: H(`page:${item.paperId}`), contentSha256: H(`content:${item.paperId}`),
         pagePath: `content/posts/${item.paperId.split(':').at(-1)}.md` } };
 }
+test('会议子 Reader 预算耗尽即使进程窗口尚有余额也不继续重试', async t => {
+    const f = fixture(t); let calls = 0;
+    const result = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...f.deps, maxRounds: 3, processPaper: async () => {
+            calls++;
+            throw Object.assign(new Error('child Reader budget exhausted'), {
+                code: 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED', retryable: true });
+        }
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.status, 'partial');
+    assert.deepEqual(result.manualHandoff.budgetExhaustedIds, [f.members[0].paperId]);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(
+        f.files.conferenceProcessDir, result.processId, 'state.json'))));
+    assert.equal(state.items[f.members[0].paperId].attempts, 1);
+    assert.equal(state.items[f.members[0].paperId].lastFailure.code, 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED');
+});
+for (const providerFirst of [true, false]) test(`会议停止保留真实服务首因，取消信号顺序 ${providerFirst}`, async t => {
+    const f = fixture(t, 2); let entered = 0, release;
+    const bothEntered = new Promise(resolve => { release = resolve; });
+    const result = await processApi.runConferenceProcess({ apply: true, concurrency: 2 }, {
+        ...f.deps, processPaper: async (_c, _s, item) => {
+            const provider = item.paperId === f.members[0].paperId;
+            if (++entered === 2) release();
+            await bothEntered;
+            if (provider !== providerFirst) await new Promise(resolve => setImmediate(resolve));
+            throw Object.assign(new Error(provider ? 'HTTP 503 unavailable' : 'analysis stopped'), {
+                code: provider ? 'MODEL_HTTP_TRANSIENT' : 'ANALYSIS_STOP_REQUESTED',
+                scope: 'run', retryable: false });
+        }
+    });
+    assert.equal(result.stopped, true);
+    assert.equal(result.batchFailure.code, 'MODEL_HTTP_TRANSIENT');
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(
+        f.files.conferenceProcessDir, result.processId, 'state.json'))));
+    assert.deepEqual(Object.values(state.items).map(item => item.lastFailure.code),
+        ['MODEL_HTTP_TRANSIENT', 'ANALYSIS_STOP_REQUESTED']);
+});
 test('会议先完成所有首轮成员再只续失败集，成功成员与重试预算不重签', async t => {
     const f = fixture(t, 3); const order = []; let failedOnce = false;
     const result = await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',

@@ -13,6 +13,77 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 
 const EXECUTION = '77777777-7777-4777-8777-777777777777';
 
+test('活动付费候选在预算前零请求恢复，失败义务及原凭证变化不得洗成完成', async t => {
+    const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'active-paid-revision');
+    const input = { analysisRoot, parentExecutionId: EXECUTION, planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot };
+    adapter.prepareConferenceAnalysis({ ...input, executionId: EXECUTION, paperId: fixture.paperId });
+    const initial = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
+    const parentPaper = { ...initial.analysis.papers[0], analysis: 'paid unchanged core', apiReaderArticle: 'parent Reader',
+        analysisManifest: { sourceAcquisition: { modelTextSanitizationContract: 'model-text-unicode-scalars-v1' },
+            stages: { primaryAnalysis: { status: 'complete' }, coreSummaryRepair: { status: 'complete' },
+                scoringAudit: { status: 'complete' }, apiReaderArticle: { status: 'complete' } } } };
+    adapter.replaceJson(path.join(initial.directory, 'analysis.json'), { ...initial.analysis, status: 'complete',
+        completedAt: '2026-10-16T00:00:00.000Z', papers: [parentPaper] }, initial.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }));
+    const parent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
+    const postprocess = require('../scripts/lib/conference-postprocess'), oldRead = postprocess.readOriginalTagProof;
+    postprocess.readOriginalTagProof = () => ({ rules: {} });
+    t.after(() => { postprocess.readOriginalTagProof = oldRead; });
+    let paidCalls = 0, blockQualification = false, mode = 'unsupported', inspected = 0;
+    const engine = { LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY: Symbol('fixture'),
+        withPaperAnalysisLock: async (_p, callback) => callback(), getConferenceReaderRefreshUpstreamReason: () => null,
+        isSuccessfulAnalysisRecordForReadOnlyConferencePublication: value => {
+            assert.equal(context.getConferenceAnalysisSource(value).text, initial.source.sourceDetails.text);
+            return value.apiReaderArticle === 'new paid Reader' && !blockQualification;
+        } };
+    const operations = { buildApiReaderResourceIdentity: deep.buildApiReaderResourceIdentity,
+        inspectSavedConferenceReaderCompletion: async () => null,
+        refreshApiReaderArticleFromSource: async () => { paidCalls++; throw new Error('original paid attempt rejected'); } };
+    const overrides = { engine, deep: operations, replayActiveReaderCandidate: async ({ loaded }) => {
+        inspected++;
+        if (mode === 'unsupported') return { eligible: false };
+        const paper = structuredClone(loaded.analysis.papers[0]); paper.apiReaderArticle = 'new paid Reader';
+        if (mode === 'bad-stage') paper.analysisManifest.stages.primaryAnalysis.extra = 'changed';
+        return { eligible: true, paper, proof: { contract: 'conference-active-paid-reader-recovery-v1' },
+            assertUnchanged: () => { if (mode === 'bad-proof') throw new Error('original paid bytes changed'); } };
+    } };
+    await assert.rejects(adapter.refreshConferenceReader(input, overrides), /original paid attempt rejected/);
+    const executionId = adapter.readerRevisionExecutionId(EXECUTION, parent.analysisFileSha256);
+    let loaded = adapter.loadConferenceReaderRevision({ analysisRoot, executionId });
+    const file = path.join(loaded.directory, 'analysis.json');
+    for (const broken of [null, { attempts: -1, failures: [] }, { attempts: 4, failures: [] },
+        { attempts: 1, failures: null }]) {
+        adapter.replaceJson(file, { ...loaded.analysis, readerRevisionProgress: broken }, loaded.analysisFileSha256);
+        await assert.rejects(adapter.refreshConferenceReader(input, overrides), /轮次或失败历史损坏/);
+        assert.equal(inspected, 0); assert.equal(paidCalls, 1);
+        adapter.replaceJson(file, loaded.analysis, adapter.readJsonRecord(file).sha256);
+    }
+    adapter.replaceJson(file, { ...loaded.analysis,
+        readerRevisionProgress: { ...loaded.analysis.readerRevisionProgress, attempts: 3 } }, loaded.analysisFileSha256);
+    loaded = adapter.loadConferenceReaderRevision({ analysisRoot, executionId });
+    const originalBytes = fs.readFileSync(file), progress = structuredClone(loaded.analysis.readerRevisionProgress);
+    await assert.rejects(adapter.refreshConferenceReader(input, overrides), error => error.code === 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED');
+    assert.deepEqual(fs.readFileSync(file), originalBytes);
+    mode = 'valid'; blockQualification = true;
+    await assert.rejects(adapter.refreshConferenceReader(input, overrides), /正常整篇资格/);
+    assert.deepEqual(fs.readFileSync(file), originalBytes);
+    blockQualification = false; mode = 'bad-stage';
+    await assert.rejects(adapter.refreshConferenceReader(input, overrides), /受保护原阶段/);
+    assert.deepEqual(fs.readFileSync(file), originalBytes);
+    mode = 'bad-proof';
+    await assert.rejects(adapter.refreshConferenceReader(input, overrides), /original paid bytes changed/);
+    assert.deepEqual(fs.readFileSync(file), originalBytes);
+    mode = 'valid';
+    const result = await adapter.refreshConferenceReader(input, overrides);
+    assert.equal(result.recoveredActivePaidReader, true); assert.equal(paidCalls, 1); assert.equal(inspected, 5);
+    const completed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId });
+    assert.equal(completed.run.status, 'complete');
+    assert.deepEqual(completed.analysis.readerRevisionProgress, progress);
+    assert.equal(completed.analysis.readerRevisionRecovery.contract, 'conference-active-paid-reader-recovery-v1');
+    assert.equal(completed.parent.analysisFileSha256, parent.analysisFileSha256);
+    assert.equal(completed.parent.runFileSha256, parent.runFileSha256);
+});
+
 test('已保存付费子稿在原预算耗尽后仍先冷核完成，父稿继承与未完成义务不能混过', async t => {
     const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'cold-reader-revision');
     const input = { analysisRoot, parentExecutionId: EXECUTION, planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot };

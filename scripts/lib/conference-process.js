@@ -1094,13 +1094,18 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                             : {}),
                         retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString(), updatedAt: deps.now() }));
                     if (failure.systemic) saveState(() => deps.engine.updateJsonFileLocked(stateFile, current => {
-                        const next = clone(assertState(current, expected)); next.batchFailure = failure;
+                        const next = clone(assertState(current, expected));
+                        // Cancellation is a consequence of the original run
+                        // failure. Keep that cause when in-flight workers stop.
+                        if (!next.batchFailure || next.batchFailure.code === 'ANALYSIS_STOP_REQUESTED'
+                            && failure.code !== 'ANALYSIS_STOP_REQUESTED') next.batchFailure = failure;
                         next.generation += 1; next.updatedAt = deps.now(); next.stateSha256 = stateDigest(next); return next;
                     }));
                     const latest = assertState(JSON.parse(fs.readFileSync(stateFile)), expected).items[item.paperId];
-                    return { success: false, error, retryable: failure.retryable && !failure.systemic
+                    const childBudgetExhausted = error.code === 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED';
+                    return { success: false, error, retryable: !childBudgetExhausted && failure.retryable && !failure.systemic
                         && latest.attempts - (latest.retryBudgetStart || 0) < recovery.MAX_ATTEMPTS,
-                        budgetExhausted: latest.attempts - (latest.retryBudgetStart || 0) >= recovery.MAX_ATTEMPTS,
+                        budgetExhausted: childBudgetExhausted || latest.attempts - (latest.retryBudgetStart || 0) >= recovery.MAX_ATTEMPTS,
                         scope: failure.systemic ? 'run' : 'paper',
                         progressKey: error.progressKey || initialProgress.get(item.paperId) };
                 }

@@ -268,3 +268,64 @@ test('会议摘要沿认证来源保存和零请求重放，会议/执行/全文
     assert.notEqual(otherConferenceContext.directory, context.directory);
     assert.deepEqual(snapshot(context.directory), before);
 });
+
+for (const historicalConference of [true, false]) {
+    test(`历史直改${historicalConference ? '会议' : 'arXiv'}摘要绑定真实运行与来源，跨身份或凭证拒绝`, async t => {
+        const defaultRoot = isolated(t);
+        const direct = require('../scripts/lib/direct-rewrite-analysis-context');
+        const folder = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-core-diagnostic-'));
+        t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+        const id = historicalConference ? 'conference:interspeech:2026:conference-paper-id:ahn26b_interspeech' : 'arxiv:2610.90009';
+        const target = historicalConference ? { directPaperId: id, id, title: '历史会议摘要' }
+            : { directPaperId: id, arxivId: '2610.90009', title: '历史arXiv摘要' };
+        const details = { source: historicalConference ? 'conference_pdf_text' : 'html',
+            sourceId: historicalConference ? id : '2610.90009v3', text: sourceText,
+            structuredArtifacts: { payloadSha256: 'c'.repeat(64) } };
+        const runId = '99999999-9999-4999-8999-999999999999';
+        const scope = { runId, route: historicalConference ? 'conference-local-pdf' : 'arxiv-fresh-fetch',
+            paperId: id, sourceDetails: details, sourceSha256: sha256(sourceText),
+            structuredArtifactsSha256: 'c'.repeat(64), sourceSnapshotSha256: 'd'.repeat(64),
+            readerAttemptsDir: path.join(folder, runId, 'reader-attempts'),
+            ...(!historicalConference ? { sourceGeneration: 3, sourceManifestSha256: 'e'.repeat(64) } : {}) };
+        const run = (callback, identity = scope) => direct.withDirectRewriteAnalysisSource(identity, callback);
+        let calls = 0;
+        assert.equal(await run(() => deep.repairCoreSummarySection(target, incompleteAnalysis, sourceText, sourceText,
+            { callModelFn: async () => { calls++; return `## 核心摘要\n${goodSummary}`; } })), baseline);
+        assert.equal(calls, 1);
+        const diagnostic = run(() => direct.directCoreSummaryRepairContext(target, sourceText));
+        assert.ok(diagnostic.directory.startsWith(scope.readerAttemptsDir + path.sep));
+        assert.match(path.basename(diagnostic.directory), /^direct-[a-f0-9]{64}$/);
+        const [record] = readRecords(diagnostic.directory);
+        assert.equal(record.request.identity.paperId, id);
+        assert.deepEqual(record.request.identity.sourceIdentity, {
+            ...run(() => direct.getDirectSourceRecord(target)), paperId: id, route: scope.route });
+        assert.equal(record.request.identity.sourceIdentity.sourceSnapshotSha256, scope.sourceSnapshotSha256);
+        const original = snapshot(diagnostic.directory);
+        const replay = { coreSummaryDiagnosticId: record.request.id,
+            callModelFn: async () => assert.fail('历史付费摘要重放不得新请求') };
+        assert.equal(await run(() => deep.repairCoreSummarySection(target, incompleteAnalysis, sourceText, sourceText, replay)), baseline);
+        assert.deepEqual(snapshot(diagnostic.directory), original);
+        assert.deepEqual(snapshot(defaultRoot), [], '历史arXiv也不得落入普通日更诊断目录');
+        const attempt = (paper = target, text = sourceText, identity = scope) => run(() =>
+            deep.repairCoreSummarySection(paper, incompleteAnalysis, text, sourceText, replay), identity);
+        const { runId: ignored, ...missingRun } = scope;
+        await assert.rejects(attempt(target, sourceText, missingRun), /真实直改运行/);
+        await assert.rejects(attempt({ ...target, directPaperId: historicalConference
+            ? id.replace(':ahn26b_', ':other_') : 'arxiv:2610.90010' }), /不是同一篇|另一篇/);
+        await assert.rejects(attempt({ ...target, arxivId: historicalConference ? '2610.90009' : '2610.90010' }), /规范论文身份/);
+        await assert.rejects(attempt(target, sourceText + 'changed'), /相同封存全文/);
+        await assert.rejects(attempt({ ...target, sourceSha256: '0'.repeat(64) }), /相同封存全文/);
+        await assert.rejects(attempt(target, sourceText, { ...scope, sourceSnapshotSha256: 'f'.repeat(64) }), /当前来源或输入不一致/);
+        await assert.rejects(attempt(target, sourceText, { ...scope, sourceDetails: { ...details,
+            sourceId: historicalConference ? id.replace(':ahn26b_', ':other_') : '2610.90010' } }), /相同封存全文/);
+        await assert.rejects(attempt(target, sourceText, { ...scope,
+            route: historicalConference ? 'arxiv-fresh-fetch' : 'conference-local-pdf',
+            sourceGeneration: 3, sourceManifestSha256: 'e'.repeat(64) }), /规范论文身份/);
+        const otherId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        const otherScope = { ...scope, runId: otherId, readerAttemptsDir: path.join(folder, otherId, 'reader-attempts') };
+        const otherDiagnostic = run(() => direct.directCoreSummaryRepairContext(target, sourceText), otherScope);
+        fs.cpSync(diagnostic.directory, otherDiagnostic.directory, { recursive: true });
+        await assert.rejects(attempt(target, sourceText, otherScope), /当前来源或输入不一致/);
+        assert.deepEqual(snapshot(diagnostic.directory), original);
+    });
+}

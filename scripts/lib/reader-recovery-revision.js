@@ -177,7 +177,7 @@ function restoreUnfundedDiagnosticFailureState(directory, identity, payload) {
         || path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')
         || !isDeepStrictEqual(fresh.freshAnalysisIdentity(identity.paperId), identity.freshAnalysis)) return payload;
     const same = require('./reader-compatible-candidate-replay');
-    const source = require('./model-text-sanitization').currentModelInputSource({ arxivId: identity.paperId });
+    const source = require('./model-text-sanitization').currentModelInputSourceForPaperId(identity.paperId);
     if (!source || shaText(source.text) !== identity.sourceSha256) throw new Error('Unfunded diagnostic state recovery scope drift');
     const chain = [], seen = new Set();
     let nodeIdentity = identity, node = payload, originalState;
@@ -236,6 +236,10 @@ function restoreUnfundedDiagnosticFailureState(directory, identity, payload) {
 }
 
 function loadReaderRecoveryRevision(directory, identity, options = {}) {
+    if (options.allowNewImplementationAllowance !== undefined
+        && typeof options.allowNewImplementationAllowance !== 'boolean') {
+        throw new TypeError('Reader implementation allowance policy must be boolean');
+    }
     return require('./reader-proof-read-scope').withReaderProofReadScope(
         () => require('./reader-proof-read-scope').withReaderReceiptScan(() => {
             try { return loadReaderRecoveryRevisionInternal(directory, identity, options); }
@@ -577,7 +581,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         let currentSource = null;
         if (typeof options.normalizeReplayDraft === 'function'
             || require('./fresh-analysis-context').isDailyFreshSourceScope()) {
-            currentSource = require('./model-text-sanitization').currentModelInputSource({ arxivId: identity.paperId });
+            currentSource = require('./model-text-sanitization').currentModelInputSourceForPaperId(identity.paperId);
             if (currentSource && shaText(currentSource.text) !== identity.sourceSha256) {
                 throw new Error('来源阻塞恢复的当前正文与候选身份不同');
             }
@@ -623,9 +627,12 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     const recoveryEpochChanged = old.changedFields.includes('readerRecoveryEpochSha256');
     const transferExistingCompatibleAllowance = Boolean(options.savedReaderInputContinuity === undefined && compatibleReplay && previousActiveAllowance
         && !updated.explicitReaderRetryRound && old.changedFields.some(field => implementationFields.includes(field)));
+    const allowNewImplementationAllowance = options.allowNewImplementationAllowance !== false;
     const grantOrTransferAllowance = transferExistingCompatibleAllowance || !compatibleReplay && !updated.explicitReaderRetryRound && diagnosticImplementationChanged
-        && (!lineageAlreadyIssued || Boolean(previousActiveAllowance) || recoveryEpochChanged);
-    const clearDiagnosticState = diagnosticImplementationChanged && grantOrTransferAllowance;
+        && (Boolean(previousActiveAllowance) || allowNewImplementationAllowance && (!lineageAlreadyIssued || recoveryEpochChanged));
+    // A caller may preserve an already funded unused allowance while refusing
+    // new funding. Such a transfer must also retain the original failure state.
+    const clearDiagnosticState = allowNewImplementationAllowance && diagnosticImplementationChanged && grantOrTransferAllowance;
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
     const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(), scope: revisionScope,
         runId: revisionRunId, paperId: identity.paperId,

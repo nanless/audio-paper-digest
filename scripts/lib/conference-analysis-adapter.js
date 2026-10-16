@@ -764,8 +764,56 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                 analysisSha256: completed.analysisFileSha256, recoveredSavedReader: true };
         }
         const progress = loaded.analysis.readerRevisionProgress;
-        if (!progress || !Number.isSafeInteger(progress.attempts) || !Array.isArray(progress.failures)
-            || progress.attempts >= maxAttempts) throw Object.assign(new Error('会议 Reader revision 原付费预算已耗尽'),
+        if (!progress || !Number.isSafeInteger(progress.attempts) || progress.attempts < 0
+            || progress.attempts > loaded.revision.maxAttempts || !Array.isArray(progress.failures)) {
+            throw Object.assign(new Error('保存的会议 Reader 修订轮次或失败历史损坏'), { retryable: false });
+        }
+        if (progress.attempts > 0 && loaded.revision.mode !== 'normal-analysis'
+            && (loaded.revision.mode === 'reader-only' || progress.scoringCheckpoint)) {
+            // Only the existing paid candidate may run in the helper's private
+            // no-model scope. This does not authorize another outer attempt.
+            const replay = overrides.replayActiveReaderCandidate
+                || require('./conference-reader-active-candidate-replay').replayActiveConferenceReaderCandidate;
+            const recovered = await replay({ loaded, planHandle, sourceRoot }, { engine, deep });
+            if (recovered.eligible) {
+                if (!recovered.paper || !recovered.proof
+                    || typeof recovered.assertUnchanged !== 'function') throw new Error('活动付费 Reader 恢复缺少原字节证明');
+                const paper = recovered.paper;
+                const protectedStages = ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'taxonomySeal',
+                    ...(loaded.revision.mode === 'reader-only' ? ['scoringAudit'] : [])];
+                for (const name of protectedStages) {
+                    if (stableHash(paper.analysisManifest?.stages?.[name] || null)
+                        !== stableHash(parent.analysis.papers[0].analysisManifest?.stages?.[name] || null)) {
+                        throw Object.assign(new Error(`活动付费 Reader 恢复改动受保护原阶段：${name}`), { retryable: false });
+                    }
+                }
+                const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
+                withVerifiedSource(() => {
+                    if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) {
+                        throw Object.assign(revisionQualificationError(paper, rules, engine,
+                            '活动付费 Reader 恢复未通过正常整篇资格'), { retryable: false });
+                    }
+                    if (progress.scoringCheckpoint
+                        && stableHash(progress.scoringCheckpoint) !== stableHash(readerScoringCheckpoint(paper, loaded, engine, rules))) {
+                        throw Object.assign(new Error('活动付费 Reader 恢复改变已完成评分检查点'), { retryable: false });
+                    }
+                });
+                recovered.assertUnchanged();
+                const unchanged = loadConferenceReaderRevision({ analysisRoot, executionId });
+                if (unchanged.analysisFileSha256 !== loaded.analysisFileSha256
+                    || unchanged.runFileSha256 !== loaded.runFileSha256
+                    || unchanged.sourceFileSha256 !== loaded.sourceFileSha256) throw new Error('活动付费 Reader 恢复保存前原子稿或来源改变');
+                const next = { ...loaded.analysis, papers: [paper], status: 'complete', completedAt: new Date().toISOString(),
+                    generation: loaded.analysis.generation + 1, readerRevisionRecovery: clone(recovered.proof),
+                    stats: { ...(loaded.analysis.stats || {}), analysisStatus: 'complete' } };
+                replaceJson(path.join(loaded.directory, 'analysis.json'), next, loaded.analysisFileSha256);
+                const completed = loadConferenceReaderRevision({ analysisRoot, executionId });
+                sealCompletedRun(completed);
+                return { executionId, paperId: parent.run.paperId, status: 'complete', revision: loaded.revision,
+                    analysisSha256: completed.analysisFileSha256, recoveredActivePaidReader: true };
+            }
+        }
+        if (progress.attempts >= maxAttempts) throw Object.assign(new Error('会议 Reader revision 原付费预算已耗尽'),
             { code: 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED', retryable: false });
         let paper = clone(loaded.analysis.papers[0]);
         const savedScoring = progress.scoringCheckpoint;

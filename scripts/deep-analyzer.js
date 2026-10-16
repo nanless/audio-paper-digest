@@ -8530,6 +8530,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
     recovered = operatorCorrection?.payload || require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, { ...recoveryOptions,
+            ...(conference.getConferenceAnalysisContext() ? { allowNewImplementationAllowance: false } : {}),
             ...(options.savedReaderInputContinuity ? { savedReaderInputContinuity: options.savedReaderInputContinuity, paper } : {}),
             normalizeReplayDraft: (draft, issues) => normalizeReplayDraft(draft, issues, allImageInputs, false),
             ...(options.resolvedReaderCandidate !== undefined ? { resolvedReaderCandidate:options.resolvedReaderCandidate, paper:options.resolvedReaderCandidateParent || paper } : {}),
@@ -9243,7 +9244,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         ? crypto.createHash('sha256').update(reviewFeedback).digest('hex')
         : null;
     let revisionSeed = options.revisionSeed;
-    let requireExistingSourceCandidate = false;
+    let requireExistingSourceCandidate = options.requireExistingSourceCandidate === true;
     if (!revisionSeed) {
         try { revisionSeed = prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options); }
         catch (error) {
@@ -18864,15 +18865,16 @@ async function repairCoreSummarySection(
     let issue = getCoreSummaryDetailIssue(original, { sourceText });
     if (!issue && !externalFeedback && options.coreSummaryDiagnosticId === undefined) return original;
     const diagnosticStage = options.diagnosticStage || {};
-    const conferenceDiagnostic = require('./lib/conference-analysis-context')
-        .conferenceCoreSummaryRepairContext(paper, sourceText);
+    const sourceDiagnostic = require('./lib/conference-analysis-context')
+        .conferenceCoreSummaryRepairContext(paper, sourceText)
+        || require('./lib/direct-rewrite-analysis-context').directCoreSummaryRepairContext(paper, sourceText);
     const diagnosticPaperId = getPaperArxivId(paper).replace(/v\d+$/, '');
-    if (!conferenceDiagnostic && !/^\d{4}\.\d{4,5}$/.test(diagnosticPaperId)) {
+    if (!sourceDiagnostic && !/^\d{4}\.\d{4,5}$/.test(diagnosticPaperId)) {
         throw contractRejectedError('摘要修复记录需要规范论文身份');
     }
     const diagnosticIdentity = {
-        paperId: getPaperArxivId(paper),
-        sourceIdentity: conferenceDiagnostic?.sourceIdentity
+        paperId: sourceDiagnostic?.paperId || getPaperArxivId(paper),
+        sourceIdentity: sourceDiagnostic?.sourceIdentity
             || require('./lib/fresh-analysis-context').freshAnalysisIdentity(getPaperArxivId(paper)),
         sourceTextSha256: crypto.createHash('sha256').update(String(sourceText)).digest('hex'),
         inputAnalysisSha256: crypto.createHash('sha256').update(original).digest('hex'),
@@ -18882,7 +18884,7 @@ async function repairCoreSummarySection(
         repairRequestPolicy: resolveRepairRequestPolicy('coreSummaryRepair') || null,
         promptTextContract: diagnosticStage.promptTextContract || currentPromptTextContract('coreSummaryRepair')
     };
-    const recordRoot = conferenceDiagnostic?.directory
+    const recordRoot = sourceDiagnostic?.directory
         || path.join(require('./config.js').FILES.analysisRepairAttemptsDir, diagnosticPaperId);
     // 仅复用调用者明确指定的原付费响应，仍运行当前完整摘要与事实检查。
     if (options.coreSummaryDiagnosticId !== undefined) {

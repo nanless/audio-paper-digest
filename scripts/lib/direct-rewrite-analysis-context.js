@@ -186,6 +186,36 @@ function getDirectSourceRecord(paper = getDirectRewriteAnalysisContext()?.paperI
         sourceOnly: true, oldGeneratedTextIncluded: false };
 }
 
+function directCoreSummaryRepairContext(paper, sourceText) {
+    const active = getDirectRewriteAnalysisContext();
+    if (!active) return null;
+    const source = getDirectRewriteSource(paper);
+    const record = getDirectSourceRecord(paper);
+    const id = paperId(paper);
+    const isConference = CONFERENCE.test(id);
+    const sameArxiv = value => typeof value === 'string'
+        && `arxiv:${value.replace(/^arxiv:/, '').replace(/v[1-9]\d*$/, '')}` === id;
+    if (!source || !record || !UUID.test(record.runId || '')
+        || ![record.sourceSha256, record.structuredArtifactsSha256, record.sourceSnapshotSha256].every(value => SHA.test(value || ''))
+        || (isConference && !/^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/.test(id))
+        || (isConference ? active.route !== 'conference-local-pdf' : active.route !== 'arxiv-fresh-fetch')
+        || (isConference && (paper?.arxivId || paper?.paper_id
+            || [paper?.id, paper?.paperId, paper?.conferencePaperId, paper?.sourceId].some(value => value !== undefined && value !== id)))
+        || (!isConference && [paper?.arxivId, paper?.paper_id, paper?.id, paper?.paperId, paper?.sourceId]
+            .some(value => value !== undefined && !sameArxiv(value)))
+        || (isConference ? source.sourceId !== id : !sameArxiv(source.sourceId))
+        || source.text !== sourceText || sha256(String(sourceText)) !== record.sourceSha256
+        || source.structuredArtifacts?.payloadSha256 !== record.structuredArtifactsSha256
+        || (paper?.sourceSha256 && paper.sourceSha256 !== record.sourceSha256)
+        || (paper?.analysisManifest?.sourceAcquisition?.sourceSha256
+            && paper.analysisManifest.sourceAcquisition.sourceSha256 !== record.sourceSha256)) {
+        fail('摘要修复需要当前真实直改运行、规范论文身份及相同封存全文与来源凭证');
+    }
+    return { paperId: id,
+        directory: path.join(directReaderAttemptsDirectory(), 'core-summary-repair', 'direct-' + sha256(id)),
+        sourceIdentity: { ...record, paperId: id, route: active.route } };
+}
+
 function attachDirectSourceRecord(paper, manifest, source) {
     const context = scope.getStore();
     if (!context || !context.runId) return;
@@ -232,5 +262,5 @@ module.exports = { PROVENANCE_CONTRACT, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT,
     withDirectRewriteAnalysisSource, getDirectRewriteAnalysisContext, getDirectRewriteSource,
     directReaderAttemptsDirectory, directReaderMaterializer, directPrimaryImageDownloader, stripEphemeralFigureFields,
     directReaderCandidateCommitDeferred,
-    directSupplementaryReaderImages, getDirectSourceRecord, attachDirectSourceRecord,
+    directSupplementaryReaderImages, getDirectSourceRecord, directCoreSummaryRepairContext, attachDirectSourceRecord,
     assertNoPersistentFigureFields, paperId, stableHash };
