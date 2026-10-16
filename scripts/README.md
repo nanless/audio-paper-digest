@@ -244,6 +244,8 @@ npm run test:compat
 | `lib/reader-paid-response-replay.js` | Node 库：显式复验被旧程序变换损坏的付费原响应：正式用量记录须绑定原输出 SHA，真实后续修复请求及响应须精确关联原候选；保留原次数和失败记录，经正常完整解析与来源、事实反馈校验后才可保存。缺少这些证明时拒绝，不能作为通用原响应导入入口。 |
 | `lib/reader-parent-recovery.js` | Node 库：为已付费失败稿规划有累计上限的后续修复，核对每轮原稿、费用和父回执；公开诊断准备只允许实现变化，保留旧账，不自动添加请求额度。 |
 | `lib/reader-parent-upstream-preflight.js` | Node 库：在真实日更论文锁、封存来源及原上游反馈作用域中，对副本复核正常主分析、资源扫描和七个文本阶段的指纹；失效时交回父阶段恢复，不改论文、成功状态或请求额度。 |
+| `lib/reader-fact-pre-request-recovery.js` | Node 库：只为真实零请求配置失败核验原完整签名父稿、同一未完成反馈与用量历史；不透明作用域仅将唯一短片段定位到原正文完整句，保留原失败和额度，不恢复旧正式文件。 |
+| `lib/reader-derived-parent-replay.js` | Node 内部库：在调用方完成真实付费、Git 与父稿核验后比较自动来源引文；仅对已绑定完整原表修正的槽位核验原稿与正常裁减投影，不生成父稿、发布资格或模型额度。 |
 | `lib/reader-pdf-cell-evidence.js` | Reader PDF 表格单元格的来源绑定与跨 worker 证据核验。 |
 | `lib/reader-pre-image-check.js` | Node 库：下载图片前，只读判断已用完修复次数且当前纯文本或原表检查仍失败的草稿；有新授权、剩余次数或已被当前检查接受时继续正常下载和完整验收，不复用旧像素证明。 |
 | `lib/reader-proof-read-scope.js` | Node 库：在一次恢复准备期间复用未变化的证明文件读取；每次核对文件状态，结束即清空，完整恢复链仍重新核验。 |

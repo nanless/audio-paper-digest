@@ -8119,6 +8119,7 @@ function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
         && paper?.latestAnalysisAttemptErrorCode === 'CONTRACT_REJECTED'
         && (!paper.error || paper.error === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
     if (hasFailure && !knownPreRequestRejection
+        && !require('./lib/reader-fact-pre-request-recovery').isVerifiedReaderFactPreRequestSeed(paper, sourceText, reviewFeedback)
         && !hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback)) return false;
     return Boolean(active && !active.scoringOnly && reader?.readerFeedback?.trim()
         && !['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback']
@@ -8377,6 +8378,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-paid-response-replay.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-fact-pre-request-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-unsent-empty-candidate.js'), 'utf8'),

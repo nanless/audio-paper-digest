@@ -67,7 +67,7 @@ function assertLedger(record, envelope, stage, proof) {
         || repair.hashDraft(payload.ephemeralImageEvidence) !== stage.modelImagePreflightEvidenceSha256)
         fail('原传输或已见像素账改变');
 }
-function validateLegacyBatchRoot({ descriptor, paper, plan, source }) {
+function validateLegacyBatchRoot({ descriptor, paper, plan, source, normalProducerProof }) {
     assertDescriptor(descriptor);
     const stage = paper?.analysisManifest?.stages?.apiReaderArticle, proof = stage?.operatorProvenance;
     if (!stage || stage.status !== 'complete' || stage.executionKind !== 'operator'
@@ -136,6 +136,8 @@ function validateLegacyBatchRoot({ descriptor, paper, plan, source }) {
     assertLedger(record, envelope, stage, proof);
     const draft = require('./daily-reader-operator-correction').replay(record, envelope);
     if (repair.hashDraft(draft) !== proof.afterDraftSha256) fail('公共原补丁重放终点不同');
+    const producer = normalProducerProof === undefined ? null
+        : require('./daily-reader-signed-correction').validateNormalProducerProof(normalProducerProof, checked);
     const deep = require('../deep-analyzer');
     const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
         arxivId: paper.arxivId, requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
@@ -152,9 +154,13 @@ function validateLegacyBatchRoot({ descriptor, paper, plan, source }) {
             || image.sourceSha256 !== image.sha256 || !/^[a-f0-9]{64}$/.test(image.modelPayloadSha256 || '')) fail('原图像素身份不同');
         return { ...figure, assetSha256: image.sha256 };
     });
-    if (!equal(figures, paper.apiReaderFigures) || !equal(rendered.plan, paper.apiReaderPlan)
-        || deep.normalizeApiReaderFigureMarkdown(rendered.article, figures) !== paper.apiReaderArticle
-        || stage.articleSha256 !== paper.apiReaderArticleSha256 || stage.planSha256 !== paper.apiReaderPlanSha256
+    const article = deep.normalizeApiReaderFigureMarkdown(rendered.article, figures);
+    if ((!equal(figures, paper.apiReaderFigures) || !equal(rendered.plan, paper.apiReaderPlan)
+        || article !== paper.apiReaderArticle)
+        && !(producer?.prune && require('./reader-derived-parent-replay').parentReplayMatches({
+            draft, parent: paper, source, current: { article, plan: rendered.plan, figures }
+        }))) fail('原paid与真实批次补丁不能逐字重放当前完整Reader');
+    if (stage.articleSha256 !== paper.apiReaderArticleSha256 || stage.planSha256 !== paper.apiReaderPlanSha256
         || sha(paper.apiReaderArticle) !== paper.apiReaderArticleSha256
         || daily.stableHash(paper.apiReaderPlan) !== paper.apiReaderPlanSha256
         || daily.stableHash(figures) !== stage.figuresSha256) fail('原paid与真实批次补丁不能逐字重放当前完整Reader');

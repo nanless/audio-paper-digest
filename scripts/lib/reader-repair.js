@@ -2130,11 +2130,11 @@ function unavailableFigureCleanupOperation(draft, options = {}) {
 
 function verifiedReaderFactIssues(draft, claims) {
     const issues = [];
-    for (const claim of claims || []) {
-        if (typeof claim !== 'string' || claim.trim().length < 12) continue;
+    for (const originalClaim of claims || []) {
+        if (typeof originalClaim !== 'string') continue;
         const nodes = [...(draft?.sections || []).map((section, index) => ({ path: `/sections/${index}/body`, value: section?.body })),
             ...(draft?.conceptBridges || []).map((bridge, index) => ({ path: `/conceptBridges/${index}/explanation`, value: bridge?.explanation }))];
-        const matches = nodes.flatMap(node => {
+        const proseNodes = nodes.map(node => {
             // 只看正文完整原句，不以来源引文、绑定元数据或零散术语授权改写。
             const mask = value => value.replace(/[^\n]/g, ' ');
             const protectedBody = String(node.value || '')
@@ -2159,16 +2159,23 @@ function verifiedReaderFactIssues(draft, claims) {
             const prose = lines.map((line, lineIndex) => (
                 /^\s*>/.test(line) || tableLines.has(lineIndex) ? mask(line) : line
             )).join('\n');
+            return { ...node, prose };
+        });
+        const claim = originalClaim.trim().length < 12
+            ? require('./reader-fact-pre-request-recovery').mapVerifiedShortClaim(originalClaim, proseNodes) : originalClaim;
+        if (typeof claim !== 'string' || claim.trim().length < 12) continue;
+        const matches = proseNodes.flatMap(node => {
             const occurrences = [];
-            let position = prose.indexOf(claim);
+            let position = node.prose.indexOf(claim);
             while (position >= 0) {
                 occurrences.push({ path: node.path, index: position });
-                position = prose.indexOf(claim, position + claim.length);
+                position = node.prose.indexOf(claim, position + claim.length);
             }
             return occurrences;
         });
         if (matches.length !== 1) continue;
         issues.push({ path: matches[0].path, index: matches[0].index, code: 'reader_verified_fact_claim', claim,
+            ...(claim !== originalClaim ? { originalClaim } : {}),
             message: '已核验事实反馈指出该正文仍保留错误完整原句，按本次原文证据纠正。' });
     }
     return issues;
@@ -2192,8 +2199,10 @@ function assertReaderFactLocalCoverage(draft, claims) {
             while (index >= 0) { found.push({ path: node.path, index }); index = node.value.indexOf(claim, index + claim.length); }
             return found;
         });
-        if (matches.length && (matches.length !== 1 || !issues.some(issue => issue.claim === claim
-            && issue.path === matches[0].path && issue.index === matches[0].index))) {
+        if (matches.length && (matches.length !== 1 || !issues.some(issue => issue.path === matches[0].path
+            && (issue.claim === claim && issue.index === matches[0].index
+                || issue.originalClaim === claim && matches[0].index >= issue.index
+                    && matches[0].index + claim.length <= issue.index + issue.claim.length)))) {
             throw new Error('事实局部修订的错误原句存在重复或未获准位置，未发送模型请求');
         }
     }
