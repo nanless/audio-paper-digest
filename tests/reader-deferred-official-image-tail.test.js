@@ -12,9 +12,11 @@ const fixtureFile = path.join(__dirname, 'normal-reader-only-feedback.test.js');
 const fixtureModule = new Module(fixtureFile, module);
 fixtureModule.filename = fixtureFile; fixtureModule.paths = module.paths;
 fixtureModule._compile(fs.readFileSync(fixtureFile, 'utf8').split("const saved = require('../scripts/lib/saved-fact-feedback');")[0]
-    .replace('fixture({ noFigures: true,', 'fixture({ noFigures: false,')
+    .replace('fixture({ noFigures: true,', 'fixture({ noFigures: options.noFigures ?? false,')
+    .replace('capture: options =>', 'capture: captureOptions =>')
+    .replace('captureFreshArxivRewriteSource(options,', 'captureFreshArxivRewriteSource(captureOptions,')
     .replace('...signed.sourceDetails, text: sourceText,',
-        "...signed.sourceDetails, imageInfos:[{url:'https://arxiv.org/html/2609.12345v1/figure.png',caption:'Official figure'}], text: sourceText,")
+        "...signed.sourceDetails, imageInfos:options.noFigures&&!options.sourceCandidate?[]:[{url:'https://arxiv.org/html/2609.12345v1/figure.png',caption:'Official figure'}], text: sourceText,")
     + '\nmodule.exports={createReviewedReaderSample,deep,daily,fresh,engine};', fixtureFile);
 const { createReviewedReaderSample, deep, daily, fresh, engine } = fixtureModule.exports;
 const deepFile = require.resolve('../scripts/deep-analyzer');
@@ -24,11 +26,13 @@ internals._compile(fs.readFileSync(deepFile, 'utf8') + '\nmodule.exports.testNor
 const normal = internals.exports.testNormalImageFingerprints;
 const forbidden = require('../scripts/lib/analysis-stop-control').withModelRequestsForbidden;
 
-async function sample(t) {
-    const f = await createReviewedReaderSample(t);
+async function sample(t, options = {}) {
+    const f = await createReviewedReaderSample(t, options);
     delete f.paper.analysisManifest.stages.apiReaderArticle.factReview;
     delete f.paper.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256;
     f.paper.analysisStageCheckpoints.scoringAudit = f.paper.analysis;
+    if (options.noFigures) Object.assign(f.paper.analysisManifest.stages.apiReaderArticle,
+        { imageEvidenceCount: 0, imageEvidenceSha256: deep.stableFingerprint([]) });
     delete f.paper.analysisManifest.stages.imageSupplement;
     const candidates = deep.selectImageCandidates(deep.normalizeImageInfos(f.source.imageInfos), 20);
     f.paper.analysisManifest.stages.imageDownload = { status: 'pending',
@@ -75,6 +79,47 @@ test('无日更作用域不收尾，缺论文锁的当前日更拒绝且原状�
         assert.throws(() => deep.finalizeDeferredDailyReaderImages(f.paper, f.source));
     }));
     assert.deepEqual(f.paper, before);
+});
+
+test('封存零来源图/零候选/明确签名零像素的构造Reader按原正常空图绑定收尾', async t => {
+    const f = await sample(t, { noFigures: true }), before = withoutTail(f.paper);
+    await f.run((paper, source) => {
+        assert.deepEqual(source.structuredArtifacts.figures, []);
+        assert.deepEqual(source.imageInfos, []);
+        assert.deepEqual(paper.apiReaderFigures, []);
+        assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+        assert.equal(deep.finalizeDeferredDailyReaderImages(paper, source), true);
+        assert.equal(paper.analysisManifest.stages.imageSupplement.officialFigureCount, 0);
+        assert.equal(paper.analysisManifest.stages.imageSupplement.officialFiguresSha256, deep.stableFingerprint([]));
+        assert.deepEqual(withoutTail(paper), before);
+    });
+});
+
+for (const [name, alter] of Object.entries({
+    '缺原像素数': p => { delete p.analysisManifest.stages.apiReaderArticle.imageEvidenceCount; },
+    '缺原像素SHA': p => { delete p.analysisManifest.stages.apiReaderArticle.imageEvidenceSha256; },
+    '错误空像素SHA': p => { p.analysisManifest.stages.apiReaderArticle.imageEvidenceSha256 = '0'.repeat(64); },
+    '实际观察过像素': p => { p.analysisManifest.stages.apiReaderArticle.imageEvidenceCount = 1; },
+    '曾排除来源像素': p => { p.analysisManifest.stages.apiReaderArticle.providerImageExclusionCount = 1; },
+    '非空排除记录': p => { p.analysisManifest.stages.apiReaderArticle.providerImageExclusions = [{ ordinal: 1 }]; }
+})) test(`零图分支拒${name}，缺失证明不等于实际零`, async t => {
+    const f = await sample(t, { noFigures: true });
+    await f.run((paper, source) => {
+        alter(paper); const before = structuredClone(paper);
+        assert.throws(() => deep.finalizeDeferredDailyReaderImages(paper, source));
+        assert.deepEqual(paper, before);
+    });
+});
+
+test('来源无正式figure但存在正常图片候选仍不能按零图收尾', async t => {
+    const f = await sample(t, { noFigures: true, sourceCandidate: true });
+    await f.run((paper, source) => {
+        assert.deepEqual(source.structuredArtifacts.figures, []);
+        assert.equal(deep.selectImageCandidates(deep.normalizeImageInfos(source.imageInfos), 20).length, 1);
+        const before = structuredClone(paper);
+        assert.throws(() => deep.finalizeDeferredDailyReaderImages(paper, source));
+        assert.deepEqual(paper, before);
+    });
 });
 
 for (const [name, alter] of Object.entries({

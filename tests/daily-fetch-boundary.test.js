@@ -14,7 +14,10 @@ function createPublishedBlogRepo(t) {
     // Git 退出后可能仍有短暂的目录写入；有限重试清理，持续失败仍让测试报错。
     t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
     const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
-    git('init'); git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'test');
+    git('init');
+    // 临时仓库无须后台维护；同步 Git 命令返回后不能再有维护进程与清理争写。
+    git('config', 'maintenance.auto', 'false'); git('config', 'gc.auto', '0');
+    git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'test');
     const put = (name, value) => { const f = path.join(root, name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, value); };
     const citation = JSON.stringify({ arxivId: '2610.00026' });
     const digest = crypto.createHash('sha256').update(citation).digest('hex');

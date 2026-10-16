@@ -10421,7 +10421,7 @@ function finalizeDeferredDailyReaderImages(paper, sourceDetails) {
     if (!isDualModel || pending.attempted !== 0 || pending.downloaded !== 0
         || !Array.isArray(pending.outcomes) || pending.outcomes.length
         || manifest.stages.imageSupplement !== undefined
-        || !hasCompleteApiReaderFigureBinding(paper, manifest) || !paper.apiReaderFigures.length) fail();
+        || !hasCompleteApiReaderFigureBinding(paper, manifest)) fail();
     const engine = require('./analysis-engine');
     if (!engine.paperAnalysisLockHeld(paper) || !engine.scoringAuditBindsFinalAnalysis(paper)
         || !engine.hasValidApiReaderV3Records(paper)) fail();
@@ -10437,6 +10437,16 @@ function finalizeDeferredDailyReaderImages(paper, sourceDetails) {
     require('./lib/reader-resource-sync').synchronizeReaderResourceAvailability(
         paper, sourceDetails, { preserveUpstream: true });
     const candidates = selectImageCandidates(normalizeImageInfos(sourceDetails.imageInfos), IMAGE_CANDIDATE_MAX);
+    if (!paper.apiReaderFigures.length) {
+        const reader = manifest.stages.apiReaderArticle;
+        if (!Array.isArray(sourceDetails.structuredArtifacts?.figures)
+            || sourceDetails.structuredArtifacts.figures.length || candidates.length
+            || !Array.isArray(paper.apiReaderPlan?.figurePlacements) || paper.apiReaderPlan.figurePlacements.length
+            || reader.imageEvidenceCount !== 0 || reader.imageEvidenceSha256 !== stableFingerprint([])
+            || (reader.providerImageExclusionCount ?? 0) !== 0
+            || (reader.providerImageExclusions !== undefined
+                && (!Array.isArray(reader.providerImageExclusions) || reader.providerImageExclusions.length))) fail();
+    }
     const downloadFingerprint = buildImageDownloadFingerprint(candidates);
     if (pending.fingerprint !== downloadFingerprint) fail();
     const promptTextContract = currentPromptTextContract('imageSupplement');
