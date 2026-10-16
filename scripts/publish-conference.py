@@ -1784,9 +1784,10 @@ def validate_review(generation, receipt, *, current=True):
                                 or (current and gate.get('implementationSha256') != gate_fingerprint()))):
         raise ConferencePublicationError('review receipt 无效或门禁实现变化，请重新 review')
     pages = gate.get('pages')
-    if not legacy and (pages is None or not isinstance(pages, list) or len(pages) != len(generation['files']) \
+    page_files = publication_page_files(generation)
+    if not legacy and (pages is None or not isinstance(pages, list) or len(pages) != len(page_files) \
             or {(p.get('path'), p.get('sourceSha256')) for p in pages} != {
-                (r['path'], r['sourceSha256']) for r in generation['files']}):
+                (r['path'], r['sourceSha256']) for r in page_files}):
         raise ConferencePublicationError('review HTML 页面集合不闭合')
     if legacy:
         return
@@ -1811,14 +1812,26 @@ def validate_review(generation, receipt, *, current=True):
     if current:
         if protocol != content_review_protocol(load_publish_to_blog()):
             raise ConferencePublicationError('会议页面语义 review 凭证无效')
-    elif not isinstance(protocol, str) or not protocol \
-            or any(p.get('protocol') != protocol for p in reviewed):
+    elif not isinstance(protocol, str) or not protocol:
         # 已发布凭证的协议指纹绑定的是当时的审查代码、模型和 Hugo 运行时，
         # 当前发布器已经算不出那个值。拿当前哈希去比，会让每一次发布器改动
         # 都把已发布的会议判成无效，等于把历史凭证绑死在最新代码上。
-        # 这里只要求协议字段自身闭合：汇总协议与逐页记录一致；页面与
-        # generation 的绑定仍由上面的逐页核对保证。
+        # 历史批次保留原协议；跨协议复用的逐页原通过凭证在下方独立核验，
+        # 页面与 generation 的绑定仍由上面的逐页核对保证。
         raise ConferencePublicationError('会议页面语义 review 协议字段不闭合')
+    for page in reviewed:
+        if page.get('protocol') == protocol:
+            continue  # Preserve the original same-protocol v2 receipt format.
+        original = dict(page)
+        declared = original.pop('resultSha256', None)
+        key = stable({'path': safe_relative(page['path'], '原通过页面'), 'sha256': page['sha256']})
+        cache = PUBLICATION_ROOT / 'page-review-passes' / f'{key}.json'
+        if not SHA_RE.fullmatch(str(protocol or '')) \
+                or not SHA_RE.fullmatch(str(page.get('protocol') or '')) \
+                or page.get('contract') != 'conference-page-content-review-v1' \
+                or not SHA_RE.fullmatch(str(declared or '')) or declared != stable(original) \
+                or not cache.exists() or read_json(cache) != page:
+            raise ConferencePublicationError('会议页面复用的原通过凭证或独立审查协议字段不闭合')
 
 
 def conference_sidecar_urls(pages, generation):
