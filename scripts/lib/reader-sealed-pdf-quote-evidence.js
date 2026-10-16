@@ -1,7 +1,7 @@
 'use strict';
 // Separate PDF quotation origin; it never changes HTML evidence or an input identity.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
-const child = require('node:child_process'), crypto = require('node:crypto');
+const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const CONTRACT = 'reader-sealed-pdf-quotes-v1';
@@ -26,10 +26,7 @@ function deriveBundle(expectation, quotes = []) {
         try {
             fs.writeFileSync(file, JSON.stringify({ pdfBase64: before.pdf.toString('base64'), pdfSha256: sha(before.pdf), quotes }), { mode: 0o600 });
             fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-            const raw = child.execFileSync('bash', [path.join(root, 'scripts/python-runtime.sh'), program, '3'], {
-                cwd: root, timeout: 60000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe', fd],
-                env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_SANDBOX: process.env.CODEX_SANDBOX || '' }
-            });
+            const raw = require('./reader-pdf-extraction-scope').runPdfExtractor(program, fd);
             const response = JSON.parse(raw), after = api.readFreshArxivRewriteSource(expectation);
             if (response.contract !== CONTRACT || response.document?.contract !== CONTRACT
                 || response.document.pdfSha256 !== sha(before.pdf) || !Array.isArray(response.results) || response.results.length !== quotes.length
@@ -119,5 +116,7 @@ function withSavedPaper(paper, callback) {
     return scope.run({ artifacts: source.structuredArtifacts, expectation, sourceText: source.text, document: response.document }, callback);
 }
 
-module.exports = { CONTRACT, deriveBundle, withArtifacts, document, evidenceForQuotes, quoteEvidence,
-    assertQuoteEvidence, withSavedPaper, verifiedSourceContext };
+const extractionScope = callback => require('./reader-pdf-extraction-scope').withPdfExtractionScope(callback);
+module.exports = { CONTRACT, deriveBundle, withArtifacts: (...args) => extractionScope(() => withArtifacts(...args)),
+    document, evidenceForQuotes, quoteEvidence, assertQuoteEvidence,
+    withSavedPaper: (...args) => extractionScope(() => withSavedPaper(...args)), verifiedSourceContext };

@@ -1,7 +1,7 @@
 'use strict';
 // A capability for one complete literal PDF table; it never grants prose units.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
-const crypto = require('node:crypto'), child = require('node:child_process');
+const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const CONTRACT = 'reader-sealed-pdf-column-units-v1';
 const root = path.resolve(__dirname, '../..');
@@ -27,10 +27,7 @@ function deriveBundle(expectation, view, quotes) {
             fs.writeFileSync(filename, JSON.stringify({ pdfBase64: before.pdf.toString('base64'), pdfSha256: sha(before.pdf),
                 tables: source.structuredArtifacts.tables, view, quotes }), { mode: 0o600 });
             fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-            const result = JSON.parse(child.execFileSync('bash', [path.join(root, 'scripts/python-runtime.sh'), program, '3'], {
-                cwd: root, timeout: 60000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore','pipe','pipe',fd],
-                env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_SANDBOX: process.env.CODEX_SANDBOX || '' }
-            }));
+            const result = JSON.parse(require('./reader-pdf-extraction-scope').runPdfExtractor(program, fd, [quoteProgram]));
             const after = api.readFreshArxivRewriteSource(expectation);
             if (result.contract !== CONTRACT || !isDeepStrictEqual(before.manifest, after.manifest)
                 || before.sourceManifestSha256 !== after.sourceManifestSha256
