@@ -263,10 +263,14 @@ npm run test:compat
 | `lib/reader-signed-draft.js` | Node 库：把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有实际解析并恢复原图引用后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
 | `lib/daily-reader-signed-correction.js` | 已完成日更 Reader 的显式尾修：v1 保留有界中文词替换，v2 仅允许严格事实反馈原句内的逐字范围修正。原退休付费稿和既有人工历史须逐步重放到当前正文、计划与图片，绑定完整父稿 CAS、四源及完整小尾集合，沿用原次数与像素，经正常解析和引擎保存；预览不登记义务，执行才保存 pending，不复活候选或授予请求。 |
 | `lib/daily-reader-signed-fact-patch.js` | 签名 Reader v2 的纯范围核验：逐字绑定当前受拒原句、UTF-16 起止位置和原节点 SHA；仅1–8个既有正文/解释/同源表绑定节点。raw/display 差异只接受真实正常排版投影，句外、公式、原图及新节点不可改；来源资格仍由正常 Reader 解析器核验。 |
+| `lib/daily-reader-legacy-batch-root.js` | 只读核验旧日更批次人工修正根：真实失败父检查点、原授权及清单、原付费候选和原补丁必须逐字重放到当前签名 Reader；保留真实 operator 身份、四源、原费用和次数，不伪造完成 API 父稿或改变活跃候选状态。 |
+| `lib/reader-signed-raw-claim-display.js` | 签名范围的原句显示映射：仅同一原节点的唯一原句与实际偏移可使用公共定量诊断及正常排版；用完整节点的位置标记重放证明显示范围，拒绝借另一句、引用或代码的数字证据。 |
+| `lib/reader-signed-table-targets.js` | 签名修正的真实表序与目标来源核验：内联表和独立 TABLE 标记一起定位；原占位表须重放到已签父表，获准新表由正常编译或同一 DOM 的严格逐格行列投影得到，不混拼、猜值或增删表。 |
 | `lib/reader-signed-operator.js` | Node 库：显式修订同一运行的已核验 Reader，先核对完整父稿、正文、计划及来源 SHA 与修改请求一致，再还原、解析并按共同流程封存结果；恢复输出时核对先前保存且不再改动的准备记录，其中包含修改请求、父稿、运行、来源和预期输出的 SHA。只写隔离分析并要求事实复核，不调用 API。 |
 | `lib/reader-source-blocked-normalization.js` | Node 库：对封存来源导致的完整表阻塞重跑唯一顺序调整，核对原稿与准备稿双 SHA，并保留真实绑定与承载正文的失败诊断；付费回放必须先逐字对应保存的原稿，不授予成功资格或新额度。 |
 | `lib/reader-source-diagnostics.js` | Node 库：把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
 | `lib/reader-source-display.js` | Node 库：共用原表单元格的显示规范化；仅合并明确 TeX 注解与一致可见副本，裸数字重复保持原样，供 Reader 与发布资格检查复用。 |
+| `lib/source-cell-math-display.js` | 原 DOM 单元格的窄数学显示证明：仅在完整可见副本与受支持 TeX 的数字、符号和精度严格相同时去掉重复纯样式显示；保留原来源字节及 SHA，供正常表编译、冷态资格和 Python 发布视图交叉复验。 |
 | `lib/reader-source-metric-units.js` | Node 库：对原文明确由编辑距离定义、原表未标百分号的事件指标，只接受同一原列逐字保存的比较值；不转换百分比、不改数字，也不豁免其他指标。 |
 | `lib/reader-table-narrative-labels.js` | Reader 表格说明文字与原表标签的来源对应检查。 |
 | `lib/reader-table-pdf-evidence.js` | Node 库：隔离旧 PDF 规则与新的独立 PDF 来源证明；正常 Reader 编译和冷态保存记录核验均重读受控来源，保留原 DOM 与 PDF 显示值的不同来源。 |
