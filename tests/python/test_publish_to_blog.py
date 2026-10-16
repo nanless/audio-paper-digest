@@ -3608,7 +3608,7 @@ title: "Score rows"
         second['arxivId'] = '2608.30003'
         selections = [
             (first, '#语音识别', 'task.asr'),
-            (second, '#语音合成', 'task.speech-synthesis'),
+            (second, '#文本到语音', 'task.tts'),
         ]
         for paper, task, task_id in selections:
             paper['parsed'].update({
@@ -3635,6 +3635,10 @@ title: "Score rows"
         self.assertIn('| [语音识别](/audio-paper-digest-blog/papers/?concept=task.asr) | 1 篇 |', direction_table)
         self.assertIn('| [语音合成](/audio-paper-digest-blog/papers/?concept=task.speech-synthesis) | 1 篇 |', direction_table)
         self.assertNotIn('#Transformer', direction_table)
+        ranking = markdown.split('### 📊 论文评分排行榜', 1)[1].split('## 📋 论文列表', 1)[0]
+        self.assertIn('[语音合成](/audio-paper-digest-blog/papers/?concept=task.speech-synthesis)', ranking)
+        self.assertNotIn('task.tts', ranking)
+        self.assertIn('[文本到语音](/audio-paper-digest-blog/papers/?concept=task.tts)', markdown.split('## 📋 论文列表', 1)[1])
         self.assertIn('最上级方向统计', markdown)
         self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', markdown)
 
