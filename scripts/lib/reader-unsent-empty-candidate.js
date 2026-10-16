@@ -146,7 +146,10 @@ function withRecovery(directory, identity, callback) {
     if (!blocked.length || blocked.some(record => !isUnsent(record.event)
         || record.event.model !== identity.model.model || record.event.protocol !== identity.model.protocol))
         fail('later requests do not prove zero transport');
-    if (empty.some(item => fs.statSync(item.filename).mtimeMs < blocked.at(-1).at)) fail('empty candidate predates unsent requests');
+    // A later independently blocked input cannot invalidate an earlier empty
+    // failure. Each original file still needs its own earlier unsent witness.
+    if (empty.some(item => !blocked.some(record => record.at <= fs.statSync(item.filename).mtimeMs)))
+        fail('empty candidate predates unsent requests');
     const histories=empty.map(item=>({ contract:CONTRACT, identity:structuredClone(item.envelope.identity),
         inputFingerprint:identity.inputFingerprint, envelopeSha256:item.envelopeSha256,
         transportFailures:item.envelope.payload.transportFailures,

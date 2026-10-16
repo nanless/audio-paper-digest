@@ -91,3 +91,20 @@ test('正常后续内容次数增长后，旧未发送档案按原迁移窗口�
     const archived=again.readerRecoveryRevisions.at(-1).unfundedTransportFailureHistory[0];
     assert.equal(archived.selectedMigration.attempts,3);
 });
+test('较晚不同输入的真实未发送失败不使早期空包失效，全部事件保留',async t=>{
+    const f=await fixture(t,{implDifferent:true});
+    const saved=Date.parse('2026-10-14T02:00:01.000Z')/1000;fs.utimesSync(f.emptyFile,saved,saved);
+    const later={...f.blocked,eventId:crypto.randomUUID(),at:'2026-10-14T03:00:00.000Z',inputSha256:'b'.repeat(64)};
+    write(path.join(Config.FILES.llmUsageDir,later.eventId+'.json'),later);
+    const other={...f.identity,inputFingerprint:'different genuine resource observation'};
+    const otherFile=repair.saveFailedCandidate(f.plan.readerAttemptsDir,other,f.empty),otherBytes=fs.readFileSync(otherFile);
+    const result=await f.run(()=>revision.loadReaderRecoveryRevision(f.plan.readerAttemptsDir,f.identity,f.options));
+    assert.equal(result.attempts,f.paid.attempts);assert.equal(result.unfundedTransportFailureHistory[0].blockedUsage.length,2);
+    assert.deepEqual(fs.readFileSync(otherFile),otherBytes);
+});
+test('空失败早于全部after-paid未发送见证时仍拒绝且原档不变',async t=>{
+    const f=await fixture(t),saved=Date.parse('2026-10-14T01:30:00.000Z')/1000;fs.utimesSync(f.emptyFile,saved,saved);
+    const before=fs.readFileSync(f.emptyFile);
+    await assert.rejects(f.run(()=>revision.loadReaderRecoveryRevision(f.plan.readerAttemptsDir,f.identity,f.options)),/predates unsent/);
+    assert.deepEqual(fs.readFileSync(f.emptyFile),before);assert.equal(fs.readdirSync(f.plan.readerAttemptsDir).some(name=>name.includes('.unsent-')),false);
+});
