@@ -1342,3 +1342,15 @@ it('词表整数范围属于实验设置，错误率和裸比分仍须完整单�
         assert.ok(find(text).length > 0, text);
     }
 });
+
+
+it('字面下划线保留技术词边界，真实强调与无边界粘连仍须拒绝', () => {
+    for (const text of ['训练_GFLOPs', '推理_GFLOPs', '训练__GFLOPs__',
+        '训练_GFLOPs_', 'GFLOPs_计算', '训练_GFLOPs_计算']) {
+        assert.deepEqual(findTechnicalTermAdhesions(text), [], text);
+    }
+    for (const text of ['训练GFLOPs', '训练**GFLOPs**', '_训练GFLOPs_',
+        '**训练GFLOPs**', 'GFLOPs计算', '**GFLOPs**计算', '训练~~GFLOPs~~']) {
+        assert.ok(findTechnicalTermAdhesions(text).length > 0, text);
+    }
+});

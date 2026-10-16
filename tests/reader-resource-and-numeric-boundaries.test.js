@@ -20,6 +20,74 @@ function issues(text, source = sourceText) {
     return result;
 }
 
+function assertResourceTypeIssue(text, type, source) {
+    assert.ok(issues(text, source).some(issue => issue.message.includes(` ${type} `)), text);
+}
+
+test('实物归属省略已也须核验，局部概念或功能说明不得洗掉真实代码声明', () => {
+    for (const text of [
+        '本文代码公开、模型权重可下载、系统可运行是三件事。',
+        '作者团队代码可用、模型权重可下载、系统可运行是三件事。',
+        '代码已经公开，但权重未确认。',
+        '本次没有可验证的代码、模型或数据已公开的证据，但本文代码已经公开。',
+        '因此代码开源、权重可下载与系统可运行要分开说，但本文代码已经公开。',
+        '代码公开、模型权重可下载是不同的已证实事实。',
+        '代码公开、模型权重可下载是不同的真实结果。'
+    ]) assertResourceTypeIssue(text, 'code');
+    for (const text of [
+        '本研究权重可下载、系统可运行是三件事。',
+        '当对应模态可用时每一路权重为三分之一，但本文权重已经公开。',
+        '需要的材料包括本文模型权重已经公开的证明和基础模型的可用权重。',
+        '需要的材料包括基础模型的可用权重，但作者模型权重已公开。'
+    ]) assertResourceTypeIssue(text, 'model');
+});
+
+test('从已有检查点继续微调须有真实初始化来源，PDF软行不切断转引', () => {
+    const text = 'Distil-Whisper从已发布检查点继续微调。';
+    const source = 'We initialize from the released checkpoint.';
+    assert.deepEqual(issues(text, source), []);
+    assertResourceTypeIssue(text + '但本文权重已经公开。', 'model', source);
+    for (const wrong of [sourceText,
+        'We do not initialize from the released checkpoint.',
+        'Other authors said we initialize from the released checkpoint.',
+        'Other authors said\nWe initialize from the released checkpoint.',
+        '"We initialize from the released checkpoint."',
+        'We will initialize from the released checkpoint.'
+    ]) assertResourceTypeIssue(text, 'model', wrong);
+});
+
+test('原文发布数据加载软件不等于开放数据，转述仍保留本次未核实限定', () => {
+    const text = '本次没有可验证的作者资源可用性信息，因此不能声称代码、模型或数据已公开，'
+        + '只能说论文称评测脚本与数据集加载已开源并给出了链接，具体可用性需读者自行核对。';
+    const source = 'All code and dataset loaders are open-sourced.';
+    assert.deepEqual(issues(text, source), []);
+    assertResourceTypeIssue('数据集已开源。', 'dataset', source);
+    assertResourceTypeIssue(text.replace('具体可用性需读者自行核对',
+        '具体可用性需读者自行核对这一说法是错误的'), 'dataset', source);
+    for (const wrong of [sourceText,
+        'All code and dataset loaders are not open-sourced.',
+        'Reportedly All code and dataset loaders are open-sourced.',
+        'All code and dataset loaders are planned to be open-sourced.',
+        'All code and dataset loaders are unlikely to be open-sourced.',
+        'All code and dataset loaders are not expected to be open-sourced.',
+        'All code and dataset loaders are scheduled to be open-sourced.',
+        'Other authors reported:\nAll code and dataset loaders are open-sourced.',
+        'The following statement is false:\nAll code and dataset loaders are open-sourced.'
+    ]) assertResourceTypeIssue(text, 'dataset', wrong);
+});
+
+test('原文PDF断行的公开链接转述须同时核原文和当前未确认，不以200推断下载内容', () => {
+    const text = '原文写了数据集和代码公开链接，但本次只依据论文文本，不能确认链接当前可用，'
+        + '因此不能写成已公开可用，这只是来源未确认，不是技术缺陷。';
+    const source = 'Our dataset and code are publicly avail-\n unrelated second column\nable at: https://example.org';
+    assert.deepEqual(issues(text, source), []);
+    assertResourceTypeIssue(text, 'code');
+    assertResourceTypeIssue(text.replace('因此不能写成已公开可用',
+        '因此不能写成已公开可用这一说法是错误的'), 'code', source);
+    assertResourceTypeIssue(text + '本文代码已经公开。', 'code', source);
+    assertResourceTypeIssue('状态码200，但这只证明模型设定和代码存档可下载，不证明开箱可运行。', 'code');
+});
+
 test('真实失败否定句不成为作者资源肯定声明', () => {
     for (const text of [
         '复现应从作者提供的第三方链接开始，本文证据显示该链接当前可达，但它在原文中是第三方资源记录，不能直接写成作者已开源或权重可下载，需要自己打开确认代码、权重与运行脚本是否齐全。',

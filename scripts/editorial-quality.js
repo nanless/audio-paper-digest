@@ -1104,6 +1104,8 @@ function stripCodeLinksAndUrls(value) {
         // 末尾单个星号要保留，它可能是 GatherMOS-ZS* 这类带名字的技术变体。
         // Markdown 加粗标记照旧去掉，免得它收尾的 **
         // 把汉字与 ASCII 的边界藏起来。
+        // Intraword underscores are literal Markdown separators, not emphasis.
+        .replace(/(?<=[\p{L}\p{N}])_+(?=[\p{L}\p{N}])/gu, match => ' '.repeat(match.length))
         .replace(/\*{2,}|[_~]+/g, '');
 }
 

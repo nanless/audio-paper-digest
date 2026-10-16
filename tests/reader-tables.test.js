@@ -521,3 +521,23 @@ test('斜杠展示的完整计数组合须逐项对应来源，不能凭重复�
     }
     assert.ok(findReaderTablePasteDuplication('条件胜数28/26/26', { sourceTexts: [] }));
 });
+
+
+test('完整原文英文三元参数列表保留重复值，不能截取长列表或数字片段', () => {
+    const cell = '1280, 1280, and 320';
+    const source = 'The FFT, window, and hop size are set to 1280, 1280, and 320.';
+    for (const quote of [source, '1280, 1280, and 320.', '1280,\n1280, and\n320.']) {
+        assert.equal(findReaderTablePasteDuplication(cell, { sourceTexts: [quote] }), null, quote);
+    }
+    for (const quote of ['', '1280, 320, and 1280.', '1280, 1280, and 3200.',
+        '1e1280, 1280, and 320.', '1.1280, 1280, and 320.', '641280, 1280, and 320.',
+        '64, 1280, 1280, and 320.', '1280, 1280, and 320/640.',
+        '1280, 1280, and 320 and 640.', '1280, 1280, and 320, 640.',
+        '1280, 1280, and 320e3.', 'x1280, 1280, and 320.']) {
+        assert.ok(findReaderTablePasteDuplication(cell, { sourceTexts: [quote] }), quote);
+    }
+    for (const value of [cell + cell, '12801280, 1280, and 320',
+        '1280, 1280, and 320, 320', '1280, 1280, 320']) {
+        assert.ok(findReaderTablePasteDuplication(value, { sourceTexts: [source] }), value);
+    }
+});

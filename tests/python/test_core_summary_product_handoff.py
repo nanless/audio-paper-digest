@@ -16,6 +16,12 @@ CASES = json.loads((ROOT / 'tests/fixtures/core-product-handoff-cases.json').rea
 
 
 class ProductHandoffTest(unittest.TestCase):
+    def test_measured_test_or_recorded_data_boundary_rejects_speculation_and_denial(self):
+        for key, expected in [('scopedBoundaryPositive', True), ('scopedBoundaryNegative', False)]:
+            for text in CASES[key]:
+                with self.subTest(text=text):
+                    self.assertEqual(publish._has_natural_scoped_boundary(text), expected)
+
     def test_typed_products_keep_negative_and_unrelated_paths_blocked(self):
         for key, expected in [('chainsPositive', True), ('chainsNegative', False)]:
             for text in CASES[key]:

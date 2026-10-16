@@ -4106,7 +4106,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 value.lastIndexOf('；', distinction.index), value.lastIndexOf(';', distinction.index)) + 1;
             const scope = value.slice(start, distinction.index);
             if (matchIndex < start || scope.length > 180
-                || /(?:本文|本论文|作者团队|本研究|本工作)[^。；;]{0,28}(?:代码|权重|检查点)[^。；;]{0,16}(?:已|现已|已经)(?:开源|公开|发布)/.test(scope)) continue;
+                || /(?:本文|本论文|作者团队|本研究|本工作)[^。；;]{0,28}(?:代码|权重|检查点)[^。；;]{0,16}(?:已|现已|已经)?(?:开源|公开|发布|可用|可下载|可获取|可访问)/.test(scope)) continue;
             const properties = [
                 /代码(?:开源|公开|可用|可运行|可访问)/,
                 /(?:模型)?权重(?:可下载|可获取|公开|可用)/,
@@ -4787,6 +4787,79 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         }
         return false;
     };
+    const isBoundedResourceMeaningNonClaim = (value, type, matchIndex, matchEnd) => {
+        // Only the matched predicate's complete local grammatical span can be
+        // non-assertive. Another resource assertion in this sentence stays live.
+        const contains = span => matchIndex >= span.index && matchEnd <= span.index + span[0].length;
+        const safe = span => {
+            const before = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            const after = value.slice(span.index + span[0].length).replace(/^[\s，,*_~]+/u, '');
+            return !/[“”‘’「」"'`]|所谓|否认|否定|反驳|证伪|推翻|并非|不是/u.test(before)
+                && !/^(?:[“”‘’「」"'`]|(?:这(?:一|种)?|该|上述|的)?(?:说法|判断|结论|声明|否定)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳))/u.test(after);
+        };
+        const bounded = pattern => [...value.matchAll(pattern)].some(span => contains(span) && safe(span));
+        const resource = '(?:源代码|代码仓库|模型权重|数据集|语料库|代码|模型|权重|检查点|数据|资源)';
+        const list = resource + '(?:(?:、|或|与|和|及)' + resource + '){0,4}';
+        const release = '(?:已(?:经)?|当前)?(?:公开|开源|开放|可下载|可获取|可用)';
+        if (bounded(new RegExp('(?:没有|尚无|并无)可验证的' + list + release + '的证据', 'gu'))
+            || bounded(new RegExp('(?:没有|尚未|并未)(?:明确)?(?:声称|声明)' + list + release, 'gu'))
+            || bounded(new RegExp('不(?:作|做)' + list + '(?:开源|公开)(?:与|和)可用(?:断言|声明)', 'gu'))
+            || bounded(/(?:代码仓库|作者仓库|模型权重|权重|数据集|资源)的可达性未在[^。！？!?；;，,]{1,20}确认为可用/gu)) return true;
+        const property = '(?:代码(?:开源|公开|可得|可跑|可运行)|开源代码|(?:模型)?权重可下载|(?:端到端)?系统可(?:一键)?运行|演示可听|开源|可运行)';
+        const properties = property + '(?:(?:、|与|和)' + property + '){1,3}';
+        // Bare, owner-free concepts followed by an explicit distinction or
+        // pending state are not present availability. Ownership is not optional.
+        const lists = new RegExp('(' + properties + ')(?:是(?:三件独立的事|三件事|不同的)|三件事|要分开说|要当作三件未确认的事|(?:同样)?未确认|在本篇中均未给出明确证据|更需要分别核验)(?=[，,。！？!?；;]|$)', 'gu');
+        for (const span of value.matchAll(lists)) {
+            if (!contains(span) || !safe(span)) continue;
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (!/^(?:\s*(?:但|因此))?\s*$/u.test(prefix)) continue;
+            const items = span[1].split(/、|与|和/u);
+            if (new Set(items).size !== items.length) continue;
+            const tail = value.slice(span.index + span[0].length).split(/[。！？!?；;]/u)[0];
+            if (/(?:它们|三者|这三项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;]{0,28}(?:公开|开源|可用|可下载|可获取)/u.test(tail)) continue;
+            return true;
+        }
+        for (const span of value.matchAll(new RegExp('复现(?:前)?(?:要|应|需)(?:分清三件事[：:]|区分)(' + properties + ')(?:三件事)?(?=[。！？!?；;]|$)', 'gu'))) {
+            const items = span[1].split(/、|与|和/u);
+            if (contains(span) && safe(span) && new Set(items).size === items.length) return true;
+        }
+        if (bounded(/这与代码公开是两回事/gu)
+            || bounded(/即使(?:模型)?权重可下载也不能等同(?:系统|端到端系统)可一键运行/gu)) return true;
+        // Functional availability has a different grammatical object from a
+        // repository or downloadable model. Mask that predicate only.
+        if (type === 'model' && (bounded(/(?:对应)?模态可用(?=时)/gu)
+            || bounded(/可用(?:容量|知识)/gu))) return true;
+        if (type === 'dataset' && bounded(/临床可用(?=的结论)/gu)) return true;
+        if (type === 'code' && (bounded(/(?:从)?各模态仓库取出可用线索/gu)
+            || bounded(/数据可得指仓库经注册申请后可访问/gu))) return true;
+        const source = String(sourceText || '').replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
+            .replace(/^[ \t]*>.*$/gm, ' ').replace(/“[^”]*”|「[^」]*」|"[^"\n]*"|'[^'\n]*'/g, ' ');
+        const sourceAffirms = pattern => [...source.matchAll(pattern)].some(span => {
+            const before = source.slice(Math.max(0, span.index - 240), span.index).split(/[.!?]/u).at(-1);
+            return !/\b(?:not|never|no|if|would|could|might|will|future|planned|plans?|unlikely|likely|expected|intended|may|can|should|must|aims?|whether|said|says?|wrote|written|quoted|quote|quotation|false|untrue|incorrect|inaccurate|claims?|claimed|reports?|reported|reportedly|alleged|assumed|third[- ]party)\b/iu.test(before + span[0]);
+        });
+        if (type === 'model') {
+            if (bounded(/从已发布检查点继续(?:微调)?/gu)
+                && sourceAffirms(/\bwe\s+initialize from the released checkpoint\b/giu)) return true;
+            for (const span of value.matchAll(/需要的材料包括[^。！？!?；;，,]{1,110}(?:表示|预训练|基础)模型的(?<requirement>可用权重)/gu)) {
+                const start = span.index + span[0].length - span.groups.requirement.length;
+                if (matchIndex >= start && matchEnd <= start + span.groups.requirement.length && safe(span)) return true;
+            }
+        }
+        // Dataset loading software is not the dataset release. The original
+        // source must explicitly release loaders, with current use unverified.
+        const unrevokedQualification = !/[“”‘’「」"'`]|所谓|(?:说法|判断|结论|声明)(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:不能|无法|不可)(?:否认|否定|反驳)/u.test(value);
+        if (type === 'dataset' && unrevokedQualification && bounded(/论文称评测脚本与数据集加载已开源并给出了链接/gu)
+            && sourceAffirms(/\bAll code and dataset loaders are[ \t]*(?:[^\n]{0,140}\n)?[ \t]*open-sourced\b/gu)
+            && /本次没有可验证的作者资源可用性信息/u.test(value)
+            && /具体可用性需读者自行核对[。]?$/u.test(value)) return true;
+        if (['code', 'dataset'].includes(type) && unrevokedQualification
+            && bounded(/原文写了数据集和代码公开链接/gu)
+            && sourceAffirms(/Our dataset and code are publicly avail-\n[^\n]{0,180}\n\s*able\s+at:/gu)
+            && /但本次只依据论文文本，不能确认链接当前可用，因此不能写成已公开可用/u.test(value)) return true;
+        return false;
+    };
     const hasUnqualifiedTypeAffirmative = (
         value, type, noun, { qualificationResource = null } = {}
     ) => {
@@ -4862,7 +4935,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 segment, nearbyMentions, nearestMentions
             );
             if (!associatedTypes.has(type)) continue;
-            if (isThirdPartyTypeAttribution(segment, type, mentions)
+            if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length)
+                || isThirdPartyTypeAttribution(segment, type, mentions)
                 || isDataSourceRepositoryAttribution(segment, type)
                 || isExistingDatasetAttribution(segment, type)
                 || isSelfOwnedResourceAvailabilityDenial(segment, type)

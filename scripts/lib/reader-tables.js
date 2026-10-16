@@ -149,6 +149,26 @@ function hasSourceBoundRepeatedSlashVector(cell, context = {}, duplicate = null)
         .flatMap(vectors).some(vector => vector.sequence === candidate.sequence);
 }
 
+function hasSourceBoundRepeatedEnglishTriple(cell, context = {}, duplicate = null) {
+    const compact = String(cell || '').replace(/\s+/g, '');
+    const number = '[+\\-]?\\d+(?:\\.\\d+)?';
+    if (!new RegExp(`^${number},${number},and${number}$`, 'i').test(compact)) return false;
+    if (duplicate && !(duplicate.index >= 0
+        && duplicate.index + duplicate.length <= compact.length)) return false;
+    // Keep source whitespace to distinguish actual English list boundaries from
+    // substrings of scientific numbers, names and longer parameter sequences.
+    const pattern = new RegExp(`(?<![A-Za-z0-9_.+\\-])${number}\\s*,\\s*${number}\\s*,\\s*and\\s+${number}(?![A-Za-z0-9_]|\\.\\d)`, 'gi');
+    return (Array.isArray(context.sourceTexts) ? context.sourceTexts : []).some(source => {
+        const text = String(source || '');
+        return [...text.matchAll(pattern)].some(match => {
+            const before = text.slice(0, match.index), after = text.slice(match.index + match[0].length);
+            if (/[+\-]?\d+(?:\.\d+)?\s*[,/、，;；]\s*$/u.test(before)
+                || /^\s*(?:[,/、，;；]\s*(?:and\s+)?|and\s+)[+\-]?\d/iu.test(after)) return false;
+            return match[0].replace(/\s+/g, '').toLowerCase() === compact.toLowerCase();
+        });
+    });
+}
+
 function hasSourceBoundRepeatedRangeChain(cell, context = {}, duplicate = null) {
     const text = String(cell || '').normalize('NFKC');
     const compact = text.replace(/\s+/g, '').replace(/\\times/gi, '×');
@@ -214,6 +234,8 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         if (hasSourceBoundRepeatedColonVector(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasSourceBoundRepeatedSlashVector(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
+        if (hasSourceBoundRepeatedEnglishTriple(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         return `单元格存在疑似粘连复写“${doubled[0].slice(0, 40)}”，须核对完整原始值与绑定，不能仅按重复形状删减数字`;
     }

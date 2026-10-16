@@ -4937,6 +4937,9 @@ def _has_concrete_product_handoff(summary):
             window = '。'.join(parts)
             if denied.search(window):
                 continue
+            if (not re.search(r'(?:若|假想|假定|设想|是否|相互独立|无关(?:的)?(?:波形|方法))|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:回归|预测|输出|求|计算|得到)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)|(?:不|未|没有)(?:再|实际|直接|继续)?(?:使用|采用|处理|传递|送入)(?:该|此|所得)?(?:估计)?(?:基频)?波形|(?:丢弃|弃用)(?:了)?(?:该|此|所得)?(?:估计)?(?:基频)?波形|(?:不|未|没有)(?:再|实际|直接|继续)?(?:将|把)(?:该|此|所得)(?:估计)?(?:基频)?波形[^，,。；]{0,12}(?:送入|用于|交给)', window) and re.search(r'(?:编码器|解码器|网络)[^。；]{0,180}(?:回归|预测|输出)(?:估计的)?(?:基频)?波形', parts[0])
+                    and re.search(r'(?:由|将|把)(?:该|此|估计得到的)(?:估计)?(?:基频)?波形[^，,。；]{0,12}(?:求|计算|得到)解析信号并(?:计算|求取)相位导数(?:即得|得到)(?:瞬时频率|连续基频)', parts[-1])):
+                return True
             if (neural_tokens.search(window) or mask_processing.search(window)
                     or frame_production.search(parts[0]) and frame_consumption.search(parts[-1])
                     or text_production.search(parts[0]) and text_consumption.search(parts[-1])):
@@ -4989,6 +4992,10 @@ def _has_natural_scoped_boundary(summary):
             continue
         if re.search(r'(?:未经证实|效果未知)[^。]{0,30}(?:说法|表述|观点|判断)[^。]{0,20}(?:不成立|不正确|有误|错误)', sentence):
             continue
+        measured_scope = re.search(r'(?:结论|研究结果|研究发现|该提升|这些结果)(?:只|仅)在[^。！？!?；;\n]{1,140}(?:测试集|评测集|实录数据)[^。！？!?；;\n]{0,40}?(?:内|上|下|中)(?:得到)?(?:验证|成立)', sentence)
+        if (measured_scope and not re.search(r'(?:并非|不是|不能|不应|否认|尚未|未经|没有|未曾|未被|假设|假想|假定|设想|如果|若|可能|预计|预期|计划|未来|讨论|声称|据说)', sentence[:measured_scope.end()])
+                and not re.search(r'(?:说法|表述|观点|判断|结论)[^。！？!?；;\n]{0,20}(?:不成立|不正确|不属实|不是事实|错误|有误)|^(?:是|为)?(?:不成立|不正确|不属实|错误|有误)', sentence[measured_scope.end():measured_scope.end() + 50])):
+            return True
         if (re.search(r'(?:结论|研究结果|研究发现|该提升|这些结果)(?:只|仅)?在[^。]{1,100}(?:条件|语料|数据集|设置|说话人)[^。]{0,30}(?:下验证|中验证|得到验证|成立)', sentence)
                 or re.search(r'(?:该提升|这些结果|上述结论)(?:只|仅)?限于[^。]{1,100}(?:评测|语料|数据集|问答|场景|条件|设置|样本|任务)', sentence)
                 or re.search(r'(?:跨语言|跨说话人|新说话人|新硬件|词表外|开放式生成)[^。]{0,80}(?:效果未经证实|效果未知|尚未得到验证)', sentence)):
@@ -5069,6 +5076,10 @@ def _has_concrete_runtime_disclosure(summary):
     for sentence in re.split(r'[。！？!?\n]', str(summary or '')):
         if re.search(r'(?:(?:未|不)(?:曾|实际|直接)?(?:需|需要|进行|执行)|讨论|假说|预计|预期|可能|假设|如果|未来|计划|建议|不需|无需|不能|不会|不进行|不执行|不耗|尚未|没有|未曾|并非|未测|未披露|未报告|未记录|未提供|未给出|未公布|未说明|未统计|不报告|不记录|不披露|不提供|尚无|不代表)', sentence):
             continue
+        measured_duration = re.search(r'(?:训练|推理|部署|(?:监督)?微调|强化学习)(?:平均|每轮|每个epoch)?(?:时间|耗时|用时)?(?:约|大约|为|是|分别为)?\s*(?:[0-9]+(?:\.[0-9]+)?)\s*(?:小时|分钟|毫秒|秒|hours?|minutes?|seconds?|ms|h|s)(?![A-Za-z0-9]|\s*的?\s*(?:(?:训练|测试|验证|评测)(?:用|集)?\s*)?(?:音频|语音|录音|数据|样本|语料|材料))', sentence, re.I)
+        if (measured_duration and not re.search(r'(?:假定|假想|设想)', sentence)
+                and not re.search(r'(?:说法|表述|观点|判断|结论)[^。！？!?；;\n]{0,20}(?:不成立|不正确|不属实|不是事实|错误|有误)|^(?:是|为)?(?:不成立|不正确|不属实|错误|有误)', sentence[measured_duration.end():measured_duration.end() + 50])):
+            return True
         if any(re.search(pattern, sentence) for pattern in (
             r'(?:训练|推理|部署)[^。！？!?；;]{0,40}(?:需要|需|进行|执行)(?:[1-9][0-9]*|[一二两三四五六七八九十]+)次(?:完整(?:的)?|(?:经过|通过)(?:共享)?(?:[A-Za-z0-9_-]+\s*)?(?:编码器|主干|网络|模型)(?:的)?(?:提示条件)?|提示条件(?:的)?)?前向(?:传播|计算)?',
             r'(?:训练|推理|部署)(?:平均|每轮|每个epoch)?时间(?:约|为|是|分别为)?\s*[0-9]+:[0-5][0-9](?![0-9:])',

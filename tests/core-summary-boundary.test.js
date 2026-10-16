@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { validateCoreSummarySemanticContract } = require('../scripts/analysis-contract.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
+const scopedCases = require('./fixtures/core-product-handoff-cases.json');
 const originalBoundary = '结论仅适用于论文覆盖的噪声类型与语种，对极低信噪比、未见录音环境和跨语言外推尚未验证。';
 
 function analysisWithBoundary(sentence) {
@@ -13,6 +14,15 @@ function analysisWithBoundary(sentence) {
     assert.ok(analysis.includes(sentence));
     return analysis;
 }
+
+test('仅在具体测试集或实录划分成立的实测边界保留否定和假设约束', () => {
+    const { hasNaturalScopedBoundary } = require('../scripts/analysis-contract.js');
+    for (const [key, expected] of [['scopedBoundaryPositive', true], ['scopedBoundaryNegative', false]]) {
+        for (const sentence of scopedCases[key]) {
+            assert.equal(hasNaturalScopedBoundary(sentence), expected, sentence);
+        }
+    }
+});
 
 test('明确的语料范围和观察性因果限制可作为实际结论边界', () => {
     for (const sentence of ['结论限于固定朗读语料。', '本研究的结论限于相同语音任务和录音条件。',
