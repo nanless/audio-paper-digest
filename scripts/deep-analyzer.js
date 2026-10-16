@@ -4106,7 +4106,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 value.lastIndexOf('；', distinction.index), value.lastIndexOf(';', distinction.index)) + 1;
             const scope = value.slice(start, distinction.index);
             if (matchIndex < start || scope.length > 180
-                || /(?:本文|本论文|作者团队|本研究|本工作)[^。；;]{0,28}(?:代码|权重|检查点)[^。；;]{0,16}(?:已|现已|已经)?(?:开源|公开|发布|可用|可下载|可获取|可访问)/.test(scope)) continue;
+                || /(?:本文|本论文|作者团队|本研究|本工作)[^。；;，,]{0,28}(?:代码|权重|检查点)[^。；;，,]{0,16}(?:已|现已|已经)?(?:开源|公开|发布|可用|可下载|可获取|可访问)/.test(scope)) continue;
             const properties = [
                 /代码(?:开源|公开|可用|可运行|可访问)/,
                 /(?:模型)?权重(?:可下载|可获取|公开|可用)/,
@@ -8786,11 +8786,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         }
         return parsed;
     };
+    let candidateRevalidated = false;
     // 恢复候选即使被之前的执行单元标成失败，也要重新校验。已保存的成功标志不能
     // 替代当前完整检查。
     if (candidate) {
         try {
             normalizeCandidate();
+            candidateRevalidated = true;
             const parsed = parseCandidate(JSON.stringify(candidate));
             const result = { ...parsed, contentMode, attempts: completedAttempts, fullAttempts, transportFailures, imageEvidence,
                 modelImagePreflightEvidenceSha256,
@@ -8850,8 +8852,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     );
     const attemptLimit = explicitRound ? explicitRound.maxResponses : repair.readerAttemptLimit(
         maxAttempts, completedAttempts, candidate, boundedRecoveryAllowance);
+    const changedValidationWithinOriginalBudget = repair.canContinueRevalidatedIssuesWithinBudget({
+        recovered, identity, currentIssues, candidateRevalidated, maxAttempts, attemptLimit, explicitRound
+    });
     if (completedAttempts >= attemptLimit
-        || !useEscalatedRepairBudget && (noProgress >= 2 || validationFailureStreak >= 2)) {
+        || !useEscalatedRepairBudget && !changedValidationWithinOriginalBudget
+            && (noProgress >= 2 || validationFailureStreak >= 2)) {
         if (mechanicalNoFigureCleanupChanged) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
             repair.saveFailedCandidate(candidateDirectory, identity, {
@@ -17369,7 +17375,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             }
             let changed = false;
             const paidCoreReplay = {};
-            if (summaryIssue || options.coreSummaryDiagnosticId !== undefined) {
+            if (summaryIssue || options.coreSummaryDiagnosticId !== undefined || options.replayLatestCoreSummaryDiagnostic === true) {
                 console.log(`    [deep] 🔧 结构检查后，只修复核心摘要这一节：${summaryIssue}`);
                 const fixed = await repairCoreSummarySection(
                     paper,
@@ -17377,7 +17383,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     rawTextForAnalysis,
                     coreSummaryRepairStage.evidenceContext,
                     { diagnosticStage: coreSummaryRepairStage, reviewFeedback: coreReviewFeedback,
-                        coreSummaryDiagnosticId: options.coreSummaryDiagnosticId, paidCoreReplay }
+                        coreSummaryDiagnosticId: options.coreSummaryDiagnosticId,
+                        replayLatestCoreSummaryDiagnostic: options.replayLatestCoreSummaryDiagnostic, paidCoreReplay }
                 );
                 changed = fixed !== analysis;
                 analysis = fixed;
@@ -19038,7 +19045,8 @@ async function repairCoreSummarySection(
         throw contractRejectedError('核心摘要事实反馈尚未绑定当前日更封存来源与正文');
     }
     let issue = getCoreSummaryDetailIssue(original, { sourceText });
-    if (!issue && !externalFeedback && options.coreSummaryDiagnosticId === undefined) return original;
+    if (!issue && !externalFeedback && options.coreSummaryDiagnosticId === undefined
+        && options.replayLatestCoreSummaryDiagnostic !== true) return original;
     const diagnosticStage = options.diagnosticStage || {};
     const sourceDiagnostic = require('./lib/conference-analysis-context')
         .conferenceCoreSummaryRepairContext(paper, sourceText)
@@ -19061,13 +19069,19 @@ async function repairCoreSummarySection(
     };
     const recordRoot = sourceDiagnostic?.directory
         || path.join(require('./config.js').FILES.analysisRepairAttemptsDir, diagnosticPaperId);
+    if (options.replayLatestCoreSummaryDiagnostic === true
+        && sourceDiagnostic?.sourceIdentity?.contract !== 'conference-analysis-source-identity-v1') {
+        throw contractRejectedError('最新原付费摘要复用只允许当前会议认证来源');
+    }
     // 仅复用调用者明确指定的原付费响应，仍运行当前完整摘要与事实检查。
-    if (options.coreSummaryDiagnosticId !== undefined) {
+    if (options.coreSummaryDiagnosticId !== undefined || options.replayLatestCoreSummaryDiagnostic === true) {
         try {
-            if (!/^[a-f0-9-]{36}$/.test(String(options.coreSummaryDiagnosticId)))
+            const paidDiagnosticId = options.coreSummaryDiagnosticId !== undefined ? options.coreSummaryDiagnosticId
+                : require('./lib/reader-request-diagnostics').latestCoreSummaryDiagnosticId(recordRoot, diagnosticIdentity);
+            if (!/^[a-f0-9-]{36}$/.test(String(paidDiagnosticId)))
                 throw contractRejectedError('付费摘要原请求 ID 无效');
             const saved = require('./lib/reader-request-diagnostics').readCoreSummaryDiagnostic(
-                recordRoot, options.coreSummaryDiagnosticId, diagnosticIdentity);
+                recordRoot, paidDiagnosticId, diagnosticIdentity);
             const match = String(saved.response.rawResponse).trim().match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
             if (!match || /^#{1,6}\s/m.test(match[1])) throw contractRejectedError('原付费摘要响应结构不合法');
             const updated = mergeSectionByTitle(original, '核心摘要', match[1]);

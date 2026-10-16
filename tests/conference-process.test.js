@@ -1070,7 +1070,8 @@ test('会议迁移先完成全批正常后处理，再按失败集合刷新并�
     const children = new Map();
     const deps = { ...f.deps, maxRounds: 3,
         processPaper: () => assert.fail('completed source must use bounded revision'),
-        adapter: { refreshConferenceReader: async ({ parentExecutionId }) => {
+        adapter: { refreshConferenceReader: async ({ parentExecutionId, reusePaidCoreDiagnostics }) => {
+            assert.equal(reusePaidCoreDiagnostics, true, 'only explicit retryFailed dispatch supplies paid-core replay');
             assert.equal(events.filter(value => value.startsWith('stage-parent')).length, 3);
             const item = Object.values(original.items).find(value => value.analysisRunId === parentExecutionId);
             events.push(`refresh:${item.paperId}`);

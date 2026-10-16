@@ -157,6 +157,43 @@ function readCoreSummaryDiagnostic(root, id, expectedIdentity) {
             fileSha256: { request: request.sha256, response: response.sha256, disposition: disposition.sha256 } };
     });
 }
+// Read-only discovery for an explicitly requested replay. The returned ID is
+// only an index; the ordinary strict reader rechecks the complete original chain.
+function latestCoreSummaryDiagnosticId(root, expectedIdentity) {
+    return guarded(() => {
+        const dir = path.resolve(root, 'request-diagnostics');
+        const matching = [];
+        const names = fs.readdirSync(dir).filter(name => /^[a-f0-9-]{36}\.request\.json$/.test(name)).sort();
+        for (const name of names) {
+            const fd = fs.openSync(path.join(dir, name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            let request, requestSha256;
+            try {
+                const stat = fs.fstatSync(fd);
+                if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024 * 1024) throw new Error('摘要修复索引必须为普通独立文件且不超过64MiB');
+                const bytes = fs.readFileSync(fd); requestSha256 = sha(bytes);
+                request = JSON.parse(bytes);
+            } finally { fs.closeSync(fd); }
+            if (JSON.stringify(request.identity) !== JSON.stringify(expectedIdentity)) continue;
+            const id = name.slice(0, -'.request.json'.length);
+            if (request.contract !== CORE_CONTRACT || request.id !== id
+                || request.promptSha256 !== sha(request.prompt)
+                || request.identity.inputAnalysisSha256 !== sha(request.inputAnalysis)
+                || request.identity.sourceTextSha256 !== sha(request.sourceText)
+                || request.identity.evidenceSha256 !== sha(request.evidenceText)) throw new Error('摘要原请求索引与其真实输入不一致');
+            const time = Date.parse(request.at);
+            if (!Number.isFinite(time)) throw new Error('摘要原请求时间无效');
+            matching.push({ id, time, requestSha256 });
+        }
+        if (JSON.stringify(names) !== JSON.stringify(fs.readdirSync(dir).filter(name => /^[a-f0-9-]{36}\.request\.json$/.test(name)).sort())) throw new Error('摘要原请求集合在只读索引期间改变');
+        matching.sort((a, b) => b.time - a.time);
+        if (!matching.length || (matching.length > 1 && matching[0].time === matching[1].time)) throw new Error('当前完整摘要身份没有唯一最新的原付费响应');
+        const latest = matching[0];
+        const saved = readCoreSummaryDiagnostic(root, latest.id, expectedIdentity);
+        if (saved.fileSha256.request !== latest.requestSha256) throw new Error('摘要原请求在索引与严格读取之间改变');
+        if (JSON.stringify(names) !== JSON.stringify(fs.readdirSync(dir).filter(name => /^[a-f0-9-]{36}\.request\.json$/.test(name)).sort())) throw new Error('摘要原请求集合在严格读取期间改变');
+        return latest.id;
+    });
+}
 module.exports = { beginReaderRepairDiagnostic, saveReaderRepairResponse,
     beginCoreSummaryDiagnostic, saveCoreSummaryResponse, saveCoreSummaryDisposition,
-    readCoreSummaryDiagnostic };
+    readCoreSummaryDiagnostic, latestCoreSummaryDiagnosticId };

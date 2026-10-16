@@ -270,6 +270,7 @@ function migrateAndRun(options, runtime = {}) {
             }
             const revised = await deps.adapter.refreshConferenceReader({ analysisRoot: deps.files.conferenceAnalysisDir,
                 parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
+                reusePaidCoreDiagnostics: options.retryFailed === true,
                 maxAttempts: Math.min(recovery.MAX_ATTEMPTS, deps.analysisConfig?.batchMaxRounds ?? 3) });
             let staged;
             try { staged = deps.postprocess.stagePaper({ analysisRoot: deps.files.conferenceAnalysisDir,

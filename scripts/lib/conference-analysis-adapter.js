@@ -665,7 +665,7 @@ function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
     return { ...loaded, revision: record.value, parent, resourcePreflight };
 }
 async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHandle, sourceRoot,
-    maxAttempts = 3 } = {}, overrides = {}) {
+    maxAttempts = 3, reusePaidCoreDiagnostics = false } = {}, overrides = {}) {
     if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) throw new Error('会议 revision 总轮预算必须为1至3');
     const engine = overrides.engine || require('../analysis-engine');
     const deep = overrides.deep || require('../deep-analyzer');
@@ -835,7 +835,11 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                 readerPdfSourceHandle, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () =>
                 loaded.revision.mode === 'normal-analysis'
                     ? withNormalAnalysisSlot(async () => {
+                        const reuseCore = reusePaidCoreDiagnostics === true && progress.attempts > 0
+                            && paper.analysisManifest?.stages?.coreSummaryRepair?.status === 'contract_rejected';
                         const outcome = await engine.analyzePaperWithRetry(paper, { maxRetries: 0,
+                        ...(reuseCore ? { analyzeFn: current => deep.analyzePaperDeep(current,
+                            { replayLatestCoreSummaryDiagnostic: true }) } : {}),
                         onCheckpoint: checkpoint => {
                             const saved = readJsonRecord(analysisFile);
                             replaceJson(analysisFile, { ...saved.value, papers: [checkpoint],

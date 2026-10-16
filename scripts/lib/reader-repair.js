@@ -273,6 +273,52 @@ function validationFailureHasNoProgress(previousSignature, currentSignature) {
     return !improved;
 }
 
+// A new parser result may expose a different blocking rule after an old
+// common false positive disappears. This only releases the stale stop predicate;
+// it neither changes a counter nor extends the original response/full budgets.
+function canContinueRevalidatedIssuesWithinBudget({ recovered, identity, currentIssues,
+    candidateRevalidated = false, maxAttempts, attemptLimit, explicitRound = null }) {
+    if (!candidateRevalidated || explicitRound || !recovered || !identity
+        || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 6
+        || identity.maxAttempts !== maxAttempts || attemptLimit !== maxAttempts
+        || !Number.isInteger(recovered.attempts) || recovered.attempts < 1
+        || recovered.attempts >= maxAttempts
+        || !Number.isInteger(recovered.fullAttempts) || recovered.fullAttempts < 1
+        || recovered.fullAttempts >= 2
+        || recovered.lastTransportError || recovered.lastContentError
+        || !Number.isInteger(recovered.noProgress) || recovered.noProgress < 0
+        || !Number.isInteger(recovered.validationFailureStreak) || recovered.validationFailureStreak < 0
+        || !(recovered.noProgress >= 2 || recovered.validationFailureStreak >= 2)) return false;
+    const blocking = issues => Array.isArray(issues) ? issues.filter(issue => issue?.diagnosticOnly !== true) : [];
+    const before = blocking(recovered.issues), after = blocking(currentIssues);
+    const valid = issues => issues.length > 0 && issues.every(issue => issue
+        && (issue.path === null || typeof issue.path === 'string')
+        && typeof issue.message === 'string' && issue.message.trim()
+        && (issue.code === undefined || typeof issue.code === 'string'));
+    if (!valid(before) || !valid(after)
+        || !parseValidationFailureSignature(recovered.validationFailureSignature)
+        || recovered.validationFailureSignature !== validationFailureSignature(recovered.issues)
+        || recovered.failureSignature !== hashRecoveryIssues(recovered.issues)) return false;
+    const current = validationFailureSignature(currentIssues);
+    if (!parseValidationFailureSignature(current)
+        || validationFailureHasNoProgress(recovered.validationFailureSignature, current)) return false;
+    // A retained old rule, including one with added cells/changed thresholds,
+    // is not a different problem. Typed codes identify a rule globally. Legacy
+    // prose uses its leading diagnostic clause with numeric values removed;
+    // unknown/missing clauses fail closed instead of inferring a new allowance.
+    const group = issue => {
+        const projected = recoveryIssueProjection(issue);
+        const clause = normalizeValidationMessage(projected.message).split(/[：:；;。\n]/u)[0]
+            .replace(/\d+(?:\.\d+)?/gu, '<number>').replace(/\s+/gu, ' ').trim();
+        if (clause.length < 8) return null;
+        return [...(issue.code ? ['code:' + issue.code] : []), 'legacy:' + clause];
+    };
+    const previousGroups = before.map(group), currentGroups = after.map(group);
+    if (previousGroups.includes(null) || currentGroups.includes(null)) return false;
+    const oldKeys = new Set(previousGroups.flat());
+    return !currentGroups.flat().some(key => oldKeys.has(key));
+}
+
 function hasUnusedImplementationAllowance(payload) {
     const proof = payload?.implementationRepairAllowanceProof;
     if (!proof || (payload.consumedImplementationAllowanceSha256 || []).includes(proof.allowanceSha256)) return false;
@@ -3559,7 +3605,7 @@ module.exports = { repairOperationProtocol, buildConceptTermsRepairContext, conc
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
     readTableCountIssue, hashRecoveryIssues, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
-    validationFailureHasNoProgress, readerAttemptLimit,
+    validationFailureHasNoProgress, readerAttemptLimit, canContinueRevalidatedIssuesWithinBudget,
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
