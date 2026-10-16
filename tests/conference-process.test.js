@@ -114,23 +114,30 @@ for (const providerFirst of [true, false]) test(`会议停止保留真实服务�
     assert.deepEqual(Object.values(state.items).map(item => item.lastFailure.code),
         ['MODEL_HTTP_TRANSIENT', 'ANALYSIS_STOP_REQUESTED']);
 });
-test('会议先完成所有首轮成员再只续失败集，成功成员与重试预算不重签', async t => {
-    const f = fixture(t, 3); const order = []; let failedOnce = false;
+test('会议并发10先完成全部首轮成员再只续失败集，保留原预算', async t => {
+    const f = fixture(t, 13), order = [], firstSettled = new Set(), attempts = new Map();
+    let active = 0, maximumActive = 0;
     const result = await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
-        reportName: 'report.json', filterId: f.authority.filterId, concurrency: 1 }, {
+        reportName: 'report.json', filterId: f.authority.filterId, concurrency: 10 }, {
         ...f.deps, maxRounds: 3, processPaper: async (_context, _shared, item) => {
-            order.push(item.paperId);
-            if (!failedOnce) { failedOnce = true; throw new Error('normal paper failure'); }
+            const attempt = (attempts.get(item.paperId) || 0) + 1;
+            attempts.set(item.paperId, attempt); order.push(item.paperId);
+            if (attempt > 1) assert.equal(firstSettled.size, f.members.length);
+            active++; maximumActive = Math.max(maximumActive, active);
+            await new Promise(resolve => setImmediate(resolve));
+            active--; if (attempt === 1) firstSettled.add(item.paperId);
+            if (item.paperId === f.members[0].paperId && attempt === 1) throw new Error('normal paper failure');
             return success(item);
         }
     });
-    assert.equal(result.status, 'complete');
+    assert.equal(result.status, 'complete'); assert.equal(maximumActive, 10);
     assert.deepEqual(order, [...f.members.map(item => item.paperId), f.members[0].paperId]);
     const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(
         f.files.conferenceProcessDir, result.processId, 'state.json'))));
-    assert.deepEqual(Object.values(state.items).map(item => item.attempts), [2, 1, 1]);
+    assert.deepEqual(Object.values(state.items).map(item => item.attempts), [2, ...Array(12).fill(1)]);
     assert.ok(Object.values(state.items).every(item => !item.retryReleases && !item.retryBudgetStart));
 });
+
 test('会议重复失败只用原三次预算，禁用人工建议配置不重开 Reader 或通过资格', async t => {
     const f = fixture(t); let calls = 0;
     const result = await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
@@ -878,16 +885,38 @@ test('真实的官方精确 PDF 来源保存后，能在不声称人工审查的
     assert.equal(extractions, 1);
 });
 
-test('命令行给并发设上限，并关掉旧版新建会议的绕过口子', () => {
-    const parsed = cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
-        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '3']);
-    assert.equal(parsed.concurrency, 3);
-    const raised = cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
-        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '5']);
-    assert.equal(raised.concurrency, 5);
-    assert.throws(() => cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
-        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '6']), /参数不符合要求。用法：/);
+test('会议与迁移命令行接受1至60并发，保持默认值并拒绝非规范数字', () => {
+    const base = ['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
+        '--filter', '11111111-1111-4111-8111-111111111111'];
+    const migration = require('../scripts/migrate-conference-process');
+    const migrationBase = [...base, '--from', '11111111-1111-4111-8111-111111111111'];
+    assert.equal(cli.parseArgs(base).concurrency, 1);
+    assert.equal(migration.parseArgs(migrationBase).concurrency, 3);
+    for (const value of ['1', '3', '5', '6', '10', '60']) {
+        assert.equal(cli.parseArgs([...base, '--concurrency', value]).concurrency, Number(value));
+        assert.equal(migration.parseArgs([...migrationBase, '--concurrency', value]).concurrency, Number(value));
+    }
+    for (const value of ['0', '61', '-1', '1.5', '01', 'NaN', '1e1']) {
+        assert.throws(() => cli.parseArgs([...base, '--concurrency', value]), /参数不符合要求。用法：/);
+        assert.throws(() => migration.parseArgs([...migrationBase, '--concurrency', value]), /命令写法不对，用法：/);
+    }
     assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /新会议的执行、分析和页面处理必须使用 conference:process/);
+});
+
+test('会议库支持1至60并发且仅调度参数变化不改变原计划身份', async t => {
+    const f = fixture(t);
+    assert.equal(processApi.MAX_CONCURRENCY, 60);
+    const baseline = await processApi.runConferenceProcess({ apply: false, concurrency: 1 }, f.deps);
+    for (const concurrency of [6, 10, 60]) {
+        const result = await processApi.runConferenceProcess({ apply: false, concurrency }, f.deps);
+        assert.equal(result.concurrency, concurrency);
+        assert.equal(result.processId, baseline.processId);
+    }
+    for (const concurrency of [0, 61, -1, 1.5, NaN, Infinity, '10']) {
+        await assert.rejects(processApi.runConferenceProcess({ apply: false, concurrency }, {
+            ...f.deps, loadAuthority: () => assert.fail('invalid concurrency must fail before loading source authority')
+        }), /concurrency 1-60/);
+    }
 });
 
 test('401 余额失败会停止派发，能跨续跑保留，并且只显式释放未完成的工作', async t => {
@@ -1126,17 +1155,17 @@ test('会议未创建任何 child 时重验修复后的原父稿，零模型恢�
     assert.deepEqual(fs.readdirSync(f.files.conferenceAnalysisDir), []);
 });
 
-test('系统性失败后，正在处理论文的任务会完成手上的工作，但不再派发新任务', async t => {
-    const f = fixture(t, 7); let calls = 0;
+test('会议并发10的系统性失败保存九篇在途结果，停止领取后续成员', async t => {
+    const f = fixture(t, 13); let calls = 0;
     let release; const inFlight = new Promise(resolve => { release = resolve; });
-    const result = await processApi.runConferenceProcess({ apply: true, concurrency: 3 }, { ...f.deps,
+    const result = await processApi.runConferenceProcess({ apply: true, concurrency: 10 }, { ...f.deps,
         processPaper: async (_c, _s, item) => {
             const call = ++calls;
-            if (call === 1) { await Promise.resolve(); release(); throw new Error('HTTP 503: service unavailable'); }
+            if (call === 1) { await new Promise(resolve => setImmediate(resolve)); release(); throw new Error('HTTP 503: service unavailable'); }
             await inFlight; return success(item);
         } });
     assert.equal(result.stopped, true); assert.equal(result.batchFailure.category, 'transport');
-    assert.equal(calls, 3); assert.equal(result.complete, 2);
+    assert.equal(calls, 10); assert.equal(result.complete, 9);
 });
 
 test('单篇演示失败不会中断会议批次', async t => {

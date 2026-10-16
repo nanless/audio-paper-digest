@@ -36,6 +36,8 @@
 
 完整会议的旧稿先统一走正常后处理，失败集合在显式 `conference:migrate-process --retry-failed` 恢复中分轮处理。保留原父稿和费用；上游合格时刷新 Reader，资源状态影响评分时先正常复核评分，上游或旧模型输入有问题时正常完整分析，成功项不重复付费。具体参数与中断恢复见[会议页面更新](docs/conference-workflow.md#已有完整会议只更新页面)。
 
+会议 `conference:process` 外层并发默认1、`conference:migrate-process` 默认3，均可显式设置 `--concurrency N`（1–60）。Reader 仍受原 `PD_API_READER_CONCURRENCY` 限制，正常完整分析修订最多占用原主分析配置下的3槽，每篇内部并发仍为1；调度并发不改变来源计划、模型、请求额度或整批轮次。
+
 会议沿用共享摘要修复、Reader 和资源检查，同时保留真实会议身份与封存来源上下文。已保存的新合格稿先复验再决定是否请求模型，不能因接口修复重复付费，也不能用继承父稿掩盖新失败。
 
 PDF 表格证据也通过来源适配进入同一 Reader：只有原表范围、表头或明确表注、行列及单位可以唯一对应时，程序才派生可重放证明。会议和历史 PDF 不伪装成日更 HTML DOM；原表未注明的单位不能从别处借用。详见[共享来源边界](docs/three-workflows.md)。

@@ -61,6 +61,8 @@ conference:acquire → conference:discover → 全文证据与每会筛选
 
 参数、官方会议来源、账本、导入、并发、来源升级与断点恢复见 [会议工作流](docs/conference-workflow.md)。唯一分析入口是 `conference:process`，内部调用公共 `analysis-engine.js`，不再提供独立execution/analyze/postprocess旧CLI。
 
+会议 `conference:process` 外层并发默认1、`conference:migrate-process` 默认3，均可显式设置 `--concurrency N`（1–60）。Reader 仍受原 `PD_API_READER_CONCURRENCY` 限制，正常完整分析修订最多占用原主分析配置下的3槽，每篇内部并发仍为1；调度并发不改变来源计划、模型、请求额度或整批轮次。
+
 仅更新完整会议的页面时，先核对原全成员状态，再正常恢复或显式实现迁移，重暂存单篇和汇总，复用原合格分析与费用。未发布 process 才继续上述发布三阶段；已有 `publish.json` 的 ID 不因重复 generate 更新，已有 URL 按历史维护入口处理，见[只更新会议页面](docs/conference-workflow.md#已有完整会议只更新页面)。
 
 旧完成稿遇当前检查失败，迁移先统一处理全体并报告失败集合；同一命令显式加 `--retry-failed` 才恢复这些稿件。原父运行与费用保留，子运行绑定真实原来源并按公共失败轮次续跑；上游合格时按封存资源预检选择 Reader 或评分＋Reader，旧 Unicode 输入或核心问题则正常完整分析。成功逐篇即时保存，中断仍须核验父子连续链，不能重签旧稿、变更原预检与模式或清零预算。

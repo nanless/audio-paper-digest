@@ -27,7 +27,7 @@ const LEGACY_TAG_REVIEW_QUEUE_FILE = 'taxonomy-review-queue.json';
 const DEEP_EXECUTION_CONFIG_CONTRACT = 'conference-deep-execution-config-v1';
 const VERSION = PROCESS_VERSION;
 const DEEP_EXECUTION_CONFIG_VERSION = 1;
-const MAX_CONCURRENCY = 5;
+const MAX_CONCURRENCY = 60;
 const DEEP_EXECUTION_LIMIT_FIELDS = Object.freeze([
     'apiOverallTimeoutMs',
     'apiReaderOverallTimeoutMs',
@@ -1189,7 +1189,7 @@ async function runConferenceProcess(options, overrides = {}) {
     if (!options || typeof options.apply !== 'boolean' || !Number.isInteger(options.concurrency)
         || (options.retryFailed !== undefined && typeof options.retryFailed !== 'boolean')
         || options.concurrency < 1 || options.concurrency > MAX_CONCURRENCY) {
-        throw new Error('conference process requires explicit mode and concurrency 1-5');
+        throw new Error('conference process requires explicit mode and concurrency 1-60');
     }
     const deps = { ...defaultDependencies(), ...overrides };
     const context = (deps.loadAuthority || loadAuthority)(options, deps);
