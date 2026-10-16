@@ -148,3 +148,61 @@ test('未知startup hook或非隔离venv不缓存；唯一标准distutils及其�
         fs.writeFileSync(moduleFile, 'changed shim'); run(same); assert.equal(calls, 17);
     });
 });
+test('真实package或模块目录symlink是未知runtime，改target文件也必须正常重提取', t => {
+    const { run, dir, venv } = fixture(t);
+    const packages = path.join(venv, 'lib/python3.11/site-packages');
+    let calls = 0, targetFile;
+    t.mock.method(child, 'execFileSync', () => {
+        calls++;
+        return Buffer.from(JSON.stringify({ text: fs.readFileSync(targetFile, 'utf8') }));
+    });
+    const same = { literal: 'same input' };
+    function checkChangedTarget() {
+        const before = calls;
+        fs.writeFileSync(targetFile, 'original');
+        const first = JSON.parse(run(same));
+        fs.writeFileSync(targetFile, 'modified');
+        const second = JSON.parse(run(same));
+        assert.equal(calls, before + 2, 'unknown linked module layout must never hit a cached result');
+        assert.equal(first.text, 'original');
+        assert.equal(second.text, 'modified');
+    }
+    // Top-level package link: old identity recorded only the link inode.
+    const module = path.join(packages, 'pymupdf'), saved = module + '-original';
+    fs.renameSync(module, saved);
+    const external = path.join(dir, 'external-package'); fs.mkdirSync(external);
+    targetFile = path.join(external, '__init__.py');
+    fs.symlinkSync(external, module, 'dir');
+    try { api.withPdfExtractionScope(checkChangedTarget); }
+    finally { fs.unlinkSync(module); fs.renameSync(saved, module); }
+    // Internal directory link: changing an existing target child does not
+    // change the target directory's inode/mtime, so directory metadata is insufficient.
+    const nested = path.join(dir, 'external-nested'); fs.mkdirSync(nested);
+    targetFile = path.join(nested, 'runtime.py');
+    const link = path.join(module, 'linked'); fs.symlinkSync(nested, link, 'dir');
+    try { api.withPdfExtractionScope(checkChangedTarget); }
+    finally { fs.unlinkSync(link); }
+    // A linked layout root is likewise outside the known isolated runtime.
+    const realPackages = packages + '-real'; fs.renameSync(packages, realPackages);
+    fs.symlinkSync(realPackages, packages, 'dir');
+    targetFile = path.join(realPackages, 'pymupdf/__init__.py');
+    try { api.withPdfExtractionScope(() => {
+        const before = calls; run(same); run(same);
+        assert.equal(calls, before + 2, 'linked site-packages root is uncached');
+    }); } finally { fs.unlinkSync(packages); fs.renameSync(realPackages, packages); }
+});
+test('解释器自身已追真实目标的symlink保持合法，模块文件symlink仍不缓存', t => {
+    const { run, dir, venv } = fixture(t); let calls = 0;
+    const python = path.join(venv, 'bin/python'), realPython = python + '-real';
+    fs.renameSync(python, realPython); fs.symlinkSync(realPython, python);
+    t.mock.method(child, 'execFileSync', () => { calls++; return Buffer.from('{"exact":true}'); });
+    api.withPdfExtractionScope(() => { run({ same: true }); run({ same: true }); });
+    assert.equal(calls, 1, 'the explicitly fingerprinted interpreter target is supported');
+    const module = path.join(venv, 'lib/python3.11/site-packages/fitz/__init__.py');
+    const target = path.join(dir, 'external-module.py'); fs.writeFileSync(target, 'original');
+    fs.unlinkSync(module); fs.symlinkSync(target, module);
+    api.withPdfExtractionScope(() => {
+        run({ same: true }); fs.writeFileSync(target, 'modified'); run({ same: true });
+    });
+    assert.equal(calls, 3, 'arbitrary module file links are unknown and always re-executed');
+});

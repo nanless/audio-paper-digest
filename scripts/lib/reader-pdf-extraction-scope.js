@@ -26,14 +26,20 @@ function metadata(filename) {
     const value = fs.lstatSync(filename, { bigint: true });
     return [filename, ...['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeNs', 'ctimeNs'].map(k => String(value[k]))];
 }
+function plainDirectory(directory) {
+    const info = fs.lstatSync(directory);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error('Unknown linked Python runtime layout');
+}
 function treeMetadata(directory) {
+    plainDirectory(directory);
     const rows = [metadata(directory)];
     for (const name of fs.readdirSync(directory).sort()) {
         // Python bytecode is incidental; importing the same unchanged source
         // must not turn a warm extraction into a miss.
         if (name === '__pycache__') continue;
         const filename = path.join(directory, name), stat = fs.lstatSync(filename);
-        if (stat.isSymbolicLink()) { rows.push(metadata(filename), metadata(fs.realpathSync(filename))); continue; }
+        if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile()))
+            throw new Error('Unknown linked Python module tree');
         rows.push(...(stat.isDirectory() ? treeMetadata(filename) : [metadata(filename)]));
     }
     return rows;
@@ -44,14 +50,19 @@ function runtimeIdentity() {
     const python = path.join(root, '.venv/bin/python');
     try {
         fs.accessSync(python, fs.constants.X_OK);
+        plainDirectory(path.join(root, '.venv'));
+        plainDirectory(path.join(root, '.venv/bin'));
         const cfg = path.join(root, '.venv/pyvenv.cfg');
         const config = fs.readFileSync(cfg);
         const isolation = [...config.toString('utf8').matchAll(/^\s*include-system-site-packages\s*=\s*([^\r\n]*)$/gmi)];
         if (isolation.length !== 1 || isolation[0][1].trim().toLowerCase() !== 'false') return null;
         const libraries = path.join(root, '.venv/lib');
+        plainDirectory(libraries);
         const versions = fs.readdirSync(libraries).filter(n => /^python3\.\d+$/.test(n));
         if (versions.length !== 1) return null;
+        plainDirectory(path.join(libraries, versions[0]));
         const packages = path.join(libraries, versions[0], 'site-packages');
+        plainDirectory(packages);
         const packageNames = fs.readdirSync(packages);
         const startupRoots = [packages, root, path.join(root, 'scripts'),
             path.join(path.dirname(path.dirname(fs.realpathSync(python))), 'lib', versions[0])];
@@ -69,7 +80,10 @@ function runtimeIdentity() {
             configSha256: sha(config), packages: metadata(packages),
             modules: names.flatMap(n => {
                 const file = path.join(packages, n);
-                return fs.lstatSync(file).isDirectory() ? treeMetadata(file) : [metadata(file)];
+                const info = fs.lstatSync(file);
+                if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile()))
+                    throw new Error('Unknown linked Python package');
+                return info.isDirectory() ? treeMetadata(file) : [metadata(file)];
             }) };
     } catch (_) { return null; }
 }
