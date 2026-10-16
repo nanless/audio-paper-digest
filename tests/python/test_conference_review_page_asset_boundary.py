@@ -6,9 +6,26 @@ from pathlib import Path
 from unittest import mock
 
 from test_publish_conference import M, FakeReviewer
+from project_env_isolation import isolate_module_environment, restore_environment_after
+
+
+setUpModule, tearDownModule = isolate_module_environment()
 
 
 class ConferenceReviewPageAssetBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        restore_environment_after(self)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.runtime = self.root / 'review-runtime'
+        self.runtime.mkdir()
+        (self.runtime / 'hugo.toml').write_text('baseURL = "https://example.invalid/"\n')
+        (self.runtime / 'layouts').mkdir()
+        self.publisher = M.load_publish_to_blog()
+        self.enterContext(mock.patch.object(self.publisher, 'BLOG_REPO', self.runtime))
+        self.enterContext(mock.patch.object(M, 'load_publish_to_blog', return_value=self.publisher))
+
     def fixture(self):
         # A small equivalent of 1355 HTML pages plus 5416 machine sidecars.
         pages = [{'kind': kind, 'path': f'content/posts/{kind}.md', 'sourceSha256': digit * 64}
@@ -33,6 +50,13 @@ class ConferenceReviewPageAssetBoundaryTests(unittest.TestCase):
         return {**body, 'reviewSha256': M.stable(body)}
 
     def test_html_set_excludes_sidecars_but_full_receipt_retains_all_assets(self):
+        # CI has no adjacent blog checkout. Keep the production refusal real,
+        # then compute this fixture's actual protocol using its own runtime.
+        missing = self.root / 'missing-default-blog'
+        self.assertFalse(missing.exists())
+        with mock.patch.object(self.publisher, 'BLOG_REPO', missing), \
+                self.assertRaisesRegex(self.publisher.PublishDataValidationError, '博客运行时文件缺失'):
+            self.publisher.review_protocol_fingerprint()
         generation, receipt = self.fixture()
         for current in [True, False]:
             M.validate_review(generation, receipt, current=current)
