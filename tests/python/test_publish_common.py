@@ -597,6 +597,24 @@ class PublishCommonSanitizerTest(unittest.TestCase):
                 invalid, 'sourceBindings', invalid['sourceQuote'], '测试样例数据',
             ))
 
+    def test_manual_v4_task_condition_references_and_real_quantity_boundaries(self):
+        for sentence in [
+            '当前是哪一个任务。', '下一个任务换系统，流程重复。',
+            '另一个条件是把英语子集扩到多语言。',
+            '临床验证部分是另一个条件，它只用 70 例英语样本。',
+            '只报告准确率。下一个任务重新训练。',
+        ]:
+            with self.subTest(sentence=sentence):
+                self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + sentence))
+        for sentence in [
+            '模型只在一个任务上评测。', '共有一个条件。', '比较了两个条件的结果。',
+            'batch为一。', '阈值为三。', '实验只在这一个任务上评测。',
+            '仅有下一个条件可用。', '下一个任务包含一千个样本。',
+            '另一个条件提升百分之三。', '这一个任务训练一轮。',
+        ]:
+            with self.subTest(sentence=sentence):
+                self.assertIsNotNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + sentence))
+
     def test_manual_v4_reader_lexical_boundaries_and_node_parity(self):
         safe = '''## 核心摘要
 系统把标签统一成同一条件；唯一分层用于二分类。目标具有有界项与有限状态，功能能否启用取决于输入，性能能够稳定复现。

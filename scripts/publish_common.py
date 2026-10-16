@@ -4052,6 +4052,14 @@ def validate_manual_depth_contract_v3(analysis):
     return None
 
 
+def _is_discourse_task_condition_numeral(text, index, surface):
+    if (index < 1 or not re.fullmatch(r'一个(?:任务|条件)', surface)
+            or text[index:index + len(surface)] != surface or text[index - 1] not in '上下这另哪'):
+        return False
+    prefix = re.split(r'[，,。！？；;\n]', text[:index - 1])[-1]
+    return not re.search(r'(?:仅|只|至少|至多|恰好|共有|共计|总共|总计|一共|剩余)', prefix)
+
+
 def validate_manual_editorial_quality_v4(analysis):
     """发布阶段对 Manual v4 读者闸做高置信度复刻。
 
@@ -4206,6 +4214,12 @@ def validate_manual_editorial_quality_v4(analysis):
         quantity_body = re.sub(
             rf'(?<![\d{numeral_chars}])[{numeral_chars}]+点一致(?:性)?(?=\s*(?:[:：，,。；;！？!?]|$))',
             lambda match: ' ' * len(match.group(0)),
+            quantity_body,
+        )
+        quantity_body = re.sub(
+            r'[上下这另哪]一个(?:任务|条件)',
+            lambda match: ' ' * len(match.group(0)) if _is_discourse_task_condition_numeral(
+                quantity_body, match.start() + 1, match.group(0)[1:]) else match.group(0),
             quantity_body,
         )
         # 与 Node 闸一致：一对一是一种结构关系，不是可测量的配对数量。

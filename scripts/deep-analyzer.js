@@ -1265,8 +1265,8 @@ function isAllowedReaderNarrativeNumeralIssue(issue, article = '', evidence = nu
         && articleText.slice(issue.index - 1, issue.index + match.length) === '另一个方向') return true;
     // 「另一个任务」是同样的指代构造；统一空格写法后，数词检查本会匹配到里面的
     // 「一个任务」。
-    if (match === '一个任务' && Number.isInteger(issue.index) && issue.index >= 1
-        && articleText.slice(issue.index - 1, issue.index + match.length) === '另一个任务') return true;
+    if (require('./editorial-quality').isDiscourseTaskConditionNumeral(
+        articleText, issue.index, match)) return true;
     // 「一个数据集」在说明性文字里多半是不定冠词（「每篇论文用一个数据集」），不是
     // 在说量到了确切的数据集数量。例外只限这一处；「两个数据集」这类仍按精确计数
     // 要求写成阿拉伯数字。

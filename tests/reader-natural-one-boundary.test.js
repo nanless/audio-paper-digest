@@ -58,3 +58,47 @@ test('旧诊断误截自然词时也保留原句，不能再次生成维度1致'
         }]), text);
     }
 });
+
+test('排版还原的任务和条件指代不再被数量检查重新拒绝', () => {
+    for (const text of [
+        '推理时也不告诉模型当前是哪 1 个任务。',
+        '下1个任务换另一个系统，流程重复。',
+        '另 1 个条件是把英语子集扩到多语言。',
+        '临床验证部分是另 1 个条件，它只用70例英语样本。',
+        '只报告准确率。下一个任务重新训练。'
+    ]) {
+        const formatted = deep.normalizeReaderProseFormatting(text);
+        assert.deepEqual(quality.findQuantitativeChineseNumerals(formatted)
+            .filter(issue => /^一个(?:任务|条件)$/.test(issue.match)), [], formatted);
+    }
+    for (const prefix of '上下这另哪') for (const noun of ['任务', '条件']) {
+        const text = `${prefix}一个${noun}需要重新说明。`;
+        assert.deepEqual(quality.findQuantitativeChineseNumerals(text), [], text);
+        assert.equal(deep.isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: `一个${noun}`, index: 1
+        }, text), true, text);
+    }
+});
+
+test('数量限定和同句其他科学数值继续检查，指代不能豁免整句', () => {
+    for (const text of [
+        '模型只在一个任务上评测。', '共有一个条件。', '比较了两个条件的结果。',
+        '实验只在这一个任务上评测。', '仅有下一个条件可用。',
+        '只在经过严格控制和充分验证的这一个任务上评测。',
+        '下一个任务包含一千个样本。', '另一个条件提升百分之三。',
+        '这一个任务训练一轮。', '哪一个条件的阈值为三。', 'batch为一。'
+    ]) {
+        const issues = numericIssues(text);
+        assert.ok(issues.length, text);
+        for (const issue of issues) {
+            assert.equal(quality.isDiscourseTaskConditionNumeral(text, issue.index, issue.match), false, text);
+            if (/^一个(?:任务|条件)$/.test(issue.match)) {
+                assert.equal(deep.isAllowedReaderNarrativeNumeralIssue(issue, text), false, text);
+            }
+        }
+    }
+    for (const [text, index, surface] of [
+        ['一个任务完成。', 0, '一个任务'], ['下一个任务完成。', 0, '一个任务'],
+        ['下一个任务完成。', 2, '一个任务'], ['下一秒开始。', 1, '一秒']
+    ]) assert.equal(quality.isDiscourseTaskConditionNumeral(text, index, surface), false, text);
+});

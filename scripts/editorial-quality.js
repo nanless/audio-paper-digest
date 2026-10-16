@@ -303,6 +303,16 @@ function collectRegexMatches(text, regex, reason) {
     return findings;
 }
 
+// Task/condition references restored by prose formatting are discourse, not a measured count.
+// Keep exact quantity limiters in the same clause strict; never mask other numbers.
+function isDiscourseTaskConditionNumeral(text, index, surface) {
+    if (!Number.isInteger(index) || index < 1 || !/^一个(?:任务|条件)$/u.test(surface)
+        || text.slice(index, index + surface.length) !== surface
+        || !/[上下这另哪]/u.test(text[index - 1])) return false;
+    const prefix = text.slice(0, index - 1).split(/[，,。！？；;\n]/u).at(-1);
+    return !/(?:仅|只|至少|至多|恰好|共有|共计|总共|总计|一共|剩余)/u.test(prefix);
+}
+
 function findQuantitativeChineseNumerals(text) {
     // 下列“一步”都是篇章连接或指代，不是精确的 1 个步骤；用等长空白
     // 屏蔽它们以保持后续 issue index/line 不漂移。
@@ -319,7 +329,9 @@ function findQuantitativeChineseNumerals(text) {
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             match => ' '.repeat(match.length))
         // 「另一路」是承接上文的指代，不是量出来的计数。
-        .replace(/另一个流|另一个条件(?=改动)/gu, match => ' '.repeat(match.length))
+        .replace(/另一个流|[上下这另哪]一个(?:任务|条件)/gu, (match, offset, whole) =>
+            match === '另一个流' || isDiscourseTaskConditionNumeral(whole, offset + 1, match.slice(1))
+                ? ' '.repeat(match.length) : match)
         // “哪一个类别”是泛指选项，不是在报告实验类别数量。
         .replace(/(?:哪|某|这|那)一个(?=类别)/gu, match => ' '.repeat(match.length))
         .replace(
@@ -1280,6 +1292,22 @@ function findMissingComparisonUnits(text) {
                 /(?<![A-Za-z0-9_.-])\d+(?:\.\d+)?(?:\s*(?:[x×]|[-–—至到])\s*\d+(?:\.\d+)?)*\s*(?:km|cm|mm|[µμu]m|nm|m)(?:[²³]|\^[23])?(?=$|[^A-Za-z0-9])/giu,
                 match => ' '.repeat(match.length)
             )
+            // 已明确绑定的提前量/观察窗是实验设置，不是同句准确率的值。
+            // 只屏蔽带设置名称的完整时间量；其余裸指标仍逐项检查。
+            .replace(
+                /(?:同|在|以|使用|采用)\s*\d+(?:\.\d+)?\s*(?:毫秒|秒|分钟|小时)\s*(?:的\s*)?(?:提前量|观察窗|窗口|步长|延迟预算|滞后量)(?=\s*(?:下|时|上|条件|设置))/gu,
+                match => ' '.repeat(match.length)
+            )
+            .replace(
+                /(?:提前量|观察窗|窗口长度|步长|延迟预算|滞后量)\s*(?:为|是|=|取)?\s*\d+(?:\.\d+)?\s*(?:毫秒|秒|分钟|小时)(?![A-Za-z0-9_.])/gu,
+                match => ' '.repeat(match.length)
+            )
+            // 中文长度单位与上面的 cm/mm/m 采用相同语义；数字并非百分比。
+            // 要求完整单位边界，不能将“米尔”等名称截成“米”。
+            .replace(
+                /(?<![A-Za-z0-9_.+\-−])\d+(?:\.\d+)?\s*(?:千米|厘米|毫米|微米|纳米|米)(?=\s*(?:的|时|下|内|外|以上|以下|以内|以外|处|误差|门限|阈值|[，。；：、,.;:])|$)/gu,
+                match => ' '.repeat(match.length)
+            )
             // 有些原表在表头里就说明指标无量纲，单元格里不再逐个写 %/点。
             // 明确写出名字的 ASCII 指标范围沿用原表这个习惯，
             // 编辑归一化时不能硬给它补一个单位。
@@ -1909,6 +1937,7 @@ module.exports = {
     SCALED_ARABIC_MEASUREMENT_UNITS,
     normalizeEvidence,
     coerceCoreSections,
+    isDiscourseTaskConditionNumeral,
     findQuantitativeChineseNumerals,
     normalizeIssueBoundReaderQuantitativeNumerals,
     findReaderTemplatePhrases,
