@@ -482,8 +482,16 @@ function markPaperDigestStatus(paper, status, extra = {}) {
 }
 
 function mergeAnalysisDigestPaper(existing, paper) {
+    const successful = isSuccessfulAnalysisRecord(paper);
+    return mergeQualifiedAnalysisDigestPaper(existing, paper, successful,
+        !successful && hasValidAnalysisBody(existing));
+}
+
+// Reuse this element's actual qualification within one synchronous update.
+// This helper stays private: callers cannot supply a claimed success result.
+function mergeQualifiedAnalysisDigestPaper(existing, paper, successful, hadUsableAnalysis) {
     const merged = { ...existing, ...paper };
-    if (hasValidAnalysisBody(existing) && !isSuccessfulAnalysisRecord(paper)) {
+    if (hadUsableAnalysis && !successful) {
         preserveAnalysisFields(merged, existing);
         if (paper.analysisManifest) merged.analysisManifest = paper.analysisManifest;
         if (typeof paper.analysisCheckpoint === 'string') merged.analysisCheckpoint = paper.analysisCheckpoint;
@@ -492,7 +500,7 @@ function mergeAnalysisDigestPaper(existing, paper) {
         if (paper.imageManifest) merged.analysisRecoveryImageManifest = paper.imageManifest;
         merged.latestAnalysisAttemptError = paper.error || '分析未完成';
         merged.latestAnalysisAttemptAt = getBeijingISOString();
-    } else if (isSuccessfulAnalysisRecord(paper)) {
+    } else if (successful) {
         delete merged.analysisFactReviewObligation;
         delete merged.analysisRecoveryImageManifest;
         delete merged.analysisCheckpoint;
@@ -514,10 +522,11 @@ function applyAnalysisDigestStatuses(papersData, analyzedPapers, options = {}) {
         const key = normalizedId(paper);
         if (!key) continue;
         const existing = papersData.papers[key] || {};
-        const hadUsableAnalysis = hasValidAnalysisBody(existing);
-        const mergedPaper = mergeAnalysisDigestPaper(existing, paper);
-        const latestAttemptStatus = isSuccessfulAnalysisRecord(paper) ? 'analyzed' : 'analysis_failed';
-        const status = (isSuccessfulAnalysisRecord(paper) || hadUsableAnalysis) ? 'analyzed' : 'analysis_failed';
+        const successful = isSuccessfulAnalysisRecord(paper);
+        const hadUsableAnalysis = !successful && hasValidAnalysisBody(existing);
+        const mergedPaper = mergeQualifiedAnalysisDigestPaper(existing, paper, successful, hadUsableAnalysis);
+        const latestAttemptStatus = successful ? 'analyzed' : 'analysis_failed';
+        const status = (successful || hadUsableAnalysis) ? 'analyzed' : 'analysis_failed';
         papersData.papers[key] = markPaperDigestStatus(
             mergedPaper,
             status,

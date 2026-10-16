@@ -1,0 +1,41 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
+const path = require('node:path');
+
+test('状态同步逐篇只核一次完整资格；失败和下一次更新仍独立重查', () => {
+    const output = execFileSync(process.execPath, ['-e', `
+        process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
+        const assert = require('node:assert/strict');
+        const engine = require('./scripts/analysis-engine');
+        let calls = 0;
+        const qualify = engine.isSuccessfulAnalysisRecord;
+        engine.isSuccessfulAnalysisRecord = paper => { calls++; return qualify(paper); };
+        const { validAnalysisPaper } = require('./tests/valid-analysis-fixture');
+        const { applyAnalysisDigestStatuses, mergeAnalysisDigestPaper } = require('./scripts/digest-status');
+        const success = validAnalysisPaper('2607.00001');
+        const failed = { arxivId: '2607.00002', analysis: null, error: 'new attempt failed' };
+        const database = { papers: { '2607.00002': validAnalysisPaper('2607.00002') } };
+        const options = { batchDate: '2026-07-08', updatedAt: '2026-07-08T12:00:00+08:00' };
+        assert.equal(applyAnalysisDigestStatuses(database, [success, failed], options), 2);
+        assert.equal(calls, 2);
+        assert.equal(database.papers['2607.00001'].digestStatus.latestAttemptStatus, 'analyzed');
+        assert.equal(database.papers['2607.00002'].digestStatus.status, 'analyzed');
+        assert.equal(database.papers['2607.00002'].digestStatus.latestAttemptStatus, 'analysis_failed');
+        assert.equal(database.papers['2607.00002'].latestAnalysisAttemptError, failed.error);
+        const oldAnalysis = database.papers['2607.00001'].analysis;
+        const laterFailure = { ...success, analysis: null, error: 'later failure' };
+        applyAnalysisDigestStatuses(database, [laterFailure], options);
+        assert.equal(calls, 3, 'a new update must not reuse the prior success');
+        assert.equal(database.papers['2607.00001'].analysis, oldAnalysis);
+        assert.equal(database.papers['2607.00001'].digestStatus.latestAttemptStatus, 'analysis_failed');
+        mergeAnalysisDigestPaper(database.papers['2607.00001'], success, true);
+        assert.equal(calls, 4, 'public merge always qualifies; extra caller arguments cannot grant success');
+        const stillFailed = mergeAnalysisDigestPaper(database.papers['2607.00001'], laterFailure, true);
+        assert.equal(calls, 5);
+        assert.equal(stillFailed.latestAnalysisAttemptError, 'later failure');
+        console.log(JSON.stringify({ calls, preservedFailure: true }));
+    `], { cwd: path.resolve(__dirname, '..'), encoding: 'utf8' });
+    assert.match(output, /"preservedFailure":true/);
+});
