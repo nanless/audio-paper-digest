@@ -13,6 +13,13 @@ const handles = new WeakMap();
 const replaySnapshots = new WeakMap();
 const replayOptions = new WeakMap();
 const legacyRootReplays = new WeakMap();
+const previewCompletions = new (require('node:async_hooks').AsyncLocalStorage)();
+function readOnlyPreviewFeedback(proof) {
+    const bound = previewCompletions.getStore(), active = facts.current(proof?.paperId);
+    return bound && active?.readerOnly && active.readerBound
+        && isDeepStrictEqual(bound.proof, proof) && isDeepStrictEqual(active.readerBound.proof, proof)
+        ? bound.feedback : null;
+}
 // Only a completed, byte-exact paid/history replay can mint this capability.
 // It is never serialized into a record or accepted as an operator assertion.
 const tableProjectionReplays = new WeakMap();
@@ -502,6 +509,15 @@ async function finalize(handle, paper, persist) {
             }
             if (!require('../analysis-engine').hasValidApiReaderV3Records(result)) fail('完整正常Reader资格未通过');
             facts.validateRepairedClaims('apiReaderArticle', result.apiReaderArticle, paper.arxivId);
+            // Preview must exercise the same pending-feedback stage gate as
+            // the engine, without persisting a new packet or clearing a duty.
+            const completionView = structuredClone(result);
+            if (completionView.analysisFactReviewObligation !== undefined
+                && !isDeepStrictEqual(completionView.analysisFactReviewObligation, bound.proof)) fail('完成核验的事实义务不同');
+            completionView.analysisFactReviewObligation = structuredClone(bound.proof);
+            const complete = () => require('./completed-bound-fact-feedback').hasCompletedBoundFactFeedbackStages(
+                completionView, feedback, plan);
+            if (!(persist ? complete() : previewCompletions.run(bound, complete))) fail('当前来源绑定的事实反馈尚未完成');
             unchanged(active.manifest); unchanged(item.snapshot); checked.assertUnchanged(); return result;
         });
         if (!parent) return execute();
@@ -518,6 +534,7 @@ async function finalize(handle, paper, persist) {
 const apply = (handle, paper) => finalize(handle, paper, true);
 const preview = (handle, paper) => finalize(handle, paper, false);
 module.exports = { CONTRACT, FACT_CONTRACT, prepare, apply, preview, applyBoundedTextPatch,
+    readOnlyPreviewFeedback,
     applyBoundedFactPatch: factPatch.applyBoundedFactPatch, verifyRoundtrip, authenticatedTableProjection,
     validateNormalProducerProof: normalProducerOptions };
 if (require.main === module) {

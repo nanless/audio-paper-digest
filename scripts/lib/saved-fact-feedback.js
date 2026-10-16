@@ -9,6 +9,13 @@ function savedProofs(paper) {
         ...(paper?.fullStageReanalysis?.currentFeedbackProof ? [paper.fullStageReanalysis.currentFeedbackProof] : [])];
 }
 function hasSavedProof(paper) { return savedProofs(paper).length > 0; }
+function readReaderPacket(filename, proof) {
+    if (fs.existsSync(filename)) return facts.readFeedback(filename);
+    // A signed preview has not persisted its new child packet. Only the
+    // already validated Reader scope can supply that exact child in memory;
+    // historical parents still have to be read from their original files.
+    return require('./daily-reader-signed-correction').readOnlyPreviewFeedback(proof);
+}
 function readSavedFeedback(paper, plan) {
     const proofs = savedProofs(paper);
     if (!proofs.length) return null;
@@ -30,7 +37,8 @@ function readSavedFeedback(paper, plan) {
 function readSavedStageReaderFeedback(paper, plan, proofs) {
     if (paper.fullStageReanalysis) return null;
     const stages = paper.analysisManifest?.stages || {};
-    const parentStage = stages.primaryAnalysis?.factReview ? 'primaryAnalysis' : 'coreSummaryRepair';
+    const parentStage = stages.primaryAnalysis?.factReview ? 'primaryAnalysis'
+        : stages.coreSummaryRepair?.factReview ? 'coreSummaryRepair' : 'tagSelection';
     const parentProof = stages[parentStage]?.factReview;
     const readerProof = stages.apiReaderArticle?.factReview;
     if (!parentProof || !readerProof || parentProof.feedbackSha256 === readerProof.feedbackSha256) return null;
@@ -43,8 +51,9 @@ function readSavedStageReaderFeedback(paper, plan, proofs) {
     }
     if (proofs.some(proof => ![parentProof.feedbackSha256, readerProof.feedbackSha256].includes(proof.feedbackSha256))) return null;
     const filenames = [parentProof, readerProof].map(proof => path.join(daily.factFeedbackDirectory(plan), proof.feedbackSha256 + '.json'));
-    if (filenames.some(filename => !fs.existsSync(filename))) return null;
-    const [parent, reader] = filenames.map(filename => facts.readFeedback(filename));
+    if (!fs.existsSync(filenames[0])) return null;
+    const parent = facts.readFeedback(filenames[0]), reader = readReaderPacket(filenames[1], readerProof);
+    if (!reader) return null;
     const parentBound = facts.validateFeedback(parent, plan, paper);
     const readerBound = facts.validateFeedback(reader, plan, paper);
     if (daily.stableHash(parentBound.proof) !== daily.stableHash(parentProof)
@@ -53,6 +62,15 @@ function readSavedStageReaderFeedback(paper, plan, proofs) {
     if (parentStage === 'coreSummaryRepair' && (!parent.coreFeedback.trim()
         || ['primaryFeedback', 'readerFeedback', 'tagFeedback', 'scoringFeedback'].some(key => String(parent[key] || '').trim())
         || ['rejectedPrimaryClaims', 'rejectedReaderClaims', 'rejectedTagClaims', 'rejectedScoringClaims'].some(key => (parent[key] || []).length))) return null;
+    if (parentStage === 'tagSelection' && (!String(parent.tagFeedback || '').trim()
+        || ['primaryFeedback', 'coreFeedback', 'readerFeedback', 'scoringFeedback'].some(key => String(parent[key] || '').trim())
+        || ['rejectedPrimaryClaims', 'rejectedCoreClaims', 'rejectedReaderClaims', 'rejectedScoringClaims'].some(key => (parent[key] || []).length)
+        || Object.entries(stages).some(([name, value]) =>
+            (!['tagSelection', 'apiReaderArticle', 'apiReaderTableAudit'].includes(name) && value?.factReview)
+            || value?.scoringFactReview)
+        || stages.tagSelection.status !== 'complete'
+        || parent.rejectedTagClaims.some(claim => String(paper.analysis || '').includes(claim))
+        || !completedReaderUpstream(paper, plan))) return null;
     return { feedback: parentBound.feedback, paper, readerFeedback: reader, savedParentStage: parentStage };
 }
 function readSavedReaderFeedback(paper, plan, proofs) {
@@ -71,8 +89,9 @@ function readSavedReaderFeedback(paper, plan, proofs) {
     const original = paper.fullStageReanalysisHistory.find(item => item.runId === record.runId).originalPaper;
     const inherited = record.inheritedFeedbacks.find(item => daily.stableHash(item.proof) === daily.stableHash(parentProof));
     const filename = path.join(daily.factFeedbackDirectory(plan), readerProof.feedbackSha256 + '.json');
-    if (!inherited || !fs.existsSync(filename)) return null;
-    const readerFeedback = facts.readFeedback(filename);
+    if (!inherited) return null;
+    const readerFeedback = readReaderPacket(filename, readerProof);
+    if (!readerFeedback) return null;
     if (!readerOnlyFeedback(readerFeedback)) return null;
     const parentBound = facts.validateFeedback(inherited.feedback, plan, original);
     const readerBound = facts.validateFeedback(readerFeedback, plan, paper);
