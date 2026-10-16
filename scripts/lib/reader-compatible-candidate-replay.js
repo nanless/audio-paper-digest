@@ -30,6 +30,7 @@ function latestReaderRequest(usageDirectory, paperId, runId) {
         const event = checked.value;
         if (event.kind !== 'request' || event.paperId !== paperId || event.runId !== runId
             || !['apiReaderArticle', 'apiReaderRepair'].includes(event.stage)) continue;
+        if (require('./reader-unsent-empty-candidate').excludedUsage(file, checked)) continue;
         const at = Date.parse(event.at);
         if (!Number.isFinite(at)) return null;
         if (!latest || at > latest.at) { latest = { ...checked, file, at }; ambiguous = false; }

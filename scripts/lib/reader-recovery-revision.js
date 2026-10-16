@@ -245,7 +245,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     }
     return require('./reader-proof-read-scope').withReaderProofReadScope(
         () => require('./reader-proof-read-scope').withReaderReceiptScan(() => {
-            try { return loadReaderRecoveryRevisionInternal(directory, identity, options); }
+            try { return require('./reader-unsent-empty-candidate').withRecovery(directory, identity,
+                () => loadReaderRecoveryRevisionInternal(directory, identity, options)); }
             catch (cause) {
                 if (options.resolvedReaderCandidate === undefined) throw cause;
                 throw Object.assign(new Error(`已归档读者稿复验输入不合法：${cause.message}`, { cause }), {
@@ -333,7 +334,8 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         finishRevisionArchives(directory, identity, updated);
         return loadFailedCandidate(directory, identity);
     }
-    const exact = loadFailedCandidate(directory, identity);
+    const unsentEmpty = require('./reader-unsent-empty-candidate');
+    const exact = unsentEmpty.suppressExact(directory, identity) ? null : loadFailedCandidate(directory, identity);
     if (exact) {
         if (options.resolvedReaderCandidate !== undefined) throw new Error('显式归档复验不能覆盖现有活动候选');
         verifyPixels(exact);
@@ -454,6 +456,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     const compatible = [];
     for (const name of names) {
+        if (unsentEmpty.suppressCandidate(directory, name)) continue;
         let checked = readFailedCandidateEnvelope(directory, null, path.join(directory, name));
         if (checked && require('./reader-compatible-candidate-replay').sameInput(checked.envelope.identity, identity)) {
             restoreUnfundedDiagnosticFailureState(directory, checked.envelope.identity, checked.envelope.payload);
@@ -671,14 +674,16 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     // 调用方外面已经有常规的逐篇锁。安装前仍要重新检查：
     // 绝不覆盖更新的精确候选，也不覆盖过期的预算。
     const racedExact = loadFailedCandidate(directory, identity);
-    if (racedExact) { verifyPixels(racedExact); return finishRevisionArchives(directory, identity, racedExact); }
+    if (racedExact && !unsentEmpty.suppressExact(directory, identity)) { verifyPixels(racedExact); return finishRevisionArchives(directory, identity, racedExact); }
     if (hashDraft(loadFailedCandidate(directory, old.identity)) !== hashDraft(old.payload)) {
         throw new Error('Reader diagnostic revision source changed before installation');
     }
     require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
     if (compatibleReplay) compatibleReplay.assertUnchanged();
+    unsentEmpty.beforeInstall(directory, identity, updated, old);
     saveFailedCandidate(directory, identity, updated);
     finishRevisionArchives(directory, identity, updated);
+    unsentEmpty.afterInstall(directory, identity);
     // 仍然是失败的恢复输入，不是已接受的正文，也不是证明。
     return loadFailedCandidate(directory, identity);
 }

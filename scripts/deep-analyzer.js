@@ -8379,6 +8379,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-unsent-empty-candidate.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-display.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-metric-units.js'), 'utf8'),
