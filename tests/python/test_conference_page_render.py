@@ -653,6 +653,61 @@ class ConferencePageRenderTest(unittest.TestCase):
         })
         self.assertIn('## ⚖️ 评分明细', MODULE.render_packet(packet)['markdown'])
 
+    def test_multi_pass_scoring_consensus_replays_complete_proof(self):
+        packet = self.packet()
+        stage = packet['paper']['analysisManifest']['stages']['scoringAudit']
+        stage.update(stabilityWarning=True, finalScore=8.1, auditSha256='f' * 64,
+                     stabilityResolution={
+                         'contract': 'api-scoring-stability-resolution-v1',
+                         'status': 'resolved', 'method': 'multi_pass_consensus',
+                         'firstAuditScore': 8.2, 'secondAuditScore': 8.1,
+                         'thirdAuditScore': 8.1, 'scoreDifference': abs(8.2 - 8.1),
+                         'firstAuditSha256': 'a' * 64, 'secondAuditSha256': 'f' * 64,
+                         'thirdAuditSha256': 'f' * 64, 'thirdAttempts': 1,
+                     })
+        original = copy.deepcopy(packet)
+        self.assertTrue(MODULE.scoring_stability_is_resolved(stage))
+        self.assertIn('## ⚖️ 评分明细', MODULE.render_packet(packet)['markdown'])
+        self.assertEqual(packet, original)
+        # Mirror the Node engine's multi-pass proof, rather than merely accepting its method name.
+        mutations = [
+            ('thirdAuditScore', None), ('thirdAuditScore', float('inf')),
+            ('thirdAttempts', None), ('thirdAttempts', 0), ('thirdAttempts', True),
+            ('thirdAttempts', 1.5), ('thirdAttempts', 2 ** 53),
+            ('firstAuditSha256', None), ('thirdAuditSha256', 'not-sha'),
+            ('secondAuditSha256', '0' * 64), ('scoreDifference', 0.01),
+            ('firstAuditScore', float('nan')), ('secondAuditScore', float('inf')),
+            ('scoreDifference', float('nan')), ('firstAuditScore', True),
+            ('firstAuditScore', 10 ** 1000), ('method', 'unknown'),
+            ('contract', 'unknown'), ('status', 'pending'),
+            ('stage.auditSha256', '0' * 64), ('stage.finalScore', 8.3),
+            ('stage.finalScore', float('nan')),
+        ]
+        for field, value in mutations:
+            bad = copy.deepcopy(packet)
+            bad_stage = bad['paper']['analysisManifest']['stages']['scoringAudit']
+            target = bad_stage if field.startswith('stage.') else bad_stage['stabilityResolution']
+            target[field.removeprefix('stage.')] = value
+            with self.subTest(field=field, value=value):
+                self.assertFalse(MODULE.scoring_stability_is_resolved(bad_stage))
+                with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
+                    MODULE.render_packet(bad)
+
+    def test_scoring_stability_requires_finite_base_scores(self):
+        stage = {'stabilityWarning': True, 'stabilityResolution': {
+            'contract': 'api-scoring-stability-resolution-v1', 'status': 'resolved',
+            'method': 'second_pass_consensus', 'firstAuditScore': 8.2,
+            'secondAuditScore': 8.1, 'scoreDifference': 0.1, 'secondAuditSha256': 'f' * 64,
+        }}
+        for field in ('firstAuditScore', 'secondAuditScore', 'scoreDifference'):
+            for value in (float('inf'), float('nan'), True, 10 ** 1000):
+                bad = copy.deepcopy(stage)
+                bad['stabilityResolution'][field] = value
+                with self.subTest(field=field, value=value):
+                    self.assertFalse(MODULE.scoring_stability_is_resolved(bad))
+        self.assertFalse(MODULE.scoring_stability_is_resolved({
+            'stabilityWarning': True, 'stabilityResolution': ['not a proof']}))
+
     def test_bare_repository_source_token_binding_is_replayable_and_strict(self):
         token = 'github.com/ZhanqiZhang66/align'
         quote_text = f'Our code is publicly available at {token}.'

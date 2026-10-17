@@ -273,12 +273,39 @@ def scoring_stability_is_resolved(stage):
     if stage.get('stabilityWarning') is not True:
         return True
     resolution = stage.get('stabilityResolution') or {}
+    if not isinstance(resolution, dict):
+        return False
+
+    def finite_number(value):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            return False
+
+    multi_pass = resolution.get('method') == 'multi_pass_consensus'
+    if multi_pass:
+        third_attempts = resolution.get('thirdAttempts')
+        if not (finite_number(resolution.get('thirdAuditScore'))
+                and finite_number(third_attempts) and 1 <= third_attempts <= 2 ** 53 - 1
+                and int(third_attempts) == third_attempts
+                and all(re.fullmatch(r'[a-f0-9]{64}', str(resolution.get(field) or '')) is not None
+                        for field in ('firstAuditSha256', 'thirdAuditSha256'))
+                and stage.get('auditSha256') == resolution.get('secondAuditSha256')
+                and finite_number(stage.get('finalScore'))
+                and finite_number(resolution.get('firstAuditScore'))
+                and finite_number(resolution.get('secondAuditScore'))
+                and finite_number(resolution.get('scoreDifference'))
+                and abs(stage['finalScore'] - resolution['secondAuditScore']) < 1e-9
+                and abs(abs(resolution['secondAuditScore'] - resolution['firstAuditScore'])
+                        - resolution['scoreDifference']) < 1e-9):
+            return False
     numeric = ('firstAuditScore', 'secondAuditScore', 'scoreDifference')
     return resolution.get('contract') == 'api-scoring-stability-resolution-v1' \
         and resolution.get('status') == 'resolved' \
-        and resolution.get('method') == 'second_pass_consensus' \
-        and all(isinstance(resolution.get(field), (int, float)) and not isinstance(resolution.get(field), bool)
-                for field in numeric) \
+        and (resolution.get('method') == 'second_pass_consensus' or multi_pass) \
+        and all(finite_number(resolution.get(field)) for field in numeric) \
         and resolution['scoreDifference'] <= 0.3 \
         and re.fullmatch(r'[a-f0-9]{64}', str(resolution.get('secondAuditSha256') or '')) is not None
 
