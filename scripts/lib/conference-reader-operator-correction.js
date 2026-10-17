@@ -461,11 +461,58 @@ function receiptRoot(active) { return path.join(active.batch.processDir, 'reader
 function receiptFile(active) { return path.join(receiptRoot(active), active.loaded.run.executionId, 'receipt.json'); }
 const mutableReaderFields = new Set(['apiReaderArticle','apiReaderPlan','apiReaderFigures','apiReaderAuthors','apiReaderResources',
     'apiReaderArticleSha256','apiReaderPlanSha256','readerFactReview']);
+function assertReaderFailureProjection(active, paper) {
+    const original = active.rawBeforePaper || active.beforePaper;
+    const blocked = new Set(['authentication', 'quota', 'configuration', 'storage', 'transport', 'rate_limit', 'run', 'integrity']);
+    const channels = [
+        { failed: Boolean(original.latestAnalysisAttemptError),
+            code: original.latestAnalysisAttemptErrorCode || original.errorCode,
+            scopes: [original.latestAnalysisAttemptErrorScope, original.latestAnalysisAttemptScope],
+            categories: [original.latestAnalysisAttemptErrorCategory, original.latestAnalysisAttemptCategory] },
+        { failed: Boolean(original.error), code: original.errorCode || original.latestAnalysisAttemptErrorCode,
+            scopes: [original.errorScope], categories: [original.errorCategory] }
+    ];
+    if (original.digestStatus?.latestAttemptStatus === 'analysis_failed' && !channels.some(row => row.failed)) {
+        channels.push({ failed: true, code: original.latestAnalysisAttemptErrorCode || original.errorCode,
+            scopes: [original.latestAnalysisAttemptErrorScope, original.latestAnalysisAttemptScope, original.errorScope],
+            categories: [original.latestAnalysisAttemptErrorCategory, original.latestAnalysisAttemptCategory, original.errorCategory] });
+    }
+    if (channels.some(row => row.failed && (!/^(?:READER_|CONFERENCE_READER_)/u.test(row.code || '')
+        || row.scopes.includes('run') || row.categories.some(value => blocked.has(value))))) fail('人工Reader不能解除非Reader或运行级失败');
+    for (const key of CHECKPOINT_FAILURE_FIELDS) {
+        if (Object.hasOwn(paper, key) && (!Object.hasOwn(original, key)
+            || !isDeepStrictEqual(paper[key], original[key]))) fail('人工Reader新增或改写了原失败字段');
+    }
+    const oldStatus = original.digestStatus?.latestAttemptStatus, status = paper.digestStatus?.latestAttemptStatus;
+    if (oldStatus !== status && !(oldStatus === 'analysis_failed' && status === 'analyzed')) fail('人工Reader状态收尾越界');
+}
+function finalizeReaderFailure(paper) {
+    const active = scope.getStore();
+    if (!active || active.cold || !require('../analysis-engine').paperAnalysisLockHeld({ id: paper.id })) fail('Reader失败收尾须在真实热scope和论文锁内');
+    assertReaderFailureProjection(active, paper);
+    const original = active.rawBeforePaper || active.beforePaper;
+    if (!original.latestAnalysisAttemptError && !original.error
+        && original.digestStatus?.latestAttemptStatus !== 'analysis_failed') return paper;
+    assertOutput(active, paper);
+    assertCheckpointImageSupplement(active, paper, true);
+    const engine = require('../analysis-engine');
+    if (!engine.hasValidApiReaderV3Records(paper)) fail('新Reader尚未通过完整记录校验，不能解除原失败');
+    // Qualify a temporary view first. The actual object stays unchanged on any
+    // source/upstream/Reader/pending-obligation failure; archives stay unchanged.
+    const completed = clone(paper);
+    for (const key of CHECKPOINT_FAILURE_FIELDS) delete completed[key];
+    if (completed.digestStatus?.latestAttemptStatus === 'analysis_failed') completed.digestStatus.latestAttemptStatus = 'analyzed';
+    const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
+    if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(completed, { tagRules: rules })) fail('新Reader整篇资格未通过，保留原失败');
+    for (const key of CHECKPOINT_FAILURE_FIELDS) delete paper[key];
+    if (paper.digestStatus?.latestAttemptStatus === 'analysis_failed') paper.digestStatus.latestAttemptStatus = 'analyzed';
+    assertOutput(active, paper); return paper;
+}
 function protectedPaper(paper) {
     const value = clone(paper);
     for (const key of mutableReaderFields) delete value[key];
-    for (const key of Object.keys(value)) if (/^latestAnalysisAttempt/u.test(key)
-        || ['error','errorCode','errorCategory','errorStatus','errorScope','retryable'].includes(key)) delete value[key];
+    for (const key of CHECKPOINT_FAILURE_FIELDS) delete value[key];
+    if (value.digestStatus) delete value.digestStatus.latestAttemptStatus;
     if (value.analysisManifest?.stages) {
         delete value.analysisManifest.stages.apiReaderArticle;
         if (scope.getStore()?.mainCheckpointRecovery) delete value.analysisManifest.stages.imageSupplement;
@@ -476,6 +523,7 @@ function protectedPaper(paper) {
 }
 function assertOutput(active, paper) {
     assertOriginals(active);
+    assertReaderFailureProjection(active, paper);
     assertCheckpointImageSupplement(active, paper);
     if (!isDeepStrictEqual(protectedPaper(paper), protectedPaper(active.beforePaper))) fail('人工Reader改变了受保护主文、评分、标签或非Reader阶段');
     const stage = paper.analysisManifest?.stages?.apiReaderArticle, proof = active.proof;
@@ -643,6 +691,6 @@ function withSavedPaper(paper, callback) {
                 assertOutput(restored, paper); return callback();
             }))));
 }
-module.exports = { prepareReaderInput, finalizeCheckpointImages, CONTRACT, CORRECTION, RECEIPT, SINGLE_TABLE_APPEND, openCorrectionBatch, withCorrection, current, execution, replay,
+module.exports = { prepareReaderInput, finalizeCheckpointImages, finalizeReaderFailure, CONTRACT, CORRECTION, RECEIPT, SINGLE_TABLE_APPEND, openCorrectionBatch, withCorrection, current, execution, replay,
     readVerifiedConferenceReaderPrompts, isVerifiedConferenceReaderPromptDeclaration,
     sealCorrection, withSavedPaper, hasVerifiedOperatorProvenance, assertMayAccessNetwork, assertSavedBatchMember };

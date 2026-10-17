@@ -65,6 +65,7 @@ async function applyCorrection({ batchHandle, analysisRoot, executionId, planHan
             const result = await deep.refreshApiReaderArticleFromSource(paper, loaded.source.sourceDetails,
                 { preserveReaderUpstream: true, readerAuthors: structuredClone(paper.apiReaderAuthors) });
             corrections.finalizeCheckpointImages(result);
+            corrections.finalizeReaderFailure(result);
             const protectOptions = { checkpointImages: Boolean(prepared.mainCheckpointRecovery) };
             if (!isDeepStrictEqual(protectedProjection(result, protectOptions), protectedProjection(before, protectOptions))) fail('修正改变 Reader 以外的原正文或阶段');
             if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(result, { tagRules: rules })) fail('正常整篇资格未通过');
