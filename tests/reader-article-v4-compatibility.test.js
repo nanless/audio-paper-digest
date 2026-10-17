@@ -10,7 +10,7 @@ const fresh = require('../scripts/lib/fresh-analysis-context');
 const Config = require('../scripts/config');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
-test('旧完成 Reader 保留冻结 v3 正文，新待处理记录使用 v8', () => {
+test('旧完成 Reader 保留冻结 v3 正文，新待处理记录使用 v9', () => {
     const paper = { id: '2610.90011', title: '读者文章版本测试' };
     const old = { status: 'complete', promptTextContract: 'analysis-prompt-text-v3',
         repairPromptTextContract: versions.currentPromptTextContract('apiReaderRepair') };
@@ -19,7 +19,7 @@ test('旧完成 Reader 保留冻结 v3 正文，新待处理记录使用 v8', ()
         { stages: { apiReaderArticle: stage } }).apiReaderArticle;
     const oldFingerprint = fingerprint(old);
     assert.equal(versions.promptFilePathForContract('apiReaderArticle', old.promptTextContract), 'prompts/api-reader-article-v3.md');
-    assert.equal(versions.currentPromptTextContract('apiReaderArticle'), 'analysis-prompt-text-v8');
+    assert.equal(versions.currentPromptTextContract('apiReaderArticle'), 'analysis-prompt-text-v9');
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(old), oldFingerprint);
     assert.equal(JSON.stringify(old), bytes);

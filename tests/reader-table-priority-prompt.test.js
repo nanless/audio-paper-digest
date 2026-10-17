@@ -73,6 +73,12 @@ test('新修复提示明确完整原表优先，来源证据字节和授权目�
 });
 
 test('固定修复提示升级保留4或5次修复及2次全篇尝试，不发放新次数', async t => {
+    // This is the original article-v6 + repair-v7/v8 -> v9 migration,
+    // not permission to combine a historical repair with the current article.
+    assert.equal(deep.runtimePromptTemplateSha256('prompts/api-reader-article-v6.md'), articleSha);
+    for (const [version, expected] of [[7, repairV7Sha], [8, repairV8Sha], [9, repairV9Sha]]) {
+        assert.equal(deep.runtimePromptTemplateSha256(`prompts/api-reader-repair-v${version}.md`), expected);
+    }
     for (const [oldRepairSha, attempts] of [[repairV7Sha, 4], [repairV8Sha, 5]]) {
         await t.test(`${attempts}次修复保留`, tt => {
             const sample = createRecoverySample(tt, oldRepairSha, attempts);
@@ -82,11 +88,17 @@ test('固定修复提示升级保留4或5次修复及2次全篇尝试，不发�
             for (const invalidIdentity of [
                 { ...nextIdentity, repairPromptSha256: 'f'.repeat(64) },
                 { ...nextIdentity, promptSha256: 'e'.repeat(64) },
-                { ...nextIdentity, inputFingerprint: '另一个来源输入' }
+                { ...nextIdentity, promptSha256: deep.runtimePromptTemplateSha256(
+                    versions.currentTextStagePromptPath('apiReaderArticle')) }
             ]) {
-                assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, invalidIdentity)), null);
+                assert.throws(() => sample.enabled(() => loadReaderRecoveryRevision(sample.directory, invalidIdentity)),
+                    { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
                 assert.deepEqual(fs.readFileSync(filename), originalBytes);
+                assert.deepEqual(fs.readdirSync(sample.directory), [path.basename(filename)]);
             }
+            assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory,
+                { ...nextIdentity, inputFingerprint: '另一个来源输入' })), null);
+            assert.deepEqual(fs.readFileSync(filename), originalBytes);
             const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, nextIdentity));
             assert.equal(recovered.status, 'failed');
             assert.equal(recovered.attempts, attempts);

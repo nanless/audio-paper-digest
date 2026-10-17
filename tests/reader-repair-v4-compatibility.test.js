@@ -33,7 +33,7 @@ function patchFor(draft, replacements) {
     }) };
 }
 
-test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v12', () => {
+test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v13', () => {
     const paper = { id: '2610.90037', title: '局部修复版本核验' };
     const oldStage = { status: 'complete', promptTextContract: 'analysis-prompt-text-v4',
         repairPromptTextContract: 'analysis-prompt-text-v3' };
@@ -43,7 +43,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v12', () =>
     const oldFingerprint = fingerprint(oldStage);
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', oldStage.repairPromptTextContract),
         'prompts/api-reader-repair-v3.md');
-    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v12');
+    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v13');
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(oldStage), oldFingerprint);
     assert.equal(JSON.stringify(oldStage), before);
@@ -52,7 +52,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v12', () =>
         '03baf3e0c54831c8e6e25d2fda2f223e908a54353d0a2b54c68aa7cbd41cac2a');
 });
 
-test('真实公开局部请求使用当前按目标修复 v12，保存的付费尝试数未清零', async t => {
+test('真实公开局部请求使用当前按目标修复 v13，保存的付费尝试数未清零', async t => {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-repair-v4-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const draft = createReaderTestArticle();
@@ -93,7 +93,7 @@ test('真实公开局部请求使用当前按目标修复 v12，保存的付费�
         versions.promptFilePathForContract('apiReaderRepair', versions.currentPromptTextContract('apiReaderRepair'))));
 });
 
-// 历史迁移控制显式选冻结 v4 修复正文；不把当前 v5 当成固定 v3→v4 目标。
+// 历史迁移控制同时冻结当时的正文和修复模板，不混用当前正文模板。
 function frozenV4RepairControl() {
     const Module = require('node:module');
     const filename = require.resolve('../scripts/deep-analyzer.js');
@@ -103,10 +103,11 @@ function frozenV4RepairControl() {
     controlled.require = function (request) {
         const actual = Module.prototype.require.call(this, request);
         if (request !== './lib/prompt-text-versions.js') return actual;
+        const frozenStage = stage => ['apiReaderArticle', 'apiReaderRepair'].includes(stage);
         return { ...actual,
-            currentPromptTextContract: stage => stage === 'apiReaderRepair'
+            currentPromptTextContract: stage => frozenStage(stage)
                 ? 'analysis-prompt-text-v4' : actual.currentPromptTextContract(stage),
-            currentTextStagePromptPath: stage => stage === 'apiReaderRepair'
+            currentTextStagePromptPath: stage => frozenStage(stage)
                 ? actual.promptFilePathForContract(stage, 'analysis-prompt-text-v4')
                 : actual.currentTextStagePromptPath(stage) };
     };
@@ -149,6 +150,10 @@ async function withControlledRecoveryCandidate(t, callback) {
         const original = JSON.parse(fs.readFileSync(path.join(directory, originalName), 'utf8'));
         assert.equal(original.payload.attempts, 1);
         assert.equal(original.payload.fullAttempts, 1);
+        assert.equal(original.identity.promptSha256,
+            '15dd04fa060900e4698e1325a44868ae07fa3fbf5c2b6b7977b947601db8d15f');
+        assert.equal(original.identity.repairPromptSha256,
+            '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470');
         await callback({ directory, original, originalName, revision, options, paper, historicalDeep });
     });
 }
@@ -197,7 +202,8 @@ test('临时归档样例的既有未用许可经固定提示词转交，仅在�
         assert.throws(() => repair.saveFailedCandidate(directory, original.identity, { ...migrated,
             consumedImplementationAllowanceSha256: [...(migrated.consumedImplementationAllowanceSha256 || []), originalProof.allowanceSha256]
         }), /allowance|许可|凭证/i);
-        assert.equal(revision.loadReaderRecoveryRevision(directory, oldCurrentIdentity), null);
+        assert.throws(() => revision.loadReaderRecoveryRevision(directory, oldCurrentIdentity),
+            { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY', retryable: false, scope: 'paper' });
         const stages = [];
         const transportError = Object.assign(new Error('受控网络异常'), { retryable: false, scope: 'run' });
         await assert.rejects(historicalDeep.generateApiReaderArticleDetailed(paper, '', '', { ...options,
@@ -245,7 +251,11 @@ test('已耗尽的旧提示词候选不获新许可，未知提示词或来源�
             readerCallModel: async () => { calls++; throw new Error('不应新请求'); }
         }));
         assert.equal(calls, 0);
-        assert.equal(revision.loadReaderRecoveryRevision(directory, { ...original.identity, repairPromptSha256: 'f'.repeat(64) }), null);
+        const beforeUnknown = fs.readFileSync(path.join(directory, repair.hashDraft(original.identity) + '.json'));
+        assert.throws(() => revision.loadReaderRecoveryRevision(directory,
+            { ...original.identity, repairPromptSha256: 'f'.repeat(64) }),
+        { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY', retryable: false, scope: 'paper' });
+        assert.deepEqual(fs.readFileSync(path.join(directory, repair.hashDraft(original.identity) + '.json')), beforeUnknown);
         assert.equal(revision.loadReaderRecoveryRevision(directory, { ...original.identity, paperId: '2610.90038v2' }), null);
         assert.throws(() => revision.loadReaderRecoveryRevision(directory, { ...original.identity, sourceSha256: 'f'.repeat(64) }), /source scope/);
         assert.throws(() => revision.loadReaderRecoveryRevision(directory, { ...original.identity,
