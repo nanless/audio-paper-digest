@@ -15,6 +15,7 @@ const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const directContext = require('./direct-rewrite-analysis-context.js');
 const directPages = require('./historical-direct-page-staging.js');
 const pdfLayout = require('./pdf-layout.js');
+const { classifyFailure, analysisFailureFromRecord } = require('./workflow-error-policy.js');
 
 const CONFERENCE_VISUAL_PAGE_LIMIT = 6;
 const CONTRACT = 'historical-direct-rewrite-execution-v1';
@@ -2003,11 +2004,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     && TRANSITIONS.get(active.status)?.has('analysis_partial');
                 const analysisFailure = attemptedAnalysis?.directPaperId === item.paperId
                     && !require('../analysis-engine.js').isSuccessfulAnalysisRecord(attemptedAnalysis);
-                const failure = require('./conference-process-recovery.js').classifyFailure(
-                    analysisFailure ? Object.assign(new Error(attemptedAnalysis.latestAnalysisAttemptError
-                        || attemptedAnalysis.error || safeErrorText(error)), {
-                        code: attemptedAnalysis.latestAnalysisAttemptErrorCode,
-                        retryable: attemptedAnalysis.latestAnalysisAttemptRetryable }) : error, clock());
+                const failure = classifyFailure(analysisFailure
+                    ? analysisFailureFromRecord(attemptedAnalysis, safeErrorText(error)) : error, clock());
                 const retryable = (analysisFailure || !(error instanceof HistoricalDirectRewriteRunnerError))
                     && failure.retryable && !failure.systemic;
                 registry = transition(registry, plan, item.paperId,

@@ -554,33 +554,44 @@ function loadGeneration(loadedPlan) {
 }
 
 function reviewProtocolImplementationFiles() {
-    return [__filename, require.resolve('./historical-direct-aggregate.js'),
-        require.resolve('./page-tag-metadata.js'),
-        require.resolve('./tag-rules.js'),
-        path.resolve(__dirname, '../../package-lock.json'),
-        require.resolve('./fresh-arxiv-rewrite-source.js'), require.resolve('./historical-direct-rewrite-runner.js'),
-        require.resolve('./historical-direct-page-staging.js'),
-        require.resolve('./historical-arxiv-publication-metadata.js'), require.resolve('./arxiv-metadata-source.js'),
-        path.resolve(__dirname, '../historical-direct-review.py'),
-        path.resolve(__dirname, '../tag_catalog_publication.py'),
-        path.resolve(__dirname, '../tag_presentation.py'),
-        path.resolve(__dirname, '../publish-to-blog.py')];
+    const root = path.resolve(__dirname, '../..');
+    // These are entry points, not a flat dependency allowlist. Shared validators,
+    // Python imports and local workers must enter new review fingerprints too.
+    return require('./workflow-implementation-files.js').collectWorkflowImplementationFiles({
+        root, entryFiles: ['scripts/lib/historical-direct-publication.js',
+            'scripts/lib/historical-direct-aggregate.js', 'scripts/lib/page-tag-metadata.js',
+            'scripts/lib/tag-rules.js', 'package-lock.json',
+            'scripts/lib/fresh-arxiv-rewrite-source.js', 'scripts/lib/historical-direct-rewrite-runner.js',
+            'scripts/lib/historical-direct-page-staging.js',
+            'scripts/lib/historical-arxiv-publication-metadata.js', 'scripts/lib/arxiv-metadata-source.js',
+            'scripts/historical-direct-review.py', 'scripts/tag_catalog_publication.py',
+            'scripts/tag_presentation.py', 'scripts/publish-to-blog.py']
+    }).map(relative => path.join(root, relative));
 }
 function reviewProtocolFingerprint(dependencies = {}) {
     const files = reviewProtocolImplementationFiles();
-    const code = files.map(filename => ({ filename: path.basename(filename), sha256: sha256(fs.readFileSync(filename)) }));
+    const root = path.resolve(__dirname, '../..');
+    const code = files.map(filename => ({ filename: path.relative(root, filename).split(path.sep).join('/'),
+        sha256: sha256(fs.readFileSync(filename)) }));
     return stableHash({ contract: REVIEW_CONTRACT, version: VERSION, code,
         semanticReview: semanticReviewProtocol(),
         hugo: String(dependencies.hugoVersion || defaultHugoVersion()) });
 }
 function semanticReviewProtocol() {
-    const implementation = path.resolve(__dirname, '../historical-direct-review.py');
+    const root = path.resolve(__dirname, '../..');
     const promptImplementation = path.resolve(__dirname, '../publish-to-blog.py');
+    // Unit-level failure recovery compares this protocol, not the outer batch
+    // fingerprint. Bind the same real shared review leaves before new requests.
+    const implementationFiles = require('./workflow-implementation-files.js').collectWorkflowImplementationFiles({
+        root, entryFiles: ['scripts/historical-direct-review.py', 'scripts/publish-to-blog.py']
+    });
+    const implementationSha256 = stableHash(implementationFiles.map(filename => ({ filename,
+        sha256: sha256(fs.readFileSync(path.join(root, filename))) })));
     const body = { contract: 'historical-direct-semantic-review-protocol-v1', version: 1,
         model: String(process.env.PAPER_ANALYZER_MODEL || ''),
         secondaryModel: String(process.env.PAPER_ANALYZER_SECONDARY_MODEL || ''),
         endpointSha256: sha256(Buffer.from(String(process.env.PAPER_ANALYZER_ENDPOINT || ''))),
-        implementationSha256: sha256(fs.readFileSync(implementation)),
+        implementationSha256,
         promptSha256: sha256(fs.readFileSync(promptImplementation)),
         textReview: 'publish-to-blog.llm-review-post-chunks-v1',
         imageReview: 'publish-to-blog.multimodal-review-images-v1',

@@ -151,6 +151,7 @@ npm run test:compat
 | `lib/conference-plan.js` | Node 库：只从已认证的导入记录、已审计划和当前词表生成运行与计划凭证；恢复按原凭证 SHA 及版本从集中归档只读核验原词表，保持原 plan/run/receipt 字节。来源计划可溯源不授予旧分类新出版资格，当前暂存仍完整核验分类；拒绝任意路径、别名和不完整成员集。 |
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
+| `lib/workflow-error-policy.js` | 公共失败分类、嵌套存储错误检测和正式分析错误字段投影；会议保留旧导出，历史直接调用，运行级范围不会在适配时丢失；不调度、不增加重试预算。 |
 | `lib/conference-retained-source-replay.js` | 完整来源升级进程的只读逐篇来源回放：按每篇原分析绑定的计划凭证认证筛选、暂存、导入、原计划与原抽取，缓存不同计划的已认证句柄；单篇与汇总使用各自原来源。仅词表元数据能恢复到原凭证精确 SHA 时才在系统临时目录重放原计划，不改现有文件或重新提取、分析。 |
 | `lib/conference-reader-active-candidate-replay.js` | 在禁用新模型请求的私有临时目录中重放会议子运行已付费候选；严格核验原请求、响应、用量与来源闭合链，完整资格通过后交由适配器正常保存，不增加预算或覆盖原稿。 |
 | `lib/conference-reader-publication-evidence.js` | 为已完成会议的发布复核从原封存 PDF 派生可逐字重放的表头、单位与实验设置引文；绑定原计划、抽取、正文及表格，不修改旧稿或来源签名，不授予普通分析成功或跳过资格。 |
@@ -229,7 +230,7 @@ npm run test:compat
 | `lib/reader-author-parser.js` | Node 库：从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
 | `lib/reader-author-replay-cli.js` | Node 子进程入口：供 Python 发布器调用的本地作者核验入口；原单对象协议保持，有界批次最多8项/32MiB，逐项重读真实四源及父证明，全部精确通过才返回true；只读取私有FD，无网络与模型。 |
 | `lib/reader-next-request-plan.js` | 从正常 Reader 循环的实际候选、问题与原预算记录下一次全文或局部路由；诊断不是最终预检或请求许可，显式仅局部作用域只能减权，保留原计数与全部后续守卫。 |
-| `lib/reader-pdf-extraction-scope.js` | 单次 Reader 核验中对相同完整输入复用两个纯 PDF 提取器的 stdout；实时核对角色、私有输入和已知隔离运行时，来源及资格不缓存，未知模块布局按原路径执行。 |
+| `lib/reader-pdf-extraction-scope.js` | 三流程单次 Reader 核验共用的纯 PDF 提取执行与 stdout 复用；日更保留最小环境，会议及历史认证 PDF 保留继承环境，未知启动覆盖或禁用 venv 按原路径执行。实时核对角色、私有输入和隔离运行时，来源及资格不缓存。 |
 | `lib/reader-author-source.js` | Node 库：当前生产 Reader 作者复用资格；跳过已完成分析、恢复历史/会议任务及发布前，必须从已核验的原始材料重新解析并核验作者，保留旧成功结构与只读统计。 |
 | `lib/reader-candidate-transactions.js` | Node 库：在内存中跟踪分析结果对应的待保存文章，复制结果时同步这层对应关系；不加载分析器、不读写文件、不改变日志。文章实际保存后的检查和恢复稿停用仍由分析器负责。 |
 | `lib/reader-compatible-candidate-replay.js` | Node 库：在统一恢复中用真实迁移链或最后付费请求、响应及生产逐字回放收敛同输入候选；不按文件时间选稿，不改次数和费用，无法证明仍拒绝。 |
@@ -310,7 +311,7 @@ npm run test:compat
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
 | `page-source-crosswalk.js` | 从直接命名的历史清单与凭证创建独立 crosswalk，管理受控决定和 CAS。普通磁盘 arXiv 来源文件不能获得发布授权；finalize 要求全体 verified，且来源可在现场重新核验。 |
 | `paper_identity.py` | 实现与 Node 相同的 `paper-identity-v1`，用共享测试向量核对身份与 SHA 结果。 |
-| `paper_reader_presentation.py` | 共用作者、资源、评分展示，要求原计划与保存身份完全对应。 |
+| `paper_reader_presentation.py` | 日更、会议、历史的同一摘要/资源/评分展示解析器及作者展示；详细摘要仍真实冷核，原计划与保存身份须对应，各来源过滤及页面外框保持。 |
 | `parse-arxiv-atom.py` | Python 解析入口：经 `python-runtime.sh` 读取有字节上限的标准输入，严格校验 Atom XML、官方论文 ID、标题与摘要，再输出有字节上限的 JSON；拒绝文档类型与实体声明。 |
 | `path_config.py` | 定义 Python 共享路径、日期与原子写入配置。 |
 | `pdf-layout-extract.py` | 从受控 PDF 提取布局、文本位置和单元格证据。 |

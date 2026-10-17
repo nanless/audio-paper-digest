@@ -125,6 +125,22 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         assert.equal(api.generate({ outputRoot, publicationId, authorityOptions: {}, blogRepo, apply: true }, deps).status, 'generated');
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
         assert.equal(semanticModelCalls, 1);
+        // Synthetic previously signed schema fixture: an older fingerprint is
+        // opaque historical evidence, never rewritten into the current recipe.
+        const reviewFile = path.join(outputRoot, publicationId, 'review.json');
+        const currentReviewBytes = fs.readFileSync(reviewFile);
+        const legacy = JSON.parse(currentReviewBytes);
+        legacy.reviewProtocolFingerprint = hash('9');
+        delete legacy.reviewSha256;
+        legacy.reviewSha256 = api.stableHash(legacy);
+        const legacyBytes = Buffer.from(JSON.stringify(legacy));
+        fs.writeFileSync(reviewFile, legacyBytes);
+        const loadedPlan = api.loadPlan({ outputRoot, publicationId });
+        assert.equal(api.loadReview(loadedPlan).receipt.reviewProtocolFingerprint, hash('9'));
+        assert.deepEqual(fs.readFileSync(reviewFile), legacyBytes, 'cold legacy reads must not re-sign or save');
+        fs.writeFileSync(reviewFile, JSON.stringify({ ...legacy, reviewProtocolFingerprint: hash('8') }));
+        assert.throws(() => api.loadReview(loadedPlan), /字段或 SHA/);
+        fs.writeFileSync(reviewFile, currentReviewBytes);
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-reviewed');
         deps.hugoVersion = 'hugo v0.protocol-change';
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
@@ -475,7 +491,34 @@ test('审查约定给全新来源、运行器和页面暂存的实现都记指�
     assert.ok(names.includes('fresh-arxiv-rewrite-source.js'));
     assert.ok(names.includes('historical-direct-rewrite-runner.js'));
     assert.ok(names.includes('historical-direct-page-staging.js'));
+    for (const leaf of ['publish_common.py', 'reader-author-replay-cli.js',
+        'reader-pdf-extraction-scope.js', 'workflow-error-policy.js', 'workflow-implementation-files.js']) {
+        assert.ok(names.includes(leaf), `shared transitive dependency must be included: ${leaf}`);
+    }
     assert.match(api.reviewProtocolFingerprint({ hugoVersion: 'hugo v0.fixture' }), /^[a-f0-9]{64}$/);
+});
+
+test('新历史审查指纹覆盖真实传递叶依赖的字节变化，不改任何源文件', t => {
+    const originalRead = fs.readFileSync;
+    const target = path.resolve(__dirname, '../scripts/publish_common.py');
+    const baseline = api.reviewProtocolFingerprint({ hugoVersion: 'hugo v0.fixture' });
+    const baselineSemantic = api.semanticReviewProtocol();
+    let observed = 0;
+    t.mock.method(fs, 'readFileSync', function (filename, ...options) {
+        const value = originalRead.call(fs, filename, ...options);
+        if (typeof filename !== 'string' || path.resolve(filename) !== target) return value;
+        observed += 1;
+        return typeof value === 'string' ? value + '\n# test-only changed dependency bytes\n'
+            : Buffer.concat([value, Buffer.from('\n# test-only changed dependency bytes\n')]);
+    });
+    assert.notEqual(api.reviewProtocolFingerprint({ hugoVersion: 'hugo v0.fixture' }), baseline);
+    const changedSemantic = api.semanticReviewProtocol();
+    assert.notEqual(changedSemantic.implementationSha256, baselineSemantic.implementationSha256);
+    assert.notEqual(changedSemantic.protocolSha256, baselineSemantic.protocolSha256,
+        'a real shared leaf change must reach the unit-level content-rejection gate too');
+    assert.equal(changedSemantic.promptSha256, baselineSemantic.promptSha256,
+        'do not pretend a shared validator change rewrote the original prompt file');
+    assert.ok(observed > 0, 'the normal public fingerprint must read the actual shared dependency');
 });
 
 test('页面审查接受新旧单一标签字段族，先核原页面 SHA 再拒混用', () => {

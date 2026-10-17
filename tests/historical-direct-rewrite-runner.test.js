@@ -119,6 +119,29 @@ test('恢复期的结构化失败即使最终校验错误很笼统，也会暂�
     assert.equal(result.pauseReason.code, 'account-authentication-failed');
 });
 
+test('历史分析返回的类型化运行故障在失败注册表中仍是运行故障', async t => {
+    const f = fixture(t); const roots = files(f.root); let calls = 0;
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(),
+        analyze: async ({ item }) => {
+            calls += 1;
+            return { directPaperId: item.paperId, analysis: null,
+                latestAnalysisAttemptError: '模型当前不可用',
+                latestAnalysisAttemptErrorCode: 'MODEL_SERVICE_UNAVAILABLE',
+                latestAnalysisAttemptErrorScope: 'run', latestAnalysisAttemptErrorCategory: 'request',
+                latestAnalysisAttemptErrorStatus: 503, latestAnalysisAttemptRetryable: false };
+        }
+    });
+    assert.equal(result.status, 'paused'); assert.equal(calls, 1);
+    assert.equal(result.registryCounts.pending, 1);
+    const registry = JSON.parse(fs.readFileSync(result.registryFile, 'utf8'));
+    const failed = registry.entries.find(entry => entry.status === 'failed');
+    assert.equal(failed.latestFailure.code, 'MODEL_SERVICE_UNAVAILABLE');
+    assert.equal(failed.latestFailure.category, 'run');
+    assert.equal(failed.latestFailure.systemic, true);
+    assert.equal(failed.latestFailure.retryable, false);
+});
+
 test('收到退出信号后保存可用于续跑的暂停记录，不启动分析', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots }, {
