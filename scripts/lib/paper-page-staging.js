@@ -3,9 +3,7 @@
 // 日更发布器的历史路径适配：只接收已经核验的当前分析，不加载旧 crosswalk/标签/调度流程。
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const publicationFiles = require('./publication-file-primitives.js');
 const stableHash = require('./fresh-rewrite-run.js').stableHash;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -52,31 +50,13 @@ function currentRendererImplementationSha256(dependencies = {}) {
     return rendererImplementationIdentity(dependencies).rendererImplementationSha256;
 }
 function defaultRender(packet, dependencies = {}) {
-    const script = path.join(__dirname, '..', 'historical-page-render.py');
-    const runtime = path.join(__dirname, '..', 'python-runtime.sh');
-    const io = dependencies.io || fs;
-    const execute = dependencies.execFileSync || execFileSync;
-    const temporaryRoot = dependencies.tmpdir?.() || fs.realpathSync(os.tmpdir());
-    const temporary = io.mkdtempSync(path.join(temporaryRoot, 'historical-page-render-input-'));
-    const inputFile = path.join(temporary, 'packet.json');
-    try {
-        io.writeFileSync(inputFile, JSON.stringify(packet), {
-            encoding: 'utf8', flag: 'wx', mode: 0o600
-        });
-        const output = execute('bash', [runtime, script, '--input-file', inputFile], {
-            maxBuffer: 64 * 1024 * 1024,
-            timeout: 60 * 1000,
-            killSignal: 'SIGKILL'
-        });
-        const parsed = JSON.parse(output.toString('utf8'));
-        if (typeof parsed.markdown !== 'string' || !parsed.markdown.trim() || !Array.isArray(parsed.assets)) throw new Error('历史页面生成器必须返回非空 Markdown 正文和资源数组。');
-        return parsed;
-    }
-    finally {
-        try { io.unlinkSync(inputFile); }
-        catch (error) { if (error.code !== 'ENOENT') throw error; }
-        io.rmdirSync(temporary);
-    }
+    const output = require('./python-json-packet-bridge').runPythonJsonPacket(packet, {
+        script: path.join(__dirname, '..', 'historical-page-render.py'),
+        inputFlag: '--input-file', prefix: 'historical-page-render-input-', cleanup: 'strict'
+    }, dependencies);
+    const parsed = JSON.parse(output.toString('utf8'));
+    if (typeof parsed.markdown !== 'string' || !parsed.markdown.trim() || !Array.isArray(parsed.assets)) throw new Error('历史页面生成器必须返回非空 Markdown 正文和资源数组。');
+    return parsed;
 }
 
 function writeExact(filename, bytes) {

@@ -2,9 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const adapter = require('./conference-analysis-adapter.js');
 const tagCatalogApi = require('./tag-catalog.js');
 const identityApi = require('./paper-identity.js');
@@ -420,21 +418,11 @@ function safeStem(loaded) {
     return `conference-${parts[1]}-${parts[2]}-${parts[3]}-${value}-${sha256(loaded.run.paperId).slice(0, 10)}`;
 }
 function render(packet) {
-    // 把带图的大 JSON 数据包从 execFileSync 的标准输入传过去，
-    // 在 macOS 上可能让 Python 子进程一直等 EOF。改用一个权限收紧的临时文件，
-    // 里面的字节与渲染器校验和读取的完全一致，
-    // 父进程也总能关掉并清理这个输入。
-    const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'conference-page-render-'));
-    const packetFile = path.join(temporaryRoot, 'packet.json');
-    try {
-        fs.writeFileSync(packetFile, JSON.stringify(packet), { flag: 'wx', mode: 0o600 });
-        const output = execFileSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'),
-            path.join(__dirname, '..', 'conference-page-render.py'), '--packet-file', packetFile],
-        { maxBuffer: 64 * 1024 * 1024 });
-        return pageApi.strictJson(output, 'conference renderer output');
-    } finally {
-        fs.rmSync(temporaryRoot, { recursive: true, force: true });
-    }
+    const output = require('./python-json-packet-bridge').runPythonJsonPacket(packet, {
+        script: path.join(__dirname, '..', 'conference-page-render.py'),
+        inputFlag: '--packet-file', prefix: 'conference-page-render-', cleanup: 'recursive'
+    });
+    return pageApi.strictJson(output, 'conference renderer output');
 }
 function implementationFingerprint() {
     const sources = { nodeSourceSha256: pageApi.readRegular(__filename, 4 * 1024 * 1024, 'conference projection source').fileSha256,

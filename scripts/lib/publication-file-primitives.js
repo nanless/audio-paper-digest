@@ -4,7 +4,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { runGitProcess } = require('./publication-git-process.js');
 const fresh = require('./fresh-rewrite-run.js');
 const { writeImmutableFile } = require('./immutable-file.js');
 const stableHash = fresh.stableHash;
@@ -60,9 +60,11 @@ function writeExact(filename, bytes) {
     return verified.sha256;
 }
 function runGit(blogRepo, args, { text = true, maximum = 128 * 1024 * 1024 } = {}) {
-    const result = spawnSync('git', ['-C', blogRepo, ...args], { encoding: text ? 'utf8' : null,
-        env: { ...process.env, LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }, maxBuffer: maximum });
-    if (result.error || result.signal || result.status !== 0) fail(`Git 命令 ${args[0]} 执行失败（${result.error?.message || result.signal || result.status}）。`);
+    let result;
+    try { result = runGitProcess(blogRepo, args, { encoding: text ? 'utf8' : null,
+        env: { ...process.env, LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }, maxBuffer: maximum }); }
+    catch { fail(`Git 命令 ${args[0]} 执行失败（子进程未完整正常退出）。`); }
+    if (result.status !== 0) fail(`Git 命令 ${args[0]} 执行失败（${result.status}）。`);
     return text ? result.stdout.trim() : Buffer.from(result.stdout);
 }
 function defaultBlogState(blogRepo, remoteName = 'origin') {

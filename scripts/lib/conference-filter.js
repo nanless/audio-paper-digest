@@ -1434,67 +1434,44 @@ const HISTORICAL_FILTER_PROMPT_ARCHIVES = Object.freeze({
         'e8678d07c58b38862dafa5b74a715db667d29db2a4e20664423208cff2f3cd8f'
 });
 
-function renderDeclaredDailyFilterPrompt(envelope) {
+const DECLARED_FROZEN_FILTER_PROMPTS = Object.freeze([
+    { sha256: '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661', path: FROZEN_LLM_FILTER_PROMPT_PATH, checkSha: false },
+    { sha256: '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5', path: FROZEN_V2_LLM_FILTER_PROMPT_PATH, checkSha: true },
+    { sha256: '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f', path: FROZEN_V3_LLM_FILTER_PROMPT_PATH, checkSha: true },
+    { sha256: '58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29', path: FROZEN_V4_LLM_FILTER_PROMPT_PATH, checkSha: true }
+]);
+// One resolver for issuance and replay. Archive-only declarations still cannot
+// authorize a new request; their original bytes can only verify a saved request.
+function resolveDeclaredDailyFilterPrompt(envelope) {
     const declaredSha = envelope.filter.promptSha256;
-    if (declaredSha === LLM_FILTER_PROMPT_SHA256) return renderDailyFilterPrompt(envelope);
-    if (declaredSha === '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661') {
-        return renderFrozenDailyFilterPrompt(envelope);
+    if (declaredSha === LLM_FILTER_PROMPT_SHA256) {
+        return { rendered: renderDailyFilterPrompt(envelope), requestAllowed: true };
     }
-    if (declaredSha === '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5'
-        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, {
+    const frozen = DECLARED_FROZEN_FILTER_PROMPTS.find(item => item.sha256 === declaredSha);
+    if (frozen) {
+        if (frozen.checkSha && sha256(Buffer.from(utilsApi.loadPrompt(frozen.path, {
             title: '{title}', abstract: '{abstract}', categories: '{categories}'
-        }), 'utf8')) === declaredSha) {
-        return utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+        }), 'utf8')) !== declaredSha) return null;
+        return { rendered: utilsApi.loadPrompt(frozen.path, promptFields(envelope)), requestAllowed: true };
     }
-    if (declaredSha === '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f'
-        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, {
-            title: '{title}', abstract: '{abstract}', categories: '{categories}'
-        }), 'utf8')) === declaredSha) {
-        return utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
-    }
-    if (declaredSha === '58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29'
-        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, {
-            title: '{title}', abstract: '{abstract}', categories: '{categories}'
-        }), 'utf8')) === declaredSha) {
-        return utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
-    }
-    fail('新请求的筛选提示词版本没有登记，或冻结正文已变化');
-}
-
-function dailyFilterPromptMatches(prompt, envelope) {
-    if (envelope.filter.promptSha256 === LLM_FILTER_PROMPT_SHA256
-        && prompt === renderDailyFilterPrompt(envelope)) return true;
-    if (envelope.filter.promptSha256 === '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661'
-        && prompt === renderFrozenDailyFilterPrompt(envelope)) return true;
-    // v2 原文只用于声明该历史模板 SHA 的旧请求，不能混入新模板的请求。
-    if (envelope.filter.promptSha256 === '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5'
-        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, {
-            title: '{title}', abstract: '{abstract}', categories: '{categories}'
-        }), 'utf8')) === envelope.filter.promptSha256
-        && prompt === utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
-    // v3 原文同样只对应声明的冻结模板，不能与当前正文混用。
-    if (envelope.filter.promptSha256 === '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f'
-        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, {
-            title: '{title}', abstract: '{abstract}', categories: '{categories}'
-        }), 'utf8')) === envelope.filter.promptSha256
-        && prompt === utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
-    if (envelope.filter.promptSha256 === '58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29'
-        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, {
-            title: '{title}', abstract: '{abstract}', categories: '{categories}'
-        }), 'utf8')) === envelope.filter.promptSha256
-        && prompt === utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
-    const declaredSha = envelope.filter.promptSha256;
     const archiveSha = HISTORICAL_FILTER_PROMPT_ARCHIVES[declaredSha];
-    if (!archiveSha) return false;
+    if (!archiveSha) return null;
     const bytes = require('./prompt-history.js').historicalPromptBytesForSha256(archiveSha);
-    if (!bytes) return false;
+    if (!bytes) return null;
     const block = bytes.toString('utf8').match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m);
-    if (!block || sha256(Buffer.from(block[2], 'utf8')) !== declaredSha) return false;
+    if (!block || sha256(Buffer.from(block[2], 'utf8')) !== declaredSha) return null;
     const fields = promptFields(envelope);
-    // 单次替换原模板；来源文字中的花括号不再被当作模板字段。
-    const rendered = block[2].replace(/\{(?:title|abstract|categories)\}/g,
-        placeholder => String(fields[placeholder.slice(1, -1)]));
-    return prompt === rendered;
+    return { rendered: block[2].replace(/\{(?:title|abstract|categories)\}/g,
+        placeholder => String(fields[placeholder.slice(1, -1)])), requestAllowed: false };
+}
+function renderDeclaredDailyFilterPrompt(envelope) {
+    const resolved = resolveDeclaredDailyFilterPrompt(envelope);
+    if (!resolved?.requestAllowed) fail('新请求的筛选提示词版本没有登记，或冻结正文已变化');
+    return resolved.rendered;
+}
+function dailyFilterPromptMatches(prompt, envelope) {
+    const resolved = resolveDeclaredDailyFilterPrompt(envelope);
+    return Boolean(resolved && prompt === resolved.rendered);
 }
 
 function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus = 'ready') {

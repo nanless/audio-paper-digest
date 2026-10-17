@@ -227,6 +227,8 @@ npm run test:compat
 | `lib/prompt-rendering-contract.js` | Node 库：识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
 | `lib/prompt-text-versions.js` | Node 库：登记每个分析阶段当前使用的提示词正文路径和版本标识。导出当前 18 份正文名单；旧记录按自己声明的版本选择原路径，通过 Git 证据读取器重新核验，未声明版本时按 v1 身份读取，未知版本直接报错。 |
 | `lib/publication-file-primitives.js` | 三流程共用的严格文件、JSON、不可变写入与回读 SHA 守卫。 |
+| `lib/publication-git-process.js` | 历史发布及公共文件模块共用的有界 Git 同步执行；原适配器保留环境、返回值和事务，期限或截断不作为普通非零退出处理；不增加推送次数。 |
+| `lib/python-json-packet-bridge.js` | 会议与历史单篇渲染共用的私有 Python 输入文件传输；独占创建 `0600` 临时文件，限制输入、输出与期限并清理；packet 身份、JSON 和正文资格仍由调用方核验。 |
 | `lib/reader-author-parser.js` | Node 库：从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
 | `lib/reader-author-replay-cli.js` | Node 子进程入口：供 Python 发布器调用的本地作者核验入口；原单对象协议保持，有界批次最多8项/32MiB，逐项重读真实四源及父证明，全部精确通过才返回true；只读取私有FD，无网络与模型。 |
 | `lib/reader-next-request-plan.js` | 从正常 Reader 循环的实际候选、问题与原预算记录下一次全文或局部路由；诊断不是最终预检或请求许可，显式仅局部作用域只能减权，保留原计数与全部后续守卫。 |
@@ -311,7 +313,7 @@ npm run test:compat
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
 | `page-source-crosswalk.js` | 从直接命名的历史清单与凭证创建独立 crosswalk，管理受控决定和 CAS。普通磁盘 arXiv 来源文件不能获得发布授权；finalize 要求全体 verified，且来源可在现场重新核验。 |
 | `paper_identity.py` | 实现与 Node 相同的 `paper-identity-v1`，用共享测试向量核对身份与 SHA 结果。 |
-| `paper_reader_presentation.py` | 日更、会议、历史的同一摘要/资源/评分展示解析器及作者展示；详细摘要仍真实冷核，原计划与保存身份须对应，各来源过滤及页面外框保持。 |
+| `paper_reader_presentation.py` | 日更、会议、历史的同一摘要/资源/评分展示解析器、八维评分规格及连续重复加粗标题投影；详细摘要仍真实冷核，原计划与保存身份须对应，各来源过滤及页面外框保持。 |
 | `parse-arxiv-atom.py` | Python 解析入口：经 `python-runtime.sh` 读取有字节上限的标准输入，严格校验 Atom XML、官方论文 ID、标题与摘要，再输出有字节上限的 JSON；拒绝文档类型与实体声明。 |
 | `path_config.py` | 定义 Python 共享路径、日期与原子写入配置。 |
 | `pdf-layout-extract.py` | 从受控 PDF 提取布局、文本位置和单元格证据。 |

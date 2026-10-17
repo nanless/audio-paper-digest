@@ -1059,9 +1059,11 @@ function loadActivation(loadedPlan) {
 }
 
 function runGit(blogRepo, args, { binary = false, allowFailure = false } = {}) {
-    const result = spawnSync('git', ['-C', blogRepo, ...args], { encoding: binary ? null : 'utf8',
-        env: { ...process.env, LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' }, maxBuffer: 128 * 1024 * 1024 });
-    if (!allowFailure && (result.error || result.signal || result.status !== 0)) fail(`Git ${args[0]} 操作失败`);
+    let result;
+    try { result = require('./publication-git-process.js').runGitProcess(blogRepo, args, { encoding: binary ? null : 'utf8',
+        env: { ...process.env, LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' }, maxBuffer: 128 * 1024 * 1024 }); }
+    catch { fail(`Git ${args[0]} 操作失败（子进程未完整正常退出）`); }
+    if (!allowFailure && result.status !== 0) fail(`Git ${args[0]} 操作失败`);
     return binary ? Buffer.from(result.stdout || []) : { status: result.status, stdout: String(result.stdout || '').trim(), stderr: String(result.stderr || '').trim() };
 }
 function defaultPublishGit({ blogRepo, plan, publicationId, message }) {
