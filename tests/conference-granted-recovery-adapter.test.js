@@ -11,9 +11,9 @@ const grants = require('../scripts/lib/conference-recovery-grant');
 const budget = require('../scripts/lib/conference-reader-recovery-window');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture');
 const { recoveryFixtureIdentity, registerRecoveryFixture } = require('./helpers/conference-recovery-grant-fixture');
-const { validAnalysisText } = require('./valid-analysis-fixture');
+const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture');
 
-async function fixture(t, { invalidCore = false, scoringMode = false, coreRejected = false } = {}) {
+async function fixture(t, { invalidCore = false, scoringMode = false, coreRejected = false, tagProofCase = null } = {}) {
     const f = productionPlanFixture(t), identity = recoveryFixtureIdentity(f.paperId);
     const analysisRoot = path.join(f.root, 'data/runtime/conference-analysis-executions');
     const input = { analysisRoot, parentExecutionId: identity.parentExecutionId,
@@ -30,6 +30,21 @@ async function fixture(t, { invalidCore = false, scoringMode = false, coreReject
             modelTextSanitizationContract: 'model-text-unicode-scalars-v1' },
             stages: { primaryAnalysis: { status: 'complete' }, coreSummaryRepair: { status: 'complete' },
                 scoringAudit: { status: 'complete' }, apiReaderArticle: { status: 'complete' } } } };
+    if (tagProofCase) {
+        const tagged = validAnalysisPaper(undefined, {}, analysis);
+        paper.analysisManifest.contracts = tagged.analysisManifest.contracts;
+        paper.analysisManifest.stages.taxonomySeal = tagged.analysisManifest.stages.taxonomySeal;
+        paper.analysisManifest.stages.structureRepair = tagged.analysisManifest.stages.structureRepair;
+        paper.analysisManifest.stages.coreSummaryRepair.inputAnalysisSha256 =
+            tagged.analysisManifest.stages.coreSummaryRepair.inputAnalysisSha256;
+        paper.analysisStageCheckpoints = tagged.analysisStageCheckpoints;
+        if (tagProofCase.parent === 'missing') {
+            delete paper.analysisManifest.stages.taxonomySeal;
+            delete paper.analysisStageCheckpoints.taxonomySeal;
+        } else if (tagProofCase.parent === 'mismatch') {
+            paper.analysis = paper.analysis.replace(/#语音识别/g, '#语音合成');
+        }
+    }
     adapter.replaceJson(path.join(parent.directory, 'analysis.json'), { ...parent.analysis, status: 'complete',
         completedAt: '2026-10-17T12:00:00.000Z', papers: [paper] }, parent.analysisFileSha256);
     adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: identity.parentExecutionId }));
@@ -64,9 +79,73 @@ async function fixture(t, { invalidCore = false, scoringMode = false, coreReject
         adapter.replaceJson(path.join(failed.directory, 'analysis.json'), changed, failed.analysisFileSha256);
         failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
     }
+    if (tagProofCase) {
+        const changed = structuredClone(failed.analysis), current = changed.papers[0];
+        if (tagProofCase.forceNormal !== false) current.analysisManifest.stages.primaryAnalysis.status = 'contract_rejected';
+        if (tagProofCase.failed === 'missing') {
+            delete current.analysisManifest.stages.taxonomySeal;
+            delete current.analysisStageCheckpoints.taxonomySeal;
+        } else if (tagProofCase.failed === 'mismatch') {
+            current.analysis = current.analysis.replace(/#语音识别/g, '#语音合成');
+        }
+        adapter.replaceJson(path.join(failed.directory, 'analysis.json'), changed, failed.analysisFileSha256);
+        failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
+    }
     const grant = registerRecoveryFixture({ analysisRoot, parentExecutionId: identity.parentExecutionId, failedExecutionId, paperId: f.paperId });
+    // The new regressions below use the real tag proof reader for every grant
+    // entry and final gate. Only the pre-existing synthetic bootstrap uses the
+    // orchestration double, before the tested recovery operation starts.
+    if (tagProofCase) post.readOriginalTagProof = oldRead;
     return { ...f, ...input, failedExecutionId, failed, grant, engine, operations };
 }
+
+test('正常分析从真实父词表恢复未完成标签，但新稿仍须通过自己的完整标签证明', async t => {
+    for (const failed of ['missing', 'mismatch']) await t.test(failed, async t => {
+        const f = await fixture(t, { tagProofCase: { failed } });
+        const post = require('../scripts/lib/conference-postprocess');
+        assert.ok(post.readOriginalTagProof(f.failed.parent.analysis.papers[0]).rules.registrySha256);
+        assert.throws(() => post.readOriginalTagProof(f.failed.analysis.papers[0]), /标签阶段/);
+        const originals = ['analysis.json', 'run.json', 'source.json', 'reader-revision.json']
+            .map(name => ({ name, bytes: fs.readFileSync(path.join(f.failed.directory, name)) }));
+        const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+            failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+        let calls = 0;
+        const engine = { ...f.engine, analyzePaperWithRetry: async paper => {
+            calls++; assert.ok(context.getConferenceAnalysisSource(paper)); assert.ok(budget.getCurrentReaderWindow(paper));
+            if (calls === 1) return { success: false, result: paper, error: 'normal tag recovery reached', retryable: false };
+            return { success: true, result: paper };
+        }, isSuccessfulAnalysisRecordForReadOnlyConferencePublication: () => assert.fail('invalid final tags must fail first') };
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: f.operations }), /normal tag recovery reached/);
+        const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+        const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+        assert.equal(loaded.revision.mode, 'normal-analysis');
+        assert.equal(loaded.analysis.readerRevisionProgress.attempts, 1);
+        // A normal engine result alone cannot authorize publication while its
+        // own current classification is still absent or mismatched.
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: f.operations }), /标签阶段/);
+        const after = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+        assert.equal(after.analysis.status, 'partial'); assert.equal(after.analysis.readerRevisionProgress.attempts, 2);
+        for (const { name, bytes } of originals) assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, name)), bytes);
+        assert.equal(f.failed.analysis.readerRevisionProgress.attempts, 3);
+    });
+});
+
+test('正常分析不能借无效父标签，固定Reader模式也不能借父词表绕过坏子标签', async t => {
+    for (const tagProofCase of [{ parent: 'missing' }, { parent: 'mismatch' }, { failed: 'missing', forceNormal: false }]) {
+        await t.test(JSON.stringify(tagProofCase), async t => {
+            const f = await fixture(t, { tagProofCase });
+            const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+            let calls = 0;
+            const engine = { ...f.engine, analyzePaperWithRetry: async () => { calls++; assert.fail('invalid proof reached normal analysis'); } };
+            await assert.rejects(adapter.refreshConferenceGrantedRecovery({ analysisRoot: f.analysisRoot,
+                parentExecutionId: f.parentExecutionId, failedExecutionId: f.failedExecutionId, planHandle: f.planHandle,
+                sourceRoot: f.sourceRoot, grantHandle: f.grant.handle }, { engine, deep: f.operations }), /标签阶段/);
+            assert.equal(calls, 0); assert.equal(fs.existsSync(path.join(f.analysisRoot, member.expectedExecutionId)), false);
+            assert.equal(adapter.loadConferenceReaderRevision({ analysisRoot: f.analysisRoot,
+                executionId: f.failedExecutionId }).analysis.readerRevisionProgress.attempts, 3);
+        });
+    }
+});
 
 test('真实注册许可新建隔离窗口，原3/3与原稿字节不变，新窗口三轮封顶', async t => {
     const f = await fixture(t), originalBytes = fs.readFileSync(path.join(f.failed.directory, 'analysis.json'));

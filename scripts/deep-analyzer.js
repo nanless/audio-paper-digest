@@ -4137,9 +4137,10 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             { pattern: new RegExp('复现(?:时)?(?:要|应|需)把' + conceptList + '\\s*([三两二32])\\s*件事分开', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp('(?:(?:复现(?:前|时)?(?:要|应|需))|并)?(?:把|将)' + conceptList
                 + '\\s*(?:([三两二32])\\s*件事)?\\s*(?:分开|分别)(?:核实|核对|确认|验证|判断)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
-            { pattern: new RegExp(conceptList + '\\s*是\\s*([两二2])\\s*回事', 'gu'), listGroup: 1, countGroup: 2 }
+            { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*回事', 'gu'), listGroup: 1, countGroup: 2, countedMatters: true },
+            { pattern: new RegExp(conceptList + '\\s*(?:需要|仍需)(?:另行|分别|逐项)确认', 'gu'), listGroup: 1, closedPending: true }
         ];
-        for (const { pattern, listGroup, countGroup } of countedDistinctions) for (const span of value.matchAll(pattern)) {
+        for (const { pattern, listGroup, countGroup, closedPending, countedMatters } of countedDistinctions) for (const span of value.matchAll(pattern)) {
             const list = span[listGroup];
             const count = countGroup ? span[countGroup] ?? null : null;
             const items = list.split(/\s*[、和与及]\s*/u);
@@ -4157,6 +4158,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '');
             const collectiveAfter = after.replace(/^[\s，,:：；;]+/u, '')
                 .replace(/^(?:要|应|需)(?:分别|分开)(?:核实|核对|确认|验证|判断)[\s，,:：；;]*/u, '');
+            if (closedPending && !/^[。！？!?]?\s*$/u.test(value.slice(span.index + span[0].length))) continue;
+            if (countedMatters && declared === 3 && /[；;]\s*$/u.test(value)) continue;
             if (quoted || !/^(?:\s*(?:但|因此))?\s*$/u.test(prefix)
                 || /^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|区分|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)/u.test(after)
                 || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:本身|其实|实际)?(?:并不成立|从未成立)/u.test(after)
@@ -4860,9 +4863,28 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 && !/^(?:[“”‘’「」"'`]|(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|否定|区分)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳))/u.test(after);
         };
         const bounded = pattern => [...value.matchAll(pattern)].some(span => contains(span) && safe(span));
+        const safeRecoverySpan = span => {
+            const before = value.slice(0, span.index);
+            const after = value.slice(span.index + span[0].length).replace(/^[\s，,；;：:。.!?！？]+/u, '')
+                .replace(/^(?:但是?|不过|然而)[\s，,：:]*/u, '');
+            const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+                before.lastIndexOf(open) > before.lastIndexOf(close))
+                || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
+            return safe(span) && !quoted && !/[；;]\s*$/u.test(value)
+                && !/^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|否定|区分|限定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定|不成立)/u.test(after);
+        };
         const resource = '(?:源代码|代码仓库|模型权重|数据集|语料库|代码|模型|权重|检查点|数据|资源)';
         const list = resource + '(?:(?:、|或|与|和|及)' + resource + '){0,4}';
         const release = '(?:已(?:经)?|当前)?(?:公开|开源|开放|可下载|可获取|可用)';
+        // Only the governed resource proposition is denied. An affirmative
+        // embedded object such as 本文已经公开的代码 is outside this grammar.
+        const inferredProposition = '(?:(?:作者(?:团队)?|本文|本论文|本研究|本工作)的?)?'
+            + resource + '(?:已(?:经)?|现已)?(?:正式)?(?:开源|公开|发布|开放|可下载|可获取|可用)';
+        const deniedInference = new RegExp('(?:不能|不应|不可|不得)(?:仅)?据此(?:直接)?(?:断定|认定|推断|断言)'
+            + inferredProposition + '(?:(?:、|或|与|和|及)' + inferredProposition + '){0,3}', 'gu');
+        for (const span of value.matchAll(deniedInference)) {
+            if (contains(span) && safeRecoverySpan(span)) return true;
+        }
         if (bounded(new RegExp('(?:没有|尚无|并无)可验证的' + list + release + '的证据', 'gu'))
             || bounded(new RegExp('(?:没有|尚未|并未)(?:明确)?(?:声称|声明)' + list + release, 'gu'))
             || bounded(new RegExp('不(?:作|做)' + list + '(?:开源|公开)(?:与|和)可用(?:断言|声明)', 'gu'))
@@ -4912,6 +4934,39 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const before = source.slice(Math.max(0, span.index - 240), span.index).split(/[.!?]/u).at(-1);
             return !/\b(?:not|never|no|if|would|could|might|will|future|planned|plans?|unlikely|likely|expected|intended|may|can|should|must|aims?|whether|said|says?|wrote|written|quoted|quote|quotation|false|untrue|incorrect|inaccurate|claims?|claimed|reports?|reported|reportedly|alleged|assumed|third[- ]party)\b/iu.test(before + span[0]);
         });
+        if (type === 'model') {
+            const own = '\\b(?:Our|The\\s+proposed)\\s+';
+            const checkpoint = '(?:model[ \\t]+)?checkpoints?\\s+(?:is|are|have\\s+been)\\s+(?:open[- ]sourced|publicly\\s+released)\\b';
+            // Keep an actual ownership/coordination relation. A single raw PDF
+            // column line may intervene after "framework and the"; do not
+            // scan arbitrary sentences from Our to somebody else's checkpoint.
+            const jointlyOwned = '(?:[A-Za-z0-9-]+[ \\t]+){0,5}(?:framework|system|implementation)'
+                + '[ \\t]+and(?:[ \\t]+the)?(?:[ \\t]*\\n[^\\n]{1,180}\\n[ \\t]*|\\s+)'
+                + '(?:[A-Za-z][A-Za-z0-9-]*[ \\t]+){0,2}' + checkpoint;
+            const ownCheckpointRelease = new RegExp(own + '(?:' + checkpoint + '|' + jointlyOwned + ')', 'giu');
+            const ownRelease = [...source.matchAll(ownCheckpointRelease)].some(span => {
+                const before = source.slice(Math.max(0, span.index - 200), span.index);
+                const framing = before.split(/[.!?]\s*/u).at(-1) + span[0];
+                const after = source.slice(span.index + span[0].length, span.index + span[0].length + 180)
+                    .replace(/^[\s.,;:]+/u, '').replace(/^(?:but|however)\b[\s,:]*/iu, '');
+                return !/\b(?:(?:following|quoted|next)\s+(?:statement|claim|assertion|result)[^.!?\n]{0,48}|(?:Other\s+authors?|A\s+previous\s+(?:paper|study))\s+(?:said|reported|wrote))[.!?:]\s*$/iu.test(before)
+                    && !/\b(?:not|never|no|if|would|could|might|will|future|planned|plans?|may|can|should|must|aims?|whether|expected|intended|unlikely|likely|said|says?|wrote|written|quotes?|quoted|quotation|false|untrue|incorrect|claims?|claimed|reports?|reported|alleged|assumed|third[- ]party|prior|previous|baseline|existing|another|their|other\s+(?:authors?|team))\b/iu.test(framing)
+                    && !/^(?:if|when|provided|assuming|subject\s+to|only\s+if|in\s+(?:the\s+)?future)\b/iu.test(after)
+                    && !/^(?:This|That)\s+(?:is|was)\s+(?:false|untrue|incorrect|inaccurate|not\s+true)\b/iu.test(after)
+                    && !/^(?:This|That|The|These|Those|Above)\s+(?:claim|statement|assertion|report|release|availability|checkpoints?|weights?)(?:\s+(?:is|are|was|were|has\s+been|have\s+been))?\s+(?:false|untrue|incorrect|inaccurate|not\s+true|withdrawn|revoked|denied|never\s+(?:released|provided))/iu.test(after);
+            });
+            const reported = /(?:论文|原文)(?:正文)?(?:称|写明|说明)[^。！？!?；;，,]{0,64}(?:模型(?:检查点|权重)|检查点)(?:已(?:经)?)(?:开源|公开)/gu;
+            for (const span of value.matchAll(reported)) {
+                if (!contains(span) || !safeRecoverySpan(span) || !ownRelease) continue;
+                const tail = value.slice(span.index + span[0].length);
+                const qualifier = /(?:但|不过|然而)?本次(?:核验|检查|验证)[^。！？!?；;，,]{0,40}(?:链接|镜像|资源|地址)(?:未能|无法)确认可达[^。！？!?；;]{0,120}?(?:应|需)(?:先)?自行(?:确认|核对)[^。！？!?；;]{0,40}是否可(?:下载|用|获取)/gu;
+                for (const qualified of tail.matchAll(qualifier)) {
+                    const absolute = { 0: qualified[0], index: span.index + span[0].length + qualified.index };
+                    const status = { 0: qualified[0].match(/^[\s\S]*?确认可达/u)[0], index: absolute.index };
+                    if (safeRecoverySpan(status) && safeRecoverySpan(absolute)) return true;
+                }
+            }
+        }
         if (type === 'model') {
             if (bounded(/从已发布检查点继续(?:微调)?/gu)
                 && sourceAffirms(/\bwe\s+initialize from the released checkpoint\b/giu)) return true;
@@ -5109,11 +5164,17 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // A directly following semicolon claim about the enumerated two/three
         // resources must stay visible to the bounded concept guard. Do not
         // infer referents across sentences or treat a conditional/denial as a claim.
-        const clauses = splitClauses.map((clause, index) => /[；;]$/u.test(clause)
-            && clause.length <= 300 && /[三两二32]\s*件\s*(?:不同的?|独立的?)?(?:事项|事)/u.test(clause)
-            && /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源)(?:都|均|全部)?(?:已经|现已|已|当前已?|目前已?)?(?:(?:公开|开源)(?:可用|可下载|可获取)?|发布|提供|可用|可下载|可获取)[。！？!?]?$/u
-                .test(splitClauses[index + 1] || '')
-            ? clause + splitClauses[index + 1] : clause);
+        const clauses = splitClauses.map((clause, index) => {
+            const next = splitClauses[index + 1] || '';
+            const collective = /[；;]$/u.test(clause) && clause.length <= 300
+                && /[三两二32]\s*(?:件\s*(?:不同的?|独立的?)?(?:事项|事)|回事)/u.test(clause)
+                && /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源)(?:都|均|全部)?(?:已经|现已|已|当前已?|目前已?)?(?:(?:公开|开源)(?:可用|可下载|可获取)?|发布|提供|可用|可下载|可获取)[。！？!?]?$/u.test(next);
+            // Only a closed, adjacent explicit retraction may refer back to
+            // these new nonclaim spans; no general cross-sentence inference.
+            const withdrawn = /(?:不能(?:仅)?据此|需要另行确认|论文(?:正文)?称|是[三3]回事)/u.test(clause)
+                && /^(?:上述|这一|这种|该)(?:说法|判断|结论|声明|否定|区分|限定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定|不成立)[。！？!?]?$/u.test(next);
+            return collective || withdrawn ? clause + next : clause;
+        });
         for (const resource of unavailableResources) {
             const tokens = [resource.originalUrl, resource.sourceUrlToken].filter(Boolean);
             if (tokens.some(token => text.includes(token))) {

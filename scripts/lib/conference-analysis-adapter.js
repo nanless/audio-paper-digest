@@ -937,12 +937,16 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
         || authority.limits.maxRounds !== 3 || authority.limits.readerContentResponses !== 6 || authority.limits.readerFullResponses !== 2) {
         throw recoveryWindowError('新增会议恢复的执行身份或获准限次不一致');
     }
-    const original = require('./conference-postprocess').readOriginalTagProof(failed.analysis.papers[0]);
     const failedPdf = verifyPlanAuthority(failed, planHandle, sourceRoot);
     const withFailedSource = callback => analysisContext.withConferenceAnalysisSource({ executionId: failedExecutionId,
         executionDir: failed.directory, paperId: failed.run.paperId, sourceDetails: failed.source.sourceDetails,
         readerPdfSourceHandle: failedPdf }, callback);
     const mode = withFailedSource(() => grantedRecoveryMode(failed));
+    // Full analysis repairs incomplete classification too. Its original rules
+    // come from the CAS-bound completed parent, not the unfinished child. The
+    // repaired paper still has to prove its own tags before completion below.
+    const original = require('./conference-postprocess').readOriginalTagProof(
+        mode === 'normal-analysis' ? failed.parent.analysis.papers[0] : failed.analysis.papers[0]);
     const oldScoring = failed.analysis.readerRevisionProgress?.scoringCheckpoint;
     if (oldScoring && stableHash(oldScoring) !== stableHash(withFailedSource(() =>
         readerScoringCheckpoint(failed.analysis.papers[0], failed, engine, original.rules)))) {
