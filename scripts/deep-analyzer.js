@@ -2622,6 +2622,31 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         renderedMarkdown, sourceText,
         { allowSplitUnit: structuredArtifacts.sourceKind === 'conference_pdf' }
     );
+    const tableQuoteSelections = new WeakMap();
+    const quotesForTable = (binding, rendered) => {
+        let byMarkdown = tableQuoteSelections.get(binding);
+        if (!byMarkdown) tableQuoteSelections.set(binding, byMarkdown = new Map());
+        if (byMarkdown.has(rendered.markdown)) return byMarkdown.get(rendered.markdown);
+        const validDeclaredQuotes = resolvedDeclaredSourceQuotes(
+            binding, sourceText, options.allowDeterministicQuoteRepair === true
+        );
+        const pdfQuotes = pdfQuotesFor(binding);
+        // An extra exact substring can name another PDF table and make an
+        // already complete column mapping ambiguous. Repair missing evidence
+        // only after the original quotes pass the same numeric/unit gates.
+        const completeDeclared = validDeclaredQuotes.length === binding.sourceQuotes.length
+            && validDeclaredQuotes.length + pdfQuotes.length > 0
+            && readerNumericTokens(rendered.markdown).every(token =>
+                readerSourceQuotesCoverNumericToken(token, validDeclaredQuotes, pdfQuotes,
+                    structuredArtifacts.sourceKind === 'conference_pdf'))
+            && readerTableHeaderUnitEvidenceFailures(rendered,
+                [...validDeclaredQuotes, ...pdfQuotes]).length === 0;
+        const repairedQuotes = options.allowDeterministicQuoteRepair === true && !completeDeclared
+            ? deriveReaderSourceQuotes(rendered.markdown) : [];
+        const result = { htmlQuotes: [...new Set([...validDeclaredQuotes, ...repairedQuotes])], pdfQuotes };
+        byMarkdown.set(rendered.markdown, result);
+        return result;
+    };
     const { payloadSha256: declaredArtifactsSha256, ...artifactBody } = structuredArtifacts;
     const replayedArtifactsSha256 = stableFingerprint(artifactBody);
     const sourceTextSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
@@ -2742,12 +2767,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 sourceQuotes: deriveReaderSourceQuotes(renderedTables[index].markdown)
             } : null);
             if (binding?.sourceType !== 'source_quotes' || !Array.isArray(binding.sourceQuotes)) continue;
-            const validQuotes = resolvedDeclaredSourceQuotes(
-                binding, sourceText, options.allowDeterministicQuoteRepair === true
-            );
-            const derivedQuotes = deriveReaderSourceQuotes(renderedTables[index].markdown);
-            const pdfQuotes = pdfQuotesFor(binding).map(item => item.quote);
-            const htmlQuotes = [...new Set([...validQuotes, ...derivedQuotes])];
+            const selected = quotesForTable(binding, renderedTables[index]);
+            const pdfQuotes = selected.pdfQuotes.map(item => item.quote);
+            const htmlQuotes = selected.htmlQuotes;
             const pruned = pruneUnsupportedSourceQuoteTable(
                 renderedTables[index], pdfQuotes.length
                     ? [htmlQuotes.join('\n'), ...pdfQuotes] : htmlQuotes.join('\n')
@@ -2807,13 +2829,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         if (!binding || binding.sourceType !== 'source_quotes'
             || binding.sourceTableOrdinal !== null || !Array.isArray(binding.cellBindings)
             || binding.cellBindings.length !== 0 || !Array.isArray(binding.sourceQuotes)) continue;
-        const validDeclaredQuotes = resolvedDeclaredSourceQuotes(
-            binding, sourceText, options.allowDeterministicQuoteRepair === true
-        );
-        const repairedQuotes = options.allowDeterministicQuoteRepair === true
-            ? deriveReaderSourceQuotes(rendered.markdown) : [];
-        const htmlQuotes = [...new Set([...validDeclaredQuotes, ...repairedQuotes])];
-        const pdfQuotes = pdfQuotesFor(binding);
+        const { htmlQuotes, pdfQuotes } = quotesForTable(binding, rendered);
         const exactQuotes = [...htmlQuotes, ...pdfQuotes];
         if (exactQuotes.length === 0) continue;
         const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
@@ -2975,10 +2991,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 ' 不是全文中的 exact sourceQuote'
             );
         }
-        const repairedQuotes = options.allowDeterministicQuoteRepair === true
-            ? deriveReaderSourceQuotes(rendered.markdown) : [];
-        const exactQuotes = [...new Set([...validDeclaredQuotes, ...repairedQuotes])];
-        const sealedPdfQuoteEvidence = pdfQuotesFor(binding);
+        const { htmlQuotes: exactQuotes, pdfQuotes: sealedPdfQuoteEvidence } = quotesForTable(binding, rendered);
         if (exactQuotes.length === 0 && sealedPdfQuoteEvidence.length === 0) {
             throw new Error(`读者文章 tableBindings[${index}] 无法确定性绑定 exact sourceQuote`);
         }
