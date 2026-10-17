@@ -150,9 +150,9 @@ key 绑定完整输入、程序与固定依赖、launcher/guard、工作区环�
 
 博客提交 `5dd45708` 将完整 `npm test` 与完整 `build:verify` 放到独立 runner、相同 HEAD 和相同 Hugo/Node 环境；部署显式要求两项 success，PR 不部署，原 Pages 不取消在途部署的规则保持。此前 462 秒测试与 1415 秒构建串行，改成并行后可消除这段串行等待；不能把理论消除的等待当作远端已测降幅。
 
-之后仅做一次资源配置对照：从原发布及相同主题提交重新导出，源码、配置、模板、测试、构建参数均不变，仅 `GOMEMLIMIT=3GiB→6GiB`、`GOMAXPROCS=2→4`，worker 仍为 1，执行完整原 `npm run build:verify`，上限 900 秒。该次总耗时 553.518 秒，较原净 603.084 秒下降 8.22%；Hugo 526.995 秒，较原净 578.376 秒下降 8.88%。全部前置审计、搜索分片和最终 13773 HTML、903513 引用、283212 fragment 检查通过；20009 个产物路径、字节 SHA 全部相同，总清单 SHA 为 `f8809a410bc3c06ec4afe4ba78b6365d807a40ce1d9c7efc6560c75240c73592`。
+之后仅做一次资源配置对照：从原发布及相同主题提交重新导出，源码、配置、模板、测试、构建参数均不变，仅 `GOMEMLIMIT=3GiB→6GiB`、`GOMAXPROCS=2→4`，worker 仍为 1，执行博客仓库的完整 `build:verify` 入口，上限 900 秒。该次总耗时 553.518 秒，较原净 603.084 秒下降 8.22%；Hugo 526.995 秒，较原净 578.376 秒下降 8.88%。全部前置审计、搜索分片和最终 13773 HTML、903513 引用、283212 fragment 检查通过；20009 个产物路径、字节 SHA 全部相同，总清单 SHA 为 `f8809a410bc3c06ec4afe4ba78b6365d807a40ce1d9c7efc6560c75240c73592`。
 
-两秒采样观测的峰值 RSS 为 6.335 GiB、CPU 为 400.1%。这是本机 10 CPU/32 GiB 上 CPU 与内存配置共同变化的单次测量；不能将收益单独归因于内存或 GC，更不能把 RSS 超过软限制当作 GC 根因证明。[Go 的内存限制是软限制](https://go.dev/doc/gc-guide#Memory_limit)；本机与 [GitHub 公共仓库 ubuntu-22.04 runner 的 4 CPU/16 GB](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) 也不同。
+两秒采样观测的峰值 RSS 为 6.335 GiB、CPU 为 400.1%。这是本机 10 CPU/32 GiB 上 CPU 与内存配置共同变化的单次测量；不能将收益单独归因于内存或 GC，更不能把 RSS 超过软限制当作 GC 根因证明。两份 Git archive 都不含历史，GitInfo 与真实 checkout 有差异，本地相对测量不外推到 CI 的绝对耗时。[Go 的内存限制是软限制](https://go.dev/doc/gc-guide#Memory_limit)；本机与 [GitHub 公共仓库 ubuntu-22.04 runner 的 4 CPU/16 GB](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) 也不同。
 
 基于有限但明确的改善，博客提交 `8572d200` 仅在 Pages build job 配置 6 GiB/4 CPU，输出实际系统资源及生效环境；本地默认值、独立 unit job、完整验证命令和双成功部署门槛保持。新增工作流回归 3/3 通过，原 1355 条无关工作树状态保持。证据为 `site-ci/resource-6g-4cpu-comparison-summary.json` 与 `resource-workflow-handoff.json`。旧 `5dd45708` run 的 unit 已通过，尚在途的构建被显式取消，以便新提交正常运行；这不是一次通过的完整部署。最终远端收益须以最新完整 run 的实际结果另行验收。
 
