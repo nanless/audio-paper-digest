@@ -524,13 +524,14 @@ function buildDigestRunReport(targetDate, options = {}) {
     );
     const analysisWaivedIds = analysisWaiverCheck.valid ? analysisWaiverCheck.paperIds : new Set();
     const deepBatch = papersFrom(deep);
-    const successful = deepBatch.filter(isSuccessfulAnalysisRecord);
-    const failed = deepBatch.filter(paper => (
-        !isSuccessfulAnalysisRecord(paper) && !analysisWaivedIds.has(normalizedId(paper))
-    ));
+    const successful = [], failed = [], waived = [];
     // 成功结果继续按成功核验；豁免只覆盖失败结果，避免同一篇同时计入两组。
-    const waived = deepBatch.filter(paper => analysisWaivedIds.has(normalizedId(paper))
-        && !isSuccessfulAnalysisRecord(paper));
+    // 同一份报告中的同一论文只做一次完整资格检查，不跨报告保存成功结论。
+    for (const paper of deepBatch) {
+        if (isSuccessfulAnalysisRecord(paper)) successful.push(paper);
+        else if (analysisWaivedIds.has(normalizedId(paper))) waived.push(paper);
+        else failed.push(paper);
+    }
     const waivedPaperIds = new Set(waived.map(normalizedId));
     const requiredAnalysis = deepBatch.filter(paper => !waivedPaperIds.has(normalizedId(paper)));
     const failedIds = failed.map(normalizedId).filter(Boolean);
