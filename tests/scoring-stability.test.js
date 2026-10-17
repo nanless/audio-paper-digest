@@ -21,13 +21,46 @@ test('共享评分判据逐项重放固定证明向量且不修改对象', () =>
     }
 });
 
-test('深度恢复与最终资格使用同一个函数，不另建宽松判据或保存器', () => {
+test('深度恢复保留共享函数，最终资格对普通API完整委托同一严格判据', () => {
     const deep = require('../scripts/deep-analyzer.js');
     const engine = require('../scripts/analysis-engine.js');
     assert.equal(deep.scoringStabilityResolutionIsValid, predicate);
-    assert.equal(engine.scoringStabilityIsResolved, predicate);
+    for (const { name, stage, expected } of vectors) {
+        const before = structuredClone(stage);
+        assert.equal(engine.scoringStabilityIsResolved(stage), predicate(stage), name);
+        assert.equal(engine.scoringStabilityIsResolved(stage), expected, name);
+        assert.deepStrictEqual(stage, before, name);
+    }
     assert.equal(Object.hasOwn(deep, 'auditTypeAwareScoring'), false);
     assert.equal(Object.hasOwn(engine, 'createFileSaver'), false);
+});
+
+test('本地确定性评分不能凭执行类型、原API共识或伪凭证绕过真实私有冷核', () => {
+    const engine = require('../scripts/analysis-engine.js');
+    for (const kind of ['deterministic_source_resource_audit', 'deterministic_source_core_audit']) {
+        for (const { name, stage: original } of vectors.filter(row => row.expected === true)) {
+            const stage = { ...structuredClone(original), executionKind: kind,
+                originApiStage: structuredClone(original), newApiRequests: 0 };
+            // Raw API consensus is intentionally insufficient for a local stage.
+            assert.equal(predicate(stage), true, `${kind}: ${name}`);
+            const paper = { id: 'conference:interspeech:2026:conference-paper-id:forged26_interspeech',
+                source: 'conference', analysisManifest: { stages: { scoringAudit: stage } } };
+            const before = structuredClone({ stage, paper });
+            assert.equal(engine.scoringStabilityIsResolved(stage), false, `${kind}: no paper`);
+            assert.equal(engine.scoringStabilityIsResolved(stage, paper), false, `${kind}: no receipt`);
+            const claimed = { ...paper, conferenceSourceCorrection: {
+                contract: kind === 'deterministic_source_core_audit'
+                    ? 'conference-source-core-correction-v1' : 'conference-source-resource-correction-v1',
+                processId: '11111111-2222-4333-8444-555555555555',
+                executionId: '11111111-2222-4333-8444-555555555555', manifestSha256: 'a'.repeat(64) } };
+            const claimedBefore = structuredClone(claimed);
+            assert.equal(engine.scoringStabilityIsResolved(stage, claimed), false, `${kind}: forged locator`);
+            assert.equal(engine.scoringStabilityIsResolved(stage, structuredClone(claimed)), false,
+                `${kind}: stage object belongs to another paper`);
+            assert.deepStrictEqual({ stage, paper }, before);
+            assert.deepStrictEqual(claimed, claimedBefore);
+        }
+    }
 });
 
 test('Python 与 Node 读取同一固定向量并给出完全相同的严格判断', () => {
