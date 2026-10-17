@@ -75,6 +75,8 @@ conference:acquire → conference:discover → 全文证据与每会筛选
 
 需先统一检查而不继续付费时，迁移显式加 `--postprocess-only`：保存正常后处理及迁移结果后返回，不派发分析、不释放重试、不聚合。认证 PDF 的资源归属或原完整稿唯一核心句确需零请求纠正时，使用独立物理清单及 `--postprocess-only --source-corrections ABSOLUTE_PATH`；资源与核心权限分开，保留最新主文、真实 Reader 父稿、原失败和费用，仍经正常整篇热核、保存冷核和暂存后原子采纳，详见[认证来源纠正](docs/conference-workflow.md#认证来源事实的零请求纠正)。
 
+来源纠正的新 Reader 须使用正常 finalizer 当前五项 Reader 合同，原图持久化声明保持原样；旧稿缺少 Reader 声明不阻止正常补齐。其它科学合同及非 Reader 阶段继续逐字保护，不能通过删合同对象放宽检查。
+
 论文必须有真实会议身份、官方PDF、来源SHA及能力记录。只有PDF时不能推断HTML DOM能力，不为会议补造arXiv ID。图像/公式仍按真实PDF像素核验。页面及JSON/BibTeX/RIS/上下文使用同一展示与导出核心，缺失摘要或公开URL如实标示。
 
 ## 3. 历史博客更新

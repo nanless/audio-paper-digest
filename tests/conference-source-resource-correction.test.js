@@ -506,3 +506,68 @@ test('迁移默认依赖未注入deep仍进入真实local finalizer；原科学�
     assert.notEqual(child.analysis.status, 'complete');
     assert.equal(fs.existsSync(path.join(child.directory, 'source-correction-receipt.json')), false);
 });
+
+// Synthetic contract/projection checks only: these do not claim scientific
+// qualification or grant any source-correction capability.
+function privateReaderContractCalculations() {
+    const sourceFile = require.resolve('../scripts/lib/conference-source-resource-correction');
+    const source = fs.readFileSync(sourceFile, 'utf8');
+    const fields = source.match(/const FAILURE_FIELDS = Object\.freeze\((\[[\s\S]*?\])\);/u)[1];
+    const start = source.indexOf('const READER_CONTRACT_KEYS = Object.freeze(');
+    const end = source.indexOf('function assertRecoveredImageSupplement(');
+    assert(start >= 0 && end > start);
+    return require('node:vm').runInNewContext(`const FAILURE_FIELDS = ${fields};\n`
+        + source.slice(start, end) + '\n({protectedPaper, assertNormalReaderContracts})', {
+        clone: structuredClone, scope: { getStore: () => undefined },
+        equal: (actual, expected, message) => assert.deepStrictEqual(
+            structuredClone(actual), structuredClone(expected), message)
+    });
+}
+
+test('来源纠正仅允许正常finalizer当前五合同；缺失伪造及原持久化声明变化均拒绝（合成）', () => {
+    const h = privateReaderContractCalculations(), deep = require('../scripts/deep-analyzer');
+    const before = { analysisManifest: { contracts: { coreSummary: 'protected-original' }, stages: {} } };
+    const after = structuredClone(before);
+    const normal = {
+        apiReaderArticle: deep.API_READER_ARTICLE_CONTRACT,
+        apiReaderSourceBindings: deep.API_READER_SOURCE_BINDING_CONTRACT,
+        apiReaderAuthorIdentity: deep.API_READER_AUTHOR_IDENTITY_CONTRACT,
+        apiReaderResourceIdentity: deep.API_READER_RESOURCE_IDENTITY_CONTRACT,
+        readerResourceClaims: deep.API_READER_RESOURCE_CLAIMS_CONTRACT
+    };
+    Object.assign(after.analysisManifest.contracts, normal);
+    h.assertNormalReaderContracts(after, before, deep);
+    for (const key of Object.keys(normal)) {
+        const missing = structuredClone(after); delete missing.analysisManifest.contracts[key];
+        assert.throws(() => h.assertNormalReaderContracts(missing, before, deep), /当前精确声明/u);
+        const forged = structuredClone(after); forged.analysisManifest.contracts[key] = 'forged';
+        assert.throws(() => h.assertNormalReaderContracts(forged, before, deep), /当前精确声明/u);
+    }
+    const minted = structuredClone(after); minted.analysisManifest.contracts.apiReaderFigurePersistence = 'daily-forged';
+    assert.throws(() => h.assertNormalReaderContracts(minted, before, deep), /当前精确声明/u);
+    before.analysisManifest.contracts.apiReaderFigurePersistence = 'original-archived-declaration';
+    after.analysisManifest.contracts.apiReaderFigurePersistence = 'original-archived-declaration';
+    h.assertNormalReaderContracts(after, before, deep);
+    const missing = structuredClone(after); delete missing.analysisManifest.contracts.apiReaderFigurePersistence;
+    assert.throws(() => h.assertNormalReaderContracts(missing, before, deep), /当前精确声明/u);
+    after.analysisManifest.contracts.apiReaderFigurePersistence = 'changed';
+    assert.throws(() => h.assertNormalReaderContracts(after, before, deep), /当前精确声明/u);
+});
+
+test('来源纠正六Reader合同外的原科学合同与非Reader阶段仍逐字保护（合成）', () => {
+    const h = privateReaderContractCalculations();
+    const before = { analysisManifest: { contracts: { coreSummary: 'original', taxonomy: 'original' },
+        stages: { primaryAnalysis: { status: 'complete', fingerprint: 'original' } } } };
+    const after = structuredClone(before);
+    for (const key of ['apiReaderArticle', 'apiReaderSourceBindings', 'apiReaderAuthorIdentity',
+        'apiReaderResourceIdentity', 'apiReaderFigurePersistence', 'readerResourceClaims']) {
+        after.analysisManifest.contracts[key] = 'Reader-only projected here; separately exact-validated';
+    }
+    assert.deepEqual(structuredClone(h.protectedPaper(after)), structuredClone(h.protectedPaper(before)));
+    for (const key of Object.keys(before.analysisManifest.contracts)) {
+        const changed = structuredClone(after); changed.analysisManifest.contracts[key] = 'changed';
+        assert.notDeepEqual(structuredClone(h.protectedPaper(changed)), structuredClone(h.protectedPaper(before)));
+    }
+    after.analysisManifest.stages.primaryAnalysis.fingerprint = 'changed';
+    assert.notDeepEqual(structuredClone(h.protectedPaper(after)), structuredClone(h.protectedPaper(before)));
+});

@@ -857,6 +857,26 @@ function clearVerifiedReaderFailure(paper) {
     }
     assertOutput(paper); return paper;
 }
+const READER_CONTRACT_KEYS = Object.freeze(['apiReaderArticle', 'apiReaderSourceBindings', 'apiReaderAuthorIdentity',
+    'apiReaderResourceIdentity', 'apiReaderFigurePersistence', 'readerResourceClaims']);
+function assertNormalReaderContracts(paper, parent, deep) {
+    const expected = {
+        apiReaderArticle: deep.API_READER_ARTICLE_CONTRACT,
+        apiReaderSourceBindings: deep.API_READER_SOURCE_BINDING_CONTRACT,
+        apiReaderAuthorIdentity: deep.API_READER_AUTHOR_IDENTITY_CONTRACT,
+        apiReaderResourceIdentity: deep.API_READER_RESOURCE_IDENTITY_CONTRACT,
+        readerResourceClaims: deep.API_READER_RESOURCE_CLAIMS_CONTRACT
+    };
+    // Conference finalization preserves any existing persistence declaration;
+    // it cannot mint a daily/direct-rewrite figure identity. Absence stays absent.
+    if (Object.hasOwn(parent.analysisManifest?.contracts || {}, 'apiReaderFigurePersistence')) {
+        expected.apiReaderFigurePersistence = parent.analysisManifest.contracts.apiReaderFigurePersistence;
+    }
+    const actual = Object.fromEntries(READER_CONTRACT_KEYS.filter(key =>
+        Object.hasOwn(paper.analysisManifest?.contracts || {}, key))
+        .map(key => [key, paper.analysisManifest.contracts[key]]));
+    equal(actual, expected, '新Reader合同不是正常finalizer的当前精确声明');
+}
 function protectedPaper(paper) {
     const value = clone(paper);
     for (const key of FAILURE_FIELDS) delete value[key];
@@ -864,6 +884,7 @@ function protectedPaper(paper) {
     for (const key of ['analysis', 'parsed', 'apiReaderArticle', 'apiReaderPlan', 'apiReaderFigures',
         'apiReaderAuthors', 'apiReaderResources', 'apiReaderArticleSha256', 'apiReaderPlanSha256',
         'analysisCheckpoint', 'conferenceSourceCorrection', 'conferenceSourceCorrectionObligation']) delete value[key];
+    if (value.analysisManifest?.contracts) for (const key of READER_CONTRACT_KEYS) delete value.analysisManifest.contracts[key];
     const stages = value.analysisManifest?.stages || {};
     for (const key of ['scoringAudit', 'apiReaderArticle']) delete stages[key];
     if (scope.getStore()?.mainCheckpointRecovery) delete stages.imageSupplement;
@@ -894,6 +915,7 @@ function assertOutput(paper) {
     const active = current(); assertContext(active, paper);
     const input = prepareFinalizerInput(paper), deep = require('../deep-analyzer');
     equal(protectedPaper(paper), protectedPaper(input.parent), '本地纠正改变了受保护主文或原阶段');
+    assertNormalReaderContracts(paper, input.parent, deep);
     assertRecoveredImageSupplement(input, paper);
     assertFailureProjection(input.parent, paper);
     equal(paper.analysis, input.audit.analysis, '评分与资源正文未由公共操作派生');
