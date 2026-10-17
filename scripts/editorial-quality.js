@@ -306,7 +306,7 @@ function collectRegexMatches(text, regex, reason) {
 // Task/condition references restored by prose formatting are discourse, not a measured count.
 // Keep exact quantity limiters in the same clause strict; never mask other numbers.
 function isDiscourseTaskConditionNumeral(text, index, surface) {
-    if (!Number.isInteger(index) || index < 1 || !/^一个(?:任务|条件)$/u.test(surface)
+    if (!Number.isInteger(index) || index < 1 || !/^一个(?:任务|条件|随机种子)$/u.test(surface)
         || text.slice(index, index + surface.length) !== surface
         || !/[上下这另哪]/u.test(text[index - 1])) return false;
     const prefix = text.slice(0, index - 1).split(/[，,。！？；;\n]/u).at(-1);
@@ -329,7 +329,7 @@ function findQuantitativeChineseNumerals(text) {
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             match => ' '.repeat(match.length))
         // 「另一路」是承接上文的指代，不是量出来的计数。
-        .replace(/另一个流|[上下这另哪]一个(?:任务|条件)/gu, (match, offset, whole) =>
+        .replace(/另一个流|[上下这另哪]一个(?:任务|条件|随机种子)/gu, (match, offset, whole) =>
             match === '另一个流' || isDiscourseTaskConditionNumeral(whole, offset + 1, match.slice(1))
                 ? ' '.repeat(match.length) : match)
         // “阈值二值化”中的二属于完整操作名；邻近的真实阈值仍须核验。

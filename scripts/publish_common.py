@@ -4126,7 +4126,7 @@ def validate_manual_depth_contract_v3(analysis):
 
 
 def _is_discourse_task_condition_numeral(text, index, surface):
-    if (index < 1 or not re.fullmatch(r'一个(?:任务|条件)', surface)
+    if (index < 1 or not re.fullmatch(r'一个(?:任务|条件|随机种子)', surface)
             or text[index:index + len(surface)] != surface or text[index - 1] not in '上下这另哪'):
         return False
     prefix = re.split(r'[，,。！？；;\n]', text[:index - 1])[-1]
@@ -4290,7 +4290,7 @@ def validate_manual_editorial_quality_v4(analysis):
             quantity_body,
         )
         quantity_body = re.sub(
-            r'[上下这另哪]一个(?:任务|条件)',
+            r'[上下这另哪]一个(?:任务|条件|随机种子)',
             lambda match: ' ' * len(match.group(0)) if _is_discourse_task_condition_numeral(
                 quantity_body, match.start() + 1, match.group(0)[1:]) else match.group(0),
             quantity_body,

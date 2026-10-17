@@ -4125,7 +4125,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const conceptProperties = [
             '代码(?:开源|公开|可用|可运行|可访问)',
             '(?:模型)?权重(?:可下载|下载|可获取|公开|可用)',
-            '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可用)'
+            '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可部署|可用)'
         ];
         const conceptProperty = '(?:' + conceptProperties.join('|') + ')';
         const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
@@ -4155,11 +4155,13 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
             const after = value.slice(span.index + span[0].length).replace(/^[\s，,:：]+/u, '')
                 .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '');
+            const collectiveAfter = after.replace(/^[\s，,:：；;]+/u, '')
+                .replace(/^(?:要|应|需)(?:分别|分开)(?:核实|核对|确认|验证|判断)[\s，,:：；;]*/u, '');
             if (quoted || !/^(?:\s*(?:但|因此))?\s*$/u.test(prefix)
                 || /^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|区分|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)/u.test(after)
                 || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:本身|其实|实际)?(?:并不成立|从未成立)/u.test(after)
-                || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:已经|已被|已|被)?(?:撤回|撤销|推翻|否定)/u.test(after)
-                || /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)/u.test(after)) continue;
+                || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)/u.test(after)
+                || /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)/u.test(collectiveAfter)) continue;
             return true;
         }
         const prefix = value.slice(0, matchIndex);
@@ -4854,7 +4856,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const before = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
             const after = value.slice(span.index + span[0].length).replace(/^[\s，,*_~]+/u, '');
             return !/[“”‘’「」"'`]|所谓|否认|否定|反驳|证伪|推翻|并非|不是/u.test(before)
-                && !/^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|否定|区分)(?:已经|已被|已|被)?(?:撤回|撤销|推翻|否定)/u.test(after)
+                && !/^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|否定|区分)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)/u.test(after)
                 && !/^(?:[“”‘’「」"'`]|(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|否定|区分)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳))/u.test(after);
         };
         const bounded = pattern => [...value.matchAll(pattern)].some(span => contains(span) && safe(span));
@@ -4877,7 +4879,11 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const items = span[1].split(/、|与|和/u);
             if (new Set(items).size !== items.length) continue;
             const tail = value.slice(span.index + span[0].length).split(/[。！？!?；;]/u)[0];
-            if (/(?:它们|三者|这三项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;]{0,28}(?:公开|开源|可用|可下载|可获取)/u.test(tail)) continue;
+            const followup = value.slice(span.index + span[0].length).replace(/^[\s，,:：；;]+/u, '')
+                .replace(/^(?:但是?|不过|然而|可是)[\s，,:：；;]*/u, '')
+                .replace(/^(?:要|应|需)(?:分别|分开)(?:核实|核对|确认|验证|判断)[\s，,:：；;]*/u, '');
+            if (/(?:它们|三者|这三项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;]{0,28}(?:公开|开源|可用|可下载|可获取)/u.test(tail)
+                || /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)/u.test(followup)) continue;
             return true;
         }
         for (const span of value.matchAll(new RegExp('复现(?:前)?(?:要|应|需)(?:分清三件事[：:]|区分)(' + properties + ')(?:三件事)?(?=[。！？!?；;]|$)', 'gu'))) {
@@ -5099,7 +5105,15 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         for (const table of extractMarkdownTables(prose)) prose = prose.replace(table.markdown, '\n');
         const text = prose.replace(/\s+/g, ' ').trim();
         if (!text) continue;
-        const clauses = text.split(/(?<=[。！？!?；;])/u).map(item => item.trim()).filter(Boolean);
+        const splitClauses = text.split(/(?<=[。！？!?；;])/u).map(item => item.trim()).filter(Boolean);
+        // A directly following semicolon claim about the enumerated two/three
+        // resources must stay visible to the bounded concept guard. Do not
+        // infer referents across sentences or treat a conditional/denial as a claim.
+        const clauses = splitClauses.map((clause, index) => /[；;]$/u.test(clause)
+            && clause.length <= 300 && /[三两二32]\s*件\s*(?:不同的?|独立的?)?(?:事项|事)/u.test(clause)
+            && /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源)(?:都|均|全部)?(?:已经|现已|已|当前已?|目前已?)?(?:(?:公开|开源)(?:可用|可下载|可获取)?|发布|提供|可用|可下载|可获取)[。！？!?]?$/u
+                .test(splitClauses[index + 1] || '')
+            ? clause + splitClauses[index + 1] : clause);
         for (const resource of unavailableResources) {
             const tokens = [resource.originalUrl, resource.sourceUrlToken].filter(Boolean);
             if (tokens.some(token => text.includes(token))) {
@@ -5165,10 +5179,28 @@ function enforceReaderResourceClaims(draft, identity, sourceText, options = {}) 
 const conferenceReaderResourceClaimIssues = readerResourceClaimIssues;
 const enforceConferenceReaderResourceClaims = enforceReaderResourceClaims;
 
+// Reuse the exact heading typography projection already used to replay old
+// assembled Readers. This does not edit or resign their saved plan/article.
+function readerPlanHeadingForArticle(planHeading, articleHeading) {
+    const heading = normalizeReaderProseFormatting(String(planHeading || '').trim());
+    if (heading === articleHeading) return heading;
+    const issues = findQuantitativeChineseNumerals(heading).map(issue => ({
+        ...issue, code: 'quantitative_chinese_numeral'
+    }));
+    return normalizeReaderProseFormatting(
+        normalizeIssueBoundReaderQuantitativeNumerals(heading, issues), issues
+    );
+}
+
 function readerResourceClaimDraftFromArticle(plan, article) {
     const headings = [...String(article || '').matchAll(/^### ([^\n]+)\n\n/gm)];
     if (!Array.isArray(plan?.sections) || headings.length !== plan.sections.length
-        || headings.some((heading, index) => heading[1] !== plan.sections[index]?.heading)) {
+        || new Set(headings.map(heading => heading[1])).size !== headings.length
+        || headings.some((heading, index) => {
+            const planned = plan.sections[index]?.heading;
+            return typeof planned !== 'string' || (heading[1] !== planned
+                && heading[1] !== readerPlanHeadingForArticle(planned, heading[1]));
+        })) {
         throw Object.assign(new Error('资源声明复核需要与正式计划逐节对应的已装配文章'), {
             code: 'READER_RESOURCE_ARTICLE_STRUCTURE_INVALID', retryable: false
         });
@@ -5176,7 +5208,7 @@ function readerResourceClaimDraftFromArticle(plan, article) {
     return { readerTitle: plan.readerTitle, oneSentenceThesis: plan.oneSentenceThesis,
         conceptBridges: plan.conceptBridges,
         sections: plan.sections.map((section, index) => ({ kind: section.kind,
-            heading: section.heading,
+            heading: headings[index][1],
             body: String(article).slice(headings[index].index + headings[index][0].length,
                 index + 1 < headings.length ? headings[index + 1].index : String(article).length)
         })) };
@@ -7532,18 +7564,8 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
     const articleHeadings = [...article.matchAll(/^###\s+(.+?)\s*$/gm)]
         .map(match => match[1].trim());
     if (articleHeadings.length !== plan.sections.length) return false;
-    const repairedHeadings = plan.sections.map((section, index) => {
-        const heading = normalizeReaderProseFormatting(String(section?.heading || '').trim());
-        if (heading === articleHeadings[index]) return heading;
-        // 早先的 Reader 修复把标题里量出来的计数归一化了，计划却没跟着改。只恢复同一个
-        // 精确的排版变换；其他标题改动仍被拒绝。
-        const issues = findQuantitativeChineseNumerals(heading).map(issue => ({
-            ...issue, code: 'quantitative_chinese_numeral'
-        }));
-        return normalizeReaderProseFormatting(
-            normalizeIssueBoundReaderQuantitativeNumerals(heading, issues), issues
-        );
-    });
+    const repairedHeadings = plan.sections.map((section, index) =>
+        readerPlanHeadingForArticle(section?.heading, articleHeadings[index]));
     if (!repairedHeadings.every((heading, index) => heading === articleHeadings[index])) {
         return false;
     }

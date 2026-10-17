@@ -848,7 +848,8 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
         let paper = clone(loaded.analysis.papers[0]);
         const savedScoring = progress.scoringCheckpoint;
         if (savedScoring && (loaded.revision.mode !== 'scoring-and-reader'
-            || stableHash(savedScoring) !== stableHash(readerScoringCheckpoint(paper, loaded, engine, original.rules)))) {
+            || stableHash(savedScoring) !== stableHash(withVerifiedSource(() =>
+                readerScoringCheckpoint(paper, loaded, engine, original.rules))))) {
             throw Object.assign(new Error('会议新评分检查点的资源、正文或原修订 SHA 改变'), { retryable: false });
         }
         if (loaded.resourcePreflight && !savedScoring) paper.apiReaderResources = clone(loaded.resourcePreflight);

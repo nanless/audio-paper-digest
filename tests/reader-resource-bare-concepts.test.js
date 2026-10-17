@@ -13,7 +13,8 @@ const savedFragments = [
     { paper: 'gao26', text: '若按原文链接尝试，需自行确认本次是否可达，并把代码开源、权重下载和系统可运行三件事分开验证。' },
     { paper: 'kim26', text: '代码开源、权重下载和系统可运行是三件不同的事' },
     { paper: 'nguyen26i', text: '代码开源、权重下载与系统可运行是三件不同的事，论文未提供可直接运行的仓库承诺，复现应区分自己实现的训练脚本与原文系统。' },
-    { paper: 'xu26j', text: '代码开源、权重下载与系统可运行是三件独立事项，论文引用 Whisper-large-v3、Dolphin、Qwen3-ASR、GPT-SoVITS 与 FireRedLID 等既有实现，但本次未验证其可达链接，复现者需自行确认版本与许可。' }
+    { paper: 'xu26j', text: '代码开源、权重下载与系统可运行是三件独立事项，论文引用 Whisper-large-v3、Dolphin、Qwen3-ASR、GPT-SoVITS 与 FireRedLID 等既有实现，但本次未验证其可达链接，复现者需自行确认版本与许可。' },
+    { paper: 'wang26w', text: '代码可运行、权重可下载、系统可部署是三件事，要分别确认。' }
 ];
 
 test('saved bare-download concepts and bounded verification instructions are nonclaims', () => {
@@ -24,6 +25,29 @@ test('saved bare-download concepts and bounded verification instructions are non
         '把代码开源和权重下载分别核实。',
         '代码开源、模型权重下载与系统可运行是三件独立事项。'
     ]) assert.deepEqual(issues(text), [], text);
+});
+
+test('deployment is a bounded distinct concept, never a release assertion', () => {
+    const list = '代码可运行、权重可下载、系统可部署是三件事';
+    for (const text of [
+        '本文' + list + '，要分别确认。',
+        list + '，但三者已公开可用。',
+        list + '，这个区分不成立。',
+        '“' + list + '”这句话是错误的。',
+        '代码可运行、权重可下载、系统可部署是两件事。',
+        '权重可下载与系统可部署是三件事。',
+        '本文代码可运行、权重可下载、系统可部署。'
+    ]) assert.ok(issues(text).length, text);
+    for (const system of ['系统可部署', '系统可运行']) {
+        const concepts = `代码可运行、权重可下载、${system}是三件事`;
+        assert.ok(issues(concepts + '，上述区分已经被撤销。').length);
+        assert.ok(issues(concepts + '，要分别确认；三者均已公开可用。').length);
+        for (const qualification of [
+            '三者可用与否仍待核验。', '三者当前可用性仍未确认。',
+            '三者均已公开这一假设尚待验证。', '三者均已公开的说法是错误的。',
+            '三者可用时仍须核验版本。'
+        ]) assert.deepEqual(issues(concepts + '，要分别确认；' + qualification), []);
+    }
 });
 
 test('concept spans cannot hide real ownership, extra claims, quoted or revoked distinctions', () => {

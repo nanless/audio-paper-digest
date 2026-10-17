@@ -450,27 +450,70 @@ module.exports.installOfflineConferenceBoundaries = function(identity) {
     const scoreDeep = runtime.exports;
     const scoreCounts = scoreDeep.installOfflineConferenceBoundaries(emptyReaderResourceIdentity(scoredParent.source.sourceDetails.text));
     const scoreInput = { ...input, parentExecutionId: scoredParentId };
-    await assert.rejects(adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep }), /interrupted/);
+    let authenticatedCheckpointChecks = 0;
+    const scoreEngine = { ...engine, getConferenceReaderRefreshUpstreamReason: value => {
+        if (!value.analysisManifest?.stages?.scoringAudit?.audit?.offlinePaidScore) return null;
+        const source = context.getConferenceAnalysisSource(value);
+        if (!source) return '已保存评分缺少当前认证会议来源';
+        assert.equal(source.text, scoredParent.source.sourceDetails.text);
+        const active = context.getConferenceAnalysisContext();
+        const provider = require('../scripts/lib/conference-source-context')
+            .readerPdfSourceForContext(active.readerPdfSourceHandle);
+        assert.equal(provider.paperId, fixture.paperId);
+        assert.equal(provider.sourceText, source.text);
+        assert.ok(Buffer.isBuffer(provider.pdf), '评分重入必须携带真实计划验证的 PDF 能力');
+        authenticatedCheckpointChecks += 1;
+        return null;
+    } };
+    const scoreOverrides = { engine: scoreEngine, deep: scoreDeep };
+    await assert.rejects(adapter.refreshConferenceReader(scoreInput, scoreOverrides), /interrupted/);
     const scoredParentLoaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId: scoredParentId });
     const scoreChildId = adapter.readerRevisionExecutionId(scoredParentId, scoredParentLoaded.analysisFileSha256);
     const scoreChild = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: scoreChildId });
     assert.equal(scoreChild.revision.mode, 'scoring-and-reader');
     const scoreAnalysisFile = path.join(scoreChild.directory, 'analysis.json');
-    const damagedScore = structuredClone(scoreChild.analysis);
-    damagedScore.readerRevisionProgress.scoringCheckpoint.analysisSha256 = '0'.repeat(64);
-    adapter.replaceJson(scoreAnalysisFile, damagedScore, scoreChild.analysisFileSha256);
-    await assert.rejects(adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep }), /新评分检查点/);
-    adapter.replaceJson(scoreAnalysisFile, scoreChild.analysis, adapter.readJsonRecord(scoreAnalysisFile).sha256);
+    for (const damage of [
+        value => { value.readerRevisionProgress.scoringCheckpoint.analysisSha256 = '0'.repeat(64); },
+        value => { value.papers[0].analysis += '\n\n改动后的正文。'; },
+        value => {
+            const stage = value.papers[0].analysisManifest.stages.scoringAudit;
+            stage.audit.changed = true;
+            stage.auditSha256 = adapter.stableHash(stage.audit);
+        },
+        value => { value.papers[0].sourceSha256 = '0'.repeat(64); }
+    ]) {
+        const damagedScore = structuredClone(scoreChild.analysis);
+        damage(damagedScore);
+        adapter.replaceJson(scoreAnalysisFile, damagedScore, adapter.readJsonRecord(scoreAnalysisFile).sha256);
+        const rejectedBytes = fs.readFileSync(scoreAnalysisFile);
+        await assert.rejects(adapter.refreshConferenceReader(scoreInput, scoreOverrides), /新评分检查点/);
+        assert.deepEqual(fs.readFileSync(scoreAnalysisFile), rejectedBytes,
+            '评分/正文/来源/检查点变化必须在原 attempt 递增前拒绝');
+        assert.equal(scoreCounts.scoreCalls, 1);
+        assert.equal(scoreCounts.readers, 1);
+        adapter.replaceJson(scoreAnalysisFile, scoreChild.analysis, adapter.readJsonRecord(scoreAnalysisFile).sha256);
+    }
     assert.equal(scoreCounts.scoreCalls, 1);
+    const sourceFile = path.join(scoreChild.directory, 'source.json');
+    const savedSource = fs.readFileSync(sourceFile);
+    fs.appendFileSync(sourceFile, ' ');
+    const beforeSourceRejection = fs.readFileSync(scoreAnalysisFile);
+    await assert.rejects(adapter.refreshConferenceReader(scoreInput, scoreOverrides),
+        /conference analysis execution evidence drifted/);
+    assert.deepEqual(fs.readFileSync(scoreAnalysisFile), beforeSourceRejection);
+    assert.equal(scoreCounts.scoreCalls, 1);
+    assert.equal(scoreCounts.readers, 1);
+    fs.writeFileSync(sourceFile, savedSource);
     const preflightFile = path.join(scoreChild.directory, 'reader-resource-preflight.json');
     const savedPreflight = fs.readFileSync(preflightFile);
     fs.appendFileSync(preflightFile, ' ');
-    await assert.rejects(adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep }), /预检文件 SHA/);
+    await assert.rejects(adapter.refreshConferenceReader(scoreInput, scoreOverrides), /预检文件 SHA/);
     assert.equal(scoreCounts.preflights, 2); assert.equal(scoreCounts.scoreCalls, 1);
     fs.writeFileSync(preflightFile, savedPreflight);
-    const scoredResult = await adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep });
+    const scoredResult = await adapter.refreshConferenceReader(scoreInput, scoreOverrides);
     assert.equal(scoredResult.revision.mode, 'scoring-and-reader');
     assert.equal(scoreCounts.preflights, 2); assert.equal(scoreCounts.scoreCalls, 1); assert.equal(scoreCounts.readers, 2);
+    assert.ok(authenticatedCheckpointChecks >= 2, '首次评分和已保存评分重入均须处于真实来源作用域');
     assert.equal(adapter.loadConferenceReaderRevision({ analysisRoot, executionId: scoreChildId })
         .analysis.readerRevisionProgress.attempts, 2);
     assert.equal(adapter.loadConferenceAnalysis({ analysisRoot, executionId: scoredParentId }).analysisFileSha256,

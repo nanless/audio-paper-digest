@@ -615,6 +615,70 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             with self.subTest(sentence=sentence):
                 self.assertIsNotNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + sentence))
 
+    def test_reader_seed_reference_saved_prose_and_exact_surface(self):
+        from publish_common import _is_discourse_task_condition_numeral
+        # chen26l 既有付费稿经正常 Node 排版后的真实语句，不是整篇资格证明。
+        sentence = '三是在另一个随机种子或另一份挖掘切分上重复，确认提升不是切分运气。'
+        self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + sentence))
+        self.assertIsNone(validate_manual_editorial_quality_v4(
+            '## 核心摘要\n只报告准确率。另一个随机种子上重复。'))
+        for prefix in '上下这另哪':
+            text = f'{prefix}一个随机种子上的结果需要复核。'
+            with self.subTest(text=text):
+                self.assertIsNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+                self.assertTrue(_is_discourse_task_condition_numeral(text, 1, '一个随机种子'))
+                for index in (0, 2, -1):
+                    self.assertFalse(_is_discourse_task_condition_numeral(text, index, '一个随机种子'))
+                self.assertFalse(_is_discourse_task_condition_numeral(text, 1, '一个随机'))
+
+    def test_reader_seed_measured_counts_and_other_numbers_remain_diagnostic(self):
+        from publish_common import _is_discourse_task_condition_numeral
+        for limiter in ('只', '仅', '至少', '至多', '恰好', '共有', '共计', '总共', '总计', '一共', '剩余'):
+            text = f'{limiter}在经过严格控制和验证的这一个随机种子上评测。'
+            with self.subTest(text=text):
+                self.assertFalse(_is_discourse_task_condition_numeral(
+                    text, text.index('一个随机种子'), '一个随机种子'))
+                self.assertIsNotNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+        for text in ('实验只用一个随机种子。', '实验仅用一个随机种子。',
+                     '至少一个随机种子通过测试。', '至多一个随机种子通过测试。'):
+            with self.subTest(text=text):
+                self.assertIsNotNone(validate_manual_editorial_quality_v4('## 核心摘要\n' + text))
+        for counted in ('三个随机种子', '一千个样本', '三轮'):
+            text = f'在另一个随机种子上重复，然后检查{counted}。'
+            with self.subTest(text=text):
+                result = validate_manual_editorial_quality_v4('## 核心摘要\n' + text)
+                self.assertIsNotNone(result)
+                self.assertIn(counted, result)
+        # 同一指代前的字节偏移照旧核验；屏蔽它不能匹配后面的真实计数。
+        text = '在另一个随机种子上重复，然后增加三个随机种子。'
+        self.assertTrue(_is_discourse_task_condition_numeral(text, text.index('一个随机种子'), '一个随机种子'))
+        self.assertFalse(_is_discourse_task_condition_numeral(text, text.index('三个随机种子'), '一个随机种子'))
+
+    def test_reader_seed_reference_boundaries_match_node(self):
+        import subprocess
+        accepted = [f'{prefix}一个随机种子上的结果需要复核。' for prefix in '上下这另哪']
+        accepted += ['三是在另一个随机种子或另一份挖掘切分上重复，确认提升不是切分运气。',
+                     '只报告准确率。另一个随机种子上重复。']
+        rejected = [f'{limiter}在经过严格控制和验证的这一个随机种子上评测。'
+                    for limiter in ('只', '仅', '至少', '至多', '恰好', '共有', '共计', '总共', '总计', '一共', '剩余')]
+        rejected += ['实验只用一个随机种子。', '实验仅用一个随机种子。',
+                     '至少一个随机种子通过测试。', '至多一个随机种子通过测试。']
+        rejected += [f'在另一个随机种子上重复，然后检查{counted}。'
+                     for counted in ('三个随机种子', '一千个样本', '三轮')]
+        samples = accepted + rejected
+        script = '''const fs=require('node:fs');
+const q=require('./scripts/editorial-quality');
+const samples=JSON.parse(fs.readFileSync(0,'utf8'));
+process.stdout.write(JSON.stringify(samples.map(text=>q.findQuantitativeChineseNumerals(text).length===0)));'''
+        result = subprocess.run(['node', '-e', script], cwd=ROOT,
+                                input=json.dumps(samples, ensure_ascii=False),
+                                text=True, capture_output=True, check=True, timeout=20)
+        node = json.loads(result.stdout)
+        python = [validate_manual_editorial_quality_v4('## 核心摘要\n' + text) is None
+                  for text in samples]
+        self.assertEqual(node, python)
+        self.assertEqual(python, [True] * len(accepted) + [False] * len(rejected))
+
     def test_manual_v4_reader_lexical_boundaries_and_node_parity(self):
         safe = '''## 核心摘要
 系统把标签统一成同一条件；唯一分层用于二分类。目标具有有界项与有限状态，功能能否启用取决于输入，性能能够稳定复现。
