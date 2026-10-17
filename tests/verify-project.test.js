@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const YAML = require('yaml');
 const { spawnSync } = require('node:child_process');
 const {
     HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, executeCommand, assertPinnedHugo, javascriptShardArguments
@@ -117,6 +118,29 @@ test('CI 同一入口分套件隔离运行，两Node全覆盖并仅完整汇总�
     assert.match(workflow, /test "\$VERIFY_RESULT" = success/);
     assert.match(workflow, /cancel-in-progress: true/);
     assert.doesNotMatch(workflow, /run: npm (?:test|run test:(?:default|manual))/);
+});
+
+test('CI普通推送不自动运行，主动验收和PR保留完整且不重复的套件', () => {
+    const workflow = YAML.parse(fs.readFileSync(path.resolve(__dirname, '../.github/workflows/ci.yml'), 'utf8'));
+    assert.deepEqual(Object.keys(workflow.on).sort(), ['pull_request', 'workflow_dispatch']);
+    assert.deepEqual(workflow.on.pull_request.branches, ['main']);
+    const matrix = workflow.jobs.verify.strategy.matrix;
+    const jobs = matrix['node-version'].flatMap(node => matrix.partition.map(partition => ({
+        'node-version': node, partition
+    }))).filter(job => !matrix.exclude.some(exclusion =>
+        Object.entries(exclusion).every(([key, value]) => require('node:util').isDeepStrictEqual(job[key], value))));
+    assert.equal(jobs.length, 10);
+    for (const node of ['20.x', '22.x']) {
+        assert.deepEqual(jobs.filter(job => job['node-version'] === node && job.partition.suite === 'javascript')
+            .map(job => job.partition.shard).sort(), ['1/4', '2/4', '3/4', '4/4']);
+    }
+    for (const suite of ['python', 'static']) {
+        assert.deepEqual(jobs.filter(job => job.partition.suite === suite)
+            .map(job => job['node-version']), ['22.x']);
+    }
+    assert.equal(workflow.jobs.test.needs, 'verify');
+    assert.equal(workflow.jobs.test.if, 'always()');
+    assert.deepEqual(workflow.jobs.test.strategy.matrix['node-version'], ['20.x', '22.x']);
 });
 
 test('分套件并集保持完整计划覆盖，非法分片不能伪装完整验收', () => {

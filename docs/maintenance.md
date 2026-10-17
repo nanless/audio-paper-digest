@@ -159,7 +159,25 @@ git diff --check
 
 只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:compat` 或选定测试；完整验证通过后无须重复这些子集。
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 各运行六个独立 runner：四个 `verify --suite javascript --shard I/4 --allow-empty`、一个 `--suite python`、一个 `--suite static`。JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；Python 两套测试、全仓语法、数据和真实 Hugo 要求均保留。所有分片成功后才由原名 `test (20.x)`、`test (22.x)` 汇总检查报告完整通过；单套件、缺片、失败或取消都不是完整验收。每片保存日志；同分支被新提交替代的旧纯 CI 可取消，当前提交仍须全覆盖。该取消规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
+### 什么时候运行远端 CI
+
+普通 Git 推送不再自动触发 CI。按批次及时中文提交、推送；先完成必要定向检查和交叉审查，代码稳定后主动运行一次完整验收。PR 仍自动检查。GitHub 页面可在 Actions → CI → Run workflow 中选择分支；终端也可以运行：
+
+```bash
+gh workflow run ci.yml --ref main
+```
+
+主动运行后核对实际 `headSha`，确认它是本轮最终提交，再检查所有套件。不能拿旧提交的成功替代当前代码验收，也不在每个中间检查点重复开启完整 CI。实现再次变化或修复真实失败后，才运行新的验收。
+
+### 完整覆盖与并行范围
+
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 分别运行四个 `verify --suite javascript --shard I/4 --allow-empty`；Python 两套测试及 `--suite static` 各在 Node 22 环境运行一次。共十个验证任务，加两个原名汇总检查，共十二个检查；不再为相同 Python 和静态任务重复准备第二套运行环境。
+
+JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；全部 JavaScript、Python、语法、数据和真实 Hugo 要求保留。全部验证任务成功后，`test (20.x)`、`test (22.x)` 才报告完整通过；缺片、失败或取消都不能冒充通过。每片保存日志。同分支被后续验收替代的旧纯 CI 可取消，此规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
+
+### 邮件通知来自哪里
+
+仓库工作流没有发送邮件的步骤。GitHub Actions 通知由账户的 [Actions 通知偏好](https://docs.github.com/en/subscriptions-and-notifications/how-tos/managing-github-actions-notifications)控制；手动验收或 PR 检查仍可能按该偏好发送邮件。取消普通 push 触发后，中间提交不再产生这类运行通知。账户级偏好会影响其他仓库，维护本项目时不自动修改它。
 
 离线测试使用临时目录和合成/脱敏样例，用模拟调用替代模型、网络和发布，不修改生产正式分析数据来制造成功。Reader 测试应覆盖多错定位、数字/单位、图标记、坏 JSON、陈旧或越权补丁、损坏候选、恢复及无进展；发布测试应覆盖协议变化、文件字节变化、未调用 LLM 就阻断的错误和真实 Hugo 资源构建。记录输入指纹、通过或阻断结果及失败调用数。样例通过不代表真实文章质量或付费 token 改善；这类效果需要另行授权的一篇隔离实验，付费请求不属于 `verify`。
 
