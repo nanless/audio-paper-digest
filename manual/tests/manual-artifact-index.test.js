@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { buildManifestContext } = require('../../scripts/lib/legacy-manual-source.js');
 const { buildCompleteEntry, writeLegacyFulltextManifestFixture } = require('./helpers/legacy-fulltext-fixture.js');
 const {
@@ -14,12 +15,10 @@ const {
     buildArtifactIndex,
     validateArtifactIndex,
     buildArtifactManifestContext,
-    initializeArtifactManifestLocked,
-    persistStructuredArtifactSnapshot,
+    loadStructuredArtifactSnapshot,
+    structuredSnapshotPathFor,
     readArtifactManifestLocked,
-    ensureArtifactIndexCheckpoint,
-    recordArtifactFailure,
-    finalizeArtifactManifestLocked,
+    artifactPathFor,
     isReusableArtifactCheckpoint
 } = require('../scripts/manual-artifact-index.js');
 const {
@@ -80,6 +79,44 @@ function fixture() {
         }]
     }, fs.readFileSync(input.filePath));
     return { dir, context, input, text, sourceEntry, structuredArtifacts };
+}
+
+// Explicit old-format fixture bytes, never a production writer or completion receipt.
+function savedArtifactFixture(f) {
+    const { dir, context, input, text, sourceEntry, structuredArtifacts } = f;
+    const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+    const artifactContext = buildArtifactManifestContext(context, dir);
+    const snapshotPath = structuredSnapshotPathFor(artifactContext, input, sourceEntry, structuredArtifacts);
+    const snapshot = { version: 1, mode: 'manual_structured_source_snapshot', paperId: input.id,
+        source: sourceEntry.source, sourceId: sourceEntry.sourceId, sourceSha256: sourceEntry.sourceSha256,
+        sourceIdentitySha256: sourceEntry.sourceIdentitySha256, paperInputSha256: input.paperInputSha256,
+        payloadSha256: structuredArtifacts.payloadSha256, structuredArtifacts };
+    const snapshotBytes = Buffer.from(JSON.stringify(snapshot, null, 2));
+    fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+    fs.writeFileSync(snapshotPath, snapshotBytes);
+    sourceEntry.structuredArtifactsSnapshot = { version: 1, path: snapshotPath,
+        parserVersion: structuredArtifacts.parserVersion, healthStatus: structuredArtifacts.health.status,
+        payloadSha256: structuredArtifacts.payloadSha256, outputSha256: digest(snapshotBytes), bytes: snapshotBytes.length };
+    const index = buildArtifactIndex({ paperId: input.id, sourceText: text,
+        sourceSha256: sourceEntry.sourceSha256, sourceIdentitySha256: sourceEntry.sourceIdentitySha256,
+        paperInputSha256: input.paperInputSha256, imageInfos: sourceEntry.imageInfos,
+        sourceKind: sourceEntry.source, sourceId: sourceEntry.sourceId, structuredArtifacts,
+        structuredArtifactsSha256: structuredArtifacts.payloadSha256 });
+    const indexPath = artifactPathFor(artifactContext, input, sourceEntry);
+    const indexBytes = Buffer.from(JSON.stringify(index, null, 2));
+    fs.writeFileSync(indexPath, indexBytes);
+    const entry = { status: index.inventoryHealth.status, paperId: input.id, parserVersion: ARTIFACT_PARSER_VERSION,
+        path: indexPath, paperInputSha256: input.paperInputSha256, sourceSha256: sourceEntry.sourceSha256,
+        sourceIdentitySha256: sourceEntry.sourceIdentitySha256, structuredArtifactsSha256: structuredArtifacts.payloadSha256,
+        inventoryStatus: index.inventoryHealth.status, inventoryIssues: index.inventoryHealth.issues,
+        artifactIndexSha256: index.artifactIndexSha256, outputSha256: digest(indexBytes), bytes: indexBytes.length,
+        completedAt: '2026-08-28T12:00:00+08:00' };
+    const manifest = { version: 1, mode: 'manual_artifact_index', parserVersion: ARTIFACT_PARSER_VERSION,
+        date: context.date, filteredBatchSha256: context.filteredBatchSha256,
+        expectedPaperInputs: artifactContext.expectedPaperInputs, papers: { [input.id]: entry },
+        status: 'partial_failed', failed: 1, usage: { totalTokens: 19 }, error: 'retained fixture failure' };
+    fs.writeFileSync(artifactContext.manifestPath, JSON.stringify(manifest, null, 2));
+    return { artifactContext, entry, manifest };
 }
 
 describe('Manual 结构化来源索引 v1', () => {
@@ -190,61 +227,67 @@ describe('Manual 结构化来源索引 v1', () => {
         );
     });
 
-    it('在 manifest v2 旁边存检查点，校验文件字节，只续跑失败的那篇', () => {
-        const { dir, context, input, text, sourceEntry, structuredArtifacts } = fixture();
+    it('只读重放原格式检查点，不补写缺失产物或改变失败、费用与来源清单', t => {
+        const f = fixture();
+        t.after(() => fs.rmSync(f.dir, { recursive: true, force: true }));
+        const { dir, context, input, text, sourceEntry, structuredArtifacts } = f;
         const fullManifestPath = path.join(dir, 'manifest.json');
         writeLegacyFulltextManifestFixture(fullManifestPath, context);
         const historicalBytes = fs.readFileSync(fullManifestPath);
-
-        const artifactContext = buildArtifactManifestContext(context, dir);
-        initializeArtifactManifestLocked(artifactContext);
-        sourceEntry.structuredArtifactsSnapshot = persistStructuredArtifactSnapshot(
-            artifactContext, input, sourceEntry, structuredArtifacts
-        );
-        let entry = ensureArtifactIndexCheckpoint(artifactContext, input, sourceEntry);
-        assert.equal(entry.status, 'complete');
-        assert.equal(fs.readFileSync(fullManifestPath).equals(historicalBytes), true);
-        assert.equal(isReusableArtifactCheckpoint(entry, {
-            context: artifactContext, input, sourceEntry, sourceText: text
-        }), true);
-
+        const { artifactContext, entry, manifest } = savedArtifactFixture(f);
+        const retainedBytes = fs.readFileSync(artifactContext.manifestPath);
+        assert.deepEqual(loadStructuredArtifactSnapshot(input, sourceEntry), structuredArtifacts);
+        assert.deepEqual(readArtifactManifestLocked(artifactContext), manifest);
+        const options = { context: artifactContext, input, sourceEntry, sourceText: text };
+        assert.equal(isReusableArtifactCheckpoint(entry, options), true);
+        assert.equal(isReusableArtifactCheckpoint({ ...entry, status: 'failed' }, options), false);
+        assert.equal(isReusableArtifactCheckpoint({ ...entry, sourceIdentitySha256: '0'.repeat(64) }, options), false);
+        assert.equal(isReusableArtifactCheckpoint(entry, { ...options, sourceText: text + 'changed' }), false);
+        assert.throws(() => readArtifactManifestLocked({ ...artifactContext, date: '2026-08-29' }), /不同 parser 或 filtered/);
         fs.appendFileSync(entry.path, '\n');
-        assert.equal(isReusableArtifactCheckpoint(entry, {
-            context: artifactContext, input, sourceEntry, sourceText: text
-        }), false);
-        entry = ensureArtifactIndexCheckpoint(artifactContext, input, sourceEntry);
-        assert.equal(isReusableArtifactCheckpoint(entry, {
-            context: artifactContext, input, sourceEntry, sourceText: text
-        }), true);
-
-        fs.appendFileSync(entry.path, '\n');
-        recordArtifactFailure(artifactContext, input, new Error('transient parser failure'));
-        assert.equal(readArtifactManifestLocked(artifactContext).papers[input.id].status, 'failed');
-        entry = ensureArtifactIndexCheckpoint(artifactContext, input, sourceEntry);
-        const finalized = finalizeArtifactManifestLocked(artifactContext, { [input.id]: sourceEntry });
-        assert.equal(finalized.status, 'complete');
-        assert.equal(finalized.count, 1);
-        assert.equal(finalized.failed, 0);
-        assert.equal(readArtifactManifestLocked(artifactContext).papers[input.id].outputSha256, entry.outputSha256);
+        assert.equal(isReusableArtifactCheckpoint(entry, options), false);
+        fs.unlinkSync(entry.path);
+        assert.equal(isReusableArtifactCheckpoint(entry, options), false);
+        assert.equal(fs.existsSync(entry.path), false);
+        assert.deepEqual(fs.readFileSync(fullManifestPath), historicalBytes);
+        assert.deepEqual(fs.readFileSync(artifactContext.manifestPath), retainedBytes);
+        assert.deepEqual(readArtifactManifestLocked(artifactContext).usage, { totalTokens: 19 });
+        assert.equal(readArtifactManifestLocked(artifactContext).error, 'retained fixture failure');
     });
 
-    it('结构化来源快照中的表格值改变后，不能复用原检查点', () => {
-        const { dir, context, input, text, sourceEntry, structuredArtifacts } = fixture();
-        const artifactContext = buildArtifactManifestContext(context, dir);
-        initializeArtifactManifestLocked(artifactContext);
-        sourceEntry.structuredArtifactsSnapshot = persistStructuredArtifactSnapshot(
-            artifactContext, input, sourceEntry, structuredArtifacts
-        );
-        const entry = ensureArtifactIndexCheckpoint(artifactContext, input, sourceEntry);
-        assert.equal(isReusableArtifactCheckpoint(entry, {
-            context: artifactContext, input, sourceEntry, sourceText: text
-        }), true);
-        const snapshot = JSON.parse(fs.readFileSync(sourceEntry.structuredArtifactsSnapshot.path, 'utf8'));
+    it('快照表格篡改、身份错配与缺失仍拒绝，核验不会修复原文件', t => {
+        const f = fixture();
+        t.after(() => fs.rmSync(f.dir, { recursive: true, force: true }));
+        const { input, text, sourceEntry } = f;
+        const { artifactContext, entry } = savedArtifactFixture(f);
+        const options = { context: artifactContext, input, sourceEntry, sourceText: text };
+        assert.equal(isReusableArtifactCheckpoint(entry, options), true);
+        const pointer = sourceEntry.structuredArtifactsSnapshot;
+        const snapshot = JSON.parse(fs.readFileSync(pointer.path, 'utf8'));
         snapshot.structuredArtifacts.tables[0].matrix[2][1] = '99.9';
-        fs.writeFileSync(sourceEntry.structuredArtifactsSnapshot.path, JSON.stringify(snapshot, null, 2));
-        assert.equal(isReusableArtifactCheckpoint(entry, {
-            context: artifactContext, input, sourceEntry, sourceText: text
-        }), false);
+        const changed = Buffer.from(JSON.stringify(snapshot, null, 2));
+        fs.writeFileSync(pointer.path, changed);
+        assert.equal(isReusableArtifactCheckpoint(entry, options), false);
+        assert.throws(() => loadStructuredArtifactSnapshot(input, sourceEntry), /字节 SHA/);
+        assert.deepEqual(fs.readFileSync(pointer.path), changed);
+        // Recomputing only the outer file witness cannot bless a changed DOM payload.
+        pointer.bytes = changed.length;
+        pointer.outputSha256 = crypto.createHash('sha256').update(changed).digest('hex');
+        assert.throws(() => loadStructuredArtifactSnapshot(input, sourceEntry), /payload SHA/);
+        assert.equal(isReusableArtifactCheckpoint(entry, options), false);
+        fs.unlinkSync(pointer.path);
+        assert.equal(isReusableArtifactCheckpoint(entry, options), false);
+        assert.equal(fs.existsSync(pointer.path), false);
+    });
+
+    it('退役写入 API 不再导出，只读核验 API 保持可用', () => {
+        const api = require('../scripts/manual-artifact-index.js');
+        for (const name of ['initializeArtifactManifestLocked', 'persistStructuredArtifactSnapshot',
+            'upsertArtifactManifestPaperLocked', 'ensureArtifactIndexCheckpoint',
+            'recordArtifactFailure', 'finalizeArtifactManifestLocked']) assert.equal(Object.hasOwn(api, name), false);
+        for (const name of ['loadStructuredArtifactSnapshot', 'validateStructuredArtifacts',
+            'validateArtifactIndex', 'readArtifactManifestLocked', 'isReusableArtifactCheckpoint'])
+            assert.equal(typeof api[name], 'function');
     });
 
     it('图注或公式结构无法还原时，把 PDF/文本回退标为不完整', () => {

@@ -1,17 +1,16 @@
 'use strict';
 
 /**
- * Manual 全文用的确定性单篇证据产物索引。
+ * 旧 Manual 单篇证据产物的确定性重建与只读核验。
  *
- * 这份索引有意作为历史全文清单 v2 的配套。它从不修改那份清单，
- * 所以已经汇编好的 Manual v5 规范字节保持不变。新的和续跑的全文运行
- * 在 artifacts/manifest.json 下独立记录检查点。
+ * 保留历史全文清单 v2、结构化来源快照和索引的原格式及 SHA 规则；
+ * 不再创建快照、写入检查点或维护已退役的 Manual 生产运行。
  */
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { normalizedId, writeFileAtomic, getBeijingISOString } = require('../../scripts/utils.js');
+const { normalizedId } = require('../../scripts/utils.js');
 const { updateJsonFileLocked } = require('../../scripts/analysis-engine.js');
 
 const ARTIFACT_INDEX_VERSION = 1;
@@ -823,32 +822,6 @@ function assertArtifactManifestContext(manifest, context) {
     }
 }
 
-function initializeArtifactManifestLocked(context) {
-    fs.mkdirSync(context.artifactDir, { recursive: true });
-    return updateJsonFileLocked(context.manifestPath, current => {
-        const reusable = current?.version === ARTIFACT_MANIFEST_VERSION
-            && current?.mode === ARTIFACT_MANIFEST_MODE
-            && current?.parserVersion === ARTIFACT_PARSER_VERSION
-            && current?.date === context.date
-            && current?.filteredBatchSha256 === context.filteredBatchSha256
-            && stableSha256(current?.expectedPaperInputs || {}) === stableSha256(context.expectedPaperInputs)
-            && current?.papers && typeof current.papers === 'object' && !Array.isArray(current.papers);
-        const now = getBeijingISOString();
-        return {
-            ...(reusable ? current : {}),
-            version: ARTIFACT_MANIFEST_VERSION,
-            mode: ARTIFACT_MANIFEST_MODE,
-            parserVersion: ARTIFACT_PARSER_VERSION,
-            date: context.date,
-            filteredBatchSha256: context.filteredBatchSha256,
-            expectedPaperInputs: context.expectedPaperInputs,
-            status: 'running',
-            ...(reusable ? { resumedAt: now } : { startedAt: now }),
-            papers: reusable ? { ...current.papers } : {}
-        };
-    });
-}
-
 function structuredSnapshotPathFor(context, input, sourceEntry, structuredArtifacts) {
     const payloadSha256 = String(
         structuredArtifacts?.payloadSha256
@@ -863,39 +836,6 @@ function structuredSnapshotPathFor(context, input, sourceEntry, structuredArtifa
         'source',
         `${input.id}-${input.paperInputSha256.slice(0, 12)}-${sourceEntry.sourceSha256.slice(0, 12)}-${payloadSha256.slice(0, 12)}.structured.json`
     );
-}
-
-function persistStructuredArtifactSnapshot(context, input, sourceEntry, structuredArtifacts) {
-    validateStructuredArtifacts(structuredArtifacts, {
-        paperId: input.id,
-        sourceId: sourceEntry.sourceId,
-        sourceSha256: sourceEntry.sourceSha256
-    });
-    const outputPath = structuredSnapshotPathFor(context, input, sourceEntry, structuredArtifacts);
-    const envelope = {
-        version: 1,
-        mode: 'manual_structured_source_snapshot',
-        paperId: input.id,
-        source: sourceEntry.source,
-        sourceId: sourceEntry.sourceId,
-        sourceSha256: sourceEntry.sourceSha256,
-        sourceIdentitySha256: sourceEntry.sourceIdentitySha256,
-        paperInputSha256: input.paperInputSha256,
-        payloadSha256: structuredArtifacts.payloadSha256,
-        structuredArtifacts
-    };
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    writeFileAtomic(outputPath, JSON.stringify(envelope, null, 2));
-    const output = fs.readFileSync(outputPath);
-    return {
-        version: 1,
-        path: outputPath,
-        parserVersion: structuredArtifacts.parserVersion,
-        healthStatus: structuredArtifacts.health.status,
-        payloadSha256: structuredArtifacts.payloadSha256,
-        outputSha256: sha256(output),
-        bytes: output.length
-    };
 }
 
 function loadStructuredArtifactSnapshot(input, sourceEntry) {
@@ -984,122 +924,6 @@ function readArtifactManifestLocked(context) {
     }, { allowMissing: false });
 }
 
-function upsertArtifactManifestPaperLocked(context, id, entry, sourceEntries = {}) {
-    return updateJsonFileLocked(context.manifestPath, current => {
-        assertArtifactManifestContext(current, context);
-        const input = context.byId.get(id);
-        if (!input) throw new Error(`ArtifactIndex manifest 包含批次外论文: ${id}`);
-        const existing = current.papers?.[id];
-        const sourceEntry = sourceEntries[id];
-        if (entry.status !== 'complete' && sourceEntry && isReusableArtifactCheckpoint(existing, {
-            context, input, sourceEntry,
-            sourceText: fs.readFileSync(sourceEntry.path, 'utf8')
-        })) return undefined;
-        return {
-            ...current,
-            status: 'running',
-            lastUpdated: getBeijingISOString(),
-            papers: { ...(current.papers || {}), [id]: entry }
-        };
-    });
-}
-
-function ensureArtifactIndexCheckpoint(context, input, sourceEntry) {
-    if (!sourceEntry || sourceEntry.status !== 'complete' || sourceEntry.path !== input.filePath) {
-        throw new Error(`${input.id} ArtifactIndex 缺少可绑定的 complete 全文 checkpoint`);
-    }
-    const sourceText = fs.readFileSync(sourceEntry.path, 'utf8');
-    const structuredArtifacts = loadStructuredArtifactSnapshot(input, sourceEntry);
-    const current = readArtifactManifestLocked(context);
-    const existing = current.papers?.[input.id];
-    if (isReusableArtifactCheckpoint(existing, { context, input, sourceEntry, sourceText })) return existing;
-    const index = buildArtifactIndex({
-        paperId: input.id,
-        sourceText,
-        sourceSha256: sourceEntry.sourceSha256,
-        sourceIdentitySha256: sourceEntry.sourceIdentitySha256,
-        paperInputSha256: input.paperInputSha256,
-        imageInfos: sourceEntry.imageInfos || [],
-        sourceKind: sourceEntry.source,
-        sourceId: sourceEntry.sourceId,
-        structuredArtifacts,
-        structuredArtifactsSha256: structuredArtifacts.payloadSha256
-    });
-    const outputPath = artifactPathFor(context, input, sourceEntry);
-    writeFileAtomic(outputPath, JSON.stringify(index, null, 2));
-    const output = fs.readFileSync(outputPath);
-    const persisted = JSON.parse(output.toString('utf8'));
-    validateArtifactIndex(persisted, {
-        paperId: input.id,
-        sourceText,
-        sourceSha256: sourceEntry.sourceSha256,
-        sourceIdentitySha256: sourceEntry.sourceIdentitySha256,
-        paperInputSha256: input.paperInputSha256,
-        imageInfos: sourceEntry.imageInfos || [],
-        sourceKind: sourceEntry.source,
-        sourceId: sourceEntry.sourceId,
-        structuredArtifacts,
-        structuredArtifactsSha256: structuredArtifacts.payloadSha256
-    });
-    const entry = {
-        status: index.inventoryHealth.status,
-        paperId: input.id,
-        parserVersion: ARTIFACT_PARSER_VERSION,
-        path: outputPath,
-        paperInputSha256: input.paperInputSha256,
-        sourceSha256: sourceEntry.sourceSha256,
-        sourceIdentitySha256: sourceEntry.sourceIdentitySha256,
-        structuredArtifactsSha256: structuredArtifacts.payloadSha256,
-        inventoryStatus: index.inventoryHealth.status,
-        inventoryIssues: index.inventoryHealth.issues,
-        artifactIndexSha256: index.artifactIndexSha256,
-        outputSha256: sha256(output),
-        bytes: output.length,
-        completedAt: getBeijingISOString()
-    };
-    upsertArtifactManifestPaperLocked(context, input.id, entry, { [input.id]: sourceEntry });
-    return entry;
-}
-
-function recordArtifactFailure(context, input, error, sourceEntries = {}) {
-    return upsertArtifactManifestPaperLocked(context, input.id, {
-        status: 'failed',
-        paperId: input.id,
-        parserVersion: ARTIFACT_PARSER_VERSION,
-        paperInputSha256: input.paperInputSha256,
-        error: error.message,
-        failedAt: getBeijingISOString()
-    }, sourceEntries);
-}
-
-function finalizeArtifactManifestLocked(context, sourceEntries) {
-    return updateJsonFileLocked(context.manifestPath, current => {
-        assertArtifactManifestContext(current, context);
-        let count = 0;
-        let incomplete = 0;
-        let failed = 0;
-        for (const input of context.inputs) {
-            const sourceEntry = sourceEntries[input.id];
-            let sourceText = '';
-            try { sourceText = sourceEntry ? fs.readFileSync(sourceEntry.path, 'utf8') : ''; } catch (_error) { /* 失败在下面计数 */ }
-            const reusable = sourceEntry && isReusableArtifactCheckpoint(current.papers?.[input.id], {
-                context, input, sourceEntry, sourceText
-            });
-            if (!reusable) failed++;
-            else if (current.papers[input.id].status === 'complete') count++;
-            else incomplete++;
-        }
-        return {
-            ...current,
-            status: failed > 0 ? 'partial_failed' : (incomplete > 0 ? 'incomplete' : 'complete'),
-            completedAt: getBeijingISOString(),
-            count,
-            incomplete,
-            failed
-        };
-    });
-}
-
 module.exports = {
     ARTIFACT_INDEX_VERSION,
     ARTIFACT_PARSER_VERSION,
@@ -1112,15 +936,9 @@ module.exports = {
     buildArtifactIndex,
     validateArtifactIndex,
     buildArtifactManifestContext,
-    initializeArtifactManifestLocked,
-    persistStructuredArtifactSnapshot,
     loadStructuredArtifactSnapshot,
     structuredSnapshotPathFor,
     readArtifactManifestLocked,
-    upsertArtifactManifestPaperLocked,
-    ensureArtifactIndexCheckpoint,
-    recordArtifactFailure,
-    finalizeArtifactManifestLocked,
     isReusableArtifactCheckpoint,
     artifactPathFor
 };

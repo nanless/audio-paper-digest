@@ -6,7 +6,7 @@ setupScriptLogging(__filename);
  * Paper Digest - 论文抓取与筛选模块
  * 功能：
  * 1. 从 7 个 arXiv 类别抓取最新论文
- * 2. 保存论文信息，避免重复分析
+ * 2. 向完整抓取入口返回候选，由该入口保存正式论文库
  * 3. LLM 筛选语音/音频相关论文（统一使用 PAPER_ANALYZER_* 环境变量）
  */
 
@@ -23,11 +23,9 @@ const {
     filterPapersByKeywords
 } = require('./lib/keyword-prefilter.js');
 const {
-    writeFileAtomic,
     getBeijingISOString,
     normalizeToBeijingISOString,
     loadEnvFile,
-    readJsonSafe,
     detectApiType,
     buildApiUrl,
     buildRequestBody,
@@ -613,58 +611,6 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     }
     lastError.attempts = maxRetries;
     throw lastError;
-}
-
-// 数据文件路径（从 config.js 读取）
-const { FILES } = Config;
-const PAPERS_FILE = FILES.papers;
-const LEGACY_PAPERS_FILE = FILES.papersLegacy;
-const ANALYZED_FILE = FILES.analyzed;
-const LEGACY_ANALYZED_FILE = FILES.analyzedLegacy;
-
-/**
- * 加载已保存的论文数据（自动兼容旧格式数组）
- */
-function loadPapers() {
-    const data = readJsonSafe(PAPERS_FILE, null)
-        || readJsonSafe(LEGACY_PAPERS_FILE, null)
-        || { papers: {}, lastUpdated: null };
-    if (Array.isArray(data)) {
-        // 旧格式：纯数组，转换为新格式
-        const map = {};
-        for (const paper of data) {
-            const id = paper.arxivId || paper.paper_id;
-            if (id) map[id] = paper;
-        }
-        return { papers: map, lastUpdated: null };
-    }
-    return data;
-}
-
-/**
- * 保存论文数据（确保新格式）
- */
-function savePapers(data) {
-    const payload = Array.isArray(data) ? { papers: {}, lastUpdated: getBeijingISOString() } : data;
-    payload.lastUpdated = getBeijingISOString();
-    writeFileAtomic(PAPERS_FILE, JSON.stringify(payload));
-}
-
-/**
- * 加载已分析的论文
- */
-function loadAnalyzed() {
-    return readJsonSafe(ANALYZED_FILE, null)
-        || readJsonSafe(LEGACY_ANALYZED_FILE, null)
-        || { analyzed: {}, lastUpdated: null };
-}
-
-/**
- * 保存已分析的论文
- */
-function saveAnalyzed(data) {
-    data.lastUpdated = getBeijingISOString();
-    writeFileAtomic(ANALYZED_FILE, JSON.stringify(data, null, 2));
 }
 
 /**
@@ -1763,30 +1709,6 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
 }
 
 /**
- * 去重：按 arxivId 去重，保留最相关类别
- */
-function deduplicatePapers(papers) {
-    const seen = new Map();
-
-    for (const paper of papers) {
-        const existing = seen.get(paper.arxivId);
-
-        if (!existing) {
-            seen.set(paper.arxivId, paper);
-        } else {
-            const existingPriority = CATEGORIES.find(c => c.id === existing.fetchedFrom)?.priority || 'supplement';
-            const newPriority = CATEGORIES.find(c => c.id === paper.fetchedFrom)?.priority || 'supplement';
-
-            if (newPriority === 'core' && existingPriority !== 'core') {
-                seen.set(paper.arxivId, paper);
-            }
-        }
-    }
-
-    return Array.from(seen.values());
-}
-
-/**
  * 用大模型判断论文是否语音/音频相关
  */
 /**
@@ -1881,10 +1803,6 @@ async function getSpeechAudioDecision(paper, options = {}) {
             retryable: true
         };
     }
-}
-
-async function isSpeechAudioRelated(paper, options = {}) {
-    return (await getSpeechAudioDecision(paper, options)).related;
 }
 
 function getEffectiveFilterBatchSize(configuredBatchSize, model = FILTER_CONFIG.model) {
@@ -2189,7 +2107,6 @@ module.exports = {
     parseRecentPageHTML,
     parseSearchPageHTML,
     parseArxivXML,
-    deduplicatePapers,
     filterPapers,
     filterPapersWithLLM,
     parseFilterDecision,
@@ -2210,13 +2127,8 @@ module.exports = {
     getBrowserHeaders,
     getFetchRetryDelayMs,
     redactProxyUrl,
-    isSpeechAudioRelated,
     getSpeechAudioDecision,
     evaluateKeywordPrefilter,
     filterPapersByKeywords,
     buildFilterInputSha256,
-    loadPapers,
-    savePapers,
-    loadAnalyzed,
-    saveAnalyzed
 };
