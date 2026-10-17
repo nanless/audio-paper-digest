@@ -225,7 +225,9 @@ npm run test:compat
 | `lib/prompt-text-versions.js` | Node 库：登记每个分析阶段当前使用的提示词正文路径和版本标识。导出当前 18 份正文名单；旧记录按自己声明的版本选择原路径，通过 Git 证据读取器重新核验，未声明版本时按 v1 身份读取，未知版本直接报错。 |
 | `lib/publication-file-primitives.js` | 三流程共用的严格文件、JSON、不可变写入与回读 SHA 守卫。 |
 | `lib/reader-author-parser.js` | Node 库：从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
-| `lib/reader-author-replay-cli.js` | Node 子进程入口：供 Python 发布器调用的本地作者核验入口；只读取调用方传入的私有文件，限制输入字节并只输出布尔核验结果。 |
+| `lib/reader-author-replay-cli.js` | Node 子进程入口：供 Python 发布器调用的本地作者核验入口；原单对象协议保持，有界批次最多8项/32MiB，逐项重读真实四源及父证明，全部精确通过才返回true；只读取私有FD，无网络与模型。 |
+| `lib/reader-next-request-plan.js` | 从正常 Reader 循环的实际候选、问题与原预算记录下一次全文或局部路由；诊断不是最终预检或请求许可，显式仅局部作用域只能减权，保留原计数与全部后续守卫。 |
+| `lib/reader-pdf-extraction-scope.js` | 单次 Reader 核验中对相同完整输入复用两个纯 PDF 提取器的 stdout；实时核对角色、私有输入和已知隔离运行时，来源及资格不缓存，未知模块布局按原路径执行。 |
 | `lib/reader-author-source.js` | Node 库：当前生产 Reader 作者复用资格；跳过已完成分析、恢复历史/会议任务及发布前，必须从已核验的原始材料重新解析并核验作者，保留旧成功结构与只读统计。 |
 | `lib/reader-candidate-transactions.js` | Node 库：在内存中跟踪分析结果对应的待保存文章，复制结果时同步这层对应关系；不加载分析器、不读写文件、不改变日志。文章实际保存后的检查和恢复稿停用仍由分析器负责。 |
 | `lib/reader-compatible-candidate-replay.js` | Node 库：在统一恢复中用真实迁移链或最后付费请求、响应及生产逐字回放收敛同输入候选；不按文件时间选稿，不改次数和费用，无法证明仍拒绝。 |

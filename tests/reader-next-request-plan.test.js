@@ -24,6 +24,9 @@ test('实际计划保持原路由与原计数，所有issues隔离且不能当�
         repairContext: { targets: [{ path: '/sections/2/body', oldSha256: 'c'.repeat(64) }] } }));
     assert.equal(patch.nextKind, 'patch'); assert.equal(patch.action, 'request');
     assert.equal(patch.fullAttempts, 2); assert.equal(patch.remainingFullResponses, 0);
+    const malformed = api.buildReaderNextRequestPlan(state({ repairContext: { targets: [null] } }));
+    assert.deepEqual(malformed.repairTargets, [{ path: undefined, oldSha256: undefined }]);
+    assert.equal(malformed.nextKind, 'patch', 'diagnostics must not replace the existing malformed-target guard');
 });
 test('原full/content/noProgress/streak边界全部保持，进展证明不能授新full', () => {
     for (const [change, code] of [

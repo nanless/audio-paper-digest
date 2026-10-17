@@ -71,7 +71,9 @@ function buildReaderNextRequestPlan(state) {
         permittedFullResponses: localOnly.getStore() === true ? 0 : remainingFullResponses,
         localOnly: localOnly.getStore() === true,
         sourceBindingNeedsFullRetry: state.sourceBindingNeedsFullRetry === true,
-        repairTargets: (repairContext?.targets || []).map(target => ({ path: target.path, oldSha256: target.oldSha256 })),
+        // Diagnostics must leave malformed targets to the existing safety gate,
+        // preserving its original error code and zero-request behavior.
+        repairTargets: (repairContext?.targets || []).map(target => ({ path: target?.path, oldSha256: target?.oldSha256 })),
         atomicOperation: repairContext?.atomicOperation?.kind || null,
         ...issueProjection(state.issues), blocker });
 }
