@@ -8,7 +8,10 @@ const MAX_BYTES = 32 * 1024 * 1024, MAX_ENTRIES = 128;
 const extractors = new Map([
     [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py'), []],
     [path.join(root, 'scripts/reader_sealed_pdf_column_units.py'),
-        [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]]
+        [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]],
+    [path.join(root, 'scripts/reader_authenticated_pdf_hierarchical_table.py'),
+        [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]],
+    [path.join(root, 'scripts/reader_authenticated_pdf_footnote_evidence.py'), []]
 ]);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const DISTUTILS_STARTUP = "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n";
@@ -95,11 +98,20 @@ function runPdfExtractor(program, fd, dependencies = []) {
 // environment. Preserve that invocation; unknown startup/import overrides run
 // normally without reuse, rather than guessing their mutable dependencies.
 function runAuthenticatedPdfQuoteExtractor(fd) {
+    return runAuthenticatedPdfExtractor('reader_sealed_pdf_quote_evidence.py', fd);
+}
+function runAuthenticatedPdfHierarchicalTableExtractor(fd) {
+    return runAuthenticatedPdfExtractor('reader_authenticated_pdf_hierarchical_table.py', fd);
+}
+function runAuthenticatedPdfFootnoteExtractor(fd) {
+    return runAuthenticatedPdfExtractor('reader_authenticated_pdf_footnote_evidence.py', fd);
+}
+function runAuthenticatedPdfExtractor(filename, fd) {
     const env = { ...process.env };
     const known = env.PD_PYTHON_RUNTIME_DISABLE_VENV !== '1'
         && !Object.keys(env).some(key => /^(?:PYTHON|PYMUPDF|FITZ|LD_|DYLD_|BASH_FUNC_)/i.test(key)
         || ['BASH_ENV', 'ENV'].includes(key));
-    return executePdfExtractor(path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py'), fd, [], env, known);
+    return executePdfExtractor(path.join(root, 'scripts', filename), fd, [], env, known);
 }
 function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKnown) {
     require('../env-loader').requireExternalRuntime('reader-pdf-extraction-scope');
@@ -114,7 +126,7 @@ function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKno
     if (!runtime) return run();
     const descriptor = fs.fstatSync(fd), size = descriptor.size;
     if (!descriptor.isFile() || (descriptor.mode & 0o077) !== 0
-        || (program === path.join(root, 'scripts/reader_sealed_pdf_column_units.py') && descriptor.nlink !== 1)
+        || (program !== path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py') && descriptor.nlink !== 1)
         || !Number.isSafeInteger(size) || size < 2 || size > 96 * 1024 * 1024) return run();
     const input = Buffer.alloc(size);
     let offset = 0;
@@ -137,4 +149,5 @@ function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKno
     }
     return raw;
 }
-module.exports = { withPdfExtractionScope, runPdfExtractor, runAuthenticatedPdfQuoteExtractor };
+module.exports = { withPdfExtractionScope, runPdfExtractor, runAuthenticatedPdfQuoteExtractor,
+    runAuthenticatedPdfHierarchicalTableExtractor, runAuthenticatedPdfFootnoteExtractor };

@@ -28,37 +28,46 @@ globalThis.fetch = deny;
     const input = JSON.parse(fs.readFileSync(fd, 'utf8'));
     const keys = input && Object.keys(input).sort().join(',');
     const pdfOnly = keys === 'authenticatedPdfTables,paper' && input.authenticatedPdfTables === true;
-    if (!input || !['authenticatedPdfTables,paper', 'paper,sourceText', 'paper,resourcePresentation,sourceText',
+    const pdfResourcesOnly = keys === 'authenticatedPdfResources,paper' && input.authenticatedPdfResources === true;
+    if (!input || !['authenticatedPdfTables,paper', 'authenticatedPdfResources,paper', 'paper,sourceText', 'paper,resourcePresentation,sourceText',
         'paper,publicationEvidence,resourcePresentation,sourceText'].includes(keys)
         || (Object.hasOwn(input, 'resourcePresentation') && input.resourcePresentation !== true)
-        || !input.paper || (!pdfOnly && (typeof input.sourceText !== 'string'
+        || !input.paper || (!pdfOnly && !pdfResourcesOnly && (typeof input.sourceText !== 'string'
         || crypto.createHash('sha256').update(input.sourceText).digest('hex') !== input.paper.sourceSha256))) {
         throw new Error('Resource claims are not bound to authenticated source bytes');
     }
     const authenticated = (input.paper.apiReaderPlan?.tableBindings || [])
         .filter(binding => binding.authenticatedPdfTableEvidence !== undefined);
+    const footnoteResources = (input.paper.apiReaderResources?.resources || [])
+        .filter(resource => resource && Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence'));
+    if (pdfOnly && !authenticated.length) throw new Error('Authenticated PDF table replay requires an actual saved table proof');
+    if (pdfResourcesOnly && !footnoteResources.length) throw new Error('Authenticated PDF resource replay requires an actual saved footnote proof');
+    const identities = [...authenticated.map(binding => binding.authenticatedPdfTableEvidence?.sourceIdentity),
+        ...footnoteResources.map(resource => resource.authenticatedPdfFootnoteEvidence?.sourceIdentity)];
     let authenticatedHandle = null;
-    if (authenticated.length) {
-        const identity = authenticated[0].authenticatedPdfTableEvidence?.sourceIdentity;
-        if (authenticated.some(binding => !require('node:util').isDeepStrictEqual(
-            binding.authenticatedPdfTableEvidence?.sourceIdentity, identity))) throw new Error('PDF table proofs mix original source identities');
+    if (identities.length) {
+        const identity = identities[0];
+        if (identities.some(value => !require('node:util').isDeepStrictEqual(value, identity))) throw new Error('PDF table/resource proofs mix original source identities');
         authenticatedHandle = identity?.contract === 'historical-direct-reader-pdf-source-v1'
             ? await require('./historical-direct-rewrite-runner').replayHistoricalReaderPdfSource(input.paper, identity)
             : require('./conference-reader-publication-evidence').replayCanonicalReaderPdfSource(input.paper, identity);
     }
     if (pdfOnly && !authenticatedHandle) throw new Error('Authenticated PDF table replay requires saved source-bound evidence');
-    const sourceText = pdfOnly
+    const sourceText = pdfOnly || pdfResourcesOnly
         ? require('./conference-source-context').readerPdfSourceForContext(authenticatedHandle).sourceText : input.sourceText;
     if (crypto.createHash('sha256').update(sourceText).digest('hex') !== input.paper.sourceSha256) throw new Error('Authenticated PDF source text SHA differs');
     const deep = require('../deep-analyzer');
     const draft = deep.readerResourceClaimDraftFromArticle(input.paper.apiReaderPlan, input.paper.apiReaderArticle);
-    deep.enforceReaderResourceClaims(draft, input.paper.apiReaderResources, sourceText, { paper: input.paper });
     const response = { verified: true };
-    if (input.resourcePresentation === true) response.resources = deep.readerResourcePublicationResources(input.paper, sourceText);
     const withAuthenticated = callback => authenticatedHandle
         ? require('./reader-authenticated-pdf-table-evidence').withVerifiedSource(authenticatedHandle,
             () => require('./reader-authenticated-pdf-table-evidence').withSavedPaper(input.paper, callback))
         : callback();
+    withAuthenticated(() => {
+        for (const resource of footnoteResources) require('./reader-authenticated-pdf-footnote-evidence').assertEvidence(resource, sourceText);
+        deep.enforceReaderResourceClaims(draft, input.paper.apiReaderResources, sourceText, { paper: input.paper });
+        if (input.resourcePresentation === true) response.resources = deep.readerResourcePublicationResources(input.paper, sourceText);
+    });
     if (Object.hasOwn(input, 'publicationEvidence')) {
         const evidence = require('./conference-reader-publication-evidence');
         const handle = evidence.replayDescriptor(input.paper, input.publicationEvidence);
@@ -72,7 +81,7 @@ globalThis.fetch = deny;
             }))
         })));
     }
-    if (authenticatedHandle) withAuthenticated(() => {
+    if (authenticated.length) withAuthenticated(() => {
         const tables = require('../analysis-contract').extractMarkdownTables(input.paper.apiReaderArticle);
         const existing = response.tableEvidence;
         response.tableEvidence = { ...existing, contract: 'reader-authenticated-pdf-table-evidence-v1',

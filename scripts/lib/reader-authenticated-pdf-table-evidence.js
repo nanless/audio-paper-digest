@@ -157,6 +157,32 @@ function pdfQuotes(source, quotes) {
         return JSON.parse(require('./reader-pdf-extraction-scope').runAuthenticatedPdfQuoteExtractor(fd));
     } finally { if (fd !== undefined) fs.closeSync(fd); fs.rmSync(directory, { recursive: true, force: true }); }
 }
+function hierarchicalTable(source, table, quotes, document) {
+    const boundQuotes = exactQuotes(quotes, source.sourceText);
+    if (!boundQuotes.length) return null;
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'authenticated-pdf-hierarchy-')); let fd;
+    try {
+        fs.chmodSync(directory, 0o700);
+        const filename = path.join(directory, 'input.json');
+        const view = { markdown: table.markdown, header: table.header, rows: table.rows };
+        fs.writeFileSync(filename, JSON.stringify({ pdfBase64: source.pdf.toString('base64'),
+            pdfSha256: source.pdfSha256, table: view, quotes: boundQuotes }), { mode: 0o600 });
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        const result = JSON.parse(require('./reader-pdf-extraction-scope').runAuthenticatedPdfHierarchicalTableExtractor(fd));
+        if (result.contract !== 'reader-authenticated-pdf-hierarchical-table-v1' || result.eligible !== true) return null;
+        const evidence = result.evidence;
+        if (evidence?.contract !== result.contract || evidence.pdfSha256 !== source.pdfSha256
+            || evidence.rawFullTextSha256 !== document.rawFullTextSha256
+            || evidence.renderedTableSha256 !== sha(table.markdown)
+            || !Array.isArray(evidence.columns) || !Array.isArray(evidence.rows)
+            || !evidence.grid?.captionEvidence?.quote) throw new Error('Authenticated PDF hierarchy response drifted');
+        return { quote: evidence.grid.captionEvidence.quote, columns: evidence.columns, rows: evidence.rows,
+            hierarchicalPdfTableEvidence: evidence };
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+}
 function sourceBoundary(callback) {
     try { return callback(); }
     catch (cause) {
@@ -174,11 +200,15 @@ function withVerifiedSource(handle, callback) {
         || ![source.pdfSha256, source.sourceSnapshotSha256, source.structuredArtifactsSha256].every(value => SHA.test(value || ''))
         || !source.sourceIdentity || typeof source.assertUnchanged !== 'function') throw new Error('PDF table evidence requires authenticated source authority');
     const active = scope.getStore();
-    if (active?.handle === handle && isDeepStrictEqual(active.source.sourceIdentity, source.sourceIdentity)) return callback();
+    if (active?.handle === handle && isDeepStrictEqual(active.source.sourceIdentity, source.sourceIdentity))
+        return require('./reader-authenticated-pdf-footnote-evidence').withVerifiedSource(handle, callback);
     const state = { handle, source, sourceTextSha256: sha(source.sourceText), cache: new Map(), document: null };
-    return require('./reader-pdf-extraction-scope').withPdfExtractionScope(() => scope.run(state, callback));
+    return require('./reader-pdf-extraction-scope').withPdfExtractionScope(() => scope.run(state,
+        () => require('./reader-authenticated-pdf-footnote-evidence').withVerifiedSource(handle, callback)));
 }
-function withoutVerifiedSource(callback) { return scope.run(null, callback); }
+function withoutVerifiedSource(callback) {
+    return scope.run(null, () => require('./reader-authenticated-pdf-footnote-evidence').withoutVerifiedSource(callback));
+}
 function derive(table, quotes) {
     const active = scope.getStore(); if (!active) return null;
     if (!table?.header?.some((value, column) => column > 0 && declaration(value))) return null;
@@ -194,7 +224,11 @@ function derive(table, quotes) {
         active.document = result.document;
     }
     const reasons = [];
-    const match = matchLiteralTable(table, quotes, active.document, active.source.sourceText, reasons);
+    // Keep the original successful path and its proof bytes unchanged. A failed
+    // flat match may only gain units through a complete real-PDF hierarchy.
+    const match = matchLiteralTable(table, quotes, active.document, active.source.sourceText, reasons)
+        || sourceBoundary(() => hierarchicalTable(active.source, table, quotes, active.document));
+    if (match?.hierarchicalPdfTableEvidence) reasons.length = 0;
     active.reasons ||= new Map(); active.reasons.set(key, [...new Set(reasons)].slice(0,3));
     if (!match) { active.cache.set(key, null); return null; }
     const response = sourceBoundary(() => pdfQuotes(active.source, [match.quote]));
@@ -205,7 +239,8 @@ function derive(table, quotes) {
         sourceIdentity: active.source.sourceIdentity, sourceSnapshotSha256: active.source.sourceSnapshotSha256,
         sourceTextSha256: active.sourceTextSha256, structuredArtifactsSha256: active.source.structuredArtifactsSha256,
         pdfSha256: active.source.pdfSha256, renderedTableSha256: sha(table.markdown),
-        columns: match.columns, rows: match.rows, pdfQuoteEvidence: quote.evidence };
+        columns: match.columns, rows: match.rows, pdfQuoteEvidence: quote.evidence,
+        ...(match.hierarchicalPdfTableEvidence ? { hierarchicalPdfTableEvidence: match.hierarchicalPdfTableEvidence } : {}) };
     const proof = { ...body, evidenceSha256: stable(body) };
     sourceBoundary(() => active.source.assertUnchanged()); active.cache.set(key, proof);
     return structuredClone(proof);

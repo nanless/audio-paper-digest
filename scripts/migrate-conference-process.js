@@ -12,7 +12,7 @@ const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--recovery-manifest ABSOLUTE_PATH]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -24,7 +24,7 @@ function parseArgs(argv) {
             if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
-        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest'].includes(flag)
+        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest', '--reader-corrections'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value; index += 2;
     }
@@ -32,14 +32,16 @@ function parseArgs(argv) {
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !UUID_RE.test(values['--filter'] || '') || !UUID_RE.test(values['--from'] || '')
         || (values['--concurrency'] && !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values['--concurrency']))
-        || (values['--recovery-manifest'] && (!path.isAbsolute(values['--recovery-manifest']) || !values['--retry-failed']))) {
+        || (values['--recovery-manifest'] && (!path.isAbsolute(values['--recovery-manifest']) || !values['--retry-failed']))
+        || (values['--reader-corrections'] && (!path.isAbsolute(values['--reader-corrections']) || !values['--recovery-manifest']))) {
         throw new Error(`命令写法不对，用法：${USAGE}`);
     }
     return { apply: true, statusOnly: false, catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'],
         fromProcessId: values['--from'], concurrency: Number(values['--concurrency'] || 3),
         reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']),
-        ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}) };
+        ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}),
+        ...(values['--reader-corrections'] ? { readerCorrections: values['--reader-corrections'] } : {}) };
 }
 
 function withoutImplementation(authority, version = processApi.PROCESS_VERSION) {
@@ -126,6 +128,13 @@ function migrateAndRun(options, runtime = {}) {
             ? retainedSourceReplay.replayCompletedPromotedShared({ context, state, directory }, deps)
             : await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
         processApi.assertSourceContinuity(state, shared);
+        if (options.readerCorrections) {
+            if (!grantHandle || requiresMigration || lifecycleNeedsRefresh) {
+                throw new Error('人工 Reader 修正要求同一原许可及当前已完成的实现迁移；先完成普通只读后处理再绑定最终失败清单');
+            }
+            state = await require('./lib/conference-reader-operator-apply').applyAndStageBatch({
+                manifestPath: options.readerCorrections, grantHandle, directory, state, shared }, deps);
+        }
         // 只有实现或生命周期确实需要时，才重新处理已完成的论文。发布器或渲染器的提交
         // 会在 LLM 流程运行期间改变实现指纹，这时重跑只是把暂存页拉回与记录一致，
         // 不必把已完成的论文再送回 LLM。实现没变、只是普通重试时跳过这一步，

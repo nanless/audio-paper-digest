@@ -302,6 +302,7 @@ const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
 const API_READER_TRANSPORT_MAX_RETRIES = 2;
 
 function getArxivFetchDispatcher() {
+    require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
     const proxyUrl = detectHttpConnectProxyUrl();
     if (!proxyUrl) {
         const error = new Error('arXiv 全文、PDF 与图片抓取必须通过当前项目 .env 中 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 代理，拒绝直连或仅使用 SOCKS ALL_PROXY');
@@ -4040,6 +4041,7 @@ function readerResourcePublicationResources(paper, sourceText) {
     // This is an unsigned, temporary view after original identity authentication.
     // Do not mutate/re-sign the saved identity or turn URL reachability into release evidence.
     return verified.resources.flatMap(resource => {
+        if (Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence')) return [structuredClone(resource)];
         if (!legacy || resource.origin !== 'paper_source') return [structuredClone(resource)];
         const facets = binding.paperSourceResourceFacets(sourceText, resource.sourceUrlToken || resource.originalUrl);
         return facets.map(type => ({ ...structuredClone(resource), type }));
@@ -8367,6 +8369,19 @@ function readerRepairPromptPath(options = {}) {
     return promptFilePathForContract('apiReaderRepair', readerRepairPromptContract(options));
 }
 
+function readVerifiedConferenceReaderPrompts(paper, sourceText, identity = null) {
+    return require('./lib/conference-reader-operator-correction')
+        .readVerifiedConferenceReaderPrompts(paper, sourceText, identity)
+        || require('./lib/conference-reader-active-candidate-replay')
+            .readVerifiedConferenceReaderPrompts(paper, sourceText, identity);
+}
+function apiReaderOperatorExecution(proof) {
+    const conference = require('./lib/conference-reader-operator-correction');
+    return proof?.contract === conference.CORRECTION
+        ? conference.execution(proof)
+        : require('./lib/daily-reader-operator-correction').execution(proof);
+}
+
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     const repair = require('./lib/reader-repair.js');
     const fresh = require('./lib/fresh-analysis-context.js');
@@ -8438,8 +8453,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const maxAttempts = Number.isInteger(options.readerMaxAttempts)
         ? Math.min(6, Math.max(1, options.readerMaxAttempts)) : 6;
     const paidPromptReplay = conference.getConferenceAnalysisContext()
-        ? require('./lib/conference-reader-active-candidate-replay')
-            .readVerifiedConferenceReaderPrompts(paper, options.sourceText) : null;
+        ? readVerifiedConferenceReaderPrompts(paper, options.sourceText) : null;
     const identity = {
         paperId: getPaperArxivId(paper),
         ...readerGrantFields,
@@ -8500,6 +8514,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-column-units.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-table-column-units.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-authenticated-pdf-table-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-authenticated-pdf-footnote-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-extraction-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/conference-source-context.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/conference-pdf-source.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/conference-reader-publication-evidence.js'), 'utf8'),
@@ -8512,6 +8528,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'pdf-layout-extract.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_column_units.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_quote_evidence.py'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_authenticated_pdf_hierarchical_table.py'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_authenticated_pdf_footnote_evidence.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-blocked-normalization.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-dom-span-projection.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-upstream-preflight.js'), 'utf8'),
@@ -8519,6 +8537,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-next-request-plan.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-saved-feedback-input-continuity.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/daily-reader-operator-correction.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/conference-reader-operator-correction.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-cell-evidence.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-table-pdf-evidence.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-table-evidence.js'), 'utf8'),
@@ -8557,8 +8576,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ...(directScope?.readerRetryEpoch !== undefined
             ? { historicalDirectRetryEpoch: directScope.readerRetryEpoch } : {})
     };
-    if (paidPromptReplay) require('./lib/conference-reader-active-candidate-replay')
-        .readVerifiedConferenceReaderPrompts(paper, options.sourceText, identity);
+    if (paidPromptReplay) readVerifiedConferenceReaderPrompts(paper, options.sourceText, identity);
     if (start.legacyPreviousDraft) {
         const legacyIdentity = { ...identity };
         delete legacyIdentity.signedRevisionDisplayContract;
@@ -8815,7 +8833,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         .filter(item => Number.isInteger(item.ordinal));
     // 只读提前检查同身份候选。纯文本/DOM 仍失败且预算确实用完时，不先下载图片。
     // 不复用旧像素事实；新实现已能接受的候选仍进入下方原下载及完整校验。
-    const operatorCorrection = require('./lib/daily-reader-operator-correction').current(paper,identity);
+    const operatorCorrection = require('./lib/daily-reader-operator-correction').current(paper,identity)
+        || require('./lib/conference-reader-operator-correction').current(paper, identity);
     const priorCandidate = operatorCorrection?.payload || repair.loadFailedCandidate(candidateDirectory, identity);
     if (priorCandidate) {
         const retryApi = require('./lib/explicit-reader-retry-round');
@@ -9660,8 +9679,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     // 普通刷新仍按当前模板。已核付费候选的私有只读范围仅保留原声明，
     // 科学检查、解析器与其他实现指纹仍按当前代码执行。
     const paidPromptReplay = conference.getConferenceAnalysisContext()
-        ? require('./lib/conference-reader-active-candidate-replay')
-            .readVerifiedConferenceReaderPrompts(paper, sourceText) : null;
+        ? readVerifiedConferenceReaderPrompts(paper, sourceText) : null;
     const configurationFingerprint = paidPromptReplay
         ? buildApiReaderBaseFingerprint(paidPromptReplay.stageFields.promptTextContract,
             paidPromptReplay.stageFields.repairPromptTextContract, arxivId, paidPromptReplay.stageFields)
@@ -9817,7 +9835,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
             evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
             reviewFeedbackSha256, ...(revisionSeed?.metadata || {}),
-            ...require('./lib/daily-reader-operator-correction').execution(generated.operatorCorrectionProof)
+            ...apiReaderOperatorExecution(generated.operatorCorrectionProof)
         }
     });
     finalizeDeferredDailyReaderImages(finalized, sourceDetails);
@@ -11472,8 +11490,10 @@ function buildApiReaderBaseFingerprint(
     const preservedRequestDeclaration = declaredPrompt?.status === 'complete'
         || Boolean(declaredPrompt
             && require('./lib/conference-analysis-context').getConferenceAnalysisContext()
-            && require('./lib/conference-reader-active-candidate-replay')
-                .isVerifiedConferenceReaderPromptDeclaration(declaredPrompt));
+            && (require('./lib/conference-reader-active-candidate-replay')
+                .isVerifiedConferenceReaderPromptDeclaration(declaredPrompt)
+                || require('./lib/conference-reader-operator-correction')
+                    .isVerifiedConferenceReaderPromptDeclaration(declaredPrompt)));
     if (declaredPrompt && Object.prototype.hasOwnProperty.call(declaredPrompt, 'readerRequestPolicy')) {
         validateDeclaredApiReaderRequestPolicy(declaredPrompt.readerRequestPolicy);
     }
@@ -14296,6 +14316,7 @@ function exactResourceSourceQuote(sourceText, url, maxChars = 1200) {
 }
 
 async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
+    require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
     const requestImpl = options.requestImpl || requestPinnedPublicHttps;
     const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
     let currentUrl = String(rawUrl || '');
@@ -14454,8 +14475,9 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
         ? conference.conferenceWeakReaderCapabilityPolicy(options.paper, options.structuredArtifacts)
         : null;
     const analysisCandidates = extractApiReaderResourceCandidates(analysis);
-    const sourceCandidates = weakConferencePolicy
-        ? extractWeakConferenceSourceResourceCandidates(sourceText) : [];
+    const sourceCandidates = [...(weakConferencePolicy
+        ? extractWeakConferenceSourceResourceCandidates(sourceText) : []),
+    ...require('./lib/reader-authenticated-pdf-footnote-evidence').deriveCandidates(sourceText)];
     const demoLinks = new Set(Array.isArray(demoStage?.discoveredLinks)
         ? demoStage.discoveredLinks : []);
     const demoCandidates = [...demoLinks].map(url => {
@@ -14473,7 +14495,8 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
     for (const candidate of [...analysisCandidates, ...sourceCandidates, ...demoCandidates]) {
         const key = `${candidate.type}:${candidate.url}`;
         const previous = candidateByTypeAndUrl.get(key);
-        if (!previous || (candidate.sourceToken && !previous.sourceToken)) {
+        if (!previous || (candidate.authenticatedPdfFootnoteEvidence && !previous.authenticatedPdfFootnoteEvidence)
+            || (candidate.sourceToken && !previous.sourceToken && !previous.authenticatedPdfFootnoteEvidence)) {
             candidateByTypeAndUrl.set(key, candidate);
         }
     }
@@ -14485,14 +14508,21 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
     const deadlineAt = Number.isFinite(options.deadlineAt)
         ? options.deadlineAt : Date.now() + 60000;
     const boundCandidates = extractedCandidates.map(candidate => {
-        const sourceLine = exactResourceSourceQuote(
+        const footnoteProof = candidate.authenticatedPdfFootnoteEvidence;
+        if (footnoteProof) require('./lib/reader-authenticated-pdf-footnote-evidence').assertEvidence({
+            origin: 'paper_source', type: candidate.type, originalUrl: candidate.url,
+            sourceQuote: footnoteProof.sourceQuote, sourceQuoteSha256: footnoteProof.sourceQuoteSha256,
+            authenticatedPdfFootnoteEvidence: footnoteProof
+        }, sourceText);
+        const sourceLine = footnoteProof?.sourceQuote || exactResourceSourceQuote(
             sourceText,
             candidate.sourceToken || candidate.url
         );
         const origin = sourceLine ? 'paper_source' : demoLinks.has(candidate.url)
             ? 'validated_demo' : null;
         const sourceFacets = origin === 'paper_source'
-            ? paperSourceResourceFacets(sourceText, candidate.sourceToken || candidate.url) : [];
+            ? footnoteProof?.pdfFootnote.resourceFacets
+                || paperSourceResourceFacets(sourceText, candidate.sourceToken || candidate.url) : [];
         const staleAuthorCodeClassification = origin === 'paper_source'
             && candidate.type === 'third_party' && sourceFacets.includes('code')
             && !resourceClassificationIsCurrent({
@@ -14583,7 +14613,8 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
             }
         }
         const sourceQuote = origin === 'paper_source'
-            ? paperSourceResourceQuote(sourceText, candidate.sourceToken || candidate.url)
+            ? candidate.authenticatedPdfFootnoteEvidence?.sourceQuote
+                || paperSourceResourceQuote(sourceText, candidate.sourceToken || candidate.url)
             : sourceLine?.trim() || candidate.line;
         resources.push({
             type: candidate.type,
@@ -14595,6 +14626,8 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
                 ? normalizedSourceUrlBinding(candidate.sourceToken || candidate.url, candidate.url)
                 : {}),
             ...(documentationEvidence ? { documentationEvidence } : {}),
+            ...(candidate.authenticatedPdfFootnoteEvidence
+                ? { authenticatedPdfFootnoteEvidence: structuredClone(candidate.authenticatedPdfFootnoteEvidence) } : {}),
             ...verified
         });
     }
@@ -14662,10 +14695,12 @@ function applyApiReaderResourceAvailability(analysis, identity) {
         const generatedThirdPartyLine = /^- 其他资源链接：<https:\/\/[^<>\s]+>（(?:已验证可访问|当前不可用|本次暂时无法确认可达)(?:，HTTP \d{3})?）（未据此确认作者已开放资源）$/.test(line.trim());
         if (generatedThirdPartyLine && candidates.length === 1 && candidates.every(candidate => candidate.type === 'third_party'
             && identity.resources.some(resource => resource.originalUrl === candidate.url
-                && resource.origin === 'paper_source' && resource.type === 'code'
-                && !resourceClassificationIsCurrent({
+                && resource.origin === 'paper_source'
+                && (Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence')
+                    ? require('./lib/reader-authenticated-pdf-footnote-evidence').assertEvidence(resource)
+                    : resource.type === 'code' && !resourceClassificationIsCurrent({
                     ...resource, type: 'third_party'
-                }, resource.sourceQuote)))) {
+                }, resource.sourceQuote))))) {
             return '';
         }
         return candidates.some(candidate => candidate.type !== 'third_party'
@@ -15192,6 +15227,7 @@ function nodeHeadersView(headers) {
 }
 
 async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {}) {
+    require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
     const {
         headers = {},
         timeoutMs = 15000,
@@ -17542,6 +17578,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     // 结构修复完成后，单独依据原文证据核验并修复标签。
     // 标签不合规时必须修复；主任务标签过于宽泛时，也会尝试改选。
     // 局部修复只允许改动标签节，以及机器摘要中的主任务和主方法标签字段。
+    const previousTagRecord = readTagStageRecord(analysisManifest, paper.analysisStageCheckpoints);
+    const previousTagAttempt = JSON.parse(JSON.stringify({
+        stageKey: previousTagRecord.stageKey, stage: previousTagRecord.stage || null,
+        checkpoint: previousTagRecord.checkpoint || null
+    }));
     let tagStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -17576,7 +17617,13 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             // 只修复实际标签合同或已绑定的来源反馈；目录子任务不代表本篇适用。
             const tagReviewFeedback = require('./lib/daily-fact-review').reviewFeedback('tagSelection', arxivId);
             const repairFeedback = tagReviewFeedback || tagValidationIssue;
-            if (repairFeedback) {
+            const ancestorPruning = !tagReviewFeedback && tagValidationIssue
+                ? normalizeRedundantTagAncestors(analysis) : null;
+            if (ancestorPruning) {
+                analysis = ancestorPruning.analysis;
+                require('./lib/daily-fact-review').validateRepairedClaims('tagSelection',
+                    extractSectionByTitle(analysis, '标签'), arxivId);
+            } else if (repairFeedback) {
                 console.log(`    [deep] 🏷️  正在局部修复标签：${repairFeedback}`);
                 analysis = await repairTagSelection(
                     paper, analysis, tagStage.evidenceContext, repairFeedback
@@ -17626,9 +17673,15 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                         ? { promptTextContract: tagStage.promptTextContract } : {}),
                     ...require('./lib/daily-fact-review').fingerprintFields('tagSelection', analysisManifest.stages.tagSelection),
                     ...tagStageProof,
+                    ...(ancestorPruning ? { deterministicAncestorPruning: (() => {
+                        const receipt = { ...ancestorPruning.proof, previousTagAttempt,
+                            previousTagAttemptSha256: stableFingerprint(previousTagAttempt) };
+                        return { ...receipt, receiptSha256: stableFingerprint(receipt) };
+                    })() } : {}),
                     bindingSha256: stableFingerprint(tagStageProof)
                 }
             );
+            if (ancestorPruning) (paper.analysisStageCheckpoints ||= {}).tagSelection = analysis;
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (error) {
             markRecoveryStage(
@@ -18409,7 +18462,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     providerImageExclusionCount: readerResult.providerImageExclusions?.length || 0,
                     providerImageExclusionSha256: stableFingerprint(readerResult.providerImageExclusions || [])
                 } : {}),
-                ...require('./lib/daily-reader-operator-correction').execution(readerResult.operatorCorrectionProof)
+                ...apiReaderOperatorExecution(readerResult.operatorCorrectionProof)
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             transferDeferredReaderCandidate(generatedReaderResult, paper);
@@ -18965,6 +19018,7 @@ function isPrivateIpAddress(address) {
 }
 
 async function validatePublicHttpUrl(rawUrl) {
+    require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
     const url = new URL(rawUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         throw new Error(`不支持的公网 URL 协议: ${url.protocol}`);
@@ -19310,6 +19364,75 @@ function applyTagSelection(analysis, selection, options = {}) {
             `标签局部修复后仍未通过校验：${parsed.tagValidation.specificityWarning}`);
     }
     return updated;
+}
+
+function normalizeRedundantTagAncestors(analysis) {
+    const original = String(analysis || '');
+    const bounds = findSectionBounds(original, '标签');
+    if (!bounds) return null;
+    const originalTagSection = original.slice(bounds.contentStart, bounds.end);
+    const wrapped = originalTagSection.trim().split(/\r?\n/u).map(line => line.trim());
+    const wrapperRemoved = wrapped.length === 6 && wrapped[0] === '```' && wrapped[5] === '```'
+        && wrapped.slice(1, 5).every(line => line && !line.includes('```'));
+    const surfaceInput = wrapperRemoved
+        ? replaceSectionBodyExact(original, '标签', wrapped.slice(1, 5).join('\n')) : original;
+    const parsed = parseAnalysis(surfaceInput);
+    const validation = parsed?.tagValidation;
+    if (!validation || validation.valid || validation.errors?.length !== 1
+        || validation.errors[0] !== '标签不能同时包含上级概念及其下级概念。') return null;
+    // Check the entire original surface, including invariants checked after the
+    // ancestor error in the normal validator. Do not repair an unrelated error.
+    const lines = extractSectionByTitle(surfaceInput, '标签').split('\n').map(line => line.trim()).filter(Boolean);
+    if (lines.length !== 4 || !/^(?:#[^\s,，;；、]+)(?:\s+#[^\s,，;；、]+){2,4}$/u.test(lines[0])
+        || !/^主任务标签\s*[:：]\s*#\S+$/u.test(lines[1])
+        || !/^主方法标签\s*[:：]\s*#\S+$/u.test(lines[2])
+        || !/^补充标签\s*[:：]\s*#\S+(?:\s+#\S+)*$/u.test(lines[3])) return null;
+    const tags = lines[0].match(/#[^\s]+/gu) || [];
+    const task = lines[1].match(/#[^\s]+/u)?.[0];
+    const method = lines[2].match(/#[^\s]+/u)?.[0];
+    const supplemental = lines[3].match(/#[^\s]+/gu) || [];
+    const expectedSupplemental = tags.filter(tag => tag !== task && tag !== method);
+    const machineBody = extractSectionByTitle(original, '机器摘要');
+    if (getDuplicateRequiredSections(original).some(title => ['标签', '机器摘要'].includes(title))
+        || ['primary_task_tag', 'primary_method_tag'].some(key =>
+            (machineBody.match(new RegExp(`^${key}\\s*[:：]\\s*.*$`, 'gm')) || []).length !== 1)) return null;
+    if (stableFingerprint(tags) !== stableFingerprint(parsed.tags)
+        || parsed.primaryTaskTag !== task || parsed.primaryMethodTag !== method
+        || parsed.machineSummary?.primaryTaskTag !== task || parsed.machineSummary?.primaryMethodTag !== method
+        || stableFingerprint(supplemental) !== stableFingerprint(expectedSupplemental)) return null;
+    const concepts = tags.map(tag => TAG_RULES.resolveCurrentTag(tag));
+    if (concepts.some(concept => !concept)) return null;
+    const ids = concepts.map(concept => concept.id);
+    const catalog = require('./lib/tag-catalog');
+    const retained = catalog.pruneAncestors(TAG_RULES.tagCatalog, ids);
+    const removed = ids.filter(id => !retained.includes(id));
+    if (!removed.length || retained.length < 3 || retained.length > 5
+        || removed.includes(validation.primaryTaskId) || removed.includes(validation.primaryMethodId)) return null;
+    const selection = { tags: tags.filter((_tag, index) => retained.includes(ids[index])),
+        primaryTaskTag: task, primaryMethodTag: method };
+    const finalSelection = TAG_RULES.validateTagSelection(selection);
+    if (!finalSelection.valid || finalSelection.primaryTaskId !== validation.primaryTaskId
+        || finalSelection.primaryMethodId !== validation.primaryMethodId) return null;
+    let updated;
+    try { updated = applyTagSelection(original, selection); }
+    catch (error) { if (error.code === 'CONTRACT_REJECTED') return null; throw error; }
+    const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+    const body = {
+        contract: 'tag-selection-deterministic-ancestor-pruning-v1', registrySha256: TAG_RULES.registrySha256,
+        inputAnalysisSha256: hash(original), outputAnalysisSha256: hash(updated),
+        originalTagSection, originalTagSectionSha256: hash(originalTagSection), wrapperRemoved,
+        originalTagValidationErrors: parseAnalysis(original)?.tagValidation?.errors || [],
+        inputProtectedProjectionSha256: hash(maskClassificationFields(original)),
+        outputProtectedProjectionSha256: hash(maskClassificationFields(updated)),
+        primaryTaskId: validation.primaryTaskId, primaryMethodId: validation.primaryMethodId,
+        originalConceptIds: ids, retainedConceptIds: retained,
+        removed: removed.map(id => ({ id, descendantWitnesses: retained.flatMap(descendantId => {
+            const chain = [descendantId, ...catalog.ancestors(TAG_RULES.tagCatalog, descendantId)];
+            const position = chain.indexOf(id);
+            return position > 0 ? [{ descendantId, ancestorChain: chain.slice(0, position + 1) }] : [];
+        }) })), modelRequests: 0
+    };
+    return { analysis: updated, proof: { ...body, proofSha256: stableFingerprint(body) } };
 }
 
 async function repairTagSelection(paper, analysis, evidenceContext, issue, options = {}) {
@@ -20314,6 +20437,7 @@ module.exports = {
     tagRuleFingerprintFields,
     parseTagRepairResult,
     applyTagSelection,
+    normalizeRedundantTagAncestors,
     repairTagSelection,
     maskClassificationFields,
     retainFinalTagCheckpoints,

@@ -1531,6 +1531,13 @@ test('重试放行是一个显式的、只在 apply 时可用的命令行参数'
     assert.throws(() => cli.parseArgs(['--apply', ...args, '--retry-failed', '--retry-failed']), /参数不符合要求。用法：/);
     assert.equal(require('../scripts/migrate-conference-process.js').parseArgs(['--apply', ...args,
         '--from', '11111111-1111-4111-8111-111111111111', '--retry-failed']).retryFailed, true);
+    const migrate = require('../scripts/migrate-conference-process.js');
+    const base = ['--apply', ...args, '--from', '11111111-1111-4111-8111-111111111111'];
+    assert.throws(() => migrate.parseArgs([...base, '--reader-corrections', '/tmp/local.json']), /命令写法/);
+    assert.throws(() => migrate.parseArgs([...base, '--retry-failed', '--recovery-manifest', '/tmp/grant.json',
+        '--reader-corrections', 'relative.json']), /命令写法/);
+    assert.equal(migrate.parseArgs([...base, '--retry-failed', '--recovery-manifest', '/tmp/grant.json',
+        '--reader-corrections', '/tmp/local.json']).readerCorrections, '/tmp/local.json');
 });
 
 test('多跳的旧版迁移沿凭证父级一路追到绑定 UUID 的起点', async t => {

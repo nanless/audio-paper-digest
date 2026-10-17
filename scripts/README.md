@@ -78,6 +78,8 @@ npm run test:compat
 | `lib/analysis-batch-report.js` | Node共享：将 Reader 刷新固定范围、来源引用、轮次和人工建议保存为私有诊断；不签来源、成功正文或发布凭证，不授权新请求。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
 | `lib/analysis-stage-request-guard.js` | 独立会议恢复跨轮保存失败非 Reader 阶段的请求禁令，覆盖正常和自定义模型入口；保留纯检查及原付费重验，不新增额度。Reader 仍使用自己的累计账本。 |
+| `lib/conference-reader-operator-correction.js` | 只在原会议许可最后失败集合中安装有界人工 Reader 补丁；核原完整包、候选、响应、预算、资产及真实 PDF，硬禁模型/网络，保存独立原包和可冷重放凭证。 |
+| `lib/conference-reader-operator-apply.js` | 持真实论文锁执行正常 Reader 解析与整篇资格，CAS 保存子稿、离开热作用域后冷核，再正常暂存并原子采纳完整集合；保留原次数及费用，不启动新付费轮。 |
 | `lib/cancelled-reader-final-checkpoint.js` | 确认最终正文仅被已取消步骤阻挡时，在原完整性、来源和反馈核验通过后从真实检查点继续，不重新生成已完成内容。 |
 | `lib/completed-bound-fact-feedback.js` | Node 库：供普通批量和单篇续跑共用，按真实父子反馈签发上下文只读核验完成证明、来源与禁留原句；不写包、不授予模型请求、不改变显式强制重分析。 |
 | `lib/pending-fact-feedback.js` | Node 库：锁内核验真实反馈及原包后保存未完成纠错义务；旧成功正文不代表新反馈完成，无反馈恢复沿用原包，完整同反馈资格通过后才清除。不给模型新额度。 |
@@ -260,6 +262,7 @@ npm run test:compat
 | `lib/reader-author-parser.js` | Node 库：从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
 | `lib/reader-author-replay-cli.js` | Node 子进程入口：供 Python 发布器调用的本地作者核验入口；原单对象协议保持，有界批次最多8项/32MiB，逐项重读真实四源及父证明，全部精确通过才返回true；只读取私有FD，无网络与模型。 |
 | `lib/reader-pdf-extraction-scope.js` | 三流程单次 Reader 核验共用的纯 PDF 提取执行与 stdout 复用；日更保留最小环境，会议及历史认证 PDF 保留继承环境，未知启动覆盖或禁用 venv 按原路径执行。实时核对角色、私有输入和隔离运行时，来源及资格不缓存。 |
+| `lib/reader-authenticated-pdf-footnote-evidence.js` | 在真实会议/历史 PDF 句柄内导出并冷重放同栏作者声明、上标及同号资源网址；归属和可达状态分别保留。旧身份只能生成独立纠正提案，不自动改稿或授予评分/Reader资格。 |
 | `lib/reader-author-source.js` | Node 库：当前生产 Reader 作者复用资格；跳过已完成分析、恢复历史/会议任务及发布前，必须从已核验的原始材料重新解析并核验作者，保留旧成功结构与只读统计。 |
 | `lib/reader-dom-span-projection.js` | Node 库：从真正封存 HTML 重放全幅 colspan 分类行的空白投影，让正常完整表编译与最终逐格守卫一致；保持来源、旧展示字节及 PDF 规则不变。 |
 | `lib/reader-dom-span-replay-cli.js` | Node 只读子进程：Python 发布检查通过私有受限文件描述符批量重放 HTML 全幅分类行空白投影；先核日更工作区、四份封存来源、保存表格 SHA 与实际正文坐标，再共用原 DOM 规则，不请求模型或网络。 |
@@ -292,6 +295,8 @@ npm run test:compat
 | `reader_pdf_visual_audit_cache.py` | Python 库：有界缓存旧 PDF 后端成功的纯视觉抽取；每次核对真实 PDF 和完整实现字节，返回独立副本；四份封存来源、当前绑定与逐格数字资格仍由原核验器每次重放。 |
 | `reader_sealed_pdf_column_units.py` | 核验受控 PDF 原表列单位证据，供 Node 和发布器重放。 |
 | `reader_sealed_pdf_quote_evidence.py` | 核验受控 PDF 精确引文，供 Node 和发布器重放。 |
+| `reader_authenticated_pdf_hierarchical_table.py` | 从真实 PDF 完整表格的字形、列组、原行和条件带唯一映射展示子集；先闭合原表再选择，不猜单位，不制造 HTML DOM。 |
+| `reader_authenticated_pdf_footnote_evidence.py` | 从真实 PDF 独立导出同页同栏的当前作者资源声明、附着上标和唯一同号 URL；拒绝未来、否定、第三方和歧义归属。 |
 | `reader_sealed_pdf_table_evidence.py` | 核验受控 PDF 原表结构与单元格，供 Node 和发布器重放。 |
 
 ### 签名稿与有界人工修正
@@ -300,7 +305,9 @@ npm run test:compat
 |---|---|
 | `lib/daily-reader-operator-correction.js` | Node 库：显式日更人工修正清单覆盖完整失败集合，通常最多10篇；大批次按重读原封存入选集的10%取整增加、硬限15篇，扩展时核验完整唯一集合。重读四份封存来源、原失败草稿与每篇1–8节点SHA补丁；原候选及费用不改，由正常 Reader 全量解析验收并记录本地修正来源，不作为模型响应或新收费额度。 |
 | `lib/reader-operator-patch.js` | Node 库：显式应用同一全新重写运行的人工局部补丁，核验来源、每个修改字段或数组项的原内容 SHA，以及完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
-| `lib/reader-signed-draft.js` | Node 库：把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有实际解析并恢复原图引用后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
+| `lib/reader-signed-draft.js` | Node 库：日更封存来源的已签 Reader 逆算入口；保留原 fresh 准入及正文、计划、图片 SHA 精确往返要求，不写文件或调用模型。 |
+| `lib/reader-signed-draft-surface.js` | Node 库：纯表示逆算，恢复完整术语组合和原图引用；不授予来源、API 作者身份、修改许可或发布资格。 |
+| `lib/conference-reader-signed-draft.js` | Node 库：只读核验真实完整会议父包及计划/PDF 后逆算 Reader，分别报告精确往返、纯格式差异和阻断；保留逐节点差异，不把可恢复草稿视为通过稿。 |
 | `lib/daily-reader-signed-correction.js` | 已完成日更 Reader 的显式尾修：v1 保留有界中文词替换，v2 仅允许严格事实反馈原句内的逐字范围修正。原退休付费稿和既有人工历史须逐步重放到当前正文、计划与图片，绑定完整父稿 CAS、四源及完整小尾集合，沿用原次数与像素，经正常解析和引擎保存；预览不登记义务，执行才保存 pending，不复活候选或授予请求。 |
 | `lib/daily-reader-signed-fact-patch.js` | 签名 Reader v2 的纯范围核验：逐字绑定当前受拒原句、UTF-16 起止位置和原节点 SHA；仅1–8个既有正文/解释/同源表绑定节点。raw/display 差异只接受真实正常排版投影，句外、公式、原图及新节点不可改；来源资格仍由正常 Reader 解析器核验。 |
 | `lib/daily-reader-legacy-batch-root.js` | 只读核验旧日更批次人工修正根：真实失败父检查点、原授权及清单、原付费候选和原补丁必须逐字重放到当前签名 Reader；保留真实 operator 身份、四源、原费用和次数，不伪造完成 API 父稿或改变活跃候选状态。 |

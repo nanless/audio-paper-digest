@@ -49,6 +49,48 @@ test('未知Python布局只按正常提取执行，作用域不伪造缓存能�
     api.withPdfExtractionScope(() => { run({ literal: true }); run({ literal: true }); });
     assert.equal(calls, 2);
 });
+test('新认证层级表和脚注executor分离缓存身份，单链接约束不能被热缓存绕过', t => {
+    const { dir } = fixture(t);
+    const saved = new Map();
+    const unsafe = key => /^(?:PYTHON|PYMUPDF|FITZ|LD_|DYLD_|BASH_FUNC_)/i.test(key) || ['BASH_ENV', 'ENV'].includes(key);
+    for (const key of Object.keys(process.env)) if (unsafe(key)) { saved.set(key, process.env[key]); delete process.env[key]; }
+    const disabled = process.env.PD_PYTHON_RUNTIME_DISABLE_VENV;
+    delete process.env.PD_PYTHON_RUNTIME_DISABLE_VENV;
+    t.after(() => {
+        for (const [key, value] of saved) process.env[key] = value;
+        if (disabled === undefined) delete process.env.PD_PYTHON_RUNTIME_DISABLE_VENV;
+        else process.env.PD_PYTHON_RUNTIME_DISABLE_VENV = disabled;
+    });
+    let calls = 0;
+    t.mock.method(child, 'execFileSync', (_file, args) => {
+        calls++;
+        return Buffer.from(JSON.stringify({ program: path.basename(args[1]) }));
+    });
+    const filename = path.join(dir, 'new-authenticated.json');
+    fs.writeFileSync(filename, '{"same":"descriptor"}', { mode: 0o600 });
+    const run = method => {
+        const fd = fs.openSync(filename, 'r');
+        try { return JSON.parse(api[method](fd)); } finally { fs.closeSync(fd); }
+    };
+    api.withPdfExtractionScope(() => {
+        assert.equal(run('runAuthenticatedPdfHierarchicalTableExtractor').program,
+            'reader_authenticated_pdf_hierarchical_table.py');
+        run('runAuthenticatedPdfHierarchicalTableExtractor');
+        assert.equal(calls, 1);
+        assert.equal(run('runAuthenticatedPdfFootnoteExtractor').program,
+            'reader_authenticated_pdf_footnote_evidence.py');
+        run('runAuthenticatedPdfFootnoteExtractor');
+        assert.equal(calls, 2);
+        const link = path.join(dir, 'linked-descriptor.json');
+        fs.linkSync(filename, link);
+        // A real worker rejects these descriptors. The cache layer must send
+        // them to that worker instead of serving an earlier valid response.
+        run('runAuthenticatedPdfHierarchicalTableExtractor');
+        run('runAuthenticatedPdfFootnoteExtractor');
+        assert.equal(calls, 4);
+        fs.unlinkSync(link);
+    });
+});
 test('认证PDF使用同一纯executor并保留继承环境，未知导入或启动覆盖不复用', t => {
     const { dir } = fixture(t), saved = new Map();
     const unsafe = key => /^(?:PYTHON|PYMUPDF|FITZ|LD_|DYLD_|BASH_FUNC_)/i.test(key) || ['BASH_ENV', 'ENV'].includes(key);

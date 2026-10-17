@@ -120,8 +120,11 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None, 
         raise ValueError('资源展示的公共声明重放需要 Node.js。')
     root = Path(__file__).resolve().parents[1]
     request = {'paper': paper, 'sourceText': source_text, 'resourcePresentation': True}
-    authenticated_pdf = any(isinstance(binding, dict) and 'authenticatedPdfTableEvidence' in binding
+    authenticated_pdf_tables = any(isinstance(binding, dict) and 'authenticatedPdfTableEvidence' in binding
                             for binding in (paper.get('apiReaderPlan') or {}).get('tableBindings', []))
+    authenticated_pdf_resources = any(isinstance(resource, dict) and 'authenticatedPdfFootnoteEvidence' in resource
+                                      for resource in (paper.get('apiReaderResources') or {}).get('resources', []))
+    authenticated_pdf = authenticated_pdf_tables or authenticated_pdf_resources
     if publication_evidence is not None:
         request['publicationEvidence'] = publication_evidence
     payload = json.dumps(request,
@@ -145,7 +148,7 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None, 
     if result.returncode != 0 or result.timed_out or result.output_truncated \
             or value.get('verified') is not True or not isinstance(value.get('resources'), list):
         raise ValueError('资源展示或正文声明未通过当前封存来源核验：' + str(value.get('message', '')))
-    if publication_evidence is not None or authenticated_pdf:
+    if publication_evidence is not None or authenticated_pdf_tables:
         # Only this fresh response from the source-replaying generic worker may
         # supplement the quality check. Original plan/bindings stay untouched.
         if not isinstance(value.get('tableEvidence'), dict):

@@ -60,3 +60,22 @@ test('明确别工作或假设帧中的数值不成为本文观测', () => {
         'We plan evaluation of accuracy of 80% compared with baseline accuracy of 70%.'
     ]) assert.equal(classify(source), false, source);
 });
+
+test('旧工作或假设之后同句明确本文实际观测仍保留，不能由裸指标或否定借用', () => {
+    for (const source of [
+        'Prior work reports accuracy of 70%, whereas in our evaluation our model achieved accuracy of 80% compared with the baseline accuracy of 70%.',
+        'If our model achieves accuracy of 80% compared with the baseline accuracy of 70%, we would deploy it; our actual evaluation measured accuracy of 82% compared with the baseline accuracy of 70%.'
+    ]) assert.equal(classify(source), true, source);
+    for (const source of [
+        'Prior work reports accuracy of 80% compared with baseline accuracy of 70% in the evaluation.',
+        'If our model achieves accuracy of 80% compared with baseline accuracy of 70%, the evaluation would improve.',
+        'Prior work reports accuracy of 70%, whereas our accuracy is 80% compared with baseline accuracy of 70%.',
+        'Prior work reports accuracy of 70%, whereas in our hypothetical evaluation our model achieved accuracy of 80% compared with baseline accuracy of 70%.',
+        'Prior work reports accuracy of 70%, whereas in our evaluation our model would achieve accuracy of 80% compared with baseline accuracy of 70%.',
+        'Prior work reports accuracy of 70%, whereas in our evaluation other authors achieved accuracy of 80% compared with baseline accuracy of 70%.',
+        'If the setting holds, in our evaluation our model achieved accuracy of 80% compared with baseline accuracy of 70%.',
+        'Prior work reports accuracy of 70%, whereas in our evaluation our model achieved accuracy of 80% compared with baseline accuracy of 70%, but this result was retracted.',
+        'Prior work quotes "whereas in our evaluation our model achieved accuracy of 80% compared with baseline accuracy of 70%".',
+        "Prior work quotes 'the setup, whereas in our evaluation our model achieved accuracy of 80% compared with baseline accuracy of 70%'."
+    ]) assert.equal(classify(source), false, source);
+});

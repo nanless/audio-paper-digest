@@ -292,6 +292,9 @@ function paperSourceResourceQuote(sourceText, sourceToken) {
 }
 
 function resourceClassificationIsCurrent(resource, sourceText) {
+    if (resource && Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence')) {
+        return require('./reader-authenticated-pdf-footnote-evidence').assertEvidence(resource, sourceText);
+    }
     if (resource?.origin !== 'paper_source' || resource.type !== 'third_party') return true;
     const token = resource.sourceUrlToken || resource.originalUrl;
     const source = String(sourceText || '');
@@ -370,6 +373,9 @@ function normalizedSourceUrlBinding(sourceToken, originalUrl) {
 }
 
 function paperSourceQuoteBindsOriginalUrlBinding(resource) {
+    if (resource && Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence')) {
+        return require('./reader-authenticated-pdf-footnote-evidence').assertEvidence(resource);
+    }
     const quote = String(resource?.sourceQuote || '');
     const originalUrl = String(resource?.originalUrl || '');
     if (!originalUrl) return false;
@@ -382,6 +388,9 @@ function paperSourceQuoteBindsOriginalUrlBinding(resource) {
 }
 
 function paperSourceQuoteBindsOriginalUrl(resource) {
+    if (resource && Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence')) {
+        return require('./reader-authenticated-pdf-footnote-evidence').assertEvidence(resource);
+    }
     return paperSourceQuoteBindsOriginalUrlBinding(resource)
         && (!resource?.type || resource.type === 'third_party'
             || paperSourceResourceFacets(resource.sourceQuote,

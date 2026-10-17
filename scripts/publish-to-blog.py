@@ -8605,13 +8605,23 @@ def _validate_api_reader_resource_identity(paper):
             'type', 'origin', 'sourceQuote', 'sourceQuoteSha256',
             'originalUrl', 'finalUrl', 'redirects', 'status', 'availability',
         }
-        allowed = required | {'retryable', 'failureCode', 'documentationEvidence'}
+        allowed = required | {'retryable', 'failureCode', 'documentationEvidence', 'authenticatedPdfFootnoteEvidence'}
         if not isinstance(resource, dict) or not required.issubset(resource) \
                 or not set(resource).issubset(allowed):
             raise PublishDataValidationError(f'资源记录 resources[{index}] 格式无效、缺少必要字段，或含有不允许的字段。')
         if resource.get('type') not in allowed_types \
                 or resource.get('origin') not in {'paper_source', 'validated_demo'}:
             raise PublishDataValidationError(f'资源记录 resources[{index}] 的类型或来源不符合要求。')
+        if 'authenticatedPdfFootnoteEvidence' in resource:
+            proof = resource['authenticatedPdfFootnoteEvidence']
+            if not isinstance(proof, dict) or proof.get('contract') != 'reader-authenticated-pdf-footnote-evidence-v1' \
+                    or resource.get('origin') != 'paper_source' \
+                    or proof.get('originalUrl') != resource.get('originalUrl') \
+                    or proof.get('sourceTextSha256') != paper.get('sourceSha256') \
+                    or proof.get('sourceQuote') != resource.get('sourceQuote') \
+                    or proof.get('sourceQuoteSha256') != resource.get('sourceQuoteSha256') \
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(proof.get('evidenceSha256') or '')):
+                raise PublishDataValidationError(f'资源记录 resources[{index}] 的认证 PDF 脚注证明无效。')
         original_url = _validated_https_identity_url(
             resource.get('originalUrl'), f'资源记录 resources[{index}] 的原始地址 originalUrl',
         )
@@ -8723,6 +8733,8 @@ def _validate_api_reader_resource_identity(paper):
                     f'资源记录 resources[{index}] 的 README 文档证据地址不是该仓库 main 分支的指定地址。'
                 )
 
+    if any('authenticatedPdfFootnoteEvidence' in resource for resource in resources):
+        _validate_authenticated_pdf_resource_identity_replay(paper)
     parsed_analysis = parse_analysis(paper.get('analysis', '')) or {}
     for field, resource_type in (
             ('hasCode', 'code'), ('hasModel', 'model'), ('hasDataset', 'dataset')):
@@ -8749,6 +8761,31 @@ def _validate_api_reader_resource_identity(paper):
         'availableTypes': sorted(available_types),
         'resources': resources,
     }
+
+
+def _validate_authenticated_pdf_resource_identity_replay(paper):
+    """Never promote an explicit PDF resource proof from JSON alone."""
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('认证 PDF 资源冷重放需要 Node.js。')
+    payload = _daily_fresh_compact_json_bytes({'paper': paper, 'authenticatedPdfResources': True})
+    if len(payload) > 128 * 1024 * 1024:
+        raise PublishDataValidationError('认证 PDF 资源重放输入超过上限。')
+    with tempfile.TemporaryFile() as source_file:
+        source_file.write(payload); source_file.flush(); source_file.seek(0)
+        result = _run_bounded_subprocess(
+            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'), str(source_file.fileno())],
+            cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    try:
+        response = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise PublishDataValidationError('认证 PDF 资源冷重放响应无效。') from error
+    if result.returncode != 0 or result.timed_out or result.output_truncated \
+            or not isinstance(response, dict) or response.get('verified') is not True:
+        reason = response.get('message', '') if isinstance(response, dict) else '响应必须为对象'
+        raise PublishDataValidationError('认证 PDF 脚注资源未通过真实来源冷重放：' + str(reason))
 
 
 def _add_reader_term_heading_spaces(article, plan):
@@ -10956,11 +10993,13 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
     if not isinstance(source_text, str) or _javascript_string_sha256(source_text) != paper.get('sourceSha256'):
         raise PublishDataValidationError(f'{paper_id} 资源宣称重放缺少对应的封存全文。')
     cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'
+    authenticated_footnotes = any(isinstance(resource, dict) and 'authenticatedPdfFootnoteEvidence' in resource
+                                  for resource in (paper.get('apiReaderResources') or {}).get('resources', []))
     key = (_stable_json_sha256({'plan': paper.get('apiReaderPlan'), 'article': paper.get('apiReaderArticle'),
                               'resources': paper.get('apiReaderResources')}), paper.get('sourceSha256'),
            _sha256_file(cli), _sha256_file(SHARED_SCRIPTS_DIR / 'deep-analyzer.js'),
            _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-binding.js'))
-    if key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
+    if not authenticated_footnotes and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
         return
     node = shutil.which('node')
     if not node:
@@ -10973,11 +11012,20 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
         result = _run_bounded_subprocess(
             [node, str(cli), str(source_file.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
             env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=30, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+            timeout_seconds=180 if authenticated_footnotes else 30,
+            max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    accepted_response = result.stdout.strip() == '{"verified":true}'
+    if authenticated_footnotes:
+        try:
+            response = json.loads(result.stdout)
+            accepted_response = isinstance(response, dict) and response.get('verified') is True
+        except (ValueError, TypeError):
+            accepted_response = False
     if result.returncode != 0 or result.timed_out or result.output_truncated \
-            or result.stdout.strip() != '{"verified":true}':
+            or not accepted_response:
         raise PublishDataValidationError(f'{paper_id} 读者正文的资源可用性宣称未通过封存来源核验。')
-    _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
+    if not authenticated_footnotes:
+        _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
 
 
 
