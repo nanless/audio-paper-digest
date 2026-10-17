@@ -80,7 +80,7 @@ Reader 刷新可以用 `--rounds N`（1–10）覆写本次总轮数，未传时
 
 ### 来源或旧签名不符时先保留现场
 
-`READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY` 表示同输入仍有不同提示词版本的原请求历史。程序阻止把它当新稿从零计数；不要删候选、改 epoch 或重跑首次生成来消除错误。先核对原候选、提示词、来源和剩余次数，再按 [Reader 恢复](reader-explicit-retry.md)选择已有合法路线。更新代码或写作规则不构成追加付费授权。
+`READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY` 表示同输入仍有不同提示词版本的原请求历史。程序阻止把它当新稿从零计数；不要删候选、改 epoch 或重跑首次生成来消除错误。先核对原候选、提示词、来源和剩余次数，再按 [Reader 恢复](reader-explicit-retry.md)选择已有合法路线。更新代码或写作规则不隐式重开原付费窗口，也不清零历史次数；必要的新增付费恢复按 [持续授权](../AGENTS.md#持续授权以效率和效果为准) 登记并执行，不再逐轮询问。
 
 恢复命令报告日更来源缺失或变化时，不要改进度文件，也不要补入旧 `data/current` 文本。目标仍为北京时间当天时，重新运行同日 `npm run digest:prepare -- YYYY-MM-DD` 获取并保存来源；历史日期不能重新从抓取开始，应保留失败记录并按历史维护流程处理。
 
