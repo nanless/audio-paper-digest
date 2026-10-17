@@ -32,6 +32,7 @@ test('只合并显式TeX关系符且变量、数值和精度相同的完整副�
 test('JS与Python合并条件镜像，错误变量/精度/运算符尾部绝不合并', () => {
     const script = `import ast,json,pathlib,re,sys,unicodedata
 p=pathlib.Path(sys.argv[1])/'scripts/publish-to-blog.py'
+sys.path.insert(0,str(p.resolve().parent))
 tree=ast.parse(p.read_text())
 names={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts'}
 functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]

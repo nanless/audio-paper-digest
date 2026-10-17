@@ -17,9 +17,11 @@ describe('config', () => {
         const scriptsDir = path.join(projectRoot, 'scripts');
         const envPath = path.join(projectRoot, '.env');
         try {
-            fs.mkdirSync(scriptsDir, { recursive: true });
+            fs.mkdirSync(path.join(scriptsDir, 'lib'), { recursive: true });
             fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'config.js'), path.join(scriptsDir, 'config.js'));
             fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'env-loader.js'), path.join(scriptsDir, 'env-loader.js'));
+            fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'filter-decision.js'),
+                path.join(scriptsDir, 'lib', 'filter-decision.js'));
             fs.writeFileSync(envPath, `${extraLines}\n`, 'utf8');
             const tempConfigPath = path.join(scriptsDir, 'config.js');
             return fn(require(tempConfigPath));

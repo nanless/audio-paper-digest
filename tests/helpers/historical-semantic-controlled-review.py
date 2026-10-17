@@ -20,7 +20,8 @@ passed = outcome in ('passed', 'reuse')
 def local_review(*args, **kwargs):
     if outcome == 'reuse':
         raise AssertionError('已有通过页面检查点时不应再次调用测试模型函数')
-    return passed, ([] if passed else [{'severity': 'blocking', 'message': '本地测试：本次审查未通过'}])
+    return passed, ([] if passed else [{'severity': 'error', 'type': 'model_content',
+                                       'description': '本地测试：本次审查未通过'}]), args[0]
 mock = types.SimpleNamespace(split_review_content=lambda content, size: [content],
     get_blog_review_chunk_chars=lambda: 10000, parse_markdown_images=lambda content: [],
     _llm_review_post_chunk=local_review)

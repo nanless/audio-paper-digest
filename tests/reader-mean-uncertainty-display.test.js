@@ -52,6 +52,7 @@ test('整数下标显示合并仍保留原格，错字母和错下标不能借�
 test('Python发布显示与Reader对同一组正反例结果一致', () => {
     const script = `import ast,json,pathlib,re,sys,unicodedata
 p=pathlib.Path(sys.argv[1])/'scripts/publish-to-blog.py'
+sys.path.insert(0,str(p.resolve().parent))
 tree=ast.parse(p.read_text())
 names={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts'}
 functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]

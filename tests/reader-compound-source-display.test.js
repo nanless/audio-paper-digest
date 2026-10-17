@@ -49,7 +49,7 @@ test('完整同义数学显示不改索引、运算符、值或精度；残式�
 
 test('Python发布侧逐项重放同一源格，含既有原子和新复合原子正反例', () => {
     const filename = path.resolve(__dirname, '../scripts/publish-to-blog.py');
-    const code = `import ast,json,re,unicodedata,sys\nsource=ast.parse(open(sys.argv[1]).read())\nkeep={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts','_normalize_api_reader_source_cell'}\nmodule=ast.Module(body=[n for n in source.body if isinstance(n,ast.FunctionDef) and n.name in keep],type_ignores=[])\nexec(compile(module,sys.argv[1],'exec'))\nprint(json.dumps([_normalize_api_reader_source_cell(v) for v in json.loads(sys.stdin.read())],ensure_ascii=False))`;
+    const code = `import ast,json,re,unicodedata,sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(sys.argv[1]).resolve().parent))\nsource=ast.parse(open(sys.argv[1]).read())\nkeep={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts','_normalize_api_reader_source_cell'}\nmodule=ast.Module(body=[n for n in source.body if isinstance(n,ast.FunctionDef) and n.name in keep],type_ignores=[])\nexec(compile(module,sys.argv[1],'exec'))\nprint(json.dumps([_normalize_api_reader_source_cell(v) for v in json.loads(sys.stdin.read())],ensure_ascii=False))`;
     const result = execFileSync('bash', [path.resolve(__dirname, '../scripts/python-runtime.sh'), '-c', code, filename], {
         input: JSON.stringify(samples.map(([raw]) => raw)), encoding: 'utf8'
     });

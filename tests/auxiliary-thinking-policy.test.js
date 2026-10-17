@@ -34,8 +34,9 @@ test('非法配置请求前拒绝，协议及冲突负控',t=>{
  const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
  const folder=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'aux-thinking-config-'));
  t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
- fs.mkdirSync(path.join(folder,'scripts'));
+ fs.mkdirSync(path.join(folder,'scripts','lib'),{recursive:true});
  for(const file of ['config.js','env-loader.js','workspace-role.js'])fs.copyFileSync(path.resolve(__dirname,'../scripts',file),path.join(folder,'scripts',file));
+ fs.copyFileSync(path.resolve(__dirname,'../scripts/lib/filter-decision.js'),path.join(folder,'scripts/lib/filter-decision.js'));
  for(const mode of ['bad','DISABLED','', 'true']){
   fs.writeFileSync(path.join(folder,'.env'),'PAPER_ANALYZER_API_KEY=synthetic\nPAPER_ANALYZER_MODEL=mimo-v2.6-flash\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:9/v1\nPD_ANALYSIS_AUXILIARY_THINKING_MODE='+mode+'\n',{mode:0o600});
   const r=cp.spawnSync(process.execPath,['-e',"require('./scripts/config.js')"],{cwd:folder,env:{...process.env},encoding:'utf8'});

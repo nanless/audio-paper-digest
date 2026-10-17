@@ -33,6 +33,8 @@ test('范数只合并同值完整原子，不删错下标、续式或裸重复',
 });
 test('Python发布对每个范数正反例重放同一严格规则', () => {
     const code = `import ast,json,re,unicodedata,sys
+from pathlib import Path
+sys.path.insert(0,str(Path(sys.argv[1]).resolve().parent))
 source=ast.parse(open(sys.argv[1],encoding='utf-8').read())
 keep={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts','_normalize_api_reader_source_cell'}
 exec(compile(ast.Module(body=[n for n in source.body if isinstance(n,ast.FunctionDef) and n.name in keep],type_ignores=[]),sys.argv[1],'exec'))

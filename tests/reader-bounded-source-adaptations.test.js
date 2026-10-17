@@ -31,7 +31,7 @@ test('bounded explicit source-cell projection preserves values, order and unknow
 });
 test('publisher replays exactly the same bounded source projections', () => {
     const file = path.resolve(__dirname, '../scripts/publish-to-blog.py');
-    const code = `import ast,json,re,unicodedata,sys\ns=ast.parse(open(sys.argv[1]).read())\nkeep={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts'}\nexec(compile(ast.Module(body=[n for n in s.body if isinstance(n,ast.FunctionDef) and n.name in keep],type_ignores=[]),sys.argv[1],'exec'))\nprint(json.dumps([_normalize_api_reader_display_artifacts(v) for v in json.load(sys.stdin)],ensure_ascii=False))`;
+    const code = `import ast,json,re,unicodedata,sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(sys.argv[1]).resolve().parent))\ns=ast.parse(open(sys.argv[1]).read())\nkeep={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts'}\nexec(compile(ast.Module(body=[n for n in s.body if isinstance(n,ast.FunctionDef) and n.name in keep],type_ignores=[]),sys.argv[1],'exec'))\nprint(json.dumps([_normalize_api_reader_display_artifacts(v) for v in json.load(sys.stdin)],ensure_ascii=False))`;
     const result = execFileSync('bash', [path.resolve(__dirname, '../scripts/python-runtime.sh'), '-c', code, file],
         { input: JSON.stringify(cases.map(([raw]) => raw)), encoding: 'utf8' });
     assert.deepEqual(JSON.parse(result), cases.map(([, expected]) => expected));
