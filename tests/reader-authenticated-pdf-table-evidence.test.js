@@ -47,6 +47,93 @@ test('caption百分比仅赋予该原表精确英文指标，中文猜译和跨�
         [raw], doc(raw), raw), null);
 });
 
+test('混合原列保留位置，仅明确单位列获能力，完整原行引文不能省略中间数值', () => {
+    const raw = ['Table 4: Measured comparisons.', 'Method', 'CER (%)', 'Similarity', 'BadRate (%)',
+        'OriginalAlpha', '1.2', '0.81', '5.2', 'OriginalBeta', '1.1', '0.83', '4.2'].join('\n');
+    const rendered = table('| Method | CER (%) | BadRate (%) |\n|---|---|---|\n|OriginalAlpha|1.2|5.2|\n|OriginalBeta|1.1|4.2|');
+    const match = api.matchLiteralTable(rendered, [raw], doc(raw), raw);
+    assert.ok(match);
+    assert.deepEqual(match.columns.map(column => column.sourceColumn), [0, 2]);
+    assert.deepEqual(match.rows[0].values.map(value => [value.sourceColumn, value.sourceValue, value.unit]),
+        [[1, '1.2', '%'], [3, '5.2', '%']]);
+    for (const changed of [
+        raw.replace('CER (%)', 'CER'),
+        raw.replace('CER (%)', 'CER (degree)'),
+        raw.replace('Similarity', 'CER'),
+        raw.replace('Similarity', 'CER (degree)'),
+        raw.replace('BadRate (%)', 'CER (%)'),
+        raw.replace('OriginalAlpha', 'OriginalAlpha (fixed condition)'),
+        raw.replace('5.2', '5.3'), raw + '\n' + raw
+    ]) assert.equal(api.matchLiteralTable(rendered, [changed], doc(changed), changed), null);
+    const opaque = raw.replace('Similarity', 'Angle (degree)');
+    assert.ok(api.matchLiteralTable(rendered, [opaque], doc(opaque), opaque), 'unknown non-target unit remains opaque');
+    const withUnknown = api.matchLiteralTable(table(rendered.markdown.replace('BadRate (%)', 'Angle (degree)')),
+        [opaque], doc(opaque), opaque);
+    assert.deepEqual(withUnknown.columns.map(column => column.metric), ['CER'], 'unknown target unit gains no evidence');
+    assert.equal(api.matchLiteralTable(table(rendered.markdown.replace('CER (%)', 'CER').replace('BadRate (%)', 'Angle (degree)')),
+        [opaque], doc(opaque), opaque), null, 'a table with only unknown units gains no capability');
+    assert.equal(api.matchLiteralTable(rendered, ['OriginalAlpha\n1.2', 'OriginalBeta\n1.1'], doc(raw), raw), null);
+    assert.equal(api.matchLiteralTable(rendered, ['OriginalAlpha 1.2 5.2', 'OriginalBeta 1.1 4.2'], doc(raw), raw), null);
+    const other = raw.replace('Table 4:', 'Table 5:').replace('0.81', '0.91').replace('0.83', '0.93');
+    assert.equal(api.matchLiteralTable(rendered, ['OriginalAlpha\n1.2', 'OriginalBeta\n1.1'],
+        doc(raw + '\n' + other), raw + '\n' + other), null, 'shared values do not identify a different table');
+    const sameValues = ['Table 5: Measured comparisons.', 'Method', 'CER (%)', 'Similarity',
+        'OriginalAlpha', '1.2', '0.81', 'OriginalAlphaExtended', '1.2', '0.81'].join('\n');
+    const selected = table('|Method|CER (%)|\n|---|---|\n|OriginalAlpha|1.2|');
+    assert.equal(api.matchLiteralTable(selected, ['OriginalAlphaExtended\n1.2\n0.81'], doc(sameValues), sameValues), null,
+        'same numbers and a prefix row label cannot replace the cited original row');
+    const prefix = sameValues.replace('OriginalAlphaExtended', 'PrefixOriginalAlpha');
+    assert.equal(api.matchLiteralTable(selected, ['PrefixOriginalAlpha\n1.2\n0.81'], doc(prefix), prefix), null,
+        'the complete row window must also be unique in the actual PDF');
+    const multiword = sameValues.replace('OriginalAlphaExtended', 'Prefix OriginalAlpha');
+    assert.equal(api.matchLiteralTable(selected, ['Prefix OriginalAlpha\n1.2\n0.81'], doc(multiword), multiword), null,
+        'a whitespace-delimited suffix is not a uniquely cited row window');
+    assert.ok(api.matchLiteralTable(selected, ['OriginalAlpha\n1.2\n0.81'], doc(sameValues), sameValues));
+});
+
+test('真实lei与niu原表片段仅补明确单位列，不把无量纲列或复杂分组签成单位', () => {
+    // Verbatim PDF extraction/Reader quote fragments from the sealed lei26 and
+    // niu26c diagnostic. These exercise pure mapping, not source authority or
+    // whole-paper qualification. Every original numeric column is retained.
+    const lei = ['Table 1: Comparison with baseline models on the VSSE-Bench.',
+        'Model', 'Objective Metrics', 'User Study', 'LSD (dB)↓', 'OD (s)↓', 'FAD↓', 'A-MOS↑', 'MOS-S↑', 'MOS-T↑', 'MOS-E↑',
+        'MMAudio [5]', '2.09', '0.120', '22.76', '2.14', '1.58', '2.33', '2.21',
+        'Kling-Foley [6]', '1.99', '0.077', '25.52', '2.34', '1.79', '1.86', '2.35',
+        'ARCHES (Ours)', '0.77', '0.048', '7.04', '2.68', '4.04', '4.54', '4.46'].join('\n');
+    const leiTable = table('|模型|LSD (dB)↓|OD (s)↓|FAD↓|A-MOS↑|MOS-S↑|MOS-T↑|MOS-E↑|\n|---|---|---|---|---|---|---|---|\n'
+        + '|MMAudio [5]|2.09|0.120|22.76|2.14|1.58|2.33|2.21|\n'
+        + '|Kling-Foley [6]|1.99|0.077|25.52|2.34|1.79|1.86|2.35|\n'
+        + '|ARCHES (Ours)|0.77|0.048|7.04|2.68|4.04|4.54|4.46|');
+    const leiMatch = api.matchLiteralTable(leiTable, [lei], doc(lei), lei);
+    assert.ok(leiMatch);
+    assert.deepEqual(leiMatch.columns.map(column => [column.metric, column.unit, column.sourceColumn]),
+        [['LSD', 'db', 0], ['OD', 's', 1]]);
+    const ablation = ['Table 2: Ablation study of the ARCHES framework.', 'Model', 'LSD ↓', 'OD (s) ↓', 'A-MOS ↑', 'FAD ↓',
+        'w/o AURA', '1.35', '0.051', '2.52', '15.81', 'w/o AXIS', '0.95', '0.122', '1.88', '9.04',
+        'w/o CEB', '0.82', '0.053', '2.61', '7.18', 'Full', '0.77', '0.048', '2.68', '7.04'].join('\n');
+    const ablationTable = table('|模型|LSD ↓|OD (s) ↓|A-MOS ↑|FAD ↓|\n|---|---|---|---|---|\n'
+        + '|w/o AURA|1.35|0.051|2.52|15.81|\n|w/o AXIS|0.95|0.122|1.88|9.04|\n|w/o CEB|0.82|0.053|2.61|7.18|\n|Full|0.77|0.048|2.68|7.04|');
+    assert.deepEqual(api.matchLiteralTable(ablationTable, [ablation], doc(ablation), ablation).columns
+        .map(column => [column.metric, column.unit, column.sourceColumn]), [['OD', 's', 1]]);
+    const niu = ['Table 1: Comparison of post-training methods on intelligibility, speaker consistency, and stability-oriented metrics.',
+        'Model', 'CER (%) ↓', 'CER=0 ↑', 'FR@CER< 0.05 ↓', 'SIM ↑', 'FR@SIM> 0.75 ↓', 'BadRate (%) ↓',
+        'SFT', '1.53', '0.54', '0.38', '0.81', '0.42', '12.66', 'DPO', '1.28', '0.59', '0.22', '0.81', '0.14', '3.35',
+        'GRPO', '1.46', '0.44', '0.27', '0.80', '0.22', '10.83', 'Rank3DPO', '1.17', '0.62', '0.17', '0.82', '0.10', '2.44'].join('\n');
+    const niuTable = table('|Model|CER (%) ↓|CER=0 ↑|FR@CER<0.05 ↓|SIM ↑|FR@SIM>0.75 ↓|BadRate (%) ↓|\n|---|---|---|---|---|---|---|\n'
+        + '|SFT|1.53|0.54|0.38|0.81|0.42|12.66|\n|DPO|1.28|0.59|0.22|0.81|0.14|3.35|\n'
+        + '|GRPO|1.46|0.44|0.27|0.80|0.22|10.83|\n|Rank3DPO|1.17|0.62|0.17|0.82|0.10|2.44|');
+    const niuMatch = api.matchLiteralTable(niuTable, [niu], doc(niu), niu);
+    assert.ok(niuMatch);
+    assert.deepEqual(niuMatch.columns.map(column => [column.metric, column.unit, column.sourceColumn]),
+        [['CER', '%', 0], ['BadRate', '%', 5]]);
+    const grouped = ['Table 2: Grouped ablation.', 'Setting', 'CER (%)', 'BadRate (%)', 'MOS',
+        'DPO', '1.21', '10.26', '4.11', '+ ChatScore', '1.28', '3.35', '4.28',
+        'GRPO', '1.46', '11.70', '3.91', '+ ChatScore', '1.46', '10.47', '4.05'].join('\n');
+    const ambiguous = table('|Setting|CER (%)|BadRate (%)|\n|---|---|---|\n|+ ChatScore|1.28|3.35|\n|+ ChatScore|1.46|10.47|');
+    assert.equal(api.matchLiteralTable(ambiguous, [grouped], doc(grouped), grouped), null,
+        'repeated group-dependent row names cannot be rescued by mixed units');
+});
+
 function fixture(t) {
     const extraction = require('./helpers/conference-extraction-fixture');
     const original = extraction.buildPdf;

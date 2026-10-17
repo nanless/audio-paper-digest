@@ -25,6 +25,12 @@ function declaration(value) {
     const match = /^([A-Za-z][A-Za-z0-9 ._-]{0,63}?)\s*(?:\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)|\[\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\])$/iu.exec(text(value));
     return match ? { metric: compact(match[1]), unit: (match[2] || match[3]).toLowerCase() } : null;
 }
+function opaqueColumn(value) {
+    // Retain every original column position. An unrecognized unit is opaque,
+    // never a unit assertion; its metric still participates in ambiguity checks.
+    const match = /^([A-Za-z][A-Za-z0-9 ._@<>=/+:-]{0,95}?)(?:\s*(?:\([^()\r\n]{1,32}\)|\[[^\[\]\r\n]{1,32}\]))?$/u.exec(text(value));
+    return match ? { metric: compact(match[1]), unit: null } : null;
+}
 function literalLines(raw) {
     return [...raw.matchAll(/[^\r\n]+/gu)].map(match => ({ value: text(match[0]),
         start: match.index, end: match.index + match[0].length })).filter(line => line.value);
@@ -69,10 +75,11 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
             const explicit = headers.map(declaration);
             const caption = lines.slice(captionIndex, first - width).map(line => line.value).join(' ');
             const percentCaption = /^Table\s+\d+\s*[:.]\s*Results\s*\[%\]/u.test(caption);
-            const sourceColumns = explicit.every(Boolean) ? explicit
-                : percentCaption && headers.every(header => /^[A-Za-z][A-Za-z0-9 ._-]{0,63}$/u.test(header))
-                    ? headers.map(metric => ({ metric: compact(metric), unit: '%' })) : null;
-            if (!sourceColumns) continue;
+            const captionColumns = percentCaption && headers.every(header => /^[A-Za-z][A-Za-z0-9 ._-]{0,63}$/u.test(header))
+                ? headers.map(metric => ({ metric: compact(metric), unit: '%' })) : null;
+            const sourceColumns = headers.map((header, index) => explicit[index] || captionColumns?.[index] || opaqueColumn(header));
+            if (sourceColumns.some(column => !column)) continue;
+            const mixedUnits = sourceColumns.some(column => column.unit === null);
             if (new Set(sourceColumns.map(value => value.metric)).size !== sourceColumns.length) {
                 reasons.push('原PDF同一表存在重复指标列（例如多个K分组），当前列分组不能唯一逐字映射；保留原分组表头，不猜列位置。');
                 continue;
@@ -92,10 +99,15 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
                 if (numeric(label.value) !== null || label.value.length > 200) break;
                 const cells = lines.slice(cursor + 1, cursor + 1 + width);
                 if (cells.length !== width || cells.some(cell => numeric(cell.value) === null)) break;
-                sourceRows.push({ label: label.value, cells: cells.map(cell => cell.value), end: cells.at(-1).end });
+                sourceRows.push({ label: label.value, cells: cells.map(cell => cell.value), end: cells.at(-1).end,
+                    quote: document.rawFullText.slice(label.start, cells.at(-1).end).replace(/\s+/gu, ' ').trim() });
                 cursor += width + 1;
             }
             if (sourceRows.length < 2) continue;
+            if (mixedUnits && new Set(sourceRows.map(row => compact(row.label))).size !== sourceRows.length) {
+                reasons.push('原PDF混合单位表存在重复行名，原分组身份不能唯一逐字映射；保留完整分组，不凭数字猜行。');
+                continue;
+            }
             const quote = document.rawFullText.slice(lines[captionIndex].start, sourceRows.at(-1).end).replace(/\s+/gu, ' ').trim();
             if (quote.length < 12 || quote.length > 4000 || document.normalizedFullText.split(quote).length !== 2) continue;
             const rowQuotes = originalQuotes.filter(value => {
@@ -113,9 +125,16 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
                     return null;
                 }
                 const { original, sourceRow } = matches[0];
+                // Mixed tables may put dimensionless/unknown-unit columns
+                // between selected metrics. Require the complete original row's
+                // numeric sequence, including those intervening cells; a sparse
+                // target-value subsequence is not a quotation of that row.
                 const numbers = columns.flatMap(column => require('../deep-analyzer').readerNumericTokens(row[column.column]));
-                if (!rowQuotes.some(quote => compact(quote).includes(compact(original.label))
-                    && hasSequence(require('../deep-analyzer').readerNumericTokens(quote), numbers))) return null;
+                if (!rowQuotes.some(quote => mixedUnits
+                    ? quote.replace(/\s+/gu, ' ').trim().includes(original.quote)
+                        && document.normalizedFullText.split(original.quote).length === 2
+                    : compact(quote).includes(compact(original.label))
+                        && hasSequence(require('../deep-analyzer').readerNumericTokens(quote), numbers))) return null;
                 return { row: index + 1, sourceRow: sourceRow + 1, rowLabel: original.label,
                     values: columns.map(column => ({ column: column.column, sourceColumn: column.sourceColumn + 1,
                         value: row[column.column], sourceValue: original.cells[column.sourceColumn], unit: column.unit })) };
