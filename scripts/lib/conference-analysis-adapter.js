@@ -1134,7 +1134,8 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
         // A fully authenticated retired latest paid draft is a local-tail case,
         // not permission to reset its candidate counter or a run-level fee fault.
         // Missing/invalid provenance still raises the original integrity error.
-        if (grant && loaded.revision.mode === 'reader-only') {
+        if (grant && loaded.revision.mode === 'reader-only'
+            && path.resolve(analysisRoot) === path.resolve(require('../config').FILES.conferenceAnalysisDir)) {
             const retired = require('./conference-reader-resolved-origin');
             const origin = withVerifiedSource(() => retired.inspectLatestResolvedPaidReader({
                 analysisRoot, executionId, planHandle, sourceRoot

@@ -360,6 +360,16 @@ test('原已签评分检查点逐字核验后继承到新窗口，不重复评�
 
 test('新窗口完成与重入沿正常资格接口，旧阶段及原失败计数不动', async t => {
     const f = await fixture(t), oldBytes = fs.readFileSync(path.join(f.failed.directory, 'analysis.json'));
+    // Independent roots retain normal adapter behavior; they cannot acquire the
+    // canonical-only retired-origin capability or its paper-level reduction.
+    const origin = require('../scripts/lib/conference-reader-resolved-origin');
+    assert.throws(() => origin.inspectLatestResolvedPaidReader({ analysisRoot: f.analysisRoot,
+        executionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot }),
+    error => error.code === 'CONFERENCE_READER_RESOLVED_ORIGIN_INTEGRITY' && error.scope === 'run');
+    let originInspections = 0;
+    t.mock.method(origin, 'inspectLatestResolvedPaidReader', () => {
+        originInspections++; throw new Error('Independent roots cannot enter canonical retired-origin scope');
+    });
     let readers = 0;
     const engine = { ...f.engine, isSuccessfulAnalysisRecordForReadOnlyConferencePublication: paper => {
         assert.ok(context.getConferenceAnalysisSource(paper));
@@ -384,6 +394,7 @@ test('新窗口完成与重入沿正常资格接口，旧阶段及原失败计�
     assert.equal(readers, 1);
     assert.deepEqual(fs.readFileSync(path.join(first.directory, 'analysis.json')), completeBytes);
     assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, 'analysis.json')), oldBytes);
+    assert.equal(originInspections, 0);
 });
 
 
