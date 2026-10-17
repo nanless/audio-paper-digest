@@ -25,6 +25,7 @@ function qualifyAndSeal(loaded, { planHandle, sourceRoot }, engine) {
     qualify(); // Real canonical/source reconstruction after leaving hot context.
 }
 async function applyCorrection({ batchHandle, record, manifestSha256, analysisRoot, planHandle, sourceRoot }, deps) {
+    const deep = deps.deep || require('../deep-analyzer');
     return deps.engine.withPaperAnalysisLock({ id: record.paperId }, async () => {
         // Preparation may recover the exact same pending/complete fixed UUID.
         // It never installs a new Reader grant or copies an old preflight.
@@ -47,7 +48,7 @@ async function applyCorrection({ batchHandle, record, manifestSha256, analysisRo
             const paper = structuredClone(selected.analysis.papers[0]);
             // The private source module verifies selected upstream and separate
             // Reader parent, then the shared normal parser/finalizer handles it.
-            const finalized = await deps.deep.finalizeConferenceLocalSourceCorrection(
+            const finalized = await deep.finalizeConferenceLocalSourceCorrection(
                 paper, initial.source.sourceDetails);
             const rules = require('./conference-postprocess').readOriginalTagProof(finalized).rules;
             if (!deps.engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(finalized, { tagRules: rules })) {

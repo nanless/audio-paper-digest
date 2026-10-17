@@ -480,3 +480,29 @@ test('检查点恢复的官方图阶段热中间态不可冷保存，必须按�
     paper.analysisManifest.stages.imageDownload.attempted = 1;
     assert.throws(() => h.assertRecoveredImageSupplement(input, paper));
 });
+
+test('迁移默认依赖未注入deep仍进入真实local finalizer；原科学门禁拒绝且不采纳state', async t => {
+    const f = admissionFixture(t);
+    const deps = processApi.defaultDependencies();
+    assert.equal(Object.hasOwn(deps, 'deep'), false, 'exercise the actual migrate default dependency shape');
+    const stateBefore = fs.readFileSync(f.stateFile);
+    const parentFile = path.join(f.loaded.directory, 'analysis.json');
+    const parentBefore = fs.readFileSync(parentFile);
+    const shared = { planHandle: f.planHandle, sourceCacheRoot: f.sourceRoot };
+    // The fixture deliberately lacks a genuine scientific tag/core chain.
+    // Invoke the real batch/writer, source/PDF scope, shared normal finalizer
+    // and scientific gate; no qualification/parser/receipt is replaced with a pass.
+    await assert.rejects(require('../scripts/lib/conference-source-resource-correction-apply').applyAndStageBatch({
+        manifestPath: f.manifestPath, directory: path.dirname(f.stateFile), state: f.state, shared
+    }, deps), error => {
+        assert.notEqual(error instanceof TypeError, true, error.stack);
+        assert.match(error.stack, /finalizeConferenceLocalSourceCorrection/u);
+        assert.match(error.message, /标签|tag/iu);
+        return true;
+    });
+    assert.deepEqual(fs.readFileSync(f.stateFile), stateBefore);
+    assert.deepEqual(fs.readFileSync(parentFile), parentBefore);
+    const child = adapter.loadConferenceAnalysis({ analysisRoot: f.analysisRoot, executionId: f.record.childExecutionId });
+    assert.notEqual(child.analysis.status, 'complete');
+    assert.equal(fs.existsSync(path.join(child.directory, 'source-correction-receipt.json')), false);
+});
