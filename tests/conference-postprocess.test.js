@@ -44,7 +44,7 @@ function canonical(index) {
 function completed(executionId, index = 0, analysisText) {
     const paperId = `conference:icassp:2026:icassp-arnumber:${100 + index}`;
     const base = validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`, {}, analysisText);
-    const sourceText = 'Original conference PDF text';
+    const sourceText = 'Original conference PDF text. '+'In our evaluation on the LibriSpeech test set, our model reduces WER from 10.2% to 9.8% compared with the baseline.';
     base.sourceSha256 = sha256(sourceText);
     const artifactBody = { tables: [], formulas: [], figures: [], flattenedTextSha256: base.sourceSha256 };
     const structuredArtifacts = { ...artifactBody, payloadSha256: sha256(JSON.stringify(artifactBody)) };
@@ -861,7 +861,9 @@ test('真实计划授权、来源复核和已保存并核验的分析，可以�
     const analysisRoot = path.join(fixture.root, 'analysis'); const stagingRoot = path.join(fixture.root, 'page-staging');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId, now: '2026-09-07T00:00:00.000Z' });
-    const loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId }); const generated = completed(executionId, 0).analysis.papers[0];
+    const loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId });
+    const noResultAnalysis = canonical(0).replace(/(## 核心摘要[^]*?)(?=\n## )/, '$1\n原文未提供可核对的关键定量结果。\n');
+    const generated = completed(executionId, 0, noResultAnalysis).analysis.papers[0];
     const paper = { ...generated, id: loaded.run.paperId, conferencePaperId: loaded.run.paperId,
         title: loaded.analysis.papers[0].title, conference: loaded.analysis.papers[0].conference,
         externalId: loaded.analysis.papers[0].externalId };

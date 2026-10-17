@@ -34,11 +34,24 @@ test('daily retry diagnostics bind source/date/scope and never grant completion 
     assert.equal(resolved.manualHandoff.eligible, false);
     assert.equal(saved.stats.analysisBatchRetry.manualHandoff.eligible, true, 'read-only report never changes canonical diagnostics');
 
-    const previous = Object.fromEntries(['deepAnalysisResult', 'rawCandidates', 'filteredPapers', 'filterDecisions']
-        .map(key => [key, Config.FILES[key]]));
-    t.after(() => Object.assign(Config.FILES, previous));
+    // The report also inspects publication, visual and waiver state. Keep all
+    // data roots private so this retry-only fixture cannot replay a real batch.
+    const fileKeys = ['deepAnalysisResult', 'rawCandidates', 'filteredPapers', 'filterDecisions', 'papers'];
+    const directoryKeys = ['visualSummaryManifestDir', 'digestCoverManifestDir',
+        'visualSummaryAssetDir', 'digestCoverAssetDir', 'analysisWaiverDir',
+        'postPublishVisualWaiverDir', 'dailyFreshSourceRunsDir'];
+    const previous = Object.fromEntries([...fileKeys, ...directoryKeys].map(key => [key, Config.FILES[key]]));
+    const previousCurrent = Config.CURRENT_DIR, previousArchive = Config.ARCHIVE_DIR;
+    t.after(() => {
+        Config.CURRENT_DIR = previousCurrent;
+        Config.ARCHIVE_DIR = previousArchive;
+        Object.assign(Config.FILES, previous);
+    });
+    Config.CURRENT_DIR = path.join(root, 'current');
+    Config.ARCHIVE_DIR = path.join(root, 'archive');
+    for (const key of fileKeys) Config.FILES[key] = path.join(Config.CURRENT_DIR, `${key}.json`);
+    for (const key of directoryKeys) Config.FILES[key] = path.join(root, key);
     Config.FILES.deepAnalysisResult = file;
-    for (const key of ['rawCandidates', 'filteredPapers', 'filterDecisions']) Config.FILES[key] = path.join(root, `${key}.json`);
     const report = buildDigestRunReport(date, { today: date });
     assert.equal(report.analysis.batchRetry.manualHandoff.eligible, true);
     assert.equal(report.analysis.complete, false); assert.equal(report.overallStatus, 'incomplete');

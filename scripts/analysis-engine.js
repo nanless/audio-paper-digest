@@ -1044,7 +1044,7 @@ function getReadOnlyValidationAnalysisRunSummary(papers) {
 
 const API_READER_V3_CONTRACT = 'beginner-researcher-v3';
 const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
-const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-v1';
+const { scoringStabilityIsResolved, SCORING_STABILITY_RESOLUTION_CONTRACT } = require('./lib/scoring-stability.js');
 const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
@@ -1063,32 +1063,6 @@ function stableSha256(value) {
     return crypto.createHash('sha256').update(JSON.stringify(normalize(value))).digest('hex');
 }
 
-function scoringStabilityIsResolved(scoring) {
-    if (scoring?.stabilityWarning !== true) return true;
-    const resolution = scoring.stabilityResolution;
-    const multiPass = resolution?.method === 'multi_pass_consensus';
-    const multiPassProofValid = !multiPass || (
-        Number.isFinite(resolution.thirdAuditScore)
-        && Number.isSafeInteger(resolution.thirdAttempts) && resolution.thirdAttempts >= 1
-        && /^[a-f0-9]{64}$/.test(String(resolution.firstAuditSha256 || ''))
-        && /^[a-f0-9]{64}$/.test(String(resolution.thirdAuditSha256 || ''))
-        && scoring.auditSha256 === resolution.secondAuditSha256
-        && Math.abs(scoring.finalScore - resolution.secondAuditScore) < 1e-9
-        && Math.abs(Math.abs(resolution.secondAuditScore - resolution.firstAuditScore)
-            - resolution.scoreDifference) < 1e-9
-    );
-    return Boolean(
-        resolution?.contract === SCORING_STABILITY_RESOLUTION_CONTRACT
-        && resolution?.status === 'resolved'
-        && (resolution?.method === 'second_pass_consensus' || multiPass)
-        && multiPassProofValid
-        && Number.isFinite(resolution?.firstAuditScore)
-        && Number.isFinite(resolution?.secondAuditScore)
-        && Number.isFinite(resolution?.scoreDifference)
-        && resolution.scoreDifference <= 0.3
-        && /^[a-f0-9]{64}$/.test(String(resolution?.secondAuditSha256 || ''))
-    );
-}
 
 function hasValidApiReaderV3Records(paper, options = {}) {
     try {
@@ -2275,28 +2249,6 @@ async function mergeAndSaveResults(newResults, filePath, extraData = {}) {
     return counts;
 }
 
-/**
- * 创建简单的文件保存回调（适用于逐篇保存场景）
- * @param {string} filePath - 文件路径
- * @param {Object} baseData - 基础数据结构（会被浅合并）
- */
-function createFileSaver(filePath, baseData = {}) {
-    return async (results, stats) => {
-        updateJsonFileLocked(filePath, existing => {
-            const isLegacyArray = Array.isArray(existing);
-            const existingPapers = isLegacyArray ? existing : (existing && existing.papers);
-            const existingStats = !isLegacyArray && existing && existing.stats ? existing.stats : null;
-            return {
-                ...(!isLegacyArray && existing ? existing : {}),
-                ...baseData,
-                lastUpdated: getBeijingISOString(),
-                papers: existingPapers ? mergePapersById(existingPapers, results) : results,
-                stats: existingStats ? { ...existingStats, ...stats } : stats
-            };
-        });
-    };
-}
-
 // 按论文 ID 合并列表。默认使用新记录；需要保留成功正文时，另按完整性检查处理。
 function mergePapersById(existingPapers, newPapers, options = {}) {
     if (!Array.isArray(existingPapers) || !Array.isArray(newPapers)) {
@@ -2397,7 +2349,6 @@ module.exports = {
     analyzeBatch,
     mergeAndSaveResults,
     hasValidAnalysisBody,
-    createFileSaver,
     mergePapersById,
     mergeStoredAnalysisState,
     loadStoredAnalysisRecord,

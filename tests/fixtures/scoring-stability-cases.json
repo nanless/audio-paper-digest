@@ -1,0 +1,599 @@
+[
+  {
+    "name": "no-warning",
+    "stage": {},
+    "expected": true
+  },
+  {
+    "name": "old-second-pass",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "second_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "expected": true
+  },
+  {
+    "name": "multi-pass",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": true
+  },
+  {
+    "name": "stage-finalScore-7.2",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": "7.2",
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "stage-finalScore-True",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": true,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "stage-finalScore-None",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": null,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "stage-auditSha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-thirdAuditScore-None",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": null,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-thirdAttempts-0",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 0,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-thirdAttempts-True",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": true,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-thirdAttempts-1.5",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1.5,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-thirdAttempts-9007199254740992",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 9007199254740992,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-firstAuditSha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-thirdAuditSha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-secondAuditSha256-None",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": null,
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-method-unknown",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "unknown",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-status-unresolved",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "unresolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-contract-unknown",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "unknown",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-firstAuditScore-None",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": null,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-secondAuditScore-7.2",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": "7.2",
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-scoreDifference--0.1",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": -0.1,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-scoreDifference-0.31",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.31,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-scoreDifference-True",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": true,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "resolution-scoreDifference-0.1",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.1,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "old-second-missing-firstAuditScore",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "second_pass_consensus",
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "expected": false
+  },
+  {
+    "name": "old-second-missing-secondAuditScore",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "second_pass_consensus",
+        "firstAuditScore": 7,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "expected": false
+  },
+  {
+    "name": "old-second-missing-scoreDifference",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "second_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "expected": false
+  },
+  {
+    "name": "old-second-missing-secondAuditSha256",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "second_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2
+      }
+    },
+    "expected": false
+  },
+  {
+    "name": "invalid-resolution-None",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": null
+    },
+    "expected": false
+  },
+  {
+    "name": "invalid-resolution-[]",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": []
+    },
+    "expected": false
+  },
+  {
+    "name": "invalid-resolution-True",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": true
+    },
+    "expected": false
+  },
+  {
+    "name": "invalid-resolution-invalid",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": "invalid"
+    },
+    "expected": false
+  }
+]

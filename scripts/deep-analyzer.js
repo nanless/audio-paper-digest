@@ -129,6 +129,7 @@ const {
     ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V5_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V6_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V7_CONTRACT,
     FROZEN_V1_PROMPT_FILES: RECOVERY_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     currentPromptTextContract,
@@ -1102,9 +1103,6 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
     throw exhausted;
 }
 
-async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}) {
-    return (await auditTypeAwareScoringDetailed(analysis, sourceEvidence, options)).analysis;
-}
 
 const API_READER_ARTICLE_CONTRACT = 'beginner-researcher-v3';
 const API_READER_PLAN_VERSION = 3;
@@ -1133,9 +1131,10 @@ const API_READER_MODEL_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
 const API_READER_MODEL_IMAGE_TOTAL_PIXELS = 16 * 1024 * 1024;
 const API_READER_MODEL_IMAGE_TRANSFORM = 'decoded-white-background-fit-jpeg-v1';
 const API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT = 'api-reader-provider-image-exclusion-v1';
-const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-v1';
+const { scoringStabilityIsResolved: scoringStabilityResolutionIsValid,
+    SCORING_STABILITY_RESOLUTION_CONTRACT, SCORING_STABILITY_CONSENSUS_TOLERANCE
+} = require('./lib/scoring-stability.js');
 const SCORING_STABILITY_THRESHOLD = 0.5;
-const SCORING_STABILITY_CONSENSUS_TOLERANCE = 0.3;
 const API_READER_FIGURE_LEAD_MIN_CHARS = READER_LIMITS.figureLeadChars;
 const API_READER_FIGURE_EXPLANATION_MIN_CHARS = READER_LIMITS.figureExplanationChars;
 const { READER_SECTION_KINDS: API_READER_KINDS, locateReaderDraftTables,
@@ -1145,17 +1144,6 @@ const API_READER_REQUIRED_KINDS = Object.freeze([
     'background', 'related_work', 'method_overview', 'training',
     'experiment_setup', 'result', 'limitation', 'reproduction', 'synthesis'
 ]);
-
-function scoringStabilityResolutionIsValid(stage) {
-    if (stage?.stabilityWarning !== true) return true;
-    const resolution = stage.stabilityResolution;
-    return resolution?.contract === SCORING_STABILITY_RESOLUTION_CONTRACT
-        && resolution?.status === 'resolved'
-        && ['second_pass_consensus', 'multi_pass_consensus'].includes(resolution?.method)
-        && Number.isFinite(resolution?.scoreDifference)
-        && resolution.scoreDifference <= SCORING_STABILITY_CONSENSUS_TOLERANCE
-        && /^[a-f0-9]{64}$/.test(String(resolution?.secondAuditSha256 || ''));
-}
 
 // 只有同一原文条件和完整数量元组都明确时，保留对应位置的自然中文写法。
 // 这不是全局中文数词转数字；未获来源支持、单位改变或数量改变仍保留原诊断。
@@ -11021,7 +11009,8 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
                 && ['revision', 'structureRepair'].includes(stage)
                 ? REPAIR_MAX_TOKENS
                 : ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
-                    ANALYSIS_PROMPT_TEXT_V5_CONTRACT, ANALYSIS_PROMPT_TEXT_V6_CONTRACT].includes(declaredPromptTextContract)
+                    ANALYSIS_PROMPT_TEXT_V5_CONTRACT, ANALYSIS_PROMPT_TEXT_V6_CONTRACT,
+                    ANALYSIS_PROMPT_TEXT_V7_CONTRACT].includes(declaredPromptTextContract)
                     && stage === 'coreSummaryRepair'
                     ? LEGACY_CURRENT_CORE_SUMMARY_REPAIR_MAX_TOKENS : config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(
@@ -20051,7 +20040,6 @@ module.exports = {
     findForbiddenDeductionClauses,
     prepareScoringAuditAnalysis,
     updateOpensourceFromDemoLinks,
-    auditTypeAwareScoring,
     auditTypeAwareScoringDetailed,
     parseApiReaderArticleResult,
     normalizeReaderConceptBridgeTerms,

@@ -359,6 +359,8 @@ npm run test:compat
 | `lib/publication-git-process.js` | 历史发布及公共文件模块共用的有界 Git 同步执行；原适配器保留环境、返回值和事务，期限或截断不作为普通非零退出处理；不增加推送次数。 |
 | `markdown_hugo_gate.py` | Python 共享：检查 Markdown、页面元数据、公式和图片，并运行 Hugo 渲染检查。 |
 | `paper_reader_presentation.py` | 日更、会议、历史的同一摘要/资源/评分展示解析器、八维评分规格及连续重复加粗标题投影；详细摘要仍真实冷核，原计划与保存身份须对应，各来源过滤及页面外框保持。 |
+| `lib/reader-aggregate-presentation.js` | 会议与历史汇总的有界 Reader 展示桥，每次最多 8 篇，通过既有 Python 桥调用同一摘要、资源、评分说明和八维格式；仅返回显示文本，来源、完整成员集合和发布凭证仍由原入口核验。 |
+| `lib/scoring-stability.js`、`scoring_stability.py` | Node 分析恢复、最终资格与 Python 会议页面共用的严格评分稳定性判据；固定向量跨语言核对，读取原证明，不授予请求或改写次数。 |
 | `publication_activation.py` | Python 入口/共享库：核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
 | `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；独立人工 v4 的文章语义与 `machineAssets` 机器核验分区，最终凭证仍覆盖完整清单。逐页通过记录永久按“相对路径 + 内容 SHA”复用，字节未变的通过页不重审；内容失败页仅在完整合法的旧、新审查协议确实不同时进入正常重审。 |
 | `publish_common.py` | Python 共享：提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |

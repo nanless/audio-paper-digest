@@ -1566,7 +1566,7 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
             persistenceOperation(() => originalIO[name](...args));
     }
     const pageManifest = directPages.stageDirectPages({ item, sourceDescriptor, publicationSource,
-        artifact, analysis, directory,
+        artifact, analysis, sourceText: sourceDetails?.text || null, directory,
         stagingInputSha256, stagingBindingSha256: body.stagingBindingSha256,
         expectedRendererImplementationSha256: rendererImplementationSha256,
         dependencies: { ...dependencies, io: guardedIO,
@@ -2179,5 +2179,5 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     withEphemeralConferenceFigures, selectConferenceVisualPages, renderConferencePdfPages,
     buildDirectSourceRecord, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
     validateInterruptedSourceDescriptor, recoverInterruptedRegistryEntry,
-    replayCompletedAnalysisForStaging, resealCompletedAnalysisSurfaceRepair,
+    replayCompletedAnalysisForStaging, replayHistoricalReaderPdfSourceForStaging, resealCompletedAnalysisSurfaceRepair,
     stageDirectExecution, defaultAnalyze, sealedFailureHandoff, runDirectRewrite };

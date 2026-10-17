@@ -1120,15 +1120,21 @@ test('第二轮审查有噪声时，多轮评分的共识仍然可以复核', ()
     const hash = 'a'.repeat(64);
     const stage = {
         stabilityWarning: true,
+        finalScore: 7.2, auditSha256: hash,
         stabilityResolution: {
             contract: deep.SCORING_STABILITY_RESOLUTION_CONTRACT,
             status: 'resolved',
             method: 'multi_pass_consensus',
+            firstAuditScore: 7, secondAuditScore: 7.2, thirdAuditScore: 7.2,
+            firstAuditSha256: 'b'.repeat(64), thirdAuditSha256: hash, thirdAttempts: 1,
             scoreDifference: 0.2,
             secondAuditSha256: hash
         }
     };
     assert.equal(deep.scoringStabilityResolutionIsValid(stage), true);
+    const incomplete = structuredClone(stage);
+    delete incomplete.stabilityResolution.thirdAuditSha256;
+    assert.equal(deep.scoringStabilityResolutionIsValid(incomplete), false);
     stage.stabilityResolution.scoreDifference = 0.4;
     assert.equal(deep.scoringStabilityResolutionIsValid(stage), false);
 });

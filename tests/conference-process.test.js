@@ -422,7 +422,8 @@ test('会议当前执行身份覆盖公共 Reader 来源守卫与共享展示的
     const files = processApi.currentImplementationFiles();
     const required = ['scripts/lib/reader-author-source.js',
         'scripts/lib/reader-resource-binding.js', 'scripts/lib/reader-sealed-pdf-column-units.js',
-        'scripts/reader_sealed_pdf_column_units.py', 'scripts/paper_reader_presentation.py'];
+        'scripts/reader_sealed_pdf_column_units.py', 'scripts/paper_reader_presentation.py',
+        'scripts/lib/scoring-stability.js', 'scripts/scoring_stability.py'];
     for (const name of required) assert.ok(files.includes(name), name);
     const root = '/virtual/conference-shared-reader-implementation';
     const sources = new Map(files.map(name => [name, Buffer.from(`source:${name}`)]));

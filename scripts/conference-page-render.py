@@ -14,8 +14,10 @@ from urllib.parse import quote, urlsplit
 
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
+from scoring_stability import scoring_stability_is_resolved
 from paper_reader_presentation import (build_reader_presentation, SCORE_DIMENSIONS,
-                                       normalize_repeated_bold_prefixes)
+                                       normalize_repeated_bold_prefixes, reader_score_line,
+                                       build_aggregate_reader_presentations)
 from tag_presentation import FACET_DISPLAY_LABELS, render_tag_hierarchy_markdown
 from tag_catalog import load_tag_catalog, load_archived_tag_catalog, resolve_append_only_proof_catalog
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
@@ -258,56 +260,8 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
 
 
 def score_line(parsed):
-    try:
-        score = float(parsed.get('score'))
-        dimensions = [(label, float(parsed.get(field)), maximum) for field, label, maximum in SCORE_DIMENSIONS]
-    except (TypeError, ValueError):
-        raise ValueError('总分或八个评分维度缺失，或无法转换为数字。') from None
-    if not 0 <= score <= 10 or any(not 0 <= value <= float(maximum) for _, value, maximum in dimensions):
-        raise ValueError('总分或评分维度的数值不在允许范围内。')
-    detail = ' | '.join(f'{label} {value:.1f}/{maximum}' for label, value, maximum in dimensions)
-    return f'**{score:.1f}/10** | {detail}'
+    return reader_score_line(parsed)
 
-
-def scoring_stability_is_resolved(stage):
-    if stage.get('stabilityWarning') is not True:
-        return True
-    resolution = stage.get('stabilityResolution') or {}
-    if not isinstance(resolution, dict):
-        return False
-
-    def finite_number(value):
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            return False
-        try:
-            return math.isfinite(value)
-        except OverflowError:
-            return False
-
-    multi_pass = resolution.get('method') == 'multi_pass_consensus'
-    if multi_pass:
-        third_attempts = resolution.get('thirdAttempts')
-        if not (finite_number(resolution.get('thirdAuditScore'))
-                and finite_number(third_attempts) and 1 <= third_attempts <= 2 ** 53 - 1
-                and int(third_attempts) == third_attempts
-                and all(re.fullmatch(r'[a-f0-9]{64}', str(resolution.get(field) or '')) is not None
-                        for field in ('firstAuditSha256', 'thirdAuditSha256'))
-                and stage.get('auditSha256') == resolution.get('secondAuditSha256')
-                and finite_number(stage.get('finalScore'))
-                and finite_number(resolution.get('firstAuditScore'))
-                and finite_number(resolution.get('secondAuditScore'))
-                and finite_number(resolution.get('scoreDifference'))
-                and abs(stage['finalScore'] - resolution['secondAuditScore']) < 1e-9
-                and abs(abs(resolution['secondAuditScore'] - resolution['firstAuditScore'])
-                        - resolution['scoreDifference']) < 1e-9):
-            return False
-    numeric = ('firstAuditScore', 'secondAuditScore', 'scoreDifference')
-    return resolution.get('contract') == 'api-scoring-stability-resolution-v1' \
-        and resolution.get('status') == 'resolved' \
-        and (resolution.get('method') == 'second_pass_consensus' or multi_pass) \
-        and all(finite_number(resolution.get(field)) for field in numeric) \
-        and resolution['scoreDifference'] <= 0.3 \
-        and re.fullmatch(r'[a-f0-9]{64}', str(resolution.get('secondAuditSha256') or '')) is not None
 
 
 def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
@@ -468,6 +422,19 @@ def repair_formula_delimiters(markdown):
 
 
 def render_packet(packet):
+    if 'aggregatePresentationBatch' in packet:
+        if set(packet) != {'aggregatePresentationBatch'}:
+            raise ValueError('汇总展示输入不能与论文页面或标签输入混用。')
+        records = packet['aggregatePresentationBatch']
+        if not isinstance(records, list) or not 1 <= len(records) <= 8:
+            raise ValueError('汇总展示每批必须包含 1–8 篇已核验记录。')
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get('resources'), list):
+                raise ValueError('汇总展示缺少已核验资源列表。')
+            for resource in record['resources']:
+                for field in ('originalUrl', 'finalUrl'):
+                    public_https(resource.get(field), f'汇总资源 {field}')
+        return {'readerPresentations': build_aggregate_reader_presentations(records)}
     if 'tagPresentationBatch' in packet:
         # A pure, batched display operation shares this existing Python bridge.
         # It emits no page/assets or publication eligibility and cannot bypass

@@ -619,7 +619,9 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
         fail(`${item.paperId} direct page staging receipt drifted from execution registry`);
     }
     return { item, source, artifact, stageFileSha256: loaded.fileSha256, stagingBindingSha256: stage.stagingBindingSha256,
-        pageStaging: pageManifest, canonical };
+        pageStaging: pageManifest, canonical,
+        sourceText: runnerApi.replayHistoricalReaderPdfSourceForStaging({ plan, item,
+            sourceDescriptor: source, executionRoot, freshArxivSourceRoot }).sourceDetails.text };
 }
 function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
     freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null,
@@ -689,6 +691,18 @@ function renderAggregate(scope, key, members, options = {}) {
         || rendered.tagPresentations.some(value => typeof value !== 'string' || !value.trim())) {
         fail(`汇总 ${scope}:${key} 的逐篇多级标签展示不完整。`);
     }
+    const readerDisplays = require('./reader-aggregate-presentation.js').renderReaderAggregatePresentations(
+        members.map(member => {
+            // Preserve this workflow's independent HTTPS gate before display.
+            const resources = member.canonical.analysis?.apiReaderResources?.resources;
+            if (!Array.isArray(resources)) fail(`${member.item.paperId} aggregate Reader resources missing`);
+            for (const resource of resources) {
+                publicHttps(resource.originalUrl, `${member.item.paperId} original resource URL`);
+                publicHttps(resource.finalUrl, `${member.item.paperId} final resource URL`);
+            }
+            return { paperKey: member.item.paperId, paper: member.canonical.analysis,
+                sourceText: member.sourceText, resources };
+        }));
     const directionConcepts = directionCounts.map(([label]) => {
         const concept = selectedConcept(label);
         if (concept.facet !== 'task') fail(`汇总 ${scope}:${key} 的主任务不属于研究任务维度。`);
@@ -728,7 +742,7 @@ function renderAggregate(scope, key, members, options = {}) {
             output += `> ⚠️ **当前稿不可用**：本条目只封存并分析官方历史版本 **[${md(version.selectedSourceId)}](${publicHttps(version.selectedPdfUrl, `${member.item.paperId} historical PDF URL`)})**，不得暗示当前稿仍有效。\n\n`;
         }
         output += rendered.tagPresentations[index].trimEnd() + '\n\n';
-        output += `评分：${member.canonical.score.toFixed(1)}/10（${member.canonical.scoreDimensions.map(item => `${item.label} ${item.value}`).join('；')}）\n\n`;
+        output += `评分：${readerDisplays[index].scoreLine}\n\n`;
         const source = member.item.route.kind === 'arxiv-fresh-fetch'
             ? version
                 ? ` | [arXiv 当前条目](https://arxiv.org/abs/${member.item.route.arxivId}) | [分析所用官方历史版本 ${md(version.selectedSourceId)}](${publicHttps(version.selectedPdfUrl, `${member.item.paperId} historical PDF URL`)})`
@@ -737,12 +751,9 @@ function renderAggregate(scope, key, members, options = {}) {
         output += `排名：${md(member.canonical.rankBucket)} | 文档类型：${md(member.canonical.documentType)}${source}\n\n`;
         output += '👥 **作者与机构**\n\n';
         for (const author of member.canonical.authors) output += `- ${md(author.name)}：${author.affiliations.map(md).join('；')}\n`;
-        output += `\n📌 **核心摘要**\n\n${member.canonical.summary}\n\n`;
-        output += '🔗 **开源资源**\n\n';
-        if (!member.canonical.resources.length) output += '未发现已由来源证据绑定的公开资源。\n';
-        for (const resource of member.canonical.resources) {
-            output += `- ${md(resource.type)} · ${md(resource.status)} · ${md(resource.availability)}：<${publicHttps(resource.url, `${member.item.paperId} resource URL`)}>\n`;
-        }
+        output += `\n📌 **核心摘要**\n\n${readerDisplays[index].summary}\n\n`;
+        output += `⚖️ **评分说明**\n\n${readerDisplays[index].scoringBlock}\n\n`;
+        output += `🔗 **开源资源**\n\n${readerDisplays[index].resourceBlock}\n`;
         output += '\n---\n';
     }
     return output;

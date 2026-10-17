@@ -5456,7 +5456,7 @@ def _detailed_core_summary_semantic_issue(summary):
 _CORE_SUMMARY_NODE_REPLAY_CACHE = {}
 
 
-def _source_bound_core_summary_semantic_issue(paper, summary):
+def _source_bound_core_summary_semantic_issue(paper, summary, *, source_text=None):
     """Use the same current semantic rules as analysis for an actual sealed source."""
     proof = paper.get('freshRewriteProvenance') or {}
     stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('coreSummaryRepair') or {}
@@ -5464,6 +5464,20 @@ def _source_bound_core_summary_semantic_issue(paper, summary):
             or (stage.get('paidDiagnosticReplay') or {}).get('operatorLiteralCorrectionRequired') is not None) \
             and proof.get('contract') != 'fresh-source-analysis-v1':
         raise PublishDataValidationError('已付核心术语修正只接受完整日更封存来源。')
+    if source_text is not None:
+        # This explicit display route is supplied only after its workflow has
+        # authenticated the original source. It is never a daily paid-replay
+        # authorization, and it always runs the full original stage binding.
+        if 'operatorLiteralCorrection' in stage \
+                or (isinstance(stage.get('paidDiagnosticReplay'), dict)
+                    and 'operatorLiteralCorrectionRequired' in stage['paidDiagnosticReplay']):
+            raise PublishDataValidationError('日更专属核心修正不能改走通用来源展示。')
+        if not isinstance(source_text, str) or not source_text \
+                or _javascript_string_sha256(source_text) != paper.get('sourceSha256') \
+                or (proof.get('sourceSha256') is not None
+                    and proof['sourceSha256'] != paper.get('sourceSha256')):
+            raise PublishDataValidationError('核心摘要展示的全文与原论文来源 SHA 不一致。')
+        return _run_core_summary_node_replay(paper, summary, source_text, stage_replay=True)
     if proof.get('contract') != 'fresh-source-analysis-v1':
         return _detailed_core_summary_semantic_issue(summary)
     run_id = proof.get('runId')
@@ -5482,14 +5496,18 @@ def _source_bound_core_summary_semantic_issue(paper, summary):
             or paper.get('sourceSha256') != proof.get('sourceSha256'):
         raise PublishDataValidationError('核心摘要重放原文 SHA 与本篇记录不一致。')
     source_text = source_bytes.decode('utf-8')
+    return _run_core_summary_node_replay(paper, summary, source_text,
+        stage_replay='operatorLiteralCorrection' in stage or 'paidDiagnosticReplay' in stage)
+
+
+def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
     cli = SHARED_SCRIPTS_DIR / 'lib' / 'core-summary-semantic-replay-cli.js'
     implementations = (
         _sha256_file(cli),
         _sha256_file(SHARED_SCRIPTS_DIR / 'analysis-contract.js'),
         _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'analysis-section-titles.js'),
     )
-    stage_replay = 'operatorLiteralCorrection' in stage or 'paidDiagnosticReplay' in stage
-    key = (_javascript_string_sha256(summary), _daily_fresh_sha256(source_bytes), implementations)
+    key = (_javascript_string_sha256(summary), _javascript_string_sha256(source_text), implementations)
     # An operator replay must re-read its original paid files and authorization
     # every time; a semantic-only cache cannot attest those mutable files.
     if not stage_replay and key in _CORE_SUMMARY_NODE_REPLAY_CACHE:
@@ -5522,7 +5540,7 @@ def _source_bound_core_summary_semantic_issue(paper, summary):
     return response['issue']
 
 
-def _validated_detailed_core_summary(paper, parsed):
+def _validated_detailed_core_summary(paper, parsed, *, source_text=None):
     """核验详细摘要的正文和阶段记录，并返回摘要文本。
 
     记录未声明当前详细摘要协议时，本函数返回 None。声明了该协议后，
@@ -5550,7 +5568,8 @@ def _validated_detailed_core_summary(paper, parsed):
     if not isinstance(summary, str) or not summary.strip():
         raise PublishDataValidationError('读者文章缺少有效的详细核心摘要正文。')
     summary = summary.strip()
-    semantic_issue = _source_bound_core_summary_semantic_issue(paper, summary)
+    semantic_issue = (_source_bound_core_summary_semantic_issue(paper, summary, source_text=source_text)
+                      if source_text is not None else _source_bound_core_summary_semantic_issue(paper, summary))
     if semantic_issue:
         raise PublishDataValidationError(
             f'读者文章的详细核心摘要未达到 {CORE_SUMMARY_DETAILED_CONTRACT}: '
@@ -5763,7 +5782,7 @@ def render_verified_reader_scoring_notes(paper, parsed=None):
     return '\n\n'.join(scoring_note_lines)
 
 
-def _build_api_reader_display_fields(paper, payload=None):
+def _build_api_reader_display_fields(paper, payload=None, *, source_text=None):
     """返回读者文章页面使用的摘要、资源情况和评分说明；未使用对应格式时返回 None。"""
     payload = _api_reader_payload(paper) if payload is None else payload
     if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
@@ -5777,7 +5796,7 @@ def _build_api_reader_display_fields(paper, payload=None):
                         render_verified_reader_scoring_notes=render_verified_reader_scoring_notes,
                         _validated_detailed_core_summary=_validated_detailed_core_summary),
         paper, plan=payload['plan'],
-        resources=payload['resourceIdentityProof']['resources'], parsed=parsed,
+        resources=payload['resourceIdentityProof']['resources'], parsed=parsed, source_text=source_text,
     )
     return {
         'summary': decision['summary'],
@@ -9607,7 +9626,7 @@ def _strip_non_reader_article_images(content, image_plans_by_url):
     ).strip()
 
 
-def generate_paper_page(paper, date_str, category='论文速递'):
+def generate_paper_page(paper, date_str, category='论文速递', *, source_text=None):
     """生成单篇论文的独立页面"""
     heading_issue = evaluation_heading_issue(paper.get('analysis'))
     if heading_issue:
@@ -9722,7 +9741,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         api_reader_payload
         and api_reader_payload.get('contract') in LLM_API_READER_STRUCTURED_CONTRACTS
     )
-    reader_display_fields = _build_api_reader_display_fields(paper, api_reader_payload)
+    reader_display_fields = _build_api_reader_display_fields(paper, api_reader_payload, source_text=source_text)
     # 新版 Manual 页面绝不能从旧的固定
     # canonical 章节重建。reader payload 缺失、不完整或被篡改
     # 都是硬失败：悄悄回退会把一篇旧分析变成

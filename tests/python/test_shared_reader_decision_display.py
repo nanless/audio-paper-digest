@@ -147,6 +147,16 @@ class SharedReaderDecisionDisplayTests(unittest.TestCase):
 
     def test_filtered_source_resource_view_precedes_shared_resolver_without_reloading(self):
         paper = llm_api_publication_fixture()
+        source_text = ('In our evaluation on the public test set, our method reduces WER '
+                       'from 10.2% to 8.4% compared with the baseline.')
+        source_sha = hashlib.sha256(source_text.encode('utf-8')).hexdigest()
+        paper['sourceSha256'] = source_sha
+        paper['analysisManifest']['sourceAcquisition']['sourceSha256'] = source_sha
+        # This synthetic fixture declares an unchanged core stage. Supply its
+        # actual input/output text so the full Node stage replay can verify it.
+        paper['analysisStageCheckpoints'] = {
+            'structureRepair': paper['analysis'], 'coreSummaryRepair': paper['analysis'],
+        }
         saved = paper['apiReaderResources']['resources']
         raw = copy.deepcopy(paper)
         replay = [dict(saved[0], originalUrl='https://arxiv.org/abs/2608.30002')]
@@ -156,9 +166,9 @@ class SharedReaderDecisionDisplayTests(unittest.TestCase):
              mock.patch.object(presentation, 'load_publish_to_blog', side_effect=AssertionError('reload'))):
             view = presentation.build_reader_presentation(paper, publisher=publisher,
                 plan=paper['apiReaderPlan'], resources=saved, authors=paper['apiReaderAuthors']['authors'],
-                source_text='real-source-supplied-to-replay',
+                source_text=source_text,
                 exclude_resource_url=lambda url: str(url).startswith('https://arxiv.org/'))
-        source.assert_called_once_with(paper, 'real-source-supplied-to-replay', None, publisher=publisher)
+        source.assert_called_once_with(paper, source_text, None, publisher=publisher)
         self.assertEqual(shared.call_args.kwargs['resources'], [])
         self.assertNotIn('https://arxiv.org/', view['resourceBlock'])
         self.assertIn('预印本/扩展版链接未在会议页展示', view['resourceBlock'])

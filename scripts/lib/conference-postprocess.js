@@ -938,10 +938,6 @@ function md(value) {
     return String(value).replace(/[()]/g, char => char === '(' ? '&#40;' : '&#41;')
         .replace(/([\\`*_\[\]<>|{}#+.!-])/g, '\\$1').replace(/\s+/g, ' ').trim();
 }
-function scoreLine(score, dimensions) {
-    const detail = SCORE_DIMENSIONS.map(([field, label, maximum]) => `${label} ${Number(dimensions[field]).toFixed(1)}/${maximum}`).join(' | ');
-    return `**${Number(score).toFixed(1)}/10** | ${detail}`;
-}
 function isArxivResource(resource) {
     return [resource?.originalUrl, resource?.finalUrl].some(value => {
         try { return /(^|\.)arxiv\.org$/i.test(new URL(value).hostname); }
@@ -1171,6 +1167,55 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     }
     const tagPresentationByPaperId = new Map(members.map((item, index) =>
         [item.paperId, presentations.tagPresentations[index]]));
+    const stageByPaperId = new Map(stages.map(item => [item.manifest.paperId, item]));
+    const readerRecords = members.map(member => {
+        const stage = stageByPaperId.get(member.paperId);
+        const executionId = stage.manifest.analysisExecutionId;
+        // Preserved pages are an explicit read-only legacy path. Read the
+        // original canonical record, not a synthetic paper made from its card.
+        const loaded = stage.completed || (dependencies.loadConferenceAnalysis || adapter.loadConferenceAnalysis)({
+            analysisRoot, executionId });
+        const paper = loaded.analysis?.papers?.[0];
+        const receipt = loaded.run?.completionReceipt;
+        const receiptBody = receipt && { ...receipt }; if (receiptBody) delete receiptBody.receiptSha256;
+        if (loaded.analysisFileSha256 !== stage.manifest.analysisSha256
+            || loaded.run?.paperId !== member.paperId || loaded.run?.executionId !== executionId
+            || loaded.run?.status !== 'complete' || loaded.analysis?.status !== 'complete'
+            || loaded.analysis?.papers?.length !== 1 || paper?.id !== member.paperId
+            || receipt?.receiptSha256 !== stage.manifest.completionReceiptSha256
+            || receipt?.receiptSha256 !== stableHash(receiptBody)
+            || receipt?.analysisSha256 !== loaded.analysisFileSha256
+            || receipt?.paperId !== member.paperId || receipt?.executionId !== executionId
+            || loaded.run?.sourceSnapshotSha256 !== stage.manifest.sourceSnapshotSha256
+            || receipt?.sourceSnapshotSha256 !== stage.manifest.sourceSnapshotSha256) {
+            fail('汇总展示的原分析、来源快照或完成凭证与单篇页面不一致。');
+        }
+        const fields = getConsistentPublicationFields(paper, readOriginalTagProof(paper).rules);
+        if (fields.summary !== member.summary || Number(fields.score) !== member.score
+            || stableHash(paper.apiReaderAuthors?.authors) !== stableHash(member.authors)) {
+            fail('汇总展示的原摘要、评分或作者与单篇页面不一致。');
+        }
+        const sourceText = loaded.source?.sourceDetails?.text;
+        if (typeof sourceText !== 'string' || sha256(sourceText) !== paper.sourceSha256) {
+            fail('汇总展示缺少与原分析 SHA 对应的认证来源全文。');
+        }
+        return { paperKey: member.paperId, paper, sourceText, resources: member.resources.filter(resource => {
+            try {
+                publicHttps(resource.originalUrl, `${member.paperId} resource original URL`, { normalize: true });
+                publicHttps(resource.finalUrl, `${member.paperId} resource final URL`, { normalize: true });
+                return true;
+            } catch (error) {
+                // Keep the old unavailable/invalid URL text outside the shared
+                // clickable resource view; positive availability still fails.
+                resourceLine(resource, member.paperId);
+                return false;
+            }
+        }) };
+    });
+    const readerDisplays = require('./reader-aggregate-presentation.js')
+        .renderReaderAggregatePresentations(readerRecords);
+    const readerDisplayByPaperId = new Map(readerDisplays.map(item => [item.paperKey, item]));
+    const readerRecordByPaperId = new Map(readerRecords.map(item => [item.paperKey, item]));
     // 所有成员的词表与标签规则一致后，再按其概念 ID 构建层级。directCount 统计
     // 直接使用该概念的论文数；subtreeCount 统计使用该概念或任一后代概念的论文数，
     // 同一篇论文只计一次，不能把下级标签的频次直接相加。
@@ -1221,19 +1266,20 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     lines.push('', '## 📊 论文评分排行榜', '',
         '| 排名 | Reader 中文题目 | 英文题目 | 八维评分 | 分档 | 文档类型 | 主任务 |',
         '|---:|---|---|---|---|---|---|');
-    for (const item of members) lines.push(`| ${item.rank} | [${md(item.readerTitle)}](${item.url}) | [${md(item.title)}](${item.url}) | ${scoreLine(item.score, item.scoreDimensions).replace(/ \| /g, ' · ')} | ${md(item.rankBucket)} | ${md(item.documentType)} | #${md(item.primaryTask)} |`);
+    for (const item of members) lines.push(`| ${item.rank} | [${md(item.readerTitle)}](${item.url}) | [${md(item.title)}](${item.url}) | ${readerDisplayByPaperId.get(item.paperId).scoreLine.replace(/ \| /g, ' · ')} | ${md(item.rankBucket)} | ${md(item.documentType)} | #${md(item.primaryTask)} |`);
     lines.push('', '---', '', '## 📋 论文列表', '');
     for (const item of members) lines.push(`### ${item.rank}. [${md(item.readerTitle)}](${item.url})`, '',
         `> 英文题目：*[${md(item.title)}](${item.url})*`, '',
-        tagPresentationByPaperId.get(item.paperId).trimEnd(), '', `评分：${scoreLine(item.score, item.scoreDimensions)}`, '',
+        tagPresentationByPaperId.get(item.paperId).trimEnd(), '', `评分：${readerDisplayByPaperId.get(item.paperId).scoreLine}`, '',
         `排名：${md(item.rankBucket)} | 文档类型：${md(item.documentType)}`, '',
         `会议来源：[官方记录](${item.officialRecordUrl}) · [官方 PDF](${item.officialPdfUrl})`, '',
         '👥 **作者与机构**', '',
         ...item.authors.map(author => `- ${md(author.name)}：${author.affiliations.map(md).join('；')}`), '',
-        '📌 **核心摘要**', '', md(item.summary), '', '🔗 **开源资源**', '',
-        ...(item.resources.length ? item.resources.map(resource => resourceLine(resource, item.paperId))
-            : ['本次未形成可展示的已核验资源记录，开放状态尚未核实。']),
-        '可达状态仅表示本次链接检查结果，不代表许可证、本文权重或运行复现已验证。', '', '---', '');
+        '📌 **核心摘要**', '', readerDisplayByPaperId.get(item.paperId).summary, '',
+        '⚖️ **评分说明**', '', readerDisplayByPaperId.get(item.paperId).scoringBlock, '',
+        '🔗 **开源资源**', '', readerDisplayByPaperId.get(item.paperId).resourceBlock, '',
+        ...item.resources.filter(resource => !readerRecordByPaperId.get(item.paperId)
+            .resources.includes(resource)).map(resource => resourceLine(resource, item.paperId)), '', '---', '');
     const markdown = repairFormulaDelimiters(repairDollarMath(lines.join('\n')));
     const selection = stages.map(item => ({ executionId: item.manifest.analysisExecutionId, paperId: item.manifest.paperId,
         analysisSha256: item.manifest.analysisSha256, completionReceiptSha256: item.manifest.completionReceiptSha256,

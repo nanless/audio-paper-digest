@@ -94,6 +94,12 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     return paper;
 }
 async function fixture(t, { mixedDailyConference = false, historicalVersion = false, publicationSidecar = false } = {}) {
+    // This fixture already mocks PDF text extraction in the original writer.
+    // Replay that same synthetic text at the new read-only display boundary.
+    t.mock.method(runner, 'replayHistoricalReaderPdfSourceForStaging', args =>
+        args.item.route.kind === 'conference-local-pdf'
+            ? { sourceDetails: { text: 'In our evaluation on the LibriSpeech test set, our model reduces WER from 10.2% to 9.8% compared with the baseline.'.repeat(10) } }
+            : { sourceDetails: capturedSources.get(`${args.item.route.arxivId}:${args.sourceDescriptor.generation}`).runtimeDetails });
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-aggregate-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blog = path.join(root, 'blog'); const metadata = path.join(root, 'metadata.json'); const pdf = path.join(root, 'conference.pdf');
@@ -197,14 +203,14 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
         const text = publicationSidecar && arxivId === arxivOne ? [
             `Fresh official title ${arxivId}`,
             'Fresh exact full text without a unique Abstract marker.',
-            '1 Introduction', `fresh official text ${arxivId} generation ${generation}`
+            '1 Introduction\nIn our evaluation on the LibriSpeech test set, our model reduces WER from 10.2% to 9.8% compared with the baseline.', `fresh official text ${arxivId} generation ${generation}`
         ].join('\n') : [
             sourceVersion ? `【来源版本警告】${sourceVersion.warning}\n` : '',
             `Fresh official title ${arxivId}`,
             'Abstract',
             `Fresh exact abstract for ${arxivId} generation ${generation}. `.repeat(6),
             'Keywords: speech, audio',
-            '1 Introduction',
+            '1 Introduction\nIn our evaluation on the LibriSpeech test set, our model reduces WER from 10.2% to 9.8% compared with the baseline.',
             `fresh official text ${arxivId} generation ${generation}`,
         ].filter(Boolean).join('\n');
         const pdfBytes = Buffer.from(`%PDF-1.4\n${arxivId}/${generation}\n%%EOF\n`);
@@ -254,7 +260,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
         publicationMetadataRoot: paths.publicationRoot,
         freshArxivFailureHandoffRoot: paths.failureRoot, concurrency: 3 };
     const rendererSha256 = sha('direct-mock-renderer-v1');
-    const deps = { captureFreshArxivRewriteSource: capture, analyze, extractPdfText: async () => 'fresh conference source text '.repeat(10),
+    const deps = { captureFreshArxivRewriteSource: capture, analyze, extractPdfText: async () => 'In our evaluation on the LibriSpeech test set, our model reduces WER from 10.2% to 9.8% compared with the baseline.'.repeat(10),
         materializeConferenceFigures: async () => [], rendererImplementationSha256: () => rendererSha256,
         assertPublicationMetadataReady: () => {},
         renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }),
@@ -384,7 +390,7 @@ test('直接汇总接受完整的当日分组，并生成绑定来源代次的 M
     assert.match(aggregate.markdown, /## ⚡ 今日概览[\s\S]*## 📋 论文列表/);
     assert.match(aggregate.markdown, /英文题目：\*\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)\*/);
     assert.match(aggregate.markdown, /评分：[\s\S]*排名：前50% \| 文档类型：方法研究 \| \[arXiv 原文\]\(https:\/\/arxiv\.org\/abs\/2608\.00001\)[\s\S]*👥 \*\*作者与机构\*\*/);
-    assert.match(aggregate.markdown, /🔗 \*\*开源资源\*\*[\s\S]*未发现已由来源证据绑定的公开资源/);
+    assert.match(aggregate.markdown, /🔗 \*\*开源资源\*\*[\s\S]*本次未形成可展示的已核验资源记录，开放状态尚未核实/);
     assert.equal((aggregate.markdown.match(/^\*\*研究分类\*\*/gm) || []).length, 2,
         '每篇使用共享多级分类展示，不重复平铺标签');
     assert.doesNotMatch(aggregate.markdown, /^标签：/m);
@@ -568,13 +574,21 @@ test('直接汇总生成完整的本地留存会议汇总', async t => {
 });
 
 
+function displayOnlyPaper() {
+    const paper = validLegacyApiAnalysisPaper('2608.00001');
+    paper.sourceSha256 = sha('display-only synthetic source');
+    paper.apiReaderPlan.oneSentenceThesis = '合成摘要。';
+    return paper;
+}
+
 test('会议任务标题的引号、反斜杠和换行按 YAML 字符串保存', () => {
     const yaml = require('yaml');
     const rules = require('../scripts/lib/tag-rules.js').getDefaultTagRules();
     const member = {
         rank: 1, item: { paperId: 'conference:icassp:2026:icassp-arnumber:100', route: { kind: 'conference-local-pdf' } },
-        source: {}, renderedPages: [{ primaryUrl: 'https://example.test/paper/' }],
-        canonical: { labels: ['语音识别'], primaryTaskLabel: '语音识别', primaryMethodLabel: '神经网络',
+        source: {}, sourceText: 'display-only synthetic source', renderedPages: [{ primaryUrl: 'https://example.test/paper/' }],
+        canonical: { analysis: displayOnlyPaper(),
+            labels: ['语音识别'], primaryTaskLabel: '语音识别', primaryMethodLabel: '神经网络',
             tagMetadata: { selectionContract: rules.selectionContract, registryVersion: rules.registryVersion,
                 registrySha256: rules.registrySha256 },
             readerTitle: '测试论文', title: 'Example paper', score: 8, scoreDimensions: [], authors: [], resources: [],
@@ -594,9 +608,10 @@ test('历史日更、会议和任务汇总共享多级路径且不把祖先或�
     const rules = require('../scripts/lib/tag-rules.js').getDefaultTagRules();
     const member = {
         rank: 1, item: { paperId: 'conference:icassp:2026:icassp-arnumber:100',
-            route: { kind: 'conference-local-pdf' } }, source: {},
+            route: { kind: 'conference-local-pdf' } }, source: {}, sourceText: 'display-only synthetic source',
         renderedPages: [{ primaryUrl: 'https://example.test/paper/' }],
-        canonical: { labels: ['唇读', 'Transformer', '鲁棒性'], primaryTaskLabel: '唇读',
+        canonical: { analysis: displayOnlyPaper(),
+            labels: ['唇读', 'Transformer', '鲁棒性'], primaryTaskLabel: '唇读',
             primaryMethodLabel: 'Transformer', tagMetadata: { selectionContract: rules.selectionContract,
                 registryVersion: rules.registryVersion, registrySha256: rules.registrySha256 },
             readerTitle: '测试论文', title: 'Example paper', score: 8, scoreDimensions: [], authors: [],

@@ -455,7 +455,7 @@ function validateManifest({ value, item, sourceDescriptor, publicationSource, ar
     }
     return clone(value);
 }
-function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact, analysis, directory, stagingInputSha256, stagingBindingSha256,
+function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact, analysis, sourceText = null, directory, stagingInputSha256, stagingBindingSha256,
     expectedRendererImplementationSha256 = null, dependencies = {} } = {}) {
     const root = (dependencies.createDirectory || (operation => operation()))(() =>
         safeDirectory(directory, '直接来源论文的页面生成目录', true));
@@ -478,7 +478,7 @@ function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact,
     const pageDisclosure = pageDisclosureFor(item, sourceDescriptor);
     for (const page of projection.pages) {
         const result = normalizeRendererResult(render({ directStaging: true, paper: directPaper(item, analysis),
-            publicationSource: publication, cohortDate: page.cohortDate }), page);
+            publicationSource: publication, sourceText, cohortDate: page.cohortDate }), page);
         validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page,
             markdown: result.markdown, assets: result.assets });
         for (const asset of result.assets) {

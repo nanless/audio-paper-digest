@@ -199,7 +199,7 @@ def render_packet(packet):
         score_line = publisher.format_complete_score_line(parsed)
         presentation = build_reader_presentation(
             projected,
-            publisher=publisher,
+            publisher=publisher, source_text=packet.get('sourceText'),
             plan=projected.get('apiReaderPlan'),
             resources=(projected.get('apiReaderResources') or {}).get('resources'),
             authors=(projected.get('apiReaderAuthors') or {}).get('authors'),
@@ -268,7 +268,7 @@ def render_packet(packet):
             'primaryMethodId': assignment['primaryMethodId'],
             'conceptIds': ordered,
         }
-    markdown, _ = publisher.generate_paper_page(projected, date, '论文速递')
+    markdown, _ = publisher.generate_paper_page(projected, date, '论文速递', source_text=packet.get('sourceText'))
     assets = []
     with tempfile.TemporaryDirectory(prefix='historical-page-render-') as temporary:
         root = Path(temporary)

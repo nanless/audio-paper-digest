@@ -15,6 +15,44 @@ const countChinese = text => (text.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uff
 const replaceSummary = summary => sampleAnalysis.replace(/## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/, '## 核心摘要\n' + summary + '\n');
 const sampleSource = 'Experiment results on the public test set report baseline WER 12.4% and our method WER 9.8%.';
 
+function fingerprintPayload(contract) {
+    const original = crypto.createHash; let payload;
+    crypto.createHash = function (...args) {
+        const hash = original.apply(this, args), update = hash.update;
+        hash.update = function (value, ...rest) {
+            if (typeof value === 'string' && value.startsWith('{')) {
+                let candidate; try { candidate = JSON.parse(value); } catch (_) { /* Raw source is not JSON. */ }
+                if (candidate?.promptTextContract === contract && candidate.inputAnalysisSha256
+                    && candidate.evidenceMaxChars) payload = candidate;
+            }
+            return update.call(this, value, ...rest);
+        };
+        return hash;
+    };
+    try {
+        deep.buildTextStageFingerprint('coreSummaryRepair', replaceSummary('摘要待修复。'), sampleSource, contract);
+    } finally { crypto.createHash = original; }
+    assert.ok(payload, 'must capture the actual public fingerprint JSON');
+    return payload;
+}
+
+test('当前core7阶段指纹预算与真实核心修复调用一致，原core6预算不变', async () => {
+    const current = fingerprintPayload(versions.currentPromptTextContract('coreSummaryRepair'));
+    const previous = fingerprintPayload('analysis-prompt-text-v6');
+    let calls = 0;
+    const repaired = await deep.repairCoreSummarySection(
+        { arxivId: '2610.90020', title: '真实预算与指纹一致性合成样例' },
+        replaceSummary('摘要待修复。'), sampleSource, sampleSource,
+        { callModelFn: async (_messages, maxTokens) => {
+            calls++;
+            assert.equal(current.maxTokens, maxTokens);
+            assert.equal(previous.maxTokens, maxTokens);
+            return '## 核心摘要\n' + sampleSummary;
+        } });
+    assert.equal(calls, 1);
+    assert.equal(repaired, sampleAnalysis);
+});
+
 test('每次摘要修复请求使用当前候选真实字数与剩余空间，并保留事实及明确逐字保护', async () => {
     const initialSummary = '摘要待修复。';
     const secondSummary = '当前说明仍未交代任务和可核对结果。';
