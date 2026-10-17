@@ -33,6 +33,9 @@ test('每次摘要修复请求使用当前候选真实字数与剩余空间，�
             assert.match(prompt, /6–9/);
             assert.match(prompt, /修正缺项应替换原有不完整或重复句/);
             assert.match(prompt, /反馈明确要求逐字保留的句子必须原样保留/);
+            assert.match(prompt, /数值可以位于不同方法行/);
+            assert.match(prompt, /禁止把不同数据集、评测协议、指标或不连续证据片段拼成同条件比较/);
+            assert.doesNotMatch(prompt, /逐字来自同一原表行/);
             requestCount += 1;
             return '## 核心摘要\n' + (requestCount === 1 ? secondSummary : sampleSummary);
         } }
@@ -46,6 +49,6 @@ test('旧核心摘要第四版正文仍按原路径和原字节读取，新版�
     assert.equal(oldPath, 'prompts/core-summary-repair-v4.md');
     const oldBytes = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(oldPath);
     assert.equal(crypto.createHash('sha256').update(oldBytes).digest('hex'), '65cf4a3656fabab76a8203b35c7b01aa1417350f7eb0fe0e304528262e6f5d7e');
-    assert.equal(versions.currentTextStagePromptPath('coreSummaryRepair'), 'prompts/core-summary-repair-v6.md');
+    assert.equal(versions.currentTextStagePromptPath('coreSummaryRepair'), 'prompts/core-summary-repair-v7.md');
     assert.notDeepEqual(require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/core-summary-repair-v5.md'), oldBytes);
 });

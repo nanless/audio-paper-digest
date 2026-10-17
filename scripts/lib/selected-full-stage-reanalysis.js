@@ -18,7 +18,7 @@ function bindings() {
     for (const [stage, expected] of Object.entries({ primaryAnalysis: 'prompts/deep-analysis-v6.md',
         apiReaderArticle: 'prompts/api-reader-article-v9.md', apiReaderRepair: 'prompts/api-reader-repair-v13.md',
         revision: 'prompts/gap-fill-v4.md', methodRepair: 'prompts/method-fill-v3.md',
-        coreSummaryRepair: 'prompts/core-summary-repair-v6.md', structureRepair: 'prompts/structure-repair-v3.md' })) {
+        coreSummaryRepair: 'prompts/core-summary-repair-v7.md', structureRepair: 'prompts/structure-repair-v3.md' })) {
         if (versions[stage]?.path !== expected) fail('全阶段重跑必须使用当前已改进中文提示词');
         result[stage] = { ...versions[stage], fileSha256: crypto.createHash('sha256')
             .update(fs.readFileSync(path.resolve(__dirname, '../..', expected))).digest('hex') };

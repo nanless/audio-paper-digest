@@ -1,0 +1,773 @@
+{
+  "origin": "Actual sealed SNOAR Table 2; immutable original text, runtime and raw DOM table identities. An instruction fixture, not a new publication proof.",
+  "paperId": "2610.20863",
+  "sourceSha256": "f16efd906245c8a12958a160e78c636ff8b6b614103a87359c32a553d030c841",
+  "sourceRuntimeSha256": "07d5ed3392428f08da5bfa01c2259b7b001b1991459cb636ede1f3cff92d9372",
+  "sourceLineRange": [
+    279,
+    314
+  ],
+  "sourceExcerpt": "Table 2: Ablation of SNOAR(MixIT) on the WHAM! tt set. The first row\nis the method as described (γ=0.2\\gamma=0.2). α\\alpha, λ\\lambda and rr are the\nspeech, noise and artifact terms of the decomposition of Sec. 2, with rr the\nartifact energy as a fraction of the estimate’s.\nArm\nSI-SDR\nPESQ\nUTMOS\nWER\nα\\alpha\nλ\\lambda\nrr\nMixIT teacher\n8.32\n1.541.54\n2.262.26\n15.315.3\n0.9120.912\n0.2180.218\n0.0850.085\nSNOAR(MixIT), γ=0.2\\gamma{=}0.2\n13.25\n2.02\n3.453.45\n10.9\n0.9490.949\n0.0310.031\n0.0480.048\nRemixIT(MixIT)\n12.1012.10\n1.611.61\n3.153.15\n13.313.3\n0.9390.939\n0.0260.026\n0.0620.062",
+  "sourceExcerptSha256": "5a2af334ceadc0b405015e2cef3bbaed8fee1273ed17d75d973b109c51532627",
+  "table": {
+    "bodyRows": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "caption": "Table 2: Ablation of SNOAR(MixIT) on the WHAM! tt set. The first row is the method as described (\\gamma=0.2). \\alpha, \\lambda and r are the speech, noise and artifact terms of the decomposition of Sec. 2, with r the artifact energy as a fraction of the estimate’s.",
+    "cells": [
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "54bdcc050364f4f75591ba2f6fe68bab94e6146dfa6e46cdba24e25266f19762",
+        "text": "Arm"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "5f01aaf886d2cd7b87d29d261c4b8c62a3f46cce8b6f2d22170e8baffccca8ea",
+        "text": "SI-SDR"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "eee4483229f647083d52e9d9c8274f7c26b1e557e033a967d635bdf598f8a95b",
+        "text": "PESQ"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "6ed233c642bb991eff69fea311f347dac5e74ed2cfb29a88630f4ad526c7d358",
+        "text": "UTMOS"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "c00940d0c39e5474eb2307cf3c7f5c768402267f8af967f6105f693d9a3114b6",
+        "text": "WER"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "5beeaf9d9d249b90624253b9291a8093b784c8565c82faa3f19e79b975f4ee0a",
+        "text": "α\\alpha"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "9a976ec6a9b9d6603540e79f966825378978fc9ec79888ec42cd60b80d660864",
+        "text": "λ\\lambda"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "845adcde36ea81885ae9555a91dd20863e58b42008b0f4c6cd2de3f08a25ac54",
+        "text": "rr"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "e68ae409b28a9fe02a2f4700ad6d2c5558b5eb003d867767798e90c4329c3ece",
+        "text": "MixIT teacher"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "f2032c1e31dcdbb67cfeda750270464bfd6a461b965bffb5505dd07a7152d719",
+        "text": "8.32"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "02ba78888e543402905adbd39f0ed58addeeacac9988e06c06b20820cc947305",
+        "text": "1.541.54"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "7c967647b913b56c069cf56882f3ef57c4bbed4462d8d0e9bbce261ac8dde2e6",
+        "text": "2.262.26"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "33cbe31c365b4b6aa2750f1eebd6a94616141a293c7cddfb0dbdbe7efd76fb68",
+        "text": "15.315.3"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "1fa695eac1e36a1f1397a0e2a8012415d320bcdf8b9546b0fcfa9e04e946b4ac",
+        "text": "0.9120.912"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "08611645a102f364d927069736f9a71281e24f618e8ef77f9e7fb29d629fb547",
+        "text": "0.2180.218"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "70e259e99caf94b2cebef0d16193f8685344c176db8cbe35ff0245fb395ec233",
+        "text": "0.0850.085"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "4b00eb19d88d70dbf5a08e50c2f6fec835d54a755aede4f30cbe38c96991091c",
+        "text": "SNOAR(MixIT), γ=0.2\\gamma{=}0.2"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "5d0623498ba5c3352db2fcf29d0670d62e511b354c628219857e98a62f1fba67",
+        "text": "13.25"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "c8d4dd40805181634a6f76ca066be38dd7f49deabdbe30d5f82e91c82ad89233",
+        "text": "2.02"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "cdf0231ae37b4ca37350632aae56d167ecb99edd832a632b2fb4c0e20b95bd32",
+        "text": "3.453.45"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "ad1d59fc94e02cc8e4996093afe914bd8e403435b7fa702fc5a5982eda47e595",
+        "text": "10.9"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "cd11f969e528fa27d2de781d15d8abc881b337d06f5940cc6601e7de97ba246c",
+        "text": "0.9490.949"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "2d074e0f347f6e7e76557dffd3fd1c34fa8fe0440cebb45bf74ace1ab4c51c58",
+        "text": "0.0310.031"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "dfac77e6f6c5ac47dfca880a09d0e537e4ce789d8d99fbb8081a04d6959628cb",
+        "text": "0.0480.048"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "bb9bbf93a4574f82226708ad929321fef1b0cda234e36eb31398d72952ed02d8",
+        "text": "RemixIT(MixIT)"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "f73ac40f1887f5d6db77c191f533bc6c657a0b5c4f877df63942b4fafb60238c",
+        "text": "12.1012.10"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "e32f7b7e9777bc499d576d04760e1fac9fc93318c4183386a71ec54d7ddbc5c9",
+        "text": "1.611.61"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "bbf48f0b480b7fae5b71eadc5d9cf79b5b8c93f77c51b7e58340340489bc6266",
+        "text": "3.153.15"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "2ec1a7b0252d2b7294747d5ecb93757b5a8eff91ad0769d3fcd2cc7a36a73a6e",
+        "text": "13.313.3"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "637a39b0e9fab554474a43eb865a1e28efb60bfc7a58cfeafbd59a9fc5fc2bd2",
+        "text": "0.9390.939"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "38f1eacad45d18242f86f4c767af82cda578b2970e5de913779ffc2649a60319",
+        "text": "0.0260.026"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "fcb89e0508b7a2e9db3edfcb67cf60e5a905c4e3250884c16b3077c06879a674",
+        "text": "0.0620.062"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "a80dd1c0a84d80b7b94cd41c997534a2a253442bfb7c081ab2bd575b2887aa1d",
+        "text": "γ=0.5\\gamma{=}0.5"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "384dc806568e64463f11c6e818929f2707d37720ae8ccde18ac758be301fa1f8",
+        "text": "−0.82-0.82"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "69aa2bd1bed9eddb003364dfd93f6d2ffb29f8435ac896c9c832096e0d12c12a",
+        "text": "1.111.11"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "22fa370724fd7840b0007c445d2f4e57a8c52b53fb7b156d9a62872c9a92b745",
+        "text": "1.381.38"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "1473fe80db7845ba3092d50659d30da201c772e395bcebdc63f906f8ac505ac4",
+        "text": "19.919.9"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "67507fc646b9d1d57a5e6b017b057d4dc26df0ebfd43e8518396bf46e9fef861",
+        "text": "0.9980.998"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "b612136974e96549eaf5844bda7ff4b29bb7dbe9f4573961388c167945f8559f",
+        "text": "0.8990.899"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "c2d3ab466957f4d60f6bd403acb4e5ea7045a04361e5f9afde7422ccb4051021",
+        "text": "0.0330.033"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "31018d2c7460d2b1c069628a5f51e1d43fae5410648ffa46b7bbf1be1f776b78",
+        "text": "γ=0.1\\gamma{=}0.1"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "38d8f324bafa70015185c68120d1462bafc36fc88c1f19f5227595a284c8e04c",
+        "text": "13.1413.14"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "8e58384087e0e2f2d24edd7fd8cf7cc925f04b0d596c349d203450f89fe2b1b0",
+        "text": "1.871.87"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "eeb79d53b71f698cd9966ceb225828817232bf42b97e982f6a9be78d5e4abea6",
+        "text": "3.47"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "fe481318a4edd79ef0274ac65877e17034d83a517a15a0bfccdb357da9c5db3f",
+        "text": "11.111.1"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "e847692d5a46dc3cdc72d706d44bd6b5bfeb6221319800d161183eea69900f2f",
+        "text": "0.9460.946"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "354705f221828a8124b8cf10344671d5155c13b001d8cf7caedbe455cabaada8",
+        "text": "0.0200.020"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "c5686ff556c1c798e9755b1d126afac547922e9d4a0415adf5910aea9c172f25",
+        "text": "0.0500.050"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "70282644b3d76e434d8e261d1dd25cea5f4946e71c746dd0d71864d7a085eb91",
+        "text": "γ=0\\gamma{=}0 (no OA)"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "2e4705c437de39d35f19eb00cb73b4b07b97f52deefb5f56a62c08d3547be776",
+        "text": "12.3312.33"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "bfa94ebba6453c69ee0be21b7995fdec35bb86eb9a3b05daf1474b78dbce4496",
+        "text": "1.841.84"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "f48727933ceef0538ce51d907db6ff850ca9cce589381c410e836747c924dd85",
+        "text": "3.273.27"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "40f679919191ea9f4cbf2bf6fb327e263e41a94fecd629adf061f8c7efa2e8cd",
+        "text": "11.211.2"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "a48113a2df351553e5f22aec68f6f29a9c11d87b699364cc9c32b343574995b9",
+        "text": "0.9440.944"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "8e3d23f45eae8742bdc1bc4a1979b1f83413ca76254569b736b70cc94cb4d560",
+        "text": "0.0180.018"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "450bc96e1f379d0945344936161a6c0372fdca540846a9eb6f73cdda239a185d",
+        "text": "0.0590.059"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "b30e7ea75e12b887b7d62ad3949fc60be49b5351d4b4d68a49c2f512647a84b2",
+        "text": "γ\\gamma annealed →0.050.2\\!\\to\\!0.05"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "0d51d3decca4119922c8301e247f7f150251f2051fbe7cc40329a351835661a4",
+        "text": "13.2313.23"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "0cff5495fa6ad33d5fd56f13ceb2cb81f08865a16d8345b7a73fde03cfdcc8b3",
+        "text": "1.841.84"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "750a6d564534d0211450de4b71f70ca6a2549e6d5b30a16d5af0d3d663930966",
+        "text": "3.433.43"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "386db68fa34033fc913a1770533f86b6eaee757a3007f3a6e6e6f61bb2b73c60",
+        "text": "11.611.6"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "6ee27949a0e8c97538f7c9b9961bc3a5f4694cfb3dff05fd90b77f0cabc799b6",
+        "text": "0.9450.945"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "a835ad1df2264977c4f2aa1be71fc6eaba75d22ae40658036bd64bf8105017da",
+        "text": "0.0200.020"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "1cbb74f678788b5d9cb41784e55ad159859ca8b924e05b7e98dccdc7f3a40576",
+        "text": "0.0480.048"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "ea4b78798baafd951402ef06b25f1833a34eef3fd12f7ef08e89bd899fcf9233",
+        "text": "no DNF, Eq. (2)"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "a4ad0d3e639f99a790b0602ce2bb5b6f4c3c6a0ef60998f3c8f3e93c0262bb91",
+        "text": "0.230.23"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "6508728bfb6b15968d92c17611d07148a150c95299ef2bfd510d0cf8b4fac8d7",
+        "text": "1.131.13"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "c5f74ce16a8dc041048ae1251966b01824a1810b83fc9370d8409fa81c34027b",
+        "text": "1.381.38"
+      },
+      {
+        "colspan": 1,
+        "column": 4,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "cb20fc0d35fcfe188b2a78a35882a681d42935c03436210bb77b070b9acfa2b7",
+        "text": "17.617.6"
+      },
+      {
+        "colspan": 1,
+        "column": 5,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "b321ddf3a9871288316ecf8ef734515343cb64e1372c4fcf42fa46dcf343008b",
+        "text": "0.9790.979"
+      },
+      {
+        "colspan": 1,
+        "column": 6,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "39c6a32c8afbfa855e4b614c46064ebf25987cdcc86817b79e1b26d4661fb482",
+        "text": "0.6970.697"
+      },
+      {
+        "colspan": 1,
+        "column": 7,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "88cab4e9adf3a8afd2d94dc5c86d43338531f738b2b43ed4571b79872833624c",
+        "text": "0.1350.135"
+      }
+    ],
+    "headerRows": [],
+    "label": "Table 2:",
+    "matrix": [
+      [
+        "Arm",
+        "SI-SDR",
+        "PESQ",
+        "UTMOS",
+        "WER",
+        "α\\alpha",
+        "λ\\lambda",
+        "rr"
+      ],
+      [
+        "MixIT teacher",
+        "8.32",
+        "1.541.54",
+        "2.262.26",
+        "15.315.3",
+        "0.9120.912",
+        "0.2180.218",
+        "0.0850.085"
+      ],
+      [
+        "SNOAR(MixIT), γ=0.2\\gamma{=}0.2",
+        "13.25",
+        "2.02",
+        "3.453.45",
+        "10.9",
+        "0.9490.949",
+        "0.0310.031",
+        "0.0480.048"
+      ],
+      [
+        "RemixIT(MixIT)",
+        "12.1012.10",
+        "1.611.61",
+        "3.153.15",
+        "13.313.3",
+        "0.9390.939",
+        "0.0260.026",
+        "0.0620.062"
+      ],
+      [
+        "γ=0.5\\gamma{=}0.5",
+        "−0.82-0.82",
+        "1.111.11",
+        "1.381.38",
+        "19.919.9",
+        "0.9980.998",
+        "0.8990.899",
+        "0.0330.033"
+      ],
+      [
+        "γ=0.1\\gamma{=}0.1",
+        "13.1413.14",
+        "1.871.87",
+        "3.47",
+        "11.111.1",
+        "0.9460.946",
+        "0.0200.020",
+        "0.0500.050"
+      ],
+      [
+        "γ=0\\gamma{=}0 (no OA)",
+        "12.3312.33",
+        "1.841.84",
+        "3.273.27",
+        "11.211.2",
+        "0.9440.944",
+        "0.0180.018",
+        "0.0590.059"
+      ],
+      [
+        "γ\\gamma annealed →0.050.2\\!\\to\\!0.05",
+        "13.2313.23",
+        "1.841.84",
+        "3.433.43",
+        "11.611.6",
+        "0.9450.945",
+        "0.0200.020",
+        "0.0480.048"
+      ],
+      [
+        "no DNF, Eq. (2)",
+        "0.230.23",
+        "1.131.13",
+        "1.381.38",
+        "17.617.6",
+        "0.9790.979",
+        "0.6970.697",
+        "0.1350.135"
+      ]
+    ],
+    "ordinal": 2,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "9d2a6fee1781cd4c7f88036033f0528fc53e8884790da9d8c67c28898d4af43c"
+  }
+}

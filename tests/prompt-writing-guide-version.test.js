@@ -83,9 +83,10 @@ test('讲解增强保留机器章节、Reader来源声明及普通局部补丁�
     assert.equal(require('../scripts/lib/reader-contract').READER_LIMITS.minimumChineseChars, 5000);
 });
 
-test('其余15份运行Prompt及两份冻结Manual要求字节保持', () => {
+test('两轮升级以外的14份运行Prompt及两份冻结Manual要求字节保持', () => {
     const base = '6753f5c098a3804af72e702eb93124ce91d86d3b';
     const changed = new Set(Object.keys(predecessors).map(stage => registry.currentTextStagePromptPath(stage)));
+    changed.add(registry.currentTextStagePromptPath('coreSummaryRepair'));
     for (const file of registry.CURRENT_PROMPT_FILES.filter(file => !changed.has(file))) {
         assert.deepEqual(fs.readFileSync(path.join(root, file)), execFileSync('git', ['show', `${base}:${file}`], { cwd: root }));
     }

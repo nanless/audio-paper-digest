@@ -14,7 +14,7 @@ CURRENT_PROMPT_FILES = frozenset((
     "prompts/api-reader-concept-terms-v1.md",
     "prompts/api-reader-fact-local-v3.md",
     "prompts/api-reader-repair-v13.md",
-    "prompts/core-summary-repair-v6.md",
+    "prompts/core-summary-repair-v7.md",
     "prompts/deep-analysis-v6.md",
     "prompts/digest-cover-v2.md",
     "prompts/filter-v5.md",

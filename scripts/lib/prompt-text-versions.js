@@ -172,7 +172,7 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V9_CONTRACT, path: 'prompts/api-reader-article-v9.md' }),
     apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V13_CONTRACT, path: 'prompts/api-reader-repair-v13.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
-    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V6_CONTRACT, path: 'prompts/core-summary-repair-v6.md' }),
+    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V7_CONTRACT, path: 'prompts/core-summary-repair-v7.md' }),
     structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/structure-repair-v3.md' }),
 });
 
@@ -235,6 +235,10 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (stage === 'coreSummaryRepair' && declared === ANALYSIS_PROMPT_TEXT_V4_CONTRACT) {
         return 'prompts/core-summary-repair-v4.md';
     }
+    // v6 原付费摘要保留原模板和输入身份；跨行比较说明升级不重签旧记录。
+    if (stage === 'coreSummaryRepair' && declared === ANALYSIS_PROMPT_TEXT_V6_CONTRACT) {
+        return 'prompts/core-summary-repair-v6.md';
+    }
     const archivedV3 = FROZEN_V3_PROMPT_FILES[stage];
     if (declared === ANALYSIS_PROMPT_TEXT_V3_CONTRACT && archivedV3?.contract === declared) return archivedV3.path;
     const archivedV4 = FROZEN_READER_V4_PROMPT_FILES[stage] || FROZEN_V4_PROMPT_FILES[stage];
@@ -263,7 +267,7 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (entry && declared === entry.contract) return entry.path;
     const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];
     if (archivedV2) known.push(ANALYSIS_PROMPT_TEXT_V2_CONTRACT);
-    if (stage === 'coreSummaryRepair') known.push(ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT);
+    if (stage === 'coreSummaryRepair') known.push(ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT, ANALYSIS_PROMPT_TEXT_V6_CONTRACT);
     if (archivedV3?.contract === ANALYSIS_PROMPT_TEXT_V3_CONTRACT) known.push(ANALYSIS_PROMPT_TEXT_V3_CONTRACT);
     if (archivedV4?.contract === ANALYSIS_PROMPT_TEXT_V4_CONTRACT) known.push(ANALYSIS_PROMPT_TEXT_V4_CONTRACT);
     if (stage === 'apiReaderRepair') known.push(ANALYSIS_PROMPT_TEXT_V5_CONTRACT);

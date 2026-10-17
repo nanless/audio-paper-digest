@@ -39,7 +39,7 @@ test('改写阶段分别按 v1、v2、v3 原路径身份读取Git证据，旧版
     }
     const coreOld = registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v3');
     const coreCurrent = registry.promptFilePathForContract('coreSummaryRepair', registry.currentPromptTextContract('coreSummaryRepair'));
-    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v6');
+    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v7');
     assert.equal(coreOld, registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v2'));
     assert.notEqual(coreCurrent, coreOld);
     assert.notEqual(deep.runtimePromptTemplateSha256(coreCurrent), deep.runtimePromptTemplateSha256(coreOld));
