@@ -910,6 +910,11 @@ function getIncompleteAnalysisContentReason(paper) {
 }
 
 function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOptions = {}) {
+    const local = require('./lib/conference-source-resource-correction');
+    if (local.isSourceCorrectionRecord(paper)) {
+        try { local.withSavedPaper(paper, () => local.assertVerified(paper)); }
+        catch (error) { return `本次来源纠正的原包、来源及完整输出未闭合：${error.message}`; }
+    }
     if (!hasValidAnalysisBodyUsingRules(paper, { tagRules })) return '分析正文未通过内容检查。';
     if (!paper.analysisManifest || paper.analysisManifest.version !== 1) {
         return '分析阶段记录 analysisManifest 缺失，或其版本无效。';
@@ -935,7 +940,7 @@ function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOpt
     const scoring = stages.scoringAudit;
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
         if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审查记录与最终正文不一致。';
-        if (!scoringStabilityIsResolved(scoring)) return '评分稳定性检查未通过。';
+        if (!scoringStabilityIsResolved(scoring, paper)) return '评分稳定性检查未通过。';
         if (readerOptions.conferenceReaderRefreshUpstream !== true
             && !hasValidApiReaderV3Records(paper, readerOptions)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
     }
@@ -1009,7 +1014,7 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
     const scoring = stages.scoringAudit;
     return scoring?.scoringContract === 'api-scoring-audit-v2'
         && scoringAuditBindsFinalAnalysis(paper)
-        && scoringStabilityIsResolved(scoring)
+        && scoringStabilityIsResolved(scoring, paper)
         && hasValidApiReaderV3Records(paper)
         && !validateManualTakeoverManifest(
             manifest,
@@ -1039,7 +1044,7 @@ function canRepairCoreSummaryFromSavedAnalysis(paper) {
         )) return false;
     return scoring?.scoringContract === 'api-scoring-audit-v2'
         && scoringAuditBindsFinalAnalysis(paper)
-        && scoringStabilityIsResolved(scoring)
+        && scoringStabilityIsResolved(scoring, paper)
         && hasValidApiReaderV3Records(paper);
 }
 
@@ -1055,7 +1060,18 @@ function getReadOnlyValidationAnalysisRunSummary(papers) {
 
 const API_READER_V3_CONTRACT = 'beginner-researcher-v3';
 const API_READER_QUALITY_METRICS_CONTRACT = 'api-reader-quality-metrics-v2';
-const { scoringStabilityIsResolved, SCORING_STABILITY_RESOLUTION_CONTRACT } = require('./lib/scoring-stability.js');
+const { scoringStabilityIsResolved: apiScoringStabilityIsResolved,
+    SCORING_STABILITY_RESOLUTION_CONTRACT } = require('./lib/scoring-stability.js');
+function scoringStabilityIsResolved(stage, paper = null) {
+    if (!['deterministic_source_resource_audit', 'deterministic_source_core_audit'].includes(stage?.executionKind)) {
+        return apiScoringStabilityIsResolved(stage);
+    }
+    if (!paper || paper.analysisManifest?.stages?.scoringAudit !== stage) return false;
+    try {
+        const local = require('./lib/conference-source-resource-correction');
+        return local.withSavedPaper(paper, () => local.assertVerifiedScoringStage(paper, stage));
+    } catch (_) { return false; }
+}
 const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
@@ -1077,7 +1093,10 @@ function stableSha256(value) {
 
 function hasValidApiReaderV3Records(paper, options = {}) {
     try {
-        return require('./lib/conference-reader-operator-correction').withSavedPaper(paper, () =>
+        const local = require('./lib/conference-source-resource-correction');
+        const route = local.isSourceCorrectionRecord(paper)
+            ? local : require('./lib/conference-reader-operator-correction');
+        return route.withSavedPaper(paper, () =>
             require('./lib/reader-dom-span-projection').withSavedPaper(paper, () =>
             require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
                 () => require('./lib/reader-sealed-pdf-quote-evidence').withSavedPaper(paper,

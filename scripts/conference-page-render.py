@@ -532,7 +532,9 @@ def render_packet(packet):
             or not isinstance(analysis, str) or not analysis.strip() or scoring_stage.get('status') != 'complete' \
             or scoring_stage.get('scoringContract') != SCORING_CONTRACT \
             or scoring_stage.get('outputAnalysisSha256') != hashlib.sha256(analysis.encode()).hexdigest() \
-            or not scoring_stability_is_resolved(scoring_stage):
+            or not (load_publish_to_blog()._validate_local_source_scoring_replay(paper)
+                    if scoring_stage.get('executionKind') in {'deterministic_source_resource_audit', 'deterministic_source_core_audit'}
+                    else scoring_stability_is_resolved(scoring_stage)):
         raise ValueError('会议论文的分析正文、全文来源或评分审计记录不符合 api-scoring-audit-v2 要求。')
     concepts = {item['id']: item for item in assignment.get('concepts', [])}
     ordered = []

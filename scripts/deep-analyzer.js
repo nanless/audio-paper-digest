@@ -303,6 +303,7 @@ const API_READER_TRANSPORT_MAX_RETRIES = 2;
 
 function getArxivFetchDispatcher() {
     require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
+    require('./lib/conference-source-resource-correction').assertMayAccessNetwork();
     const proxyUrl = detectHttpConnectProxyUrl();
     if (!proxyUrl) {
         const error = new Error('arXiv 全文、PDF 与图片抓取必须通过当前项目 .env 中 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 代理，拒绝直连或仅使用 SOCKS ALL_PROXY');
@@ -10026,6 +10027,113 @@ async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, 
     return finalized;
 }
 
+// Pure display projection shared by the normal writer and authenticated cold
+// replay. Supplied figures are not a source capability or new model pixels.
+function assembleApiReaderFinalDisplay(injectedReaderResult, signedFigures) {
+    const materializedFigureOrdinals = new Set(signedFigures.map(item => item.ordinal));
+    const readerResult = {
+        ...injectedReaderResult,
+        plan: {
+            ...injectedReaderResult.plan,
+            figurePlacements: (injectedReaderResult.plan.figurePlacements || [])
+                .filter(item => materializedFigureOrdinals.has(item.figureOrdinal))
+        },
+        article: pruneUnmaterializedApiReaderFigureBlocks(
+            injectedReaderResult.article,
+            injectedReaderResult.figures,
+            signedFigures
+        ),
+        figures: signedFigures
+    };
+    readerResult.article = normalizeApiReaderFigureMarkdown(readerResult.article, signedFigures);
+    return readerResult;
+}
+function replayApiReaderFinalDisplay(parsed, sourceDetails, materializedFigures, paperId) {
+    return assembleApiReaderFinalDisplay(injectApiReaderFigures(parsed,
+        sourceDetails.structuredArtifacts, paperId), materializedFigures);
+}
+
+async function finalizeConferenceLocalSourceCorrection(paper, sourceDetails) {
+    const local = require('./lib/conference-source-resource-correction');
+    const input = local.currentVerifiedCorrection(paper, sourceDetails);
+    local.assertFinalizerInput(input, paper);
+    return require('./lib/analysis-stop-control').withModelRequestsForbidden(async () => {
+        // Use the latest independently admitted scientific main/core/tag/score.
+        // readerParent is only the source of the old Reader and its asset lineage.
+        const working = structuredClone(input.parent), readerParent = input.readerParent;
+        if (input.scopeKind === 'source_core_correction') {
+            // Private module has replayed the one approved sentence against
+            // the actual retained tag checkpoint and verified all other bytes.
+            // This honest local stage is never copied from the old API stage.
+            working.analysisManifest.stages.coreSummaryRepair = structuredClone(input.coreStage);
+            working.analysisStageCheckpoints = { ...(working.analysisStageCheckpoints || {}),
+                coreSummaryRepair: input.coreCheckpoint };
+        }
+        working.analysis = input.audit.analysis;
+        working.parsed = structuredClone(input.audit.parsed);
+        working.analysisManifest.stages.scoringAudit = local.scoringStage(input);
+        working.analysisStageCheckpoints = { ...(working.analysisStageCheckpoints || {}),
+            scoringAudit: working.analysis, apiReaderArticle: working.analysis };
+        working.analysisCheckpoint = working.analysis;
+        const locator = { contract: input.provenance.contract,
+            processId: input.provenance.processId, executionId: input.provenance.executionId,
+            manifestSha256: input.provenance.manifestSha256 };
+        working.conferenceSourceCorrection = locator;
+        working.conferenceSourceCorrectionObligation = { ...locator, status: 'complete',
+            originalRoleCAS: structuredClone(input.provenance.originalRoleCAS),
+            sourceSha256: input.provenance.sourceSha256,
+            sourceSnapshotSha256: input.provenance.sourceSnapshotSha256 };
+        const source = input.sourceDetails;
+        const policy = validateReaderCapabilityPolicy(require('./lib/conference-analysis-context')
+            .conferenceWeakReaderCapabilityPolicy(working, source.structuredArtifacts));
+        const evidence = buildApiReaderEvidenceContext('', source.text,
+            source.structuredArtifacts, working.id);
+        const parsed = parseApiReaderArticleResult(JSON.stringify(input.draft), {
+            arxivId: working.id, requiredVersion: 3, requireIntegratedTables: true,
+            minimumIntegratedTables: policy?.minimumIntegratedTables ?? readerRequirements({ version: 3,
+                availableTableCount: [...evidence.matchAll(/^TABLE_(\d+):/gm)].length }).minimumTables,
+            readerCapabilityPolicy: policy, requireSourceBindings: true,
+            allowDeterministicQuoteRepair: false,
+            allowDeterministicUnsupportedClaimPruning: false,
+            exactSignedBridgeSurfaces: readerParent.apiReaderPlan.conceptBridges.map(bridge => bridge.explanation),
+            verifiedResourceIdentity: input.resources, enforceResourceAvailabilityClaims: true,
+            availableFigureOrdinals: readerParent.apiReaderFigures.map(figure => figure.ordinal),
+            structuredArtifacts: source.structuredArtifacts, sourceText: source.text
+        });
+        const previous = readerParent.analysisManifest.stages.apiReaderArticle;
+        const counts = Object.fromEntries(['attempts', 'fullAttempts', 'transportFailures']
+            .filter(key => Object.hasOwn(previous, key)).map(key => [key, previous[key]]));
+        const final = await finalizeApiReaderRefresh(working, source, {
+            ...parsed,
+            // Historical signed pixel input remains only in originApiStage.
+            // This local execution has no new model input or request.
+            imageEvidence: []
+        }, {
+            localSourceCorrectionInput: input, preserveReaderUpstream: true,
+            readerAuthors: structuredClone(readerParent.apiReaderAuthors),
+            readerResources: structuredClone(input.resources),
+            execution: { executionKind: 'operator', model: 'operator-local', protocol: 'local_operator',
+                contentMode: input.scopeKind === 'source_core_correction'
+                    ? 'conference-reader-source-core-correction-v1' : 'conference-reader-source-resource-correction-v1',
+                newReaderApiRequests: 0, fingerprint: stableFingerprint(input.provenance),
+                operatorProvenance: structuredClone(input.provenance),
+                originApiStage: structuredClone(previous), ...counts,
+                evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
+                evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS, contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
+                evidenceSha256: crypto.createHash('sha256').update(evidence).digest('hex'),
+                sourceCorrectionAppliedAt: input.provenance.appliedAt }
+        });
+        local.assertFinalizerInput(input, final);
+        local.assertVerified(final);
+        // The private source module can close only the exact original Reader
+        // failure after actual Reader/source/upstream validation. No generic
+        // failure deletion, receipt installation, save or stage is performed.
+        local.clearVerifiedReaderFailure(final);
+        local.assertVerified(final);
+        return final;
+    });
+}
+
 async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options) {
     const manifest = paper.analysisManifest, analysis = String(paper.analysis || '');
     const arxivId = getPaperArxivId(paper), sourceText = String(sourceDetails.text || '');
@@ -10037,30 +10145,20 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const directMaterializer = directContext.directReaderMaterializer();
     const paidFigures = require('./lib/reader-paid-resolved-render')
         .reuseVerifiedPaidResolvedFigures(injectedReaderResult.figures, paper, arxivId);
-    const materializedFigures = paidFigures ?? (options.reuseSignedFigures
-        ? reuseSignedApiReaderFigureAssets(injectedReaderResult.figures, options.reuseSignedFigures, arxivId)
-        : await (directMaterializer || materializeApiReaderFigures)(
-            injectedReaderResult.figures, arxivId
-        ));
-    const materializedFigureOrdinals = new Set(materializedFigures.map(item => item.ordinal));
+    const localSourceInput = options.localSourceCorrectionInput;
+    const localSource = localSourceInput && require('./lib/conference-source-resource-correction');
+    if (localSourceInput) localSource.assertFinalizerInput(localSourceInput, paper);
+    const materializedFigures = localSourceInput
+        ? localSource.readVerifiedSignedFigures(localSourceInput, injectedReaderResult.figures)
+        : paidFigures ?? (options.reuseSignedFigures
+            ? reuseSignedApiReaderFigureAssets(injectedReaderResult.figures, options.reuseSignedFigures, arxivId)
+            : await (directMaterializer || materializeApiReaderFigures)(
+                injectedReaderResult.figures, arxivId
+            ));
     const signedFigures = directContext.getDirectRewriteAnalysisContext()
         ? materializedFigures.map(directContext.stripEphemeralFigureFields)
         : materializedFigures;
-    const readerResult = {
-        ...injectedReaderResult,
-        plan: {
-            ...injectedReaderResult.plan,
-            figurePlacements: (injectedReaderResult.plan.figurePlacements || [])
-                .filter(item => materializedFigureOrdinals.has(item.figureOrdinal))
-        },
-        article: pruneUnmaterializedApiReaderFigureBlocks(
-            injectedReaderResult.article,
-            injectedReaderResult.figures,
-            materializedFigures
-        ),
-        figures: signedFigures
-    };
-    readerResult.article = normalizeApiReaderFigureMarkdown(readerResult.article, signedFigures);
+    const readerResult = assembleApiReaderFinalDisplay(injectedReaderResult, signedFigures);
     require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', readerResult.article,
         getPaperArxivId(paper));
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
@@ -14317,6 +14415,7 @@ function exactResourceSourceQuote(sourceText, url, maxChars = 1200) {
 
 async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
     require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
+    require('./lib/conference-source-resource-correction').assertMayAccessNetwork();
     const requestImpl = options.requestImpl || requestPinnedPublicHttps;
     const validateUrlImpl = options.validateUrlImpl || validatePublicHttpUrl;
     let currentUrl = String(rawUrl || '');
@@ -15228,6 +15327,7 @@ function nodeHeadersView(headers) {
 
 async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {}) {
     require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
+    require('./lib/conference-source-resource-correction').assertMayAccessNetwork();
     const {
         headers = {},
         timeoutMs = 15000,
@@ -17771,15 +17871,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             const replayReceipt = paidCoreReplay.id ? Object.fromEntries(Object.entries(paidCoreReplay)
                 .filter(([key]) => key !== 'operatorLiteralCorrection')) : null;
             const summaryBinding = {
-                contractVersion: CORE_SUMMARY_CONTRACT_VERSION,
-                inputAnalysisSha256: coreSummaryRepairStage.inputAnalysisSha256,
-                outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
-                inputSummarySha256: crypto.createHash('sha256').update(summaryInput).digest('hex'),
-                summarySha256: crypto.createHash('sha256').update(summaryOutput).digest('hex'),
-                inputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(
-                    coreSummaryRepairStage.inputAnalysis
-                ),
-                outputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(analysis),
+                ...buildCoreSummaryBindingBody(
+                    coreSummaryRepairStage.inputAnalysis, analysis),
                 ...(paidCoreReplay.operatorLiteralCorrection ? {
                     operatorLiteralCorrection: paidCoreReplay.operatorLiteralCorrection,
                     paidDiagnosticReplay: replayReceipt
@@ -19019,6 +19112,7 @@ function isPrivateIpAddress(address) {
 
 async function validatePublicHttpUrl(rawUrl) {
     require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
+    require('./lib/conference-source-resource-correction').assertMayAccessNetwork();
     const url = new URL(rawUrl);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         throw new Error(`不支持的公网 URL 协议: ${url.protocol}`);
@@ -19465,6 +19559,21 @@ async function repairTagSelection(paper, analysis, evidenceContext, issue, optio
         }
     }
     throw contractRejectedError(`标签局部修复失败：${feedback}`);
+}
+
+function buildCoreSummaryBindingBody(inputAnalysis, outputAnalysis) {
+    const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+    // The normal caller already supplies strings. Avoid normalizing, trimming
+    // or reconstructing either actual input/output before hashing the bytes.
+    return {
+        contractVersion: CORE_SUMMARY_CONTRACT_VERSION,
+        inputAnalysisSha256: sha(inputAnalysis),
+        outputAnalysisSha256: sha(outputAnalysis),
+        inputSummarySha256: sha(extractSectionByTitle(inputAnalysis, '核心摘要')),
+        summarySha256: sha(extractSectionByTitle(outputAnalysis, '核心摘要')),
+        inputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(inputAnalysis),
+        outputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(outputAnalysis)
+    };
 }
 
 async function repairCoreSummarySection(
@@ -20346,7 +20455,9 @@ module.exports = {
     finalizeDeferredDailyReaderImages,
     inspectSavedConferenceReaderCompletion,
     hasReviewedReaderFactLocalSeed,
+    buildCoreSummaryBindingBody,
     finalizeApiReaderRefresh,
+    replayApiReaderFinalDisplay, finalizeConferenceLocalSourceCorrection,
     finalizeOperatorApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,

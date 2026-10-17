@@ -39,7 +39,20 @@ try {
         issue = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, { sourceText: input.sourceText });
     } else if (Object.keys(input).sort().join(',') === 'mode,paper,sourceText'
         && input.mode === 'stage-binding' && input.paper && typeof input.paper === 'object' && !Array.isArray(input.paper)) {
-        issue = contract.validateCoreSummaryStageBinding(input.paper, { sourceText: input.sourceText });
+        const local = require('./conference-source-resource-correction');
+        if (local.isSourceCorrectionRecord(input.paper)) {
+            issue = local.withSavedPublicationPaper(input.paper, canonical => {
+                const context = require('./conference-analysis-context').getConferenceAnalysisContext();
+                const provider = context?.readerPdfSourceHandle
+                    && require('./conference-source-context').readerPdfSourceForContext(context.readerPdfSourceHandle);
+                if (!provider || provider.paperId !== canonical.id || provider.sourceText !== input.sourceText
+                    || require('node:crypto').createHash('sha256').update(input.sourceText).digest('hex') !== canonical.sourceSha256) {
+                    throw new Error('Local core replay source differs from actual configured canonical PDF/text');
+                }
+                provider.assertUnchanged();
+                return contract.validateCoreSummaryStageBinding(canonical, { sourceText: input.sourceText });
+            });
+        } else issue = contract.validateCoreSummaryStageBinding(input.paper, { sourceText: input.sourceText });
     } else throw new Error('Input must be exact semantic or stage-binding replay data');
     if (issue !== null && typeof issue !== 'string') throw new Error('Semantic contract returned an invalid result');
     writeResult(issue);

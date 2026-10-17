@@ -115,7 +115,7 @@ function validateReaderAndScoring(paper, sourceText) {
     }
     if (scoring.status !== 'complete' || scoring.scoringContract !== SCORING_CONTRACT
         || !analysisEngine.scoringAuditBindsFinalAnalysis(paper)
-        || !analysisEngine.scoringStabilityIsResolved(scoring)) {
+        || !analysisEngine.scoringStabilityIsResolved(scoring, paper)) {
         fail('评分审查的状态、规则、正文绑定或稳定性未通过校验。');
     }
     return getPublicationUrls(paper);
@@ -229,6 +229,7 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     const authenticatedPdfBindings = (sourcePaper.apiReaderPlan?.tableBindings || [])
         .filter(binding => binding.authenticatedPdfTableEvidence !== undefined);
     let readerPdfSourceHandle = loaded.recoveryWindow
+        || require('./conference-source-resource-correction').isSourceCorrectionRecord(sourcePaper)
         ? adapter.verifyPlanAuthority(loaded, planHandle, sourceRoot) : null;
     if (authenticatedPdfBindings.length) {
         const identity = authenticatedPdfBindings[0].authenticatedPdfTableEvidence?.sourceIdentity;

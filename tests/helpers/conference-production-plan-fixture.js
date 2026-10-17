@@ -18,7 +18,7 @@ const NOW = '2026-09-06T12:00:00.000Z';
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = plan, authors = null,
-    tagCatalogBytes = null } = {}) {
+    tagCatalogBytes = null, pdfBytes: inputPdfBytes = null } = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-plan-authority-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const roots = Object.fromEntries(['source', 'cache', 'ledgers', 'catalogs', 'reports', 'filters', 'staging', 'runs']
@@ -27,7 +27,7 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
     const pdfRoot = path.join(root, 'pdfs'); fs.mkdirSync(pdfRoot, { mode: 0o700 });
     const metadataFile = path.join(root, 'metadata.json'); const title = `Paper ${value}`;
     fs.writeFileSync(metadataFile, JSON.stringify([{ arnumber: value, title, ...(authors ? { authors } : {}) }]), { mode: 0o600 });
-    fs.writeFileSync(path.join(pdfRoot, `${title}.pdf`), extractionFixture.buildPdf(title, pdfLines), { mode: 0o600 });
+    fs.writeFileSync(path.join(pdfRoot, `${title}.pdf`), inputPdfBytes || extractionFixture.buildPdf(title, pdfLines), { mode: 0o600 });
 
     const discovered = discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile, pdfRoot });
     const catalogFile = path.join(roots.catalogs, 'catalog.json'); const reportFile = path.join(roots.reports, 'report.json');

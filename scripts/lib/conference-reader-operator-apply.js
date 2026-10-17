@@ -50,8 +50,9 @@ async function applyCorrection({ batchHandle, analysisRoot, executionId, planHan
             }
             corrections.assertSavedBatchMember(batchHandle, paper);
             qualifyAndSeal(loaded, { planHandle, sourceRoot }, engine);
-            return { executionId, paperId: loaded.run.paperId, status: 'complete',
-                analysisSha256: loaded.analysisFileSha256, revision: loaded.revision, resumed: true };
+            const sealed = adapter.loadGrantedConferenceRecovery({ analysisRoot, executionId });
+            return { executionId, paperId: sealed.run.paperId, status: 'complete',
+                ...sealedAdoptionIdentity(sealed), revision: sealed.revision, resumed: true };
         }
         const result = await corrections.withCorrection(batchHandle, { executionId, planHandle, sourceRoot }, async () => {
             const before = loaded.analysis.papers[0], paper = structuredClone(before);
@@ -78,7 +79,8 @@ async function applyCorrection({ batchHandle, analysisRoot, executionId, planHan
         // canonical/source chain may authorize this independent cold replay.
         const completed = adapter.loadGrantedConferenceRecovery({ analysisRoot, executionId });
         qualifyAndSeal(completed, { planHandle, sourceRoot }, engine);
-        return { ...result, analysisSha256: completed.analysisFileSha256 };
+        const sealed = adapter.loadGrantedConferenceRecovery({ analysisRoot, executionId });
+        return { ...result, ...sealedAdoptionIdentity(sealed) };
     }, { recoveryPolicy: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 async function applyAndStageBatch({ manifestPath, grantHandle, directory, state, shared }, deps) {
@@ -101,10 +103,26 @@ async function applyAndStageBatch({ manifestPath, grantHandle, directory, state,
             executionId: result.executionId, tagCatalogPath: deps.files.tagCatalogFile,
             stagingRoot: deps.files.conferencePageStagingDir, planHandle, sourceRoot, apply: true });
         if (page.status !== 'staged') fail('人工结果未通过正常页面后处理');
+        assertAdoptionStageBinding(record, result, page.manifest);
         staged.push({ record, result, page, retained, planHandle, sourceRoot });
     }
     const stateFile = path.join(directory, 'state.json');
-    const next = deps.engine.updateJsonFileLocked(stateFile, current => {
+    const next = await withSortedAdoptionLocks(staged.map(row => row.record.paperId), deps.engine, () => {
+        for (const row of staged) {
+            const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
+                executionId: row.result.executionId });
+            if (loaded.run.status !== 'complete' || loaded.analysis.status !== 'complete'
+                || loaded.analysisFileSha256 !== row.result.analysisSha256
+                || loaded.runFileSha256 !== row.result.runFileSha256
+                || loaded.sourceFileSha256 !== row.result.sourceFileSha256) fail('人工整批采纳前真实子稿CAS改变');
+            const stage = deps.postprocess.loadStage({ analysisRoot: deps.files.conferenceAnalysisDir,
+                executionId: row.result.executionId, tagCatalogPath: deps.files.tagCatalogFile,
+                stagingRoot: deps.files.conferencePageStagingDir,
+                planHandle: row.planHandle, sourceRoot: row.sourceRoot });
+            assertAdoptionStageBinding(row.record, row.result, stage.manifest);
+            if (stage.manifest.manifestSha256 !== row.page.manifest.manifestSha256) fail('人工整批采纳前暂存凭证改变');
+        }
+        return deps.engine.updateJsonFileLocked(stateFile, current => {
         const checked = processApi.assertState(current);
         if (checked.stateSha256 !== state.stateSha256
             || adapter.readJsonRecord(stateFile).sha256 !== manifest.value.stateFileSha256
@@ -127,10 +145,31 @@ async function applyAndStageBatch({ manifestPath, grantHandle, directory, state,
         value.status = 'running'; value.aggregate = null; value.completionReceiptSha256 = null;
         value.generation++; value.updatedAt = deps.now(); value.stateSha256 = processApi.stateDigest(value);
         return processApi.assertState(value);
+        });
     });
     for (const { result, retained, planHandle, sourceRoot } of staged) if (shared.retainedSources) {
         shared.retainedSources.set(result.executionId, { ...retained, planHandle, sourceRoot });
     }
     return next;
+}
+function sealedAdoptionIdentity(loaded) {
+    if (loaded.run.status !== 'complete' || loaded.analysis.status !== 'complete') fail('采纳须绑定真实完整子运行');
+    return { analysisSha256: loaded.analysisFileSha256, runFileSha256: loaded.runFileSha256,
+        sourceFileSha256: loaded.sourceFileSha256,
+        completionReceiptSha256: loaded.run.completionReceipt.receiptSha256,
+        sourceSnapshotSha256: loaded.run.sourceSnapshotSha256 };
+}
+function assertAdoptionStageBinding(record, result, manifest) {
+    if (manifest.paperId !== record.paperId || manifest.analysisExecutionId !== record.executionId
+        || manifest.analysisExecutionId !== result.executionId || manifest.analysisSha256 !== result.analysisSha256
+        || manifest.completionReceiptSha256 !== result.completionReceiptSha256
+        || manifest.sourceSnapshotSha256 !== result.sourceSnapshotSha256) fail('人工分析与页面证明不是同一真实稿件');
+}
+function withSortedAdoptionLocks(ids, engine, callback) {
+    const ordered = [...new Set(ids)].sort();
+    const next = index => index === ordered.length ? callback()
+        : engine.withPaperAnalysisLock({ id: ordered[index] }, () => next(index + 1),
+            { recoveryPolicy: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
+    return next(0);
 }
 module.exports = { applyCorrection, applyAndStageBatch, protectedProjection };

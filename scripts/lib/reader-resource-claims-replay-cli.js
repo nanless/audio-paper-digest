@@ -36,15 +36,20 @@ globalThis.fetch = deny;
         || crypto.createHash('sha256').update(input.sourceText).digest('hex') !== input.paper.sourceSha256))) {
         throw new Error('Resource claims are not bound to authenticated source bytes');
     }
+    const local = require('./conference-source-resource-correction');
+    const presentedPaper = input.paper;
+    await local.withSavedPublicationPaper(presentedPaper, async canonicalPaper => {
+    input.paper = canonicalPaper;
     const authenticated = (input.paper.apiReaderPlan?.tableBindings || [])
         .filter(binding => binding.authenticatedPdfTableEvidence !== undefined);
     const footnoteResources = (input.paper.apiReaderResources?.resources || [])
         .filter(resource => resource && Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence'));
     if (pdfOnly && !authenticated.length) throw new Error('Authenticated PDF table replay requires an actual saved table proof');
-    if (pdfResourcesOnly && !footnoteResources.length) throw new Error('Authenticated PDF resource replay requires an actual saved footnote proof');
+    if (pdfResourcesOnly && !footnoteResources.length && !local.isSourceCorrectionRecord(canonicalPaper)) throw new Error('Authenticated PDF resource replay requires an actual saved footnote proof');
     const identities = [...authenticated.map(binding => binding.authenticatedPdfTableEvidence?.sourceIdentity),
         ...footnoteResources.map(resource => resource.authenticatedPdfFootnoteEvidence?.sourceIdentity)];
-    let authenticatedHandle = null;
+    let authenticatedHandle = local.isSourceCorrectionRecord(canonicalPaper)
+        ? local.readVerifiedPublicationPdfSource(canonicalPaper) : null;
     if (identities.length) {
         const identity = identities[0];
         if (identities.some(value => !require('node:util').isDeepStrictEqual(value, identity))) throw new Error('PDF table/resource proofs mix original source identities');
@@ -101,7 +106,11 @@ globalThis.fetch = deny;
                         authenticatedPdfProofVerified: true } : {}) };
             }) };
     });
+    if (local.isSourceCorrectionRecord(canonicalPaper)) {
+        response.localSourceCorrection = local.exportPublicationVerification(presentedPaper, canonicalPaper);
+    }
     writeOutput(JSON.stringify(response));
+    });
 } catch (error) {
     writeOutput(JSON.stringify({ verified: false, code: error.code || 'READER_RESOURCE_REPLAY_FAILED',
         issues: Array.isArray(error.readerIssues) ? error.readerIssues : [], message: error.message }));

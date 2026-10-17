@@ -8786,6 +8786,31 @@ def _validate_authenticated_pdf_resource_identity_replay(paper):
             or not isinstance(response, dict) or response.get('verified') is not True:
         reason = response.get('message', '') if isinstance(response, dict) else '响应必须为对象'
         raise PublishDataValidationError('认证 PDF 脚注资源未通过真实来源冷重放：' + str(reason))
+    return response
+
+
+def _validate_local_source_scoring_replay(paper):
+    # The same inherited private FD cold-loads the configured canonical package,
+    # verifies physical before/receipt/source, and runs all normal Node gates.
+    # JSON declarations, local strings or this digest are not capabilities.
+    from publish_common import _manual_hash
+    response = _validate_authenticated_pdf_resource_identity_replay(paper)
+    proof = response.get('localSourceCorrection')
+    locator = paper.get('conferenceSourceCorrection') or {}
+    stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('scoringAudit') or {}
+    if not isinstance(proof, dict) or proof.get('contract') != 'conference-source-correction-verification-v1' \
+            or proof.get('verified') is not True or proof.get('newApiRequests') != 0 \
+            or proof.get('executionId') != locator.get('executionId') \
+            or proof.get('sourceCorrectionContract') != locator.get('contract') \
+            or proof.get('scopeKind') != {'deterministic_source_resource_audit': 'source_resource_correction', \
+                                        'deterministic_source_core_audit': 'source_core_correction'}.get(stage.get('executionKind')) \
+            or proof.get('presentedPaperSha256') != _manual_hash(paper) \
+            or proof.get('scoringStageSha256') != _manual_hash(stage) \
+            or proof.get('sourceSha256') != paper.get('sourceSha256') \
+            or not all(re.fullmatch(r'[a-f0-9]{64}', str(proof.get(key, ''))) for key in \
+                       ('canonicalPaperSha256', 'receiptSha256')):
+        raise PublishDataValidationError('本地来源评分未通过整篇、原回执及真实 PDF 冷重放。')
+    return True
 
 
 def _add_reader_term_heading_spaces(article, plan):

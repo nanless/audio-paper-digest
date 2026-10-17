@@ -33,6 +33,7 @@
 | 按报错定位恢复入口 | [故障排查](troubleshooting.md) |
 | Reader 原付费稿核验、有界追加及已授权修正 | [Reader 恢复](reader-explicit-retry.md) |
 | 会议原额度耗尽后，明确获准的剩余集合追加 | [独立会议窗口](conference-workflow.md#原额度耗尽后的独立付费恢复)、[记录格式](data-format.md#会议独立追加窗口) |
+| 会议只做统一后处理、认证来源事实的零请求纠正 | [来源纠正](conference-workflow.md#认证来源事实的零请求纠正)；资源与核心清单分开，原失败、次数及费用保留 |
 | 旧数据、旧协议与旧提示词如何核验 | [兼容规则](compatibility.md)、[旧记录与独立人工审查](../manual/README.md) |
 
 ## 维护代码与查阅协议

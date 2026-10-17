@@ -12,7 +12,7 @@ const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--postprocess-only] [--source-corrections ABSOLUTE_PATH] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -20,11 +20,11 @@ function parseArgs(argv) {
     const values = {};
     for (let index = 1; index < argv.length;) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (flag === '--reuse-complete-pages' || flag === '--retry-failed') {
+        if (flag === '--reuse-complete-pages' || flag === '--retry-failed' || flag === '--postprocess-only') {
             if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
-        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest', '--reader-corrections'].includes(flag)
+        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest', '--reader-corrections', '--source-corrections'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value; index += 2;
     }
@@ -33,15 +33,19 @@ function parseArgs(argv) {
         || !UUID_RE.test(values['--filter'] || '') || !UUID_RE.test(values['--from'] || '')
         || (values['--concurrency'] && !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values['--concurrency']))
         || (values['--recovery-manifest'] && (!path.isAbsolute(values['--recovery-manifest']) || !values['--retry-failed']))
-        || (values['--reader-corrections'] && (!path.isAbsolute(values['--reader-corrections']) || !values['--recovery-manifest']))) {
+        || (values['--reader-corrections'] && (!path.isAbsolute(values['--reader-corrections']) || !values['--recovery-manifest']))
+        || (values['--source-corrections'] && (!path.isAbsolute(values['--source-corrections'])
+            || !values['--postprocess-only'] || values['--reader-corrections']))) {
         throw new Error(`命令写法不对，用法：${USAGE}`);
     }
     return { apply: true, statusOnly: false, catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'],
         fromProcessId: values['--from'], concurrency: Number(values['--concurrency'] || 3),
         reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']),
+        postprocessOnly: Boolean(values['--postprocess-only']),
         ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}),
-        ...(values['--reader-corrections'] ? { readerCorrections: values['--reader-corrections'] } : {}) };
+        ...(values['--reader-corrections'] ? { readerCorrections: values['--reader-corrections'] } : {}),
+        ...(values['--source-corrections'] ? { sourceCorrections: values['--source-corrections'] } : {}) };
 }
 
 function withoutImplementation(authority, version = processApi.PROCESS_VERSION) {
@@ -135,6 +139,15 @@ function migrateAndRun(options, runtime = {}) {
             state = await require('./lib/conference-reader-operator-apply').applyAndStageBatch({
                 manifestPath: options.readerCorrections, grantHandle, directory, state, shared }, deps);
         }
+        if (options.sourceCorrections) {
+            if (!options.postprocessOnly || options.readerCorrections || requiresMigration || lifecycleNeedsRefresh) {
+                throw new Error('来源纠正要求当前实现已完整迁移，并显式仅后处理；不能混入付费调度或其它人工批次');
+            }
+            // Only the actual registered source batch authorizes this separate
+            // local transaction; it cannot enter paid dispatch below.
+            state = await require('./lib/conference-source-resource-correction-apply').applyAndStageBatch({
+                manifestPath: options.sourceCorrections, directory, state, shared }, deps);
+        }
         // 只有实现或生命周期确实需要时，才重新处理已完成的论文。发布器或渲染器的提交
         // 会在 LLM 流程运行期间改变实现指纹，这时重跑只是把暂存页拉回与记录一致，
         // 不必把已完成的论文再送回 LLM。实现没变、只是普通重试时跳过这一步，
@@ -150,7 +163,7 @@ function migrateAndRun(options, runtime = {}) {
                 require('./lib/analysis-stop-control').assertMayStartRequest();
                 const original = shared.retainedSources?.get(item.analysisRunId);
                 let staged;
-                try { staged = deps.postprocess.stagePaper({
+                try { const stageComplete = () => deps.postprocess.stagePaper({
                     analysisRoot: deps.files.conferenceAnalysisDir,
                     executionId: item.analysisRunId,
                     tagCatalogPath: deps.files.tagCatalogFile,
@@ -159,6 +172,9 @@ function migrateAndRun(options, runtime = {}) {
                     sourceRoot: original?.sourceRoot || shared.sourceCacheRoot,
                     apply: true
                 });
+                staged = options.postprocessOnly
+                    ? require('./lib/analysis-stop-control').withModelRequestsForbidden(stageComplete)
+                    : stageComplete();
                 if (staged.status !== 'staged') {
                     throw new Error(`已完成的论文用当前后处理代码跑不过：${item.paperId}`);
                 }
@@ -334,6 +350,18 @@ function migrateAndRun(options, runtime = {}) {
         // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
         // 出来，流程完成时才能原子写入新凭证。
         archiveStaleCompletionReceipt(directory, state);
+        if (options.postprocessOnly) {
+            // Migration/state/receipt/source checks above are mandatory. This
+            // mode never enters process dispatch, retry release or aggregation.
+            return { status: 'postprocessed_only', postprocessedOnly: true,
+                processId: options.fromProcessId, generation: state.generation,
+                stateSha256: state.stateSha256, implementationSha256: state.authority.implementationSha256,
+                complete: Object.values(state.items).filter(item => item.status === 'complete').length,
+                pending: Object.values(state.items).filter(item => item.status !== 'complete').length,
+                checkedComplete: requiresMigration || lifecycleNeedsRefresh ? complete.length : 0,
+                stagedComplete: stagedProofs.size, stageFailed: stageFailures.size,
+                sourceCorrectionsApplied: Boolean(options.sourceCorrections), newApiRequests: 0 };
+        }
         return processApi.runConferenceProcessLocked(grant ? { ...options, recoveryGrantId: grant.grantId,
             recoveryGrantSha256: grant.grantSha256 } : options, migrationDeps, context,
             options.fromProcessId, directory);

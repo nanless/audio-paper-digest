@@ -1146,6 +1146,43 @@ test('会议迁移先完成全批正常后处理，再按失败集合刷新并�
     assert.equal(current.items[f.members[1].paperId].attempts, 3);
 });
 
+test('仅后处理完整收集失败并迁移凭证，禁止模型且不进入分析、聚合或重试窗口', async t => {
+    const migration = require('../scripts/migrate-conference-process');
+    const stop = require('../scripts/lib/analysis-stop-control');
+    const f = fixture(t, 3), options = { apply: true, concurrency: 1 };
+    const first = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_c, _s, item) => success(item) });
+    const filename = path.join(f.files.conferenceProcessDir, first.processId, 'state.json');
+    const before = JSON.parse(fs.readFileSync(filename));
+    f.context.authority = { ...f.authority, implementationSha256: H('postprocess only implementation') };
+    f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
+    const seen = [];
+    const result = await migration.migrateAndRun({ ...options, fromProcessId: first.processId,
+        retryFailed: true, postprocessOnly: true }, { dependencies: { ...f.deps,
+        processPaper: () => assert.fail('postprocess-only must not dispatch analysis'),
+        aggregate: () => assert.fail('postprocess-only must not aggregate'),
+        postprocess: { stagePaper: ({ executionId }) => {
+            assert.throws(() => stop.assertMayStartRequest(), { code: stop.MODEL_REQUESTS_FORBIDDEN });
+            seen.push(executionId);
+            if (seen.length === 2) throw Object.assign(new Error('real semantic failure fixture'),
+                { code: 'CONFERENCE_POSTPROCESS_INTEGRITY', retryable: false });
+            return { status: 'staged', manifest: { ...success(f.members[0]).pageProof,
+                manifestSha256: H(executionId) } };
+        } }
+    } });
+    assert.equal(result.status, 'postprocessed_only'); assert.equal(result.newApiRequests, 0);
+    assert.equal(result.checkedComplete, 3); assert.equal(result.stageFailed, 1);
+    assert.equal(seen.length, 3);
+    const after = JSON.parse(fs.readFileSync(filename));
+    assert.equal(after.authority.implementationSha256, f.context.authority.implementationSha256);
+    for (const id of Object.keys(before.items)) {
+        assert.equal(after.items[id].attempts, before.items[id].attempts);
+        assert.deepEqual(after.items[id].retryReleases, before.items[id].retryReleases);
+        assert.equal(after.items[id].retryBudgetStart, before.items[id].retryBudgetStart);
+        assert.equal(after.items[id].analysisRunId, before.items[id].analysisRunId);
+    }
+});
+
 test('会议未创建任何 child 时重验修复后的原父稿，零模型恢复且保留原分析证明', async t => {
     const migration = require('../scripts/migrate-conference-process');
     const f = fixture(t), options = { apply: true, concurrency: 1 };
@@ -1533,6 +1570,11 @@ test('重试放行是一个显式的、只在 apply 时可用的命令行参数'
         '--from', '11111111-1111-4111-8111-111111111111', '--retry-failed']).retryFailed, true);
     const migrate = require('../scripts/migrate-conference-process.js');
     const base = ['--apply', ...args, '--from', '11111111-1111-4111-8111-111111111111'];
+    assert.equal(migrate.parseArgs([...base, '--postprocess-only']).postprocessOnly, true);
+    assert.equal(migrate.parseArgs(base).postprocessOnly, false);
+    assert.throws(() => migrate.parseArgs([...base, '--source-corrections', '/tmp/source.json']), /命令写法/);
+    assert.equal(migrate.parseArgs([...base, '--postprocess-only', '--source-corrections', '/tmp/source.json'])
+        .sourceCorrections, '/tmp/source.json');
     assert.throws(() => migrate.parseArgs([...base, '--reader-corrections', '/tmp/local.json']), /命令写法/);
     assert.throws(() => migrate.parseArgs([...base, '--retry-failed', '--recovery-manifest', '/tmp/grant.json',
         '--reader-corrections', 'relative.json']), /命令写法/);

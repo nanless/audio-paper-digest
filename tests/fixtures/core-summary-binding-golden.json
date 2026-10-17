@@ -1,0 +1,57 @@
+{
+  "legacyDeepSha256": "24af050f22cee7346ec31b7cdc557cf1adc3d6194c2c0d8cfcf73892f52a1cc5",
+  "cases": [
+    {
+      "input": "## 核心摘要\n原句。\n\n## 方法概述和架构\n保持。",
+      "output": "## 核心摘要\n新句。\n\n## 方法概述和架构\n保持。",
+      "expected": {
+        "contractVersion": "core-summary-detailed-v3",
+        "inputAnalysisSha256": "7d60866291f1f7a5439c33587830eae37a8b3ffa05242849a88069ec634c5d35",
+        "outputAnalysisSha256": "56cf685f4b7f6729b1303f8034364fbee1599e0e3e43332bf17f468fd95c2b05",
+        "inputSummarySha256": "1bddf8c4c811ad4e772d501df041f5e8ccd901bd61a95132acb0fe464f13edab",
+        "summarySha256": "fadd19f891cbcbcb91924d626e6c5d18bf6bb5443f1bf82113d8983a12fd616f",
+        "inputStructureProjectionSha256": "50b5deb3931e20988fe08b2539225bcb57d4178a0bff0730c2e3632fd1c3732d",
+        "outputStructureProjectionSha256": "50b5deb3931e20988fe08b2539225bcb57d4178a0bff0730c2e3632fd1c3732d"
+      }
+    },
+    {
+      "input": "## 核心摘要\r\n原句。\r\n\r\n## 其它\r\n保持。",
+      "output": "## 核心摘要\r\n新句。\r\n\r\n## 其它\r\n保持。",
+      "expected": {
+        "contractVersion": "core-summary-detailed-v3",
+        "inputAnalysisSha256": "cb323460c3bf064ddb54ea0e8d374cb096a5d35a802d356b21fda0413947b24e",
+        "outputAnalysisSha256": "356653db96b21bc2edf9d95c6ee9dfa55b9aec83ce7810a6eaa6900a9144b558",
+        "inputSummarySha256": "1bddf8c4c811ad4e772d501df041f5e8ccd901bd61a95132acb0fe464f13edab",
+        "summarySha256": "fadd19f891cbcbcb91924d626e6c5d18bf6bb5443f1bf82113d8983a12fd616f",
+        "inputStructureProjectionSha256": "fcba53e8a9b9285c2cbf20790d38975b2fcf9db9f66e4e28e495c82ec1b4a502",
+        "outputStructureProjectionSha256": "fcba53e8a9b9285c2cbf20790d38975b2fcf9db9f66e4e28e495c82ec1b4a502"
+      }
+    },
+    {
+      "input": "## 6. 核心摘要：\n原句。\n\n## 方法\n保持。",
+      "output": "## 6. 核心摘要：\n新句。\n\n## 方法\n保持。",
+      "expected": {
+        "contractVersion": "core-summary-detailed-v3",
+        "inputAnalysisSha256": "84531de3d1747a4bb1ad4c37abc5445cf6a0aeedb624517ed0cd3e789af24121",
+        "outputAnalysisSha256": "726f21d0c935f5fbdc1b6c51397135497df09d067aee476073bc10fb4e8bde93",
+        "inputSummarySha256": "1bddf8c4c811ad4e772d501df041f5e8ccd901bd61a95132acb0fe464f13edab",
+        "summarySha256": "fadd19f891cbcbcb91924d626e6c5d18bf6bb5443f1bf82113d8983a12fd616f",
+        "inputStructureProjectionSha256": "",
+        "outputStructureProjectionSha256": ""
+      }
+    },
+    {
+      "input": "## 核心摘要\n原句含𝛽与 Z′。\n\n## 实验结果\n数值原样。",
+      "output": "## 核心摘要\n新句含𝛽与 Z′。\n\n## 实验结果\n数值原样。",
+      "expected": {
+        "contractVersion": "core-summary-detailed-v3",
+        "inputAnalysisSha256": "dc69a55a98211f5d0d89b76953642af9962e32c210616bb1f8b2b84ccb0b8f3c",
+        "outputAnalysisSha256": "849b4ca814f8863fdf492a77d62a4709154dd2d24f09bafebef47757a8a19995",
+        "inputSummarySha256": "c7426adaeaadfd417022649effbdfd83f90b75c35e4109fef3721bfd3bd98cac",
+        "summarySha256": "78efc07f00ac1ddd12671b53186d96b2bd1a3e859061355a737d388aceee7e45",
+        "inputStructureProjectionSha256": "b043b1e3796bb817718099a40e82d72a02442895d04f5f5621fc9f59c523403c",
+        "outputStructureProjectionSha256": "b043b1e3796bb817718099a40e82d72a02442895d04f5f5621fc9f59c523403c"
+      }
+    }
+  ]
+}

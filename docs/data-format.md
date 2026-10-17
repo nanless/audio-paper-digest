@@ -102,6 +102,16 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 `reader-grant-budget.json` 使用 `conference-granted-reader-budget-v1`，逐请求预留，绑定实际 Reader 身份。`reader-grant-request-<id>.json` 和内容响应的 `reader-grant-response-<id>.json` 是不可变原账；冷核须逐项与账本和真实输出 SHA 相符。未结请求保守占额，账本缺失或裁剪不能重开额度。新增请求沿公共费用记录保存，以该 grantId 作为 `runId`、新子运行 ID 的 SHA 作为默认 `unitId`，覆盖必要主分析、摘要、评分及 Reader，旧费用与旧连续失败不修改。生成、冷后处理和发布仍须核验真实会议来源及原完整链，详见[操作与恢复边界](conference-workflow.md#原额度耗尽后的独立付费恢复)。
 
+## 会议零请求来源纠正
+
+`conference:migrate-process --postprocess-only` 保存真实统一后处理及迁移凭证后返回，结果含 `postprocessedOnly:true`、检查/通过/失败数量和 `newApiRequests:0`。它不派发分析、放行重试或生成聚合。
+
+`--postprocess-only --source-corrections FILE` 读取 process 下独立的 `source-resource-corrections/` 或 `source-core-corrections/`。两者分别使用 `conference-source-resource-correction-{batch,receipt}-v1` 与 `conference-source-core-correction-{batch,receipt}-v1`，逐篇记录去掉中间的 `batch`/`receipt`。清单绑定实际状态文件 SHA、语义 SHA、完整唯一集合和每条记录字节；每条记录绑定固定新 UUID、原角色 CAS、来源/PDF、Reader 补丁、原费用及独立批准提案，权限不因共有保存器而合并。
+
+四种原角色为完整 Reader 父稿、当前 process 指针、最新实际失败及所选主文；有付费失败时主文必须来自最新失败。纯后处理的核心错误没有新付费子稿时，另精确绑定正常当前错误与失败状态。核心只改一条原句，其余十二节、资源和完整评分对象不变；资源修正仅重算作者归属及对应评分，不改主文。阶段记录如实标识本地执行，原模型阶段、检查点、请求及计数在不可变原包保留，不重签成新 API 响应。
+
+新稿 `conferenceSourceCorrection` 和完成义务绑定实际独立合同、process、新执行及物理清单 SHA；正常 Reader、评分、核心与完整资格的热核/保存冷核重放后签独立回执。采纳项 `sourceResourceCorrectionAdoption` 保留原状态/成员 SHA、原次数/失败及真实主文/Reader父身份，不复用 `readerRevision`。分析、来源、暂存页及原状态在全部成员锁内复核后原子采纳；旧完成凭证只投影到真实物理原包。详见[恢复与限制](conference-workflow.md#认证来源事实的零请求纠正)。
+
 ## 批次轮次与人工建议的诊断
 
 共享批量调用返回 `rounds`、`failedIds`、`unstartedIds` 和 `manualHandoff`。每轮的 `inputIds` 是该轮固定集合；`attemptedIds`、`successIds`、`skippedIds`、`failedIds`、`retryableFailedIds` 和 `unstartedIds` 分开记录。下一轮只取可重试失败项，不把尚未启动或被预算/来源阻断的论文算成成功。结果数组保留每篇最近一次真实结果，`stats.roundsCompleted` 是已结束轮数；成功/失败数量按最新结果计算，不能把同篇多次尝试当成多篇成功。

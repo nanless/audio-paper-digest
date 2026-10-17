@@ -113,6 +113,7 @@ function batchFixture(t, f, onStage = () => {}) {
     const shared = { retainedSources: new Map([[f.state.items[f.paperId].analysisRunId,
         { planHandle:f.planHandle, sourceRoot:f.sourceRoot }]]) };
     const proof = { manifestSha256:'c'.repeat(64), contentSha256:'d'.repeat(64), pagePath:'content/posts/synthetic-orchestration-only.md' };
+    let stagedManifest;
     const deps = { files:{conferenceAnalysisDir:f.options.analysisRoot,tagCatalogFile:path.join(f.root,'unused-tag-catalog.json'),
         conferencePageStagingDir:path.join(f.root,'unused-stage-root')},
         now:()=>'2026-10-18T00:30:00.000Z', deep:f.deep,
@@ -124,9 +125,12 @@ function batchFixture(t, f, onStage = () => {}) {
             const current=adapter.loadGrantedConferenceRecovery({analysisRoot:f.options.analysisRoot,executionId:options.executionId});
             assert.equal(current.analysis.status,'complete'); assert.equal(current.run.status,'complete');
             onStage(stageCalls,current);
-            return {status:'staged',manifest:{...proof,completionReceiptSha256:current.run.completionReceipt.receiptSha256,
-                sourceSnapshotSha256:current.run.sourceSnapshotSha256}};
-        }} };
+            stagedManifest={...proof,paperId:f.paperId,analysisExecutionId:current.run.executionId,
+                analysisSha256:current.analysisFileSha256,
+                completionReceiptSha256:current.run.completionReceipt.receiptSha256,
+                sourceSnapshotSha256:current.run.sourceSnapshotSha256};
+            return {status:'staged',manifest:stagedManifest};
+        },loadStage:()=>({manifest:structuredClone(stagedManifest)})} };
     const input={manifestPath:f.manifestPath,grantHandle:f.registered.handle,directory:f.registered.processDirectory,
         state:structuredClone(f.state),shared};
     return {input,deps,proof,shared,get stageCalls(){return stageCalls;},get transactionCalls(){return transactionCalls;}};
@@ -193,4 +197,23 @@ test('批事务不能采纳另一人工manifest的已有complete child，必须�
     assert.equal(batch.stageCalls,0);assert.equal(batch.transactionCalls,0);
     assert.equal(f.counts.reader,1);assert.equal(f.counts.belonging,1);
     assert.deepEqual(fs.readFileSync(stateFile),before);
+});
+
+test('暂存期间原分析改变或页面混用另一执行时拒绝整批采纳',async t=>{
+    for(const target of ['analysis','stage']) await t.test(target,async t=>{
+        const f=await setup(t),stateFile=path.join(f.registered.processDirectory,'state.json');
+        const before=fs.readFileSync(stateFile);
+        const batch=batchFixture(t,f,(_call,current)=>{
+            if(target==='analysis')adapter.replaceJson(path.join(current.directory,'analysis.json'),
+                {...current.analysis,externalConcurrentEdit:'preserve'},current.analysisFileSha256);
+        });
+        if(target==='stage') batch.deps.postprocess.loadStage=()=>({manifest:{
+            ...batch.proof,paperId:f.paperId,analysisExecutionId:'different-execution'}});
+        await assert.rejects(apply.applyAndStageBatch(batch.input,batch.deps),
+            target==='analysis'?/canonical analysis bytes|真实子稿CAS改变/:/不是同一真实稿件/);
+        assert.deepEqual(fs.readFileSync(stateFile),before);
+        assert.equal(batch.transactionCalls,0);
+        if(target==='analysis')assert.equal(adapter.readJsonRecord(path.join(f.loaded.directory,'analysis.json'))
+            .value.externalConcurrentEdit,'preserve');
+    });
 });

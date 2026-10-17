@@ -84,8 +84,17 @@ function analysisProof(loaded) {
         completionReceiptSha256: loaded.run.completionReceipt?.receiptSha256,
         sourceSnapshotSha256: loaded.run.sourceSnapshotSha256 };
 }
-function completionItemProjections(item, deps) {
+function completionItemProjections(item, deps, sourceAncestors = new Set()) {
     const result = [completionItem(item)];
+    if (item.sourceResourceCorrectionAdoption) {
+        if (sourceAncestors.has(item.analysisRunId) || sourceAncestors.size >= 16) {
+            throw new Error('来源纠正原完成凭证投影循环或超过16层。');
+        }
+        const next = new Set(sourceAncestors); next.add(item.analysisRunId);
+        const original = require('./conference-source-resource-correction')
+            .readPreviousPublicationItem(item);
+        return [...result, ...completionItemProjections(original, deps, next)];
+    }
     if (!item.readerRevision) return result;
     let current = deps.adapter.loadConferenceReaderRevision({ analysisRoot: deps.files.conferenceAnalysisDir,
         executionId: item.analysisRunId });
@@ -168,8 +177,11 @@ function createRetainedSourceReplay(context, deps) {
         const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir,
             executionId: item.analysisRunId });
         const proof = analysisProof(loaded);
-        if (item.readerRevision || fs.existsSync(path.join(loaded.directory, 'reader-revision.json'))) {
-            if (!item.readerRevision) throw new Error('保留的会议 Reader 子稿缺少当前成员修订凭证。');
+        if (item.sourceResourceCorrectionAdoption || item.readerRevision
+            || fs.existsSync(path.join(loaded.directory, 'reader-revision.json'))) {
+            if (!item.sourceResourceCorrectionAdoption && !item.readerRevision) {
+                throw new Error('保留的会议 Reader 子稿缺少当前成员修订凭证。');
+            }
             completionItemProjections(item, deps);
         }
         if (loaded.run.status !== 'complete' || loaded.analysis.status !== 'complete'

@@ -1447,6 +1447,9 @@ function stripCoreSummaryNonResultNumerals(text) {
         .replace(/\b(?:map|Map|per|Per|most|Most|MOST)\b/g, ' ')
         .replace(/\bMel(?=[- ](?:spectrogram|filterbank|QCD|control)\b)/gi, ' ')
         .replace(/\bSTFT(?=[⁡(])/g, ' ')
+        // A symbolic next/previous index is not a measured scalar. Keep any
+        // actual metric value beside the symbol, including on the same PDF line.
+        .replace(/(?<![A-Za-z0-9_])(?:[A-Z]?[tijkn][ \t]*[+-][ \t]*\d+|[A-Za-z]_[tijkn][ \t]*[+-][ \t]*\d+|[A-Za-z]_\{[tijkn][ \t]*[+-][ \t]*\d+\})(?![A-Za-z0-9_%]|\.[0-9])/g, ' ')
         .replace(/https?:\/\/\S+/g, ' ')
         .replace(/\[[0-9,;\s-]+\]/g, ' ')
         .replace(/§\s*\d+(?:\.\d+)*/g, ' ')
@@ -1782,7 +1785,76 @@ function hasCompleteSoftwareFunctionalValidationResult(summary,result){
  });
 }
 
+// Typed observed outcomes, never participant composition or free settings.
+function sourceHasBoundEventProportionComparison(sourceText) {
+    const raw = String(sourceText || '');
+    if (!/\bProportion\s+of\b/i.test(raw) || !/\d[\d,]*\s*\/\s*\d[\d,]*/.test(raw)) return false;
+    const denied = /\b(?:hypothetical(?:ly)?|illustrative|assum(?:e|ed|ing)|suppose|if|expected|predicted|planned|future|would|could|should|retracted|withdrawn|fabricated|incorrect|false)\b|\b(?:prior|previous|earlier|other)\s+(?:work|research|stud(?:y|ies))\b|\b(?:not|never)\s+(?:(?:actually|yet|been)\s+)*(?:observed|measured|contained|reported|found)\b|\b(?:according\s+to|quoted|quotation|denies|denied|refutes|refuted)\b|\bwe\s+(?:plan|hypothesi[sz]e|assume)\b/iu;
+    const captions = [...raw.matchAll(/\bTable\s+([1-9][0-9]*)\s*:\s*Proportion\s+of\s+((?:release\s+)?(?:phases?|segments?|tokens?|utterances?|frames?|outputs?|responses?)\s+(?:with|containing|showing|exhibiting)\s+[^\r\n]{3,100}?)\s+by/giu)];
+    for (const caption of captions) {
+        // A PDF column may attach the neighbouring left-column word after by.
+        // The same caption must still name the speaker-cohort dimension nearby.
+        if (!/\bspeaker\s+cohort\b/iu.test(raw.slice(caption.index + caption[0].length, caption.index + caption[0].length + 200))) continue;
+        const before = raw.slice(Math.max(0, caption.index - 1800), caption.index).replace(/\s+/gu, ' ');
+        const comparison = /\b([A-Z][A-Za-z-]{2,30})\s+speakers?[’']?[^.;!?]{0,100}?kens?\s+contained\s+[a-z-]{3,40}\s+over\s+half\s+of\s+the\s+time,[^.;!?]{0,150}?compared\s+to[^.;!?]{0,150}?less\s+than\s+a\s+quarter\s+for\s+([A-Za-z-]{2,30})\s+speakers?\b/iu.exec(before);
+        if (!comparison || comparison[1].toLowerCase() === comparison[2].toLowerCase()
+            || /[“"‘']\s*$/u.test(before.slice(0, comparison.index))
+            || denied.test(before.slice(Math.max(0, comparison.index - 160)))
+            || !new RegExp('\\bfound\\s+in\\s+Table\\s+' + caption[1] + '\\b', 'iu').test(before.slice(comparison.index))) continue;
+        const nextCaption = raw.slice(caption.index + caption[0].length).search(/\bTable\s+[1-9][0-9]*\s*:/iu);
+        const block = raw.slice(caption.index + caption[0].length,
+            Math.min(raw.length, caption.index + caption[0].length + (nextCaption < 0 ? 3000 : nextCaption), caption.index + 3000));
+        if (denied.test(raw.slice(Math.max(0, caption.index - 140), caption.index + caption[0].length))) continue;
+        const lines = block.split(/\r?\n/), groups = new Map(); let lastMeasuredRow = -1;
+        const header = lines.find(line => /^\s*[A-Za-z][A-Za-z -]{1,50}\s{2,}[A-Za-z][A-Za-z -]{1,50}\s{2,}(?:Total|Overall)\s*$/iu.test(line));
+        if (!header) continue;
+        const width = header.trim().split(/\s{2,}/u).length;
+        for (let i = 0; i + 1 < lines.length; i++) {
+            const row = /^\s*([A-Za-z][A-Za-z -]{1,40}?)\s{2,}((?:[0-9][0-9,]*\s*\/\s*[0-9][0-9,]*\s*){2,5})\s*$/u.exec(lines[i]);
+            if (!row) continue;
+            const ratios = [...row[2].matchAll(/([0-9][0-9,]*)\s*\/\s*([0-9][0-9,]*)/g)].map(m => [Number(m[1].replace(/,/g, '')), Number(m[2].replace(/,/g, ''))]);
+            const percentages = [...lines[i + 1].matchAll(/\(\s*([0-9]+(?:\.[0-9]+)?)%\s*\)/g)].map(m => Number(m[1]));
+            if (ratios.length !== width || percentages.length !== width
+                || lines[i + 1].replace(/\(\s*[0-9]+(?:\.[0-9]+)?%\s*\)/g, '').trim()
+                || ratios.some(([n,d], j) => !Number.isSafeInteger(n) || !Number.isSafeInteger(d) || d <= 0 || n < 0 || n > d
+                    || percentages[j] < 0 || percentages[j] > 100 || Math.abs(100 * n / d - percentages[j]) > 0.51)) continue;
+            lastMeasuredRow = i + 1;
+            const key = row[1].trim().toLowerCase();
+            if (groups.has(key)) { groups.set(key, null); continue; }
+            groups.set(key, ratios.at(-1));
+        }
+        const following = lines.slice(lastMeasuredRow + 1, lastMeasuredRow + 10).join(' ');
+        if (/\b(?:this|these|those|the above)\s+(?:table|results?|proportions?|percentages?|comparisons?|measurements?|findings?)\b[^.!?]{0,100}\b(?:not\s+(?:observed|measured)|retracted|withdrawn|incorrect|false)\b/iu.test(following)) continue;
+        const left = groups.get(comparison[1].toLowerCase()), right = groups.get(comparison[2].toLowerCase());
+        if (left && right && left[0] / left[1] > 0.5 && right[0] / right[1] < 0.25) return true;
+    }
+    return false;
+}
+
+function sourceHasBoundMeanF0Comparison(sourceText) {
+    // Keep PDF line boundaries so a neighbouring column cannot become part of a group label.
+    const text = String(sourceText || '').replace(/\r/g, '').replace(/[ \t]+/gu, ' ');
+    if (!/\bmean\s+F0\b/iu.test(text)) return false;
+    const denied = /\b(?:hypothetical(?:ly)?|illustrative|assum(?:e|ed|ing)|suppose|if|expected|predicted|planned|future|will|would|could|should|retracted|withdrawn|fabricated|incorrect|false)\b|\b(?:prior|previous|earlier|other)\s+(?:work|research|stud(?:y|ies))\b|\b(?:according\s+to|quoted|quotation|denies|denied|refutes|refuted)\b|\b(?:not|never)\s+(?:(?:actually|yet|been)\s+)*(?:calculated|measured|estimated|observed|reported)\b|\b(?:according\s+to|quoted|quotation|denies|denied|refutes|refuted)\b|\bwe\s+(?:plan|hypothesi[sz]e|assume)\b/iu;
+    const measured = /\bwe\s+(?:also\s+)?(?:calculated|measured|estimated)\s+(?:the\s+)?mean\s+F0\b[^.!?]{0,350}?\b(?:for|of)\b[^.!?]{0,180}?\b(?:each|all|the)\s+(?:voices?|speakers?|utterances?|samples?)\s+(?:in|from)\s+(?:the|our|this)\s+(?:study|experiment|evaluation)\b/giu;
+    for (const declaration of text.matchAll(measured)) {
+        const preceding = text.slice(Math.max(0, declaration.index - 180), declaration.index);
+        if (denied.test(preceding + declaration[0]) || /[“"‘']\s*$/u.test(preceding)) continue;
+        const after = text.slice(declaration.index + declaration[0].length, declaration.index + declaration[0].length + 1400);
+        const compare = /\bMean\s+F0\s+(?:is|was)\s+(lower|higher)\s+for\s+([A-Za-z][A-Za-z -]{2,75}?)\s*\(([0-9]+(?:\.[0-9]+)?)\s*(Hz|kHz)\)[\s\S]{0,180}?\bthan\b[\s\S]{0,180}?([A-Za-z][A-Za-z -]{2,75}?)\s*\(([0-9]+(?:\.[0-9]+)?)\s*(Hz|kHz)\)/iu.exec(after);
+        if (!compare || denied.test(after.slice(0, compare.index + compare[0].length))
+            || compare[4].toLowerCase() !== compare[7].toLowerCase()
+            || compare[2].trim().toLowerCase() === compare[5].trim().toLowerCase()) continue;
+        const left = Number(compare[3]), right = Number(compare[6]);
+        const tail = after.slice(compare.index + compare[0].length, compare.index + compare[0].length + 180);
+        if (/\b(?:this|these|those|the above)\s+(?:results?|comparisons?|measurements?|claims?|statements?)\b[^.!?]{0,80}\b(?:not\s+(?:observed|measured)|retracted|withdrawn|incorrect|false)\b/iu.test(tail)) continue;
+        if (left > 0 && right > 0 && (compare[1].toLowerCase() === 'lower' ? left < right : left > right)) return true;
+    }
+    return false;
+}
+
 function sourceHasObservedOutcomeComparison(sourceText) {
+    if (sourceHasBoundEventProportionComparison(sourceText) || sourceHasBoundMeanF0Comparison(sourceText)) return true;
     // Source-only evidence. A numeric definition, a scale, or a planned test is
     // not an observation. Keep the measured object/condition and its result in
     // one bounded statement; never infer source evidence from the summary.
@@ -3056,6 +3128,15 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         if (semanticIssue) return semanticIssue;
     }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文的哈希与阶段记录不一致。';
+    // A local core is an independently authenticated source correction, not an
+    // API model response. Even skipSemantic cannot authorize its private proof.
+    if (stage.sourceCoreCorrection !== undefined
+        || (stage.executionKind === 'operator' && stage.model === 'operator-local')) {
+        try {
+            if (require('./lib/conference-source-resource-correction')
+                .assertVerifiedCoreStage(paper, stage) !== true) return '核心本地修正未通过真实来源与原句冷重放。';
+        } catch (error) { return `核心本地修正未通过真实来源与原句冷重放：${error.message}`; }
+    }
     // 已付响应的人工短语变更必须独立重放来源、原付费字节和 operator 证明。
     // 即使调用方跳过语义检查，也不能把该变更当成模型原始输出。
     if (stage.operatorLiteralCorrection !== undefined || stage.paidDiagnosticReplay !== undefined) {
