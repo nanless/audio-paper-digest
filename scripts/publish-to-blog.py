@@ -5088,7 +5088,69 @@ def _has_typed_natural_product_handoff(summary):
     return False
 
 
+def _has_typed_processing_product_chain(summary):
+    """Mirror only the closed, artifact-owned signal/representation paths."""
+    denied = re.compile(r'(?:假设|假想|假定|设想|如果|可能|预计|预期|计划|未来|建议|讨论|提及|相关工作|先前工作|他人|独立方法|无关|另一|其他(?:模型|方法|系统|病人|数据|信号|样本)|并非|并未|不是|没有|不能|不会|尚未|未曾|不再|否认|否定|反驳|驳斥|引用|引述|转述)|(?:不|未|没)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:统计|计算|形成|生成|输出|送入|进入|作为|使用|采用|处理|池化|注入|承接|给出|锁定|确定|执行|发生|应用|实现|实施|进行|完成)|(?:丢弃|弃用|忽略)|(?:说法|表述|观点|判断|过程|流程)[^。；]{0,20}(?:错误|有误|不成立|不正确|未执行)')
+    normalize_notice = lambda value: re.sub(r'^(?:不过|然而|但是|可是|但|实际上)[，,]?\s*', '', str(value or ''))
+    revoked = re.compile(r'^(?:上述|以上|前述|该|此|这一|这些|所述)(?:方法|流程|链|步骤|过程|说法|表述|处理|交接|轮廓|表示|隐表示|候选集合|解释集合)[^。；]{0,35}(?:不成立|不正确|错误|有误|没有|被弃用|被丢弃|不代表|不属于|(?:未|不)(?:被|曾|实际|真正|根本|直接|再|继续)*(?:使用|采用|输入|消费|送入|注入|应用|发生|执行|实施|实现))')
+    forward_revoked = re.compile(r'^(?:(?:下述|如下|以下|后述)(?:方法|流程|链|步骤|过程)[^。；]{0,50}(?:不成立|没有|并未|未执行|未发生|只是设计|只是示意|仅为示意|尚待实现|有待实现)|(?:对照|基线|先前|相关|其他|另一)(?:系统|模型|方法|工作|研究)[^。；]{0,40}(?:方法|流程|步骤)[^。；]{0,15}(?:如下|所示))')
+
+    def safe(parts, object_kind=''):
+        if not all(part and len(part) <= 320 for part in parts):
+            return False
+        text = '。'.join(parts)
+        if object_kind == 'candidates':
+            text = re.sub(r'(?:意图(?:与|和)槽位|意图|槽位|标签)假设(?=[，,]|$)', '候选对象', text, count=1)
+        if object_kind == 'pooled':
+            text = re.sub(r'与录音数无关的(?:病人级|患者级)隐表示', '固定尺寸隐表示', text, count=1)
+        return not denied.search(text) and not re.search(r'(?:^|[，,])\s*(?:但|然而|不过|可是|却)', text)
+
+    for paragraph in re.split(r'\n\s*\n', str(summary or '')):
+        if re.search(r'[！？!?]', paragraph):
+            continue
+        parts = [part.strip() for part in re.split(r'[。；;\n]', paragraph) if part.strip()]
+        for index, first in enumerate(parts):
+            if forward_revoked.search(normalize_notice(parts[index - 1] if index else '')):
+                continue
+            second = parts[index + 1] if index + 1 < len(parts) else ''
+            third = parts[index + 2] if index + 2 < len(parts) else ''
+            clauses = [clause.strip() for clause in re.split(r'[，,]', first)]
+            if safe([first]) and not revoked.search(normalize_notice(second)):
+                if re.fullmatch(r'梯度归因(?:统计|计算)各频点对[^，,。；]{1,24}(?:影响|贡献)(?:权重)?(?:并)?(?:形成|生成|得到)(?:加权|频率权重)轮廓', clauses[0]) \
+                        and re.search(r'^(?:该|此)(?:加权|频率权重)?轮廓(?:作为|被用作)加权函数(?:进入|用于)(?:经典与神经|经典|神经)?(?:广义互相关|GCC|互相关)(?:流水线(?:对比|比较)?|计算|处理)$', clauses[1] if len(clauses) > 1 else ''):
+                    return True
+                if re.fullmatch(r'(?:前端|编码前端)(?:将|把)[^，,。；]{1,160}(?:拼接|融合)(?:并|后|再)(?:经|通过)(?:二维|2D)卷积(?:编码|处理)?', clauses[0]) \
+                        and re.search(r'^(?:输出|得到|生成)融合(表示|特征)(?:并(?:将|把)(?:该|此)\1)?(?:送入|交给)(?:基于[A-Za-z][A-Za-z0-9-]{0,30}的)?(?:时频(?:网格)?主干|分离网络|分离主干)(?:处理|编码|变换)(?:为|得到|生成)(?:待调制的)?分离(?:表示|特征)$', clauses[1] if len(clauses) > 1 else ''):
+                    return True
+                epoch = re.fullmatch(r'脑电(?:分析|处理)对目标(?:音|刺激)锁定取(-?[0-9]+(?:\.[0-9]+)?)至(-?[0-9]+(?:\.[0-9]+)?)(?:毫秒|ms)(?:计算|生成)(?:事件相关谱扰动|ERSP)', clauses[0])
+                baseline = re.fullmatch(r'以(?:语境前|刺激前|目标前)(-?[0-9]+(?:\.[0-9]+)?)至(-?[0-9]+(?:\.[0-9]+)?)(?:毫秒|ms)(?:作为)?基线(?:作|进行)(?:时频变换|时频分析)', clauses[1] if len(clauses) > 1 else '')
+                clusters = re.search(r'^(?:经|通过)([1-9][0-9]*)次置换检验(?:确定|识别|得到)显著(?:性)?簇(?=$|并(?:比较|分析|检验))', clauses[2] if len(clauses) > 2 else '')
+                if epoch and baseline and clusters:
+                    start, end, baseline_start, baseline_end, iterations = map(float, (*epoch.groups(), *baseline.groups(), clusters[1]))
+                    if all(math.isfinite(value) for value in (start, end, baseline_start, baseline_end, iterations)) \
+                            and start < end and start <= baseline_start < baseline_end <= end:
+                        return True
+            if safe([first, second], 'pooled') and not revoked.search(normalize_notice(third)) \
+                    and re.fullmatch(r'(?:同一病人的|同一患者的)(?:多录音|多部位录音)(?:编码|声学)特征(?:经)?展平后(?:送入|交给)(?:感知)?重采样器', clauses[0]) \
+                    and re.fullmatch(r'由固定数量(?:的)?可学习查询(?:经)?交叉注意力(?:池化|汇聚|压缩)(?:为|得到)(?:与录音数无关的)?(?:病人级|患者级)隐表示', clauses[1] if len(clauses) > 1 else '') \
+                    and len(re.findall(r'隐表示', first)) == 1 \
+                    and (re.search(r'^(?:冻结的)?(?:大)?语言模型[^，,。；]{0,60}[，,]\s*(?:以|通过|使用)(?:可训练)?门控交叉注意力(?:适配器)?(?:把|将)(?:该|此)隐表示注入(?:其)?各层', second) \
+                         or re.search(r'^门控交叉注意力(?:适配器)?(?:把|将)(?:该|此)隐表示注入冻结的(?:大)?语言模型(?:的)?各层', second)):
+                return True
+            following = parts[index + 3] if index + 3 < len(parts) else ''
+            if safe([first, second, third], 'candidates') and not revoked.search(normalize_notice(following)) \
+                    and re.fullmatch(r'(?:候选列举|候选枚举|枚举阶段)(?:从|依据|根据)[^，,。；]{1,90}(?:挑出|列出|筛出)[^，,。；]{1,70}(?:候选|假设)', clauses[0]) \
+                    and re.fullmatch(r'(?:输出|生成|形成)(?:包含正确标签(?:在内)?的)?候选集合', clauses[1] if len(clauses) > 1 else '') \
+                    and re.search(r'^(?:否决推理|排除推理|辨析阶段)以(?:上述|该|此)候选集合为输入[，,]', second) \
+                    and re.search(r'为每个(?:错误|竞争)候选(?:生成|写出)[^，,。；]{1,70}(?:理由|解释)[，,]\s*(?:形成|输出|得到)解释集合$', second) \
+                    and re.fullmatch(r'(?:最终标签|标签阶段|标签预测)(?:承接|依据|使用)(?:前述辨析|上述解释集合|该解释集合)(?:给出|输出|预测)(?:结构化)?(?:意图(?:与|和)槽位(?:-槽值)?|语义标签|最终标签|标签|意图|槽位|语义框)(?:结果)?', third):
+                return True
+    return False
+
+
 def _has_explicit_natural_product_chain(summary):
+    if _has_typed_processing_product_chain(summary):
+        return True
     if _has_typed_natural_product_handoff(summary):
         return True
     if _has_explicit_edited_vector_handoff(summary):

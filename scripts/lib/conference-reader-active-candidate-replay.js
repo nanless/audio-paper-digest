@@ -3,12 +3,82 @@
 // 已付费失败候选只在私有副本里走正常Reader；这里从不增加一次模型请求或改原候选。
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const crypto = require('node:crypto'), { isDeepStrictEqual } = require('node:util');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const adapter = require('./conference-analysis-adapter');
 const context = require('./conference-analysis-context');
 const stop = require('./analysis-stop-control');
 const repair = require('./reader-repair');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const CONTRACT = 'conference-active-paid-reader-recovery-v1';
+// Only the paid/source verifier below can enter this scope. The exported reader
+// cannot install a declaration or turn caller JSON into replay authority.
+const declaredPromptScope = new AsyncLocalStorage();
+function freeze(value) {
+    if (value && typeof value === 'object') {
+        for (const child of Object.values(value)) freeze(child);
+        Object.freeze(value);
+    }
+    return value;
+}
+function originalPromptDeclaration(stage, expectedSha256) {
+    if (!/^[a-f0-9]{64}$/.test(expectedSha256 || '')) integrity('原付费候选缺少提示词身份');
+    const versions = require('./prompt-text-versions');
+    const history = require('./prompt-history');
+    const evidence = require('./prompt-evidence');
+    const matches = [];
+    for (const [name, contract] of Object.entries(versions)) {
+        if (!/^ANALYSIS_PROMPT_TEXT_V\d+_CONTRACT$/.test(name)) continue;
+        let filename;
+        try { filename = versions.promptFilePathForContract(stage, contract); }
+        catch { continue; }
+        const bytes = evidence.readPromptEvidenceBytes(filename);
+        if (history.promptTemplateSha256(bytes.toString('utf8')) === expectedSha256) {
+            matches.push(Object.freeze({ contract, path: filename,
+                fileSha256: sha(bytes), templateSha256: expectedSha256 }));
+        }
+    }
+    if (matches.length !== 1) integrity('原付费候选的提示词声明缺失或不唯一');
+    return matches[0];
+}
+function activePromptScope() {
+    const saved = declaredPromptScope.getStore();
+    if (!saved) return null;
+    const active = context.getConferenceAnalysisContext();
+    if (!active || active.executionId !== saved.executionId
+        || !saved.executionDirectories.includes(active.executionDir)
+        || active.paperId !== saved.identity.paperId
+        || active.readerPdfSourceHandle !== saved.readerPdfSourceHandle
+        || sha(active.sourceDetails.text) !== saved.identity.sourceSha256) {
+        integrity('原付费提示词重放离开真实会议来源范围');
+    }
+    return saved;
+}
+function readVerifiedConferenceReaderPrompts(paper, sourceText, candidateIdentity = null) {
+    const saved = activePromptScope();
+    if (!saved) return null;
+    if (paper?.id !== saved.identity.paperId
+        || paper.arxivId || paper.paper_id
+        || paper.sourceSha256 !== saved.identity.sourceSha256
+        || sha(String(sourceText || '')) !== saved.identity.sourceSha256
+        || context.getConferenceAnalysisContext().sourceDetails.text !== sourceText) {
+        integrity('原付费提示词重放离开真实会议来源范围');
+    }
+    if (candidateIdentity) {
+        const allowed = require('./reader-recovery-revision').ALLOWED_FIELDS;
+        const logical = value => Object.fromEntries(Object.entries(value)
+            .filter(([key]) => !allowed.includes(key)));
+        if (candidateIdentity.promptSha256 !== saved.identity.promptSha256
+            || candidateIdentity.repairPromptSha256 !== saved.identity.repairPromptSha256
+            || !isDeepStrictEqual(logical(candidateIdentity), logical(saved.identity))) {
+            integrity('原付费提示词重放改变了原请求逻辑输入或预算');
+        }
+    }
+    return saved.declaration;
+}
+function isVerifiedConferenceReaderPromptDeclaration(value) {
+    const saved = activePromptScope();
+    return Boolean(saved && saved.declaration.stageFields === value);
+}
 const statEqual = (left, right) => ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeNs', 'ctimeNs']
     .every(key => left[key] === right[key]);
 function integrity(message) {
@@ -117,7 +187,7 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
         executionId: loaded.run.executionId });
     if (current.analysisFileSha256 !== loaded.analysisFileSha256 || current.sourceFileSha256 !== loaded.sourceFileSha256
         || current.runFileSha256 !== loaded.runFileSha256 || !isDeepStrictEqual(current.analysis, loaded.analysis)) integrity('原子稿已变化');
-    adapter.verifyPlanAuthority(current, planHandle, sourceRoot);
+    const readerPdfSourceHandle = adapter.verifyPlanAuthority(current, planHandle, sourceRoot);
     if (current.analysis.status !== 'partial'
         || !['reader-only', 'scoring-and-reader'].includes(current.revision.mode)
         || (current.revision.mode === 'scoring-and-reader' && !current.analysis.readerRevisionProgress?.scoringCheckpoint)) {
@@ -152,6 +222,15 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
     const paid = paidCandidateProof(attempts, identity, payload, current.source.sourceDetails,
         overrides.usageDirectory || require('../config').FILES.llmUsageDir);
     if (!paid) return { eligible: false, reason: '原活跃候选缺少唯一真实付费请求响应及费用闭合链。' };
+    const articlePrompt = originalPromptDeclaration('apiReaderArticle', identity.promptSha256);
+    const repairPrompt = originalPromptDeclaration('apiReaderRepair', identity.repairPromptSha256);
+    const requestPolicyFields = Object.fromEntries(['readerRequestPolicy', 'readerJsonRequestPolicy']
+        .filter(key => Object.hasOwn(identity, key)).map(key => [key, structuredClone(identity[key])]));
+    const declaration = freeze({ article: articlePrompt, repair: repairPrompt, requestPolicyFields,
+        stageFields: { promptTextContract: articlePrompt.contract,
+            repairPromptTextContract: repairPrompt.contract,
+            promptTemplateSha256: articlePrompt.templateSha256,
+            repairPromptTemplateSha256: repairPrompt.templateSha256, ...requestPolicyFields } });
     const assetsDirectory = path.join(current.directory, 'reader-assets'), assets = optionalTree(assetsDirectory);
     const pinned = ['analysis.json', 'run.json', 'source.json', 'reader-revision.json', 'reader-resource-preflight.json']
         .map(name => ({ name, ...adapter.readJsonRecord(path.join(current.directory, name)) }));
@@ -173,54 +252,67 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
         for (const record of pinned) fs.writeFileSync(path.join(executionDir, record.name), record.bytes, { mode: 0o600, flag: 'wx' });
         copyTree(attempts, path.join(executionDir, 'reader-attempts'));
         if (assets.length) copyTree(assets, path.join(executionDir, 'reader-assets'));
-        let paper = structuredClone(original);
-        if (current.revision.mode === 'reader-only') paper.apiReaderResources = structuredClone(preflight);
-        try {
-            paper = await stop.withModelRequestsForbidden(() => context.withConferenceAnalysisSource({
-                executionId: current.run.executionId, executionDir, paperId: current.run.paperId,
-                sourceDetails: current.source.sourceDetails, readerRetryEpoch: 1
-            }, () => deep.refreshApiReaderArticleFromSource(paper, current.source.sourceDetails,
-                { resumeSavedSourceReader: true, requireExistingSourceCandidate: true, preserveReaderUpstream: true })));
-        } catch (error) {
+        return await stop.withModelRequestsForbidden(() => declaredPromptScope.run(Object.freeze({
+            executionId: current.run.executionId,
+            executionDirectories: Object.freeze([executionDir, current.directory]),
+            identity: freeze(structuredClone(identity)), declaration, readerPdfSourceHandle
+        }), async () => {
+            let paper = structuredClone(original);
+            if (current.revision.mode === 'reader-only') paper.apiReaderResources = structuredClone(preflight);
+            try {
+                paper = await context.withConferenceAnalysisSource({
+                    executionId: current.run.executionId, executionDir, paperId: current.run.paperId,
+                    sourceDetails: current.source.sourceDetails, readerRetryEpoch: 1, readerPdfSourceHandle
+                }, () => deep.refreshApiReaderArticleFromSource(paper, current.source.sourceDetails,
+                    { resumeSavedSourceReader: true, requireExistingSourceCandidate: true, preserveReaderUpstream: true }));
+            } catch (error) {
+                sameFiles();
+                const failure = require('./conference-process-recovery').classifyFailure(error, new Date().toISOString());
+                if (failure.category === 'storage' || error.code === 'CONFERENCE_ACTIVE_READER_REPLAY_INTEGRITY'
+                    || ['CONFERENCE_SOURCE_CONTEXT_INTEGRITY', 'READER_IMAGE_SOURCE_INTEGRITY'].includes(error.code)
+                    || (failure.category === 'integrity' && !error.readerIssues)) throw error;
+                return { eligible: false, reason: error.message, code: error.code || null };
+            }
             sameFiles();
-            const failure = require('./conference-process-recovery').classifyFailure(error, new Date().toISOString());
-            if (failure.category === 'storage' || error.code === 'CONFERENCE_ACTIVE_READER_REPLAY_INTEGRITY'
-                || ['CONFERENCE_SOURCE_CONTEXT_INTEGRITY', 'READER_IMAGE_SOURCE_INTEGRITY'].includes(error.code)
-                || (failure.category === 'integrity' && !error.readerIssues)) throw error;
-            return { eligible: false, reason: error.message, code: error.code || null };
-        }
-        sameFiles();
-        const stage = paper.analysisManifest?.stages?.apiReaderArticle;
-        if (stage?.contentMode !== identity.contentMode || stage.attempts !== payload.attempts
-            || stage.fullAttempts !== payload.fullAttempts || (stage.transportFailures || 0) !== (payload.transportFailures || 0)) integrity('只读重放改变了原模型尝试或费用身份');
-        for (const name of protectedStages) if (!isDeepStrictEqual(paper.analysisManifest?.stages?.[name], original.analysisManifest?.stages?.[name])) integrity(`重放改变受保护${name}阶段`);
-        if (paper.analysis !== original.analysis) integrity('Reader重放改变了原主文或评分');
-        for (const figure of paper.apiReaderFigures || []) {
-            const saved = assets.find(entry => entry.path === figure.assetFilename);
-            if (!saved || saved.sha256 !== figure.assetSha256) return { eligible: false, reason: '新稿图片缺少原同SHA已存资产。' };
-            figure.cachePath = path.join(assetsDirectory, figure.assetFilename);
-        }
-        // 仅把新生成阶段的物化路径从私有副本还原为同字节原资产；像素及正文未改变。
-        stage.figuresSha256 = require('../deep-analyzer').stableFingerprint(paper.apiReaderFigures || []);
-        if (JSON.stringify(paper).includes(temporary)) integrity('临时文件路径泄露到原稿');
-        const qualified = context.withConferenceAnalysisSource({ executionId: current.run.executionId,
-            executionDir: current.directory, paperId: current.run.paperId, sourceDetails: current.source.sourceDetails }, () =>
-            engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules }));
-        if (!qualified) return { eligible: false, reason: '原付费候选仍未通过正常整篇资格。' };
-        sameFiles();
-        const proof = { contract: CONTRACT, version: 1, executionId: current.run.executionId, paperId: current.run.paperId,
-            revisionSha256: current.revision.revisionSha256, analysisFileSha256: current.analysisFileSha256,
-            sourceFileSha256: current.sourceFileSha256, parentAnalysisFileSha256: current.parent.analysisFileSha256,
-            parentRunFileSha256: current.parent.runFileSha256,
-            candidate: { name: active[0].path, envelopeSha256: checked.envelopeSha256,
-                identitySha256: repair.hashDraft(identity), payloadSha256: checked.envelope.payloadSha256,
-                sourceSha256, attempts: payload.attempts, fullAttempts: payload.fullAttempts,
-                transportFailures: payload.transportFailures || 0 },
-            paid,
-            originalFiles: [...projection(attempts).map(item => ({ ...item, path: 'reader-attempts/' + item.path })),
-                ...projection(assets).map(item => ({ ...item, path: 'reader-assets/' + item.path }))],
-            articleSha256: paper.apiReaderArticleSha256, planSha256: paper.apiReaderPlanSha256 };
-        return { eligible: true, paper, proof, assertUnchanged: sameFiles };
+            const stage = paper.analysisManifest?.stages?.apiReaderArticle;
+            if (stage?.contentMode !== identity.contentMode || stage.attempts !== payload.attempts
+                || stage.fullAttempts !== payload.fullAttempts || (stage.transportFailures || 0) !== (payload.transportFailures || 0)) integrity('只读重放改变了原模型尝试或费用身份');
+            if (Object.entries(declaration.stageFields).some(([key, value]) => !isDeepStrictEqual(stage[key], value))
+                || ['readerRequestPolicy', 'readerJsonRequestPolicy'].some(key =>
+                    Object.hasOwn(stage, key) !== Object.hasOwn(declaration.stageFields, key))) {
+                integrity('只读重放没有保留原付费提示词和请求策略声明');
+            }
+            for (const name of protectedStages) if (!isDeepStrictEqual(paper.analysisManifest?.stages?.[name], original.analysisManifest?.stages?.[name])) integrity(`重放改变受保护${name}阶段`);
+            if (paper.analysis !== original.analysis) integrity('Reader重放改变了原主文或评分');
+            for (const figure of paper.apiReaderFigures || []) {
+                const saved = assets.find(entry => entry.path === figure.assetFilename);
+                if (!saved || saved.sha256 !== figure.assetSha256) return { eligible: false, reason: '新稿图片缺少原同SHA已存资产。' };
+                figure.cachePath = path.join(assetsDirectory, figure.assetFilename);
+            }
+            // 仅把新生成阶段的物化路径从私有副本还原为同字节原资产；像素及正文未改变。
+            stage.figuresSha256 = require('../deep-analyzer').stableFingerprint(paper.apiReaderFigures || []);
+            if (JSON.stringify(paper).includes(temporary)) integrity('临时文件路径泄露到原稿');
+            const qualified = context.withConferenceAnalysisSource({ executionId: current.run.executionId,
+                executionDir: current.directory, paperId: current.run.paperId, sourceDetails: current.source.sourceDetails,
+                readerPdfSourceHandle }, () =>
+                engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules }));
+            if (!qualified) return { eligible: false, reason: '原付费候选仍未通过正常整篇资格。' };
+            sameFiles();
+            const proof = { contract: CONTRACT, version: 1, executionId: current.run.executionId, paperId: current.run.paperId,
+                revisionSha256: current.revision.revisionSha256, analysisFileSha256: current.analysisFileSha256,
+                sourceFileSha256: current.sourceFileSha256, parentAnalysisFileSha256: current.parent.analysisFileSha256,
+                parentRunFileSha256: current.parent.runFileSha256,
+                candidate: { name: active[0].path, envelopeSha256: checked.envelopeSha256,
+                    identitySha256: repair.hashDraft(identity), payloadSha256: checked.envelope.payloadSha256,
+                    sourceSha256, attempts: payload.attempts, fullAttempts: payload.fullAttempts,
+                    transportFailures: payload.transportFailures || 0 },
+                paid, declaredPrompts: { article: articlePrompt, repair: repairPrompt },
+                originalFiles: [...projection(attempts).map(item => ({ ...item, path: 'reader-attempts/' + item.path })),
+                    ...projection(assets).map(item => ({ ...item, path: 'reader-assets/' + item.path }))],
+                articleSha256: paper.apiReaderArticleSha256, planSha256: paper.apiReaderPlanSha256 };
+            return { eligible: true, paper, proof, assertUnchanged: sameFiles };
+        }));
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
-module.exports = { CONTRACT, replayActiveConferenceReaderCandidate };
+module.exports = { CONTRACT, replayActiveConferenceReaderCandidate,
+    readVerifiedConferenceReaderPrompts, isVerifiedConferenceReaderPromptDeclaration };

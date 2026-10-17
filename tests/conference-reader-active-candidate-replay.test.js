@@ -10,7 +10,7 @@ const replay = require('../scripts/lib/conference-reader-active-candidate-replay
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function fixture(t) {
+function fixture(t, identityOverrides = {}) {
     const f = productionPlanFixture(t), analysisRoot = path.join(f.root, 'active-reader');
     const parentId = '44444444-4444-4444-8444-444444444444';
     adapter.prepareConferenceAnalysis({ analysisRoot, executionId: parentId, planHandle: f.planHandle,
@@ -43,7 +43,15 @@ function fixture(t) {
         readerRevisionProgress: { attempts: 3, failures: [{ code: 'MODEL_HTTP_TRANSIENT', message: 'old failure' }] } }, child.analysisFileSha256);
     const directory = path.join(child.directory, 'reader-attempts');
     const draft = require('./reader-signed-draft-fixture').fixture({ noFigures: true }).draft;
-    const identity = { paperId: f.paperId, sourceSha256: sha(source), contentMode: 'reader-source-only-v1', conferenceReaderRetryEpoch: 1, model: { model: 'fixture-model', protocol: 'openai_responses' } };
+    const promptEvidence = require('../scripts/lib/prompt-evidence');
+    const promptHistory = require('../scripts/lib/prompt-history');
+    const identity = { paperId: f.paperId, sourceSha256: sha(source), contentMode: 'reader-source-only-v1',
+        conferenceReaderRetryEpoch: 1, inputFingerprint: sha('original fixture logical input'),
+        promptSha256: promptHistory.promptTemplateSha256(promptEvidence.readPromptEvidenceBytes(
+            'prompts/api-reader-article-v8.md').toString('utf8')),
+        repairPromptSha256: promptHistory.promptTemplateSha256(promptEvidence.readPromptEvidenceBytes(
+            'prompts/api-reader-repair-v12.md').toString('utf8')),
+        model: { model: 'fixture-model', protocol: 'openai_responses' }, ...identityOverrides };
     const payload = { status: 'failed', draft, rawDraft: JSON.stringify(draft), attempts: 3, fullAttempts: 1,
         transportFailures: 1, noProgress: 1, failureSignature: 'a'.repeat(64), issues: [] };
     const diagnosticId = crypto.randomUUID(), requestDraft = structuredClone(draft);
@@ -99,7 +107,8 @@ test('同child耗尽预算仅在私有副本重放，原候选、历史及attemp
                 url: 'https://example.com/figure.png', assetFilename: 'figure.png', assetSha256: sha(image),
                 cachePath: path.join(active.executionDir, 'reader-assets', 'figure.png') }];
             paper.analysisManifest.stages.apiReaderArticle = { status: 'complete', contentMode: 'reader-source-only-v1',
-                attempts: 3, fullAttempts: 1, transportFailures: 1 };
+                attempts: 3, fullAttempts: 1, transportFailures: 1,
+                ...replay.readVerifiedConferenceReaderPrompts(paper, source.text).stageFields };
             return paper;
         }
     } });
@@ -196,4 +205,126 @@ test('无效付费补丁仅保留相同请求原稿时，不能当成响应应�
     });
     assert.equal(result.eligible, false); assert.equal(calls, 0);
     assert.match(result.reason, /缺少唯一真实付费请求响应及费用闭合链/);
+});
+
+test('原归档Prompt仅在真实付费私有scope内可读，PDF能力和硬禁模型覆盖最终资格', async t => {
+    const f = fixture(t);
+    const context = require('../scripts/lib/conference-analysis-context');
+    const sourceApi = require('../scripts/lib/conference-source-context');
+    let retainedDeclaration;
+    let qualificationCalls = 0;
+    assert.equal(replay.readVerifiedConferenceReaderPrompts(f.loaded.analysis.papers[0],
+        f.loaded.source.sourceDetails.text), null);
+    assert.equal(replay.isVerifiedConferenceReaderPromptDeclaration({ readOnlyPaidReplay: true }), false);
+    const result = await replay.replayActiveConferenceReaderCandidate(f.input, {
+        usageDirectory: f.usageDirectory,
+        engine: {
+            ...f.engine,
+            isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper) {
+                qualificationCalls++;
+                assert.throws(stop.assertMayStartRequest, { code: stop.MODEL_REQUESTS_FORBIDDEN });
+                const active = context.getConferenceAnalysisContext();
+                assert.equal(active.executionDir, f.loaded.directory);
+                const provider = sourceApi.readerPdfSourceForContext(active.readerPdfSourceHandle);
+                assert.equal(provider.paperId, f.paperId);
+                assert.equal(provider.sourceText, f.loaded.source.sourceDetails.text);
+                assert.deepEqual(replay.readVerifiedConferenceReaderPrompts(paper, provider.sourceText),
+                    retainedDeclaration);
+                return true;
+            }
+        },
+        deep: {
+            replayVerifiedReaderResourceIdentity: deep.replayVerifiedReaderResourceIdentity,
+            async refreshApiReaderArticleFromSource(paper, source) {
+                assert.throws(stop.assertMayStartRequest, { code: stop.MODEL_REQUESTS_FORBIDDEN });
+                const active = context.getConferenceAnalysisContext();
+                assert(sourceApi.readerPdfSourceForContext(active.readerPdfSourceHandle));
+                retainedDeclaration = replay.readVerifiedConferenceReaderPrompts(paper, source.text, f.identity);
+                assert.equal(retainedDeclaration.article.contract, 'analysis-prompt-text-v8');
+                assert.equal(retainedDeclaration.repair.contract, 'analysis-prompt-text-v12');
+                assert.equal(retainedDeclaration.stageFields.promptTemplateSha256, f.identity.promptSha256);
+                assert.equal(retainedDeclaration.stageFields.repairPromptTemplateSha256, f.identity.repairPromptSha256);
+                assert(Object.isFrozen(retainedDeclaration.stageFields));
+                assert.equal(Object.hasOwn(retainedDeclaration.stageFields, 'status'), false);
+                assert.equal(Object.hasOwn(retainedDeclaration.stageFields, 'readerJsonRequestPolicy'), false);
+                assert.equal(replay.isVerifiedConferenceReaderPromptDeclaration(retainedDeclaration.stageFields), true);
+                assert.equal(replay.isVerifiedConferenceReaderPromptDeclaration(
+                    JSON.parse(JSON.stringify(retainedDeclaration.stageFields))), false);
+                assert.throws(() => replay.readVerifiedConferenceReaderPrompts({ ...paper, id: 'conference:other' },
+                    source.text), /真实会议来源范围/);
+                assert.throws(() => replay.readVerifiedConferenceReaderPrompts(paper, source.text,
+                    { ...f.identity, inputFingerprint: '0'.repeat(64) }), /原请求逻辑输入或预算/);
+                assert.throws(() => replay.readVerifiedConferenceReaderPrompts(paper, source.text,
+                    { ...f.identity, model: { ...f.identity.model, model: 'another-model' } }), /原请求逻辑输入或预算/);
+                // Same-source nesting may inherit the already authenticated
+                // parent handle; JSON alone still cannot create that handle.
+                context.withConferenceAnalysisSource({
+                    executionId: active.executionId, executionDir: active.executionDir,
+                    paperId: active.paperId, sourceDetails: source
+                }, () => assert.equal(context.getConferenceAnalysisContext().readerPdfSourceHandle,
+                    active.readerPdfSourceHandle));
+                assert.throws(() => context.withConferenceAnalysisSource({
+                    executionId: '99999999-9999-4999-8999-999999999999',
+                    executionDir: active.executionDir, paperId: active.paperId, sourceDetails: source
+                }, () => replay.isVerifiedConferenceReaderPromptDeclaration(retainedDeclaration.stageFields)),
+                /真实会议来源范围/);
+                assert.throws(() => context.withConferenceAnalysisSource({
+                    ...active, sourceDetails: { ...source, text: source.text + 'changed' },
+                    readerPdfSourceHandle: undefined
+                }, () => replay.isVerifiedConferenceReaderPromptDeclaration(retainedDeclaration.stageFields)),
+                /真实会议来源范围|PDF authority/);
+                paper.apiReaderArticle = 'new normal Reader';
+                paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle);
+                paper.apiReaderPlanSha256 = 'c'.repeat(64);
+                paper.apiReaderFigures = [];
+                paper.analysisManifest.stages.apiReaderArticle = {
+                    status: 'complete', contentMode: 'reader-source-only-v1',
+                    attempts: 3, fullAttempts: 1, transportFailures: 1,
+                    ...retainedDeclaration.stageFields
+                };
+                return paper;
+            }
+        }
+    });
+    assert.equal(result.eligible, true, result.reason);
+    assert.equal(qualificationCalls, 1);
+    assert.equal(result.proof.declaredPrompts.article.contract, 'analysis-prompt-text-v8');
+    assert.equal(result.proof.declaredPrompts.repair.contract, 'analysis-prompt-text-v12');
+    assert.equal(replay.isVerifiedConferenceReaderPromptDeclaration(retainedDeclaration.stageFields), false);
+    assert.equal(replay.readVerifiedConferenceReaderPrompts(result.paper, f.loaded.source.sourceDetails.text), null);
+    assert.doesNotThrow(stop.assertMayStartRequest);
+    result.assertUnchanged();
+});
+
+test('未知原Prompt即使有匹配付费记录也不能安装scope或进入正常刷新', async t => {
+    const f = fixture(t, { promptSha256: '0'.repeat(64) });
+    let calls = 0;
+    await assert.rejects(replay.replayActiveConferenceReaderCandidate(f.input, {
+        usageDirectory: f.usageDirectory, engine: f.engine, deep: {
+            replayVerifiedReaderResourceIdentity: deep.replayVerifiedReaderResourceIdentity,
+            refreshApiReaderArticleFromSource() { calls++; }
+        }
+    }), /提示词声明缺失或不唯一/);
+    assert.equal(calls, 0);
+    assert.equal(replay.isVerifiedConferenceReaderPromptDeclaration({}), false);
+});
+
+test('真实付费scope不允许最终阶段冒称当前Prompt或补造原请求策略', async t => {
+    const f = fixture(t);
+    await assert.rejects(replay.replayActiveConferenceReaderCandidate(f.input, {
+        usageDirectory: f.usageDirectory, engine: f.engine, deep: {
+            replayVerifiedReaderResourceIdentity: deep.replayVerifiedReaderResourceIdentity,
+            async refreshApiReaderArticleFromSource(paper, source) {
+                const declared = replay.readVerifiedConferenceReaderPrompts(paper, source.text);
+                paper.analysisManifest.stages.apiReaderArticle = {
+                    status: 'complete', contentMode: 'reader-source-only-v1',
+                    attempts: 3, fullAttempts: 1, transportFailures: 1,
+                    ...declared.stageFields, promptTextContract: 'analysis-prompt-text-v9',
+                    readerJsonRequestPolicy: { type: 'json_object' }
+                };
+                return paper;
+            }
+        }
+    }), /没有保留原付费提示词和请求策略声明/);
+    assert.doesNotThrow(stop.assertMayStartRequest);
 });

@@ -8335,11 +8335,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     );
     const maxAttempts = Number.isInteger(options.readerMaxAttempts)
         ? Math.min(6, Math.max(1, options.readerMaxAttempts)) : 6;
+    const paidPromptReplay = conference.getConferenceAnalysisContext()
+        ? require('./lib/conference-reader-active-candidate-replay')
+            .readVerifiedConferenceReaderPrompts(paper, options.sourceText) : null;
     const identity = {
         paperId: getPaperArxivId(paper),
         ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
         ...(options.readerFactLocalRevision === true ? { readerFactLocalRevisionContract: 'signed-reader-fact-local-repair-v1' } : {}),
-        ...apiReaderRequestPolicyFields(),
+        ...(paidPromptReplay ? paidPromptReplay.requestPolicyFields : apiReaderRequestPolicyFields()),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         contentMode,
         ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
@@ -8360,10 +8363,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             } : {}) }),
         sourceSha256: repair.shaText(options.sourceText || ''),
         model: modelFingerprint(DEEP_CONFIG, start.temperature, API_READER_MAX_TOKENS),
-        // 正文和修复提示词各按当前版本加载，身份里也必须记当前版本算出的 SHA，
-        // 否则失败草稿的身份会指向一份本次并没有真正读的提示词。
-        promptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderArticle')),
-        repairPromptSha256: promptTemplateSha256(readerRepairPromptPath(options)),
+        // 新请求使用当前模板；真实付费旧稿只在硬禁模型的私有重放范围内
+        // 保留已核验的原模板，不能以新模板身份重新取得一次内容预算。
+        promptSha256: paidPromptReplay?.stageFields.promptTemplateSha256
+            || promptTemplateSha256(currentTextStagePromptPath('apiReaderArticle')),
+        repairPromptSha256: paidPromptReplay?.stageFields.repairPromptTemplateSha256
+            || promptTemplateSha256(readerRepairPromptPath(options)),
         // Reader 检查依赖共享的正文规则，输入身份须包含实际读取的实现。
         // 实现变化后的恢复按已有保存记录核验，只使用获准的剩余尝试，
         // 不把旧付费记录当成没有发生。
@@ -8446,6 +8451,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ...(directScope?.readerRetryEpoch !== undefined
             ? { historicalDirectRetryEpoch: directScope.readerRetryEpoch } : {})
     };
+    if (paidPromptReplay) require('./lib/conference-reader-active-candidate-replay')
+        .readVerifiedConferenceReaderPrompts(paper, options.sourceText, identity);
     if (start.legacyPreviousDraft) {
         const legacyIdentity = { ...identity };
         delete legacyIdentity.signedRevisionDisplayContract;
@@ -9539,13 +9546,16 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         readerResources,
         naturalResourceProse
     );
-    // 刷新一定会重新生成正文，加载路径也按当前版本走，所以配置指纹必须按当前
-    // 版本算，不能按这条记录原来声明的版本算，否则指纹和实际用的正文对不上。
-    // 修复提示词同理。
-    const configurationFingerprint = buildApiReaderBaseFingerprint(
-        currentPromptTextContract('apiReaderArticle'),
-        readerRepairPromptContract(options)
-    );
+    // 普通刷新仍按当前模板。已核付费候选的私有只读范围仅保留原声明，
+    // 科学检查、解析器与其他实现指纹仍按当前代码执行。
+    const paidPromptReplay = conference.getConferenceAnalysisContext()
+        ? require('./lib/conference-reader-active-candidate-replay')
+            .readVerifiedConferenceReaderPrompts(paper, sourceText) : null;
+    const configurationFingerprint = paidPromptReplay
+        ? buildApiReaderBaseFingerprint(paidPromptReplay.stageFields.promptTextContract,
+            paidPromptReplay.stageFields.repairPromptTextContract, arxivId, paidPromptReplay.stageFields)
+        : buildApiReaderBaseFingerprint(currentPromptTextContract('apiReaderArticle'),
+            readerRepairPromptContract(options));
     const reviewFeedback = String(options.reviewFeedback || '').trim();
     require('./lib/daily-fact-review').validateReaderReviewFeedbackLength(reviewFeedback, arxivId);
     const reviewFeedbackSha256 = reviewFeedback
@@ -9678,7 +9688,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             fullAttempts: generated.fullAttempts, transportFailures: generated.transportFailures,
             ...(generated.draftOrderMappings?.some(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT)
                 ? { conceptTermsRepairPromptBindings: generated.draftOrderMappings.filter(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT) } : {}),
-            ...apiReaderRequestPolicyFields(),
+            ...(paidPromptReplay ? paidPromptReplay.requestPolicyFields : apiReaderRequestPolicyFields()),
             model: DEEP_CONFIG.model, protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
             temperature: revisionSeed ? API_READER_REPAIR_TEMPERATURE : API_READER_INITIAL_TEMPERATURE,
             repairTemperature: API_READER_REPAIR_TEMPERATURE, maxTokens: API_READER_MAX_TOKENS,
@@ -9686,14 +9696,12 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             repairTruncationRetryPolicy: API_READER_REPAIR_TRUNCATION_RETRY_POLICY,
             repairTruncationRetryMaxTokens: resolveApiReaderRepairRetryMaxTokens(),
             maxResponseBytes: API_MAX_RESPONSE_BYTES, overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
-            promptTemplateSha256: promptTemplateSha256(
-                currentTextStagePromptPath('apiReaderArticle')
-            ),
-            promptTextContract: currentPromptTextContract('apiReaderArticle'),
-            repairPromptTemplateSha256: promptTemplateSha256(
-                readerRepairPromptPath(options)
-            ),
-            repairPromptTextContract: readerRepairPromptContract(options),
+            ...(paidPromptReplay ? paidPromptReplay.stageFields : {
+                promptTemplateSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderArticle')),
+                promptTextContract: currentPromptTextContract('apiReaderArticle'),
+                repairPromptTemplateSha256: promptTemplateSha256(readerRepairPromptPath(options)),
+                repairPromptTextContract: readerRepairPromptContract(options)
+            }),
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION, evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
             contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
             evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
@@ -11349,6 +11357,11 @@ function apiReaderRequestPolicyFields() {
 function buildApiReaderBaseFingerprint(
     promptTextContract, repairPromptTextContract, arxivId, declaredPrompt = null
 ) {
+    const preservedRequestDeclaration = declaredPrompt?.status === 'complete'
+        || Boolean(declaredPrompt
+            && require('./lib/conference-analysis-context').getConferenceAnalysisContext()
+            && require('./lib/conference-reader-active-candidate-replay')
+                .isVerifiedConferenceReaderPromptDeclaration(declaredPrompt));
     if (declaredPrompt && Object.prototype.hasOwnProperty.call(declaredPrompt, 'readerRequestPolicy')) {
         validateDeclaredApiReaderRequestPolicy(declaredPrompt.readerRequestPolicy);
     }
@@ -11365,10 +11378,10 @@ function buildApiReaderBaseFingerprint(
             ? { repairPromptTextContract: declaredRepairPromptTextContract } : {}),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         // 旧已保存阶段没有此字段时，仍核验原配方，不补写新策略。
-        ...(!declaredPrompt || declaredPrompt.status !== 'complete'
+        ...(!declaredPrompt || !preservedRequestDeclaration
             || declaredPrompt.readerRequestPolicy
             ? (resolveApiReaderRequestPolicy() ? { readerRequestPolicy: resolveApiReaderRequestPolicy() } : {}) : {}),
-        ...(!declaredPrompt || declaredPrompt.status !== 'complete' || declaredPrompt.readerJsonRequestPolicy
+        ...(!declaredPrompt || !preservedRequestDeclaration || declaredPrompt.readerJsonRequestPolicy
             ? (resolveApiReaderJsonRequestPolicy() ? { readerJsonRequestPolicy: resolveApiReaderJsonRequestPolicy() } : {}) : {}),
         ...(declaredPrompt?.readerJsonRequestPolicy
             && stableFingerprint(declaredPrompt.readerJsonRequestPolicy)

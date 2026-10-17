@@ -2075,7 +2075,60 @@ function hasTypedNaturalProductHandoff(summary) {
     return false;
 }
 
+// Closed signal/representation handoffs. These are actual processing paths,
+// not a count of action words or a paper/model-name exception.
+function hasTypedProcessingProductChain(summary) {
+    const denied = /(?:假设|假想|假定|设想|如果|可能|预计|预期|计划|未来|建议|讨论|提及|相关工作|先前工作|他人|独立方法|无关|另一|其他(?:模型|方法|系统|病人|数据|信号|样本)|并非|并未|不是|没有|不能|不会|尚未|未曾|不再|否认|否定|反驳|驳斥|引用|引述|转述)|(?:不|未|没)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:统计|计算|形成|生成|输出|送入|进入|作为|使用|采用|处理|池化|注入|承接|给出|锁定|确定|执行|发生|应用|实现|实施|进行|完成)|(?:丢弃|弃用|忽略)|(?:说法|表述|观点|判断|过程|流程)[^。；]{0,20}(?:错误|有误|不成立|不正确|未执行)/u;
+    const normalizeNotice = value => String(value || '').replace(/^(?:不过|然而|但是|可是|但|实际上)[，,]?\s*/u, '');
+    const revoked = /^(?:上述|以上|前述|该|此|这一|这些|所述)(?:方法|流程|链|步骤|过程|说法|表述|处理|交接|轮廓|表示|隐表示|候选集合|解释集合)[^。；]{0,35}(?:不成立|不正确|错误|有误|没有|被弃用|被丢弃|不代表|不属于|(?:未|不)(?:被|曾|实际|真正|根本|直接|再|继续)*(?:使用|采用|输入|消费|送入|注入|应用|发生|执行|实施|实现))/u;
+    const forwardRevoked = /^(?:(?:下述|如下|以下|后述)(?:方法|流程|链|步骤|过程)[^。；]{0,50}(?:不成立|没有|并未|未执行|未发生|只是设计|只是示意|仅为示意|尚待实现|有待实现)|(?:对照|基线|先前|相关|其他|另一)(?:系统|模型|方法|工作|研究)[^。；]{0,40}(?:方法|流程|步骤)[^。；]{0,15}(?:如下|所示))/u;
+    const safe = (parts, objectKind = '') => {
+        if (!parts.every(part => part && part.length <= 320)) return false;
+        let text = parts.join('。');
+        if (objectKind === 'candidates') text = text.replace(/(?:意图(?:与|和)槽位|意图|槽位|标签)假设(?=[，,]|$)/u, '候选对象');
+        if (objectKind === 'pooled') text = text.replace(/与录音数无关的(?:病人级|患者级)隐表示/u, '固定尺寸隐表示');
+        return !denied.test(text) && !/(?:^|[，,])\s*(?:但|然而|不过|可是|却)/u.test(text);
+    };
+    for (const paragraph of String(summary || '').split(/\n\s*\n/u)) {
+        if (/[！？!?]/u.test(paragraph)) continue;
+        const parts = paragraph.split(/[。；;\n]/u).map(part => part.trim()).filter(Boolean);
+        for (let index = 0; index < parts.length; index++) {
+            if (forwardRevoked.test(normalizeNotice(parts[index - 1]))) continue;
+            const first = parts[index], second = parts[index + 1] || '', third = parts[index + 2] || '';
+            const clauses = first.split(/[，,]/u).map(clause => clause.trim());
+            if (safe([first]) && !revoked.test(normalizeNotice(second))) {
+                if (/^梯度归因(?:统计|计算)各频点对[^，,。；]{1,24}(?:影响|贡献)(?:权重)?(?:并)?(?:形成|生成|得到)(?:加权|频率权重)轮廓$/u.test(clauses[0])
+                    && /^(?:该|此)(?:加权|频率权重)?轮廓(?:作为|被用作)加权函数(?:进入|用于)(?:经典与神经|经典|神经)?(?:广义互相关|GCC|互相关)(?:流水线(?:对比|比较)?|计算|处理)$/u.test(clauses[1] || '')) return true;
+                if (/^(?:前端|编码前端)(?:将|把)[^，,。；]{1,160}(?:拼接|融合)(?:并|后|再)(?:经|通过)(?:二维|2D)卷积(?:编码|处理)?$/u.test(clauses[0])
+                    && /^(?:输出|得到|生成)融合(表示|特征)(?:并(?:将|把)(?:该|此)\1)?(?:送入|交给)(?:基于[A-Za-z][A-Za-z0-9-]{0,30}的)?(?:时频(?:网格)?主干|分离网络|分离主干)(?:处理|编码|变换)(?:为|得到|生成)(?:待调制的)?分离(?:表示|特征)$/u.test(clauses[1] || '')) return true;
+                const epoch = /^脑电(?:分析|处理)对目标(?:音|刺激)锁定取(-?[0-9]+(?:\.[0-9]+)?)至(-?[0-9]+(?:\.[0-9]+)?)(?:毫秒|ms)(?:计算|生成)(?:事件相关谱扰动|ERSP)$/u.exec(clauses[0]);
+                const baseline = /^以(?:语境前|刺激前|目标前)(-?[0-9]+(?:\.[0-9]+)?)至(-?[0-9]+(?:\.[0-9]+)?)(?:毫秒|ms)(?:作为)?基线(?:作|进行)(?:时频变换|时频分析)$/u.exec(clauses[1] || '');
+                const clusters = /^(?:经|通过)([1-9][0-9]*)次置换检验(?:确定|识别|得到)显著(?:性)?簇(?=$|并(?:比较|分析|检验))/u.exec(clauses[2] || '');
+                if (epoch && baseline && clusters) {
+                    const [start, end, baselineStart, baselineEnd, iterations] = [...epoch.slice(1), ...baseline.slice(1), clusters[1]].map(Number);
+                    if ([start, end, baselineStart, baselineEnd, iterations].every(Number.isFinite)
+                        && start < end && start <= baselineStart && baselineStart < baselineEnd && baselineEnd <= end) return true;
+                }
+            }
+            if (safe([first, second], 'pooled') && !revoked.test(normalizeNotice(third))
+                && /^(?:同一病人的|同一患者的)(?:多录音|多部位录音)(?:编码|声学)特征(?:经)?展平后(?:送入|交给)(?:感知)?重采样器$/u.test(clauses[0])
+                && /^由固定数量(?:的)?可学习查询(?:经)?交叉注意力(?:池化|汇聚|压缩)(?:为|得到)(?:与录音数无关的)?(?:病人级|患者级)隐表示$/u.test(clauses[1] || '')
+                && (first.match(/隐表示/gu) || []).length === 1
+                && (/^(?:冻结的)?(?:大)?语言模型[^，,。；]{0,60}[，,]\s*(?:以|通过|使用)(?:可训练)?门控交叉注意力(?:适配器)?(?:把|将)(?:该|此)隐表示注入(?:其)?各层/u.test(second)
+                    || /^门控交叉注意力(?:适配器)?(?:把|将)(?:该|此)隐表示注入冻结的(?:大)?语言模型(?:的)?各层/u.test(second))) return true;
+            if (safe([first, second, third], 'candidates') && !revoked.test(normalizeNotice(parts[index + 3]))
+                && /^(?:候选列举|候选枚举|枚举阶段)(?:从|依据|根据)[^，,。；]{1,90}(?:挑出|列出|筛出)[^，,。；]{1,70}(?:候选|假设)$/u.test(clauses[0])
+                && /^(?:输出|生成|形成)(?:包含正确标签(?:在内)?的)?候选集合$/u.test(clauses[1] || '')
+                && /^(?:否决推理|排除推理|辨析阶段)以(?:上述|该|此)候选集合为输入[，,]/u.test(second)
+                && /为每个(?:错误|竞争)候选(?:生成|写出)[^，,。；]{1,70}(?:理由|解释)[，,]\s*(?:形成|输出|得到)解释集合$/u.test(second)
+                && /^(?:最终标签|标签阶段|标签预测)(?:承接|依据|使用)(?:前述辨析|上述解释集合|该解释集合)(?:给出|输出|预测)(?:结构化)?(?:意图(?:与|和)槽位(?:-槽值)?|语义标签|最终标签|标签|意图|槽位|语义框)(?:结果)?$/u.test(third)) return true;
+        }
+    }
+    return false;
+}
+
 function hasExplicitNaturalProductChain(summary) {
+    if (hasTypedProcessingProductChain(summary)) return true;
     if (hasCachedCausalStateHandoff(summary)) return true;
     if (hasTypedNaturalProductHandoff(summary)) return true;
     if (hasExplicitEditedVectorHandoff(summary)) return true;

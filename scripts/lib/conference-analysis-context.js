@@ -63,9 +63,8 @@ function withConferenceAnalysisSource(identity, callback) {
     return scope.run(Object.freeze({ executionId: identity.executionId, executionDir: path.resolve(identity.executionDir), paperId: identity.paperId,
         ...(readerPdfSourceHandle ? { readerPdfSourceHandle } : {}),
         sourceDetails: Object.freeze(clone(identity.sourceDetails)),
-        // 显式的会议 --retry-failed 释放会开一个新的受限 Reader 身份。
-        // 旧候选作为不可变的审计证据保留，而新的 epoch 让已耗尽的候选
-        // 不至于在下次模型请求之前就被拒绝。
+        // 传递原受控子运行绑定的 Reader 身份；恢复时须继续同一 epoch。
+        // --retry-failed 本身不授予新次数，不能改 epoch 绕过耗尽的候选。
         ...(identity.readerRetryEpoch !== undefined
             ? { readerRetryEpoch: identity.readerRetryEpoch } : {}) }), () => readerPdfSourceHandle
         ? tableEvidence.withVerifiedSource(readerPdfSourceHandle, callback)
