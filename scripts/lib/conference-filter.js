@@ -12,6 +12,8 @@ const discoveryApi = require('./conference-discovery.js');
 const evidenceApi = require('./conference-filter-evidence.js');
 const paperIdentity = require('./paper-identity.js');
 const keywordPrefilter = require('./keyword-prefilter.js');
+const decisionApi = require('./filter-decision.js');
+const { renderFilterPrompt } = require('./filter-prompt.js');
 const Config = require('../config.js');
 const utilsApi = require('../utils.js');
 const {
@@ -67,10 +69,10 @@ const LOCK_HANDLES = new WeakSet();
 const LOCK_HANDLE_DATA = new WeakMap();
 // 会议路径有意使用日更 digest 消费的同一个首个围栏块。占位符放在这里，
 // 它的 SHA 就不依赖某一篇具体论文，而每次持久请求仍保留渲染后的文本。
-const LLM_FILTER_PROMPT = utilsApi.loadPrompt(LLM_FILTER_PROMPT_PATH, {
+const LLM_FILTER_PROMPT = renderFilterPrompt({
     title: '{title}', abstract: '{abstract}', categories: '{categories}'
-});
-const DAILY_DECISION_PARSER_VERSION = 'filter-decision-contract-v3';
+}, LLM_FILTER_PROMPT_PATH);
+const DAILY_DECISION_PARSER_VERSION = decisionApi.FILTER_DECISION_CONTRACT;
 const CORE_CONFERENCE_FALLBACK_VERSION = 'core-audio-conferences-2026-v1';
 const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'chime-2026': 'CHiME Speech Separation and Recognition',
@@ -1394,7 +1396,7 @@ function parseLlmDecisionText(source) {
     } catch (error) {
         if (String(error.message || error).startsWith('Invalid conference filter:')) throw error;
     }
-    const parsed = require('../fetch-papers.js').parseFilterDecisionDetails(source);
+    const parsed = decisionApi.parseFilterDecisionDetails(source);
     if (parsed.related === null || parsed.retryable) fail('LLM response is not strict JSON and has no structured daily-filter decision');
     const reason = nonempty(parsed.reason || `日更筛选解析：${parsed.parseSource}`, 'LLM response reason');
     if (reason.length > 4000) fail('LLM 响应的 reason 过长');
@@ -1416,7 +1418,7 @@ function promptFields(envelope) {
 }
 
 function renderDailyFilterPrompt(envelope) {
-    return utilsApi.loadPrompt(LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+    return renderFilterPrompt(promptFields(envelope), LLM_FILTER_PROMPT_PATH);
 }
 
 // 旧请求记录保存的是按 v1 提示词生成的请求正文。恢复时仍须用同一版本重新生成正文，

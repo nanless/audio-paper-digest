@@ -203,6 +203,8 @@ npm run test:compat
 | `lib/history-conflict-identity.js` | Node 库：保留旧版冲突解析功能；当前直接重写策略不把状态为 `conflict/multiple` 的页面送入正式 crosswalk。 |
 | `lib/immutable-file.js` | Node 库：先写临时文件并同步，再用硬链接保存正式文件，不覆盖已有内容；只回收同机已退出写者留下、且与正式文件指向同一文件的临时硬链接，拒绝清理其他文件。 |
 | `lib/keyword-prefilter.js` | Node 库：音频关键词预筛，追求高召回，按版本管理。 |
+| `lib/filter-decision.js` | 日更和会议共用的筛选决定解析、理由及 v3 版本声明；保留无法判定时的原可重试结果，兼容旧抓取入口导出。 |
+| `lib/filter-prompt.js` | 日更和会议共用的筛选模板渲染；各适配器显式传入已冻结的模板路径及原来源字段，保留旧请求文本与 SHA。 |
 | `lib/legacy-history-run.js` | 只读核验旧历史来源与分析 SHA，定位既存运行；不创建来源或调度任务。 |
 | `lib/legacy-manual-source.js` | 只读核验旧 Manual 官方来源的日期、版本、路径和 SHA。 |
 | `lib/llm-pending-request.js` | 模型请求发起前的持久记录，防止中断后退还已预留预算。 |

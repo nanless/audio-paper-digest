@@ -84,7 +84,7 @@ const FILTER_CONFIG = {
     delayBetweenBatchesMs: 2000,
     temperature: 0.3,
     maxTokens: 1000,
-    decisionContractVersion: 3,
+    decisionContractVersion: require('./lib/filter-decision.js').FILTER_DECISION_VERSION,
     keywordPrefilterEnabled: true,
     conferenceTimeoutMs: 60000,
     conferenceMaxTokens: 1200,
