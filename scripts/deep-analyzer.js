@@ -4124,22 +4124,24 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // 「本文权重已经公开」仍单独判断，不能用前面的限定吞掉真实声明。
         const conceptProperties = [
             '代码(?:开源|公开|可用|可运行|可访问)',
-            '(?:模型)?权重(?:可下载|可获取|公开|可用)',
+            '(?:模型)?权重(?:可下载|下载|可获取|公开|可用)',
             '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可用)'
         ];
         const conceptProperty = '(?:' + conceptProperties.join('|') + ')';
         const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
         const countedDistinctions = [
-            { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*件\\s*(?:不同的?|独立的?)?事', 'gu'), listGroup: 1, countGroup: 2 },
+            { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*件\\s*(?:不同的?|独立的?)?(?:事项|事)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp('(?:复现(?:时)?(?:要|应|需))?(?:先)?分清\\s*([三两二32])\\s*件事\\s*[，,:：]\\s*'
                 + conceptList + '\\s*(?:是(?:相互)?独立的|是不同的主张)', 'gu'), listGroup: 2, countGroup: 1 },
             { pattern: new RegExp(conceptList + '\\s*(?:要|应|需)?(?:分开|分别)(?:看|确认|核实|核对|验证|判断)', 'gu'), listGroup: 1 },
             { pattern: new RegExp('复现(?:时)?(?:要|应|需)把' + conceptList + '\\s*([三两二32])\\s*件事分开', 'gu'), listGroup: 1, countGroup: 2 },
+            { pattern: new RegExp('(?:(?:复现(?:前|时)?(?:要|应|需))|并)?(?:把|将)' + conceptList
+                + '\\s*(?:([三两二32])\\s*件事)?\\s*(?:分开|分别)(?:核实|核对|确认|验证|判断)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp(conceptList + '\\s*是\\s*([两二2])\\s*回事', 'gu'), listGroup: 1, countGroup: 2 }
         ];
         for (const { pattern, listGroup, countGroup } of countedDistinctions) for (const span of value.matchAll(pattern)) {
             const list = span[listGroup];
-            const count = countGroup ? span[countGroup] : null;
+            const count = countGroup ? span[countGroup] ?? null : null;
             const items = list.split(/\s*[、和与及]\s*/u);
             const declared = count === null ? items.length : { 三: 3, 两: 2, 二: 2 }[count] || Number(count);
             const types = items.map(item => conceptProperties.findIndex(property => new RegExp('^' + property + '$', 'u').test(item)));
@@ -4151,9 +4153,12 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
                 before.lastIndexOf(open) > before.lastIndexOf(close))
                 || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
-            const after = value.slice(span.index + span[0].length).replace(/^[\s，,:：]+/u, '');
+            const after = value.slice(span.index + span[0].length).replace(/^[\s，,:：]+/u, '')
+                .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '');
             if (quoted || !/^(?:\s*(?:但|因此))?\s*$/u.test(prefix)
                 || /^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|区分|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)/u.test(after)
+                || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:本身|其实|实际)?(?:并不成立|从未成立)/u.test(after)
+                || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:已经|已被|已|被)?(?:撤回|撤销|推翻|否定)/u.test(after)
                 || /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)/u.test(after)) continue;
             return true;
         }
