@@ -923,7 +923,9 @@ function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOpt
         ? validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis, { tagRules }), tagRules })
         : null;
     if (tagStageProofIssue) return `标签阶段记录未通过核验：${tagStageProofIssue}`;
-    const coreSummaryBindingIssue = validateCoreSummaryStageBinding(paper);
+    const coreSummaryBindingIssue = validateCoreSummaryStageBinding(paper,
+        readerOptions.conferenceReaderRefreshUpstream === true
+            ? { sourceText: readerOptions.sourceText } : {});
     if (coreSummaryBindingIssue) return `核心摘要的对应记录未通过核验：${coreSummaryBindingIssue}`;
     if (validateManualTakeoverManifest(
         paper.analysisManifest,
@@ -955,8 +957,17 @@ function getConferenceReaderRefreshUpstreamReason(paper, { tagRules } = {}) {
             paper.analysisStageCheckpoints).stage?.registrySha256 !== tagRules.registrySha256) {
         return '会议 Reader 恢复缺少已核验原词表与会议身份。';
     }
+    let source;
+    try { source = require('./lib/conference-analysis-context').getConferenceAnalysisSource(paper); }
+    catch (error) { return `会议 Reader 恢复的认证来源未通过核验：${error.message}`; }
+    if (!source || source.source !== 'conference_pdf_text' || source.sourceId !== paper.id
+        || typeof source.text !== 'string' || !source.text.trim()
+        || crypto.createHash('sha256').update(source.text).digest('hex') !== paper.sourceSha256
+        || paper.analysisManifest.sourceAcquisition?.sourceSha256 !== paper.sourceSha256) {
+        return '会议 Reader 恢复缺少与原论文 SHA 一致的认证封存全文。';
+    }
     return getIncompleteAnalysisContentReasonUsingRules(paper, tagRules,
-        { conferenceReaderRefreshUpstream: true });
+        { conferenceReaderRefreshUpstream: true, sourceText: source.text });
 }
 
 const LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES = Object.freeze(

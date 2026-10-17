@@ -44,7 +44,7 @@ function canonical(index) {
 function completed(executionId, index = 0, analysisText) {
     const paperId = `conference:icassp:2026:icassp-arnumber:${100 + index}`;
     const base = validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`, {}, analysisText);
-    const sourceText = 'Original conference PDF text. '+'In our evaluation on the LibriSpeech test set, our model reduces WER from 10.2% to 9.8% compared with the baseline.';
+    const sourceText = 'Original conference PDF text. '+'In our evaluation on the LibriSpeech test set, our model reduces WER from 12.4% to 9.8% compared with the baseline.';
     base.sourceSha256 = sha256(sourceText);
     const artifactBody = { tables: [], formulas: [], figures: [], flattenedTextSha256: base.sourceSha256 };
     const structuredArtifacts = { ...artifactBody, payloadSha256: sha256(JSON.stringify(artifactBody)) };
@@ -181,11 +181,32 @@ test('新资源声明的会议冷资格只在原计划来源核验后重放，�
     }), /cross-plan source refused/, '旧混合来源标志不能给新声明伪造来源作用域');
     const previous = loaded.source.sourceDetails.text;
     loaded.source.sourceDetails.text += ' changed';
-    assert.throws(() => api.loadCompleted(options, deps), /读者文章/);
+    assert.throws(() => api.loadCompleted(options, deps), /封存全文/);
     loaded.source.sourceDetails.text = previous;
     paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = 'unknown';
     assert.equal(engine.getApiReaderV3RecordDiagnostics(paper)[0].check, 'resource_claims_contract');
     assert.throws(() => api.loadCompleted(options, deps), /读者文章/);
+});
+
+test('会议冷后处理把已核验全文传入核心校验，参数来源不能借无来源检查通过', t => {
+    const f = fixture(t), loaded = f.runs.get(f.one), paper = loaded.analysis.papers[0];
+    const options = { analysisRoot: f.root, executionId: f.one,
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot };
+    let verified = 0;
+    const deps = { ...f.dependencies, verifyPlanAuthority: (...args) => {
+        verified += 1;
+        return f.dependencies.verifyPlanAuthority(...args);
+    } };
+    assert.equal(api.loadCompleted(options, deps).run.paperId, paper.id);
+    assert.equal(verified, 1);
+    loaded.source.sourceDetails.text = 'The evaluation setup uses 4 GPUs and 100k training steps; inference latency is 21 ms.';
+    bindFixtureSource(paper, loaded.source.sourceDetails);
+    assert.equal(require('../scripts/analysis-contract').validateCoreSummaryStageBinding(paper), null,
+        '无来源旧检查不能区分核心摘要的结果与原文参数');
+    const before = JSON.stringify(loaded);
+    assert.throws(() => api.loadCompleted(options, deps), /核心摘要阶段校验.*原文无可核定量结果/);
+    assert.equal(verified, 2, '严格语义检查仍先经过原计划来源核验');
+    assert.equal(JSON.stringify(loaded), before);
 });
 
 test('已签会议原标签按原归档重放，当前目录另投影相同概念且不修改原稿', () => {
@@ -1077,14 +1098,16 @@ test('会议后处理在生成页面前拒绝旧清洗可能损坏的来源，�
         tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle,
         sourceRoot: f.sourceRoot, apply: true };
     const record = f.runs.get(f.one);
-    record.source.sourceDetails.text = 'Source defines 𝑥 = 𝑦 + 1.';
+    const measuredSource = record.source.sourceDetails.text;
+    record.source.sourceDetails.text = `${measuredSource} Source defines 𝑥 = 𝑦 + 1.`;
+    bindFixtureSource(record.analysis.papers[0], record.source.sourceDetails);
     let renders = 0;
     assert.throws(() => api.stagePaper(options, { ...f.dependencies,
         render: () => { renders++; throw new Error('不能进入渲染'); }
     }), /Unicode.*重新分析/);
     assert.equal(renders, 0);
     assert.equal(fs.existsSync(stagingRoot), false);
-    record.source.sourceDetails.text = 'Source defines x = y + 1.';
+    record.source.sourceDetails.text = `${measuredSource} Source defines x = y + 1.`;
     bindFixtureSource(record.analysis.papers[0], record.source.sourceDetails);
     assert.equal(api.stagePaper(options, f.dependencies).status, 'staged');
 });

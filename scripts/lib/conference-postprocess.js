@@ -92,12 +92,15 @@ function getPublicationUrls(paper) {
     if (recordUrl === pdfUrl) fail('官方论文记录网址与 PDF 网址必须不同。');
     return { contract: PUBLICATION_CONTRACT, recordUrl, pdfUrl };
 }
-function validateReaderAndScoring(paper) {
+function validateReaderAndScoring(paper, sourceText) {
     const contracts = paper?.analysisManifest?.contracts || {};
     const scoring = paper?.analysisManifest?.stages?.scoringAudit || {};
     const acquisition = paper?.analysisManifest?.sourceAcquisition || {};
     const sectionIssue = analysisContract.validateTopLevelSectionContract(paper?.analysis);
-    const coreSummaryIssue = analysisContract.validateCoreSummaryStageBinding(paper);
+    if (typeof sourceText !== 'string' || !sourceText.trim() || sha256(sourceText) !== paper?.sourceSha256) {
+        fail('核心摘要未绑定与当前论文 SHA 一致的封存全文。');
+    }
+    const coreSummaryIssue = analysisContract.validateCoreSummaryStageBinding(paper, { sourceText });
     if (sectionIssue || coreSummaryIssue || acquisition.fullTextAvailable !== true || acquisition.analysisSource === 'abstract') {
         const issue = sectionIssue || coreSummaryIssue;
         fail(`会议论文必须有基于全文的分析，包含规定的 13 节，并通过核心摘要阶段校验${issue ? `: ${issue}` : ''}`);
@@ -236,7 +239,7 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
             loaded, planHandle, sourceRoot });
     }
     const qualify = () => {
-    const publication = validateReaderAndScoring(sourcePaper);
+    const publication = validateReaderAndScoring(sourcePaper, loaded.source.sourceDetails.text);
     const originalTagProof = readOriginalTagProof(sourcePaper);
     const successful = dependencies.isSuccessful || analysisEngine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication;
     if (!successful(sourcePaper, { tagRules: originalTagProof.rules })) fail('会议论文的正式分析记录尚未通过完成检查。');

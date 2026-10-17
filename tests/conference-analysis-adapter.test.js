@@ -150,15 +150,55 @@ test('会议 Reader 前置重放只忽略 Reader 自身，原核心、评分和�
     const { paper, tagRules } = require('./helpers/conference-readonly-qualification-fixture')
         .completedConferenceOriginalTaxonomyFixture();
     const engine = require('../scripts/analysis-engine');
+    const sourceText = 'Experiment results on the public test set report baseline WER 12.4% and our method WER 9.8%.';
+    paper.sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    paper.analysisManifest.sourceAcquisition.sourceSha256 = paper.sourceSha256;
+    const inSource = callback => context.withConferenceAnalysisSource({ executionId: EXECUTION,
+        executionDir: path.join(os.tmpdir(), EXECUTION), paperId: paper.id,
+        sourceDetails: { source: 'conference_pdf_text', sourceId: paper.id, text: sourceText } }, callback);
     paper.apiReaderArticle = 'invalid old Reader';
-    assert.equal(engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules }), null);
+    assert.match(engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules }), /认证封存全文/);
+    assert.equal(inSource(() => engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules })), null);
     const brokenCore = structuredClone(paper);
     brokenCore.analysisManifest.stages.coreSummaryRepair.outputAnalysisSha256 = '0'.repeat(64);
-    assert.match(engine.getConferenceReaderRefreshUpstreamReason(brokenCore, { tagRules }), /核心摘要/);
+    assert.match(inSource(() => engine.getConferenceReaderRefreshUpstreamReason(brokenCore, { tagRules })), /核心摘要/);
     const brokenScore = structuredClone(paper);
     brokenScore.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = '0'.repeat(64);
-    assert.match(engine.getConferenceReaderRefreshUpstreamReason(brokenScore, { tagRules }), /评分/);
+    assert.match(inSource(() => engine.getConferenceReaderRefreshUpstreamReason(brokenScore, { tagRules })), /评分/);
+    const wrongSource = structuredClone(paper);
+    wrongSource.sourceSha256 = '0'.repeat(64);
+    assert.match(inSource(() => engine.getConferenceReaderRefreshUpstreamReason(wrongSource, { tagRules })), /认证封存全文/);
+    const wrongAcquisition = structuredClone(paper);
+    wrongAcquisition.analysisManifest.sourceAcquisition.sourceSha256 = '0'.repeat(64);
+    assert.match(inSource(() => engine.getConferenceReaderRefreshUpstreamReason(wrongAcquisition, { tagRules })), /认证封存全文/);
+    const crossPaper = structuredClone(paper);
+    crossPaper.id = crossPaper.conferencePaperId = crossPaper.sourceId = paper.id + '-other';
+    assert.match(inSource(() => engine.getConferenceReaderRefreshUpstreamReason(crossPaper, { tagRules })), /认证来源未通过核验/);
+    context.withConferenceAnalysisSource({ executionId: EXECUTION,
+        executionDir: path.join(os.tmpdir(), EXECUTION), paperId: paper.id,
+        sourceDetails: { source: 'conference_pdf_text', sourceId: paper.id + '-other', text: sourceText } }, () => {
+        assert.match(engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules }), /认证封存全文/);
+    });
     assert.notEqual(engine.getConferenceReaderRefreshUpstreamReason(paper), null);
+});
+
+test('会议 Reader 前置用同一来源区分实测结果与参数，普通内容查询不借用会议全文', () => {
+    const { paper, tagRules } = require('./helpers/conference-readonly-qualification-fixture')
+        .completedConferenceOriginalTaxonomyFixture();
+    const engine = require('../scripts/analysis-engine');
+    const sourceText = 'The evaluation setup uses 4 GPUs and 100k training steps; inference latency is 21 ms.';
+    paper.sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+    paper.analysisManifest.sourceAcquisition.sourceSha256 = paper.sourceSha256;
+    const before = JSON.stringify(paper);
+    const ordinary = engine.getIncompleteAnalysisContentReason(paper);
+    context.withConferenceAnalysisSource({ executionId: EXECUTION,
+        executionDir: path.join(os.tmpdir(), EXECUTION), paperId: paper.id,
+        sourceDetails: { source: 'conference_pdf_text', sourceId: paper.id, text: sourceText } }, () => {
+        assert.match(engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules }), /核心摘要/);
+        assert.equal(engine.getIncompleteAnalysisContentReason(paper), ordinary,
+            '普通日更/历史资格不能因为相邻会议作用域而新增全文注入');
+    });
+    assert.equal(JSON.stringify(paper), before);
 });
 
 test('会议 Reader revision 保留原完成包，失败中断后从同一候选恢复且拒绝父链篡改', async t => {
