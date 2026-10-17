@@ -1680,9 +1680,156 @@ function hasCompleteSoftwareFunctionalValidationResult(summary,result){
  });
 }
 
+function sourceHasObservedOutcomeComparison(sourceText) {
+    // Source-only evidence. A numeric definition, a scale, or a planned test is
+    // not an observation. Keep the measured object/condition and its result in
+    // one bounded statement; never infer source evidence from the summary.
+    const paragraphs = String(sourceText || '').replace(/\r/g, '').split(/\n[ \t]*\n/)
+        .map(value => value.replace(/\s+/gu, ' ').trim()).filter(Boolean);
+    const denied = /\b(?:hypothetical|illustrative|suppose|assuming|predicted|expected|planned|future|will|would|could|should)\b|\bwe\s+hypothesi[sz]e\b|\b(?:prior|previous|earlier|another|other)\s+(?:work|stud(?:y|ies)|research|paper)\b|\b(?:cited|quoted|quotation|denies|denied|refutes|refuted)\b|\b(?:et\s+al\.?|reviewer|commentator)\s+(?:report(?:s|ed)?|write[sd]?|wrote|says?|said|claims?|claimed)\b|\b(?:not|never|no)\s+(?:(?:actually|actual|yet|empirically|be|been|ever)\s+)*(?:measur|observ|evaluat|perform|conduct|carri|run|test|report|found|confirm|yield|show|averag|var|surpass|produc|trigger|shift)|\b(?:as\s+(?:a\s+)?(?:stopping\s+|selection\s+|decision\s+)?threshold|hyperparameter)\b|\b(?:define|defines|defined|definition|assume|assumes|assumed)\b/iu;
+    const withdrawn = (observation, after) => {
+        const quote = /^\s*[“"‘']/u.test(observation);
+        const resultReferent = '(?:values?|results?|estimates?|measurements?|observations?|probabilities|probability|coefficients?|proportions?|improvements?|correlations?|(?:rejection\\s+)?rates?)';
+        const revoked = new RegExp(`\\b(?:these|those|this|that|the\\s+above)\\s+${resultReferent}\\b[^.;!?]{0,70}\\b(?:(?:not|never)\\b[^.;!?]{0,30}\\b(?:measured|observed|reported|obtained|produced)|withdrawn|retracted|fabricated|false|incorrect)\\b|\\bneither\\s+${resultReferent}\\b[^.;!?]{0,40}\\b(?:measured|observed|reported|obtained|produced)\\b|\\b(?:this|that|the\\s+above)\\s+(?:claim|statement|evaluation|experiment|test)\\b[^.;!?]{0,60}\\b(?:false|incorrect|fabricated|retracted|withdrawn|(?:not|never)\\s+(?:(?:been|actually|yet)\\s+)*(?:performed|conducted|carried\\s+out|true))\\b|\\bthis\\s+(?:is|was)\\s+(?:(?:only|just|merely)\\s+)?(?:a\\s+|an\\s+)?(?:synthetic|hypothetical|illustrative|fictional)\\b`, 'iu');
+        return quote || revoked.test(observation) || revoked.test(after.slice(0, 180));
+    };
+    const number = '[-+]?(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)';
+    const lines = String(sourceText || '').split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+        if (!/\bTable\s+[0-9]+\s*:\s*(?:Performance|Comparison|Evaluation|Ablation|Results)\b/iu.test(lines[index])
+            || denied.test(lines[index]) || denied.test(lines.slice(Math.max(0, index - 2), index).join(' '))) continue;
+        const block = [];
+        for (let next = index + 1; next < Math.min(lines.length, index + 50); next++) {
+            if (/\bTable\s+[0-9]+\s*:/iu.test(lines[next])) break;
+            block.push(lines[next]);
+        }
+        // These named result columns are not generic "score"/"metric" labels.
+        // Rows must literally follow that header with the same complete width.
+        const betaHeader = /\b(?:Cue|Feature|Predictor)\s+([A-Za-z][A-Za-z0-9_-]*)\s*β\s+([A-Za-z][A-Za-z0-9_-]*)\s*β/u;
+        const header = block.findIndex(line => /\bModel\s+Rm\s+Rstd\s+Rpos\s+Spec\s+F1pos\b/u.test(line)
+            || /\bMethods\s+JS↓\s*BC↑\s*R[2²]↑\s*Brier↓/u.test(line) || betaHeader.test(line));
+        if (header < 0) continue;
+        const beta = betaHeader.exec(block[header]);
+        if (beta) {
+            const headerText = block.slice(0, header).join(' ');
+            const definition = /\b(?:importance|effects?)\s+is\s+measured\s+by\s+the\s+fixed-effect[\s\S]{0,160}?coefficient\s*\(β\)\s+from\s+the\s+mixed-effects\s+models\b/iu.exec(headerText);
+            // Framing before the measurement declaration belongs to this table.
+            // Afterwards, reject explicit attribution of these coefficients, not
+            // unrelated discussion from the other column of a PDF page.
+            const coefficientFraming = /\b(?:these|those|following|above)\s+(?:values|coefficients)\b[^.;!?]{0,70}\b(?:hypothetical|illustrative|fictional|synthetic|prior|previous|quoted)\b|\b(?:hypothetical|illustrative|fictional|synthetic)\s+(?:values|coefficients)\b|\b(?:prior|previous|earlier|another)\s+(?:study|paper|work)\b[^.;!?]{0,70}\b(?:following|these|those)\s+(?:values|coefficients)\b/iu;
+            if (!definition || denied.test(headerText.slice(0, definition.index + definition[0].length))
+                || coefficientFraming.test(block.join(' ')) || beta[1].toLowerCase() === beta[2].toLowerCase()) continue;
+        } else if (denied.test(block.slice(0, header + 1).join(' '))) continue;
+        const width = beta ? 2 : /\bF1pos\b/u.test(block[header]) ? 5 : 4;
+        const rowPattern = new RegExp(`^\\s*([A-Za-z][A-Za-z0-9 ()+_.-]{0,70}?)\\s+((?:${number}\\s+){${width - 1}}${number})\\s*$`, 'u');
+        const rows = []; let lastRow = header;
+        for (let offset = header + 1; offset < block.length; offset++) {
+            const line = block[offset];
+            const row = rowPattern.exec(line);
+            if (row && row[2].trim().split(/\s+/u).every(value => Number.isFinite(Number(value))
+                && (beta || Number(value) >= 0 && Number(value) <= 1))) {
+                rows.push(row[1].trim()); lastRow = offset;
+            }
+        }
+        if (new Set(rows).size >= 2 && !withdrawn(`${lines[index]} ${block.slice(0, lastRow + 1).join(' ')}`,
+            block.slice(lastRow + 1).join(' ').slice(0, 180))) return true;
+    }
+    const metric = '(?:recognition\\s+accuracy|mean\\s+silhouette(?:\\s+coefficient)?|centroid\\s+size|AUC)';
+    const scalar = new RegExp(`\\b(${metric})\\b\\s*(?:averag(?:ing|ed|es?)|varied\\s+by\\s+actor:|exceeded|=|of|at)\\s*(${number})(%?)(?![A-Za-z0-9_.%])`, 'iu');
+    for (const paragraph of paragraphs) {
+        for (const correlation of paragraph.matchAll(/\bwe\s+(?:observe|observed|measured)\b[\s\S]{0,160}?\b(?:average|mean)\s+correlation\s+(?:of|=)\s*([-+]?[0-9]+(?:\.[0-9]+)?)(?![A-Za-z0-9_.%])/giu)) {
+            const after = paragraph.slice(correlation.index + correlation[0].length, correlation.index + correlation[0].length + 180);
+            const local = paragraph.slice(Math.max(0, correlation.index - 250), correlation.index + correlation[0].length) + after;
+            if (Number(correlation[1]) >= -1 && Number(correlation[1]) <= 1 && !denied.test(local)
+                && /\binter[- ]model\b[\s\S]{0,70}\bcorrelation\s+(?:matrix|matrices)\b/iu.test(local)
+                && /\bamong\s+[A-Z][A-Za-z0-9_+-]{1,40}/u.test(after)
+                && /\b(?:architectures|models|systems)\b/iu.test(local)
+                && !withdrawn(local, after)) return true;
+        }
+        const ratePair = new RegExp(`\\brejection\\s+rates\\b[\\s\\S]{0,100}\\bshows\\b[\\s\\S]{0,120}?\\bapproximately\\s+(${number})\\s+percentage\\s+points\\s+under\\s+(?:the\\s+)?([A-Za-z-]+(?:\\s+[A-Za-z-]+){0,4}\\s+(?:model|analysis))[\\s\\S]{0,180}?\\band\\s+(${number})\\s+points\\s+under\\s+(?:the\\s+)?([A-Za-z-]+(?:\\s+[A-Za-z-]+){0,4}\\s+(?:model|analysis))`, 'gu');
+        for (const rate of paragraph.matchAll(ratePair)) {
+            const local = paragraph.slice(Math.max(0, rate.index - 250), rate.index + rate[0].length);
+            if (!denied.test(local) && /\bcalibrated\b/iu.test(local)
+                && /\b(?:empirical|observed|measured|results\s+confirm)\b/iu.test(local)
+                && [rate[1], rate[3]].every(value => Math.abs(Number(value)) <= 100)
+                && rate[2].toLowerCase().replace(/\s+/gu, ' ') !== rate[4].toLowerCase().replace(/\s+/gu, ' ')
+                && !withdrawn(local, paragraph.slice(rate.index + rate[0].length, rate.index + rate[0].length + 180))) return true;
+        }
+        for (const proportion of paragraph.matchAll(/\b(?:Our|This)\s+study\s+(?:shows|showed|found|observed)\s+(?:a\s+)?(?:(?:high|low)\s+)?incidence\b[\s\S]{0,240}?\bwith\s+([0-9]+(?:\.[0-9]+)?)%\s+of\s+all\s+[A-Za-z][A-Za-z0-9_-]{1,35}\s+(?:having|showing|exhibiting)\s+[^.;]{2,80}/gu)) {
+            const local = paragraph.slice(Math.max(0, proportion.index - 160), proportion.index + proportion[0].length);
+            if (Number(proportion[1]) > 0 && Number(proportion[1]) <= 100 && !denied.test(local)
+                && !CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.test(proportion[0])
+                && !/\b(?:gpus?|cpus?|tpus?|npus?|layers?|parameters?|batches|epochs?|steps?)\b/iu.test(proportion[0])
+                && /\b(?:in|on|for|among)\b/iu.test(proportion[0])
+                && !withdrawn(local, paragraph.slice(proportion.index + proportion[0].length, proportion.index + proportion[0].length + 180))) return true;
+        }
+        for (const contrast of paragraph.matchAll(/\bresult(?:ing|ed)\s+in\s+(?:up\s+to\s+)?([0-9]+(?:\.[0-9]+)?)\s*×\s+(?:worse|better|higher|lower)\s+(?:jailbreak|attack)(?:\s+success)?\s+rates?\s+than\s+(?:the\s+)?(?:unimodal|baseline|control|reference)\b/gu)) {
+            const local = paragraph.slice(Math.max(0, contrast.index - 300), contrast.index + contrast[0].length);
+            if (Number(contrast[1]) > 1 && !denied.test(local)
+                && /\bwe\s+(?:showed|observed|found|demonstrated)\b/iu.test(local)
+                && !withdrawn(local, paragraph.slice(contrast.index + contrast[0].length, contrast.index + contrast[0].length + 180))) return true;
+        }
+        // An estimated group effect is not its participant count or a free p
+        // value. The observed contrast must precede a coefficient + p-value.
+        for (const estimate of paragraph.matchAll(/\((?:β|Est\.?)\s*=\s*([-+]?[0-9]+(?:\.[0-9]+)?),\s*(?:SE\.?\s*=\s*[0-9]+(?:\.[0-9]+)?,\s*t\s*=\s*[-+]?[0-9]+(?:\.[0-9]+)?,\s*)?p\s*[<=]\s*(0\.[0-9]+)\)/gu)) {
+            const local = paragraph.slice(Math.max(0, estimate.index - 300), estimate.index + estimate[0].length);
+            if (!denied.test(local)
+                && !withdrawn(local, paragraph.slice(estimate.index + estimate[0].length, estimate.index + estimate[0].length + 180))
+                && /\b(?:speakers?|participants?|patients?|subjects?|groups?)\b(?:[^.;!?]|\.(?=[0-9])){0,200}\b(?:had|exhibited|showed)\b(?:[^.;!?]|\.(?=[0-9])){0,120}\b(?:higher|lower|greater|smaller|increased|decreased)\b/iu.test(local)
+                && Number(estimate[2]) > 0 && Number(estimate[2]) < 1) return true;
+        }
+        for (const posterior of paragraph.matchAll(/\bin\s+[A-Z][A-Za-z-]{1,35}\s*\(95%\s*CrI:\s*\[([-+]?[0-9]+(?:\.[0-9]+)?),\s*([-+]?[0-9]+(?:\.[0-9]+)?)\],\s*ER\s+for\s+[^:()]{1,35}:\s*([0-9]+(?:\.[0-9]+)?)\)/gu)) {
+            const local = paragraph.slice(Math.max(0, posterior.index - 400), posterior.index + posterior[0].length);
+            if (!denied.test(local) && !withdrawn(local, paragraph.slice(posterior.index + posterior[0].length, posterior.index + posterior[0].length + 180))
+                && /\bshowed\b[^.;]{0,100}\bassociation\b/iu.test(local)
+                && Number(posterior[1]) <= Number(posterior[2])) return true;
+        }
+        const statements = paragraph.replace(/\bet al\.(?=\s)/giu, 'et al').split(/(?<=[.!?])\s+/u);
+        for (let index = 0; index < statements.length; index++) {
+            const statement = statements[index];
+            const framing = statements[index - 1] || '';
+            if (denied.test(framing) && /\b(?:following|below|next|these|this|test|experiment|evaluation)\b/iu.test(framing)) continue;
+            if (statement.length <= 1800 && !denied.test(statement)
+                && !withdrawn(statement, statements[index + 1] || '')) {
+                const match = scalar.exec(statement);
+                const value = match && Number(match[2]);
+                const validValue = match && Number.isFinite(value) && (/centroid/i.test(match[1]) ? value > 0
+                    : /silhouette/i.test(match[1]) ? value >= -1 && value <= 1
+                        : value >= 0 && value <= (match[3] === '%' ? 100 : 1));
+                if (validValue && /\b(?:showed|yield(?:s|ed)?|averag(?:ing|ed|es?)|varied|found|demonstrate[sd]?|exceeded)\b|\b(?:optimal\s+)?solution\s+was\b/iu.test(statement)
+                    && /\b(?:compared\s+to|than|against|versus|baseline|chance|classification|clustering|actor|speakers?|males?|females?|models?|systems?|methods?|groups?|conditions?|evaluations?)\b/iu.test(statement)) {
+                    return true;
+                }
+                const paired = new RegExp(`\\b(?:Both|The\\s+models?)\\s+([A-Za-z][A-Za-z0-9_+-]{1,35})\\s+and\\s+([A-Za-z][A-Za-z0-9_+-]{1,35})\\s+(?:yield|yielded|achieved|produced)\\s+CKA\\s+scores\\b[^()]{0,45}\\((${number})\\s+and\\s+(${number}),\\s*respec-?\\s*tively\\)`, 'iu').exec(statement);
+                if (paired && paired[1].toLowerCase() !== paired[2].toLowerCase()
+                    && [paired[3], paired[4]].every(value => Number(value) >= 0 && Number(value) <= 1)) return true;
+            }
+            // The same evaluated system, one probability variable, two explicit
+            // input conditions and an observed directional change. P(x)=... by
+            // itself, priors and probability-distribution definitions cannot pass.
+            const candidate = statements.slice(index, index + 3).join(' ');
+            const probabilities = [...candidate.matchAll(/\bP\(([A-Za-z][A-Za-z0-9_]*)\)\s*=\s*(0(?:\.[0-9]+)?|1(?:\.0+)?)(?![A-Za-z0-9_.%])/gu)];
+            if (probabilities.length !== 2) continue;
+            const window = candidate;
+            const models = new Set([...window.matchAll(/\b([A-Z][A-Za-z0-9_+.-]{1,40})\s+(?:model|system)\b|\b(?:model|system)\s+([A-Z][A-Za-z0-9_+.-]{1,40})/gu)]
+                .map(match => (match[1] || match[2]).toLowerCase()).filter(value => !['the', 'this', 'that', 'different'].includes(value)));
+            if (window.length > 1500 || denied.test(window)
+                || models.size !== 1
+                || withdrawn(window, statements[index + 3] || '')
+                || !/\b(?:evaluation|test)\b[^.;]{0,80}\b(?:demonstrated|performed|conducted)\b[^.;]{0,80}\b(?:model|system)\b/iu.test(window)
+                || !/\b(?:isolated|single|univariate|baseline)\b[^.;]{0,150}\b(?:triggers?|yield(?:s|ed)?|produces?)\b/iu.test(window)
+                || !/\b(?:recombin\w*|combin\w*|modified|perturbed)\b[^.;]{0,200}\b(?:shifting|shifted|decreasing|decreased|increasing|increased)\b/iu.test(window)) continue;
+            if (probabilities[0][1] === probabilities[1][1]
+                && Number(probabilities[0][2]) !== Number(probabilities[1][2])) return true;
+        }
+    }
+    return false;
+}
+
 function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null) {
     if (!sourceText) return null;
-    if (sourceHasMeasuredMetricTable(sourceText) || sourceCorpusCurationResult(sourceText)) return true;
+    if (sourceHasMeasuredMetricTable(sourceText) || sourceCorpusCurationResult(sourceText)
+        || sourceHasObservedOutcomeComparison(sourceText)) return true;
     const values = Array.isArray(sentences) ? sentences : String(sourceText).trim()
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
         .map(sentence => sentence.trim()).filter(Boolean);

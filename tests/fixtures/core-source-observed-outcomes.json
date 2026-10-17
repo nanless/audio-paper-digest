@@ -1,0 +1,302 @@
+{
+  "description": "Verbatim excerpts from sealed conference source, not constructed paper text. Metadata pins original source bytes; these pure classifier fixtures are not source authority or publication receipts.",
+  "cases": [
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:chen26b_interspeech",
+      "sourceTextSha256": "dd005107fff73cbdc402fe5c3b90caaf564d208ab18b103f9e6b008200cabbea",
+      "sourceFileSha256": "40fc5b25beaf9039ca993312ce3cfb8ae355a4de89d23dbf1e374076a1855ffc",
+      "evidenceFamily": "概率/绑定效应",
+      "sourceExcerpts": [
+        {
+          "start": 6450,
+          "end": 7650,
+          "quote": " Gender bias in ITTS often manifests not as isolated attribute as-\nintegration of multiple cues rather than from isolated lexical        sociations but as compositional dependencies driven by the in-\nmarkers [16, 17]. A prompt case that describes a high-status        terplay of multiple textual cues. We propose a disentanglement\n\n\n\n                                                2526                          10.21437/Interspeech.2026-66\n\f\nFigure 1: Overall Framework. Two-stage evaluation demonstrated with PromptTTS++ model. Stage 1 establishes univariate gender\npriors, where an isolated descriptor like nurse triggers a strong female bias (P(x) = 0.99). In Stage 2, recombining tokens with\nattributes like high-status and reckless creates a binding effect to the original female-leaning nurse, shifting the perceived gender\ntoward male (P(x) = 0.17).\n\nframework to separate the independent contributions of individ-       We compute the marginal female probability P(x(k)uni ) for\nual cues from their interaction effects, as illustrated in Fig. 1.       each x. They deviating significantly from 0.5 are identified as\nBy charting the multi-dimensional prompt space moving from        sensitive",
+          "quoteUtf8Sha256": "e01358a9a91f50571afc25d1b47eefb5c45fd79fa7ebd9548be9b92b7fd8e447"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:chen26c_interspeech",
+      "sourceTextSha256": "5dc7926eb9f6490b49536effbfc35b84d4fc6da6779ac5a93023e927802d2f7b",
+      "sourceFileSha256": "9d275afe90f45459c7939a1227472766c10c432e88da627d40f83bcd21a1b277",
+      "evidenceFamily": "统计系数及AUC",
+      "sourceExcerpts": [
+        {
+          "start": 26900,
+          "end": 28500,
+          "quote": "igure 3: Estimated means for Duration, f0, OQ, and Creak\n                                                                   across age groups by Tone (T2 vs. T4). Only significant effectsple parameters. We observed significant differences between T2\n                                                                  are presented here. Error bars represent confidence intervals;and T4 for F0 PC1, OQ PC1, SQ PC2, and Creak PC1. Post-\n                                                                         asterisks indicate significant differences (∗p < 0.05, ∗∗p <hoc comparisons showed that all four parameters were signifi-\n                                                                   0.01, ∗∗∗p < 0.001).cantly higher in T2 than in T4 (F0 PC1: β = 2.31, p < 0.001;\nOQ PC1: β = 0.61, p = 0.022; SQ PC2: β = 0.49, p =\n0.025; Creak PC1: β = 10.20, p = 0.009).\n    Crucially, significant Tone × Age interactions were found        in T2 and an increased probability in T4. No significant inter-\nacross several parameters (as shown in Figure 3). This indicates        generational differences were found in other parameters.\nthat the acoustic and physiological cues underlying tonal con-           Furthermore, the experimental condition (isolated words vs.\ntrasts show intergenerational differences, mainly due to varia-        carrier sentences) acted as a global variable. It yielded signifi-\ntions in T4. Compared to older speakers, younger speakers had        cant main effects (ps < 0.001) on the speakers’ overall pitch\na higher F0 PC2 for T4 (β = 0.84, p = 0.007), a reduced        leve",
+          "quoteUtf8Sha256": "4fe0fe895e93236314f6d6ddaca05a089d8c66dea0fb2d84fb6b49aac243c0ee"
+        },
+        {
+          "start": 30100,
+          "end": 31550,
+          "quote": "  weights of phonation and duration, thereby helping to main-section uses Random Forest models to systematically assess the\n                                                                            tain the acoustic distance between the two tones. Specifically,cue weights speakers use in differentiating T2 and T4. For all\n                                                              changes in T4 have led to increased differences in voice qualitymodels, the average AUC exceeded 0.97. This indicates robust\n                                                           and duration compared to T2. This finding differs from strate-model performance and high classification accuracy. Figure 4\n                                                                       gies observed in previous studies. For example, in the Huantaishows how each parameter’s relative weight differs across the\n                                                           Mandarin of Shandong [41] and the Chaoyang dialect of east-groups.\n                                                                   ern Guangdong [42], tonal contrast is maintained by expanding    Intergenerational comparison reveals a clear reorganiza-\n                                                                       pitch contour differences. This reflects a unique pattern of cuetion in cue weight distribution.  In the older group, F0 PC1\n                                                 ",
+          "quoteUtf8Sha256": "f8a06f3b055724d7ee6d02099080335f862a771a522a44fcefb0979ca9ff5ce4"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:danner26_interspeech",
+      "sourceTextSha256": "da3ea0040c6dfb2462cca8bb42a225c334435b4b004c758a2e7fa8e262f43125",
+      "sourceFileSha256": "ce08b7d0857f961b5b760930b1577e334d38074258495f1b31af17415c1cc1f0",
+      "evidenceFamily": "形态测量",
+      "sourceExcerpts": [
+        {
+          "start": 14800,
+          "end": 16050,
+          "quote": "  parisons indicate that the most pronounced sex difference is the\nmetric effects, i.e., residual size-related shape variation [26]. In       lower larynx position in males (Fig. 1C), corresponding to sub-\naddition, for the articulatory dataset we evaluated disparity in         stantially greater vocal tract length relative to females (Fig. 1D).\na pooled analysis across vowels, including vowel category as        In addition to shape differences, males exhibit larger overall\nan additional covariate in the model. Sex differences in dispar-       vocal tract size, with centroid size averaging 1503.04 in males\nity were statistically assessed using permutation tests (n=999)      compared to 1386.16 in females, corresponding to an approxi-\nunder the null hypothesis of no group difference. In each itera-       mately 8.4% increase in males. Males also exhibit greater mor-\ntion, residual Procrustes coordinates (after accounting for cen-       phological disparity than females in the first two principal com-\ntroid size) were randomly reassigned across groups to generate       ponents (PC1–PC2), which together account for 41.6% of total\na null distribution of disparity differences.                         shape variation in the sample. This",
+          "quoteUtf8Sha256": "46fcace27249e5b158da61ed5c746e3d50c9cc9323b5367c7929c8209037351e"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:jing26b_interspeech",
+      "sourceTextSha256": "92a4e16dd51849d85b00170e37d908e488ffb0101c0f14697ae4126b99b1e0f2",
+      "sourceFileSha256": "e2e1d7a477dfb23b59b200ff4de4bf9f3ab1ae32306881eb4b01a3f5dc593ca1",
+      "evidenceFamily": "聚类质量",
+      "sourceExcerpts": [
+        {
+          "start": 28300,
+          "end": 29850,
+          "quote": "peaker variation in retroflex re-\n                                                                              alisation, and may therefore yield strategy distributions and\nSpecifically, each speaker’s three-part proportion vector was\n                                                                 tongue-contour patterns that differ from those reported in Luo.\ncentre log-ratio (CLR) transformed, and Ward.D2 hierarchical\nclustering was performed in the CLR space. The number of\n                                                                            3.2. Speaker-specific strategy preferences\nspeaker groups was selected by maximising the mean silhou-\nette coefficient; under this criterion, the optimal solution was      The significant speaker effect supports strong individual prefer-\nk = 2 (mean silhouette = 0.626), separating speakers into {1,       ences in retroflex sibilant implementation: some speakers pre-\n4} versus {2, 3, 5}. Within the latter group, the dendrogram       dominantly use humped shapes, others favour domed shapes,\nsuggested an additional split (visually corresponding to 2, 3 vs.       and some exhibit a higher proportion of concave shapes (see\n5; see Fig. 3). In distributional terms, the three super-strategies        Fig. 4). Moreover, compositional clustering based on the three\ndiffered significantly across speakers (Monte Carlo χ2 test, p        super-strategy proportions yielded a two-group solution,  al-\n< 0.001). To assess branch stability, we additionally used pv-       though the dendrogram sugg",
+          "quoteUtf8Sha256": "6daca334a16c612e51719401a56774c5b629eb478e80a6704649fc2ea4c79c95"
+        },
+        {
+          "start": 18500,
+          "end": 20050,
+          "quote": "                        using false discovery rate (FDR; Benjamini-Hochberg) correc-were grouped solely based on contour-derived representations.\n                                                                               tion. Of the 21 tested features, 20 remained significant after cor-We extracted a set of contour-based shape descriptors captur-\n                                                                        rection (pFDR < 0.001); only seg4 curv was not significant (pFDRing global contour extent (xrange, yrange), a global curvature\n                                                  = 0.106). The solution showed modest separation (mean silhou-summary (P |∆2y|), extrema locations (peak/trough indices),\n                                                                               ette = 0.134) but moderate reproducibility under 80% subsam-front/back linear slopes (points 1-21 vs. 22-42), two-peak (bi-\n                                                                     pling (ARI mean = 0.541, median = 0.528).modal) contour descriptors (bimodality, valley depth, peak sep-\naration, peak indices), and piecewise slope/curvature computed\nover six equal point segments along the 42-point contour. The        2.4.2. Super-strategy grouping\nfeature matrix was z-score standardised, and pairwise token dis-\n                                               Among the six clusters obtained from the unsupervised analysis\ntances were computed in the standardised feature space. Clus-\n                                                 ",
+          "quoteUtf8Sha256": "d98623a34a29a6122dbaab24012be564de163b5789a311ee749ffd3550a10a68"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:krishnan26_interspeech",
+      "sourceTextSha256": "f667bea0321ec8e6b2e5e79e7e2a8aedf1c89bbb2882dead945185f90c18fc26",
+      "sourceFileSha256": "7dcac9f1d0d11558450c0882d61e10091f95222289b0d10dda9f47fb3a724d4d",
+      "evidenceFamily": "实际攻击率/速度倍数",
+      "sourceExcerpts": [
+        {
+          "start": 2200,
+          "end": 3750,
+          "quote": "                             overestimate the security of multimodal systems. Motivated by\njoint multimodal optimization framework combining Greedy\n                                                                               this thought, we ask the following question—“Does robustness\nCoordinate Gradient (GCG) and Projected Gradient Descent\n                                                                         to unimodal adversarial optimization transfer to the multi-\n(PGD),  simultaneously  perturbing  both  input  modalities.\n                                                        modal setting?”. We propose a white-box attack scenario where\nEvaluations across four state-of-the-art SLMs and four audio\n                                                                both the text and audio inputs are simultaneously optimized for\ntypes demonstrate that JAMA surpasses unimodal jailbreak\n                                                                         jailbreak success. Our findings show that such an adversarial\nrate by 1.5× to 20×. We analyze the operational dynamics\n                                                               combination increases jailbreak success up to 20× compared to\nof this joint attack and show that a sequential attack makes it\n                                                            unimodal attacks. Our contributions are as follows:\n4× to 6× faster. Our findings suggest that unimodal safety is\ninsufficient for robust SLMs.                                            1. We introduce JAM",
+          "quoteUtf8Sha256": "1f3027d67fb96139117357ebb2acbd3e4513eda0c14e19340b996520adc88534"
+        },
+        {
+          "start": 50696,
+          "end": 51796,
+          "quote": "f SLMs\noptimized in the second stage only—reducing GCG compute.       when subjected to gradient-based multimodal attacks.  By\nExperimental Setup. First, we run GCG without an audio in-        introducing a joint optimization framework, we showed that\nput, noting the best suffix during training. Second, the audio       multimodal attacks indeed threaten model safety alignment,\nsignal is introduced, and the PGD perturbation is optimized by        resulting in up to 20× worse jailbreak rates than unimodal\nconditioning the loss on the now-fixed GCG suffix. To ensure a        attacks. We show that multimodal perturbations act on partially\nfair comparison with the joint algorithm (see §3), each stage is       independent  jailbreak spaces, and  their combination tends\noptimized for 1000 steps, i.e., 1000 GCG updates followed by        to expose vulnerabilities that are not visible under unimodal\n1000 PGD updates. Remaining hyperparameters follow §3. We        attacks. Based on gradient dynamics, we proposed a sequential\nrun the sequential algorithm across different GCG lengths, us-       ",
+          "quoteUtf8Sha256": "92876d8eab21d62a7948b47352def1de0584700e1c10afade830b36df45a7962"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:rathnayake26_interspeech",
+      "sourceTextSha256": "7fd7c416d98eb143e4050c745cf7c765d8a075982eb198b5a167c671244178cb",
+      "sourceFileSha256": "41858438cf0919501b8f74b47c30c22d61c6cdb4b28064f0fd1bf11ac6aa8515",
+      "evidenceFamily": "感知识别准确率",
+      "sourceExcerpts": [
+        {
+          "start": 24950,
+          "end": 26750,
+          "quote": "r-\ndifferent arousal levels and valence (positive and negative), as       more, allowing multiple emotion selections per utterance may\nwell as those corresponding to presumed basic emotions. Only        better reflect perceived emotional blends. We plan to explore\none subset was presented to each participant, and an equal num-        these factors in future extensions of the perception test.\nber of participants rated each subset. This study was approved\nby the University of Auckland Ethics Committee (Ref. 25668).         4. Preliminary acoustic feature analysis\n   The perception test yielded an overall recognition accuracy\n                                                                            4.1. Feature extractionof 36.15% for the eight-class classification task (with 38.89%\nand 33.41% for the two subsets), well above the 12.5% chance     We analysed three acoustic features to investigate how emo-\nlevel.  Recognition accuracy varied by actor: 51% and 40%        tions are expressed in M¯aori: fundamental frequency, mean in-\nfor the female actors, and 30% and 26% for the male actors.         tensity, and speech rate. The fundamental frequency (f0), the\nWhile above chance, these rates remain modest, consistent with       primary acoustic correlate of perceived pitch for each utter-\nprior findings that larger emotion sets, particularly those involv-        ance, was extracted using Praat’s Autocorrelation algorithm via\ning finer-grained categories beyond the six basic emotions, are       Python Parselmouth library [31]. Mean intensity, representing\nharder for listeners to discriminate [29].                               the perceived loudness of the vocalisation for each utterance,\n    Figure 1 presents the confusion matrices, showing the dis-      was also computed ",
+          "quoteUtf8Sha256": "7fce564b76d1ef3808a7210bdab9210bf191c2ecf0329fcf683e614f7c8de30e"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:shi26g_interspeech",
+      "sourceTextSha256": "658cec4a2a9ac8918adc3c7ac507bceb4c1df226e3e2ff7bf980335bd9515447",
+      "sourceFileSha256": "9094aeca479b5c635f88631d49ada3dc85044191b08058210a83c88878e83b05",
+      "evidenceFamily": "实际CKA模型比较",
+      "sourceExcerpts": [
+        {
+          "start": 26600,
+          "end": 28450,
+          "quote": "gen-\n                                                                  uine text semantic understanding, such as the text embeddings\n                                                                    of LLMs or cross-modal encoders trained on paired speech-text\n3.3. Semantic Alignment\n                                                                          data. Second, the training objective itself could be augmented\nThe preceding analyses consistently show that codec tokens       with explicit semantic constraints, for instance by encourag-\nlack semantic information. A direct consequence would be       ing codec representations of synonymous words to be closer in\nweak structural alignment between speech codec token and        the latent space, thereby complementing acoustic reconstruction\ntext token. To test this, we measure Centered Kernel Align-       with semantic structure preservation.\nment (CKA) between the two spaces. Both MIMI and MIMO\nyield CKA scores well below 1.0 (0.329 and 0.122, respec-\ntively), confirming a substantial cross-modal structural gap. To                       4. Conclusion\ncontrol for spurious alignment caused by each space’s intrinsic\ngeometry, we also compute a random-permutation baseline that       This paper systematically probes the information encoded in\nbreaks the speech–text pairing. Both codecs show only mod-       speech codec representations from semantic and phonetic per-\nest gains over this baseline (∆=0.087 for MIMI; ∆=0.054 for        spectives.  Through functional analysis, articulatory probing\nMIMO), indicating that neither codec captures strong semantic       with rt-MRI data, and cross-modal alignment evaluation, ap-\nstructure—consistent with Fig. 2. MIMI’s higher absolute CKA        plied across four representative codec frameworks, we demon-\nis likely an artifact of t",
+          "quoteUtf8Sha256": "e582c70b3bc07b2363a96c12955ecc72ce12838d1d8106b9e33b09c38297ca58"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:gorman26_interspeech",
+      "sourceTextSha256": "4954241ea1f7c03b5b2a938b70f3550ab45eaf9d77075b8852fa793690672bce",
+      "sourceFileSha256": "81cdbf45a45a7fbf7290008d7255fef3bf4964bffc1784b479d1952e67d18d97",
+      "evidenceFamily": "统计检验超额拒绝率",
+      "sourceExcerpts": [
+        {
+          "start": 23900,
+          "end": 25350,
+          "quote": "highest non-zero support mass,\nity across both active-speaker directions. Tier C separates that       with directional wins that are near-symmetric across directions\nnon-overlapping activity according to which speaker is active.       (Table 1). Tier B (pooled non-overlapping activity) and Tier C\nThese conditions compare coupling across overlapping, pooled        (directional exclusive activity) shift strongly toward zero sup-\nnon-overlapping, and direction-specific non-overlapping activ-        port, consistent with weaker or absent dyadic coupling out-\nity. Tier C provides an AMI-specific empirical control by sep-        side mutual co-presence. Matched circular-shift results confirm\narating non-overlapping activity according to which speaker is        short-series size inflation (Table 2), motivating calibrated ex-\nactive.                                                              cess rejection rates (Fig. 2). At q = 5%, Tier A micro shows\nCausal analysis:We test directional Granger causality [28] us-       approximately +6.6 percentage points under the bivariate model\ning bivariate and 4-speaker conditional vector autoregression       and +7.4 points under energy-controlled conditional analysis.\n(VAR) models [10, 28]. In the conditional model, each dyadic      At the stricter q = 1% operating point (not shown), effects\ntest conditions on the other two speakers to reduce group-level        attenuate but remain regime-spe",
+          "quoteUtf8Sha256": "234fc299181f81ddd31fae442e588667840d158ca8e8fe22a4a721f1c0f728b0"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:leal26b_interspeech",
+      "sourceTextSha256": "ec31bec2ff381dd44bd2e101e5700e991b3fbcfc2445add4375efff2a2e11cc1",
+      "sourceFileSha256": "4a848897eac27d9d379470830d818add352295763c30dfd8bcd025135ba87f3c",
+      "evidenceFamily": "分类F1pos表格",
+      "sourceExcerpts": [
+        {
+          "start": 21150,
+          "end": 23450,
+          "quote": "   Scatter analyses under gender stratification indicated weak-\n     In RQ2, we contrasted the mean longitudinal trajectories       to-moderate associations between acoustic change and clinical\n\n\n\n                                                 2365\n\f\n                                                                 Table 2: Performance by age group and acoustic representation.\n\n                                                                         Cohort AR   Model Rm  Rstd  Rpos  Spec  F1pos\n                                                            AR1 MLP    0.25   0.17   0.11   0.39   0.15\n                                                            AR2 MLP    0.27   0.15   0.12   0.42   0.17\n                                                   YA\n                                                            AR3 GRU    0.58   0.50   0.00   1.00   0.00\n                                                            AR4 GRU    0.52   0.51   0.70   0.36   0.37\n                                                            AR1 MLP    0.32   0.19   0.51   0.14   0.55\n                                                            AR2 MLP    0.19   0.17   0.24   0.14   0.31\n                                               AD\n                                                            AR3 GRU    0.34   0.50   0.43   0.25   0.30\n                                                            AR4 GRU    0.72   0.47   0.71   0.75   0.62\nFigure 3: Acoustic change vs. treatment outcome by age group.\n\n                                                                  Table 3: Performance by gender and acoustic representation.\n\n                                                                     Gender AR   Model Rm  Rstd  Rpos  Spec  F1pos\n                                                            AR3 GRU    0.50   0.51   0.50   0.50   0.35\n                                                          FE\n                                                            AR4 GRU    0.64   0.49   0.58   0.70   0.47\n                                                            AR3 GRU    0.48   0.52   0.60   0.38   0.30\n                                          MA\n                                                            AR4 GRU    0.58   0.52   0.80   0.38    0.4\n\n\n\n                                 ",
+          "quoteUtf8Sha256": "aafd1d136fc04e2651362ce98f43c76fba138eacd379ca16b0df42d7c9a9c991"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:li26x_interspeech",
+      "sourceTextSha256": "230386b4ab15f635018ca5726667f8823190679182b578ece4fc03c1cf548cd4",
+      "sourceFileSha256": "dbc9b999ce9d208c1a2802e98f007729e5dbf4182c2f750208cdff6974247e42",
+      "evidenceFamily": "固定效应系数表格",
+      "sourceExcerpts": [
+        {
+          "start": 27700,
+          "end": 29550,
+          "quote": "osodic cue to perceived sarcasm, particularly when\ncombined with flat pitch contours. Optional participant com-\nments were broadly consistent with this pattern:  participants       Table 1: Comparison of prosodic cue weights between humans\ndescribed fast dynamic soft stimuli as sounding sincere and ur-      and the model. Cue importance is measured by the fixed-effect\ngent, and characterized slow flat loud stimuli as sounding sar-        coefficient (β) from the mixed-effects models.\ncastic and angry.  This pattern aligns with previous research\nshowing that prosodic exaggeration plays a central role in sar-           Cue             Human β   Machine β\ncasm perception [10,11]. Although pitch contour did not reach\n                                                                 Speech Rate (slow)      0.061       0.313\nsignificance (p = 0.25), the direction of the effect is consis-\n                                                                            Pitch Variation (flat)     0.138       0.132\ntent with prior findings that intonational flattening contributes\n                                                                  Loudness (loud)        0.285       0.035\nto perceived irony [5]. Taken together with the naturalness re-\nsults, this pattern suggests that prosodic cues enhancing sarcasm\nperception (e.g., increased loudness) also introduce markedness           Rather than mirroring human sensitivity patterns, the model\nthat listeners interpret as reduced naturalness.                       appeared to rely strongly on speech rate, whereas human listen-\n                                                                         ers were primarily driven by loudness cues. One possible expla-\n3.4. Machine naturalness perception                              nation for such divergence is that human listeners acquire sa",
+          "quoteUtf8Sha256": "fdc2896191b7f77d26da0ca3ad9b477494a3b6ad040c62f3390be7108b895b93"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:payne26_interspeech",
+      "sourceTextSha256": "6c4c55f48825c1a9e322d8f8592edc799c4987a91a0c5e1fb2d9c8ec3c856e9e",
+      "sourceFileSha256": "b6aa254c35e138d87fb59873b88592e4a5781cba589b5ead6dcc7512d22fe8f8",
+      "evidenceFamily": "本研究比例+外部文献",
+      "sourceExcerpts": [
+        {
+          "start": 34200,
+          "end": 35750,
+          "quote": "                                                          sufficient segmental material, H is consistently post-nuclear.\n               4.     Discussion\nOur study shows a high incidence of BFD RISE(-FALLS) in                     5.     Conclusions\nthis variety of Venetan, with 47% of all BFDs having a RISE(-\n                                                          Whatever the phonological interpretation, our study confirmsFALL), for semi-spontaneous (unscripted) conversation by\n                                                                     the prevalent use of an alternative RISE(-FALL) nuclear tuneolder speakers. Contrary to predictions, however, this was not\n                                                                         for unmarked declaratives, in at least central Venetan varieties.more prevalent than what has been reported for read speech;\n                                                                This tune is starkly distinct from the other variant, a FALL,indeed, [30] report almost exactly the same proportion (50%)\n                                                                       closer to Italian and other Italo-Romance varieties. Work is inof RISE(-FALLS) in read speech by younger speakers, for a\n                                                                   progress to determine the prevalence of the RISE(-FALL) forsimilar rural community in central-western Veneto.\n                                                               spontaneous speech  in  other Venetan  varieties, and  i",
+          "quoteUtf8Sha256": "534066909196f650324548e66a4670fb439547e0c219d63f1ee9957f8bfedc34"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:rust26_interspeech",
+      "sourceTextSha256": "d0f66a61c78bfc04cd1bf5ad131e8a2789276a597eb92513f4d3050d9660a9cb",
+      "sourceFileSha256": "2fe9c156f2e74613382208bff35407061350a3b532af21b9157e1071c600f84f",
+      "evidenceFamily": "后验统计证据ER",
+      "sourceExcerpts": [
+        {
+          "start": 17400,
+          "end": 19050,
+          "quote": "dence ratios (ERs) computed from poste-\nrior distributions using the hypothesis() function in brms\n[55]. ERs quantify the relative posterior probability that a pa-\nrameter is (1) greater than or (2) less than or (3) equal to zero,\nproviding a graded measure of directional evidence. Larger ERs\nindicate stronger support for the hypothesis, ERs near 1 indicate\nlittle evidence, and ERs reported as Inf indicate that the poste-\nrior mass lies entirely on hypothesized side of zero.\n\n                   3. Results\n\nFigure 2 summarizes the effects of temporal distance between\nutterances (∆t) and child age on pitch-contour similarity.             Figure 2: Posterior distributions of fixed-effect estimates. Hori-\n   ∆t only showed a consistent positive association with        zontal black lines indicate 95% credible intervals.\npitch-contour similarity, indicating that temporally closer fol-\nlowing caregiver utterances (to a child utterance) exhibit more\nsimilar pitch contours in Russian (95% CrI: [0.01, 0.04], ER for\n∆t > 0: 284.71). In English there is no credible effect (95%        similarity between  caregiver–child  utterances using DTW-\nCrI: [-0.01, 0.01], ER for ∆t > 0: 0.33), and in Japanese we       based distance measures as a function of temporal proximity\nfind the opposite of the expected effect (95% CrI: [-0.05, -0.03],       and child age. We asked whether the underlying process is\nER for ∆t > 0: 0).                                              priming or rather social accommodation. We find systematic\n    Child age exhibited a  positive association with  pitch-       evidence for short- and long-term caregiver-child pitc",
+          "quoteUtf8Sha256": "64af4e19b984c2d4f340e7000081ff7b49f2bb6c831ce0d0fa245f8703accf2c"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:sadok26_interspeech",
+      "sourceTextSha256": "701e0904227d9e5667962a37d62858fb8e06dd77160ba6ae40ff9e71f5f0bb6b",
+      "sourceFileSha256": "fb1f340cc9dc571f297b36d5b68bdc24001660d386696c9bad1dae0ada23d9fd",
+      "evidenceFamily": "Pearson相关系数",
+      "sourceExcerpts": [
+        {
+          "start": 52350,
+          "end": 54050,
+          "quote": " These trends align with prior studies [17, 19, 18],        of WavLM. Second, we presented a novel method to estimate\nwhich report that paralinguistic information is predominantly        functional compatibility across the network hierarchy, the cross-\nencoded in lower layers and progressively diminished as repre-        layer Generative Compatibility Matrix (GCM), which uncov-\nsentations become more linguistically specialized. Pearson cor-       ered a stable phonetic core in mid-layers. In addition, we explic-\nrelations in Figure 9 quantify these trends. Paralinguistic tasks         itly linked these intrinsic properties to downstream performance\ncorrelate positively with representational complexity: pitch and        via task probing. This confirmed that phoneme recognition ben-\nspeaker classification depend strongly on entropy (0.77, 0.84)         efits from deep-layer compression, whereas pitch and speaker\nand curvature (0.82, 0.74), consistent with a high-dimensional,        tasks rely on early high-entropy states, offering a roadmap\ncurved manifold.  In contrast, phoneme classification shows        for designing efficient, task-aligned architectures. While our\nnegative correlations (Avg: entropy −0.46, curvature −0.57,       framework provides a robust empirical foundation, future work\ninvariance −0.54), indicating that linguistic discrimination ben-       must establish formal causal links. Isolating the precise mecha-\nefits from compression and manifold linearization that suppress       nisms behind phenomena like Wav2Vec2’s extreme deep-layer\nraw acoustic variability.                                         compression will be crucial for designing next-generatio",
+          "quoteUtf8Sha256": "ff6f0c03e39da86c9032007455d51c45c16ba2a8338229d247365171bebc22e0"
+        },
+        {
+          "start": 27640,
+          "end": 28740,
+          "quote": "se analysis of SSL models across the three model-centric perspectives: compression (entropy), geometry (curvature),\nand robustness (invariance to input perturbations).\n\n\n\nbaseline is included as a reference for raw acoustic features.        out.  The inter-model entropy correlation matrix (Figure 2d)\nComplementing these trajectories, the bottom row (Figs. 2d–2f)       confirms the consistency of these dynamics across the other ar-\ndisplays inter-model correlation matrices.  These heatmaps        chitectures. Specifically, we observe high entropy correlations\nquantify  the  pairwise  similarity  of  layer-wise  behaviors        (exhibiting an average correlation of 0.86) among HUBERT,\nbetween architectures using Pearson correlation.              WAVLM, and UNISPEECH, indicating shared trajectories in\n                                                                  information compression.\nInformation-theoretic perspective.  Figure 2a illustrates the\nlayer-wise evolution of average normalized entropy across      Geometric perspective.  Figure 2b reports the average cur-\naudio SSL mode",
+          "quoteUtf8Sha256": "e29aeac27cba5e2d0f97c3e2c6aab641ced71b006d545796cb7f3ae4ba9d6b91"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:shea26_interspeech",
+      "sourceTextSha256": "61117eb3f04e63e4f9554e5bf1808ff6a527ee04836fc49472493117594174b2",
+      "sourceFileSha256": "90648667ebd9d731299f91b80dbada9e598fe4def5e1e9447a3ec2f02a4a6e97",
+      "evidenceFamily": "回归交互效应估计",
+      "sourceExcerpts": [
+        {
+          "start": 18250,
+          "end": 19950,
+          "quote": "                    when speaking on neutral topics compared with LGBTQ topics\n                                                                  did in fact contitute a significant contrast (p = 0.005). There was\n                                                        no significant difference by topic for straight speakers.4.2.      f0 Differences\n\nThe fixed effects structure of the final model for the second DV\nf0  differences  featured  three  separate  significant two-way\ninteractions. While, for speakers 30 and under MRAS Score did\nnot appear to significantly affect f0 differences, for speakers\nover 30 f0 differences decreased with increasing MRAS Score\n(Est = -2.805, SE. = 0.840, t = -3.340, p = 0.001). For the 30\nand under age bracket gay and bi + speakers exhibited greater\nf0 diffferences than straight speakers, while the reverse was true\nfor the over 30 age bracket (Est = 3.219, SE. = 1.493, t = 2.156,\np = 0.034). Gay and Bi + speakers exhibited greater f0\ndifferences in the LGBTQ topic condition than the neutral topic\ncondition, while this was not so for straight speakers  (Est =\n0.979, SE. = 0.372, t = 2.632, p = 0.010). Illustrations of these\nthree significant interactions are presented in Figure 2, Figure\n3, and Figure 4 respectively.\n\n\n                                                                           Figure 4: Effect of topic & SO on f0 diffs.\n\n\n\n\n\n                                                3687\n\f\n4.3.      f0 Range                                                       traditional male gender roles do not feel the need to distinguish\n                                                                themselves from other men of their age group wit",
+          "quoteUtf8Sha256": "f0dfa5b28545ca6993efccc7b5624f03aab93c68fb3797bdbc6a585b710d2edf"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:yu26f_interspeech",
+      "sourceTextSha256": "2d9741224e7ba91ecff73c0ddf0fef21764c2b4cf2bd6817cf406341ce418d5a",
+      "sourceFileSha256": "f641a59056c8b4c9389a05b3c8df02539585cc2853bb220da2aa1749825ef407",
+      "evidenceFamily": "实际JS/BC/R2/Brier表格",
+      "sourceExcerpts": [
+        {
+          "start": 28480,
+          "end": 30600,
+          "quote": "ps://huggingface.co/Qwen/Qwen2-Audio-7B-Instruct\n\n\n\n\n                                                7460\n\f\nTable 2: Comparison for ambiguous emotion recognition per-                       (a) SFT  IEMOCAP                  (b) SFT  CREMA-D\nformance.  The best results are in bold.  GRPOz indicates\nground-truth CoT trajectory injection in GRPO.                                             Score 0.5                                                   Score 0.5\n\n                                                                                            0.0                                    0.0   Dataset     Methods        JS↓ BC↑R2↑Brier↓                        JS    BC    R²    Brier            JS    BC    R²    Brier\n                                                                                                          (c) DPO  IEMOCAP                 (d) DPO  CREMA-D\n              Base model      0.40  0.64  0.51  0.15\n              Audio-Reasoner  0.36  0.67  0.52  0.15\n                                                                                                                                          Score 0.5                                                   Score 0.5\n  IEMOCAP SFT             0.29  0.73  0.60  0.12\n          DPO            0.23  0.79  0.65  0.09                   0.0                                    0.0                                                                                               JS    BC    R²    Brier            JS    BC    R²    Brier\n          GRPO          0.36  0.67  0.55  0.13\n           GRPOz          0.20  0.82  0.67  0.07                          w/o KL supervision      w/ KL supervision\n                                                                 Figure 2: Comparison between CE-only (w/o KL supervision)              Base model      0.25  0.78  0.54  0.05\n                                                         and proposed additional KL supervision.  (a) SFT on IEMO-              Audio-Reasoner  0.37  0.69  0.51  0.09\n                                                         CAP, (b) SFT on CREMA-D, (c) DPO on IEMOCAP, and (d)\n ",
+          "quoteUtf8Sha256": "0cf4f52a5eb4ed72effa35c81053265448f7251eb219ab8435183462497bdaec"
+        }
+      ]
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:mohapatra26_interspeech",
+      "sourceTextSha256": "a9a8eb29ed32859e052a1453ff282400b2372409836b61a097a04acae708ccf4",
+      "sourceFileSha256": "2f4a192a0004ba7826e1b9de47265d43b726990ae70c1adb5090dbdf983f4c85",
+      "evidenceFamily": "FEM频域现象",
+      "sourceExcerpts": [
+        {
+          "start": 22500,
+          "end": 23800,
+          "quote": "range considered (up to 14 kHz), suggesting that uni-\nthe acoustic field remains predominantly plane-wave in nature.                                                               formly shaped ducts behave acoustically as straight waveguides,\n                                                              even under substantial bending.\n           3. Results and Discussion                        In contrast, vocal tracts with non-uniform cross-sections\n                                                                 corresponding to the vowel [A] demonstrate a different behav-\n3.1. Transfer Function Analysis\n                                                                                      ior, particularly at higher frequencies. Below 8 kHz, the transfer\nFig. 2 shows the frequency responses of bent and straight vo-        functions of the bent tracts remain closely aligned with those of\ncal tract configurations. For ducts with uniform cross-sections,        the straight tract, indicating that curvature has little influence on\ncurvature has a negligible effect on the acoustic response. As        the lower formant structure. However, anti-resonances (higher-\nillustrated in the top two panels, the transfer functions of both       order modes) appear above 8 kHz, as shown in the bo",
+          "quoteUtf8Sha256": "a39c809c5944494fc54601395bc48f372cadd6ba971a56a7c6891ebd650c2924"
+        },
+        {
+          "start": 23950,
+          "end": 25200,
+          "quote": "ponding straight counterparts. The resonance peaks occur        Fig. 2. For example, distinct antiresonances appear around the\n\n\n\n                                                1161\n\f\n                      60 Degrees           90 Degrees             120 Degrees\n\n\n           Low\n             Curvature\n\n\n\n\n             High\n             Curvature\n\n\n\n\n           Low\n             Curvature\n\n\n\n\n\n             High\n             Curvature\n\n\n\n\n\nFigure 3: Pressure distribution inside bent acoustic ducts with uniform (top two rows) and nonuniform (bottom two rows) cross-sectional\narea. Columns show bend angles of 60◦, 90◦, and 120◦; rows compare low and high curvature configurations. Colors indicate the\nspatial distribution of |p| within the duct at a selective frequency.\n\n\n8–10 kHz and 11–12 kHz regions depending on the bending        high-curvature disrupt the predominantly plane-wave propaga-\nangle of the tract geometry. Importantly, the positions of these        tion and lead to the onset of higher-order modes, as evident in\nantiresonances vary with increasing bending angle for both low-        Fig. 3. These acoustic features, however, are not simply a direct\nand high-curvature configurations. This suggests that curvature-       consequ",
+          "quoteUtf8Sha256": "82da3c2d5f1aad5bbe869ffa9fec1f8a442f0c2599e35ade1c98be6427c48ae1"
+        }
+      ],
+      "retainWithoutNewEvidence": true
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:park26m_interspeech",
+      "sourceTextSha256": "f7d4d0947da2412790b01dba66216ecfb75b2bcaa7ae8ef9687e9e6ea5d73e88",
+      "sourceFileSha256": "8880f85d40dae624a93c26f7595cd3b6652aa91d9776594cc1eef245da0ba57f",
+      "evidenceFamily": "演示流水线耗时",
+      "sourceExcerpts": [
+        {
+          "start": 2200,
+          "end": 3190,
+          "quote": "  ation, HRTF spatialization, and live editing—on two NVIDIA\ning. The pipeline requires no training, fine-tuning, or paired    DGX Spark GPUs. Visitors can upload their videos for a hands-\nbinaural data. Because each source is generated and stored sep-      on experience: within approximately 1–2 min, the workflow\narately, editing one—through re-prompting, repositioning, or       populates a per-source timeline, after which individual sources\ntimeline injection—leaves all others unchanged. At the booth,       can be re-prompted, repositioned in 3D space, or mixed in\nvisitors upload a video clip and watch a per-source timeline        real time. We expect this demonstration will inspire visitors\npopulate within approximately one minute.  They then drag       and spark discussion on the future directions of compositional,\nsources around in 3D space, rewrite their prompts, or inject new        spatially-aware video-to-audio generation.\nevents, with each change reflected on headph",
+          "quoteUtf8Sha256": "34724d3591d15cc707a5653f4c5118ff0b45d1789b699a8d8a097ba1ba565646"
+        },
+        {
+          "start": 11600,
+          "end": 12550,
+          "quote": "generated audio.                                                                 [4] M. Zhang et al., “ViSAudio: End-to-end video-driven binaural\nStep 2: V2A Generation.  The  full pipeline—event-wise                spatial audio generation,” arXiv preprint arXiv:2512.03036, 2025.\nscene decomposition, per-source audio generation, and HRTF          [5] L. Zhao et al., “FoleySpace: Vision-aligned binaural spatial audio\nrendering—runs automatically. Within approximately 1 min for              generation,” arXiv preprint arXiv:2508.12918, 2025.\na 10 s clip, the timeline is populated with independently gener-          [6] Google DeepMind, “Gemma 4,” https://deepmind.google/models/\nated sources.                                                        gemma/gemma-4/, 2026, accessed: 2026-04-29.\nStep 3: Audio Editing. After generation, visitors can explore          [7] C.-Y. Hung et al., “TangoFlux: Super fast and faithful text to\n              ",
+          "quoteUtf8Sha256": "e47a4386ea5b585444b046263af636aa86592e776bf5ec82439f28df5e44d7b4"
+        }
+      ],
+      "retainWithoutNewEvidence": true
+    },
+    {
+      "paperId": "conference:interspeech:2026:conference-paper-id:sheppard26b_interspeech",
+      "sourceTextSha256": "655c30be30de3fb176516e40818b3194e9b9f08562045ff117eac93bde679c8e",
+      "sourceFileSha256": "37f1f91ac3f787de15aed6eac508018979e823b6cf057cc35edc338c5ce3574e",
+      "evidenceFamily": "规范框架结构计数",
+      "sourceExcerpts": [
+        {
+          "start": 19150,
+          "end": 20600,
+          "quote": "                          Right Panel: Nested circles with bidirectional arrows indicating\ntransfer in both directions, often with the goal of revitalizing\n                                                                             iteration, collaboration, and co-design.\nthe language through documentation and curriculum develop-\nment [29].  This method of engaging with the community in\na partnership of knowledge sharing allows the language com-\nmunity to be fully involved in the process from project goals        fashion. These phases are 1) community, 2) project formulation,\nto the evaluation of outcomes. Drawing on the previous work        3) modes of participation, and 4) personal autonomy. Along\nin participatory design and queer engagement in these various        these four phases, we provide questions to guide community\nfields, we propose a framework for participatory speech dataset        contributors through the speech data curation process.\ncreation by, for, and with the queer community.\n                                                                            4.1. Community\n\n        4. Conceptual framework for               While many participatory approaches in AI begin with project\n                                                                 conception or formulation, we instead focus first on the com-\n   community-led speech data curation                                                            munity the ",
+          "quoteUtf8Sha256": "ae87c319215ff034b47123629badebf86f33cc87277daa183bc4f1a79bdeb0d6"
+        },
+        {
+          "start": 24600,
+          "end": 26100,
+          "quote": "d and maintained over time.\ning suggest a two-way approach to honour the contributions of         What type of speech are we hoping to collect? Given that\nall parties involved.                                             speech of varying discourse genres may differ considerably\n   We present this framework as a form of normative infras-         (e.g., conversational speech versus read speech), it is important\ntructure for speech dataset governance, rather than prescriptive        to be explicit about what genre of speech will be collected and\nset of requirements. We conceptualize this process through four       consider the uses and risks of each. In the case of StammerTalk,\nphases of engagement that may relate to each other in a cyclical        for example, the researchers collected a variety of genres in-\n\n\n\n                                                3692\n\f\ncluding both conversational speech discussing lived experiences        4.4. Personal autonomy\nwith being a part of the stuttering community and a set of ASR\n                                                                           Finally, we come to the issue of personal autonomy; that is, each\ncommands [26]. In the case of the queer community, a similar\n                                                                        individual‘s right to engage in the process that is most empow-\napproach may be helpful, but comes with its own challenges and\n                                                                ",
+          "quoteUtf8Sha256": "6972c15e5d7ad17bf25fb6129626c14837d6a7d63d170a05cddf18d8cffd08e3"
+        }
+      ],
+      "retainWithoutNewEvidence": true
+    }
+  ]
+}

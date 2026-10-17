@@ -817,6 +817,32 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                     analysisSha256: completed.analysisFileSha256, recoveredActivePaidReader: true };
             }
         }
+        if (fullAnalysis && loaded.revision.mode !== 'normal-analysis') {
+            // An existing fixed Reader mode cannot repair a newly rejected
+            // core or old Unicode input. Preserve its paid history and mode;
+            // pending scoring remains the scoring-and-reader mode's job.
+            withVerifiedSource(() => {
+                const savedPaper = loaded.analysis.papers[0];
+                const source = analysisContext.getConferenceAnalysisSource(savedPaper);
+                const sourceText = source?.text;
+                let reason;
+                if (typeof sourceText !== 'string'
+                    || sha256(sourceText) !== savedPaper.sourceSha256
+                    || savedPaper.analysisManifest?.sourceAcquisition?.sourceSha256 !== savedPaper.sourceSha256) {
+                    reason = '子稿与认证封存全文的 SHA 不一致。';
+                } else {
+                    reason = require('../analysis-contract').validateCoreSummarySemanticContract(
+                        savedPaper.analysis, { sourceText });
+                    if (!reason && !require('./model-text-sanitization').canReuseModelTextInputs(savedPaper, source)) {
+                        reason = '旧 Unicode 模型输入需要完整重新分析。';
+                    }
+                }
+                if (reason) throw Object.assign(new Error(`会议原固定 Reader 修订模式无权修复当前上游：${reason}`), {
+                    code: 'CONFERENCE_READER_REVISION_UPSTREAM_REQUIRES_ANALYSIS',
+                    category: 'integrity', scope: 'paper', retryable: false, executionId
+                });
+            });
+        }
         if (progress.attempts >= maxAttempts) throw Object.assign(new Error('会议 Reader revision 原付费预算已耗尽'),
             { code: 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED', retryable: false });
         let paper = clone(loaded.analysis.papers[0]);

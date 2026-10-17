@@ -1,0 +1,137 @@
+{
+  "description": "Constructed independent review counterexamples, not paper evidence or operator materials.",
+  "cases": [
+    {
+      "id": "foreign-etal",
+      "source": "Smith et al. reported that The solution showed mean silhouette = 0.51 for the speaker groups compared to the baseline."
+    },
+    {
+      "id": "foreign-quoted-first-person",
+      "source": "A previous paper reports the following result. Our study showed centroid size averaging 841.2 in males compared to 799.4 in females."
+    },
+    {
+      "id": "quoted-mid-statement",
+      "source": "The reviewer writes: “The solution showed mean silhouette = 0.51 for the speaker groups compared to the baseline.”"
+    },
+    {
+      "id": "not-conducted-perfect",
+      "source": "The solution showed mean silhouette = 0.51 for the speaker groups compared to the baseline. This evaluation has not been conducted."
+    },
+    {
+      "id": "not-carried-out",
+      "source": "The solution showed mean silhouette = 0.51 for the speaker groups compared to the baseline. This evaluation was not carried out."
+    },
+    {
+      "id": "results-withdrawn",
+      "source": "Both ModelA and ModelB yield CKA scores below 1.0 (0.41 and 0.22, respectively). These results have been withdrawn."
+    },
+    {
+      "id": "neither-measured",
+      "source": "Both ModelA and ModelB yield CKA scores below 1.0 (0.41 and 0.22, respectively). Neither value was measured."
+    },
+    {
+      "id": "no-run-before",
+      "source": "We did not run this test. The solution showed mean silhouette = 0.51 for the speaker groups compared to the baseline."
+    },
+    {
+      "id": "synthetic-only",
+      "source": "Evaluation performed with a different model. A single input triggers a female bias (P(z) = 0.81). Combining input conditions shifted the perceived gender toward male (P(z) = 0.32). This is only a synthetic illustration."
+    },
+    {
+      "id": "parameter-threshold",
+      "source": "The solution showed mean silhouette = 0.51 for speaker groups as a stopping threshold, not as an evaluated result."
+    },
+    {
+      "id": "parameter-fixed",
+      "source": "The solution showed mean silhouette = 0.51 for speaker groups because we fixed it as a hyperparameter."
+    },
+    {
+      "id": "same-model-case",
+      "source": "Both ModelA and modela yield CKA scores below 1.0 (0.41 and 0.22, respectively)."
+    },
+    {
+      "id": "nonfinite-prefix",
+      "source": "The solution showed mean silhouette = 0.51e3 for the speaker groups compared to the baseline."
+    },
+    {
+      "id": "decimal-tail",
+      "source": "The solution showed mean silhouette = 0.51.3 for the speaker groups compared to the baseline."
+    },
+    {
+      "id": "probability-not-measured",
+      "source": "Evaluation performed with a different model. A single input triggers a female bias (P(z) = 0.81). Combining input conditions shifted the perceived gender toward male (P(z) = 0.32). These probabilities were never measured."
+    },
+    {
+      "id": "probability-other-model",
+      "source": "Evaluation performed with model Alpha. A single input triggers a female bias (P(z) = 0.81) in Alpha. Combining input conditions shifted the perceived gender toward male (P(z) = 0.32) in model Beta."
+    },
+    {
+      "id": "table-cited-before",
+      "source": "A previous study reports the following table.\nTable 2: Performance by group.\nCohort AR Model Rm Rstd Rpos Spec F1pos\nA MLP 0.25 0.17 0.11 0.39 0.15\nB GRU 0.52 0.51 0.70 0.36 0.37"
+    },
+    {
+      "id": "table-not-conducted-before",
+      "source": "This evaluation was never performed.\nTable 2: Performance by group.\nCohort AR Model Rm Rstd Rpos Spec F1pos\nA MLP 0.25 0.17 0.11 0.39 0.15\nB GRU 0.52 0.51 0.70 0.36 0.37"
+    },
+    {
+      "id": "table-fictional-after",
+      "source": "Table 2: Performance by group.\nCohort AR Model Rm Rstd Rpos Spec F1pos\nA MLP 0.25 0.17 0.11 0.39 0.15\nB GRU 0.52 0.51 0.70 0.36 0.37\nThese results are fabricated."
+    },
+    {
+      "id": "table-cross-group-heading",
+      "source": "Table 2: Hypothetical performance by group.\nCohort AR Model Rm Rstd Rpos Spec F1pos\nA MLP 0.25 0.17 0.11 0.39 0.15\nB GRU 0.52 0.51 0.70 0.36 0.37"
+    },
+    {
+      "id": "strict-negation",
+      "source": "The solution did not show mean silhouette = 0.51 for speaker groups."
+    },
+    {
+      "id": "probability-definition",
+      "source": "We define a probability distribution P(x) = 0.99 and P(y) = 0.17."
+    },
+    {
+      "id": "beta-hypothesis-inside",
+      "source": "Table 4: Comparison of acoustic cues.\nThese are hypothetical coefficients. Cue importance is measured by the fixed-effect coefficient (β) from the mixed-effects models.\nFeature GroupA β GroupB β\nPitch (flat) 0.12 0.31\nLoudness (loud) 0.25 0.04"
+    },
+    {
+      "id": "beta-previous-inside",
+      "source": "Table 4: Comparison of acoustic cues.\nA previous study reports the following values. Cue importance is measured by the fixed-effect coefficient (β) from the mixed-effects models.\nFeature GroupA β GroupB β\nPitch (flat) 0.12 0.31\nLoudness (loud) 0.25 0.04"
+    },
+    {
+      "id": "beta-coefficients-unmeasured",
+      "source": "Table 4: Comparison of acoustic cues.\nCue importance is measured by the fixed-effect coefficient (β) from the mixed-effects models.\nFeature GroupA β GroupB β\nPitch (flat) 0.12 0.31\nLoudness (loud) 0.25 0.04\nThese coefficients were never measured."
+    },
+    {
+      "id": "proportion-fabricated",
+      "source": "Our study shows a high incidence of a vowel type in the conversational corpus, with 43% of all tokens having a falling contour. This proportion was fabricated."
+    },
+    {
+      "id": "correlation-unmeasured",
+      "source": "The inter-model correlation matrix compares architectures. We observed a mean correlation of 0.74 among ArchA and ArchB. These correlations were never measured."
+    },
+    {
+      "id": "rate-unobserved",
+      "source": "Observed calibration results confirm calibrated rejection rates. At q = 3%, Group R shows approximately +4.2 percentage points under the unadjusted model and +5.7 points under the adjusted analysis. These rejection rates were never observed."
+    },
+    {
+      "id": "attack-improvement-unmeasured",
+      "source": "In our evaluation we showed that combined attacks threaten the system, resulting in up to 12× worse jailbreak rates than unimodal attacks. This improvement was never measured."
+    },
+    {
+      "id": "rate-scientific-prefix",
+      "source": "Observed calibration results confirm calibrated rejection rates. At q = 3%, Group R shows approximately +4.2e3 percentage points under the unadjusted model and +5.7 points under the adjusted analysis."
+    },
+    {
+      "id": "correlation-scientific-prefix",
+      "source": "The inter-model correlation matrix compares architectures. We observed a mean correlation of 0.74e3 among ArchA and ArchB."
+    },
+    {
+      "id": "beta-post-definition-hypothetical",
+      "source": "Table 4: Comparison of acoustic cues.\nCue importance is measured by the fixed-effect coefficient (β) from the mixed-effects models. These are hypothetical coefficients.\nFeature GroupA β GroupB β\nPitch (flat) 0.12 0.31\nLoudness (loud) 0.25 0.04"
+    },
+    {
+      "id": "beta-post-definition-foreign",
+      "source": "Table 4: Comparison of acoustic cues.\nCue importance is measured by the fixed-effect coefficient (β) from the mixed-effects models. A previous study reports the following values.\nFeature GroupA β GroupB β\nPitch (flat) 0.12 0.31\nLoudness (loud) 0.25 0.04"
+    }
+  ]
+}

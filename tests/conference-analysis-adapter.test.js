@@ -201,6 +201,113 @@ test('会议 Reader 前置用同一来源区分实测结果与参数，普通内
     assert.equal(JSON.stringify(paper), before);
 });
 
+function seedFixedReaderRevision(fixture, analysisRoot, { kind, mode = 'reader-only' }) {
+    const parentId = crypto.randomUUID();
+    adapter.prepareConferenceAnalysis({ analysisRoot, executionId: parentId,
+        planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot, paperId: fixture.paperId });
+    const prepared = adapter.loadConferenceAnalysis({ analysisRoot, executionId: parentId });
+    const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture');
+    const resultSentence = '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。';
+    let analysis = validAnalysisText();
+    if (kind !== 'core') analysis = analysis.replace(resultSentence, '原文未提供可核对的关键定量结果。'
+        + '这份方法流程只能说明各模块的处理顺序和输入输出关系，不能将训练配置当作实测性能，'
+        + '也不能把运行成功等同于模型优于基线。');
+    if (kind === 'unicode') analysis = analysis.replace('## 核心创新点', '数学变量 𝑥 表示声学输入。\n\n## 核心创新点');
+    if (mode === 'scoring-and-reader') analysis = analysis.replace('has_code: 否', 'has_code: 是');
+    const paper = { ...prepared.analysis.papers[0], ...validAnalysisPaper('2609.12345', {}, analysis),
+        id: fixture.paperId, conferencePaperId: fixture.paperId, sourceId: fixture.paperId,
+        source: 'conference', analysisSource: 'conference_pdf_text' };
+    delete paper.arxivId;
+    paper.sourceSha256 = crypto.createHash('sha256').update(prepared.source.sourceDetails.text).digest('hex');
+    paper.analysisManifest.sourceAcquisition = {
+        ...prepared.analysis.papers[0].analysisManifest?.sourceAcquisition, sourceSha256: paper.sourceSha256
+    };
+    delete paper.analysisManifest.sourceAcquisition.modelTextSanitizationContract;
+    const semanticIssue = require('../scripts/analysis-contract').validateCoreSummarySemanticContract(
+        paper.analysis, { sourceText: prepared.source.sourceDetails.text });
+    if (kind === 'core') assert.match(semanticIssue, /原文无可核定量结果/);
+    else assert.equal(semanticIssue, null, '合法核心必须真的通过同源语义，不能借评分错误掩盖别的问题');
+    if (kind === 'unicode') assert.equal(require('../scripts/lib/model-text-sanitization')
+        .canReuseModelTextInputs(paper, prepared.source.sourceDetails), false);
+    if (kind === 'pending-score') paper.analysisManifest.stages.scoringAudit.stabilityWarning = true;
+    adapter.replaceJson(path.join(prepared.directory, 'analysis.json'), { ...prepared.analysis,
+        papers: [paper], status: 'complete', completedAt: '2026-10-17T00:00:00.000Z' }, prepared.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: parentId }));
+    const parent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: parentId });
+    const childId = adapter.readerRevisionExecutionId(parentId, parent.analysisFileSha256);
+    adapter.prepareConferenceAnalysis({ analysisRoot, executionId: childId,
+        planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot, paperId: fixture.paperId });
+    const child = adapter.loadConferenceAnalysis({ analysisRoot, executionId: childId });
+    const seeded = { ...child.analysis, status: 'partial', generation: 1,
+        papers: [structuredClone(paper)], readerRevisionProgress: { attempts: 1, failures: [] } };
+    // This is an old, fixed-mode partial fixture, not a newly qualified result.
+    if (kind === 'pending-score') seeded.papers[0].analysisManifest.stages.scoringAudit = { status: 'contract_rejected' };
+    const bytes = value => Buffer.from(JSON.stringify(value, null, 2) + '\n');
+    const preflight = bytes(emptyReaderResourceIdentity(child.source.sourceDetails.text));
+    fs.writeFileSync(path.join(child.directory, 'reader-resource-preflight.json'), preflight, { mode: 0o600 });
+    const body = { contract: adapter.READER_REVISION_CONTRACT, version: 1, executionId: childId,
+        parentExecutionId: parentId, parentAnalysisFileSha256: parent.analysisFileSha256,
+        parentRunFileSha256: parent.runFileSha256, paperId: fixture.paperId,
+        sourceSnapshotSha256: parent.run.sourceSnapshotSha256, mode,
+        resourcePreflightFileSha256: crypto.createHash('sha256').update(preflight).digest('hex'),
+        maxAttempts: 3, seededAnalysisSha256: crypto.createHash('sha256').update(bytes(seeded)).digest('hex') };
+    fs.writeFileSync(path.join(child.directory, 'reader-revision.json'),
+        bytes({ ...body, revisionSha256: adapter.stableHash(body) }), { mode: 0o600 });
+    adapter.replaceJson(path.join(child.directory, 'analysis.json'), seeded, child.analysisFileSha256);
+    return { parentId, childId, child: adapter.loadConferenceReaderRevision({ analysisRoot, executionId: childId }),
+        input: { analysisRoot, parentExecutionId: parentId, planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot } };
+}
+
+test('已有固定 Reader 模式不能为真实核心或旧 Unicode 上游失败继续付费和增次数', async t => {
+    const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'fixed-upstream');
+    const realEngine = require('../scripts/analysis-engine');
+    for (const kind of ['core', 'unicode']) {
+        const { input, child } = seedFixedReaderRevision(fixture, analysisRoot, { kind });
+        const files = ['analysis.json', 'run.json', 'source.json', 'reader-revision.json', 'reader-resource-preflight.json'];
+        const before = files.map(name => fs.readFileSync(path.join(child.directory, name)));
+        let requests = 0;
+        await assert.rejects(adapter.refreshConferenceReader(input, {
+            engine: { ...realEngine, withPaperAnalysisLock: async (_paper, callback) => callback() },
+            deep: { inspectSavedConferenceReaderCompletion: async () => null,
+                refreshApiReaderArticleFromSource: async () => { requests++; throw new Error('must not request Reader'); },
+                refreshApiScoringAndReaderFromSource: async () => { requests++; throw new Error('must not request scoring'); } }
+        }), error => {
+            assert.equal(error.code, 'CONFERENCE_READER_REVISION_UPSTREAM_REQUIRES_ANALYSIS');
+            assert.equal(error.retryable, false);
+            assert.equal(error.executionId, child.run.executionId);
+            assert.match(error.message, kind === 'unicode' ? /Unicode/ : /原文无可核定量结果/);
+            return true;
+        });
+        assert.equal(requests, 0, kind);
+        assert.deepEqual(files.map(name => fs.readFileSync(path.join(child.directory, name))), before, kind);
+        const after = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: child.run.executionId });
+        assert.equal(after.revision.mode, 'reader-only');
+        assert.deepEqual(after.analysis.readerRevisionProgress, child.analysis.readerRevisionProgress);
+    }
+});
+
+test('固定 scoring-and-reader 的合法核心不会因待修评分被新上游 guard 封死', async t => {
+    const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'pending-score-upstream');
+    const { input, child } = seedFixedReaderRevision(fixture, analysisRoot,
+        { kind: 'pending-score', mode: 'scoring-and-reader' });
+    const realEngine = require('../scripts/analysis-engine');
+    let scoringCalls = 0;
+    await assert.rejects(adapter.refreshConferenceReader(input, {
+        engine: { ...realEngine, withPaperAnalysisLock: async (_paper, callback) => callback() },
+        deep: { inspectSavedConferenceReaderCompletion: async () => null,
+            refreshApiScoringAndReaderFromSource: async (_paper, source) => {
+                scoringCalls++;
+                assert.equal(context.getConferenceAnalysisSource(_paper).text, source.text);
+                throw new Error('OFFLINE_SCORE_BOUNDARY');
+            }, refreshApiReaderArticleFromSource: async () => assert.fail('pending score must run scoring first') }
+    }), /OFFLINE_SCORE_BOUNDARY/);
+    assert.equal(scoringCalls, 1);
+    const after = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: child.run.executionId });
+    assert.equal(after.revision.mode, 'scoring-and-reader');
+    assert.equal(after.revision.maxAttempts, 3);
+    assert.equal(after.analysis.readerRevisionProgress.attempts, 2);
+});
+
 test('会议 Reader revision 保留原完成包，失败中断后从同一候选恢复且拒绝父链篡改', async t => {
     const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'reader-revision');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
