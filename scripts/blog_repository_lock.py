@@ -55,15 +55,6 @@ def _strict_json(data, label):
         raise BlogRepositoryLockError(f'{label} 不是严格的 UTF-8 JSON') from exc
 
 
-def _sync_directory(path):
-    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
-    fd = os.open(path, flags)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
 def _git_common_dir(blog_repo):
     repo = Path(blog_repo).expanduser().resolve(strict=True)
     if not repo.is_dir():

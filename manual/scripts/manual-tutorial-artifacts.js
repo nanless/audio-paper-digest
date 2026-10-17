@@ -183,11 +183,6 @@ function repeatedNonEmptyLabel(row) {
     return new Set(nonEmpty).size === 1 ? nonEmpty[0] : '';
 }
 
-function hasDistinctColumnNames(row) {
-    const names = row.map(normalizeText).filter(Boolean);
-    return names.length >= 2 && new Set(names).size >= 2;
-}
-
 /**
  * 把 HTML 表头的层级结构拍平成每列一个 Markdown 表头。这里刻意把每个非空的
  * 原始表头单元格都表示出来，但不会为了模仿 HTML 的合并而重复 colspan 标签。

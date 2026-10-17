@@ -79,16 +79,6 @@ function rawFileSha256(filePath, label = 'file') {
     return sha256(fs.readFileSync(assertPlainFile(filePath, label)));
 }
 
-function defaultArticlePath(currentRoot, date, paperId) {
-    const id = normalizedId(paperId);
-    if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
-        throw new Error('fresh article path 缺少合法日期或 arXiv ID');
-    }
-    return path.join(
-        path.resolve(currentRoot), 'manual-tutorial-previews', String(date), id, 'draft', 'article.md'
-    );
-}
-
 function resolveArtifactAuthority(artifactManifestPath, expected) {
     const manifestPath = assertPlainFile(artifactManifestPath, 'ArtifactIndex manifest');
     let manifest;
@@ -267,7 +257,6 @@ module.exports = {
     articleSha256,
     stableSha256,
     rawFileSha256,
-    defaultArticlePath,
     resolveArtifactAuthority,
     buildAuthorityInputs,
     validateFreshAuthoringReceipt

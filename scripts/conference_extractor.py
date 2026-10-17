@@ -419,14 +419,6 @@ def _bbox(value: Any) -> list[float]:
     return normalized
 
 
-def _formula_candidate(text: str) -> bool:
-    if not text or len(text) > 240:
-        return False
-    operators = sum(text.count(symbol) for symbol in "=±≤≥∑∏∫√×·^_")
-    greek = bool(re.search(r"[α-ωΑ-ΩλμσθφψΔΓΣΠΩ]", text))
-    return operators >= 1 and (operators >= 2 or greek)
-
-
 def _layout_tex(glyphs: list[dict[str, Any]]) -> str | None:
     """只还原范围有限、同一基线、且上下标各不超过一层的那种式子。
 

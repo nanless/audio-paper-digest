@@ -17,19 +17,6 @@ function modelPolicyRules(policy) {
     return rules;
 }
 
-function versionedModelPolicy(value, legacyVersion, currentVersion, label) {
-    if (value?.version === legacyVersion && value.modelPolicy === undefined) return LEGACY_MODEL_POLICY;
-    if (value?.version === currentVersion && value.modelPolicy === CURRENT_MODEL_POLICY) return CURRENT_MODEL_POLICY;
-    throw new Error(`${label} 的版本与模型规则不对应`);
-}
-
-function assertCurrentModelPolicy(policy, label) {
-    modelPolicyRules(policy);
-    if (policy !== CURRENT_MODEL_POLICY) {
-        throw new Error(`${label} 只能读取旧任务记录；新任务须另建 gpt-6.1-sol/high 队列`);
-    }
-}
-
 function assertAgentIdentity(value, expectedPolicy, label, options = {}) {
     const rules = modelPolicyRules(expectedPolicy);
     if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -62,4 +49,4 @@ function boundModelPolicy(value, expectedPolicy, label) {
 }
 
 module.exports = { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules,
-    versionedModelPolicy, assertCurrentModelPolicy, assertAgentIdentity, boundModelPolicy };
+    assertAgentIdentity, boundModelPolicy };
