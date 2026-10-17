@@ -325,10 +325,14 @@ test('未启用的全新范围优先于日更分析使用的嵌套直接来源�
 test('来源、运行身份、提示词、输入指纹或请求额度变化时，不能复用旧候选', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     for (const mutate of [id => { id.model.maxTokens = 24000; }, id => { id.maxAttempts = 5; },
-        id => { id.repairMaxTokens = 16000; }, id => { id.promptSha256 = 'new prompt'; },
-        id => { id.repairPromptSha256 = 'new repair prompt'; }, id => { id.inputFingerprint = 'new input'; }]) {
+        id => { id.repairMaxTokens = 16000; }, id => { id.inputFingerprint = 'new input'; }]) {
         const identity = structuredClone(f.identity); mutate(identity);
         assert.equal(f.enabled(() => loadReaderRecoveryRevision(f.directory, identity)), null);
+    }
+    for (const field of ['promptSha256', 'repairPromptSha256']) {
+        assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory,
+            { ...f.identity, [field]: 'unapproved new prompt' })),
+        { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
     }
     for (const mutate of [id => { id.sourceSha256 = '0'.repeat(64); }, id => { id.freshAnalysis.runId = crypto.randomUUID(); }]) {
         const identity = structuredClone(f.identity); mutate(identity);
@@ -704,7 +708,8 @@ test('其他修复提示词SHA不得冒充固定v5到v6迁移', t => {
         repairPromptSha256: '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de' };
     const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
     const originalBytes = fs.readFileSync(filename);
-    assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity)), null);
+    assert.throws(() => sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity)),
+        { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
     assert.deepEqual(fs.readFileSync(filename), originalBytes);
 });
 
@@ -748,7 +753,8 @@ test('完整原表升级只接受固定正文及局部修复提示词配对', t 
         { ...currentIdentity, repairPromptSha256: 'a'.repeat(64) },
         { ...currentIdentity, promptSha256: sample.oldIdentity.promptSha256 }
     ]) {
-        assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, identity)), null);
+        assert.throws(() => sample.enabled(() => loadReaderRecoveryRevision(sample.directory, identity)),
+            { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
         assert.deepEqual(fs.readFileSync(filename), originalBytes);
     }
 });
@@ -769,8 +775,9 @@ test('固定局部修复版本升级保留原始元数据草稿、付费次数�
         repairPromptSha256: '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e' };
     const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
     const originalBytes = fs.readFileSync(filename);
-    assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory,
-        { ...sample.identity, repairPromptSha256: 'a'.repeat(64) })), null);
+    assert.throws(() => sample.enabled(() => loadReaderRecoveryRevision(sample.directory,
+        { ...sample.identity, repairPromptSha256: 'a'.repeat(64) })),
+    { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
     const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
     assert.equal(recovered.draft, null);
     assert.equal(recovered.rawDraft, sample.payload.rawDraft);
@@ -796,8 +803,9 @@ test('固定 v9 到 v10 升级保留完整超节数草稿、次数和归档字�
         repairPromptSha256: 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4' };
     const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
     const originalBytes = fs.readFileSync(filename);
-    assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory,
-        { ...sample.identity, repairPromptSha256: 'a'.repeat(64) })), null);
+    assert.throws(() => sample.enabled(() => loadReaderRecoveryRevision(sample.directory,
+        { ...sample.identity, repairPromptSha256: 'a'.repeat(64) })),
+    { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
     const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
     assert.deepEqual(recovered.draft, originalDraft);
     assert.deepEqual(JSON.parse(recovered.rawDraft), originalDraft);
@@ -940,6 +948,39 @@ test('固定中文提示升级连同实现指纹变化仍保留已付费次数�
     assert.equal(revised.implementationRepairAllowanceProof, null);
     assert.equal(revised.readerRecoveryRevisions.at(-1).clearedNoProgress, false);
 });
+test('合法固定Prompt迁移的save后rename前断点只完成原严格归档，假audit仍拒绝', t => {
+    const f = fixture(t);
+    f.oldIdentity = { ...f.identity, repairPromptSha256: '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34' };
+    f.identity.repairPromptSha256 = '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de';
+    const parent = saveFailedCandidate(f.directory, f.oldIdentity, f.payload), parentBytes = fs.readFileSync(parent);
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    const archive = path.join(f.directory, migrated.readerRecoveryRevisions.at(-1).archivedName);
+    const child = path.join(f.directory, hashDraft(f.identity) + '.json'), childBytes = fs.readFileSync(child);
+    fs.renameSync(archive, parent); // Real original audit, interrupted before its archive rename.
+    const invalid = structuredClone(migrated); invalid.readerRecoveryRevisions.at(-1).oldEnvelopeSha256 = '0'.repeat(64);
+    saveFailedCandidate(f.directory, f.identity, invalid);
+    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /archive\/source bytes drifted/);
+    assert.deepEqual(fs.readFileSync(parent), parentBytes);
+    fs.writeFileSync(child, childBytes);
+    const recovered = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    assert.deepEqual(recovered, migrated);
+    assert.deepEqual(fs.readFileSync(archive), parentBytes);
+    assert.deepEqual(fs.readFileSync(child), childBytes);
+    assert.equal(fs.existsSync(parent), false);
+});
+test('合法Prompt迁移旁存在未授权同输入Prompt fork时，在新候选保存和归档前拒绝', t => {
+    const f = fixture(t);
+    f.oldIdentity = { ...f.identity, repairPromptSha256: '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34' };
+    f.identity.repairPromptSha256 = '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de';
+    const parent = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const fork = saveFailedCandidate(f.directory, { ...f.oldIdentity, repairPromptSha256: '9'.repeat(64) }, f.payload);
+    const originals = [parent, fork].map(file => fs.readFileSync(file));
+    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)),
+        { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
+    assert.equal(fs.readdirSync(f.directory).length, 2);
+    for (const [i, file] of [parent, fork].entries()) assert.deepEqual(fs.readFileSync(file), originals[i]);
+    assert.equal(fs.existsSync(path.join(f.directory, hashDraft(f.identity) + '.json')), false);
+});
 for (const field of ['sourceSha256','inputFingerprint','readerRecoveryEpochSha256','promptSha256']) {
     test(`中文提示升级不接受改变${field}的恢复上下文`, t => {
         const f = fixture(t);
@@ -951,6 +992,8 @@ for (const field of ['sourceSha256','inputFingerprint','readerRecoveryEpochSha25
         if (field === 'readerRecoveryEpochSha256') f.oldIdentity[field] = '8'.repeat(64);
         const file = saveFailedCandidate(f.directory, f.oldIdentity, f.payload), bytes = fs.readFileSync(file);
         if (field === 'sourceSha256') assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /exact fresh run\/source scope/);
+        else if (field === 'promptSha256') assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)),
+            { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
         else assert.equal(f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), null);
         assert.deepEqual(fs.readFileSync(file), bytes);
     });

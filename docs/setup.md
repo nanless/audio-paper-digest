@@ -6,6 +6,8 @@
 
 ## 最短安装路径
 
+先安装运行环境，再配置模型、代理和博客仓库。下面命令安装依赖并复制配置模板；API 路由诊断会真实请求模型，放在后文单独说明。
+
 ```bash
 npm install
 python3.11 -m venv .venv
@@ -74,6 +76,18 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 
 需要代理却未配置时，程序会停止，不会静默直连。所有项目脚本和测试都必须在沙箱外运行，包括访问本机代理的诊断命令。
 
+## 验证安装
+
+```bash
+node --version
+npm test
+npm run validate:data -- --allow-empty
+```
+
+`--allow-empty` 仅供明确没有运行数据、也没有本地改动的仓库使用。已有数据的工作区应运行 `npm run validate:data`，检查实际数据。测试和诊断同样须在沙箱外执行。
+
+需要验证模型路由时，可单独运行 `node scripts/test-api-key.js`；它会发送真实 API 请求，不属于上述离线检查。不要用完整日更来检查安装是否正确。
+
 ## PDF/TXT 来源存储
 
 筛选完成后，`full-fetch.js` 通过项目代理为每个入选 arXiv ID 获取本次官方 HTML 文本和 PDF，保存到 `data/runtime/daily-fresh-source-runs/`。每篇包含 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json`，后续分析与发布须使用并校验这组文件，不能读取旧文本缓存。
@@ -83,6 +97,8 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 历史重写每次获取 arXiv 来源时，也会保存这四类文件，并用 `generation` 序号区分各次获取。目录为 `data/runtime/fetched-arxiv-sources/`。会议论文则核对保留的本地论文信息和 PDF 及其 SHA。两种来源的具体要求见[历史重写流程](history-rewrite.md)。
 
 ## 常用容量参数
+
+默认值通常足以开始。调整前先区分“同时处理多少篇”“本次最多几轮”和“每篇请求预算”；三者不互相增加额度。模型专属兼容项在表中明确标出。
 
 | 变量 | 默认值 |
 |---|---:|
@@ -110,13 +126,21 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 
 这些环境变量写入项目 `.env`。Reader 刷新另可用 `--rounds N` 覆写本次总轮数，范围 1–10；会议和历史分析使用公共配置，没有新增同名参数。总轮数、同时处理的论文数和单阶段/Reader预算各自独立；改变批次轮数不重开已耗尽的候选额度。会议还受原单篇3次尝试窗口约束，历史保持首次选定范围；人工建议不会发请求或将失败改成通过，见 [三流程批次规则](three-workflows.md#全批轮次与失败集合)。
 
+### MiMo 专属推理配置与旧记录兼容
+
 主分析可通过 `PD_ANALYSIS_PRIMARY_THINKING_MODE=disabled|enabled` 配置推理，默认关闭，仅对精确 `mimo-v2.6-flash` 的 OpenAI Chat 主分析请求生效。旧完整主分析必须同时有有效正文检查点与原指纹，才按旧配方复用；不补签新声明。新请求绑定实际策略，截断、正文及来源检查保持。厂商支持不等于 OpenCode Go 已在本次业务中验证。
 
 开源检查、正文审校、评分和标签处理独立使用 `PD_ANALYSIS_AUXILIARY_THINKING_MODE`，默认关闭。请求参数、用量记录和新阶段指纹记录相同策略。旧完整检查点按原指纹核验，不补写新请求证明。Demo 链接检查不调用模型，不使用这个开关。此开关不修改输出容量、来源检查或发布要求。
 
 摘要、完整结构和表格修复可独立配置 `PD_ANALYSIS_REPAIR_THINKING_MODE=disabled|enabled`，默认关闭。仅对精确 `mimo-v2.6-flash` 的 OpenAI Chat 请求发送该参数，该修复开关不影响主分析、审校、评分或其他模型。新修复阶段绑定实际请求策略，旧成功记录没有该声明时仍按旧指纹核验，不补签；失效后重新执行使用当前策略。输出截断和内容、来源核验仍会拒绝不完整结果。[MiMo 官方推理说明](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking)支持此参数；OpenCode Go 是否接受须由正常业务响应确认，参数日志不代表已接受。
 
-筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制，整篇分析并发由 `PD_ANALYSIS_CONCURRENCY` 控制。账号池只在选择账号和更新状态时短暂持锁，发送网络请求时不持锁。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_STREAM` 和 `PD_OPENAI_RESPONSES_REASONING_EFFORT` 对当前主模型的 Chat Completions 请求没有作用。
+[MiMo 官方推理说明](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking)支持通过 `thinking.type` 关闭推理；长文推理开关仅用于长文相关的 Chat 请求，不影响主分析与筛选；主分析使用上文独立开关。OpenCode Go 是否实际接受该字段须由真实响应核验，不能把官方模型文档当作网关已验证。普通参数错误不会自动更换模型或账号；输出截断及内容检查仍会拒绝不完整文章。
+
+### 请求与下载容量
+
+筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制，整篇分析并发由 `PD_ANALYSIS_CONCURRENCY` 控制。账号池只在选择账号和更新状态时短暂持锁，发送网络请求时不持锁。
+
+当前 Muse 使用 OpenAI Responses。`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE，`PD_OPENAI_RESPONSES_REASONING_EFFORT` 控制 Responses 推理设置；两项配置不作用于 Chat Completions 请求。
 
 日更开始时的原文和 PDF 封存下载保留独立的八路上限。未显式指定下载并发时，使用整篇分析并发与 8 中较小的值；因此把模型分析设为 10 路不会阻止来源下载，也不会把模型分析自动降为 8 路。程序显式传入下载并发时仍须为 1–8 的整数。
 
@@ -134,26 +158,12 @@ API Reader v3 会直接把安全准备的官方论文图交给主模型，因此
 
 ## 博客与 Hugo
 
-`PAPER_DIGEST_BLOG_REPO` 须指向真实 Hugo 仓库。数据抓取阶段在仓库目录不存在时可以跳过已发布论文去重，但正式发布不能缺少目标仓库。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。
+`PAPER_DIGEST_BLOG_REPO` 须指向真实 Hugo 仓库。默认日更在归档或抓取前，必须同步并核验该仓库的 `origin/main`，以正式已发布页确定去重和补抓基线。目录缺失、Git 更新或基线核验失败都会停止，不能跳过去重继续抓取。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。
 
 外部进程有明确等待上限。图片审查、Hugo、Git 本地操作、提交及 hook、推送与远端核验、视觉规划默认分别为 120、300、30、180、180、120 秒。可在 `env.example` 规定范围内，分别使用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`、`PD_GIT_NETWORK_TIMEOUT_SECONDS` 和 `PD_VISUAL_PLANNER_TIMEOUT_SECONDS` 调整。超时不会被记录为审查或远端发布成功；有效的本地发布提交若尚未验证远端，会保留供续跑核对和使用。
-
-## 验证安装
-
-```bash
-node --version
-npm test
-npm run validate:data -- --allow-empty
-```
-
-`--allow-empty` 仅供明确没有运行数据、也没有本地改动的仓库使用。已有数据的工作区应运行 `npm run validate:data`，检查实际数据。测试和诊断同样须在沙箱外执行。
-
-需要验证模型路由时，可单独运行 `node scripts/test-api-key.js`；它会发送真实 API 请求，不属于上述离线检查。不要用完整日更来检查安装是否正确。
 
 ## 安全边界
 
 `.env`、`data/`、`logs/`、缓存和密钥不得提交。公开模型端点须使用 HTTPS，日志须隐藏密钥、认证头、Cookie、密码、URL 中的用户认证信息及其他敏感信息。
 
 整批 Manual 与微信、飞书、小红书发布已退役，不配置或启动这些旧入口。正常流程多轮后仍失败的少量论文，只能在原来源和失败记录约束下进行受控人工修正或独立审查，见 [旧记录核验与独立人工审查](../manual/README.md)。
-
-[MiMo 官方推理说明](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking)支持通过 `thinking.type` 关闭推理；长文推理开关仅用于长文相关的 Chat 请求，不影响主分析与筛选；主分析使用上文独立开关。OpenCode Go 是否实际接受该字段须由真实响应核验，不能把官方模型文档当作网关已验证。普通参数错误不会自动更换模型或账号；输出截断及内容检查仍会拒绝不完整文章。

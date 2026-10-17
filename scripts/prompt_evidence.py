@@ -10,12 +10,12 @@ import subprocess
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LIMIT = 8 * 1024 * 1024
 CURRENT_PROMPT_FILES = frozenset((
-    "prompts/api-reader-article-v8.md",
+    "prompts/api-reader-article-v9.md",
     "prompts/api-reader-concept-terms-v1.md",
     "prompts/api-reader-fact-local-v3.md",
-    "prompts/api-reader-repair-v12.md",
+    "prompts/api-reader-repair-v13.md",
     "prompts/core-summary-repair-v6.md",
-    "prompts/deep-analysis-v5.md",
+    "prompts/deep-analysis-v6.md",
     "prompts/digest-cover-v2.md",
     "prompts/filter-v5.md",
     "prompts/gap-fill-v4.md",

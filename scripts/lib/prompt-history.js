@@ -143,7 +143,8 @@ function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
         } catch (_error) { /* 阶段没有 v4 路径 */ }
         for (const contract of ['analysis-prompt-text-v5', 'analysis-prompt-text-v6',
             'analysis-prompt-text-v7', 'analysis-prompt-text-v8', 'analysis-prompt-text-v9',
-            'analysis-prompt-text-v10', 'analysis-prompt-text-v11']) {
+            'analysis-prompt-text-v10', 'analysis-prompt-text-v11',
+            'analysis-prompt-text-v12', 'analysis-prompt-text-v13']) {
             try { candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, contract))); }
             catch (_error) { /* 此阶段未登记该版本 */ }
         }

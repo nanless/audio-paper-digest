@@ -26,8 +26,8 @@ test('主分析和评分分别读取旧 v3 与 v4，旧原字节不被当前版�
             const oldPath = `prompts/${name}-v3.md`, newPath = `prompts/${name}-v4.md`;
             assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), oldPath);
             assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v4'), newPath);
-            assert.equal(registry.currentTextStagePromptPath(stage), `prompts/${name}-v5.md`);
-            assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v5');
+            assert.equal(registry.currentTextStagePromptPath(stage), `prompts/${name}-v${stage === 'primaryAnalysis' ? 6 : 5}.md`);
+            assert.equal(registry.currentPromptTextContract(stage), stage === 'primaryAnalysis' ? 'analysis-prompt-text-v6' : 'analysis-prompt-text-v5');
             const oldBytes = evidence.readPromptEvidenceBytes(oldPath);
             const sha = crypto.createHash('sha256').update(oldBytes).digest('hex');
             assert.equal(sha, originalV3Sha[stage], `${stage} 已发布的 v3 原字节必须保持`);

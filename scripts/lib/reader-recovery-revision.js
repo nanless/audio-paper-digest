@@ -245,8 +245,16 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     }
     return require('./reader-proof-read-scope').withReaderProofReadScope(
         () => require('./reader-proof-read-scope').withReaderReceiptScan(() => {
-            try { return require('./reader-unsent-empty-candidate').withRecovery(directory, identity,
-                () => loadReaderRecoveryRevisionInternal(directory, identity, options)); }
+            try { return require('./reader-unsent-empty-candidate').withRecovery(directory, identity, () => {
+                let continuityChecked = false;
+                const assertContinuity = (selectedIdentitySha256, scannedCandidates) => {
+                    assertNoPromptOnlyAttemptReset(directory, identity, selectedIdentitySha256, scannedCandidates);
+                    continuityChecked = true;
+                };
+                const recovered = loadReaderRecoveryRevisionInternal(directory, identity, options, assertContinuity);
+                if (!continuityChecked) assertContinuity();
+                return recovered;
+            }); }
             catch (cause) {
                 if (options.resolvedReaderCandidate === undefined) throw cause;
                 throw Object.assign(new Error(`已归档读者稿复验输入不合法：${cause.message}`, { cause }), {
@@ -256,7 +264,38 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
             }
         }));
 }
-function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
+
+// A new template is not a new content budget. Normal, explicitly supported
+// migrations above retain their original attempts; this guard only closes the
+// otherwise-null path and conflicting active forks before generation starts.
+function assertNoPromptOnlyAttemptReset(directory, identity, selectedIdentitySha256 = null, scannedCandidates = null) {
+    let candidates = scannedCandidates;
+    if (!candidates) {
+        let names;
+        try { names = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort(); }
+        catch (error) { if (error.code === 'ENOENT') return; throw error; }
+        candidates = names.map(name => readFailedCandidateEnvelope(directory, null, path.join(directory, name)));
+    }
+    const withoutPrompts = value => ({ ...value, promptSha256: null, repairPromptSha256: null });
+    const { sameInput } = require('./reader-compatible-candidate-replay');
+    for (const checked of candidates) {
+        if (!checked) throw new Error('Reader candidate disappeared during Prompt budget protection');
+        const old = checked.envelope;
+        // Only the original selector in this module can nominate a candidate;
+        // no caller option grants a new Prompt migration or content allowance.
+        if (hashDraft(old.identity) === selectedIdentitySha256) continue;
+        if ((old.payload.attempts > 0 || old.payload.fullAttempts > 0 || old.payload.transportFailures > 0)
+            && (old.identity.promptSha256 !== identity.promptSha256
+                || old.identity.repairPromptSha256 !== identity.repairPromptSha256)
+            && sameInput(withoutPrompts(old.identity), withoutPrompts(identity))) {
+            throw Object.assign(new Error('同篇同输入已有请求历史；提示词版本变化不能重置原Reader次数，须受控恢复原候选。'), {
+                code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY', retryable: false, scope: 'paper',
+                candidateIdentitySha256: hashDraft(old.identity), candidateEnvelopeSha256: checked.envelopeSha256
+            });
+        }
+    }
+}
+function loadReaderRecoveryRevisionInternal(directory, identity, options, assertContinuity) {
     if (options.savedReaderInputContinuity !== undefined) {
         const source = require('./model-text-sanitization').currentModelInputSource(options.paper);
         require('./reader-saved-feedback-input-continuity').readSavedReaderInputContinuity(
@@ -330,6 +369,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             throw new Error('原付费响应保存前候选已变化');
         }
         require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
+        assertContinuity(hashDraft(old.envelope.identity));
         saveFailedCandidate(directory, identity, updated);
         finishRevisionArchives(directory, identity, updated);
         return loadFailedCandidate(directory, identity);
@@ -339,7 +379,12 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     if (exact) {
         if (options.resolvedReaderCandidate !== undefined) throw new Error('显式归档复验不能覆盖现有活动候选');
         verifyPixels(exact);
-        const recovered = restoreUnfundedDiagnosticFailureState(directory, identity, finishRevisionArchives(directory, identity, exact));
+        // A legitimate migration may have saved its child immediately before
+        // interruption. Finish its original verified archive transaction first;
+        // otherwise its still-active parent would look like an unrelated fork.
+        const finished = finishRevisionArchives(directory, identity, exact);
+        assertContinuity();
+        const recovered = restoreUnfundedDiagnosticFailureState(directory, identity, finished);
         // 同身份续跑也可能保存了旧解析器拒绝的完整原始稿。仅恢复有界结构，
         // 不修改存档、次数或验证凭证；调用方仍须完整校验并按明确目标修复。
         if (!recovered.draft && recovered.rawDraft) {
@@ -454,7 +499,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     let names;
     try { names = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort(); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-    const compatible = [];
+    const compatible = [], scannedCandidates = [];
     for (const name of names) {
         if (unsentEmpty.suppressCandidate(directory, name)) continue;
         let checked = readFailedCandidateEnvelope(directory, null, path.join(directory, name));
@@ -463,6 +508,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             checked = readFailedCandidateEnvelope(directory, null, path.join(directory, name));
         }
         if (!checked) throw new Error('Reader 恢复候选在审查期间消失');
+        scannedCandidates.push(checked);
         const { envelope, envelopeSha256 } = checked;
         const payload = envelope.payload;
         // 只允许从同输入的旧签名模式收紧为资源局部模式，不允许解除已保存的局部限制。
@@ -524,8 +570,9 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         if (!compatibleReplay) throw new Error('Ambiguous Reader diagnostic revision: multiple compatible candidates');
         compatible.splice(0, compatible.length, compatibleReplay.selected);
     }
-    if (!compatible.length) return null;
+    if (!compatible.length) { assertContinuity(null, scannedCandidates); return null; }
     const old = compatible[0];
+    assertContinuity(hashDraft(old.identity), scannedCandidates);
     const updated = structuredClone(old.payload);
     // 有些旧失败候选保存了合法的 JSON 响应，但原解析器拒绝其结构，draft 因而为空。
     // 这里只尝试解析允许恢复的结构；调用方接受正文前仍须运行完整的 Reader 解析器，

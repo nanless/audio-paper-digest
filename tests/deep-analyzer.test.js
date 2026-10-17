@@ -5695,16 +5695,16 @@ has_dataset: 否
             legacyPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/api-reader-article.md')
         );
-        // 新请求使用 v8；旧记录继续按其声明版本计算指纹。
+        // 新请求使用 v9；旧记录继续按其声明版本计算指纹。
         const freshPayload = capture({ version: 1, stages: {} });
-        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v8');
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v9');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
-            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v8.md')
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v9.md')
         );
         assert.strictEqual(
             deep.currentTextStagePromptPath('apiReaderArticle'),
-            'prompts/api-reader-article-v8.md'
+            'prompts/api-reader-article-v9.md'
         );
         const previousPayload = capture({ version: 1, stages: { apiReaderArticle: {
             status: 'complete', promptTextContract: 'analysis-prompt-text-v7',
@@ -5721,7 +5721,7 @@ has_dataset: 否
         assert.strictEqual(declaredV5Payload.promptTemplateSha256, deep.runtimePromptTemplateSha256('prompts/api-reader-article-v5.md'));
         assert.throws(() => deep.buildRecoveryFingerprints(paper, text, arxivId, {
             version: 1, stages: { apiReaderArticle: { status: 'complete',
-                fingerprint: 'legacy', promptTextContract: 'analysis-prompt-text-v9' } }
+                fingerprint: 'legacy', promptTextContract: 'analysis-prompt-text-v99' } }
         }), /没有登记/);
     });
 
@@ -5772,16 +5772,16 @@ has_dataset: 否
             deep.promptFilePathForContract('primaryAnalysis', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             'prompts/deep-analysis.md'
         );
-        // 新请求使用 v5；旧记录继续按其声明版本计算指纹。
+        // 新请求使用 v6；旧记录继续按其声明版本计算指纹。
         const fresh = capture({ version: 1, stages: {} });
-        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v5');
+        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v6');
         assert.strictEqual(
             fresh.payload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256(
-                'prompts/deep-analysis-v5.md', CORE_SUMMARY_CONTRACT_VERSION)
+                'prompts/deep-analysis-v6.md', CORE_SUMMARY_CONTRACT_VERSION)
         );
         assert.strictEqual(
-            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v5.md');
+            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v6.md');
         // 判别力：两个版本必须算出不同的正文哈希和不同的阶段指纹，否则这条测试等于没测。
         assert.notStrictEqual(
             fresh.payload.promptTemplateSha256, legacy.payload.promptTemplateSha256);

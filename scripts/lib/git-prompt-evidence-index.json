@@ -1,8 +1,11 @@
 {
   "contract": "git-prompt-evidence-v1",
   "version": 1,
-  "provenanceCommit": "d936bd7e519ed341cafab55443ebda0209b60bc8",
+  "provenanceCommit": "6753f5c098a3804af72e702eb93124ce91d86d3b",
   "retiredPaths": {
+    "prompts/api-reader-article-v8.md": "755a393402a7f819a99e8c08073ea48efa6ad6d10ff945c7f195dbcf6177de15",
+    "prompts/api-reader-repair-v12.md": "731604e38df21a46b536dfe00280504c7964e94f7a4fb43188945ead85a76971",
+    "prompts/deep-analysis-v5.md": "9c2793d7a4b3139b1ccdba327eb3624bac0ae593ccc2abcc2164a7d79052ab94",
     "manual/prompts/manual-analysis-record-v2.md": "896f4c523ab52891aebe8280227f0148a4722bf54d956b093ae7dbe3510f429f",
     "manual/prompts/manual-analysis-record.md": "93e7e3a0843960e9e623d3dd352808ee9b9e51f232a16a366a4330966b2dce03",
     "manual/prompts/manual-tutorial-article.md": "fa26c419c0326adfcd1bbbd18e42eba99baca7e59dcf91f030c66005c720d76e",
@@ -110,6 +113,10 @@
     "prompts/visual-summary.md": "89f761c8cbb3ec3d990630e3b9e11897702238f8367162f241212af72f1193bf"
   },
   "blobs": {
+    "9c2793d7a4b3139b1ccdba327eb3624bac0ae593ccc2abcc2164a7d79052ab94": {
+      "blobOid": "9374bd87da4479e3f9c637a3afcb69f112b5e0be",
+      "paths": ["prompts/deep-analysis-v5.md"]
+    },
     "00558d438565f6038148958f941549f5e325e255802e385cddab2b4acdb73e69": {
       "blobOid": "88ed2d40d737019a2dffc837903a4c563eeac0e5",
       "paths": [

@@ -4,6 +4,12 @@
 
 本目录保留 `analysis-contract.js`、正式数据验证和发布器实际调用的旧来源、作者策略、签名、正文与教程合同核验模块。旧合同 Prompt 已从工作树移除，核验时通过受控 Git 索引取回原字节并核对原声明 SHA，不补签旧结果；两份冻结的编辑依据文件继续保留原字节，不能改写。
 
+### 现在怎样阅读本目录
+
+学习当前论文解读的写法，先读[共同写作约定](../docs/writing-guide.md)和[Reader 写作与来源要求](../docs/reader-writing.md)。术语首次解释实际作用，再使用准确名称；概念、计算、比较条件和图表要能连成完整论证，段落间留空行，语气朴实平和。受控修订的具体范围与预算仍按[Reader 恢复](../docs/reader-explicit-retry.md)核验。
+
+`docs/editorial-reference-contract.md` 和 `docs/editorial-reference-contract-v2.md` 是旧记录绑定的冻结协议证据。里面的“当前”、长度、章节和任务角色须按其原版本理解，不能推广为现行 Reader 规则，也不表示旧整批 Manual 写作入口重新开放。现代导读另作导航，不复制一份新旧混杂的第三协议，不修改原文件 SHA 或旧凭证。
+
 新建独立审查必须实际配置 `gpt-6.1-sol`、`high`，使用 v4 声明及 `manual-agents-sol-high-v2`；逐页记录真实子代理身份，不能仅填写模型名。旧 `gpt-5.6-terra/high` 声明只用于读取原记录。规则以 `scripts/manual_agent_policy.py` 为准，不改变三流程论文分析所配置的 Muse 模型。
 
 独立单页审查仍使用以下共享补救入口：

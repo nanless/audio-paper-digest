@@ -56,16 +56,23 @@ test('首页保持任务导向且三流程与旧记录兼容边界清楚', () =>
     const lines = readme.split('\n').length;
     assert.ok(lines <= 200, `README.md 不应重新膨胀为内部协议手册: ${lines} 行`);
     for (const heading of [
-        '## 你会得到什么', '## 默认行为', '## 5 分钟开始', '## 怎样才算完成',
-        '## 核心命令', '## 失败后从哪里继续', '## 架构概览', '## 文档导航'
+        '## 第一次使用', '## 选择任务', '## 运行一次日更',
+        '## 失败后从哪里继续', '## 怎样才算完成', '## 文档导航'
     ]) {
         assert.ok(readme.includes(heading), `README.md 缺少任务型章节: ${heading}`);
     }
-    const defaultRouteIndex = readme.indexOf('默认路线是 LLM/API');
-    const manualRouteIndex = readme.indexOf('Manual/人工流程');
+    const defaultRouteIndex = readme.search(/默认[^。\n]*LLM\/API/);
+    const manualRouteIndex = readme.search(/整批 Manual[^。\n]*已退役/);
     assert.ok(defaultRouteIndex >= 0, '首页应明确说明默认 API 路线');
-    assert.ok(manualRouteIndex >= 0, '首页应说明显式人工流程');
-    assert.ok(defaultRouteIndex < manualRouteIndex, '首页应先介绍默认路线，再介绍人工流程');
+    assert.ok(manualRouteIndex >= 0, '首页应说明整批 Manual 已退役，而非另一条写作入口');
+    assert.ok(defaultRouteIndex < manualRouteIndex, '首页应先介绍默认路线，再说明旧链边界');
+    for (const task of ['当天日更', '官方会议整理', '历史博客更新']) {
+        assert.ok(readme.includes(task), `首页应覆盖现行任务: ${task}`);
+    }
+    assert.ok(readme.includes('npm run digest:prepare -- YYYY-MM-DD'), '首页应给出真实日更入口');
+    assert.match(readme, /历史日期不能从日更抓取阶段重跑/);
+    assert.match(readme, /manual\/README\.md[^\n]*仅保留旧记录核验及独立人工审查/);
+    assert.match(readme, /\]\(docs\/writing-guide\.md\)/);
     assert.doesNotMatch(readme, /node scripts\/manual-|prompts\/manual-|docs\/manual-v6/);
 });
 
@@ -74,6 +81,7 @@ test('现行三流程与旧记录核验各有唯一导航入口', () => {
     const manualReadme = fs.readFileSync(path.join(ROOT, 'manual', 'README.md'), 'utf8');
     assert.match(docsIndex, /默认[^\n]*LLM\/API/);
     assert.match(docsIndex, /manual\/README\.md/);
+    assert.match(docsIndex, /\]\(writing-guide\.md\)/);
     assert.match(manualReadme, /只有.*明确/);
     assert.match(manualReadme, /整批 Manual.*已退役/);
     assert.match(manualReadme, /npm run blog:manual-review/);

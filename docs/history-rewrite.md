@@ -17,6 +17,19 @@
 
 同一论文只进入一个分析任务，再为它对应的全部冻结历史页面生成新稿。以下绝对路径、UUID、日期和文件名须替换为真实任务输出；命令存在不代表历史现场已经完成。实际发布见[历史重写结果的审查与发布](history-direct-publication.md)。
 
+## 正常执行路线
+
+| 步骤 | 输入与动作 | 得到什么 |
+|---|---|---|
+| 冻结页面 | 在干净博客 main 上运行 inventory | 页面与 URL 范围、原字节 SHA 和清单凭证 |
+| 建立对应关系 | 核对会议本地来源，合并 arXiv 身份，建立页面对应及计划 | 固定论文集、队列与未覆盖页报告 |
+| 准备来源和元数据 | sources 核真实论文来源，metadata 补官方 Atom 发布资料 | ready 来源状态及可核验元数据 |
+| 分析和暂存 | run 调用公共分析引擎 | 当前实现生成的合格单篇私有页面 |
+| 生成汇总 | aggregate 核完整成员和页面覆盖 | 每日、会议及任务汇总 |
+| 发布并验收 | 转到[历史发布](history-direct-publication.md) | 审查、精确推送、部署和网页证据 |
+
+来源准备、分析和发布分别完成；不能用某一步 complete 代替其他步骤。下文先讲主链，特殊来源、补充维护、备用获取和旧断点恢复放在后面。
+
 ## 冻结现有博客清单
 
 `history:inventory` 扫描配置的 Hugo 博客 `content/posts`，保存后续要保留的页面集合、公开地址及原字节指纹。它要求本机可以运行 `hugo`；permalink 和已发布集合以同次扫描的 Hugo 输出为准，不能由脚本猜测。
@@ -27,7 +40,7 @@ npm run history:inventory -- --apply \
   --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-清单记录 Git `main`、HEAD、离线可读取的 `refs/remotes/<remote>/main`、`content/posts` 的 tree OID、每页 Git blob 和工作树状态、远端身份、Hugo 配置及 base URL。每页保留稳定 `pageId`、相对路径、正文、front matter 和整页 SHA、已有 URL 与 aliases，以及发布日期、会议日期、旧任务键、draft/published 状态和页面类型。Hugo 版本与 `list all/published` 集合 SHA 也进入记录；手写的 URL 对应关系必须逐页等于 Hugo permalink。
+清单记录 Git `main`、HEAD、离线可读取的 `refs/remotes/<remote>/main`、`content/posts` 的 tree OID、每页 Git blob 和工作树状态、远端身份、Hugo 配置及 base URL。每页记录稳定 `pageId`、相对路径，整页、页头（front matter）和正文各自的字节数与 SHA，以及已有 URL、aliases、发布日期、会议日期、旧任务键和 draft/published 状态、页面类型。正文和页头全文不写入清单，受限元数据另按白名单保存。Hugo 版本与 `list all/published` 集合 SHA 也进入记录；手写的 URL 对应关系必须逐页等于 Hugo permalink。
 
 汇总页的每次行内内部链接都会记录字节位置、类型和解析后的目标 `pageId`、路径及快照 SHA。解析器要求方括号平衡，也处理标题内部的 `[]`。清单还记录受限论文身份线索、已有发布标记和旧标签的未核验候选 URL；候选 URL 不能当作已验证来源。
 
@@ -37,7 +50,7 @@ npm run history:inventory -- --apply \
 
 ## 建立来源清单和重写计划
 
-先用 `history:conference-local-sources` 建立会议论文信息与 PDF 的来源清单。该步不联网、不读博客正文、不调用模型；缺失 PDF 的处理见下一节。随后 `history:inputs` 从冻结清单中已有的单一 arXiv ID 线索建立获取任务，并合并会议来源。
+先用 `history:conference-local-sources` 建立会议论文信息与 PDF 的来源清单。该步不联网、不读博客正文、不调用模型；缺失 PDF 的处理见[会议 PDF 与特殊来源](#会议-pdf-与特殊来源)。随后 `history:inputs` 从冻结清单中已有的单一 arXiv ID 线索建立获取任务，并合并会议来源。
 
 ```bash
 npm run history:conference-local-sources -- --apply \
@@ -72,28 +85,6 @@ npm run history:plan -- --apply \
 主评分行路线抓取失败时写入 v2 交接，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 交接。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
 
 没有冻结历史页面对应关系的来源记录不进入抓取、crosswalk 或模型队列。反过来，没有可用来源的冻结论文页须出现在 `uncoveredFrozenPaperPages` 和 `paperPageCoverage`，记录页面与内容 SHA、范围及身份线索状态，并按范围和状态统计。`none/conflict/multiple` 是待处理问题，不能据此猜身份。`--apply` 还会保存与计划 SHA 绑定的不可变 `historical-direct-rewrite-unprojected-catalog-report-v1`，记录未找到对应冻结历史页面的来源所涉及的论文 ID、来源类型和原因；该报告不是待执行任务清单。
-
-## 会议 PDF 与特殊来源
-
-### 会议页面与 PDF 的对应关系
-
-ICML Daily 页使用 catalog v5 保存的 poster 对应记录。冻结单篇页须有唯一官方 poster URL；`tau-Voice` 的空单篇页只允许从同一冻结 Daily 汇总中，按精确单篇 URL 所属段落找到唯一 poster。poster 再唯一对应 OpenReview forum ID 与按 forum ID 命名的 PDF，不能按标题猜测。旧正文仅提供字节区间及 SHA，不进入分析、Reader 或新稿。
-
-来源清单保存全部论文身份记录和当前已有可用 PDF 的子集；页面对应关系和计划只处理后者。缺 PDF 的身份仍可审计，但页面保持未覆盖。PDF 经专用来源程序核验保存、并重建清单之后，才能进入任务。
-
-缺失 PDF 必须在首次 `history:conference-local-sources --apply` 之前处理。会议来源清单、catalog、页面对应关系和计划均不可覆盖；如果已有一轮保存了缺 PDF 状态，应使用新的唯一文件名，从会议来源清单开始重建整条链，不能只改下游文件。
-
-历史保留 PDF 只从显式 `--icml-pdf-root` 读取。新下载保存到 `data/runtime/historical-icml-pdf-sources/`，通过 `--icml-fresh-pdf-root` 作为补充来源读取，不回写旧 `data/pdfs/`。每个新 PDF 必须恰有一份 OpenReview 或替代来源凭证；缺凭证、双凭证、孤立凭证、旧新 PDF 字节冲突都会拒绝。凭证文件 SHA、自哈希、版本关系和 PDF SHA 共同绑定来源，catalog、计划与执行器每层重新检查，不能只看字段是否像 SHA。
-
-### 两项固定替代来源
-
-优先通过官方 OpenReview 来源程序获取 PDF。公开端点被浏览器挑战页阻断时，`history:icml-alternate-pdf-source` 只允许代码已审查的固定 poster、forum 和来源 URL 组合：`jfpkqjhex4` 对应同标题、同作者的官方 arXiv v3；`n1mAjfRDZ6` 对应作者在 SSRN 发布的早期预印本。后者凭证须保留两个标题、作者显示名差异、DOI 和 `author-prior-preprint-cross-version`，不能声称 PDF 来自 OpenReview 响应或是 ICML 会议终稿（camera-ready）。
-
-不同标题的作者早期预印本默认不能进入写作队列。唯一例外是用户已明确授权、代码精确列入白名单的 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`。来源必须重新核对 poster/forum、凭证、PDF SHA、固定预印本标题、作者、DOI 及来源绑定，计划须包含带自哈希的 `sourceDisclosure`。分析执行器把“并非会议终稿”的警告放入所有模型读取的全文前缀，暂存页在 Hugo front matter 后第一位置放入同样的醒目中文说明。披露和最终页面字节都进入 manifest、`pageSet` 及其 SHA。任一字段缺失或与原记录不同都会拒绝，其他 forum 不得套用例外。
-
-如果 SSRN 自动下载被 Cloudflare 阻断，但浏览器能够下载 PDF，可通过 `--import-file ABSOLUTE.pdf` 导入。该入口仅对 `n1mAjfRDZ6` 开放，会重新提取 PDF 文本，要求固定来源标题、作者、预印本日期及多个跨页特征文本全部匹配。PDF 自身不含 DOI，因此 SSRN DOI 由固定来源记录绑定。导入凭证记录 `operator-browser-download` 和 `networkResponseObserved: false`，不能伪造网络响应状态。原网络下载凭证与普通 plan v5 来源仍按既有方式核验，暂停、状态查询和恢复要求不变。
-
-具体操作见[会议工作流](conference-workflow.md)。
 
 ## 获取和检查论文来源
 
@@ -157,28 +148,6 @@ npm run history:run -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json
 暂存目录按 `runId/sourceIdentity/renderer-<renderer SHA>/` 隔离。Reader SHA、历史页面对应关系或单页内容与原记录不同，都会阻止恢复。已 `staged` 但渲染 SHA 不是当前实现的项，在状态中不计为当前完成，并重新进入无显式 ID 的限量队列。执行器核验已封存来源和分析后重新生成页面，不重复调用模型、不增加分析尝试次数，也不覆盖或删除旧渲染目录。汇总读取页面时再次要求全部成员使用当前渲染实现。
 
 每次阶段断点记录（checkpoint）都原子写入 execution 目录的 `analysis-recovery.json`，绑定论文 ID、run ID 和来源快照 SHA。失败后若仍有 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 或 `analysisRecoveryImageManifest`，执行记录进入 `analysis_partial` 并记录恢复文件 SHA，不写暂存页。同来源续跑按文件与阶段指纹恢复；来源身份或记录自身的 SHA 与原记录不同，会拒绝恢复。
-
-### 补充旧页面的标签和来源身份
-
-已经发布的历史页面正文里没有标签元数据时，用下面四个入口生成补充记录。它们只读计划、执行登记、博客快照和已暂存的分析结果，产出独立记录，不改写页面正文，也不改变正式发布状态。
-
-```bash
-npm run history:tag-supplement -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID [--limit N]
-npm run history:source-tags -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID \
-  [--concurrency 1|2|3] [--only-paper-ids ID,...] [--include-paper-ids ID,...] \
-  [--resume-after-checkpoint ABS --resume-after-export ABS]
-npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
-npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID \
-  --checkpoint ABS [--exclude-paper-ids ID,...]
-```
-
-`history:tag-supplement` 对已由当前渲染实现暂存、且页面缺少标签元数据的论文，从已核验的分析记录和当前词表确定性分类，不请求模型；按运行标识写入 `historical-direct-tag-supplement-v2` 的 `tag-history.json` 和 `report.json`，文件不可覆盖。
-
-`history:source-tags` 是没有可用正式分析记录时按来源证据请求模型的分类入口，也是这四个入口里唯一调用模型的。它保存论文选择集合、标签选择响应、独立审核和分类决策的检查点，写入 `historical-source-tag-classification-v2`；同一运行标识可续跑，`--concurrency` 只接受 1–3，默认 1。`partial` 部分运行记录不能当作续跑检查点；要从正规检查点开始新的论文集合，须同时给出 `--resume-after-checkpoint` 和 `--resume-after-export`。特殊来源重做须换新的运行标识，并显式给出 `--only-paper-ids`。
-
-`history:source-identity` 只核验来源身份，写入 `historical-source-identity-supplement-v2`，不请求模型。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划再按原格式复算，全部字节一致才复用；缺少完整输出、只有旧格式的部分检查点或校验失败时命令停止，保留原文件并换新的运行标识。
-
-`history:tag-checkpoint-export` 读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录，同样不请求模型；报告同时保留失败项和未处理论文。
 
 ### 本次调用使用的论文图
 
@@ -247,6 +216,52 @@ npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --ge
 不传 `--publication-id` 时，不读取发布事务或访问远端，状态不会把未选择发布的任务算作完整发布。指定后深核全部来源，要求发布计划 SHA 对应当前历史计划，默认实时核验远端身份及 OID；发布终验不能与 watch 同用。`--live-remote false` 仅作离线诊断，不能产生完整发布状态。
 
 当前 `history:publication` 已有会议和任务汇总发布能力；实际页面或汇总文件缺失、校验失败时仍拒绝发布。Git 远端 OID 只证明推送，不证明网页已上线。向用户确认完成前，还须按[历史发布说明](history-direct-publication.md)核验对应部署及全部目标页面，并完成用户本次范围内的视觉要求。状态是读取时快照，发布后应重新查询。
+
+## 会议 PDF 与特殊来源
+
+### 会议页面与 PDF 的对应关系
+
+ICML Daily 页使用 catalog v5 保存的 poster 对应记录。冻结单篇页须有唯一官方 poster URL；`tau-Voice` 的空单篇页只允许从同一冻结 Daily 汇总中，按精确单篇 URL 所属段落找到唯一 poster。poster 再唯一对应 OpenReview forum ID 与按 forum ID 命名的 PDF，不能按标题猜测。旧正文仅提供字节区间及 SHA，不进入分析、Reader 或新稿。
+
+来源清单保存全部论文身份记录和当前已有可用 PDF 的子集；页面对应关系和计划只处理后者。缺 PDF 的身份仍可审计，但页面保持未覆盖。PDF 经专用来源程序核验保存、并重建清单之后，才能进入任务。
+
+缺失 PDF 必须在首次 `history:conference-local-sources --apply` 之前处理。会议来源清单、catalog、页面对应关系和计划均不可覆盖；如果已有一轮保存了缺 PDF 状态，应使用新的唯一文件名，从会议来源清单开始重建整条链，不能只改下游文件。
+
+历史保留 PDF 只从显式 `--icml-pdf-root` 读取。新下载保存到 `data/runtime/historical-icml-pdf-sources/`，通过 `--icml-fresh-pdf-root` 作为补充来源读取，不回写旧 `data/pdfs/`。每个新 PDF 必须恰有一份 OpenReview 或替代来源凭证；缺凭证、双凭证、孤立凭证、旧新 PDF 字节冲突都会拒绝。凭证文件 SHA、自哈希、版本关系和 PDF SHA 共同绑定来源，catalog、计划与执行器每层重新检查，不能只看字段是否像 SHA。
+
+### 两项固定替代来源
+
+优先通过官方 OpenReview 来源程序获取 PDF。公开端点被浏览器挑战页阻断时，`history:icml-alternate-pdf-source` 只允许代码已审查的固定 poster、forum 和来源 URL 组合：`jfpkqjhex4` 对应同标题、同作者的官方 arXiv v3；`n1mAjfRDZ6` 对应作者在 SSRN 发布的早期预印本。后者凭证须保留两个标题、作者显示名差异、DOI 和 `author-prior-preprint-cross-version`，不能声称 PDF 来自 OpenReview 响应或是 ICML 会议终稿（camera-ready）。
+
+不同标题的作者早期预印本默认不能进入写作队列。唯一例外是用户已明确授权、代码精确列入白名单的 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`。来源必须重新核对 poster/forum、凭证、PDF SHA、固定预印本标题、作者、DOI 及来源绑定，计划须包含带自哈希的 `sourceDisclosure`。分析执行器把“并非会议终稿”的警告放入所有模型读取的全文前缀，暂存页在 Hugo front matter 后第一位置放入同样的醒目中文说明。披露和最终页面字节都进入 manifest、`pageSet` 及其 SHA。任一字段缺失或与原记录不同都会拒绝，其他 forum 不得套用例外。
+
+如果 SSRN 自动下载被 Cloudflare 阻断，但浏览器能够下载 PDF，可通过 `--import-file ABSOLUTE.pdf` 导入。该入口仅对 `n1mAjfRDZ6` 开放，会重新提取 PDF 文本，要求固定来源标题、作者、预印本日期及多个跨页特征文本全部匹配。PDF 自身不含 DOI，因此 SSRN DOI 由固定来源记录绑定。导入凭证记录 `operator-browser-download` 和 `networkResponseObserved: false`，不能伪造网络响应状态。原网络下载凭证与普通 plan v5 来源仍按既有方式核验，暂停、状态查询和恢复要求不变。
+
+具体操作见[会议工作流](conference-workflow.md)。
+
+## 已有页面的补充维护
+
+### 补充旧页面的标签和来源身份
+
+已经发布的历史页面正文里没有标签元数据时，用下面四个入口生成补充记录。它们只读计划、执行登记、博客快照和已暂存的分析结果，产出独立记录，不改写页面正文，也不改变正式发布状态。
+
+```bash
+npm run history:tag-supplement -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID [--limit N]
+npm run history:source-tags -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID \
+  [--concurrency 1|2|3] [--only-paper-ids ID,...] [--include-paper-ids ID,...] \
+  [--resume-after-checkpoint ABS --resume-after-export ABS]
+npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
+npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID \
+  --checkpoint ABS [--exclude-paper-ids ID,...]
+```
+
+`history:tag-supplement` 对已由当前渲染实现暂存、且页面缺少标签元数据的论文，从已核验的分析记录和当前词表确定性分类，不请求模型；按运行标识写入 `historical-direct-tag-supplement-v2` 的 `tag-history.json` 和 `report.json`，文件不可覆盖。
+
+`history:source-tags` 是没有可用正式分析记录时按来源证据请求模型的分类入口，也是这四个入口里唯一调用模型的。它保存论文选择集合、标签选择响应、独立审核和分类决策的检查点，写入 `historical-source-tag-classification-v2`；同一运行标识可续跑，`--concurrency` 只接受 1–3，默认 1。`partial` 部分运行记录不能当作续跑检查点；要从正规检查点开始新的论文集合，须同时给出 `--resume-after-checkpoint` 和 `--resume-after-export`。特殊来源重做须换新的运行标识，并显式给出 `--only-paper-ids`。
+
+`history:source-identity` 只核验来源身份，写入 `historical-source-identity-supplement-v2`，不请求模型。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划再按原格式复算，全部字节一致才复用；缺少完整输出、只有旧格式的部分检查点或校验失败时命令停止，保留原文件并换新的运行标识。
+
+`history:tag-checkpoint-export` 读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录，同样不请求模型；报告同时保留失败项和未处理论文。
 
 ## arXiv 获取失败的备用处理
 

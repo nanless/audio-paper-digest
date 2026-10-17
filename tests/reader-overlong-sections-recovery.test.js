@@ -79,7 +79,7 @@ test('专用小节数组修复保护全部其他记录，缺授权与错误SHA�
     assert.notEqual(legalContext.atomicOperation?.kind, 'reorganize_existing_sections_v1');
 });
 test('当前V12保留小节数组例外，旧V9正文与路径继续可复算', () => {
-    assert.equal(versions.currentTextStagePromptPath('apiReaderRepair'), 'prompts/api-reader-repair-v12.md');
+    assert.equal(versions.currentTextStagePromptPath('apiReaderRepair'), 'prompts/api-reader-repair-v13.md');
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', 'analysis-prompt-text-v9'), 'prompts/api-reader-repair-v9.md');
     assert.equal(deep.runtimePromptTemplateSha256('prompts/api-reader-repair-v9.md'), '5164ce17261a13a009c34bfcf8a71fc2c44f1ae2246f0651de5eda82a7645f65');
     assert.equal(deep.runtimePromptTemplateSha256('prompts/api-reader-repair-v10.md'), 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4');
