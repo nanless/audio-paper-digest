@@ -202,6 +202,8 @@ function assertSavedBatchMember(handle, paper) {
         || proof.grantId !== batch.manifest.value.grantId || proof.grantSha256 !== batch.manifest.value.grantSha256
         || paper.sourceSha256 !== r.sourceSha256
         || read(path.join(batch.analysisRoot, r.executionId, 'source.json')).sha256 !== r.sourceFileSha256) fail('完成稿属于不同人工清单、补丁、原CAS或来源');
+    if (r.originKind === 'latest_resolved_paid_reader' && (proof.originKind !== r.originKind
+        || !isDeepStrictEqual(proof.originalPaidOrigin, r.originalPaidOrigin))) fail('已保存稿的退休付费来源不匹配当前清单');
     return true;
 }
 
@@ -220,15 +222,32 @@ function readBaseline(batch, row, loaded, planHandle, sourceRoot, { cold = false
     const pdf = adapter.verifyPlanAuthority(loaded, planHandle, sourceRoot);
     const directory = path.join(loaded.directory, 'reader-attempts'), entries = tree(directory);
     const active = entries.filter(entry => /^[a-f0-9]{64}\.json$/u.test(entry.path));
-    if (active.length !== 1) fail('需要唯一原活跃失败候选；无候选的旧签稿不由此入口恢复');
-    const candidateFile = path.join(directory, active[0].path), checked = repair.readFailedCandidateEnvelope(directory, null, candidateFile);
-    if (!checked || checked.envelopeSha256 !== active[0].sha256 || r.baselineCandidateEnvelopeSha256 !== checked.envelopeSha256
-        || path.resolve(r.baselineCandidateFile) !== candidateFile) fail('原活跃候选CAS错误');
-    const candidate = checked.envelope, identity = candidate.identity;
+    let candidate, originalPaidOrigin = null, originHandle = null;
+    if (r.originKind === 'latest_resolved_paid_reader') {
+        if ((r.version !== undefined && r.version !== 1) || r.correctionKind !== undefined) fail('退休原付费来源只允许原v1既有节点修正');
+        const origin = require('./conference-reader-resolved-origin');
+        const handle = origin.inspectLatestResolvedPaidReader({ analysisRoot: batch.analysisRoot,
+            executionId: r.executionId, planHandle, sourceRoot });
+        if (!handle || active.length) fail('原退休付费来源缺失或已有活动候选');
+        const verified = origin.readVerifiedOrigin(handle);
+        origin.assertOriginalPaidOrigin(handle, r.originalPaidOrigin);
+        candidate = verified.candidate; originalPaidOrigin = verified.originalPaidOrigin; originHandle = handle;
+        if (r.baselineCandidateEnvelopeSha256 !== originalPaidOrigin.resolved.sha256
+            || path.resolve(r.baselineCandidateFile) !== path.join(directory, originalPaidOrigin.resolved.basename)) fail('退休原档CAS错误');
+    } else {
+        if (r.originKind !== undefined || active.length !== 1) fail('需要唯一原活跃失败候选');
+        const candidateFile = path.join(directory, active[0].path), checked = repair.readFailedCandidateEnvelope(directory, null, candidateFile);
+        if (!checked || checked.envelopeSha256 !== active[0].sha256 || r.baselineCandidateEnvelopeSha256 !== checked.envelopeSha256
+            || path.resolve(r.baselineCandidateFile) !== candidateFile) fail('原活跃候选CAS错误');
+        candidate = checked.envelope;
+    }
+    const identity = candidate.identity;
     if (identity.paperId !== r.paperId || identity.sourceSha256 !== r.sourceSha256 || identity.freshAnalysis !== undefined
         || identity.contentMode !== 'reader-source-only-v1' || identity.conferenceReaderRetryEpoch !== 1
         || candidate.payload.attempts < 1 || !repair.parseRecoveryDraft(candidate.payload.draft)) fail('原候选不是同源会议失败稿');
-    const { draft, appendData } = replayMember(r, candidate, { loaded, pdf, cold, beforeAnalysis, beforeRun });
+    const { draft, appendData } = originHandle
+        ? { draft: require('./conference-reader-resolved-origin').replayLocalPatch(originHandle, r), appendData: null }
+        : replayMember(r, candidate, { loaded, pdf, cold, beforeAnalysis, beforeRun });
     for (const key of ['sections','conceptBridges','figurePlacements','tableBindings','formulaBindings']) {
         const delta = appendData && key === 'tableBindings' ? 1 : 0;
         if (draft[key].length !== candidate.payload.draft[key].length + delta) fail('人工补丁不能增删非获准原结构数量');
@@ -240,12 +259,13 @@ function readBaseline(batch, row, loaded, planHandle, sourceRoot, { cold = false
         revisionFileSha256: read(path.join(loaded.directory, 'reader-revision.json')).sha256,
         beforeAnalysisBytes: beforeAnalysis ? beforeAnalysis.bytes : read(path.join(loaded.directory, 'analysis.json')).bytes,
         beforeRunBytes: beforeRun ? beforeRun.bytes : read(path.join(loaded.directory, 'run.json')).bytes };
-    return { batch, row, loaded, pdf, candidate, draft, appendData, pins, beforePaper,
+    return { batch, row, loaded, pdf, candidate, draft, appendData, pins, beforePaper, originalPaidOrigin, originHandle,
         beforeAnalysis: before, beforeRun: beforeRun?.value || loaded.run, cold, planHandle, sourceRoot };
 }
 function assertOriginals(active) {
     const { batch, row, loaded, pins } = active;
     assertBatchFiles(batch, row);
+    if (active.originHandle) require('./conference-reader-resolved-origin').assertUnchanged(active.originHandle);
     if (!active.cold && (read(path.join(loaded.directory, 'analysis.json')).sha256 !== row.record.analysisFileSha256
         || read(path.join(loaded.directory, 'run.json')).sha256 !== row.record.runFileSha256
         || read(path.join(batch.processDir, 'state.json')).sha256 !== batch.state.sha256)) fail('完整原失败包或最终失败集发生变化');
@@ -377,6 +397,8 @@ function current(paper, identity) {
         originalCandidateEnvelopeSha256: r.baselineCandidateEnvelopeSha256,
         originalIdentitySha256: hash(active.candidate.identity), currentInputIdentitySha256: hash(identity),
         beforeDraftSha256: hash(active.candidate.payload.draft), afterDraftSha256: hash(active.draft),
+        ...(active.originalPaidOrigin ? { originKind: 'latest_resolved_paid_reader',
+            originalPaidOrigin: clone(active.originalPaidOrigin) } : {}),
         retainedAttempts: active.candidate.payload.attempts, retainedFullAttempts: active.candidate.payload.fullAttempts,
         ...(active.mainCheckpointRecovery ? { mainCheckpointRecovery: clone(active.mainCheckpointRecovery) } : {}),
         appliedAt: r.appliedAt };
@@ -582,25 +604,40 @@ function withSavedPaper(paper, callback) {
         || provider.sourceText !== loaded.source.sourceDetails.text) fail('冷核来源能力不一致');
     const candidateDirectory = path.join(loaded.directory, 'reader-attempts'), entries = tree(candidateDirectory),
         candidateFile = path.resolve(row.record.baselineCandidateFile),
-        candidate = require('./reader-repair').readFailedCandidateEnvelope(candidateDirectory, null, candidateFile);
-    if (!candidate || candidate.envelopeSha256 !== row.record.baselineCandidateEnvelopeSha256
+        candidate = row.record.originKind === 'latest_resolved_paid_reader' ? null
+            : require('./reader-repair').readFailedCandidateEnvelope(candidateDirectory, null, candidateFile);
+    if (row.record.originKind !== 'latest_resolved_paid_reader' && (!candidate || candidate.envelopeSha256 !== row.record.baselineCandidateEnvelopeSha256)
         || !isDeepStrictEqual(entries, body.candidateFiles)
         || !isDeepStrictEqual(retainedFiles(loaded.directory), body.retainedMaterials)
         || read(path.join(loaded.directory, 'reader-grant-budget.json')).sha256 !== body.ledgerFileSha256
         || read(path.join(loaded.directory, 'reader-revision.json')).sha256 !== body.revisionFileSha256) fail('冷核原候选/账/修订变化');
-    const replayedMember = replayMember(row.record, candidate.envelope, { loaded, pdf, cold: true, beforeAnalysis, beforeRun });
-    const restored = { batch, row, loaded, pdf, candidate: candidate.envelope,
+    const replayedMember = candidate
+        ? replayMember(row.record, candidate.envelope, { loaded, pdf, cold: true, beforeAnalysis, beforeRun })
+        : { draft: null, appendData: null };
+    const restored = { batch, row, loaded, pdf, candidate: candidate?.envelope || null,
         draft: replayedMember.draft, appendData: replayedMember.appendData,
         pins: { entries, materials: body.retainedMaterials, ledgerSha256: body.ledgerFileSha256, sourceFileSha256: row.record.sourceFileSha256,
             revisionFileSha256: body.revisionFileSha256 }, beforePaper: beforeAnalysis.value.papers[0],
         beforeAnalysis: beforeAnalysis.value, beforeRun: beforeRun.value, cold: true,
         proof: clone(proof), currentIdentity: body.currentIdentity };
-    assertCompatibleIdentity(restored.candidate.identity, body.currentIdentity);
+    if (restored.candidate) assertCompatibleIdentity(restored.candidate.identity, body.currentIdentity);
     const options = { paperId: paper.id, executionId: proof.executionId, executionDir: loaded.directory, readerPdfSourceHandle: pdf };
     return context.withConferenceAnalysisSource({ ...options, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () =>
         require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(grantHandle, options, () =>
             require('./analysis-stop-control').withModelRequestsForbidden(() => scope.run(restored, () => {
                 projectMainCheckpoint(restored);
+                if (row.record.originKind === 'latest_resolved_paid_reader') {
+                    const origin = require('./conference-reader-resolved-origin');
+                    const handle = origin.inspectLatestResolvedPaidReader({ analysisRoot, executionId: proof.executionId });
+                    if (!handle) fail('冷核缺少真实最新退休付费来源');
+                    origin.assertOriginalPaidOrigin(handle, row.record.originalPaidOrigin);
+                    const actual = origin.readVerifiedOrigin(handle);
+                    restored.candidate = actual.candidate;
+                    restored.originHandle = handle;
+                    restored.originalPaidOrigin = actual.originalPaidOrigin;
+                    restored.draft = origin.replayLocalPatch(handle, row.record);
+                    assertCompatibleIdentity(restored.candidate.identity, body.currentIdentity);
+                }
                 const replayed = current(paper, body.currentIdentity);
                 if (!isDeepStrictEqual(replayed.proof, proof)) fail('冷核逻辑身份或原候选证明不一致');
                 assertOutput(restored, paper); return callback();

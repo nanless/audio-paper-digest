@@ -1131,6 +1131,16 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                 });
             });
         }
+        // A fully authenticated retired latest paid draft is a local-tail case,
+        // not permission to reset its candidate counter or a run-level fee fault.
+        // Missing/invalid provenance still raises the original integrity error.
+        if (grant && loaded.revision.mode === 'reader-only') {
+            const retired = require('./conference-reader-resolved-origin');
+            const origin = withVerifiedSource(() => retired.inspectLatestResolvedPaidReader({
+                analysisRoot, executionId, planHandle, sourceRoot
+            }));
+            if (origin) retired.assertDeferredLocalCorrection(origin);
+        }
         if (progress.attempts >= maxAttempts) throw Object.assign(new Error('会议 Reader revision 原付费预算已耗尽'),
             { code: 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED', retryable: false });
         let paper = clone(loaded.analysis.papers[0]);

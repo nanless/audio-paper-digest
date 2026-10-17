@@ -8396,6 +8396,143 @@ function apiReaderOperatorExecution(proof) {
         : require('./lib/daily-reader-operator-correction').execution(proof);
 }
 
+function apiReaderSourceOnlyInputFingerprint(paper, sourceEvidence, options = {}) {
+    const readerCapabilityPolicy = options.readerCapabilityPolicy || null;
+    const readerGrantFields = options.readerGrantFields || {};
+    const previousDraft = options.previousDraft;
+    return stableFingerprint({
+        ...readerGrantFields,
+        ...require('./lib/selected-full-stage-reanalysis').fingerprintFields(paper),
+        ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, previousDraft),
+        contentMode: READER_SOURCE_CONTENT_MODE, sourceEvidence,
+        ...(options.readerFactLocalRevision === true ? {
+            readerFactLocalPromptContract: readerRepairPromptContract(options),
+            readerFactLocalPromptSha256: promptTemplateSha256(readerRepairPromptPath(options))
+        } : {}),
+        ...require('./lib/reader-resource-prose').fields(options.naturalResourceProse),
+        ...options.signedRevisionDisplayFields,
+        reviewFeedback: options.reviewFeedback || '', initialDraft: previousDraft,
+        structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '',
+        directSupplementaryEvidence: options.directSupplementaryPreflightEvidence || [],
+        ...(readerCapabilityPolicy ? {
+            readerCapabilityPolicyContract: readerCapabilityPolicy.contract,
+            readerCapabilityPolicySha256: readerCapabilityPolicy.policySha256
+        } : {})
+    });
+}
+
+// Pure deterministic transform shared by normal generation and authenticated
+// read-only paid-origin replay. It creates no source or publication capability.
+function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, state = {}) {
+    const repair = require('./lib/reader-repair');
+    let candidate = draft;
+    const currentIssues = issues || [];
+    const readerCapabilityPolicy = options.readerCapabilityPolicy || null;
+    const pixelFigureOrdinals = options.pixelFigureOrdinals || [];
+    const draftOrderMappings = options.draftOrderMappings || [];
+    let mechanicalNoFigureCleanupChanged = options.mechanicalNoFigureCleanupChanged === true;
+    try {
+        return require('./lib/reader-table-pdf-evidence').withArtifacts(
+            options.structuredArtifacts, options.paperId, () =>
+                withReaderSourceQuoteEvidence(options.structuredArtifacts, options.paperId, () => {
+                if (!candidate) return;
+                const noFigureCleanup = repair.normalizeUnavailableReaderFigures(candidate, pixelFigureOrdinals);
+                if (noFigureCleanup) {
+                    candidate = noFigureCleanup.draft;
+                    draftOrderMappings.push(noFigureCleanup.mapping);
+                    mechanicalNoFigureCleanupChanged = true;
+                }
+                // 明确只修正文或资源的模式不授权改来源字段，继续由原有完整校验决定。
+                if (options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
+                    const quoteWhitespace = normalizeReaderSourceQuoteWhitespace(candidate, options.sourceText);
+                    if (quoteWhitespace) draftOrderMappings.push(quoteWhitespace);
+                }
+                const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE
+                    && !repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
+                normalizeReaderConceptBridgeTerms(candidate);
+                normalizeShiftedReaderConceptBridgeMarkers(candidate);
+                normalizeDuplicateReaderConceptBridgeMarkers(candidate);
+                repairReportedTextSpacing(candidate, normalizationIssues);
+                normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
+                candidate.sections = candidate.sections.map(section => ({
+                    ...section,
+                    body: typeof section?.body === 'string'
+                        ? normalizeIssueBoundReaderQuantitativeNumerals(
+                            normalizeDanglingReaderConnectors(section.body), normalizationIssues
+                        ) : section?.body
+                }));
+                if (Array.isArray(candidate.conceptBridges)) {
+                    candidate.conceptBridges = candidate.conceptBridges.map(bridge => ({
+                        ...bridge,
+                        explanation: typeof bridge?.explanation === 'string'
+                            ? normalizeIssueBoundReaderQuantitativeNumerals(
+                                bridge.explanation, normalizationIssues
+                            ) : bridge?.explanation
+                    }));
+                }
+                if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
+                    normalizeReaderConferenceNarrowComparisonTable(candidate);
+                }
+                // 模型可能把 TABLE 标记直接贴在正文后面。在会议的表格顺序处理之前，先让已声明的
+                // 标记独立成块；否则一次本来语义上可恢复的标记/表格错位，会被看成绑定有歧义，
+                // 在归一化之前就被拒。
+                normalizeDeclaredReaderMarkerParagraphs(candidate);
+                if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
+                    normalizeReaderSourceQuotes(candidate, options.sourceText);
+                    const sourceQuoteMarkerTableRepair = repairConferenceReaderQuoteTables(
+                        candidate, options.sourceText, options.structuredArtifacts
+                    );
+                    if (sourceQuoteMarkerTableRepair) draftOrderMappings.push(sourceQuoteMarkerTableRepair);
+                    if (normalizeConferenceGeneratedEvidenceTableLabels(candidate)) {
+                        draftOrderMappings.push({
+                            contract: 'conference-reader-generated-evidence-labels-v1',
+                            changed: true
+                        });
+                    }
+                    const sourceQuoteMarkerRepair = normalizeReaderSourceQuoteTableMarkers(candidate);
+                    if (sourceQuoteMarkerRepair) draftOrderMappings.push(sourceQuoteMarkerRepair);
+                    const prunedUnboundTables = pruneUniquelyUnboundReaderMarkdownTables(candidate);
+                    if (prunedUnboundTables > 0) {
+                        draftOrderMappings.push({
+                            contract: 'conference-reader-prune-unbound-tables-v1',
+                            changed: true,
+                            removedTables: prunedUnboundTables
+                        });
+                    }
+                    const tableOrderRepair = normalizeConferenceMixedTableBindings(candidate);
+                    if (tableOrderRepair) draftOrderMappings.push(tableOrderRepair);
+                }
+                let normalized;
+                try {
+                    normalized = normalizeReaderDraftOrder(candidate, {
+                        structuredArtifacts: options.structuredArtifacts || null
+                    });
+                } catch (error) {
+                    const blocked = require('./lib/reader-source-blocked-normalization')
+                        .readSourceTableNormalizationError(error, candidate, options.structuredArtifacts);
+                    if (blocked) {
+                        // This is the actual failed input after deterministic preparation,
+                        // with the same binding and body indices as the blocking issues.
+                        candidate = blocked.draft;
+                        error.readerIssues = blocked.blockingIssues;
+                    }
+                    throw error;
+                }
+                candidate = normalized.draft;
+                if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
+                if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
+                    const labels = require('./lib/reader-table-narrative-labels').normalizeReaderTableNarrativeLabels(candidate);
+                    if (labels) draftOrderMappings.push(labels);
+                }
+                    return state;
+                }));
+    } finally {
+        state.draft = candidate;
+        state.draftOrderMappings = draftOrderMappings;
+        state.mechanicalNoFigureCleanupChanged = mechanicalNoFigureCleanupChanged;
+    }
+}
+
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     const repair = require('./lib/reader-repair.js');
     const fresh = require('./lib/fresh-analysis-context.js');
@@ -8478,7 +8615,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         contentMode,
         ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
         ...start.signedRevisionDisplayFields,
-        inputFingerprint: stableFingerprint({
+        inputFingerprint: contentMode === READER_SOURCE_CONTENT_MODE
+            ? apiReaderSourceOnlyInputFingerprint(paper, sourceEvidence, {
+                ...options, readerGrantFields, readerCapabilityPolicy, naturalResourceProse,
+                previousDraft: start.previousDraft, directSupplementaryPreflightEvidence,
+                signedRevisionDisplayFields: start.signedRevisionDisplayFields
+            }) : stableFingerprint({
             ...readerGrantFields,
             ...require('./lib/selected-full-stage-reanalysis').fingerprintFields(paper),
             ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.previousDraft),
@@ -8627,97 +8769,20 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let candidate = null;
     let draftOrderMappings = [];
     let mechanicalNoFigureCleanupChanged = false;
-    const normalizeCandidate = () => withReaderSourceTableEvidence(() => {
-        if (!candidate) return;
-        const noFigureCleanup = repair.normalizeUnavailableReaderFigures(candidate, pixelFigureOrdinals);
-        if (noFigureCleanup) {
-            candidate = noFigureCleanup.draft;
-            draftOrderMappings.push(noFigureCleanup.mapping);
-            mechanicalNoFigureCleanupChanged = true;
-        }
-        // 明确只修正文或资源的模式不授权改来源字段，继续由原有完整校验决定。
-        if (options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
-            const quoteWhitespace = normalizeReaderSourceQuoteWhitespace(candidate, options.sourceText);
-            if (quoteWhitespace) draftOrderMappings.push(quoteWhitespace);
-        }
-        const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE
-            && !repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
-        normalizeReaderConceptBridgeTerms(candidate);
-        normalizeShiftedReaderConceptBridgeMarkers(candidate);
-        normalizeDuplicateReaderConceptBridgeMarkers(candidate);
-        repairReportedTextSpacing(candidate, normalizationIssues);
-        normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
-        candidate.sections = candidate.sections.map(section => ({
-            ...section,
-            body: typeof section?.body === 'string'
-                ? normalizeIssueBoundReaderQuantitativeNumerals(
-                    normalizeDanglingReaderConnectors(section.body), normalizationIssues
-                ) : section?.body
-        }));
-        if (Array.isArray(candidate.conceptBridges)) {
-            candidate.conceptBridges = candidate.conceptBridges.map(bridge => ({
-                ...bridge,
-                explanation: typeof bridge?.explanation === 'string'
-                    ? normalizeIssueBoundReaderQuantitativeNumerals(
-                        bridge.explanation, normalizationIssues
-                    ) : bridge?.explanation
-            }));
-        }
-        if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
-            normalizeReaderConferenceNarrowComparisonTable(candidate);
-        }
-        // 模型可能把 TABLE 标记直接贴在正文后面。在会议的表格顺序处理之前，先让已声明的
-        // 标记独立成块；否则一次本来语义上可恢复的标记/表格错位，会被看成绑定有歧义，
-        // 在归一化之前就被拒。
-        normalizeDeclaredReaderMarkerParagraphs(candidate);
-        if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
-            normalizeReaderSourceQuotes(candidate, options.sourceText);
-            const sourceQuoteMarkerTableRepair = repairConferenceReaderQuoteTables(
-                candidate, options.sourceText, options.structuredArtifacts
-            );
-            if (sourceQuoteMarkerTableRepair) draftOrderMappings.push(sourceQuoteMarkerTableRepair);
-            if (normalizeConferenceGeneratedEvidenceTableLabels(candidate)) {
-                draftOrderMappings.push({
-                    contract: 'conference-reader-generated-evidence-labels-v1',
-                    changed: true
-                });
-            }
-            const sourceQuoteMarkerRepair = normalizeReaderSourceQuoteTableMarkers(candidate);
-            if (sourceQuoteMarkerRepair) draftOrderMappings.push(sourceQuoteMarkerRepair);
-            const prunedUnboundTables = pruneUniquelyUnboundReaderMarkdownTables(candidate);
-            if (prunedUnboundTables > 0) {
-                draftOrderMappings.push({
-                    contract: 'conference-reader-prune-unbound-tables-v1',
-                    changed: true,
-                    removedTables: prunedUnboundTables
-                });
-            }
-            const tableOrderRepair = normalizeConferenceMixedTableBindings(candidate);
-            if (tableOrderRepair) draftOrderMappings.push(tableOrderRepair);
-        }
-        let normalized;
+    const normalizeCandidate = () => {
+        const state = {};
         try {
-            normalized = normalizeReaderDraftOrder(candidate, {
-                structuredArtifacts: options.structuredArtifacts || null
-            });
-        } catch (error) {
-            const blocked = require('./lib/reader-source-blocked-normalization')
-                .readSourceTableNormalizationError(error, candidate, options.structuredArtifacts);
-            if (blocked) {
-                // This is the actual failed input after deterministic preparation,
-                // with the same binding and body indices as the blocking issues.
-                candidate = blocked.draft;
-                error.readerIssues = blocked.blockingIssues;
-            }
-            throw error;
+            normalizeApiReaderRecoveryDraftForSource(candidate, currentIssues, {
+                ...options, paperId: getPaperArxivId(paper), readerCapabilityPolicy,
+                pixelFigureOrdinals, draftOrderMappings, mechanicalNoFigureCleanupChanged
+            }, state);
+        } finally {
+            candidate = state.draft;
+            draftOrderMappings = state.draftOrderMappings;
+            mechanicalNoFigureCleanupChanged = state.mechanicalNoFigureCleanupChanged;
         }
-        candidate = normalized.draft;
-        if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
-        if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
-            const labels = require('./lib/reader-table-narrative-labels').normalizeReaderTableNarrativeLabels(candidate);
-            if (labels) draftOrderMappings.push(labels);
-        }
-    });
+    };
+
     let currentIssues = [];
     const normalizeReplayDraft = (draft, issues, imageEvidence = [], verifySealedImages = true) => {
         if (!Array.isArray(imageEvidence)) throw new Error('Reader付费回放的像素证据必须是数组');
@@ -20505,6 +20570,8 @@ module.exports = {
     prepareApiReaderRetryIdentity: (paper, analysis, sourceEvidence, options = {}) =>
         generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, { ...options, readerIdentityOnly: true }),
     generateApiReaderArticleDetailed,
+    normalizeApiReaderRecoveryDraftForSource,
+    apiReaderSourceOnlyInputFingerprint,
     apiReaderTransportMaxRetries: () => API_READER_TRANSPORT_MAX_RETRIES,
     resolveApiReaderBaseRepairMaxTokens,
     resolveApiReaderRepairRetryMaxTokens,
