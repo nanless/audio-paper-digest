@@ -1,5 +1,6 @@
 """Bounded index image review keeps the existing per-image proof and recovery."""
 import base64
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -80,21 +81,53 @@ class IndexImageReviewConcurrencyTests(unittest.TestCase):
             self.assertIsNone(blog._REVIEW_UNIT_CONTEXT.get())
 
     def test_run_failure_stops_replenishment_and_keeps_completed_unit_checkpoints(self):
-        ready=threading.Barrier(5);seen=[];lock=threading.Lock()
-        def request(prompt,**kwargs):
-            number=int(base64.b64decode(kwargs['images'][0]['data']))
-            with lock:seen.append(number)
-            ready.wait(timeout=3)
-            if number==1:
-                error=RuntimeError('run-level refusal');error.scope='run';raise error
-            time.sleep(.03)
+        ready = threading.Barrier(5)
+        failure_observed = threading.Event()
+        seen = []
+        completed = []
+        lock = threading.Lock()
+        real_wait = concurrent.futures.wait
+
+        def observe_failed_future(*args, **kwargs):
+            done, pending = real_wait(*args, **kwargs)
+            if any(getattr(future.exception(), 'scope', None) == 'run' for future in done):
+                # The real worker has saved its failed unit and the scheduler's
+                # invoke wrapper has observed the error before the Future ends.
+                failure_observed.set()
+            return done, pending
+
+        def request(prompt, **kwargs):
+            number = int(base64.b64decode(kwargs['images'][0]['data']))
+            with lock:
+                seen.append(number)
+            ready.wait(timeout=10)
+            if number == 1:
+                error = RuntimeError('run-level refusal')
+                error.scope = 'run'
+                raise error
+            # Do not assume the failure checkpoint reaches the scheduler within
+            # a fixed sleep. Keep the other real in-flight calls pending until
+            # its completed Future proves that the run error was observed.
+            self.assertTrue(failure_observed.wait(timeout=10))
+            with lock:
+                completed.append(number)
             return '{"passed":true,"issues":[]}'
-        env,images=self.patches()
-        with tempfile.TemporaryDirectory() as td,env,images,mock.patch.object(blog,'CURRENT_DIR',Path(td)/'current'),mock.patch.object(blog,'review_protocol_fingerprint',return_value='a'*64),mock.patch.object(blog,'call_llm_api',side_effect=request):
+        env, images = self.patches()
+        with (
+            tempfile.TemporaryDirectory() as td,
+            env,
+            images,
+            mock.patch.object(blog, 'CURRENT_DIR', Path(td) / 'current'),
+            mock.patch.object(blog, 'review_protocol_fingerprint', return_value='a' * 64),
+            mock.patch.object(blog, 'call_llm_api', side_effect=request),
+            mock.patch('publish_common.concurrent.futures.wait', side_effect=observe_failed_future),
+        ):
             with blog.review_unit_cache('2026-10-11',Path(td)/'index.md',required=True):
                 with self.assertRaisesRegex(RuntimeError,'run-level refusal'):
                     blog.multimodal_review_images(content(12),'汇总页面',required=True,image_concurrency=5)
+            self.assertTrue(failure_observed.is_set())
             self.assertEqual(sorted(seen),[1,2,3,4,5])
+            self.assertEqual(sorted(completed),[2,3,4,5])
             records=[json.loads(f.read_text()) for f in (Path(td)/'current').rglob('units/*/*.json')]
             self.assertEqual(len(records),5);self.assertEqual(sum(r['passed'] for r in records),4)
 
