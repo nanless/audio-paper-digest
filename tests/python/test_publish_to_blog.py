@@ -5882,7 +5882,8 @@ primary_method_tag: #Transformer
                     'media_type': 'image/png', 'data': base64.b64encode(b'pixels').decode('ascii'),
                 }), mock.patch.object(publish_to_blog, 'call_llm_api', side_effect=review):
             self.assertEqual(publish_to_blog.multimodal_review_images(
-                content, '本图真矛盾仍阻断', required=True), (False, [issue]))
+                content, '本图真矛盾仍阻断', required=True),
+                (False, [{**issue, 'type': 'model_content'}]))
 
     def test_reader_clusters_may_share_only_the_complete_explanation_lead_paragraph(self):
         shared = '这段既解释第一图，也为第二图提供明确导读。'
@@ -5931,7 +5932,8 @@ primary_method_tag: #Transformer
                 content, '图与原文的比较', required=True,
             )
         self.assertFalse(passed)
-        self.assertEqual(issues, [conflict])
+        self.assertEqual(issues, [{**conflict, 'type': 'model_content'}])
+        self.assertEqual(publish_to_blog.classify_review_failure(issues), 'content')
         self.assertEqual(request.call_count, 2)
         for index, call in enumerate(request.call_args_list):
             self.assertEqual(call.kwargs['images'], [images[index]])
