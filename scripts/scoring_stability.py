@@ -48,3 +48,9 @@ def scoring_stability_is_resolved(stage):
             and abs(stage['finalScore'] - resolution['secondAuditScore']) < 1e-9
             and abs(abs(resolution['secondAuditScore'] - resolution['firstAuditScore'])
                     - resolution['scoreDifference']) < 1e-9)
+
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime('scoring_stability.py')
+    raise SystemExit('这是只读评分证明模块，请通过正常分析或页面发布入口使用。')

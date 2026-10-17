@@ -5876,7 +5876,14 @@ has_dataset: 否
         assert.match(prompt, /2–4 个步骤/);
         assert.match(prompt, /汉字与中文标点合计 320–600 个/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
-        assert.match(prompt, /两个数值及各自单位、正负号和小数精度必须逐字来自同一原表行/);
+        const currentCorePrompt = require('../scripts/utils.js').loadPrompt(
+            require('../scripts/lib/prompt-text-versions.js').currentTextStagePromptPath('coreSummaryRepair'));
+        const comparisonParagraph = currentCorePrompt.split('\n\n')
+            .find(paragraph => paragraph.startsWith('两个数值及各自单位'));
+        assert.ok(comparisonParagraph && prompt.includes(comparisonParagraph));
+        assert.match(comparisonParagraph, /不同方法行.*同一指标列/);
+        assert.match(comparisonParagraph, /除被比较因素外其余评测条件一致/);
+        assert.match(comparisonParagraph, /禁止把不同数据集、评测协议、指标或不连续证据片段拼成同条件比较/);
         assert.match(prompt, /不要把 `0\.85` 写成 `85\.00`/);
         assert.match(prompt, /也不要增删末尾的零、舍入、把百分数与小数互换、换算单位或自己算差值/);
         assert.match(prompt, /摘要和引言里的概括值不能和表格里的基线值拼成一组比较/);

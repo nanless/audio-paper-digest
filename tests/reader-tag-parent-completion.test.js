@@ -85,7 +85,41 @@ test('真实Teacher标签父包与已保存Reader子稿：冷完成、严格负�
     await t.test('真实完整三篇公共prepare和Teacher preview执行事实义务门槛', async t => {
         const signed = require('../scripts/lib/daily-reader-signed-correction'), fresh = require('../scripts/lib/fresh-analysis-context');
         const feedbacks = new Map(inputs.entries.map(e => [e.paperId, read(e.feedbackFile)]));
-        const ids = inputs.entries.map(e => e.paperId), handle = await signed.prepare(inputs.manifestFile, plan, data.papers, feedbacks, ids);
+        const ids = inputs.entries.map(e => e.paperId);
+        const prepare = () => signed.prepare(inputs.manifestFile, plan, data.papers, feedbacks, ids);
+        const currentProducer = crypto.createHash('sha256')
+            .update(fs.readFileSync(require.resolve('../scripts/deep-analyzer'))).digest('hex');
+        const records = inputs.entries.map(e => ({ file: e.recordFile, record: read(e.recordFile) }));
+        const drifted = records.filter(({ record }) => record.normalProducerProof !== undefined
+            && record.normalProducerProof.currentProducerSha256 !== currentProducer);
+        if (drifted.length) {
+            const snapshots = [inputsFile, inputs.manifestFile, ...records.map(row => row.file)];
+            const originals = snapshots.map(file => fs.readFileSync(file));
+            const driftError = { message: '日更签名Reader人工修正拒绝：normal producer证明字段或真实原输入身份不同' };
+            const repair = require('../scripts/lib/reader-repair');
+            for (const { record } of drifted) {
+                const file = record.retiredCandidateFile || record.baselineCandidateFile;
+                const expectedSha = record.retiredCandidateEnvelopeSha256 || record.baselineCandidateEnvelopeSha256;
+                const originalBytes = fs.readFileSync(file);
+                assert.equal(crypto.createHash('sha256').update(originalBytes).digest('hex'), expectedSha);
+                const checked = record.retiredCandidateFile
+                    ? require('../scripts/lib/reader-paid-resolved-render').readResolvedFile(plan.readerAttemptsDir, file, expectedSha)
+                    : repair.readFailedCandidateEnvelope(plan.readerAttemptsDir, null, file);
+                assert.ok(checked, record.paperId);
+                assert.equal(record.normalProducerProof.inputParserImplementationSha256,
+                    checked.envelope.identity.parserImplementationSha256);
+                assert.equal(record.normalProducerProof.originalDraftSha256, repair.hashDraft(checked.envelope.payload.draft));
+                assert.throws(() => signed.validateNormalProducerProof(record.normalProducerProof, checked),
+                    driftError, record.paperId);
+                assert.deepEqual(fs.readFileSync(file), originalBytes);
+            }
+            await assert.rejects(prepare, driftError);
+            for (const [index, file] of snapshots.entries()) assert.deepEqual(fs.readFileSync(file), originals[index]);
+            assert.equal(utils.requestLlmJson.mock.callCount(), 0);
+            assert.deepEqual(fees(), originalFees);
+            t.diagnostic(`${drifted.length}份原真实审批仍绑定旧生产者；逐项及公共入口均严格拒绝，未改签或新增请求。`);
+        } else {
+        const handle = await prepare();
         const parentPaper = data.papers.find(p => p.arxivId.startsWith('2610.21941'));
         const run = () => daily.withDailyFreshAnalysisContext(plan, () => engine.withPaperAnalysisLock(parentPaper, () =>
             fresh.withFreshPaperContext(parentPaper, () => daily.withDailyFreshPaperSource(plan, structuredClone(parentPaper), () =>
@@ -103,6 +137,7 @@ test('真实Teacher标签父包与已保存Reader子稿：冷完成、严格负�
         await run(); assert.equal(checks, 1, 'preview now checks the actual completion predicate');
         t.mock.method(completed, 'hasCompletedBoundFactFeedbackStages', () => false);
         await assert.rejects(run(), /当前来源绑定的事实反馈尚未完成/);
+        }
     });
     assert.equal(JSON.stringify(paper), original);
     assert.deepEqual(fs.readFileSync(actualFormal), formalBytes);
