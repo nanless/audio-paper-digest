@@ -49,6 +49,48 @@ test('未知Python布局只按正常提取执行，作用域不伪造缓存能�
     api.withPdfExtractionScope(() => { run({ literal: true }); run({ literal: true }); });
     assert.equal(calls, 2);
 });
+test('认证PDF使用同一纯executor并保留继承环境，未知导入或启动覆盖不复用', t => {
+    const { dir } = fixture(t), saved = new Map();
+    const unsafe = key => /^(?:PYTHON|PYMUPDF|FITZ|LD_|DYLD_|BASH_FUNC_)/i.test(key) || ['BASH_ENV', 'ENV'].includes(key);
+    for (const key of Object.keys(process.env)) if (unsafe(key)) { saved.set(key, process.env[key]); delete process.env[key]; }
+    const marker = process.env.PD_PDF_SHARED_TEST, disableVenv = process.env.PD_PYTHON_RUNTIME_DISABLE_VENV;
+    delete process.env.PD_PYTHON_RUNTIME_DISABLE_VENV;
+    t.after(() => {
+        for (const key of Object.keys(process.env)) if (unsafe(key)) delete process.env[key];
+        for (const [key, value] of saved) process.env[key] = value;
+        if (marker === undefined) delete process.env.PD_PDF_SHARED_TEST; else process.env.PD_PDF_SHARED_TEST = marker;
+        if (disableVenv === undefined) delete process.env.PD_PYTHON_RUNTIME_DISABLE_VENV;
+        else process.env.PD_PYTHON_RUNTIME_DISABLE_VENV = disableVenv;
+    });
+    process.env.PD_PDF_SHARED_TEST = 'inherited-original';
+    let calls = 0;
+    t.mock.method(child, 'execFileSync', (_file, args, options) => {
+        calls++; assert.equal(args[1], program); assert.equal(args[2], '3');
+        assert.equal(options.env.PD_PDF_SHARED_TEST, process.env.PD_PDF_SHARED_TEST);
+        assert.equal(options.env.PD_PYTHON_RUNTIME_DISABLE_VENV, process.env.PD_PYTHON_RUNTIME_DISABLE_VENV);
+        return Buffer.from('{"document":{"exact":"source"}}');
+    });
+    const run = () => {
+        const file = path.join(dir, 'authenticated.json'); fs.writeFileSync(file, '{"pdf":"same"}', { mode: 0o600 });
+        const fd = fs.openSync(file, 'r');
+        try { return api.runAuthenticatedPdfQuoteExtractor(fd); } finally { fs.closeSync(fd); }
+    };
+    api.withPdfExtractionScope(() => {
+        run(); run(); assert.equal(calls, 1);
+        process.env.PD_PDF_SHARED_TEST = 'changed-original'; run(); assert.equal(calls, 2, 'inherited environment enters exact key');
+        for (const key of ['PYTHONPATH', 'PYTHONHOME', 'PYMUPDF_MESSAGE', 'LD_PRELOAD', 'DYLD_LIBRARY_PATH', 'BASH_ENV', 'ENV', 'BASH_FUNC_untracked%%']) {
+            process.env[key] = '/unknown/mutable/startup';
+            try { run(); run(); assert.equal(calls % 2, 0, key + ' stays uncached'); }
+            finally { delete process.env[key]; }
+        }
+        const beforeExternal = calls;
+        process.env.PD_PYTHON_RUNTIME_DISABLE_VENV = '1';
+        run(); run();
+        assert.equal(calls, beforeExternal + 2, 'same inherited external-runtime selection cannot use project-venv cache');
+        delete process.env.PD_PYTHON_RUNTIME_DISABLE_VENV;
+    });
+    run(); assert.equal(calls, 21, 'scope end cannot carry extraction into next qualification');
+});
 test('纯提取仅作用域内复用，完整输入/程序/环境/运行时变更miss且返回隔离', async t => {
     const { run, dependency } = fixture(t); let calls = 0;
     t.mock.method(child, 'execFileSync', () => { calls++; return Buffer.from('{"document":{"exact":"value"}}'); });

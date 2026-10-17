@@ -88,15 +88,28 @@ function runtimeIdentity() {
     } catch (_) { return null; }
 }
 function runPdfExtractor(program, fd, dependencies = []) {
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_SANDBOX: process.env.CODEX_SANDBOX || '' };
+    return executePdfExtractor(program, fd, dependencies, env, true);
+}
+// The authenticated conference/history adapter historically inherits its
+// environment. Preserve that invocation; unknown startup/import overrides run
+// normally without reuse, rather than guessing their mutable dependencies.
+function runAuthenticatedPdfQuoteExtractor(fd) {
+    const env = { ...process.env };
+    const known = env.PD_PYTHON_RUNTIME_DISABLE_VENV !== '1'
+        && !Object.keys(env).some(key => /^(?:PYTHON|PYMUPDF|FITZ|LD_|DYLD_|BASH_FUNC_)/i.test(key)
+        || ['BASH_ENV', 'ENV'].includes(key));
+    return executePdfExtractor(path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py'), fd, [], env, known);
+}
+function executePdfExtractor(program, fd, dependencies, env, cacheEnvironmentKnown) {
     require('../env-loader').requireExternalRuntime('reader-pdf-extraction-scope');
     require('../workspace-role').requireWorkspaceRole('daily', root);
     const wrapper = path.join(root, 'scripts/python-runtime.sh');
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_SANDBOX: process.env.CODEX_SANDBOX || '' };
     const run = () => child.execFileSync('bash', [wrapper, program, '3'], {
         cwd: root, timeout: 60000, maxBuffer: MAX_BYTES, stdio: ['ignore', 'pipe', 'pipe', fd], env
     });
     const active = scope.getStore();
-    if (!active?.active || !extractors.has(program)) return run();
+    if (!active?.active || !cacheEnvironmentKnown || !extractors.has(program)) return run();
     const runtime = runtimeIdentity();
     if (!runtime) return run();
     const descriptor = fs.fstatSync(fd), size = descriptor.size;
@@ -124,4 +137,4 @@ function runPdfExtractor(program, fd, dependencies = []) {
     }
     return raw;
 }
-module.exports = { withPdfExtractionScope, runPdfExtractor };
+module.exports = { withPdfExtractionScope, runPdfExtractor, runAuthenticatedPdfQuoteExtractor };

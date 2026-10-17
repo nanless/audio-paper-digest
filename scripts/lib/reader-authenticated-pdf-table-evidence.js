@@ -1,13 +1,11 @@
 'use strict';
 // Literal PDF tables are a distinct source capability, never a synthesized DOM.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
-const crypto = require('node:crypto'), child = require('node:child_process');
+const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage();
 const CONTRACT = 'reader-authenticated-pdf-table-evidence-v1';
-const root = path.resolve(__dirname, '../..');
-const program = path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const stable = value => require('./reader-repair').hashDraft(value);
 const text = value => String(value ?? '').normalize('NFKC').replace(/[*`↑↓]/gu, '').replace(/\s+/gu, ' ').trim();
@@ -137,8 +135,7 @@ function pdfQuotes(source, quotes) {
         const filename = path.join(directory, 'input.json');
         fs.writeFileSync(filename, JSON.stringify({ pdfBase64: source.pdf.toString('base64'), pdfSha256: source.pdfSha256, quotes }), { mode: 0o600 });
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        return JSON.parse(child.execFileSync('bash', [path.join(root, 'scripts/python-runtime.sh'), program, '3'], {
-            cwd: root, timeout: 60000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe', fd] }));
+        return JSON.parse(require('./reader-pdf-extraction-scope').runAuthenticatedPdfQuoteExtractor(fd));
     } finally { if (fd !== undefined) fs.closeSync(fd); fs.rmSync(directory, { recursive: true, force: true }); }
 }
 function sourceBoundary(callback) {
@@ -160,7 +157,7 @@ function withVerifiedSource(handle, callback) {
     const active = scope.getStore();
     if (active?.handle === handle && isDeepStrictEqual(active.source.sourceIdentity, source.sourceIdentity)) return callback();
     const state = { handle, source, sourceTextSha256: sha(source.sourceText), cache: new Map(), document: null };
-    return scope.run(state, callback);
+    return require('./reader-pdf-extraction-scope').withPdfExtractionScope(() => scope.run(state, callback));
 }
 function withoutVerifiedSource(callback) { return scope.run(null, callback); }
 function derive(table, quotes) {

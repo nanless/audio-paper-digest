@@ -67,6 +67,35 @@ function fixture(t) {
     return { ...f, handle, verified, quotes: [verified.sourceText.slice(start,end).trim()] };
 }
 
+test('真实认证句柄经共享executor重放，scope释放且每次仍核来源', t => {
+    const f = fixture(t), rendered = table(markdown);
+    const pure = require('../scripts/lib/reader-pdf-extraction-scope');
+    const execute = pure.runAuthenticatedPdfQuoteExtractor, spawn = child.execFileSync;
+    let executorCalls = 0, workerCalls = 0;
+    t.mock.method(pure, 'runAuthenticatedPdfQuoteExtractor', fd => { executorCalls++; return execute(fd); });
+    t.mock.method(child, 'execFileSync', function(command, args, options) {
+        if (args?.[1]?.endsWith('/reader_sealed_pdf_quote_evidence.py')) workerCalls++;
+        return spawn.call(this, command, args, options);
+    });
+    const cold = sourceApi.buildConferenceSourceContext({ planHandle: f.planHandle, paperId: f.paperId, sourceRoot: f.sourceRoot });
+    api.withVerifiedSource(f.handle, () => {
+        assert.ok(api.derive(rendered, f.quotes));
+        api.withVerifiedSource(cold, () => assert.ok(api.derive(rendered, f.quotes)));
+        assert.equal(executorCalls, 4, 'both authenticated contexts use one fixed shared worker executor');
+        assert.ok(workerCalls === 2 || workerCalls === 4, 'known runtime reuses; unknown runtime keeps original extraction');
+        const pdf = path.join(f.sourceRoot, f.member.pdfFile), original = fs.readFileSync(pdf);
+        try {
+            fs.appendFileSync(pdf, '\nsource mutation after cached extraction');
+            assert.throws(() => api.derive(rendered, f.quotes), /source|SHA|sha|drift|变化|不一致/);
+        } finally { fs.writeFileSync(pdf, original); }
+    });
+    const before = workerCalls;
+    api.withVerifiedSource(cold, () => assert.ok(api.derive(rendered, f.quotes)));
+    assert.equal(workerCalls, before + 2, 'new authenticated scope executes its real workers again');
+    t.diagnostic(JSON.stringify({ authenticatedExecutorCalls: executorCalls, workerCalls, reusedWithinScope: before === 2 }));
+    assert.throws(() => api.withVerifiedSource({ ...f.handle }, () => true), /authenticated source authority/);
+});
+
 test('真实计划四源签发、派生、保存和冷重放同一PDF证明，任意JSON与篡改均拒', t => {
     const f = fixture(t), rendered = table(markdown);
     assert.equal(api.derive(rendered, f.quotes), null);
