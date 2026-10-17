@@ -5710,21 +5710,21 @@ def _build_api_reader_display_fields(paper, payload=None):
     payload = _api_reader_payload(paper) if payload is None else payload
     if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
         return None
-    resource_display = render_verified_reader_resources(
-        payload['resourceIdentityProof']['resources'], paper=paper)
+    from paper_reader_presentation import resolve_reader_decision_display
     parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
-    scoring_display = render_verified_reader_scoring_notes(paper, parsed)
-    detailed_summary = _validated_detailed_core_summary(paper, parsed)
-    visible_summary = detailed_summary or payload['plan']['oneSentenceThesis'].strip()
-    # 这里只在发布视图中修正这处重复的中英文术语，不改写论文记录中的摘要。
-    visible_summary = visible_summary.replace(
-        '音频推测推测解码 Audio Speculative Speculative Decoding',
-        '音频推测解码 Audio Speculative Decoding',
+    # Pass this loaded module's functions, not a second loader instance. The
+    # shared resolver still performs the normal detailed-core cold replay.
+    decision = resolve_reader_decision_display(
+        SimpleNamespace(render_verified_reader_resources=render_verified_reader_resources,
+                        render_verified_reader_scoring_notes=render_verified_reader_scoring_notes,
+                        _validated_detailed_core_summary=_validated_detailed_core_summary),
+        paper, plan=payload['plan'],
+        resources=payload['resourceIdentityProof']['resources'], parsed=parsed,
     )
     return {
-        'summary': visible_summary,
-        'opensource': resource_display,
-        'scoringReason': scoring_display,
+        'summary': decision['summary'],
+        'opensource': decision['resourceBlock'],
+        'scoringReason': decision['scoringBlock'],
     }
 
 
@@ -13437,6 +13437,7 @@ def generation_template_fingerprint():
     dependency_paths = {
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'publish_common.py': script_dir / 'publish_common.py',
+        'paper_reader_presentation.py': script_dir / 'paper_reader_presentation.py',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',

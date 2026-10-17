@@ -198,6 +198,7 @@ def render_packet(packet):
         score_line = publisher.format_complete_score_line(parsed)
         presentation = build_reader_presentation(
             projected,
+            publisher=publisher,
             plan=projected.get('apiReaderPlan'),
             resources=(projected.get('apiReaderResources') or {}).get('resources'),
             authors=(projected.get('apiReaderAuthors') or {}).get('authors'),

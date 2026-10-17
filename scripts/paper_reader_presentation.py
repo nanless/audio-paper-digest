@@ -15,11 +15,11 @@ import tempfile
 from blog_entry_loader import load_publish_to_blog
 
 
-def replay_resource_presentation(paper, source_text, publication_evidence=None):
+def replay_resource_presentation(paper, source_text, publication_evidence=None, *, publisher=None):
     """复用同一只读来源及声明核验桥；返回临时视图，不改原身份。"""
     if not isinstance(source_text, str) or hashlib.sha256(source_text.encode()).hexdigest() != paper.get('sourceSha256'):
         raise ValueError('资源展示必须绑定同篇封存全文 SHA。')
-    publisher = load_publish_to_blog()
+    publisher = publisher if publisher is not None else load_publish_to_blog()
     node = shutil.which('node')
     if not node:
         raise ValueError('资源展示的公共声明重放需要 Node.js。')
@@ -60,9 +60,30 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None):
     return value['resources']
 
 
+def resolve_reader_decision_display(publisher, paper, *, plan, resources, parsed):
+    """Resolve display fields through the caller's already loaded publisher.
+
+    This is a read-only resolver, not pure computation: the detailed summary
+    still undergoes its normal source/paid-stage replay. Callers retain their
+    own Reader/source gates and resource filtering. The returned strings grant
+    no publication eligibility and never replace saved evidence.
+    """
+    resource_block = publisher.render_verified_reader_resources(resources, paper=paper)
+    scoring_block = publisher.render_verified_reader_scoring_notes(paper, parsed=parsed)
+    summary = publisher._validated_detailed_core_summary(paper, parsed)
+    summary = summary or str(plan.get('oneSentenceThesis') or '').strip()
+    # Display-only correction shared by daily, conference and historical pages.
+    summary = summary.replace(
+        '音频推测推测解码 Audio Speculative Speculative Decoding',
+        '音频推测解码 Audio Speculative Decoding',
+    )
+    return {'summary': summary, 'resourceBlock': resource_block,
+            'scoringBlock': scoring_block}
+
+
 def build_reader_presentation(paper, *, plan, resources, authors,
                               exclude_resource_url=None, source_note='', source_text=None,
-                              publication_evidence=None):
+                              publication_evidence=None, publisher=None):
     """Use daily presentation rules without inventing an arXiv source identity.
 
     Callers must first validate their Reader and source contracts. Requiring the
@@ -77,13 +98,14 @@ def build_reader_presentation(paper, *, plan, resources, authors,
         raise ValueError('Reader 展示作者必须对应本篇保存的原作者记录。')
     if not isinstance(raw_resources, dict) or resources != raw_resources.get('resources'):
         raise ValueError('Reader 展示资源必须对应本篇保存的原资源记录。')
-    publisher = load_publish_to_blog()
+    publisher = publisher if publisher is not None else load_publish_to_blog()
     parsed = publisher.parse_analysis(paper.get('analysis', ''))
     if not isinstance(parsed, dict):
         raise ValueError('Reader 展示需要可重新解析的正式分析正文。')
     if publication_evidence is not None and source_text is None:
         raise ValueError('会议出版补充引文不能脱离同篇封存来源。')
-    visible_resources = (replay_resource_presentation(paper, source_text, publication_evidence) if source_text is not None
+    visible_resources = (replay_resource_presentation(
+        paper, source_text, publication_evidence, publisher=publisher) if source_text is not None
                          else copy.deepcopy(resources))
     excluded = False
     if exclude_resource_url is not None:
@@ -91,9 +113,9 @@ def build_reader_presentation(paper, *, plan, resources, authors,
                              if not exclude_resource_url(resource.get('originalUrl'))
                              and not exclude_resource_url(resource.get('finalUrl'))]
         excluded = len(visible_resources) != len(resources)
-    summary = publisher._validated_detailed_core_summary(paper, parsed)
-    summary = summary or str(plan.get('oneSentenceThesis') or '').strip()
-    resource_block = publisher.render_verified_reader_resources(visible_resources, paper=paper)
+    decision = resolve_reader_decision_display(
+        publisher, paper, plan=plan, resources=visible_resources, parsed=parsed)
+    resource_block = decision['resourceBlock']
     if source_text is not None:
         # A mentioned project URL does not prove third-party ownership or release.
         resource_block = resource_block.replace('- 第三方资源：', '- 论文所列链接：')
@@ -101,11 +123,11 @@ def build_reader_presentation(paper, *, plan, resources, authors,
         resource_block += ('\n\n预印本/扩展版链接未在会议页展示；'
                            '会议版来源见页首官方记录与 PDF。')
     return {
-        'summary': summary,
+        'summary': decision['summary'],
         'authors': copy.deepcopy(authors),
         'authorBlock': publisher.render_verified_reader_authors(authors, source_note=source_note),
         'resourceBlock': resource_block,
-        'scoringBlock': publisher.render_verified_reader_scoring_notes(paper, parsed=parsed),
+        'scoringBlock': decision['scoringBlock'],
     }
 
 

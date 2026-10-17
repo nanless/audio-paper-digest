@@ -631,6 +631,7 @@ def render_packet(packet):
     assets.extend(formula_assets)
     publisher = load_publish_to_blog()
     presentation = build_reader_presentation(paper, plan=plan, resources=resources,
+                                             publisher=publisher,
                                              authors=authors, exclude_resource_url=is_arxiv_url,
                                              source_text=packet.get('sourceText'),
                                              publication_evidence=packet.get('publicationEvidence'))
