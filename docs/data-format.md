@@ -108,7 +108,7 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 `--postprocess-only --source-corrections FILE` 读取 process 下独立的 `source-resource-corrections/` 或 `source-core-corrections/`。两者分别使用 `conference-source-resource-correction-{batch,receipt}-v1` 与 `conference-source-core-correction-{batch,receipt}-v1`，逐篇记录去掉中间的 `batch`/`receipt`。清单绑定实际状态文件 SHA、语义 SHA、完整唯一集合和每条记录字节；每条记录绑定固定新 UUID、原角色 CAS、来源/PDF、Reader 补丁、原费用及独立批准提案，权限不因共有保存器而合并。
 
-四种原角色为完整 Reader 父稿、当前 process 指针、最新实际失败及所选主文；有付费失败时主文必须来自最新失败。纯后处理的核心错误没有新付费子稿时，另精确绑定正常当前错误与失败状态。核心只改一条原句，其余十二节、资源和完整评分对象不变；资源修正仅重算作者归属及对应评分，不改主文。阶段记录如实标识本地执行，原模型阶段、检查点、请求及计数在不可变原包保留，不重签成新 API 响应。
+原角色包括完整 Reader 父稿、当前 process 指针、最新实际失败及所选主文；追加窗口另用 `originalFailedExecutionId` / `originalFailedCAS` 绑定公共加载器核验的许可前失败稿，并同样保存完整原目录。当前指针可以仍是完整父稿，不能把它冒充中间失败 UUID；有付费失败时主文必须来自最新失败。纯后处理的核心错误没有新付费子稿时，另精确绑定正常当前错误与失败状态。核心只改一条原句，其余十二节、资源和完整评分对象不变；资源修正仅重算作者归属及对应评分，不改主文。阶段记录如实标识本地执行，原模型阶段、检查点、请求及计数在不可变原包保留，不重签成新 API 响应。
 
 新稿 `conferenceSourceCorrection` 和完成义务绑定实际独立合同、process、新执行及物理清单 SHA；正常 Reader、评分、核心与完整资格的热核/保存冷核重放后签独立回执。采纳项 `sourceResourceCorrectionAdoption` 保留原状态/成员 SHA、原次数/失败及真实主文/Reader父身份，不复用 `readerRevision`。分析、来源、暂存页及原状态在全部成员锁内复核后原子采纳；旧完成凭证只投影到真实物理原包。详见[恢复与限制](conference-workflow.md#认证来源事实的零请求纠正)。
 

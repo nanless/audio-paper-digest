@@ -40,8 +40,11 @@ function admissionFixture(t) {
     const paper = { ...loaded.analysis.papers[0], sourceSha256: resources.sourceTextSha256,
         apiReaderArticle: 'Synthetic admission fixture, not a qualified Reader.', apiReaderPlan: {},
         apiReaderFigures: [], apiReaderResources: resources,
-        analysisManifest: { stages: { apiReaderArticle: { status: 'complete',
-            model: 'synthetic-offline-fixture', protocol: 'fixture-not-paid', contentMode: 'reader-source-only-v1' } } } };
+        analysis: require('./valid-analysis-fixture').validAnalysisText(),
+        analysisManifest: { sourceAcquisition: { sourceSha256: resources.sourceTextSha256 },
+            stages: { primaryAnalysis: { status: 'complete' }, coreSummaryRepair: { status: 'complete' },
+                scoringAudit: { status: 'complete' }, apiReaderArticle: { status: 'complete',
+                    model: 'synthetic-offline-fixture', protocol: 'fixture-not-paid', contentMode: 'reader-source-only-v1' } } } };
     paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle);
     paper.apiReaderPlanSha256 = hash(paper.apiReaderPlan);
     Object.assign(paper.analysisManifest.stages.apiReaderArticle, {
@@ -148,3 +151,83 @@ test('原CAS/完整集合/当前状态变化先阻断，不能覆盖另一个pai
 });
 
 module.exports = { admissionFixture };
+
+
+async function grantedSourceFixture(t) {
+    const f = admissionFixture(t);
+    const post = require('../scripts/lib/conference-postprocess');
+    // Only stage operations are doubles, with no model or publication claim.
+    // Grant registration, original failed/parent loaders, source and all CAS
+    // checks are the unmodified production implementation under test.
+    t.mock.method(post, 'readOriginalTagProof', () => ({ rules: {} }));
+    const orchestration = {
+        withPaperAnalysisLock: engine.withPaperAnalysisLock,
+        LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
+        getConferenceReaderRefreshUpstreamReason: () => null,
+        isSuccessfulAnalysisRecordForReadOnlyConferencePublication: () => false,
+        analyzePaperWithRetry: async paper => ({ success: false, result: paper,
+            error: 'synthetic fixture stops before any request', retryable: false })
+    };
+    const operations = { buildApiReaderResourceIdentity: require('../scripts/deep-analyzer').buildApiReaderResourceIdentity,
+        inspectSavedConferenceReaderCompletion: async () => null,
+        refreshApiReaderArticleFromSource: async () => { throw Error('synthetic fixture stops before any request'); } };
+    const input = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot };
+    await assert.rejects(adapter.refreshConferenceReader(input, { engine: orchestration, deep: operations }), /synthetic fixture/);
+    const failedExecutionId = adapter.readerRevisionExecutionId(f.parentExecutionId, f.loaded.analysisFileSha256);
+    const registered = require('./helpers/conference-recovery-grant-fixture').registerRecoveryFixture({
+        analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId, paperId: f.paperId });
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery({ ...input, failedExecutionId,
+        grantHandle: registered.handle }, { engine: orchestration, deep: operations }), /synthetic fixture/);
+    const authority = require('../scripts/lib/conference-recovery-grant').readRecoveryGrantMember(registered.handle, f.paperId);
+    const latest = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot,
+        executionId: authority.expectedExecutionId });
+    const failed = latest.recoveryWindow.failed;
+    const CAS = loaded => ({ analysisFileSha256: loaded.analysisFileSha256,
+        runFileSha256: loaded.runFileSha256, sourceFileSha256: loaded.sourceFileSha256 });
+    Object.assign(f.record, {
+        selectedMainExecutionId: latest.run.executionId, selectedMainCAS: CAS(latest),
+        latestFailedExecutionId: latest.run.executionId, latestFailedCAS: CAS(latest),
+        originalFailedExecutionId: failed.run.executionId, originalFailedCAS: CAS(failed),
+        originalResourceIdentitySha256: latest.analysis.papers[0].apiReaderResources.identitySha256
+    });
+    const state = JSON.parse(fs.readFileSync(f.stateFile));
+    const sync = () => {
+        state.stateSha256 = processApi.stateDigest(state); processApi.assertState(state); write(f.stateFile, state);
+        f.record.observedStateExecutionId = state.items[f.paperId].analysisRunId;
+        f.record.observedStateCAS = state.items[f.paperId].analysisRunId === f.parentExecutionId ? CAS(f.loaded) : CAS(failed);
+        f.record.observedItemSha256 = hash(state.items[f.paperId]);
+        f.manifest.stateFileSha256 = sha(fs.readFileSync(f.stateFile));
+        f.manifest.stateSha256 = state.stateSha256; f.save();
+    };
+    sync();
+    return { ...f, state, latest, failed, registered, sync };
+}
+
+test('真实grant原失败与完整父稿分离，process保留父指针或原失败指针均精确闭链', async t => {
+    const f = await grantedSourceFixture(t);
+    assert.notEqual(f.parentExecutionId, f.failed.run.executionId);
+    assert.equal(f.latest.recoveryWindow.failed.run.executionId, f.record.originalFailedExecutionId);
+    assert.equal(f.record.observedStateExecutionId, f.parentExecutionId);
+    const handle = api.openBatch(f.options);
+    const bound = api.batchDescription(handle).records[0];
+    assert.equal(bound.originalFailedCAS.analysisFileSha256, f.failed.analysisFileSha256);
+    assert.equal(bound.selectedMainExecutionId, f.latest.run.executionId);
+    // The existing public Reader revision remains the exact state locator when
+    // it is the actually observed pointer, rather than manufacturing a new one.
+    f.state.items[f.paperId].analysisRunId = f.failed.run.executionId;
+    f.state.items[f.paperId].readerRevision = structuredClone(f.failed.revision);
+    f.sync();
+    assert.ok(api.openBatch(f.options));
+    const original = structuredClone(f.record);
+    for (const alter of [
+        record => { delete record.originalFailedExecutionId; delete record.originalFailedCAS; },
+        record => { record.originalFailedExecutionId = f.parentExecutionId; },
+        record => { record.originalFailedCAS.analysisFileSha256 = '0'.repeat(64); },
+        record => { record.selectedMainExecutionId = f.parentExecutionId; record.selectedMainCAS = record.readerParentCAS; }
+    ]) {
+        Object.assign(f.record, structuredClone(original)); alter(f.record); f.save();
+        assert.throws(() => api.openBatch(f.options), /追加链|原实际失败|最新失败/);
+    }
+});

@@ -120,3 +120,17 @@ test('真实普通paid和operator阶段在非测试子进程完整重放，缺op
     assert.ok(plain > 0 && operator > 0);
     assert.equal(sha(fs.readFileSync(file)), sha(before));
 });
+
+test('核心私有FD不以operator JSON或伪来源字段替代真实会议core-local凭证', () => {
+    const base = require('./valid-analysis-fixture').validAnalysisPaper('fixture');
+    const paper = structuredClone(base);
+    Object.assign(paper.analysisManifest.stages.coreSummaryRepair, {
+        executionKind: 'operator', model: 'operator-local',
+        sourceCoreCorrection: { contract: 'conference-source-core-correction-v1' }
+    });
+    const before = JSON.stringify(paper);
+    const result = execute({ mode: 'stage-binding', paper, sourceText: '' });
+    assert.equal(result.status, 1);
+    assert.match(result.value.issue, /定位器|来源纠正|core replay/i);
+    assert.equal(JSON.stringify(paper), before);
+});

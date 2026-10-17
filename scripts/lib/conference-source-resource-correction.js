@@ -257,8 +257,10 @@ function roleRefs(record) {
         observedState: { executionId: record.observedStateExecutionId, CAS: record.observedStateCAS },
         main: { executionId: record.selectedMainExecutionId, CAS: record.selectedMainCAS }
     };
-    if (record.latestFailedExecutionId !== null) roles.latestFailed = {
-        executionId: record.latestFailedExecutionId, CAS: record.latestFailedCAS };
+    if (record.latestFailedExecutionId !== null) {
+        roles.originalFailed = { executionId: record.originalFailedExecutionId, CAS: record.originalFailedCAS };
+        roles.latestFailed = { executionId: record.latestFailedExecutionId, CAS: record.latestFailedCAS };
+    }
     return roles;
 }
 function verifyOriginals(batch, row) {
@@ -322,6 +324,8 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
             if (read(r.coreCorrection.proposalFile).sha256 !== r.coreCorrection.proposalFileSha256) fail('核心提案原字节不同');
         } else if (r.coreCorrection !== undefined) fail('资源scope不能新增核心编辑');
         children.add(r.childExecutionId);
+        if (r.latestFailedExecutionId === null
+            && (r.originalFailedExecutionId != null || r.originalFailedCAS != null)) fail('没有追加失败时不能附带未核验的原失败角色');
         const parent = load(r.readerParentExecutionId, base.analysisRoot);
         const originalPaper = parent.analysis.papers[0], originalReader = originalPaper.analysisManifest?.stages?.apiReaderArticle;
         if (originalReader?.status !== 'complete' || originalReader.executionKind === 'operator'
@@ -338,10 +342,26 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
         pinLoaded(main, r.selectedMainCAS, '最新主文基础');
         if (latest) {
             pinLoaded(latest, r.latestFailedCAS, '最新实际失败');
+            const originalFailed = latest.recoveryWindow?.failed;
             if (item.status === 'complete' || r.selectedMainExecutionId !== r.latestFailedExecutionId
                 || latest.revision?.contract !== 'conference-reader-recovery-window-v1'
-                || latest.revision.failedExecutionId !== r.observedStateExecutionId
-                || latest.revision.parentExecutionId !== r.readerParentExecutionId) fail('最新失败不是原指针对应的真实追加子运行');
+                || !UUID.test(r.originalFailedExecutionId || '') || !originalFailed
+                || r.originalFailedExecutionId !== originalFailed.run.executionId
+                || latest.revision.failedExecutionId !== r.originalFailedExecutionId
+                || latest.revision.parentExecutionId !== r.readerParentExecutionId
+                || originalFailed.parent.run.executionId !== r.readerParentExecutionId
+                || latest.parent.run.executionId !== r.readerParentExecutionId
+                || ![r.readerParentExecutionId, r.originalFailedExecutionId].includes(r.observedStateExecutionId)) {
+                fail('最新失败未绑定原完成父稿、原失败child和真实process指针的同一追加链');
+            }
+            pinLoaded(originalFailed, r.originalFailedCAS, '原实际失败child');
+            pinLoaded(originalFailed.parent, r.readerParentCAS, '原失败child的完整父稿');
+            pinLoaded(latest.parent, r.readerParentCAS, '追加窗口的完整父稿');
+            pinLoaded(observed, r.observedStateExecutionId === r.readerParentExecutionId
+                ? r.readerParentCAS : r.originalFailedCAS, '原process指针真实链成员');
+            if (originalFailed.run.paperId !== r.paperId
+                || originalFailed.sourceFileSha256 !== parent.sourceFileSha256
+                || originalFailed.run.sourceSnapshotSha256 !== r.sourceSnapshotSha256) fail('原失败child来源不同');
         } else if (item.status !== 'complete' || r.selectedMainExecutionId !== r.observedStateExecutionId) {
             const issue = base.policy.kind === 'source_core_correction'
                 ? require('../analysis-contract').validateCoreSummarySemanticContract(main.analysis.papers[0].analysis,
