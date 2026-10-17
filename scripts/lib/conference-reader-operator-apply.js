@@ -9,9 +9,10 @@ function fail(message) {
     throw Object.assign(new Error('会议人工 Reader 保存拒绝：' + message), {
         code: 'CONFERENCE_READER_OPERATOR_APPLY_REJECTED', scope: 'paper', retryable: false });
 }
-function protectedProjection(paper) {
+function protectedProjection(paper, { checkpointImages = false } = {}) {
     const stages = structuredClone(paper.analysisManifest?.stages || {});
     delete stages.apiReaderArticle;
+    if (checkpointImages) delete stages.imageSupplement;
     const checkpoints = structuredClone(paper.analysisStageCheckpoints || {});
     delete checkpoints.apiReaderArticle;
     return { analysis: paper.analysis, sourceSha256: paper.sourceSha256,
@@ -55,13 +56,17 @@ async function applyCorrection({ batchHandle, analysisRoot, executionId, planHan
                 ...sealedAdoptionIdentity(sealed), revision: sealed.revision, resumed: true };
         }
         const result = await corrections.withCorrection(batchHandle, { executionId, planHandle, sourceRoot }, async () => {
-            const before = loaded.analysis.papers[0], paper = structuredClone(before);
+            const prepared = corrections.prepareReaderInput();
+            const before = prepared.paper, paper = structuredClone(before);
             const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
-            const upstream = engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules: rules });
+            const upstream = prepared.mainCheckpointRecovery ? null
+                : engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules: rules });
             if (upstream) fail('人工 Reader 无权修正上游：' + upstream);
             const result = await deep.refreshApiReaderArticleFromSource(paper, loaded.source.sourceDetails,
                 { preserveReaderUpstream: true, readerAuthors: structuredClone(paper.apiReaderAuthors) });
-            if (!isDeepStrictEqual(protectedProjection(result), protectedProjection(before))) fail('修正改变 Reader 以外的原正文或阶段');
+            corrections.finalizeCheckpointImages(result);
+            const protectOptions = { checkpointImages: Boolean(prepared.mainCheckpointRecovery) };
+            if (!isDeepStrictEqual(protectedProjection(result, protectOptions), protectedProjection(before, protectOptions))) fail('修正改变 Reader 以外的原正文或阶段');
             if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(result, { tagRules: rules })) fail('正常整篇资格未通过');
             const receipt = corrections.sealCorrection(result);
             receipt.assertUnchanged();

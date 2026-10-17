@@ -203,6 +203,88 @@ function withCorrection(handle, { executionId, planHandle, sourceRoot }, callbac
         require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(batch.grantHandle, options, () =>
             require('./analysis-stop-control').withModelRequestsForbidden(() => scope.run(active, callback))));
 }
+
+// This view restores only this exact failed run's already-complete scientific
+// checkpoint. Original before bytes, failed stages and counters stay archived.
+const MAIN_CHECKPOINT = 'conference-reader-main-checkpoint-recovery-v1';
+const checkpointStable = value => require('./fresh-rewrite-run').stableHash(value);
+const CHECKPOINT_FAILURE_FIELDS = Object.freeze(['error', 'errorCode', 'errorCategory', 'errorScope', 'errorStatus',
+    'retryable', 'latestAnalysisAttemptError', 'latestAnalysisAttemptAt', 'latestAnalysisAttemptErrorCode',
+    'latestAnalysisAttemptRetryable', 'latestAnalysisAttemptCategory', 'latestAnalysisAttemptStatus',
+    'latestAnalysisAttemptScope', 'latestAnalysisAttemptErrorCategory',
+    'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']);
+function projectMainCheckpoint(active) {
+    const raw = active.rawBeforePaper || active.beforePaper, r = active.row.record;
+    if (raw.analysis !== null) {
+        if (r.mainCheckpointRecovery !== undefined) fail('非空主文不能声明评分检查点恢复');
+        active.rawBeforePaper = raw; active.beforePaper = raw; active.mainCheckpointRecovery = null;
+        return raw;
+    }
+    const source = active.loaded.source.sourceDetails;
+    const context = require('./conference-analysis-context').getConferenceAnalysisContext();
+    const stages = raw.analysisManifest?.stages, checkpoint = raw.analysisStageCheckpoints?.scoringAudit;
+    const images = raw.imageManifest, download = stages?.imageDownload;
+    if (!context || context.paperId !== r.paperId || context.executionId !== r.executionId
+        || context.executionDir !== active.loaded.directory || context.readerPdfSourceHandle !== active.pdf
+        || active.loaded.revision.mode !== 'normal-analysis' || active.beforeRun?.executionId !== r.executionId
+        || raw.id !== r.paperId || raw.source !== 'conference'
+        || source.source !== 'conference_pdf_text' || source.sourceId !== r.paperId
+        || sha(source.text) !== r.sourceSha256 || raw.sourceSha256 !== r.sourceSha256
+        || raw.analysisManifest?.sourceAcquisition?.sourceSha256 !== r.sourceSha256
+        || typeof checkpoint !== 'string' || !checkpoint.trim() || raw.analysisCheckpoint !== checkpoint
+        || stages?.scoringAudit?.status !== 'complete' || sha(checkpoint) !== stages.scoringAudit.outputAnalysisSha256
+        || stages.apiReaderArticle?.status !== 'invalid_output'
+        || !/^(?:READER_|CONFERENCE_READER_)/u.test(raw.latestAnalysisAttemptErrorCode || raw.errorCode || '')
+        || !(raw.latestAnalysisAttemptError || raw.error) || stages.imageSupplement !== undefined
+        || download?.status !== 'no_candidates' || download.attempted !== 0 || download.downloaded !== 0
+        || !Array.isArray(download.outcomes) || download.outcomes.length || images?.totalFound !== 0
+        || ['candidates', 'downloaded', 'selected', 'downloadOutcomes'].some(key => !Array.isArray(images?.[key]) || images[key].length)
+        || !Array.isArray(source.imageInfos) || source.imageInfos.length) fail('空主文缺少同执行的完整评分、原Reader失败或真实零图来源');
+    require('./conference-source-context').readerPdfSourceForContext(active.pdf).assertUnchanged();
+    const recovery = { contract: MAIN_CHECKPOINT, rawAnalysisValue: null, rawPaperSha256: checkpointStable(raw),
+        analysisCheckpointSha256: sha(raw.analysisCheckpoint), scoringCheckpointSha256: sha(checkpoint),
+        scoringOutputAnalysisSha256: stages.scoringAudit.outputAnalysisSha256,
+        scoringStageSha256: checkpointStable(stages.scoringAudit), readerStageSha256: checkpointStable(stages.apiReaderArticle),
+        originalFailureFieldsSha256: checkpointStable(Object.fromEntries(CHECKPOINT_FAILURE_FIELDS.filter(key => Object.hasOwn(raw, key)).map(key => [key, raw[key]]))),
+        readerRevisionProgressSha256: checkpointStable(active.beforeAnalysis.readerRevisionProgress ?? null), missingImageSupplement: true };
+    if (!isDeepStrictEqual(r.mainCheckpointRecovery, recovery)) fail('评分检查点恢复声明与原完整失败包不同');
+    const view = { ...clone(raw), analysis: checkpoint, parsed: require('../utils').parseAnalysis(checkpoint) };
+    // Only this new normal-analysis checkpoint branch uses the scientific gate.
+    // Nonempty inherited main text retains its original-registry preflight.
+    if (!require('./completed-reader-upstream').completedReaderUpstream(view, source)) fail('当前评分检查点未通过完整科学上游核验');
+    active.rawBeforePaper = raw; active.beforePaper = view; active.mainCheckpointRecovery = recovery;
+    return view;
+}
+function prepareReaderInput() {
+    const active = scope.getStore();
+    if (!active || active.cold || !require('../analysis-engine').paperAnalysisLockHeld({ id: active.row.record.paperId })) fail('检查点输入须在真实热人工scope及论文锁内');
+    assertOriginals(active);
+    const paper = projectMainCheckpoint(active);
+    return { paper: clone(paper), mainCheckpointRecovery: active.mainCheckpointRecovery ? clone(active.mainCheckpointRecovery) : null };
+}
+function assertCheckpointImageSupplement(active, paper, requireComplete = false) {
+    if (!active.mainCheckpointRecovery) return;
+    const saved = paper.analysisManifest?.stages?.imageSupplement;
+    if (saved === undefined) {
+        if (requireComplete || active.cold) fail('评分检查点恢复尚未正常完成官方图收尾');
+        return;
+    }
+    const replay = clone(paper); delete replay.analysisManifest.stages.imageSupplement;
+    const expected = require('../deep-analyzer').deriveConferenceLocalOfficialImageSupplement(replay,
+        active.loaded.source.sourceDetails, { appliedAt: active.row.record.appliedAt });
+    if (!expected || !isDeepStrictEqual(saved, expected)) fail('官方图阶段不是当前正常函数的精确派生');
+}
+function finalizeCheckpointImages(paper) {
+    const active = scope.getStore(); if (!active || active.cold) fail('官方图收尾须在真实热人工scope');
+    if (!active.mainCheckpointRecovery) return paper;
+    if (paper.analysisManifest?.stages?.imageSupplement !== undefined) fail('原缺失官方图阶段已被提前填入');
+    const expected = require('../deep-analyzer').deriveConferenceLocalOfficialImageSupplement(paper,
+        active.loaded.source.sourceDetails, { appliedAt: active.row.record.appliedAt });
+    if (!expected) fail('没有正常官方图收尾结果');
+    paper.analysisManifest.stages.imageSupplement = expected;
+    assertCheckpointImageSupplement(active, paper, true); return paper;
+}
+
 function current(paper, identity) {
     const active = scope.getStore(); if (!active) return null;
     const actual = require('./conference-analysis-context').getConferenceAnalysisContext(), r = active.row.record;
@@ -230,6 +312,7 @@ function current(paper, identity) {
         originalIdentitySha256: hash(active.candidate.identity), currentInputIdentitySha256: hash(identity),
         beforeDraftSha256: hash(active.candidate.payload.draft), afterDraftSha256: hash(active.draft),
         retainedAttempts: active.candidate.payload.attempts, retainedFullAttempts: active.candidate.payload.fullAttempts,
+        ...(active.mainCheckpointRecovery ? { mainCheckpointRecovery: clone(active.mainCheckpointRecovery) } : {}),
         appliedAt: r.appliedAt };
     active.proof = proof;
     return { payload: { ...clone(active.candidate.payload), draft: clone(active.draft), rawDraft: JSON.stringify(active.draft) }, proof: clone(proof) };
@@ -295,13 +378,17 @@ function protectedPaper(paper) {
     for (const key of mutableReaderFields) delete value[key];
     for (const key of Object.keys(value)) if (/^latestAnalysisAttempt/u.test(key)
         || ['error','errorCode','errorCategory','errorStatus','errorScope','retryable'].includes(key)) delete value[key];
-    if (value.analysisManifest?.stages) delete value.analysisManifest.stages.apiReaderArticle;
+    if (value.analysisManifest?.stages) {
+        delete value.analysisManifest.stages.apiReaderArticle;
+        if (scope.getStore()?.mainCheckpointRecovery) delete value.analysisManifest.stages.imageSupplement;
+    }
     if (value.analysisManifest?.contracts) for (const key of ['apiReaderArticle','apiReaderSourceBindings','apiReaderAuthorIdentity',
         'apiReaderResourceIdentity','apiReaderFigurePersistence','readerResourceClaims']) delete value.analysisManifest.contracts[key];
     return value;
 }
 function assertOutput(active, paper) {
     assertOriginals(active);
+    assertCheckpointImageSupplement(active, paper);
     if (!isDeepStrictEqual(protectedPaper(paper), protectedPaper(active.beforePaper))) fail('人工Reader改变了受保护主文、评分、标签或非Reader阶段');
     const stage = paper.analysisManifest?.stages?.apiReaderArticle, proof = active.proof;
     if (!proof || !isDeepStrictEqual(stage?.operatorProvenance, proof) || stage.executionKind !== 'operator'
@@ -340,6 +427,7 @@ function sealCorrection(paper) {
     const active = scope.getStore(); if (!active || active.cold) fail('只有真实热人工scope能封存');
     if (!require('../analysis-engine').paperAnalysisLockHeld({ id: paper.id })) fail('封存人工输出必须持有原论文锁');
     assertOutput(active, paper);
+    assertCheckpointImageSupplement(active, paper, true);
     const engine = require('../analysis-engine'), rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
     if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) fail('正常整篇资格尚未通过');
     assertOriginals(active);
@@ -430,18 +518,20 @@ function withSavedPaper(paper, callback) {
         || read(path.join(loaded.directory, 'reader-revision.json')).sha256 !== body.revisionFileSha256) fail('冷核原候选/账/修订变化');
     const restored = { batch, row, loaded, pdf, candidate: candidate.envelope, draft: replay(row.record, candidate.envelope),
         pins: { entries, materials: body.retainedMaterials, ledgerSha256: body.ledgerFileSha256, sourceFileSha256: row.record.sourceFileSha256,
-            revisionFileSha256: body.revisionFileSha256 }, beforePaper: beforeAnalysis.value.papers[0], cold: true,
+            revisionFileSha256: body.revisionFileSha256 }, beforePaper: beforeAnalysis.value.papers[0],
+        beforeAnalysis: beforeAnalysis.value, beforeRun: beforeRun.value, cold: true,
         proof: clone(proof), currentIdentity: body.currentIdentity };
     assertCompatibleIdentity(restored.candidate.identity, body.currentIdentity);
     const options = { paperId: paper.id, executionId: proof.executionId, executionDir: loaded.directory, readerPdfSourceHandle: pdf };
     return context.withConferenceAnalysisSource({ ...options, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () =>
         require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(grantHandle, options, () =>
             require('./analysis-stop-control').withModelRequestsForbidden(() => scope.run(restored, () => {
+                projectMainCheckpoint(restored);
                 const replayed = current(paper, body.currentIdentity);
                 if (!isDeepStrictEqual(replayed.proof, proof)) fail('冷核逻辑身份或原候选证明不一致');
                 assertOutput(restored, paper); return callback();
             }))));
 }
-module.exports = { CONTRACT, CORRECTION, RECEIPT, openCorrectionBatch, withCorrection, current, execution, replay,
+module.exports = { prepareReaderInput, finalizeCheckpointImages, CONTRACT, CORRECTION, RECEIPT, openCorrectionBatch, withCorrection, current, execution, replay,
     readVerifiedConferenceReaderPrompts, isVerifiedConferenceReaderPromptDeclaration,
     sealCorrection, withSavedPaper, hasVerifiedOperatorProvenance, assertMayAccessNetwork, assertSavedBatchMember };
