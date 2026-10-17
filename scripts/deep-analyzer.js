@@ -10124,6 +10124,13 @@ async function finalizeConferenceLocalSourceCorrection(paper, sourceDetails) {
                 sourceCorrectionAppliedAt: input.provenance.appliedAt }
         });
         local.assertFinalizerInput(input, final);
+        if (input.parent.analysisManifest.stages.imageSupplement === undefined) {
+            const official = deriveConferenceLocalOfficialImageSupplement(final, source,
+                { appliedAt: input.provenance.appliedAt });
+            if (official) {
+                final.analysisManifest.stages.imageSupplement = official;
+            }
+        }
         local.assertVerified(final);
         // The private source module can close only the exact original Reader
         // failure after actual Reader/source/upstream validation. No generic
@@ -10700,13 +10707,57 @@ function markOfficialReaderImageDownload(manifest, fingerprint) {
     });
 }
 
-function markOfficialReaderImageSupplement(manifest, figures, fingerprint, promptTextContract) {
+function markOfficialReaderImageSupplement(manifest, figures, fingerprint, promptTextContract, updatedAt) {
     markRecoveryStage(manifest, 'imageSupplement', 'skipped', {
         reason: 'api_reader_v3_official_figures_bound',
         officialFigureCount: figures.length,
         officialFiguresSha256: stableFingerprint(figures),
         fingerprint, promptTextContract
     });
+    if (updatedAt !== undefined) {
+        manifest.stages.imageSupplement.updatedAt = updatedAt;
+        manifest.updatedAt = updatedAt;
+    }
+}
+
+// Pure stage derivation for the private source-local finalizer and its cold
+// replay. It grants no Reader/source authority and never saves or fetches.
+function deriveConferenceLocalOfficialImageSupplement(paper, sourceDetails, { appliedAt } = {}) {
+    const manifest = paper?.analysisManifest;
+    if (manifest?.stages?.imageSupplement !== undefined) return null;
+    const fail = () => { throw new Error('会议本地Reader官方图收尾的原空候选、评分或新Reader绑定不同'); };
+    const download = manifest?.stages?.imageDownload, images = paper?.imageManifest;
+    const reader = manifest?.stages?.apiReaderArticle, score = manifest?.stages?.scoringAudit;
+    const checkpoint = paper?.analysisStageCheckpoints?.scoringAudit;
+    if (paper?.source !== 'conference' || sourceDetails?.source !== 'conference_pdf_text'
+        || sourceDetails.sourceId !== paper.id || typeof sourceDetails.text !== 'string'
+        || crypto.createHash('sha256').update(sourceDetails.text).digest('hex') !== paper.sourceSha256
+        || manifest?.sourceAcquisition?.sourceSha256 !== paper.sourceSha256
+        || download?.status !== 'no_candidates' || download.attempted !== 0 || download.downloaded !== 0
+        || !Array.isArray(download.outcomes) || download.outcomes.length || images?.totalFound !== 0
+        || ['candidates', 'downloaded', 'selected', 'downloadOutcomes'].some(key =>
+            !Array.isArray(images?.[key]) || images[key].length)
+        || !Array.isArray(sourceDetails.imageInfos) || sourceDetails.imageInfos.length
+        || !hasCompleteApiReaderFigureBinding(paper, manifest)
+        || reader.executionKind !== 'operator' || reader.model !== 'operator-local'
+        || reader.protocol !== 'local_operator' || reader.newReaderApiRequests !== 0
+        || typeof paper.apiReaderArticle !== 'string'
+        || reader.articleSha256 !== crypto.createHash('sha256').update(paper.apiReaderArticle).digest('hex')
+        || reader.articleSha256 !== paper.apiReaderArticleSha256
+        || reader.planSha256 !== stableFingerprint(paper.apiReaderPlan)
+        || reader.planSha256 !== paper.apiReaderPlanSha256
+        || score?.status !== 'complete' || score.scoringContract !== 'api-scoring-audit-v2'
+        || typeof checkpoint !== 'string' || !checkpoint.trim()
+        || checkpoint !== paper.analysis || checkpoint !== paper.analysisCheckpoint
+        || crypto.createHash('sha256').update(checkpoint).digest('hex') !== score.outputAnalysisSha256
+        || typeof appliedAt !== 'string' || !Number.isFinite(Date.parse(appliedAt))
+        || reader.operatorProvenance?.appliedAt !== appliedAt) fail();
+    const promptTextContract = currentPromptTextContract('imageSupplement');
+    const fingerprint = buildImageSupplementFingerprint(
+        buildImageSupplementBaseFingerprint(promptTextContract), [], [], checkpoint);
+    const derived = { stages: {} };
+    markOfficialReaderImageSupplement(derived, paper.apiReaderFigures, fingerprint, promptTextContract, appliedAt);
+    return derived.stages.imageSupplement;
 }
 
 // Finish only the daily legacy work explicitly deferred before Reader. This
@@ -20458,6 +20509,7 @@ module.exports = {
     buildCoreSummaryBindingBody,
     finalizeApiReaderRefresh,
     replayApiReaderFinalDisplay, finalizeConferenceLocalSourceCorrection,
+    deriveConferenceLocalOfficialImageSupplement,
     finalizeOperatorApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,

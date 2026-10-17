@@ -345,3 +345,138 @@ test('已有child冲突像素、错原路径或科学说明拒绝，不覆盖父
     f.injected[0].caption = 'changed scientific caption';
     assert.throws(() => f.routine(f.input, f.injected), /科学说明/);
 });
+
+// Execute the production private calculations without exporting a capability.
+// These are narrow projection/validation tests, not a full Reader qualification.
+function privateCalculations() {
+    const sourceFile = require.resolve('../scripts/lib/conference-source-resource-correction');
+    const source = fs.readFileSync(sourceFile, 'utf8');
+    const body = (name, next) => source.slice(source.indexOf(`function ${name}(`), source.indexOf(`function ${next}(`));
+    const fields = source.match(/const FAILURE_FIELDS = Object\.freeze\((\[[\s\S]*?\])\);/u)[1];
+    const state = { cold: false };
+    const output = require('node:vm').runInNewContext(
+        `const FAILURE_FIELDS = ${fields};\n`
+        + body('projectSelectedMain', 'prepareFinalizerInput')
+        + body('assertPairedCoreAudits', 'deriveCoreAudit')
+        + body('assertRecoveredImageSupplement', 'assertOutput')
+        + '\n({projectSelectedMain, assertPairedCoreAudits, assertRecoveredImageSupplement, FAILURE_FIELDS})', {
+            require: require('node:module').createRequire(sourceFile), sha, stable: hash,
+            clone: structuredClone, CONTRACT: api.CONTRACT, current: () => state,
+            fail: message => { throw Error(message); },
+            equal: (actual, expected, message) => assert.deepStrictEqual(
+                structuredClone(actual), structuredClone(expected), message)
+        });
+    return { ...output, state };
+}
+
+test('仅原null主文可恢复三SHA相同评分检查点，原失败/次数/原包不变', () => {
+    const h = privateCalculations();
+    const checkpoint = require('./valid-analysis-fixture').validAnalysisText();
+    const raw = { analysis: null, parsed: null, analysisCheckpoint: checkpoint,
+        analysisStageCheckpoints: { scoringAudit: checkpoint },
+        imageManifest: { totalFound: 0, candidates: [], downloaded: [], selected: [], downloadOutcomes: [] },
+        latestAnalysisAttemptError: 'Original Reader failure', latestAnalysisAttemptErrorCode: 'READER_REPAIR_NO_PROGRESS',
+        latestAnalysisAttemptErrorCategory: 'reader_recovery', latestAnalysisAttemptRetryable: false,
+        analysisManifest: { stages: {
+            scoringAudit: { status: 'complete', outputAnalysisSha256: sha(checkpoint), attempts: 1 },
+            apiReaderArticle: { status: 'invalid_output', attempts: 6, fullAttempts: 2 },
+            imageDownload: { status: 'no_candidates', attempted: 0, downloaded: 0, outcomes: [] }
+        } } };
+    const loaded = { analysis: { papers: [raw], readerRevisionProgress: { attempts: 3, failures: ['original'] } } };
+    const record = { contract: api.CONTRACT, selectedMainExecutionId: 'latest', latestFailedExecutionId: 'latest',
+        mainCheckpointRecovery: { contract: 'conference-source-main-checkpoint-recovery-v1', rawAnalysisValue: null,
+            rawPaperSha256: hash(raw), analysisCheckpointSha256: sha(checkpoint), scoringCheckpointSha256: sha(checkpoint),
+            scoringOutputAnalysisSha256: sha(checkpoint), scoringStageSha256: hash(raw.analysisManifest.stages.scoringAudit),
+            readerStageSha256: hash(raw.analysisManifest.stages.apiReaderArticle),
+            originalFailureFieldsSha256: hash(Object.fromEntries(h.FAILURE_FIELDS.filter(key => Object.hasOwn(raw, key)).map(key => [key, raw[key]]))),
+            readerRevisionProgressSha256: hash(loaded.analysis.readerRevisionProgress), missingImageSupplement: true } };
+    const before = structuredClone(loaded);
+    const projected = h.projectSelectedMain(loaded, record);
+    assert.equal(projected.parent.analysis, checkpoint);
+    assert.deepEqual(projected.parent.parsed, require('../scripts/utils').parseAnalysis(checkpoint));
+    const restored = structuredClone(projected.parent); restored.analysis = null; restored.parsed = null;
+    assert.deepEqual(restored, raw);
+    assert.deepEqual(loaded, before);
+    const changes = [
+        x => { x.analysisCheckpoint += 'changed'; },
+        x => { x.analysisStageCheckpoints.scoringAudit += 'changed'; },
+        x => { x.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = '0'.repeat(64); },
+        x => { x.analysisManifest.stages.scoringAudit.status = 'invalid_output'; },
+        x => { x.latestAnalysisAttemptErrorCode = 'CORE_SUMMARY_INVALID'; },
+        x => { x.analysisManifest.stages.apiReaderArticle.status = 'complete'; },
+        x => { x.analysisManifest.stages.imageSupplement = { status: 'skipped' }; },
+        x => { x.imageManifest.candidates.push({}); },
+        x => { x.analysisManifest.stages.imageDownload.attempted = 1; }
+    ];
+    for (const change of changes) {
+        const bad = structuredClone(loaded); change(bad.analysis.papers[0]);
+        assert.throws(() => h.projectSelectedMain(bad, record));
+    }
+    const badRecord = structuredClone(record); badRecord.mainCheckpointRecovery.rawPaperSha256 = '0'.repeat(64);
+    assert.throws(() => h.projectSelectedMain(loaded, badRecord), /恢复声明不同/);
+    const advanced = structuredClone(loaded); advanced.analysis.readerRevisionProgress.attempts++;
+    assert.throws(() => h.projectSelectedMain(advanced, record), /恢复声明不同/);
+    const ordinary = structuredClone(loaded); ordinary.analysis.papers[0].analysis = checkpoint;
+    assert.throws(() => h.projectSelectedMain(ordinary, record), /非空主文/);
+    assert.equal(h.projectSelectedMain(ordinary, {}).parent, ordinary.analysis.papers[0]);
+});
+
+test('核心paired validation只保留已严格通过原audit，canonical仅理由措辞且前后exact', () => {
+    const h = privateCalculations();
+    const original = { dimensions: { openSource: { score: 0, reason: 'Original source-bound reason' },
+        innovation: { score: 1.2, reason: 'Unchanged' } }, total: 7, capsApplied: [], confidence: '中' };
+    const canonical = structuredClone(original);
+    canonical.dimensions.openSource.reason = 'Current canonical validation wording';
+    const before = structuredClone({ original, canonical });
+    const proof = h.assertPairedCoreAudits(original, structuredClone(original), canonical, structuredClone(canonical));
+    assert.equal(proof.originalAuditStrictSha256, hash(original));
+    assert.equal(proof.validationCanonicalSha256, hash(canonical));
+    assert.notEqual(proof.originalAuditStrictSha256, proof.validationCanonicalSha256);
+    assert.deepEqual({ original, canonical }, before);
+    for (const change of [
+        value => { value.dimensions.innovation.reason = 'different'; },
+        value => { value.dimensions.openSource.score = 1; },
+        value => { value.total = 8; },
+        value => { value.capsApplied.push('new cap'); },
+        value => { value.confidence = '高'; }
+    ]) {
+        const bad = structuredClone(canonical); change(bad);
+        assert.throws(() => h.assertPairedCoreAudits(original, structuredClone(original), bad, structuredClone(bad)));
+    }
+    const changedAfter = structuredClone(canonical); changedAfter.dimensions.openSource.reason += ' changed';
+    assert.throws(() => h.assertPairedCoreAudits(original, original, canonical, changedAfter), /归一不同/);
+    const strictDifferent = structuredClone(original); strictDifferent.dimensions.innovation.score = 1;
+    assert.throws(() => h.assertPairedCoreAudits(original, strictDifferent, canonical, canonical), /严格重验/);
+});
+
+test('检查点恢复的官方图阶段热中间态不可冷保存，必须按正常函数exact重放', () => {
+    const h = privateCalculations(), deep = require('../scripts/deep-analyzer');
+    const { paper, sourceDetails } = require('./reader-signed-draft-fixture').fixture();
+    paper.id = 'conference:interspeech:2026:conference-paper-id:fixture26_interspeech'; paper.source = 'conference';
+    const source = { ...sourceDetails, source: 'conference_pdf_text', sourceId: paper.id, imageInfos: [] };
+    const appliedAt = '2026-10-18T10:00:00.000+08:00';
+    paper.analysis = paper.analysisCheckpoint = 'Synthetic stage-only scoring checkpoint';
+    paper.analysisStageCheckpoints = { scoringAudit: paper.analysis };
+    paper.imageManifest = { totalFound: 0, candidates: [], downloaded: [], selected: [], downloadOutcomes: [] };
+    Object.assign(paper.analysisManifest.stages, {
+        imageDownload: { status: 'no_candidates', attempted: 0, downloaded: 0, outcomes: [] },
+        scoringAudit: { status: 'complete', scoringContract: 'api-scoring-audit-v2', outputAnalysisSha256: sha(paper.analysis) }
+    });
+    Object.assign(paper.analysisManifest.stages.apiReaderArticle, { executionKind: 'operator', model: 'operator-local',
+        protocol: 'local_operator', newReaderApiRequests: 0, operatorProvenance: { appliedAt } });
+    const input = { mainCheckpointRecovery: { missingImageSupplement: true }, sourceDetails: source, provenance: { appliedAt } };
+    h.assertRecoveredImageSupplement(input, paper);
+    assert.throws(() => h.assertRecoveredImageSupplement(input, paper, true), /尚未完成/);
+    h.state.cold = true;
+    assert.throws(() => h.assertRecoveredImageSupplement(input, paper), /尚未完成/);
+    const expected = deep.deriveConferenceLocalOfficialImageSupplement(paper, source, { appliedAt });
+    paper.analysisManifest.stages.imageSupplement = expected;
+    const before = structuredClone(paper);
+    h.assertRecoveredImageSupplement(input, paper);
+    assert.deepEqual(paper, before);
+    paper.analysisManifest.stages.imageSupplement.officialFigureCount++;
+    assert.throws(() => h.assertRecoveredImageSupplement(input, paper));
+    paper.analysisManifest.stages.imageSupplement = expected;
+    paper.analysisManifest.stages.imageDownload.attempted = 1;
+    assert.throws(() => h.assertRecoveredImageSupplement(input, paper));
+});

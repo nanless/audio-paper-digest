@@ -112,6 +112,8 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 新稿 `conferenceSourceCorrection` 和完成义务绑定实际独立合同、process、新执行及物理清单 SHA；正常 Reader、评分、核心与完整资格的热核/保存冷核重放后签独立回执。采纳项 `sourceResourceCorrectionAdoption` 保留原状态/成员 SHA、原次数/失败及真实主文/Reader父身份，不复用 `readerRevision`。分析、来源、暂存页及原状态在全部成员锁内复核后原子采纳；旧完成凭证只投影到真实物理原包。详见[恢复与限制](conference-workflow.md#认证来源事实的零请求纠正)。
 
+显式最新评分检查点恢复另绑定原 `analysis:null`、原 Reader 失败、当前评分阶段及实际检查点 SHA；检查点、活动正文检查点和评分输出必须是同一正文。只恢复私有正文/解析视图，原文件与费用不变。原无图片候选和下载的未收尾 `imageSupplement` 必须在真实新 Reader 完成后由同一公共官方图逻辑派生并冷重放。核心审计保留原完整对象时，记录原/新核心的公共归一校验结果 SHA 与原审计 SHA，二者分别核验，不混充同一字节。
+
 ## 批次轮次与人工建议的诊断
 
 共享批量调用返回 `rounds`、`failedIds`、`unstartedIds` 和 `manualHandoff`。每轮的 `inputIds` 是该轮固定集合；`attemptedIds`、`successIds`、`skippedIds`、`failedIds`、`retryableFailedIds` 和 `unstartedIds` 分开记录。下一轮只取可重试失败项，不把尚未启动或被预算/来源阻断的论文算成成功。结果数组保留每篇最近一次真实结果，`stats.roundsCompleted` 是已结束轮数；成功/失败数量按最新结果计算，不能把同篇多次尝试当成多篇成功。

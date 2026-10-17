@@ -518,17 +518,55 @@ function withLocalSourceCorrection(handle, callback) {
     return withMember(handle, callback);
 }
 function current() { const active = scope.getStore(); if (!active || !verified.has(active.handle)) fail('缺少私有来源纠正范围'); return active; }
+function projectSelectedMain(loaded, record) {
+    const raw = loaded.analysis.papers[0];
+    if (raw.analysis !== null) {
+        if (record.mainCheckpointRecovery !== undefined) fail('非空主文不能声明检查点恢复');
+        return { parent: raw, recovery: null };
+    }
+    const stages = raw.analysisManifest?.stages, checkpoint = raw.analysisStageCheckpoints?.scoringAudit;
+    const images = raw.imageManifest, download = stages?.imageDownload;
+    if (record.contract !== CONTRACT || record.selectedMainExecutionId !== record.latestFailedExecutionId
+        || typeof checkpoint !== 'string' || !checkpoint.trim()
+        || raw.analysisCheckpoint !== checkpoint || stages?.scoringAudit?.status !== 'complete'
+        || sha(checkpoint) !== stages.scoringAudit.outputAnalysisSha256
+        || stages.apiReaderArticle?.status !== 'invalid_output'
+        || !/^(?:READER_|CONFERENCE_READER_)/u.test(raw.latestAnalysisAttemptErrorCode || raw.errorCode || '')
+        || !(raw.latestAnalysisAttemptError || raw.error) || stages.imageSupplement !== undefined
+        || download?.status !== 'no_candidates' || download.attempted !== 0 || download.downloaded !== 0
+        || !Array.isArray(download.outcomes) || download.outcomes.length || images?.totalFound !== 0
+        || ['candidates', 'downloaded', 'selected', 'downloadOutcomes'].some(key =>
+            !Array.isArray(images?.[key]) || images[key].length)) {
+        fail('空主文没有唯一完整评分检查点及原Reader失败，不能恢复');
+    }
+    const recovery = { contract: 'conference-source-main-checkpoint-recovery-v1', rawAnalysisValue: null,
+        rawPaperSha256: stable(raw), analysisCheckpointSha256: sha(raw.analysisCheckpoint),
+        scoringCheckpointSha256: sha(checkpoint), scoringOutputAnalysisSha256: stages.scoringAudit.outputAnalysisSha256,
+        scoringStageSha256: stable(stages.scoringAudit), readerStageSha256: stable(stages.apiReaderArticle),
+        originalFailureFieldsSha256: stable(Object.fromEntries(FAILURE_FIELDS.filter(key => Object.hasOwn(raw, key))
+            .map(key => [key, raw[key]]))),
+        readerRevisionProgressSha256: stable(loaded.analysis.readerRevisionProgress ?? null), missingImageSupplement: true };
+    equal(record.mainCheckpointRecovery, recovery, '原空主文/评分检查点/失败或进度恢复声明不同');
+    return { parent: { ...clone(raw), analysis: checkpoint, parsed: require('../utils').parseAnalysis(checkpoint) }, recovery };
+}
 function prepareFinalizerInput(paper) {
     const active = current(), r = active.row.record; const provider = assertContext(active, paper);
     if (active.finalizerInput) return active.finalizerInput;
-    const parent = load(r.selectedMainExecutionId, active.batch.analysisRoot).analysis.papers[0];
+    const selected = load(r.selectedMainExecutionId, active.batch.analysisRoot);
+    const { parent, recovery } = projectSelectedMain(selected, r);
+    active.mainCheckpointRecovery = recovery;
     const readerParent = load(r.readerParentExecutionId, active.batch.analysisRoot).analysis.papers[0];
     const rules = require('./conference-postprocess').readOriginalTagProof(parent).rules;
     let audit;
     if (active.batch.policy.kind === 'source_core_correction') {
         audit = deriveCoreAudit(parent, active);
     } else {
-        const upstream = require('../analysis-engine').getConferenceReaderRefreshUpstreamReason(parent, { tagRules: rules });
+        // The public scientific preflight excludes Reader/image work. It runs
+        // in this same authenticated conference source scope, never a daily scope.
+        const upstream = recovery
+            ? (require('./completed-reader-upstream').completedReaderUpstream(parent, active.loaded.source.sourceDetails)
+                ? null : '真实评分检查点未通过完整科学上游核验')
+            : require('../analysis-engine').getConferenceReaderRefreshUpstreamReason(parent, { tagRules: rules });
         if (upstream) fail('最新主文/核心/标签/评分未通过来源上游预检：' + upstream);
         const corrected = require('./reader-authenticated-pdf-footnote-evidence')
             .deriveCorrectedIdentity(parent.apiReaderResources, active.loaded.source.sourceDetails.text);
@@ -550,12 +588,16 @@ function prepareFinalizerInput(paper) {
         sourceSnapshotSha256: r.sourceSnapshotSha256, sourceIdentity: clone(provider.sourceIdentity),
         originalReaderStageSha256: stable(readerParent.analysisManifest.stages.apiReaderArticle),
         beforeDraftSha256: reader.original.draftSha256, afterDraftSha256: r.reader.afterDraftSha256,
+        ...(recovery ? { mainCheckpointRecovery: clone(recovery) } : {}),
+        ...(audit.pairedAuditValidation ? { pairedAuditValidation: clone(audit.pairedAuditValidation) } : {}),
         appliedAt: r.appliedAt };
     active.calculation = { parent, readerParent, audit, reader, provenance };
     // Object identity, not a rebuilt JSON projection, is the finalizer authority.
     active.finalizerInput = freeze({ scopeKind: active.batch.policy.kind,
         ...(audit.coreStage ? { coreStage: clone(audit.coreStage), coreCheckpoint: audit.coreCheckpoint } : {}),
-        parent: clone(parent), readerParent: clone(readerParent), audit: clone(audit), draft: clone(reader.draft),
+        parent: clone(parent), rawParent: clone(selected.analysis.papers[0]),
+        ...(recovery ? { mainCheckpointRecovery: clone(recovery) } : {}),
+        readerParent: clone(readerParent), audit: clone(audit), draft: clone(reader.draft),
         originalFailureFields: Object.fromEntries(FAILURE_FIELDS.filter(key => Object.hasOwn(parent, key))
             .map(key => [key, clone(parent[key])])),
         originalRoleProgress: Object.fromEntries(Object.entries(roleRefs(r)).map(([role, ref]) => {
@@ -566,6 +608,17 @@ function prepareFinalizerInput(paper) {
         resources: clone(audit.correction.identity), provenance: clone(provenance),
         sourceDetails: clone(active.loaded.source.sourceDetails) });
     return active.finalizerInput;
+}
+function assertPairedCoreAudits(original, strictOriginal, canonicalBefore, canonicalAfter) {
+    equal(strictOriginal, original, '原完整8维审计没有通过当前严格重验');
+    equal(canonicalAfter, canonicalBefore, '核心前后正常评分归一不同，需另行审查');
+    const reason = original.dimensions?.openSource?.reason;
+    if (typeof reason !== 'string' || !reason.trim()) fail('原开源理由缺失');
+    const comparable = clone(original);
+    comparable.dimensions.openSource.reason = canonicalBefore.dimensions?.openSource?.reason;
+    equal(comparable, canonicalBefore, '原审计与正常归一并非仅开源理由措辞不同');
+    return { contract: 'conference-source-core-paired-audit-validation-v1',
+        originalAuditStrictSha256: stable(strictOriginal), validationCanonicalSha256: stable(canonicalBefore) };
 }
 function deriveCoreAudit(parent, active) {
     const deep = require('../deep-analyzer'), contract = require('../analysis-contract');
@@ -646,10 +699,23 @@ function deriveCoreAudit(parent, active) {
     deep.replayVerifiedReaderResourceIdentity(parent.apiReaderResources, source.text);
     const evidence = deep.buildTypeAwareSourceContext(coreMain, source.text);
     const ids = new Set([...evidence.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
-    const normalized = deep.validateScoringAuditAgainstAnalysis(coreMain, clone(oldScore.audit), parent.apiReaderResources, source.text);
-    const strict = deep.revalidateScoringAudit(normalized, ids);
-    const audit = { ...strict, ...(Array.isArray(normalized.capsApplied) ? { capsApplied: normalized.capsApplied } : {}) };
-    equal(audit, oldScore.audit, '核心scope的8维/理由/分档/置信度或总分需要另行审查，不能自动变化');
+    const restoreCaps = (strict, original) => ({ ...strict,
+        ...(Array.isArray(original.capsApplied) ? { capsApplied: clone(original.capsApplied) } : {}) });
+    const strictOriginal = restoreCaps(deep.revalidateScoringAudit(clone(oldScore.audit), ids), oldScore.audit);
+    const canonical = analysis => {
+        const normalized = deep.validateScoringAuditAgainstAnalysis(analysis,
+            clone(oldScore.audit), parent.apiReaderResources, source.text);
+        const context = deep.buildTypeAwareSourceContext(analysis, source.text);
+        const contextIds = new Set([...context.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
+        return restoreCaps(deep.revalidateScoringAudit(normalized, contextIds), normalized);
+    };
+    // Validate the original reason against the same real source/resource guard;
+    // canonical wording is evidence of validation, not authority to rewrite it.
+    deep.enforceReaderResourceClaims({ sections: [{ body: oldScore.audit.dimensions.openSource.reason }] },
+        parent.apiReaderResources, source.text, { paper: parent });
+    const pairedAuditValidation = assertPairedCoreAudits(oldScore.audit, strictOriginal,
+        canonical(parent.analysis), canonical(coreMain));
+    const audit = clone(oldScore.audit);
     const analysis = deep.applyScoringAuditResult(coreMain, audit);
     if (outside(analysis) !== outside(parent.analysis)) fail('核心正常评分派生改变其它12节');
     const parsed = require('../utils').parseAnalysis(analysis), beforeParsed = require('../utils').parseAnalysis(parent.analysis);
@@ -661,7 +727,7 @@ function deriveCoreAudit(parent, active) {
         resourceIdentitySha256: parent.apiReaderResources.identitySha256, sourceBoundReasonReplacement: null,
         inputAnalysisSha256: sha(coreMain), evidenceSha256: sha(evidence), allowedEvidenceIds: [...ids],
         auditSha256: stable(audit), outputAnalysisSha256: sha(analysis), summarySha256: body.summarySha256,
-        coreStage, coreCheckpoint };
+        pairedAuditValidation, coreStage, coreCheckpoint };
 }
 function assertVerifiedCoreStage(paper, stage) {
     const active = current(); assertContext(active, paper);
@@ -750,6 +816,7 @@ function scoringStage(input) {
         scoreDelta: Number((input.audit.audit.total - old.audit.total).toFixed(1)),
         stabilityWarning: Math.abs(input.audit.audit.total - old.audit.total) > 0.3,
         localStability: { method: active.batch.policy.scoreKind, originalStageSha256: stable(old),
+            ...(input.audit.pairedAuditValidation ? { pairedAuditValidation: clone(input.audit.pairedAuditValidation) } : {}),
             unchangedNonOpenSourceScoresSha256: stable(Object.fromEntries(Object.entries(old.audit.dimensions)
                 .filter(([key]) => key !== 'openSource').map(([key, value]) => [key, value.score]))),
             sourceBoundReasonReplacement: clone(input.audit.sourceBoundReasonReplacement) },
@@ -799,6 +866,7 @@ function protectedPaper(paper) {
         'analysisCheckpoint', 'conferenceSourceCorrection', 'conferenceSourceCorrectionObligation']) delete value[key];
     const stages = value.analysisManifest?.stages || {};
     for (const key of ['scoringAudit', 'apiReaderArticle']) delete stages[key];
+    if (scope.getStore()?.mainCheckpointRecovery) delete stages.imageSupplement;
     if (scope.getStore()?.batch.policy.kind === 'source_core_correction') delete stages.coreSummaryRepair;
     if (stages.openSourceScan) for (const key of ['resourceEvidenceContract', 'resourceEvidenceSha256']) delete stages.openSourceScan[key];
     const checkpoints = value.analysisStageCheckpoints || {};
@@ -806,10 +874,27 @@ function protectedPaper(paper) {
     if (scope.getStore()?.batch.policy.kind === 'source_core_correction') delete checkpoints.coreSummaryRepair;
     return value;
 }
+function assertRecoveredImageSupplement(input, paper, requireComplete = false) {
+    if (!input.mainCheckpointRecovery) return;
+    const saved = paper.analysisManifest?.stages?.imageSupplement;
+    if (saved === undefined) {
+        // The normal finalizer checks local Reader output before its official
+        // image closure. A saved/cold result may never retain that transient gap.
+        if (requireComplete || current().cold) fail('检查点恢复的新Reader尚未完成正常官方图收尾');
+        return;
+    }
+    const replay = clone(paper);
+    delete replay.analysisManifest.stages.imageSupplement;
+    const expected = require('../deep-analyzer').deriveConferenceLocalOfficialImageSupplement(replay,
+        input.sourceDetails, { appliedAt: input.provenance.appliedAt });
+    if (!expected) fail('没有原空候选对应的正常官方图阶段');
+    equal(saved, expected, '检查点恢复的官方图阶段不是同一正常函数的精确派生');
+}
 function assertOutput(paper) {
     const active = current(); assertContext(active, paper);
     const input = prepareFinalizerInput(paper), deep = require('../deep-analyzer');
     equal(protectedPaper(paper), protectedPaper(input.parent), '本地纠正改变了受保护主文或原阶段');
+    assertRecoveredImageSupplement(input, paper);
     assertFailureProjection(input.parent, paper);
     equal(paper.analysis, input.audit.analysis, '评分与资源正文未由公共操作派生');
     equal(paper.parsed, input.audit.parsed, '正式解析字段不同');
@@ -928,6 +1013,7 @@ function seal(paper) {
     const active = current();
     if (active.cold || !require('../analysis-engine').paperAnalysisLockHeld({ id: paper.id })) fail('封存须为真实热事务和论文锁');
     const input = assertOutput(paper);
+    assertRecoveredImageSupplement(input, paper, true);
     const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
     if (!require('../analysis-engine').isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) fail('来源纠正未通过正常整篇资格');
     const archived = archiveOriginals(active);
