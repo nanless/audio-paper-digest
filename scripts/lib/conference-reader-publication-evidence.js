@@ -378,8 +378,17 @@ function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(sourceIdentity.executionId || '')) {
         throw new Error('会议 PDF 表格冷核缺少原规范完成运行');
     }
-    const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: deps.files.conferenceAnalysisDir,
+    let loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: deps.files.conferenceAnalysisDir,
         executionId: sourceIdentity.executionId });
+    if (loaded.analysis.readerRevisionProgress !== undefined) {
+        const revision = deps.adapter.readJsonRecord(path.join(loaded.directory, 'reader-revision.json')).value;
+        if (revision.contract === 'conference-reader-recovery-window-v1') {
+            // A current source proof is not authority for an additional budget.
+            // Cold table replay retains the registered grant and original CAS chain.
+            loaded = deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
+                executionId: sourceIdentity.executionId });
+        }
+    }
     const original = loaded.analysis.papers[0];
     const expected = { contract: 'conference-reader-pdf-source-v1', paperId: loaded.run.paperId,
         sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,

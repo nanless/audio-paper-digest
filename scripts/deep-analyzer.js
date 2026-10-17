@@ -8344,6 +8344,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? conference.conferenceReaderAttemptsDirectory(options.readerAttemptsDir)
             : options.readerAttemptsDir || FILES.apiReaderAttemptsDir;
     if (!candidateDirectory) throw new Error('Reader candidate directory is not configured');
+    const grantedReaderBudget = require('./lib/conference-reader-recovery-window');
+    const readerGrantFields = grantedReaderBudget.identityFields(paper, options.sourceText, candidateDirectory);
     const repairMaxTokens = resolveApiReaderBaseRepairMaxTokens();
     const repairTruncationRetryMaxTokens = resolveApiReaderRepairRetryMaxTokens(
         API_READER_MAX_TOKENS, repairMaxTokens
@@ -8355,6 +8357,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             .readVerifiedConferenceReaderPrompts(paper, options.sourceText) : null;
     const identity = {
         paperId: getPaperArxivId(paper),
+        ...readerGrantFields,
         ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
         ...(options.readerFactLocalRevision === true ? { readerFactLocalRevisionContract: 'signed-reader-fact-local-repair-v1' } : {}),
         ...(paidPromptReplay ? paidPromptReplay.requestPolicyFields : apiReaderRequestPolicyFields()),
@@ -8363,6 +8366,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
         ...start.signedRevisionDisplayFields,
         inputFingerprint: stableFingerprint({
+            ...readerGrantFields,
             ...require('./lib/selected-full-stage-reanalysis').fingerprintFields(paper),
             ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.previousDraft),
             contentMode, sourceEvidence,
@@ -8415,6 +8419,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/conference-pdf-source.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/conference-reader-publication-evidence.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/conference-analysis-context.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/conference-reader-recovery-window.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/conference-recovery-grant.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/direct-rewrite-analysis-context.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/historical-direct-rewrite-runner.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/pdf-layout.js'), 'utf8'),
@@ -9194,6 +9200,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         let raw;
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
         const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
+        const grantedResponseLease = grantedReaderBudget.reserveReaderResponse(
+            paper, identity, repairContext ? 'patch' : 'full', attempt);
         try {
             const requestOptions = {
                 ...(resolveApiReaderJsonRequestPolicy()
@@ -9253,6 +9261,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 selectedOrdinals = isolated.activeInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
             }
         } catch (error) {
+            grantedReaderBudget.settleReaderResponse(grantedResponseLease,
+                ['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(error?.code) ? 'truncated' : 'no_content');
             if (error?.code === require('./lib/analysis-stop-control').CODE) throw error;
             if (Array.isArray(error?.providerImageExclusions)) {
                 providerImageExclusions = normalizeProviderImageExclusions([
@@ -9304,6 +9314,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         }
         implementationRepairAllowanceProof = null;
         // 在解析和修改候选之前保存原响应；记录写入失败必须停止，不能当模型重试吞掉。
+        grantedReaderBudget.settleReaderResponse(grantedResponseLease, 'content', raw);
         if (repairDiagnostic) require('./lib/reader-request-diagnostics')
             .saveReaderRepairResponse(repairDiagnostic, raw);
         if (!repairContext) fullAttempts += 1;

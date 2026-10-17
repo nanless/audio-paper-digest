@@ -218,6 +218,7 @@ const FILES = {
     conferenceStagingDir: path.join(DATA_DIR, 'runtime', 'conference-staging'),
     conferenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-runs'),
     conferenceAnalysisDir: path.join(DATA_DIR, 'runtime', 'conference-analysis-executions'),
+    conferenceRecoveryGrantDir: path.join(DATA_DIR, 'runtime', 'conference-recovery-grants'),
     conferencePageStagingDir: path.join(DATA_DIR, 'runtime', 'conference-page-staging'),
     conferenceAggregateDir: path.join(DATA_DIR, 'runtime', 'conference-aggregates'),
     conferenceProcessDir: path.join(DATA_DIR, 'runtime', 'conference-processes'),

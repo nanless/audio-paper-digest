@@ -525,6 +525,7 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
 }
 
 const READER_REVISION_CONTRACT = 'conference-reader-source-revision-v1';
+const RECOVERY_WINDOW_CONTRACT = 'conference-reader-recovery-window-v1';
 let fullRevisionActive = 0;
 const fullRevisionWaiters = [];
 async function withNormalAnalysisSlot(callback) {
@@ -589,8 +590,7 @@ async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourc
         || typeof deep.inspectSavedConferenceReaderCompletion !== 'function') {
         return { eligible: false, reason: '没有本子任务已完成 Reader 的可重放付费签发证明。' };
     }
-    return analysisContext.withConferenceAnalysisSource({ executionId: loaded.run.executionId,
-        readerPdfSourceHandle, executionDir: loaded.directory, paperId: loaded.run.paperId, sourceDetails: loaded.source.sourceDetails }, async () => {
+    const inspect = async () => {
         const proof = await deep.inspectSavedConferenceReaderCompletion(paper, {
             executionId: loaded.run.executionId, executionDir: loaded.directory,
             parentPaper, revision: loaded.revision });
@@ -617,7 +617,14 @@ async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourc
             || after.sourceFileSha256 !== loaded.sourceFileSha256) throw new Error('付费 Reader 冷核期间子稿或来源发生变化');
         return { eligible: true, proof, analysisSha256: loaded.analysisFileSha256,
             articleSha256: paper.apiReaderArticleSha256, attempts: progress.attempts };
-    });
+    };
+    return analysisContext.withConferenceAnalysisSource({ executionId: loaded.run.executionId,
+        readerPdfSourceHandle, executionDir: loaded.directory, paperId: loaded.run.paperId, sourceDetails: loaded.source.sourceDetails }, () =>
+        loaded.recoveryWindow
+            ? require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(
+                loaded.recoveryWindow.grantHandle, { paperId: loaded.run.paperId, executionId: loaded.run.executionId,
+                    executionDir: loaded.directory, readerPdfSourceHandle }, inspect)
+            : inspect());
 }
 async function inspectConferenceReaderRevisionCompletion({ analysisRoot, executionId, planHandle, sourceRoot } = {}, overrides = {}) {
     const loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
@@ -641,6 +648,7 @@ function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
     const loaded = loadConferenceAnalysis({ analysisRoot, executionId });
     const record = readJsonRecord(path.join(loaded.directory, 'reader-revision.json'));
     const { revisionSha256, ...body } = record.value;
+    if (body.contract === RECOVERY_WINDOW_CONTRACT) return loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, loaded, record);
     if (body.contract !== READER_REVISION_CONTRACT || body.version !== 1
         || !['reader-only', 'scoring-and-reader', 'normal-analysis'].includes(body.mode)
         || !Number.isSafeInteger(body.maxAttempts) || body.maxAttempts < 1 || body.maxAttempts > 3
@@ -733,14 +741,286 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             replaceJson(path.join(loaded.directory, 'analysis.json'), seeded, loaded.analysisFileSha256);
             loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
         }
+        return continueConferenceRevision({ loaded, parent, planHandle, sourceRoot, analysisRoot,
+            executionId, fullAnalysis, original, maxAttempts, reusePaidCoreDiagnostics }, { engine, deep, ...overrides });
+    }, conferencePaperLockOptions(engine)).catch(error => {
+        // Resource preflight precedes the paid-attempt block, but a provider or
+        // storage failure must stop the same shared request scope immediately.
+        if (require('./conference-process-recovery').classifyFailure(error, new Date().toISOString()).systemic) {
+            require('./analysis-stop-control').requestAnalysisStop(error.code || 'service_failure');
+        }
+        throw error;
+    });
+}
+
+function recoveryWindowError(message) {
+    return Object.assign(new Error(message), { code: 'CONFERENCE_RECOVERY_GRANT_INTEGRITY', scope: 'run', retryable: false });
+}
+
+function grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256) {
+    return require('./conference-recovery-grant').grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256);
+}
+function assertGrantedMember(authority, failed) {
+    const member = authority.member;
+    if (member?.paperId !== failed.run.paperId || member.childExecutionId !== failed.run.executionId
+        || member.parentExecutionId !== failed.parent.run.executionId
+        || member.sourceSnapshotSha256 !== failed.run.sourceSnapshotSha256
+        || member.sourceTextSha256 !== sha256(failed.source.sourceDetails.text)) throw recoveryWindowError('新增会议恢复授权与原失败成员或来源不一致');
+    const entries = authority.files || member.files || Object.entries(member.recordCAS || {}).map(([file, hash]) => ({ path: file, sha256: hash }));
+    const expected = new Map(entries.map(entry => [path.resolve(__dirname, '../..', entry.path), entry.sha256]));
+    for (const directory of [failed.directory, failed.parent.directory]) {
+        for (const name of ['analysis.json', 'run.json', 'source.json', ...(directory === failed.directory ? ['reader-revision.json'] : [])]) {
+            const filename = path.join(directory, name);
+            if (expected.get(filename) !== readJsonRecord(filename).sha256) throw recoveryWindowError('新增会议恢复原父子稿 CAS 不一致：' + name);
+        }
+    }
+    authority.assertUnchanged();
+}
+function grantedRecoveryMode(failed) {
+    const paper = failed.analysis.papers[0];
+    const invalidCore = require('../analysis-contract').validateCoreSummarySemanticContract(paper.analysis,
+        { sourceText: failed.source.sourceDetails.text });
+    return invalidCore || !require('./model-text-sanitization').canReuseModelTextInputs(paper, failed.source.sourceDetails)
+        || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
+        || !['complete', 'not_needed'].includes(paper.analysisManifest?.stages?.coreSummaryRepair?.status)
+        || failed.revision.mode === 'normal-analysis' ? 'normal-analysis' : failed.revision.mode;
+}
+function assertGrantedCoreProtection(paper, failed) {
+    const original = failed.analysis.papers[0], contract = require('../analysis-contract');
+    if (contract.hashAnalysisWithMaskedCoreSummary(paper.analysisCheckpoint)
+        !== contract.hashAnalysisWithMaskedCoreSummary(original.analysisCheckpoint)) {
+        throw recoveryWindowError('原付费核心重放改变了其余十二节');
+    }
+    for (const name of ['primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision', 'tableRepair',
+        'methodRepair', 'structureRepair', 'tagSelection', 'taxonomySeal']) {
+        if (stableHash(paper.analysisManifest?.stages?.[name] || null) !== stableHash(original.analysisManifest?.stages?.[name] || null)) {
+            throw recoveryWindowError('原付费核心重放改变了非核心上游阶段：' + name);
+        }
+    }
+}
+function missingOldCoreDiagnostic(error, failed) {
+    if (error?.code !== 'READER_DIAGNOSTIC_FAILED') return false;
+    if (String(error.message).endsWith('当前完整摘要身份没有唯一最新的原付费响应')) return true;
+    const directory = path.join(failed.directory, 'analysis-repair-attempts', `conference-${sha256(failed.run.paperId)}`, 'request-diagnostics');
+    for (let cause = error.cause; cause; cause = cause.cause) {
+        if (cause.code === 'ENOENT' && typeof cause.path === 'string'
+            && (cause.path === directory || path.dirname(cause.path) === directory)) return true;
+    }
+    return false;
+}
+
+function validateGrantedRecoverySeed(record, failed, authority) {
+    const seed = record.value, paper = seed.paper;
+    if (seed.contract !== 'conference-recovery-seed-v1' || seed.grantId !== authority.grantId
+        || seed.failedAnalysisFileSha256 !== failed.analysisFileSha256 || paper?.id !== failed.run.paperId) {
+        throw recoveryWindowError('新增会议恢复初始检查点未绑定原失败稿');
+    }
+    if (seed.paidCoreReplay) {
+        assertGrantedCoreProtection(paper, failed);
+        const stage = paper.analysisManifest?.stages?.coreSummaryRepair, proof = stage?.paidDiagnosticReplay;
+        if (!proof || !['complete', 'not_needed'].includes(stage.status) || proof.id !== seed.paidCoreReplay
+            || stage.outputAnalysisSha256 !== sha256(paper.analysisCheckpoint)
+            || require('../analysis-contract').validateCoreSummarySemanticContract(paper.analysisCheckpoint,
+                { sourceText: failed.source.sourceDetails.text })) throw recoveryWindowError('原付费核心检查点未通过完整语义或正文绑定');
+        const directory = path.join(failed.directory, 'analysis-repair-attempts', `conference-${sha256(failed.run.paperId)}`, 'request-diagnostics');
+        const records = Object.fromEntries(['request', 'response', 'disposition'].map(kind => {
+            const value = readJsonRecord(path.join(directory, `${proof.id}.${kind}.json`));
+            if (value.sha256 !== proof[kind]) throw recoveryWindowError('原付费核心诊断字节已变化');
+            return [kind, value];
+        }));
+        const identity = records.request.value.identity;
+        const saved = require('./reader-request-diagnostics').readCoreSummaryDiagnostic(path.dirname(directory), proof.id, identity);
+        const rawSummary = String(saved.response.rawResponse).trim().match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
+        if (identity?.sourceIdentity?.executionId !== failed.run.executionId || identity.paperId !== failed.run.paperId
+            || identity.sourceTextSha256 !== sha256(failed.source.sourceDetails.text)
+            || identity.inputAnalysisSha256 !== stage.inputAnalysisSha256 || identity.evidenceSha256 !== stage.evidenceSha256
+            || identity.stageFingerprint !== stage.fingerprint
+            || require('../analysis-contract').hashAnalysisWithMaskedCoreSummary(saved.request.inputAnalysis)
+                !== require('../analysis-contract').hashAnalysisWithMaskedCoreSummary(paper.analysisCheckpoint) || !rawSummary
+            || require('../deep-analyzer').extractSectionByTitle(paper.analysisCheckpoint, '核心摘要').trim() !== rawSummary[1].trim()) {
+            throw recoveryWindowError('原付费核心检查点与真实原响应或来源身份不一致');
+        }
+    } else if (stableHash(paper) !== stableHash(failed.analysis.papers[0])) {
+        throw recoveryWindowError('未复用付费核心时初始稿不能改变原失败稿');
+    }
+    return seed;
+}
+async function prepareGrantedRecoverySeed(failed, authority, withFailedSource, deep) {
+    const original = clone(failed.analysis.papers[0]);
+    const result = { contract: 'conference-recovery-seed-v1', grantId: authority.grantId,
+        failedAnalysisFileSha256: failed.analysisFileSha256, paper: original, paidCoreReplay: null };
+    if (original.analysisManifest?.stages?.coreSummaryRepair?.status !== 'contract_rejected'
+        || !String(original.analysisCheckpoint || '').trim()) return result;
+    let captured = null;
+    const candidate = clone(original), stopAtCore = new Error('GRANTED_CORE_CHECKPOINT_CAPTURED');
+    candidate[Symbol.for('audio-paper-digest.analysisCheckpointCallback')] = paper => {
+        const stage = paper.analysisManifest?.stages?.coreSummaryRepair;
+        if (!['complete', 'not_needed'].includes(stage?.status) || !stage.paidDiagnosticReplay?.id) return;
+        assertGrantedCoreProtection(paper, failed);
+        captured = clone(paper); throw stopAtCore;
+    };
+    try {
+        await require('./analysis-stop-control').withModelRequestsForbidden(() => withFailedSource(() =>
+            deep.analyzePaperDeep(candidate, { replayLatestCoreSummaryDiagnostic: true })));
+    } catch (error) {
+        if (error !== stopAtCore) {
+            const stop = require('./analysis-stop-control');
+            const missing = missingOldCoreDiagnostic(error, failed);
+            const allowed = error.code === stop.MODEL_REQUESTS_FORBIDDEN || error.code === 'CONTRACT_REJECTED' || missing;
+            if (!allowed || (!missing && require('./conference-process-recovery').classifyFailure(error,
+                new Date().toISOString()).systemic)) throw error;
+            result.coreReplayFailure = { code: error.code || null, message: error.message };
+        }
+    }
+    authority.assertUnchanged();
+    if (captured) {
+        captured.analysis = captured.analysisCheckpoint;
+        captured.parsed = require('../utils').parseAnalysis(captured.analysis);
+        result.paper = captured;
+        result.paidCoreReplay = captured.analysisManifest.stages.coreSummaryRepair.paidDiagnosticReplay.id;
+    }
+    return result;
+}
+
+function loadGrantedConferenceRecovery({ analysisRoot, executionId } = {}) {
+    const loaded = loadConferenceAnalysis({ analysisRoot, executionId });
+    const record = readJsonRecord(path.join(loaded.directory, 'reader-revision.json'));
+    return loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, loaded, record);
+}
+function loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, loaded, record) {
+    const { revisionSha256, ...body } = record.value;
+    if (body.contract !== RECOVERY_WINDOW_CONTRACT || body.version !== 1 || body.executionId !== executionId
+        || revisionSha256 !== stableHash(body) || body.paperId !== loaded.run.paperId
+        || body.originalMemberPaperId !== body.paperId || body.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256
+        || !['normal-analysis', 'reader-only', 'scoring-and-reader'].includes(body.mode) || body.maxAttempts !== 3
+        || !['failedAnalysisFileSha256', 'failedRunFileSha256', 'failedSourceFileSha256', 'failedRevisionFileSha256',
+            'parentAnalysisFileSha256', 'parentRunFileSha256', 'seededAnalysisSha256', 'grantSha256', 'recoverySeedFileSha256'].every(key => /^[a-f0-9]{64}$/.test(body[key] || ''))
+        || grantedRecoveryExecutionId(body.grantId, body.failedExecutionId, body.failedAnalysisFileSha256) !== executionId) {
+        throw recoveryWindowError('新增会议恢复窗口身份或 SHA 不一致');
+    }
+    const grants = require('./conference-recovery-grant');
+    const grantHandle = grants.reopenRecoveryGrantForWindow({ analysisRoot, windowRecord: record.value });
+    const authority = grants.readRecoveryGrantMember(grantHandle, body.paperId);
+    const failed = loadConferenceReaderRevision({ analysisRoot, executionId: body.failedExecutionId });
+    assertGrantedMember(authority, failed);
+    if (body.mode !== grantedRecoveryMode(failed)) throw recoveryWindowError('新增会议恢复窗口模式与原失败上游范围不一致');
+    if (authority.grantId !== body.grantId || authority.grantSha256 !== body.grantSha256
+        || authority.expectedExecutionId !== executionId || path.resolve(authority.analysisRoot) !== path.resolve(analysisRoot)
+        || authority.limits.maxRounds !== body.maxAttempts || authority.limits.readerContentResponses !== 6
+        || authority.limits.readerFullResponses !== 2
+        || failed.analysisFileSha256 !== body.failedAnalysisFileSha256 || failed.runFileSha256 !== body.failedRunFileSha256
+        || failed.sourceFileSha256 !== body.failedSourceFileSha256
+        || readJsonRecord(path.join(failed.directory, 'reader-revision.json')).sha256 !== body.failedRevisionFileSha256
+        || failed.parent.run.executionId !== body.parentExecutionId || failed.parent.analysisFileSha256 !== body.parentAnalysisFileSha256
+        || failed.parent.runFileSha256 !== body.parentRunFileSha256 || failed.sourceFileSha256 !== loaded.sourceFileSha256) {
+        throw recoveryWindowError('新增会议恢复窗口未绑定真实原父子稿、授权或封存来源');
+    }
+    const seedRecord = readJsonRecord(path.join(loaded.directory, 'recovery-seed.json'));
+    if (seedRecord.sha256 !== body.recoverySeedFileSha256) throw recoveryWindowError('新增会议恢复封存检查点 SHA 不一致');
+    validateGrantedRecoverySeed(seedRecord, failed, authority);
+    const resourcePreflight = body.mode === 'normal-analysis' ? null
+        : readReaderResourcePreflight({ ...loaded, analysis: failed.analysis }, body.resourcePreflightFileSha256);
+    return { ...loaded, revision: record.value, parent: failed.parent, resourcePreflight,
+        recoveryWindow: { grantHandle, authority, failed } };
+}
+async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionId, failedExecutionId,
+    planHandle, sourceRoot, grantHandle, reusePaidCoreDiagnostics = true } = {}, overrides = {}) {
+    const engine = overrides.engine || require('../analysis-engine'), deep = overrides.deep || require('../deep-analyzer');
+    const failed = loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
+    if (failed.recoveryWindow || failed.parent.run.executionId !== parentExecutionId || failed.analysis.status !== 'partial') {
+        throw recoveryWindowError('新增会议恢复只接受授权清单的原失败子稿与原完成父稿');
+    }
+    const grants = require('./conference-recovery-grant'), authority = grants.readRecoveryGrantMember(grantHandle, failed.run.paperId);
+    assertGrantedMember(authority, failed);
+    const executionId = grantedRecoveryExecutionId(authority.grantId, failedExecutionId, failed.analysisFileSha256);
+    if (authority.expectedExecutionId !== executionId || path.resolve(authority.analysisRoot) !== path.resolve(analysisRoot)
+        || authority.limits.maxRounds !== 3 || authority.limits.readerContentResponses !== 6 || authority.limits.readerFullResponses !== 2) {
+        throw recoveryWindowError('新增会议恢复的执行身份或获准限次不一致');
+    }
+    const original = require('./conference-postprocess').readOriginalTagProof(failed.analysis.papers[0]);
+    const failedPdf = verifyPlanAuthority(failed, planHandle, sourceRoot);
+    const withFailedSource = callback => analysisContext.withConferenceAnalysisSource({ executionId: failedExecutionId,
+        executionDir: failed.directory, paperId: failed.run.paperId, sourceDetails: failed.source.sourceDetails,
+        readerPdfSourceHandle: failedPdf }, callback);
+    const mode = withFailedSource(() => grantedRecoveryMode(failed));
+    const oldScoring = failed.analysis.readerRevisionProgress?.scoringCheckpoint;
+    if (oldScoring && stableHash(oldScoring) !== stableHash(withFailedSource(() =>
+        readerScoringCheckpoint(failed.analysis.papers[0], failed, engine, original.rules)))) {
+        throw recoveryWindowError('新增会议恢复不能复用失配的原评分检查点');
+    }
+    return engine.withPaperAnalysisLock({ id: failed.run.paperId }, async () => {
+        assertGrantedMember(authority, failed);
+        prepareConferenceAnalysis({ analysisRoot, executionId, planHandle, sourceRoot, paperId: failed.run.paperId });
+        let loaded = loadConferenceAnalysis({ analysisRoot, executionId });
+        const revisionFile = path.join(loaded.directory, 'reader-revision.json');
+        const seedFile = path.join(loaded.directory, 'recovery-seed.json');
+        if (!fs.existsSync(seedFile)) writeJson(seedFile,
+            await prepareGrantedRecoverySeed(failed, authority, withFailedSource, deep));
+        const seedRecord = readJsonRecord(seedFile);
+        const seed = validateGrantedRecoverySeed(seedRecord, failed, authority);
+        if (!fs.existsSync(revisionFile)) {
+            if (loaded.analysis.status !== 'pending') throw recoveryWindowError('新增会议恢复缺少不可变窗口凭证');
+            const seeded = { ...loaded.analysis, status: 'partial', generation: 1,
+                papers: [clone(seed.paper)], readerRevisionProgress: { attempts: 0, failures: [] } };
+            let resourcePreflightFileSha256;
+            if (mode !== 'normal-analysis') {
+                const previous = readJsonRecord(path.join(failed.directory, 'reader-resource-preflight.json'));
+                resourcePreflightFileSha256 = writeBytesAtomic(path.join(loaded.directory, 'reader-resource-preflight.json'), previous.bytes);
+            }
+            const body = { contract: RECOVERY_WINDOW_CONTRACT, version: 1, executionId, paperId: failed.run.paperId,
+                sourceSnapshotSha256: failed.run.sourceSnapshotSha256, parentExecutionId,
+                parentAnalysisFileSha256: failed.parent.analysisFileSha256, parentRunFileSha256: failed.parent.runFileSha256,
+                failedExecutionId, failedAnalysisFileSha256: failed.analysisFileSha256, failedRunFileSha256: failed.runFileSha256,
+                failedSourceFileSha256: failed.sourceFileSha256,
+                failedRevisionFileSha256: readJsonRecord(path.join(failed.directory, 'reader-revision.json')).sha256,
+                grantId: authority.grantId, grantSha256: authority.grantSha256, originalMemberPaperId: failed.run.paperId,
+                mode, maxAttempts: 3, recoverySeedFileSha256: seedRecord.sha256, seededAnalysisSha256: sha256(jsonBytes(seeded)),
+                ...(resourcePreflightFileSha256 ? { resourcePreflightFileSha256 } : {}) };
+            writeJson(revisionFile, { ...body, revisionSha256: stableHash(body) });
+        }
+        loaded = loadGrantedConferenceRecovery({ analysisRoot, executionId });
+        if (loaded.revision.mode !== mode) throw recoveryWindowError('新增会议恢复不能在重入时切换固定模式');
+        if (loaded.analysis.status === 'pending') {
+            const seeded = { ...loaded.analysis, status: 'partial', generation: 1,
+                papers: [clone(seed.paper)], readerRevisionProgress: { attempts: 0, failures: [] } };
+            if (sha256(jsonBytes(seeded)) !== loaded.revision.seededAnalysisSha256) throw recoveryWindowError('新增会议恢复初始失败稿 SHA 不一致');
+            replaceJson(path.join(loaded.directory, 'analysis.json'), seeded, loaded.analysisFileSha256);
+            loaded = loadGrantedConferenceRecovery({ analysisRoot, executionId });
+        }
+        if (oldScoring && mode !== 'normal-analysis' && !loaded.analysis.readerRevisionProgress.scoringCheckpoint) {
+            if (loaded.analysis.readerRevisionProgress.attempts !== 0) throw recoveryWindowError('新增会议恢复评分检查点在请求后缺失');
+            const sourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
+            const checkpoint = analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory,
+                paperId: loaded.run.paperId, sourceDetails: loaded.source.sourceDetails, readerPdfSourceHandle: sourceHandle }, () =>
+                readerScoringCheckpoint(loaded.analysis.papers[0], loaded, engine, original.rules));
+            replaceJson(path.join(loaded.directory, 'analysis.json'), { ...loaded.analysis, generation: loaded.analysis.generation + 1,
+                readerRevisionProgress: { ...loaded.analysis.readerRevisionProgress, scoringCheckpoint: checkpoint,
+                    inheritedScoringCheckpoint: { executionId: failedExecutionId, checkpoint: clone(oldScoring) } } }, loaded.analysisFileSha256);
+            loaded = loadGrantedConferenceRecovery({ analysisRoot, executionId });
+        }
+        const result = await continueConferenceRevision({ loaded, parent: failed.parent, planHandle, sourceRoot, analysisRoot,
+            executionId, fullAnalysis: mode === 'normal-analysis', original, maxAttempts: 3, reusePaidCoreDiagnostics: false,
+            grant: { grantHandle, authority } }, { ...overrides, engine, deep });
+        authority.assertUnchanged(); return result;
+    }, conferencePaperLockOptions(engine));
+}
+
+async function continueConferenceRevision({ loaded, parent, planHandle, sourceRoot, analysisRoot,
+    executionId, fullAnalysis, original, maxAttempts, reusePaidCoreDiagnostics, grant = null }, overrides) {
+    const engine = overrides.engine, deep = overrides.deep;
+    let readerPdfSourceHandle;
+    const assertGrantUnchanged = () => grant?.authority.assertUnchanged();
         readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
+        const withGrant = callback => grant
+            ? require('./conference-reader-recovery-window').withConferenceReaderGrant(grant.grantHandle,
+                { paperId: loaded.run.paperId, executionId, executionDir: loaded.directory, readerPdfSourceHandle }, callback)
+            : callback();
         const withVerifiedSource = callback => {
-            // Re-read real plan-bound source files before granting the source
-            // scope; saved text alone cannot authorize resource claim replay.
+            // Re-read real plan-bound source files before granting either scope.
             readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
             return analysisContext.withConferenceAnalysisSource({ executionId,
                 readerPdfSourceHandle, executionDir: loaded.directory, paperId: loaded.run.paperId,
-                sourceDetails: loaded.source.sourceDetails }, callback);
+                sourceDetails: loaded.source.sourceDetails }, () => withGrant(callback));
         };
         if (loaded.analysis.status === 'complete') {
             const rules = require('./conference-postprocess').readOriginalTagProof(loaded.analysis.papers[0]).rules;
@@ -761,6 +1041,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             const next = { ...loaded.analysis, status: 'complete', completedAt: new Date().toISOString(),
                 generation: loaded.analysis.generation + 1,
                 stats: { ...(loaded.analysis.stats || {}), analysisStatus: 'complete' } };
+            assertGrantUnchanged();
             replaceJson(path.join(loaded.directory, 'analysis.json'), next, loaded.analysisFileSha256);
             const completed = loadConferenceReaderRevision({ analysisRoot, executionId });
             sealCompletedRun(completed);
@@ -810,6 +1091,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                 const next = { ...loaded.analysis, papers: [paper], status: 'complete', completedAt: new Date().toISOString(),
                     generation: loaded.analysis.generation + 1, readerRevisionRecovery: clone(recovered.proof),
                     stats: { ...(loaded.analysis.stats || {}), analysisStatus: 'complete' } };
+                assertGrantUnchanged();
                 replaceJson(path.join(loaded.directory, 'analysis.json'), next, loaded.analysisFileSha256);
                 const completed = loadConferenceReaderRevision({ analysisRoot, executionId });
                 sealCompletedRun(completed);
@@ -859,7 +1141,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
         replaceJson(analysisFile, current, loaded.analysisFileSha256);
         try {
             paper = await analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory,
-                readerPdfSourceHandle, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () =>
+                readerPdfSourceHandle, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () => withGrant(() =>
                 loaded.revision.mode === 'normal-analysis'
                     ? withNormalAnalysisSlot(async () => {
                         const reuseCore = reusePaidCoreDiagnostics === true && progress.attempts > 0
@@ -905,7 +1187,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                             }
                         })
                         : deep.refreshApiReaderArticleFromSource(paper, loaded.source.sourceDetails,
-                            { resumeSavedSourceReader: true }));
+                            { resumeSavedSourceReader: true })));
             // Core and classification may never be rewritten by a Reader revision.
             for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'taxonomySeal']) {
                 if (loaded.revision.mode !== 'normal-analysis' && stableHash(paper.analysisManifest?.stages?.[name] || null)
@@ -922,6 +1204,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             current = readJsonRecord(analysisFile);
             const next = { ...current.value, papers: [paper], status: 'complete', completedAt: new Date().toISOString(),
                 generation: current.value.generation + 1, stats: { ...(current.value.stats || {}), analysisStatus: 'complete' } };
+            assertGrantUnchanged();
             replaceJson(analysisFile, next, current.sha256);
             const completed = loadConferenceReaderRevision({ analysisRoot, executionId });
             // Consume the paid candidate only after its exact canonical bytes
@@ -946,19 +1229,13 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             }
             error.executionId = executionId; throw error;
         }
-    }, conferencePaperLockOptions(engine)).catch(error => {
-        // Resource preflight precedes the paid-attempt block, but a provider or
-        // storage failure must stop the same shared request scope immediately.
-        if (require('./conference-process-recovery').classifyFailure(error, new Date().toISOString()).systemic) {
-            require('./analysis-stop-control').requestAnalysisStop(error.code || 'service_failure');
-        }
-        throw error;
-    });
+
 }
 
 module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INTENT_CONTRACT, VERSION, UUID_RE,
     stableHash, normalizedPaper, sourceDetails, validatePersistedSourceDetails,
     readJsonRecord, writeBytesAtomic, replaceJson, prepareArtifacts, prepareConferenceAnalysis, loadConferenceAnalysis, verifyPlanAuthority,
     sealCompletedRun, sealCompletedRunLocked, analyzeConference,
-    READER_REVISION_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevision,
+    READER_REVISION_CONTRACT, RECOVERY_WINDOW_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevision,
+    grantedRecoveryExecutionId, loadGrantedConferenceRecovery, refreshConferenceGrantedRecovery,
     inspectConferenceReaderRevisionCompletion, refreshConferenceReader };

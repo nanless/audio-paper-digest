@@ -893,6 +893,10 @@ test('会议与迁移命令行接受1至60并发，保持默认值并拒绝非�
     const migrationBase = [...base, '--from', '11111111-1111-4111-8111-111111111111'];
     assert.equal(cli.parseArgs(base).concurrency, 1);
     assert.equal(migration.parseArgs(migrationBase).concurrency, 3);
+    const manifest = path.resolve('/tmp/explicit-conference-recovery.json');
+    assert.equal(migration.parseArgs([...migrationBase, '--retry-failed', '--recovery-manifest', manifest]).recoveryManifest, manifest);
+    assert.throws(() => migration.parseArgs([...migrationBase, '--recovery-manifest', manifest]), /命令写法不对/);
+    assert.throws(() => migration.parseArgs([...migrationBase, '--retry-failed', '--recovery-manifest', 'relative.json']), /命令写法不对/);
     for (const value of ['1', '3', '5', '6', '10', '60']) {
         assert.equal(cli.parseArgs([...base, '--concurrency', value]).concurrency, Number(value));
         assert.equal(migration.parseArgs([...migrationBase, '--concurrency', value]).concurrency, Number(value));
@@ -902,6 +906,25 @@ test('会议与迁移命令行接受1至60并发，保持默认值并拒绝非�
         assert.throws(() => migration.parseArgs([...migrationBase, '--concurrency', value]), /命令写法不对，用法：/);
     }
     assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /新会议的执行、分析和页面处理必须使用 conference:process/);
+});
+
+test('同一会议追加许可跨调用只释放一次调度窗口，保留旧尝试和原失败', async t => {
+    const f = fixture(t); let calls = 0;
+    const worker = async () => { calls++; throw Object.assign(new Error('synthetic content failure'), { retryable: true }); };
+    const first = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, { ...f.deps, processPaper: worker });
+    const grant = { apply: true, concurrency: 1, retryFailed: true,
+        recoveryGrantId: '11111111-1111-4111-8111-111111111111', recoveryGrantSha256: H('synthetic registered grant') };
+    for (let index = 0; index < 4; index++) await processApi.runConferenceProcess(grant, { ...f.deps, processPaper: worker });
+    const saved = processApi.assertState(JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, first.processId, 'state.json'))));
+    const item = saved.items[f.members[0].paperId];
+    assert.equal(calls, 4); // One original attempt and the same three new attempts.
+    assert.equal(item.attempts, 4);
+    assert.equal(item.retryBudgetStart, 1);
+    assert.equal(item.retryReleases.length, 1);
+    assert.equal(item.retryReleases[0].previousFailure.message, 'synthetic content failure');
+    await assert.rejects(processApi.runConferenceProcess({ ...grant, recoveryGrantSha256: H('changed grant') },
+        { ...f.deps, processPaper: worker }), /调度SHA改变/);
+    assert.equal(calls, 4);
 });
 
 test('会议库支持1至60并发且仅调度参数变化不改变原计划身份', async t => {

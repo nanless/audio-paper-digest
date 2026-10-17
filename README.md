@@ -56,7 +56,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | 停在哪里 | 下一步 |
 |---|---|
 | 日更分析或 Reader | 按[操作手册](SKILL.md)选择 deep、batch 或 Reader 刷新，继续原封存来源。 |
-| 会议处理 | 继续原 `conference:process`；实现变化或旧完成稿失败时使用对应[迁移与恢复](docs/conference-workflow.md#已有完整会议只更新页面)。 |
+| 会议处理 | 继续原 `conference:process`；实现变化或旧完成稿失败时使用对应[迁移与恢复](docs/conference-workflow.md#已有完整会议只更新页面)。原额度耗尽且用户明确批准新清单时，走[独立付费恢复](docs/conference-workflow.md#原额度耗尽后的独立付费恢复)，同一许可续跑并保留旧账。 |
 | 历史准备或分析 | 继续同一计划、来源获取序号和 `history:run`；已暂停时先按原控制协议恢复。 |
 | 博客正文或图片被拒 | 保存 findings，先完成本批其余页面，再回生成或修复阶段处理；review 不改写最终页面。 |
 | 认证、配额、配置、存储或运行级故障 | 停止新派发，保存在途结果，排除原故障后从原阶段继续。 |

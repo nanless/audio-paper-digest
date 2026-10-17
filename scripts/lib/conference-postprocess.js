@@ -178,7 +178,12 @@ function readOriginalTagProof(paper) {
 function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     if (!UUID_RE.test(executionId || '')) fail('分析运行 ID 必须是 UUID。');
     authority(planHandle, dependencies);
-    const loaded = (dependencies.loadConferenceAnalysis || adapter.loadConferenceAnalysis)({ analysisRoot, executionId });
+    let loaded = (dependencies.loadConferenceAnalysis || adapter.loadConferenceAnalysis)({ analysisRoot, executionId });
+    // A new paid window must be reopened from its registered source/CAS chain.
+    // Saved stage JSON alone cannot supply the private Reader identity scope.
+    if (loaded.analysis?.readerRevisionProgress !== undefined) {
+        loaded = adapter.loadConferenceReaderRevision({ analysisRoot, executionId });
+    }
     // 来源升级合并不同版本的已完成记录时，调用方会明确启用 trustEvidence。
     // 每份分析保留其创建时的计划凭证；当前单一计划不能同时匹配这些版本。
     // 此时只跳过当前计划与原计划的交叉检查，下方对运行、分析、完成凭证、
@@ -223,13 +228,15 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     const sourcePaper = loaded.analysis.papers[0];
     const authenticatedPdfBindings = (sourcePaper.apiReaderPlan?.tableBindings || [])
         .filter(binding => binding.authenticatedPdfTableEvidence !== undefined);
-    let readerPdfSourceHandle = null;
+    let readerPdfSourceHandle = loaded.recoveryWindow
+        ? adapter.verifyPlanAuthority(loaded, planHandle, sourceRoot) : null;
     if (authenticatedPdfBindings.length) {
         const identity = authenticatedPdfBindings[0].authenticatedPdfTableEvidence?.sourceIdentity;
         if (authenticatedPdfBindings.some(binding => stableHash(binding.authenticatedPdfTableEvidence?.sourceIdentity)
             !== stableHash(identity))) fail('会议 PDF 表格证明混用了不同原来源身份');
-        readerPdfSourceHandle = require('./conference-reader-publication-evidence')
+        const replayed = require('./conference-reader-publication-evidence')
             .replayCanonicalReaderPdfSource(sourcePaper, identity);
+        readerPdfSourceHandle ||= replayed;
     }
     let publicationEvidence = null;
     if (needsPublicationEvidence(sourcePaper)) {
@@ -268,11 +275,16 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     };
     // The plan/source replay above authenticates these exact source bytes. New
     // Reader claims must also see them during a cold publication qualification.
+    const qualifyInWindow = () => loaded.recoveryWindow
+        ? require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(
+            loaded.recoveryWindow.grantHandle, { paperId: loaded.run.paperId, executionId,
+                executionDir: loaded.directory, readerPdfSourceHandle }, qualify)
+        : qualify();
     const qualifyInSource = () => hasCurrentResourceClaims || readerPdfSourceHandle
         ? require('./conference-analysis-context').withConferenceAnalysisSource({
         executionId, executionDir: loaded.directory, paperId: loaded.run.paperId,
         sourceDetails: loaded.source.sourceDetails,
-        ...(readerPdfSourceHandle ? { readerPdfSourceHandle } : {}) }, qualify) : qualify();
+        ...(readerPdfSourceHandle ? { readerPdfSourceHandle } : {}) }, qualifyInWindow) : qualifyInWindow();
     return publicationEvidence
         ? require('./conference-reader-publication-evidence').withPublicationEvidence(publicationEvidence, qualifyInSource)
         : qualifyInSource();

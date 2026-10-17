@@ -435,10 +435,20 @@ function assertState(value, expected = null) {
         const revision = item.readerRevision;
         if (revision) {
             const { revisionSha256, ...body } = revision;
-            if (revisionSha256 !== stableHash(body) || revision.contract !== 'conference-reader-source-revision-v1'
-                || revision.version !== 1 || revision.paperId !== paperId || revision.executionId !== item.analysisRunId
-                || revision.executionId !== require('./conference-analysis-adapter').readerRevisionExecutionId(
-                    revision.parentExecutionId, revision.parentAnalysisFileSha256)
+            const additional = revision.contract === 'conference-reader-recovery-window-v1';
+            const validWindow = additional && revision.version === 1
+                && /^[a-f0-9-]{36}$/u.test(revision.grantId || '')
+                && /^[a-f0-9]{64}$/u.test(revision.grantSha256 || '')
+                && /^[a-f0-9]{64}$/u.test(revision.failedAnalysisFileSha256 || '')
+                && revision.originalMemberPaperId === paperId && revision.maxAttempts === 3
+                && revision.executionId === require('./conference-recovery-grant').grantedRecoveryExecutionId(
+                    revision.grantId, revision.failedExecutionId, revision.failedAnalysisFileSha256);
+            const validOriginal = !additional && revision.contract === 'conference-reader-source-revision-v1'
+                && revision.version === 1
+                && revision.executionId === require('./conference-analysis-adapter').readerRevisionExecutionId(
+                    revision.parentExecutionId, revision.parentAnalysisFileSha256);
+            if (revisionSha256 !== stableHash(body) || (!validOriginal && !validWindow)
+                || revision.paperId !== paperId || revision.executionId !== item.analysisRunId
                 || (!preservedComplete.has(paperId) && revision.parentExecutionId !== deterministicUuid(value.processId, paperId, 'analysis'))) {
                 throw new Error(`Conference process Reader revision integrity failed: ${paperId}`);
             }
@@ -951,9 +961,19 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 changed = true;
             }
             if (options.retryFailed && (item.lastFailure || item.status === 'analyzing')) {
-                item.retryReleases = [...(item.retryReleases || []), { at: deps.now(), attempts: item.attempts,
-                    previousFailure: item.lastFailure || null }];
-                item.retryBudgetStart = item.attempts; item.retryNotBefore = null;
+                const previousGrantRelease = options.recoveryGrantId && (item.retryReleases || [])
+                    .find(release => release.recoveryGrantId === options.recoveryGrantId);
+                if (previousGrantRelease && previousGrantRelease.recoveryGrantSha256 !== options.recoveryGrantSha256) {
+                    throw new Error('同一追加许可的调度SHA改变');
+                }
+                if (!previousGrantRelease) {
+                    item.retryReleases = [...(item.retryReleases || []), { at: deps.now(), attempts: item.attempts,
+                        previousFailure: item.lastFailure || null,
+                        ...(options.recoveryGrantId ? { recoveryGrantId: options.recoveryGrantId,
+                            recoveryGrantSha256: options.recoveryGrantSha256 } : {}) }];
+                    item.retryBudgetStart = item.attempts;
+                }
+                item.retryNotBefore = null;
                 // 把失败留作证据，另外记录显式的重试许可。
                 item.retryAuthorizedAtAttempt = item.attempts;
                 if (item.status === 'analyzing') item.status = 'analysis_partial';

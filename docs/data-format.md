@@ -94,6 +94,14 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 解读失败候选只供恢复，不能作为成功分析或发布依据。新版表格数量诊断使用 `code=reader_table_count_insufficient`、`requiredCount` 和 `actualCount`。计数必须是安全整数，满足 `requiredCount >= 1`、`0 <= actualCount < requiredCount`；带该错误代码却缺少有效计数时，不得从说明文字补出计数。`diagnosticOnly: true` 的记录仅供参考，不触发修复动作。旧保存诊断只由限定的兼容读取处理，不能让新的自然语言报错决定修复动作。通用草稿哈希及已有恢复身份的计算规则不变。
 
+## 会议独立追加窗口
+
+仅明确获准的会议剩余失败集合使用 `conference-recovery-grant-v1`。`data/runtime/conference-recovery-grants/<grantId>/` 的 `manifest.json`、`baseline-state.json` 和最后保存的 `registration.json` 不可变，绑定原 process、完整失败集合、原父子稿与候选 CAS、来源和 3轮/Reader累计6次/全文2次上限。普通状态 JSON 不能代替已核验的私有运行能力。
+
+原失败子稿保持不变；新子运行的 `reader-revision.json` 使用 `conference-reader-recovery-window-v1`，同时指向原完成父稿、原失败子稿和唯一已登记许可。`recovery-seed.json` 不可变保存正常接续的初始检查点；若先复用原付费核心摘要，必须由真实旧来源、原响应及正常引擎生成检查点，并逐字保护其余十二节，不能手写通过阶段。新 `readerRevisionProgress` 只累计本窗口轮次，process 的 `retryReleases` 按同一 grantId 只登记一次，重复执行不重新起算。
+
+`reader-grant-budget.json` 使用 `conference-granted-reader-budget-v1`，逐请求预留，绑定实际 Reader 身份。`reader-grant-request-<id>.json` 和内容响应的 `reader-grant-response-<id>.json` 是不可变原账；冷核须逐项与账本和真实输出 SHA 相符。未结请求保守占额，账本缺失或裁剪不能重开额度。新增请求沿公共费用记录保存，以该 grantId 作为 `runId`、新子运行 ID 的 SHA 作为默认 `unitId`，覆盖必要主分析、摘要、评分及 Reader，旧费用与旧连续失败不修改。生成、冷后处理和发布仍须核验真实会议来源及原完整链，详见[操作与恢复边界](conference-workflow.md#原额度耗尽后的独立付费恢复)。
+
 ## 批次轮次与人工建议的诊断
 
 共享批量调用返回 `rounds`、`failedIds`、`unstartedIds` 和 `manualHandoff`。每轮的 `inputIds` 是该轮固定集合；`attemptedIds`、`successIds`、`skippedIds`、`failedIds`、`retryableFailedIds` 和 `unstartedIds` 分开记录。下一轮只取可重试失败项，不把尚未启动或被预算/来源阻断的论文算成成功。结果数组保留每篇最近一次真实结果，`stats.roundsCompleted` 是已结束轮数；成功/失败数量按最新结果计算，不能把同篇多次尝试当成多篇成功。

@@ -12,7 +12,7 @@ const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--recovery-manifest ABSOLUTE_PATH]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -24,20 +24,22 @@ function parseArgs(argv) {
             if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
-        if (!['--catalog', '--report', '--filter', '--from', '--concurrency'].includes(flag)
+        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value; index += 2;
     }
     if (!/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--catalog'] || '')
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !UUID_RE.test(values['--filter'] || '') || !UUID_RE.test(values['--from'] || '')
-        || (values['--concurrency'] && !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values['--concurrency']))) {
+        || (values['--concurrency'] && !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values['--concurrency']))
+        || (values['--recovery-manifest'] && (!path.isAbsolute(values['--recovery-manifest']) || !values['--retry-failed']))) {
         throw new Error(`命令写法不对，用法：${USAGE}`);
     }
     return { apply: true, statusOnly: false, catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'],
         fromProcessId: values['--from'], concurrency: Number(values['--concurrency'] || 3),
-        reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']) };
+        reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']),
+        ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}) };
 }
 
 function withoutImplementation(authority, version = processApi.PROCESS_VERSION) {
@@ -80,6 +82,14 @@ function migrateAndRun(options, runtime = {}) {
     const migrationFile = path.join(directory, 'implementation-migration.json');
     const runLocked = async () => {
         let state = processApi.assertState(cli.readSafeJson(stateFile));
+        const grants = options.recoveryManifest ? require('./lib/conference-recovery-grant') : null;
+        const grantHandle = grants ? grants.openRecoveryGrant({ manifestPath: options.recoveryManifest,
+            processDirectory: directory, analysisRoot: deps.files.conferenceAnalysisDir, install: true }) : null;
+        const grant = grantHandle ? grants.recoveryGrantSummary(grantHandle) : null;
+        if (grant && (grant.processId !== options.fromProcessId
+            || Object.values(state.items).some(item => item.status !== 'complete' && !grant.paperIds.includes(item.paperId)))) {
+            throw new Error('追加许可只允许原完整失败集合，不能用于清单外未完成论文');
+        }
         if (processApi.stableHash(withoutImplementation(state.authority, state.version))
             !== processApi.stableHash(withoutImplementation(context.authority))) {
             throw new Error('来源、筛选或其余配置与原进程不一致，不能迁移实现。');
@@ -170,6 +180,9 @@ function migrateAndRun(options, runtime = {}) {
             complete: complete.length - stageFailures.size, failed: stageFailures.size,
             retryFailedRequired: true, failures: [...stageFailures].map(([paperId, failure]) => ({ paperId, ...failure }))
         };
+        if (grant && [...stageFailures.keys()].some(paperId => !grant.paperIds.includes(paperId))) {
+            throw new Error('已完成论文出现新的后处理失败，不属于获准追加集合；保留失败并停止新派发');
+        }
         if (requiresMigration || lifecycleNeedsRefresh) {
             const beforeStateSha256 = state.stateSha256;
             if (state.authority.implementationSha256 !== currentImplementation || lifecycleNeedsRefresh) {
@@ -268,10 +281,15 @@ function migrateAndRun(options, runtime = {}) {
                             contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
                 }
             }
-            const revised = await deps.adapter.refreshConferenceReader({ analysisRoot: deps.files.conferenceAnalysisDir,
-                parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
-                reusePaidCoreDiagnostics: options.retryFailed === true,
-                maxAttempts: Math.min(recovery.MAX_ATTEMPTS, deps.analysisConfig?.batchMaxRounds ?? 3) });
+            const revised = grantHandle
+                ? await deps.adapter.refreshConferenceGrantedRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
+                    parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
+                    failedExecutionId: grants.readRecoveryGrantMember(grantHandle, item.paperId).failedExecutionId,
+                    grantHandle, reusePaidCoreDiagnostics: true })
+                : await deps.adapter.refreshConferenceReader({ analysisRoot: deps.files.conferenceAnalysisDir,
+                    parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
+                    reusePaidCoreDiagnostics: options.retryFailed === true,
+                    maxAttempts: Math.min(recovery.MAX_ATTEMPTS, deps.analysisConfig?.batchMaxRounds ?? 3) });
             let staged;
             try { staged = deps.postprocess.stagePaper({ analysisRoot: deps.files.conferenceAnalysisDir,
                 executionId: revised.executionId, tagCatalogPath: deps.files.tagCatalogFile,
@@ -307,7 +325,8 @@ function migrateAndRun(options, runtime = {}) {
         // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
         // 出来，流程完成时才能原子写入新凭证。
         archiveStaleCompletionReceipt(directory, state);
-        return processApi.runConferenceProcessLocked(options, migrationDeps, context,
+        return processApi.runConferenceProcessLocked(grant ? { ...options, recoveryGrantId: grant.grantId,
+            recoveryGrantSha256: grant.grantSha256 } : options, migrationDeps, context,
             options.fromProcessId, directory);
     };
     return deps.engine.withFileLock(operation, () => require('./lib/analysis-stop-control')

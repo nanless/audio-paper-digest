@@ -1,0 +1,302 @@
+'use strict';
+// Adapter orchestration tests use real registered grants and real plan/PDF
+// fixtures. Stage outputs below are test doubles, never production completion.
+const test = require('node:test'), assert = require('node:assert/strict');
+const fs = require('node:fs'), path = require('node:path');
+const adapter = require('../scripts/lib/conference-analysis-adapter');
+const actualEngine = require('../scripts/analysis-engine');
+const actualDeep = require('../scripts/deep-analyzer');
+const context = require('../scripts/lib/conference-analysis-context');
+const grants = require('../scripts/lib/conference-recovery-grant');
+const budget = require('../scripts/lib/conference-reader-recovery-window');
+const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture');
+const { recoveryFixtureIdentity, registerRecoveryFixture } = require('./helpers/conference-recovery-grant-fixture');
+const { validAnalysisText } = require('./valid-analysis-fixture');
+
+async function fixture(t, { invalidCore = false, scoringMode = false, coreRejected = false } = {}) {
+    const f = productionPlanFixture(t), identity = recoveryFixtureIdentity(f.paperId);
+    const analysisRoot = path.join(f.root, 'data/runtime/conference-analysis-executions');
+    const input = { analysisRoot, parentExecutionId: identity.parentExecutionId,
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot };
+    adapter.prepareConferenceAnalysis({ ...input, executionId: identity.parentExecutionId, paperId: f.paperId });
+    let parent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: identity.parentExecutionId });
+    let analysis = invalidCore ? 'original invalid core' : validAnalysisText().replace('## 核心摘要\n',
+        '## 核心摘要\n原文未提供可核对的关键定量结果。');
+    if (scoringMode) analysis = analysis.replace('has_code: 否', 'has_code: 是');
+    const sourceSha256 = require('crypto').createHash('sha256').update(parent.source.sourceDetails.text).digest('hex');
+    const paper = { ...parent.analysis.papers[0], sourceSha256, analysis, apiReaderArticle: 'original parent Reader',
+        analysisManifest: { sourceAcquisition: { sourceSha256: parent.source.sourceDetails.text &&
+            require('crypto').createHash('sha256').update(parent.source.sourceDetails.text).digest('hex'),
+            modelTextSanitizationContract: 'model-text-unicode-scalars-v1' },
+            stages: { primaryAnalysis: { status: 'complete' }, coreSummaryRepair: { status: 'complete' },
+                scoringAudit: { status: 'complete' }, apiReaderArticle: { status: 'complete' } } } };
+    adapter.replaceJson(path.join(parent.directory, 'analysis.json'), { ...parent.analysis, status: 'complete',
+        completedAt: '2026-10-17T12:00:00.000Z', papers: [paper] }, parent.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: identity.parentExecutionId }));
+    parent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: identity.parentExecutionId });
+    const post = require('../scripts/lib/conference-postprocess'), oldRead = post.readOriginalTagProof;
+    post.readOriginalTagProof = () => ({ rules: {} }); t.after(() => { post.readOriginalTagProof = oldRead; });
+    const engine = { LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY: actualEngine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
+        withPaperAnalysisLock: actualEngine.withPaperAnalysisLock,
+        getConferenceReaderRefreshUpstreamReason: () => null,
+        isSuccessfulAnalysisRecordForReadOnlyConferencePublication: () => false };
+    const operations = { buildApiReaderResourceIdentity: actualDeep.buildApiReaderResourceIdentity,
+        inspectSavedConferenceReaderCompletion: async () => null,
+        refreshApiReaderArticleFromSource: async () => { throw Error('original paid fixture failure'); } };
+    operations.refreshApiScoringAndReaderFromSource = async (current, _source, options) => {
+        current.analysis = actualDeep.applyApiReaderResourceAvailability(current.analysis, current.apiReaderResources);
+        const audit = { fixture: 'signed-score-content' };
+        current.analysisManifest.stages.scoringAudit = { status: 'complete', audit,
+            auditSha256: adapter.stableHash(audit), fixtureScoringToken: 'preserve-original-paid-score' };
+        await options.onScoringComplete(current);
+        throw Error('original paid fixture failure');
+    };
+    await assert.rejects(adapter.refreshConferenceReader(input, { engine, deep: operations }), /original paid fixture failure/);
+    const failedExecutionId = adapter.readerRevisionExecutionId(identity.parentExecutionId, parent.analysisFileSha256);
+    let failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
+    adapter.replaceJson(path.join(failed.directory, 'analysis.json'), { ...failed.analysis,
+        readerRevisionProgress: { ...failed.analysis.readerRevisionProgress, attempts: 3 } }, failed.analysisFileSha256);
+    failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
+    if (coreRejected) {
+        const changed = structuredClone(failed.analysis);
+        changed.papers[0].analysisCheckpoint = changed.papers[0].analysis;
+        changed.papers[0].analysisManifest.stages.coreSummaryRepair.status = 'contract_rejected';
+        adapter.replaceJson(path.join(failed.directory, 'analysis.json'), changed, failed.analysisFileSha256);
+        failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
+    }
+    const grant = registerRecoveryFixture({ analysisRoot, parentExecutionId: identity.parentExecutionId, failedExecutionId, paperId: f.paperId });
+    return { ...f, ...input, failedExecutionId, failed, grant, engine, operations };
+}
+
+test('真实注册许可新建隔离窗口，原3/3与原稿字节不变，新窗口三轮封顶', async t => {
+    const f = await fixture(t), originalBytes = fs.readFileSync(path.join(f.failed.directory, 'analysis.json'));
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    let calls = 0;
+    const operations = { ...f.operations, refreshApiReaderArticleFromSource: async (paper, source) => {
+        calls++;
+        assert.equal(context.getConferenceAnalysisSource(paper).text, source.text);
+        const window = budget.getCurrentReaderWindow(paper, source.text);
+        assert.equal(window.grantId, f.grant.manifest.grantId);
+        assert.notEqual(window.executionId, f.failedExecutionId);
+        throw Error('new window fixture content failure');
+    } };
+    for (let round = 0; round < 3; round++) await assert.rejects(
+        adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }), /new window fixture content failure/);
+    const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+    const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+    assert.equal(loaded.revision.mode, 'reader-only');
+    assert.equal(loaded.analysis.readerRevisionProgress.attempts, 3);
+    assert.equal(loaded.analysis.readerRevisionProgress.failures.length, 3);
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }),
+        error => error.code === 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED');
+    assert.equal(calls, 3);
+    const revisionFile = path.join(loaded.directory, 'reader-revision.json');
+    const originalRevision = adapter.readJsonRecord(revisionFile);
+    const { revisionSha256: _previous, ...changedMode } = originalRevision.value;
+    changedMode.mode = 'normal-analysis';
+    adapter.replaceJson(revisionFile, { ...changedMode, revisionSha256: adapter.stableHash(changedMode) }, originalRevision.sha256);
+    assert.throws(() => adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot,
+        executionId: member.expectedExecutionId }), /模式与原失败上游范围不一致/);
+    adapter.replaceJson(revisionFile, originalRevision.value, adapter.readJsonRecord(revisionFile).sha256);
+    assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, 'analysis.json')), originalBytes);
+    assert.equal(adapter.loadConferenceReaderRevision({ analysisRoot: f.analysisRoot, executionId: f.failedExecutionId }).analysis.readerRevisionProgress.attempts, 3);
+});
+
+test('伪许可与旧稿CAS漂移在新窗口写入/模型调用前拒绝', async t => {
+    const f = await fixture(t), request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: {} };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: f.operations }), /追加许可能力/);
+    const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId), dir = path.join(f.analysisRoot, member.expectedExecutionId);
+    assert.equal(fs.existsSync(dir), false);
+    fs.appendFileSync(path.join(f.failed.directory, 'analysis.json'), ' ');
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery({ ...request, grantHandle: f.grant.handle },
+        { engine: f.engine, deep: f.operations }), /原父稿|CAS|已变化/);
+    assert.equal(fs.existsSync(dir), false);
+});
+
+test('原Reader-only遇真实不合法核心，只在独立获准窗口升级正常上游', async t => {
+    const f = await fixture(t, { invalidCore: true }), before = fs.readFileSync(path.join(f.failed.directory, 'reader-revision.json'));
+    let normalCalls = 0;
+    const engine = { ...f.engine, analyzePaperWithRetry: async paper => {
+        normalCalls++; assert.ok(context.getConferenceAnalysisSource(paper));
+        assert.ok(budget.getCurrentReaderWindow(paper));
+        return { success: false, result: paper, error: 'normal upstream fixture failure', retryable: false };
+    } };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery({ analysisRoot: f.analysisRoot,
+        parentExecutionId: f.parentExecutionId, failedExecutionId: f.failedExecutionId, planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot, grantHandle: f.grant.handle }, { engine, deep: f.operations }), /normal upstream fixture failure/);
+    const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+    const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+    assert.equal(loaded.revision.mode, 'normal-analysis'); assert.equal(normalCalls, 1);
+    assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, 'reader-revision.json')), before);
+});
+
+
+test('原已签评分检查点逐字核验后继承到新窗口，不重复评分', async t => {
+    const f = await fixture(t, { scoringMode: true });
+    assert.equal(f.failed.revision.mode, 'scoring-and-reader');
+    const oldCheckpoint = structuredClone(f.failed.analysis.readerRevisionProgress.scoringCheckpoint);
+    const originalAnalysis = fs.readFileSync(path.join(f.failed.directory, 'analysis.json'));
+    assert.ok(oldCheckpoint);
+    let scoringCalls = 0, readerCalls = 0;
+    const operations = { ...f.operations,
+        refreshApiScoringAndReaderFromSource: async () => { scoringCalls++; throw Error('must not score again'); },
+        refreshApiReaderArticleFromSource: async () => { readerCalls++; throw Error('Reader fixture still incomplete'); } };
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }), /Reader fixture still incomplete/);
+    const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+    const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+    assert.equal(scoringCalls, 0); assert.equal(readerCalls, 1);
+    assert.deepEqual(loaded.analysis.readerRevisionProgress.inheritedScoringCheckpoint.checkpoint, oldCheckpoint);
+    assert.equal(loaded.analysis.readerRevisionProgress.inheritedScoringCheckpoint.executionId, f.failedExecutionId);
+    assert.notEqual(loaded.analysis.readerRevisionProgress.scoringCheckpoint.revisionSha256, oldCheckpoint.revisionSha256);
+    assert.equal(loaded.analysis.readerRevisionProgress.scoringCheckpoint.scoringStageSha256, oldCheckpoint.scoringStageSha256);
+    const analysisFile = path.join(loaded.directory, 'analysis.json');
+    const changed = structuredClone(loaded.analysis);
+    changed.papers[0].analysisManifest.stages.scoringAudit.fixtureScoringToken = 'tampered-new-score';
+    adapter.replaceJson(analysisFile, changed, loaded.analysisFileSha256);
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }), /评分检查点/);
+    assert.equal(scoringCalls, 0); assert.equal(readerCalls, 1);
+    assert.equal(adapter.readJsonRecord(analysisFile).value.readerRevisionProgress.attempts, 1);
+    assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, 'analysis.json')), originalAnalysis);
+});
+
+
+test('新窗口完成与重入沿正常资格接口，旧阶段及原失败计数不动', async t => {
+    const f = await fixture(t), oldBytes = fs.readFileSync(path.join(f.failed.directory, 'analysis.json'));
+    let readers = 0;
+    const engine = { ...f.engine, isSuccessfulAnalysisRecordForReadOnlyConferencePublication: paper => {
+        assert.ok(context.getConferenceAnalysisSource(paper));
+        assert.ok(budget.getCurrentReaderWindow(paper));
+        return paper.apiReaderArticle === 'new isolated fixture Reader';
+    } };
+    const operations = { ...f.operations, refreshApiReaderArticleFromSource: async paper => {
+        readers++; paper.apiReaderArticle = 'new isolated fixture Reader'; return paper;
+    } };
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    const result = await adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations });
+    assert.equal(result.status, 'complete');
+    const first = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: result.executionId });
+    const completeBytes = fs.readFileSync(path.join(first.directory, 'analysis.json'));
+    assert.equal(first.run.status, 'complete');
+    for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit']) assert.deepEqual(
+        first.analysis.papers[0].analysisManifest.stages[name], f.failed.analysis.papers[0].analysisManifest.stages[name]);
+    assert.equal(first.analysis.readerRevisionProgress.attempts, 1);
+    assert.deepEqual(first.analysis.readerRevisionProgress.failures, []);
+    await adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations });
+    assert.equal(readers, 1);
+    assert.deepEqual(fs.readFileSync(path.join(first.directory, 'analysis.json')), completeBytes);
+    assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, 'analysis.json')), oldBytes);
+});
+
+
+test('旧核心零请求复验仅一次且封存确定性，仍不合格才交新正常窗口', async t => {
+    const f = await fixture(t, { coreRejected: true });
+    let oldCoreReads = 0, newCalls = 0;
+    const operations = { ...f.operations, analyzePaperDeep: async paper => {
+        oldCoreReads++;
+        assert.equal(context.getConferenceAnalysisContext().executionId, f.failedExecutionId);
+        assert.ok(context.getConferenceAnalysisContext().readerPdfSourceHandle);
+        assert.throws(() => require('../scripts/lib/analysis-stop-control').assertMayStartRequest(),
+            error => error.code === 'MODEL_REQUESTS_FORBIDDEN_FOR_REPLAY');
+        throw Object.assign(Error('原付费摘要仍未通过当前检查：fixture'), { code: 'CONTRACT_REJECTED' });
+    }, refreshApiReaderArticleFromSource: async () => { newCalls++; throw Error('new permitted fixture Reader failure'); } };
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    const engine = { ...f.engine, analyzePaperWithRetry: async paper => {
+        newCalls++; return { success: false, result: paper, error: 'new permitted fixture Reader failure', retryable: false };
+    } };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations }), /new permitted fixture Reader failure/);
+    const id = grants.readRecoveryGrantMember(f.grant.handle, f.paperId).expectedExecutionId;
+    const seedFile = path.join(f.analysisRoot, id, 'recovery-seed.json'), before = fs.readFileSync(seedFile);
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations }), /new permitted fixture Reader failure/);
+    assert.equal(oldCoreReads, 1); assert.equal(newCalls, 2);
+    assert.deepEqual(fs.readFileSync(seedFile), before);
+    assert.match(JSON.parse(before).coreReplayFailure.message, /原付费摘要仍未通过/);
+});
+
+test('旧核心复验的十二节/上游保护和真实存储异常不能降为可付费fallback', async t => {
+    const f = await fixture(t, { coreRejected: true });
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    let nextCalls = 0;
+    const operations = { ...f.operations, refreshApiReaderArticleFromSource: async () => { nextCalls++; } };
+    operations.analyzePaperDeep = async paper => {
+        paper.analysisCheckpoint += '\nchanged exterior';
+        paper.analysisManifest.stages.coreSummaryRepair = { status: 'complete', paidDiagnosticReplay: { id: '11111111-1111-4111-8111-111111111111' } };
+        paper[Symbol.for('audio-paper-digest.analysisCheckpointCallback')](paper);
+    };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }),
+        error => error.code === 'CONFERENCE_RECOVERY_GRANT_INTEGRITY' && /十二节/.test(error.message));
+    operations.analyzePaperDeep = async () => { throw Object.assign(Error('fixture disk read failed'), { code: 'EIO' }); };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }), /fixture disk read failed/);
+    assert.equal(nextCalls, 0);
+    const id = grants.readRecoveryGrantMember(f.grant.handle, f.paperId).expectedExecutionId;
+    assert.equal(fs.existsSync(path.join(f.analysisRoot, id, 'recovery-seed.json')), false);
+});
+
+
+test('真实核心诊断三文件经生产原核心阶段签发，捕获后可冷重入且旧文件不改', async t => {
+    const f = await fixture(t, { coreRejected: true });
+    const filename = require.resolve('../scripts/deep-analyzer'), raw = fs.readFileSync(filename, 'utf8');
+    const begin = raw.indexOf('    let coreSummaryRepairStage = prepareTextRecoveryStage(');
+    const end = raw.indexOf('    // 评分前，先核对资源链接', begin);
+    assert.ok(begin > 0 && end > begin);
+    const Module = require('node:module'), compiled = new Module(filename, module);
+    compiled.filename = filename; compiled.paths = Module._nodeModulePaths(path.dirname(filename));
+    // Invoke the unchanged production core phase only; do not handwrite a stage
+    // or repeat the engine's binding/signature implementation in this fixture.
+    compiled._compile(raw + '\nmodule.exports.testCoreTokens=TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens;\n'
+        + 'module.exports.testNormalCorePhase=async(paper,options)=>{let analysis=paper.analysisCheckpoint;'
+        + 'const analysisManifest=paper.analysisManifest,rawTextForAnalysis=options.sourceText,arxivId=paper.id,imageManifest=null;'
+        + raw.slice(begin,end) + '\nreturn paper;};', filename);
+    const old = f.failed.analysis.papers[0], sourceText = f.failed.source.sourceDetails.text;
+    const handle = adapter.verifyPlanAuthority(f.failed, f.planHandle, f.sourceRoot);
+    const withOld = callback => context.withConferenceAnalysisSource({ executionId: f.failedExecutionId,
+        executionDir: f.failed.directory, paperId: f.paperId, sourceDetails: f.failed.source.sourceDetails,
+        readerPdfSourceHandle: handle }, callback);
+    const prepared = withOld(() => actualDeep.prepareTextRecoveryStage(structuredClone(old),
+        structuredClone(old.analysisManifest), 'coreSummaryRepair', old.analysisCheckpoint, sourceText));
+    const diagnosticSource = withOld(() => context.conferenceCoreSummaryRepairContext(old, sourceText));
+    const hash = value => require('crypto').createHash('sha256').update(value).digest('hex');
+    const identity = { paperId: f.paperId, sourceIdentity: diagnosticSource.sourceIdentity,
+        sourceTextSha256: hash(sourceText), inputAnalysisSha256: hash(prepared.inputAnalysis),
+        evidenceSha256: hash(prepared.evidenceContext), stageFingerprint: prepared.fingerprint,
+        maxTokens: compiled.exports.testCoreTokens, repairRequestPolicy: actualDeep.resolveRepairRequestPolicy('coreSummaryRepair') || null,
+        promptTextContract: prepared.promptTextContract };
+    const diagnostics = require('../scripts/lib/reader-request-diagnostics');
+    const record = diagnostics.beginCoreSummaryDiagnostic(diagnosticSource.directory,
+        { identity, inputAnalysis: prepared.inputAnalysis, sourceText, evidenceText: prepared.evidenceContext,
+            prompt: 'Explicitly synthetic offline core replay fixture; no provider request is claimed.' });
+    const response = '## 核心摘要\n' + actualDeep.extractSectionByTitle(prepared.inputAnalysis, '核心摘要');
+    diagnostics.saveCoreSummaryResponse(record, response);
+    diagnostics.saveCoreSummaryDisposition(record, { status: 'rejected', outputTextSha256: hash(response) });
+    const originalFiles = Object.fromEntries(['analysis.json','run.json','source.json','reader-revision.json']
+        .map(name => [name, fs.readFileSync(path.join(f.failed.directory,name))]));
+    let replayCalls = 0, downstreamCalls = 0;
+    const operations = { ...f.operations, analyzePaperDeep: async (paper, options) => {
+        replayCalls++; assert.equal(options.replayLatestCoreSummaryDiagnostic, true);
+        assert.equal(context.getConferenceAnalysisContext().executionId, f.failedExecutionId);
+        return compiled.exports.testNormalCorePhase(paper, { ...options, sourceText });
+    } };
+    const engine = { ...f.engine, analyzePaperWithRetry: async paper => {
+        downstreamCalls++;
+        assert.equal(paper.analysisManifest.stages.coreSummaryRepair.paidDiagnosticReplay.id, record.id);
+        assert.ok(['complete','not_needed'].includes(paper.analysisManifest.stages.coreSummaryRepair.status));
+        return { success: false, result: paper, error: 'new downstream fixture incomplete', retryable: false };
+    } };
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations }), /new downstream fixture incomplete/);
+    const id = grants.readRecoveryGrantMember(f.grant.handle, f.paperId).expectedExecutionId;
+    const seedFile = path.join(f.analysisRoot,id,'recovery-seed.json'), seedBytes = fs.readFileSync(seedFile);
+    assert.equal(JSON.parse(seedBytes).paidCoreReplay, record.id);
+    adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: id });
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations }), /new downstream fixture incomplete/);
+    assert.equal(replayCalls, 1); assert.equal(downstreamCalls, 2);
+    assert.deepEqual(fs.readFileSync(seedFile), seedBytes);
+    for (const [name,bytes] of Object.entries(originalFiles)) assert.deepEqual(fs.readFileSync(path.join(f.failed.directory,name)),bytes);
+});

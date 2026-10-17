@@ -94,3 +94,21 @@ test('正常签发的新PDF字段经真实canonical和原计划冷核，再由�
     }
     assert.equal(publication.readVerifiedPublicationReaderPdfSource({...proof.sourceIdentity}),null);
 });
+
+
+test('冷表证不能用完整PDF来源替代新增恢复窗口的真实登记凭证', t => {
+    const f = fixture(t), proof = f.paper.apiReaderPlan.tableBindings[0].authenticatedPdfTableEvidence;
+    const analysis = { ...f.loaded.analysis, readerRevisionProgress: { attempts: 1, failures: [] } };
+    adapter.replaceJson(path.join(f.loaded.directory, 'analysis.json'), analysis, f.loaded.analysisFileSha256);
+    // replaceJson returns no receipt; read the real canonical bytes before sealing.
+    adapter.sealCompletedRun({ ...f.loaded,
+        analysisFileSha256: adapter.readJsonRecord(path.join(f.loaded.directory, 'analysis.json')).sha256 });
+    assert.throws(() => publication.replayCanonicalReaderPdfSource(f.paper, proof.sourceIdentity), /ENOENT/);
+    const body = { contract: 'conference-reader-recovery-window-v1', version: 1,
+        executionId, paperId: f.paperId, grantId: '11111111-2222-4333-8444-555555555555',
+        grantSha256: 'a'.repeat(64) };
+    adapter.writeBytesAtomic(path.join(f.loaded.directory, 'reader-revision.json'),
+        Buffer.from(JSON.stringify({ ...body, revisionSha256: adapter.stableHash(body) }, null, 2) + '\n'));
+    assert.throws(() => publication.replayCanonicalReaderPdfSource(f.paper, proof.sourceIdentity), /窗口身份或 SHA|追加许可/);
+    assert.equal(fs.existsSync(path.join(f.loaded.directory, 'reader-grant-budget.json')), false);
+});

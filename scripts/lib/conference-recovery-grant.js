@@ -1,0 +1,267 @@
+'use strict';
+
+// Explicit, immutable additional budgets. A caller's JSON is never the runtime
+// capability: only a verified registration can issue this module's WeakMap handle.
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const handles = new WeakMap();
+const registrations = new Map();
+const CONTRACT = 'conference-recovery-grant-v1';
+const RECEIPT = 'conference-recovery-grant-registration-v1';
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+const SHA = /^[a-f0-9]{64}$/u;
+const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const api = () => require('./conference-process');
+const adapter = () => require('./conference-analysis-adapter');
+const hash = value => api().stableHash(value);
+const clone = value => JSON.parse(JSON.stringify(value));
+function freeze(value) {
+    if (value && typeof value === 'object') {
+        for (const child of Object.values(value)) freeze(child);
+        Object.freeze(value);
+    }
+    return value;
+}
+function fail(message) {
+    throw Object.assign(new Error(`会议追加额度：${message}`), {
+        code: 'CONFERENCE_RECOVERY_GRANT_INTEGRITY', scope: 'run', retryable: false
+    });
+}
+function directory(filename, create = false) {
+    const absolute = path.resolve(filename); let cursor = path.parse(absolute).root;
+    for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
+        cursor = path.join(cursor, part);
+        try { const stat = fs.lstatSync(cursor);
+            if (!stat.isDirectory() || stat.isSymbolicLink()) fail('目录不能是链接或普通文件');
+        } catch (error) {
+            if (error.code !== 'ENOENT' || !create) throw error;
+            fs.mkdirSync(cursor, { mode: 0o700 });
+        }
+    }
+    return absolute;
+}
+function read(filename) {
+    const info = fs.lstatSync(filename);
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || (info.mode & 0o777) !== 0o600) {
+        fail(`文件必须是0600单链接普通文件：${path.basename(filename)}`);
+    }
+    return adapter().readJsonRecord(filename);
+}
+function grantRoot(analysisRoot, create = false) {
+    const root = directory(analysisRoot);
+    return directory(path.join(path.dirname(root), 'conference-recovery-grants'), create);
+}
+function grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256) {
+    if (!UUID.test(grantId || '') || !UUID.test(failedExecutionId || '') || !SHA.test(failedAnalysisFileSha256 || '')) {
+        fail('恢复窗口身份不合法');
+    }
+    return api().deterministicUuid(hash({ grantId, failedExecutionId, failedAnalysisFileSha256 }),
+        'conference-reader-recovery-window-v1');
+}
+function casPath(repositoryRoot, member, relative) {
+    const allowed = [member.parentExecutionId, member.childExecutionId];
+    const parts = typeof relative === 'string' ? relative.split('/') : [];
+    if (parts.length < 5 || parts.slice(0, 3).join('/') !== 'data/runtime/conference-analysis-executions'
+        || !allowed.includes(parts[3]) || parts.some(part => !part || part === '.' || part === '..')
+        || !(parts.length === 5 && /^(?:analysis|run|source|reader-revision|reader-resource-preflight)\.json$/u.test(parts[4])
+            || parts.length === 6 && parts[4] === 'reader-attempts' && /^[a-f0-9]{64}\.json$/u.test(parts[5]))) {
+        fail('成员CAS路径不属于原父/子运行的受控文件');
+    }
+    const filename = path.join(repositoryRoot, relative);
+    directory(path.dirname(filename));
+    return filename;
+}
+function memberPins(member) {
+    const base = 'data/runtime/conference-analysis-executions/';
+    const digest = (id, name) => member.recordCAS?.[`${base}${id}/${name}`];
+    const result = {
+        parentAnalysisFileSha256: digest(member.parentExecutionId, 'analysis.json'),
+        parentRunFileSha256: digest(member.parentExecutionId, 'run.json'),
+        failedAnalysisFileSha256: digest(member.childExecutionId, 'analysis.json'),
+        failedRunFileSha256: digest(member.childExecutionId, 'run.json'),
+        failedSourceFileSha256: digest(member.childExecutionId, 'source.json'),
+        failedRevisionFileSha256: digest(member.childExecutionId, 'reader-revision.json')
+    };
+    if (Object.values(result).some(value => !SHA.test(value || ''))) fail('成员缺少完整父/子CAS');
+    return result;
+}
+function assertMemberFiles(state, member) {
+    for (const [relative, expected] of Object.entries(member.recordCAS || {})) {
+        if (!SHA.test(expected || '') || read(casPath(state.repositoryRoot, member, relative)).sha256 !== expected) {
+            fail('原父稿、失败稿、候选或来源文件已变化');
+        }
+    }
+    const run = read(path.join(state.analysisRoot, member.childExecutionId, 'run.json')).value;
+    const source = read(path.join(state.analysisRoot, member.childExecutionId, 'source.json')).value;
+    if (run.paperId !== member.paperId || run.sourceSnapshotSha256 !== member.sourceSnapshotSha256
+        || sha(source.sourceDetails?.text || '') !== member.sourceTextSha256) {
+        fail('原子运行与封存全文身份不一致');
+    }
+}
+function assertManifest(manifest) {
+    const { manifestSha256, ...body } = manifest || {};
+    if (manifest.contract !== CONTRACT || manifest.version !== 1 || !UUID.test(manifest.grantId || '')
+        || !UUID.test(manifest.processId || '') || !SHA.test(manifest.baselineStateFileSha256 || '')
+        || !SHA.test(manifest.inventorySha256 || '') || manifestSha256 !== hash(body)
+        || !manifest.approval || manifest.approval.kind !== 'explicit-human'
+        || typeof manifest.approval.reference !== 'string' || !manifest.approval.reference.trim()
+        || typeof manifest.approval.answer !== 'string' || !manifest.approval.answer.trim()
+        || !Number.isFinite(Date.parse(manifest.approval.approvedAt))) fail('追加许可格式或明确授权记录无效');
+    if (hash(manifest.limits) !== hash({ maxRounds: 3, readerContentResponses: 6,
+        readerFullResponses: 2, readerTransportAttempts: 2 })) fail('追加额度必须为同一批3轮、Reader总6/全文2');
+    if (!Array.isArray(manifest.members) || !manifest.members.length
+        || new Set(manifest.members.map(member => member.paperId)).size !== manifest.members.length) {
+        fail('追加集合为空或有重复成员');
+    }
+    for (const member of manifest.members) {
+        if (!/^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/u.test(member.paperId || '')
+            || !UUID.test(member.parentExecutionId || '') || !UUID.test(member.childExecutionId || '')
+            || !SHA.test(member.sourceTextSha256 || '') || !SHA.test(member.sourceSnapshotSha256 || '')) {
+            fail('成员身份或来源SHA不合法');
+        }
+        memberPins(member);
+    }
+    return manifest;
+}
+function checkBaseline(manifest, baseline) {
+    const state = api().assertState(baseline.value);
+    if (baseline.sha256 !== manifest.baselineStateFileSha256 || state.processId !== manifest.processId
+        || state.generation !== manifest.baselineGeneration || state.status !== 'partial') fail('原批次基线不匹配');
+    const failed = Object.values(state.items).filter(item => item.status !== 'complete');
+    if (failed.some(item => item.status === 'analyzing')
+        || hash(failed.map(item => item.paperId).sort()) !== hash(manifest.members.map(item => item.paperId).sort())) {
+        fail('清单必须精确覆盖原批次完整失败集合');
+    }
+    for (const member of manifest.members) {
+        const item = state.items[member.paperId], pins = memberPins(member);
+        if (item.analysisRunId !== member.parentExecutionId
+            || item.analysisProof?.analysisSha256 !== pins.parentAnalysisFileSha256
+            || item.sourceProof?.textSha256 !== member.sourceTextSha256
+            || item.analysisProof?.sourceSnapshotSha256 !== member.sourceSnapshotSha256) {
+            fail('成员不对应原批次的父包和来源证明');
+        }
+    }
+    return state;
+}
+function makeHandle(manifest, directoryPath, analysisRoot, processDirectory) {
+    const handle = Object.freeze(Object.create(null));
+    const state = { manifest: freeze(clone(manifest)), directory: directoryPath,
+        analysisRoot: directory(analysisRoot), processDirectory: directory(processDirectory),
+        repositoryRoot: path.resolve(analysisRoot, '../../..') };
+    handles.set(handle, state);
+    return handle;
+}
+function registrationStamp(filename) {
+    const stat = fs.lstatSync(filename, { bigint: true });
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n || (stat.mode & 0o777n) !== 0o600n) {
+        fail('已登记文件的类型、权限或链接变化');
+    }
+    return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.nlink, stat.mode].join(':');
+}
+function assertRegistration(state) {
+    for (const [filename, expected] of state.registrationStamps) {
+        if (registrationStamp(filename) !== expected) fail('不可变的已登记许可或原基线文件已变化');
+    }
+}
+function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, install = false }) {
+    if (!path.isAbsolute(manifestPath || '') || !path.isAbsolute(processDirectory || '')
+        || !path.isAbsolute(analysisRoot || '')) fail('追加许可与运行目录必须使用绝对路径');
+    const original = read(manifestPath), manifest = assertManifest(original.value);
+    if (path.basename(processDirectory) !== manifest.processId) fail('追加许可的process目录不匹配');
+    const root = grantRoot(analysisRoot, install), target = path.join(root, manifest.grantId);
+    const receiptFile = path.join(target, 'registration.json');
+    if (!fs.existsSync(receiptFile)) {
+        if (!install) fail('追加许可尚未显式登记');
+        const baseline = read(path.join(processDirectory, 'state.json'));
+        checkBaseline(manifest, baseline);
+        const temporaryHandle = makeHandle(manifest, root, analysisRoot, processDirectory);
+        const data = handles.get(temporaryHandle);
+        for (const member of manifest.members) assertMemberFiles(data, member);
+        directory(target, true);
+        // Exact writes are no-overwrite and crash-resumable. The receipt is last.
+        adapter().writeBytesAtomic(path.join(target, 'manifest.json'), original.bytes);
+        adapter().writeBytesAtomic(path.join(target, 'baseline-state.json'), baseline.bytes);
+        const body = { contract: RECEIPT, version: 1, grantId: manifest.grantId,
+            grantSha256: manifest.manifestSha256, manifestFileSha256: original.sha256,
+            baselineStateFileSha256: baseline.sha256, processId: manifest.processId,
+            analysisRoot: directory(analysisRoot), processDirectory: directory(processDirectory),
+            inventorySha256: manifest.inventorySha256 };
+        adapter().writeBytesAtomic(receiptFile, Buffer.from(JSON.stringify({ ...body, receiptSha256: hash(body) }, null, 2) + '\n'));
+    }
+    directory(target);
+    const registered = read(path.join(target, 'manifest.json'));
+    const receipt = read(receiptFile).value, { receiptSha256, ...receiptBody } = receipt;
+    if (receipt.contract !== RECEIPT || receipt.version !== 1 || receiptSha256 !== hash(receiptBody)
+        || !registered.bytes.equals(original.bytes) || receipt.manifestFileSha256 !== original.sha256
+        || receipt.grantId !== manifest.grantId || receipt.grantSha256 !== manifest.manifestSha256
+        || receipt.processId !== manifest.processId || receipt.analysisRoot !== directory(analysisRoot)
+        || receipt.processDirectory !== directory(processDirectory)
+        || receipt.inventorySha256 !== manifest.inventorySha256) fail('已登记追加许可身份不匹配');
+    checkBaseline(manifest, read(path.join(target, 'baseline-state.json')));
+    const handle = makeHandle(manifest, target, analysisRoot, processDirectory);
+    const data = handles.get(handle);
+    for (const member of manifest.members) assertMemberFiles(data, member);
+    data.registrationStamps = ['manifest.json', 'registration.json', 'baseline-state.json'].map(name => {
+        const filename = path.join(target, name); return [filename, registrationStamp(filename)];
+    });
+    registrations.set(path.join(target, 'manifest.json'), handle);
+    return handle;
+}
+function readRecoveryGrantMember(handle, paperId) {
+    const state = handles.get(handle);
+    if (!state) fail('需要真实已登记的追加许可能力');
+    const member = state.manifest.members.find(value => value.paperId === paperId);
+    if (!member) fail('论文不在获准的完整集合中');
+    const pins = memberPins(member);
+    const assertUnchanged = () => {
+        assertRegistration(state);
+        assertMemberFiles(state, member);
+    };
+    assertUnchanged();
+    return Object.freeze({ grantId: state.manifest.grantId, grantSha256: state.manifest.manifestSha256,
+        processId: state.manifest.processId, member, limits: state.manifest.limits,
+        analysisRoot: state.analysisRoot, parentExecutionId: member.parentExecutionId,
+        failedExecutionId: member.childExecutionId, ...pins,
+        sourceSha256: member.sourceTextSha256, sourceSnapshotSha256: member.sourceSnapshotSha256,
+        expectedExecutionId: grantedRecoveryExecutionId(state.manifest.grantId, member.childExecutionId, pins.failedAnalysisFileSha256),
+        files: Object.freeze(Object.entries(member.recordCAS).map(([relative, sha256]) => Object.freeze({
+            path: casPath(state.repositoryRoot, member, relative), sha256 }))), assertUnchanged });
+}
+function resolveRegisteredRecoveryGrant(grantId, grantSha256, { analysisRoot }) {
+    if (!UUID.test(grantId || '') || !SHA.test(grantSha256 || '')) fail('冷恢复许可身份非法');
+    const registeredPath = path.join(grantRoot(analysisRoot), grantId, 'manifest.json');
+    const cached = registrations.get(registeredPath);
+    if (cached) {
+        const state = handles.get(cached);
+        assertRegistration(state);
+        if (state.manifest.manifestSha256 !== grantSha256 || state.analysisRoot !== directory(analysisRoot)) {
+            fail('冷恢复缓存与真实许可身份不符');
+        }
+        return cached;
+    }
+    const manifest = assertManifest(read(registeredPath).value);
+    if (manifest.manifestSha256 !== grantSha256) fail('冷恢复许可SHA不匹配');
+    const receipt = read(path.join(path.dirname(registeredPath), 'registration.json')).value;
+    return openRecoveryGrant({ manifestPath: registeredPath, processDirectory: receipt.processDirectory, analysisRoot });
+}
+function reopenRecoveryGrantForWindow({ analysisRoot, windowRecord }) {
+    const record = windowRecord;
+    const handle = resolveRegisteredRecoveryGrant(record?.grantId, record?.grantSha256, { analysisRoot });
+    const member = readRecoveryGrantMember(handle, record.paperId);
+    if (record.contract !== 'conference-reader-recovery-window-v1' || record.version !== 1
+        || record.executionId !== member.expectedExecutionId
+        || record.failedExecutionId !== member.failedExecutionId
+        || record.failedAnalysisFileSha256 !== member.failedAnalysisFileSha256
+        || record.sourceSnapshotSha256 !== member.sourceSnapshotSha256
+        || record.originalMemberPaperId !== record.paperId) fail('窗口与已登记原成员不一致');
+    return handle;
+}
+function recoveryGrantSummary(handle) {
+    const state = handles.get(handle); if (!state) fail('需要真实追加许可');
+    return Object.freeze({ grantId: state.manifest.grantId, grantSha256: state.manifest.manifestSha256,
+        processId: state.manifest.processId, paperIds: Object.freeze(state.manifest.members.map(x => x.paperId).sort()),
+        limits: state.manifest.limits });
+}
+module.exports = { CONTRACT, RECEIPT, openRecoveryGrant, readRecoveryGrantMember,
+    resolveRegisteredRecoveryGrant, reopenRecoveryGrantForWindow, grantedRecoveryExecutionId, recoveryGrantSummary };
