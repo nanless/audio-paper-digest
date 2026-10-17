@@ -130,3 +130,19 @@ test('推理窗长仅作为设置轴；真实已发生块长消融同源症状�
     for (const text of [result.replace('块长消融显示', '假设块长消融显示'), result.replace('250 帧约 5 秒', '250 帧约 8 秒'), result.replace('块长消融显示', '先前研究的块长消融显示')])
         assert.equal(pure.hasSourceBackedWindowConfusion(text, row.sourceText), false, text);
 });
+
+test('块长症状不能忽略原来源或结果紧邻的明确撤回', () => {
+    const row = fixture.windowConfusion;
+    const result = c.extractSection(row.analysis, '实验结果');
+    const sourceRetracted = row.sourceText.replace('speaker confusion and false alarms',
+        'speaker confusion and false alarms. This result was retracted');
+    assert.notEqual(sourceRetracted, row.sourceText);
+    assert.equal(pure.hasSourceBackedWindowConfusion(result, sourceRetracted), false);
+    for (const separator of ['', '\n', '\n\n']) {
+        const resultRetracted = result.replace('支持了该选择。', '支持了该选择。' + separator + '上述块长消融结论已撤回。');
+        assert.notEqual(resultRetracted, result);
+        assert.equal(pure.hasSourceBackedWindowConfusion(resultRetracted, row.sourceText), false);
+    }
+    assert.equal(pure.hasSourceBackedWindowConfusion(row.analysis + '\n上述块长消融结论已撤回。', row.sourceText), false);
+    assert.equal(pure.hasSourceBackedWindowConfusion(result, row.sourceText), true);
+});

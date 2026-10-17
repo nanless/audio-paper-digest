@@ -987,14 +987,26 @@ function hasTableBoundHigherMetricRegression(results, tables, sourceText) {
 function hasSourceBackedWindowConfusion(results, sourceText) {
     const source = String(sourceText || '').replace(/\s+/gu, ' ');
     const observed = /\ba larger (\d+(?:\.\d+)?)s window \(chunk size=(\d+)\)[^.!?]{0,160}?\bit often introduces higher speaker confusion and false alarms/giu;
+    const sourceRevoked = /^\s*(?:(?:but|however|in fact)[, ]+)?(?:this|these|the above)\s+(?:results?|findings?|observations?|comparisons?|claims?)[^.!?]{0,60}\b(?:retracted|withdrawn|incorrect|false|not\s+(?:observed|measured|supported))\b/iu;
+    const resultRevoked = /^[，,\s]*(?:(?:但|但是|不过|然而)[，,\s]*)?(?:上述|以上|前述|该|此|这一)(?:块长)?(?:消融)?(?:结论|结果|观察|发现|比较|说法)[^。；\n]{0,25}(?:撤回|撤销|不成立|错误|未(?:观测|测量|发生)|没有(?:观测|测量|发生))/u;
+    const sentences = String(results || '').split(/[。；\n]/u).map(sentence => sentence.trim()).filter(Boolean);
     for (const report of source.matchAll(observed)) {
         const prefix = source.slice(Math.max(0, report.index - 160), report.index).split(/[.!?]/u).at(-1);
         if (/\b(?:hypothetical|future|planned|previous|another|quoted|not|never|false|incorrect)\b/iu.test(prefix)
             || /\b(?:not|never|incorrect|false\s+(?:claim|report))\b/iu.test(report[0])) continue;
-        for (const sentence of String(results || '').split(/[。；\n]/u)) {
+        // Only the current observation's continuation and its immediately
+        // following sentence can revoke it; unrelated later prose cannot.
+        const sourceAfter = source.slice(report.index + report[0].length).split(/[.!?]/u).slice(0, 2);
+        if (sourceAfter.some(part => sourceRevoked.test(part.replace(/^[,;]\s*/u, '')))) continue;
+        for (const [index, sentence] of sentences.entries()) {
             if (/假设|如果|未来|计划|预计|建议|未进行|没有|并非|不是|先前研究|相关工作|引用|引述|他人|否认|反驳/u.test(sentence)) continue;
             const effect = /消融(?:显示|结果表明|表明)[^。；\n]{0,180}?(\d+)\s*帧约\s*(\d+(?:\.\d+)?)\s*秒窗(?:会)?引入更多(?:说话人)?混淆(?:与|和|及)虚警/u.exec(sentence);
-            if (effect && Number(effect[1]) === Number(report[2]) && Number(effect[2]) === Number(report[1])) return true;
+            if (effect && !resultRevoked.test(sentence.slice(effect.index + effect[0].length))
+                && !resultRevoked.test(sentences[index + 1] || '')
+                // An explicit later reference naming this very ablation is
+                // unambiguous even when another table intervenes.
+                && !sentences.slice(index + 1).some(part => /^(?:上述|以上|前述|该|此|这一)块长消融(?:结论|结果)[^。；\n]{0,25}(?:撤回|撤销|不成立|错误)/u.test(part))
+                && Number(effect[1]) === Number(report[2]) && Number(effect[2]) === Number(report[1])) return true;
         }
     }
     return false;
