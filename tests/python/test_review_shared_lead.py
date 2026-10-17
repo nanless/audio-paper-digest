@@ -52,7 +52,9 @@ class SharedLeadReviewInputTest(unittest.TestCase):
         with mock.patch.dict(os.environ,{'PAPER_ANALYZER_MODEL':'fixture-model'}), \
                 mock.patch.object(pub,'_load_review_image',return_value={'media_type':'image/png','data':base64.b64encode(b'fixture pixels').decode()}), \
                 mock.patch.object(pub,'call_llm_api',side_effect=api):
-            self.assertEqual(pub.multimodal_review_images(content,'真问题不能免审',required=True),(False,[issue]))
+            result = pub.multimodal_review_images(content,'真问题不能免审',required=True)
+            self.assertEqual(result,(False,[{**issue,'type':'model_content'}]))
+            self.assertEqual(pub.classify_review_failure(result[1]),'content')
 
     def test_independent_five_part_context_has_no_new_annotation(self):
         blocks=[]

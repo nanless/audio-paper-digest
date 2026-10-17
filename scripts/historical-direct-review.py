@@ -15,7 +15,8 @@ from pathlib import Path
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 from publish_common import (classify_review_failure,
-                            unchanged_content_rejection_blocks_retry)
+                            unchanged_content_rejection_blocks_retry,
+                            interpret_readonly_text_unit)
 
 CONTRACT = 'historical-direct-semantic-review-v1'
 CHECKPOINT_CONTRACT = 'historical-direct-semantic-review-checkpoint-v1'
@@ -191,8 +192,9 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
         chunk_sha = hashlib.sha256(chunk.encode()).hexdigest()
         result = checkpoint(checkpoint_root, relative, 'text', index, chunk_sha, protocol,
             lambda chunk=chunk, index=index: dict(zip(('passed', 'issues'),
-                module._llm_review_post_chunk(chunk, title, required=True,
-                                              chunk_label=f'{index + 1}/{len(chunks)}')[:2])))
+                interpret_readonly_text_unit(chunk,
+                    module._llm_review_post_chunk(chunk, title, required=True,
+                                                  chunk_label=f'{index + 1}/{len(chunks)}'))[:2])))
         chunk_results.append(result)
     image_matches = module.parse_markdown_images(content)
     # 审查器拿到的是全文，不只是图片链接。周围说法变了，

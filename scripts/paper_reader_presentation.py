@@ -8,11 +8,59 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import tempfile
 
 from blog_entry_loader import load_publish_to_blog
+
+SCORE_DIMENSIONS = (
+    ('innovationScore', '创新', '2'), ('technicalRigorScore', '技术严谨', '1.5'),
+    ('experimentalSufficiencyScore', '实验充分', '1.5'), ('clarityScore', '清晰度', '1'),
+    ('impactScore', '影响力', '1.5'), ('openSourceScore', '开源', '1.5'),
+    ('reproducibilityScore', '可复现', '0.5'), ('engineeringScore', '工程/实践', '1.5'),
+)
+
+
+def normalize_repeated_bold_prefixes(value):
+    """Project identical adjacent bold labels, preserving quoted/code bytes.
+
+    This only narrows the old daily display rule outside ordinary Reader prose.
+    It does not normalize numeric values, TeX, source evidence or image labels.
+    """
+    pattern = re.compile(r'\*\*[ \t]*([^*\n]+?)([：:])\*\*'
+                         r'(?:[ \t]*\*\*[ \t]*\1\2\*\*)+[ \t]*')
+    protected = re.compile(
+        r'`+'
+        r'|!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)'
+        r'|<?https://[^\s<>]+>?')
+    output, fence = [], None
+    for line in str(value or '').splitlines(keepends=True):
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+        if fence is not None:
+            output.append(line)
+            if re.fullmatch(r' {0,3}' + re.escape(fence[0]) + '{' + str(len(fence))
+                            + r',}[ \t]*', line.rstrip('\r\n')):
+                fence = None
+            continue
+        if marker:
+            fence = marker[1]; output.append(line); continue
+        if re.match(r'^\s*(?:>\s*|\*论文图\s)', line) or re.match(r'^(?: {4}|\t)', line):
+            output.append(line); continue
+        parts, start = [], 0
+        while (match := protected.search(line, start)) is not None:
+            end = match.end()
+            if match[0].startswith('`'):
+                closing = re.compile(r'(?<!`)' + re.escape(match[0]) + r'(?!`)').search(line, end)
+                # Unknown/unclosed code-like text is left intact as a
+                # conservative display restriction, not parsed as Markdown.
+                end = closing.end() if closing else len(line)
+            parts.extend((pattern.sub(r'**\1\2** ', line[start:match.start()]), line[match.start():end]))
+            start = end
+        parts.append(pattern.sub(r'**\1\2** ', line[start:]))
+        output.append(''.join(parts))
+    return ''.join(output)
 
 
 def replay_resource_presentation(paper, source_text, publication_evidence=None, *, publisher=None):

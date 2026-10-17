@@ -6079,6 +6079,33 @@ def count_blocking_review_issues(issues):
     return sum(1 for issue in issues if is_blocking_review_issue(issue))
 
 
+def interpret_readonly_text_unit(content, result):
+    """Interpret one model unit without editing bytes or issuing permission.
+
+    Workflow-specific checkpoints and whole-page false-positive checks remain
+    with callers. Proposed edits are findings to return to generation, never a
+    replacement page or a successful unit cache.
+    """
+    if not isinstance(content, str):
+        raise ValueError('只读文本审查需要原始字符串。')
+    if not isinstance(result, (tuple, list)) or len(result) != 3 \
+            or not isinstance(result[0], bool) or not isinstance(result[1], list) \
+            or any(not isinstance(issue, dict) for issue in result[1]) \
+            or not isinstance(result[2], str):
+        passed, issues = review_protocol_failure('只读文本 review', '响应不完整')
+        return passed, issues, content
+    passed, findings, proposed = result
+    issues = list(findings)
+    if proposed != content:
+        issues.append({'severity': 'error', 'type': 'readonly_change',
+                       'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。'})
+        passed = False
+    if not passed and count_blocking_review_issues(issues) == 0:
+        _unused, failures = review_protocol_failure('只读文本 review', '明确未通过但缺少有效阻断原因')
+        issues.extend(failures)
+    return passed and count_blocking_review_issues(issues) == 0, issues, proposed
+
+
 def classify_review_failure(issues):
     """Shared classification; a transport failure is not a content rejection."""
     blocking = [issue for issue in (issues or []) if is_blocking_review_issue(issue)]

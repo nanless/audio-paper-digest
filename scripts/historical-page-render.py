@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
-from paper_reader_presentation import build_reader_presentation
+from paper_reader_presentation import build_reader_presentation, normalize_repeated_bold_prefixes
 from tag_presentation import render_tag_hierarchy_markdown
 from runtime_guard import require_external_runtime
 
@@ -190,6 +190,7 @@ def render_packet(packet):
         article = str(projected.get('apiReaderArticle') or '').strip()
         if not article:
             raise ValueError('历史会议论文的解读正文不能为空。')
+        article = normalize_repeated_bold_prefixes(article)
         figures = projected.get('apiReaderFigures')
         article = publisher.render_ephemeral_api_reader_figures(
             article, [] if figures is None else figures

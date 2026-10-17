@@ -43,7 +43,11 @@ class FakeReviewer:
     def _llm_review_post_chunk(self, content, *args, **kwargs):
         assert kwargs['required'] is True
         self.calls += 1
-        return self.passed, [], content
+        findings = [] if self.passed else [{
+            'severity': 'error', 'type': 'content',
+            'description': '原论文主张与页面所述科学证据不符。',
+        }]
+        return self.passed, findings, content
 
     def parse_markdown_images(self, content):
         return M.CONFERENCE_IMAGE_RE.findall(content)
@@ -396,7 +400,12 @@ class ConferencePublishTests(unittest.TestCase):
         fail_last = [True]
         def review_chunk(chunk, _title, **_kwargs):
             calls.append(chunk)
-            return (not (chunk == 'second' and fail_last[0]), [], chunk)
+            passed = not (chunk == 'second' and fail_last[0])
+            findings = [] if passed else [{
+                'severity': 'error', 'type': 'content',
+                'description': '第二分块的科学结论与原论文证据不符。',
+            }]
+            return passed, findings, chunk
         with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
                 mock.patch.object(reviewer, 'split_review_content', return_value=['first', 'second']), \
                 mock.patch.object(reviewer, '_llm_review_post_chunk', side_effect=review_chunk), \
@@ -482,7 +491,11 @@ class ConferencePublishTests(unittest.TestCase):
         self.assertEqual(text.call_count, 2)
         failure_file, = (M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json')
         failure = json.loads(failure_file.read_text())
-        self.assertEqual(failure['issues'], findings)
+        self.assertEqual(failure['issues'][:-1], findings)
+        self.assertEqual(failure['issues'][-1], {
+            'severity': 'error', 'type': 'readonly_change',
+            'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。',
+        })
         self.assertEqual((failure['stage'], failure['chunkIndex'], failure['chunkCount'],
                           failure['proposedChanged']), ('text', 1, 1, True))
         self.assertNotIn(proposed, failure_file.read_text())
@@ -501,7 +514,12 @@ class ConferencePublishTests(unittest.TestCase):
         calls = []
         def response(chunk, *_args, **_kwargs):
             calls.append(chunk)
-            return (len(calls) not in {1, 4}, [], chunk)
+            passed = len(calls) not in {1, 4}
+            findings = [] if passed else [{
+                'severity': 'error', 'type': 'content',
+                'description': '页面的科学结论与原论文证据不符。',
+            }]
+            return passed, findings, chunk
         with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
                 mock.patch.object(reviewer, '_llm_review_post_chunk', side_effect=response), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):

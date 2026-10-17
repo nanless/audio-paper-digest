@@ -51,6 +51,7 @@ from publish_common import (
     call_publish_llm_api, PublishLLMUnavailable, run_bounded_llm_tasks,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
     classify_review_failure, unchanged_content_rejection_blocks_retry,
+    interpret_readonly_text_unit,
     normalize_publish_arxiv_id, parse_publish_arxiv_identity, is_canonical_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload,
     validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
@@ -1472,10 +1473,10 @@ def llm_review_post(content, title="", required=False, *, paper=None):
         passed, issues = review_cached_unit(
             'text', {'content': chunks[index], 'title': title, 'chunkLabel': label, 'required': required,
                      'sourceFigureNote': source_figure_note},
-            lambda: _llm_review_post_chunk(
+            lambda: interpret_readonly_text_unit(chunks[index], _llm_review_post_chunk(
                 chunks[index], title, required=required, chunk_label=label,
                 source_figure_note=source_figure_note,
-            )[:2],
+            ))[:2],
         )
         return passed, issues, chunks[index]
 
@@ -4035,6 +4036,27 @@ def _serialize_verified_workbench_sidecars(*, original_title, authors, citation_
     }
 
 
+def _workbench_sidecar_records(sidecars, *, context_contract):
+    """Validate and describe the same four serialized files for both identities."""
+    if len(sidecars) != len(RESEARCHER_SIDECAR_FILENAMES) or {
+            relative.name for relative in sidecars} != set(RESEARCHER_SIDECAR_FILENAMES):
+        raise PublishDataValidationError('researcher sidecar 四文件集合不完整。')
+    records = {}
+    for relative, raw in sidecars.items():
+        if not isinstance(raw, bytes) or not raw or b'\r' in raw \
+                or not raw.endswith(b'\n') or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
+            raise PublishDataValidationError(f'researcher sidecar 非规范: {relative}')
+        try:
+            raw.decode('utf-8')
+        except UnicodeDecodeError as error:
+            raise PublishDataValidationError(f'researcher sidecar 非规范 UTF-8: {relative}') from error
+        records[relative.name] = {'url': _researcher_public_url(relative),
+                                  'sha256': hashlib.sha256(raw).hexdigest()}
+    if context_contract == RESEARCH_CONTEXT_CONTRACT:
+        records['rethink-context.json']['contract'] = RESEARCH_CONTEXT_CONTRACT
+    return records
+
+
 def build_researcher_workbench_bundle(
         paper, date_str, *, parsed=None, reader_plan=None,
         api_reader_payload=None, require_reader=False,
@@ -4142,19 +4164,7 @@ def build_researcher_workbench_bundle(
         original_title=original_title, authors=authors, citation_id=citation_id,
         identity=identity, citation=citation, context=context, root=root,
     )
-    for relative, raw in sidecars.items():
-        if b'\r' in raw or not raw.endswith(b'\n') \
-                or not raw or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
-            raise PublishDataValidationError(f'researcher sidecar 非规范: {relative}')
-    sidecar_records = {
-        relative.name: {
-            'url': _researcher_public_url(relative),
-            'sha256': hashlib.sha256(raw).hexdigest(),
-        }
-        for relative, raw in sidecars.items()
-    }
-    if context_contract == RESEARCH_CONTEXT_CONTRACT:
-        sidecar_records['rethink-context.json']['contract'] = RESEARCH_CONTEXT_CONTRACT
+    sidecar_records = _workbench_sidecar_records(sidecars, context_contract=context_contract)
     return {
         'contract': RESEARCHER_WORKBENCH_CONTRACT,
         'readerTitle': reader_title,
@@ -4276,13 +4286,7 @@ def build_verified_conference_workbench_bundle(paper, date_str, *, paper_id,
     sidecars = _serialize_verified_workbench_sidecars(
         original_title=original_title, authors=clean_authors, citation_id=paper_id,
         identity=identity, citation=citation, context=context, root=root, source_kind='conference')
-    sidecar_records = {}
-    for relative, raw in sidecars.items():
-        if not raw or b'\r' in raw or not raw.endswith(b'\n') or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
-            raise PublishDataValidationError('会议工作区附属文件格式或大小无效。')
-        sidecar_records[relative.name] = {'url': _researcher_public_url(relative),
-                                        'sha256': hashlib.sha256(raw).hexdigest()}
-    sidecar_records['rethink-context.json']['contract'] = RESEARCH_CONTEXT_CONTRACT
+    sidecar_records = _workbench_sidecar_records(sidecars, context_contract=RESEARCH_CONTEXT_CONTRACT)
     return {'contract': RESEARCHER_WORKBENCH_CONTRACT, 'readerTitle': reader_title,
             'originalTitle': original_title, 'oneSentenceThesis': one_sentence,
             'abstractSha256': abstract_sha, 'identity': identity, 'authors': clean_authors,
@@ -4521,19 +4525,10 @@ def format_complete_score_line(parsed):
     """渲染总分和全部八个维度；零是真实评分，不是缺失。"""
     if not isinstance(parsed, dict) or parsed.get('score') is None:
         return ''
-    dimensions = (
-        ('innovationScore', '创新', '2'),
-        ('technicalRigorScore', '技术严谨', '1.5'),
-        ('experimentalSufficiencyScore', '实验充分', '1.5'),
-        ('clarityScore', '清晰度', '1'),
-        ('impactScore', '影响力', '1.5'),
-        ('openSourceScore', '开源', '1.5'),
-        ('reproducibilityScore', '可复现', '0.5'),
-        ('engineeringScore', '工程/实践', '1.5'),
-    )
+    from paper_reader_presentation import SCORE_DIMENSIONS
     sub_scores = ' | '.join(
         f'{label} {parsed[key]}/{maximum}'
-        for key, label, maximum in dimensions
+        for key, label, maximum in SCORE_DIMENSIONS
         if parsed.get(key) is not None
     )
     return f"**{parsed['score']}/10**" + (f' | {sub_scores}' if sub_scores else '')
@@ -7069,12 +7064,8 @@ def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
     # 一次合并全部连续副本，保证完整页面和独立 Reader 使用同一固定点。
     # 这里只合并同一行标题文字和冒号完全相同的重复部分，不跨段落；
     # 仅标题定界符内外的横向空白属于排版，后面的解释正文保持不变。
-    return re.sub(
-        r'\*\*[ \t]*([^*\n]+?)([：:])\*\*'
-        r'(?:[ \t]*\*\*[ \t]*\1\2\*\*)+[ \t]*',
-        r'**\1\2** ',
-        value,
-    )
+    from paper_reader_presentation import normalize_repeated_bold_prefixes
+    return normalize_repeated_bold_prefixes(value)
 
 
 def _normalize_api_reader_source_cell(value):
@@ -13569,6 +13560,7 @@ def review_protocol_fingerprint():
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
         'publish_common.py': script_dir / 'publish_common.py',
+        'paper_reader_presentation.py': script_dir / 'paper_reader_presentation.py',
         'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
         'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
         'llm_account_pool.py': script_dir / 'llm_account_pool.py',

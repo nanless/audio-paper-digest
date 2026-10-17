@@ -15,6 +15,7 @@ import tempfile
 import io
 import tarfile
 from datetime import datetime, timezone
+from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -22,7 +23,8 @@ from urllib.parse import urlsplit
 from blog_repository_lock import shared_blog_repository_lock
 from blog_entry_loader import load_publish_to_blog
 from publish_common import (run_bounded_llm_tasks, classify_review_failure,
-                            unchanged_content_rejection_blocks_retry)
+                            unchanged_content_rejection_blocks_retry,
+                            interpret_readonly_text_unit)
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
 from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, fetch_public, GATE_CONTRACT
@@ -237,10 +239,33 @@ def under(root, relative, label):
     return target
 
 
+@lru_cache(maxsize=1)
+def _git_process_runtime():
+    # 缓存执行器模块，不缓存 Git 结果；不修改日更发布器的仓库或其它全局配置。
+    return load_publish_to_blog()
+
+
 def git(repo, *args, check=True, binary=False):
     env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
-    result = subprocess.run(['git', '-C', str(repo), *args], cwd=ROOT, env=env,
-                            capture_output=True, text=not binary, check=False)
+    runtime = _git_process_runtime()
+    kind = 'ARCHIVE' if args[0] == 'archive' else 'COMMIT' if args[0] == 'commit' else 'NETWORK' if args[0] in (
+        'push', 'fetch', 'pull', 'clone', 'ls-remote') else 'LOCAL'
+    timeout = runtime._bounded_positive_seconds(
+        f'PD_GIT_{kind}_TIMEOUT_SECONDS', 180 if kind == 'ARCHIVE' else getattr(runtime, f'GIT_{kind}_TIMEOUT_SECONDS'),
+        5 if kind == 'LOCAL' else 10, 300 if kind == 'LOCAL' else 900)
+    command = ['git', '-C', str(repo), *args]
+    try:
+        raw = runtime._run_bounded_subprocess(
+            command, cwd=ROOT, env=env, timeout_seconds=timeout,
+            text=False, check=False, max_output_bytes=(1024 if kind == 'ARCHIVE' else 128) * 1024 * 1024)
+    except (OSError, subprocess.SubprocessError):
+        raise ConferencePublicationError('Git 子进程无法完整执行') from None
+    if raw.timed_out or raw.output_truncated or type(raw.returncode) is not int or raw.returncode < 0:
+        raise ConferencePublicationError('Git 子进程未完整正常退出（期限、信号或输出限制）')
+    def output(value):
+        # 与 subprocess.run(text=True) 一样，严格 locale 解码并归一 CRLF/CR。
+        return value if binary else io.TextIOWrapper(io.BytesIO(value)).read()
+    result = subprocess.CompletedProcess(command, raw.returncode, output(raw.stdout), output(raw.stderr))
     if check and result.returncode != 0:
         # 远端 URL 和 Git stderr 里可能带凭据。
         raise ConferencePublicationError(f'Git {args[0]} 失败（exit {result.returncode}）')
@@ -249,9 +274,7 @@ def git(repo, *args, check=True, binary=False):
 
 def blob_sha(repo, revision, path):
     """对 Git 里的字节求哈希，不碰可能不一致的工作区文件（PNG 同样适用）。"""
-    env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
-    result = subprocess.run(['git', '-C', str(repo), 'show', f'{revision}:{path}'],
-                            cwd=ROOT, env=env, capture_output=True, check=False)
+    result = git(repo, 'show', f'{revision}:{path}', check=False, binary=True)
     if result.returncode:
         raise ConferencePublicationError(f'Git blob 不可读: {revision}:{path}')
     return sha_bytes(result.stdout)
@@ -1708,8 +1731,9 @@ def review_pages(repo, records, workers=None):
             if saved_unit is not None:
                 found.extend(saved_unit['issues'])
                 continue
-            passed, findings, proposed = module._llm_review_post_chunk(
-                chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}')
+            passed, findings, proposed = interpret_readonly_text_unit(chunk,
+                module._llm_review_post_chunk(
+                    chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}'))
             if passed is not True or proposed != chunk:
                 raise_content_review_failure(
                     record, digest, protocol, 'text', findings,

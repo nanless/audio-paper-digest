@@ -14,7 +14,8 @@ from urllib.parse import quote, urlsplit
 
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
-from paper_reader_presentation import build_reader_presentation
+from paper_reader_presentation import (build_reader_presentation, SCORE_DIMENSIONS,
+                                       normalize_repeated_bold_prefixes)
 from tag_presentation import FACET_DISPLAY_LABELS, render_tag_hierarchy_markdown
 from tag_catalog import load_tag_catalog, load_archived_tag_catalog, resolve_append_only_proof_catalog
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
@@ -41,12 +42,6 @@ CONFERENCE_IMAGE_BASE_URL = os.environ.get(
 ARXIV_URL_PATTERN = r'https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/[^\s<>)]+'
 ARXIV_URL_RE = re.compile(ARXIV_URL_PATTERN, re.IGNORECASE)
 REPOSITORY_HOSTS = {'github.com', 'gitlab.com', 'huggingface.co', 'modelscope.cn'}
-SCORE_DIMENSIONS = (
-    ('innovationScore', '创新', '2'), ('technicalRigorScore', '技术严谨', '1.5'),
-    ('experimentalSufficiencyScore', '实验充分', '1.5'), ('clarityScore', '清晰度', '1'),
-    ('impactScore', '影响力', '1.5'), ('openSourceScore', '开源', '1.5'),
-    ('reproducibilityScore', '可复现', '0.5'), ('engineeringScore', '工程/实践', '1.5'),
-)
 REQUIRED_ANALYSIS_SECTIONS = (
     '评分', '机器摘要', '标签', '作者与机构', '论文评价', '核心摘要', '方法概述和架构',
     '核心创新点', '实验结果', '细节详述', '评分理由', '局限与问题', '开源详情',
@@ -477,6 +472,7 @@ def render_packet(packet):
     manifest = paper.get('analysisManifest')
     stage = ((manifest or {}).get('stages') or {}).get('apiReaderArticle') or {}
     plan, article, authors, resources = validate_reader_source_records(paper, manifest, stage, capabilities)
+    article = normalize_repeated_bold_prefixes(article)
     assets = []
     if capabilities in (FULL, PDF_VISUAL):
         asset_by_url = {}
