@@ -50,6 +50,7 @@ from publish_common import (
     sanitize_markdown_for_publish, strip_internal_scoring_anchors,
     call_publish_llm_api, PublishLLMUnavailable, run_bounded_llm_tasks,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
+    classify_review_failure, unchanged_content_rejection_blocks_retry,
     normalize_publish_arxiv_id, parse_publish_arxiv_identity, is_canonical_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload,
     validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
@@ -10247,26 +10248,6 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     return fixed, issues
 
 
-def classify_review_failure(issues):
-    """把可重试的审查基础设施与协议失败，和内容缺陷区分开。"""
-    blocking = [issue for issue in (issues or []) if is_blocking_review_issue(issue)]
-    if not blocking:
-        return None
-    if all(isinstance(issue, dict) and issue.get('type') == 'infrastructure' for issue in blocking):
-        return 'transient'
-    transient_markers = (
-        '连续失败', '调用失败', '返回非 json', '响应不完整', '协议',
-        '下载失败', '超时', '绝对截止时间', 'timeout', 'unavailable',
-    )
-    if all(
-        isinstance(issue, dict)
-        and any(marker in str(issue.get('description', '')).lower() for marker in transient_markers)
-        for issue in blocking
-    ):
-        return 'transient'
-    return 'content'
-
-
 def _paper_fresh_run_id(paper):
     fresh_source_details = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
     run_id = fresh_source_details.get('runId') if isinstance(fresh_source_details, dict) else None
@@ -15780,16 +15761,10 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                 if classify_review_failure(record.get('issues') or []) == 'transient':
                     failure_kind = 'transient'
             previous_protocol = record.get('reviewProtocolFingerprint')
-            changed_failure_protocol = (
-                record.get('completed') is True
-                and re.fullmatch(r'[0-9a-f]{64}', str(previous_protocol or ''))
-                and re.fullmatch(r'[0-9a-f]{64}', str(current_protocol or ''))
-                and previous_protocol != current_protocol
-            )
-            if (
-                current == recorded
-                and failure_kind == 'content'
-                and not changed_failure_protocol
+            if unchanged_content_rejection_blocks_retry(
+                same_input=current == recorded, completed=record.get('completed'),
+                failure_kind=failure_kind, previous_protocol=previous_protocol,
+                current_protocol=current_protocol,
             ):
                 unchanged_failed.append(item.resolve())
                 prior_results[key] = {

@@ -382,6 +382,10 @@ class ConferencePublishTests(unittest.TestCase):
             with self.assertRaisesRegex(M.ConferencePublicationError, '多模态'):
                 M.review_pages(self.repo, [r])
             reviewer.image_passed = True
+            with self.assertRaisesRegex(M.ConferencePublicationError, '同一字节'):
+                M.review_pages(self.repo, [r])
+            self.assertEqual(reviewer.image_calls, 1)
+            reviewer.protocol = 'protocol-2'
             M.review_pages(self.repo, [r])
             self.assertEqual(reviewer.image_calls, 2)
 
@@ -401,6 +405,10 @@ class ConferencePublishTests(unittest.TestCase):
                 M.review_pages(self.repo, [r])
             self.assertEqual(calls, ['first', 'second'])
             fail_last[0] = False
+            with self.assertRaisesRegex(M.ConferencePublicationError, '同一字节'):
+                M.review_pages(self.repo, [r])
+            self.assertEqual(calls, ['first', 'second'])
+            reviewer.protocol = 'protocol-2'
             self.assertEqual(M.review_pages(self.repo, [r])['status'], 'passed')
             self.assertEqual(calls, ['first', 'second', 'second'])
             # Even identical split chunks cannot reuse passes from a changed page.
@@ -497,7 +505,7 @@ class ConferencePublishTests(unittest.TestCase):
         with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
                 mock.patch.object(reviewer, '_llm_review_post_chunk', side_effect=response), \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
-            for expected_calls in (3, 4):
+            for expected_calls in (3, 3):
                 with self.assertRaisesRegex(M.ConferencePublicationError, '整批正常审查已结束.*1 页拒稿'):
                     M.review_pages(self.repo, pages, workers=1)
                 self.assertEqual(len(calls), expected_calls)
@@ -527,6 +535,10 @@ class ConferencePublishTests(unittest.TestCase):
             failure_file, = (M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json')
             failed_bytes = failure_file.read_bytes()
             reviewer.passed = True
+            with self.assertRaisesRegex(M.ConferencePublicationError, '同一字节'):
+                M.review_pages(self.repo, [r])
+            self.assertEqual(reviewer.calls, 1)
+            reviewer.protocol = 'protocol-2'
             self.assertEqual(M.review_pages(self.repo, [r])['status'], 'passed')
             self.assertEqual(reviewer.calls, 2)
             self.assertEqual(failure_file.read_bytes(), failed_bytes)

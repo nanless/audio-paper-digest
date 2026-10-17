@@ -21,7 +21,8 @@ from urllib.parse import urlsplit
 
 from blog_repository_lock import shared_blog_repository_lock
 from blog_entry_loader import load_publish_to_blog
-from publish_common import run_bounded_llm_tasks
+from publish_common import (run_bounded_llm_tasks, classify_review_failure,
+                            unchanged_content_rejection_blocks_retry)
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
 from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, fetch_public, GATE_CONTRACT
@@ -1584,7 +1585,8 @@ def raise_content_review_failure(record, digest, protocol, stage, findings, mess
             'path': safe_relative(record['path'], 'review 失败页面'),
             'sha256': digest, 'paperId': record.get('paperId'),
             'passed': False, 'stage': stage, 'protocol': protocol,
-            'issues': findings, **details}
+            'issues': findings, 'completed': True,
+            'failureKind': classify_review_failure(findings) or 'content', **details}
     failure_sha = stable(body)
     target = PUBLICATION_ROOT / 'page-review-failures' / f'{failure_sha}.json'
     write_exact(target, json_bytes({**body, 'failureSha256': failure_sha}))
@@ -1616,6 +1618,33 @@ def text_review_unit_pass(record, page_sha, index, chunk_sha, *, issues=None, pr
     return saved
 
 
+def _content_review_failure_index():
+    """Read immutable rejection evidence once per batch, never cache permission."""
+    index = {}
+    directory = PUBLICATION_ROOT / 'page-review-failures'
+    if not directory.exists():
+        return index
+    if directory.is_symlink() or not directory.is_dir():
+        raise ConferencePublicationError('内容审查失败目录不安全')
+    for filename in sorted(directory.glob('*.json')):
+        saved = read_json(filename)
+        if not isinstance(saved, dict):
+            raise ConferencePublicationError('内容审查失败记录不是对象')
+        body = dict(saved)
+        declared = body.pop('failureSha256', None)
+        if declared != stable(body) or filename.stem != declared \
+                or saved.get('contract') != 'conference-page-content-review-failure-v1' \
+                or saved.get('passed') is not False \
+                or not SHA_RE.fullmatch(str(saved.get('sha256') or '')) \
+                or not isinstance(saved.get('issues'), list) \
+                or saved.get('completed', True) is not True \
+                or saved.get('failureKind') not in (None, 'content', 'transient'):
+            raise ConferencePublicationError(f'内容审查失败记录身份或 SHA 损坏: {filename}')
+        relative = safe_relative(saved.get('path'), 'review 失败页面')
+        index.setdefault((relative, saved['sha256']), []).append((saved, filename))
+    return index
+
+
 def review_pages(repo, records, workers=None):
     """只复用「路径 + 字节」都通过的证据；确定性检查每次都要重跑。
 
@@ -1627,6 +1656,7 @@ def review_pages(repo, records, workers=None):
     module.BLOG_REPO = str(repo)
     module.CONTENT_DIR = str(repo / 'content' / 'posts')
     protocol = content_review_protocol(module)
+    failures_by_page = _content_review_failure_index()
 
     # 会议页与日更使用相同的 1–5 并发范围，每页自行保存内容审查记录。
     def _review_one(record):
@@ -1659,10 +1689,22 @@ def review_pages(repo, records, workers=None):
         if not chunks:
             raise_content_review_failure(record, digest, protocol, 'text', [],
                 f'没有可审查正文: {relative}')
+        saved_units = [text_review_unit_pass(record, digest, index,
+                       sha_bytes(chunk.encode('utf-8')))
+                       for index, chunk in enumerate(chunks)]
+        for previous, failure_path in failures_by_page.get((relative, digest), []):
+            if unchanged_content_rejection_blocks_retry(
+                same_input=True, completed=previous.get('completed', True),
+                failure_kind=classify_review_failure(previous['issues']) or 'content',
+                previous_protocol=previous.get('protocol'), current_protocol=protocol,
+            ):
+                message = ('同一字节的内容拒稿须先修正页面或变更有效审查协议；'
+                           f'失败原因记录: {failure_path}')
+                raise ConferenceContentReviewFailure(message, {**previous, 'message': message})
         found = []
         for index, chunk in enumerate(chunks):
             chunk_sha = sha_bytes(chunk.encode('utf-8'))
-            saved_unit = text_review_unit_pass(record, digest, index, chunk_sha)
+            saved_unit = saved_units[index]
             if saved_unit is not None:
                 found.extend(saved_unit['issues'])
                 continue

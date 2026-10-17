@@ -14,6 +14,8 @@ from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
+from publish_common import (classify_review_failure,
+                            unchanged_content_rejection_blocks_retry)
 
 CONTRACT = 'historical-direct-semantic-review-v1'
 CHECKPOINT_CONTRACT = 'historical-direct-semantic-review-checkpoint-v1'
@@ -89,16 +91,30 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
         if value.get('inputSha256') == input_sha:
             raise ValueError('正式审查检查点只能保存通过结果')
     attempt_prefix = f'{target.stem}.attempt-'
-    # 失败的尝试只留作审计，不当作永久的否定缓存。
-    # 每次调用最多做一次审查请求（传输层自带有限重试），
-    # 后面再跑还能从故障里恢复。
-    # 编号接在已有序号后面，读不懂的审计文件也算数，
-    # 以前留下的证据不删不盖。
+    # Keep every original failure; a content rejection cannot buy another
+    # response for unchanged input under the same or unknown protocol.
     attempt_numbers = []
     for candidate in target.parent.glob(f'{attempt_prefix}*.json') if target.parent.exists() else []:
         match = re.fullmatch(re.escape(attempt_prefix) + r'(\d+)\.json', candidate.name)
         if match:
             attempt_numbers.append(int(match.group(1)))
+            saved = read_json(candidate)
+            body = dict(saved)
+            declared = body.pop('checkpointSha256', None)
+            if (saved.get('contract') != CHECKPOINT_CONTRACT or saved.get('version') != 1
+                    or saved.get('identity') != identity or saved.get('unit') != unit
+                    or saved.get('index') != index or saved.get('inputSha256') != input_sha
+                    or declared != stable(body) or not isinstance(saved.get('protocol'), dict)
+                    or not isinstance(saved.get('result'), dict)
+                    or saved['result'].get('passed') is not False
+                    or not isinstance(saved['result'].get('issues'), list)):
+                raise ValueError(f'失败审查记录的身份或 SHA 损坏： {candidate}')
+            if unchanged_content_rejection_blocks_retry(
+                    same_input=True, completed=True,
+                    failure_kind=classify_review_failure(saved['result']['issues']) or 'content',
+                    previous_protocol=saved['protocol'].get('protocolSha256'),
+                    current_protocol=protocol.get('protocolSha256')):
+                return saved['result']
     run_error = None
     try:
         result = runner()

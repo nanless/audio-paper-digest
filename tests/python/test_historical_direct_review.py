@@ -100,17 +100,18 @@ class HistoricalDirectReviewTests(unittest.TestCase):
             self.assertEqual(audits, {p.name: p.read_bytes() for p in Path(temporary).glob('*.attempt-*.json')})
             MODULE.checkpoint(*args, lambda: self.fail('passing result must be reused'))
 
-    def test_failure_audit_numbering_preserves_gaps_and_unreadable_files(self):
+    def test_unreadable_failure_audit_stops_before_new_request_and_is_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
             args = (temporary, 'page.md', 'text', 0, 'b' * 64, {})
             target = MODULE.checkpoint_path(temporary, 'page.md', 'text', 0, 'b' * 64)
             old = target.with_name(f'{target.stem}.attempt-007.json')
             old.write_text('unreadable retained audit', encoding='utf-8')
-            result = MODULE.checkpoint(*args, lambda: {'passed': False, 'issues': [
-                {'severity': 'error', 'type': 'content', 'description': 'incorrect claim'}]})
-            self.assertFalse(result['passed'])
+            runner = mock.Mock()
+            with self.assertRaises(ValueError):
+                MODULE.checkpoint(*args, runner)
+            runner.assert_not_called()
             self.assertEqual(old.read_text(), 'unreadable retained audit')
-            self.assertTrue(target.with_name(f'{target.stem}.attempt-008.json').exists())
+            self.assertFalse(target.with_name(f'{target.stem}.attempt-008.json').exists())
 
     def test_atomic_json_dir_mode_defaults_to_private_and_only_touches_new_dirs(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -161,7 +162,7 @@ class HistoricalDirectReviewTests(unittest.TestCase):
             def fail_once():
                 calls.append('failed')
                 return {'passed': False, 'issues': [
-                    {'severity': 'error', 'type': 'transient', 'description': 'temporary outage'}
+                    {'severity': 'error', 'type': 'infrastructure', 'description': 'temporary outage'}
                 ]}
 
             first = MODULE.checkpoint(temporary, 'page.md', 'text', 0, 'b' * 64,

@@ -6079,10 +6079,53 @@ def count_blocking_review_issues(issues):
     return sum(1 for issue in issues if is_blocking_review_issue(issue))
 
 
+def classify_review_failure(issues):
+    """Shared classification; a transport failure is not a content rejection."""
+    blocking = [issue for issue in (issues or []) if is_blocking_review_issue(issue)]
+    if not blocking:
+        return None
+    def transient(issue):
+        if not isinstance(issue, dict):
+            return False
+        kind = issue.get('type')
+        if kind == 'infrastructure':
+            return True
+        # Scientific protocols, inference timeouts and unavailable resources are
+        # content. Only trusted diagnostic envelopes classify legacy failures.
+        if kind not in (None, '', 'protocol'):
+            return False
+        description = str(issue.get('description', '')).lower()
+        if kind == 'protocol' and description == '页面审查未通过，但结果没有列出阻断问题':
+            return True
+        if description.startswith('无法加载图片内容用于多模态 review:'):
+            return any(marker in description for marker in (
+                '下载失败', '超时', '绝对截止时间', 'timeout', 'unavailable'))
+        return bool(re.match(
+            r'^(?:llm(?:\s+文本)?\s+review|多模态图片\s+review|正文[^\n]{0,30}review|页面审查|审查执行)'
+            r'[^\n]{0,300}(?:连续失败|调用失败|返回非 json|响应不完整|协议校验失败|缺少有效)',
+            description))
+    if all(transient(issue) for issue in blocking):
+        return 'transient'
+    return 'content'
+
+
+def unchanged_content_rejection_blocks_retry(*, same_input, completed, failure_kind,
+                                             previous_protocol, current_protocol):
+    """A negative cache gate, never a request or publication permission."""
+    if not same_input or failure_kind != 'content':
+        return False
+    changed_protocol = (completed is True
+                        and re.fullmatch(r'[0-9a-f]{64}', str(previous_protocol or ''))
+                        and re.fullmatch(r'[0-9a-f]{64}', str(current_protocol or ''))
+                        and previous_protocol != current_protocol)
+    return not bool(changed_protocol)
+
+
 def review_protocol_failure(context, message):
     """为格式错误或无法判定的审查输出构造阻断问题。"""
     return False, [{
         'severity': 'error',
+        'type': 'infrastructure',
         'description': f'{context} 协议校验失败：{message}',
     }]
 
@@ -6116,6 +6159,7 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
                 return review_protocol_failure(context, f'issues[{index}] 必须是对象')
             normalized_issues.append({
                 'severity': 'error',
+                'type': 'model_content',
                 'description': str(issue),
             })
             continue
@@ -6172,6 +6216,11 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
                 f'issues[{index}].fix_instruction 必须是字符串',
             )
         normalized = dict(issue)
+        # Provider-controlled issues cannot impersonate the diagnostic types
+        # emitted by our own exception/protocol handlers. Raw responses remain
+        # in the original request audit; this only classifies the display result.
+        if normalized.get('type') in (None, '', 'infrastructure', 'protocol'):
+            normalized['type'] = 'model_content'
         normalized['severity'] = severity
         normalized['description'] = str(description or '')
         if 'fix_instruction' in issue_fields and issue.get('auto_fixable') is False:
@@ -6182,6 +6231,7 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
     if not passed and not has_error:
         normalized_issues.append({
             'severity': 'error',
+            'type': 'infrastructure',
             'description': f'{context} 返回 passed=false，但没有提供 error 级原因',
         })
         has_error = True

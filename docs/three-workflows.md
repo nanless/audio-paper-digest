@@ -12,6 +12,8 @@
 
 ## 三条流程共用什么
 
+2026-10-17 的逐段调用审计、六类真实缺口、公共实现收敛及两轮交叉复核见[公共部件审计](shared-workflow-review.md)。
+
 | 职责 | 权威代码 | 要保留的规则 |
 |---|---|---|
 | 分析编排、锁、检查点、费用与恢复 | `scripts/analysis-engine.js`、`scripts/deep-analyzer.js` | 同篇锁内重读合并，原稿、失败与费用保留 |
@@ -34,7 +36,7 @@
 |---|---|---|
 | 候选获取与去重 | 网络、代理、字节与 SHA 校验规则 | 日更按来源窗口重叠补抓并仅以已发布页去重；会议按官方完整目录、真实会议 ID 和唯一 exact PDF 固定全集，不套用日更日期边界 |
 | 摘要与关键词预筛 | `lib/keyword-prefilter.js` | 日更使用官方元数据摘要；会议先从受控 PDF 定位摘要，证据不可用及核心音频会议按明确规则放行给 LLM，不能凭缺摘要排除 |
-| LLM 筛选 | 当前 `filter-v5.md`、`fetch-papers.js` 的结构化决定解析器、`requestLlmJson()` | 会议填入真实会议类别和 PDF 摘要证据，保留每会 spec、来源集合、请求/响应和选择回执；不混用日更的候选文件或筛选 SHA |
+| LLM 筛选 | 当前 `filter-v5.md`、`lib/filter-decision.js`、`lib/filter-prompt.js`、`requestLlmJson()` | 会议填入真实会议类别和 PDF 摘要证据，保留每会 spec、来源集合、请求/响应和选择回执；不混用日更的候选文件或筛选 SHA |
 | 全文预处理 | 公共来源上下文、输入清洗、均衡证据取样与预算 | 日更读取本批封存 HTML/PDF 四文件；会议的 PDF 文本、布局、图像、摘要证据由官方来源账本适配进入公共引擎，不能伪造 HTML DOM 或原 TeX |
 | 深度分析与后处理 | 同一 `analysis-engine.js` / `deep-analyzer.js`、13 节主分析、审校、资源/表格/方法/结构/摘要修复、八维评分、标签和 Reader 当前模板 | 来源能力决定表格、公式、作者和图片哪些证据可用；会议分析保存隔离的 canonical analysis 和真实会议身份，不写入日更 `data/current` |
 | 失败集合恢复 | `lib/analysis-failure-rounds.js`、论文锁、阶段指纹、付费稿与预算守卫 | 会议 process 原尝试窗口、冷却及显式 `--retry-failed` 仍有效；一轮一篇、整轮后仅续失败集合，不让内部单篇调用提前精修 |
