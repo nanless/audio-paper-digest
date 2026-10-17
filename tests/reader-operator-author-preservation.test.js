@@ -51,6 +51,87 @@ test('篡改原作者、stage SHA、传入作者或封存全文不能借operator
         await assert.rejects(deep.finalizeApiReaderRefresh(x.paper, x.sourceDetails, x.generated, x.options), /作者机构与本次原始来源重放不一致/);
     }
 });
+
+// Synthetic wiring coverage only: the private admission and empty figure
+// boundary are isolated. Author/source validation below remains the real
+// production validator; these tests do not claim conference qualification.
+function sourceCorrectionFixture(t) {
+    const x = fixture();
+    const local = require('../scripts/lib/conference-source-resource-correction');
+    const readerParent = structuredClone(x.paper);
+    const input = { readerParent };
+    delete x.paper.apiReaderAuthors;
+    x.paper.analysisManifest.stages.apiReaderArticle = { status: 'invalid_output' };
+    x.options.localSourceCorrectionInput = input;
+    let admitted = false;
+    t.mock.method(local, 'assertFinalizerInput', (value, paper) => {
+        assert.strictEqual(value, input);
+        assert.strictEqual(paper, x.paper);
+        admitted = true;
+    });
+    t.mock.method(local, 'readVerifiedSignedFigures', (value, figures) => {
+        assert.equal(admitted, true);
+        assert.strictEqual(value, input);
+        assert.deepEqual(figures, []);
+        return [];
+    });
+    return { ...x, input, readerParent };
+}
+
+test('来源纠正使用独立签名Reader父稿的作者证明，科学主文无需继承旧Reader阶段', async t => {
+    const x = sourceCorrectionFixture(t);
+    const original = structuredClone(x.readerParent.apiReaderAuthors);
+    assert.equal(authors.readerAuthorIdentityMatchesSource(x.paper, x.sourceDetails), false);
+    assert.equal(authors.readerAuthorIdentityMatchesSource(x.readerParent, x.sourceDetails), true);
+    assert.notDeepEqual(authors.resolveVerifiedReaderAuthors(x.paper, x.sourceDetails), original);
+
+    const output = await deep.finalizeApiReaderRefresh(x.paper, x.sourceDetails, x.generated, x.options);
+
+    assert.deepEqual(output.apiReaderAuthors, original);
+    assert.equal(output.analysisManifest.stages.apiReaderArticle.readerAuthorsSha256,
+        deep.stableFingerprint(original));
+    assert.equal(output.analysisManifest.stages.apiReaderArticle.readerAuthorIdentitySha256,
+        original.identitySha256);
+});
+
+test('来源纠正仍拒父稿来源、姓名、原作者签名及传入作者的篡改', async t => {
+    const cases = [
+        ['parent source SHA', x => { x.readerParent.sourceSha256 = 'a'.repeat(64); }],
+        ['parent names', x => { x.readerParent.authors = ['Invented Author']; }],
+        ['parent author stage', x => {
+            x.readerParent.analysisManifest.stages.apiReaderArticle.readerAuthorsSha256 = 'a'.repeat(64);
+        }],
+        ['provided authors', x => {
+            x.options.readerAuthors.authors[0].affiliations = ['Invented Institute'];
+        }]
+    ];
+    for (const [name, mutate] of cases) {
+        await t.test(name, async t => {
+            const x = sourceCorrectionFixture(t);
+            mutate(x);
+            await assert.rejects(
+                deep.finalizeApiReaderRefresh(x.paper, x.sourceDetails, x.generated, x.options),
+                /原作者与当前主文姓名或来源不一致|作者机构与本次原始来源重放不一致/
+            );
+        });
+    }
+});
+
+test('自报local input未经真实私有assertFinalizerInput不能借Reader父稿保留作者', async t => {
+    const x = fixture();
+    const local = require('../scripts/lib/conference-source-resource-correction');
+    x.options.localSourceCorrectionInput = { readerParent: structuredClone(x.paper) };
+    delete x.paper.apiReaderAuthors;
+    x.paper.analysisManifest.stages.apiReaderArticle = { status: 'invalid_output' };
+    const figures = t.mock.method(local, 'readVerifiedSignedFigures', () => {
+        assert.fail('Unbranded input must be rejected before signed figures are read');
+    });
+
+    await assert.rejects(deep.finalizeApiReaderRefresh(x.paper, x.sourceDetails, x.generated, x.options),
+        /来源纠正/);
+    assert.equal(figures.mock.callCount(), 0);
+});
+
 test('真实FO当前v2完整prepare及normal finalizer纯preview保留原作者和费用证据',
     { skip: !actualManifest }, async () => {
     const daily = require('../scripts/lib/daily-fresh-source-plan'), facts = require('../scripts/lib/daily-fact-review');

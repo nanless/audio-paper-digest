@@ -10250,18 +10250,26 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
     let readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails);
+    // A source correction can combine a new scientific main with a separately
+    // authenticated signed Reader. Its author proof belongs to that Reader,
+    // rather than the failed Reader stage of the selected scientific main.
+    const readerAuthorPaper = localSourceInput ? localSourceInput.readerParent : paper;
+    if (localSourceInput && (stableFingerprint(readerAuthorPaper.authors) !== stableFingerprint(paper.authors)
+        || readerAuthorPaper.sourceSha256 !== paper.sourceSha256)) {
+        throw new Error('Reader 来源纠正的原作者与当前主文姓名或来源不一致');
+    }
     if (options.readerAuthors && stableFingerprint(options.readerAuthors) !== stableFingerprint(readerAuthors)
         && !require('./lib/reader-author-parser.js').readerAuthorIdentityMatchesSource(
-            { ...paper, apiReaderAuthors: options.readerAuthors }, sourceDetails)) {
+            { ...readerAuthorPaper, apiReaderAuthors: options.readerAuthors }, sourceDetails)) {
         throw new Error('Reader 刷新传入的作者机构与本次原始来源重放不一致');
     }
     if (options.execution?.executionKind === 'operator' && options.execution.newReaderApiRequests === 0
         && options.readerAuthors
-        && stableFingerprint(options.readerAuthors) === stableFingerprint(paper.apiReaderAuthors)
-        && require('./lib/reader-author-parser.js').readerAuthorIdentityMatchesSource(paper, sourceDetails)) {
+        && stableFingerprint(options.readerAuthors) === stableFingerprint(readerAuthorPaper.apiReaderAuthors)
+        && require('./lib/reader-author-parser.js').readerAuthorIdentityMatchesSource(readerAuthorPaper, sourceDetails)) {
         // A zero-request operator edit preserves the already signed author bytes,
         // including supported legacy unavailable wording, after source replay.
-        readerAuthors = structuredClone(paper.apiReaderAuthors);
+        readerAuthors = structuredClone(readerAuthorPaper.apiReaderAuthors);
     }
     const existingReaderResources = paper.apiReaderResources;
     const existingReaderResourceBody = existingReaderResources && {
