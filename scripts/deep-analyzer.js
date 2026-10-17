@@ -4138,7 +4138,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             { pattern: new RegExp('(?:(?:复现(?:前|时)?(?:要|应|需))|并)?(?:把|将)' + conceptList
                 + '\\s*(?:([三两二32])\\s*件事)?\\s*(?:分开|分别)(?:核实|核对|确认|验证|判断)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*回事', 'gu'), listGroup: 1, countGroup: 2, countedMatters: true },
-            { pattern: new RegExp(conceptList + '\\s*(?:需要|仍需)(?:另行|分别|逐项)确认', 'gu'), listGroup: 1, closedPending: true }
+            { pattern: new RegExp(conceptList + '\\s*(?:需要|仍需)(?:另行|分别|逐项)(?:确认|核对)', 'gu'), listGroup: 1, closedPending: true }
         ];
         for (const { pattern, listGroup, countGroup, closedPending, countedMatters } of countedDistinctions) for (const span of value.matchAll(pattern)) {
             const list = span[listGroup];
@@ -4770,6 +4770,30 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             return Boolean(use && contains(use));
         }
         if (type !== 'dataset') return false;
+        // A cited, named public corpus used as training input is not an offer
+        // of an author-owned dataset. Bind just this input span to the same
+        // source name; it grants neither current download nor availability.
+        for (const input of value.matchAll(/训练(?:数据|语料)(?:来自|是|使用|采用|取自)\s*公开\s*([A-Za-z][A-Za-z0-9_-]{0,70})\s*数据集/gu)) {
+            if (!contains(input)) continue;
+            const before = value.slice(0, input.index).split(/[。！？!?；;，,]/u).at(-1);
+            const after = value.slice(input.index + input[0].length);
+            if (before.trim()
+                || /可下载|可访问|可获取|可用|可达|开放下载|公开下载/u.test(after)) continue;
+            const name = input[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const evidence = new RegExp(`\\bWe\\s+(?:use|used)\\b[^.!?]{0,220}?\\bfrom\\b[^.!?]{0,220}?\\b(?:the\\s+)?public\\s+${name}\\s+dataset\\s*\\[\\d+\\]`, 'giu');
+            for (const use of source.matchAll(evidence)) {
+                const prefix = source.slice(0, use.index).split(/[.!?]/u).at(-1);
+                const framing = source.slice(0, use.index).match(/[^.!?]*[.!?]\s*$/u)?.[0] || '';
+                const tail = source.slice(use.index + use[0].length).split(/[.!?]/u)[0];
+                if (!/^\s*(?:(?:For|In)\s+[^.!?]{0,100}\btraining\s*,\s*)?$/i.test(prefix)
+                    || /\b(?:not|never|without|if|unless|hypothetical|future|plan(?:ned)?|propos(?:e|ed)|would|could|quoted?|report(?:ed|s)?|previous|prior)\b/i.test(prefix)
+                    || /\b(?:quot(?:e|es|ed)|report(?:s|ed))\b[^.!?]{0,80}\b(?:following|statement|claim)\b/i.test(framing)
+                    || /\b(?:no|not|never|nothing|except|excluding|other than|rather than|instead of|if|unless|hypothetical|would|could|plan(?:ned)?|future|release|publish)\b/i.test(use[0] + tail)) continue;
+                const next = source.slice(use.index + use[0].length).replace(/^[\s.!?]+/u, '');
+                if (/^(?:This(?: (?:statement|claim|description))?|These (?:data|results))\b[^.!?]{0,80}\b(?:false|withdrawn|fabricated|not (?:used|true)|never used)\b/i.test(next)) continue;
+                return true;
+            }
+        }
         // Only the cited, pre-existing corpus's geographically restricted
         // access span is exempt. The next author/current positive is separate.
         const related = source.match(/\bRelated Work\b[\s\S]{0,5000}?\b(?:Two|Three|Several|Existing)\s+[A-Za-z -]{0,60}corpora exist but with limited utility:\s+a nationally funded\s+([^.[\]]{1,80})dataset\s*\[\d+\]\s+is accessible only within\s+([A-Za-z -]{1,40})\s+and\b/i);
@@ -5171,7 +5195,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 && /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源)(?:都|均|全部)?(?:已经|现已|已|当前已?|目前已?)?(?:(?:公开|开源)(?:可用|可下载|可获取)?|发布|提供|可用|可下载|可获取)[。！？!?]?$/u.test(next);
             // Only a closed, adjacent explicit retraction may refer back to
             // these new nonclaim spans; no general cross-sentence inference.
-            const withdrawn = /(?:不能(?:仅)?据此|需要另行确认|论文(?:正文)?称|是[三3]回事)/u.test(clause)
+            const withdrawn = /(?:不能(?:仅)?据此|需要另行(?:确认|核对)|论文(?:正文)?称|是[三3]回事)/u.test(clause)
                 && /^(?:上述|这一|这种|该)(?:说法|判断|结论|声明|否定|区分|限定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定|不成立)[。！？!?]?$/u.test(next);
             return collective || withdrawn ? clause + next : clause;
         });

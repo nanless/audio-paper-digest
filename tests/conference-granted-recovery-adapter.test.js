@@ -13,7 +13,7 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 const { recoveryFixtureIdentity, registerRecoveryFixture } = require('./helpers/conference-recovery-grant-fixture');
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture');
 
-async function fixture(t, { invalidCore = false, scoringMode = false, coreRejected = false, tagProofCase = null } = {}) {
+async function fixture(t, { invalidCore = false, scoringMode = false, scoringFailed = false, coreRejected = false, tagProofCase = null } = {}) {
     const f = productionPlanFixture(t), identity = recoveryFixtureIdentity(f.paperId);
     const analysisRoot = path.join(f.root, 'data/runtime/conference-analysis-executions');
     const input = { analysisRoot, parentExecutionId: identity.parentExecutionId,
@@ -59,6 +59,7 @@ async function fixture(t, { invalidCore = false, scoringMode = false, coreReject
         inspectSavedConferenceReaderCompletion: async () => null,
         refreshApiReaderArticleFromSource: async () => { throw Error('original paid fixture failure'); } };
     operations.refreshApiScoringAndReaderFromSource = async (current, _source, options) => {
+        if (scoringFailed) throw Object.assign(Error('original scoring content exhausted'), { retryable: false });
         current.analysis = actualDeep.applyApiReaderResourceAvailability(current.analysis, current.apiReaderResources);
         const audit = { fixture: 'signed-score-content' };
         current.analysisManifest.stages.scoringAudit = { status: 'complete', audit,
@@ -66,7 +67,8 @@ async function fixture(t, { invalidCore = false, scoringMode = false, coreReject
         await options.onScoringComplete(current);
         throw Error('original paid fixture failure');
     };
-    await assert.rejects(adapter.refreshConferenceReader(input, { engine, deep: operations }), /original paid fixture failure/);
+    await assert.rejects(adapter.refreshConferenceReader(input, { engine, deep: operations }),
+        scoringFailed ? /original scoring content exhausted/ : /original paid fixture failure/);
     const failedExecutionId = adapter.readerRevisionExecutionId(identity.parentExecutionId, parent.analysisFileSha256);
     let failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
     adapter.replaceJson(path.join(failed.directory, 'analysis.json'), { ...failed.analysis,
@@ -127,6 +129,51 @@ test('正常分析从真实父词表恢复未完成标签，但新稿仍须通�
         assert.equal(after.analysis.status, 'partial'); assert.equal(after.analysis.readerRevisionProgress.attempts, 2);
         for (const { name, bytes } of originals) assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, name)), bytes);
         assert.equal(f.failed.analysis.readerRevisionProgress.attempts, 3);
+    });
+});
+
+test('新评分失败不能借父complete审计重开，内容后传输失败也不重授次数', async t => {
+    for (const retryable of [false, true]) await t.test(String(retryable), async t => {
+        const f = await fixture(t, { scoringMode: true, scoringFailed: true });
+        const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+            failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot,
+            grantHandle: f.grant.handle };
+        const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+        let scoringCalls = 0, physicalCalls = 0, contentResponses = 0;
+        const operations = { ...f.operations, refreshApiScoringAndReaderFromSource: async (paper, source) => {
+            scoringCalls++;
+            return actualDeep.auditTypeAwareScoringDetailed(paper.analysis, source.text, {
+                callModelFn: async (_messages, _tokens, options) => {
+                    physicalCalls++;
+                    assert.equal(options.usageContext.contentAttempt, physicalCalls);
+                    if (retryable && physicalCalls === 3) {
+                        throw Object.assign(Error('synthetic scoring transport failure after two content responses'), { retryable: true });
+                    }
+                    contentResponses++;
+                    return '{}'; // Explicitly synthetic rejected output, no provider request.
+                }
+            });
+        }, refreshApiReaderArticleFromSource: () => assert.fail('scoring never completed') };
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }),
+            retryable ? /synthetic scoring transport/ : /评分/);
+        const before = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot,
+            executionId: member.expectedExecutionId });
+        assert.equal(before.revision.mode, 'scoring-and-reader');
+        assert.equal(before.analysis.readerRevisionProgress.attempts, 1);
+        assert.equal(before.analysis.readerRevisionProgress.scoringCheckpoint, undefined);
+        assert.equal(before.analysis.papers[0].analysisManifest.stages.scoringAudit.status, 'complete');
+        const bytes = fs.readFileSync(path.join(before.directory, 'analysis.json'));
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }),
+            error => error.code === 'CONFERENCE_READER_REVISION_SCORING_RECOVERY_BLOCKED');
+        const after = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot,
+            executionId: member.expectedExecutionId });
+        assert.equal(scoringCalls, 1);
+        assert.equal(physicalCalls, 3);
+        assert.equal(contentResponses, retryable ? 2 : 3);
+        assert.equal(after.analysis.readerRevisionProgress.attempts, 1);
+        assert.deepEqual(fs.readFileSync(path.join(before.directory, 'analysis.json')), bytes);
+        assert.equal(fs.existsSync(path.join(before.directory, 'reader-grant-budget.json')), false);
+        member.assertUnchanged();
     });
 });
 
@@ -221,24 +268,31 @@ test('原已签评分检查点逐字核验后继承到新窗口，不重复评�
     let scoringCalls = 0, readerCalls = 0;
     const operations = { ...f.operations,
         refreshApiScoringAndReaderFromSource: async () => { scoringCalls++; throw Error('must not score again'); },
-        refreshApiReaderArticleFromSource: async () => { readerCalls++; throw Error('Reader fixture still incomplete'); } };
+        refreshApiReaderArticleFromSource: async () => { readerCalls++;
+            throw Object.assign(Error('Reader fixture still incomplete'), { retryable: false }); } };
     const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
         failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
     await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }), /Reader fixture still incomplete/);
     const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
-    const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+    let loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
     assert.equal(scoringCalls, 0); assert.equal(readerCalls, 1);
     assert.deepEqual(loaded.analysis.readerRevisionProgress.inheritedScoringCheckpoint.checkpoint, oldCheckpoint);
     assert.equal(loaded.analysis.readerRevisionProgress.inheritedScoringCheckpoint.executionId, f.failedExecutionId);
     assert.notEqual(loaded.analysis.readerRevisionProgress.scoringCheckpoint.revisionSha256, oldCheckpoint.revisionSha256);
     assert.equal(loaded.analysis.readerRevisionProgress.scoringCheckpoint.scoringStageSha256, oldCheckpoint.scoringStageSha256);
+    assert.equal(loaded.analysis.readerRevisionProgress.failures[0].retryable, false);
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }),
+        /Reader fixture still incomplete/);
+    loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+    assert.equal(scoringCalls, 0); assert.equal(readerCalls, 2);
+    assert.equal(loaded.analysis.readerRevisionProgress.attempts, 2);
     const analysisFile = path.join(loaded.directory, 'analysis.json');
     const changed = structuredClone(loaded.analysis);
     changed.papers[0].analysisManifest.stages.scoringAudit.fixtureScoringToken = 'tampered-new-score';
     adapter.replaceJson(analysisFile, changed, loaded.analysisFileSha256);
     await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine: f.engine, deep: operations }), /评分检查点/);
-    assert.equal(scoringCalls, 0); assert.equal(readerCalls, 1);
-    assert.equal(adapter.readJsonRecord(analysisFile).value.readerRevisionProgress.attempts, 1);
+    assert.equal(scoringCalls, 0); assert.equal(readerCalls, 2);
+    assert.equal(adapter.readJsonRecord(analysisFile).value.readerRevisionProgress.attempts, 2);
     assert.deepEqual(fs.readFileSync(path.join(f.failed.directory, 'analysis.json')), originalAnalysis);
 });
 
@@ -378,4 +432,99 @@ test('真实核心诊断三文件经生产原核心阶段签发，捕获后可�
     assert.equal(replayCalls, 1); assert.equal(downstreamCalls, 2);
     assert.deepEqual(fs.readFileSync(seedFile), seedBytes);
     for (const [name,bytes] of Object.entries(originalFiles)) assert.deepEqual(fs.readFileSync(path.join(f.failed.directory,name)),bytes);
+});
+
+test('追加窗口重入把显式核心复验交给当前子稿真实来源与正常阶段，不借原失败稿或补付请求', async t => {
+    const filename = require.resolve('../scripts/deep-analyzer'), raw = fs.readFileSync(filename, 'utf8');
+    const begin = raw.indexOf('    let coreSummaryRepairStage = prepareTextRecoveryStage(');
+    const end = raw.indexOf('    // 评分前，先核对资源链接', begin);
+    assert.ok(begin > 0 && end > begin);
+    const Module = require('node:module'), compiled = new Module(filename, module);
+    compiled.filename = filename; compiled.paths = Module._nodeModulePaths(path.dirname(filename));
+    compiled._compile(raw + '\nmodule.exports.testCoreTokens=TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens;\n'
+        + 'module.exports.testNormalCorePhase=async(paper,options)=>{let analysis=paper.analysisCheckpoint;'
+        + 'const analysisManifest=paper.analysisManifest,rawTextForAnalysis=options.sourceText,arxivId=paper.id,imageManifest=null;'
+        + raw.slice(begin,end) + '\nreturn paper;};', filename);
+    for (const variant of ['enabled', 'disabled', 'invalid-latest']) await t.test(variant, async t => {
+        const f = await fixture(t, { coreRejected: true });
+        const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+            failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot,
+            grantHandle: f.grant.handle, reusePaidCoreDiagnostics: variant !== 'disabled' };
+        const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+        let calls = 0, currentCoreReads = 0;
+        const operations = { ...f.operations, analyzePaperDeep: async (paper, options) => {
+            const currentContext = context.getConferenceAnalysisContext();
+            assert.equal(options.replayLatestCoreSummaryDiagnostic, true);
+            if (currentContext.executionId === f.failedExecutionId) {
+                throw Object.assign(Error('synthetic original core remains rejected'), { code: 'CONTRACT_REJECTED' });
+            }
+            currentCoreReads++;
+            assert.equal(currentContext.executionId, member.expectedExecutionId);
+            assert.ok(currentContext.readerPdfSourceHandle);
+            assert.ok(budget.getCurrentReaderWindow(paper));
+            // This exercises the unchanged production core phase using three
+            // explicitly synthetic offline diagnostic files, never a model.
+            return require('../scripts/lib/analysis-stop-control').withModelRequestsForbidden(() =>
+                compiled.exports.testNormalCorePhase(paper, {
+                    ...options, sourceText: currentContext.sourceDetails.text
+                }));
+        } };
+        const engine = { ...f.engine, analyzePaperWithRetry: async (paper, options) => {
+            calls++;
+            if (calls === 1) {
+                assert.equal(options.analyzeFn, undefined);
+            } else if (variant === 'disabled') {
+                assert.equal(options.analyzeFn, undefined);
+            } else {
+                assert.equal(typeof options.analyzeFn, 'function');
+                paper = await options.analyzeFn(paper);
+            }
+            return { success: false, result: paper, error: 'synthetic downstream remains incomplete', retryable: false };
+        } };
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations }),
+            /synthetic downstream remains incomplete/);
+        const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+        assert.equal(loaded.analysis.readerRevisionProgress.attempts, 1);
+        const sourceText = loaded.source.sourceDetails.text;
+        const handle = adapter.verifyPlanAuthority(loaded, f.planHandle, f.sourceRoot);
+        const withCurrent = callback => context.withConferenceAnalysisSource({ executionId: loaded.run.executionId,
+            executionDir: loaded.directory, paperId: f.paperId, sourceDetails: loaded.source.sourceDetails,
+            readerPdfSourceHandle: handle }, callback);
+        const prepared = withCurrent(() => actualDeep.prepareTextRecoveryStage(structuredClone(loaded.analysis.papers[0]),
+            structuredClone(loaded.analysis.papers[0].analysisManifest), 'coreSummaryRepair',
+            loaded.analysis.papers[0].analysisCheckpoint, sourceText));
+        const diagnosticSource = withCurrent(() => context.conferenceCoreSummaryRepairContext(loaded.analysis.papers[0], sourceText));
+        const hash = value => require('crypto').createHash('sha256').update(value).digest('hex');
+        const identity = { paperId: f.paperId, sourceIdentity: diagnosticSource.sourceIdentity,
+            sourceTextSha256: hash(sourceText), inputAnalysisSha256: hash(prepared.inputAnalysis),
+            evidenceSha256: hash(prepared.evidenceContext), stageFingerprint: prepared.fingerprint,
+            maxTokens: compiled.exports.testCoreTokens, repairRequestPolicy: actualDeep.resolveRepairRequestPolicy('coreSummaryRepair') || null,
+            promptTextContract: prepared.promptTextContract };
+        const diagnostics = require('../scripts/lib/reader-request-diagnostics');
+        const record = diagnostics.beginCoreSummaryDiagnostic(diagnosticSource.directory, {
+            identity, inputAnalysis: prepared.inputAnalysis, sourceText, evidenceText: prepared.evidenceContext,
+            prompt: 'Explicitly synthetic current-grant core replay fixture; no provider request is claimed.'
+        });
+        const response = '## 核心摘要\n' + (variant === 'invalid-latest' ? '这个摘要过短。'
+            : actualDeep.extractSectionByTitle(prepared.inputAnalysis, '核心摘要'));
+        diagnostics.saveCoreSummaryResponse(record, response);
+        diagnostics.saveCoreSummaryDisposition(record, { status: 'rejected', outputTextSha256: hash(response) });
+        const pinned = ['request', 'response', 'disposition'].map(kind => {
+            const file = path.join(record.directory, record.id + '.' + kind + '.json');
+            return { file, bytes: fs.readFileSync(file) };
+        });
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations }),
+            variant === 'invalid-latest' ? /原付费摘要仍未通过/ : /synthetic downstream remains incomplete/);
+        const after = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+        assert.equal(after.analysis.readerRevisionProgress.attempts, 2);
+        assert.equal(currentCoreReads, variant === 'disabled' ? 0 : 1);
+        assert.equal(after.analysis.status, 'partial');
+        if (variant === 'enabled') {
+            assert.equal(after.analysis.papers[0].analysisManifest.stages.coreSummaryRepair.paidDiagnosticReplay.id, record.id);
+            assert.ok(['complete', 'not_needed'].includes(after.analysis.papers[0].analysisManifest.stages.coreSummaryRepair.status));
+        }
+        for (const { file, bytes } of pinned) assert.deepEqual(fs.readFileSync(file), bytes);
+        member.assertUnchanged();
+        assert.equal(fs.existsSync(path.join(loaded.directory, 'reader-grant-budget.json')), false);
+    });
 });

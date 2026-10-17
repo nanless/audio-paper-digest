@@ -1002,8 +1002,10 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
                     inheritedScoringCheckpoint: { executionId: failedExecutionId, checkpoint: clone(oldScoring) } } }, loaded.analysisFileSha256);
             loaded = loadGrantedConferenceRecovery({ analysisRoot, executionId });
         }
+        // The immutable old seed does not cover later paid summaries in this
+        // new window. Resume those through the same source-bound strict replay.
         const result = await continueConferenceRevision({ loaded, parent: failed.parent, planHandle, sourceRoot, analysisRoot,
-            executionId, fullAnalysis: mode === 'normal-analysis', original, maxAttempts: 3, reusePaidCoreDiagnostics: false,
+            executionId, fullAnalysis: mode === 'normal-analysis', original, maxAttempts: 3, reusePaidCoreDiagnostics,
             grant: { grantHandle, authority } }, { ...overrides, engine, deep });
         authority.assertUnchanged(); return result;
     }, conferencePaperLockOptions(engine));
@@ -1137,6 +1139,18 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
             || stableHash(savedScoring) !== stableHash(withVerifiedSource(() =>
                 readerScoringCheckpoint(paper, loaded, engine, original.rules))))) {
             throw Object.assign(new Error('会议新评分检查点的资源、正文或原修订 SHA 改变'), { retryable: false });
+        }
+        if (loaded.revision.mode === 'scoring-and-reader' && !savedScoring
+            && progress.failures.length > 0) {
+            // A failed refresh may still carry its parent's complete audit.
+            // Only this revision's saved scoring checkpoint can prove the new
+            // scoring finished. Even a transport failure can follow already
+            // rejected content; without its durable consumption record an outer
+            // retry cannot assume that all three content attempts remain.
+            throw Object.assign(new Error('会议新评分未完成且已保存失败，缺少可重放的新评分消费记录，不能用旧评分或外层余额重新请求评分'), {
+                code: 'CONFERENCE_READER_REVISION_SCORING_RECOVERY_BLOCKED',
+                category: 'integrity', scope: 'paper', retryable: false, executionId
+            });
         }
         if (loaded.resourcePreflight && !savedScoring) paper.apiReaderResources = clone(loaded.resourcePreflight);
         let current = { ...loaded.analysis, generation: loaded.analysis.generation + 1,

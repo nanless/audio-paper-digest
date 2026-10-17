@@ -1194,6 +1194,26 @@ function isFinalCountedPairRate(value, finding) {
     return false;
 }
 
+function maskBoundParameterSweeps(text) {
+    // Bind the initialization and sweep to one explicit parameter. Only their
+    // numeric tokens are settings; later WER/CER results remain visible.
+    const number = '[-+]?\\d+(?:\\.\\d+)?(?:[eE][-+]?\\d+)?(?![\\w.])';
+    const sweep = new RegExp('(?:建议|推荐)(?:先)?从\\s*([αλε])\\s*(?:为|=)\\s*'
+        + `(?<initial>${number})\\s*开始\\s*[，,]\\s*在(?<scope>[^。！？!?；;\\n]{1,100}?)上\\s*(?:分别)?(?:扫|扫描)\\s*`
+        + `(?<lower>${number})\\s*(?:到|至)\\s*(?<upper>${number})(?=\\s*(?:[，,。！？!?；;]|$))`, 'dgu');
+    const spans = [];
+    for (const match of text.matchAll(sweep)) {
+        // A new metric or parameter in the intervening scope changes the
+        // target. Do not infer that its following values still belong to α.
+        if (PERCENT_METRICS_RE.test(match.groups.scope)
+            || /[αβγδελ]|参数|系数|阈值|另设|改为|换成|结果|测得|得分|[=＝]/u.test(match.groups.scope)) continue;
+        for (const key of ['initial', 'lower', 'upper']) spans.push(match.indices.groups[key]);
+    }
+    let masked = text;
+    for (const [start, end] of spans.reverse()) masked = masked.slice(0, start) + ' '.repeat(end - start) + masked.slice(end);
+    return masked;
+}
+
 function findMissingComparisonUnits(text) {
     const value = stripCodeLinksAndUrls(text)
         // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
@@ -1242,7 +1262,7 @@ function findMissingComparisonUnits(text) {
         const parameterRanges = [...sentence.text.matchAll(
             /([λε])\s*在\s*[-+]?\d+(?:\.\d+)?\s*(?:到|至)\s*[-+]?\d+(?:\.\d+)?\s*之间/gu
         )];
-        let comparisonText = maskExplicitTurnRangeAxis(maskBoundMetricDeltaIntervals(sentence.text));
+        let comparisonText = maskBoundParameterSweeps(maskExplicitTurnRangeAxis(maskBoundMetricDeltaIntervals(sentence.text)));
         // NFE 的显式取值集合与同句展开步数 K 是设置条件。
         // 只屏蔽完整表达式，不能把同句裸露的 WER/CER 结果一并当作参数。
         const hasExplicitNfeSettings = /\bNFE\s*(?:∈|in\b|=)\s*\{\s*\d+(?:\s*[,，]\s*\d+)*\s*\}/iu.test(comparisonText);
@@ -2026,6 +2046,7 @@ module.exports = {
     findDefensiveNegationSaturation,
     findTechnicalTermAdhesions,
     findMissingComparisonUnits,
+    maskBoundParameterSweeps,
     maskBoundMetricDeltaIntervals,
     maskExplicitTurnRangeAxis,
     findBatchTemplateReuse,

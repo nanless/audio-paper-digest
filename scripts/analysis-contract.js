@@ -246,6 +246,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
+    if (/^推理窗长$/u.test(normalized)) return true;
     // 检验名称可以标识一行，但 F/t/p 等统计检验结果是可核对的测量值。
     // 仅识别完整列名，不能把“检验设置”等真正的条件列变成结果列。
     if (/^(?:(?:检验|统计检验)?统计量|统计检验结果|(?:F|t|z|χ²)\s*统计量|(?:test\s+)?statistics?|[Ftzp][ -]?(?:values?|statistics?))$/i.test(normalized)) return false;
@@ -803,6 +804,77 @@ function hasSourceBackedTrainingStageAblation(tables, sourceText) {
             String(row[column] || '').replace(/[*_`]/g, '').trim()))));
 }
 
+function hasSourceBackedSettingVariantAblation(results, tables, sourceText) {
+    // Only a uniquely identified original ablation table can supply settings.
+    // Labels, update counts, layer indices, groups and values all come from the
+    // current table and that original table, never a method-name allowlist.
+    const source = String(sourceText || ''), lines = String(results || '').split(/\r?\n/u);
+    const escape = value => String(value).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const clean = value => String(value).replace(/[*`↑↓]/gu, '').trim();
+    const denied = /假设|假想|如果|未来|计划|建议|预计|尚未|未做|没有(?:做|进行)|否认|否定|反驳|引述|转述|引用|他人|先前(?:工作|研究)|相关(?:工作|研究)|不属于本文|并非本文|说法[^。]{0,20}(?:不成立|错误)/u;
+    const sourceDenied = /\b(?:hypothetical|planned|future|previous\s+(?:study|work)|another\s+(?:study|work)|cited|quoted|not\s+(?:performed|conducted)|no\s+ablation)\b/iu;
+    const captions = [...source.matchAll(/Table\s+\d+:\s*Ablation\b/giu)];
+    const windows = captions.flatMap(match => {
+        const prefix = source.slice(Math.max(0, match.index - 180), match.index).split(/[.!?]/u).at(-1);
+        const next = source.slice(match.index + match[0].length).search(/Table\s+\d+:/iu);
+        const window = source.slice(match.index, next < 0 ? match.index + 3500 : Math.min(match.index + 3500, match.index + match[0].length + next));
+        return sourceDenied.test(prefix) || /["“”]/u.test(prefix) || sourceDenied.test(window.slice(0, 350))
+            || /\b(?:this|these|the above)\s+(?:table|ablations?|experiments?|comparisons?)[^.!?]{0,80}\b(?:not\s+(?:performed|conducted)|hypothetical|withdrawn|retracted|incorrect)\b/iu.test(window) ? [] : [window];
+    });
+    const headersMatch = (headers, window) => {
+        const flat = headers.map(clean);
+        const sourceLines = window.split(/\r?\n/u);
+        if (sourceLines.some(line => new RegExp('(?:^|[ \\t])' + flat.map(escape).join('[ \\t]+') + '[ \\t]*$', 'u').test(line))) return true;
+        // Repeated metric leaves must retain the full ordered group axis.
+        const grouped = flat.map(header => /^(\S+)\s+([A-Za-z][A-Za-z0-9@._-]*)$/u.exec(header));
+        if (grouped.some(header => !header)) return false;
+        const groups = grouped.map(header => header[1]).filter((group, index, all) => index === 0 || all[index - 1] !== group);
+        if (groups.length < 2 || new Set(groups).size !== groups.length) return false;
+        const groupLine = groups.map(group => escape(group) + '(?:[ \\t]+subset)?').join('[ \\t]+');
+        const leaves = grouped.map(header => escape(header[2])).join('[ \\t]+');
+        return sourceLines.some((line, index) => new RegExp('(?:^|[ \\t])' + groupLine + '[ \\t]*$', 'u').test(line)
+            && new RegExp('^[ \\t]*' + leaves + '[ \\t]*$', 'u').test(sourceLines[index + 1] || ''));
+    };
+    const labelPattern = label => {
+        const value = clean(label);
+        const ema = /^([A-Za-z][A-Za-z0-9_.-]*)\s+(?:EMA\s+([1-9][0-9]*)步间隔|无\s*EMA\s+冻结教师(?:加单层([1-9][0-9]*))?)$/u.exec(value);
+        if (ema) return { base: ema[1], key: value, pattern: ema[2]
+            ? `w/\\s*EMA\\s*\\(${ema[2]}-step interval\\)`
+            : `w/o\\s*EMA\\s*\\(freeze\\)${ema[3] ? `\\s*&\\s*Single-layer\\s*\\(${ema[3]}\\)` : '(?![ \\t]*&)'}` };
+        // A component-addition row must name at least two actual components.
+        const components = /^(?:\+\s*[A-Za-z][A-Za-z0-9_.-]*\s*){2,}(?:本文)?$/u.exec(value);
+        if (!components) return null;
+        const names = value.replace(/\s*本文$/u, '').split('+').map(part => part.trim()).filter(Boolean);
+        return { key: names.join('+'), pattern: names.map(escape).join('[ \\t]*\\+[ \\t]*').replace(/^/, '\\+[ \\t]*') + '(?:[ \\t]*\\(Ours\\))?' };
+    };
+    return tables.some(table => {
+        const before = lines.slice(0, table.startLine).join('\n').split(/\n\s*\n/u).filter(Boolean).at(-1) || '';
+        const after = lines.slice(table.endLine + 1).join('\n').split(/\n\s*\n/u).filter(Boolean)[0] || '';
+        if (denied.test(before + after) || !/(?:比较|对比|是否重要|是否必要|只改变|只替换)/u.test(before)
+            || !/(?:高于|低于|优于|变差|退化|上升|下降|降至|升至)/u.test(after)) return false;
+        const width = table.header.length - 1;
+        if (width < 1 || !table.header.slice(1).every(header => /[↑↓]/u.test(header))
+            && !/(?:越低越好|越高越好)/u.test(before)) return false;
+        const matching = windows.filter(window => {
+            if (!headersMatch(table.header.slice(1), window)) return false;
+            const matched = table.rows.flatMap(row => {
+                const label = labelPattern(row[0]);
+                if (!label || row.length !== width + 1 || row.slice(1).some(cell => !/^\d+(?:\.\d+)?$/u.test(String(cell).trim()))) return [];
+                if (label.base && !new RegExp('(?:^|\\n)[ \\t]*' + escape(label.base) + '[ \\t]+\\([^\\n)]*\\)[ \\t]+[0-9]', 'u').test(window)) return [];
+                const numeric = row.slice(1).map(cell => escape(String(cell).trim())).join('[ \\t]+');
+                const pattern = new RegExp('(?<![A-Za-z0-9_+.-])' + label.pattern + '[ \\t]+(' + numeric + ')(?![0-9.]|[ \\t]+[0-9])', 'gu');
+                const matches = [...window.matchAll(pattern)];
+                if (matches.length !== 1) return [];
+                const prefix = window.slice(Math.max(window.lastIndexOf('\n', matches[0].index) + 1, 0), matches[0].index);
+                if (!label.base && /\+\s*(?:[A-Za-z][A-Za-z0-9_.-]*\s*\+\s*)*(?:[A-Za-z][A-Za-z0-9_.-]*\s*)?$/u.test(prefix)) return [];
+                return [label.key];
+            });
+            return new Set(matched).size >= 2;
+        });
+        return matching.length === 1;
+    });
+}
+
 function hasSourceBackedZeroCorrectionAblation(results, sourceText) {
     const source = String(sourceText || '').replace(/\s+/g, ' ');
     // A measured correction sweep isolates this component; a zero weight in
@@ -912,6 +984,22 @@ function hasTableBoundHigherMetricRegression(results, tables, sourceText) {
     return false;
 }
 
+function hasSourceBackedWindowConfusion(results, sourceText) {
+    const source = String(sourceText || '').replace(/\s+/gu, ' ');
+    const observed = /\ba larger (\d+(?:\.\d+)?)s window \(chunk size=(\d+)\)[^.!?]{0,160}?\bit often introduces higher speaker confusion and false alarms/giu;
+    for (const report of source.matchAll(observed)) {
+        const prefix = source.slice(Math.max(0, report.index - 160), report.index).split(/[.!?]/u).at(-1);
+        if (/\b(?:hypothetical|future|planned|previous|another|quoted|not|never|false|incorrect)\b/iu.test(prefix)
+            || /\b(?:not|never|incorrect|false\s+(?:claim|report))\b/iu.test(report[0])) continue;
+        for (const sentence of String(results || '').split(/[。；\n]/u)) {
+            if (/假设|如果|未来|计划|预计|建议|未进行|没有|并非|不是|先前研究|相关工作|引用|引述|他人|否认|反驳/u.test(sentence)) continue;
+            const effect = /消融(?:显示|结果表明|表明)[^。；\n]{0,180}?(\d+)\s*帧约\s*(\d+(?:\.\d+)?)\s*秒窗(?:会)?引入更多(?:说话人)?混淆(?:与|和|及)虚警/u.exec(sentence);
+            if (effect && Number(effect[1]) === Number(report[2]) && Number(effect[2]) === Number(report[1])) return true;
+        }
+    }
+    return false;
+}
+
 function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     const results = extractSection(analysis, '实验结果');
     if (!results) return null;
@@ -992,6 +1080,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     );
     const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceAblationEvidence);
     const resultHasAblation = hasSourceBackedTrainingStageAblation(tables, sourceAblationEvidence)
+        || hasSourceBackedSettingVariantAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedZeroCorrectionAblation(results, sourceAblationEvidence)
         || /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除|无外推/i.test(results)
         // 有的论文只用 `+ L_j`、`+ L_s` … 标注消融行，正文里说是逐级叠加。
@@ -1033,6 +1122,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
     const resultHasNegative = contextualNegative
+        || hasSourceBackedWindowConfusion(results, sourceText)
         || hasTableBoundHigherMetricRegression(results, tables, options.sourceText)
         || explicitMetricDecline
         || reportedLowerScore
@@ -1834,7 +1924,13 @@ function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null)
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
         .map(sentence => sentence.trim()).filter(Boolean);
     return values.some((sentence, index) => {
-        if (!hasCoreSummaryQuantitativeEvidence(sentence)) return false;
+        // These are input controls, including when PDF columns put an unrelated
+        // metric name on the same extracted line. Keep any actual outcome values.
+        const resultSentence = sentence
+            .replace(/\b(?:source\s+)?sweeps?\s+[−+-]?\d+(?:\.\d+)?[◦°]\s*[→↔]\s*[−+-]?\d+(?:\.\d+)?[◦°]/giu, ' ')
+            .replace(/\bthe other\s+[−+-]?\d+(?:\.\d+)?[◦°]\s*[→↔]\s*[−+-]?\d+(?:\.\d+)?[◦°]/giu, ' ')
+            .replace(/\brandom\s+SNR\s+(?:between|from)\s+[−+-]?\d+(?:\.\d+)?\s+(?:and|to)\s+[−+-]?\d+(?:\.\d+)?\s*dB\b/giu, ' ');
+        if (!hasCoreSummaryQuantitativeEvidence(resultSentence)) return false;
         const localContext = values.slice(Math.max(0, index - 1), Math.min(values.length, index + 2)).join(' ');
         return /(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i
             .test(localContext)
@@ -1919,16 +2015,51 @@ function hasMeanRoomSimulationComparison(sentence) {
             : seconds.get(comparison[1]) < seconds.get(order)));
 }
 
-function coreSummaryQuantitativeResultState(text) {
+function hasSourceBackedBayesianGroupResult(sentence, sourceText) {
+    // An ER/PP pair measures evidence for a stated effect, not effect size.
+    // Bind the measured response, compared conditions and direction to the
+    // source; the same two numbers for another metric cannot supply a result.
+    if (!sourceText || /假设|假想|如果|未来|计划|预计|可能|定义|阈值|先验|引用|引述|转述|他人|先前研究|相关工作|并非|没有|未测|未报告|否认|反驳|说法[^。]{0,20}(?:错误|不成立)/u.test(sentence)) return false;
+    const effect = /(高|低)认知负荷下数字回忆编辑距离(高于|低于)(高|低)认知负荷/u.exec(sentence);
+    const er = /证据比(?:\s*\(?ER\)?)?\s*(为|是|=|≥|>=|大于等于)\s*(\d+(?:\.\d+)?)(?![\d.eE+-])/u.exec(sentence);
+    const pp = /后验概率(?:\s*\(?PP\)?)?\s*(?:为|是|=)\s*(\d+(?:\.\d+)?)(?![\d.eE+-])/u.exec(sentence);
+    if (!effect || effect[1] === effect[3] || !er || !pp || Number(er[2]) <= 1 || Number(pp[1]) <= 0.5 || Number(pp[1]) > 1) return false;
+    const source = String(sourceText).replace(/\s+/gu, ' ');
+    const sourceDenied = /\b(?:previous|another|cited|quoted|hypothetical|future|planned|no|not|never|false|incorrect|untrue)\b|[“”"]/iu;
+    const withdrawn = /^\s*(?:(?:but|however|in fact)[, ]+)?(?:this|these|the above)\s+(?:claim|result|finding|comparison|evaluation|measure|values?|observations?)[^.!?]{0,100}\b(?:not|never|false|incorrect|untrue|withdrawn|retracted|unmeasured)\b/iu;
+    // A source may define recall accuracy using edit distance. Accept its
+    // inverse orientation only with the actual measurement definition, not a
+    // generic assumption that every accuracy score means edit distance.
+    const definitions = [...source.matchAll(/Response accuracy for the digit (?:preload|recall) task was analysed[\s\S]{0,700}?It was calculated as the[\s\S]{0,200}?Levenshtein edit distance between a participant[’']s response[\s\S]{0,1100}?higher Levenshtein([\s\S]{0,240}?)distances represent less accurate answers/giu)].filter(match => {
+        const prefix = source.slice(Math.max(0, match.index - 180), match.index);
+        return !sourceDenied.test(prefix) && !sourceDenied.test(match[1])
+            && !withdrawn.test(source.slice(match.index + match[0].length).replace(/^\s*[.!?]\s*/u, ''));
+    });
+    if (definitions.length !== 1) return false;
+    const observed = /There was\s+(?:extremely\s+)?strong evidence that digit (?:preload|recall) accuracy was (lower|higher) under (high|low) cognitive load(?:\s*\([^)]{0,50}\))?\s+than (high|low) cognitive load(?:\s*\([^)]{0,50}\))?,?\s+with an evidence ratio\s*\(ER\)\s*of\s*(≥|>=)?\s*(\d+(?:\.\d+)?)(?![A-Za-z0-9_+-]|\.\d)\s+and posterior probability\s*\(PP\)\s*of\s*(\d+(?:\.\d+)?)(?![A-Za-z0-9_+-]|\.\d)/giu;
+    return [...source.matchAll(observed)].some(match => {
+        const prefix = source.slice(Math.max(0, match.index - 180), match.index);
+        const after = source.slice(match.index + match[0].length).replace(/^\s*[.!?]\s*/u, '');
+        if (sourceDenied.test(prefix) || withdrawn.test(after) || match[2] === match[3]
+            || Number(match[5]) !== Number(er[2]) || Number(match[6]) !== Number(pp[1])
+            || /≥|>=|大于等于/u.test(er[1]) !== Boolean(match[4])) return false;
+        const sourceFirst = match[2] === 'high' ? '高' : '低';
+        const distanceHigher = match[1] === 'lower';
+        return (effect[2] === '高于') === (sourceFirst === effect[1] ? distanceHigher : !distanceHigher);
+    });
+}
+
+function coreSummaryQuantitativeResultState(text, sourceText = null) {
     const candidates = String(text || '').split(/[。！？!?\n]/).map((rawSentence, sentenceIndex) => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
+        const bayesianGroupResult = hasSourceBackedBayesianGroupResult(sentence, sourceText);
         // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
         // 不能顶替缺失的结果指标。
         const metricText = sentence.replace(/(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))/giu, '');
         const hasRecognizedMetric = Boolean(sentence && (
             CORE_SUMMARY_METRIC_PATTERN.test(metricText)
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(metricText)
-            || hasCoreSummaryStatisticalResult(metricText)
+            || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
@@ -2243,6 +2374,36 @@ function hasTypedProcessingProductChain(summary) {
             if (forwardRevoked.test(normalizeNotice(parts[index - 1]))) continue;
             const first = parts[index], second = parts[index + 1] || '', third = parts[index + 2] || '';
             const clauses = first.split(/[，,]/u).map(clause => clause.trim());
+            const nextClauses = second.split(/[，,；;]/u).map(clause => clause.trim());
+            const newChainRevoked = /^(?:(?:上述|以上|前述|该|此|这些)(?:处理|过程|流程|方法|步骤|按键记录|记录|帧级特征序列|时间表示|融合特征|调制向量|向量|梅尔谱)|这一步)[^。]{0,45}(?:未|不|没有|否认|放弃|弃用|丢弃|错误|不成立)/u;
+            const newChainSafe = safe([first, (/一方面/u.test(second) ? second.replace(/另一方面/u, '并行分支') : second)]) && !revoked.test(normalizeNotice(third))
+                && !newChainRevoked.test(normalizeNotice(third))
+                && !/先前研究|既有研究|其他研究|文献中|此前研究/u.test(first + second + (parts[index - 1] || ''));
+            // A behavioural protocol passes the actual recorded responses to
+            // the named statistics; merely listing experimental actions fails.
+            if (newChainSafe
+                && /(?:被试|参与者)按目标词按键/u.test(first)
+                && /按键(?:记录)?(?:分|区分)为命中、漏报(?:和|与|及)虚报并记录正确命中(?:的)?(?:按键)?延迟/u.test(first)
+                && /试次末再键入回忆数字/u.test(first)
+                && /^命中与虚报(?:经)?换算(?:得|为)灵敏度/u.test(nextClauses[0] || '')
+                && /^正确命中(?:的)?(?:按键)?延迟作为反应时$/u.test(nextClauses[1] || '')
+                && /^数字回忆用编辑距离计分$/u.test(nextClauses[2] || '')
+                && /^三者再输入贝叶斯(?:多层|层级)模型比较条件差异$/u.test(nextClauses[3] || '')) return true;
+            // Frame features become temporal representations consumed by the
+            // acoustic predictor. The same representation must cross the edge.
+            if (newChainSafe
+                && /^(?:视觉编码器|[A-Z][A-Za-z0-9.-]{1,48})对[^，,。]{1,80}视频逐帧提取(?:图像|视觉)特征$/u.test(clauses[0])
+                && /^输出帧级特征序列送入[A-Z][A-Za-z0-9. -]{1,60}建模时间依赖$/u.test(clauses[1] || '')
+                && /^形成时间表示$/u.test(clauses[2] || '')
+                && /^该时间表示一方面逐帧预测(?:[1-9][0-9]*维)?(?:对数)?梅尔谱$/u.test(nextClauses[0] || '')) return true;
+            // A spatial query produces a modulation vector which is actually
+            // used to condition the already identified separation blocks.
+            if (newChainSafe
+                && /^前端(?:把|将)[^，,。]{1,180}(?:复数短时傅里叶变换|复数STFT)[^，,。]{1,180}(?:空间线索|声道间相位差)[^，,。]{0,80}拼接融合$/u.test(clauses[0])
+                && /^得到融合特征并送入基于[A-Z][A-Za-z0-9.-]{1,40}的时频网格骨干(?:网络)?做时频分离$/u.test(clauses[1] || '')
+                && /^空间查询编码把归一化距离与方位角经傅里叶特征映射为调制向量$/u.test(nextClauses[0] || '')
+                && /^再经(?:特征线性调制|FiLM)注入上述分离块$/u.test(nextClauses[1] || '')
+                && /^以该向量为条件调制融合特征的分离过程$/u.test(nextClauses[2] || '')) return true;
             if (safe([first]) && !revoked.test(normalizeNotice(second))) {
                 if (/^梯度归因(?:统计|计算)各频点对[^，,。；]{1,24}(?:影响|贡献)(?:权重)?(?:并)?(?:形成|生成|得到)(?:加权|频率权重)轮廓$/u.test(clauses[0])
                     && /^(?:该|此)(?:加权|频率权重)?轮廓(?:作为|被用作)加权函数(?:进入|用于)(?:经典与神经|经典|神经)?(?:广义互相关|GCC|互相关)(?:流水线(?:对比|比较)?|计算|处理)$/u.test(clauses[1] || '')) return true;
@@ -2541,7 +2702,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     // GPU 数、步数、延迟、算力开销这类运行参数分开。
     const sourceHasQuantitativeEvidence = classifySourceQuantitativeEvidence(
         sourceText, quantitativeSourceSentences);
-    const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
+    const quantitativeResultState = coreSummaryQuantitativeResultState(summary, options.sourceText);
     const scopedSymbolicDemonstration = sourceHasQuantitativeEvidence === false
         && /point[- ](?:set|pattern)/i.test(sourceText)
         && /transformation class/i.test(sourceText)
