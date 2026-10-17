@@ -9,6 +9,8 @@ const handles = new WeakMap();
 const registrations = new Map();
 const CONTRACT = 'conference-recovery-grant-v1';
 const RECEIPT = 'conference-recovery-grant-registration-v1';
+const CONTINUATION = 'conference-recovery-window-continuation-v1';
+const memberChecks = new Set();
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -86,6 +88,83 @@ function memberPins(member) {
     if (Object.values(result).some(value => !SHA.test(value || ''))) fail('成员缺少完整父/子CAS');
     return result;
 }
+// Hash every retained byte, including the independent Reader ledger, original
+// requests/responses, retired/migrated candidates and paid image assets. This
+// reads the old window only; it never copies a candidate into a new budget.
+function recoveryWindowMaterials(analysisRoot, executionId) {
+    if (!UUID.test(executionId || '')) fail('延续窗口 UUID 非法');
+    const root = directory(path.join(directory(analysisRoot), executionId));
+    const files = []; let bytes = 0;
+    function visit(folder, prefix = '') {
+        for (const name of fs.readdirSync(folder).sort()) {
+            if (!/^[A-Za-z0-9._-]{1,220}$/u.test(name) || ['.', '..'].includes(name)) fail('延续材料文件名非法');
+            const file = path.join(folder, name), info = fs.lstatSync(file);
+            if (info.isSymbolicLink()) fail('延续材料不能是链接');
+            if (info.isDirectory()) { directory(file); visit(file, prefix + name + '/'); continue; }
+            if (!info.isFile() || info.nlink !== 1 || (info.mode & 0o777) !== 0o600
+                || info.size > 64 * 1024 * 1024) fail('延续材料不是有界0600原文件');
+            const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            let content;
+            try {
+                const before = fs.fstatSync(fd), value = fs.readFileSync(fd), after = fs.fstatSync(fd), named = fs.lstatSync(file);
+                if (['dev','ino','size','mtimeMs','ctimeMs','nlink','mode'].some(key =>
+                    before[key] !== info[key] || before[key] !== after[key] || after[key] !== named[key])
+                    || value.length !== before.size) fail('读取延续材料期间原文件变化');
+                content = value;
+            } finally { fs.closeSync(fd); }
+            bytes += content.length;
+            if (files.length >= 8192 || bytes > 512 * 1024 * 1024) fail('延续材料超过完整窗口界限');
+            files.push({ path: prefix + name, sha256: sha(content) });
+        }
+    }
+    visit(root);
+    const ledger = files.find(row => row.path === 'reader-grant-budget.json');
+    if (ledger) {
+        const requests = read(path.join(root, ledger.path)).value.requests;
+        if (!Array.isArray(requests)) fail('原窗口 Reader 请求账不完整');
+        if (requests.some(row => row?.status === 'pending')) fail('原窗口仍有在途 Reader 请求');
+    }
+    return { files, materialsSha256: hash(files), ledgerFileSha256: ledger?.sha256 || null };
+}
+function assertContinuation(state, member) {
+    const c = member.continuation;
+    if (state.manifest.version === 1) {
+        if (c !== undefined) fail('旧v1许可不能借延续字段扩大权限');
+        return;
+    }
+    const key = `${state.manifest.grantId}:${member.paperId}`;
+    if (memberChecks.has(key) || memberChecks.size >= 16) fail('追加窗口延续循环或超过16层');
+    memberChecks.add(key);
+    try {
+        const prior = resolveRegisteredRecoveryGrant(c.grantId, c.grantSha256, { analysisRoot: state.analysisRoot });
+        const authority = readRecoveryGrantMember(prior, member.paperId);
+        if (authority.processId !== state.manifest.processId || authority.expectedExecutionId !== member.childExecutionId
+            || authority.parentExecutionId !== member.parentExecutionId
+            || authority.sourceSha256 !== member.sourceTextSha256
+            || authority.sourceSnapshotSha256 !== member.sourceSnapshotSha256) fail('不是前许可唯一最新窗口及原完整父稿');
+        const actual = recoveryWindowMaterials(state.analysisRoot, member.childExecutionId);
+        if (actual.materialsSha256 !== c.materialsSha256 || actual.ledgerFileSha256 !== c.ledgerFileSha256) {
+            fail('前窗口完整账本、候选、请求响应或资产树变化');
+        }
+        const folder = path.join(state.analysisRoot, member.childExecutionId);
+        const analysis = read(path.join(folder, 'analysis.json')).value;
+        const revision = read(path.join(folder, 'reader-revision.json')).value;
+        const { revisionSha256, ...body } = revision;
+        // Do not call the adapter's recursive loader here: it reopens this
+        // grant layer itself and would multiply whole-tree reads at each depth.
+        // The adapter independently validates every predecessor's full seed,
+        // mode and source/CAS chain before any child preparation or request.
+        if (analysis.status !== 'partial' || analysis.papers?.length !== 1
+            || analysis.papers[0].id !== member.paperId
+            || body.contract !== 'conference-reader-recovery-window-v1' || body.version !== 1
+            || revisionSha256 !== hash(body) || body.executionId !== member.childExecutionId
+            || body.paperId !== member.paperId || body.parentExecutionId !== member.parentExecutionId
+            || body.grantId !== c.grantId || body.grantSha256 !== c.grantSha256
+            || body.failedExecutionId !== authority.failedExecutionId
+            || body.failedAnalysisFileSha256 !== authority.failedAnalysisFileSha256
+            || body.sourceSnapshotSha256 !== member.sourceSnapshotSha256) fail('前窗口不是同一真实已停止失败');
+    } finally { memberChecks.delete(key); }
+}
 function assertMemberFiles(state, member) {
     for (const [relative, expected] of Object.entries(member.recordCAS || {})) {
         if (!SHA.test(expected || '') || read(casPath(state.repositoryRoot, member, relative)).sha256 !== expected) {
@@ -98,10 +177,11 @@ function assertMemberFiles(state, member) {
         || sha(source.sourceDetails?.text || '') !== member.sourceTextSha256) {
         fail('原子运行与封存全文身份不一致');
     }
+    assertContinuation(state, member);
 }
 function assertManifest(manifest) {
     const { manifestSha256, ...body } = manifest || {};
-    if (manifest.contract !== CONTRACT || manifest.version !== 1 || !UUID.test(manifest.grantId || '')
+    if (manifest.contract !== CONTRACT || ![1, 2].includes(manifest.version) || !UUID.test(manifest.grantId || '')
         || !UUID.test(manifest.processId || '') || !SHA.test(manifest.baselineStateFileSha256 || '')
         || !SHA.test(manifest.inventorySha256 || '') || manifestSha256 !== hash(body)
         || !manifest.approval || manifest.approval.kind !== 'explicit-human'
@@ -121,6 +201,14 @@ function assertManifest(manifest) {
             fail('成员身份或来源SHA不合法');
         }
         memberPins(member);
+        const c = member.continuation;
+        if (manifest.version === 1 ? c !== undefined : !c || c.contract !== CONTINUATION
+            || Object.keys(c).sort().join(',') !== ['contract','grantId','grantSha256','materialsSha256','ledgerFileSha256'].sort().join(',')
+            || !UUID.test(c.grantId || '') || c.grantId === manifest.grantId
+            || !SHA.test(c.grantSha256 || '') || !SHA.test(c.materialsSha256 || '')
+            || !(c.ledgerFileSha256 === null || SHA.test(c.ledgerFileSha256 || ''))) {
+            fail('延续许可必须显式绑定前许可和完整材料树，旧v1不授予延续');
+        }
     }
     return manifest;
 }
@@ -140,6 +228,12 @@ function checkBaseline(manifest, baseline) {
             || item.sourceProof?.textSha256 !== member.sourceTextSha256
             || item.analysisProof?.sourceSnapshotSha256 !== member.sourceSnapshotSha256) {
             fail('成员不对应原批次的父包和来源证明');
+        }
+        const releases = (item.retryReleases || []).filter(row => row.recoveryGrantId);
+        if (manifest.version === 1 && releases.length) fail('已有追加历史必须绑定最新失败窗口，不能重选最旧失败');
+        if (manifest.version === 2 && (releases.at(-1)?.recoveryGrantId !== member.continuation.grantId
+            || releases.at(-1)?.recoveryGrantSha256 !== member.continuation.grantSha256)) {
+            fail('延续未绑定原进程最后实际派发的许可');
         }
     }
     return state;
@@ -178,6 +272,14 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
         const temporaryHandle = makeHandle(manifest, root, analysisRoot, processDirectory);
         const data = handles.get(temporaryHandle);
         for (const member of manifest.members) assertMemberFiles(data, member);
+        if (manifest.version === 2) for (const id of fs.readdirSync(root)) {
+            if (id === manifest.grantId || !UUID.test(id) || !fs.existsSync(path.join(root, id, 'registration.json'))) continue;
+            const other = assertManifest(read(path.join(root, id, 'manifest.json')).value);
+            if (other.processId === manifest.processId && other.members.some(row => manifest.members.some(member =>
+                row.paperId === member.paperId && row.childExecutionId === member.childExecutionId))) {
+                fail('同一最新失败已有独立追加登记，必须恢复该窗口');
+            }
+        }
         directory(target, true);
         // Exact writes are no-overwrite and crash-resumable. The receipt is last.
         adapter().writeBytesAtomic(path.join(target, 'manifest.json'), original.bytes);
@@ -225,6 +327,7 @@ function readRecoveryGrantMember(handle, paperId) {
         failedExecutionId: member.childExecutionId, ...pins,
         sourceSha256: member.sourceTextSha256, sourceSnapshotSha256: member.sourceSnapshotSha256,
         expectedExecutionId: grantedRecoveryExecutionId(state.manifest.grantId, member.childExecutionId, pins.failedAnalysisFileSha256),
+        ...(member.continuation ? { continuation: freeze(clone(member.continuation)) } : {}),
         files: Object.freeze(Object.entries(member.recordCAS).map(([relative, sha256]) => Object.freeze({
             path: casPath(state.repositoryRoot, member, relative), sha256 }))), assertUnchanged });
 }
@@ -263,5 +366,5 @@ function recoveryGrantSummary(handle) {
         processId: state.manifest.processId, paperIds: Object.freeze(state.manifest.members.map(x => x.paperId).sort()),
         limits: state.manifest.limits });
 }
-module.exports = { CONTRACT, RECEIPT, openRecoveryGrant, readRecoveryGrantMember,
+module.exports = { CONTRACT, RECEIPT, CONTINUATION, recoveryWindowMaterials, openRecoveryGrant, readRecoveryGrantMember,
     resolveRegisteredRecoveryGrant, reopenRecoveryGrantForWindow, grantedRecoveryExecutionId, recoveryGrantSummary };

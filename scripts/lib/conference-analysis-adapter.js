@@ -775,6 +775,11 @@ function assertGrantedMember(authority, failed) {
         }
     }
     authority.assertUnchanged();
+    if (Boolean(failed.recoveryWindow) !== Boolean(authority.continuation)
+        || authority.continuation && (failed.revision.grantId !== authority.continuation.grantId
+            || failed.revision.grantSha256 !== authority.continuation.grantSha256)) {
+        throw recoveryWindowError('只有显式延续许可能接受最新已登记失败窗口');
+    }
 }
 function grantedRecoveryMode(failed) {
     const paper = failed.analysis.papers[0];
@@ -903,6 +908,9 @@ function loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, load
     const authority = grants.readRecoveryGrantMember(grantHandle, body.paperId);
     const failed = loadConferenceReaderRevision({ analysisRoot, executionId: body.failedExecutionId });
     assertGrantedMember(authority, failed);
+    if (stableHash(body.continuation || null) !== stableHash(authority.continuation || null)) {
+        throw recoveryWindowError('追加窗口没有保留同一前许可及原材料树');
+    }
     if (body.mode !== grantedRecoveryMode(failed)) throw recoveryWindowError('新增会议恢复窗口模式与原失败上游范围不一致');
     if (authority.grantId !== body.grantId || authority.grantSha256 !== body.grantSha256
         || authority.expectedExecutionId !== executionId || path.resolve(authority.analysisRoot) !== path.resolve(analysisRoot)
@@ -927,7 +935,7 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
     planHandle, sourceRoot, grantHandle, reusePaidCoreDiagnostics = true } = {}, overrides = {}) {
     const engine = overrides.engine || require('../analysis-engine'), deep = overrides.deep || require('../deep-analyzer');
     const failed = loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
-    if (failed.recoveryWindow || failed.parent.run.executionId !== parentExecutionId || failed.analysis.status !== 'partial') {
+    if (failed.parent.run.executionId !== parentExecutionId || failed.analysis.status !== 'partial') {
         throw recoveryWindowError('新增会议恢复只接受授权清单的原失败子稿与原完成父稿');
     }
     const grants = require('./conference-recovery-grant'), authority = grants.readRecoveryGrantMember(grantHandle, failed.run.paperId);
@@ -941,6 +949,15 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
     const withFailedSource = callback => analysisContext.withConferenceAnalysisSource({ executionId: failedExecutionId,
         executionDir: failed.directory, paperId: failed.run.paperId, sourceDetails: failed.source.sourceDetails,
         readerPdfSourceHandle: failedPdf }, callback);
+    if (failed.recoveryWindow) {
+        // Authenticate the predecessor's complete independent ledger in its
+        // own real source scope before preparing any new child or model work.
+        // Its old counters, pending/final responses and history are never moved
+        // into the new ledger or changed to grant fresh attempts.
+        withFailedSource(() => require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(
+            failed.recoveryWindow.grantHandle, { executionId: failedExecutionId,
+                executionDir: failed.directory, paperId: failed.run.paperId, readerPdfSourceHandle: failedPdf }, () => {}));
+    }
     const mode = withFailedSource(() => grantedRecoveryMode(failed));
     // Full analysis repairs incomplete classification too. Its original rules
     // come from the CAS-bound completed parent, not the unfinished child. The
@@ -978,6 +995,7 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
                 failedSourceFileSha256: failed.sourceFileSha256,
                 failedRevisionFileSha256: readJsonRecord(path.join(failed.directory, 'reader-revision.json')).sha256,
                 grantId: authority.grantId, grantSha256: authority.grantSha256, originalMemberPaperId: failed.run.paperId,
+                ...(authority.continuation ? { continuation: clone(authority.continuation) } : {}),
                 mode, maxAttempts: 3, recoverySeedFileSha256: seedRecord.sha256, seededAnalysisSha256: sha256(jsonBytes(seeded)),
                 ...(resourcePreflightFileSha256 ? { resourcePreflightFileSha256 } : {}) };
             writeJson(revisionFile, { ...body, revisionSha256: stableHash(body) });

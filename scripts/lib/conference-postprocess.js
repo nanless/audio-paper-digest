@@ -311,9 +311,23 @@ function withCompletedPublicationEvidence(loaded, callback) {
         ? require('./reader-authenticated-pdf-table-evidence').withVerifiedSource(loaded.readerPdfSourceHandle,
             () => require('./reader-authenticated-pdf-table-evidence').withSavedPaper(loaded.analysis.papers[0], callback))
         : callback();
-    return loaded.publicationEvidence
-        ? require('./conference-reader-publication-evidence').withPublicationEvidence(loaded.publicationEvidence, inPdfSource)
+    // loadCompleted's qualification scope has ended. Rendering must replay the
+    // same real execution/source identity, including the PDF proof's executionId.
+    const inWindow = () => loaded.recoveryWindow
+        ? require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(
+            loaded.recoveryWindow.grantHandle, { paperId: loaded.run.paperId,
+                executionId: loaded.run.executionId, executionDir: loaded.directory,
+                readerPdfSourceHandle: loaded.readerPdfSourceHandle }, inPdfSource)
         : inPdfSource();
+    const inSource = () => loaded.readerPdfSourceHandle
+        ? require('./conference-analysis-context').withConferenceAnalysisSource({
+            paperId: loaded.run.paperId, executionId: loaded.run.executionId,
+            executionDir: loaded.directory, sourceDetails: loaded.source.sourceDetails,
+            readerPdfSourceHandle: loaded.readerPdfSourceHandle }, inWindow)
+        : inWindow();
+    return loaded.publicationEvidence
+        ? require('./conference-reader-publication-evidence').withPublicationEvidence(loaded.publicationEvidence, inSource)
+        : inSource();
 }
 function getConsistentPublicationFields(paper, tagRules) {
     const parsed = paper.parsed; const reparsed = require('../utils.js').parseAnalysis(paper.analysis,

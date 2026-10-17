@@ -112,3 +112,33 @@ test('冷表证不能用完整PDF来源替代新增恢复窗口的真实登记�
     assert.throws(() => publication.replayCanonicalReaderPdfSource(f.paper, proof.sourceIdentity), /窗口身份或 SHA|追加许可/);
     assert.equal(fs.existsSync(path.join(f.loaded.directory, 'reader-grant-budget.json')), false);
 });
+
+test('完成稿页面投影恢复真实会议执行范围，原PDF表证不丢executionId且拒错来源', t => {
+    const f = fixture(t);
+    // Exercise the real private rendering wrapper with an authenticated source
+    // fixture, not an invented whole-paper qualification or exported capability.
+    const Module = require('node:module');
+    const filename = require.resolve('../scripts/lib/conference-postprocess');
+    const compiled = new Module(filename, module);
+    compiled.filename = filename;
+    compiled.paths = Module._nodeModulePaths(path.dirname(filename));
+    compiled._compile(fs.readFileSync(filename, 'utf8')
+        + '\nmodule.exports.testCompletedScope = withCompletedPublicationEvidence;', filename);
+    const replay = compiled.exports.testCompletedScope;
+    const loaded = { ...f.loaded, readerPdfSourceHandle: f.handle };
+    assert.equal(context.getConferenceAnalysisContext(), null);
+    assert.equal(replay(loaded, () => {
+        const current = context.getConferenceAnalysisContext();
+        assert.equal(current.executionId, executionId);
+        assert.equal(current.readerPdfSourceHandle, f.handle);
+        assert.equal(sourceApi.readerPdfSourceForContext(f.handle).sourceIdentity.executionId, executionId);
+        return true;
+    }), true);
+    assert.equal(context.getConferenceAnalysisContext(), null);
+    assert.throws(() => replay({ ...loaded, run: { ...loaded.run,
+        executionId: '44444444-4444-4444-8444-444444444444' } }, () => true), /differs|不同|identity/);
+    const wrongSource = structuredClone(loaded.source);
+    wrongSource.sourceDetails.text += '\nnot the retained source';
+    assert.throws(() => replay({ ...loaded, source: wrongSource }, () => true));
+    assert.throws(() => replay({ ...loaded, readerPdfSourceHandle: { ...f.handle } }, () => true));
+});

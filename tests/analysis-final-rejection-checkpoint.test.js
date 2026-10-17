@@ -18,6 +18,65 @@ let modelRequests=0;utils.requestLlmJson=async()=>{modelRequests++;throw Object.
 Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs=480000;
 const engine = require('../scripts/analysis-engine');
 
+test('会议最终拒绝只保留当前真实执行的认证PDF来源，拒绝错身份、复制能力及来源改写', t => {
+    const os = require('node:os'), crypto = require('node:crypto');
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-final-rejection-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const processApi = require('../scripts/lib/conference-process');
+    const sourceApi = require('../scripts/lib/conference-source-context');
+    const adapter = require('../scripts/lib/conference-analysis-adapter');
+    const context = require('../scripts/lib/conference-analysis-context');
+    const f = require('./helpers/conference-process-storage-fixture').createSourceFixture(directory);
+    fs.copyFileSync(Config.FILES.tagCatalogFile, f.files.tagCatalogFile);
+    f.context = processApi.loadAuthority(f.options, f.deps);
+    const shared = processApi.prepareShared(f.context, f.deps, f.stamp);
+    const sourceRoot = path.join(f.files.conferenceSourceCacheDir,
+        fs.readdirSync(f.files.conferenceSourceCacheDir).find(name => name.startsWith('generation-')));
+    const handle = sourceApi.buildConferenceSourceContext({ planHandle: shared.planHandle, paperId: f.paperId, sourceRoot });
+    const details = adapter.sourceDetails(handle);
+    const executionId = '33333333-3333-4333-8333-333333333333';
+    const sourceSha256 = crypto.createHash('sha256').update(details.text).digest('hex');
+    const paper = { id: f.paperId, sourceId: f.paperId, sourceSha256,
+        analysisManifest: { sourceAcquisition: { sourceSha256,
+            structuredArtifactsSha256: details.structuredArtifacts.payloadSha256 } } };
+    // Expose only the private source selector in this test module. This checks
+    // source authority, and does not invent a successful scientific analysis.
+    const Module = require('node:module');
+    const filename = require.resolve('../scripts/analysis-engine');
+    const compiled = new Module(filename, module);
+    compiled.filename = filename;
+    compiled.paths = Module._nodeModulePaths(path.dirname(filename));
+    compiled._compile(fs.readFileSync(filename, 'utf8')
+        + '\nmodule.exports.testRejectedSource = readConferenceFinalRejectionSource;', filename);
+    const read = compiled.exports.testRejectedSource;
+    const identity = { executionId, executionDir: path.join(directory, executionId),
+        paperId: f.paperId, sourceDetails: details, readerPdfSourceHandle: handle };
+    const beforeRequests = modelRequests;
+    assert.equal(read(paper), null, '没有会议执行时保持原日更选择路径');
+    context.withConferenceAnalysisSource(identity, () => {
+        assert.deepEqual(read(paper), details);
+        for (const mutate of [p => { p.id += '-other'; }, p => { p.arxivId = '2601.00001'; },
+            p => { p.sourceSha256 = '0'.repeat(64); },
+            p => { p.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = '0'.repeat(64); }]) {
+            const bad = structuredClone(paper); mutate(bad);
+            assert.throws(() => read(bad));
+        }
+    });
+    assert.throws(() => context.withConferenceAnalysisSource({ ...identity,
+        executionDir: path.join(directory, 'different-execution') }, () => read(paper)));
+    assert.throws(() => context.withConferenceAnalysisSource({ ...identity,
+        readerPdfSourceHandle: { ...handle } }, () => read(paper)));
+    const withoutHandle = { ...identity }; delete withoutHandle.readerPdfSourceHandle;
+    assert.throws(() => context.withConferenceAnalysisSource(withoutHandle, () => read(paper)));
+    // Alter an actually ledger-bound file: stat-only or copied authority must
+    // never preserve a new checkpoint against changed source bytes.
+    const sourceTextFile = fs.readdirSync(sourceRoot, { recursive: true }).find(name => name.endsWith('.txt'));
+    assert.ok(sourceTextFile);
+    fs.appendFileSync(path.join(sourceRoot, sourceTextFile), '\nchanged source');
+    assert.throws(() => context.withConferenceAnalysisSource(identity, () => read(paper)));
+    assert.equal(modelRequests, beforeRequests);
+});
+
 test('最终资格拒绝保留真实封存来源正文，重启取得原检查点且失败标记保留', {
     skip: !input || !root ? '需真实已付费完整论文副本及封存来源项目' : false
 }, async () => {

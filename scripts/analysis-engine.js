@@ -1648,6 +1648,27 @@ function getAnalysisExitCode(status) {
 // 单篇分析（带重试 + 解析）
 // ═══════════════════════════════════════════════════════
 
+function readConferenceFinalRejectionSource(paper) {
+    const conference = require('./lib/conference-analysis-context');
+    const context = conference.getConferenceAnalysisContext();
+    if (!context) return null;
+    const source = conference.getConferenceAnalysisSource(paper);
+    // 保存真实付费稿不代表签发成功；仍须使用当前执行的认证 PDF 能力，
+    // 不能用持久化描述、别篇来源或日更封存目录替代会议来源。
+    conference.conferenceCoreSummaryRepairContext(paper, source.text);
+    const provider = require('./lib/conference-source-context')
+        .readerPdfSourceForContext(context.readerPdfSourceHandle);
+    if (!provider || provider.paperId !== paper.id
+        || provider.sourceIdentity.executionId !== context.executionId
+        || provider.sourceText !== source.text
+        || provider.structuredArtifactsSha256 !== source.structuredArtifacts?.payloadSha256
+        || paper.analysisManifest?.sourceAcquisition?.structuredArtifactsSha256 !== provider.structuredArtifactsSha256) {
+        throw new Error('会议最终拒绝检查点缺少当前执行的认证 PDF 来源');
+    }
+    provider.assertUnchanged();
+    return source;
+}
+
 /**
  * 分析单篇论文，带重试和自动解析
  * @param {Object} paper - 论文对象，需包含 arxivId 和 title
@@ -1763,11 +1784,14 @@ async function analyzePaperWithRetry(paper, options = {}) {
                                 fresh.assertFreshPaper(analyzed);
                                 source = fresh.readFreshSource(context.runDir, analyzed, context);
                             } else {
-                                const daily = require('./lib/daily-fresh-source-plan');
-                                const data = readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
-                                const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
-                                if (!daily.isPaperBoundToPlan(analyzed, plan)) throw new Error('正文未绑定当前封存来源');
-                                source = daily.readDailyFreshSource(plan, analyzed);
+                                source = readConferenceFinalRejectionSource(analyzed);
+                                if (!source) {
+                                    const daily = require('./lib/daily-fresh-source-plan');
+                                    const data = readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
+                                    const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
+                                    if (!daily.isPaperBoundToPlan(analyzed, plan)) throw new Error('正文未绑定当前封存来源');
+                                    source = daily.readDailyFreshSource(plan, analyzed);
+                                }
                             }
                             const sourceSha256 = crypto.createHash('sha256').update(String(source?.text || '')).digest('hex');
                             if (sourceSha256 === analyzed.sourceSha256
