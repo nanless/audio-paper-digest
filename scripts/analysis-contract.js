@@ -3133,8 +3133,13 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (stage.sourceCoreCorrection !== undefined
         || (stage.executionKind === 'operator' && stage.model === 'operator-local')) {
         try {
-            if (require('./lib/conference-source-resource-correction')
-                .assertVerifiedCoreStage(paper, stage) !== true) return '核心本地修正未通过真实来源与原句冷重放。';
+            const local = require('./lib/conference-source-resource-correction');
+            // The shared validator is also called directly by cold publication
+            // checks. Rebuild the registered canonical receipt/source scope;
+            // stage JSON alone must never authorize the local core proof.
+            if (local.withSavedPaper(paper, () => local.assertVerifiedCoreStage(paper, stage)) !== true) {
+                return '核心本地修正未通过真实来源与原句冷重放。';
+            }
         } catch (error) { return `核心本地修正未通过真实来源与原句冷重放：${error.message}`; }
     }
     // 已付响应的人工短语变更必须独立重放来源、原付费字节和 operator 证明。
