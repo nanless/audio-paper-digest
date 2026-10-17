@@ -231,3 +231,117 @@ test('真实grant原失败与完整父稿分离，process保留父指针或原�
         assert.throws(() => api.openBatch(f.options), /追加链|原实际失败|最新失败/);
     }
 });
+
+// Exercise the exact private asset routine and strict byte reader/immutable
+// writer with a small scope harness. Admission/source authority itself is
+// covered above; this harness makes no scientific qualification claim.
+function assetRoutine(t) {
+    const vm = require('node:vm');
+    const { createRequire } = require('node:module');
+    const moduleFile = require.resolve('../scripts/lib/conference-source-resource-correction');
+    const source = fs.readFileSync(moduleFile, 'utf8');
+    const functionBody = (name, next) => source.slice(source.indexOf(`function ${name}(`),
+        source.indexOf(`function ${next}(`));
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(require('node:os').tmpdir()), 'source-correction-assets-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const parent = path.join(root, 'parent');
+    const child = path.join(root, 'child');
+    fs.mkdirSync(path.join(parent, 'reader-assets'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(child, { mode: 0o700 });
+    const pixels = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+    const filename = `figure-1-${sha(pixels).slice(0, 16)}.png`;
+    const original = { ordinal: 1, url: 'https://example.org/original.png',
+        caption: 'Original scientific caption', assetFilename: filename,
+        cachePath: path.join(parent, 'reader-assets', filename), assetMediaType: 'image/png',
+        assetSha256: sha(pixels), assetBytes: pixels.length, assetWidth: 1, assetHeight: 1 };
+    fs.writeFileSync(original.cachePath, pixels, { mode: 0o600 });
+    const input = { readerParent: { apiReaderFigures: [original] } };
+    const active = { finalizerInput: input, cold: false, loaded: { directory: child },
+        batch: { analysisRoot: root }, row: { record: { paperId: 'conference:icassp:2026:icassp-arnumber:100',
+            sourceSha256: '1'.repeat(64), readerParentExecutionId: 'parent' } } };
+    const localRequire = createRequire(moduleFile);
+    let immutableCalls = 0;
+    const fail = message => { throw Error(message); };
+    const environment = {
+        fs, path, sha, Buffer, SHA: /^[a-f0-9]{64}$/u,
+        require: localRequire, current: () => active,
+        assertContext: () => {}, equal: (a, b, message) => assert.deepEqual(a, b, message), fail,
+        immutable(file, bytes) {
+            immutableCalls++;
+            assert.equal(active.cold, false, 'cold path must never call any writer');
+            fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+            localRequire('./fresh-rewrite-run').assertSafeDirectory(path.dirname(file));
+            localRequire('./immutable-file').writeImmutableFile(file, bytes, fail);
+        }
+    };
+    const routine = vm.runInNewContext(functionBody('sameStat', 'inside') + '\n'
+        + functionBody('verifiedSignedFigureAssets', 'withCorrection')
+        + '\n({routine: readVerifiedSignedFigures, verifyOnly: (input, figures) => verifiedSignedFigureAssets(input, figures, false)})', environment);
+    const noAssets = ({ cachePath, assetFilename, assetMediaType, assetSha256,
+        assetBytes, assetWidth, assetHeight, ...rest }) => rest;
+    const injected = [noAssets(original)];
+    const target = path.join(child, 'reader-assets', filename);
+    return { active, input, ...routine, original, injected, target, pixels,
+        immutableCalls: () => immutableCalls, normalize: value => JSON.parse(JSON.stringify(value)) };
+}
+
+test('本地来源热图复制到当前child路径，像素及其余元数据exact且正常页面资产检查接受', async t => {
+    const f = assetRoutine(t), before = fs.readFileSync(f.original.cachePath);
+    assert.throws(() => f.routine(f.input, f.injected), /同一论文锁/);
+    await engine.withPaperAnalysisLock({ id: f.active.row.record.paperId }, async () => {
+        const first = f.routine(f.input, f.injected);
+        assert.deepEqual(f.normalize(first), [{ ...f.original, cachePath: f.target }]);
+        assert.deepEqual(fs.readFileSync(f.target), f.pixels);
+        const calls = f.immutableCalls();
+        assert.deepEqual(f.normalize(f.verifyOnly(f.input, first)), f.normalize(first));
+        assert.equal(f.immutableCalls(), calls, 'assertOutput helper must never write even when hot');
+        assert.deepEqual(f.normalize(f.routine(f.input, f.injected)), f.normalize(first));
+        const postFile = require.resolve('../scripts/lib/conference-postprocess');
+        const source = fs.readFileSync(postFile, 'utf8');
+        const raw = source.slice(source.indexOf('function conferenceFigureAssets('),
+            source.indexOf('function buildFormulaEvidenceRecord('));
+        const readRegular = require('../scripts/lib/publication-file-primitives').readRegular;
+        const assets = require('node:vm').runInNewContext('(' + raw + ')', {
+            path, fail: message => { throw Error(message); },
+            pageApi: { readRegular(file, maximum) {
+                const result = readRegular(file, maximum); return { ...result, fileSha256: result.sha256 };
+            } }
+        })({ directory: f.active.loaded.directory, analysis: { papers: [{ apiReaderFigures: first }] } });
+        assert.equal(assets[0].assetSha256, f.original.assetSha256);
+        assert.equal(assets[0].base64, f.pixels.toString('base64'));
+    });
+    assert.deepEqual(fs.readFileSync(f.original.cachePath), before);
+});
+
+test('冷图重放只读核父子两份真字节，缺图或任一端篡改不得补写', async t => {
+    const f = assetRoutine(t);
+    await engine.withPaperAnalysisLock({ id: f.active.row.record.paperId }, () => f.routine(f.input, f.injected));
+    const calls = f.immutableCalls();
+    f.active.cold = true;
+    const before = fs.statSync(f.target, { bigint: true });
+    assert.equal(f.verifyOnly(f.input, f.injected)[0].cachePath, f.target);
+    assert.equal(fs.statSync(f.target, { bigint: true }).mtimeNs, before.mtimeNs);
+    fs.writeFileSync(f.target, 'different child bytes');
+    assert.throws(() => f.routine(f.input, f.injected), /子稿原图/);
+    fs.unlinkSync(f.target);
+    assert.throws(() => f.routine(f.input, f.injected), { code: 'ENOENT' });
+    assert.equal(fs.existsSync(f.target), false);
+    fs.writeFileSync(f.target, f.pixels, { mode: 0o600 });
+    fs.writeFileSync(f.original.cachePath, 'different original bytes');
+    assert.throws(() => f.routine(f.input, f.injected), /原签图像素/);
+    assert.equal(f.immutableCalls(), calls);
+});
+
+test('已有child冲突像素、错原路径或科学说明拒绝，不覆盖父子文件', async t => {
+    const f = assetRoutine(t);
+    fs.mkdirSync(path.dirname(f.target), { mode: 0o700 });
+    fs.writeFileSync(f.target, 'existing unrelated bytes', { mode: 0o600 });
+    await engine.withPaperAnalysisLock({ id: f.active.row.record.paperId }, () => {
+        assert.throws(() => f.routine(f.input, f.injected), /不可变|不同/);
+        assert.deepEqual(fs.readFileSync(f.target), Buffer.from('existing unrelated bytes'));
+        f.original.cachePath = f.target;
+        assert.throws(() => f.routine(f.input, f.injected), /原签会议图路径/);
+    });
+    f.injected[0].caption = 'changed scientific caption';
+    assert.throws(() => f.routine(f.input, f.injected), /科学说明/);
+});

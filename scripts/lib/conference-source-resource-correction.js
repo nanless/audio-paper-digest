@@ -679,7 +679,7 @@ function currentVerifiedCorrection(paper, sourceDetails) {
     if (stable(sourceDetails) !== stable(active.loaded.source.sourceDetails)) fail('finalizer来源副本不同');
     return prepareFinalizerInput(paper);
 }
-function readVerifiedSignedFigures(input, injectedFigures) {
+function verifiedSignedFigureAssets(input, injectedFigures, materialize) {
     const active = current();
     if (input !== active.finalizerInput) fail('原图复用缺少本scope冻结引用');
     assertContext(active, { id: active.row.record.paperId, source: 'conference',
@@ -697,8 +697,23 @@ function readVerifiedSignedFigures(input, injectedFigures) {
             || prior.cachePath !== path.join(directory, filename) || prior.assetMediaType !== 'image/png') fail('原签会议图路径/SHA不规范');
         const raw = read(prior.cachePath, false);
         if (raw.sha256 !== prior.assetSha256 || raw.bytes.length !== prior.assetBytes) fail('原签图像素改变');
-        return { ...figure, ...Object.fromEntries(keys.map(key => [key, prior[key]])) };
+        const childPath = path.join(active.loaded.directory, 'reader-assets', filename);
+        if (!active.cold && materialize) {
+            if (!require('../analysis-engine').paperAnalysisLockHeld({ id: active.row.record.paperId })) {
+                fail('新子稿原图保存必须持有同一论文锁');
+            }
+            // Preserve original pixels and metadata. Only the new child owns
+            // this normal asset path; cold replay must never create or repair it.
+            immutable(childPath, raw.bytes);
+        }
+        const child = read(childPath, false);
+        if (child.sha256 !== prior.assetSha256 || child.bytes.length !== prior.assetBytes
+            || !child.bytes.equals(raw.bytes)) fail('子稿原图与原签父稿字节不同');
+        return { ...figure, ...Object.fromEntries(keys.map(key => [key, prior[key]])), cachePath: childPath };
     });
+}
+function readVerifiedSignedFigures(input, injectedFigures) {
+    return verifiedSignedFigureAssets(input, injectedFigures, true);
 }
 function withCorrection(batchHandle, { executionId, planHandle, sourceRoot }, callback) {
     const batch = batchFor(batchHandle);
@@ -800,6 +815,11 @@ function assertOutput(paper) {
     equal(paper.parsed, input.audit.parsed, '正式解析字段不同');
     equal(paper.apiReaderResources, input.resources, '资源身份不是同 PDF 的重新派生');
     equal(paper.apiReaderAuthors, input.readerParent.apiReaderAuthors, '未授权改变原签作者字段');
+    // The complete cold gate verifies both actual pixel files too, rather than
+    // waiting for page staging to discover a missing or changed child asset.
+    // This shared helper is read-only here, including during a hot finalizer.
+    equal(verifiedSignedFigureAssets(input, paper.apiReaderFigures, false), paper.apiReaderFigures,
+        '当前child原图路径、像素或原签元数据不同');
     const locator = { contract: active.batch.policy.contract, processId: active.batch.manifest.value.processId,
         executionId: active.row.record.childExecutionId, manifestSha256: active.batch.manifest.sha256 };
     equal(paper.conferenceSourceCorrection, locator, '本地子运行定位器错误');
