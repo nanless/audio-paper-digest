@@ -192,7 +192,7 @@ const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差|(?:对数似然比代价(?:[ \t]*[Cc][Ll][Ll][Rr](?![A-Za-z0-9_])|(?![ \t-]*[Cc][Ll][Ll][Rr]))|声对比度|声压级)(?=[ \t]*(?:指标|分数|得分)?(?:为|是|从|升至|降至)[ \t]*[-+]?[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))/;
 const CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN = /(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])/i;
-const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|on par|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
+const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|\bon par\b|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
 const CORE_SUMMARY_COMPARISON_OBJECT_PATTERN = /(?:\bbaseline\b|\bcontrol\b|\breference\b|\bcomparison\b|\b(?:our|ours|proposed|present|this)\s+(?:approach|method|model|system|technique)\b|基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|完整模型|竞品)/i;
 // 这些量描述系统怎么运行、怎么配置。写成本段落时有用，但没有基线或对照，
 // 它们不算核心摘要结果句所需的实测结果证据。
@@ -1936,9 +1936,21 @@ function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null)
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
         .map(sentence => sentence.trim()).filter(Boolean);
     return values.some((sentence, index) => {
+        // A sentence explicitly framed as other work or a hypothetical setup
+        // is not an observation by this paper. Do not let adjacent PDF columns
+        // supply its missing result role.
+        if (/^\s*(?:(?:prior|previous|earlier|related)\s+(?:work|research|stud(?:y|ies))\b|(?:hypothetical(?:ly)?|assuming|if)\b|(?:we|the authors)\s+(?:plan|hypothesi[sz]e|assume)\b)/iu.test(sentence)) return false;
         // These are input controls, including when PDF columns put an unrelated
         // metric name on the same extracted line. Keep any actual outcome values.
         const resultSentence = sentence
+            // Page/DOI metadata, symbolic sample indices and channel-format
+            // labels are not measured outcomes, even after PDF columns merge.
+            // Remove only these typed tokens; a real result in the same clause
+            // must keep its number and still be classified normally.
+            .replace(/\b\d{1,5}[ \t]+(?=10\.\d{4,9}\/)/gu, ' ')
+            .replace(/\b10\.\d{4,9}\/[^\s]+/gu, ' ')
+            .replace(/(\b[A-Za-z]_?([A-Za-z])\s*,\s*\2\s*(?:∈|:|=)\s*)\[\s*1\s*,\s*[A-Za-z]\s*\]/gu, '$1[index range]')
+            .replace(/\(\s*[1-9][0-9]*\s*-\s*ch\s*\)/giu, '(channel format)')
             .replace(/\b(?:source\s+)?sweeps?\s+[−+-]?\d+(?:\.\d+)?[◦°]\s*[→↔]\s*[−+-]?\d+(?:\.\d+)?[◦°]/giu, ' ')
             .replace(/\bthe other\s+[−+-]?\d+(?:\.\d+)?[◦°]\s*[→↔]\s*[−+-]?\d+(?:\.\d+)?[◦°]/giu, ' ')
             .replace(/\brandom\s+SNR\s+(?:between|from)\s+[−+-]?\d+(?:\.\d+)?\s+(?:and|to)\s+[−+-]?\d+(?:\.\d+)?\s*dB\b/giu, ' ');
@@ -2704,7 +2716,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     // 这一对；普通的行尾测量值只要下一行不同，仍然是证据。
     const quantitativeSourceText = stripDuplicatedLineFootnoteMarkers(sourceText)
         // 合并 PDF 软换行前只剥掉大纲编号。指标词表旁边的标题不是数值结果。
-        .replace(/^\s*\d{1,2}(?:\.\d+){0,3}[ \t]+(?=[A-Z][A-Za-z])/gm, '')
+        .replace(/^\s*\d{1,2}(?:\.\d+){0,3}\.?[ \t]+(?=[A-Z][A-Za-z])/gm, '')
         .replace(/([^\n])\r?\n(?!\r?\n)/g, '$1 ');
     const quantitativeSourceSentences = quantitativeSourceText.trim()
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)

@@ -1152,9 +1152,22 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                 category: 'integrity', scope: 'paper', retryable: false, executionId
             });
         }
+        const stageRequests = require('./analysis-stage-request-guard');
+        const retainedBlockedStages = Object.hasOwn(progress, 'blockedAuxiliaryModelStages')
+            ? progress.blockedAuxiliaryModelStages : [];
+        if (!Array.isArray(retainedBlockedStages)
+            || retainedBlockedStages.some(name => !stageRequests.AUXILIARY_STAGES.includes(name))
+            || new Set(retainedBlockedStages).size !== retainedBlockedStages.length
+            || (progress.attempts === 0 || loaded.revision.mode !== 'normal-analysis') && retainedBlockedStages.length) {
+            throw Object.assign(new Error('会议原失败阶段的请求禁令记录无效'), { retryable: false });
+        }
+        const failedStages = loaded.revision.mode === 'normal-analysis' && progress.attempts > 0
+            ? [...new Set([...retainedBlockedStages,
+                ...stageRequests.failedAuxiliaryStages(loaded.analysis.papers[0].analysisManifest)])].sort() : [];
         if (loaded.resourcePreflight && !savedScoring) paper.apiReaderResources = clone(loaded.resourcePreflight);
         let current = { ...loaded.analysis, generation: loaded.analysis.generation + 1,
-            readerRevisionProgress: { ...progress, attempts: progress.attempts + 1 } };
+            readerRevisionProgress: { ...progress, attempts: progress.attempts + 1,
+                ...(loaded.revision.mode === 'normal-analysis' ? { blockedAuxiliaryModelStages: failedStages } : {}) } };
         const analysisFile = path.join(loaded.directory, 'analysis.json');
         replaceJson(analysisFile, current, loaded.analysisFileSha256);
         try {
@@ -1164,14 +1177,15 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                     ? withNormalAnalysisSlot(async () => {
                         const reuseCore = reusePaidCoreDiagnostics === true && progress.attempts > 0
                             && paper.analysisManifest?.stages?.coreSummaryRepair?.status === 'contract_rejected';
-                        const outcome = await engine.analyzePaperWithRetry(paper, { maxRetries: 0,
+                        const outcome = await stageRequests.withStageModelRequestsForbidden(failedStages,
+                            () => engine.analyzePaperWithRetry(paper, { maxRetries: 0,
                         ...(reuseCore ? { analyzeFn: current => deep.analyzePaperDeep(current,
                             { replayLatestCoreSummaryDiagnostic: true }) } : {}),
                         onCheckpoint: checkpoint => {
                             const saved = readJsonRecord(analysisFile);
                             replaceJson(analysisFile, { ...saved.value, papers: [checkpoint],
                                 generation: saved.value.generation + 1 }, saved.sha256);
-                        } });
+                        } }));
                             if (!outcome.success) {
                                 paper = outcome.result || paper;
                                 const error = Object.assign(new Error(String(outcome.error || '会议正常分析恢复失败')), {

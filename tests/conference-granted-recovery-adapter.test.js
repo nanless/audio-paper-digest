@@ -132,6 +132,67 @@ test('正常分析从真实父词表恢复未完成标签，但新稿仍须通�
     });
 });
 
+test('正常窗口跨轮保留已失败阶段请求禁令，纯复验成功也不能重新授予调用', async t => {
+    const f = await fixture(t, { invalidCore: true });
+    const guard = require('../scripts/lib/analysis-stage-request-guard');
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    let calls = 0;
+    const engine = { ...f.engine, analyzePaperWithRetry: async paper => {
+        calls++;
+        // A newly authorized window may execute a previously failed seed stage.
+        if (calls === 1) {
+            assert.doesNotThrow(() => guard.assertStageModelRequestAllowed('tagSelection'));
+            paper.analysisManifest.stages.tagSelection = { status: 'contract_rejected' };
+        } else {
+            assert.throws(() => guard.assertStageModelRequestAllowed('tagSelection'),
+                error => error.code === guard.CODE && error.retryable === false);
+            // A distinct downstream stage which has not failed keeps its own
+            // original eligibility; no transport or provider is used here.
+            assert.doesNotThrow(() => guard.assertStageModelRequestAllowed('imageSupplement'));
+            // Pure validation can succeed, but must not erase the saved ban.
+            paper.analysisManifest.stages.tagSelection = { status: 'complete' };
+        }
+        return { success: false, result: paper, error: 'fixture stops before model', retryable: false };
+    } };
+    const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+    for (let round = 1; round <= 3; round++) {
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: f.operations }),
+            /fixture stops before model/);
+        const saved = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot,
+            executionId: member.expectedExecutionId });
+        assert.equal(saved.analysis.readerRevisionProgress.attempts, round);
+        assert.deepEqual(saved.analysis.readerRevisionProgress.blockedAuxiliaryModelStages,
+            round === 1 ? [] : ['tagSelection']);
+    }
+    assert.equal(calls, 3);
+});
+
+test('保存的阶段禁令字段异常在推进轮次或调用前停止', async t => {
+    const f = await fixture(t, { invalidCore: true });
+    const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+    let calls = 0;
+    const engine = { ...f.engine, analyzePaperWithRetry: async paper => {
+        calls++; return { success: false, result: paper, error: 'fixture initial stop', retryable: false };
+    } };
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: f.operations }), /fixture initial stop/);
+    const id = grants.readRecoveryGrantMember(f.grant.handle, f.paperId).expectedExecutionId;
+    const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: id });
+    for (const value of [null, 0, ['unknownStage'], ['tagSelection', 'tagSelection']]) {
+        const changed = structuredClone(loaded.analysis);
+        changed.readerRevisionProgress.blockedAuxiliaryModelStages = value;
+        const file = path.join(loaded.directory, 'analysis.json');
+        adapter.replaceJson(file, changed, adapter.readJsonRecord(file).sha256);
+        const bytes = fs.readFileSync(file);
+        await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: f.operations }), /请求禁令记录无效/);
+        assert.deepEqual(fs.readFileSync(file), bytes);
+        assert.equal(calls, 1);
+    }
+});
+
 test('新评分失败不能借父complete审计重开，内容后传输失败也不重授次数', async t => {
     for (const retryable of [false, true]) await t.test(String(retryable), async t => {
         const f = await fixture(t, { scoringMode: true, scoringFailed: true });

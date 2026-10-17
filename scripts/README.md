@@ -77,6 +77,7 @@ npm run test:compat
 | `lib/analysis-failure-rounds.js` | Node共享：固定首轮范围、全批轮次屏障、可重试失败集合、运行级停止及人工接手建议；不操作来源文件、正文、费用或发布资格。 |
 | `lib/analysis-batch-report.js` | Node共享：将 Reader 刷新固定范围、来源引用、轮次和人工建议保存为私有诊断；不签来源、成功正文或发布凭证，不授权新请求。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
+| `lib/analysis-stage-request-guard.js` | 独立会议恢复跨轮保存失败非 Reader 阶段的请求禁令，覆盖正常和自定义模型入口；保留纯检查及原付费重验，不新增额度。Reader 仍使用自己的累计账本。 |
 | `lib/cancelled-reader-final-checkpoint.js` | 确认最终正文仅被已取消步骤阻挡时，在原完整性、来源和反馈核验通过后从真实检查点继续，不重新生成已完成内容。 |
 | `lib/completed-bound-fact-feedback.js` | Node 库：供普通批量和单篇续跑共用，按真实父子反馈签发上下文只读核验完成证明、来源与禁留原句；不写包、不授予模型请求、不改变显式强制重分析。 |
 | `lib/pending-fact-feedback.js` | Node 库：锁内核验真实反馈及原包后保存未完成纠错义务；旧成功正文不代表新反馈完成，无反馈恢复沿用原包，完整同反馈资格通过后才清除。不给模型新额度。 |

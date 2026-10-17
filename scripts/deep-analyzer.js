@@ -13257,6 +13257,7 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
     maxRetries = resolveApiMaxRetries(maxRetries);
     const cfg = config || DEEP_CONFIG;
     require('./lib/daily-fact-review').assertScoringOnlyModelStageAllowed(cfg.usageContext?.stage);
+    require('./lib/analysis-stage-request-guard').assertStageModelRequestAllowed(cfg.usageContext?.stage);
     const overallTimeoutMs = Number.isInteger(cfg.overallTimeoutMs) && cfg.overallTimeoutMs > 0
         ? cfg.overallTimeoutMs
         : API_OVERALL_TIMEOUT_MS;
@@ -16499,7 +16500,8 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
         try {
             planText = await callModelWithConfig(
                 [{ role: 'user', content: supplementContent }],
-                API_MAX_TOKENS, API_MAX_RETRIES, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
+                API_MAX_TOKENS, API_MAX_RETRIES, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE,
+                    usageContext: { stage: 'imageSupplement' } }
             );
         } catch (error) {
             if (!isCorruptedMultimodalError(error)) throw error;
@@ -16511,7 +16513,8 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
             console.log(`    [secondary]    normalized_images=${normalizedInputCount} | mime=image/jpeg | base64_chars=${normalizedBase64Chars}`);
             planText = await callModelWithConfig(
                 [{ role: 'user', content: supplementContent }],
-                API_MAX_TOKENS, API_MAX_RETRIES, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE }
+                API_MAX_TOKENS, API_MAX_RETRIES, { ...SECONDARY_CONFIG, temperature: IMAGE_PLAN_TEMPERATURE,
+                    usageContext: { stage: 'imageSupplement' } }
             );
         }
     } finally {

@@ -1121,6 +1121,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
  */
 async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options = {}) {
     require('./lib/analysis-stop-control').assertMayStartRequest();
+    require('./lib/analysis-stage-request-guard').assertStageModelRequestAllowed(options.usageContext?.stage);
     let expectedApiUrl;
     try {
         expectedApiUrl = buildApiUrl(detectApiType(endpoint, model), endpoint);
