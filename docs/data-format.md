@@ -122,6 +122,8 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 下一窗使用 `conference-reader-review-maintenance-window-v1`，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。
 
+未签发准备的恢复位于本维护根 `unissued-preflight-recoveries/<executionId>/`。`before/` 保留原五份准备文件和 `member-progress.json`，`new-preflight.json` 保存正常探测快照，`receipt.json` 使用 `conference-reader-unissued-preflight-recovery-v1`，绑定维护清单、父 CAS、原文件 SHA、新预检 SHA、探测次数及是否恢复 Reader-only。只有原始 pending、generation 0、无修订和请求材料时可使用；中断恢复核对 receipt 与前后字节，不重复联网，不改原失败或费用。
+
 全部新稿正常完整资格及 stage 通过后，`adoption.json` 与 `adoption-after-state.json` 不可变绑定原 baseline、实际登记前后状态和全 child/page CAS，锁内原子采纳后正常重做汇总。pending 发布门同时核 state 定位器和私有实物，缺目录/旧成功/旧 passed 缓存都不能清义务。操作命令见[正常 Reader 维护](conference-workflow.md#博客拒稿后的正常-reader-维护)。
 
 ## 会议零请求来源纠正

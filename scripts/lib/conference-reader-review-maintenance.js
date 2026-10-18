@@ -1044,6 +1044,109 @@ function stageChild(batch,member,shared,deps,readOnly=false) {
         pageManifestSha256:staged.manifest.manifestSha256,pagePath:staged.manifest.pagePath,
         contentSha256:staged.manifest.contentSha256,revision:child.revision};
 }
+function readUnissuedMaintenanceChild(batch,member) {
+    const directory=path.join(batch.analysisRoot,member.executionId);
+    const names=['analysis.json','intent.json','reader-resource-preflight.json','run.json','source.json'];
+    check(same(fs.readdirSync(directory).sort(),names),'unissued recovery requires exact original five files and no revision/seed/request/candidate');
+    const loaded=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.executionId});
+    const intent=read(path.join(directory,'intent.json'));
+    check(loaded.run.status==='source_ready'&&loaded.analysis.status==='pending'&&loaded.analysis.generation===0
+        &&loaded.analysisFileSha256===intent.value.initialAnalysisFileSha256
+        &&loaded.run.prepareIntentFileSha256===intent.sha256
+        &&loaded.sourceFileSha256===member.parentCAS.sourceFileSha256
+        &&loaded.run.sourceSnapshotSha256===member.sourceSnapshotSha256
+        &&!Object.hasOwn(loaded.analysis,'readerRevisionProgress'),'unissued recovery actual intent/source/zero-attempt CAS');
+    const records=Object.fromEntries(names.map(name=>[name,read(path.join(directory,name))]));
+    return {loaded,records};
+}
+function unissuedResourceMode(paper,identity) {
+    const parse=require('../utils').parseAnalysis,deep=require('../deep-analyzer');
+    const before=parse(paper.analysis),after=parse(deep.applyApiReaderResourceAvailability(paper.analysis,identity));
+    return ['hasCode','hasModel','hasDataset'].some(key=>before[key]!==after[key])?'scoring-and-reader':'reader-only';
+}
+async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) {
+    const selected=effectiveMember(batch,member),saved=progressFor(batch).value.members[member.paperId];
+    const messages=['Text maintenance cannot change resources or scoring',
+        '定向修订需要完整的读者文章，且正文、写作计划和分析阶段的 SHA 记录须一致。'];
+    if(selected.window||!saved||saved.status!=='failed'||saved.executionId!==selected.executionId
+        ||saved.attempts!==0||saved.failure?.retryable!==false||saved.failure?.systemic
+        ||!messages.includes(saved.failure?.message))return false;
+    return deps.engine.withPaperAnalysisLock({id:member.paperId},()=>require('./analysis-stop-control').withModelRequestsForbidden(async()=>{
+        assertCurrentBatch(batch);const parent=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.parentExecutionId});bindCompletedParent(handle,parent);
+        const initial=readUnissuedMaintenanceChild(batch,selected),paper=parent.analysis.papers[0];
+        // The new private parent-reference bridge must really qualify before an
+        // earlier pre-request failure is eligible for normal dispatch again.
+        check(verifiedParentSeed(parent,member.reviewFeedback.trim()),'unissued parent reference seed did not qualify');
+        const directory=path.join(batch.p.root,'unissued-preflight-recoveries',selected.executionId);
+        const receiptFile=path.join(directory,'receipt.json'),newFile=path.join(directory,'new-preflight.json');
+        const beforeNames=Object.keys(initial.records),beforeDir=path.join(directory,'before');
+        let receipt;
+        if(fs.existsSync(receiptFile)) {
+            const row=read(receiptFile);self(row.value,'receiptSha256');receipt=row.value;
+            check(receipt.contract==='conference-reader-unissued-preflight-recovery-v1'
+                &&receipt.manifestSha256===batch.m.manifestSha256&&receipt.manifestFileSha256===batch.manifestFileSha256
+                &&receipt.executionId===selected.executionId&&receipt.paperId===member.paperId
+                &&same(receipt.parentCAS,member.parentCAS),'unissued recovery receipt belongs to another parent/obligation');
+            const restored=read(newFile);check(restored.sha256===receipt.newPreflightFileSha256,'unissued new preflight snapshot changed');
+            const original=shared.retainedSources?.get(member.parentExecutionId),planHandle=original?.planHandle||shared.planHandle,sourceRoot=original?.sourceRoot||shared.sourceCacheRoot;
+            const pdf=adapter().verifyPlanAuthority(initial.loaded,planHandle,sourceRoot);
+            require('./conference-analysis-context').withConferenceAnalysisSource({executionId:selected.executionId,executionDir:initial.loaded.directory,
+                paperId:member.paperId,sourceDetails:initial.loaded.source.sourceDetails,readerPdfSourceHandle:pdf},()=>
+                require('../deep-analyzer').replayVerifiedReaderResourceIdentity(restored.value,initial.loaded.source.sourceDetails.text));
+            check(receipt.status!=='reader-only-ready'||unissuedResourceMode(paper,restored.value)==='reader-only',
+                'unissued receipt cannot grant a changed scoring mode');
+            for(const name of beforeNames)check(read(path.join(beforeDir,name)).sha256===receipt.before[name],
+                'unissued original before archive changed');
+            check(read(path.join(beforeDir,'member-progress.json')).sha256===receipt.oldMemberProgressFileSha256,
+                'unissued original failure archive changed');
+            for(const name of beforeNames)check(name==='reader-resource-preflight.json'
+                ?[receipt.before[name],...(receipt.status==='reader-only-ready'?[receipt.newPreflightFileSha256]:[])].includes(initial.records[name].sha256)
+                :initial.records[name].sha256===receipt.before[name],'unissued child changed after preflight restoration');
+            if(receipt.status==='reader-only-ready'&&initial.records['reader-resource-preflight.json'].sha256!==restored.sha256)
+                adapter().replaceJson(path.join(initial.loaded.directory,'reader-resource-preflight.json'),restored.value,initial.records['reader-resource-preflight.json'].sha256);
+            return receipt.status==='reader-only-ready';
+        }
+        for(const [name,row] of Object.entries(initial.records))adapter().writeBytesAtomic(path.join(beforeDir,name),row.bytes);
+        exact(path.join(beforeDir,'member-progress.json'),saved);
+        const old=initial.records['reader-resource-preflight.json'].value;
+        let identity=old,probeInvocations=0;
+        const original=shared.retainedSources?.get(member.parentExecutionId);
+        const planHandle=original?.planHandle||shared.planHandle,sourceRoot=original?.sourceRoot||shared.sourceCacheRoot;
+        const source=initial.loaded.source.sourceDetails,pdf=adapter().verifyPlanAuthority(initial.loaded,planHandle,sourceRoot),deep=require('../deep-analyzer');
+        const sourceOperation=async()=>{
+            deep.replayVerifiedReaderResourceIdentity(old,source.text);
+            if(unissuedResourceMode(paper,old)!=='reader-only') {
+                check(old.resources.some(resource=>resource.availability==='temporarily_unreachable'&&resource.retryable===true),
+                    'unissued scoring input changed without a temporary resource failure');
+                identity=await deep.buildApiReaderResourceIdentity(paper.analysis,source.text,paper.analysisManifest?.stages?.demoLinkScan,
+                    {paper,structuredArtifacts:source.structuredArtifacts});probeInvocations=1;
+            }
+            deep.replayVerifiedReaderResourceIdentity(identity,source.text);
+        };
+        await require('./conference-analysis-context').withConferenceAnalysisSource({executionId:selected.executionId,
+            executionDir:initial.loaded.directory,paperId:member.paperId,sourceDetails:source,readerPdfSourceHandle:pdf},sourceOperation);
+        adapter().verifyPlanAuthority(initial.loaded,planHandle,sourceRoot);
+        const current=readUnissuedMaintenanceChild(batch,selected);
+        for(const name of beforeNames)check(current.records[name].sha256===initial.records[name].sha256,
+            'unissued child changed during normal resource recheck');
+        const lockedParent=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.parentExecutionId});check(lockedParent.analysisFileSha256===parent.analysisFileSha256
+            &&lockedParent.runFileSha256===parent.runFileSha256&&lockedParent.sourceFileSha256===parent.sourceFileSha256,
+            'unissued parent changed during normal resource recheck');assertCurrentBatch(batch);
+        exact(newFile,identity);const replacement=read(newFile);
+        const body={contract:'conference-reader-unissued-preflight-recovery-v1',manifestSha256:batch.m.manifestSha256,
+            manifestFileSha256:batch.manifestFileSha256,paperId:member.paperId,executionId:selected.executionId,
+            parentCAS:member.parentCAS,before:Object.fromEntries(Object.entries(initial.records).map(([name,row])=>[name,row.sha256])),
+            oldMemberProgressFileSha256:read(path.join(beforeDir,'member-progress.json')).sha256,
+            newPreflightFileSha256:replacement.sha256,oldIdentitySha256:old.identitySha256,newIdentitySha256:identity.identitySha256,
+            normalProbeInvocations:probeInvocations,status:unissuedResourceMode(paper,identity)==='reader-only'?'reader-only-ready':'still-requires-scoring'};
+        exact(receiptFile,{...body,receiptSha256:stable(body)});
+        if(body.status!=='reader-only-ready')return false;
+        if(replacement.sha256!==initial.records['reader-resource-preflight.json'].sha256)
+            adapter().replaceJson(path.join(initial.loaded.directory,'reader-resource-preflight.json'),identity,
+                initial.records['reader-resource-preflight.json'].sha256);
+        return true;
+    }),{recoveryPolicy:deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY});
+}
 async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,shared,options},deps) {
     check(!options.postprocessOnly&&!options.recoveryManifest&&!options.readerCorrections&&!options.sourceCorrections,'exclusive normal maintenance mode');
     const handle=openMaintenanceBatch({manifestPath,processDirectory:directory,analysisRoot:deps.files.conferenceAnalysisDir});
@@ -1054,10 +1157,11 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
         assertCurrentBatch(batch);return {status:'adopted',state:read(batch.p.state).value};
     }
     const stop=require('./analysis-stop-control'),roundApi=require('./analysis-failure-rounds'),recovery=require('./conference-process-recovery');
-    const outcomes=new Map();
+    const outcomes=new Map(),unissuedReadmissions=new Set();
     // Complete children are always independently staged; progress flags never qualify them.
     for(const member of batch.m.members) {
         let actual=actualProgress(batch,member);
+        if(actual.status==='pending'&&await recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared))unissuedReadmissions.add(member.paperId);
         if(actual.status==='partial'&&typeof deps.adapter.replaySavedConferenceReaderRevision==='function') {
             const original=shared.retainedSources?.get(member.parentExecutionId),selected=effectiveMember(batch,member);
             await stop.withModelRequestsForbidden(()=>deps.adapter.replaySavedConferenceReaderRevision({analysisRoot:batch.analysisRoot,
@@ -1074,7 +1178,7 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
     while(true) {
         const previous=progressFor(batch).value.members;
         const retryable=pending.filter(member=>!outcomes.has(member.paperId)
-            &&(previous[member.paperId]?.executionId!==effectiveMember(batch,member).executionId
+            &&(unissuedReadmissions.has(member.paperId)||previous[member.paperId]?.executionId!==effectiveMember(batch,member).executionId
             ||previous[member.paperId]?.failure?.retryable!==false||previous[member.paperId]?.failure?.systemic===true)
             &&actualProgress(batch,member).attempts<3);
         if(!retryable.length)break;
@@ -1095,6 +1199,7 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
             onRoundDone:round=>{const current=progressFor(batch);adapter().replaceJson(batch.p.progress,
                 {...current.value,rounds:[...current.value.rounds,{...round,normalRoundOrdinal:minimumAttempt+1}]},current.sha256);},
             runItem:async member=>{
+                unissuedReadmissions.delete(member.paperId);
                 const original=shared.retainedSources?.get(member.parentExecutionId);
                 try {
                     const selected=effectiveMember(batch,member),source={planHandle:original?.planHandle||shared.planHandle,

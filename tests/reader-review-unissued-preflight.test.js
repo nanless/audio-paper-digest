@@ -1,0 +1,49 @@
+'use strict';
+// Synthetic pending-child control-flow/CAS tests, not source/score qualification.
+process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS='1';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{Module}=require('node:module');
+const realAdapter=require('../scripts/lib/conference-analysis-adapter'),{stable,sha}=require('../scripts/lib/conference-reader-review-maintenance-evidence');
+function setup(t){
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'unissued-reader-fixture-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const write=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n',{mode:0o600})};
+ const analysisRoot=path.join(root,'analysis'),parentId='parent',childId='child',paperId='synthetic-paper',batchRoot=path.join(root,'batch');
+ const source={sourceDetails:{text:'Original code declaration https://example.invalid/repository',structuredArtifacts:{}}};
+ const identity=available=>{const body={contract:'api-reader-resource-identity-v1',sourceTextSha256:sha(source.sourceDetails.text),resources:[{type:'code',origin:'paper_source',originalUrl:'https://example.invalid/repository',sourceQuote:source.sourceDetails.text,availability:available?'available':'temporarily_unreachable',retryable:!available,status:available?200:null}]};return {...body,identitySha256:stable(body)}};
+ const originalIdentity=identity(false),restoredIdentity=identity(true),paper={id:paperId,analysis:'code:yes',analysisManifest:{stages:{}}};
+ for(const id of [parentId,childId]){
+  const dir=path.join(analysisRoot,id);write(path.join(dir,'source.json'),source);write(path.join(dir,'analysis.json'),id===childId?{status:'pending',generation:0,papers:[{id:paperId}]}:{status:'complete',papers:[paper]});write(path.join(dir,'run.json'),{status:id===childId?'source_ready':'complete',paperId,executionId:id,sourceSnapshotSha256:'snapshot'});
+ }
+ const dir=path.join(analysisRoot,childId),intent={initialAnalysisFileSha256:realAdapter.readJsonRecord(path.join(dir,'analysis.json')).sha256};write(path.join(dir,'intent.json'),intent);
+ const run=realAdapter.readJsonRecord(path.join(dir,'run.json'));write(path.join(dir,'run.json'),{...run.value,prepareIntentFileSha256:realAdapter.readJsonRecord(path.join(dir,'intent.json')).sha256});write(path.join(dir,'reader-resource-preflight.json'),originalIdentity);
+ function load({executionId}){const directory=path.join(analysisRoot,executionId),a=realAdapter.readJsonRecord(path.join(directory,'analysis.json')),r=realAdapter.readJsonRecord(path.join(directory,'run.json')),s=realAdapter.readJsonRecord(path.join(directory,'source.json'));return {directory,analysis:a.value,run:r.value,source:s.value,analysisFileSha256:a.sha256,runFileSha256:r.sha256,sourceFileSha256:s.sha256}}
+ const parent=load({executionId:parentId}),member={paperId,parentExecutionId:parentId,executionId:childId,reviewFeedback:'exact original feedback',sourceSnapshotSha256:'snapshot',parentCAS:{analysisFileSha256:parent.analysisFileSha256,runFileSha256:parent.runFileSha256,sourceFileSha256:parent.sourceFileSha256}};
+ const batch={analysisRoot,manifestFileSha256:'original-manifest-file',p:{root:batchRoot,progress:path.join(batchRoot,'progress.json')},m:{manifestSha256:'original-manifest',members:[member]}};
+ const saved={status:'failed',executionId:childId,attempts:0,failure:{retryable:false,systemic:false,message:'Text maintenance cannot change resources or scoring'}};write(batch.p.progress,{manifestSha256:batch.m.manifestSha256,members:{[paperId]:saved},rounds:[]});
+ let probes=0,active=null,seedValid=true,interrupt=false,onProbe=null,available=true;
+ const adapter={...realAdapter,loadConferenceAnalysis:load,verifyPlanAuthority:()=>({synthetic:true}),replaceJson:(file,value,hash)=>{if(interrupt&&file===path.join(dir,'reader-resource-preflight.json')){interrupt=false;throw Error('synthetic crash before CAS')}return realAdapter.replaceJson(file,value,hash)}};
+ const deep={replayVerifiedReaderResourceIdentity:(id,text)=>{assert.equal(id.sourceTextSha256,sha(text));const {identitySha256,...body}=id;assert.equal(identitySha256,stable(body));return id},applyApiReaderResourceAvailability:(_analysis,id)=>id.resources[0].availability==='available'?'code:yes':'code:no',buildApiReaderResourceIdentity:async()=>{assert.equal(active.executionId,childId);probes++;onProbe?.();return identity(available)}};
+ const filename=path.resolve(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),m=new Module(filename,module);m.filename=filename;m.paths=Module._nodeModulePaths(path.dirname(filename));const native=m.require.bind(m);m.require=id=>{
+  if(id==='./conference-analysis-adapter')return adapter;if(id==='../deep-analyzer')return deep;if(id==='../utils')return {parseAnalysis:text=>({hasCode:text==='code:yes'?'是':'否',hasModel:'否',hasDataset:'否'})};
+  if(id==='./conference-analysis-context')return {withConferenceAnalysisSource:async(scope,fn)=>{active=scope;try{return await fn()}finally{active=null}}};return native(id)};
+ m._compile(fs.readFileSync(filename,'utf8')+'\nassertCurrentBatch=()=>{};verifiedParentSeed=()=>{if(!globalThis.__unissuedSeedValidForTest())throw Error("seed still invalid");return {initialDraft:"synthetic original parent"}};module.exports.recoverForTest=recoverUnissuedMaintenanceChild;module.exports.makeHandleForTest=batch=>{const h=Object.freeze({});opaque.set(h,batch);return h};',filename);
+ const previous=globalThis.__unissuedSeedValidForTest;globalThis.__unissuedSeedValidForTest=()=>seedValid;t.after(()=>{globalThis.__unissuedSeedValidForTest=previous});
+ const deps={engine:{LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY:Symbol('synthetic'),withPaperAnalysisLock:async(_paper,fn)=>fn()}},handle=m.exports.makeHandleForTest(batch),shared={planHandle:{synthetic:true},sourceCacheRoot:'/synthetic-source'};
+ return {dir,batch,member,write,originalIdentity,restoredIdentity,getProbes:()=>probes,setInterrupt:()=>interrupt=true,setAvailable:v=>available=v,setSeedValid:v=>seedValid=v,onProbe:fn=>onProbe=fn,run:()=>m.exports.recoverForTest(batch,member,handle,deps,shared)};
+}
+test('未签发临时预检恢复仅变预检，归档完整before和失败；中断后CAS续接与幂等不再探测',async t=>{
+ const x=setup(t);x.setInterrupt();await assert.rejects(x.run(),/synthetic crash/);assert.equal(x.getProbes(),1);
+ assert.deepEqual(realAdapter.readJsonRecord(path.join(x.dir,'reader-resource-preflight.json')).value,x.originalIdentity);
+ assert.equal(await x.run(),true);assert.equal(await x.run(),true);assert.equal(x.getProbes(),1);
+ assert.deepEqual(realAdapter.readJsonRecord(path.join(x.dir,'reader-resource-preflight.json')).value,x.restoredIdentity);
+ assert.equal(fs.existsSync(path.join(x.dir,'reader-revision.json')),false);assert.equal(fs.existsSync(path.join(x.dir,'review-reader-seed.json')),false);
+ const before=path.join(x.batch.p.root,'unissued-preflight-recoveries',x.member.executionId,'before');assert.deepEqual(realAdapter.readJsonRecord(path.join(before,'reader-resource-preflight.json')).value,x.originalIdentity);assert.equal(realAdapter.readJsonRecord(path.join(before,'member-progress.json')).value.failure.retryable,false);
+});
+test('已有revision/seed/候选/请求或attempt、源/父CAS漂移一律拒；无真实seed不得重派',async t=>{
+ for(const name of ['reader-revision.json','review-reader-seed.json','request.json','response.json','reader-attempts']){const x=setup(t);x.write(path.join(x.dir,name),{});await assert.rejects(x.run(),/exact original five/);assert.equal(x.getProbes(),0)}
+ for(const kind of ['attempt','source']){const x=setup(t),file=path.join(x.dir,kind==='attempt'?'analysis.json':'source.json'),v=realAdapter.readJsonRecord(file).value;x.write(file,kind==='attempt'?{...v,readerRevisionProgress:{attempts:1}}:{...v,changed:true});await assert.rejects(x.run(),/zero-attempt CAS/);assert.equal(x.getProbes(),0)}
+ const x=setup(t);x.setSeedValid(false);await assert.rejects(x.run(),/seed still invalid/);assert.equal(x.getProbes(),0);
+});
+test('仍不可达不替换旧预检也不增加评分权限，probe期间CAS漂移拒绝',async t=>{
+ const x=setup(t);x.setAvailable(false);assert.equal(await x.run(),false);assert.equal(await x.run(),false);assert.equal(x.getProbes(),1);
+ const y=setup(t);y.onProbe(()=>y.write(path.join(y.dir,'intent.json'),{changed:true}));await assert.rejects(y.run(),/zero-attempt CAS/);
+});
