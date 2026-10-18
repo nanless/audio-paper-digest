@@ -9,7 +9,7 @@ function operatorFixture(){
  const loaded={analysis:{papers:[paper]},analysisFileSha256:'analysis',run:{executionId:'parent',completionReceipt:{receiptSha256:'receipt'},sourceSnapshotSha256:'snapshot'}};
  let valid=true,checks=0;const handle=Object.freeze({}),bound={parent:paper,child:{id:paper.id,newReader:true},executionId:'child',processId:'process',baselineItem:original,assertUnchanged(){checks++;if(!valid)throw Error('actual child/source/adoption CAS changed');}};
  const formal=path.join(ROOT,'scripts/lib/conference-reader-operator-correction.js'),m=new Module(formal,module);m.filename=formal;m.paths=Module._nodeModulePaths(path.dirname(formal));const native=m.require.bind(m);
- m.require=name=>name==='./conference-reader-review-maintenance'?{readScientificParentReplay:token=>{assert.equal(token,handle,'private handle required');return bound;}}:native(name);
+ m.require=name=>name==='./conference-reader-review-maintenance'?{readScientificParentReplay:token=>{if(token!==handle)throw Error('private handle required');return bound;}}:native(name);
  m._compile(fs.readFileSync(formal,'utf8')+'\nmodule.exports.__test={maintenanceParentItem};',formal);
  return{api:m.exports,paper,loaded,original,current:{paperId:paper.id,analysisRunId:'child',newReader:true},handle,bound,setValid:x=>valid=x,get checks(){return checks}};
 }
