@@ -6,6 +6,44 @@ const fs = require('node:fs'), path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const MAX_STAGE_WORKERS = 5;
 const aggregateBatches = new WeakMap();
+const workerStageTimeouts = new WeakSet();
+const LOCAL_TIMEOUT = 'conference-fixed-local-python-timeout-v1';
+const PROJECT_ROOT = path.resolve(__dirname, '../..');
+const LOCAL_EXTRACTORS = Object.freeze(['reader_sealed_pdf_quote_evidence.py',
+    'reader_authenticated_pdf_hierarchical_table.py', 'reader_authenticated_pdf_footnote_evidence.py']);
+const LOCAL_RENDERER = 'conference-page-render.py';
+function localTimeoutEvidence(error) {
+    const wrapper = path.join(PROJECT_ROOT, 'scripts/python-runtime.sh');
+    if (!(error instanceof Error) || error.code !== 'ETIMEDOUT' || error.syscall !== 'spawnSync bash'
+        || error.path !== 'bash' || !Array.isArray(error.spawnargs) || error.spawnargs[0] !== wrapper) return null;
+    const args = error.spawnargs, program = args[1];
+    const extractor = args.length === 3 && args[2] === '3'
+        && LOCAL_EXTRACTORS.some(name => program === path.join(PROJECT_ROOT, 'scripts', name));
+    // The fixed packet bridge has already removed its private packet in
+    // finally. Authenticate its actual native spawn argv, never error text or
+    // a caller-supplied pathname outside that bridge's OS temporary layout.
+    const packet = args[3], temporary = typeof packet === 'string' ? path.dirname(packet) : '';
+    const renderer = program === path.join(PROJECT_ROOT, 'scripts', LOCAL_RENDERER)
+        && args.length === 4 && args[2] === '--packet-file' && path.isAbsolute(packet || '')
+        && path.normalize(packet) === packet && path.basename(packet) === 'packet.json'
+        && path.dirname(temporary) === fs.realpathSync(require('node:os').tmpdir())
+        && /^conference-page-render-[A-Za-z0-9]{6}$/u.test(path.basename(temporary));
+    if (!extractor && !renderer) return null;
+    const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+    return { contract: LOCAL_TIMEOUT, program: path.basename(program),
+        wrapperSha256: sha(fs.readFileSync(wrapper)), programSha256: sha(fs.readFileSync(program)) };
+}
+function verifiedLocalTimeout(error) {
+    const proof = error?.localTimeout;
+    if (error?.code !== 'ETIMEDOUT' || error.scope === 'run' || proof?.contract !== LOCAL_TIMEOUT
+        || Object.keys(proof).sort().join(',') !== 'contract,program,programSha256,wrapperSha256'
+        || ![...LOCAL_EXTRACTORS, LOCAL_RENDERER].includes(proof.program)) return false;
+    const sha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    if (proof.wrapperSha256 !== sha(path.join(PROJECT_ROOT, 'scripts/python-runtime.sh'))
+        || proof.programSha256 !== sha(path.join(PROJECT_ROOT, 'scripts', proof.program))) throw integrity('本地超时的固定提取或页面实现已变化');
+    return true;
+}
+
 function integrity(message) {
     return Object.assign(new Error(`会议并行后处理：${message}`), {
         code: 'CONFERENCE_STAGE_WORKER_INTEGRITY', scope: 'run', retryable: false
@@ -19,6 +57,8 @@ function serializeError(error) {
         || error?.code === require('./analysis-stop-control').MODEL_REQUESTS_FORBIDDEN) result.scope = 'run';
     const storage = recovery.findStorageFailure(error);
     if (storage && storage !== error) result.cause = { code: storage.code, message: String(storage.message).slice(0, 2000) };
+    const timeout = localTimeoutEvidence(error);
+    if (timeout && result.scope !== 'run') result.localTimeout = timeout;
     return result;
 }
 function restoreError(value) {
@@ -258,55 +298,101 @@ async function runStagePool(items, { concurrency, init, shouldStop = () => {}, o
     const count = Math.min(MAX_STAGE_WORKERS, concurrency, items.length);
     if (!count) return;
     const spawn = dependencies.createWorker || (data => new Worker(path.join(__dirname, 'conference-complete-stage-worker.js'), { workerData: data }));
-    let cursor = 0, failure = null;
+    let failure = null;
+    const deferred = new Map(), delivered = new Set();
     const fail = error => { failure ||= error; };
-    async function lane() {
-        let worker, requestId = 0, pending = null, exiting = false, exited = false, exitPromise;
-        try {
-            worker = spawn(init);
-            exitPromise = new Promise(resolve => worker.once('exit', () => { exited = true; resolve(); }));
-            const ask = message => new Promise((resolve, reject) => {
-                if (exited) { reject(failure || integrity('worker已经退出')); return; }
-                pending = { id: ++requestId, resolve, reject }; worker.postMessage({ ...message, id: requestId });
-            });
-            worker.on('message', message => {
-                const current = pending;
-                if (!current || message?.id !== current.id || !['result', 'error'].includes(message.type)) {
-                    fail(integrity('worker回包顺序或类型错误')); current?.reject(failure); pending = null; return;
+    const event = (entry, outcome, error = null) => {
+        const record = { event: 'conference-local-python-timeout', at: new Date().toISOString(),
+            paperId: entry.item.paperId, executionId: entry.item.analysisRunId, itemSha256: require('./conference-process').stableHash(entry.item),
+            sourceProof: entry.item.sourceProof || null, analysisProof: entry.item.analysisProof || null,
+            stateFileSha256: init?.stateFileSha256 || null, implementationSha256: init?.projectionSha256 || null,
+            originalError: { code: entry.error.code, message: entry.error.message, localTimeout: entry.error.localTimeout },
+            localRetry: outcome === 'queued' || outcome === 'not-started' ? 0 : 1, maxLocalRetries: 1, outcome,
+            ...(error ? { error: { code: error.code, message: error.message } } : {}) };
+        if (dependencies.onLocalTimeoutEvent) dependencies.onLocalTimeoutEvent(record);
+        else process.stderr.write(JSON.stringify(record) + '\n');
+    };
+    const deliver = async (entry, result, error) => {
+        if (delivered.has(entry.index)) throw integrity('同一暂存任务被交接两次');
+        delivered.add(entry.index);
+        await onResult(entry.item, result, error, entry.index);
+    };
+    async function phase(entries, laneCount, retryPhase) {
+        let cursor = 0;
+        async function lane() {
+            let worker, requestId = 0, pending = null, exiting = false, exited = false, exitPromise;
+            try {
+                worker = spawn(init);
+                exitPromise = new Promise(resolve => worker.once('exit', () => { exited = true; resolve(); }));
+                const ask = message => new Promise((resolve, reject) => {
+                    if (exited) { reject(failure || integrity('worker已经退出')); return; }
+                    pending = { id: ++requestId, kind: message.type, resolve, reject }; worker.postMessage({ ...message, id: requestId });
+                });
+                worker.on('message', message => {
+                    const current = pending;
+                    if (!current || message?.id !== current.id || !['result', 'error'].includes(message.type)) {
+                        fail(integrity('worker回包顺序或类型错误')); current?.reject(failure); pending = null; return;
+                    }
+                    pending = null;
+                    if (message.type === 'error') {
+                        const error = restoreError(message.error);
+                        try { if (current.kind === 'stage' && verifiedLocalTimeout(error)) workerStageTimeouts.add(error); }
+                        catch (caught) { fail(caught); current.reject(caught); return; }
+                        current.reject(error);
+                    } else current.resolve(message.result);
+                });
+                worker.on('error', error => { fail(integrity(`worker运行异常：${error.message}`)); pending?.reject(failure); pending = null; });
+                worker.on('exit', code => {
+                    if (!exiting) { fail(integrity(`worker提前退出（${code}）`)); pending?.reject(failure); pending = null; }
+                });
+                await ask({ type: 'ready' });
+                while (!failure && cursor < entries.length) {
+                    shouldStop();
+                    const entry = entries[cursor++], { index, item } = entry;
+                    let result, error;
+                    if (retryPhase) event(entry, 'started');
+                    try { result = await ask({ type: 'stage', task: { paperId: item.paperId,
+                        executionId: item.analysisRunId, itemSha256: require('./conference-process').stableHash(item) } }); }
+                    catch (caught) { error = caught; }
+                    // onResult classifies ordinary paper failures; a systemic error
+                    // throws, stops all new dispatch, and drains other active lanes.
+                    if (!retryPhase && workerStageTimeouts.has(error)) {
+                        const pendingTimeout = { ...entry, error };
+                        deferred.set(index, pendingTimeout); event(pendingTimeout, 'queued');
+                        continue;
+                    }
+                    if (retryPhase) event(entry, error ? 'failed' : 'succeeded', error);
+                    await deliver(entry, result, error);
                 }
-                pending = null;
-                if (message.type === 'error') current.reject(restoreError(message.error)); else current.resolve(message.result);
-            });
-            worker.on('error', error => { fail(integrity(`worker运行异常：${error.message}`)); pending?.reject(failure); pending = null; });
-            worker.on('exit', code => {
-                if (!exiting) { fail(integrity(`worker提前退出（${code}）`)); pending?.reject(failure); pending = null; }
-            });
-            await ask({ type: 'ready' });
-            while (!failure && cursor < items.length) {
-                shouldStop();
-                const index = cursor++, item = items[index];
-                let result, error;
-                try { result = await ask({ type: 'stage', task: { paperId: item.paperId,
-                    executionId: item.analysisRunId, itemSha256: require('./conference-process').stableHash(item) } }); }
-                catch (caught) { error = caught; }
-                // onResult classifies ordinary paper failures; a systemic error
-                // throws, stops all new dispatch, and drains other active lanes.
-                await onResult(item, result, error, index);
-            }
-            if (!exited) await ask({ type: 'finish' });
-        } catch (error) { fail(error); }
-        finally {
-            if (worker) {
-                // Every synchronous stage has returned before closing. Never
-                // terminate a live stage or strand its same-process lock.
-                exiting = true;
-                if (!exited) worker.postMessage({ type: 'close' });
-                await exitPromise;
+                if (!exited) await ask({ type: 'finish' });
+            } catch (error) { fail(error); }
+            finally {
+                if (worker) {
+                    // Every synchronous stage has returned before closing. Never
+                    // terminate a live stage or strand its same-process lock.
+                    exiting = true;
+                    if (!exited) worker.postMessage({ type: 'close' });
+                    await exitPromise;
+                }
             }
         }
+        await Promise.all(Array.from({ length: laneCount }, lane));
     }
-    await Promise.all(Array.from({ length: count }, lane));
-    if (failure) throw failure;
+    await phase(items.map((item, index) => ({ item, index })), count, false);
+    const pending = [...deferred.values()].sort((a, b) => a.index - b.index);
+    if (!failure && pending.length) {
+        try { shouldStop(); await phase(pending, 1, true); }
+        catch (error) { fail(error); }
+    }
+    if (failure) {
+        // Retain each already observed timeout even when stop/integrity/storage
+        // prevents its local retry. The first run-level failure stays primary.
+        for (const entry of pending) if (!delivered.has(entry.index)) {
+            event(entry, 'not-started');
+            try { await deliver(entry, undefined, entry.error); } catch (error) { fail(error); }
+        }
+        throw failure;
+    }
     shouldStop();
 }
 module.exports = { MAX_STAGE_WORKERS, integrity, serializeError, createStageSession, verifyStageResult,

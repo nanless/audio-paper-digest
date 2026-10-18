@@ -86,3 +86,92 @@ test('聚合批能力只能由实际完整worker核验铸造，裸JSON/克隆不
     await assert.rejects(pool.collectAggregateStageBatch({ analysisRoot: '/tmp', tagCatalogPath: '/tmp' }, {}, {}),
         { code: 'CONFERENCE_STAGE_WORKER_INTEGRITY' });
 });
+
+function timeoutHarness(options = {}) {
+    const attempts = new SharedArrayBuffer(64), h = harness({ attempts, ...options });
+    h.attempts = new Int32Array(attempts); h.events = [];
+    h.dependencies.onLocalTimeoutEvent = row => h.events.push(row);
+    return h;
+}
+test('真实固定本地提取超时先完成全部首轮，再只开单worker重试一次；成功项/交接各一次', async () => {
+    const h = timeoutHarness({ timeouts: [0, 2] }), order = [];
+    let spawned = 0; const create = h.dependencies.createWorker;
+    h.dependencies.createWorker = data => {
+        if (++spawned > 3) { assert.equal(h.observed[4], 7, 'retry worker starts only after every first-round task finishes'); assert.equal(h.exits.length, 3, 'all first-round workers have closed before the single retry worker starts'); }
+        return create(data);
+    };
+    const input = items(7).map(item => ({ ...item, sourceProof: { textSha256: 'a'.repeat(64) }, analysisProof: { analysisSha256: 'b'.repeat(64) } }));
+    await pool.runStagePool(input, { concurrency: 3, init: h.init,
+        onResult: (item, value, error) => { assert.ifError(error); assert.equal(value.index, Number(item.paperId.slice(1))); order.push(item.paperId); } }, h.dependencies);
+    assert.equal(spawned, 4); assert.equal(h.exits.length, 4);
+    assert.deepEqual([...h.attempts.slice(0, 7)], [2, 1, 2, 1, 1, 1, 1]);
+    assert.deepEqual(order.slice(-2), ['p0','p2']); assert.equal(new Set(order).size, 7);
+    assert.deepEqual(h.events.filter(e => e.outcome === 'queued').map(e => [e.paperId,e.localRetry]).sort(), [['p0',0],['p2',0]]);
+    assert.deepEqual(h.events.filter(e => e.outcome !== 'queued').map(e => [e.paperId,e.outcome,e.localRetry]), [['p0','started',1],['p0','succeeded',1],['p2','started',1],['p2','succeeded',1]]);
+    assert.ok(h.events.every(e => e.sourceProof.textSha256 === 'a'.repeat(64) && e.originalError.localTimeout.program === 'reader_authenticated_pdf_hierarchical_table.py'));
+});
+test('最后一次本地超时原error正常交接且不循环；聚合立即拒绝回调只在完整首轮后触发', async () => {
+    const h = timeoutHarness({ timeouts: [0, 2], timeoutTimes: 9 }), seen = [];
+    await pool.runStagePool(items(5), { concurrency: 2, init: h.init,
+        onResult: (item, _value, error) => { seen.push([item.paperId,error?.code]); } }, h.dependencies);
+    assert.deepEqual([...h.attempts.slice(0, 5)], [2,1,2,1,1]); assert.equal(seen.length, 5);
+    assert.deepEqual(seen.filter(r => r[1]).map(r => r[1]), ['ETIMEDOUT','ETIMEDOUT']);
+    const aggregate = timeoutHarness({ timeouts: [0], timeoutTimes: 9 });
+    let errors = 0, successes = 0;
+    await assert.rejects(pool.runStagePool(items(6), { concurrency: 2, init: aggregate.init,
+        onResult: (_item, _value, error) => { if (error) { errors++; assert.equal(aggregate.observed[4], 7); throw error; } successes++; } }, aggregate.dependencies), { code: 'ETIMEDOUT' });
+    assert.equal(successes, 5); assert.equal(errors, 1); assert.equal(aggregate.attempts[0], 2);
+});
+test('伪timeout文字、未知bash命令、普通完整性错误都不进入延后队列', async () => {
+    for (const setting of [{ fakeTimeout:true }, { wrongProgram:true }]) {
+        const h = timeoutHarness({ timeouts:[0], ...setting }); let errors = 0;
+        await pool.runStagePool(items(3), { concurrency:1, init:h.init,
+            onResult: (_item,_value,error) => { if (error) { errors++; assert.equal(error.code,'ETIMEDOUT'); assert.equal(error.localTimeout,undefined); } } },h.dependencies);
+        assert.equal(errors,1); assert.equal(h.attempts[0],1); assert.deepEqual(h.events,[]); assert.equal(h.exits.length,1);
+    }
+    const h = timeoutHarness({ fail:0 });
+    await pool.runStagePool(items(3), { concurrency:1, init:h.init, onResult:()=>{} },h.dependencies);
+    assert.equal(h.attempts[0],1); assert.deepEqual(h.events,[]);
+});
+test('首轮完成后停止不启动retry，保留原timeout并交接一次；系统故障仍立即停止', async () => {
+    const h = timeoutHarness({ timeouts:[0] }), seen=[];
+    await assert.rejects(pool.runStagePool(items(4), { concurrency:1, init:h.init,
+        shouldStop:()=>{if(h.observed[4]===4)throw Object.assign(Error('stop'),{code:'ANALYSIS_STOP_REQUESTED'});},
+        onResult:(item,_value,error)=>seen.push([item.paperId,error?.code]) },h.dependencies),{code:'ANALYSIS_STOP_REQUESTED'});
+    assert.equal(h.attempts[0],1); assert.equal(h.exits.length,1); assert.equal(seen.length,4); assert.equal(new Set(seen.map(r=>r[0])).size,4);
+    assert.deepEqual(h.events.map(e=>e.outcome),['queued','not-started']);
+    const bad=timeoutHarness({timeouts:[0],fail:1,systemic:true});
+    await assert.rejects(pool.runStagePool(items(8), {concurrency:1,init:bad.init,onResult:(_i,_v,error)=>{if(error?.code==='EIO')throw error;}},bad.dependencies),{code:'EIO'});
+    assert.equal(bad.observed[2],2);assert.equal(bad.attempts[0],1);assert.equal(bad.exits.length,1);
+    assert.deepEqual(bad.events.map(e=>e.outcome),['queued','not-started']);
+});
+
+test('串行本地retry期间停止不补派下一篇，已观测任务仍各交接一次并保留stop首因', async () => {
+    const h=timeoutHarness({timeouts:[0,2]}), seen=[];let stopped=false;
+    await assert.rejects(pool.runStagePool(items(5), {concurrency:2,init:h.init,
+        shouldStop:()=>{if(stopped)throw Object.assign(Error('stop during local retry'),{code:'ANALYSIS_STOP_REQUESTED'});},
+        onResult:(item,_value,error)=>{seen.push([item.paperId,error?.code]);if(item.paperId==='p0'&&!error)stopped=true;}
+    },h.dependencies),{code:'ANALYSIS_STOP_REQUESTED'});
+    assert.deepEqual([...h.attempts.slice(0,5)],[2,1,1,1,1]);assert.equal(seen.length,5);
+    assert.equal(new Set(seen.map(row=>row[0])).size,5);assert.equal(seen.find(row=>row[0]==='p2')[1],'ETIMEDOUT');
+    assert.deepEqual(h.events.filter(e=>e.outcome!=='queued').map(e=>[e.paperId,e.outcome]),[['p0','started'],['p0','succeeded'],['p2','not-started']]);
+});
+
+test('真实页面renderer timeout按原packet桥固定argv识别，未知flag/临时路径/额外参数不获重试身份', () => {
+    const child=require('node:child_process'),fs=require('node:fs'),os=require('node:os');
+    const root=path.resolve(__dirname,'..'),wrapper=path.join(root,'scripts/python-runtime.sh'),program=path.join(root,'scripts/conference-page-render.py');
+    const folder=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'conference-page-render-'));
+    const file=path.join(folder,'packet.json');fs.writeFileSync(file,'{}',{mode:0o600});
+    let error;try{child.execFileSync('bash',[wrapper,program,'--packet-file',file],{timeout:1});}catch(caught){error=caught;}
+    fs.rmSync(folder,{recursive:true,force:true});
+    assert.equal(error?.code,'ETIMEDOUT');const marked=pool.serializeError(error);
+    assert.equal(marked.localTimeout.program,'conference-page-render.py');
+    assert.equal(pool.serializeError(Object.assign(new Error(error.message),error,{scope:'run'})).localTimeout,undefined);
+    for(const args of [[wrapper,program,'--input-file',file],[wrapper,program,'--packet-file','/tmp/packet.json'],
+        [wrapper,program,'--packet-file',file,'extra'],['/tmp/fake-wrapper.sh',program,'--packet-file',file],
+        [wrapper,path.join(root,'scripts/historical-page-render.py'),'--packet-file',file],[wrapper,program,'3'],[wrapper,program,'--packet-file',file.replace('/packet.json','/other.json')]]){
+        const changed=Object.assign(new Error(error.message),error,{spawnargs:args});
+        assert.equal(pool.serializeError(changed).localTimeout,undefined);
+    }
+    assert.equal(pool.serializeError({message:error.message,code:error.code,syscall:error.syscall,path:error.path,spawnargs:error.spawnargs}).localTimeout,undefined,'plain JSON cannot claim a native Error');
+});
