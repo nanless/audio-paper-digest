@@ -419,7 +419,7 @@ npm run test:compat
 | `lib/model-text-sanitization.js` | Node 库：记录保留合法 Unicode 字符的请求清洗版本；生产恢复、提升和暂存核验当前来源，旧受影响输入须重分析，缺少受控来源不能推定可复用。旧成功结构和已发布只读状态不改。 |
 | `lib/paper-identity.js` | Node 库：实现 Node `paper-identity-v1` 身份规范化、官方来源 URL 检查和稳定 SHA；不替换既有 arXiv 辅助函数。 |
 | `lib/paper-source-authority.js` | Node 库：核验规范论文身份、完整身份记录、来源快照、凭证和全文 SHA，返回只含来源、且只能由实际核验过程生成的引用对象。普通磁盘 arXiv 加载器不能恢复发布授权；会议路径还要求当前进程持有实际核验生成的计划引用对象。 |
-| `lib/python-json-packet-bridge.js` | 会议与历史单篇渲染共用的私有 Python 输入文件传输；独占创建 `0600` 临时文件，限制输入、输出与期限并清理；packet 身份、JSON 和正文资格仍由调用方核验。 |
+| `lib/python-json-packet-bridge.js` | 会议与历史单篇渲染共用的私有 Python 输入文件传输；独占创建 `0600` 临时文件，限制输入、输出与期限并清理；仅固定会议页面及 `--packet-file` 组合外层允许600秒，其余入口60秒，内部来源核验期限不变；packet 身份、JSON 和正文资格仍由调用方核验。 |
 | `lib/reanalysis-helpers.js` | Node 库：供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
 | `lib/source-classification-failures.js` | Node 库：只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |
 | `lib/source-classification-scheduler.js` | Node 库：以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |

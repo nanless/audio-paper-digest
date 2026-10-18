@@ -772,3 +772,77 @@ test('采纳后缺真实维护采纳、换批或绕当前Reader门仍拒；普�
     }
     const f=adoptedIndependentPublicationFixture();assert.throws(()=>f.readPreviousPublicationItem(f.item),{code:'reader_placeholder_result_table'});
 });
+
+// Private-FD publication orchestration, not source or scientific qualification:
+// real adapter/registered-child admission is deliberately represented by doubles.
+function publicationBridgeHarness() {
+    const source=fs.readFileSync(require.resolve('../scripts/lib/conference-source-resource-correction'),'utf8');
+    const AsyncLocalStorage=require('node:async_hooks').AsyncLocalStorage;
+    const inheritedReaderScience=new AsyncLocalStorage(),contextScope=new AsyncLocalStorage();
+    const parentId='11111111-1111-4111-a111-111111111111',childId='22222222-2222-4222-a222-222222222222';
+    const parent={id:'paper',sourceSha256:sha('source'),conferenceSourceCorrection:{contract:'conference-source-core-correction-v1',executionId:parentId},
+        analysisManifest:{stages:{scoringAudit:{executionKind:'deterministic_source_core_audit'},apiReaderArticle:{article:'parent'}}}};
+    const child=structuredClone(parent);child.analysisManifest.stages.apiReaderArticle={article:'new Reader'};
+    const mk=(id,paper)=>({analysis:{status:'complete',papers:[paper]},run:{status:'complete',executionId:id,paperId:'paper'},
+        analysisFileSha256:id,runFileSha256:id+'run',sourceFileSha256:'same-source',directory:'/analysis/'+id,source:{sourceDetails:{text:'source'}}});
+    const original=mk(parentId,parent),loaded=mk(childId,child);loaded.parent=original;
+    const active={cold:true,receipt:{provenance:{sourceIdentity:{executionId:parentId}},real:'original receipt'},
+        batch:{policy:{kind:'source_core_correction',contract:parent.conferenceSourceCorrection.contract}},row:{record:{childExecutionId:parentId}}};
+    const controls={registered:true,whole:true,pins:true,canonical:true},pdf={actualChild:childId};
+    const presented=()=>({...structuredClone(child),paper_id:child.id});
+    const env={clone:structuredClone,sha,stable:hash,isDeepStrictEqual:require('node:util').isDeepStrictEqual,
+        inheritedReaderScience,CONTRACT:'conference-source-resource-correction-v1',CORE_CONTRACT:'conference-source-core-correction-v1',UUID:/^[a-f0-9-]{36}$/,
+        fail:message=>{throw Error(message);},current:()=>active,isSourceCorrectionRecord:paper=>!!paper.conferenceSourceCorrection,
+        independentReaderMaintenanceChild:()=>controls.registered,
+        assertOutput:paper=>assert.equal(paper,parent,'old receipt cannot authenticate the new child'),
+        withSavedPaper:(paper,callback)=>paper===child?inheritedReaderScience.run({paper,parent,assertUnchanged:()=>assert.equal(controls.pins,true)},callback):callback(),
+        require:name=>{
+            if(name==='node:fs')return{existsSync:()=>true};if(name==='node:path')return path;
+            if(name==='../config')return{FILES:{conferenceAnalysisDir:'/analysis'}};
+            if(name==='./conference-analysis-adapter')return{readerRevisionExecutionId:()=>childId,
+                loadConferenceReaderRevision:()=>loaded,loadConferenceAnalysis:({executionId})=>executionId===parentId?original:
+                    controls.canonical?loaded:{...loaded,analysisFileSha256:'tampered'}};
+            if(name==='./conference-reader-publication-evidence')return{replayCanonicalReaderPdfSource:(paper,identity)=>{
+                assert.equal(paper,child);assert.equal(identity.executionId,childId);return pdf;}};
+            if(name==='./conference-analysis-context')return{withConferenceAnalysisSource:(scope,callback)=>contextScope.run(scope,callback),getConferenceAnalysisContext:()=>contextScope.getStore()};
+            if(name==='./conference-source-context')return{readerPdfSourceForContext:handle=>{assert.equal(handle,pdf);return{paperId:'paper',sourceText:'source',assertUnchanged:()=>assert.equal(controls.pins,true)};}};
+            if(name==='./conference-postprocess')return{readOriginalTagProof:()=>({rules:{}})};
+            if(name==='../analysis-engine')return{isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>controls.whole};
+            throw Error('unexpected '+name);
+        }};
+    const api=require('node:vm').runInNewContext(source.slice(source.indexOf('function publicationPaperMatches('),source.indexOf('// Read physical identity only.'))+
+        '\n({withSavedPublicationPaper,readVerifiedPublicationPdfSource,exportPublicationVerification})',env);
+    return{...api,controls,parent,child,original,loaded,pdf,parentId,childId,presented};
+}
+test('出版私有FD仅精确当前子稿使用自己的PDF，旧receipt只证明原科学评分（合成编排）',()=>{
+    const f=publicationBridgeHarness(),presented=f.presented();
+    f.withSavedPublicationPaper(presented,canonical=>{
+        assert.equal(canonical,f.child);assert.equal(f.readVerifiedPublicationPdfSource(canonical),f.pdf);
+        const proof=f.exportPublicationVerification(presented,canonical);
+        assert.equal(proof.executionId,f.parentId);assert.equal(proof.readerExecutionId,f.childId);
+        assert.equal(proof.canonicalPaperSha256,hash(f.child));assert.equal(proof.presentedPaperSha256,hash(presented));
+        assert.equal(proof.scoringStageSha256,hash(f.parent.analysisManifest.stages.scoringAudit));
+    });
+    assert.equal(f.withSavedPublicationPaper(f.parent,canonical=>canonical),f.parent);
+});
+test('出版子稿拒裸登记、父CAS/来源/未完成及普通额外字段，不以旧父Reader通过替代新稿（合成编排）',()=>{
+    for(const alter of [f=>f.controls.registered=false,f=>f.loaded.parent={...f.original,sourceFileSha256:'wrong'},
+        f=>f.loaded.parent={...f.original,runFileSha256:'wrong'},f=>f.loaded.run.status='source_ready',f=>f.controls.whole=false]){
+        const f=publicationBridgeHarness();alter(f);assert.throws(()=>f.withSavedPublicationPaper(f.presented(),()=>true));
+    }
+    const f=publicationBridgeHarness(),presented=f.presented();presented.extra='not fixed identity adaptation';
+    assert.throws(()=>f.withSavedPublicationPaper(presented,()=>true));
+});
+test('出版async私有FD回调完成后仍核实际canonical CAS与完整呈现字节（合成编排）',async()=>{
+    const f=publicationBridgeHarness();
+    assert.equal(await f.withSavedPublicationPaper(f.presented(),async()=>42),42);
+    await assert.rejects(f.withSavedPublicationPaper(f.presented(),async()=>{f.controls.canonical=false;return true;}),/实际稿或呈现字节改变/);
+});
+
+test('出版回调不能共同改写canonical与呈现Reader后以相等洗过（合成编排）',()=>{
+    const f=publicationBridgeHarness(),presented=f.presented();
+    assert.throws(()=>f.withSavedPublicationPaper(presented,canonical=>{
+        canonical.analysisManifest.stages.apiReaderArticle.article='tampered';
+        presented.analysisManifest.stages.apiReaderArticle.article='tampered';
+    }),/实际稿或呈现字节改变/);
+});

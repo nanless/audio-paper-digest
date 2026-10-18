@@ -22,7 +22,8 @@ test('共享 packet transport 原字节经 0600 独占文件，保留 flags、�
         const input = args[3]; roots.push(path.dirname(input));
         assert.equal(fs.statSync(input).mode & 0o777, 0o600);
         assert.equal(fs.readFileSync(input, 'utf8'), JSON.stringify(packet));
-        assert.equal(options.maxBuffer, limit); assert.equal(options.timeout, 60000);
+        assert.equal(options.maxBuffer, limit);
+        assert.equal(options.timeout, args[1] === path.join(scripts, 'conference-page-render.py') ? 600000 : 60000);
         assert.equal(options.killSignal, 'SIGKILL');
         assert.equal(Object.hasOwn(options, 'input'), false);
         assert.equal(Object.hasOwn(options, 'env'), false);
@@ -36,6 +37,24 @@ test('共享 packet transport 原字节经 0600 独占文件，保留 flags、�
     assert.deepEqual(staging.defaultRender(packet), { markdown: '正文', assets: [] });
     assert.deepEqual(conference.render(packet), { conference: true });
     for (const root of roots) assert.equal(fs.existsSync(root), false);
+});
+
+test('仅固定会议渲染脚本及 packet flag 延长外层时限，其他入口和调用者覆写仍为60秒', () => {
+    for (const [script, inputFlag, timeout] of [
+        ['conference-page-render.py', '--packet-file', 600000],
+        ['conference-page-render.py', '--input-file', 60000],
+        ['historical-page-render.py', '--input-file', 60000],
+        ['reader-aggregate-render.py', '--packet-file', 60000],
+        ['other-conference-page-render.py', '--packet-file', 60000]
+    ]) {
+        bridge.runPythonJsonPacket({}, { ...invocation, script: path.join(scripts, script), inputFlag,
+            timeout: 9999999 }, { execFileSync: (_program, _args, options) => {
+            assert.equal(options.timeout, timeout);
+            assert.equal(options.killSignal, 'SIGKILL');
+            assert.equal(options.maxBuffer, limit);
+            return Buffer.from('{}');
+        } });
+    }
 });
 
 test('原 adapter JSON/正文校验不合并；无效输出清理临时文件且不授成功', t => {

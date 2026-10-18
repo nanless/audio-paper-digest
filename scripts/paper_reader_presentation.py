@@ -125,6 +125,9 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None, 
     authenticated_pdf_resources = any(isinstance(resource, dict) and 'authenticatedPdfFootnoteEvidence' in resource
                                       for resource in (paper.get('apiReaderResources') or {}).get('resources', []))
     authenticated_pdf = authenticated_pdf_tables or authenticated_pdf_resources
+    source_correction = paper.get('conferenceSourceCorrection')
+    declared_source_correction = isinstance(source_correction, dict) and source_correction.get('contract') in {
+        'conference-source-resource-correction-v1', 'conference-source-core-correction-v1'}
     if publication_evidence is not None:
         request['publicationEvidence'] = publication_evidence
     payload = json.dumps(request,
@@ -137,9 +140,10 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None, 
             [node, str(root / 'scripts/lib/reader-resource-claims-replay-cli.js'), str(source.fileno())],
             cwd=str(root), env={key: value for key, value in os.environ.items()
                                if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            # Cold conference evidence replays the authenticated original PDF
-            # twice; keep the ordinary resource-only bridge at its short bound.
-            timeout_seconds=180 if publication_evidence is not None or authenticated_pdf else 30,
+            # Declared source corrections also replay their original canonical
+            # source, even without table/footnote markers. Node still verifies
+            # the complete chain; this declaration only selects its time bound.
+            timeout_seconds=180 if publication_evidence is not None or authenticated_pdf or declared_source_correction else 30,
             max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
     try:
         value = json.loads(result.stdout)

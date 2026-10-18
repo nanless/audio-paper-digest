@@ -1289,34 +1289,87 @@ function withSavedPaper(paper, callback) {
         return callback();
     });
 }
+function publicationPaperMatches(presented, canonical) {
+    const expected=clone(canonical);expected.paper_id=canonical.id;delete expected.arxivId;
+    return isDeepStrictEqual(presented,canonical)||isDeepStrictEqual(presented,expected);
+}
 function withSavedPublicationPaper(presented, callback) {
     if (typeof callback !== 'function') fail('出版冷重放缺少回调');
     if (!isSourceCorrectionRecord(presented)) return callback(presented);
     const locator = presented.conferenceSourceCorrection;
     if (![CONTRACT, CORE_CONTRACT].includes(locator?.contract) || !UUID.test(locator.executionId || '')) fail('出版视图缺实际定位器');
-    const loaded = require('./conference-analysis-adapter').loadConferenceAnalysis({
-        analysisRoot: require('../config').FILES.conferenceAnalysisDir, executionId: locator.executionId });
-    const canonical = loaded.analysis.papers[0], expected = clone(canonical);
-    expected.paper_id = canonical.id; delete expected.arxivId;
-    if (!isDeepStrictEqual(presented, canonical) && !isDeepStrictEqual(presented, expected)) {
-        fail('出版视图超出固定paper_id/arxivId身份适配');
+    const adapter=require('./conference-analysis-adapter'),analysisRoot=require('../config').FILES.conferenceAnalysisDir;
+    const original=adapter.loadConferenceAnalysis({analysisRoot,executionId:locator.executionId});
+    let loaded=original;
+    // The paper-only private FD retains the original scientific locator. Follow
+    // only the adapter's deterministic, registered Reader children; caller paths
+    // and a copied locator cannot select another canonical package.
+    for(let depth=0;!publicationPaperMatches(presented,loaded.analysis.papers[0]);depth++) {
+        if(depth>=16)fail('出版视图超出固定paper_id/arxivId身份适配');
+        const executionId=adapter.readerRevisionExecutionId(loaded.run.executionId,loaded.analysisFileSha256);
+        if(!require('node:fs').existsSync(require('node:path').join(analysisRoot,executionId,'reader-revision.json')))
+            fail('出版视图超出固定paper_id/arxivId身份适配');
+        const child=adapter.loadConferenceReaderRevision({analysisRoot,executionId});
+        if(!independentReaderMaintenanceChild(child)||child.parent.run.executionId!==loaded.run.executionId
+            ||child.parent.analysisFileSha256!==loaded.analysisFileSha256
+            ||child.parent.runFileSha256!==loaded.runFileSha256
+            ||child.parent.sourceFileSha256!==loaded.sourceFileSha256
+            ||child.analysis.status!=='complete'||child.run.status!=='complete')fail('出版维护子稿或原父CAS未闭合');
+        loaded=child;
     }
-    return withSavedPaper(canonical, () => {
-        const rules = require('./conference-postprocess').readOriginalTagProof(canonical).rules;
-        if (!require('../analysis-engine').isSuccessfulAnalysisRecordForReadOnlyConferencePublication(
-            canonical, { tagRules: rules })) fail('出版私有桥的来源纠正整篇资格未通过');
-        return callback(canonical);
+    const canonical=loaded.analysis.papers[0],canonicalSha256=stable(loaded.analysis.papers[0]),presentedSha256=stable(presented);
+    const qualify=()=>withSavedPaper(canonical,()=>{
+        const rules=require('./conference-postprocess').readOriginalTagProof(canonical).rules;
+        if(!require('../analysis-engine').isSuccessfulAnalysisRecordForReadOnlyConferencePublication(canonical,{tagRules:rules}))
+            fail('出版私有桥的来源纠正整篇资格未通过');
+        const result=callback(canonical);
+        const unchanged=()=>{
+            const after=adapter.loadConferenceAnalysis({analysisRoot,executionId:loaded.run.executionId});
+            if(after.analysisFileSha256!==loaded.analysisFileSha256||after.runFileSha256!==loaded.runFileSha256
+                ||after.sourceFileSha256!==loaded.sourceFileSha256||stable(canonical)!==canonicalSha256
+                ||stable(presented)!==presentedSha256||!publicationPaperMatches(presented,canonical))
+                fail('出版回调期间实际稿或呈现字节改变');
+        };
+        if(result&&typeof result.then==='function')return result.then(value=>{unchanged();return value;});
+        unchanged();return result;
     });
+    if(loaded===original)return qualify();
+    const identity=withSavedPaper(original.analysis.papers[0],()=>clone(current().receipt.provenance.sourceIdentity));
+    const pdf=require('./conference-reader-publication-evidence').replayCanonicalReaderPdfSource(canonical,
+        {...identity,executionId:loaded.run.executionId});
+    return require('./conference-analysis-context').withConferenceAnalysisSource({executionId:loaded.run.executionId,
+        executionDir:loaded.directory,paperId:loaded.run.paperId,sourceDetails:loaded.source.sourceDetails,
+        readerPdfSourceHandle:pdf},qualify);
 }
 function readVerifiedPublicationPdfSource(paper) {
+    const inherited=inheritedReaderScience.getStore();
+    if(inherited?.paper===paper) {
+        inherited.assertUnchanged();
+        const active=require('./conference-analysis-context').getConferenceAnalysisContext();
+        const pdf=active?.readerPdfSourceHandle;
+        const provider=pdf&&require('./conference-source-context').readerPdfSourceForContext(pdf);
+        if(!provider||active.executionId===paper.conferenceSourceCorrection.executionId
+            ||provider.paperId!==paper.id||sha(provider.sourceText)!==paper.sourceSha256)
+            fail('出版继承上游缺当前子稿的真实PDF范围');
+        provider.assertUnchanged();return pdf;
+    }
     const active = current();
     if (!active.cold || !active.receipt) fail('私有出版PDF句柄只能来自实际冷回执');
     assertOutput(paper); return active.pdf;
 }
 function exportPublicationVerification(presented, canonical) {
+    if(!publicationPaperMatches(presented,canonical))fail('出版视图字节未绑定');
+    const inherited=inheritedReaderScience.getStore();
+    if(inherited?.paper===canonical) {
+        inherited.assertUnchanged();readVerifiedPublicationPdfSource(canonical);
+        const parentProof=withSavedPaper(inherited.parent,()=>exportPublicationVerification(inherited.parent,inherited.parent));
+        if(!isDeepStrictEqual(canonical.analysisManifest.stages.scoringAudit,inherited.parent.analysisManifest.stages.scoringAudit))
+            fail('出版继承评分不是原父实际阶段');
+        return {...parentProof,canonicalPaperSha256:stable(canonical),presentedPaperSha256:stable(presented),
+            readerExecutionId:require('./conference-analysis-context').getConferenceAnalysisContext().executionId,
+            readerStageSha256:stable(canonical.analysisManifest.stages.apiReaderArticle)};
+    }
     const active = current(); assertOutput(canonical);
-    const expected = clone(canonical); expected.paper_id = canonical.id; delete expected.arxivId;
-    if (!isDeepStrictEqual(presented, canonical) && !isDeepStrictEqual(presented, expected)) fail('出版视图字节未绑定');
     if (!active.cold || !active.receipt) fail('出版证明必须实际冷重放原封存回执');
     return { contract: 'conference-source-correction-verification-v1', verified: true,
         scopeKind: active.batch.policy.kind, sourceCorrectionContract: active.batch.policy.contract,

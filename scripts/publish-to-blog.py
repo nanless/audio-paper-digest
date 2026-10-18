@@ -5594,12 +5594,17 @@ def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
     node = shutil.which('node')
     if not node:
         raise PublishDataValidationError('核心摘要规则重放需要 Node.js。')
+    source_correction = paper.get('conferenceSourceCorrection')
+    source_correction_stage = stage_replay and isinstance(source_correction, dict) \
+        and source_correction.get('contract') in {
+            'conference-source-resource-correction-v1', 'conference-source-core-correction-v1'}
     with tempfile.NamedTemporaryFile(mode='w+b') as source_file:
         source_file.write(payload); source_file.flush(); source_file.seek(0)
         result = _run_bounded_subprocess([node, str(cli), str(source_file.fileno())],
             cwd=str(SHARED_SCRIPTS_DIR.parent),
             env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=30, max_output_bytes=64 * 1024, pass_fds=(source_file.fileno(),))
+            timeout_seconds=180 if source_correction_stage else 30,
+            max_output_bytes=64 * 1024, pass_fds=(source_file.fileno(),))
     if result.returncode != 0 or result.timed_out or result.output_truncated:
         raise PublishDataValidationError('核心摘要当前语义规则无法完整重放。')
     try:
