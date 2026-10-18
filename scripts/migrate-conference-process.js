@@ -76,6 +76,118 @@ function archiveStaleCompletionReceipt(directory, state) {
     return path.basename(archived);
 }
 
+// A paid child can have finished before its later page check failed. Recover
+// that saved result before scheduling eligibility: exhausted process attempts
+// must not hide a genuinely complete child or require another paid window.
+// The caller holds the process operation lock; every adoption also holds the
+// real paper lock and runs the normal source/whole-paper/page gates with models
+// forbidden. Partial children are never resumed by this pass.
+async function adoptCompletedGrantedChildren({ state, directory, shared }, deps) {
+    const grants = require('./lib/conference-recovery-grant');
+    const stop = require('./lib/analysis-stop-control');
+    const stateFile = path.join(directory, 'state.json');
+    const adopted = [], failures = [];
+    const fail = message => Object.assign(new Error(message), {
+        code: 'CONFERENCE_SAVED_CHILD_ADOPTION_INTEGRITY', scope: 'run', retryable: false
+    });
+    for (const originalItem of Object.values(state.items)) {
+        if (originalItem.status === 'complete' || !originalItem.readerRefreshRequired) continue;
+        const release = (originalItem.retryReleases || []).filter(row => row.recoveryGrantId).at(-1);
+        if (!release) continue;
+        stop.assertMayStartRequest();
+        const grantHandle = grants.resolveRegisteredRecoveryGrant(release.recoveryGrantId,
+            release.recoveryGrantSha256, { analysisRoot: deps.files.conferenceAnalysisDir });
+        const authority = grants.readRecoveryGrantMember(grantHandle, originalItem.paperId);
+        if (authority.parentExecutionId !== originalItem.analysisRunId
+            || authority.parentAnalysisFileSha256 !== originalItem.analysisProof?.analysisSha256
+            || authority.sourceSha256 !== originalItem.sourceProof?.textSha256
+            || authority.sourceSnapshotSha256 !== originalItem.analysisProof?.sourceSnapshotSha256) {
+            throw fail('待采纳会议子稿的原父稿或来源与当前进程不一致');
+        }
+        const childFile = path.join(deps.files.conferenceAnalysisDir, authority.expectedExecutionId, 'analysis.json');
+        if (!fs.existsSync(childFile) || deps.adapter.readJsonRecord(childFile).value.status !== 'complete') continue;
+        await deps.engine.withPaperAnalysisLock({ id: originalItem.paperId }, () => stop.withModelRequestsForbidden(() => {
+            const item = state.items[originalItem.paperId];
+            const loaded = deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
+                executionId: authority.expectedExecutionId });
+            if (loaded.analysis.status !== 'complete' || loaded.run.status !== 'complete'
+                || loaded.run.paperId !== item.paperId || loaded.parent.run.executionId !== item.analysisRunId) {
+                throw fail('已保存会议子稿没有同一真实完成状态或原父包');
+            }
+            const original = shared.retainedSources?.get(item.analysisRunId);
+            const planHandle = original?.planHandle || shared.planHandle;
+            const sourceRoot = original?.sourceRoot || shared.sourceCacheRoot;
+            let staged;
+            try {
+                // stagePaper performs normal loadCompleted qualification, PDF
+                // evidence replay and rendering; no separate duplicate gate.
+                staged = deps.postprocess.stagePaper({ analysisRoot: deps.files.conferenceAnalysisDir,
+                    executionId: loaded.run.executionId, tagCatalogPath: deps.files.tagCatalogFile,
+                    stagingRoot: deps.files.conferencePageStagingDir, planHandle, sourceRoot, apply: true });
+            } catch (error) {
+                const failure = recovery.classifyFailure(error, deps.now());
+                if (failure.systemic) throw error;
+                failures.push({ paperId: item.paperId, executionId: loaded.run.executionId, ...failure });
+                return;
+            }
+            const manifest = staged?.manifest;
+            if (staged?.status !== 'staged' || manifest?.paperId !== item.paperId
+                || manifest.analysisExecutionId !== loaded.run.executionId
+                || manifest.analysisSha256 !== loaded.analysisFileSha256
+                || manifest.completionReceiptSha256 !== loaded.run.completionReceipt?.receiptSha256
+                || manifest.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) {
+                throw fail('已保存会议子稿的正常页面与分析、完成回执或来源 SHA 不一致');
+            }
+            const after = deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
+                executionId: loaded.run.executionId });
+            if (after.analysisFileSha256 !== loaded.analysisFileSha256
+                || after.runFileSha256 !== loaded.runFileSha256 || after.sourceFileSha256 !== loaded.sourceFileSha256) {
+                throw fail('正常页面核验期间已保存会议子稿发生变化');
+            }
+            authority.assertUnchanged();
+            const proof = { analysisRunId: loaded.run.executionId, readerRevision: loaded.revision,
+                readerRefreshRequired: false,
+                analysisProof: { analysisSha256: loaded.analysisFileSha256,
+                    completionReceiptSha256: manifest.completionReceiptSha256,
+                    sourceSnapshotSha256: manifest.sourceSnapshotSha256 },
+                pageProof: { manifestSha256: manifest.manifestSha256,
+                    contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
+            const body = { contract: 'conference-saved-complete-child-adoption-v1', version: 1,
+                processId: state.processId, previousStateSha256: state.stateSha256,
+                paperId: item.paperId, previousItem: structuredClone(item), proof };
+            const receipt = { ...body, receiptSha256: processApi.stableHash(body) };
+            const receiptName = `saved-child-adoption-${loaded.run.executionId}-${state.stateSha256.slice(0, 12)}.json`;
+            // Preserve the entire true previous failure before clearing current
+            // failure pointers. The immutable write is crash-resumable.
+            processApi.exactFile(path.join(directory, receiptName), processApi.canonicalBytes(receipt));
+            state = deps.engine.updateJsonFileLocked(stateFile, current => {
+                const checked = processApi.assertState(current);
+                if (checked.stateSha256 !== state.stateSha256
+                    || processApi.stableHash(checked.items[item.paperId]) !== processApi.stableHash(item)) {
+                    throw fail('采纳已完成会议子稿前进程 CAS 发生变化');
+                }
+                const next = structuredClone(checked);
+                next.items[item.paperId] = { ...next.items[item.paperId], ...proof,
+                    status: 'complete', lastError: null, lastFailure: null, reviewRequired: null,
+                    retryNotBefore: null, updatedAt: deps.now(),
+                    savedChildAdoptions: [...(item.savedChildAdoptions || []), {
+                        executionId: loaded.run.executionId, receiptFile: receiptName, receiptSha256: receipt.receiptSha256 }] };
+                next.status = Object.values(next.items).some(row => row.status !== 'complete') ? 'partial' : 'running';
+                next.aggregate = null; next.completionReceiptSha256 = null;
+                next.generation = checked.generation + 1; next.updatedAt = deps.now();
+                next.stateSha256 = processApi.stateDigest(next);
+                return processApi.assertState(next);
+            });
+            if (shared.retainedSources) {
+                shared.retainedSources.delete(item.analysisRunId);
+                shared.retainedSources.set(loaded.run.executionId, { ...original, planHandle, sourceRoot });
+            }
+            adopted.push({ paperId: item.paperId, executionId: loaded.run.executionId, receiptSha256: receipt.receiptSha256 });
+        }), { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
+    }
+    return { state, adopted, failures };
+}
+
 function migrateAndRun(options, runtime = {}) {
     const deps = { ...processApi.defaultDependencies?.(), ...(runtime.dependencies || {}) };
     const context = (deps.loadAuthority || processApi.loadAuthority)(options, deps);
@@ -350,6 +462,8 @@ function migrateAndRun(options, runtime = {}) {
         // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
         // 出来，流程完成时才能原子写入新凭证。
         archiveStaleCompletionReceipt(directory, state);
+        const savedChildren = await adoptCompletedGrantedChildren({ state, directory, shared }, deps);
+        state = savedChildren.state;
         if (options.postprocessOnly) {
             // Migration/state/receipt/source checks above are mandatory. This
             // mode never enters process dispatch, retry release or aggregation.
@@ -360,8 +474,11 @@ function migrateAndRun(options, runtime = {}) {
                 pending: Object.values(state.items).filter(item => item.status !== 'complete').length,
                 checkedComplete: requiresMigration || lifecycleNeedsRefresh ? complete.length : 0,
                 stagedComplete: stagedProofs.size, stageFailed: stageFailures.size,
+                adoptedSavedChildren: savedChildren.adopted, savedChildAdoptionFailures: savedChildren.failures,
                 sourceCorrectionsApplied: Boolean(options.sourceCorrections), newApiRequests: 0 };
         }
+        if (savedChildren.failures.length) return { status: 'partial', processId: options.fromProcessId,
+            savedChildAdoptionBlocked: true, failures: savedChildren.failures, newApiRequests: 0 };
         return processApi.runConferenceProcessLocked(grant ? { ...options, recoveryGrantId: grant.grantId,
             recoveryGrantSha256: grant.grantSha256 } : options, migrationDeps, context,
             options.fromProcessId, directory);
