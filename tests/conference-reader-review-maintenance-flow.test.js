@@ -278,7 +278,7 @@ test('canonical review bytes are rechecked after cached admission and arbitrary 
     const h=setup(t,{failTerminal:['synthetic-paper-0']}),args={manifestPath:h.manifestPath,directory:h.processDirectory,state:h.state(),shared:h.shared,options:{concurrency:1}};
     await h.module.runReaderReviewMaintenanceBatch(args,h.deps);
     fs.appendFileSync(h.reviewPath,' ');const calls=[...h.events];
-    await assert.rejects(()=>h.module.runReaderReviewMaintenanceBatch({...args,state:h.state()},h.deps),/canonical finished review/);assert.deepEqual(h.events,calls);
+    await assert.rejects(()=>h.module.runReaderReviewMaintenanceBatch({...args,state:h.state()},h.deps),/canonical finished review|canonical review evidence bytes changed/);assert.deepEqual(h.events,calls);
     assert.throws(()=>h.module.assertNoPendingReaderReviewMaintenance({processDirectory:h.processDirectory,analysisRoot:h.analysisRoot+'-other',state:h.state()}),/canonical process\/analysis roots/);
     assert.throws(()=>h.module.assertNoPendingReaderReviewMaintenance({processDirectory:path.join(path.dirname(h.processDirectory)+'-other',path.basename(h.processDirectory)),analysisRoot:h.analysisRoot,state:h.state()}),/canonical process\/analysis roots/);
 });

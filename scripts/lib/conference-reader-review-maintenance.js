@@ -14,6 +14,7 @@ const scientificParentReplayHandles = new WeakMap();
 const legacyParentReferenceScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const evidenceCache = new Map();
 const verifiedAdoptedChildIdentities = new WeakMap();
+const verifiedCanonicalReviewEvidence = new WeakMap();
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
 const adapter = () => require('./conference-analysis-adapter');
@@ -32,15 +33,16 @@ function privateFile(filename,requirePrivateMode=true) {
     return absolute;
 }
 function read(filename) { privateFile(filename);return adapter().readJsonRecord(filename); }
-function privateFileSha256(filename) {
-    privateFile(filename);
+function privateFileSha256(filename,requirePrivateMode=true) {
+    privateFile(filename,requirePrivateMode);
+    const allowedMode=mode=>requirePrivateMode?mode===0o600:[0o600,0o644].includes(mode);
     const fd=fs.openSync(filename,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
     try {
         const stat=fs.fstatSync(fd);
-        check(stat.isFile()&&stat.nlink===1&&(stat.mode&0o777)===0o600&&stat.size<=64*1024*1024,'private bounded file required');
+        check(stat.isFile()&&stat.nlink===1&&allowedMode(stat.mode&0o777)&&stat.size<=64*1024*1024,'private bounded file required');
         const bytes=fs.readFileSync(fd),named=fs.lstatSync(filename);
         check(bytes.length===stat.size&&named.isFile()&&!named.isSymbolicLink()&&named.nlink===1
-            &&(named.mode&0o777)===0o600&&named.dev===stat.dev&&named.ino===stat.ino&&named.size===stat.size,
+            &&allowedMode(named.mode&0o777)&&(named.mode&0o777)===(stat.mode&0o777)&&named.dev===stat.dev&&named.ino===stat.ino&&named.size===stat.size,
             'private file changed while reading');
         return sha(bytes);
     } finally {fs.closeSync(fd);}
@@ -584,8 +586,12 @@ function canonicalRoots(processDirectory,analysisRoot) {
 }
 function assertCanonicalReviewEvidence(batch) {
     const roots=canonicalRoots(batch.processDirectory,batch.analysisRoot),m=batch.m;
-    const generation=read(path.join(batch.p.root,'generation.json'));
-    const review=read(path.join(batch.p.root,'review-batch.json'));
+    const cached=verifiedCanonicalReviewEvidence.get(batch);
+    if(cached){cached(roots);return;}
+    const pins=[];
+    const pinnedRead=filename=>{const record=read(filename);pins.push({filename,sha256:record.sha256});return record;};
+    const generation=pinnedRead(path.join(batch.p.root,'generation.json'));
+    const review=pinnedRead(path.join(batch.p.root,'review-batch.json'));
     const g=generation.value;
     check(g.processId===m.processId&&/^[a-z0-9][a-z0-9-]*$/u.test(g.conferenceId||''),'canonical publication identity');
     const directory=path.join(roots.publication,g.conferenceId,m.processId);
@@ -597,24 +603,36 @@ function assertCanonicalReviewEvidence(batch) {
         // Registry snapshots and all other private evidence still use read().
         privateFile(filename,false);
         check([0o600,0o644].includes(fs.lstatSync(filename).mode&0o777),'canonical generation file mode');
-        return adapter().readJsonRecord(filename).sha256===generation.sha256;
+        return privateFileSha256(filename,false)===generation.sha256;
     });
     check(exactGeneration.length===1&&generation.sha256===m.generationFileSha256,
         'canonical generation original missing, ambiguous or different bytes');
-    const canonicalReview=read(path.join(roots.publication,'page-review-batch-failures',review.value.batchSha256+'.json'));
+    const canonicalReview=pinnedRead(path.join(roots.publication,'page-review-batch-failures',review.value.batchSha256+'.json'));
     check(canonicalReview.sha256===review.sha256&&review.sha256===m.reviewBatchFileSha256,
         'canonical finished review batch differs from archive');
     for(const row of review.value.pages)if(row.passed===true) {
-        const key=stable({path:row.path,sha256:row.sha256}),original=read(path.join(roots.publication,'page-review-passes',key+'.json'));
+        const key=stable({path:row.path,sha256:row.sha256}),original=pinnedRead(path.join(roots.publication,'page-review-passes',key+'.json'));
         self(original.value,'resultSha256');check(original.value.contract==='conference-page-content-review-v1'
             &&SHA.test(original.value.protocol||'')&&same(original.value,row),'canonical page pass differs from finished batch');
     }
     for(const row of review.value.pages)if(row.passed===false) {
         check(SHA.test(row.failureSha256||''),'canonical failure identity');
-        const archived=read(path.join(batch.p.root,'failures',row.failureSha256+'.json'));
-        const original=read(path.join(roots.publication,'page-review-failures',row.failureSha256+'.json'));
+        const archived=pinnedRead(path.join(batch.p.root,'failures',row.failureSha256+'.json'));
+        const original=pinnedRead(path.join(roots.publication,'page-review-failures',row.failureSha256+'.json'));
         check(original.sha256===archived.sha256,'canonical failure bytes differ from archive');
     }
+    const expected={processId:m.processId,generationFileSha256:m.generationFileSha256,reviewBatchFileSha256:m.reviewBatchFileSha256};
+    const assertBytes=currentRoots=>{
+        check(currentRoots.publication===roots.publication&&same(expected,{processId:batch.m.processId,
+            generationFileSha256:batch.m.generationFileSha256,reviewBatchFileSha256:batch.m.reviewBatchFileSha256}),
+            'canonical review identity changed');
+        for(const pin of pins)check(privateFileSha256(pin.filename)===pin.sha256,'canonical review evidence bytes changed');
+        const exact=candidates.filter(filename=>fs.existsSync(filename)&&privateFileSha256(filename,false)===generation.sha256);
+        check(exact.length===1&&exact[0]===exactGeneration[0],'canonical generation original missing, ambiguous or different bytes');
+    };
+    // The first call still performs every normal protocol/self/row validation.
+    // Later calls reread every original byte with safe FD/path/mode checks.
+    assertBytes(roots);verifiedCanonicalReviewEvidence.set(batch,assertBytes);
 }
 function loadBatch({manifestPath,processDirectory,analysisRoot}) {
     canonicalRoots(processDirectory,analysisRoot);
