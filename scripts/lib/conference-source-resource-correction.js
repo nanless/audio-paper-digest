@@ -1113,6 +1113,35 @@ function sourceProjectionCanonical(item) {
     }
     fail('来源纠正后续维护父链超过16层');
 }
+// Every entry comes from the adapter's real registered revision loader. A
+// maintenance locator alone cannot move independent rounds into/out of process
+// accounting; its verified feedback/member/parent binding must also match.
+function independentReaderMaintenanceChild(child) {
+    const locator=child.revision?.readerReviewMaintenance;
+    if(locator===undefined)return false;
+    const bound=child.readerReview,member=bound?.member;
+    if(child.revision.mode!=='reader-only'||!bound||!isDeepStrictEqual(bound.locator,locator)
+        ||!bound.parentSeedHandle||member?.paperId!==child.run.paperId
+        ||!['analysisFileSha256','runFileSha256','sourceFileSha256'].every(key=>/^[a-f0-9]{64}$/u.test(String(child.parent?.[key]||'')))
+        ||member.executionId!==child.run.executionId||member.parentExecutionId!==child.parent?.run.executionId
+        ||member.parentCAS?.analysisFileSha256!==child.parent.analysisFileSha256
+        ||member.parentCAS?.runFileSha256!==child.parent.runFileSha256
+        ||member.parentCAS?.sourceFileSha256!==child.parent.sourceFileSha256
+        ||child.sourceFileSha256!==child.parent.sourceFileSha256)fail('独立Reader维护缺少真实登记父稿/反馈绑定');
+    return true;
+}
+function assertMaintenanceChildProgress(child,item) {
+        const progress = child.analysis.readerRevisionProgress;
+        if (!progress || !Number.isSafeInteger(progress.attempts) || progress.attempts < 0
+            || progress.attempts === 0 && (child.analysis.status !== 'partial' || child.run.status !== 'source_ready')
+            || progress.attempts > child.revision.maxAttempts || !Array.isArray(progress.failures)
+            || progress.failures.length > progress.attempts
+            || progress.failures.length < progress.attempts - (child.analysis.status === 'complete' || item.status === 'analyzing' ? 1 : 0)
+            || progress.failures.some(failure => typeof failure?.message !== 'string' || !Number.isFinite(Date.parse(failure.at)))) {
+            fail('来源维护没有真实子运行轮次与完整失败记录');
+        }
+    return progress;
+}
 function assertSourceMaintenanceHistory(item, previous, projection) {
     const adapter = require('./conference-analysis-adapter');
     const childId = adapter.readerRevisionExecutionId(item.analysisRunId, item.analysisProof.analysisSha256);
@@ -1129,8 +1158,13 @@ function assertSourceMaintenanceHistory(item, previous, projection) {
                 || prepared.sourceFileSha256 !== projection.current.sourceFileSha256) fail('来源维护未签发子包不是同一真实待分析准备态');
         }
     }
+    // The independent maintenance window keeps its own attempts and fees.
+    // Validate its complete real history, but never charge it to process delta.
+    const independent=new Set(history.filter(independentReaderMaintenanceChild));
+    for(const child of independent)assertMaintenanceChildProgress(child,item);
+    const processHistory=history.filter(child=>!independent.has(child));
     const originalReleases = previous.retryReleases || [], releases = item.retryReleases || [];
-    const noDispatchedChild = history.every(child => child.analysis.status === 'partial' && child.run.status === 'source_ready'
+    const noDispatchedChild = processHistory.every(child => child.analysis.status === 'partial' && child.run.status === 'source_ready'
         && child.analysis.readerRevisionProgress?.attempts === 0
         && child.analysis.readerRevisionProgress?.failures?.length === 0);
     if (noDispatchedChild && item.attempts === previous.attempts && item.retryBudgetStart === previous.retryBudgetStart
@@ -1139,18 +1173,7 @@ function assertSourceMaintenanceHistory(item, previous, projection) {
         || releases.length < originalReleases.length
         || !isDeepStrictEqual(releases.slice(0, originalReleases.length), originalReleases)) fail('来源维护删改原次数或重试历史');
     let attempts = 0;
-    for (const child of history) {
-        const progress = child.analysis.readerRevisionProgress;
-        if (!progress || !Number.isSafeInteger(progress.attempts) || progress.attempts < 0
-            || progress.attempts === 0 && (child.analysis.status !== 'partial' || child.run.status !== 'source_ready')
-            || progress.attempts > child.revision.maxAttempts || !Array.isArray(progress.failures)
-            || progress.failures.length > progress.attempts
-            || progress.failures.length < progress.attempts - (child.analysis.status === 'complete' || item.status === 'analyzing' ? 1 : 0)
-            || progress.failures.some(failure => typeof failure?.message !== 'string' || !Number.isFinite(Date.parse(failure.at)))) {
-            fail('来源维护没有真实子运行轮次与完整失败记录');
-        }
-        attempts += progress.attempts;
-    }
+    for (const child of processHistory)attempts+=assertMaintenanceChildProgress(child,item).attempts;
     const delta = item.attempts - previous.attempts;
     const activeRelease = releases.at(-1);
     if (delta !== attempts && !(item.status === 'analyzing' && delta === attempts + 1
@@ -1322,7 +1345,7 @@ function readPreviousItemProjection(item) {
         || a.readerParentExecutionId !== record.row.record.readerParentExecutionId
         || !isDeepStrictEqual(item.sourceProof, previous.sourceProof)) fail('出版原成员/次数/来源没有精确保留');
     assertSourceMaintenanceHistory(item, previous, projection);
-    return { record, paper, previous };
+    return { record, paper, previous, projection };
 }
 function readPreviousSourceIdentityItem(item) {
     const projection = readPreviousItemProjection(item);
@@ -1338,7 +1361,15 @@ function readPreviousPublicationItem(item) {
     if (!projection) return null;
     if (item.status !== 'complete') fail('完整出版回投只接受完成成员');
     const { record, paper, previous } = projection;
-    if (item.analysisRunId !== paper.conferenceSourceCorrection?.executionId) fail('完整出版回投不能借用祖先纠正声明');
+    const descendant=item.analysisRunId!==paper.conferenceSourceCorrection?.executionId;
+    const current=projection.projection.current,chain=projection.projection.descendants;
+    if(descendant) {
+        if(!chain.length||!chain.every(independentReaderMaintenanceChild))fail('完整出版回投不能借用祖先纠正声明');
+        const latest=chain[0],locator=latest.revision.readerReviewMaintenance,adoption=item.textMaintenanceAdoption;
+        if(latest.run.executionId!==item.analysisRunId||adoption?.batchId!==locator.batchId
+            ||adoption.manifestSha256!==locator.manifestSha256
+            ||adoption.previousExecutionId!==latest.parent.run.executionId)fail('新Reader出版缺少真实维护采纳绑定');
+    }
     const actual = read(path.join(record.batch.processDirectory, 'state.json'));
     const key = `${actual.value.processId}:${item.paperId}:${item.analysisRunId}`;
     const stack = publicationProjection.getStore() || [];
@@ -1351,15 +1382,27 @@ function readPreviousPublicationItem(item) {
         return clone(previous);
     }
     if (stack.length >= 16) fail('来源出版回投超过16层');
-    return publicationProjection.run([...stack, key], () =>
-        require('./analysis-stop-control').withModelRequestsForbidden(() => withSavedPaper(paper, () => {
-            const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
-            if (!require('../analysis-engine').isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) fail('本地child完整冷核未通过');
-            // Re-read after source/Reader replay rather than trusting first read.
-            const after = read(path.join(record.batch.processDirectory, 'state.json'));
-            equal(after.value.items[item.paperId], item, '冷回投期间当前成员改变');
-            return clone(previous);
-        })));
+    return publicationProjection.run([...stack,key],()=>
+        require('./analysis-stop-control').withModelRequestsForbidden(()=>{
+            const actualPaper=descendant?current.analysis.papers[0]:paper;
+            const qualify=()=>withSavedPaper(actualPaper,()=>{
+                const rules=require('./conference-postprocess').readOriginalTagProof(actualPaper).rules;
+                if(!require('../analysis-engine').isSuccessfulAnalysisRecordForReadOnlyConferencePublication(actualPaper,{tagRules:rules}))fail('本地child完整冷核未通过');
+                const after=read(path.join(record.batch.processDirectory,'state.json'));
+                equal(after.value.items[item.paperId],item,'冷回投期间当前成员改变');return clone(previous);
+            });
+            if(!descendant)return qualify();
+            // Actual source files are identical along the verified parent chain.
+            // Reopen the current child's own PDF and full Reader, never qualify
+            // its article using the ancestor's old Reader receipt.
+            const loaded=chain[0],pdf=require('./conference-reader-publication-evidence').replayCanonicalReaderPdfSource(actualPaper,
+                {...record.receipt.provenance.sourceIdentity,executionId:loaded.run.executionId});
+            return require('./conference-analysis-context').withConferenceAnalysisSource({executionId:loaded.run.executionId,
+                executionDir:loaded.directory,paperId:loaded.run.paperId,sourceDetails:loaded.source.sourceDetails,readerPdfSourceHandle:pdf},()=>
+                loaded.recoveryWindow?require('./conference-reader-recovery-window').withConferenceReaderGrantReadOnly(
+                    loaded.recoveryWindow.grantHandle,{paperId:loaded.run.paperId,executionId:loaded.run.executionId,
+                        executionDir:loaded.directory,readerPdfSourceHandle:pdf},qualify):qualify());
+        }));
 }
 module.exports = { CONTRACT, SCORE_KIND, BATCH, RECEIPT, CORE_CONTRACT, CORE_SCORE_KIND, CORE_BATCH, CORE_RECEIPT, openBatch, prepareChild,
     withLocalSourceCorrection, prepareFinalizerInput, assertFinalizerInput, scoringStage,

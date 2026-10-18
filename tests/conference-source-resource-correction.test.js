@@ -591,7 +591,8 @@ function previousProjectionHarness() {
         sourceResourceCorrectionAdoption: { previousItemSha256: hash(previous), previousStateSha256: 'old-state',
             manifestFile: '/manifest', manifestSha256: 'manifest', selectedMainExecutionId: 'main', readerParentExecutionId: 'reader' } };
     const actual = { processId: 'process', items: { [id]: structuredClone(item) } };
-    const controls = { registered: true, page: true, publicationCalls: 0, childExists: false };
+    const controls = { registered: true, page: true, publicationCalls: 0, childExists: false, publicationPass: false, wholePass: true };
+    record.receipt={provenance:{sourceIdentity:{contract:'conference-reader-pdf-source-v1',executionId:'current'}}};
     const equal = (a, b, message) => assert.deepStrictEqual(structuredClone(a), structuredClone(b), message);
     const environment = { path, stable: hash, clone: structuredClone,
         isDeepStrictEqual: require('node:util').isDeepStrictEqual, PROJECTION_ONLY: {},
@@ -601,7 +602,7 @@ function previousProjectionHarness() {
         read: () => ({ value: structuredClone(actual) }),
         readRegisteredTransaction: () => { assert.equal(controls.registered, true, 'missing actual registered transaction'); return record; },
         assertAdoptedPage: () => assert.equal(controls.page, true, 'adopted page physical CAS mismatch'),
-        withSavedPaper: () => { controls.publicationCalls++; throw Object.assign(Error('actual Reader placeholder rejected'), { code: 'reader_placeholder_result_table' }); },
+        withSavedPaper: (presented,callback) => { controls.publicationCalls++;controls.publicationPaper=presented;if(!controls.publicationPass)throw Object.assign(Error('actual Reader placeholder rejected'), { code: 'reader_placeholder_result_table' });return callback(); },
         require: name => {
             if (name === '../config') return { FILES: { conferenceAnalysisDir: '/synthetic-analysis' } };
             if (name === './conference-analysis-adapter') return { loadConferenceAnalysis: () => loaded,
@@ -611,12 +612,16 @@ function previousProjectionHarness() {
             if (name === './conference-process-recovery') return { MAX_ATTEMPTS: 3 };
             if (name === './conference-process') return { assertState: () => {} };
             if (name === './analysis-stop-control') return stop;
+            if (name === './conference-reader-publication-evidence') return {replayCanonicalReaderPdfSource:(presented,identity)=>{controls.pdfPaper=presented;controls.pdfIdentity=identity;return {};}};
+            if (name === './conference-analysis-context') return {withConferenceAnalysisSource:(identity,callback)=>{controls.actualSourceScope=identity;return callback();}};
+            if (name === './conference-postprocess') return {readOriginalTagProof:()=>({rules:{}})};
+            if (name === '../analysis-engine') return {isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>controls.wholePass};
             throw Error(`Unexpected projection dependency ${name}`);
         } };
     const methods = require('node:vm').runInNewContext(source.slice(source.indexOf('function sourceProjectionCanonical('),
         source.indexOf('function readRegisteredTransaction(')) + source.slice(source.indexOf('function readPreviousItemProjection('),
         source.indexOf('module.exports = ')) + '\n({readPreviousSourceIdentityItem, readPreviousPublicationItem, assertSourceMaintenanceHistory})', environment);
-    return { ...methods, item, previous, actual, loaded, controls };
+    return { ...methods, item, previous, actual, loaded, controls, record };
 }
 
 test('仅来源回投不授Reader出版资格；完整出版仍真实进入旧Reader门禁（合成调度）', () => {
@@ -711,4 +716,59 @@ test('仅来源回投仍拒canonical凭证、原次数、来源、adoption、当
         assert.throws(() => f.readPreviousSourceIdentityItem(f.item));
         assert.equal(f.controls.publicationCalls, 0);
     }
+});
+
+
+function registeredIndependentMaintenanceFixture(f) {
+    const parent=structuredClone(f.loaded);parent.analysisFileSha256='a'.repeat(64);parent.runFileSha256='b'.repeat(64);parent.sourceFileSha256='c'.repeat(64);
+    f.loaded.sourceFileSha256=parent.sourceFileSha256;
+    const locator={contract:'conference-reader-review-maintenance-member-v1',batchId:'real-batch',manifestSha256:'registered-manifest'};
+    const child={analysisFileSha256:'new-analysis',runFileSha256:'new-run',sourceFileSha256:parent.sourceFileSha256,
+        analysis:{status:'complete',papers:[{id:f.item.paperId,apiReaderArticle:'new actual Reader',conferenceSourceCorrection:{executionId:'current'}}],
+            readerRevisionProgress:{attempts:3,failures:[1,2,3].map(i=>({message:'retained failure '+i,at:`2026-10-18T00:0${i}:00.000Z`}))}},
+        run:{status:'complete',executionId:'independent-child',paperId:f.item.paperId,sourceSnapshotSha256:'snapshot',completionReceipt:{receiptSha256:'new-completion'}},
+        directory:'/synthetic-analysis/independent-child',source:{sourceDetails:{text:'real source fixture'}},parent,
+        revision:{mode:'reader-only',maxAttempts:3,readerReviewMaintenance:locator}};
+    child.readerReview={locator:structuredClone(locator),parentSeedHandle:Object.freeze({}),member:{paperId:f.item.paperId,executionId:child.run.executionId,
+        parentExecutionId:parent.run.executionId,parentCAS:{analysisFileSha256:parent.analysisFileSha256,runFileSha256:parent.runFileSha256,sourceFileSha256:parent.sourceFileSha256}}};
+    return child;
+}
+test('已登记独立Reader窗口三轮不加进原process次数，pending及采纳后父链均保留原账（合成编排）',()=>{
+    const f=previousProjectionHarness(),child=registeredIndependentMaintenanceFixture(f);
+    f.controls.childExists=true;f.controls.child=child;
+    assert.doesNotThrow(()=>f.assertSourceMaintenanceHistory(f.item,f.previous,{current:f.loaded,descendants:[]}));
+    f.controls.childExists=false;
+    assert.doesNotThrow(()=>f.assertSourceMaintenanceHistory(f.item,f.previous,{current:child,descendants:[child]}));
+    const changed=structuredClone(f.item);changed.attempts++;
+    assert.throws(()=>f.assertSourceMaintenanceHistory(changed,f.previous,{current:child,descendants:[child]}),/实际子运行闭合/);
+});
+test('独立维护必须有adapter核过的登记反馈与完整原父CAS，裸locator及被改轮次仍拒（合成编排）',()=>{
+    for(const mutate of [c=>delete c.readerReview,c=>c.readerReview.locator.manifestSha256='other',c=>c.readerReview.member.parentCAS.sourceFileSha256='other',
+        c=>c.analysis.readerRevisionProgress.attempts=4,c=>c.analysis.readerRevisionProgress.failures.splice(0,2)]){
+        const f=previousProjectionHarness(),child=registeredIndependentMaintenanceFixture(f);mutate(child);f.controls.childExists=true;f.controls.child=child;
+        assert.throws(()=>f.assertSourceMaintenanceHistory(f.item,f.previous,{current:f.loaded,descendants:[]}));
+    }
+});
+function adoptedIndependentPublicationFixture(){
+    const f=previousProjectionHarness(),child=registeredIndependentMaintenanceFixture(f);
+    Object.assign(f.loaded,child);f.controls.child=child;f.controls.childExists=false;
+    Object.assign(f.item,{analysisRunId:child.run.executionId,readerRevision:child.revision,
+        analysisProof:{analysisSha256:child.analysisFileSha256,sourceSnapshotSha256:'snapshot',completionReceiptSha256:'new-completion'},
+        textMaintenanceAdoption:{batchId:child.revision.readerReviewMaintenance.batchId,manifestSha256:child.revision.readerReviewMaintenance.manifestSha256,previousExecutionId:child.parent.run.executionId}});
+    f.actual.items[f.item.paperId]=structuredClone(f.item);return f;
+}
+test('采纳后完整出版核当前Reader自己的PDF和整篇，不能拿旧祖先Reader为新正文放行（合成编排）',()=>{
+    const f=adoptedIndependentPublicationFixture();f.controls.publicationPass=true;
+    assert.deepEqual(f.readPreviousPublicationItem(f.item),f.previous);
+    assert.equal(f.controls.publicationPaper.apiReaderArticle,'new actual Reader');assert.equal(f.controls.pdfPaper.apiReaderArticle,'new actual Reader');
+    assert.equal(f.controls.pdfIdentity.executionId,f.item.analysisRunId);assert.equal(f.controls.actualSourceScope.executionId,f.item.analysisRunId);
+    f.controls.wholePass=false;assert.throws(()=>f.readPreviousPublicationItem(f.item),/完整冷核未通过/);
+});
+test('采纳后缺真实维护采纳、换批或绕当前Reader门仍拒；普通祖先借用旧限制不变（合成编排）',()=>{
+    for(const mutate of [f=>delete f.item.textMaintenanceAdoption,f=>f.item.textMaintenanceAdoption.batchId='wrong',
+        f=>f.item.textMaintenanceAdoption.previousExecutionId='wrong']){
+        const f=adoptedIndependentPublicationFixture();f.controls.publicationPass=true;mutate(f);f.actual.items[f.item.paperId]=structuredClone(f.item);
+        assert.throws(()=>f.readPreviousPublicationItem(f.item),/维护采纳绑定/);
+    }
+    const f=adoptedIndependentPublicationFixture();assert.throws(()=>f.readPreviousPublicationItem(f.item),{code:'reader_placeholder_result_table'});
 });
