@@ -84,6 +84,79 @@ function fixture(t, identityOverrides = {}) {
             isSuccessfulAnalysisRecordForReadOnlyConferencePublication: value => value.apiReaderArticle === 'new normal Reader' } };
 }
 
+async function grantedPaidFixture(t) {
+    // Real opaque registration/PDF/parent chain. Model and final scientific
+    // outputs remain explicit scheduling doubles, as in the legacy fixture.
+    const paid = fixture(t), f = await require('./helpers/conference-recovery-continuation-fixture').fixture(t);
+    const grants = require('../scripts/lib/conference-recovery-grant');
+    const member = grants.readRecoveryGrantMember(f.grant.handle, f.paperId);
+    await assert.rejects(adapter.refreshConferenceGrantedRecovery({ analysisRoot: f.analysisRoot,
+        parentExecutionId: f.parentExecutionId, failedExecutionId: f.failedExecutionId,
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle },
+    { engine: f.engine, deep: f.operations }), /original paid fixture failure/);
+    const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: member.expectedExecutionId });
+    const identity = { ...paid.identity, paperId: f.paperId, sourceSha256: member.sourceSha256,
+        conferenceReaderGrant: { grantId: member.grantId, grantSha256: member.grantSha256,
+            paperId: f.paperId, executionId: member.expectedExecutionId, sourceSha256: member.sourceSha256,
+            parentAnalysisFileSha256: member.parentAnalysisFileSha256,
+            failedAnalysisFileSha256: member.failedAnalysisFileSha256 } };
+    const directory = path.join(loaded.directory, 'reader-attempts'), diagnostics = path.join(directory, 'request-diagnostics');
+    fs.mkdirSync(diagnostics, { recursive: true, mode: 0o700 });
+    const old = path.join(paid.directory, 'request-diagnostics');
+    const filename = fs.readdirSync(old).find(name => name.endsWith('.request.json'));
+    const request = JSON.parse(fs.readFileSync(path.join(old, filename))); request.identity = identity;
+    const requestBytes = Buffer.from(JSON.stringify(request));
+    const response = JSON.parse(fs.readFileSync(path.join(old, filename.replace('.request.json', '.response.json'))));
+    response.requestSha256 = sha(requestBytes);
+    fs.writeFileSync(path.join(diagnostics, filename), requestBytes, { mode: 0o600 });
+    fs.writeFileSync(path.join(diagnostics, filename.replace('.request.json', '.response.json')), JSON.stringify(response), { mode: 0o600 });
+    const fee = JSON.parse(fs.readFileSync(paid.usageFile)); fee.runId = member.grantId;
+    fs.writeFileSync(paid.usageFile, JSON.stringify(fee), { mode: 0o600 });
+    repair.saveFailedCandidate(directory, identity, paid.payload);
+    return { ...paid, ...f, loaded, member, identity, directory, payload: paid.payload,
+        usageDirectory: paid.usageDirectory, usageFile: paid.usageFile,
+        input: { loaded, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, engine: paid.engine };
+}
+
+test('已登记会议窗口从真实opaque许可选择费用runId，原计数/费用不改；错fee路线拒绝', async t => {
+    const f = await grantedPaidFixture(t), before = fs.readFileSync(f.usageFile);
+    const options = { usageDirectory: f.usageDirectory, engine: f.engine, deep: {
+        replayVerifiedReaderResourceIdentity: deep.replayVerifiedReaderResourceIdentity,
+        refreshApiReaderArticleFromSource: async (paper, source) => {
+            assert.throws(stop.assertMayStartRequest, { code: stop.MODEL_REQUESTS_FORBIDDEN });
+            paper.apiReaderArticle = 'new normal Reader'; paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle);
+            paper.apiReaderPlanSha256 = 'c'.repeat(64); paper.apiReaderFigures = [];
+            paper.analysisManifest.stages.apiReaderArticle = { status: 'complete', contentMode: 'reader-source-only-v1',
+                attempts: 3, fullAttempts: 1, transportFailures: 1,
+                ...replay.readVerifiedConferenceReaderPrompts(paper, source.text).stageFields };
+            return paper;
+        }
+    } };
+    const result = await replay.replayActiveConferenceReaderCandidate(f.input, options);
+    assert.equal(result.eligible, true); result.assertUnchanged();
+    assert.deepEqual(fs.readFileSync(f.usageFile), before);
+    for (const wrong of [null, '33333333-3333-4333-8333-333333333333']) {
+        const fee = JSON.parse(before); fee.runId = wrong;
+        fs.writeFileSync(f.usageFile, JSON.stringify(fee), { mode: 0o600 });
+        assert.equal((await replay.replayActiveConferenceReaderCandidate(f.input, options)).eligible, false);
+    }
+    fs.writeFileSync(f.usageFile, before, { mode: 0o600 });
+    fs.unlinkSync(path.join(f.directory, repair.hashDraft(f.identity) + '.json'));
+    const changed = structuredClone(f.identity); changed.conferenceReaderGrant.grantSha256 = 'f'.repeat(64);
+    repair.saveFailedCandidate(f.directory, changed, f.payload);
+    await assert.rejects(replay.replayActiveConferenceReaderCandidate(f.input, options), /真实登记会议窗口不一致/);
+});
+
+test('没有真实已登记窗口时，候选裸JSON不能把费用路由改为grant', async t => {
+    const f = fixture(t, { conferenceReaderGrant: { grantId: '11111111-2222-4333-8444-555555555555' } });
+    await assert.rejects(replay.replayActiveConferenceReaderCandidate(f.input, {
+        usageDirectory: f.usageDirectory, engine: f.engine, deep: {
+            replayVerifiedReaderResourceIdentity: deep.replayVerifiedReaderResourceIdentity,
+            refreshApiReaderArticleFromSource: () => assert.fail('bare JSON cannot reach Reader')
+        }
+    }), /裸JSON不能授予会议窗口费用身份/);
+});
+
 test('同child耗尽预算仅在私有副本重放，原候选、历史及attempt/failure字节保持', async t => {
     const f = fixture(t), originals = ['analysis.json', 'run.json', 'source.json', 'reader-revision.json',
         'reader-attempts/' + repair.hashDraft(f.identity) + '.json'];

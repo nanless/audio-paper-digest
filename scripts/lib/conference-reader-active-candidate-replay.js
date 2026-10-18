@@ -129,7 +129,7 @@ const projection = entries => entries.map(({ path: name, sha256 }) => ({ path: n
 function optionalTree(directory) {
     try { return tree(directory); } catch (error) { if (error.code === 'ENOENT' && !fs.existsSync(directory)) return []; throw error; }
 }
-function paidCandidateProof(entries, identity, payload, source, usageDirectory) {
+function paidCandidateProof(entries, identity, payload, source, usageDirectory, usageRunId) {
     const diagnostics = entries.filter(entry => /^request-diagnostics\/[a-f0-9-]{36}\.request\.json$/.test(entry.path));
     const matches = [];
     for (const entry of diagnostics) {
@@ -165,7 +165,7 @@ function paidCandidateProof(entries, identity, payload, source, usageDirectory) 
         const pinned = require('./reader-proof-read-scope').readReaderProofJson(filename, { expectedSha256: sha(bytes) });
         const event = pinned.value;
         if (event.kind !== 'request' || event.paperId !== identity.paperId || event.stage !== 'apiReaderRepair'
-            || (event.runId ?? null) !== (identity.freshAnalysis?.runId ?? null)
+            || (event.runId ?? null) !== usageRunId
             || event.contentAttempt !== selected.request.contentAttempt
             || event.outputTextSha256 !== selected.response.outputTextSha256
             || event.model !== identity.model?.model || event.protocol !== identity.model?.protocol) continue;
@@ -203,6 +203,20 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
     const sourceSha256 = sha(current.source.sourceDetails.text);
     if (identity.paperId !== current.run.paperId || identity.sourceSha256 !== sourceSha256
         || original.sourceSha256 !== sourceSha256) integrity('候选论文或原全文身份不一致');
+    let usageRunId = identity.freshAnalysis?.runId ?? null;
+    if (current.recoveryWindow) {
+        // Only the real opaque registration can select the conference usage
+        // route. Candidate JSON alone cannot supply a grant or change runId.
+        const member = require('./conference-recovery-grant').readRecoveryGrantMember(
+            current.recoveryWindow.grantHandle, current.run.paperId);
+        const expected = { grantId: member.grantId, grantSha256: member.grantSha256,
+            paperId: current.run.paperId, executionId: member.expectedExecutionId,
+            sourceSha256: member.sourceSha256, parentAnalysisFileSha256: member.parentAnalysisFileSha256,
+            failedAnalysisFileSha256: member.failedAnalysisFileSha256 };
+        if (current.run.executionId !== member.expectedExecutionId || identity.freshAnalysis !== undefined
+            || !isDeepStrictEqual(identity.conferenceReaderGrant, expected)) integrity('候选费用身份与真实登记会议窗口不一致');
+        usageRunId = member.grantId;
+    } else if (identity.conferenceReaderGrant !== undefined) integrity('候选裸JSON不能授予会议窗口费用身份');
     if (identity.contentMode !== 'reader-source-only-v1' || identity.conferenceReaderRetryEpoch !== 1
         || !repair.parseRecoveryDraft(payload.draft) || payload.attempts < 1 || payload.fullAttempts < 1) {
         return { eligible: false, reason: '没有可重放的原source-only付费正文。' };
@@ -220,7 +234,7 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
     if (!preflight) integrity('原资源预检缺失');
     deep.replayVerifiedReaderResourceIdentity(preflight, current.source.sourceDetails.text);
     const paid = paidCandidateProof(attempts, identity, payload, current.source.sourceDetails,
-        overrides.usageDirectory || require('../config').FILES.llmUsageDir);
+        overrides.usageDirectory || require('../config').FILES.llmUsageDir, usageRunId);
     if (!paid) return { eligible: false, reason: '原活跃候选缺少唯一真实付费请求响应及费用闭合链。' };
     const articlePrompt = originalPromptDeclaration('apiReaderArticle', identity.promptSha256);
     const repairPrompt = originalPromptDeclaration('apiReaderRepair', identity.repairPromptSha256);
