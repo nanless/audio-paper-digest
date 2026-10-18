@@ -675,8 +675,9 @@ class ConferencePublishTests(unittest.TestCase):
         base = M.remote_snapshot(self.repo)
         image_base = M.remote_snapshot(images)
         record = self.record()
-        image = self.record('icassp-2026/abcdef123456/figure-1.png', b'PNG sealed bytes', images)
-        image['kind'] = 'asset'
+        image_data = b'PNG sealed bytes'
+        image = self.record('icassp-2026/abcdef123456/figure-1.png', image_data, images)
+        image.update(kind='asset', size=len(image_data))
         previous = {'baseHead': base['head'], 'remoteMainBefore': base['remoteMain'],
                     'remoteIdentitySha256': base['remoteIdentitySha256'], 'files': [record],
                     'imageBaseHead': image_base['head'], 'imageRemoteMainBefore': image_base['remoteMain'],
