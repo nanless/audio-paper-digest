@@ -104,9 +104,25 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
                 cursor += width + 1;
             }
             if (sourceRows.length < 2) continue;
-            if (mixedUnits && new Set(sourceRows.map(row => compact(row.label))).size !== sourceRows.length) {
-                reasons.push('原PDF混合单位表存在重复行名，原分组身份不能唯一逐字映射；保留完整分组，不凭数字猜行。');
-                continue;
+            const repeatedLabels = mixedUnits && new Set(sourceRows.map(row => compact(row.label))).size !== sourceRows.length;
+            let conditionColumns = null;
+            if (repeatedLabels) {
+                // A labelled input dimension is an explicit condition, unlike
+                // WER/RTF or another measured result. Repeated method names may
+                // use that condition only when the reader retains EVERY original
+                // numeric column and the complete label+condition is unique.
+                // Result values are checked afterwards, never used to pick a row.
+                const conditions = headers.flatMap((header, sourceColumn) => text(header) === 'Dim'
+                    ? [{ sourceColumn, header: text(header) }] : []);
+                const complete = table.header.length === width + 1 && headers.every((header, index) =>
+                    compact(header) === compact(table.header[index + 1]));
+                const identities = sourceRows.map(row => JSON.stringify([compact(row.label),
+                    ...conditions.map(column => numeric(row.cells[column.sourceColumn]))]));
+                if (!conditions.length || !complete || new Set(identities).size !== sourceRows.length) {
+                    reasons.push('原PDF混合单位表存在重复行名，原分组身份不能唯一逐字映射；保留完整分组，不凭数字猜行。');
+                    continue;
+                }
+                conditionColumns = conditions;
             }
             const quote = document.rawFullText.slice(lines[captionIndex].start, sourceRows.at(-1).end).replace(/\s+/gu, ' ').trim();
             if (quote.length < 12 || quote.length > 4000 || document.normalizedFullText.split(quote).length !== 2) continue;
@@ -117,6 +133,11 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
             const mapped = table.rows.map((row, index) => {
                 const matches = sourceRows.map((original, sourceRow) => ({ original, sourceRow }))
                     .filter(({ original }) => compact(original.label) === compact(row[0])
+                        && (!conditionColumns || conditionColumns.every(column =>
+                            numeric(row[column.sourceColumn + 1]) !== null
+                            && numeric(row[column.sourceColumn + 1]) === numeric(original.cells[column.sourceColumn])))
+                        && (!conditionColumns || original.cells.every((value, index) =>
+                            numeric(row[index + 1]) === numeric(value)))
                         && columns.every(column => numeric(row[column.column]) !== null
                             && numeric(row[column.column]) !== '-' && numeric(row[column.column]) === numeric(original.cells[column.sourceColumn])));
                 if (matches.length !== 1) {
@@ -136,6 +157,10 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
                     : compact(quote).includes(compact(original.label))
                         && hasSequence(require('../deep-analyzer').readerNumericTokens(quote), numbers))) return null;
                 return { row: index + 1, sourceRow: sourceRow + 1, rowLabel: original.label,
+                    ...(conditionColumns ? { conditionIdentity: { contract: 'reader-pdf-explicit-dimension-row-v1',
+                        columns: conditionColumns.map(column => ({ column: column.sourceColumn + 1,
+                            sourceColumn: column.sourceColumn + 1, header: column.header,
+                            value: original.cells[column.sourceColumn] })) } } : {}),
                     values: columns.map(column => ({ column: column.column, sourceColumn: column.sourceColumn + 1,
                         value: row[column.column], sourceValue: original.cells[column.sourceColumn], unit: column.unit })) };
             });

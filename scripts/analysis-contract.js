@@ -2494,6 +2494,19 @@ function hasTypedProcessingProductChain(summary) {
                 && /^正确命中(?:的)?(?:按键)?延迟作为反应时$/u.test(nextClauses[1] || '')
                 && /^数字回忆用编辑距离计分$/u.test(nextClauses[2] || '')
                 && /^三者再输入贝叶斯(?:多层|层级)模型比较条件差异$/u.test(nextClauses[3] || '')) return true;
+            // The played word-monitoring material leads to recorded target
+            // responses, sensitivity and reaction-time statistical inputs.
+            // Concrete trial measurements matter, not an action-word count.
+            const foreignTrialAttribution = /^(?:(?:本段|这里|下文)?(?:转述|引用|引述|介绍)(?:了|的是)?\s*)?(?:第三方(?:研究)?|(?:其他|外部|另一|别的)(?:团队|作者|研究))(?:的)?[^。；]{0,60}(?:方法|流程|步骤|研究)/u;
+            if (newChainSafe
+                && ![parts[index - 1], first, second].some(part => foreignTrialAttribution.test(normalizeNotice(part)))
+                && /词串并归一化至[^，,。]{1,24}/u.test(first)
+                && /掩蔽经长期平均频谱归一化后设为[^，,。]{1,24}/u.test(first)
+                && /合成[^，,。]{1,40}听音材料供试次播放$/u.test(first)
+                && /^试次先呈现[^，,。]{1,90}供记忆并呈现印刷目标词$/u.test(nextClauses[0] || '')
+                && /^(?:被试|参与者)听词串时听到目标按(?:空格)?键、试后键入所记数字$/u.test(nextClauses[1] || '')
+                && /^击中率与虚报率经Fisher转换相减(?:得|得到)d[′’']$/u.test(nextClauses[2] || '')
+                && /^成功击中反应时用贝叶斯偏态正态与对数正态回归检验$/u.test(nextClauses[3] || '')) return true;
             // Frame features become temporal representations consumed by the
             // acoustic predictor. The same representation must cross the edge.
             if (newChainSafe

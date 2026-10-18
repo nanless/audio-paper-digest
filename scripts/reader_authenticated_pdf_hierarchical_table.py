@@ -26,6 +26,12 @@ def compact(value):
     return re.sub(r'\s+', '', surface(value))
 
 
+def numeric_surface(value):
+    # Normal Reader typography spaces the plus/minus operator. Retain every
+    # digit and decimal place; this permits no precision, unit or value change.
+    return re.sub(r'(?<=\d)\s*±\s*(?=[+−-]?\d)', '±', surface(value))
+
+
 def cx(word):
     return (word[0] + word[2]) / 2
 
@@ -111,7 +117,7 @@ def assign_level(items, leaves):
     return solutions[0]
 
 
-def table_grid(page, caption, document):
+def table_grid(page, caption, document, flat_condition_bands=False):
     cap = caption[:4]
     rules = []
     for drawing in page.get_drawings():
@@ -154,10 +160,33 @@ def table_grid(page, caption, document):
         cells = [[w for w in ws if bounds[c + 1] < cx(w) < bounds[c + 2]] for c in range(width)]
         if all(cells):
             header_rows.append((y, cells))
+    if flat_condition_bands and not header_rows:
+        # PDF words can join adjacent metric headings without whitespace. Split
+        # only at the already closed data-column geometry, retaining every real
+        # glyph and its original word ownership in the complete grid proof.
+        glyphs = complete_glyphs(page, words, [top[0], top[1], top[2], bottom])
+        for y, ws in lines:
+            if y >= first_y:
+                continue
+            chars = [g for g in glyphs if abs((g['bbox'][1] + g['bbox'][3]) / 2 - y) <= 1.25]
+            cells = []
+            for c in range(width):
+                group = [g for g in chars if bounds[c + 1] < (g['bbox'][0] + g['bbox'][2]) / 2 < bounds[c + 2]]
+                if not group:
+                    break
+                group.sort(key=lambda g: g['bbox'][0])
+                cells.append([[min(g['bbox'][0] for g in group), min(g['bbox'][1] for g in group),
+                               max(g['bbox'][2] for g in group), max(g['bbox'][3] for g in group),
+                               ''.join(g['char'] for g in group)]])
+            if len(cells) == width:
+                need(all(sum(1 for c in range(width) if bounds[c + 1] < (g['bbox'][0] + g['bbox'][2]) / 2 < bounds[c + 2]) == 1
+                         for g in chars if (g['bbox'][0] + g['bbox'][2]) / 2 > bounds[1]), 'uncovered_flat_header_glyph')
+                header_rows.append((y, cells))
     need(header_rows, 'complete_leaf_headers_missing')
     leaf_y, leaves = header_rows[-1]
     need(all(not NUMBER.fullmatch(literal(cell)) for cell in leaves), 'leaf_header_is_numeric')
-    need(all(bounds[c + 1] - .1 <= min(w[0] for w in cell) and max(w[2] for w in cell) <= bounds[c + 2] + .1
+    need(all((bounds[c + 1] < cx(cell[0]) < bounds[c + 2]) if flat_condition_bands else
+             (bounds[c + 1] - .1 <= min(w[0] for w in cell) and max(w[2] for w in cell) <= bounds[c + 2] + .1)
              for c, cell in enumerate(leaves)), 'leaf_headers_cross_column')
     parents = raw_header_items(page, top[1], leaf_y, bounds[1], top[2])
     levels = []
@@ -168,7 +197,10 @@ def table_grid(page, caption, document):
             need(all(any(p['startColumn'] <= child['startColumn'] and child['endColumn'] <= p['endColumn']
                          for p in levels[-1]) for child in level), 'crossing_header_levels')
         levels.append(level)
-    need(levels and any(p['endColumn'] - p['startColumn'] > 1 for level in levels for p in level), 'hierarchical_headers_missing')
+    if flat_condition_bands:
+        need(not levels, 'flat_condition_table_has_parent_headers')
+    else:
+        need(levels and any(p['endColumn'] - p['startColumn'] > 1 for level in levels for p in level), 'hierarchical_headers_missing')
     label_header = [w for w in words if cy(w) <= leaf_y + 2 and cx(w) < bounds[1]]
     need(label_header and all(w[2] <= bounds[1] for w in label_header), 'row_label_header_missing_or_overlapping')
     # Every glyph above the body must belong to the label, a leaf or one exact
@@ -200,7 +232,7 @@ def table_grid(page, caption, document):
                                'unitOrigin': origin, 'leafWords': cell})
     identities = [tuple([*c['groups'], compact(c['metric'])]) for c in source_columns]
     need(len(set(identities)) == width, 'duplicate_full_header_identity')
-    source_rows, condition = [], []
+    source_rows, condition, seen_condition_bands = [], [], []
     for y, ws in lines:
         if y <= leaf_y + 2:
             continue
@@ -212,15 +244,29 @@ def table_grid(page, caption, document):
             after = [r for r in full_rules if r > y]
             need(before and after, 'condition_band_unbounded')
             a, b = max(before), min(after)
-            need(not any(a < dy < b for dy, _, _ in data), 'unparsed_body_glyphs')
-            need(sum(1 for yy, _ in lines if a < yy < b) == 1, 'condition_band_not_single_line')
-            need(re.match(r'^(?:Trained|Training|Evaluated|Evaluation|Tested|Testing|Dataset|Condition|Setting|Protocol)\b', literal(ws)),
-                 'condition_band_not_explicit')
-            need(abs((min(w[0] for w in ws) + max(w[2] for w in ws)) / 2 - (top[0] + top[2]) / 2) <= 1,
-                 'condition_band_not_centred')
+            if flat_condition_bands:
+                band_data = [(dy, values) for dy, _, values in data if a < dy < b]
+                need(band_data and all(y < dy for dy, _ in band_data), 'condition_does_not_precede_complete_band')
+                need(sum(1 for yy, values in lines if a < yy < b and not numeric_row(values)) == 1,
+                     'condition_band_unparsed_glyphs')
+                need(re.fullmatch(r'(?:Latent dimension(?:ality)?|Model capacity|Refinement (?:strategy|setting))\s+\((?:Dim|D)(?:=\d+)?\)', literal(ws)),
+                     'dimension_condition_band_not_explicit')
+                need(abs(min(w[0] for w in ws) - min(w[0] for w in label_header)) <= 1,
+                     'condition_band_label_alignment_changed')
+                need(not any(previous['top'] == a for previous in seen_condition_bands), 'condition_band_repeated')
+            else:
+                need(not any(a < dy < b for dy, _, _ in data), 'unparsed_body_glyphs')
+                need(sum(1 for yy, _ in lines if a < yy < b) == 1, 'condition_band_not_single_line')
+                need(re.match(r'^(?:Trained|Training|Evaluated|Evaluation|Tested|Testing|Dataset|Condition|Setting|Protocol)\b', literal(ws)),
+                     'condition_band_not_explicit')
+                need(abs((min(w[0] for w in ws) + max(w[2] for w in ws)) / 2 - (top[0] + top[2]) / 2) <= 1,
+                     'condition_band_not_centred')
             condition = [{'text': literal(ws), 'words': ws, 'top': a, 'bottom': b}]
+            seen_condition_bands.append(condition[0])
             continue
         label, values = parsed
+        if flat_condition_bands:
+            need(condition and condition[0]['top'] < y < condition[0]['bottom'], 'row_has_no_complete_condition_band')
         need(all(bounds[c + 1] < cx(w) < bounds[c + 2] for c, w in enumerate(values)), 'row_column_geometry_changed')
         row_text = literal(ws)
         row_proof = quote_evidence(document, row_text)
@@ -228,10 +274,13 @@ def table_grid(page, caption, document):
                             'labelWords': label, 'cells': [{'text': w[4], 'bbox': w[:4]} for w in values],
                             'quoteEvidence': row_proof})
     need(len(source_rows) == len(data), 'incomplete_source_rows')
+    if flat_condition_bands:
+        need(len(seen_condition_bands) >= 2, 'flat_table_condition_bands_missing')
     row_ids = [(tuple(p['text'] for p in row['conditionPath']), row['rowLabel']) for row in source_rows]
     need(len(set(row_ids)) == len(row_ids), 'duplicate_row_within_condition')
     box = [top[0], top[1], top[2], bottom]
     return {'page': page.number + 1, 'bbox': box, 'captionEvidence': caption_proof,
+            **({'headerKind': 'flat-explicit-dimension-condition-bands-v1'} if flat_condition_bands else {}),
             'columnBoundaries': bounds, 'fullHorizontalRules': full_rules, 'levels': levels,
             'sourceColumns': source_columns, 'sourceRows': source_rows,
             'labelHeaderWords': label_header, 'wordBoxCount': len(words), 'words': words,
@@ -264,7 +313,7 @@ def map_view(grid, table, quotes, document):
             if compact(row[0]) != compact(original['rowLabel']) or not any(p['rawStartCodePoint'] <= q['rawStartCodePoint']
                     and q['rawEndCodePoint'] <= p['rawEndCodePoint'] for p in quote_proofs):
                 continue
-            if all(surface(row[i]) == original['cells'][c['sourceColumn'] - 1]['text'] for i, c in all_columns):
+            if all(numeric_surface(row[i]) == numeric_surface(original['cells'][c['sourceColumn'] - 1]['text']) for i, c in all_columns):
                 matches.append(original)
         need(len(matches) == 1, 'rendered_row_not_uniquely_quoted_complete_original')
         original = matches[0]
@@ -297,7 +346,12 @@ def prove_pdf_bytes(raw, table, quotes):
                     columns, rows = map_view(grid, table, quotes, document)
                     candidates.append({'grid': grid, 'columns': columns, 'rows': rows})
                 except ValueError:
-                    continue
+                    try:
+                        grid = table_grid(page, block, document, flat_condition_bands=True)
+                        columns, rows = map_view(grid, table, quotes, document)
+                        candidates.append({'grid': grid, 'columns': columns, 'rows': rows})
+                    except ValueError:
+                        continue
     need(len(candidates) == 1, 'complete_hierarchical_table_not_unique:' + str(len(candidates)))
     body = {'contract': CONTRACT, 'pdfSha256': sha(raw), 'rawFullTextSha256': document['rawFullTextSha256'],
             'renderedTableSha256': sha(table['markdown'].encode()), 'extraction': document['extraction'], **candidates[0]}

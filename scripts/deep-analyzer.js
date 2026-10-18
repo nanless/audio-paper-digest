@@ -4139,7 +4139,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // 不是把三个条件断言为已经满足。仅豁免概念列举的字节范围；其后
         // 「本文权重已经公开」仍单独判断，不能用前面的限定吞掉真实声明。
         const conceptProperties = [
-            '代码(?:开源|公开|可用|可运行|可访问)',
+            '代码(?:开源|公开|可用|可运行|可访问|可达)',
             '(?:模型)?权重(?:可下载|下载|可获取|公开|可用)',
             '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可部署|可用)'
         ];
@@ -4154,6 +4154,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             { pattern: new RegExp('(?:(?:复现(?:前|时)?(?:要|应|需))|并)?(?:把|将)' + conceptList
                 + '\\s*(?:([三两二32])\\s*件事)?\\s*(?:分开|分别)(?:核实|核对|确认|验证|判断)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*回事', 'gu'), listGroup: 1, countGroup: 2, countedMatters: true },
+            { pattern: new RegExp('复现(?:时)?(?:要|应|需)(?:把|将)' + conceptList
+                + '\\s*当作\\s*([三两二32])\\s*件(?:相互)?独立的事(?:分别|逐项)(?:确认|核实|核对|验证)', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp(conceptList + '\\s*(?:需要|仍需)(?:另行|分别|逐项)(?:确认|核对)', 'gu'), listGroup: 1, closedPending: true }
         ];
         for (const { pattern, listGroup, countGroup, closedPending, countedMatters } of countedDistinctions) for (const span of value.matchAll(pattern)) {
@@ -4465,6 +4467,26 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const systemDisclaimer = /(?:但|不过|然而)[^。！？!?；;]{0,96}(?:不是|不等于|不能等同于|不代表)[^。！？!?；;]{0,48}(?:完整系统|端到端系统)[^。！？!?；;]{0,24}(?:保证|可运行|可用)/.test(value);
         return verifiedThirdPartyLink && systemDisclaimer;
     };
+    const isVerifiedPostposedThirdPartyCodeAttribution = (value, type, matchIndex, matchEnd) => {
+        if (type !== 'code' || !availableTypes.has('third_party')) return false;
+        // Only this explicitly verified third-party link predicate is covered.
+        // An adjacent author's own release or a quoted/revoked attribution is
+        // still checked independently; no whole-clause availability exemption.
+        const pattern = /(?:代码|源代码)(?:仓库|链接|地址)(?:经|已经|已)?(?:核验|验证|确认)(?:为|是)第三方(?:资源)?(?:当前)?可用/gu;
+        for (const span of value.matchAll(pattern)) {
+            if (matchIndex < span.index || matchEnd > span.index + span[0].length) continue;
+            const before = value.slice(0, span.index);
+            const prefix = before.split(/[。！？!?；;，,]/u).at(-1);
+            const suffix = value.slice(span.index + span[0].length).replace(/^[\s，,]+/u, '');
+            const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+                before.lastIndexOf(open) > before.lastIndexOf(close))
+                || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
+            if (quoted || /(?:作者|本文|本论文|本研究|本工作|我们|否认|否定|并非|不是)/u.test(prefix)
+                || /^(?:(?:的|这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|归属)(?:本身|其实|实际)?(?:是|为)?)?(?:错误|不属实|不正确|不准确|不成立)|^(?:的|这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|归属)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)/u.test(suffix)) continue;
+            return true;
+        }
+        return false;
+    };
     const isBroaderThirdPartyCodeAttribution = (segment, type) => {
         if (type !== 'code' || !availableTypes.has('third_party')) return false;
         if (/(?:本文|本研究|本工作|该论文|论文作者|作者团队|项目团队)[^。！？!?；;，,]{0,40}(?:代码|源代码|代码仓库|仓库)/.test(segment)) {
@@ -4651,6 +4673,10 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             + '的?(?:陈述|声明|证据|说明|表述)', 'gu');
         const hypotheticalDenial = /(?<introduction>(?:不能|不应|不可|不得)(?:把|将)[^。！？!?；;，,]{1,48}(?:建立在|寄托于|依赖于))(?<assumption>[^。！？!?；;，,]{1,64})的假设(?:上|之上)/gu;
         const missingReleaseEvidence = /(?:没有|尚无|并无|不存在)[^。！？!?；;，,]{0,48}(?:作者资源|资源|记录|链接|来源)[^。！？!?；;，,]{0,24}(?:可作|作为|支撑|证明)[^。！？!?；;，,]{1,48}(?:已公开|已开源|可用|可下载|可获取)的证据/gu;
+        const missingVerifiedAuthorRelease = new RegExp('(?:没有|尚无|并无|不存在)(?:可验证|可核验)的?'
+            + '(?:作者|本文|本论文|本研究|本工作)的?' + resource
+            + '(?:(?:' + connector + ')?' + resource + '){0,4}'
+            + '(?:可|能)(?:写|称|记)(?:为|作|成)(?:已公开|已开源|当前可用)', 'gu');
         const coordinatedDenial = new RegExp('(' + resource + '(?:' + connector + resource + '){1,4})'
             + released + '([二两三四五2-5])(?:件事|项主张|项声明)(?:都|均|皆)不能默认成立', 'gu');
         const qualifiedLinkDenial = new RegExp('(?:本文|本论文|论文|作者(?:团队)?)?(?:尚未|并未|未|没有)'
@@ -4675,6 +4701,11 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         };
         for (const pattern of [qualifiedLinkDenial, forbiddenDescription]) for (const span of value.matchAll(pattern)) {
             if (contains(span) && safeDenialIntroduction(span)) return true;
+        }
+        for (const span of value.matchAll(missingVerifiedAuthorRelease)) {
+            const suffix = value.slice(span.index + span[0].length).replace(/^[\s，,]+/u, '');
+            if (contains(span) && safeDenialIntroduction(span)
+                && !/^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|否定|声明)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)|^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|否定|声明)(?:并不|从未)成立/u.test(suffix)) return true;
         }
         for (const span of value.matchAll(hypotheticalDenial)) {
             const start = span.index + span.groups.introduction.length;
@@ -5119,6 +5150,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 || isDatasetRepositoryStatusSummary(value, type)
                 || isVerifiedDependencyCodeRepositoryAttribution(segment, type)
                 || isVerifiedThirdPartyCodeLinkDisclaimer(value, type)
+                || isVerifiedPostposedThirdPartyCodeAttribution(value, type, match.index, match.index + match[0].length)
                 || isBroaderThirdPartyCodeAttribution(segment, type)
                 || isThirdPartyNonPaperCodeDisclaimer(value, type)
                 || isNamedDependencyCodeRepositoryAttribution(segment, type)
