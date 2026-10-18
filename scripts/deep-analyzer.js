@@ -7800,6 +7800,8 @@ async function withApiReaderGenerationSlot(callback) {
     }
 }
 
+const READER_SAVED_REQUEST_INPUT_PROOF = Symbol('reader-saved-request-input-proof');
+
 async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, options = {}) {
     return withApiReaderGenerationSlot(() => generateApiReaderArticleDetailedUnlocked(
         paper, analysis, sourceEvidence, options
@@ -8800,7 +8802,19 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     // 不复用旧像素事实；新实现已能接受的候选仍进入下方原下载及完整校验。
     const operatorCorrection = require('./lib/daily-reader-operator-correction').current(paper,identity)
         || require('./lib/conference-reader-operator-correction').current(paper, identity);
-    const priorCandidate = operatorCorrection?.payload || repair.loadFailedCandidate(candidateDirectory, identity);
+    const inputProofOnly = options[READER_SAVED_REQUEST_INPUT_PROOF] === true;
+    if (inputProofOnly) {
+        let savedNames = [];
+        try { savedNames = fs.readdirSync(candidateDirectory); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (!conference.getConferenceAnalysisContext() || !options.readerReviewParentSeedHandle
+            || contentMode !== READER_SIGNED_REVISION_CONTENT_MODE
+            || options.signedRevisionMinimalDisplay !== true || figureEvidenceEntries.length
+            || supplementaryPreflight.ready.length || operatorCorrection || savedNames.length) {
+            throw new Error('已保存首轮签名请求的只读输入证明不接受图片、候选或重试窗口');
+        }
+    }
+    const priorCandidate = inputProofOnly ? null : operatorCorrection?.payload || repair.loadFailedCandidate(candidateDirectory, identity);
     if (priorCandidate) {
         const retryApi = require('./lib/explicit-reader-retry-round');
         const oldCandidate = candidate; const oldIssues = currentIssues;
@@ -8886,7 +8900,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const modelImagePreflightEvidenceSha256 = repair.hashDraft(ephemeralImageEvidence);
     const recoveryOptions = useEphemeralFigureEvidence
         ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
-    recovered = operatorCorrection?.payload || require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
+    recovered = inputProofOnly ? null : operatorCorrection?.payload || require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, { ...recoveryOptions,
             allowNewImplementationAllowance: false,
             ...(options.savedReaderInputContinuity ? { savedReaderInputContinuity: options.savedReaderInputContinuity, paper } : {}),
@@ -8899,7 +8913,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         throw Object.assign(new Error('原Reader来源模式恢复缺少同输入身份的真实失败候选，禁止首次生成或重置旧次数。'),
             { code: 'READER_SOURCE_RECOVERY_CANDIDATE_MISSING', retryable: false });
     }
-    if (!operatorCorrection) recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
+    if (!inputProofOnly && !operatorCorrection) recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
         candidateDirectory, identity, recovered, paper);
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     candidate = recovered?.draft || start.signedRecoveryDraft || null;
@@ -9020,7 +9034,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     }
     const explicitRetry = require('./lib/explicit-reader-retry-round');
     {
-        const newRound = explicitRetry.beginExplicitRound(candidateDirectory, identity, recovered, paper);
+        const newRound = inputProofOnly ? null : explicitRetry.beginExplicitRound(candidateDirectory, identity, recovered, paper);
         if (newRound) {
             recovered = newRound;
             candidate = recovered.draft || null;
@@ -9269,6 +9283,22 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         let raw;
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
         const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
+        if (inputProofOnly) {
+            if (attempt !== 1 || repairContext || candidate || recovered || explicitRound || selectedInputs.length
+                || completedAttempts || fullAttempts || transportFailures) {
+                throw new Error('已保存签名请求输入只能重放真实首次零图全文');
+            }
+            const messages = buildReaderRequestMessages(prompt, visibilityNoticeFor(selectedInputs, null), []);
+            const config = { ...DEEP_CONFIG, temperature: start.temperature,
+                usageContext: { paperId: getPaperArxivId(paper), stage: 'apiReaderArticle', contentAttempt: 1 } };
+            const protocol = detectApiType(config.endpoint, config.model);
+            const body = buildConfiguredModelRequestBody(sanitizeModelMessages(messages), API_READER_MAX_TOKENS, config, protocol);
+            return { contract: 'conference-saved-signed-reader-request-input-v1',
+                inputSha256: repair.shaText(JSON.stringify(body)), identity,
+                evidenceSha256: repair.shaText(sourceEvidence), ...summarizeModelInput(messages),
+                model: config.model, protocol, maxTokens: API_READER_MAX_TOKENS, temperature: start.temperature,
+                modelRequests: 0 };
+        }
         const grantedResponseLease = grantedReaderBudget.reserveReaderResponse(
             paper, identity, repairContext ? 'patch' : 'full', attempt);
         try {
@@ -9287,11 +9317,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const isolated = await explicitRetry.withPhysicalBudget(explicitRound, paper, () => requestReaderModelWithImageIsolation({ requestModel,
                 buildMessages: inputs => {
                     const visibilityNotice = visibilityNoticeFor(inputs, repairContext);
-                    const messages = [{ role: 'user', content: [
-                        { type: 'text', text: prompt },
-                        { type: 'text', text: visibilityNotice },
-                        ...inputs.flatMap(image => blocksForImage(image, repairContext))
-                    ] }];
+                    const messages = buildReaderRequestMessages(prompt, visibilityNotice,
+                        inputs.flatMap(image => blocksForImage(image, repairContext)));
                     if (repairContext) repairDiagnostic = require('./lib/reader-request-diagnostics')
                         .beginReaderRepairDiagnostic(candidateDirectory, {
                             identity, contentAttempt: attempt, prompt, visibilityNotice,
@@ -9729,6 +9756,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         ...(revisionSeed?.metadata || {})
     });
     const generatorOptions = {
+            ...(options[READER_SAVED_REQUEST_INPUT_PROOF] ? { [READER_SAVED_REQUEST_INPUT_PROOF]: true } : {}),
             reviewFeedback,
             ...(requireExistingSourceCandidate ? { requireExistingSourceCandidate: true } : {}),
             naturalResourceProse,
@@ -9796,6 +9824,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const generated = await (options.preserveReaderUpstream === true
         ? require('./lib/analysis-stop-control').withModelRequestsForbidden(generateReader)
         : generateReader());
+    if (options[READER_SAVED_REQUEST_INPUT_PROOF] === true) return { ...generated, currentInputPreparationFingerprint: fingerprint,
+        preparerImplementationSha256: promptTemplateSha256('scripts/deep-analyzer.js') };
     const finalized = await finalizeApiReaderRefresh(paper, sourceDetails, generated, {
         ...options,
         ...(revisionSeed ? {
@@ -9836,6 +9866,24 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     });
     finalizeDeferredDailyReaderImages(finalized, sourceDetails);
     return transferDeferredReaderCandidate(generated, finalized);
+}
+
+async function prepareConferenceReaderSavedRequestInput(paper, sourceDetails,
+    { reviewFeedback, revisionSeed, readerReviewParentSeedHandle } = {}) {
+    const conference = require('./lib/conference-analysis-context');
+    if (!conference.getConferenceAnalysisContext() || !readerReviewParentSeedHandle || !revisionSeed) {
+        throw new Error('已保存请求输入证明需要真实会议来源及原父稿 seed 能力');
+    }
+    return require('./lib/analysis-stop-control').withModelRequestsForbidden(() =>
+        refreshApiReaderArticleFromSource(paper, sourceDetails, {
+            [READER_SAVED_REQUEST_INPUT_PROOF]: true, reviewFeedback, revisionSeed,
+            readerReviewParentSeedHandle, signedRevisionMinimalDisplay: true
+        }));
+}
+
+function buildReaderRequestMessages(prompt, visibilityNotice, imageBlocks) {
+    return [{ role: 'user', content: [{ type: 'text', text: prompt },
+        { type: 'text', text: visibilityNotice }, ...imageBlocks] }];
 }
 
 // A failed outer save may leave an accepted Reader in a partial conference
@@ -13586,10 +13634,9 @@ function getRemainingTimeoutMs(deadline, now = Date.now()) {
 /**
  * 单次 API 调用（内部方法）
  */
-async function _callModelOnce(messages, maxTokens, config, budget, apiType, timeoutMs) {
-    const apiUrl = buildApiUrl(apiType, config.endpoint);
+function buildConfiguredModelRequestBody(messages, maxTokens, config, apiType) {
     const temperature = Number.isFinite(config.temperature) ? config.temperature : API_TEMPERATURE;
-    const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
+    return buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
         { usageContext: config.usageContext,
             auxiliaryThinkingMode: resolveAuxiliaryRequestPolicy(config.usageContext?.stage, config)?.thinkingMode,
             readerResponseFormat: ['apiReaderArticle', 'apiReaderRepair'].includes(config.usageContext?.stage)
@@ -13600,6 +13647,12 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
                 ? config.primaryThinkingMode : undefined,
             repairThinkingMode: ['coreSummaryRepair', 'structureRepair', 'tableRepair']
                 .includes(config.usageContext?.stage) ? config.repairThinkingMode : undefined });
+}
+
+async function _callModelOnce(messages, maxTokens, config, budget, apiType, timeoutMs) {
+    const apiUrl = buildApiUrl(apiType, config.endpoint);
+    const temperature = Number.isFinite(config.temperature) ? config.temperature : API_TEMPERATURE;
+    const bodyObj = buildConfiguredModelRequestBody(messages, maxTokens, config, apiType);
     if (bodyObj.thinking?.type) {
         const requestLabel = ['coreSummaryRepair', 'structureRepair', 'tableRepair'].includes(config.usageContext?.stage)
             ? '局部修复' : '长文';
@@ -20509,6 +20562,7 @@ module.exports = {
     refreshApiReaderArticleFromSource,
     finalizeDeferredDailyReaderImages,
     inspectSavedConferenceReaderCompletion,
+    prepareConferenceReaderSavedRequestInput,
     hasReviewedReaderFactLocalSeed,
     buildCoreSummaryBindingBody,
     finalizeApiReaderRefresh,

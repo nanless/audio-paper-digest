@@ -7,6 +7,7 @@ const evidence = require('./conference-reader-review-maintenance-evidence');
 const { sha, stable } = evidence;
 const opaque = new WeakMap();
 const windowHandles = new WeakMap();
+const savedCompletionHandles = new WeakMap();
 const publicationHistoryHandles = new WeakMap();
 const parentReaderSeedHandles = new WeakMap();
 const evidenceCache = new Map();
@@ -85,6 +86,183 @@ function protectedScience(paper) {
     delete stages.apiReaderArticle;delete stages.imageSupplement;delete stages.openSourceScan;delete checkpoints.apiReaderArticle;
     return {analysis:paper.analysis,analysisCheckpoint:paper.analysisCheckpoint,parsed:paper.parsed,
         scoringAudit:paper.scoringAudit,sourceSha256:paper.sourceSha256,stages,checkpoints};
+}
+// A private read-only view of the one neutral resource projection. This does
+// not complete/save a Reader or authenticate model output; the caller must still
+// bind real paid issuance and pass all normal source/Reader/whole-paper gates.
+function neutralReaderUpstreamView(parent,paper,resources) {
+    if(same(protectedScience(paper),protectedScience(parent)))return {paper:structuredClone(paper),projection:null};
+    check(same(resources,parent.apiReaderResources)&&same(resources,paper.apiReaderResources),'saved neutral resource identity changed');
+    check(same(parent.analysisStageCheckpoints,paper.analysisStageCheckpoints)
+        &&parent.analysisCheckpoint===paper.analysisCheckpoint,'saved neutral projection changed checkpoints');
+    const before=sha(parent.analysis),expected=structuredClone(parent);
+    const score=expected.analysisManifest?.stages?.scoringAudit;
+    check(score?.status==='complete'&&score.outputAnalysisSha256===before,'saved neutral projection requires exact direct scoring output');
+    expected.analysis=require('../deep-analyzer').applyApiReaderResourceAvailability(parent.analysis,resources);
+    const after=sha(expected.analysis);
+    check(before!==after,'saved upstream difference is not a resource projection');
+    expected.parsed=require('../utils').parseAnalysis(expected.analysis);
+    score.outputAnalysisSha256=after;
+    score.resourceAvailabilitySynchronizations=[...(score.resourceAvailabilitySynchronizations||[]),{
+        contract:'reader-resource-availability-sync-v1',executionKind:'deterministic_resource_projection',
+        sourceSha256:parent.sourceSha256,resourceIdentitySha256:resources.identitySha256,
+        beforeAnalysisSha256:before,afterAnalysisSha256:after,originalScoringOutputAnalysisSha256:before,
+        checkpointChanges:[],newApiRequests:0}];
+    check(same(protectedScience(expected),protectedScience(paper)),'saved upstream is not exact neutral resource projection');
+    const restored=structuredClone(paper);
+    restored.analysis=parent.analysis;restored.parsed=structuredClone(parent.parsed);
+    restored.analysisManifest.stages.scoringAudit=structuredClone(parent.analysisManifest.stages.scoringAudit);
+    check(same(protectedScience(restored),protectedScience(parent)),'saved neutral private view failed exact parent protection');
+    return {paper:restored,projection:{contract:'conference-reader-neutral-resource-upstream-view-v1',
+        beforeAnalysisSha256:after,afterAnalysisSha256:before,
+        savedProtectedScienceSha256:stable(protectedScience(paper)),
+        parentProtectedScienceSha256:stable(protectedScience(parent)),resourceIdentitySha256:resources.identitySha256}};
+}
+function replaySavedNeutralReaderUpstream(loaded) {
+    const source=require('./conference-analysis-context').getConferenceAnalysisContext();
+    check(source?.executionId===loaded.run.executionId&&source.paperId===loaded.run.paperId
+        &&source.executionDir===loaded.directory&&source.readerPdfSourceHandle
+        &&sha(source.sourceDetails.text)===loaded.analysis.papers[0].sourceSha256,'saved Reader requires actual current PDF source scope');
+    check(loaded.analysis.status==='partial'&&loaded.revision.mode==='reader-only'
+        &&loaded.revision.readerReviewMaintenance,'saved Reader requires actual partial maintenance revision');
+    const current=read(path.join(loaded.directory,'analysis.json'));
+    check(current.sha256===loaded.analysisFileSha256&&same(current.value,loaded.analysis),'saved Reader raw partial CAS changed');
+    const bound=replayRevisionFeedback(loaded),paper=loaded.analysis.papers[0],stage=paper.analysisManifest?.stages?.apiReaderArticle;
+    check(stage?.status==='complete'&&stage.contentMode==='reader-source-signed-revision-v1'
+        &&stage.reviewFeedbackSha256===bound.locator.reviewFeedbackSha256,'saved signed Reader feedback stage changed');
+    const result=neutralReaderUpstreamView(loaded.parent.analysis.papers[0],paper,loaded.resourcePreflight);
+    if(result.projection) {
+        const last=loaded.analysis.readerRevisionProgress?.failures?.at(-1);
+        check(last?.code==='CONFERENCE_READER_REVIEW_MAINTENANCE_INTEGRITY'
+            &&last.message==='Text maintenance: protected scientific upstream changed','saved neutral view requires the actual protected-upstream failure');
+        result.projection={...result.projection,executionId:loaded.run.executionId,
+            originalPartialAnalysisFileSha256:loaded.analysisFileSha256,parentAnalysisFileSha256:loaded.parent.analysisFileSha256,
+            sourceFileSha256:loaded.sourceFileSha256,resourcePreflightFileSha256:loaded.revision.resourcePreflightFileSha256,
+            savedReaderStageSha256:stable(stage),newApiRequests:0};
+    }
+    return result;
+}
+
+function savedReaderUsageProof(loaded,native,stage) {
+    const root=require('../config').FILES.llmUsageDir,events=[];
+    const since=Date.parse(loaded.run.createdAt),until=Date.parse(stage.refreshedAt);
+    check(Number.isFinite(since)&&Number.isFinite(until)&&until>=since,'saved Reader issue interval');
+    for(const name of fs.readdirSync(root)) {
+        if(!/^[a-f0-9-]{36}\.json$/u.test(name))continue;
+        let value;try{value=JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));}catch{continue;}
+        if(value.paperId!==loaded.run.paperId||value.stage!=='apiReaderArticle'
+            ||Date.parse(value.at)<since||Date.parse(value.at)>until)continue;
+        const record=read(path.join(root,name));check(same(record.value,value),'usage changed during read');
+        events.push({name,...record});
+    }
+    const requests=events.filter(({value:v})=>v.kind==='request'&&v.inputSha256===native.inputSha256);
+    check(requests.length===1,'saved Reader needs unique actual request for native input');
+    const request=requests[0],r=request.value;
+    check(r.version==='llm-usage-v1'&&r.outcome==='completed'&&r.transportStarted===true&&r.statusCode===200
+        &&r.errorCode===null&&r.runId===null&&r.unitId===null&&r.contentAttempt===1&&r.transportAttempt===1
+        &&r.model===stage.model&&r.protocol===stage.protocol&&SHA.test(r.outputTextSha256),'saved Reader request completion/consumption binding');
+    const starts=events.filter(({value:v})=>v.kind==='request_started'&&v.eventId===r.eventId);
+    check(starts.length===1&&starts[0].value.inputSha256===r.inputSha256
+        &&starts[0].value.model===r.model&&starts[0].value.protocol===r.protocol
+        &&starts[0].value.contentAttempt===1&&starts[0].value.transportAttempt===1
+        &&starts[0].value.runId===null&&starts[0].value.unitId===null
+        &&Date.parse(starts[0].value.at)<=Date.parse(r.at),'saved Reader original request-start binding');
+    const dispositions=events.filter(({value:v})=>v.kind==='disposition'&&v.outputTextSha256===r.outputTextSha256);
+    check(dispositions.length===1&&dispositions[0].value.disposition==='accepted'
+        &&dispositions[0].value.contentAttempt===1&&dispositions[0].value.runId===null
+        &&dispositions[0].value.unitId===null&&Date.parse(dispositions[0].value.at)>=Date.parse(r.at),
+        'saved Reader unique accepted disposition');
+    return {inputSha256:r.inputSha256,outputTextSha256:r.outputTextSha256,contentResponses:1,fullResponses:1,
+        records:[starts[0],request,dispositions[0]].map(x=>({name:x.name,sha256:x.sha256,kind:x.value.kind,eventId:x.value.eventId}))};
+}
+async function inspectSavedMaintenanceReaderCompletion(loaded) {
+    const last=loaded.analysis.readerRevisionProgress?.failures?.at(-1),stage=loaded.analysis.papers[0].analysisManifest?.stages?.apiReaderArticle;
+    if(!loaded.readerReview||last?.code!=='CONFERENCE_READER_REVIEW_MAINTENANCE_INTEGRITY'
+        ||last.message!=='Text maintenance: protected scientific upstream changed'
+        ||stage?.status!=='complete'||stage.contentMode!=='reader-source-signed-revision-v1')return null;
+    return require('./analysis-stop-control').withModelRequestsForbidden(async()=>{
+        const view=replaySavedNeutralReaderUpstream(loaded),bound=loaded.readerReview;
+        check(view.projection&&stage.attempts===1&&stage.fullAttempts===1&&(stage.transportFailures||0)===0
+            &&loaded.analysis.readerRevisionProgress.attempts===1,'saved first successful signed Reader only');
+        check(stable(stage)!==stable(loaded.parent.analysis.papers[0].analysisManifest?.stages?.apiReaderArticle),
+            'saved Reader must be this new feedback result');
+        for(const [key,value] of Object.entries(bound.revisionSeed.metadata))check(same(stage[key],value),'saved Reader original seed metadata '+key);
+        const input=structuredClone(loaded.parent.analysis.papers[0]);input.apiReaderResources=structuredClone(loaded.resourcePreflight);
+        const native=await require('../deep-analyzer').prepareConferenceReaderSavedRequestInput(input,loaded.source.sourceDetails,{
+            reviewFeedback:bound.modelFeedback,revisionSeed:bound.revisionSeed,readerReviewParentSeedHandle:bound.parentSeedHandle});
+        check(native.contract==='conference-saved-signed-reader-request-input-v1'&&native.images===0&&native.modelRequests===0
+            &&native.evidenceSha256===stage.evidenceSha256
+            &&native.model===stage.model&&native.protocol===stage.protocol&&native.maxTokens===stage.maxTokens
+            &&native.temperature===stage.temperature,'saved Reader actual native request/stage identity');
+        const identity=native.identity;
+        check(identity.paperId===loaded.run.paperId&&identity.sourceSha256===view.paper.sourceSha256
+            &&identity.contentMode===stage.contentMode&&identity.promptSha256===stage.promptTemplateSha256
+            &&identity.repairPromptSha256===stage.repairPromptTemplateSha256
+            &&identity.signedRevisionDisplayContract===stage.signedRevisionDisplayContract
+            &&identity.signedRevisionDisplaySha256===stage.signedRevisionDisplaySha256,'saved Reader source/prompt/display binding');
+        const usage=savedReaderUsageProof(loaded,native,stage),engine=require('../analysis-engine');
+        assertReaderOutput(loaded,view.paper,loaded.parent.analysis.papers[0]);
+        const rules=require('./conference-postprocess').readOriginalTagProof(view.paper).rules;
+        check(engine.hasValidApiReaderV3Records(view.paper)
+            &&engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(view.paper,{tagRules:rules}),
+            'saved Reader requires full normal Reader and whole-paper qualification');
+        const beforeNames=['analysis.json','run.json','source.json','reader-revision.json','reader-resource-preflight.json','review-reader-seed.json'];
+        const beforeFiles=beforeNames.map(name=>({name,...read(path.join(loaded.directory,name))}));
+        check(beforeFiles[0].sha256===loaded.analysisFileSha256,'saved Reader final original partial CAS');
+        const proof={contract:'conference-saved-maintenance-reader-completion-v1',executionId:loaded.run.executionId,
+            paperId:loaded.run.paperId,originalPartialAnalysisFileSha256:loaded.analysisFileSha256,
+            parentAnalysisFileSha256:loaded.parent.analysisFileSha256,parentRunFileSha256:loaded.parent.runFileSha256,
+            sourceFileSha256:loaded.sourceFileSha256,preflightFileSha256:loaded.revision.resourcePreflightFileSha256,
+            projection:view.projection,readerStageSha256:stable(stage),restoredPaperSha256:stable(view.paper),
+            nativeRequest:{inputSha256:native.inputSha256,stageFingerprint:stage.fingerprint,
+                currentInputPreparationFingerprint:native.currentInputPreparationFingerprint,
+                preparerImplementationSha256:native.preparerImplementationSha256,
+                evidenceSha256:native.evidenceSha256,promptSha256:identity.promptSha256,repairPromptSha256:identity.repairPromptSha256},
+            usage,beforeFiles:beforeFiles.map(x=>({name:x.name,sha256:x.sha256})),newApiRequests:0};
+        const handle=Object.freeze({});savedCompletionHandles.set(handle,{proof,paper:structuredClone(view.paper),beforeFiles,loaded});
+        return {paper:view.paper,proof,handle};
+    });
+}
+function archiveSavedMaintenanceReaderCompletion(loaded,handle) {
+    const saved=savedCompletionHandles.get(handle);check(saved&&saved.loaded.directory===loaded.directory
+        &&saved.proof.originalPartialAnalysisFileSha256===loaded.analysisFileSha256,'opaque saved completion handle required');
+    for(const file of saved.beforeFiles)check(read(path.join(loaded.directory,file.name)).sha256===file.sha256,'saved completion original CAS changed');
+    for(const row of saved.proof.usage.records)check(read(path.join(require('../config').FILES.llmUsageDir,row.name)).sha256===row.sha256,'saved completion usage changed');
+    const directory=path.join(loaded.directory,'saved-reader-stage-recovery',loaded.analysisFileSha256);
+    const immutable=(file,bytes)=>{if(fs.existsSync(file))check(same(read(file).bytes,bytes),'immutable saved completion archive differs');else adapter().writeBytesAtomic(file,bytes);};
+    for(const record of saved.beforeFiles)immutable(path.join(directory,record.name),record.bytes);
+    const receipt={...saved.proof,receiptSha256:stable(saved.proof)};
+    immutable(path.join(directory,'receipt.json'),Buffer.from(JSON.stringify(receipt,null,2)+'\n'));
+    return receipt;
+}
+function assertSavedMaintenanceReaderRecovery(loaded,paper) {
+    const receipt=loaded.analysis.readerSavedStageRecovery;if(!receipt)return;
+    self(receipt,'receiptSha256');check(receipt.contract==='conference-saved-maintenance-reader-completion-v1'
+        &&receipt.executionId===loaded.run.executionId&&receipt.paperId===loaded.run.paperId
+        &&receipt.parentAnalysisFileSha256===loaded.parent.analysisFileSha256
+        &&receipt.parentRunFileSha256===loaded.parent.runFileSha256&&receipt.sourceFileSha256===loaded.sourceFileSha256
+        &&receipt.preflightFileSha256===loaded.revision.resourcePreflightFileSha256&&receipt.newApiRequests===0
+        &&SHA.test(receipt.originalPartialAnalysisFileSha256),'saved completion receipt source/CAS');
+    const directory=path.join(loaded.directory,'saved-reader-stage-recovery',receipt.originalPartialAnalysisFileSha256);
+    check(same(read(path.join(directory,'receipt.json')).value,receipt),'saved completion actual immutable receipt');
+    check(same(receipt.beforeFiles.map(x=>x.name),['analysis.json','run.json','source.json','reader-revision.json','reader-resource-preflight.json','review-reader-seed.json']),
+        'saved completion exact before package');
+    const records=Object.fromEntries(receipt.beforeFiles.map(row=>{const file=read(path.join(directory,row.name));check(file.sha256===row.sha256,'saved completion before package SHA');return [row.name,file];}));
+    check(records['analysis.json'].sha256===receipt.originalPartialAnalysisFileSha256
+        &&records['source.json'].sha256===loaded.sourceFileSha256
+        &&same(records['reader-revision.json'].value,loaded.revision),'saved completion original source/revision');
+    const before=records['analysis.json'].value,view=neutralReaderUpstreamView(loaded.parent.analysis.papers[0],before.papers[0],loaded.resourcePreflight);
+    check(before.status==='partial'&&same(view.paper,paper)&&stable(paper)===receipt.restoredPaperSha256
+        &&stable(paper.analysisManifest.stages.apiReaderArticle)===receipt.readerStageSha256
+        &&paper.analysisManifest.stages.apiReaderArticle.fingerprint===receipt.nativeRequest.stageFingerprint
+        &&same(before.readerRevisionProgress,loaded.analysis.readerRevisionProgress),'saved completion exact restored Reader and unchanged consumption');
+    const feeRows=receipt.usage.records.map(row=>{const record=read(path.join(require('../config').FILES.llmUsageDir,row.name));check(record.sha256===row.sha256,'saved completion live usage SHA');return record.value;});
+    check(feeRows.length===3&&feeRows[0].kind==='request_started'&&feeRows[1].kind==='request'&&feeRows[2].kind==='disposition'
+        &&feeRows.every(v=>v.paperId===loaded.run.paperId&&v.stage==='apiReaderArticle'&&v.contentAttempt===1&&v.runId===null&&v.unitId===null)
+        &&feeRows[0].eventId===feeRows[1].eventId&&feeRows[0].inputSha256===receipt.nativeRequest.inputSha256
+        &&feeRows[1].inputSha256===receipt.nativeRequest.inputSha256&&feeRows[1].outcome==='completed'
+        &&feeRows[2].disposition==='accepted'&&feeRows[2].outputTextSha256===feeRows[1].outputTextSha256
+        &&feeRows[1].outputTextSha256===receipt.usage.outputTextSha256,'saved completion actual paid issuance chain');
 }
 function sourceIdentity(parent) {
     return {contract:'conference-reader-pdf-source-v1',paperId:parent.run.paperId,
@@ -655,6 +833,7 @@ function assertReaderOutput(loaded,paper,parent) {
     const bound=loaded.readerReview||replayRevisionFeedback(loaded),stage=paper.analysisManifest?.stages?.apiReaderArticle;
     check(stage?.status==='complete'&&stage.reviewFeedbackSha256===bound.locator.reviewFeedbackSha256,'actual new Reader feedback identity');
     check(same(protectedScience(paper),protectedScience(parent)),'protected scientific upstream changed');
+    assertSavedMaintenanceReaderRecovery(loaded,paper);
     if(bound.member?.feedbackMode==='corrective-assertion-v1')for(const claim of bound.member.rejectedClaims)
         check(!paper.apiReaderArticle.includes(claim.quote),'rejected original claim survived');
     // Issuance, source, model bytes, normal semantic and full-paper qualification
@@ -857,6 +1036,6 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
     }
     return true;
 }
-module.exports={bindCompletedParent,replayRevisionFeedback,assertReaderOutput,
+module.exports={bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
     runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,
     resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed};

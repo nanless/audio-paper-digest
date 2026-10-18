@@ -633,7 +633,8 @@ function revisionQualificationError(paper, rules, engine, label) {
 }
 async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourceRoot }, { engine, deep }) {
     const readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
-    const paper = loaded.analysis.papers[0], parentPaper = loaded.parent.analysis.papers[0];
+    let paper = loaded.analysis.papers[0];
+    const parentPaper = loaded.parent.analysis.papers[0];
     const progress = loaded.analysis.readerRevisionProgress;
     if (!progress || !Number.isSafeInteger(progress.attempts) || progress.attempts < 0
         || progress.attempts > loaded.revision.maxAttempts || !Array.isArray(progress.failures)) {
@@ -645,7 +646,10 @@ async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourc
         return { eligible: false, reason: '没有本子任务已完成 Reader 的可重放付费签发证明。' };
     }
     const inspect = async () => {
-        const proof = await deep.inspectSavedConferenceReaderCompletion(paper, {
+        const savedMaintenance = loaded.readerReview
+            ? await require('./conference-reader-review-maintenance').inspectSavedMaintenanceReaderCompletion(loaded) : null;
+        if (savedMaintenance) paper = savedMaintenance.paper;
+        const proof = savedMaintenance?.proof || await deep.inspectSavedConferenceReaderCompletion(paper, {
             executionId: loaded.run.executionId, executionDir: loaded.directory,
             parentPaper, revision: loaded.revision });
         if (!proof) return { eligible: false, reason: '保存稿未与本子任务支持的真实付费候选闭合链对应。' };
@@ -672,7 +676,8 @@ async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourc
             || after.runFileSha256 !== loaded.runFileSha256
             || after.sourceFileSha256 !== loaded.sourceFileSha256) throw new Error('付费 Reader 冷核期间子稿或来源发生变化');
         return { eligible: true, proof, analysisSha256: loaded.analysisFileSha256,
-            articleSha256: paper.apiReaderArticleSha256, attempts: progress.attempts };
+            articleSha256: paper.apiReaderArticleSha256, attempts: progress.attempts,
+            ...(savedMaintenance ? { restoredPaper: paper, savedMaintenanceHandle: savedMaintenance.handle } : {}) };
     };
     return analysisContext.withConferenceAnalysisSource({ executionId: loaded.run.executionId,
         readerPdfSourceHandle, executionDir: loaded.directory, paperId: loaded.run.paperId, sourceDetails: loaded.source.sourceDetails }, () =>
@@ -1194,8 +1199,12 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
         if (savedCompletion.eligible) {
             // Source, paid issuance, full qualification and protected upstream
             // have all replayed before any attempt increment or model request.
+            const savedReceipt = savedCompletion.savedMaintenanceHandle
+                ? require('./conference-reader-review-maintenance').archiveSavedMaintenanceReaderCompletion(loaded,
+                    savedCompletion.savedMaintenanceHandle) : null;
             const next = { ...loaded.analysis, status: 'complete', completedAt: new Date().toISOString(),
                 generation: loaded.analysis.generation + 1,
+                ...(savedReceipt ? { papers: [savedCompletion.restoredPaper], readerSavedStageRecovery: savedReceipt } : {}),
                 stats: { ...(loaded.analysis.stats || {}), analysisStatus: 'complete' } };
             assertGrantUnchanged();
             replaceJson(path.join(loaded.directory, 'analysis.json'), next, loaded.analysisFileSha256);
