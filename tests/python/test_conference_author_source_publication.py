@@ -100,7 +100,12 @@ require(GUARD_VALUE).assertNoPendingReaderReviewMaintenance=({processDirectory,a
         os.mkfifo(fifo)
         started = time.monotonic()
         try:
-            self.assertIn('会议作者来源未由', invoke(new))
+            rejected = invoke(new)
+            self.assertIn('会议作者来源只读重放未完整完成', rejected)
+            self.assertIn('returncode=1', rejected)
+            self.assertIn('timed_out=False', rejected)
+            self.assertIn('output_truncated=False', rejected)
+            self.assertIn('来源凭证必须为普通文件', rejected)
             self.assertLess(time.monotonic() - started, 5)
         finally:
             fifo.unlink()
@@ -117,7 +122,9 @@ require(GUARD_VALUE).assertNoPendingReaderReviewMaintenance=({processDirectory,a
         p=r/'conference-analysis-executions'/f['executionId'];a=read(p/'analysis.json');paper=a['papers'][0];authors=paper['apiReaderAuthors'];authors['authors'][0]['affiliations']=['Invented University'];authors['identity']['authors'][0]['affiliations']=['Invented University'];authors['identity']['authors'][0]['affiliationBindings'][0]['sourceValue']='Invented University';authors['identitySha256']=new.stable(authors['identity']);stage=paper['analysisManifest']['stages']['apiReaderArticle'];stage['readerAuthorIdentitySha256']=authors['identitySha256'];stage['readerAuthorsSha256']=new.stable(authors);write(p/'analysis.json',a);ash=h((p/'analysis.json').read_bytes());run=read(p/'run.json');run['analysisSha256']=ash;receipt=run['completionReceipt'];receipt['analysisSha256']=ash;receipt.pop('receiptSha256');receipt['receiptSha256']=new.stable(receipt);run.pop('runSha256');run['runSha256']=new.stable(run);write(p/'run.json',run)
         page=r/'conference-page-staging'/'fixture';m=read(page/'manifest.json');m['analysisSha256']=ash;m['completionReceiptSha256']=receipt['receiptSha256'];m['authors']=authors['authors'];text=(page/'page.md').read_text().replace('机构信息未能从会议 PDF 纯文本可靠映射','Invented University');(page/'page.md').write_text(text);m['contentSha256']=h((page/'page.md').read_bytes());m.pop('manifestSha256');m['manifestSha256']=new.stable(m);write(page/'manifest.json',m)
         pd=r/'conference-processes'/f['processId'];state=read(pd/'state.json');item=state['items'][f['paperId']];item['analysisProof']['analysisSha256']=ash;item['analysisProof']['completionReceiptSha256']=receipt['receiptSha256'];item['pageProof']['manifestSha256']=m['manifestSha256'];item['pageProof']['contentSha256']=m['contentSha256'];completion=read(pd/'completion-receipt.json');completion['items'][0]['analysisProof']=item['analysisProof'];completion['items'][0]['pageProof']=item['pageProof'];completion.pop('receiptSha256');completion['receiptSha256']=new.stable(completion);state['completionReceiptSha256']=completion['receiptSha256'];write(pd/'state.json',state);write(pd/'completion-receipt.json',completion)
-        self.assertIn('会议作者来源未由', invoke(new))
+        rejected = invoke(new)
+        self.assertIn('会议作者来源只读重放未完整完成', rejected)
+        self.assertIn('作者未从官方姓名全集与封存全文重放', rejected)
         def make_local_repo(name):
             remote, repo = r / (name + '.git'), r / name
             def git(*args):
@@ -161,6 +168,7 @@ require(GUARD_VALUE).assertNoPendingReaderReviewMaintenance=({processDirectory,a
             self.assertEqual(full_generation['completionReceiptSha256'],read(pd/'completion-receipt.json')['receiptSha256'])
             print('旧版核心发布实现实际生成的完整 v2 凭证已核验：',full_generation['generationSha256'])
             for action in [new.review,new.push]:
-                with self.assertRaisesRegex(new.ConferencePublicationError,'会议作者来源未由'):
+                with self.assertRaisesRegex(new.ConferencePublicationError,
+                        '会议作者来源只读重放未完整完成.*作者未从官方姓名全集与封存全文重放'):
                     action('odyssey-2026',f['processId'])
             print('绑定完整来源的旧生成凭证已被真实审查与推送入口拒绝')
