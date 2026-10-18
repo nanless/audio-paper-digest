@@ -265,7 +265,7 @@ npm run test:compat
 | `lib/reader-author-parser.js` | Node 库：从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
 | `lib/reader-author-replay-cli.js` | Node 子进程入口：供 Python 发布器调用的本地作者核验入口；原单对象协议保持，有界批次最多8项/32MiB，逐项重读真实四源及父证明，全部精确通过才返回true；只读取私有FD，无网络与模型。 |
 | `lib/reader-pdf-extraction-scope.js` | 三流程单次 Reader 核验共用的纯 PDF 提取执行与 stdout 复用；日更保留最小环境，会议及历史认证 PDF 保留继承环境，未知启动覆盖或禁用 venv 按原路径执行。实时核对角色、私有输入和隔离运行时，来源及资格不缓存。 |
-| `lib/reader-authenticated-pdf-footnote-evidence.js` | 在真实会议/历史 PDF 句柄内导出并冷重放同栏作者声明、上标及同号资源网址；归属和可达状态分别保留。旧身份只能生成独立纠正提案，不自动改稿或授予评分/Reader资格。 |
+| `lib/reader-authenticated-pdf-footnote-evidence.js` | 在真实会议/历史 PDF 句柄内导出并冷重放同栏作者声明、上标及同号资源网址；会议适配器在真实原计划及同源权限内完成预检生成复验和冷读取，归属与可达状态分别保留。旧身份只能生成独立纠正提案，不自动改稿或授予评分/Reader资格。 |
 | `lib/reader-author-source.js` | Node 库：当前生产 Reader 作者复用资格；跳过已完成分析、恢复历史/会议任务及发布前，必须从已核验的原始材料重新解析并核验作者，保留旧成功结构与只读统计。 |
 | `lib/reader-dom-span-projection.js` | Node 库：从真正封存 HTML 重放全幅 colspan 分类行的空白投影，让正常完整表编译与最终逐格守卫一致；保持来源、旧展示字节及 PDF 规则不变。 |
 | `lib/reader-dom-span-replay-cli.js` | Node 只读子进程：Python 发布检查通过私有受限文件描述符批量重放 HTML 全幅分类行空白投影；先核日更工作区、四份封存来源、保存表格 SHA 与实际正文坐标，再共用原 DOM 规则，不请求模型或网络。 |

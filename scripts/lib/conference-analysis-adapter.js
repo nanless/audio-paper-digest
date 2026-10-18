@@ -555,16 +555,70 @@ function readerResourceRevisionMode(paper, identity) {
     return ['hasCode', 'hasModel', 'hasDataset'].some(field => before[field] !== after[field])
         ? 'scoring-and-reader' : 'reader-only';
 }
-function readReaderResourcePreflight(loaded, expectedFileSha256) {
+function withReaderResourcePreflightSource(loaded, identity, callback) {
+    const proofs = (identity.resources || []).filter(resource => Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence'))
+        .map(resource => resource.authenticatedPdfFootnoteEvidence?.sourceIdentity);
+    if (!proofs.length) return callback();
+    let owner, handle;
+    try {
+        if (proofs.some(proof => !proof || stableHash(proof) !== stableHash(proofs[0]))
+            || !UUID_RE.test(proofs[0].executionId || '')) throw new Error('会议资源预检脚注缺少唯一实际来源执行');
+        if (proofs[0].executionId !== loaded.run.executionId) throw new Error('会议资源预检脚注不属于本实际执行，不能跨owner继承');
+        owner = loadConferenceAnalysis({ analysisRoot: path.dirname(loaded.directory), executionId: proofs[0].executionId });
+        if (owner.run.paperId !== loaded.run.paperId || owner.sourceFileSha256 !== loaded.sourceFileSha256
+            || owner.run.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256
+            || stableHash(owner.source.sourceDetails) !== stableHash(loaded.source.sourceDetails)) {
+            throw new Error('会议资源预检脚注所属原执行与当前论文或封存来源不同');
+        }
+        const active = analysisContext.getConferenceAnalysisContext();
+        handle = active?.executionId === owner.run.executionId && active.paperId === owner.run.paperId
+            && stableHash(active.sourceDetails) === stableHash(owner.source.sourceDetails) ? active.readerPdfSourceHandle : null;
+        if (!handle) {
+            // A preflight may be saved before its Reader/revision exists. Rebuild
+            // the real archived plan/PDF authority, never a paper success or budget.
+            const processApi = require('./conference-process'), deps = processApi.defaultDependencies();
+            const find = (directory, hash) => {
+                const matches = fs.readdirSync(directory).filter(name => /^[a-z0-9][a-z0-9._-]*\.json$/u.test(name))
+                    .filter(name => deps.ledger.readRegularJson(path.join(directory, name)).sha256 === hash);
+                if (matches.length !== 1) throw new Error('会议资源预检脚注缺少唯一原来源凭证');
+                return matches[0];
+            };
+            const binding = owner.source.planAuthorityBinding;
+            const receipt = deps.plan.normalizeSecureReceipt(deps.ledger.readRegularJson(path.join(deps.files.conferenceRunsDir,
+                find(deps.files.conferenceRunsDir, binding.planReceiptFileSha256))).value);
+            const stem = receipt.run.name.slice(0, -'-run.json'.length);
+            const staged = deps.ledger.readRegularJson(path.join(deps.files.conferenceStagingDir, stem + '-staging-receipt.json')).value;
+            const context = processApi.loadAuthority({
+                catalogName: find(deps.files.conferenceDiscoveryCatalogDir, staged.discovery.catalogSha256),
+                reportName: find(deps.files.conferenceDiscoveryReportDir, staged.discovery.reportSha256),
+                filterId: receipt.filter.filterId }, deps);
+            const source = require('./conference-retained-source-replay').createRetainedSourceReplay(context, deps)
+                .loadPlan(binding.planReceiptSha256);
+            handle = verifyPlanAuthority(owner, source.planHandle, source.sourceRoot);
+        }
+    } catch (cause) {
+        throw Object.assign(new Error(`认证会议资源预检脚注来源未闭合：${cause.message}`, { cause }), {
+            code: 'READER_AUTHENTICATED_PDF_FOOTNOTE_INTEGRITY', scope: 'run', retryable: false
+        });
+    }
+    return analysisContext.withConferenceAnalysisSource({ executionId: owner.run.executionId,
+        executionDir: owner.directory, paperId: owner.run.paperId, sourceDetails: owner.source.sourceDetails,
+        readerPdfSourceHandle: handle }, callback);
+}
+function readReaderResourcePreflight(loaded, expectedFileSha256, expectedMode) {
     const record = readJsonRecord(path.join(loaded.directory, 'reader-resource-preflight.json'));
     if (record.sha256 !== expectedFileSha256) throw new Error('会议资源预检文件 SHA 改变');
-    const identity = require('../deep-analyzer').replayVerifiedReaderResourceIdentity(
-        record.value, loaded.source.sourceDetails.text);
-    const demos = loaded.analysis.papers[0]?.analysisManifest?.stages?.demoLinkScan?.discoveredLinks || [];
-    if (identity.resources.some(resource => resource.origin === 'validated_demo' && !demos.includes(resource.originalUrl))) {
-        throw new Error('会议资源预检 Demo 不属于原已核验发现记录');
-    }
-    return identity;
+    return withReaderResourcePreflightSource(loaded, record.value, () => {
+        const identity = require('../deep-analyzer').replayVerifiedReaderResourceIdentity(record.value, loaded.source.sourceDetails.text);
+        const demos = loaded.analysis.papers[0]?.analysisManifest?.stages?.demoLinkScan?.discoveredLinks || [];
+        if (identity.resources.some(resource => resource.origin === 'validated_demo' && !demos.includes(resource.originalUrl))) {
+            throw new Error('会议资源预检 Demo 不属于原已核验发现记录');
+        }
+        if (expectedMode !== undefined && readerResourceRevisionMode(loaded.analysis.papers[0], identity) !== expectedMode) {
+            throw new Error('会议资源预检与原稿三项资源字段的固定恢复模式不一致');
+        }
+        return identity;
+    });
 }
 function revisionQualificationError(paper, rules, engine, label) {
     const diagnostics = typeof engine.getApiReaderV3RecordDiagnostics === 'function'
@@ -666,10 +720,7 @@ function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
         throw new Error('会议 Reader revision 原完成稿、原来源或原凭证发生变化');
     }
     const resourcePreflight = body.mode === 'normal-analysis' ? null
-        : readReaderResourcePreflight({ ...loaded, analysis: parent.analysis }, body.resourcePreflightFileSha256);
-    if (resourcePreflight && readerResourceRevisionMode(parent.analysis.papers[0], resourcePreflight) !== body.mode) {
-        throw new Error('会议资源预检与原稿三项资源字段的固定恢复模式不一致');
-    }
+        : readReaderResourcePreflight({ ...loaded, analysis: parent.analysis }, body.resourcePreflightFileSha256, body.mode);
     return { ...loaded, revision: record.value, parent, resourcePreflight };
 }
 async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHandle, sourceRoot,
@@ -719,19 +770,25 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                 const preflightFile = path.join(loaded.directory, 'reader-resource-preflight.json');
                 if (!fs.existsSync(preflightFile)) {
                     const identity = await analysisContext.withConferenceAnalysisSource({ executionId,
-                        readerPdfSourceHandle, executionDir: loaded.directory, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails }, () =>
-                        deep.buildApiReaderResourceIdentity(parent.analysis.papers[0].analysis,
+                        readerPdfSourceHandle, executionDir: loaded.directory, paperId: parent.run.paperId,
+                        sourceDetails: loaded.source.sourceDetails }, async () => {
+                        const identity = await deep.buildApiReaderResourceIdentity(parent.analysis.papers[0].analysis,
                             loaded.source.sourceDetails.text, parent.analysis.papers[0].analysisManifest?.stages?.demoLinkScan,
-                            { paper: parent.analysis.papers[0], structuredArtifacts: loaded.source.sourceDetails.structuredArtifacts }));
-                    // The normal builder's response is replayed before it can
-                    // become this child's immutable resource/mode authority.
-                    require('../deep-analyzer').replayVerifiedReaderResourceIdentity(identity, loaded.source.sourceDetails.text);
+                            { paper: parent.analysis.papers[0], structuredArtifacts: loaded.source.sourceDetails.structuredArtifacts });
+                        // The normal builder's response is replayed before it can
+                        // become this child's immutable resource/mode authority.
+                        require('../deep-analyzer').replayVerifiedReaderResourceIdentity(identity, loaded.source.sourceDetails.text);
+                        return identity;
+                    });
                     writeJson(preflightFile, identity);
                 }
                 resourcePreflightFileSha256 = readJsonRecord(preflightFile).sha256;
-                const identity = readReaderResourcePreflight({ ...loaded,
-                    analysis: parent.analysis }, resourcePreflightFileSha256);
-                mode = readerResourceRevisionMode(parent.analysis.papers[0], identity);
+                mode = analysisContext.withConferenceAnalysisSource({ executionId, readerPdfSourceHandle,
+                    executionDir: loaded.directory, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails }, () => {
+                    const identity = readReaderResourcePreflight({ ...loaded,
+                        analysis: parent.analysis }, resourcePreflightFileSha256);
+                    return readerResourceRevisionMode(parent.analysis.papers[0], identity);
+                });
             }
             const body = { contract: READER_REVISION_CONTRACT, version: 1, executionId,
                 parentExecutionId, parentAnalysisFileSha256: parent.analysisFileSha256,

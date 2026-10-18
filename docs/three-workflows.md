@@ -43,7 +43,7 @@ flowchart LR
 | 网络与模型 | `utils.js`、`llm-account-pool.js`、`publish_common.py` | Muse/arXiv 强制代理，只有声明的账号额度故障可向后切号 |
 | 全文、表格、公式、作者和资源身份 | `lib/fresh-analysis-context.js`、`lib/reader-*`、`reader_sealed_pdf_*.py` | 来源 SHA、结构化单元格、原始 TeX、真实像素、作者逐项身份与资源可达状态 |
 | Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`reader-repair.js`、`reader-draft-order.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算；新稿、保存稿与 Python 发布共用占位结果表检测，旧签名不能代替当前内容资格 |
-| 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；“开源代码、可下载权重、可运行系统是三件事”仅在概念列举范围内识别，不豁免前后独立的发布声明；新阶段绑定 reader-resource-availability-claims-v1 |
+| 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；“开源代码、可下载权重、可运行系统是三件事”等闭合概念列举只识别自身范围；作者提供声明须有同类型原文且保留当前核验限定，不豁免前后独立当前声明或双否；新阶段绑定 reader-resource-availability-claims-v1 |
 | 评分与标签 | `analysis-contract.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py` | 八维评分、封顶总分；第三方闭源对照与本文资源缺失分开检查，后者仍按原维度归属；当前中文标签与明确主任务/方法，严格纯追加按原SHA只读重放旧分类证明 |
 | 页面展示与引用导出 | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` | 同一资源去重、作者展示、评分说明、多级分类路径及 JSON/BibTeX/RIS/上下文导出；会议使用真实会议身份 |
 | 站点分类版本 | 日更 `tag_catalog_file_contents()`；会议/历史 `tag_catalog_publication.py` | 日更将词表资产纳入发布清单；会议/历史只读核验双份版本目录及本批原快照，缺失先阻断 |
