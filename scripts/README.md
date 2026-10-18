@@ -151,7 +151,7 @@ npm run test:compat
 | `lib/conference-importer.js` | Node 库：根据已认证的暂存记录，把会议元数据、PDF 和提取结果安全导入私有缓存，再保存来源清单和导入凭证；低层清单辅助函数仅供隔离测试。 |
 | `lib/conference-pdf-source.js` | Node 库：核验受控本机 PDF 的字节、路径和链接，生成可重新核验的来源描述；没有可靠结构化 TeX 时明确标记公式不可用。 |
 | `lib/conference-plan.js` | Node 库：只从已认证的导入记录、已审计划和当前词表生成运行与计划凭证；恢复按原凭证 SHA 及版本从集中归档只读核验原词表，保持原 plan/run/receipt 字节。来源计划可溯源不授予旧分类新出版资格，当前暂存仍完整核验分类；拒绝任意路径、别名和不完整成员集。 |
-| `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
+| `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总，沿私有池每篇复用一次完整 `loadStage` 的结果。认证PDF多层/平表的新增失败后补证仍逐项重建完整原网格、条件与单位，不改变原成功证明。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
 | `lib/conference-recovery-grant.js` | 显式追加会议额度的不可变登记与私有运行能力，绑定原 process 完整失败集合、父子稿 CAS 和真实来源；同一许可中断重入，禁止 JSON 自授额度。 |
 | `lib/conference-reader-recovery-window.js` | 同一已登记会议窗口的 Reader 6次内容/2次全文累计账本；请求前预留，保留不可变原请求和响应，冷核损坏或删账即阻断。生成须持论文锁；只读身份重放强制禁止模型。 |
@@ -168,7 +168,7 @@ npm run test:compat
 | `lib/conference-source-upgrade.js` | 会议来源能力升级的身份和已有分析绑定检查。 |
 | `lib/conference-staging.js` | Node 库：将认证的会议入选集与人工复核的提取结果一一核验，生成导入清单和凭证；排除项和身份别名都不能进入。 |
 | `lib/official-conference-acquisition.js` | Node 库：按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
-| `migrate-conference-process.js` | CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。明确获准的额外付费清单使用 `--retry-failed --recovery-manifest ABSOLUTE_PATH`，同一许可最多3轮，详见[会议追加恢复](../docs/conference-workflow.md#原额度耗尽后的独立付费恢复)。 |
+| `migrate-conference-process.js` | CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。`--postprocess-only --preserve-failed-readers` 仅供人工准备保留原失败稿，不能混入重试或许可，不授资格。明确获准的额外付费清单使用 `--retry-failed --recovery-manifest ABSOLUTE_PATH`，同一许可最多3轮，详见[会议追加恢复](../docs/conference-workflow.md#原额度耗尽后的独立付费恢复)。 |
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
 | `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 核验并安装原单篇和汇总暂存文件；review 共用正文模型、逐图多模态及 Markdown/Hugo 审查；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 重验线上页面、引用文件和图片。已有 publish 的 ID 不因重复 generate 更新。部署工作流、页面标题及浏览器实际效果另行核验。 |
 | `recover-conference-process-locks.js` | CLI：只在操作者确认本工作区、且锁的持有进程 PID 已经退出时，按文件锁协议恢复旧操作锁；活锁和不完整的锁一律跳过。 |

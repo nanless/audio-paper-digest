@@ -12,7 +12,7 @@ const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--postprocess-only] [--source-corrections ABSOLUTE_PATH] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--postprocess-only [--preserve-failed-readers]] [--source-corrections ABSOLUTE_PATH] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -20,7 +20,7 @@ function parseArgs(argv) {
     const values = {};
     for (let index = 1; index < argv.length;) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (flag === '--reuse-complete-pages' || flag === '--retry-failed' || flag === '--postprocess-only') {
+        if (flag === '--reuse-complete-pages' || flag === '--retry-failed' || flag === '--postprocess-only' || flag === '--preserve-failed-readers') {
             if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
@@ -34,6 +34,8 @@ function parseArgs(argv) {
         || (values['--concurrency'] && !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values['--concurrency']))
         || (values['--recovery-manifest'] && (!path.isAbsolute(values['--recovery-manifest']) || !values['--retry-failed']))
         || (values['--reader-corrections'] && (!path.isAbsolute(values['--reader-corrections']) || !values['--recovery-manifest']))
+        || (values['--preserve-failed-readers'] && (!values['--postprocess-only'] || values['--retry-failed']
+            || values['--recovery-manifest'] || values['--reader-corrections'] || values['--source-corrections']))
         || (values['--source-corrections'] && (!path.isAbsolute(values['--source-corrections'])
             || !values['--postprocess-only'] || values['--reader-corrections']))) {
         throw new Error(`命令写法不对，用法：${USAGE}`);
@@ -42,7 +44,7 @@ function parseArgs(argv) {
         reportName: values['--report'], filterId: values['--filter'],
         fromProcessId: values['--from'], concurrency: Number(values['--concurrency'] || 3),
         reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']),
-        postprocessOnly: Boolean(values['--postprocess-only']),
+        postprocessOnly: Boolean(values['--postprocess-only']), preserveFailedReaders: Boolean(values['--preserve-failed-readers']),
         ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}),
         ...(values['--reader-corrections'] ? { readerCorrections: values['--reader-corrections'] } : {}),
         ...(values['--source-corrections'] ? { sourceCorrections: values['--source-corrections'] } : {}) };
@@ -233,6 +235,10 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
 }
 
 function migrateAndRun(options, runtime = {}) {
+    if (options.preserveFailedReaders && (!options.postprocessOnly || options.retryFailed
+        || options.recoveryManifest || options.readerCorrections || options.sourceCorrections)) {
+        throw new Error('--preserve-failed-readers 仅可单独搭配 --postprocess-only，不能混入恢复、重试或来源纠正');
+    }
     const deps = { ...processApi.defaultDependencies?.(), ...(runtime.dependencies || {}) };
     const context = (deps.loadAuthority || processApi.loadAuthority)(options, deps);
     const directory = processApi.safeProcessDirectory(deps.files.conferenceProcessDir,
@@ -424,6 +430,12 @@ function migrateAndRun(options, runtime = {}) {
                             readerRefreshRequired: true, lastError: failure.message, lastFailure: failure,
                             retryNotBefore: null, updatedAt: deps.now() };
                     }
+                    // A preserved failed set remains genuinely partial for
+                    // the later source-bound local-edit admission. No saved
+                    // child adoption will run below to derive this status.
+                    if (options.preserveFailedReaders && Object.values(next.items).some(item => item.status !== 'complete')) {
+                        next.status = 'partial';
+                    }
                     next.updatedAt = deps.now(); next.generation = checked.generation + 1;
                     next.stateSha256 = processApi.stateDigest(next);
                     return processApi.assertState(next);
@@ -547,7 +559,11 @@ function migrateAndRun(options, runtime = {}) {
         // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
         // 出来，流程完成时才能原子写入新凭证。
         archiveStaleCompletionReceipt(directory, state);
-        const savedChildren = await adoptCompletedGrantedChildren({ state, directory, shared }, deps);
+        // Source-bound local editing may need the exact failed paid candidate.
+        // This subtracts only automatic replay/adoption; normal completed-page
+        // staging above and every later qualification gate remain mandatory.
+        const savedChildren = options.preserveFailedReaders ? { state, adopted: [], failures: [] }
+            : await adoptCompletedGrantedChildren({ state, directory, shared }, deps);
         state = savedChildren.state;
         if (options.postprocessOnly) {
             // Migration/state/receipt/source checks above are mandatory. This
@@ -560,7 +576,8 @@ function migrateAndRun(options, runtime = {}) {
                 checkedComplete: requiresMigration || lifecycleNeedsRefresh ? complete.length : 0,
                 stagedComplete: stagedProofs.size, stageFailed: stageFailures.size,
                 adoptedSavedChildren: savedChildren.adopted, savedChildAdoptionFailures: savedChildren.failures,
-                sourceCorrectionsApplied: Boolean(options.sourceCorrections), newApiRequests: 0 };
+                sourceCorrectionsApplied: Boolean(options.sourceCorrections),
+                preservedFailedReaders: Boolean(options.preserveFailedReaders), newApiRequests: 0 };
         }
         if (savedChildren.failures.length) return { status: 'partial', processId: options.fromProcessId,
             savedChildAdoptionBlocked: true, failures: savedChildren.failures, newApiRequests: 0 };

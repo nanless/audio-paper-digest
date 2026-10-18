@@ -1,0 +1,190 @@
+{
+  "description": "Portable real-source table views and exact quotes. Original PDFs remain private and are supplied via PD_COMPLETE_PDF_REAL_INPUT_DIR; verified by their immutable SHA. Liao tables are explicit original TABLE_1/2 restoration proposals, never claimed to have existed as Markdown in the original paid response.",
+  "cases": [
+    {
+      "name": "dahal-table5",
+      "paperId": "conference:interspeech:2026:conference-paper-id:dahal26_interspeech",
+      "executionId": "6a395c46-0705-4c20-8910-9fa1589b0767",
+      "pdfFile": "dahal-table5.pdf",
+      "pdfSha256": "ff70e35b107fc976d22b693dfeb6423e2f069c00feec8867036674a32dc656c6",
+      "sourceTextSha256": "eb966f07b27f8c8667962030edca7fa35e80d3f9066036f7ea50351db6b758d8",
+      "viewOrigin": "source-bound-local-proposal-over-real-saved-paid-candidate",
+      "table": {
+        "markdown": "| Method | Layers | Total Params (M) | Used Params (M) | WER (%) |\n| --- | --- | --- | --- | --- |\n| Single LoRA-QKV | 1–16 | 13.1 | 13.1 | 11.33 |\n| MoPE-QKV | 6–16 | 13.6 | 13.2 | 10.43 |",
+        "header": [
+          "Method",
+          "Layers",
+          "Total Params (M)",
+          "Used Params (M)",
+          "WER (%)"
+        ],
+        "rows": [
+          [
+            "Single LoRA-QKV",
+            "1–16",
+            "13.1",
+            "13.1",
+            "11.33"
+          ],
+          [
+            "MoPE-QKV",
+            "6–16",
+            "13.6",
+            "13.2",
+            "10.43"
+          ]
+        ]
+      },
+      "quotes": [
+        "Single LoRA-QKV    1–16        13.1           13.1         11.33",
+        "MoPE-QKV         6–16        13.6           13.2         10.43"
+      ]
+    },
+    {
+      "name": "dahal-table6",
+      "paperId": "conference:interspeech:2026:conference-paper-id:dahal26_interspeech",
+      "executionId": "6a395c46-0705-4c20-8910-9fa1589b0767",
+      "pdfFile": "dahal-table5.pdf",
+      "pdfSha256": "ff70e35b107fc976d22b693dfeb6423e2f069c00feec8867036674a32dc656c6",
+      "sourceTextSha256": "eb966f07b27f8c8667962030edca7fa35e80d3f9066036f7ea50351db6b758d8",
+      "viewOrigin": "source-bound-local-proposal-over-real-saved-paid-candidate",
+      "table": {
+        "markdown": "| Method | Mean (%) |\n| --- | --- |\n| No FT | 17.93 |\n| MoPE | 9.98 |",
+        "header": [
+          "Method",
+          "Mean (%)"
+        ],
+        "rows": [
+          [
+            "No FT",
+            "17.93"
+          ],
+          [
+            "MoPE",
+            "9.98"
+          ]
+        ]
+      },
+      "quotes": [
+        "Method  AR   ZH   HI  KR   SP    VI   Mean",
+        "No FT    17.98  20.56  9.28  13.47  17.08  29.24  17.93",
+        "MoPE    9.56   11.76  6.01   5.21   9.21   18.14   9.98"
+      ]
+    },
+    {
+      "name": "liao-table2",
+      "paperId": "conference:interspeech:2026:conference-paper-id:liao26_interspeech",
+      "executionId": "6eb86f95-b2c8-4e5c-9678-303bdb7f53ef",
+      "pdfFile": "liao-table2.pdf",
+      "pdfSha256": "6da3312694214285101ec97787acd521d7351d8ad68fbf30c25c1486bb0ede37",
+      "sourceTextSha256": "f324854e377bce309ecf705d4cc83a470f3f88680f2d7b98d4d6a2d303be27e4",
+      "viewOrigin": "source-bound-local-proposal-over-real-saved-paid-candidate",
+      "table": {
+        "markdown": "| ID | Method | Seg. Loss | Cons. Loss | FA + Miss (%) | Confusion (%) | DER (%) |\n| --- | --- | --- | --- | --- | --- | --- |\n| A | PyAnnote Community-1 | - | - | 25.71 (21.72) | 9.17 (8.88) | 34.88 (30.60) |\n| B | PyAnnote Seg. + VBx | - | - | 20.58 (16.43) | 5.87 (5.36) | 26.45 (21.79) |\n| 1 | Scratch (2-ch) | PIT | - | 16.34 (12.52) | 6.08 (6.04) | 22.42 (18.56) |\n| 2 | Pre-trained (Zero-shot) | PIT | - | 22.30 (18.44) | 8.05 (8.12) | 30.35 (26.56) |\n| 3 | Supervised FT | PIT | - | 15.19 (11.37) | 6.23 (6.21) | 21.42 (17.58) |\n| 4 | Mean Teacher (Base) | PIT | MSE | 14.57 (10.62) | 5.20 (5.12) | 19.77 (15.74) |\n| 5 | w/ Role-Aware Union Loss | Role-Aware Union | MSE | 15.05 (11.20) | 2.70 (2.58) | 17.75 (13.78) |\n| 6 | w/ PIT-MSE | PIT | PIT-MSE | 14.88 (10.96) | 2.92 (2.80) | 17.80 (13.76) |\n| 7 | Proposed Method (Ours) | Role-Aware Union | PIT-MSE | 14.42 (10.28) | 2.53 (2.39) | 16.95 (12.67) |",
+        "header": [
+          "ID",
+          "Method",
+          "Seg. Loss",
+          "Cons. Loss",
+          "FA + Miss (%)",
+          "Confusion (%)",
+          "DER (%)"
+        ],
+        "rows": [
+          [
+            "A",
+            "PyAnnote Community-1",
+            "-",
+            "-",
+            "25.71 (21.72)",
+            "9.17 (8.88)",
+            "34.88 (30.60)"
+          ],
+          [
+            "B",
+            "PyAnnote Seg. + VBx",
+            "-",
+            "-",
+            "20.58 (16.43)",
+            "5.87 (5.36)",
+            "26.45 (21.79)"
+          ],
+          [
+            "1",
+            "Scratch (2-ch)",
+            "PIT",
+            "-",
+            "16.34 (12.52)",
+            "6.08 (6.04)",
+            "22.42 (18.56)"
+          ],
+          [
+            "2",
+            "Pre-trained (Zero-shot)",
+            "PIT",
+            "-",
+            "22.30 (18.44)",
+            "8.05 (8.12)",
+            "30.35 (26.56)"
+          ],
+          [
+            "3",
+            "Supervised FT",
+            "PIT",
+            "-",
+            "15.19 (11.37)",
+            "6.23 (6.21)",
+            "21.42 (17.58)"
+          ],
+          [
+            "4",
+            "Mean Teacher (Base)",
+            "PIT",
+            "MSE",
+            "14.57 (10.62)",
+            "5.20 (5.12)",
+            "19.77 (15.74)"
+          ],
+          [
+            "5",
+            "w/ Role-Aware Union Loss",
+            "Role-Aware Union",
+            "MSE",
+            "15.05 (11.20)",
+            "2.70 (2.58)",
+            "17.75 (13.78)"
+          ],
+          [
+            "6",
+            "w/ PIT-MSE",
+            "PIT",
+            "PIT-MSE",
+            "14.88 (10.96)",
+            "2.92 (2.80)",
+            "17.80 (13.76)"
+          ],
+          [
+            "7",
+            "Proposed Method (Ours)",
+            "Role-Aware Union",
+            "PIT-MSE",
+            "14.42 (10.28)",
+            "2.53 (2.39)",
+            "16.95 (12.67)"
+          ]
+        ]
+      },
+      "quotes": [
+        "A   PyAnnote Community-1                   -                      -         25.71 (21.72)      9.17 (8.88)     34.88 (30.60)",
+        "B   PyAnnote Seg. + VBx                     -                      -         20.58 (16.43)      5.87 (5.36)     26.45 (21.79)",
+        "1    Scratch (2-ch)                    PIT                    -         16.34 (12.52)      6.08 (6.04)     22.42 (18.56)",
+        "2    Pre-trained (Zero-shot)            PIT                    -         22.30 (18.44)      8.05 (8.12)     30.35 (26.56)",
+        "3    Supervised FT                   PIT                    -         15.19 (11.37)      6.23 (6.21)     21.42 (17.58)",
+        "4   Mean Teacher (Base)              PIT        MSE       14.57 (10.62)      5.20 (5.12)     19.77 (15.74)",
+        "5   w/ Role-Aware Union Loss   Role-Aware Union    MSE       15.05 (11.20)      2.70 (2.58)     17.75 (13.78)",
+        "6   w/ PIT-MSE                     PIT         PIT-MSE     14.88 (10.96)      2.92 (2.80)     17.80 (13.76)",
+        "7   Proposed Method (Ours)   Role-Aware Union   PIT-MSE     14.42 (10.28)      2.53 (2.39)     16.95 (12.67)"
+      ]
+    }
+  ]
+}

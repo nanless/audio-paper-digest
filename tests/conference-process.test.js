@@ -1582,6 +1582,29 @@ test('重试放行是一个显式的、只在 apply 时可用的命令行参数'
         '--reader-corrections', '/tmp/local.json']).readerCorrections, '/tmp/local.json');
 });
 
+test('保留失败候选模式仍统一正常重暂存全部已完成论文，且不派发或聚合', async t => {
+    const migration = require('../scripts/migrate-conference-process');
+    const stop = require('../scripts/lib/analysis-stop-control');
+    const f = fixture(t, 3), options = { apply: true, concurrency: 1 };
+    const first = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_c, _s, item) => success(item) });
+    f.context.authority = { ...f.authority, implementationSha256: H('preserve failed mode implementation') };
+    f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
+    const seen = [];
+    const result = await migration.migrateAndRun({ ...options, fromProcessId: first.processId,
+        postprocessOnly: true, preserveFailedReaders: true }, { dependencies: { ...f.deps,
+        processPaper: () => assert.fail('preserve mode must not dispatch analysis'),
+        aggregate: () => assert.fail('preserve mode must not aggregate'),
+        postprocess: { stagePaper: ({ executionId }) => {
+            assert.throws(() => stop.assertMayStartRequest(), { code: stop.MODEL_REQUESTS_FORBIDDEN });
+            seen.push(executionId);
+            return { status: 'staged', manifest: { ...success(f.members[0]).pageProof, manifestSha256: H(executionId) } };
+        } } } });
+    assert.equal(result.status, 'postprocessed_only'); assert.equal(result.preservedFailedReaders, true);
+    assert.equal(result.checkedComplete, 3); assert.equal(result.stagedComplete, 3); assert.equal(result.stageFailed, 0);
+    assert.equal(seen.length, 3); assert.equal(result.newApiRequests, 0); assert.deepEqual(result.adoptedSavedChildren, []);
+});
+
 test('多跳的旧版迁移沿凭证父级一路追到绑定 UUID 的起点', async t => {
     const migration = require('../scripts/migrate-conference-process.js');
     const recovery = require('../scripts/lib/conference-process-recovery.js');

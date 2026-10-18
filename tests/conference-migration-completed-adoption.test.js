@@ -369,3 +369,55 @@ test('调度器不接受裸JSON伪造已登记窗口来保留或更改费用权�
     }), /真实已登记的追加许可能力/);
     assert.deepEqual(fs.readFileSync(f.stateFile), bytes);
 });
+
+test('保留失败Reader只减去自动重放采纳，原包/候选/次数/费用不变且下次正常仍可采纳', async t => {
+    const f = await completed(t), before = fs.readFileSync(f.stateFile);
+    const materials = grants.recoveryWindowMaterials(f.analysisRoot, f.member.expectedExecutionId);
+    const dependencies = { ...f.deps, adapter: { ...f.deps.adapter,
+        replaySavedConferenceReaderRevision: () => assert.fail('preserve mode must not replay a failed paid Reader') },
+        postprocess: { stagePaper: () => assert.fail('failed child must not be staged or adopted in preserve mode') } };
+    const result = await migration.migrateAndRun({ ...f.options, preserveFailedReaders: true }, { dependencies });
+    assert.equal(result.status, 'postprocessed_only'); assert.equal(result.preservedFailedReaders, true);
+    assert.equal(result.newApiRequests, 0); assert.deepEqual(result.adoptedSavedChildren, []);
+    assert.deepEqual(result.savedChildAdoptionFailures, []); assert.equal(result.pending, 1);
+    assert.deepEqual(fs.readFileSync(f.stateFile), before);
+    assert.equal(grants.recoveryWindowMaterials(f.analysisRoot, f.member.expectedExecutionId).materialsSha256, materials.materialsSha256);
+    const later = await migration.migrateAndRun(f.options, { dependencies: { ...f.deps,
+        postprocess: { stagePaper: () => f.staged() } } });
+    assert.equal(later.adoptedSavedChildren.length, 1); assert.equal(later.newApiRequests, 0);
+});
+
+test('preserve-failed-readers严格CLI和直接入口只允许独立postprocess-only', () => {
+    const base = ['--apply', '--catalog', 'c.json', '--report', 'r.json', '--filter',
+        '11111111-1111-4111-8111-111111111111', '--from', '22222222-2222-4222-8222-222222222222'];
+    assert.equal(migration.parseArgs([...base, '--postprocess-only', '--preserve-failed-readers']).preserveFailedReaders, true);
+    assert.equal(migration.parseArgs([...base, '--postprocess-only']).preserveFailedReaders, false);
+    for (const suffix of [['--preserve-failed-readers'], ['--postprocess-only', '--preserve-failed-readers', '--preserve-failed-readers'],
+        ['--postprocess-only', '--preserve-failed-readers', '--retry-failed'],
+        ['--postprocess-only', '--preserve-failed-readers', '--source-corrections', '/tmp/source.json'],
+        ['--postprocess-only', '--preserve-failed-readers', '--retry-failed', '--recovery-manifest', '/tmp/grant.json', '--reader-corrections', '/tmp/patch.json']]) {
+        assert.throws(() => migration.parseArgs([...base, ...suffix]), /命令写法/);
+    }
+    for (const extra of [{ postprocessOnly: false }, { retryFailed: true }, { recoveryManifest: '/tmp/g.json' },
+        { readerCorrections: '/tmp/r.json' }, { sourceCorrections: '/tmp/s.json' }]) {
+        assert.throws(() => migration.migrateAndRun({ preserveFailedReaders: true, postprocessOnly: true, ...extra },
+            { dependencies: { loadAuthority: () => assert.fail('invalid flag must fail before authority or writes') } }), /仅可单独搭配/);
+    }
+});
+
+test('保留原失败集跨实现迁移仍是partial，正常人工admission可读取真实失败且没有采纳副作用', async t => {
+    const f = await completed(t), original = structuredClone(f.state.items[f.paperId]);
+    const authority = { ...f.state.authority, implementationSha256: sha('preserve failed readers migrated implementation') };
+    const materials = grants.recoveryWindowMaterials(f.analysisRoot, f.member.expectedExecutionId);
+    const result = await migration.migrateAndRun({ ...f.options, preserveFailedReaders: true }, { dependencies: {
+        ...f.deps, implementationSha256: () => authority.implementationSha256,
+        deepExecutionConfigIdentity: () => authority.deepExecutionConfig,
+        loadAuthority: () => ({ authority, members: [{ paperId: f.paperId }], files: f.deps.files }),
+        postprocess: { stagePaper: () => assert.fail('failed child is preserved, never staged or adopted') }
+    } });
+    assert.equal(result.status, 'postprocessed_only'); assert.equal(result.pending, 1);
+    const state = api.assertState(JSON.parse(fs.readFileSync(f.stateFile)));
+    assert.equal(state.status, 'partial'); assert.equal(state.authority.implementationSha256, authority.implementationSha256);
+    assert.deepEqual(state.items[f.paperId], original); assert.deepEqual(result.adoptedSavedChildren, []);
+    assert.equal(grants.recoveryWindowMaterials(f.analysisRoot, f.member.expectedExecutionId).materialsSha256, materials.materialsSha256);
+});

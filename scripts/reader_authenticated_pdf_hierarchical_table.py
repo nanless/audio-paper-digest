@@ -16,6 +16,8 @@ CONTRACT = 'reader-authenticated-pdf-hierarchical-table-v1'
 NUMBER = re.compile(r'[+−-]?\d+(?:\.\d+)?(?:±\d+(?:\.\d+)?)?\Z')
 UNIT = r'%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp'
 DECLARATION = re.compile(r'(.+?)\s*(?:\(\s*(' + UNIT + r')\s*\)|\[\s*(' + UNIT + r')\s*\])\Z', re.I)
+COMPLETE_DECLARATION = re.compile(r'(.+?)\s*(?:\(\s*(' + UNIT + r'|M|B)\s*\)|\[\s*(' + UNIT + r'|M|B)\s*\])\Z', re.I)
+COMPLETE_NUMBER = re.compile(r'[∼~]?[+−-]?\d+(?:\.\d+)?\Z')
 
 
 def surface(value):
@@ -30,6 +32,26 @@ def numeric_surface(value):
     # Normal Reader typography spaces the plus/minus operator. Retain every
     # digit and decimal place; this permits no precision, unit or value change.
     return re.sub(r'(?<=\d)\s*±\s*(?=[+−-]?\d)', '±', surface(value))
+
+
+def complete_numeric_row(words):
+    """Read an entire numeric suffix, retaining paired-collar cells verbatim."""
+    index, cells = len(words), []
+    while index:
+        word = words[index - 1]
+        if re.fullmatch(r'\([+−-]?\d+(?:\.\d+)?\)', word[4]):
+            if index < 2 or not COMPLETE_NUMBER.fullmatch(words[index - 2][4]):
+                return None
+            pair = words[index - 2:index]
+            cells.insert(0, [min(w[0] for w in pair), min(w[1] for w in pair),
+                             max(w[2] for w in pair), max(w[3] for w in pair), literal(pair)])
+            index -= 2
+        elif COMPLETE_NUMBER.fullmatch(word[4]):
+            cells.insert(0, word)
+            index -= 1
+        else:
+            break
+    return (words[:index], cells) if index and len(cells) >= 2 else None
 
 
 def cx(word):
@@ -117,7 +139,46 @@ def assign_level(items, leaves):
     return solutions[0]
 
 
-def table_grid(page, caption, document, flat_condition_bands=False, merged_condition_column=False):
+def assign_partial_level(items, leaves):
+    """A fully observed parent may own only part of a complete leaf row."""
+    candidates = []
+    for parent in items:
+        spans = []
+        for start in range(len(leaves)):
+            for end in range(start + 1, len(leaves) + 1):
+                lo = min(w[0] for cell in leaves[start:end] for w in cell)
+                hi = max(w[2] for cell in leaves[start:end] for w in cell)
+                if parent[0] >= lo - .1 and parent[2] <= hi + .1 and abs(cx(parent) - (lo + hi) / 2) <= .75:
+                    spans.append({'text': parent[4], 'bbox': parent[:4], 'startColumn': start, 'endColumn': end})
+        need(len(spans) == 1, 'partial_parent_not_unique')
+        candidates.append(spans[0])
+    need(all(a['endColumn'] <= b['startColumn'] for a, b in zip(candidates, candidates[1:])), 'partial_parents_overlap')
+    return candidates
+
+
+def partition_label_cells(words, headers):
+    solutions, visits = [], [0]
+    def visit(column, start, chosen):
+        visits[0] += 1
+        need(visits[0] <= 1024 and len(solutions) <= 1, 'label_partition_ambiguous_or_unbounded')
+        if column == len(headers):
+            if start == len(words):
+                solutions.append(chosen)
+            return
+        header = headers[column]['words']
+        left = min(w[0] for w in header)
+        centre = (left + max(w[2] for w in header)) / 2
+        for end in range(start + 1, len(words) - (len(headers) - column - 1) + 1):
+            cell = words[start:end]
+            lo, hi = min(w[0] for w in cell), max(w[2] for w in cell)
+            if abs(lo - left) <= 1 or abs((lo + hi) / 2 - centre) <= .75:
+                visit(column + 1, end, chosen + [cell])
+    visit(0, 0, [])
+    need(len(solutions) == 1, 'label_partition_not_unique')
+    return solutions[0]
+
+
+def table_grid(page, caption, document, flat_condition_bands=False, merged_condition_column=False, complete_flat=False):
     cap = caption[:4]
     rules = []
     for drawing in page.get_drawings():
@@ -139,7 +200,8 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
     words = [list(w[:5]) for w in page.get_text('words', sort=False, flags=fitz.TEXTFLAGS_TEXT)
              if top[0] < cx(w) < top[2] and top[1] < cy(w) < bottom]
     lines = rows_of(words)
-    data = [(y, ws, numeric_row(ws)) for y, ws in lines if numeric_row(ws)]
+    parse_row = complete_numeric_row if complete_flat else numeric_row
+    data = [(y, ws, parse_row(ws)) for y, ws in lines if parse_row(ws)]
     need(2 <= len(data) <= 64, 'complete_numeric_rows_missing')
     width = len(data[0][2][1])
     need(2 <= width <= 15 and all(len(r[2][1]) == width for r in data), 'data_columns_incomplete')
@@ -160,7 +222,7 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
         cells = [[w for w in ws if bounds[c + 1] < cx(w) < bounds[c + 2]] for c in range(width)]
         if all(cells):
             header_rows.append((y, cells))
-    if (flat_condition_bands or merged_condition_column) and not header_rows:
+    if (flat_condition_bands or merged_condition_column or complete_flat) and not header_rows:
         # PDF words can join adjacent metric headings without whitespace. Split
         # only at the already closed data-column geometry, retaining every real
         # glyph and its original word ownership in the complete grid proof.
@@ -185,24 +247,38 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
     need(header_rows, 'complete_leaf_headers_missing')
     leaf_y, leaves = header_rows[-1]
     need(all(not NUMBER.fullmatch(literal(cell)) for cell in leaves), 'leaf_header_is_numeric')
-    need(all((bounds[c + 1] < cx(cell[0]) < bounds[c + 2]) if (flat_condition_bands or merged_condition_column) else
+    need(all((bounds[c + 1] < cx(cell[0]) < bounds[c + 2]) if (flat_condition_bands or merged_condition_column or complete_flat) else
              (bounds[c + 1] - .1 <= min(w[0] for w in cell) and max(w[2] for w in cell) <= bounds[c + 2] + .1)
              for c, cell in enumerate(leaves)), 'leaf_headers_cross_column')
     parents = raw_header_items(page, top[1], leaf_y, bounds[1], top[2])
     levels = []
     for _, items in rows_of(parents):
         need(len(levels) < 3, 'header_depth_exceeded')
-        level = assign_level(items, leaves)
+        level = assign_partial_level(items, leaves) if complete_flat else assign_level(items, leaves)
         if levels:
             need(all(any(p['startColumn'] <= child['startColumn'] and child['endColumn'] <= p['endColumn']
                          for p in levels[-1]) for child in level), 'crossing_header_levels')
         levels.append(level)
     if flat_condition_bands or merged_condition_column:
         need(not levels, 'flat_condition_table_has_parent_headers')
-    else:
+    elif not complete_flat:
         need(levels and any(p['endColumn'] - p['startColumn'] > 1 for level in levels for p in level), 'hierarchical_headers_missing')
     label_header = [w for w in words if cy(w) <= leaf_y + 2 and cx(w) < bounds[1]]
     need(label_header and all(w[2] <= bounds[1] for w in label_header), 'row_label_header_missing_or_overlapping')
+    label_columns = []
+    if complete_flat:
+        clusters = []
+        for w in sorted(label_header, key=lambda w: w[0]):
+            if not clusters or w[0] - max(v[2] for v in clusters[-1]) > max(6, (w[3] - w[1]) * .6):
+                clusters.append([w])
+            else:
+                clusters[-1].append(w)
+        label_bounds = [top[0]] + [(max(w[2] for w in a) + min(w[0] for w in b)) / 2
+                                   for a, b in zip(clusters, clusters[1:])] + [bounds[1]]
+        for i, group in enumerate(clusters):
+            label_columns.append({'header': literal(sorted(group, key=lambda w: (cy(w), w[0]))),
+                                  'words': group, 'left': label_bounds[i], 'right': label_bounds[i + 1]})
+        need(len(set(compact(c['header']) for c in label_columns)) == len(label_columns), 'label_headers_duplicate')
     merged_header, merged_boundary, merged_bands = None, None, []
     if merged_condition_column:
         ordered = sorted(label_header, key=lambda w: w[0])
@@ -232,9 +308,22 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
     caption_text = normalize_quote(caption[4])
     caption_proof = quote_evidence(document, caption_text)
     source_columns = []
+    caption_axis = None
+    if complete_flat and not levels:
+        declared = re.match(r'^Table\s+\d+\s*:\s*(?:Zero-shot\s+)?([A-Z][A-Za-z0-9-]{1,20})\s*\((' + UNIT + r')\)\s+on\s+accents\b', caption_text)
+        leaf_names = [surface(literal(cell)) for cell in leaves]
+        if declared and all(name in ('Mean', 'Avg', 'Avg.') or re.fullmatch(r'[A-Z]{2,3}', name)
+                            and re.search(r'(?<![A-Za-z])' + re.escape(name) + r':\s*[A-Za-z]', caption_text)
+                            for name in leaf_names):
+            need(not re.search(r'\b(?:not|without|unlike|previous|incorrect|hypothetical|except)\b', caption_text, re.I),
+                 'caption_axis_qualification_ambiguous')
+            need(len(re.findall(r'[A-Za-z][A-Za-z0-9-]*\s*\(\s*(?:' + UNIT + r')\s*\)', caption_text)) == 1,
+                 'caption_axis_multiple_metrics')
+            caption_axis = declared
     for c, cell in enumerate(leaves):
         value = surface(literal(cell))
-        decl = DECLARATION.fullmatch(value)
+        declaration = COMPLETE_DECLARATION if complete_flat else DECLARATION
+        decl = declaration.fullmatch(value)
         metric = surface(decl[1] if decl else value)
         unit = (decl[2] or decl[3]).lower() if decl else None
         origin = {'kind': 'leaf', 'words': cell} if decl else None
@@ -247,7 +336,14 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
             else:
                 unit = matches[0][1].lower()
                 origin = {'kind': 'caption_metric', 'start': matches[0].start(), 'end': matches[0].end(), 'text': matches[0][0]}
-        groups = [next(p['text'] for p in level if p['startColumn'] <= c < p['endColumn']) for level in levels]
+        groups = [p['text'] for level in levels for p in level if p['startColumn'] <= c < p['endColumn']]
+        if caption_axis:
+            need(unit is None, 'caption_axis_leaf_unit_conflict')
+            groups, metric, unit = [], value, caption_axis[2].lower()
+            origin = {'kind': 'caption_metric_condition', 'start': caption_axis.start(1),
+                      'end': caption_axis.end(2) + 1,
+                      'text': caption_text[caption_axis.start(1):caption_axis.end(2) + 1],
+                      'declaredMetric': caption_axis[1], 'conditionWords': cell}
         source_columns.append({'sourceColumn': c + 1, 'groups': groups, 'metric': metric, 'unit': unit,
                                'unitOrigin': origin, 'leafWords': cell})
     identities = [tuple([*c['groups'], compact(c['metric'])]) for c in source_columns]
@@ -263,7 +359,7 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
             ws = [w for w in ws if cx(w) >= merged_boundary]
             if not ws:
                 continue
-        parsed = numeric_row(ws)
+        parsed = parse_row(ws)
         if not parsed:
             # Conditions occupy their own full-rule bounded band, with no data
             # row in that band. Ordinary narrative cannot become a group label.
@@ -281,6 +377,15 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
                 need(abs(min(w[0] for w in ws) - min(w[0] for w in label_header)) <= 1,
                      'condition_band_label_alignment_changed')
                 need(not any(previous['top'] == a for previous in seen_condition_bands), 'condition_band_repeated')
+            elif complete_flat:
+                need(re.fullmatch(r'[IVX]+\.\s+[A-Za-z][A-Za-z /()-]{1,80}', literal(ws)), 'ordinary_body_group_not_explicit')
+                need(abs(min(w[0] for w in ws) - min(w[0] for w in label_header)) <= 1,
+                     'ordinary_group_label_not_aligned')
+                band_data = [(dy, values) for dy, _, values in data if a < dy < b]
+                need(band_data and all(y < dy for dy, _ in band_data), 'ordinary_group_not_before_complete_band')
+                need(sum(1 for yy, values in lines if a < yy < b and not parse_row(values)) == 1,
+                     'ordinary_group_band_unparsed_glyphs')
+                need(not any(previous['top'] == a for previous in seen_condition_bands), 'ordinary_group_band_repeated')
             else:
                 need(not any(a < dy < b for dy, _, _ in data), 'unparsed_body_glyphs')
                 need(sum(1 for yy, _ in lines if a < yy < b) == 1, 'condition_band_not_single_line')
@@ -294,19 +399,38 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
         label, values = parsed
         if flat_condition_bands:
             need(condition and condition[0]['top'] < y < condition[0]['bottom'], 'row_has_no_complete_condition_band')
+        if complete_flat and condition:
+            need(condition[0]['top'] < y < condition[0]['bottom'], 'ordinary_row_outside_condition_band')
         need(all(bounds[c + 1] < cx(w) < bounds[c + 2] for c, w in enumerate(values)), 'row_column_geometry_changed')
         row_text = literal(ws)
         row_proof = quote_evidence(document, row_text)
+        label_cells = []
+        if complete_flat:
+            label_cell_words = partition_label_cells(label, label_columns)
+            label_cells = [literal(cell) for cell in label_cell_words]
         source_rows.append({'sourceRow': len(source_rows) + 1, 'rowLabel': literal(label), 'conditionPath': condition,
+                            **({'labelCells': label_cells, 'labelCellWords': label_cell_words} if complete_flat else {}),
                             'labelWords': label, 'cells': [{'text': w[4], 'bbox': w[:4]} for w in values],
                             'quoteEvidence': row_proof})
     need(len(source_rows) == len(data), 'incomplete_source_rows')
+    if complete_flat:
+        extents = [[*column['words'], *(w for row in source_rows for w in row['labelCellWords'][i])]
+                   for i, column in enumerate(label_columns)]
+        final_label_bounds = [top[0]]
+        for a, b in zip(extents, extents[1:]):
+            hi, lo = max(w[2] for w in a), min(w[0] for w in b)
+            need(hi < lo, 'label_columns_overlap')
+            final_label_bounds.append((hi + lo) / 2)
+        final_label_bounds.append(bounds[1])
+        for i, column in enumerate(label_columns):
+            column['left'], column['right'] = final_label_bounds[i:i + 2]
     if flat_condition_bands:
         need(len(seen_condition_bands) >= 2, 'flat_table_condition_bands_missing')
     row_ids = [(tuple(p['text'] for p in row['conditionPath']), row['rowLabel']) for row in source_rows]
     need(len(set(row_ids)) == len(row_ids), 'duplicate_row_within_condition')
     box = [top[0], top[1], top[2], bottom]
     return {'page': page.number + 1, 'bbox': box, 'captionEvidence': caption_proof,
+            **({'headerKind': 'complete-flat-or-partial-header-v1', 'labelColumns': label_columns} if complete_flat else {}),
             **({'headerKind': 'flat-explicit-dimension-condition-bands-v1'} if flat_condition_bands else {}),
             **({'headerKind': 'flat-explicit-merged-condition-column-v1',
                 'rowLabelHeader': literal(ordered[1:]),
@@ -321,20 +445,28 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
 def map_view(grid, table, quotes, document):
     quote_proofs = [quote_evidence(document, quote) for quote in quotes]
     columns, all_columns, condition_columns = [], [], []
+    label_columns = []
+    for original in grid.get('labelColumns', []):
+        candidates = [i for i, header in enumerate(table['header']) if compact(header) == compact(original['header'])]
+        need(len(candidates) == 1, 'rendered_label_column_missing_or_ambiguous')
+        label_columns.append((candidates[0], original))
+    if label_columns:
+        need([i for i, _ in label_columns] == list(range(len(label_columns))), 'rendered_label_columns_reordered')
     label_index = 0
     if grid.get('conditionColumns'):
         labels = [i for i, header in enumerate(table['header']) if surface(header) == grid['rowLabelHeader']]
         need(len(labels) == 1, 'rendered_feature_header_not_unique')
         label_index = labels[0]
     for i, header in enumerate(table['header']):
-        if i == label_index:
+        if i == label_index or any(i == column for column, _ in label_columns):
             continue
         matching_conditions = [c for c in grid.get('conditionColumns', []) if surface(header) == c['header']]
         if matching_conditions:
             need(len(matching_conditions) == 1, 'rendered_condition_header_not_unique')
             condition_columns.append((i, matching_conditions[0]['header']))
             continue
-        decl = DECLARATION.fullmatch(surface(header))
+        declaration = COMPLETE_DECLARATION if grid.get('headerKind') == 'complete-flat-or-partial-header-v1' else DECLARATION
+        decl = declaration.fullmatch(surface(header))
         metric = compact(decl[1] if decl else header)
         unit = (decl[2] or decl[3]).lower() if decl else None
         candidates = [c for c in grid['sourceColumns'] if compact(' '.join([*c['groups'], c['metric']])) == metric
@@ -357,16 +489,21 @@ def map_view(grid, table, quotes, document):
             # The already source-bound complete original row quote locates the
             # physical condition band; equal selected numbers alone never do.
             q = original['quoteEvidence']
-            if compact(row[label_index]) != compact(original['rowLabel']) or not any(p['rawStartCodePoint'] <= q['rawStartCodePoint']
+            label_matches = all(compact(row[i]) == compact(original['labelCells'][j]) for j, (i, _) in enumerate(label_columns)) if label_columns else compact(row[label_index]) == compact(original['rowLabel'])
+            if not label_matches or not any(p['rawStartCodePoint'] <= q['rawStartCodePoint']
                     and q['rawEndCodePoint'] <= p['rawEndCodePoint'] for p in quote_proofs):
                 continue
             if any(sum(p.get('header') == header and surface(row[i]) == p['text'] for p in original['conditionPath']) != 1
                    for i, header in condition_columns):
                 continue
-            if all(numeric_surface(row[i]) == numeric_surface(original['cells'][c['sourceColumn'] - 1]['text']) for i, c in all_columns):
+            numeric = lambda value: re.sub(r'\s+(?=\()', '', numeric_surface(value)) if label_columns else numeric_surface(value)
+            if label_columns or all(numeric(row[i]) == numeric(original['cells'][c['sourceColumn'] - 1]['text']) for i, c in all_columns):
                 matches.append(original)
         need(len(matches) == 1, 'rendered_row_not_uniquely_quoted_complete_original')
         original = matches[0]
+        if label_columns:
+            need(all(numeric(row[i]) == numeric(original['cells'][c['sourceColumn'] - 1]['text']) for i, c in all_columns),
+                 'rendered_numeric_values_changed')
         mapped.append({'row': index, 'sourceRow': original['sourceRow'], 'rowLabel': original['rowLabel'],
                        'values': [{'column': c['column'], 'sourceColumn': c['sourceColumn'] + 1,
                                    'value': row[c['column']], 'sourceValue': original['cells'][c['sourceColumn']]['text'], 'unit': c['unit']}
@@ -406,7 +543,12 @@ def prove_pdf_bytes(raw, table, quotes):
                             columns, rows = map_view(grid, table, quotes, document)
                             candidates.append({'grid': grid, 'columns': columns, 'rows': rows})
                         except ValueError:
-                            continue
+                            try:
+                                grid = table_grid(page, block, document, complete_flat=True)
+                                columns, rows = map_view(grid, table, quotes, document)
+                                candidates.append({'grid': grid, 'columns': columns, 'rows': rows})
+                            except ValueError:
+                                continue
     need(len(candidates) == 1, 'complete_hierarchical_table_not_unique:' + str(len(candidates)))
     body = {'contract': CONTRACT, 'pdfSha256': sha(raw), 'rawFullTextSha256': document['rawFullTextSha256'],
             'renderedTableSha256': sha(table['markdown'].encode()), 'extraction': document['extraction'], **candidates[0]}
