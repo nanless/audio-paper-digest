@@ -1033,8 +1033,11 @@ function readReaderMaintenanceSourceLineage({executionId}) {
 // attempt/checkpoint progress. Only an actual adopted current child requires
 // the extra full-canonical science-parent replay capability.
 function scientificParentReplayRequired(loaded,batch,member) {
-    if(loaded.revision.contract!==adapter().READER_REVISION_CONTRACT
-        ||!require('./conference-source-resource-correction').isSourceCorrectionRecord(loaded.parent.analysis.papers[0]))return false;
+    const parent=loaded.parent.analysis.papers[0];
+    const sourceParent=require('./conference-source-resource-correction').isSourceCorrectionRecord(parent);
+    const operatorParent=parent.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance?.contract
+        ===require('./conference-reader-operator-correction').CORRECTION;
+    if(loaded.revision.contract!==adapter().READER_REVISION_CONTRACT||(!sourceParent&&!operatorParent))return false;
     const state=assertCurrentBatch(batch).value,item=state.items[member.paperId];
     if(item?.analysisRunId===loaded.parent.run.executionId)return false;
     const adoption=item?.textMaintenanceAdoption;
@@ -1047,7 +1050,10 @@ function withScientificParentReplay(loaded,batch,member,callback) {
     if(!scientificParentReplayRequired(loaded,batch,member))return callback();
     const handle=Object.freeze({});
     scientificParentReplayHandles.set(handle,{loaded,batch,member});
-    return require('./conference-source-resource-correction').withVerifiedMaintenanceScientificParent(handle,callback);
+    const operator=require('./conference-reader-operator-correction');
+    return loaded.parent.analysis.papers[0].analysisManifest?.stages?.apiReaderArticle?.operatorProvenance?.contract===operator.CORRECTION
+        ?operator.withVerifiedMaintenanceReaderParent(handle,callback)
+        :require('./conference-source-resource-correction').withVerifiedMaintenanceScientificParent(handle,callback);
 }
 function readScientificParentReplay(handle) {
     const bound=scientificParentReplayHandles.get(handle);check(bound,'private verified maintenance parent replay required');
@@ -1060,6 +1066,7 @@ function readScientificParentReplay(handle) {
         &&current.parent.sourceFileSha256===member.parentCAS.sourceFileSha256,'private scientific replay actual canonical CAS');
     assertCurrentBatch(batch);
     return {child:structuredClone(loaded.analysis.papers[0]),parent:structuredClone(loaded.parent.analysis.papers[0]),executionId:loaded.run.executionId,
+        processId:batch.m.processId,baselineItem:structuredClone(batch.baseline.value.items[member.paperId]),
         assertUnchanged:()=>{const now=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:batch.analysisRoot,executionId:loaded.run.executionId});
             check(now.analysisFileSha256===loaded.analysisFileSha256&&now.runFileSha256===loaded.runFileSha256
                 &&now.sourceFileSha256===loaded.sourceFileSha256&&same(now.revision,loaded.revision)

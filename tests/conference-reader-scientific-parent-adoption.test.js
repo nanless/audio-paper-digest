@@ -10,7 +10,7 @@ function fixture(){
  const actual={value:{items:{paper:{analysisRunId:'parent'}}}},controls={stateChecks:0,scopes:0,childIdentityReads:0};
  const api=vm.runInNewContext(code+'\n({scientificParentReplayRequired,withScientificParentReplay})',{
   scientificParentReplayHandles,check:(value,message)=>assert.ok(value,message),adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),
-  assertCurrentBatch:()=>{controls.stateChecks++;return actual},require:()=>({isSourceCorrectionRecord:paper=>paper.local===true,
+  assertCurrentBatch:()=>{controls.stateChecks++;return actual},require:()=>({CORRECTION:'conference-reader-operator-correction-v1',isSourceCorrectionRecord:paper=>paper.local===true,
    withVerifiedMaintenanceScientificParent:(handle,callback)=>{assert.ok(scientificParentReplayHandles.get(handle));controls.scopes++;controls.childIdentityReads++;return callback()}})});
  return{...api,loaded,batch,member,actual,controls};
 }

@@ -73,7 +73,7 @@ test('maintenance真正WeakMap cap逐次重读原父/子/修订CAS，非JSON许�
  const fn=maintenance.slice(maintenance.indexOf('function readScientificParentReplay('),maintenance.indexOf('function readVerifiedReaderScientificParent('));
  const loaded={run:{executionId:'child'},analysis:{papers:[{id:'paper',apiReaderArticle:'actual child'}]},revision:{real:'actual revision'},
   analysisFileSha256:'a',runFileSha256:'r',sourceFileSha256:'s',parent:{analysis:{papers:[{id:'paper',analysis:'sealed parent'}]},analysisFileSha256:'pa',runFileSha256:'pr',sourceFileSha256:'ps'}};
- const member={parentCAS:{analysisFileSha256:'pa',runFileSha256:'pr',sourceFileSha256:'ps'}},batch={analysisRoot:'/canonical'},token=Object.freeze({}),scientificParentReplayHandles=new WeakMap();
+ const member={paperId:'paper',parentCAS:{analysisFileSha256:'pa',runFileSha256:'pr',sourceFileSha256:'ps'}},batch={analysisRoot:'/canonical',m:{processId:'process'},baseline:{value:{items:{paper:{paperId:'paper',analysisRunId:'parent'}}}}},token=Object.freeze({}),scientificParentReplayHandles=new WeakMap();
  scientificParentReplayHandles.set(token,{loaded,batch,member});let actual=structuredClone(loaded),stateValid=true;
  const read=vm.runInNewContext(fn+'\nreadScientificParentReplay',{scientificParentReplayHandles,same,structuredClone,
   check:(condition,message)=>assert.ok(condition,message),adapter:()=>({loadConferenceReaderRevisionIdentity:()=>actual}),assertCurrentBatch:()=>assert.equal(stateValid,true)});
@@ -95,7 +95,7 @@ test('科学父cap只为ordinary来源纠正父生效，非纠正与原grant路�
  const scientificParentReplayHandles=new WeakMap();let scopes=0;
  const run=vm.runInNewContext(fn+'\nwithScientificParentReplay',{scientificParentReplayHandles,
   scientificParentReplayRequired:loaded=>loaded.revision.contract==='ordinary'&&loaded.parent.analysis.papers[0].local===true,
-  adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),require:()=>({isSourceCorrectionRecord:paper=>!!paper.local,
+  adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),require:()=>({CORRECTION:'conference-reader-operator-correction-v1',isSourceCorrectionRecord:paper=>!!paper.local,
    withVerifiedMaintenanceScientificParent:(token,callback)=>{assert.ok(scientificParentReplayHandles.get(token));scopes++;return callback()}})});
  const mk=(contract,local)=>({revision:{contract},parent:{analysis:{papers:[{local}]}}});
  assert.equal(run(mk('grant',true),{}, {},()=>1),1);assert.equal(run(mk('ordinary',false),{},{},()=>2),2);assert.equal(scopes,0);

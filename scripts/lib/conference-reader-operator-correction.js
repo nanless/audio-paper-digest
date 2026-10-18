@@ -5,6 +5,7 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage(), batches = new WeakMap();
+const maintenanceParentReplay = new AsyncLocalStorage();
 const CONTRACT = 'conference-reader-operator-batch-v1';
 const CORRECTION = 'conference-reader-operator-correction-v1';
 const RECEIPT = 'conference-reader-operator-receipt-v1';
@@ -920,6 +921,35 @@ function operatorMarked(paper) {
         item?.executionKind === 'operator' || item?.model === 'operator-local'
         || item?.protocol === 'local_operator' || item?.operatorProvenance || item?.operatorHistory);
 }
+// A maintenance adoption may move the process pointer past this immutable
+// operator Reader. Only the real registered child/parent capability can replay
+// its original baseline item; all original operator receipts/fees still replay.
+function withVerifiedMaintenanceReaderParent(handle,callback) {
+    if(typeof callback!=='function')fail('维护原人工父稿冷核缺少回调');
+    const bound=require('./conference-reader-review-maintenance').readScientificParentReplay(handle);
+    const proof=bound.parent?.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance;
+    if(proof?.contract!==CORRECTION||proof.processId!==bound.processId
+        ||bound.baselineItem?.paperId!==bound.parent.id
+        ||bound.baselineItem.analysisRunId!==proof.executionId)fail('维护原人工父稿缺少真实baseline绑定');
+    return require('./analysis-stop-control').withModelRequestsForbidden(()=>maintenanceParentReplay.run(bound,()=>{
+        bound.assertUnchanged();const result=callback();
+        if(result&&typeof result.then==='function')return result.then(value=>{bound.assertUnchanged();return value;});
+        bound.assertUnchanged();return result;
+    }));
+}
+function maintenanceParentItem(paper,loaded,item,processId) {
+    const bound=maintenanceParentReplay.getStore(),proof=paper.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance;
+    if(!bound||!isDeepStrictEqual(bound.parent,paper)||item?.analysisRunId===proof?.executionId)return item;
+    bound.assertUnchanged();
+    const original=bound.baselineItem;
+    if(bound.processId!==processId||bound.executionId!==item?.analysisRunId
+        ||!isDeepStrictEqual(bound.parent,loaded.analysis.papers[0])
+        ||original?.paperId!==paper.id||original.analysisRunId!==loaded.run.executionId
+        ||original.analysisProof?.analysisSha256!==loaded.analysisFileSha256
+        ||original.analysisProof?.completionReceiptSha256!==loaded.run.completionReceipt?.receiptSha256
+        ||original.analysisProof?.sourceSnapshotSha256!==loaded.run.sourceSnapshotSha256)fail('维护原人工父稿回放未绑定当前真实child/原parent CAS');
+    return clone(original);
+}
 function withSavedPaper(paper, callback) {
     if (typeof callback !== 'function') fail('缺少同步验证回调');
     // A nested ordinary-paper check must not remove the outer operator's
@@ -953,7 +983,8 @@ function withSavedPaper(paper, callback) {
         // the normal stage transaction adopts this child, only its real new
         // completion/source/page proof may replace that original pointer.
         require('./conference-process').assertState(currentState.value);
-        const item = currentState.value.items[paper.id], adoption = item?.readerOperatorAdoption;
+        const item = maintenanceParentItem(paper,loaded,currentState.value.items[paper.id],proof.processId),
+            adoption = item?.readerOperatorAdoption;
         if (currentState.value.processId !== proof.processId || item?.status !== 'complete'
             || item.analysisRunId !== proof.executionId || item.analysisProof?.analysisSha256 !== loaded.analysisFileSha256
             || item.analysisProof?.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256
@@ -1019,4 +1050,4 @@ function withSavedPaper(paper, callback) {
 module.exports = { prepareReaderInput, finalizeCheckpointImages, finalizeReaderFailure, CONTRACT, CORRECTION, RECEIPT, SINGLE_TABLE_APPEND,
     HISTORICAL_NORMAL_TERMINAL, PAID_RAW_JSON_SCHEMA, DECLARED_TABLE_RESTORATION, openCorrectionBatch, withCorrection, current, execution, replay,
     readVerifiedConferenceReaderPrompts, isVerifiedConferenceReaderPromptDeclaration,
-    sealCorrection, withSavedPaper, hasVerifiedOperatorProvenance, assertMayAccessNetwork, assertSavedBatchMember, assertResumableCorrectionBatch };
+    sealCorrection, withSavedPaper, withVerifiedMaintenanceReaderParent, hasVerifiedOperatorProvenance, assertMayAccessNetwork, assertSavedBatchMember, assertResumableCorrectionBatch };
