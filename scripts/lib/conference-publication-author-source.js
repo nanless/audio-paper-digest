@@ -35,6 +35,24 @@ function readReceipt(file) {
         return JSON.parse(bytes.toString('utf8'));
     } finally { fs.closeSync(fd); }
 }
+function loadPublicationExtractionSnapshot(sourceRoot, receiptName, receipt, item) {
+    if (receipt.extractor?.version !== '2.3.0') {
+        return extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(sourceRoot, receiptName, { replay: false }));
+    }
+    // Retain the original extraction identity, as normal source-upgrade replay
+    // already does. Publication must not relabel old bytes as a new extraction.
+    const { receiptSha256, ...body } = receipt;
+    if (receiptSha256 !== stable(body) || receiptSha256 !== item.sourceProof?.receiptSha256
+        || receipt.paperId !== item.paperId || receipt.sourceIdentity !== item.sourceIdentity) {
+        fail('原2.3.0抽取凭证与当前成员或原SHA不一致');
+    }
+    const names = { receipt: receiptName, request: receipt.request?.file,
+        metadata: receipt.source?.metadata?.file, pdf: receipt.source?.pdf?.file,
+        text: receipt.text?.file, artifacts: receipt.artifacts?.file };
+    if (Object.values(names).some(name => typeof name !== 'string'
+        || !/^[a-z0-9][a-z0-9._-]{0,164}\.(?:json|pdf|txt)$/.test(name))) fail('原2.3.0抽取文件名不安全');
+    return require('./conference-source-upgrade').retainedLegacySnapshot(sourceRoot, names, receipt, item, { discovery });
+}
 function verifyPublicationAuthorSources({ runtimeRoot, state, completion }) {
     if (!path.isAbsolute(runtimeRoot || '')) fail('运行目录必须为绝对路径');
     const authority = state?.authority;
@@ -67,7 +85,7 @@ function verifyPublicationAuthorSources({ runtimeRoot, state, completion }) {
         const record = readReceipt(filename(sourceRoot, name));
         if (record.receiptSha256) {
             if (receipts.has(record.receiptSha256)) fail('来源凭证 SHA 重复');
-            receipts.set(record.receiptSha256, name);
+            receipts.set(record.receiptSha256, { name, record });
         }
     }
     return items.map(([paperId, item]) => {
@@ -81,9 +99,9 @@ function verifyPublicationAuthorSources({ runtimeRoot, state, completion }) {
         const official = discovery.safeAbsoluteFile(path.join(catalog.candidateManifest.pdfRoot, candidate.path),
             'publication official PDF', discovery.MAX_PDF_BYTES);
         if (hash(official.bytes) !== candidate.sha256) fail(`${paperId} 官方 PDF 字节变化`);
-        const receiptName = receipts.get(item.sourceProof?.receiptSha256);
-        if (!receiptName) fail(`${paperId} 封存来源凭证缺失`);
-        const sealed = extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(sourceRoot, receiptName, { replay: false }));
+        const retained = receipts.get(item.sourceProof?.receiptSha256);
+        if (!retained) fail(`${paperId} 封存来源凭证缺失`);
+        const sealed = loadPublicationExtractionSnapshot(sourceRoot, retained.name, retained.record, item);
         const metadata = { ...replay.metadataRecord, conferenceId: replay.conference.id,
             year: replay.conference.year, identity: replay.identity };
         const metadataSha = hash(Buffer.from(`${JSON.stringify(canonical(metadata), null, 2)}\n`));

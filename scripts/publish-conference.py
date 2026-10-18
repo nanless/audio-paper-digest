@@ -529,7 +529,7 @@ def verify_process_author_sources(state, completion):
             [node, str(ROOT / 'scripts/lib/conference-publication-author-replay-cli.js'), str(source_file.fileno())],
             cwd=str(ROOT), env={key: value for key, value in os.environ.items()
                                 if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=60, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),),
+            timeout_seconds=60, max_output_bytes=2 * 1024 * 1024, pass_fds=(source_file.fileno(),),
         )
     if result.returncode != 0 or result.timed_out or result.output_truncated:
         raise ConferencePublicationError('会议作者来源未由官方元数据与已有封存全文重放，请先刷新作者/Reader：' + str(result.stderr[-2000:]))
