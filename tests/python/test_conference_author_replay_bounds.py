@@ -28,7 +28,7 @@ class ConferenceAuthorReplayBoundsTest(unittest.TestCase):
 
         def actual_bounded_child(command, **kwargs):
             self.assertTrue(command[1].endswith('conference-publication-author-replay-cli.js'))
-            self.assertEqual(kwargs['timeout_seconds'], 60)
+            self.assertEqual(kwargs['timeout_seconds'], 600)
             self.assertEqual(kwargs['max_output_bytes'], 2 * 1024 * 1024)
             self.assertGreaterEqual(kwargs['pass_fds'][0], 3)
             # Replace only the author's semantic program with explicit synthetic
@@ -53,7 +53,7 @@ class ConferenceAuthorReplayBoundsTest(unittest.TestCase):
         self.assertFalse(child.timed_out)
 
     def test_larger_than_two_mib_still_rejects_without_parsing_a_partial_proof(self):
-        with self.assertRaisesRegex(self.publisher.ConferencePublicationError, '会议作者来源未由'):
+        with self.assertRaisesRegex(self.publisher.ConferencePublicationError, '会议作者来源只读重放未完整完成'):
             self.run_transport(2 * 1024 * 1024 + 1)
 
 

@@ -530,14 +530,18 @@ def verify_process_author_sources(state, completion):
             cwd=str(ROOT), env={**{key: value for key, value in os.environ.items()
                                   if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
                                 'VERIFY_PROJECT_DISABLE_FILE_LOGS': '1'},
-            timeout_seconds=60, max_output_bytes=2 * 1024 * 1024, pass_fds=(source_file.fileno(),),
+            timeout_seconds=600, max_output_bytes=2 * 1024 * 1024, pass_fds=(source_file.fileno(),),
         )
+    diagnostics = (f'returncode={result.returncode}, timed_out={result.timed_out}, '
+                   f'output_truncated={result.output_truncated}, '
+                   f'stdout_utf8_bytes={len(result.stdout.encode())}, '
+                   f'stderr_utf8_bytes={len(result.stderr.encode())}')
     if result.returncode != 0 or result.timed_out or result.output_truncated:
-        raise ConferencePublicationError('会议作者来源未由官方元数据与已有封存全文重放，请先刷新作者/Reader：' + str(result.stderr[-2000:]))
+        raise ConferencePublicationError('会议作者来源只读重放未完整完成（' + diagnostics + '）：' + str(result.stderr[-2000:]))
     try:
         proof = json.loads(result.stdout)
     except (ValueError, TypeError) as error:
-        raise ConferencePublicationError('会议作者来源核验响应无效') from error
+        raise ConferencePublicationError('会议作者来源核验响应无效（' + diagnostics + '）') from error
     if proof.get('verified') is not True or not isinstance(proof.get('papers'), list):
         raise ConferencePublicationError('会议作者来源核验失败')
     papers = {paper['paperId']: paper for paper in proof['papers']}
