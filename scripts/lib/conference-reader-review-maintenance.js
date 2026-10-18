@@ -15,6 +15,8 @@ const legacyParentReferenceScope = new (require('node:async_hooks').AsyncLocalSt
 const evidenceCache = new Map();
 const verifiedAdoptedChildIdentities = new WeakMap();
 const validatedMetadata = new WeakMap();
+const sourceLineageBatches = new Map();
+const MAX_SOURCE_LINEAGE_BATCHES = 8;
 const verifiedCanonicalReviewEvidence = new WeakMap();
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
@@ -1037,15 +1039,25 @@ function readReaderMaintenanceSourceLineage({executionId}) {
         &&loaded.revision.mode==='reader-only','ordinary initial Reader-only source lineage required');
     const processDirectory=path.join(require('../config').FILES.conferenceProcessDir,loc.processId);
     canonicalRoots(processDirectory,analysisRoot);
-    const p=paths(processDirectory,loc.batchId),manifest=read(p.manifest),m=manifest.value;
-    self(m,'manifestSha256');
-    check(m.contract==='conference-reader-review-maintenance-batch-v1'&&m.version===1
-        &&m.processId===loc.processId&&m.batchId===loc.batchId&&Array.isArray(m.members)
-        &&m.members.length>0&&new Set(m.members.map(row=>row.paperId)).size===m.members.length,'source-only registered manifest identity');
-    const baseline=read(path.join(p.root,'baseline-state.json'));
-    check(baseline.sha256===m.stateFileSha256&&baseline.value.stateSha256===m.baselineStateSha256,
-        'source-only baseline immutable manifest CAS');
-    const batch={m,p,analysisRoot,processDirectory,manifestFileSha256:manifest.sha256,baseline};
+    const p=paths(processDirectory,loc.batchId),cacheKey=analysisRoot+'\0'+processDirectory+'\0'+p.root;
+    try {
+    const manifestSha256=privateFileSha256(p.manifest),baselineSha256=privateFileSha256(path.join(p.root,'baseline-state.json'));
+    let batch=sourceLineageBatches.get(cacheKey);
+    if(batch&&(batch.analysisRoot!==analysisRoot||batch.processDirectory!==processDirectory
+        ||batch.p.root!==p.root||batch.p.manifest!==p.manifest||batch.manifestFileSha256!==manifestSha256
+        ||batch.baseline.sha256!==baselineSha256)) {sourceLineageBatches.delete(cacheKey);batch=null;}
+    if(!batch) {
+        const manifest=read(p.manifest),m=manifest.value;check(manifest.sha256===manifestSha256,'source-only manifest changed during validation');
+        self(m,'manifestSha256');
+        check(m.contract==='conference-reader-review-maintenance-batch-v1'&&m.version===1
+            &&m.processId===loc.processId&&m.batchId===loc.batchId&&Array.isArray(m.members)
+            &&m.members.length>0&&new Set(m.members.map(row=>row.paperId)).size===m.members.length,'source-only registered manifest identity');
+        const baseline=read(path.join(p.root,'baseline-state.json'));
+        check(baseline.sha256===baselineSha256&&baseline.sha256===m.stateFileSha256&&baseline.value.stateSha256===m.baselineStateSha256,
+            'source-only baseline immutable manifest CAS');
+        batch={m,p,analysisRoot,processDirectory,manifestFileSha256:manifest.sha256,baseline};
+    }
+    const {m,baseline}=batch;
     const member=m.members.find(row=>row.paperId===loaded.run.paperId);
     check(member&&same(locator(batch,{...member,window:null}),loc)
         &&member.executionId===loaded.run.executionId&&member.parentExecutionId===loaded.parent.run.executionId
@@ -1062,7 +1074,13 @@ function readReaderMaintenanceSourceLineage({executionId}) {
         ...['analysis.json','run.json','source.json'].map(name=>path.join(loaded.parent.directory,name))]
         .map(file=>({file,sha256:read(file).sha256}));
     const assertUnchanged=()=>{for(const pin of pins)check(read(pin.file).sha256===pin.sha256,'source-only canonical revision changed');assertCurrentBatch(batch);};
-    assertUnchanged();return {loaded,member,locator:loc,assertUnchanged};
+    assertUnchanged();
+    // Admit only a completely checked source-only batch. Reuse its private
+    // metadata identities, never a Reader/source capability or a child record.
+    sourceLineageBatches.delete(cacheKey);sourceLineageBatches.set(cacheKey,batch);
+    while(sourceLineageBatches.size>MAX_SOURCE_LINEAGE_BATCHES)sourceLineageBatches.delete(sourceLineageBatches.keys().next().value);
+    return {loaded,member,locator:loc,assertUnchanged};
+    } catch(error) {sourceLineageBatches.delete(cacheKey);throw error;}
 }
 // The original pre-adoption seed path permits its own legitimate child
 // attempt/checkpoint progress. Only an actual adopted current child requires
