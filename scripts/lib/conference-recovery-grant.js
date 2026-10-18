@@ -128,6 +128,7 @@ function recoveryWindowMaterials(analysisRoot, executionId) {
 }
 function assertContinuation(state, member) {
     const c = member.continuation;
+    if (state.manifest.version === 3 && c === null) return;
     if (state.manifest.version === 1) {
         if (c !== undefined) fail('旧v1许可不能借延续字段扩大权限');
         return;
@@ -177,11 +178,27 @@ function assertMemberFiles(state, member) {
         || sha(source.sourceDetails?.text || '') !== member.sourceTextSha256) {
         fail('原子运行与封存全文身份不一致');
     }
+    if (state.manifest.version === 3 && member.continuation === null) {
+        const failed = adapter().loadConferenceReaderRevision({ analysisRoot: state.analysisRoot,
+            executionId: member.childExecutionId });
+        if (failed.recoveryWindow || failed.analysis.status !== 'partial' || failed.run.status === 'running'
+            || failed.parent.run.executionId !== member.parentExecutionId
+            || failed.parent.analysisFileSha256 !== memberPins(member).parentAnalysisFileSha256
+            || member.childExecutionId !== adapter().readerRevisionExecutionId(member.parentExecutionId,
+                memberPins(member).parentAnalysisFileSha256)
+            || !Number.isSafeInteger(failed.analysis.readerRevisionProgress?.attempts)
+            || failed.analysis.readerRevisionProgress.attempts < 1
+            || failed.analysis.readerRevisionProgress.attempts > failed.revision.maxAttempts
+            || !Array.isArray(failed.analysis.readerRevisionProgress.failures)
+            || !failed.analysis.readerRevisionProgress.failures.length) fail('初次成员不是当前父稿唯一实际失败的普通修订');
+        if (recoveryWindowMaterials(state.analysisRoot, member.childExecutionId).materialsSha256
+            !== member.initialMaterialsSha256) fail('初次失败窗口的完整候选、请求响应或资产树变化');
+    }
     assertContinuation(state, member);
 }
 function assertManifest(manifest) {
     const { manifestSha256, ...body } = manifest || {};
-    if (manifest.contract !== CONTRACT || ![1, 2].includes(manifest.version) || !UUID.test(manifest.grantId || '')
+    if (manifest.contract !== CONTRACT || ![1, 2, 3].includes(manifest.version) || !UUID.test(manifest.grantId || '')
         || !UUID.test(manifest.processId || '') || !SHA.test(manifest.baselineStateFileSha256 || '')
         || !SHA.test(manifest.inventorySha256 || '') || manifestSha256 !== hash(body)
         || !manifest.approval || manifest.approval.kind !== 'explicit-human'
@@ -202,6 +219,12 @@ function assertManifest(manifest) {
         }
         memberPins(member);
         const c = member.continuation;
+        if (manifest.version === 3 && !Object.hasOwn(member, 'continuation')) fail('混合许可逐成员必须显式声明初次null或原窗口延续');
+        if (manifest.version === 3 && c === null) {
+            if (!SHA.test(member.initialMaterialsSha256 || '')) fail('初次成员缺少完整失败材料树 SHA');
+            continue;
+        }
+        if (manifest.version === 3 && Object.hasOwn(member, 'initialMaterialsSha256')) fail('延续成员不能声明初次材料树');
         if (manifest.version === 1 ? c !== undefined : !c || c.contract !== CONTINUATION
             || Object.keys(c).sort().join(',') !== ['contract','grantId','grantSha256','materialsSha256','ledgerFileSha256'].sort().join(',')
             || !UUID.test(c.grantId || '') || c.grantId === manifest.grantId
@@ -212,7 +235,7 @@ function assertManifest(manifest) {
     }
     return manifest;
 }
-function checkBaseline(manifest, baseline) {
+function checkBaseline(manifest, baseline, analysisRoot) {
     const state = api().assertState(baseline.value);
     if (baseline.sha256 !== manifest.baselineStateFileSha256 || state.processId !== manifest.processId
         || state.generation !== manifest.baselineGeneration || state.status !== 'partial') fail('原批次基线不匹配');
@@ -231,9 +254,29 @@ function checkBaseline(manifest, baseline) {
         }
         const releases = (item.retryReleases || []).filter(row => row.recoveryGrantId);
         if (manifest.version === 1 && releases.length) fail('已有追加历史必须绑定最新失败窗口，不能重选最旧失败');
-        if (manifest.version === 2 && (releases.at(-1)?.recoveryGrantId !== member.continuation.grantId
+        if ((manifest.version === 2 || manifest.version === 3 && member.continuation)
+            && (releases.at(-1)?.recoveryGrantId !== member.continuation.grantId
             || releases.at(-1)?.recoveryGrantSha256 !== member.continuation.grantSha256)) {
             fail('延续未绑定原进程最后实际派发的许可');
+        }
+        if (manifest.version === 3 && member.continuation === null && releases.length) {
+            const release = releases.at(-1);
+            const prior = resolveRegisteredRecoveryGrant(release.recoveryGrantId, release.recoveryGrantSha256,
+                { analysisRoot });
+            const authority = readRecoveryGrantMember(prior, member.paperId);
+            const child = adapter().loadGrantedConferenceRecovery({ analysisRoot: authority.analysisRoot,
+                executionId: authority.expectedExecutionId });
+            if (authority.processId !== manifest.processId || item.analysisRunId !== authority.expectedExecutionId
+                || child.parent.run.executionId !== authority.parentExecutionId || child.analysis.status !== 'complete'
+                || child.run.status !== 'complete' || child.run.paperId !== member.paperId
+                || child.analysisFileSha256 !== pins.parentAnalysisFileSha256
+                || child.runFileSha256 !== pins.parentRunFileSha256
+                || child.run.completionReceipt?.receiptSha256 !== item.analysisProof?.completionReceiptSha256
+                || child.run.sourceSnapshotSha256 !== member.sourceSnapshotSha256
+                || authority.sourceSha256 !== member.sourceTextSha256
+                || hash(child.revision) !== hash(item.readerRevision)) {
+                fail('初次追加有旧许可历史，但当前父稿并非真实已采纳完成子稿');
+            }
         }
     }
     return state;
@@ -268,11 +311,11 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
     if (!fs.existsSync(receiptFile)) {
         if (!install) fail('追加许可尚未显式登记');
         const baseline = read(path.join(processDirectory, 'state.json'));
-        checkBaseline(manifest, baseline);
+        checkBaseline(manifest, baseline, analysisRoot);
         const temporaryHandle = makeHandle(manifest, root, analysisRoot, processDirectory);
         const data = handles.get(temporaryHandle);
         for (const member of manifest.members) assertMemberFiles(data, member);
-        if (manifest.version === 2) for (const id of fs.readdirSync(root)) {
+        if (manifest.version >= 2) for (const id of fs.readdirSync(root)) {
             if (id === manifest.grantId || !UUID.test(id) || !fs.existsSync(path.join(root, id, 'registration.json'))) continue;
             const other = assertManifest(read(path.join(root, id, 'manifest.json')).value);
             if (other.processId === manifest.processId && other.members.some(row => manifest.members.some(member =>
@@ -300,7 +343,7 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
         || receipt.processId !== manifest.processId || receipt.analysisRoot !== directory(analysisRoot)
         || receipt.processDirectory !== directory(processDirectory)
         || receipt.inventorySha256 !== manifest.inventorySha256) fail('已登记追加许可身份不匹配');
-    checkBaseline(manifest, read(path.join(target, 'baseline-state.json')));
+    checkBaseline(manifest, read(path.join(target, 'baseline-state.json')), analysisRoot);
     const handle = makeHandle(manifest, target, analysisRoot, processDirectory);
     const data = handles.get(handle);
     for (const member of manifest.members) assertMemberFiles(data, member);

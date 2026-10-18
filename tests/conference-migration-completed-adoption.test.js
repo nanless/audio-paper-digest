@@ -31,6 +31,7 @@ async function completed(t, { partial = false } = {}) {
     if (partial) await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep }), /synthetic saved partial/);
     else assert.equal((await adapter.refreshConferenceGrantedRecovery(request, { engine, deep })).status, 'complete');
     const state = structuredClone(f.grant.state), item = state.items[f.paperId];
+    item.analysisProof.completionReceiptSha256 = f.grant.parent.run.completionReceipt.receiptSha256;
     item.readerRefreshRequired = true; item.retryBudgetStart = item.attempts; item.attempts += 3;
     item.retryAuthorizedAtAttempt = item.attempts - 1;
     item.retryReleases = [{ attempts: item.retryBudgetStart, recoveryGrantId: member.grantId,
@@ -49,7 +50,10 @@ async function completed(t, { partial = false } = {}) {
         conferenceProcessDir: path.dirname(f.grant.processDirectory),
         conferencePageStagingDir: path.join(f.root, 'new-staging'), tagCatalogFile: path.join(f.root, 'unused-tags.json') };
     const context = { authority: state.authority, members: [{ paperId: f.paperId }], files };
-    const deps = { files, engine: actualEngine, adapter, loadAuthority: () => context,
+    const deps = { files, engine: actualEngine,
+        // Synthetic scientific records do not exercise the real saved-only
+        // qualification helper; its scheduling boundary is doubled below.
+        adapter: { ...adapter, replaySavedConferenceReaderRevision: undefined }, loadAuthority: () => context,
         prepareShared: async () => source, now: () => '2026-10-18T03:00:00.000Z',
         aggregate: () => assert.fail('postprocess-only must not aggregate'),
         processPaper: () => assert.fail('exhausted saved child must not enter paid dispatch') };
@@ -94,6 +98,146 @@ test('最新子稿仍 partial 时只读取，不重开恢复或调用模型', as
         postprocess: { stagePaper: () => assert.fail('partial child cannot be staged or resumed') } } });
     assert.equal(result.adoptedSavedChildren.length, 0); assert.equal(result.newApiRequests, 0);
     assert.deepEqual(fs.readFileSync(f.stateFile), bytes);
+});
+
+async function ordinaryCompleted(t, { partial = false } = {}) {
+    const f = await completed(t, { partial: true });
+    let child = adapter.loadConferenceReaderRevision({ analysisRoot: f.analysisRoot, executionId: f.failedExecutionId });
+    if (!partial) {
+        adapter.replaceJson(path.join(child.directory, 'analysis.json'), { ...child.analysis, status: 'complete',
+            completedAt: '2026-10-18T04:00:00.000Z' }, child.analysisFileSha256);
+        adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot: f.analysisRoot, executionId: f.failedExecutionId }));
+        child = adapter.loadConferenceReaderRevision({ analysisRoot: f.analysisRoot, executionId: f.failedExecutionId });
+    }
+    const state = structuredClone(f.state), item = state.items[f.paperId];
+    delete item.retryReleases; state.stateSha256 = api.stateDigest(state);
+    fs.writeFileSync(f.stateFile, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+    const staged = () => {
+        assert.throws(() => stop.assertMayStartRequest(), { code: stop.MODEL_REQUESTS_FORBIDDEN });
+        const current = adapter.loadConferenceReaderRevision({ analysisRoot: f.analysisRoot, executionId: f.failedExecutionId });
+        adapter.verifyPlanAuthority(current, f.planHandle, f.sourceRoot);
+        return { status: 'staged', manifest: { paperId: f.paperId, analysisExecutionId: current.run.executionId,
+            analysisSha256: current.analysisFileSha256, completionReceiptSha256: current.run.completionReceipt.receiptSha256,
+            sourceSnapshotSha256: current.run.sourceSnapshotSha256, manifestSha256: 'a'.repeat(64),
+            contentSha256: 'b'.repeat(64), pagePath: 'content/posts/synthetic-ordinary-test-only.md' } };
+    };
+    return { ...f, state, child, staged };
+}
+
+test('普通真实已保存complete子稿在outer耗尽后沿同一正常stage/锁/CAS零请求采纳，完整保留旧失败与次数', async t => {
+    const f = await ordinaryCompleted(t), original = structuredClone(f.state.items[f.paperId]); let calls = 0;
+    const before = sha(fs.readFileSync(path.join(f.child.directory, 'analysis.json')));
+    const result = await migration.migrateAndRun(f.options, { dependencies: { ...f.deps,
+        postprocess: { stagePaper: () => { calls++; return f.staged(); } } } });
+    assert.equal(calls, 1); assert.equal(result.adoptedSavedChildren.length, 1); assert.equal(result.newApiRequests, 0);
+    const current = api.assertState(JSON.parse(fs.readFileSync(f.stateFile))), item = current.items[f.paperId];
+    assert.equal(item.status, 'complete'); assert.equal(item.analysisRunId, f.failedExecutionId);
+    assert.equal(item.attempts, original.attempts); assert.equal(item.retryBudgetStart, original.retryBudgetStart);
+    assert.deepEqual(item.retryReleases, original.retryReleases);
+    assert.equal(sha(fs.readFileSync(path.join(f.child.directory, 'analysis.json'))), before);
+    const receipt = JSON.parse(fs.readFileSync(path.join(f.grant.processDirectory, item.savedChildAdoptions[0].receiptFile)));
+    assert.deepEqual(receipt.previousItem, original); assert.equal(receipt.proof.analysisRunId, f.failedExecutionId);
+});
+
+test('普通partial子稿不得采纳；真实科学资格仍拒合成complete，不用继承父稿证明通过', async t => {
+    for (const partial of [true, false]) {
+        const f = await ordinaryCompleted(t, { partial }), bytes = fs.readFileSync(f.stateFile);
+        const result = await migration.migrateAndRun(f.options, { dependencies: { ...f.deps,
+            postprocess: partial ? { stagePaper: () => assert.fail('partial must not stage') }
+                : require('../scripts/lib/conference-postprocess') } });
+        assert.equal(result.adoptedSavedChildren.length, 0);
+        assert.equal(result.savedChildAdoptionFailures.length, partial ? 0 : 1);
+        assert.deepEqual(fs.readFileSync(f.stateFile), bytes);
+    }
+});
+
+test('唯一实际partial子稿先走saved-only helper自身论文锁，只有真实保存complete后才正常stage采纳', async t => {
+    for (const eligible of [false, true]) {
+        const f = await ordinaryCompleted(t, { partial: true }), before = fs.readFileSync(f.stateFile);
+        let replayed = 0, staged = 0;
+        const progress = structuredClone(f.child.analysis.readerRevisionProgress);
+        const deps = { ...f.deps, adapter: { ...f.deps.adapter,
+            replaySavedConferenceReaderRevision: async input => {
+                replayed++; assert.equal(input.executionId, f.failedExecutionId);
+                assert.equal(input.planHandle, f.planHandle); assert.equal(input.sourceRoot, f.sourceRoot);
+                return actualEngine.withPaperAnalysisLock({ id: f.paperId }, () => {
+                    assert.throws(() => stop.assertMayStartRequest(), { code: stop.MODEL_REQUESTS_FORBIDDEN });
+                    if (!eligible) return { status: 'partial' };
+                    const current = adapter.loadConferenceReaderRevision(input);
+                    adapter.replaceJson(path.join(current.directory, 'analysis.json'), { ...current.analysis, status: 'complete',
+                        completedAt: '2026-10-18T04:00:00.000Z' }, current.analysisFileSha256);
+                    adapter.sealCompletedRun(adapter.loadConferenceAnalysis(input));
+                    return { status: 'complete' };
+                });
+            } }, postprocess: { stagePaper: () => { staged++; return f.staged(); } } };
+        const result = await migration.migrateAndRun(f.options, { dependencies: deps });
+        assert.equal(replayed, 1); assert.equal(staged, eligible ? 1 : 0);
+        assert.equal(result.adoptedSavedChildren.length, eligible ? 1 : 0);
+        if (!eligible) assert.deepEqual(fs.readFileSync(f.stateFile), before);
+        const current = adapter.loadConferenceReaderRevision({ analysisRoot: f.analysisRoot, executionId: f.failedExecutionId });
+        assert.deepEqual(current.analysis.readerRevisionProgress, progress);
+    }
+});
+
+test('普通complete子稿错parent/CAS、正常stage后物理变化均拒绝采纳，不覆盖原process', async t => {
+    for (const mode of ['parent', 'parentCAS', 'afterStage']) {
+        const f = await ordinaryCompleted(t), stateBytes = fs.readFileSync(f.stateFile);
+        if (mode !== 'afterStage') {
+            const file = path.join(f.child.directory, 'reader-revision.json'), value = JSON.parse(fs.readFileSync(file));
+            value[mode === 'parent' ? 'parentExecutionId' : 'parentAnalysisFileSha256'] = mode === 'parent'
+                ? '11111111-1111-4111-8111-111111111111' : 'c'.repeat(64);
+            delete value.revisionSha256; value.revisionSha256 = api.stableHash(value);
+            fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+        }
+        await assert.rejects(migration.migrateAndRun(f.options, { dependencies: { ...f.deps,
+            postprocess: { stagePaper: () => {
+                const staged = f.staged();
+                if (mode === 'afterStage') fs.appendFileSync(path.join(f.child.directory, 'analysis.json'), ' ');
+                return staged;
+            } } } }));
+        assert.deepEqual(fs.readFileSync(f.stateFile), stateBytes);
+    }
+});
+
+test('worker页面交接重读实际文件，错成员/词表/页面/assets/canonical SHA均拒绝', async t => {
+    // Transport/CAS fixture only; these synthetic bytes never claim scientific
+    // qualification (the separate real gate rejection test above remains).
+    const f = await ordinaryCompleted(t), pool = require('../scripts/lib/conference-complete-stage-pool');
+    const parent = f.child.parent, item = f.state.items[f.paperId];
+    const root = path.join(f.root, 'handoff-staging'), registry = '1'.repeat(64), projection = '2'.repeat(64);
+    const directory = path.join(root, item.analysisRunId, registry, projection); fs.mkdirSync(directory, { recursive: true });
+    const page = Buffer.from('explicit synthetic transport page\n'), assignment = Buffer.from('{}\n');
+    const asset = Buffer.from('synthetic asset'), assetPath = 'static/data/test.json';
+    const body = { contract: 'conference-paper-page-staging-v2', version: 2, status: 'complete',
+        paperId: item.paperId, analysisExecutionId: item.analysisRunId,
+        analysisSha256: parent.analysisFileSha256, completionReceiptSha256: parent.run.completionReceipt.receiptSha256,
+        sourceSnapshotSha256: parent.run.sourceSnapshotSha256, tagMetadata: { registrySha256: registry },
+        implementation: { implementationSha256: projection }, contentSha256: sha(page), tagAssignmentFileSha256: sha(assignment),
+        assets: [{ path: assetPath, sha256: sha(asset), size: asset.length }] };
+    const manifest = { ...body, manifestSha256: api.stableHash(body) };
+    const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
+    assert.notDeepEqual(manifestBytes, api.canonicalBytes(manifest), 'transport fixture must preserve real stage key order');
+    for (const [file, bytes] of [['manifest.json', manifestBytes], ['page.md', page],
+        ['assignment.json', assignment], ['assets/' + assetPath, asset]]) {
+        fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
+        fs.writeFileSync(path.join(directory, file), bytes, { mode: 0o600 });
+    }
+    const result = { status: 'staged', manifest, pins: { analysis: parent.analysisFileSha256,
+        run: parent.runFileSha256, source: parent.sourceFileSha256, extra: {} } };
+    const init = { stagingRoot: root, registrySha256: registry, projectionSha256: projection };
+    assert.equal(pool.verifyStageResult(result, item, init, f.deps.files), manifest);
+    for (const field of ['paperId', 'analysisSha256', 'sourceSnapshotSha256', 'completionReceiptSha256']) {
+        const changed = structuredClone(result); changed.manifest[field] = 'wrong';
+        assert.throws(() => pool.verifyStageResult(changed, item, init, f.deps.files), { code: 'CONFERENCE_STAGE_WORKER_INTEGRITY' });
+    }
+    assert.throws(() => pool.verifyStageResult(result, item, { ...init, registrySha256: '3'.repeat(64) }, f.deps.files), /清单/);
+    for (const name of ['page.md', 'assets/' + assetPath]) {
+        const file = path.join(directory, name), original = fs.readFileSync(file); fs.appendFileSync(file, 'changed');
+        assert.throws(() => pool.verifyStageResult(result, item, init, f.deps.files), { code: 'CONFERENCE_STAGE_WORKER_INTEGRITY' });
+        fs.writeFileSync(file, original);
+    }
+    const bad = structuredClone(result); bad.pins.source = '4'.repeat(64);
+    assert.throws(() => pool.verifyStageResult(bad, item, init, f.deps.files), /完整包/);
 });
 
 test('默认真实科学资格拒绝合成完成稿，保留原失败和次数，不以 complete 标志放行', async t => {

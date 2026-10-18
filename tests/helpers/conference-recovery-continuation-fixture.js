@@ -13,8 +13,9 @@ const { productionPlanFixture } = require('./conference-production-plan-fixture'
 const { recoveryFixtureIdentity, registerRecoveryFixture } = require('./conference-recovery-grant-fixture');
 const { validAnalysisText, validAnalysisPaper } = require('../valid-analysis-fixture');
 
-async function fixture(t, { invalidCore = false, scoringMode = false, scoringFailed = false, coreRejected = false, tagProofCase = null } = {}) {
-    const f = productionPlanFixture(t), identity = recoveryFixtureIdentity(f.paperId);
+async function fixture(t, { invalidCore = false, scoringMode = false, scoringFailed = false, coreRejected = false,
+    tagProofCase = null, value = '100', grantInstall = true } = {}) {
+    const f = productionPlanFixture(t, { value }), identity = recoveryFixtureIdentity(f.paperId);
     const analysisRoot = path.join(f.root, 'data/runtime/conference-analysis-executions');
     const input = { analysisRoot, parentExecutionId: identity.parentExecutionId,
         planHandle: f.planHandle, sourceRoot: f.sourceRoot };
@@ -93,7 +94,8 @@ async function fixture(t, { invalidCore = false, scoringMode = false, scoringFai
         adapter.replaceJson(path.join(failed.directory, 'analysis.json'), changed, failed.analysisFileSha256);
         failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
     }
-    const grant = registerRecoveryFixture({ analysisRoot, parentExecutionId: identity.parentExecutionId, failedExecutionId, paperId: f.paperId });
+    const grant = registerRecoveryFixture({ analysisRoot, parentExecutionId: identity.parentExecutionId,
+        failedExecutionId, paperId: f.paperId, install: grantInstall });
     // The new regressions below use the real tag proof reader for every grant
     // entry and final gate. Only the pre-existing synthetic bootstrap uses the
     // orchestration double, before the tested recovery operation starts.

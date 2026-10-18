@@ -193,8 +193,9 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     // 来源及论文集合的检查仍全部执行，其他调用方的行为保持原样。
     const hasCurrentResourceClaims = loaded.analysis?.papers?.[0]?.analysisManifest?.contracts?.readerResourceClaims !== undefined
         || loaded.analysis?.papers?.[0]?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsContractVersion !== undefined;
+    let verifiedPlanPdfSource = null;
     if (!trustEvidence || hasCurrentResourceClaims) {
-        try { (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
+        try { verifiedPlanPdfSource = (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
         catch (error) { fail(`会议分析与已核验计划不一致：${error.message}`); }
     }
     const receipt = loaded.run?.completionReceipt; const receiptBody = receipt && structuredClone(receipt); if (receiptBody) delete receiptBody.receiptSha256;
@@ -231,9 +232,12 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     const sourcePaper = loaded.analysis.papers[0];
     const authenticatedPdfBindings = (sourcePaper.apiReaderPlan?.tableBindings || [])
         .filter(binding => binding.authenticatedPdfTableEvidence !== undefined);
+    const authenticatedPdfFootnotes = (sourcePaper.apiReaderResources?.resources || [])
+        .some(resource => Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence'));
     let readerPdfSourceHandle = loaded.recoveryWindow
         || require('./conference-source-resource-correction').isSourceCorrectionRecord(sourcePaper)
-        ? adapter.verifyPlanAuthority(loaded, planHandle, sourceRoot) : null;
+        || authenticatedPdfFootnotes
+        ? verifiedPlanPdfSource || (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot) : null;
     if (authenticatedPdfBindings.length) {
         const identity = authenticatedPdfBindings[0].authenticatedPdfTableEvidence?.sourceIdentity;
         if (authenticatedPdfBindings.some(binding => stableHash(binding.authenticatedPdfTableEvidence?.sourceIdentity)

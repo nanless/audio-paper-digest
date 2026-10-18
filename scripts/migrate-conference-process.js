@@ -121,17 +121,41 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
     for (const originalItem of Object.values(state.items)) {
         if (originalItem.status === 'complete' || !originalItem.readerRefreshRequired) continue;
         const existing = existingRecoveryForItem(originalItem, deps);
-        if (!existing || existing.alreadyAdoptedParent) continue;
         stop.assertMayStartRequest();
-        const authority = existing.member;
-        const childFile = path.join(deps.files.conferenceAnalysisDir, authority.expectedExecutionId, 'analysis.json');
-        if (!fs.existsSync(childFile) || deps.adapter.readJsonRecord(childFile).value.status !== 'complete') continue;
+        const authority = existing && !existing.alreadyAdoptedParent ? existing.member : null;
+        // A portable orchestration fixture may not create an analysis store;
+        // there is then no actual saved ordinary child that can be adopted.
+        if (!authority && !deps.files.conferenceAnalysisDir) continue;
+        const executionId = authority?.expectedExecutionId || require('./lib/conference-analysis-adapter').readerRevisionExecutionId(
+            originalItem.analysisRunId, originalItem.analysisProof.analysisSha256);
+        const loadChild = () => authority
+            ? deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir, executionId })
+            : deps.adapter.loadConferenceReaderRevision({ analysisRoot: deps.files.conferenceAnalysisDir, executionId });
+        const childFile = path.join(deps.files.conferenceAnalysisDir, executionId, 'analysis.json');
+        if (!fs.existsSync(childFile)) continue;
+        const savedStatus = deps.adapter.readJsonRecord(childFile).value.status;
+        if (savedStatus !== 'complete') {
+            if (savedStatus !== 'partial' || typeof deps.adapter.replaySavedConferenceReaderRevision !== 'function') continue;
+            const original = shared.retainedSources?.get(originalItem.analysisRunId);
+            // This helper owns the paper lock itself and can only finish a real
+            // saved child without attempts/requests. Never nest that lock or
+            // substitute an inherited complete parent for the failed child.
+            await stop.withModelRequestsForbidden(() => deps.adapter.replaySavedConferenceReaderRevision({
+                analysisRoot: deps.files.conferenceAnalysisDir, executionId,
+                planHandle: original?.planHandle || shared.planHandle,
+                sourceRoot: original?.sourceRoot || shared.sourceCacheRoot }));
+            if (deps.adapter.readJsonRecord(childFile).value.status !== 'complete') continue;
+        }
         await deps.engine.withPaperAnalysisLock({ id: originalItem.paperId }, () => stop.withModelRequestsForbidden(() => {
             const item = state.items[originalItem.paperId];
-            const loaded = deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
-                executionId: authority.expectedExecutionId });
+            const loaded = loadChild();
             if (loaded.analysis.status !== 'complete' || loaded.run.status !== 'complete'
-                || loaded.run.paperId !== item.paperId || loaded.parent.run.executionId !== item.analysisRunId) {
+                || loaded.run.paperId !== item.paperId || loaded.parent.run.executionId !== item.analysisRunId
+                || loaded.parent.analysisFileSha256 !== item.analysisProof.analysisSha256
+                || loaded.parent.run.completionReceipt?.receiptSha256 !== item.analysisProof.completionReceiptSha256
+                || loaded.run.sourceSnapshotSha256 !== item.analysisProof.sourceSnapshotSha256
+                || loaded.sourceFileSha256 !== loaded.parent.sourceFileSha256
+                || !authority && loaded.recoveryWindow) {
                 throw fail('已保存会议子稿没有同一真实完成状态或原父包');
             }
             const original = shared.retainedSources?.get(item.analysisRunId);
@@ -158,13 +182,13 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
                 || manifest.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) {
                 throw fail('已保存会议子稿的正常页面与分析、完成回执或来源 SHA 不一致');
             }
-            const after = deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
-                executionId: loaded.run.executionId });
+            const after = loadChild();
             if (after.analysisFileSha256 !== loaded.analysisFileSha256
-                || after.runFileSha256 !== loaded.runFileSha256 || after.sourceFileSha256 !== loaded.sourceFileSha256) {
+                || after.runFileSha256 !== loaded.runFileSha256 || after.sourceFileSha256 !== loaded.sourceFileSha256
+                || processApi.stableHash(after.revision) !== processApi.stableHash(loaded.revision)) {
                 throw fail('正常页面核验期间已保存会议子稿发生变化');
             }
-            authority.assertUnchanged();
+            authority?.assertUnchanged();
             const proof = { analysisRunId: loaded.run.executionId, readerRevision: loaded.revision,
                 readerRefreshRequired: false,
                 analysisProof: { analysisSha256: loaded.analysisFileSha256,
@@ -288,46 +312,77 @@ function migrateAndRun(options, runtime = {}) {
         const stagedProofs = new Map();
         const stageFailures = new Map();
         if (requiresMigration || lifecycleNeedsRefresh) {
-            for (const [index, item] of complete.entries()) {
-                // Rendering uses synchronous private workers. Yield between
-                // papers so a stop signal can be handled before the next one.
-                await new Promise(resolve => setImmediate(resolve));
-                require('./lib/analysis-stop-control').assertMayStartRequest();
-                const original = shared.retainedSources?.get(item.analysisRunId);
-                let staged;
-                try { const stageComplete = () => deps.postprocess.stagePaper({
-                    analysisRoot: deps.files.conferenceAnalysisDir,
-                    executionId: item.analysisRunId,
-                    tagCatalogPath: deps.files.tagCatalogFile,
-                    stagingRoot: deps.files.conferencePageStagingDir,
-                    planHandle: original?.planHandle || shared.planHandle,
-                    sourceRoot: original?.sourceRoot || shared.sourceCacheRoot,
-                    apply: true
-                });
-                staged = options.postprocessOnly
-                    ? require('./lib/analysis-stop-control').withModelRequestsForbidden(stageComplete)
-                    : stageComplete();
-                if (staged.status !== 'staged') {
-                    throw new Error(`已完成的论文用当前后处理代码跑不过：${item.paperId}`);
-                }
-                if (options.reuseCompletePages && (staged.manifest.contentSha256 !== item.pageProof?.contentSha256
-                    || staged.manifest.pagePath !== item.pageProof?.pagePath)) {
-                    throw new Error(`按凭证重放时已完成的页面变了：${item.paperId}`);
-                }
-                stagedProofs.set(item.paperId, {
-                    manifestSha256: staged.manifest.manifestSha256,
-                    contentSha256: staged.manifest.contentSha256,
-                    pagePath: staged.manifest.pagePath
-                });
-                } catch (error) {
+            const stop = require('./lib/analysis-stop-control');
+            const stagePool = require('./lib/conference-complete-stage-pool');
+            const collect = (item, staged, error) => {
+                if (!error) {
+                    if (staged?.status !== 'staged') throw stagePool.integrity(`完整成员未正常暂存：${item.paperId}`);
+                    if (options.reuseCompletePages && (staged.manifest.contentSha256 !== item.pageProof?.contentSha256
+                        || staged.manifest.pagePath !== item.pageProof?.pagePath)) {
+                        throw new Error(`按凭证重放时已完成的页面变了：${item.paperId}`);
+                    }
+                    stagedProofs.set(item.paperId, {
+                        manifestSha256: staged.manifest.manifestSha256,
+                        contentSha256: staged.manifest.contentSha256,
+                        pagePath: staged.manifest.pagePath
+                    });
+                } else {
                     const failure = recovery.classifyFailure(error, deps.now());
                     if (failure.systemic || options.reuseCompletePages) throw error;
                     stageFailures.set(item.paperId, failure);
                 }
-                if ((index + 1) % 100 === 0 || index + 1 === complete.length) {
-                    process.stderr.write(`[会议统一后处理] 已检查 ${index + 1}/${complete.length}`
+                const checked = stagedProofs.size + stageFailures.size;
+                if (checked % 100 === 0 || checked === complete.length) {
+                    process.stderr.write(`[会议统一后处理] 已检查 ${checked}/${complete.length}`
                         + `，通过 ${stagedProofs.size}，失败 ${stageFailures.size}\n`);
                 }
+            };
+            // Dependency-injected portable fixtures keep their explicit local
+            // source doubles. Production always rebuilds real opaque handles in
+            // the fixed private worker pool (including concurrency=1).
+            if (!runtime.dependencies && complete.length) {
+                const before = deps.adapter.readJsonRecord(stateFile);
+                if (before.value.stateSha256 !== state.stateSha256) throw stagePool.integrity('派发前process CAS变化');
+                const init = { options: { catalogName: options.catalogName, reportName: options.reportName,
+                    filterId: options.filterId, fromProcessId: options.fromProcessId },
+                    stagingRoot: deps.files.conferencePageStagingDir,
+                    stateFileSha256: before.sha256, stateSha256: state.stateSha256,
+                    authoritySha256: processApi.stableHash(context.authority),
+                    registrySha256: context.authority.tagCatalogSha256,
+                    projectionSha256: deps.postprocess.implementationFingerprint().implementationSha256 };
+                const canonicalResults = new Map();
+                await stagePool.runStagePool(complete, { concurrency: options.concurrency, init,
+                    shouldStop: () => stop.assertMayStartRequest(), onResult: (item, staged, error) => {
+                        if (!error) {
+                            stagePool.verifyStageResult(staged, item, init, deps.files);
+                            canonicalResults.set(item.paperId, staged);
+                        }
+                        collect(item, staged, error);
+                    } });
+                if (deps.adapter.readJsonRecord(stateFile).sha256 !== before.sha256) throw stagePool.integrity('全批暂存期间process变化');
+                for (const item of complete) if (canonicalResults.has(item.paperId)) {
+                    stagePool.assertStageCanonical(canonicalResults.get(item.paperId), item, deps.files);
+                }
+                processApi.assertRuntimeAuthorityUnchanged(context, deps, 'after parallel completed-page staging');
+            } else {
+                for (const item of complete) {
+                    await new Promise(resolve => setImmediate(resolve));
+                    stop.assertMayStartRequest();
+                    const original = shared.retainedSources?.get(item.analysisRunId);
+                    let staged, error;
+                    try { staged = stop.withModelRequestsForbidden(() => deps.postprocess.stagePaper({
+                        analysisRoot: deps.files.conferenceAnalysisDir, executionId: item.analysisRunId,
+                        tagCatalogPath: deps.files.tagCatalogFile, stagingRoot: deps.files.conferencePageStagingDir,
+                        planHandle: original?.planHandle || shared.planHandle,
+                        sourceRoot: original?.sourceRoot || shared.sourceCacheRoot, apply: true })); }
+                    catch (caught) { error = caught; }
+                    collect(item, staged, error);
+                }
+            }
+            // Worker completion order cannot change receipt/failure ordering.
+            for (const map of [stagedProofs, stageFailures]) {
+                const entries = complete.filter(item => map.has(item.paperId)).map(item => [item.paperId, map.get(item.paperId)]);
+                map.clear(); for (const [paperId, value] of entries) map.set(paperId, value);
             }
         }
         // Finish the complete normal postprocessing pass before granting any

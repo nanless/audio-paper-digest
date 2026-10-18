@@ -1,0 +1,54 @@
+{
+  "provenance": {
+    "kind": "real-saved-paid-reader-sentences-with-authenticated-source-excerpts",
+    "paperId": "conference:interspeech:2026:conference-paper-id:chin26_interspeech",
+    "executionId": "ba7391c0-33e3-44f8-a6c8-ce99115712a4",
+    "sourceRecordSha256": "5611763d6181cbd57d915273a523765b81940b406b95f4e7260400d4f04c95b8",
+    "sourceTextSha256": "1b83681462874d08bfe8db03536779d9b73f17ba1c3f66cb0a2ad664f547b07f",
+    "sourceQuotes": [
+      {
+        "quote": "tance between a participant’s response and        posterior draws was set to 12000 to account for the decreased\nthe correct number(s), using the stringdist [29] package in R.      number of observations in the eight conditions after calculating\nThis measure coun",
+        "sha256": "9a685f68831d8e2408d14f09e9efc4bdb39a2031e70cfe3fb3ecbf7d10b485e3"
+      },
+      {
+        "quote": "al distribution, mean =\n0, SD = 2). The number of posterior draws was set to 8000.\nThere was  extremely  strong  evidence  that  digit  preload\naccuracy was lower under high cognitive load (more numbers)\nthan low cognitive load (fewer numbers), with an evidence",
+        "sha256": "804f1ed24bb18f1be487cbf4cbea0f6e9bc32eefb6c03b8f2bfef2467150dbb8"
+      }
+    ],
+    "originalEditorialImplementationSha256": "fcd8e7fa18706d9c646e2645399319e18c4f48bc2307ed7c65b26f897b08d2b9",
+    "noModelRequests": true,
+    "noCanonicalWrites": true
+  },
+  "records": [
+    {
+      "name": "previous-paid-local-repair",
+      "ledgerPath": "data/runtime/conference-analysis-executions/ba7391c0-33e3-44f8-a6c8-ce99115712a4/reader-attempts/3cd5af3553cfc576ff28f7494b84eecf3c644cb310d6206526190efbf84673cb.migrated-2a6672eb-5d41-4342-b7c0-f580b04ec94f.json",
+      "ledgerSha256": "474c2641b7947a890e073de97c90d90d9f8899ccfa4f9ab52293064208a17c7d",
+      "attempts": 3,
+      "fullAttempts": 1,
+      "sectionIndex": 6,
+      "sentence": "先验都是弱信息先验，数字预载任务的后验抽样次数设为8000次，词监测准确率模型因算出d'后每个条件下观测数减少、对计算更敏感而设为12000次。",
+      "sentenceSha256": "3f15f551ace011f18a8dc26ddf1f92af9caf18e441c2bf937b4c78c47919cd29",
+      "originalDiagnostic": {
+        "match": "先验都是弱信息先验，数字预载任务的后验抽样次数设为8000次，词监测准确率模型因算出d'后每个条件下观测数减少、对计算更敏感而设为12000次。",
+        "line": 1,
+        "reason": "percentage_metric_delta_without_unit"
+      }
+    },
+    {
+      "name": "latest-paid-local-repair",
+      "ledgerPath": "data/runtime/conference-analysis-executions/ba7391c0-33e3-44f8-a6c8-ce99115712a4/reader-attempts/8bccc68c4559e5231c5e154473d5083cfaefcf0a497ddc9ca2fa1fed2ed23f33.json",
+      "ledgerSha256": "63433239dc103752f5af06b973083e8de104c8e891082039a31d128764534f84",
+      "attempts": 5,
+      "fullAttempts": 1,
+      "sectionIndex": 6,
+      "sentence": "先验都是弱信息先验，数字预载任务的后验抽样次数设为 8000 次，词监测准确率模型因算出d'后每个条件下观测数减少、对计算更敏感而后验抽样次数设为 12000 次。",
+      "sentenceSha256": "dfbc046cbe556d60f2397460cfc245abcd224cf94ade208161d31b672dc0cd0b",
+      "originalDiagnostic": {
+        "match": "先验都是弱信息先验，数字预载任务的后验抽样次数设为 8000 次，词监测准确率模型因算出d'后每个条件下观测数减少、对计算更敏感而后验抽样次数设为 12000 次。",
+        "line": 1,
+        "reason": "percentage_metric_delta_without_unit"
+      }
+    }
+  ]
+}

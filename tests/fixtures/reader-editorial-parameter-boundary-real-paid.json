@@ -1,0 +1,78 @@
+{
+  "provenance": "Real saved/returned paid Reader snippets and exact authenticated source excerpts; no current canonical data modified",
+  "rows": [
+    {
+      "name": "halmai",
+      "paperId": "conference:interspeech:2026:conference-paper-id:halmai26_interspeech",
+      "executionId": "4cee624a-0aa0-4e6d-a7dd-52ae2654a704",
+      "ledgerPath": "data/runtime/conference-analysis-executions/4cee624a-0aa0-4e6d-a7dd-52ae2654a704/reader-attempts/75d718cf36e8afe50808ca731461ea360c95b338c286e2345abaf89d2ab6932d.json",
+      "ledgerSha256": "6551fb32545954ac614f2203be15de4125d575bd167c31af7029b3018416e09d",
+      "attempts": 5,
+      "origin": {
+        "kind": "returned-paid-local-response",
+        "path": "data/runtime/conference-analysis-executions/4cee624a-0aa0-4e6d-a7dd-52ae2654a704/reader-attempts/request-diagnostics/6235500e-267a-4275-a9a6-477d927a1bda.response.json",
+        "physicalSha256": "4d9e2ac6e873ab3ab6ad1d75c8956a4a1d4e7cf405401159c43dc74642ed554b",
+        "outputTextSha256": "ba3d017db8f81de255cc5a1088e4bf67e0d0faf1ab0c04e1ec69d6a6a13fc305"
+      },
+      "text": "论文只研究英语到台湾普通话一个方向，最终都在普通话的开发集和测试集上评价。",
+      "textSha256": "c30b5f42d20c5009116af8ff40062674f0e1a030fd7082556cddd0eb8205bf80",
+      "originalSavedIssues": [
+        {
+          "path": null,
+          "message": "读者文章文风校验失败: quantitative_chinese_numeral:一个方向"
+        }
+      ],
+      "sourceRecordSha256": "14656c46c1c4f7ecad8410eecd34e7c54af2853812972a5e8741d9e771c58f14",
+      "sourceTextSha256": "b5d17b537edda3709cbfbe4f34474a93c4c74ef8cbed1f736e453eeebc4c0ff8",
+      "sourceQuote": "and by fine-tuning the\ntion problems.\n                                                              networks originally trained on all 100 hours of the English data.\nIndex Terms: Speech emotion recognition, WavLM, MSP-\n                                            We focused on the emotion dimensions; instead of summarizing\n",
+      "sourceQuoteSha256": "0c85d837b6abeff421811d7922ef4abe1a88f8242c434693cd1a164d3119103f"
+    },
+    {
+      "name": "song",
+      "paperId": "conference:interspeech:2026:conference-paper-id:song26d_interspeech",
+      "executionId": "fc47ff09-9d4b-45b9-a962-fff421f7421b",
+      "ledgerPath": "data/runtime/conference-analysis-executions/fc47ff09-9d4b-45b9-a962-fff421f7421b/reader-attempts/9c5120d841abfcd7f1e943e3a2fbc3eed9f9e4a83135f2a26eebdb8a772f4e02.json",
+      "ledgerSha256": "aeca8c292ded540aecb52c3c2661ad1a8d4fff07c0d3d140cd514614297089ae",
+      "attempts": 3,
+      "origin": {
+        "kind": "saved-paid-reader-title"
+      },
+      "text": "只有带混响录音时如何做单通道去混响：ARTT的两阶段训练",
+      "textSha256": "d4d44fb082ea91857979617872befa6bdd2a53aa91ab2b7c541ee3ebcd4b900b",
+      "originalSavedIssues": [
+        {
+          "path": null,
+          "message": "读者文章文风校验失败: technical_term_adhesion:ARTT的"
+        }
+      ],
+      "sourceRecordSha256": "4c2f075e700a9b461ecf96a48f2aace05dd8456705a87b9dd5a5e31ef62b5729",
+      "sourceTextSha256": "bb476a6d3ef8379ac936e9be87100f66838080b02983bcb8964c33f4c268a4e3",
+      "sourceQuote": " Interspeech 2026\n 27 September - 1 October 2026, Sydney, Australia\n\n\n ARTT: Augmented Reverberant-Target Training for Unsupervised Monaural\n                       Speech Dereverberation\n\n                             Siqi Song, Fulin Wu, Zhong-Qiu Wang  ID ∗∗\n\n             ",
+      "sourceQuoteSha256": "96fd4abc95b60341d7a51f6a4026914fbfcb13d20374b1970f6d1c9e83cf47d7"
+    },
+    {
+      "name": "wu",
+      "paperId": "conference:interspeech:2026:conference-paper-id:wu26_interspeech",
+      "executionId": "194a5c6a-a56e-4ed5-adc3-cce80cb5372a",
+      "ledgerPath": "data/runtime/conference-analysis-executions/194a5c6a-a56e-4ed5-adc3-cce80cb5372a/reader-attempts/8c43f2f554003926d0008fec57ac93f2e2cdc18ff677d42dab9fbfe934e663c8.json",
+      "ledgerSha256": "bb93fab35ff9982b9b52681522ef9d03a28b25a5e1c427eae1855b682db2543a",
+      "attempts": 3,
+      "origin": {
+        "kind": "saved-paid-reader-section",
+        "path": "/sections/11/body"
+      },
+      "text": "图2展示在使用x-vector编码器时，分量数K从5增加到50的过程中，等错误率EER（%，数值越低越好）的变化情况，请重点看曲线由陡峭下降转为平坦的位置，以及末端与原始性能虚线的差距。",
+      "textSha256": "8c2c8997ab26731c997fc3d437e2411b990d3e80aa36066a73640e643b61a501",
+      "originalSavedIssues": [
+        {
+          "path": null,
+          "message": "读者文章文风校验失败: comparison_unit_missing:图 2 展示在使用 x-vector 编码器时，分量数 K 从 5 增加到 50 的过程中，等错误率 EER（%，数值越低越好）的变化情况，请重点看曲线由陡峭下降转为平坦的位置，以及末端与原始性能虚线的差距。"
+        }
+      ],
+      "sourceRecordSha256": "95bf3ce16ca8d2d1782ffb651f9bf53480b16aba736591323903dc6c8bbbbfff",
+      "sourceTextSha256": "360ec28fe13fc89cedaeb910ee8e7e40d1d1e7bc9279fc1e82381a77ac6779b2",
+      "sourceQuote": " We train LISE for different numbers of\n                                                            components K ∈{5, 10, 15, 20, 25, 30, 35, 40, 45, 50} and se-    As shown in Figure 1, LISE decomposes the speaker em-\n                                                                                lect K = 35 ba",
+      "sourceQuoteSha256": "e38e2dffbca3bbdfb3e18205c5f8fb8ed39d30cefe1c3ea9a01cf857092f28ef"
+    }
+  ]
+}

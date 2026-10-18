@@ -209,6 +209,41 @@ test('会议冷后处理把已核验全文传入核心校验，参数来源不�
     assert.equal(JSON.stringify(loaded), before);
 });
 
+test('只有脚注证明而没有原表证明的普通完成稿，冷后处理仍传递原计划PDF能力', t => {
+    // This test checks scope plumbing with explicit qualification doubles. Real
+    // proof extraction/owner rejection is covered by the PDF footnote fixtures.
+    const f = fixture(t), loaded = f.runs.get(f.one), paper = loaded.analysis.papers[0];
+    loaded.directory = path.join(f.root, f.one);
+    paper.apiReaderResources.resources = [{ authenticatedPdfFootnoteEvidence: { synthetic: 'scope-only' } }];
+    const { identitySha256, ...resourceBody } = paper.apiReaderResources;
+    paper.apiReaderResources.identitySha256 = api.stableHash(resourceBody);
+    paper.analysisManifest.stages.apiReaderArticle.resourceIdentitySha256 = paper.apiReaderResources.identitySha256;
+    paper.analysisManifest.stages.apiReaderArticle.resourceCount = 1;
+    paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
+    const pdfHandle = Object.freeze({ synthetic: 'actual-verify-return' });
+    const deep = require('../scripts/deep-analyzer'), context = require('../scripts/lib/conference-analysis-context');
+    t.mock.method(require('../scripts/analysis-engine'), 'hasValidApiReaderV3Records', () => true);
+    t.mock.method(deep, 'readerResourceClaimIssues', () => []);
+    t.mock.method(deep, 'readerResourcePublicationResources', () => []);
+    let scopes = 0, verifies = 0;
+    t.mock.method(context, 'withConferenceAnalysisSource', (identity, callback) => {
+        scopes++;
+        assert.equal(identity.readerPdfSourceHandle, pdfHandle);
+        assert.equal(identity.executionId, f.one);
+        assert.equal(identity.paperId, paper.id);
+        assert.deepEqual(identity.sourceDetails, loaded.source.sourceDetails);
+        return callback();
+    });
+    const options = { analysisRoot: f.root, executionId: f.one, planHandle: f.planHandle, sourceRoot: f.sourceRoot };
+    const dependencies = { ...f.dependencies, verifyPlanAuthority: () => { verifies++; return pdfHandle; } };
+    assert.equal(api.loadCompleted(options, dependencies).readerPdfSourceHandle, pdfHandle);
+    assert.equal(verifies, 1, 'reuse the same authenticated plan result');
+    assert.equal(scopes, 1);
+    assert.throws(() => api.loadCompleted(options, { ...dependencies,
+        verifyPlanAuthority: () => { throw Error('wrong original plan'); } }), /wrong original plan/);
+    assert.equal(scopes, 1, 'a failed plan cannot open a PDF qualification scope');
+});
+
 test('已签会议原标签按原归档重放，当前目录另投影相同概念且不修改原稿', () => {
     const { paper } = completedConferenceOriginalTaxonomyFixture();
     const original = JSON.stringify(paper);

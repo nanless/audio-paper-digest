@@ -4104,8 +4104,9 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // 「本文权重已经公开」仍单独判断，不能用前面的限定吞掉真实声明。
         const conceptProperties = [
             '代码(?:开源|公开|可用|可运行|可下载|可访问|可达)',
-            '(?:模型)?权重(?:可下载|下载|可获取|公开|可用)',
-            '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可部署|可用)'
+            '(?:(?:模型)?权重(?:可下载|下载|可获取|公开|可用)|模型可下载)',
+            '数据可获取',
+            '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可安装|可复现|可部署|可用)'
         ];
         const conceptProperty = '(?:' + conceptProperties.join('|') + ')';
         const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
@@ -4795,6 +4796,23 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             return Boolean(use && contains(use));
         }
         if (type !== 'dataset') return false;
+        // This is a replication input from a cited existing corpus, not an
+        // author-owned release or a current download assertion. Require the
+        // same named dataset and both supplied signal types in the real source.
+        for (const input of value.matchAll(/复现(?:时)?(?:应|需)?从公开\s*([A-Za-z][A-Za-z0-9_-]{0,70})\s*数据集的已发布预处理信号和出声录音出发/gu)) {
+            if (!contains(input)) continue;
+            const before = value.slice(0, input.index).split(/[。！？!?；;，,]/u).at(-1);
+            const after = value.slice(input.index + input[0].length).replace(/^[\s，,]+/u, '');
+            if (before.trim() || /^[“”‘’「」"'`]|^(?:这一|这种|该|上述|的)?(?:说法|判断|结论|声明)(?:是|为)?(?:错误|不成立|不属实)/u.test(after)) continue;
+            const name = input[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const evidence = new RegExp('\\bWe used the publicly available ' + name + ' dataset\\s*\\[\\d+\\]'
+                + '[\\s\\S]{0,450}\\bWe used the published preprocessed signals\\b'
+                + '[\\s\\S]{0,220}\\bwe used the provided vocalized au-?\\s*dio recordings\\b', 'giu');
+            for (const span of source.matchAll(evidence)) {
+                const prefix = source.slice(0, span.index).split(/[.!?]/u).at(-1);
+                if (!/[“”‘’「」"'`]|\b(?:not|never|no|if|unless|would|could|will|future|plan(?:ned)?|quotes?|quoted|claim(?:s|ed)?|reports?|reported|false)\b/iu.test(prefix)) return true;
+            }
+        }
         // A cited, named public corpus used as training input is not an offer
         // of an author-owned dataset. Bind just this input span to the same
         // source name; it grants neither current download nor availability.
@@ -4928,7 +4946,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // Only the governed resource proposition is denied. An affirmative
         // embedded object such as 本文已经公开的代码 is outside this grammar.
         const inferredProposition = '(?:(?:作者(?:团队)?|本文|本论文|本研究|本工作)的?)?'
-            + resource + '(?:已(?:经)?|现已)?(?:正式)?(?:开源|公开|发布|开放|可下载|可获取|可用)';
+            + '(?:官方)?' + resource + '(?:已(?:经)?|现已)?(?:正式)?(?:开源|公开|发布|开放|可下载|可获取|可用)';
         const deniedInference = new RegExp('(?:不能|不应|不可|不得)(?:仅)?据此(?:直接)?(?:断定|认定|推断|断言)'
             + inferredProposition + '(?:(?:、|或|与|和|及)' + inferredProposition + '){0,3}', 'gu');
         for (const span of value.matchAll(deniedInference)) {
@@ -4938,6 +4956,9 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             || bounded(new RegExp('(?:没有|尚未|并未)(?:明确)?(?:声称|声明)' + list + release, 'gu'))
             || bounded(new RegExp('不(?:作|做)' + list + '(?:开源|公开)(?:与|和)可用(?:断言|声明)', 'gu'))
             || bounded(/(?:代码仓库|作者仓库|模型权重|权重|数据集|资源)的可达性未在[^。！？!?；;，,]{1,20}确认为可用/gu)) return true;
+        if (type === 'code' && bounded(/(?:代码仓库|仓库链接|代码链接)(?:在本次(?:证据|核验)中)?未被确认为(?:当前)?可用/gu)) return true;
+        if (type === 'dataset' && (bounded(/数据集中单性别可用数据的最大时长/gu)
+            || bounded(/(?:部分)?标为公开的数据集实际上通过所给链接无法获取或只部分发布/gu))) return true;
         const property = '(?:代码(?:开源|公开|可得|可跑|可运行)|开源代码|包可下载|(?:模型)?权重(?:可下载|下载)|(?:端到端)?系统可(?:一键)?运行|演示可听|开源|可运行)';
         const properties = property + '(?:(?:、|与|和)' + property + '){1,3}';
         // Bare, owner-free concepts followed by an explicit distinction or

@@ -685,6 +685,34 @@ async function inspectConferenceReaderRevisionCompletion({ analysisRoot, executi
     return inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourceRoot }, {
         engine: overrides.engine || require('../analysis-engine'), deep: overrides.deep || require('../deep-analyzer') });
 }
+async function replaySavedConferenceReaderRevision({ analysisRoot, executionId, planHandle, sourceRoot } = {}, overrides = {}) {
+    const engine = overrides.engine || require('../analysis-engine');
+    const deep = overrides.deep || require('../deep-analyzer');
+    return require('./analysis-stop-control').withModelRequestsForbidden(async () => {
+        // Load only an existing revision; preparation and paid scheduling are
+        // deliberately absent. The locked read reopens any real opaque grant.
+        const before = loadConferenceReaderRevision({ analysisRoot, executionId });
+        const paperIdentity = { id: before.run.paperId };
+        const replayLocked = async () => {
+            const loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
+            if (loaded.analysisFileSha256 !== before.analysisFileSha256
+                || loaded.runFileSha256 !== before.runFileSha256
+                || loaded.sourceFileSha256 !== before.sourceFileSha256
+                || loaded.revision.revisionSha256 !== before.revision.revisionSha256) {
+                throw new Error('保存的会议 Reader 等待恢复锁期间原包、来源或修订身份改变');
+            }
+            const result = await continueConferenceRevision({ loaded, parent: loaded.parent,
+                planHandle, sourceRoot, analysisRoot, executionId, fullAnalysis: false,
+                original: null, maxAttempts: loaded.revision.maxAttempts, savedOnly: true,
+                grant: loaded.recoveryWindow ? { grantHandle: loaded.recoveryWindow.grantHandle,
+                    authority: loaded.recoveryWindow.authority } : null }, { ...overrides, engine, deep });
+            return { ...result, savedOnly: true };
+        };
+        return typeof engine.paperAnalysisLockHeld === 'function' && engine.paperAnalysisLockHeld(paperIdentity)
+            ? replayLocked()
+            : engine.withPaperAnalysisLock(paperIdentity, replayLocked, conferencePaperLockOptions(engine));
+    });
+}
 function readerScoringCheckpoint(paper, loaded, engine, rules) {
     const stage = paper.analysisManifest?.stages?.scoringAudit;
     require('../deep-analyzer').replayVerifiedReaderResourceIdentity(paper.apiReaderResources, loaded.source.sourceDetails.text);
@@ -1096,13 +1124,14 @@ async function refreshConferenceGrantedRecovery({ analysisRoot, parentExecutionI
 }
 
 async function continueConferenceRevision({ loaded, parent, planHandle, sourceRoot, analysisRoot,
-    executionId, fullAnalysis, original, maxAttempts, reusePaidCoreDiagnostics, grant = null }, overrides) {
+    executionId, fullAnalysis, original, maxAttempts, reusePaidCoreDiagnostics, grant = null, savedOnly = false }, overrides) {
     const engine = overrides.engine, deep = overrides.deep;
     let readerPdfSourceHandle;
     const assertGrantUnchanged = () => grant?.authority.assertUnchanged();
         readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
         const withGrant = callback => grant
-            ? require('./conference-reader-recovery-window').withConferenceReaderGrant(grant.grantHandle,
+            ? require('./conference-reader-recovery-window')[savedOnly
+                ? 'withConferenceReaderGrantReadOnly' : 'withConferenceReaderGrant'](grant.grantHandle,
                 { paperId: loaded.run.paperId, executionId, executionDir: loaded.directory, readerPdfSourceHandle }, callback)
             : callback();
         const withVerifiedSource = callback => {
@@ -1124,6 +1153,10 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
             return { executionId, paperId: parent.run.paperId, status: 'complete', revision: loaded.revision,
                 analysisSha256: loaded.analysisFileSha256 };
         }
+        if (savedOnly && loaded.revision.mode === 'normal-analysis') return {
+            executionId, paperId: parent.run.paperId, status: 'partial', recovered: false,
+            reason: '完整分析模式的未完成子稿须继续其原正常分析范围，不进入 Reader-only 保存候选恢复。'
+        };
         const savedCompletion = await inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourceRoot }, { engine, deep });
         if (savedCompletion.eligible) {
             // Source, paid issuance, full qualification and protected upstream
@@ -1143,6 +1176,7 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
             || progress.attempts > loaded.revision.maxAttempts || !Array.isArray(progress.failures)) {
             throw Object.assign(new Error('保存的会议 Reader 修订轮次或失败历史损坏'), { retryable: false });
         }
+        let activeReplayFailure = null;
         if (progress.attempts > 0 && loaded.revision.mode !== 'normal-analysis'
             && (loaded.revision.mode === 'reader-only' || progress.scoringCheckpoint)) {
             // Only the existing paid candidate may run in the helper's private
@@ -1188,7 +1222,13 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                 return { executionId, paperId: parent.run.paperId, status: 'complete', revision: loaded.revision,
                     analysisSha256: completed.analysisFileSha256, recoveredActivePaidReader: true };
             }
+            activeReplayFailure = recovered;
         }
+        // This branch must precede every paid-attempt, failure-history and
+        // request-budget mutation. An ineligible saved candidate stays exact.
+        if (savedOnly) return { executionId, paperId: parent.run.paperId, status: 'partial', recovered: false,
+            reason: activeReplayFailure?.reason || savedCompletion.reason,
+            ...(activeReplayFailure?.code ? { code: activeReplayFailure.code } : {}) };
         if (fullAnalysis && loaded.revision.mode !== 'normal-analysis') {
             // An existing fixed Reader mode cannot repair a newly rejected
             // core or old Unicode input. Preserve its paid history and mode;
@@ -1365,4 +1405,4 @@ module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INT
     sealCompletedRun, sealCompletedRunLocked, analyzeConference,
     READER_REVISION_CONTRACT, RECOVERY_WINDOW_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevision,
     grantedRecoveryExecutionId, loadGrantedConferenceRecovery, refreshConferenceGrantedRecovery,
-    inspectConferenceReaderRevisionCompletion, refreshConferenceReader };
+    inspectConferenceReaderRevisionCompletion, replaySavedConferenceReaderRevision, refreshConferenceReader };
