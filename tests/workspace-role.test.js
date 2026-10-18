@@ -62,6 +62,7 @@ test('直接命令推断和包入口覆盖 daily/history 边界', () => {
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('official-conference-acquire.js'), 'daily');
     for (const name of ['deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js', 'refresh-api-reader.js',
         'conference-queue.js', 'conference-workspace.js', 'migrate-conference-process.js',
+        'conference-complete-stage-worker.js',
         'recover-conference-process-locks.js']) {
         assert.equal(envLoader.requiredWorkspaceRoleForCommand(name), 'daily', name);
     }
@@ -84,6 +85,42 @@ test('直接命令推断和包入口覆盖 daily/history 边界', () => {
     for (const name of ['blog:activate-fresh']) {
         assert.match(scripts[name], /workspace-role\.js exec history --/, name);
     }
+});
+
+test('实际会议暂存Worker继承生产daily wrapper进入完整性门，history仍拒且直接主入口不得运行', async () => {
+    const { Worker } = require('node:worker_threads');
+    const { spawnSync } = require('node:child_process');
+    const workerFile = path.join(__dirname, '../scripts/lib/conference-complete-stage-worker.js');
+    const marker = role.markerPath(path.resolve(__dirname, '..'));
+    const markerBefore = fs.readFileSync(marker);
+    const envFile = path.join(__dirname, '../.env');
+    const envBefore = fs.existsSync(envFile) ? fs.readFileSync(envFile) : null;
+    const env = { ...process.env, AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE: '1',
+        AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE: 'daily' };
+    // The actual .js entry is used, with its own argv and inherited production
+    // variables. No eval wrapper, argv replacement or workspace-marker changes.
+    async function readyError(wrapper) {
+        const worker = new Worker(workerFile, { workerData: {},
+            env: { ...env, AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE: wrapper } });
+        const exit = new Promise(resolve => worker.once('exit', resolve));
+        try {
+            return await new Promise((resolve, reject) => {
+                worker.once('error', reject);
+                worker.once('message', resolve);
+                worker.postMessage({ type: 'ready', id: 1 });
+            });
+        } finally { worker.postMessage({ type: 'close' }); await exit; }
+    }
+    const daily = await readyError('daily');
+    assert.equal(daily.type, 'error'); assert.equal(daily.error.code, 'CONFERENCE_STAGE_WORKER_INTEGRITY');
+    assert.match(daily.error.message, /固定暂存根或实际状态SHA/);
+    assert.doesNotMatch(daily.error.message, /role=history|wrapper/);
+    const history = await readyError('history');
+    assert.equal(history.type, 'error'); assert.match(history.error.message, /固定要求 role=daily.*wrapper=history/);
+    const direct = spawnSync(process.execPath, [workerFile], { env, encoding: 'utf8', timeout: 5000 });
+    assert.notEqual(direct.status, 0); assert.match(direct.stderr, /只能由私有并行后处理入口启动/);
+    assert.deepEqual(fs.readFileSync(marker), markerBefore);
+    if (envBefore) assert.deepEqual(fs.readFileSync(envFile), envBefore);
 });
 
 test('daily 和 history 的直接入口拒绝在另一角色的工作区运行', () => {
