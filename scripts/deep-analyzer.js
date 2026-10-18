@@ -5913,7 +5913,7 @@ function preserveReaderPostProcessingRetryability(error) {
     return failure;
 }
 
-async function materializeApiReaderFigures(figures, arxivId = '') {
+async function materializeApiReaderFigures(figures, arxivId = '', options = {}) {
     if (!Array.isArray(figures) || figures.length === 0) return [];
     const conferenceContext = require('./lib/conference-analysis-context.js').getConferenceAnalysisContext();
     if (conferenceContext) {
@@ -5923,14 +5923,17 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
             throw new Error('当前会议 PDF 来源没有可独立引用的论文原图，无法准备插图');
         }
         const root = path.join(conferenceContext.executionDir, 'reader-assets');
-        fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+        const inputProofOnly = options[READER_SAVED_REQUEST_INPUT_PROOF] === true;
+        if (!inputProofOnly) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
         const materialized = [];
         for (const figure of figures) {
-            const source = (sourceDetails.structuredArtifacts?.figures || []).find(candidate => (
+            const matches = (sourceDetails.structuredArtifacts?.figures || []).filter(candidate => (
                 candidate?.ordinal === figure.ordinal
                 && candidate.images?.length === 1
                 && candidate.images[0]?.url === figure.url
             ));
+            if (inputProofOnly && matches.length !== 1) throw new Error('已保存请求的原图来源不唯一');
+            const source = matches[0];
             const asset = source?.images?.[0]?.asset;
             if (!asset) continue;
             try {
@@ -5952,13 +5955,22 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
                 const assetSha256 = crypto.createHash('sha256').update(png).digest('hex');
                 const filename = `figure-${figure.ordinal}-${assetSha256.slice(0, 16)}.png`;
                 const cachePath = path.join(root, filename);
-                writeFileAtomic(cachePath, png);
+                if (inputProofOnly) {
+                    if (fs.realpathSync(cachePath) !== path.resolve(cachePath)) {
+                        throw new Error('已保存请求的原图缓存不能使用符号链接');
+                    }
+                    const original = require('./lib/publication-file-primitives').readRegular(cachePath);
+                    if (original.sha256 !== assetSha256 || !original.bytes.equals(png)) {
+                        throw new Error('已保存请求的原图像素与认证来源的正常渲染不同');
+                    }
+                } else writeFileAtomic(cachePath, png);
                 materialized.push({ ...figure, cachePath, assetFilename: filename,
                     assetMediaType: 'image/png', assetSha256, assetBytes: png.length,
                     assetWidth: dimensions.canvasWidth, assetHeight: dimensions.canvasHeight,
-                    rawBytes: undefined });
+                    ...(inputProofOnly ? { rawBytes: png, originalSourceAssetSha256: asset.sha256,
+                        sourceDomSha256: source.sourceDomSha256 } : { rawBytes: undefined }) });
             } catch (error) {
-                if (!isPermanentApiReaderFigureFailure(error)) throw error;
+                if (inputProofOnly || !isPermanentApiReaderFigureFailure(error)) throw error;
                 console.log(`    [deep] ⚠️  跳过没有取到原图像素的会议论文图 ${figure.ordinal}: ${error.message}`);
             }
         }
@@ -8155,9 +8167,13 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options
         && hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback);
     const currentReaderValid = (!paper?.latestAnalysisAttemptError || reviewedCompletedPrimary || reviewedFactLocal)
         && hasValidApiReaderV3Records(paper);
-    const staleReaderStage = currentReaderValid
+    const legacyPublicationParentReference = !currentReaderValid
+        && require('./lib/conference-analysis-context').getConferenceAnalysisContext()
+        && require('./lib/conference-reader-review-maintenance').readLegacyPublicationParentReference(
+            paper,sourceText,reviewFeedback);
+    const staleReaderStage = currentReaderValid || legacyPublicationParentReference
         ? null : recoverableStaleReaderRevisionStage(paper, sourceText);
-    if (!currentReaderValid && !staleReaderStage) {
+    if (!currentReaderValid && !legacyPublicationParentReference && !staleReaderStage) {
         throw new Error('定向修订需要完整的读者文章，且正文、写作计划和分析阶段的 SHA 记录须一致。');
     }
     const sourceSha256 = crypto.createHash('sha256').update(String(sourceText || '')).digest('hex');
@@ -8181,7 +8197,8 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options
             revisionSeedPlanSha256: paper.apiReaderPlanSha256,
             revisionSeedSourceSha256: sourceSha256,
             revisionTemperature: API_READER_REPAIR_TEMPERATURE,
-            revisionSeedStageRecovery: staleReaderStage
+            revisionSeedStageRecovery: legacyPublicationParentReference
+                ? 'read-only-publication-parent-reader-reference-v1' : staleReaderStage
                 ? 'stale-signed-reader-stage-v1' : reviewedCompletedPrimary
                     ? 'reviewed-completed-primary-reader-stage-v1' : 'current-signed-reader-stage-v1'
         }
@@ -8449,8 +8466,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     // 历史直接重写自带生成器。它在操作系统的临时目录里活一阵子，然后在内存里返回图片
     // 字节，绝不会返回 data/current/image-cache 或 data/current/api-reader-assets 下的
     // 路径。
-    const materializeFigures = options.readerMaterializeFigures
-        || direct.directReaderMaterializer() || materializeApiReaderFigures;
+    const materializeFigures = options[READER_SAVED_REQUEST_INPUT_PROOF] === true
+        ? (figures, arxivId) => materializeApiReaderFigures(figures, arxivId, { [READER_SAVED_REQUEST_INPUT_PROOF]: true })
+        : options.readerMaterializeFigures || direct.directReaderMaterializer() || materializeApiReaderFigures;
     const directSupplementaryImages = direct.directSupplementaryReaderImages();
     const supplementaryPreflight = await preflightReaderModelImages(directSupplementaryImages.map(image => ({
         ...image, kind: 'supplementary', inputId: `supplementary:${image.ordinal}:${image.assetSha256}`,
@@ -8809,9 +8827,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         catch (error) { if (error.code !== 'ENOENT') throw error; }
         if (!conference.getConferenceAnalysisContext() || !options.readerReviewParentSeedHandle
             || contentMode !== READER_SIGNED_REVISION_CONTENT_MODE
-            || options.signedRevisionMinimalDisplay !== true || figureEvidenceEntries.length
-            || supplementaryPreflight.ready.length || operatorCorrection || savedNames.length) {
-            throw new Error('已保存首轮签名请求的只读输入证明不接受图片、候选或重试窗口');
+            || options.signedRevisionMinimalDisplay !== true || figureEvidenceEntries.length > 1
+            || supplementaryPreflight.ready.length || supplementaryPreflight.rejected.length || operatorCorrection || savedNames.length) {
+            throw new Error('已保存首轮签名请求的只读输入证明只接受最多一张认证原图，无候选或重试窗口');
         }
     }
     const priorCandidate = inputProofOnly ? null : operatorCorrection?.payload || repair.loadFailedCandidate(candidateDirectory, identity);
@@ -8887,6 +8905,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const budgeted = selectReaderModelImagesWithinBudget([
         ...figurePreflight.ready, ...supplementaryPreflight.ready
     ]);
+    if (inputProofOnly && (materializedReaderImages.length !== figureEvidenceEntries.length
+        || figurePreflight.ready.length !== figureEvidenceEntries.length || figurePreflight.rejected.length
+        || budgeted.rejected.length)) throw new Error('已保存首轮请求的原图预检未完整闭合');
     const allImageInputs = budgeted.ready;
     const budgetRejectedByKind = kind => budgeted.rejected.filter(item => item.kind === kind);
     const figurePreflightEvidence = [
@@ -9284,11 +9305,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
         const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
         if (inputProofOnly) {
-            if (attempt !== 1 || repairContext || candidate || recovered || explicitRound || selectedInputs.length
+            if (attempt !== 1 || repairContext || candidate || recovered || explicitRound || selectedInputs.length > 1
+                || selectedInputs.length !== figureEvidenceEntries.length || providerImageExclusions.length
                 || completedAttempts || fullAttempts || transportFailures) {
-                throw new Error('已保存签名请求输入只能重放真实首次零图全文');
+                throw new Error('已保存签名请求输入只能重放真实首次至多一图全文');
             }
-            const messages = buildReaderRequestMessages(prompt, visibilityNoticeFor(selectedInputs, null), []);
+            const messages = buildReaderRequestMessages(prompt, visibilityNoticeFor(selectedInputs, null),
+                selectedInputs.flatMap(image => blocksForImage(image, null)));
             const config = { ...DEEP_CONFIG, temperature: start.temperature,
                 usageContext: { paperId: getPaperArxivId(paper), stage: 'apiReaderArticle', contentAttempt: 1 } };
             const protocol = detectApiType(config.endpoint, config.model);
@@ -9297,6 +9320,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 inputSha256: repair.shaText(JSON.stringify(body)), identity,
                 evidenceSha256: repair.shaText(sourceEvidence), ...summarizeModelInput(messages),
                 model: config.model, protocol, maxTokens: API_READER_MAX_TOKENS, temperature: start.temperature,
+                imageEvidence, imageEvidenceCount: imageEvidence.length, imageEvidenceSha256: stableFingerprint(imageEvidence),
+                modelImagePreflightEvidenceSha256,
+                sourcePixelProofs: materializedReaderImages.map(image => ({ ordinal: image.ordinal, url: image.url,
+                    cachePath: image.cachePath, assetSha256: image.assetSha256, assetBytes: image.assetBytes,
+                    originalSourceAssetSha256: image.originalSourceAssetSha256, sourceDomSha256: image.sourceDomSha256 })),
                 modelRequests: 0 };
         }
         const grantedResponseLease = grantedReaderBudget.reserveReaderResponse(
@@ -9871,7 +9899,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
 async function prepareConferenceReaderSavedRequestInput(paper, sourceDetails,
     { reviewFeedback, revisionSeed, readerReviewParentSeedHandle } = {}) {
     const conference = require('./lib/conference-analysis-context');
-    if (!conference.getConferenceAnalysisContext() || !readerReviewParentSeedHandle || !revisionSeed) {
+    if (!conference.getConferenceAnalysisContext()?.readerPdfSourceHandle || !readerReviewParentSeedHandle || !revisionSeed) {
         throw new Error('已保存请求输入证明需要真实会议来源及原父稿 seed 能力');
     }
     return require('./lib/analysis-stop-control').withModelRequestsForbidden(() =>

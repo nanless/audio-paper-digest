@@ -122,6 +122,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
     const sources=new Map(input.manifest.members.map(m=>[m.parentExecutionId,{planHandle:{synthetic:true},sourceRoot:'synthetic'}]));
     const requireFake=id=>{
         if(id==='node:fs')return fs;if(id==='node:path')return path;if(id==='node:os')return os;
+        if(id==='node:async_hooks')return require('node:async_hooks');
         if(id==='node:child_process')return {spawnSync:(_binary,argv,options)=>{
             assert.equal(argv[argv.length-1],'3');const bytes=fs.readFileSync(options.stdio[3]),input=JSON.parse(bytes);
             const projected=Buffer.from(bridgeState.projected),scripts=path.join(temp,'scripts');
@@ -143,7 +144,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         if(id==='./conference-recovery-grant')return recoveryMock;
         if(id==='./conference-reader-publication-evidence')return {replayCanonicalReaderPdfSource:()=>({syntheticSourceOnly:true})};
         if(id==='./conference-postprocess')return {readOriginalTagProof:()=>({rules:{syntheticOnly:true}})};
-        if(id==='../analysis-engine')return {isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>true};
+        if(id==='../analysis-engine')return {hasValidApiReaderV3Records:()=>true,isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>true};
         if(id==='../deep-analyzer')return {prepareApiReaderRevisionSeed:(paper,source,feedback)=>({syntheticOnly:true,
             initialDraft:JSON.stringify({originalSignedArticle:paper.apiReaderArticle}),metadata:{sourceSha256:sha(source),feedbackSha256:sha(feedback)}})};
         if(id==='./conference-analysis-context')return {withConferenceAnalysisSource:(_args,fn)=>fn()};

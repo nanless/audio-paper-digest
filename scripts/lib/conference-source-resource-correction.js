@@ -8,6 +8,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const crypto = require('node:crypto');
 const scope = new AsyncLocalStorage();
+const inheritedReaderScience = new AsyncLocalStorage();
 const verified = new WeakMap();
 const CONTRACT = 'conference-source-resource-correction-v1';
 const SCORE_KIND = 'deterministic_source_resource_audit';
@@ -730,6 +731,13 @@ function deriveCoreAudit(parent, active) {
         pairedAuditValidation, coreStage, coreCheckpoint };
 }
 function assertVerifiedCoreStage(paper, stage) {
+    const inherited=inheritedReaderScience.getStore();
+    if(inherited?.paper===paper) {
+        inherited.assertUnchanged();
+        if(paper.analysisManifest?.stages?.coreSummaryRepair!==stage
+            ||!isDeepStrictEqual(stage,inherited.parent.analysisManifest?.stages?.coreSummaryRepair))fail('继承上游阶段并非同一真实父阶段');
+        return withSavedPaper(inherited.parent,()=>assertVerifiedCoreStage(inherited.parent,inherited.parent.analysisManifest.stages.coreSummaryRepair));
+    }
     const active = current(); assertContext(active, paper);
     if (active.batch.policy.kind !== 'source_core_correction'
         || paper.analysisManifest?.stages?.coreSummaryRepair !== stage) fail('核心阶段不在同一独立私有scope');
@@ -984,18 +992,32 @@ function assertOutput(paper) {
     }
     return input;
 }
-function assertVerified(paper) { assertOutput(paper); return current(); }
+function assertVerified(paper) {
+    const inherited=inheritedReaderScience.getStore();
+    if(inherited?.paper===paper) {
+        inherited.assertUnchanged();
+        return withSavedPaper(inherited.parent,()=>assertVerified(inherited.parent));
+    }
+    assertOutput(paper);return current();
+}
 function localStabilityIsResolved(paper) {
     if (!isSourceCorrectionRecord(paper)) return false;
     assertOutput(paper); return true; // Exact deterministic chain, not API consensus.
 }
 function assertVerifiedScoringStage(paper, stage) {
+    const inherited=inheritedReaderScience.getStore();
+    if(inherited?.paper===paper) {
+        inherited.assertUnchanged();
+        if(paper.analysisManifest?.stages?.scoringAudit!==stage
+            ||!isDeepStrictEqual(stage,inherited.parent.analysisManifest?.stages?.scoringAudit))fail('继承上游阶段并非同一真实父阶段');
+        return withSavedPaper(inherited.parent,()=>assertVerifiedScoringStage(inherited.parent,inherited.parent.analysisManifest.stages.scoringAudit));
+    }
     if (paper?.analysisManifest?.stages?.scoringAudit !== stage || stage?.executionKind !== current().batch.policy.scoreKind) {
         fail('本地稳定性必须绑定同一整篇对象的真实评分阶段');
     }
     assertOutput(paper); return true;
 }
-function assertMayAccessNetwork() { if (scope.getStore()) fail('来源纠正禁止任何网络请求'); }
+function assertMayAccessNetwork() { if (scope.getStore()||inheritedReaderScience.getStore()) fail('来源纠正禁止任何网络请求'); }
 function isSourceCorrectionRecord(paper) {
     const stages = paper?.analysisManifest?.stages || {};
     return Object.hasOwn(paper || {}, 'conferenceSourceCorrection')
@@ -1081,7 +1103,8 @@ function sourceProjectionCanonical(item) {
     for (let depth = 0; depth < 16; depth++) {
         if (seen.has(loaded.run.executionId)) fail('来源纠正后续维护父链循环');
         seen.add(loaded.run.executionId);
-        if (isSourceCorrectionRecord(loaded.analysis.papers[0])) return { current, loaded, descendants };
+        if (isSourceCorrectionRecord(loaded.analysis.papers[0])
+            &&loaded.analysis.papers[0].conferenceSourceCorrection?.executionId===loaded.run.executionId) return { current, loaded, descendants };
         const revision = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: loaded.run.executionId });
         if (revision.analysisFileSha256 !== loaded.analysisFileSha256 || revision.runFileSha256 !== loaded.runFileSha256
             || revision.parent.sourceFileSha256 !== current.sourceFileSha256
@@ -1224,6 +1247,16 @@ function withSavedPaper(paper, callback) {
     if (!isSourceCorrectionRecord(paper)) return callback();
     const hot = scope.getStore();
     if (hot) { assertOutput(paper); return callback(); }
+    const inherited=require('./conference-reader-review-maintenance').readVerifiedReaderScientificParent(paper);
+    if(inherited) {
+        // Verify the sealed parent's entire original output under its original
+        // receipt/source scope; only then validate the child's Reader normally.
+        withSavedPaper(inherited.parent,()=>true);
+        inherited.assertUnchanged();
+        return inheritedReaderScience.run({paper,...inherited},()=>{
+            const result=callback();inherited.assertUnchanged();return result;
+        });
+    }
     const handle = readRegisteredTransaction(paper);
     return withMember(handle, () => {
         const active = current(), input = assertOutput(paper);
