@@ -340,6 +340,7 @@ function loadBatchData({ manifestPath, processDirectory, analysisRoot, grantHand
     if (checkedState.processId !== summary.processId || checkedState.status !== 'partial'
         || Object.values(checkedState.items).some(row => row.status === 'analyzing')) fail('不是已停稳原进程');
     const failed = Object.values(checkedState.items).filter(row => row.status !== 'complete').map(row => row.paperId).sort();
+    const resumedMembers = [];
     // The human tail is available only after the registered normal window has
     // actually finished its rounds. A manifest cannot assert this by itself.
     const grantDirectory = path.join(path.dirname(root), 'conference-recovery-grants', summary.grantId);
@@ -368,20 +369,38 @@ function loadBatchData({ manifestPath, processDirectory, analysisRoot, grantHand
             // A cold batch may already contain several genuinely saved local
             // children. Only their own immutable receipts may restore admission;
             // an ordinary completed child must never become an editable failure.
-            if (savedState && before?.executionId !== member.expectedExecutionId) {
+            if (before?.executionId !== member.expectedExecutionId) {
                 const directory = path.join(root, member.expectedExecutionId);
                 const packet = read(path.join(directory, 'analysis.json'));
                 if (packet.value.status === 'complete') {
                     const paper = packet.value.papers?.[0], proof = paper?.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance;
                     const receiptPath = path.join(processDir, 'reader-operator-corrections', 'registered', manifest.sha256, member.expectedExecutionId, 'receipt.json');
+                    if (proof?.contract !== CORRECTION) fail('历史资格完整原材料已变化；普通完成稿没有同批人工回执');
                     const receipt = read(receiptPath), { receiptSha256, ...body } = receipt.value;
+                    const correctionFiles = m.correctionFiles.map(file => read(file)).filter(row => row.value.paperId === paperId);
+                    const originalState = read(path.join(path.dirname(path.dirname(receiptPath)), 'state-before.json'));
+                    if (correctionFiles.length !== 1) fail('历史资格缺少唯一同批修正条目');
+                    const correction = correctionFiles[0];
                     if (receiptSha256 !== hash(body) || body.contract !== RECEIPT || !isDeepStrictEqual(body.proof, proof)
-                        || proof?.manifestSha256 !== manifest.sha256 || proof.executionId !== member.expectedExecutionId
-                        || body.afterPaperSha256 !== hash(paper) || proof.receiptFile !== receiptPath) fail('历史资格不能借另一完成稿或缺失回执恢复');
+                        || proof.manifestFile !== manifest.file || proof.manifestSha256 !== manifest.sha256
+                        || proof.processId !== summary.processId || proof.paperId !== paperId
+                        || proof.grantId !== summary.grantId || proof.grantSha256 !== summary.grantSha256
+                        || proof.executionId !== member.expectedExecutionId || proof.receiptFile !== receiptPath
+                        || proof.correctionFile !== correction.file || proof.correctionSha256 !== correction.sha256
+                        || proof.sourceSha256 !== member.sourceSha256 || proof.sourceSnapshotSha256 !== member.sourceSnapshotSha256
+                        || paper.sourceSha256 !== member.sourceSha256 || body.afterPaperSha256 !== hash(paper)
+                        || body.stateFileSha256 !== state.sha256 || originalState.sha256 !== state.sha256
+                        || packet.value.readerOperatorRecovery?.receiptFile !== receiptPath
+                        || packet.value.readerOperatorRecovery?.receiptSha256 !== receiptSha256) fail('历史资格不能借另一完成稿或缺失回执恢复');
                     before = { executionId: member.expectedExecutionId,
                         analysis: read(path.join(path.dirname(receiptPath), 'analysis-before.json')),
                         run: read(path.join(path.dirname(receiptPath), 'run-before.json')) };
-                    if (before.analysis.sha256 !== body.beforeAnalysisFileSha256 || before.run.sha256 !== body.beforeRunFileSha256) fail('历史资格原before字节不同');
+                    if (before.analysis.sha256 !== body.beforeAnalysisFileSha256 || before.run.sha256 !== body.beforeRunFileSha256
+                        || before.analysis.sha256 !== correction.value.analysisFileSha256
+                        || before.run.sha256 !== correction.value.runFileSha256
+                        || proof.originalAnalysisFileSha256 !== before.analysis.sha256
+                        || proof.originalRunFileSha256 !== before.run.sha256) fail('历史资格原before字节不同');
+                    resumedMembers.push(member.expectedExecutionId);
                 }
             }
             historicalNormalAdmission(root, member, item, history.members.find(row => row.paperId === paperId), before);
@@ -402,10 +421,17 @@ function loadBatchData({ manifestPath, processDirectory, analysisRoot, grantHand
     }
     if (!isDeepStrictEqual([...records.keys()].sort(), failed)) fail('人工清单必须精确覆盖完整当前失败集合');
     return { manifest, state, processDir, analysisRoot: root, grantHandle, records,
-        baselineFile: baseline.file, baselineSha256: baseline.sha256 };
+        baselineFile: baseline.file, baselineSha256: baseline.sha256, resumedMembers };
 }
 function openCorrectionBatch(options) {
     const handle = Object.freeze({}); batches.set(handle, loadBatchData(options)); return handle;
+}
+// Only a previously saved member of this exact interrupted batch can bridge
+// an implementation migration. This authenticates history, not publication.
+function assertResumableCorrectionBatch(options) {
+    const batch = loadBatchData(options);
+    if (!batch.resumedMembers.length) fail('中断恢复需要至少一篇已真实保存的同批人工稿');
+    return true;
 }
 function assertSavedBatchMember(handle, paper) {
     const batch = batches.get(handle), row = batch?.records.get(paper?.id), proof = paper?.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance;
@@ -530,12 +556,82 @@ const CHECKPOINT_FAILURE_FIELDS = Object.freeze(['error', 'errorCode', 'errorCat
     'latestAnalysisAttemptRetryable', 'latestAnalysisAttemptCategory', 'latestAnalysisAttemptStatus',
     'latestAnalysisAttemptScope', 'latestAnalysisAttemptErrorCategory',
     'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']);
+// A failed Reader save may retain its parent's scan attachment although
+// the same child already saved the authenticated preflight used by its paid
+// Reader (and, where applicable, its scoring checkpoint). Restore that one
+// attachment in a private view; never rewrite the raw failed package.
+function projectReaderResourceScan(active, raw) {
+    const scan = raw.analysisManifest?.stages?.openSourceScan;
+    const resources = raw.apiReaderResources;
+    if (scan?.resourceEvidenceSha256 === resources?.identitySha256) {
+        active.resourceScanRecovery = null; return raw;
+    }
+    if (!active.candidate?.identity) fail('资源扫描绑定恢复需要当前真实活跃付费候选；不能借未装载的退休来源');
+    const { loaded } = active, revision = loaded.revision, parent = loaded.parent;
+    const r = active.row.record, context = require('./conference-analysis-context').getConferenceAnalysisContext();
+    const source = loaded.source.sourceDetails;
+    if (!['reader-only', 'scoring-and-reader'].includes(revision.mode)
+        || !context || context.paperId !== r.paperId || context.executionId !== r.executionId
+        || context.executionDir !== loaded.directory || context.readerPdfSourceHandle !== active.pdf
+        || active.beforeRun?.executionId !== r.executionId
+        || raw.id !== r.paperId || raw.source !== 'conference' || typeof raw.analysis !== 'string' || !raw.analysis
+        || source.source !== 'conference_pdf_text' || source.sourceId !== r.paperId
+        || sha(source.text) !== r.sourceSha256 || raw.sourceSha256 !== r.sourceSha256
+        || raw.analysisManifest?.sourceAcquisition?.sourceSha256 !== r.sourceSha256
+        || parent.analysis.status !== 'complete' || parent.run.status !== 'complete'
+        || scan?.status !== 'complete' || scan.resourceEvidenceContract !== 'api-reader-resource-identity-v1'
+        || !isDeepStrictEqual(scan, parent.analysis.papers[0].analysisManifest?.stages?.openSourceScan)) {
+        fail('资源扫描绑定恢复缺少同源原父稿及固定Reader预检范围');
+    }
+    const preflight = read(path.join(loaded.directory, 'reader-resource-preflight.json'));
+    if (preflight.sha256 !== revision.resourcePreflightFileSha256
+        || !isDeepStrictEqual(preflight.value, loaded.resourcePreflight)
+        || !isDeepStrictEqual(resources, preflight.value)) fail('资源扫描绑定恢复与已登记预检字节不同');
+    require('../deep-analyzer').replayVerifiedReaderResourceIdentity(resources, source.text);
+    require('./conference-source-context').readerPdfSourceForContext(active.pdf).assertUnchanged();
+    const checkpoint = active.beforeAnalysis.readerRevisionProgress?.scoringCheckpoint;
+    if (revision.mode === 'scoring-and-reader') {
+        const expected = { revisionSha256: revision.revisionSha256, sourceSha256: r.sourceSha256,
+            resourceIdentitySha256: resources.identitySha256, analysisSha256: sha(raw.analysis),
+            scoringStageSha256: checkpointStable(raw.analysisManifest.stages.scoringAudit) };
+        if (!isDeepStrictEqual(checkpoint, expected)) fail('资源扫描绑定恢复没有同主文及资源的真实评分检查点');
+    } else {
+        const scientific = paper => {
+            const stages = clone(paper.analysisManifest?.stages || {});
+            delete stages.apiReaderArticle; delete stages.apiReaderTableAudit;
+            const checkpoints = clone(paper.analysisStageCheckpoints || {});
+            delete checkpoints.apiReaderArticle; delete checkpoints.apiReaderTableAudit;
+            return { analysis: paper.analysis, parsed: paper.parsed, stages, checkpoints,
+                analysisCheckpoint: paper.analysisCheckpoint, scoringAudit: paper.scoringAudit };
+        };
+        if (checkpoint !== undefined || !isDeepStrictEqual(scientific(raw), scientific(parent.analysis.papers[0]))) {
+            fail('Reader-only资源扫描绑定恢复不能改变原主文、评分、标签或非Reader阶段及检查点');
+        }
+    }
+    const view = clone(raw);
+    view.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = resources.identitySha256;
+    const rules = require('./conference-postprocess').readOriginalTagProof(view).rules;
+    const engine = require('../analysis-engine');
+    if (engine.getConferenceReaderRefreshUpstreamReason(view, { tagRules: rules })
+        || !engine.scoringAuditBindsFinalAnalysis(view)
+        || !engine.scoringStabilityIsResolved(view.analysisManifest.stages.scoringAudit)) fail('资源扫描恢复视图未通过完整科学上游核验');
+    active.resourceScanRecovery = { contract: 'conference-reader-resource-scan-recovery-v1',
+        rawPaperSha256: checkpointStable(raw), restoredPaperSha256: checkpointStable(view),
+        parentExecutionId: parent.run.executionId, parentAnalysisFileSha256: parent.analysisFileSha256,
+        parentRunFileSha256: parent.runFileSha256, sourceSha256: r.sourceSha256,
+        preflightFileSha256: preflight.sha256, resourceIdentitySha256: resources.identitySha256,
+        originalScanSha256: checkpointStable(scan), restoredScanSha256: checkpointStable(view.analysisManifest.stages.openSourceScan),
+        scoringCheckpointSha256: checkpoint ? checkpointStable(checkpoint) : null,
+        originalCandidateIdentitySha256: hash(active.candidate.identity), newApiRequests: 0 };
+    return view;
+}
 function projectMainCheckpoint(active) {
     const raw = active.rawBeforePaper || active.beforePaper, r = active.row.record;
     if (raw.analysis !== null) {
         if (r.mainCheckpointRecovery !== undefined) fail('非空主文不能声明评分检查点恢复');
-        active.rawBeforePaper = raw; active.beforePaper = raw; active.mainCheckpointRecovery = null;
-        return raw;
+        active.rawBeforePaper = raw; active.mainCheckpointRecovery = null;
+        active.beforePaper = projectReaderResourceScan(active, raw);
+        return active.beforePaper;
     }
     const source = active.loaded.source.sourceDetails;
     const context = require('./conference-analysis-context').getConferenceAnalysisContext();
@@ -633,6 +729,7 @@ function current(paper, identity) {
             originalPaidOrigin: clone(active.originalPaidOrigin) } : {}),
         retainedAttempts: active.candidate.payload.attempts, retainedFullAttempts: active.candidate.payload.fullAttempts,
         ...(active.mainCheckpointRecovery ? { mainCheckpointRecovery: clone(active.mainCheckpointRecovery) } : {}),
+        ...(active.resourceScanRecovery ? { resourceScanRecovery: clone(active.resourceScanRecovery) } : {}),
         appliedAt: r.appliedAt };
     active.proof = proof;
     return { payload: { ...clone(active.candidate.payload), draft: clone(active.draft), rawDraft: JSON.stringify(active.draft) }, proof: clone(proof) };
@@ -922,4 +1019,4 @@ function withSavedPaper(paper, callback) {
 module.exports = { prepareReaderInput, finalizeCheckpointImages, finalizeReaderFailure, CONTRACT, CORRECTION, RECEIPT, SINGLE_TABLE_APPEND,
     HISTORICAL_NORMAL_TERMINAL, PAID_RAW_JSON_SCHEMA, DECLARED_TABLE_RESTORATION, openCorrectionBatch, withCorrection, current, execution, replay,
     readVerifiedConferenceReaderPrompts, isVerifiedConferenceReaderPromptDeclaration,
-    sealCorrection, withSavedPaper, hasVerifiedOperatorProvenance, assertMayAccessNetwork, assertSavedBatchMember };
+    sealCorrection, withSavedPaper, hasVerifiedOperatorProvenance, assertMayAccessNetwork, assertSavedBatchMember, assertResumableCorrectionBatch };

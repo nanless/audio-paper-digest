@@ -78,7 +78,7 @@ npm run test:compat
 | `lib/analysis-batch-report.js` | Node共享：将 Reader 刷新固定范围、来源引用、轮次和人工建议保存为私有诊断；不签来源、成功正文或发布凭证，不授权新请求。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
 | `lib/analysis-stage-request-guard.js` | 独立会议恢复跨轮保存失败非 Reader 阶段的请求禁令，覆盖正常和自定义模型入口；保留纯检查及原付费重验，不新增额度。Reader 仍使用自己的累计账本。 |
-| `lib/conference-reader-operator-correction.js` | 只在原会议许可最后失败集合中安装有界人工 Reader 补丁；核原完整包、候选、响应、预算、资产及真实 PDF，硬禁模型/网络，保存独立原包和可冷重放凭证。空主文仅可投影同执行三 SHA 一致且科学上游完整的评分检查点，原失败包不改。 |
+| `lib/conference-reader-operator-correction.js` | 只在原会议许可最后失败集合中安装有界人工 Reader 补丁；核原完整包、候选、响应、预算、资产及真实 PDF，硬禁模型/网络，保存独立原包和可冷重放凭证。同批已保存断点以真实 receipt/before/canonical 重放原资格，原清单不重签。资源阶段遗留父指针仅按同次认证预检、真实父稿及必要评分检查点恢复私有视图；空主文仅可投影同执行三 SHA 一致且科学上游完整的评分检查点，原失败包不改。 |
 | `lib/reader-single-source-table-append.js` | 纯数据验证固定形状的唯一原表追加：绑定六文件及 PDF 原字节、来源窗口、既有第11节尾部和第二绑定，保护所有原内容；输出仅为候选数据，不授予来源、资格或付费权限。会议私有 v2 成员加载后仍走正常完整解析及冷核。 |
 | `lib/conference-reader-resolved-origin.js` | 只读认证外层未保存的唯一最新退休付费 Reader：登记账本、真实请求/响应/费用、原Prompt、迁移链、正常归一与同源输入逐项闭合。私有来源句柄仅供最终失败集v1局部修正及reader-only请求前单篇减权，不复活候选或授予新额度。 |
 | `lib/conference-source-resource-correction.js`、`lib/conference-source-resource-correction-apply.js` | 认证来源事实的零请求恢复：资源归属和唯一核心句采用独立物理合同，保留最新主文及真实 Reader 父稿，正常解析、整篇热/冷核和暂存后在全部论文锁内原子采纳；不改变原费用或预算。迁移须显式 `--postprocess-only --source-corrections FILE`，见[来源纠正](../docs/conference-workflow.md#认证来源事实的零请求纠正)。 |
@@ -278,7 +278,7 @@ npm run test:compat
 | `lib/reader-resource-claims-replay-cli.js` | Python 出版前从私有描述符重放资源宣称与封存全文绑定，并以共享语义规则拒绝实际 Reader 正文的占位结果表；禁止网络。 |
 | `lib/reader-resource-input-admission.js` | Node 库：真实资源状态变化须逐字重放原请求、已付响应、费用与失败稿，并核完整父阶段和封存来源；同来源 Reader 范围仅一次新输入，固定正常 6/2 预算，旧稿与旧计数不迁移。仅元数据变化拒绝再开。 |
 | `lib/reader-resource-prose.js` | 把已核验资源身份投影为自然语言输入，保留作者与第三方归属。 |
-| `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
+| `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。保留上游时验证实际返回的原论文 Reader，假想的未保存主文投影不授予人工权限。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
 | `lib/reader-sealed-pdf-column-units.js` | Reader 封存 PDF 表格列单位的精确绑定与重放。 |
 | `lib/reader-authenticated-pdf-table-evidence.js` | 共用会议及历史真实 PDF 的私有来源能力，为正常 `source_quotes` 表派生唯一原表引文与严格行列单位证明；解析、恢复及保存后冷核使用同一实现，不制造 DOM 或放宽旧完整稿出版准入。 |
 | `lib/reader-source-table-column-units.js` | 在已核验的封存来源作用域中，以原 DOM 表、行名及同列单元格核对百分比单位；合并表头另须完整跨度覆盖、唯一指标路径及明确原表注。不改数字、单位或来源，冷态恢复与发布端同步重放。 |

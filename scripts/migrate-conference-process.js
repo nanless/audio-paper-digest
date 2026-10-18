@@ -295,8 +295,17 @@ function migrateAndRun(options, runtime = {}) {
             : await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
         processApi.assertSourceContinuity(state, shared);
         if (options.readerCorrections) {
-            if (!grantHandle || requiresMigration || lifecycleNeedsRefresh) {
+            if (!grantHandle || lifecycleNeedsRefresh) {
                 throw new Error('人工 Reader 修正要求同一原许可及当前已完成的实现迁移；先完成普通只读后处理再绑定最终失败清单');
+            }
+            if (requiresMigration) {
+                // An interrupted, already saved member pins the original
+                // immutable batch/state. Migrate after finishing that same
+                // batch: migrating first would invalidate its original CAS.
+                // A new all-partial batch cannot use this continuation path.
+                require('./lib/conference-reader-operator-correction').assertResumableCorrectionBatch({
+                    manifestPath: options.readerCorrections, processDirectory: directory,
+                    analysisRoot: deps.files.conferenceAnalysisDir, grantHandle });
             }
             state = await require('./lib/conference-reader-operator-apply').applyAndStageBatch({
                 manifestPath: options.readerCorrections, grantHandle, directory, state, shared }, deps);

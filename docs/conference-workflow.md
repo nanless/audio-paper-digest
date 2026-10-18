@@ -492,6 +492,10 @@ npm run conference:migrate-process -- --apply \
 
 默认仍核对同一许可已完成3轮。少量顽固稿已跨正常执行重试，而当前窗口因同组无进展或全文次数耗尽在首轮正常停止时，可在人工清单显式声明 `normalHistoryAdmission.contract: historical-normal-terminal-v1`。其 `members` 必须精确覆盖完整当前失败集，每项绑定 `paperId`、当前 `executionId`、直接前驱 `priorExecutionId`，以及两份完整材料树的 `currentMaterialsSha256`、`priorMaterialsSha256`。程序核验真实已登记的许可、连续父子稿、同一封存来源和原完整材料；当前与直接前驱各须有实际 Reader 内容请求/响应和正常失败记录，不能把停止记录、伪造数字或同一次执行的多条响应当成多轮。当前还须有唯一活跃失败候选，以及真实的同组无进展或全文耗尽证据。这里承认的是至少2次实际正常执行，不声称已完成本窗3轮，不增加模型额度。保存冷核使用不可变原 `analysis-before.json`、`run-before.json` 和原完整失败集重放；已成功的普通稿不能因此重新成为人工失败稿。
 
+同一人工批次中，某篇已经保存并通过冷核、但其余论文尚未完成时，进程仍保持原全失败集状态。重启继续原清单，使用同批真实完成凭证及不可变 before 包重放历史资格；核对当前完整论文、before 文件、状态、来源、许可与完整材料树，只有合法的保存替换可由 before 字节重建原树。不存在真实凭证、正文或其它原材料改变时仍拒绝。实现变化时，仅这种已保存断点可在原状态 SHA 下续完原批；随后必须执行既有全会当前实现后处理、迁移 CAS 与汇总。不能先改进程状态、重签清单，或让首次全未完成批次借此跳过迁移。
+
+部分原失败稿的 `apiReaderResources` 已等于本次封存预检，而 `openSourceScan.resourceEvidenceSha256` 仍继承父稿。入口只在真实同次来源与预检全部核验、旧资源阶段逐字等于真实父稿时，恢复这一个私有指针。评分＋Reader 必须另核本次真实评分检查点的来源、资源、主文和评分阶段绑定；Reader-only 必须保护原父稿主文、评分及标签。原物理失败包及旧声明完整归档，新操作凭证如实记录恢复前后及来源 CAS，冷热核验重放同一派生。资源对象不任意替换，不重签旧评分或 Reader，不增加请求。保留上游的资源同步仍验证投影不改变评分，但只对实际返回的原论文核 Reader 资格，假想的未保存主文不取得人工权限。
+
 完整付费响应仅因 JSON `version: 4` 被拒、原候选仍为 `draft: null` 时，成员可另显式声明 `version: 1`、`correctionKind: paid-raw-json-schema-v1`。`rawJsonSchemaCorrection` 绑定 `originalRawSha256`、固定 `originalVersion: 4`、只改为版本3后的 `projectedDraftSha256`，以及本窗最新真实全文的 `requestId`、`responseFileSha256`；原 `rawDraft` 必须逐字等于该实际响应。原候选及其 null、请求和费用原样保留，只在私有来源作用域内投影版本字段，再应用旧 SHA 绑定的局部补丁；版本节点计入总共1–8个已有节点，不能通过此声明重造原稿或放宽日更入口。
 
 原稿恰有2个来源绑定、唯一独占的 `[[TABLE_1]]`、`[[TABLE_2]]`，但实际 Markdown 表为0时，可另显式声明 `declaredTablePlaceholderRestoration.contract: declared-table-placeholder-restoration-v1`，如实记录0→2恢复。声明绑定同一认证 PDF/全文 SHA、原完整绑定 SHA、每个原标记所在 body 路径与原绑定 SHA、两张完整 Markdown 表字节及恢复后整稿 SHA。程序只在原标记位置恢复两表，不增加绑定或其它结构；后续补丁不能偷换已声明表字节。该声明可与上述版本投影组合：先改版本，再恢复标记表，再以该私有投影的 SHA 应用其它局部补丁，全部独立已有节点合计仍不超过8个。默认成员继续禁止隐瞒增删实际 Markdown 表；恢复内容仍须通过正常逐格来源、整篇质量及保存冷核，声明本身不证明科学内容正确。

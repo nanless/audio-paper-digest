@@ -8,6 +8,27 @@ const {stableHash:hash,sha256:sha}=require('../scripts/lib/fresh-rewrite-run.js'
 const {synchronizeReaderResourceAvailability:sync}=require('../scripts/lib/reader-resource-sync.js');
 const binding=require('../scripts/lib/reader-resource-binding.js');
 
+test('preserve validates the actual signed Reader after neutral resource projection, without validating a changed-main hypothetical Reader',()=>{
+    const f=fixture(),before=structuredClone(f.paper);sealReader(f.paper);
+    const original=structuredClone(f.paper),filename=require.resolve('../scripts/lib/reader-resource-sync'),Module=require('node:module');
+    const runtime=new Module(filename,module);runtime.filename=filename;runtime.paths=Module._nodeModulePaths(require('node:path').dirname(filename));
+    const actualRequire=runtime.require.bind(runtime);let actualChecks=0,hypotheticalChecks=0;
+    runtime.require=name=>name==='../analysis-engine.js'?{...engine,hasValidApiReaderV3Records(paper){
+        if(paper.analysis!==original.analysis){hypotheticalChecks++;return false;}
+        actualChecks++;return engine.hasValidApiReaderV3Records(paper);
+    }}:actualRequire(name);
+    runtime._compile(require('node:fs').readFileSync(filename,'utf8'),filename);
+    const synchronize=runtime.exports.synchronizeReaderResourceAvailability;
+    assert.notEqual(deep.applyApiReaderResourceAvailability(f.paper.analysis,f.resources),f.paper.analysis);
+    assert.equal(synchronize(f.paper,f.sourceDetails,{preserveUpstream:true}),f.paper);
+    assert.deepEqual(f.paper,original);assert.ok(actualChecks>0);assert.equal(hypotheticalChecks,0);
+    assert.throws(()=>synchronize(f.paper,f.sourceDetails),/读者文章内容或阶段绑定/);
+    assert.ok(hypotheticalChecks>0);assert.deepEqual(f.paper,original);
+    f.paper.apiReaderArticle+=' changed';
+    assert.throws(()=>synchronize(f.paper,f.sourceDetails,{preserveUpstream:true}));
+    assert.equal(f.paper.analysis,before.analysis);
+});
+
 function fixture(type='demo',availability='temporarily_unreachable') {
     const text=`Our ${type} is available at https://example.org/demo\nThis is the original source evidence.`;
     const identity={contract:'api-reader-resource-identity-v1',sourceTextSha256:sha(text),resources:[{

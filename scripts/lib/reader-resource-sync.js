@@ -141,8 +141,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails, options = {
         ...(checkpoint !== undefined ? { analysisCheckpoint: checkpoint } : {}) };
     if (stableHash(stages.scoringAudit.audit) !== auditSha
         || stableHash(Object.fromEntries(protectedReaderKeys.map(key => [key, next[key]]))) !== beforeReader
-        || !scoringAuditBindsFinalAnalysis(next)
-        || (stages.apiReaderArticle?.status === 'complete' && !hasValidApiReaderV3Records(next))) {
+        || !scoringAuditBindsFinalAnalysis(next)) {
         throw new Error('同步资源状态后，评分审查内容、读者文章内容或阶段绑定未能保持要求。');
     }
     if (options.preserveUpstream === true) {
@@ -153,6 +152,9 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails, options = {
             throw new Error('保留 Reader 上游需要原评分与当前 Reader 的完整绑定仍然有效。');
         }
         return paper;
+    }
+    if (stages.apiReaderArticle?.status === 'complete' && !hasValidApiReaderV3Records(next)) {
+        throw new Error('同步资源状态后，读者文章内容或阶段绑定未能保持要求。');
     }
     Object.assign(paper, next);
     return paper;
