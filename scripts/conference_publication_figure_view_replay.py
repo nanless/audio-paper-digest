@@ -18,13 +18,22 @@ from conference_publication_figure_view import project_page_bytes, stable, requi
 
 def native_parser():
     # Reuse the exact fixed native parser without importing publication services.
-    path = Path(__file__).resolve().parent / 'publish-to-blog.py'
-    tree = ast.parse(path.read_text())
+    scripts = Path(__file__).resolve().parent
+    publisher = ast.parse((scripts / 'publish-to-blog.py').read_bytes())
+    imports = [(node.module, node.level, alias.name, alias.asname)
+               for node in publisher.body if isinstance(node, ast.ImportFrom)
+               for alias in node.names if (alias.asname or alias.name) == 'parse_markdown_images']
+    require(imports == [('publish_common', 0, 'parse_markdown_images', None)] and not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == 'parse_markdown_images'
+        for node in publisher.body), 'native image parser must use the fixed shared import')
+    path = scripts / 'publish_common.py'
+    raw = path.read_bytes()
+    tree = ast.parse(raw)
     functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'parse_markdown_images']
     require(len(functions) == 1, 'native image parser missing or ambiguous')
     ns = {'re': re, 'PublishDataValidationError': ValueError}
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), 'exec'), ns)
-    return ns['parse_markdown_images'], hashlib.sha256(path.read_bytes()).hexdigest()
+    return ns['parse_markdown_images'], hashlib.sha256(raw).hexdigest()
 
 
 def transform(input_value):

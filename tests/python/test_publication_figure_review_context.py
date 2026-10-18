@@ -17,6 +17,7 @@ ROOT=next(p for p in Path(__file__).resolve().parents if (p/'package.json').is_f
 O=next((p for p in Path(__file__).resolve().parents if (p/'proposed/scripts/publish-to-blog.py').is_file()),None)
 filename=O/'proposed/scripts/publish-to-blog.py' if O else ROOT/'scripts/publish-to-blog.py'
 tree=ast.parse(filename.read_text())
+parser_tree=ast.parse((ROOT/'scripts/publish_common.py').read_text())
 class Rejected(ValueError):pass
 ns={'os':os,'re':re,'Path':Path,'stat':stat,'hashlib':hashlib,'base64':base64,'json':json,'io':io,'math':math,
     'PublishDataValidationError':Rejected,'REVIEW_IMAGE_MAX_BYTES':8*1024*1024,'REVIEW_IMAGE_MAX_EDGE':4096,
@@ -28,6 +29,9 @@ names={'_publication_figure_review_context_note','_open_review_image_under_direc
 for node in tree.body:
     if isinstance(node,ast.FunctionDef) and node.name in names:
         exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual proposed review functions>','exec'),ns)
+parser_functions=[node for node in parser_tree.body if isinstance(node,ast.FunctionDef) and node.name=='parse_markdown_images']
+assert len(parser_functions)==1
+exec(compile(ast.Module(body=parser_functions,type_ignores=[]),'<actual shared image parser>','exec'),ns)
 URL='https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/111111111111/figure-2.png'
 def context():return {'paperId':'conference:interspeech:2026:conference-paper-id:test','imageSha256':'a'*64,
     'sourceNote':'原论文 PDF 第 2 页，本文讨论 Figure 3（完整原页）',

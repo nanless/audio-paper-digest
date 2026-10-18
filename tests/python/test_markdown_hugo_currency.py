@@ -165,3 +165,96 @@ class MarkdownTableCountTest(unittest.TestCase):
     def test_empty_and_none_are_zero(self):
         self.assertEqual(markdown_table_count(''), 0)
         self.assertEqual(markdown_table_count(None), 0)
+
+
+class MarkdownImageAltDiagnosticContextTest(unittest.TestCase):
+    def test_actual_payne_both_alt_brackets_pass_without_published_byte_changes(self):
+        from publish_common import parse_markdown_images
+        from markdown_hugo_gate import _mask_literal_markdown_image_alt_brackets
+        raw = '[![原论文 Figure 1：f0 contour for broad focus declarative FALL: \\!\\[e me](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-1.png)](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-1.png)\n\n*论文图 1。原论文 Figure 1：“f0 contour for broad focus declarative FALL: [e me”。*\n\n[![原论文 Figure 2：f0 contour for broad focus declarative RISE: \\!\\[mi sto](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-2.png)](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-2.png)\n\n*论文图 2。原论文 Figure 2：“f0 contour for broad focus declarative RISE: [mi sto”。*'
+        before = raw.encode()
+        images = parse_markdown_images(raw)
+        self.assertEqual(len(images), 2)
+        self.assertEqual(math_and_emphasis_issues(raw, 'actual-Payne'), [])
+        diagnostic = _mask_literal_markdown_image_alt_brackets(raw)
+        self.assertNotEqual(diagnostic, raw)
+        self.assertEqual(raw.encode(), before)
+        self.assertEqual(parse_markdown_images(raw), images)
+        self.assertEqual(_mask_literal_markdown_image_alt_brackets(diagnostic), diagnostic)
+        self.assertEqual(sanitize_markdown_for_publish(raw), raw)
+
+    def test_only_valid_alt_bracket_escapes_get_formula_pairing_context(self):
+        from markdown_hugo_gate import _mask_literal_markdown_image_alt_brackets
+        from publish_common import parse_markdown_images, PublishDataValidationError
+        image = '![原论文 Figure 1：literal ' + chr(92) + '[e](https://example.org/a.png)'
+        for defect in (chr(92) + '[正文未闭合', chr(92) + '(正文未闭合', '正文$50', '正文**未闭合'):
+            raw = image + '\n\n' + defect
+            self.assertTrue(math_and_emphasis_issues(raw, 'outside-ALT'))
+            self.assertTrue(_mask_literal_markdown_image_alt_brackets(raw).endswith(defect))
+        for raw in ('![坏图 ' + chr(92) + '[未闭合',
+                    image + '\n\n![坏图 ' + chr(92) + '[未闭合',
+                    chr(92) + '![转义不是图片 ' + chr(92) + '[e](https://example.org/a.png)',
+                    '![合法ALT](https://example.org/' + chr(92) + '[bad.png)'):
+            self.assertEqual(_mask_literal_markdown_image_alt_brackets(raw), raw)
+            self.assertTrue(math_and_emphasis_issues(raw, 'not-a-literal-ALT-exception'))
+        with self.assertRaises(PublishDataValidationError):
+            parse_markdown_images('![坏图 ' + chr(92) + '[未闭合')
+        self.assertTrue(math_and_emphasis_issues('![ALT $50](https://example.org/a.png)', 'dollars-remain-strict'))
+        self.assertTrue(math_and_emphasis_issues('![ALT ' + chr(92) + '(x](https://example.org/a.png)', 'parentheses-remain-strict'))
+        html = '<img alt="caption ' + chr(92) + '[x" src="https://example.org/a.png">'
+        self.assertTrue(math_and_emphasis_issues(html, 'HTML-unchanged', rendered_html=True))
+
+    def test_alt_slash_parity_and_closed_code_use_same_strict_scanner(self):
+        from markdown_hugo_gate import _mask_literal_markdown_image_alt_brackets
+        from publish_common import parse_markdown_images
+        for n in range(1, 5):
+            slashes = chr(92) * n
+            raw = '![原论文 Figure 1：' + slashes + '[e' + slashes + ']](https://example.org/a.png)'
+            self.assertEqual(len(parse_markdown_images(raw)), 1)
+            diagnostic = _mask_literal_markdown_image_alt_brackets(raw)
+            self.assertEqual(diagnostic == raw, n % 2 == 0)
+            self.assertEqual(math_and_emphasis_issues(raw, 'escape-parity'), [])
+        for raw in ('`![代码 ' + chr(92) + '[未闭合`',
+                    '```text\n![代码 ' + chr(92) + '[未闭合\n```'):
+            self.assertEqual(math_and_emphasis_issues(raw, 'closed-code'), [])
+        self.assertTrue(math_and_emphasis_issues('`未闭合代码 ' + chr(92) + '[未闭合', 'unclosed-code'))
+
+    def test_real_hugo_keeps_actual_payne_images_and_literal_summary_visible(self):
+        import shutil
+        import subprocess
+        from html.parser import HTMLParser
+        from publish_common import escape_html_like_tags, parse_markdown_images
+        if not shutil.which('hugo'):
+            self.skipTest('Hugo not installed')
+        raw = '[![原论文 Figure 1：f0 contour for broad focus declarative FALL: \\!\\[e me](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-1.png)](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-1.png)\n\n*论文图 1。原论文 Figure 1：“f0 contour for broad focus declarative FALL: [e me”。*\n\n[![原论文 Figure 2：f0 contour for broad focus declarative RISE: \\!\\[mi sto](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-2.png)](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/1b5b0e9c4c67/figure-2.png)\n\n*论文图 2。原论文 Figure 2：“f0 contour for broad focus declarative RISE: [mi sto”。*'
+        self.assertEqual(math_and_emphasis_issues(raw, 'actual-Payne'), [])
+        summary = '保留填充词与<unk>的转写与交叉复核'
+        body = raw + '\n\n' + escape_html_like_tags(summary)
+        class Visible(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.images, self.text = [], []
+            def handle_starttag(self, tag, attrs):
+                if tag == 'img':
+                    values = dict(attrs)
+                    self.images.append((values.get('src'), values.get('alt')))
+            def handle_data(self, data):
+                self.text.append(data)
+        with tempfile.TemporaryDirectory(prefix='pd-alt-diagnostic-only-') as temporary:
+            root = Path(temporary)
+            (root / 'content').mkdir()
+            (root / 'layouts/_default').mkdir(parents=True)
+            (root / 'hugo.toml').write_text('baseURL="https://example.invalid/"\n[markup.goldmark.renderer]\nunsafe=true\n')
+            (root / 'layouts/_default/single.html').write_text('<html><body><article>{{ .Content }}</article></body></html>')
+            (root / 'content/reader.md').write_text('---\ntitle: Reader\n---\n' + body)
+            output = root / 'public'
+            subprocess.run(['hugo', '--source', str(root), '--destination', str(output), '--quiet'], check=True, capture_output=True)
+            rendered = (output / 'reader/index.html').read_text()
+        visible = Visible(); visible.feed(rendered); visible.close()
+        self.assertEqual([url for url, _alt in visible.images], [r['url'] for r in parse_markdown_images(raw)])
+        self.assertEqual([alt for _url, alt in visible.images], [
+            '原论文 Figure 1：f0 contour for broad focus declarative FALL: ![e me',
+            '原论文 Figure 2：f0 contour for broad focus declarative RISE: ![mi sto'])
+        self.assertIn('<unk>', ''.join(visible.text))
+        self.assertEqual(math_and_emphasis_issues(rendered, 'actual-Hugo', rendered_html=True), [])
+        self.assertIn(raw, body)

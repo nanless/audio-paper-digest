@@ -22,6 +22,7 @@ from publish_common import (
     mask_protected_markdown_table_regions,
     escape_literal_source_figure_caption_dollars,
     markdown_inline_code_ranges,
+    parse_markdown_images,
 )
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
@@ -292,9 +293,39 @@ def mask_closed_code_for_format_gate(text, *, rendered_html=False):
     return ''.join(chars)
 
 
+def _mask_literal_markdown_image_alt_brackets(text):
+    """Only a formula-pairing diagnostic copy; preserve all published bytes."""
+    if '![' not in text or (r'\[' not in text and r'\]' not in text):
+        return text
+    try:
+        images = parse_markdown_images(text)
+    except PublishDataValidationError:
+        # Malformed nodes never receive a literal-ALT exception.
+        return text
+    chars = list(text)
+    for image in images:
+        start = image['start'] + 2
+        end = start + len(image['alt'])
+        if text[image['start']:image['end']] != image['raw'] or text[start:end] != image['alt']:
+            return text
+        for index in range(start, end):
+            if text[index] not in '[]':
+                continue
+            cursor = index
+            while cursor > start and text[cursor - 1] == '\\':
+                cursor -= 1
+            if (index - cursor) % 2:
+                # Only the last Markdown escape slash, never prose or URL bytes.
+                chars[index - 1] = ' '
+    return ''.join(chars)
+
+
 def math_and_emphasis_issues(text, label, *, rendered_html=False):
     """Hugo 可能把语法渲染成破碎的纯文本时，这里按失败处理。"""
     clean = mask_closed_code_for_format_gate(strip_fenced_code_for_format_gate(text), rendered_html=rendered_html)
+    delimiter_view = text if rendered_html else _mask_literal_markdown_image_alt_brackets(text)
+    delimiter_clean = (clean if delimiter_view == text else
+                       mask_closed_code_for_format_gate(strip_fenced_code_for_format_gate(delimiter_view)))
     issues = []
     for opening, closing, name in (
             (r'\(', r'\)', r'\(…\)'), (r'\[', r'\]', r'\[…\]')):
@@ -302,8 +333,8 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
         # 行间公式紧挨着 ``\]``。这里统计完整反斜杠串为奇数个的定界符；
         # 旧实现只看前一个字符，会误判这种情况。
         delimiter_prefix = r'(?<!\\)(?:\\\\)*'
-        opens = len(re.findall(delimiter_prefix + re.escape(opening), clean))
-        closes = len(re.findall(delimiter_prefix + re.escape(closing), clean))
+        opens = len(re.findall(delimiter_prefix + re.escape(opening), delimiter_clean))
+        closes = len(re.findall(delimiter_prefix + re.escape(closing), delimiter_clean))
         if opens != closes:
             issues.append(
                 f'{label} 公式定界符 {name} 未配对: 开={opens}, 闭={closes}'

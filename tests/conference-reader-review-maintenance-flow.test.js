@@ -128,7 +128,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
             const projected=Buffer.from(bridgeState.projected),scripts=path.join(temp,'scripts');
             return {status:0,stdout:JSON.stringify({contract:'conference-publication-figure-view-transform-output-v1',purpose:'pure-byte-transform-only',doesNotGrantSourceOrReviewOrPublication:true,
                 rawPageSha256:input.rawPageSha256,projectedPageSha256:sha(projected),projectedPageBase64:projected.toString('base64'),size:projected.length,
-                implementation:{viewModuleSha256:sha(fs.readFileSync(path.join(scripts,'conference_publication_figure_view.py'))),cliSha256:sha(fs.readFileSync(path.join(scripts,'conference_publication_figure_view_replay.py'))),nativeParserModuleSha256:sha(fs.readFileSync(path.join(scripts,'publish-to-blog.py')))}})};}};
+                implementation:{viewModuleSha256:sha(fs.readFileSync(path.join(scripts,'conference_publication_figure_view.py'))),cliSha256:sha(fs.readFileSync(path.join(scripts,'conference_publication_figure_view_replay.py'))),nativeParserModuleSha256:bridgeState.parserShaOverride||sha(fs.readFileSync(path.join(scripts,'publish_common.py')))}})};}};
         if(id==='./conference-publication-figure-crop')return {replayPublicationFigureCropsForMaintenance:(input,handle)=>{
             bridgeState.handle=handle;const scope=module.readMaintenancePublicationHistory(handle);assert.equal(scope.purpose,'reader-maintenance-historical-publication-evidence');
             assert.equal(scope.baselineState.status,'complete');scope.baselineState.status='tampered external clone';
@@ -327,7 +327,7 @@ function syntheticPublicationHistory(h) {
         changedPages:[{path:first.path,paperId:first.paperId,rawPageSha256:first.sourceSha256,publicationViewSha256:sha(projected)}]},'viewSha256');
     seal(g,'generationSha256');h.write(h.generationPath,g);h.write(path.join(h.batchRoot,'generation.json'),g);
     const m=h.input.manifest;m.generationSha256=g.generationSha256;m.generationFileSha256=h.read(h.generationPath).sha256;m.baselineStateSha256=state.stateSha256;m.stateFileSha256=h.read(path.join(h.batchRoot,'baseline-state.json')).sha256;seal(m,'manifestSha256');h.write(h.manifestPath,m);
-    for(const name of ['conference_publication_figure_view.py','conference_publication_figure_view_replay.py','publish-to-blog.py','python-runtime.sh']){const filename=path.join(h.temp,'scripts',name);fs.mkdirSync(path.dirname(filename),{recursive:true});fs.writeFileSync(filename,'explicit synthetic implementation '+name,{mode:0o644});}
+    for(const name of ['conference_publication_figure_view.py','conference_publication_figure_view_replay.py','publish-to-blog.py','publish_common.py','python-runtime.sh']){const filename=path.join(h.temp,'scripts',name);fs.mkdirSync(path.dirname(filename),{recursive:true});fs.writeFileSync(filename,'explicit synthetic implementation '+name,{mode:0o644});}
     const batch={m,p:{root:h.batchRoot,state:path.join(h.processDirectory,'state.json'),manifest:h.manifestPath},processDirectory:h.processDirectory,analysisRoot:h.analysisRoot,manifestFileSha256:h.read(h.manifestPath).sha256,baseline:h.read(path.join(h.batchRoot,'baseline-state.json')),parents:{}};
     return {batch,g,stages,projectedPath};
 }
@@ -338,14 +338,20 @@ test('history-only opaque token rejects JSON callers and actual cached-source as
     h.bridgeState.sourceChanged=true;assert.throws(()=>proof.assertUnchanged(),/original PDF changed/);assert.ok(h.bridgeState.sourceChecks>old);
 });
 test('history view protects actual state, projected bytes, implementation and original aggregate pins',t=>{
-    for(const change of ['state','projected','implementation','aggregate']) {
+    for(const change of ['state','projected','implementation','shared-parser','aggregate']) {
         const h=setup(t),f=syntheticPublicationHistory(h),proof=h.module.__testReplay(f.batch,f.g);
         if(change==='state'){const state=h.state();state.generation++;seal(state,'stateSha256');h.write(path.join(h.processDirectory,'state.json'),state);}
         if(change==='projected')fs.appendFileSync(f.projectedPath,'wrong bytes');
         if(change==='implementation')fs.appendFileSync(path.join(h.temp,'scripts/conference_publication_figure_view.py'),' changed');
+        if(change==='shared-parser')fs.appendFileSync(path.join(h.temp,'scripts/publish_common.py'),' changed');
         if(change==='aggregate')fs.appendFileSync(path.join(f.stages.get(undefined).directory,'aggregate.md'),' changed');
         assert.throws(()=>proof.assertUnchanged(),/actual state changed|material changed/);
     }
+});
+test('history pure transform rejects a substituted shared-parser SHA before using view bytes',t=>{
+    const h=setup(t),f=syntheticPublicationHistory(h);
+    h.bridgeState.parserShaOverride=sha('different shared parser bytes');
+    assert.throws(()=>h.module.__testReplay(f.batch,f.g),/pure publication transform identity/);
 });
 test('self-consistent view missing a baseline paper or mismatching true aggregate is not authenticated by JSON hashes',t=>{
     for(const change of ['paper','aggregate']) {

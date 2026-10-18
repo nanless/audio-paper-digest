@@ -34,7 +34,8 @@ sys.modules['conference_publication_figure_view'] = view
 pub = load('publication_figure_consumer_proposal', SCRIPTS / 'publish-conference.py')
 # Parse with the actual production parser without loading publication services.
 tree = ast.parse((ROOT / 'scripts/publish-to-blog.py').read_text())
-fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'parse_markdown_images')
+shared_tree = ast.parse((ROOT / 'scripts/publish_common.py').read_text())
+fn = next(n for n in shared_tree.body if isinstance(n, ast.FunctionDef) and n.name == 'parse_markdown_images')
 ns = {'re': re, 'PublishDataValidationError': ValueError}
 exec(compile(ast.Module(body=[fn], type_ignores=[]), '<native-image-parser>', 'exec'), ns)
 parse = ns['parse_markdown_images']
@@ -136,6 +137,8 @@ class PublicationFigureViewTests(unittest.TestCase):
                'rawPageSha256':view.sha(self.raw.encode()),'kind':'paper','paperId':self.paperid,
                'nodeDerivation':self.outcome}
         result=cli.transform(value)
+        self.assertEqual(result['implementation']['nativeParserModuleSha256'],
+                         hashlib.sha256((SCRIPTS/'publish_common.py').read_bytes()).hexdigest())
         page=next(p for p in self.project()['files'] if p['kind']=='paper')
         self.assertEqual(base64.b64decode(result['projectedPageBase64']),Path(page['sourcePath']).read_bytes())
         self.assertEqual(result['projectedPageSha256'],page['sourceSha256'])
@@ -148,6 +151,27 @@ class PublicationFigureViewTests(unittest.TestCase):
         declaration=self.project()['figurePublicationView']
         self.assertEqual(declaration['rawFiles'],view.records(self.bundle['files']))
         self.assertEqual(declaration['rawImageFiles'],view.records(self.bundle['imageFiles']))
+
+    def test_native_parser_requires_unique_actual_shared_function_and_exact_publisher_import(self):
+        cli=load('view_pure_shared_parser',SCRIPTS/'conference_publication_figure_view_replay.py')
+        parser, digest=cli.native_parser()
+        self.assertEqual(parser(self.raw),parse(self.raw))
+        self.assertEqual(digest,hashlib.sha256((SCRIPTS/'publish_common.py').read_bytes()).hexdigest())
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            original=(SCRIPTS/'publish_common.py').read_bytes()
+            for publisher_bytes,common_bytes,expected in (
+                (b'from publish_common import parse_markdown_images\n',b'', 'missing or ambiguous'),
+                (b'from publish_common import parse_markdown_images\n',original+b'\ndef parse_markdown_images(content): return []\n', 'missing or ambiguous'),
+                (b'from another_module import parse_markdown_images\n',original, 'fixed shared import'),
+                (b'from publish_common import parse_markdown_images\nfrom another_module import parse_markdown_images\n',original, 'fixed shared import'),
+                (b'from publish_common import parse_markdown_images as renamed\n',original, 'fixed shared import'),
+                (b'from publish_common import parse_markdown_images\ndef parse_markdown_images(content): return []\n',original, 'fixed shared import'),
+            ):
+                (root/'publish-to-blog.py').write_bytes(publisher_bytes)
+                (root/'publish_common.py').write_bytes(common_bytes)
+                with patch.object(cli,'__file__',str(root/'conference_publication_figure_view_replay.py')):
+                    with self.assertRaisesRegex(ValueError,expected):cli.native_parser()
 
     def test_summary_only_changes_when_exact_image_present(self):
         same=self.project(); self.assertIn(self.aggregate,same['files'])

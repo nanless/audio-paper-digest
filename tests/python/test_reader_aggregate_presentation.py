@@ -116,3 +116,39 @@ class AggregateReaderPresentationTest(unittest.TestCase):
         bad['freshRewriteProvenance'] = {'contract': 'fresh-source-analysis-v1', 'sourceSha256': '0' * 64}
         with self.assertRaises(ValueError):
             publisher._validated_detailed_core_summary(bad, parsed, source_text=source)
+
+
+class LiteralSummaryDisplayOnlyTest(unittest.TestCase):
+    # Explicit display doubles: these tests do not mint source or scientific authority.
+    def publisher(self, summary):
+        stub = mock.Mock()
+        stub.render_verified_reader_resources.return_value = '原资源显示。'
+        stub.render_verified_reader_scoring_notes.return_value = '原评分显示。'
+        stub._validated_detailed_core_summary.return_value = summary
+        return stub
+
+    def test_actual_lopez_summary_token_is_visible_and_original_record_unchanged(self):
+        raw = '保留填充词与<unk>的转写与交叉复核'
+        paper = {'analysis': raw, 'retained': {'fees': [1, 2]}}
+        before = copy.deepcopy(paper)
+        stub = self.publisher(raw)
+        result = shared.resolve_reader_decision_display(stub, paper, plan={}, resources=[], parsed={})
+        self.assertEqual(result['summary'], '保留填充词与`<unk>`的转写与交叉复核')
+        self.assertEqual(paper, before)
+        stub._validated_detailed_core_summary.assert_called_once_with(paper, {})
+        self.assertEqual(result['resourceBlock'], '原资源显示。')
+        self.assertEqual(result['scoringBlock'], '原评分显示。')
+
+    def test_closed_tokens_and_normal_math_stay_idempotent(self):
+        for raw in ('保留`<unk>`。', r'公式 \(x+y\) 和 [来源](https://example.org)。'):
+            stub = self.publisher(raw)
+            first = shared.resolve_reader_decision_display(stub, {}, plan={}, resources=[], parsed={})
+            self.assertEqual(first['summary'], raw)
+            stub._validated_detailed_core_summary.return_value = first['summary']
+            self.assertEqual(shared.resolve_reader_decision_display(stub, {}, plan={}, resources=[], parsed={}), first)
+
+    def test_bad_core_source_replay_cannot_be_cleaned_into_a_display_success(self):
+        stub = self.publisher('不得借此投影未通过摘要')
+        stub._validated_detailed_core_summary.side_effect = ValueError('source replay refused')
+        with self.assertRaisesRegex(ValueError, 'source replay refused'):
+            shared.resolve_reader_decision_display(stub, {}, plan={}, resources=[], parsed={})

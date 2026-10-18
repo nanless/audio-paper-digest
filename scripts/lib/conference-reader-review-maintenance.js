@@ -481,7 +481,7 @@ function purePublicationPageTransform(raw,record,outcome) {
     const files=require('../config').FILES,root=path.resolve(path.dirname(files.conferenceProcessDir),'../..');
     const scripts=path.join(root,'scripts'),cli=path.join(scripts,'conference_publication_figure_view_replay.py');
     const expectedImplementation={viewModuleSha256:sha(fs.readFileSync(path.join(scripts,'conference_publication_figure_view.py'))),
-        cliSha256:sha(fs.readFileSync(cli)),nativeParserModuleSha256:sha(fs.readFileSync(path.join(scripts,'publish-to-blog.py')))};
+        cliSha256:sha(fs.readFileSync(cli)),nativeParserModuleSha256:sha(fs.readFileSync(path.join(scripts,'publish_common.py')))};
     const input={contract:'conference-publication-figure-view-transform-input-v1',rawPageBase64:raw.toString('base64'),
         rawPageSha256:sha(raw),kind:record.kind,paperId:record.kind==='paper'?record.paperId:null,nodeDerivation:outcome};
     const temporary=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'reader-publication-view-'));
@@ -531,7 +531,7 @@ function replayMaintenancePublicationView(batch,generation) {
         const outcome=history.outcome,files=require('../config').FILES;
         const rawFiles=view.rawFiles,rawImages=view.rawImageFiles;
         const scripts=path.resolve(path.dirname(batch.analysisRoot),'../../scripts');
-        for(const name of ['conference_publication_figure_view.py','conference_publication_figure_view_replay.py','publish-to-blog.py','python-runtime.sh'])pin(path.join(scripts,name),false);
+        for(const name of ['conference_publication_figure_view.py','conference_publication_figure_view_replay.py','publish-to-blog.py','publish_common.py','python-runtime.sh'])pin(path.join(scripts,name),false);
         check(generation.completionReceiptSha256===batch.baseline.value.completionReceiptSha256
             &&rawFiles.every(record=>['paper','aggregate','sidecar'].includes(record.kind))
             &&rawImages.every(record=>record.kind==='asset'),'raw view lifecycle or record kinds differ');

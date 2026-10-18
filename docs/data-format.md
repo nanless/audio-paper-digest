@@ -210,7 +210,7 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 页面明确标示原 PDF 页，不冒充精确裁图或旧模型输入；生成、审查和推送均重算该证明。没有这两个新字段的旧清单只按原输入语义、原来源和原 Reader 像素路径及 SHA 只读核验；不能删新证明字段，把新的替代 PNG 伪装成旧格式。替换旧资产经原清单的精确 owned 文件安装事务处理，其他图片不进入删除范围。
 
-会议原 PDF 出版派生另保存于 `conference-publications/<conferenceId>/<processId>/figure-crop-derivations/`，原页视图位于 `figure-publication-views/`。`generation.figurePublicationView` 绑定完整原 rawFiles/rawImageFiles/原 bundle SHA、真实 Node derivation、原 generation 双 SHA、固定实现及实际 changedPages；新像素和出版 body SHA 不冒充原 Reader 签名。完整页证明带目标印刷图号和 PDF 页码；正常模式核完整图注，有限源页模式须另核选中图的原认证 raw artifacts/ref/page/DOM/asset 能力，同页真实印刷图号唯一，completeTargetCaption:null 且 captionExtractionStatus 为 partial/unavailable，实际 sourceNote 明示未完整抽取；原 PDF、raw stage、原图、Reader 和费用保持。
+会议原 PDF 出版派生另保存于 `conference-publications/<conferenceId>/<processId>/figure-crop-derivations/`，原页视图位于 `figure-publication-views/`。`generation.figurePublicationView` 绑定完整原 rawFiles/rawImageFiles/原 bundle SHA、真实 Node derivation、原 generation 双 SHA、固定实现及实际 changedPages；新像素和出版 body SHA 不冒充原 Reader 签名。共享摘要显示对 `<unk>` 等论文控制词元作字面转义，原签摘要保持；合法完整图片 ALT 内的 Markdown 方括号转义仅在公式配对诊断副本中按字面处理，不改页面、ALT、URL 或图注，正文数学与 HTML 检查保持严格。完整页证明带目标印刷图号和 PDF 页码；正常模式核完整图注，有限源页模式须另核选中图的原认证 raw artifacts/ref/page/DOM/asset 能力，同页真实印刷图号唯一，completeTargetCaption:null 且 captionExtractionStatus 为 partial/unavailable，实际 sourceNote 明示未完整抽取；原 PDF、raw stage、原图、Reader 和费用保持。
 
 后续维护反馈的两阶段历史能力先验证原生批审查/父来源/真实当前后继，再通过库内 opaque 范围重算同 PDF 派生与全部实物闭包，以原生纯 FD 变换逐字对照 raw→view。缓存仍持真实 source assertUnchanged，不能只缓存 JSON 自哈希；它仅避免几何及纯 FD 重算，逐 child 仍可能重读完整批缓存与来源/页面/PNG 闭包，不承诺总 I/O 无重复；旧父不再 current 时也只认证历史意见材料，不授当前发布或新 Reader 成功。原日更 `reader-sealed-pdf-page-asset-v1` 字节及证明合同不因此改变。
 

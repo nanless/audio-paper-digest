@@ -270,3 +270,13 @@ class MarkdownImageParserTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SharedImageScannerRelocationTest(unittest.TestCase):
+    def test_publisher_uses_the_exact_original_shared_function(self):
+        import hashlib
+        import inspect
+        from publish_common import parse_markdown_images
+        self.assertIs(publisher.parse_markdown_images, parse_markdown_images)
+        self.assertEqual(hashlib.sha256(inspect.getsource(parse_markdown_images).encode()).hexdigest(), '133417b7796864babcc4fe28621273cb87dec089199d52a09c3f69ae77266c28')
+        self.assertEqual(parse_markdown_images(FIGURE), publisher.parse_markdown_images(FIGURE))
