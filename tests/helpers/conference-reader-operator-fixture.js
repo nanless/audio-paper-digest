@@ -26,6 +26,16 @@ async function fixture(t, { historical = false, rawSchema = false, tableRestorat
             modelTextSanitizationContract: 'model-text-unicode-scalars-v1' }, stages: {
             primaryAnalysis: { status: 'complete' }, coreSummaryRepair: { status: 'complete' },
             scoringAudit: { status: 'complete' }, apiReaderArticle: { status: 'complete' } } } };
+    // The ordinary orchestration fixture starts with an aligned resource scan;
+    // it does not exercise recovery of a stale parent's scan attachment. Build
+    // the actual empty identity from this real sealed source before parent CAS.
+    // Its synthetic Reader/scientific stages still grant no qualification.
+    paper.apiReaderResources = await deep.buildApiReaderResourceIdentity(paper.analysis,
+        parent.source.sourceDetails.text, {}, { paper, structuredArtifacts: parent.source.sourceDetails.structuredArtifacts });
+    assert.deepEqual(paper.apiReaderResources.resources, []);
+    paper.analysisManifest.stages.openSourceScan = { status: 'complete',
+        resourceEvidenceContract: paper.apiReaderResources.contract,
+        resourceEvidenceSha256: paper.apiReaderResources.identitySha256 };
     adapter.replaceJson(path.join(parent.directory, 'analysis.json'), { ...parent.analysis, status: 'complete',
         completedAt: '2026-10-17T12:00:00.000Z', papers: [paper] }, parent.analysisFileSha256);
     adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: ids.parentExecutionId }));
