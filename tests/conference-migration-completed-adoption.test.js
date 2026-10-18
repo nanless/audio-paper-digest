@@ -125,3 +125,103 @@ test('页面核验期间进程变化时原 CAS 拒绝，不能覆盖并发记录
     assert.equal(state.items[f.paperId].status, 'analysis_partial');
     assert.equal(state.items[f.paperId].concurrentEvidence, 'must preserve');
 });
+
+test('已采纳真实完成grant子稿后来页面失败时作为当前维护父稿，不能回退祖父或再次采纳', async t => {
+    const f = await completed(t);
+    await migration.migrateAndRun(f.options, { dependencies: { ...f.deps, postprocess: { stagePaper: f.staged } } });
+    const state = JSON.parse(fs.readFileSync(f.stateFile)), item = state.items[f.paperId];
+    item.status = 'analysis_partial'; item.readerRefreshRequired = true;
+    item.lastFailure = { code: 'CONFERENCE_POSTPROCESS_INTEGRITY', retryable: false };
+    item.lastError = 'new page quality check rejected current completed child';
+    state.status = 'partial'; state.generation++; state.stateSha256 = api.stateDigest(state);
+    fs.writeFileSync(f.stateFile, JSON.stringify(state), { mode: 0o600 });
+    const before = fs.readFileSync(f.stateFile);
+    const result = await migration.migrateAndRun(f.options, { dependencies: { ...f.deps,
+        postprocess: { stagePaper: () => assert.fail('new page failure cannot re-adopt its old complete parent') } } });
+    assert.equal(result.adoptedSavedChildren.length, 0); assert.deepEqual(fs.readFileSync(f.stateFile), before);
+    for (const field of ['analysisSha256', 'completionReceiptSha256', 'sourceSnapshotSha256']) {
+        const bad = structuredClone(state); bad.items[f.paperId].analysisProof[field] = 'f'.repeat(64);
+        bad.stateSha256 = api.stateDigest(bad); fs.writeFileSync(f.stateFile, JSON.stringify(bad), { mode: 0o600 });
+        await assert.rejects(migration.migrateAndRun(f.options, { dependencies: f.deps }),
+            { code: 'CONFERENCE_SAVED_CHILD_ADOPTION_INTEGRITY' });
+    }
+});
+
+test('混合失败集合按真实最后grant续原窗口，新普通维护走当前父稿，旧次数不重置', async t => {
+    const f = await completed(t, { partial: true }), hash = api.stableHash;
+    const state = structuredClone(f.state), old = state.items[f.paperId];
+    old.attempts = old.retryBudgetStart + 1; old.retryAuthorizedAtAttempt = old.attempts;
+    const newId = 'conference:odyssey:2026:conference-paper-id:new.quality';
+    const parentId = api.deterministicUuid(state.processId, newId, 'analysis');
+    const fresh = { paperId: newId, sourceIdentity: {}, analysisRunId: parentId, status: 'analysis_partial',
+        readerRefreshRequired: true, attempts: 5, updatedAt: state.updatedAt,
+        sourceProof: { textSha256: hash('new text') },
+        analysisProof: { analysisSha256: hash('new complete parent'), sourceSnapshotSha256: hash('new source snapshot') },
+        pageProof: null, lastError: 'new page quality failure', lastFailure: { retryable: false } };
+    state.items[newId] = fresh; state.stateSha256 = api.stateDigest(state); api.assertState(state);
+    fs.writeFileSync(f.stateFile, JSON.stringify(state), { mode: 0o600 });
+    const originalRelease = structuredClone(old.retryReleases), calls = [];
+    const context = { authority: state.authority, members: Object.keys(state.items).map(paperId => ({ paperId })), files: f.deps.files };
+    const childId = adapter.readerRevisionExecutionId(parentId, fresh.analysisProof.analysisSha256);
+    // Only the advisory legacy-path lookup is doubled as absent. The real
+    // registered source chain remains intact and must still be authenticated.
+    const originalLegacyId = adapter.readerRevisionExecutionId;
+    adapter.readerRevisionExecutionId = (executionId, analysisSha256) => executionId === f.parentExecutionId
+        ? api.deterministicUuid('absent advisory legacy path', executionId, analysisSha256)
+        : originalLegacyId(executionId, analysisSha256);
+    t.after(() => { adapter.readerRevisionExecutionId = originalLegacyId; });
+    const revisionBody = { contract: adapter.READER_REVISION_CONTRACT, version: 1, executionId: childId,
+        parentExecutionId: parentId, parentAnalysisFileSha256: fresh.analysisProof.analysisSha256,
+        parentRunFileSha256: hash('new parent run'), paperId: newId, sourceSnapshotSha256: fresh.analysisProof.sourceSnapshotSha256,
+        seededAnalysisSha256: hash('new seed'), mode: 'reader-only', maxAttempts: 3 };
+    const revision = { ...revisionBody, revisionSha256: hash(revisionBody) };
+    const dependencies = { ...f.deps, maxRounds: 1, loadAuthority: () => context,
+        implementationSha256: () => state.authority.implementationSha256,
+        deepExecutionConfigIdentity: () => state.authority.deepExecutionConfig,
+        prepareShared: async () => ({ planHandle: f.planHandle, sourceCacheRoot: f.sourceRoot,
+            sealed: Object.values(state.items).map(item => ({ paperId: item.paperId, proof: item.sourceProof })) }),
+        adapter: { ...adapter,
+            loadConferenceAnalysis: input => input.executionId === parentId
+                ? { analysisFileSha256: fresh.analysisProof.analysisSha256 }
+                : adapter.loadConferenceAnalysis(input),
+            verifyPlanAuthority: () => {},
+            refreshConferenceGrantedRecovery: async input => {
+                assert.equal(input.parentExecutionId, f.parentExecutionId);
+                assert.equal(input.failedExecutionId, f.failedExecutionId);
+                assert.equal(grants.readRecoveryGrantMember(input.grantHandle, f.paperId).expectedExecutionId, f.member.expectedExecutionId);
+                calls.push('original registered grant');
+                throw Object.assign(Error('original child window still fails'),
+                    { code: 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED', retryable: false });
+            },
+            refreshConferenceReader: async input => {
+                assert.equal(input.parentExecutionId, parentId, 'never route the registered failed member to oldest legacy child');
+                calls.push('new ordinary current parent');
+                return { executionId: childId, revision, analysisSha256: hash('newly revised content') };
+            } },
+        postprocess: { stagePaper: input => {
+            if (input.executionId === parentId) throw Object.assign(Error('current parent page needs a new Reader'),
+                { code: 'CONFERENCE_POSTPROCESS_INTEGRITY', retryable: false });
+            assert.equal(input.executionId, childId);
+            return { status: 'staged', manifest: { manifestSha256: hash('new page manifest'),
+                contentSha256: hash('new page content'), pagePath: 'content/posts/new-quality.md',
+                completionReceiptSha256: hash('new completion'), sourceSnapshotSha256: fresh.analysisProof.sourceSnapshotSha256 } };
+        } } };
+    const result = await migration.migrateAndRun({ ...f.options, postprocessOnly: false, retryFailed: true }, { dependencies });
+    assert.equal(result.status, 'partial');
+    assert.deepEqual(calls, ['original registered grant', 'new ordinary current parent']);
+    const after = api.assertState(JSON.parse(fs.readFileSync(f.stateFile)));
+    assert.deepEqual(after.items[f.paperId].retryReleases, originalRelease);
+    assert.equal(after.items[f.paperId].retryBudgetStart, old.retryBudgetStart);
+    assert.equal(after.items[f.paperId].attempts, old.attempts + 1);
+    assert.equal(after.items[newId].status, 'complete'); assert.equal(after.items[newId].analysisRunId, childId);
+});
+
+test('调度器不接受裸JSON伪造已登记窗口来保留或更改费用权限', async t => {
+    const f = await completed(t, { partial: true }), bytes = fs.readFileSync(f.stateFile);
+    await assert.rejects(api.runConferenceProcess({ apply: true, concurrency: 1, retryFailed: true }, {
+        ...f.deps, implementationSha256: () => f.state.authority.implementationSha256,
+        deepExecutionConfigIdentity: () => f.state.authority.deepExecutionConfig,
+        resolveExistingRecoveryGrant: () => ({ grantId: f.member.grantId, grantSha256: f.member.grantSha256 })
+    }), /真实已登记的追加许可能力/);
+    assert.deepEqual(fs.readFileSync(f.stateFile), bytes);
+});

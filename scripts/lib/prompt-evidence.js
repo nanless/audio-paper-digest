@@ -115,5 +115,39 @@ function readPromptEvidenceBytes(relativePath, { expectedSha256 = null, root = P
     return bytes;
 }
 
+// Evidence lookup only: this neither installs a Prompt declaration nor changes
+// current writing. Authenticated paid-replay scopes still own that authority.
+function declaredPromptTemplateEvidence(relativePath, templateSha256, { root = PROJECT_ROOT } = {}) {
+    const relative = controlledPath(relativePath), base = fs.realpathSync(root);
+    if (!SHA.test(String(templateSha256 || ''))) throw new Error('Invalid declared Prompt template SHA256');
+    const index = loadIndex(base), current = CURRENT_PROMPT_FILES.includes(relative);
+    const registered = Object.entries(index.blobs).filter(([, blob]) => blob.paths.includes(relative));
+    if (!current && !index.retiredPaths[relative] && !registered.length) return null;
+    const candidates = new Map(), match = bytes => {
+        if (require('./prompt-history').promptTemplateSha256(bytes.toString('utf8')) === templateSha256)
+            candidates.set(sha256(bytes), Buffer.from(bytes));
+    };
+    // A missing/unsafe current file is still an error. Historical declarations
+    // can select original registered bytes, never hide a broken current path.
+    if (current || index.retiredPaths[relative]) match(readPromptEvidenceBytes(relative, { root: base }));
+    for (const [wholeSha256, blob] of registered) match(readBlob(base, blob, wholeSha256));
+    if (!candidates.size) return null;
+    if (candidates.size !== 1) throw new Error('Declared Prompt template has ambiguous registered whole-file evidence');
+    const [fileSha256, bytes] = candidates.entries().next().value;
+    return { path: relative, fileSha256, templateSha256, bytes };
+}
+function declaredStagePromptTemplateEvidence(stage, templateSha256, options = {}) {
+    const versions = require('./prompt-text-versions'), matches = [];
+    for (const [name, contract] of Object.entries(versions)) {
+        if (!/^ANALYSIS_PROMPT_TEXT_V\d+_CONTRACT$/u.test(name)) continue;
+        let relative; try { relative = versions.promptFilePathForContract(stage, contract); } catch { continue; }
+        const evidence = declaredPromptTemplateEvidence(relative, templateSha256, options);
+        if (evidence) matches.push({ ...evidence, contract });
+    }
+    if (matches.length > 1) throw new Error('Declared Prompt stage/template identity is ambiguous');
+    return matches[0] || null;
+}
+
 module.exports = { readPromptEvidenceBytes, historicalPromptEvidenceBytesForSha256,
-    listHistoricalPromptEvidence, promptEvidenceIndexFingerprint };
+    listHistoricalPromptEvidence, promptEvidenceIndexFingerprint,
+    declaredPromptTemplateEvidence, declaredStagePromptTemplateEvidence };

@@ -476,10 +476,12 @@ test('拒绝无法安全写入 Markdown 的原表内容，并检查生成表格�
         selectionTableIndexes: compiled.selectionTableIndexes }), /不一致/);
 });
 
-test('Reader 解析器编译两张选中宽表后，保留 v3 计划和 v4 来源对应格式', () => {
+test('Reader 按真实原表三列或五列正常编译，保留表数量和 v4 逐格来源要求', () => {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText, parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');
-    const header = '<thead><tr><th>System</th><th>WER</th><th>CER</th><th>Latency</th><th>Memory</th></tr></thead>';
-    const rows = '<tbody><tr><td>Baseline</td><td>4.8%</td><td>3.1%</td><td>2 ms</td><td>8 GB</td></tr><tr><td>Proposed</td><td>4.1%</td><td>2.9%</td><td>3 ms</td><td>9 GB</td></tr></tbody>';
+    for (const width of [3, 5]) {
+    const header = '<thead><tr>' + ['System','WER','CER','Latency','Memory'].slice(0,width).map(x=>`<th>${x}</th>`).join('') + '</tr></thead>';
+    const rows = '<tbody>' + [['Baseline','4.8%','3.1%','2 ms','8 GB'],['Proposed','4.1%','2.9%','3 ms','9 GB']]
+        .map(row=>'<tr>'+row.slice(0,width).map(x=>`<td>${x}</td>`).join('')+'</tr>').join('')+'</tbody>';
     const html = `<article>${[1, 2].map(ordinal => `<figure class="ltx_table"><figcaption>Table ${ordinal}: Matched conditions.</figcaption><table class="ltx_tabular">${header}${rows}</table></figure>`).join('')}</article>`;
     const sourceText = cheerio.load(html)('body').text();
     const artifacts = bindStructuredArtifactsToText(parseArxivStructuredArtifactsFromHtml(html, '2609.00001v1', '2609.00001v1'), sourceText);
@@ -500,15 +502,18 @@ test('Reader 解析器编译两张选中宽表后，保留 v3 计划和 v4 来�
         oneSentenceThesis: '这篇解读沿着输入表示和任务预测之间的计算过程解释实验结果，并结合相同条件下的基线比较说明可观察收益及其运行代价。',
         sections, conceptBridges: bridges, figurePlacements: [], formulaBindings: [],
         tableBindings: [1, 2].map(tableIndex => ({ tableIndex, selection: { sourceTableOrdinal: tableIndex,
-            sourceRows: [0, 1, 2], sourceColumns: [0, 1, 2, 3, 4] } })) };
+            sourceRows: [0, 1, 2], sourceColumns: Array.from({length:width},(_,index)=>index) } })) };
     const result = parseApiReaderArticleResult(JSON.stringify(payload), { requiredVersion: 3, requireSourceBindings: true,
         requireIntegratedTables: true, minimumIntegratedTables: 2, structuredArtifacts: artifacts, sourceText });
     assert.equal(result.plan.version, 3);
     assert.equal(result.plan.sourceBindingsContract, 'api-reader-source-bindings-v4');
     assert.equal(result.plan.tableBindings.length, 2);
-    assert.equal(result.plan.tableBindings[0].cellBindings.length, 15);
+    assert.equal(result.plan.tableBindings[0].cellBindings.length, 3 * width);
     assert.doesNotMatch(result.article, /\[\[TABLE_/);
     assert.ok(result.plan.tableBindings.every(binding => binding.sourceType === 'artifact_table' && !('selection' in binding)));
+    assert.throws(() => parseApiReaderArticleResult(JSON.stringify(payload), { requiredVersion: 3, requireSourceBindings: true,
+        requireIntegratedTables: true, minimumIntegratedTables: 3, structuredArtifacts: artifacts, sourceText }), /表格|张表/);
+    }
 });
 
 

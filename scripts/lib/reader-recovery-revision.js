@@ -605,18 +605,13 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
         // 这里用惰性导入，避免恢复库在启动时依赖分析器。
         if (conference?.sourceDetails?.structuredArtifacts?.sourceKind === 'conference_pdf') {
             const deepAnalyzer = require('../deep-analyzer.js');
-            deepAnalyzer.normalizeReaderConferenceNarrowComparisonTable(updated.draft);
             deepAnalyzer.normalizeDeclaredReaderMarkerParagraphs(updated.draft);
             deepAnalyzer.normalizeReaderSourceQuotes(
                 updated.draft, conference.sourceDetails.text || ''
             );
-            deepAnalyzer.repairConferenceReaderQuoteTables(
-                updated.draft,
-                conference.sourceDetails.text || '',
-                conference.sourceDetails.structuredArtifacts
-            );
             deepAnalyzer.normalizeReaderSourceQuoteTableMarkers(updated.draft);
-            const prunedUnboundTables = pruneUniquelyUnboundReaderMarkdownTables(updated.draft);
+            const prunedUnboundTables = deepAnalyzer.readerPlaceholderResultTableIssues(updated.draft).length ? 0
+                : pruneUniquelyUnboundReaderMarkdownTables(updated.draft);
             if (prunedUnboundTables > 0) {
                 updated.draftOrderMappings = [...(updated.draftOrderMappings || []), {
                     contract: 'conference-reader-prune-unbound-tables-v1',

@@ -961,9 +961,26 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 changed = true;
             }
             if (options.retryFailed && (item.lastFailure || item.status === 'analyzing')) {
-                const previousGrantRelease = options.recoveryGrantId && (item.retryReleases || [])
-                    .find(release => release.recoveryGrantId === options.recoveryGrantId);
-                if (previousGrantRelease && previousGrantRelease.recoveryGrantSha256 !== options.recoveryGrantSha256) {
+                let itemGrant = null;
+                if (!options.recoveryGrantId && typeof deps.resolveExistingRecoveryGrant === 'function') {
+                    const handle = deps.resolveExistingRecoveryGrant(item);
+                    if (handle) {
+                        itemGrant = require('./conference-recovery-grant').readRecoveryGrantMember(handle, item.paperId);
+                        const last = (item.retryReleases || []).filter(row => row.recoveryGrantId).at(-1);
+                        if (last?.recoveryGrantId !== itemGrant.grantId || last?.recoveryGrantSha256 !== itemGrant.grantSha256
+                            || item.analysisRunId !== itemGrant.parentExecutionId
+                            || item.analysisProof?.analysisSha256 !== itemGrant.parentAnalysisFileSha256
+                            || item.sourceProof?.textSha256 !== itemGrant.sourceSha256
+                            || item.analysisProof?.sourceSnapshotSha256 !== itemGrant.sourceSnapshotSha256) {
+                            throw new Error('原会议恢复窗口与当前父包、来源或最后真实许可不一致');
+                        }
+                    }
+                }
+                const grantId = options.recoveryGrantId || itemGrant?.grantId;
+                const grantSha256 = options.recoveryGrantSha256 || itemGrant?.grantSha256;
+                const previousGrantRelease = grantId && (item.retryReleases || [])
+                    .find(release => release.recoveryGrantId === grantId);
+                if (previousGrantRelease && previousGrantRelease.recoveryGrantSha256 !== grantSha256) {
                     throw new Error('同一追加许可的调度SHA改变');
                 }
                 if (!previousGrantRelease) {

@@ -1,6 +1,5 @@
 'use strict';
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
-const sourceProject = process.env.PD_READER_WIDE_SOURCE_PROJECT;
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const repair = require('../scripts/lib/reader-repair');
@@ -49,40 +48,4 @@ test('普通窄表仍走原选择流程，不扩大到另一张合法5列表', (
         '| 方法 | 值 | 条件 |\n| --- | --- | --- |\n| A | 1 | 同设置 |');
     assert.deepEqual(paths(draft, [{ message: '读者文章至少需要2张5列以上的宽表，当前1张' }]),
         ['/sections/0/body', '/tableBindings/0']);
-});
-
-test('06569真实保存稿经完整解析和来源检查后定位第一张表', {
-    skip: !sourceProject
-}, () => {
-    const root = sourceProject;
-    const fs = require('node:fs');
-    const path = require('node:path');
-    const crypto = require('node:crypto');
-    const utils = require(path.join(root, 'scripts/utils'));
-    utils.loadEnvFile();
-    utils.requestLlmJson = async () => { throw Error('只读验证禁止模型'); };
-    const daily = require(path.join(root, 'scripts/lib/daily-fresh-source-plan'));
-    const data = JSON.parse(fs.readFileSync(path.join(root, 'data/current/deep-analysis-result.json')));
-    const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
-    const paper = data.papers.find(item => item.arxivId === '2610.06569v1');
-    const source = daily.readDailyFreshSource(plan, paper);
-    const diagnostics = path.join(plan.runDir, 'reader-attempts/request-diagnostics');
-    const request = JSON.parse(fs.readFileSync(path.join(diagnostics, 'c6556196-9405-426a-9cd5-dbe210e469f9.request.json')));
-    assert.equal(crypto.createHash('sha256').update(source.text).digest('hex'), request.identity.sourceSha256);
-    let error;
-    try {
-        require('../scripts/deep-analyzer').parseApiReaderArticleResult(JSON.stringify(request.draft), {
-            arxivId: '2610.06569', requiredVersion: 3, requireIntegratedTables: true,
-            minimumIntegratedTables: 2, requireSourceBindings: true, sourceText: source.text,
-            structuredArtifacts: source.structuredArtifacts, availableFigureOrdinals: [1],
-            allowDeterministicQuoteRepair: true, allowDeterministicUnsupportedClaimPruning: true
-        });
-    } catch (caught) { error = caught; }
-    assert.match(error.message, /宽表/);
-    assert.deepEqual(error.readerIssues[0].renderedTableDiagnostics.tables
-        .map(item => [item.bindingIndex, item.originalColumnCount, item.renderedColumnCount]), [[0, 5, 2]]);
-    assert.deepEqual(repair.buildRepairTargets(request.draft, repair.collectDraftIssues(request.draft, error,
-        { availableFigureOrdinals: [1] }),
-        { availableFigureOrdinals: [1] }).map(target => target.path).sort(),
-    ['/sections/10/body', '/tableBindings/0']);
 });

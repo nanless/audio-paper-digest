@@ -10,18 +10,29 @@ test('Reader 提示词告知与解析器共用同一组阈值，并按每次请�
     assert.deepEqual([requirements.minimumSections, requirements.maximumSections, requirements.minimumChineseChars,
         requirements.maximumChineseChars, requirements.minimumConceptBridges, requirements.maximumConceptBridges], [12, 18, 5000, 18000, 4, 10]);
     assert.equal(requirements.minimumTables, 4);
-    assert.equal(requirements.minimumWideTables, 2);
+    assert.equal(requirements.minimumWideTables, 0);
     assert.equal(readerRequirements({ availableTableCount: 0 }).minimumTables, 2);
     assert.equal(readerRequirements({ version: 2 }).minimumSections, 10);
     const notice = buildReaderContractNotice({ minimumIntegratedTables: 3 });
     assert.match(notice, /至少应包含 3 张表/);
-    assert.match(notice, /至少 2 张的列数应不少于 5 列/);
+    assert.match(notice, /列数遵循真实原表/);
+    assert.match(notice, /不为凑列添加无来源/);
     assert.match(notice, /5000–18000/);
     assert.match(notice, /没有收到像素时，figurePlacements 必须为空/);
     const prompt = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-article.md').toString('utf8');
     assert.match(prompt, /\{mechanicalContract\}/);
     assert.doesNotMatch(prompt, /未附像素但允许/);
     assert.throws(() => readerRequirements({ minimumIntegratedTables: 2.5 }), /integer/);
+});
+
+test('旧宽度参数不能替代表数或改变来源要求，不再为HTML或PDF设置宽度豁免入口', () => {
+    for (const sourceWideTables of [0, 1, 20]) {
+        const requirements = readerRequirements({ minimumIntegratedTables: 3, sourceWideTables,
+            minimumWideTables: 5, sourceTableWidthCapability: { wideTables: 0 } });
+        assert.equal(requirements.minimumTables, 3);
+        assert.equal(requirements.minimumWideTables, 0);
+    }
+    assert.equal(require('../scripts/lib/reader-contract').readerAuthenticatedTableWidthCapability, undefined);
 });
 
 test('Reader 提示词区分表格输入模式，并说明字符与图片方向的语义', () => {

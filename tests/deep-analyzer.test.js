@@ -4013,20 +4013,6 @@ primary_task_tag: #音视频生成
         }, anaphoric), false);
     });
 
-    it('会议 PDF 的窄评测表只拆分已有评测位置，不改数字', () => {
-        const { normalizeReaderConferenceNarrowComparisonTable } = require('../scripts/deep-analyzer.js');
-        const candidate = { sections: [{ kind: 'result', heading: '结果', body: [
-            '| 策略 | 评测位置 | EER (%) | 运行条件 |',
-            '| --- | --- | --- | --- |',
-            '| 基线 | tv26 eval-A | 8.27 | 可运行 |',
-            '| 完整方法 | tv26 eval-U | 4.35 | 需校准 |'
-        ].join('\n') }] };
-        assert.strictEqual(normalizeReaderConferenceNarrowComparisonTable(candidate), true);
-        assert.match(candidate.sections[0].body, /\| 策略 \| 数据集 \| 评测任务 \| EER \(\%\) \| 运行条件 \|/);
-        assert.match(candidate.sections[0].body, /\| 基线 \| tv26 \| eval-A \| 8\.27 \| 可运行 \|/);
-        assert.strictEqual(normalizeReaderConferenceNarrowComparisonTable(candidate), false);
-    });
-
     it('数字风格修复会补已报告的单位空格，但不破坏科学计数法', () => {
         const { normalizeIssueBoundReaderNumericTypography } = require('../scripts/deep-analyzer.js');
         const candidate = { sections: [{ kind: 'result', body: '采样率为 16kHz，学习率为 3e-7。' }] };
@@ -4087,17 +4073,16 @@ primary_task_tag: #音视频生成
         assert.strictEqual(normalizeDuplicateReaderConceptBridgeMarkers(candidate), false);
     });
 
-    it('会议引文证据表的行列编号不被最终数字检查误认作实验数值', () => {
-        const { normalizeConferenceGeneratedEvidenceTableLabels } = require('../scripts/deep-analyzer.js');
+    it('会议占位结果表不能通过序号美化替代语义指标', () => {
+        const { readerPlaceholderResultTableIssues } = require('../scripts/deep-analyzer.js');
         const candidate = { sections: [{ kind: 'result', body: [
             '| 来源证据 | 量化值 1 | 量化值 2 |',
             '| --- | --- | --- |',
             '| 来源句 1 | 35.2% | 37.4% |'
         ].join('\n') }] };
-        assert.strictEqual(normalizeConferenceGeneratedEvidenceTableLabels(candidate), true);
-        assert.match(candidate.sections[0].body, /来源证据 \| 量化值一 \| 量化值二/);
-        assert.match(candidate.sections[0].body, /来源句一 \| 35\.2% \| 37\.4%/);
-        assert.strictEqual(normalizeConferenceGeneratedEvidenceTableLabels(candidate), false);
+        const before = JSON.stringify(candidate);
+        assert.equal(readerPlaceholderResultTableIssues(candidate)[0].code, 'reader_placeholder_result_table');
+        assert.equal(JSON.stringify(candidate), before);
     });
 
     it('会议 PDF 中 source_quotes 误用 TABLE marker 时只移除冗余 marker 并按正文重排绑定', () => {

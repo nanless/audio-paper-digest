@@ -1863,6 +1863,18 @@
       "paths": [
         "prompts/gap-fill.md"
       ]
+    },
+    "e294f105592995d6dbe494e47b111e588fc61d96c87e3a905a8d32686b87cc83": {
+      "blobOid": "e80b4ac5a34f7499c0fa11e99d05391d0401ed27",
+      "paths": [
+        "prompts/api-reader-article-v9.md"
+      ]
+    },
+    "55aa1eb2d663b69bcaff0df77ec371fdc9764173449279b0139c85be0cba68f5": {
+      "blobOid": "bd1ef483c4d004ab965b4b160d33a47557590529",
+      "paths": [
+        "prompts/api-reader-repair-v13.md"
+      ]
     }
   }
 }

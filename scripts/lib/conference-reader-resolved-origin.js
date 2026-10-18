@@ -91,13 +91,11 @@ function migrationChain(directory, selected) {
     return { originalIdentity: identity, files };
 }
 function originalPrompts(identity) {
-    const versions = require('./prompt-text-versions'), history = require('./prompt-history'), evidence = require('./prompt-evidence');
     return [['apiReaderArticle','promptSha256'],['apiReaderRepair','repairPromptSha256']].map(([stage,key]) => {
-        // Narrow first implementation: the actually paid v9/v13 bytes are still
-        // the current normal bytes. No caller selects an archived declaration.
-        const contract = versions.currentPromptTextContract(stage), file = versions.promptFilePathForContract(stage, contract), bytes = evidence.readPromptEvidenceBytes(file);
-        if (history.promptTemplateSha256(bytes.toString('utf8')) !== identity[key]) fail('original Prompt needs an unsupported archived-declaration route');
-        return { stage, contract, file, fileSha256: sha(bytes), templateSha256: identity[key] };
+        const found = require('./prompt-evidence').declaredStagePromptTemplateEvidence(stage, identity[key]);
+        if (!found) fail('original Prompt lacks unique registered path and template evidence');
+        return { stage, contract: found.contract, file: found.path,
+            fileSha256: found.fileSha256, templateSha256: found.templateSha256 };
     });
 }
 function uniqueUsage(identity, request, response, grantId, pins) {

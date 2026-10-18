@@ -82,8 +82,36 @@ function archiveStaleCompletionReceipt(directory, state) {
 // The caller holds the process operation lock; every adoption also holds the
 // real paper lock and runs the normal source/whole-paper/page gates with models
 // forbidden. Partial children are never resumed by this pass.
-async function adoptCompletedGrantedChildren({ state, directory, shared }, deps) {
+function existingRecoveryForItem(item, deps) {
+    const release = (item.retryReleases || []).filter(row => row.recoveryGrantId).at(-1);
+    if (!release) return null;
     const grants = require('./lib/conference-recovery-grant');
+    const fail = () => { throw Object.assign(new Error('当前会议父稿、来源或已采纳子稿与最后真实恢复许可不一致'),
+        { code: 'CONFERENCE_SAVED_CHILD_ADOPTION_INTEGRITY', scope: 'run', retryable: false }); };
+    const handle = grants.resolveRegisteredRecoveryGrant(release.recoveryGrantId,
+        release.recoveryGrantSha256, { analysisRoot: deps.files.conferenceAnalysisDir });
+    const member = grants.readRecoveryGrantMember(handle, item.paperId);
+    if (member.sourceSha256 !== item.sourceProof?.textSha256
+        || member.sourceSnapshotSha256 !== item.analysisProof?.sourceSnapshotSha256) fail();
+    if (member.parentExecutionId === item.analysisRunId
+        && member.parentAnalysisFileSha256 === item.analysisProof?.analysisSha256) {
+        return { handle, member, alreadyAdoptedParent: false };
+    }
+    if (item.analysisRunId !== member.expectedExecutionId) fail();
+    const child = deps.adapter.loadGrantedConferenceRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
+        executionId: member.expectedExecutionId });
+    if (child.analysis.status !== 'complete' || child.run.status !== 'complete'
+        || child.run.paperId !== item.paperId || child.parent.run.executionId !== member.parentExecutionId
+        || child.analysisFileSha256 !== item.analysisProof?.analysisSha256
+        || child.run.completionReceipt?.receiptSha256 !== item.analysisProof?.completionReceiptSha256
+        || child.run.sourceSnapshotSha256 !== member.sourceSnapshotSha256
+        || processApi.stableHash(child.revision) !== processApi.stableHash(item.readerRevision)) fail();
+    // A newly rejected page may already use a genuinely adopted complete grant
+    // child. It is the next maintenance parent, never its old grandparent.
+    return { handle, member, alreadyAdoptedParent: true };
+}
+
+async function adoptCompletedGrantedChildren({ state, directory, shared }, deps) {
     const stop = require('./lib/analysis-stop-control');
     const stateFile = path.join(directory, 'state.json');
     const adopted = [], failures = [];
@@ -92,18 +120,10 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
     });
     for (const originalItem of Object.values(state.items)) {
         if (originalItem.status === 'complete' || !originalItem.readerRefreshRequired) continue;
-        const release = (originalItem.retryReleases || []).filter(row => row.recoveryGrantId).at(-1);
-        if (!release) continue;
+        const existing = existingRecoveryForItem(originalItem, deps);
+        if (!existing || existing.alreadyAdoptedParent) continue;
         stop.assertMayStartRequest();
-        const grantHandle = grants.resolveRegisteredRecoveryGrant(release.recoveryGrantId,
-            release.recoveryGrantSha256, { analysisRoot: deps.files.conferenceAnalysisDir });
-        const authority = grants.readRecoveryGrantMember(grantHandle, originalItem.paperId);
-        if (authority.parentExecutionId !== originalItem.analysisRunId
-            || authority.parentAnalysisFileSha256 !== originalItem.analysisProof?.analysisSha256
-            || authority.sourceSha256 !== originalItem.sourceProof?.textSha256
-            || authority.sourceSnapshotSha256 !== originalItem.analysisProof?.sourceSnapshotSha256) {
-            throw fail('待采纳会议子稿的原父稿或来源与当前进程不一致');
-        }
+        const authority = existing.member;
         const childFile = path.join(deps.files.conferenceAnalysisDir, authority.expectedExecutionId, 'analysis.json');
         if (!fs.existsSync(childFile) || deps.adapter.readJsonRecord(childFile).value.status !== 'complete') continue;
         await deps.engine.withPaperAnalysisLock({ id: originalItem.paperId }, () => stop.withModelRequestsForbidden(() => {
@@ -375,19 +395,26 @@ function migrateAndRun(options, runtime = {}) {
         const migrationDeps = oldImplementation === currentImplementation && !retained
             ? { ...deps }
             : { ...deps, prepareShared: async () => shared };
+        // Return only a real opaque registration. The process scheduler checks
+        // its member/last release again before preserving the original window.
+        migrationDeps.resolveExistingRecoveryGrant = item => {
+            const existing = existingRecoveryForItem(item, deps);
+            return existing && !existing.alreadyAdoptedParent ? existing.handle : null;
+        };
         const regularProcessPaper = deps.processPaper || processApi.processOne;
         migrationDeps.processPaper = async (currentContext, currentShared, item, actualDeps) => {
             if (!item.readerRefreshRequired) return regularProcessPaper(currentContext, currentShared, item, actualDeps);
             const original = currentShared.retainedSources?.get(item.analysisRunId);
             const planHandle = original?.planHandle || currentShared.planHandle;
             const sourceRoot = original?.sourceRoot || currentShared.sourceCacheRoot;
+            const itemGrantHandle = grantHandle || migrationDeps.resolveExistingRecoveryGrant(item);
             const childId = require('./lib/conference-analysis-adapter').readerRevisionExecutionId(
                 item.analysisRunId, item.analysisProof.analysisSha256);
             const childDirectory = path.join(deps.files.conferenceAnalysisDir, childId);
             let childAbsent = false;
             try { fs.lstatSync(childDirectory); }
             catch (error) { if (error.code !== 'ENOENT') throw error; childAbsent = true; }
-            if (childAbsent) {
+            if (childAbsent && !itemGrantHandle) {
                 const parent = deps.adapter.loadConferenceAnalysis({ analysisRoot: deps.files.conferenceAnalysisDir,
                     executionId: item.analysisRunId });
                 if (parent.analysisFileSha256 !== item.analysisProof.analysisSha256) {
@@ -418,11 +445,12 @@ function migrateAndRun(options, runtime = {}) {
                             contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
                 }
             }
-            const revised = grantHandle
+            const revised = itemGrantHandle
                 ? await deps.adapter.refreshConferenceGrantedRecovery({ analysisRoot: deps.files.conferenceAnalysisDir,
                     parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
-                    failedExecutionId: grants.readRecoveryGrantMember(grantHandle, item.paperId).failedExecutionId,
-                    grantHandle, reusePaidCoreDiagnostics: true })
+                    failedExecutionId: require('./lib/conference-recovery-grant')
+                        .readRecoveryGrantMember(itemGrantHandle, item.paperId).failedExecutionId,
+                    grantHandle: itemGrantHandle, reusePaidCoreDiagnostics: true })
                 : await deps.adapter.refreshConferenceReader({ analysisRoot: deps.files.conferenceAnalysisDir,
                     parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
                     reusePaidCoreDiagnostics: options.retryFailed === true,

@@ -420,16 +420,10 @@ function assertCompatibleIdentity(original, actual) {
     if (!isDeepStrictEqual(logical(original), logical(actual))) fail('人工重放改变了原Prompt、模型、来源、正文、资源或预算逻辑身份');
 }
 function originalPrompt(stage, expected) {
-    const versions = require('./prompt-text-versions'), matches = [];
-    for (const [name, contract] of Object.entries(versions)) {
-        if (!/^ANALYSIS_PROMPT_TEXT_V\d+_CONTRACT$/u.test(name)) continue;
-        let filename; try { filename = versions.promptFilePathForContract(stage, contract); } catch { continue; }
-        const bytes = require('./prompt-evidence').readPromptEvidenceBytes(filename);
-        if (require('./prompt-history').promptTemplateSha256(bytes.toString('utf8')) === expected)
-            matches.push({ contract, path: filename, fileSha256: sha(bytes), templateSha256: expected });
-    }
-    if (matches.length !== 1) fail('原候选Prompt声明缺失或不唯一');
-    return Object.freeze(matches[0]);
+    const found = require('./prompt-evidence').declaredStagePromptTemplateEvidence(stage, expected);
+    if (!found) fail('原候选Prompt声明缺失或不唯一');
+    return Object.freeze({ contract: found.contract, path: found.path,
+        fileSha256: found.fileSha256, templateSha256: found.templateSha256 });
 }
 function readVerifiedConferenceReaderPrompts(paper, sourceText, identity = null) {
     const active = scope.getStore(); if (!active) return null;

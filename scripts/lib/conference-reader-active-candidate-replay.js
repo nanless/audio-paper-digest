@@ -22,23 +22,10 @@ function freeze(value) {
 }
 function originalPromptDeclaration(stage, expectedSha256) {
     if (!/^[a-f0-9]{64}$/.test(expectedSha256 || '')) integrity('原付费候选缺少提示词身份');
-    const versions = require('./prompt-text-versions');
-    const history = require('./prompt-history');
-    const evidence = require('./prompt-evidence');
-    const matches = [];
-    for (const [name, contract] of Object.entries(versions)) {
-        if (!/^ANALYSIS_PROMPT_TEXT_V\d+_CONTRACT$/.test(name)) continue;
-        let filename;
-        try { filename = versions.promptFilePathForContract(stage, contract); }
-        catch { continue; }
-        const bytes = evidence.readPromptEvidenceBytes(filename);
-        if (history.promptTemplateSha256(bytes.toString('utf8')) === expectedSha256) {
-            matches.push(Object.freeze({ contract, path: filename,
-                fileSha256: sha(bytes), templateSha256: expectedSha256 }));
-        }
-    }
-    if (matches.length !== 1) integrity('原付费候选的提示词声明缺失或不唯一');
-    return matches[0];
+    const found = require('./prompt-evidence').declaredStagePromptTemplateEvidence(stage, expectedSha256);
+    if (!found) integrity('原付费候选的提示词声明缺失或不唯一');
+    return Object.freeze({ contract: found.contract, path: found.path,
+        fileSha256: found.fileSha256, templateSha256: found.templateSha256 });
 }
 function activePromptScope() {
     const saved = declaredPromptScope.getStore();
@@ -187,7 +174,27 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
         executionId: loaded.run.executionId });
     if (current.analysisFileSha256 !== loaded.analysisFileSha256 || current.sourceFileSha256 !== loaded.sourceFileSha256
         || current.runFileSha256 !== loaded.runFileSha256 || !isDeepStrictEqual(current.analysis, loaded.analysis)) integrity('原子稿已变化');
-    const readerPdfSourceHandle = adapter.verifyPlanAuthority(current, planHandle, sourceRoot);
+    const verifiedPdf = adapter.verifyPlanAuthority(current, planHandle, sourceRoot);
+    let readerPdfSourceHandle = verifiedPdf;
+    const outer = context.getConferenceAnalysisContext();
+    if (current.recoveryWindow && outer) {
+        // Independent plan replay authenticates the source again, but mints a
+        // different opaque object. Keep the exact outer grant capability only
+        // after both genuine providers prove identical source/PDF bytes. This
+        // preserves the grant's strict handle identity through the private copy.
+        const sources = require('./conference-source-context');
+        const previous = sources.readerPdfSourceForContext(outer.readerPdfSourceHandle);
+        const verified = sources.readerPdfSourceForContext(verifiedPdf);
+        if (outer.paperId !== current.run.paperId || outer.executionId !== current.run.executionId
+            || outer.executionDir !== current.directory || outer.sourceDetails.text !== current.source.sourceDetails.text
+            || !previous || !verified || ['paperId', 'sourceText', 'sourceSnapshotSha256',
+                'structuredArtifactsSha256', 'rawStructuredArtifactsSha256', 'pdfSha256']
+                .some(key => !isDeepStrictEqual(previous[key], verified[key]))) {
+            integrity('外层会议许可的真实PDF能力与独立来源重放不一致');
+        }
+        previous.assertUnchanged(); verified.assertUnchanged();
+        readerPdfSourceHandle = outer.readerPdfSourceHandle;
+    }
     if (current.analysis.status !== 'partial'
         || !['reader-only', 'scoring-and-reader'].includes(current.revision.mode)
         || (current.revision.mode === 'scoring-and-reader' && !current.analysis.readerRevisionProgress?.scoringCheckpoint)) {

@@ -117,7 +117,7 @@ def assign_level(items, leaves):
     return solutions[0]
 
 
-def table_grid(page, caption, document, flat_condition_bands=False):
+def table_grid(page, caption, document, flat_condition_bands=False, merged_condition_column=False):
     cap = caption[:4]
     rules = []
     for drawing in page.get_drawings():
@@ -160,7 +160,7 @@ def table_grid(page, caption, document, flat_condition_bands=False):
         cells = [[w for w in ws if bounds[c + 1] < cx(w) < bounds[c + 2]] for c in range(width)]
         if all(cells):
             header_rows.append((y, cells))
-    if flat_condition_bands and not header_rows:
+    if (flat_condition_bands or merged_condition_column) and not header_rows:
         # PDF words can join adjacent metric headings without whitespace. Split
         # only at the already closed data-column geometry, retaining every real
         # glyph and its original word ownership in the complete grid proof.
@@ -185,7 +185,7 @@ def table_grid(page, caption, document, flat_condition_bands=False):
     need(header_rows, 'complete_leaf_headers_missing')
     leaf_y, leaves = header_rows[-1]
     need(all(not NUMBER.fullmatch(literal(cell)) for cell in leaves), 'leaf_header_is_numeric')
-    need(all((bounds[c + 1] < cx(cell[0]) < bounds[c + 2]) if flat_condition_bands else
+    need(all((bounds[c + 1] < cx(cell[0]) < bounds[c + 2]) if (flat_condition_bands or merged_condition_column) else
              (bounds[c + 1] - .1 <= min(w[0] for w in cell) and max(w[2] for w in cell) <= bounds[c + 2] + .1)
              for c, cell in enumerate(leaves)), 'leaf_headers_cross_column')
     parents = raw_header_items(page, top[1], leaf_y, bounds[1], top[2])
@@ -197,12 +197,32 @@ def table_grid(page, caption, document, flat_condition_bands=False):
             need(all(any(p['startColumn'] <= child['startColumn'] and child['endColumn'] <= p['endColumn']
                          for p in levels[-1]) for child in level), 'crossing_header_levels')
         levels.append(level)
-    if flat_condition_bands:
+    if flat_condition_bands or merged_condition_column:
         need(not levels, 'flat_condition_table_has_parent_headers')
     else:
         need(levels and any(p['endColumn'] - p['startColumn'] > 1 for level in levels for p in level), 'hierarchical_headers_missing')
     label_header = [w for w in words if cy(w) <= leaf_y + 2 and cx(w) < bounds[1]]
     need(label_header and all(w[2] <= bounds[1] for w in label_header), 'row_label_header_missing_or_overlapping')
+    merged_header, merged_boundary, merged_bands = None, None, []
+    if merged_condition_column:
+        ordered = sorted(label_header, key=lambda w: w[0])
+        need(len(ordered) >= 2 and ordered[0][4] in ('Dataset', 'Separator'), 'merged_condition_header_not_explicit')
+        merged_header = ordered[0]
+        need(merged_header[2] < min(w[0] for w in ordered[1:]), 'merged_condition_header_overlaps_features')
+        merged_boundary = (merged_header[2] + min(w[0] for w in ordered[1:])) / 2
+        for a, b in zip(full_rules, full_rules[1:]):
+            band_data = [(y, ws, values) for y, ws, values in data if a < y < b]
+            if not band_data:
+                continue
+            condition_words = [w for w in words if a < cy(w) < b and cx(w) < merged_boundary]
+            condition_lines = rows_of(condition_words)
+            need(len(condition_lines) == 1 and 1 <= len(condition_words) <= 8, 'merged_condition_band_not_unique')
+            condition_words = condition_lines[0][1]
+            need(all(w[2] <= merged_boundary for w in condition_words), 'merged_condition_crosses_feature_column')
+            merged_bands.append({'header': merged_header[4], 'text': literal(condition_words),
+                                 'words': condition_words, 'top': a, 'bottom': b})
+        need(merged_bands and sum(sum(a['top'] < y < a['bottom'] for a in merged_bands) for y, _, _ in data) == len(data),
+             'merged_condition_data_band_incomplete')
     # Every glyph above the body must belong to the label, a leaf or one exact
     # parent line. Do not silently drop a unit, additional header or condition.
     parent_words = [w for w in words if cy(w) < leaf_y - 2 and cx(w) > bounds[1]]
@@ -236,6 +256,13 @@ def table_grid(page, caption, document, flat_condition_bands=False):
     for y, ws in lines:
         if y <= leaf_y + 2:
             continue
+        if merged_condition_column:
+            matches = [band for band in merged_bands if band['top'] < y < band['bottom']]
+            need(len(matches) == 1, 'merged_condition_row_outside_band')
+            condition = [matches[0]]
+            ws = [w for w in ws if cx(w) >= merged_boundary]
+            if not ws:
+                continue
         parsed = numeric_row(ws)
         if not parsed:
             # Conditions occupy their own full-rule bounded band, with no data
@@ -281,6 +308,10 @@ def table_grid(page, caption, document, flat_condition_bands=False):
     box = [top[0], top[1], top[2], bottom]
     return {'page': page.number + 1, 'bbox': box, 'captionEvidence': caption_proof,
             **({'headerKind': 'flat-explicit-dimension-condition-bands-v1'} if flat_condition_bands else {}),
+            **({'headerKind': 'flat-explicit-merged-condition-column-v1',
+                'rowLabelHeader': literal(ordered[1:]),
+                'conditionColumns': [{'header': merged_header[4], 'words': [merged_header],
+                                      'left': top[0], 'right': merged_boundary}]} if merged_condition_column else {}),
             'columnBoundaries': bounds, 'fullHorizontalRules': full_rules, 'levels': levels,
             'sourceColumns': source_columns, 'sourceRows': source_rows,
             'labelHeaderWords': label_header, 'wordBoxCount': len(words), 'words': words,
@@ -289,8 +320,20 @@ def table_grid(page, caption, document, flat_condition_bands=False):
 
 def map_view(grid, table, quotes, document):
     quote_proofs = [quote_evidence(document, quote) for quote in quotes]
-    columns, all_columns = [], []
-    for i, header in enumerate(table['header'][1:], 1):
+    columns, all_columns, condition_columns = [], [], []
+    label_index = 0
+    if grid.get('conditionColumns'):
+        labels = [i for i, header in enumerate(table['header']) if surface(header) == grid['rowLabelHeader']]
+        need(len(labels) == 1, 'rendered_feature_header_not_unique')
+        label_index = labels[0]
+    for i, header in enumerate(table['header']):
+        if i == label_index:
+            continue
+        matching_conditions = [c for c in grid.get('conditionColumns', []) if surface(header) == c['header']]
+        if matching_conditions:
+            need(len(matching_conditions) == 1, 'rendered_condition_header_not_unique')
+            condition_columns.append((i, matching_conditions[0]['header']))
+            continue
         decl = DECLARATION.fullmatch(surface(header))
         metric = compact(decl[1] if decl else header)
         unit = (decl[2] or decl[3]).lower() if decl else None
@@ -302,6 +345,10 @@ def map_view(grid, table, quotes, document):
         if unit:
             columns.append({'column': i, 'sourceColumn': original['sourceColumn'] - 1, 'metric': metric, 'unit': unit})
     need(columns and len(set(c['sourceColumn'] for _, c in all_columns)) == len(all_columns), 'rendered_columns_duplicate_or_unitless')
+    if grid.get('conditionColumns'):
+        need(len(condition_columns) == len(grid['conditionColumns'])
+             and len(set(header for _, header in condition_columns)) == len(condition_columns), 'rendered_condition_column_missing_or_repeated')
+        need(len(all_columns) == len(grid['sourceColumns']), 'merged_condition_numeric_columns_incomplete')
     need([c['sourceColumn'] for _, c in all_columns] == sorted(c['sourceColumn'] for _, c in all_columns), 'rendered_columns_reordered')
     mapped = []
     for index, row in enumerate(table['rows'], 1):
@@ -310,8 +357,11 @@ def map_view(grid, table, quotes, document):
             # The already source-bound complete original row quote locates the
             # physical condition band; equal selected numbers alone never do.
             q = original['quoteEvidence']
-            if compact(row[0]) != compact(original['rowLabel']) or not any(p['rawStartCodePoint'] <= q['rawStartCodePoint']
+            if compact(row[label_index]) != compact(original['rowLabel']) or not any(p['rawStartCodePoint'] <= q['rawStartCodePoint']
                     and q['rawEndCodePoint'] <= p['rawEndCodePoint'] for p in quote_proofs):
+                continue
+            if any(sum(p.get('header') == header and surface(row[i]) == p['text'] for p in original['conditionPath']) != 1
+                   for i, header in condition_columns):
                 continue
             if all(numeric_surface(row[i]) == numeric_surface(original['cells'][c['sourceColumn'] - 1]['text']) for i, c in all_columns):
                 matches.append(original)
@@ -351,7 +401,12 @@ def prove_pdf_bytes(raw, table, quotes):
                         columns, rows = map_view(grid, table, quotes, document)
                         candidates.append({'grid': grid, 'columns': columns, 'rows': rows})
                     except ValueError:
-                        continue
+                        try:
+                            grid = table_grid(page, block, document, merged_condition_column=True)
+                            columns, rows = map_view(grid, table, quotes, document)
+                            candidates.append({'grid': grid, 'columns': columns, 'rows': rows})
+                        except ValueError:
+                            continue
     need(len(candidates) == 1, 'complete_hierarchical_table_not_unique:' + str(len(candidates)))
     body = {'contract': CONTRACT, 'pdfSha256': sha(raw), 'rawFullTextSha256': document['rawFullTextSha256'],
             'renderedTableSha256': sha(table['markdown'].encode()), 'extraction': document['extraction'], **candidates[0]}

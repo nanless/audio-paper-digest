@@ -157,6 +157,46 @@ test('没有真实已登记窗口时，候选裸JSON不能把费用路由改为g
     }), /裸JSON不能授予会议窗口费用身份/);
 });
 
+test('真实已登记外层PDF能力原样贯穿私有候选重放，不给私有目录付费权限', async t => {
+    const f = await grantedPaidFixture(t), context = require('../scripts/lib/conference-analysis-context');
+    const windows = require('../scripts/lib/conference-reader-recovery-window');
+    const pdf = adapter.verifyPlanAuthority(f.loaded, f.planHandle, f.sourceRoot);
+    const scope = { paperId: f.paperId, executionId: f.loaded.run.executionId,
+        executionDir: f.loaded.directory, readerPdfSourceHandle: pdf };
+    const result = await context.withConferenceAnalysisSource({ ...scope, sourceDetails: f.loaded.source.sourceDetails }, () =>
+        windows.withConferenceReaderGrantReadOnly(f.grant.handle, scope, () => replay.replayActiveConferenceReaderCandidate(f.input, {
+            usageDirectory: f.usageDirectory, engine: f.engine, deep: {
+                replayVerifiedReaderResourceIdentity: deep.replayVerifiedReaderResourceIdentity,
+                refreshApiReaderArticleFromSource: async (paper, source) => {
+                    const active = context.getConferenceAnalysisContext();
+                    assert.notEqual(active.executionDir, scope.executionDir);
+                    assert.equal(active.readerPdfSourceHandle, pdf, 'retain exact independently authenticated outer capability');
+                    assert.deepEqual(windows.identityFields(paper, source.text,
+                        path.join(active.executionDir, 'reader-attempts')).conferenceReaderGrant, f.identity.conferenceReaderGrant);
+                    assert.throws(() => windows.withConferenceReaderGrant(f.grant.handle, scope, () => {}),
+                        { code: 'CONFERENCE_READER_GRANT_INTEGRITY' }, 'private clone cannot acquire writable grant');
+                    assert.throws(() => windows.reserveReaderResponse(paper, f.identity, 'full', 4),
+                        { code: stop.MODEL_REQUESTS_FORBIDDEN });
+                    paper.apiReaderArticle = 'new normal Reader'; paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle);
+                    paper.apiReaderPlanSha256 = 'c'.repeat(64); paper.apiReaderFigures = [];
+                    paper.analysisManifest.stages.apiReaderArticle = { status: 'complete', contentMode: 'reader-source-only-v1',
+                        attempts: 3, fullAttempts: 1, transportFailures: 1,
+                        ...replay.readVerifiedConferenceReaderPrompts(paper, source.text).stageFields };
+                    return paper;
+                }
+            }
+        })));
+    assert.equal(result.eligible, true); result.assertUnchanged();
+    await assert.rejects(context.withConferenceAnalysisSource({ ...scope,
+        executionDir: path.join(f.root, 'unverified-private-directory'), sourceDetails: f.loaded.source.sourceDetails }, () =>
+        replay.replayActiveConferenceReaderCandidate(f.input, { usageDirectory: f.usageDirectory,
+            engine: f.engine, deep: { refreshApiReaderArticleFromSource: () => assert.fail('unverified directory cannot enter Reader') } })),
+    /外层会议许可的真实PDF能力与独立来源重放不一致/);
+    assert.throws(() => context.withConferenceAnalysisSource({ ...scope, readerPdfSourceHandle: {},
+        sourceDetails: f.loaded.source.sourceDetails }, () => assert.fail('plain JSON cannot grant a PDF capability')),
+    /PDF authority differs/);
+});
+
 test('同child耗尽预算仅在私有副本重放，原候选、历史及attempt/failure字节保持', async t => {
     const f = fixture(t), originals = ['analysis.json', 'run.json', 'source.json', 'reader-revision.json',
         'reader-attempts/' + repair.hashDraft(f.identity) + '.json'];

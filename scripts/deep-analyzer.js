@@ -1618,42 +1618,6 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
     return changed;
 }
 
-// 会议 Reader 草稿会把有原文支撑的比较压成「策略 | 评测位置 | 指标 | 条件」。语义上
-// 没问题，但当已核验的 PDF 里有三张以上表格时，这样做过不了宽表约定。只把这一处原文
-// 可见的位置字段拆成数据集和评测任务两部分。数值单元不动，也不编。
-function normalizeReaderConferenceNarrowComparisonTable(candidate) {
-    if (!candidate || !Array.isArray(candidate.sections)) return false;
-    let changed = false;
-    candidate.sections = candidate.sections.map(section => {
-        if (typeof section?.body !== 'string') return section;
-        const lines = section.body.split('\n');
-        for (let index = 0; index < lines.length - 1; index++) {
-            if (lines[index].trim() !== '| 策略 | 评测位置 | EER (%) | 运行条件 |'
-                || lines[index + 1].trim() !== '| --- | --- | --- | --- |') continue;
-            let end = index + 2;
-            const rows = [];
-            while (end < lines.length && /^\s*\|/.test(lines[end])) {
-                const cells = lines[end].trim().split('|').slice(1, -1).map(cell => cell.trim());
-                if (cells.length !== 4) return section;
-                const location = cells[1];
-                const match = location.match(/^(tv26)\s+(eval-[AU])$/i);
-                if (!match) return section;
-                rows.push([cells[0], match[1], match[2], cells[2], cells[3]]);
-                end += 1;
-            }
-            if (rows.length === 0) return section;
-            lines.splice(index, end - index,
-                '| 策略 | 数据集 | 评测任务 | EER (%) | 运行条件 |',
-                '| --- | --- | --- | --- | --- |',
-                ...rows.map(row => `| ${row.join(' | ')} |`));
-            changed = true;
-            index += rows.length + 1;
-        }
-        return { ...section, body: lines.join('\n') };
-    });
-    return changed;
-}
-
 // 编辑空格对正文有用，但会把 `12-18kHz` 这类精确原文单元改成 `12-18 kHz`。
 // selection 表格是编译器输出，字节已经和 PDF DOM 单元绑定，所以归一化周围文章时只
 // 保护这些表格。source-quote 表格仍可编辑，照常走普通归一化流程。
@@ -6763,175 +6727,41 @@ function normalizeReaderSourceQuotes(candidate, sourceText) {
     return changed;
 }
 
-// 由引文生成的会议表格是编译器证据，不是作者写下的统计数据。「来源句 1」「量化值 1」
-// 这类数字标签本来只是行列表头，却会被最后的原文绑定闸门误当成科学数值。把这一处固定
-// 生成的表层归一化成中文序数；普通作者表格一律不动。
-function normalizeConferenceGeneratedEvidenceTableLabels(candidate) {
-    if (!candidate || !Array.isArray(candidate.sections)) return false;
-    const ordinals = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-    let changed = false;
-    for (const section of candidate.sections) {
+// Numeric citations are evidence, never a substitute for named experimental
+// conditions and metrics. Reject only the retired generated-table signature;
+// ordinary result tables and quotation/explanation tables remain valid.
+function readerPlaceholderResultTableIssues(draft) {
+    const issues = [];
+    const tables = (Array.isArray(draft?.sections) ? draft.sections : [])
+        .flatMap(section => typeof section?.body === 'string' ? extractMarkdownTables(section.body) : []);
+    const directBindings = Array.isArray(draft?.tableBindings) && draft.tableBindings.length === tables.length
+        && draft.tableBindings.every(binding => binding?.sourceType === 'source_quotes' && !binding.selection);
+    let ordinal = 0;
+    for (const [sectionIndex, section] of (Array.isArray(draft?.sections) ? draft.sections : []).entries()) {
         if (typeof section?.body !== 'string') continue;
-        const before = section.body;
-        const after = before.split('\n').map(line => {
-            if (!/^\s*\|/.test(line)) return line;
-            if (!/\|\s*来源证据\s*\|/.test(line)
-                && !/\|\s*来源句\s+\d+\s*\|/.test(line)
-                && !/\|\s*量化值\s+\d+\s*\|/.test(line)) return line;
-            return line
-                .replace(/(\|\s*来源句\s+)(\d+)(?=\s*\|)/g, (_, prefix, value) => {
-                    const ordinal = Number(value);
-                    const cleanPrefix = prefix.replace(/\s+$/u, '');
-                    return ordinals[ordinal] ? `${cleanPrefix}${ordinals[ordinal]}` : `${prefix}${value}`;
-                })
-                .replace(/(\|\s*量化值\s+)(\d+)(?=\s*\|)/g, (_, prefix, value) => {
-                    const ordinal = Number(value);
-                    const cleanPrefix = prefix.replace(/\s+$/u, '');
-                    return ordinals[ordinal] ? `${cleanPrefix}${ordinals[ordinal]}` : `${prefix}${value}`;
-                });
-        }).join('\n');
-        if (after !== before) {
-            section.body = after;
-            changed = true;
+        for (const [tableIndex, table] of extractMarkdownTables(section.body).entries()) {
+            ordinal += 1;
+            const clean = value => String(value || '').replace(/[\s*\x60]/gu, '');
+            const generic = table.header.slice(1).filter(header => /^量化值(?:[一二三四五六七八九十]+|[0-9]+)$/u.test(clean(header)));
+            const sourceRows = table.rows.some(row => /^来源句(?:[一二三四五六七八九十]+|[0-9]+)$/u.test(clean(row[0])));
+            if (!generic.length || clean(table.header[0]) !== '来源证据' && !sourceRows) continue;
+            issues.push({ path: '/sections/' + sectionIndex + '/body', code: 'reader_placeholder_result_table',
+                tableIndex: tableIndex + 1,
+                message: '读者文章包含缺少方法、条件和指标身份的占位结果表（来源证据/来源句/量化值序号）。'
+                    + '引用中的数字不能直接组成实验结果；请按同一真实原表或完整连续结果句恢复有语义的行列，'
+                    + '保留真实比较对象、指标、单位、完整数值和来源绑定，不凑列、不搬表或凭数值重叠选择原表。' });
+            const bindingIndex = directBindings
+                ? draft.tableBindings.findIndex(binding => binding.tableIndex === ordinal) : -1;
+            if (bindingIndex >= 0) issues.push({ ...issues.at(-1), path: '/tableBindings/' + bindingIndex });
         }
     }
-    return changed;
+    return issues;
 }
-
-// 会议 PDF 草稿把 source_quotes 放到了 TABLE 标记后面，这里做一次有上限的恢复。
-// source_quotes 绑定自己渲染不出标记，但核验过的 PDF 里可能有一张唯一可复现的结构化
-// 结果表。把那一个绑定提升为核验过的 selection，其余只有标记的引文绑定则变成紧凑的、
-// 由引文生成的证据表。显示的每个数字都从它自己那条精确引文里抄来；引文里没有可恢复的
-// 数字就留给普通 Reader 修复路径，不要编一行。
-function repairConferenceReaderQuoteTables(draft, sourceText, structuredArtifacts) {
-    if (structuredArtifacts?.sourceKind !== 'conference_pdf'
-        || !Array.isArray(draft?.sections) || !Array.isArray(draft?.tableBindings)
-        || typeof sourceText !== 'string' || !sourceText) return null;
-    const sourceQuoteBindings = draft.tableBindings.filter(binding => (
-        binding?.sourceType === 'source_quotes' && Array.isArray(binding.sourceQuotes)
-    ));
-    if (sourceQuoteBindings.length === 0) return null;
-    const original = stableFingerprint({ tableBindings: draft.tableBindings, sections: draft.sections });
-    const work = structuredClone(draft);
-    const markerFor = tableIndex => `[[TABLE_${tableIndex}]]`;
-    const markerLocation = tableIndex => {
-        const marker = markerFor(tableIndex);
-        const locations = [];
-        work.sections.forEach((section, sectionIndex) => {
-            if (typeof section?.body !== 'string') return;
-            const occurrences = section.body.split(marker).length - 1;
-            const standalone = section.body.split(/\n\s*\n/)
-                .filter(block => block.trim() === marker).length;
-            if (occurrences === 1 && standalone === 1) locations.push({ sectionIndex, marker });
-        });
-        return locations.length === 1 ? locations[0] : null;
-    };
-    const replaceMarker = (location, markdown) => {
-        const section = work.sections[location.sectionIndex];
-        section.body = section.body.replace(location.marker, markdown);
-    };
-    const quoteNumbers = quote => {
-        const matches = String(quote || '').match(/[-+]?(?:\d{1,3}(?:[ ,]\d{3})+|\d+(?:\.\d+)?)(?:\s*(?:samples?|bins?|epochs?|%|dB|kHz|MHz|Hz|GB|MB|KB|ms|s|h|倍|秒|毫秒))?(?![A-Za-z])/gi) || [];
-        return [...new Set(matches.map(value => value.trim()))];
-    };
-    const tableFromQuotes = binding => {
-        if (!Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.length === 0) return null;
-        const rows = binding.sourceQuotes.map((quote, index) => {
-            const numbers = quoteNumbers(quote);
-            if (numbers.length === 0) return null;
-            const values = numbers.slice(0, 4);
-            if (numbers.length > 4) values[3] = [values[3], ...numbers.slice(4)].join('；');
-            const ordinal = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'][index]
-                || String(index + 1);
-            return [`来源句${ordinal}`, ...values, ...Array(4 - values.length).fill('—')];
-        }).filter(Boolean);
-        if (rows.length === 0) return null;
-        const line = cells => `| ${cells.join(' | ')} |`;
-        return [line(['来源证据', '量化值一', '量化值二', '量化值三', '量化值四']),
-            line(['---', '---', '---', '---', '---']), ...rows.map(line)].join('\n');
-    };
-
-    const requirement = readerResultTableRequirement(structuredArtifacts);
-    const resultOrdinal = requirement.sourceTableOrdinals?.length === 1
-        ? requirement.sourceTableOrdinals[0] : null;
-    const first = sourceQuoteBindings.find(binding => binding.tableIndex === 1);
-    if (first && Number.isInteger(resultOrdinal)) {
-        const table = (structuredArtifacts.tables || []).find(item => item?.ordinal === resultOrdinal);
-        const quoteCorpus = first.sourceQuotes.join('\n');
-        const sourceNumbers = new Set(readerNumericTokens(quoteCorpus));
-        const resultNumbers = new Set(readerNumericTokens(
-            (table?.matrix || []).flat().join(' ')
-        ));
-        const overlap = [...resultNumbers].filter(token => sourceNumbers.has(token));
-        const location = markerLocation(first.tableIndex);
-        const sourceRows = Array.isArray(table?.matrix) ? table.matrix.map((_row, index) => index) : [];
-        const sourceColumns = Array.isArray(table?.matrix?.[0])
-            ? table.matrix[0].map((_cell, index) => index) : [];
-        if (location && table && overlap.length >= 2 && sourceRows.length >= 2 && sourceColumns.length >= 2) {
-            const selection = {
-                tableIndex: first.tableIndex,
-                selection: { sourceTableOrdinal: resultOrdinal, sourceRows, sourceColumns }
-            };
-            try {
-                renderReaderTableSelection(selection, structuredArtifacts);
-                const bindingIndex = work.tableBindings.findIndex(binding => binding?.tableIndex === first.tableIndex);
-                work.tableBindings[bindingIndex] = selection;
-            } catch (_error) {
-                // 按当前的 artifact 资格约定，这张结构化表格渲染不安全时，就保留引文
-                // 绑定。
-            }
-        }
-    }
-
-    const generatedTables = new Map();
-    for (const binding of work.tableBindings) {
-        if (binding?.sourceType !== 'source_quotes') continue;
-        const location = markerLocation(binding.tableIndex);
-        if (!location) continue;
-        const markdown = tableFromQuotes(binding);
-        if (markdown) {
-            generatedTables.set(binding.tableIndex, { markdown, location });
-            replaceMarker(location, markdown);
-        }
-    }
-
-    // 结果表覆盖闸门刻意不看设置和配置表。如果草稿的第一张（主结果）引文表写在了设置
-    // 小节里，就把这张生成出来的表格原样挪到结果小节，绑定下标跟着一起转。只对上面那种
-    // 封闭的三表标记形态启用；不猜、不复制任何任意正文或表格。
-    if (generatedTables.has(1) && generatedTables.has(2) && generatedTables.has(3)
-        && work.tableBindings.length === 3) {
-        const destinationSectionIndex = work.sections.findIndex(section => (
-            ['result', 'ablation'].includes(section?.kind)
-        ));
-        const first = generatedTables.get(1);
-        if (destinationSectionIndex >= 0 && first.location.sectionIndex !== destinationSectionIndex) {
-            const sourceSection = work.sections[first.location.sectionIndex];
-            const blocks = String(sourceSection.body || '').split(/\n\s*\n/);
-            const matching = blocks.filter(block => block.trim() === first.markdown);
-            if (matching.length === 1) {
-                sourceSection.body = blocks.filter(block => block.trim() !== first.markdown)
-                    .join('\n\n').trim();
-                const target = work.sections[destinationSectionIndex];
-                target.body = `${String(target.body || '').trim()}\n\n${first.markdown}\n\n`
-                    + '该表把来源中的主结果数值按原文证据句整理，数值和方向只适用于当前验证条件，不能外推到其他数据。';
-                const byIndex = new Map(work.tableBindings.map(binding => [binding.tableIndex, binding]));
-                work.tableBindings = [2, 3, 1].map((oldIndex, index) => ({
-                    ...byIndex.get(oldIndex), tableIndex: index + 1
-                }));
-            }
-        }
-    }
-    const output = stableFingerprint({ tableBindings: work.tableBindings, sections: work.sections });
-    if (output === original) return null;
-    draft.sections = work.sections;
-    draft.tableBindings = work.tableBindings;
-    return {
-        contract: 'conference-reader-source-quote-marker-table-v1',
-        inputSha256: original,
-        outputSha256: output,
-        changed: true,
-        promotedSelection: work.tableBindings.some(binding => binding?.selection) ? 1 : 0
-    };
+function assertReaderResultTableSemantics(draft) {
+    const issues = readerPlaceholderResultTableIssues(draft);
+    if (issues.length) throw Object.assign(new Error(issues.map(issue => issue.message).join('；')), {
+        code: 'reader_placeholder_result_table', readerIssues: issues
+    });
 }
 
 function parseApiReaderArticleResult(raw, options = {}) {
@@ -7033,6 +6863,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             }
         }
     }
+    assertReaderResultTableSemantics(value);
     removeOrphanReaderTableMarkers(value);
     require('./lib/reader-draft-order.js').pruneUniquelyUnboundReaderMarkdownTables(value);
     const orderedDraft = normalizeReaderDraftOrder(value, {
@@ -7477,33 +7308,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     if (options.requireIntegratedTables === true) {
         const minimumTables = requirements.minimumTables;
         validateApiReaderTableNarratives(article, minimumTables);
-        const tables = extractMarkdownTables(article);
-        const wideTableCount = tables.filter(table => (
-            table.header.length >= requirements.minimumWideColumns
-        )).length;
-        // Only the already checked full DOM bindings may use the authenticated
-        // source's real width ceiling. Caller counts and quote tables cannot.
-        const widthContract = require('./lib/reader-contract');
-        const sourceTableWidthCapability = wideTableCount < requirements.minimumWideTables
-            ? widthContract.readerAuthenticatedTableWidthCapability(
-                options.arxivId, options.structuredArtifacts, options.sourceText) : null;
-        const minimumWideTables = widthContract.readerRequirements({ version: value.version,
-            minimumIntegratedTables: minimumTables, sourceTableWidthCapability,
-            boundTables: sourceBindingResult?.tableBindings }).minimumWideTables;
-        if (wideTableCount < minimumWideTables) {
-            const message = `读者文章至少需要 ${minimumWideTables} 张 ${requirements.minimumWideColumns} 列以上的宽表，当前 ${wideTableCount} 张`;
-            const pruned = (sourceBindingResult?.tablePruningDiagnostics || [])
-                .filter(item => item.renderedColumnCount < requirements.minimumWideColumns);
-            const error = new Error(message + (pruned.length ? '；来源核验删除无证据列：'
-                + pruned.map(item => `绑定${item.bindingIndex}候选${item.originalColumnCount}列→实际${item.renderedColumnCount}列（${item.removedHeaders.join('、')}）`).join('；') : ''));
-            if (pruned.length) error.renderedTableDiagnostics = {
-                draftSha256: inputDraftSha256, tables: pruned
-            };
-            error.readerIssues = [{ path: null, message: error.message,
-                ...(error.renderedTableDiagnostics
-                    ? { renderedTableDiagnostics: error.renderedTableDiagnostics } : {}) }];
-            throw error;
-        }
+
     }
     // 表格和图归一化之后可能只剩下一段很短的引导，而它前面那段普通正文其实正是同一段插图
     // 引导的自然延续。在权威重新绑定之前合并掉，最后的签名引文才是对着文章的真实字节量
@@ -8062,7 +7867,7 @@ function buildApiReaderValidationFeedback(error) {
             '逐张按正文顺序重建 tableBindings：原表模式必须让每个渲染单元格逐字等于绑定坐标的原始 cell，'
             + '并覆盖表头和所有数据格；正文整理模式必须复制全文中的连续原句，且覆盖表内每个数字与单位。'
             + '不要翻译原表 cell、沿用调列前坐标或自行计算 SHA；'
-            + '若缺证据的是整理表行标签中的配置或样本量数字，可在同一已授权小节正文保留有来源的设置说明，表格标签改为原文可核的实验名称；同步保留真实结果单元格、全部结果数字与单位，以及对应原表或连续引文绑定。不得向引文补写原文没有的数值，不得删除主要结果、减少表数或降低宽表列数来绕过校验。'
+            + '若缺证据的是整理表行标签中的配置或样本量数字，可在同一已授权小节正文保留有来源的设置说明，表格标签改为原文可核的实验名称；同步保留真实结果单元格、全部结果数字与单位，以及对应原表或连续引文绑定。不得向引文补写原文没有的数值，不得删除主要结果、减少有证据的表数或删除真实指标列来绕过校验；列数遵循原表，不添加无来源列。'
             + '报错列出的每个数字都必须改成原文逐字写法（保留千分位逗号、百分号、小数位数和单位，'
             + '不得四舍五入），或删掉原文没有的数字；'
             + '若数字明明在原文表格 DOM 里以独立单元格存在、却因正文排版拼合找不到连续 quote，'
@@ -8092,11 +7897,9 @@ function buildApiReaderValidationFeedback(error) {
         );
     }
     if (/宽表/.test(message)) {
-        fixes.push(
-            '本轮只修当前授权的表与绑定，使实际来源核验后的表达到 5 列；若无证据列被删除，应重新选择有原表 DOM 或完整逐字引文支持的合法列，不能恢复无证据旧列，'
-            + '并同步更新同一 tableBindings 项。已授权的绑定整项可改选另一张有证据的原表，使用 selection 或 completeTable；保留 tableIndex，并在同一授权正文位置同步替换该表或 TABLE 标记。也可改为 source_quotes，但逐字连续引文必须覆盖新表每个数字和完整单位。不要给只有 3 个合法来源列的旧表反复补无证据列；其他表格与绑定保持不变。列中应覆盖比较条件、关键控制变量、两个数据集或指标、'
-            + '解释或成本；不要试图改动未授权的另一张表，也不要只列方法与数值两列'
-        );
+        fixes.push('旧固定宽度反馈须先按当前完整规则复验，不再要求达到固定列数。'
+            + '若仍有真实表格问题，只在授权正文与绑定内按同一原表或完整连续引文保留必要的方法、条件、指标、单位和数值；'
+            + '原表几列就按几列呈现，不添加解释列、不凭数字选表，不改无关已通过内容');
     }
     if (orderDiagnostic.actionable) {
         fixes.push(
@@ -8502,28 +8305,16 @@ function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, s
                             ) : bridge?.explanation
                     }));
                 }
-                if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
-                    normalizeReaderConferenceNarrowComparisonTable(candidate);
-                }
                 // 模型可能把 TABLE 标记直接贴在正文后面。在会议的表格顺序处理之前，先让已声明的
                 // 标记独立成块；否则一次本来语义上可恢复的标记/表格错位，会被看成绑定有歧义，
                 // 在归一化之前就被拒。
                 normalizeDeclaredReaderMarkerParagraphs(candidate);
                 if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
                     normalizeReaderSourceQuotes(candidate, options.sourceText);
-                    const sourceQuoteMarkerTableRepair = repairConferenceReaderQuoteTables(
-                        candidate, options.sourceText, options.structuredArtifacts
-                    );
-                    if (sourceQuoteMarkerTableRepair) draftOrderMappings.push(sourceQuoteMarkerTableRepair);
-                    if (normalizeConferenceGeneratedEvidenceTableLabels(candidate)) {
-                        draftOrderMappings.push({
-                            contract: 'conference-reader-generated-evidence-labels-v1',
-                            changed: true
-                        });
-                    }
                     const sourceQuoteMarkerRepair = normalizeReaderSourceQuoteTableMarkers(candidate);
                     if (sourceQuoteMarkerRepair) draftOrderMappings.push(sourceQuoteMarkerRepair);
-                    const prunedUnboundTables = pruneUniquelyUnboundReaderMarkdownTables(candidate);
+                    const prunedUnboundTables = readerPlaceholderResultTableIssues(candidate).length ? 0
+                        : pruneUniquelyUnboundReaderMarkdownTables(candidate);
                     if (prunedUnboundTables > 0) {
                         draftOrderMappings.push({
                             contract: 'conference-reader-prune-unbound-tables-v1',
@@ -8927,10 +8718,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}。figurePlacements 必须逐一记录这些图片，在对应 targetKind 小节中放置占位符，并在紧邻的前后段落分别写导读和解释。不能返回空数组，也不能只记录其中一张。`
             : `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}，最多选择 ${API_READER_FIGURE_SELECTION_LIMIT} 张最有解释价值且不重复的图片。每张所选图片都须在对应 targetKind 小节放置占位符，并在紧邻的前后段落分别写导读和解释。未选择的图片仍会由页面资源层保留，不要为凑数量添加 figurePlacements。`
         : '';
-    const sourceTableWidthCapability = require('./lib/reader-contract').readerAuthenticatedTableWidthCapability(
-        getPaperArxivId(paper), options.structuredArtifacts, options.sourceText);
     const mechanicalContract = [buildReaderContractNotice({ version: 3, minimumIntegratedTables, availableTableCount,
-        sourceTableWidthCapability,
         ...readerResultTableRequirement(options.structuredArtifacts) }), capabilityNotice,
         completeFigureBindingNotice,
         'TABLE、FORMULA、FIGURE、CONCEPT_BRIDGE 装配标记必须放在可见正文中，独占一个空行分隔的段落；不得放入 HTML 注释、代码块、行内代码或引用中。表格、原图、公式和术语解释的示例或隐藏副本不能算作正文展示。'].filter(Boolean).join('\n');
@@ -20572,7 +20360,6 @@ module.exports = {
     normalizeReaderConceptBridgeTerms,
     normalizeShiftedReaderConceptBridgeMarkers,
     normalizeDuplicateReaderConceptBridgeMarkers,
-    normalizeReaderConferenceNarrowComparisonTable,
     repairReportedTextSpacing,
     normalizeIssueBoundReaderNumericTypography,
     normalizeReaderProsePreservingSelectedTables,
@@ -20580,8 +20367,7 @@ module.exports = {
     restoreReaderSelectedTableBytes,
     normalizeReaderWorkflowLeakageSurface,
     normalizeReaderSourceQuoteTableMarkers,
-    repairConferenceReaderQuoteTables,
-    normalizeConferenceGeneratedEvidenceTableLabels,
+    readerPlaceholderResultTableIssues, assertReaderResultTableSemantics,
     normalizeReaderSourceQuotes,
     readerSourceQuoteCoversNumericToken,
     readerSourceQuotesCoverNumericToken,
