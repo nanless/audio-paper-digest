@@ -407,6 +407,40 @@ class GitPublicationTest(unittest.TestCase):
         self.assertTrue(list((publisher.publication_dir(self.cid, self.pid)).glob(
             'generation.superseded-*.json')))
 
+    def test_generate_replaces_owned_image_after_backup_interruption_without_resigning_old_generation(self):
+        self.prepare_flow()
+        bundle = publisher.process_bundle.return_value
+        asset = bundle['imageFiles'][0]
+        asset.update(kind='asset', paperId='conference:test:2026:paper-id:fixture')
+        with contextlib.redirect_stdout(io.StringIO()):
+            publisher.generate(self.cid, self.pid)
+        directory = publisher.publication_dir(self.cid, self.pid)
+        original_bytes = (directory / 'generation.json').read_bytes()
+        original = json.loads(original_bytes)
+        target = self.images / asset['path']
+        old_bytes = target.read_bytes()
+        old_source = Path(asset['sourcePath'])
+        new_source = self.root / 'new-current-figure.png'
+        new_source.write_bytes(b'new owned image bytes')
+        asset.update(sourcePath=str(new_source), sourceSha256=sha(new_source.read_bytes()),
+                     size=new_source.stat().st_size)
+        bundle['completion']['receiptSha256'] = 'b' * 64
+        with mock.patch.object(publisher, 'replace_exact', side_effect=RuntimeError('stop after image backup')):
+            with self.assertRaisesRegex(RuntimeError, 'stop after image backup'):
+                publisher.generate(self.cid, self.pid)
+        self.assertEqual(target.read_bytes(), old_bytes)
+        self.assertEqual((directory / 'generation.json').read_bytes(), original_bytes)
+        backup = directory / 'image-byte-history' / original['generationSha256'] / (sha(old_bytes) + '.png')
+        self.assertEqual(backup.read_bytes(), old_bytes)
+        with contextlib.redirect_stdout(io.StringIO()):
+            publisher.generate(self.cid, self.pid)
+            publisher.generate(self.cid, self.pid)
+        self.assertEqual(target.read_bytes(), new_source.read_bytes())
+        self.assertEqual(old_source.read_bytes(), old_bytes)
+        self.assertEqual(backup.read_bytes(), old_bytes)
+        self.assertTrue(any(file.read_bytes() == original_bytes
+                            for file in directory.glob('generation.superseded-*.json')))
+
     def test_flow_recovery_after_image_push_and_after_blog_commit(self):
         self.prepare_flow()
         original_push = publisher.push_delta

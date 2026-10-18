@@ -857,7 +857,7 @@ def target_bytes(repo, record):
     return read_bytes(under(repo, record['path'], '博客目标'))
 
 
-def replace_exact(filename, data):
+def replace_exact(filename, data, *, expected_sha256=None):
     """原地替换一个已存在、且已核实为普通单链接文件的博客目标，并绑 0644。
 
     这段写入不能改成公共的「临时文件 + rename」helper，它有独有的前置契约：
@@ -871,11 +871,24 @@ def replace_exact(filename, data):
     info = filename.lstat()
     if not filename.is_file() or filename.is_symlink() or info.st_nlink != 1:
         raise ConferencePublicationError(f'博客目标不是可替换的普通单链接文件: {filename}')
+    def assert_expected_target():
+        if expected_sha256 is None:
+            return
+        if not SHA_RE.fullmatch(str(expected_sha256)):
+            raise ConferencePublicationError('原子替换缺少合法原SHA')
+        current = filename.lstat()
+        fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_nlink', 'st_mode')
+        if any(getattr(current, key) != getattr(info, key) for key in fields) \
+                or stat.S_IMODE(current.st_mode) != 0o644 \
+                or sha_bytes(read_bytes(filename)) != expected_sha256:
+            raise ConferencePublicationError(f'原子替换目标身份或原SHA漂移: {filename}')
+    assert_expected_target()
     temporary = filename.with_name(f'.{filename.name}.{os.getpid()}.conference.tmp')
     if temporary.exists():
         raise ConferencePublicationError(f'博客目标临时文件已存在: {temporary}')
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
     fd = os.open(temporary, flags, 0o644)
+    temporary_info = os.fstat(fd)
     try:
         written = 0
         while written < len(data):
@@ -886,12 +899,49 @@ def replace_exact(filename, data):
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.replace(temporary, filename)
+    try:
+        assert_expected_target()
+        os.replace(temporary, filename)
+    finally:
+        if temporary.exists():
+            leftover = temporary.lstat()
+            if (leftover.st_dev, leftover.st_ino) == (temporary_info.st_dev, temporary_info.st_ino):
+                temporary.unlink()
     directory_fd = os.open(filename.parent, os.O_RDONLY)
     try:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+
+
+def write_generation_image(images, record, *, previous_record=None,
+                           previous_generation_sha=None, archive_root=None):
+    """仅 generate 在共享仓库锁内调用；原清单已由完整流程验证。"""
+    relative = safe_image_relative(record.get('path'), '图片目标')
+    target = under(images, relative, '图片仓库目标')
+    data = read_bytes(record['sourcePath'])
+    if sha_bytes(data) != record['sourceSha256'] or len(data) != record['size']:
+        raise ConferencePublicationError(f'图片 staging 字节在生成期间漂移: {relative}')
+    if not target.exists():
+        return write_exact(target, data, mode=0o644)
+    original = read_bytes(target)
+    if original == data:
+        return False
+    if not previous_record or not archive_root \
+            or not SHA_RE.fullmatch(str(previous_generation_sha or '')) \
+            or record.get('kind') != 'asset' or not isinstance(record.get('paperId'), str) \
+            or not record['paperId'] \
+            or any(previous_record.get(key) != record.get(key) for key in ('path', 'kind', 'paperId')) \
+            or not SHA_RE.fullmatch(str(previous_record.get('sourceSha256') or '')) \
+            or sha_bytes(original) != previous_record['sourceSha256'] \
+            or len(original) != previous_record.get('size'):
+        raise ConferencePublicationError(f'图片不是同批原清单的完整受控字节，拒绝覆盖: {relative}')
+    backup = under(archive_root,
+                   f'image-byte-history/{previous_generation_sha}/{previous_record["sourceSha256"]}.png',
+                   '旧受控图片备份')
+    write_exact(backup, original)
+    replace_exact(target, data, expected_sha256=previous_record['sourceSha256'])
+    return True
 
 
 def can_replace_conference_target(target, data, conference_id, kind):
@@ -1203,6 +1253,8 @@ def generate(conference_id, process_id):
         image_snapshot = remote_snapshot(images)
         rebased = False
         previous_source_sha = {}
+        previous_images = {}
+        previous_generation_sha = None
         if existing.exists() and read_json(existing).get('version') == 2:
             previous_record = read_json(existing)
             check_self_hash(previous_record, 'generationSha256')
@@ -1264,6 +1316,14 @@ def generate(conference_id, process_id):
                 if current and (record.get('kind'), record.get('paperId')) == \
                         (current.get('kind'), current.get('paperId')):
                     previous_source_sha[path] = record['sourceSha256']
+            previous_generation_sha = previous['generationSha256']
+            current_images = {record['path']: record for record in image_files}
+            for record in previous['imageFiles']:
+                path = safe_image_relative(record.get('path'), '旧生成图片')
+                current = current_images.get(path)
+                if current and record.get('kind') == current.get('kind') == 'asset' \
+                        and record.get('paperId') == current.get('paperId'):
+                    previous_images[path] = record
         if snapshot['head'] != snapshot['remoteMain'] or image_snapshot['head'] != image_snapshot['remoteMain']:
             raise ConferencePublicationError('generate 拒绝已有未同步本地/远端提交')
         verify_index(repo, snapshot['head'], files)
@@ -1288,11 +1348,9 @@ def generate(conference_id, process_id):
             if not target.exists():
                 write_exact(target, data, mode=0o644)
         for record in image_files:
-            target = under(images, record['path'], '图片仓库目标')
-            data = read_bytes(record['sourcePath'])
-            if sha_bytes(data) != record['sourceSha256']:
-                raise ConferencePublicationError(f'图片 staging 字节在生成期间漂移: {record["path"]}')
-            write_exact(target, data, mode=0o644)
+            write_generation_image(images, record, previous_record=previous_images.get(record['path']),
+                                   previous_generation_sha=previous_generation_sha,
+                                   archive_root=publication_dir(conference_id, process_id))
         body = {'contract': 'conference-blog-generation-v1', 'version': 2,
                 'conferenceId': conference_id, 'processId': process_id,
                 'completionReceiptSha256': bundle['completion']['receiptSha256'],
