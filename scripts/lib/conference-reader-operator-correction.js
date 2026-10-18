@@ -9,6 +9,9 @@ const CONTRACT = 'conference-reader-operator-batch-v1';
 const CORRECTION = 'conference-reader-operator-correction-v1';
 const RECEIPT = 'conference-reader-operator-receipt-v1';
 const SINGLE_TABLE_APPEND = 'single-source-table-append-v2';
+const HISTORICAL_NORMAL_TERMINAL = 'historical-normal-terminal-v1';
+const PAID_RAW_JSON_SCHEMA = 'paid-raw-json-schema-v1';
+const DECLARED_TABLE_RESTORATION = 'declared-table-placeholder-restoration-v1';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const hash = value => require('./reader-repair').hashDraft(value);
 const fail = message => { throw Object.assign(new Error('会议人工Reader修正拒绝：' + message), {
@@ -64,6 +67,10 @@ function retainedFiles(directory) {
 // A member subtype is not a grant. Only the existing complete failed-set
 // loader, registered window and actual PDF provider may enter this private path.
 function correctionMemberKind(record) {
+    if (record.version === 1 && record.correctionKind === PAID_RAW_JSON_SCHEMA) {
+        if (record.originKind !== undefined || record.tableAppend !== undefined || !record.rawJsonSchemaCorrection) fail('原付费JSON版本修正不能混入其它来源或结构权限');
+        return PAID_RAW_JSON_SCHEMA;
+    }
     if (record.version === 2 && record.correctionKind === SINGLE_TABLE_APPEND) {
         if (record.originKind !== undefined) fail('追加表只能使用未声明其它origin的原活跃失败候选');
         if (record.patch !== undefined || !record.tableAppend || typeof record.tableAppend !== 'object'
@@ -75,7 +82,86 @@ function correctionMemberKind(record) {
         || record.tableAppend !== undefined) fail('未知人工条目版本或结构子类型');
     return 'existing-nodes-v1';
 }
+function markdownTables(draft) {
+    return (draft.sections || []).flatMap(section => require('../analysis-contract').extractMarkdownTables(String(section.body || '')));
+}
+function restoreDeclaredTables(record, original, source) {
+    const spec = record.declaredTablePlaceholderRestoration;
+    if (spec === undefined) return clone(original);
+    if (!source?.loaded || !source.pdf || correctionMemberKind(record) === SINGLE_TABLE_APPEND
+        || spec.contract !== DECLARED_TABLE_RESTORATION
+        || Object.keys(spec).sort().join(',') !== ['contract','sourceTextSha256','pdfSha256','originalBindingsSha256','restoredDraftSha256','tables'].sort().join(',')
+        || original.tableBindings?.length !== 2 || markdownTables(original).length !== 0
+        || spec.originalBindingsSha256 !== hash(original.tableBindings)
+        || !Array.isArray(spec.tables) || spec.tables.length !== 2) fail('表占位恢复仅允许原2绑定、0实际表的明确来源声明');
+    const provider = require('./conference-source-context').readerPdfSourceForContext(source.pdf);
+    if (!provider || provider.paperId !== record.paperId || provider.sourceSnapshotSha256 !== record.sourceSnapshotSha256
+        || provider.pdfSha256 !== spec.pdfSha256 || sha(provider.sourceText) !== spec.sourceTextSha256
+        || provider.sourceText !== source.loaded.source.sourceDetails.text) fail('表占位恢复没有同一真实PDF来源');
+    provider.assertUnchanged();
+    const draft = clone(original);
+    const markers = original.sections.flatMap((section,index) => [...String(section.body).matchAll(/\[\[TABLE_(\d+)\]\]/gu)]
+        .map(match => ({ marker: match[0], tableIndex: Number(match[1]), bodyPath: `/sections/${index}/body` })));
+    if (markers.length !== 2) fail('表占位恢复必须完整覆盖唯一原TABLE_1和TABLE_2');
+    spec.tables.forEach((entry,index) => {
+        if (Object.keys(entry).sort().join(',') !== ['tableIndex','marker','bodyPath','originalBindingSha256','markdown'].sort().join(',')
+            || entry.tableIndex !== index + 1 || entry.marker !== `[[TABLE_${index + 1}]]`
+            || original.tableBindings[index].tableIndex !== index + 1
+            || entry.originalBindingSha256 !== hash(original.tableBindings[index])
+            || !/^\/sections\/(?:0|[1-9]\d*)\/body$/u.test(entry.bodyPath)
+            || typeof entry.markdown !== 'string' || /\[\[|!\[|^\s*#/mu.test(entry.markdown)
+            || require('../analysis-contract').extractMarkdownTables(entry.markdown).length !== 1
+            || require('../analysis-contract').extractMarkdownTables(entry.markdown)[0].markdown.trim() !== entry.markdown.trim()) fail('表占位恢复记录、原绑定或实际表字节不完整');
+        const matches = markers.filter(marker => marker.tableIndex === index + 1 && marker.bodyPath === entry.bodyPath);
+        const sectionIndex = Number(entry.bodyPath.split('/')[2]), body = draft.sections[sectionIndex]?.body;
+        if (matches.length !== 1 || typeof body !== 'string' || !body.split(/\n\s*\n/u).some(block => block.trim() === entry.marker)) fail('原表占位不是唯一独占段落');
+        draft.sections[sectionIndex].body = body.replace(entry.marker, entry.markdown);
+    });
+    if (markdownTables(draft).length !== 2 || hash(draft) !== spec.restoredDraftSha256) fail('实际恢复必须恰为声明的2张表，不增加来源绑定');
+    provider.assertUnchanged(); return draft;
+}
+function replayProjectedLocalNodes(record, candidate, projected, source, mechanicalPaths) {
+    const restored = restoreDeclaredTables(record, projected, source);
+    if (record.declaredTablePlaceholderRestoration) mechanicalPaths.push(...record.declaredTablePlaceholderRestoration.tables.map(row => row.bodyPath));
+    if (record.patch?.draftSha256 !== hash(restored) || record.patch.version !== 1
+        || Object.keys(record.patch).sort().join(',') !== 'draftSha256,replacements,version'
+        || !Array.isArray(record.patch.replacements)
+        || new Set([...mechanicalPaths,...record.patch.replacements.map(row => row.path)]).size > 8) fail('机械投影与其它既有节点合计超过1–8节点或原SHA不同');
+    const result = record.patch.replacements.length ? replay({ ...record, correctionKind: undefined,
+        rawJsonSchemaCorrection: undefined, declaredTablePlaceholderRestoration: undefined, baselineDraftSha256: hash(restored) },
+        { ...candidate, payload: { ...candidate.payload, draft: restored } }) : clone(restored);
+    if (!isDeepStrictEqual(result, record.draft)) fail('机械投影及全部局部补丁不能还原拟稿');
+    if (record.declaredTablePlaceholderRestoration
+        && !isDeepStrictEqual(markdownTables(result).map(table => table.markdown), markdownTables(restored).map(table => table.markdown))) fail('表占位恢复后的实际表必须逐字等于明确声明');
+    return result;
+}
 function replayMember(record, candidate, source = null) {
+    if (correctionMemberKind(record) === PAID_RAW_JSON_SCHEMA) {
+        if (!source?.loaded || candidate.payload.draft !== null || typeof candidate.payload.rawDraft !== 'string'
+            || record.baselineDraftSha256 !== hash(null)) fail('原付费JSON版本修正必须保留真实null候选');
+        const loaded = source.loaded, spec = record.rawJsonSchemaCorrection;
+        if (Object.keys(spec).sort().join(',') !== ['originalRawSha256','originalVersion','projectedDraftSha256','requestId','responseFileSha256'].sort().join(',')
+            || spec.originalVersion !== 4 || spec.originalRawSha256 !== sha(candidate.payload.rawDraft)) fail('原付费JSON版本修正缺少原字节或固定版本');
+        const ledger = read(path.join(loaded.directory, 'reader-grant-budget.json')).value;
+        const last = ledger.requests?.filter(row => row.status === 'content').at(-1);
+        if (!last || last.kind !== 'full' || last.id !== spec.requestId
+            || last.identitySha256 !== hash(candidate.identity) || last.responseFileSha256 !== spec.responseFileSha256) fail('原付费JSON版本修正不是本候选最新实际全文响应');
+        const response = read(path.join(loaded.directory, `reader-grant-response-${last.id}.json`));
+        if (response.sha256 !== spec.responseFileSha256 || response.value.rawResponse !== candidate.payload.rawDraft
+            || response.value.requestId !== last.id || response.value.identitySha256 !== hash(candidate.identity)
+            || response.value.outputTextSha256 !== spec.originalRawSha256 || last.outputTextSha256 !== spec.originalRawSha256) fail('原付费JSON必须与真实本窗全文响应逐字相同');
+        let original;
+        try { original = JSON.parse(candidate.payload.rawDraft); } catch { fail('原付费JSON不是完整单个JSON对象'); }
+        if (!original || original.version !== 4 || typeof original !== 'object' || Array.isArray(original)) fail('仅允许原JSON版本4到3的明确机械修正');
+        const projected = { ...clone(original), version: 3 };
+        if (!require('./reader-repair').parseRecoveryDraft(projected) || hash(projected) !== spec.projectedDraftSha256) fail('版本投影不符');
+        const draft = replayProjectedLocalNodes(record, candidate, projected, source, ['/version']);
+        return { draft, appendData: null, rawJsonSchemaData: clone(spec), originalDraft: projected };
+    }
+    if (record.declaredTablePlaceholderRestoration) {
+        if (correctionMemberKind(record) !== 'existing-nodes-v1') fail('表占位恢复不能扩大其它结构权限');
+        return { draft: replayProjectedLocalNodes(record, candidate, candidate.payload.draft, source, []), appendData: null };
+    }
     if (correctionMemberKind(record) !== SINGLE_TABLE_APPEND) return { draft: replay(record, candidate), appendData: null };
     if (!source?.loaded || !source.pdf) fail('追加表须由完整失败集私有loader和真实PDF能力重放');
     const { loaded, pdf, beforeAnalysis = null, beforeRun = null, cold = false } = source;
@@ -115,18 +201,127 @@ function replayMember(record, candidate, source = null) {
     return { draft: result.draft, appendData: { correctionKind: SINGLE_TABLE_APPEND, memberVersion: 2, ...result.delta } };
 }
 function memberProofFields(record, appendData) {
+    const restoration = record.declaredTablePlaceholderRestoration
+        ? { declaredTablePlaceholderRestoration: clone(record.declaredTablePlaceholderRestoration) } : {};
+    if (correctionMemberKind(record) === PAID_RAW_JSON_SCHEMA) return { ...restoration, correctionKind: PAID_RAW_JSON_SCHEMA,
+        memberVersion: 1, rawJsonSchemaCorrection: clone(record.rawJsonSchemaCorrection) };
     return correctionMemberKind(record) === SINGLE_TABLE_APPEND
-        ? { correctionKind: SINGLE_TABLE_APPEND, memberVersion: 2, singleTableAppend: clone(appendData) } : {};
+        ? { correctionKind: SINGLE_TABLE_APPEND, memberVersion: 2, singleTableAppend: clone(appendData) } : restoration;
 }
 function replay(record, candidate) {
     if (record.contract !== CORRECTION || record.notLlmResponse !== true) fail('不是明确人工补丁');
-    if (correctionMemberKind(record) !== 'existing-nodes-v1') fail('结构子类型不能使用公开纯v1 replay取得来源权限');
+    if (correctionMemberKind(record) !== 'existing-nodes-v1' || record.declaredTablePlaceholderRestoration !== undefined) fail('结构子类型不能使用公开纯v1 replay取得来源权限');
     // The daily export is a pure patch verifier; its daily admission/scope is
     // deliberately never called and no fresh/arXiv identity is manufactured.
     return require('./daily-reader-operator-correction').replay({ ...record,
         contract: 'reader-human-source-edit-v1' }, candidate);
 }
-function loadBatchData({ manifestPath, processDirectory, analysisRoot, grantHandle }, savedState = null) {
+// This is admission to local editing, not an additional Reader allowance. Count
+// independent, source-bound normal executions with retained content, never a
+// process counter, a stopped request, or several responses as several rounds.
+function historicalNormalAdmission(root, member, item, declaration, savedBefore = null) {
+    const adapter = require('./conference-analysis-adapter'), grants = require('./conference-recovery-grant');
+    if (!declaration || declaration.paperId !== member.member.paperId
+        || declaration.executionId !== member.expectedExecutionId || declaration.priorExecutionId !== member.failedExecutionId
+        || Object.keys(declaration).sort().join(',') !== ['paperId','executionId','priorExecutionId','currentMaterialsSha256','priorMaterialsSha256'].sort().join(',')
+        || ![declaration.currentMaterialsSha256, declaration.priorMaterialsSha256].every(value => /^[a-f0-9]{64}$/u.test(value || ''))) fail('历史正常执行声明缺少完整材料树身份');
+    const current = adapter.loadGrantedConferenceRecovery({ analysisRoot: root, executionId: member.expectedExecutionId });
+    const previous = current.recoveryWindow.failed;
+    const before = savedBefore?.executionId === current.run.executionId ? savedBefore : null;
+    const analysis = before?.analysis.value || current.analysis, run = before?.run.value || current.run;
+    const currentTree = grants.recoveryWindowMaterials(root, current.run.executionId);
+    if (before) for (const entry of currentTree.files) {
+        if (entry.path === 'analysis.json') entry.sha256 = before.analysis.sha256;
+        if (entry.path === 'run.json') entry.sha256 = before.run.sha256;
+    }
+    const currentTreeSha = require('./conference-process').stableHash(currentTree.files);
+    const previousTree = grants.recoveryWindowMaterials(root, previous.run.executionId);
+    const lastRelease = (item.retryReleases || []).filter(row => row.recoveryGrantId).at(-1);
+    if (lastRelease?.recoveryGrantId !== member.grantId || lastRelease?.recoveryGrantSha256 !== member.grantSha256
+        || item.analysisRunId !== member.parentExecutionId || item.analysisProof?.analysisSha256 !== member.parentAnalysisFileSha256
+        || item.sourceProof?.textSha256 !== member.sourceSha256
+        || item.analysisProof?.sourceSnapshotSha256 !== member.sourceSnapshotSha256
+        || currentTreeSha !== declaration.currentMaterialsSha256 || previousTree.materialsSha256 !== declaration.priorMaterialsSha256
+        || current.run.executionId !== member.expectedExecutionId || previous.run.executionId !== member.failedExecutionId
+        || analysis.status !== 'partial' || run.status === 'complete' || previous.analysis.status !== 'partial' || previous.run.status === 'complete'
+        || current.parent.run.executionId !== member.parentExecutionId || previous.parent.run.executionId !== member.parentExecutionId
+        || current.parent.analysisFileSha256 !== member.parentAnalysisFileSha256
+        || previous.parent.analysisFileSha256 !== member.parentAnalysisFileSha256
+        || current.sourceFileSha256 !== previous.sourceFileSha256
+        || current.run.paperId !== item.paperId || previous.run.paperId !== item.paperId
+        || analysis.papers?.length !== 1 || previous.analysis.papers?.length !== 1
+        || analysis.papers[0].id !== item.paperId || previous.analysis.papers[0].id !== item.paperId
+        || analysis.papers[0].sourceSha256 !== member.sourceSha256 || previous.analysis.papers[0].sourceSha256 !== member.sourceSha256
+        || sha(current.source.sourceDetails.text) !== member.sourceSha256
+        || current.run.sourceSnapshotSha256 !== member.sourceSnapshotSha256) fail('历史正常执行不是唯一同源父子链或完整原材料已变化');
+    const terminal = analysis.readerRevisionProgress?.failures?.at(-1);
+    const terminalCodes = ['READER_REPAIR_NO_PROGRESS','READER_FULL_ATTEMPTS_EXHAUSTED','READER_REPAIR_ATTEMPTS_EXHAUSTED'];
+    if (item.attempts - item.retryBudgetStart !== analysis.readerRevisionProgress?.attempts
+        || !terminal || terminal.systemic !== false || terminal.retryable !== false || !terminalCodes.includes(terminal.code)
+        || item.lastFailure?.code !== terminal.code || item.lastFailure?.retryable !== false || item.lastFailure?.systemic !== false) fail('当前不是正常Reader同组无进展或全文用尽后的技术停止');
+    const directory = path.join(current.directory, 'reader-attempts');
+    const active = tree(directory).filter(row => /^[a-f0-9]{64}\.json$/u.test(row.path));
+    if (active.length !== 1) fail('历史正常资格需要唯一实际活跃失败候选');
+    const candidate = require('./reader-repair').readFailedCandidateEnvelope(directory, null, path.join(directory, active[0].path))?.envelope;
+    if (!candidate || candidate.identity.paperId !== item.paperId || candidate.identity.sourceSha256 !== member.sourceSha256
+        || candidate.identity.conferenceReaderGrant?.executionId !== current.run.executionId
+        || !candidate.payload.issues.length || !(candidate.payload.noProgress >= 1 && candidate.payload.validationFailureStreak >= 2
+            || candidate.payload.fullAttempts === 2 && terminalCodes.slice(1).includes(terminal.code))) fail('当前候选没有实际同组无进展或全文耗尽证据');
+    function contentEvidence(loaded, value) {
+        const failures = value.readerRevisionProgress?.failures || [];
+        if (!Number.isSafeInteger(value.readerRevisionProgress?.attempts) || value.readerRevisionProgress.attempts < 1
+            || value.readerRevisionProgress.attempts !== failures.length
+            || !failures.some(failure => failure.systemic === false && /^READER_/u.test(failure.code || '')
+                && !/PROMPT_CHANGE/u.test(failure.code))) fail('历史执行只有计数、停止或配置错误，没有正常Reader失败');
+        if (loaded.recoveryWindow) {
+            const ledger = read(path.join(loaded.directory, 'reader-grant-budget.json')).value;
+            const authority = loaded.recoveryWindow.authority;
+            const expected = { grantId: authority.grantId, grantSha256: authority.grantSha256,
+                processId: authority.processId, paperId: loaded.run.paperId, executionId: loaded.run.executionId,
+                sourceSha256: member.sourceSha256, sourceSnapshotSha256: member.sourceSnapshotSha256,
+                parentAnalysisFileSha256: authority.parentAnalysisFileSha256, failedAnalysisFileSha256: authority.failedAnalysisFileSha256 };
+            if (ledger.contract !== 'conference-granted-reader-budget-v1' || !isDeepStrictEqual(ledger.binding, expected)
+                || !Array.isArray(ledger.requests) || ledger.requests.some(row => row.status === 'pending')) fail('历史窗口没有完整已结算的原Reader账本');
+            const contents = ledger.requests.filter(row => row.status === 'content');
+            if (!contents.length) fail('历史窗口没有实际Reader内容响应');
+            for (const row of contents) {
+                const request = read(path.join(loaded.directory, `reader-grant-request-${row.id}.json`));
+                const response = read(path.join(loaded.directory, `reader-grant-response-${row.id}.json`));
+                if (!isDeepStrictEqual(request.value, { contract: ledger.contract, binding: expected,
+                    logicalIdentitySha256: ledger.logicalIdentitySha256, id: row.id, ordinal: row.ordinal,
+                    kind: row.kind, contentAttempt: row.contentAttempt, identitySha256: row.identitySha256, startedAt: row.startedAt })
+                    || response.sha256 !== row.responseFileSha256 || row.responseFile !== path.basename(response.file)
+                    || response.value.contract !== ledger.contract || response.value.requestId !== row.id
+                    || response.value.identitySha256 !== row.identitySha256 || !response.value.rawResponse
+                    || sha(response.value.rawResponse) !== row.outputTextSha256
+                    || response.value.outputTextSha256 !== row.outputTextSha256) fail('历史Reader原请求响应与真实账本不一致');
+            }
+            if (loaded.run.executionId === current.run.executionId && (contents.length < 2
+                || candidate.payload.attempts !== contents.length
+                || candidate.payload.fullAttempts !== contents.filter(row => row.kind === 'full').length
+                || contents.some(row => row.identitySha256 !== hash(candidate.identity)))) fail('当前终止候选不是本窗实际付费内容和原次数');
+            return;
+        }
+        const folder = path.join(loaded.directory, 'reader-attempts', 'request-diagnostics');
+        if (!fs.existsSync(folder)) fail('历史普通执行没有实际Reader内容记录');
+        const pairs = fs.readdirSync(folder).filter(name => /^[a-f0-9-]{36}\.response\.json$/u.test(name));
+        if (!pairs.some(name => {
+            const response = read(path.join(folder, name)), request = read(path.join(folder, name.replace('.response.', '.request.')));
+            const r = request.value, s = response.value;
+            return r.contract === 'reader-repair-request-diagnostics-v1' && s.contract === r.contract && r.id === s.id
+                && r.identity?.paperId === item.paperId && r.identity.sourceSha256 === member.sourceSha256
+                && r.identity.contentMode === 'reader-source-only-v1' && r.identity.conferenceReaderRetryEpoch === 1
+                && r.identity.conferenceReaderGrant === undefined && r.promptSha256 === sha(r.prompt)
+                && r.draftSha256 === hash(r.draft) && s.requestSha256 === request.sha256
+                && typeof s.rawResponse === 'string' && s.rawResponse.length > 0 && s.outputTextSha256 === sha(s.rawResponse);
+        })) fail('历史普通执行没有同源原Reader请求响应');
+    }
+    contentEvidence(current, analysis); contentEvidence(previous, previous.analysis);
+    member.assertUnchanged();
+    return { currentMaterialsSha256: currentTreeSha, priorMaterialsSha256: previousTree.materialsSha256,
+        executionId: current.run.executionId, priorExecutionId: previous.run.executionId };
+}
+function loadBatchData({ manifestPath, processDirectory, analysisRoot, grantHandle }, savedState = null, savedBefore = null) {
     const grants = require('./conference-recovery-grant'), summary = grants.recoveryGrantSummary(grantHandle);
     const processDir = path.resolve(processDirectory), root = path.resolve(analysisRoot);
     if (processDir !== path.join(path.dirname(root), 'conference-processes', summary.processId)) fail('进程目录不是许可对应的规范路径');
@@ -156,13 +351,42 @@ function loadBatchData({ manifestPath, processDirectory, analysisRoot, grantHand
     if (!isDeepStrictEqual(Object.keys(checkedState.items).sort(), Object.keys(baseline.value.items).sort())) fail('不是原许可的完整论文集合');
     const limit = Math.min(15, Math.max(10, Math.floor(Object.keys(baseline.value.items).length / 10)));
     if (!failed.length || failed.length > limit) fail('最终失败集超过少量人工修正上限');
+    const history = m.normalHistoryAdmission;
+    if (history !== undefined && (history?.contract !== HISTORICAL_NORMAL_TERMINAL
+        || Object.keys(history).sort().join(',') !== 'contract,members' || !Array.isArray(history.members)
+        || !isDeepStrictEqual(history.members.map(row => row.paperId).sort(), failed))) fail('历史正常资格必须显式绑定完整最终失败集合');
     for (const paperId of failed) {
         const item = checkedState.items[paperId], original = baseline.value.items[paperId];
         const releases = (item.retryReleases || []).filter(release => release.recoveryGrantId === summary.grantId);
         if (!original || !Number.isInteger(original.attempts) || !Number.isInteger(item.attempts)
             || item.retryBudgetStart !== original.attempts || releases.length !== 1
             || releases[0].attempts !== original.attempts || releases[0].recoveryGrantSha256 !== summary.grantSha256
-            || item.attempts - original.attempts < summary.limits.maxRounds) fail('尚未完成同一许可的全部正常轮次');
+            || item.attempts <= original.attempts) fail('尚未完成同一许可的全部正常轮次');
+        if (history) {
+            const member = grants.readRecoveryGrantMember(grantHandle, paperId);
+            let before = savedBefore;
+            // A cold batch may already contain several genuinely saved local
+            // children. Only their own immutable receipts may restore admission;
+            // an ordinary completed child must never become an editable failure.
+            if (savedState && before?.executionId !== member.expectedExecutionId) {
+                const directory = path.join(root, member.expectedExecutionId);
+                const packet = read(path.join(directory, 'analysis.json'));
+                if (packet.value.status === 'complete') {
+                    const paper = packet.value.papers?.[0], proof = paper?.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance;
+                    const receiptPath = path.join(processDir, 'reader-operator-corrections', 'registered', manifest.sha256, member.expectedExecutionId, 'receipt.json');
+                    const receipt = read(receiptPath), { receiptSha256, ...body } = receipt.value;
+                    if (receiptSha256 !== hash(body) || body.contract !== RECEIPT || !isDeepStrictEqual(body.proof, proof)
+                        || proof?.manifestSha256 !== manifest.sha256 || proof.executionId !== member.expectedExecutionId
+                        || body.afterPaperSha256 !== hash(paper) || proof.receiptFile !== receiptPath) fail('历史资格不能借另一完成稿或缺失回执恢复');
+                    before = { executionId: member.expectedExecutionId,
+                        analysis: read(path.join(path.dirname(receiptPath), 'analysis-before.json')),
+                        run: read(path.join(path.dirname(receiptPath), 'run-before.json')) };
+                    if (before.analysis.sha256 !== body.beforeAnalysisFileSha256 || before.run.sha256 !== body.beforeRunFileSha256) fail('历史资格原before字节不同');
+                }
+            }
+            historicalNormalAdmission(root, member, item, history.members.find(row => row.paperId === paperId), before);
+        }
+        else if (item.attempts - original.attempts < summary.limits.maxRounds) fail('尚未完成同一许可的全部正常轮次');
     }
     const records = new Map();
     for (const filename of m.correctionFiles) {
@@ -188,7 +412,10 @@ function assertSavedBatchMember(handle, paper) {
     if (!batch || !row || proof?.contract !== CORRECTION) fail('完成稿不是当前真实人工清单的成员');
     assertBatchFiles(batch, row);
     const r = row.record;
-    if (correctionMemberKind(r) === SINGLE_TABLE_APPEND
+    if (correctionMemberKind(r) === PAID_RAW_JSON_SCHEMA
+        ? proof.memberVersion !== 1 || proof.correctionKind !== PAID_RAW_JSON_SCHEMA
+            || !isDeepStrictEqual(proof.rawJsonSchemaCorrection, r.rawJsonSchemaCorrection)
+        : correctionMemberKind(r) === SINGLE_TABLE_APPEND
         ? proof.memberVersion !== 2 || proof.correctionKind !== SINGLE_TABLE_APPEND
             || proof.singleTableAppend?.specSha256 !== r.tableAppend.specSha256
         : proof.memberVersion !== undefined || proof.correctionKind !== undefined || proof.singleTableAppend !== undefined) fail('完成稿人工子类型或追加规格不属于本成员');
@@ -202,6 +429,7 @@ function assertSavedBatchMember(handle, paper) {
         || proof.grantId !== batch.manifest.value.grantId || proof.grantSha256 !== batch.manifest.value.grantSha256
         || paper.sourceSha256 !== r.sourceSha256
         || read(path.join(batch.analysisRoot, r.executionId, 'source.json')).sha256 !== r.sourceFileSha256) fail('完成稿属于不同人工清单、补丁、原CAS或来源');
+    if (!isDeepStrictEqual(proof.declaredTablePlaceholderRestoration, r.declaredTablePlaceholderRestoration)) fail('完成稿原表占位恢复声明不属于本成员');
     if (r.originKind === 'latest_resolved_paid_reader' && (proof.originKind !== r.originKind
         || !isDeepStrictEqual(proof.originalPaidOrigin, r.originalPaidOrigin))) fail('已保存稿的退休付费来源不匹配当前清单');
     return true;
@@ -244,14 +472,18 @@ function readBaseline(batch, row, loaded, planHandle, sourceRoot, { cold = false
     const identity = candidate.identity;
     if (identity.paperId !== r.paperId || identity.sourceSha256 !== r.sourceSha256 || identity.freshAnalysis !== undefined
         || identity.contentMode !== 'reader-source-only-v1' || identity.conferenceReaderRetryEpoch !== 1
-        || candidate.payload.attempts < 1 || !repair.parseRecoveryDraft(candidate.payload.draft)) fail('原候选不是同源会议失败稿');
-    const { draft, appendData } = originHandle
+        || candidate.payload.attempts < 1 || (correctionMemberKind(r) !== PAID_RAW_JSON_SCHEMA
+            && !repair.parseRecoveryDraft(candidate.payload.draft))) fail('原候选不是同源会议失败稿');
+    const { draft, appendData, originalDraft } = originHandle
         ? { draft: require('./conference-reader-resolved-origin').replayLocalPatch(originHandle, r), appendData: null }
         : replayMember(r, candidate, { loaded, pdf, cold, beforeAnalysis, beforeRun });
     for (const key of ['sections','conceptBridges','figurePlacements','tableBindings','formulaBindings']) {
         const delta = appendData && key === 'tableBindings' ? 1 : 0;
-        if (draft[key].length !== candidate.payload.draft[key].length + delta) fail('人工补丁不能增删非获准原结构数量');
+        if (draft[key].length !== (originalDraft || candidate.payload.draft)[key].length + delta) fail('人工补丁不能增删非获准原结构数量');
     }
+    const originalTableCount = markdownTables(originalDraft || candidate.payload.draft).length;
+    const expectedTableCount = r.declaredTablePlaceholderRestoration ? 2 : originalTableCount + (appendData ? 1 : 0);
+    if (markdownTables(draft).length !== expectedTableCount) fail('人工补丁不能隐瞒增删实际Markdown表；原绑定不等于实际表');
     const ledger = read(path.join(loaded.directory, 'reader-grant-budget.json'));
     const before = beforeAnalysis?.value || loaded.analysis, beforePaper = before.papers?.[0];
     if (!beforePaper || beforePaper.id !== r.paperId || beforePaper.sourceSha256 !== r.sourceSha256) fail('完整原包缺失');
@@ -612,7 +844,11 @@ function withSavedPaper(paper, callback) {
         || body.afterPaperSha256 !== hash(paper)) fail('冷核凭证与最终完整原稿不一致');
     const grantHandle = require('./conference-recovery-grant').reopenRecoveryGrantForWindow({ analysisRoot, windowRecord: loaded.revision });
     const stateRecord = read(path.join(path.dirname(path.dirname(expected)), 'state-before.json'));
-    const batch = loadBatchData({ analysisRoot, processDirectory: processDir, manifestPath: proof.manifestFile, grantHandle }, stateRecord);
+    const beforeAnalysis = read(path.join(path.dirname(expected), 'analysis-before.json')),
+        beforeRun = read(path.join(path.dirname(expected), 'run-before.json'));
+    if (beforeAnalysis.sha256 !== body.beforeAnalysisFileSha256 || beforeRun.sha256 !== body.beforeRunFileSha256) fail('冷核历史资格缺少真实原失败before字节');
+    const batch = loadBatchData({ analysisRoot, processDirectory: processDir, manifestPath: proof.manifestFile, grantHandle }, stateRecord,
+        { executionId: proof.executionId, analysis: beforeAnalysis, run: beforeRun });
     if (batch.manifest.sha256 !== proof.manifestSha256 || stateRecord.sha256 !== body.stateFileSha256) fail('冷核原清单或完整失败集不一致');
     const currentState = read(path.join(processDir, 'state.json'));
     if (currentState.sha256 !== stateRecord.sha256) {
@@ -632,8 +868,6 @@ function withSavedPaper(paper, callback) {
             || adoption.previousStateSha256 !== stateRecord.value.stateSha256) fail('当前进程没有正常采纳本真实人工子稿/页面证明');
     }
     const row = batch.records.get(paper.id); if (!row || row.file.sha256 !== proof.correctionSha256) fail('冷核原补丁不一致');
-    const beforeAnalysis = read(path.join(path.dirname(expected), 'analysis-before.json')),
-        beforeRun = read(path.join(path.dirname(expected), 'run-before.json'));
     if (beforeAnalysis.sha256 !== body.beforeAnalysisFileSha256 || beforeRun.sha256 !== body.beforeRunFileSha256
         || beforeAnalysis.sha256 !== row.record.analysisFileSha256 || beforeRun.sha256 !== row.record.runFileSha256) fail('冷核完整before包不一致');
     const context = require('./conference-analysis-context'), existing = context.getConferenceAnalysisContext();
@@ -685,6 +919,7 @@ function withSavedPaper(paper, callback) {
                 assertOutput(restored, paper); return callback();
             }))));
 }
-module.exports = { prepareReaderInput, finalizeCheckpointImages, finalizeReaderFailure, CONTRACT, CORRECTION, RECEIPT, SINGLE_TABLE_APPEND, openCorrectionBatch, withCorrection, current, execution, replay,
+module.exports = { prepareReaderInput, finalizeCheckpointImages, finalizeReaderFailure, CONTRACT, CORRECTION, RECEIPT, SINGLE_TABLE_APPEND,
+    HISTORICAL_NORMAL_TERMINAL, PAID_RAW_JSON_SCHEMA, DECLARED_TABLE_RESTORATION, openCorrectionBatch, withCorrection, current, execution, replay,
     readVerifiedConferenceReaderPrompts, isVerifiedConferenceReaderPromptDeclaration,
     sealCorrection, withSavedPaper, hasVerifiedOperatorProvenance, assertMayAccessNetwork, assertSavedBatchMember };

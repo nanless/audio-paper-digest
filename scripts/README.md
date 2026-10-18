@@ -82,7 +82,7 @@ npm run test:compat
 | `lib/reader-single-source-table-append.js` | 纯数据验证固定形状的唯一原表追加：绑定六文件及 PDF 原字节、来源窗口、既有第11节尾部和第二绑定，保护所有原内容；输出仅为候选数据，不授予来源、资格或付费权限。会议私有 v2 成员加载后仍走正常完整解析及冷核。 |
 | `lib/conference-reader-resolved-origin.js` | 只读认证外层未保存的唯一最新退休付费 Reader：登记账本、真实请求/响应/费用、原Prompt、迁移链、正常归一与同源输入逐项闭合。私有来源句柄仅供最终失败集v1局部修正及reader-only请求前单篇减权，不复活候选或授予新额度。 |
 | `lib/conference-source-resource-correction.js`、`lib/conference-source-resource-correction-apply.js` | 认证来源事实的零请求恢复：资源归属和唯一核心句采用独立物理合同，保留最新主文及真实 Reader 父稿，正常解析、整篇热/冷核和暂存后在全部论文锁内原子采纳；不改变原费用或预算。迁移须显式 `--postprocess-only --source-corrections FILE`，见[来源纠正](../docs/conference-workflow.md#认证来源事实的零请求纠正)。 |
-| `lib/conference-complete-stage-pool.js`、`lib/conference-complete-stage-worker.js` | 会议完成稿迁移的私有并行暂存，沿用 `--concurrency` 且最多5个真实工作线程。实际worker入口固定核验daily角色，不能直接作为主程序启动。各线程从归档重建原来源/计划能力，禁止模型并执行原整篇资格及暂存；主线程重读页面、资产和原包SHA，最后统一CAS保存，不另设生产CLI。 |
+| `lib/conference-complete-stage-pool.js`、`lib/conference-complete-stage-worker.js` | 会议完成稿迁移及完整汇总的私有并行核验，沿用 `--concurrency` 且最多5个真实工作线程。实际worker入口固定核验daily角色，不能直接作为主程序启动。各线程从归档重建原来源/计划能力，禁止模型并执行原整篇资格及暂存；汇总只读模式每篇正常 `loadStage` 一次。主线程持实际操作锁重读完整成员、状态、页面、资产和原包SHA，私有批能力不能由JSON或子集伪造，最后统一CAS保存，不另设生产CLI。 |
 | `lib/conference-analysis-adapter.js` 的 `replaySavedConferenceReaderRevision()` | 在正常适配器内纯恢复已有普通/追加Reader子稿，实际来源及论文锁内硬禁模型；不准备新子稿、预检或额度，未合格时不写尝试、失败或费用，合格后正常保存、封存，再由迁移做页面核验及CAS采纳。 |
 | `lib/conference-reader-operator-apply.js` | 持真实论文锁执行正常 Reader 解析与整篇资格，CAS 保存子稿、离开热作用域后冷核，再正常暂存并原子采纳完整集合；保留原次数及费用，不启动新付费轮。 |
 | `lib/cancelled-reader-final-checkpoint.js` | 确认最终正文仅被已取消步骤阻挡时，在原完整性、来源和反馈核验通过后从真实检查点继续，不重新生成已完成内容。 |

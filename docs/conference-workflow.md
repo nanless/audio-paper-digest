@@ -484,6 +484,12 @@ npm run conference:migrate-process -- --apply \
 
 `conference:migrate-process` 的显式 `--reader-corrections ABSOLUTE_PATH` 只接受同一已登记 `--recovery-manifest`，并要求已完成当前实现的普通后处理。原许可全轮已结束、无在途项，且完整当前失败集不超过原 process 成员数派生的上限（至少10、硬限15）时，才能打开来源绑定人工清单。清单覆盖完整失败集，逐篇绑定真实子运行、原包/运行/来源及唯一活跃失败候选 CAS；每篇只替换 1–8 个已有节点，不增删章节、术语桥、图、表或公式数量。没有原候选的旧签稿、上游仍不合格、来源或预算链缺失都不适用。
 
+默认仍核对同一许可已完成3轮。少量顽固稿已跨正常执行重试，而当前窗口因同组无进展或全文次数耗尽在首轮正常停止时，可在人工清单显式声明 `normalHistoryAdmission.contract: historical-normal-terminal-v1`。其 `members` 必须精确覆盖完整当前失败集，每项绑定 `paperId`、当前 `executionId`、直接前驱 `priorExecutionId`，以及两份完整材料树的 `currentMaterialsSha256`、`priorMaterialsSha256`。程序核验真实已登记的许可、连续父子稿、同一封存来源和原完整材料；当前与直接前驱各须有实际 Reader 内容请求/响应和正常失败记录，不能把停止记录、伪造数字或同一次执行的多条响应当成多轮。当前还须有唯一活跃失败候选，以及真实的同组无进展或全文耗尽证据。这里承认的是至少2次实际正常执行，不声称已完成本窗3轮，不增加模型额度。保存冷核使用不可变原 `analysis-before.json`、`run-before.json` 和原完整失败集重放；已成功的普通稿不能因此重新成为人工失败稿。
+
+完整付费响应仅因 JSON `version: 4` 被拒、原候选仍为 `draft: null` 时，成员可另显式声明 `version: 1`、`correctionKind: paid-raw-json-schema-v1`。`rawJsonSchemaCorrection` 绑定 `originalRawSha256`、固定 `originalVersion: 4`、只改为版本3后的 `projectedDraftSha256`，以及本窗最新真实全文的 `requestId`、`responseFileSha256`；原 `rawDraft` 必须逐字等于该实际响应。原候选及其 null、请求和费用原样保留，只在私有来源作用域内投影版本字段，再应用旧 SHA 绑定的局部补丁；版本节点计入总共1–8个已有节点，不能通过此声明重造原稿或放宽日更入口。
+
+原稿恰有2个来源绑定、唯一独占的 `[[TABLE_1]]`、`[[TABLE_2]]`，但实际 Markdown 表为0时，可另显式声明 `declaredTablePlaceholderRestoration.contract: declared-table-placeholder-restoration-v1`，如实记录0→2恢复。声明绑定同一认证 PDF/全文 SHA、原完整绑定 SHA、每个原标记所在 body 路径与原绑定 SHA、两张完整 Markdown 表字节及恢复后整稿 SHA。程序只在原标记位置恢复两表，不增加绑定或其它结构；后续补丁不能偷换已声明表字节。该声明可与上述版本投影组合：先改版本，再恢复标记表，再以该私有投影的 SHA 应用其它局部补丁，全部独立已有节点合计仍不超过8个。默认成员继续禁止隐瞒增删实际 Markdown 表；恢复内容仍须通过正常逐格来源、整篇质量及保存冷核，声明本身不证明科学内容正确。
+
 此入口硬禁新增模型和网络请求，沿正常 Reader 解析、来源核验、整篇资格及页面后处理执行。只允许原已认证来源和同 SHA 本地资产；缺少资产不能联网补取。输出如实标记 `operator-local/local_operator`，保留原候选树、请求响应、费用、尝试及失败计数；保存独立不可变原包、原完整失败集、补丁及输出凭证，冷态从真实来源重放，不把人工结果声称为 API 响应。所有局部结果先通过正常暂存后，才原子采纳进 process。该入口不产生付费请求；选择其他正常付费恢复时适用上述持续授权，不存在“第四付费轮未获用户允许”的限制。中断后已有子稿和凭证保留，原状态 CAS 不同必须停止。最终仍须正常生成、独立审查、推送、部署及全页核验。
 
 正常完整分析在 Reader 失败后可能保存 `analysis: null`，同时保留本执行已完成的评分检查点。此时只能在真实人工来源作用域内投影该检查点：活动检查点、`scoringAudit` 检查点和评分输出 SHA 三者必须一致，原失败必须仅属 Reader，完整科学上游核验通过，并绑定原包、原失败阶段及修订进度的 SHA。原归档仍保存 null 和全部失败字段，不能借用父执行或把缺失评分补成完成。缺失的官方图收尾只由正常函数在新 Reader 完整绑定后派生；保存前和冷核均重算同一结果。非空主文继续使用原词表下的完整上游预检。这一投影不重签评分、不增加次数或费用，最终仍须通过完整资格。
