@@ -154,7 +154,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         throw new Error('unexpected dependency '+id);
     };
     const sandbox={require:requireFake,module:{exports:{}},Buffer,console,structuredClone};
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),'utf8')+'\nmodule.exports.__testReplay=replayMaintenancePublicationView;',sandbox);
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),'utf8')+'\nmodule.exports.__testReplay=replayMaintenancePublicationView;module.exports.__testLoadBatch=loadBatch;',sandbox);
     module=sandbox.module.exports;
     return {module,adapter,deps,input,manifestPath,processDirectory,analysisRoot,batchRoot,read,write,events,
         recoveryMock,publicationRoot,generationPath,reviewPath,runtimeRoot,temp,bridgeState,shared:{retainedSources:sources},state:()=>read(path.join(processDirectory,'state.json')).value};
@@ -432,4 +432,43 @@ test('direct exported migration options cannot install a grant before exclusive 
     for(const conflict of ['postprocessOnly','preserveFailedReaders','retryFailed','recoveryManifest','readerCorrections','sourceCorrections'])
         assert.throws(()=>migration.run({readerReviewFeedback:h.manifestPath,[conflict]:conflict.endsWith('Manifest')?'/explicit-test-marker':true}),/exclusive normal feedback mode/);
     assert.throws(()=>migration.run({readerReviewWindow:'/explicit-window-only'}),/exclusive normal feedback mode/);assert.deepEqual(migration.events,[]);
+});
+
+
+// Synthetic file-admission tests only; the fixture source APIs remain mocked.
+function loadSyntheticBatch(h) {
+    return h.module.__testLoadBatch({manifestPath:h.manifestPath,processDirectory:h.processDirectory,analysisRoot:h.analysisRoot});
+}
+test('publisher generation permission: fixed current original accepts only 0600 or 0644',t=>{
+    for(const mode of [0o600,0o644]) {
+        const h=setup(t);fs.chmodSync(h.generationPath,mode);
+        assert.equal(loadSyntheticBatch(h).m.batchId,h.input.manifest.batchId);
+        assert.deepEqual(h.events,[]);
+    }
+});
+test('publisher generation permission: unique exact superseded 0644 original preserves full SHA',t=>{
+    const h=setup(t),bytes=fs.readFileSync(h.generationPath),archived=path.join(path.dirname(h.generationPath),'generation.superseded-'+sha(bytes).slice(0,12)+'.json');
+    fs.renameSync(h.generationPath,archived);fs.chmodSync(archived,0o644);h.write(h.generationPath,{changed:true});fs.chmodSync(h.generationPath,0o644);
+    assert.equal(loadSyntheticBatch(h).m.batchId,h.input.manifest.batchId);
+    fs.writeFileSync(h.generationPath,bytes);assert.throws(()=>loadSyntheticBatch(h),/ambiguous/);
+    fs.unlinkSync(h.generationPath);fs.appendFileSync(archived,' ');assert.throws(()=>loadSyntheticBatch(h),/generation original/);
+});
+test('publisher generation permission: private 0644 evidence remains rejected',t=>{
+    for(const name of ['manifest.json','generation.json','review-batch.json','baseline-state.json']) {
+        const h=setup(t);fs.chmodSync(path.join(h.batchRoot,name),0o644);
+        assert.throws(()=>loadSyntheticBatch(h),/private single-link/);
+    }
+});
+test('publisher generation permission: other original modes remain rejected',t=>{
+    for(const mode of [0o640,0o664,0o444,0o700]) {
+        const h=setup(t);fs.chmodSync(h.generationPath,mode);
+        assert.throws(()=>loadSyntheticBatch(h),/canonical generation file mode/);
+    }
+});
+test('publisher generation permission: symlink and hardlink originals remain rejected',t=>{
+    for(const kind of ['symlink','hardlink']) {
+        const h=setup(t),real=h.generationPath+'.real';fs.renameSync(h.generationPath,real);
+        fs[kind==='symlink'?'symlinkSync':'linkSync'](real,h.generationPath);
+        assert.throws(()=>loadSyntheticBatch(h),/symlink|single-link/);
+    }
 });

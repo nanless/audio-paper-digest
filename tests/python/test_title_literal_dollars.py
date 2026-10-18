@@ -67,7 +67,7 @@ class TitleLiteralDollarTests(unittest.TestCase):
         for page in [good.replace('/paper', '/wrong'), good.replace('Oído $5', 'Oído $6'),
                      good.replace('Oído $5', 'Oído $5 $6'), good + '<a href="https://example.invalid/paper">Oído $5</a>',
                      good + '<p>price $5</p>', good + '<p>$x$</p>',
-                     *[good.replace('Oído $5', f'<{tag}>Oído $5</{tag}>') for tag in ['code', 'script', 'style', 'span']],
+                     *[good.replace('Oído $5', f'<{tag}>Oído $5</{tag}>') for tag in ['script', 'style', 'span']],
                      *[f'<{tag}>' + good + f'</{tag}>' for tag in ['script', 'style', 'pre', 'code', 'template']],
                      '<div hidden>' + good + '</div>',
                      '<span style="display:none">' + good + '</span>',
@@ -75,6 +75,18 @@ class TitleLiteralDollarTests(unittest.TestCase):
                      good.replace('Oído $5', 'Oído <!--hidden-->$5')]:
             with self.subTest(page=page):
                 self.assertTrue(math_and_emphasis_issues(mask_source_bound_title_dollars(page, artifact), 'html', rendered_html=True))
+        # 标题源绑定仍不接纳 code 子节点；闭合字面代码由独立格式规则处理。
+        # 不把格式通过误当作来源标题身份匹配，也不豁免代码外裸美元。
+        code_page = good.replace('Oído $5', '<code>Oído $5</code>')
+        masked_code = mask_source_bound_title_dollars(code_page, artifact)
+        self.assertIn('<code>Oído $5</code>', masked_code)
+        self.assertEqual(math_and_emphasis_issues(masked_code, 'html', rendered_html=True), [])
+        for outside in ['<p>price $5</p>', '<p>Oído $5</p>', '<p>$x$</p>']:
+            self.assertTrue(math_and_emphasis_issues(masked_code + outside, 'html', rendered_html=True))
+        for code_label in ['Oído $6', 'Oído $5 $6']:
+            mismatched_code = code_page.replace('Oído $5', code_label)
+            self.assertIn('<code>' + code_label + '</code>',
+                          mask_source_bound_title_dollars(mismatched_code, artifact))
         for source in [body.replace(r'\$', '$'), '[Oído \\$5](https://example.invalid/paper)',
                        '> 英文题目：*[Oído \\$5 $x$](https://example.invalid/paper)*',
                        '```markdown\n' + body + '```', '<!--\n' + body + '-->',

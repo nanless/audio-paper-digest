@@ -104,7 +104,7 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 ## 会议博客审查后的 Reader 维护记录
 
-已完成会议的正常付费维护使用 `conference-reader-review-maintenance-batch-v1`，与原失败迁移 grant、零请求人工清单分开。私有根为 `conference-processes/<processId>/review-reader-maintenance/<batchId>/`，不可变 manifest 绑定实际停稳完整 state、当前 canonical generation、完整正常 review batch 及各原失败的物理/语义 SHA；原 current complete 父包 analysis/run/source、PDF、来源快照及重建 Reader draft 逐一 CAS 对应。generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找回，不能拿私造的自洽归档充当正常审查已结束。通过页还须核正式永久 pass cache。
+已完成会议的正常付费维护使用 `conference-reader-review-maintenance-batch-v1`，与原失败迁移 grant、零请求人工清单分开。私有根为 `conference-processes/<processId>/review-reader-maintenance/<batchId>/`，不可变 manifest 绑定实际停稳完整 state、当前 canonical generation、完整正常 review batch 及各原失败的物理/语义 SHA；原 current complete 父包 analysis/run/source、PDF、来源快照及明确类型的 Reader 父稿表面逐一 CAS 对应。generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找回，不能拿私造的自洽归档充当正常审查已结束。规范发布目录中的这两种 generation 允许发布器原有的 `0600` 或 `0644`，仍拒绝符号链接、硬链接、重复身份及字节漂移；私有恢复副本继续严格要求 `0600`。通过页还须核正式永久 pass cache。
 
 `baseline-state.json`、`generation.json`、`review-batch.json`、`failures/`、`classifications/` 保留原材料。全部 text 及分类为 normal-reader 的 Markdown/图片构成完整唯一成员集；其余 markdown/image 失败仍完整分类并保留原 stage，不改名为 text。`raw-review-findings-v1` 只发送带待核验警示的真实意见，`corrective-assertion-v1` 另绑定旧节点与逐字来源。deferred-review/deferred-publication-format 明确 pending-new-page-review，不得带 repaired/passed，也不能授新模型或发布通过。
 

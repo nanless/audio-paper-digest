@@ -38,6 +38,32 @@ class ExistingConferenceAuthorPublicationTest(unittest.TestCase):
         new.PUBLICATION_ROOT = r / 'conference-publications'
         for key in ('RUNTIME', 'PROCESS_ROOT', 'PAGE_ROOT', 'AGGREGATE_ROOT', 'PUBLICATION_ROOT'):
             setattr(old, key, getattr(new, key))
+        # 该来源夹具使用独立临时根且没有 Reader 维护任务。仅显式隔离
+        # 新增 canonical-root 守卫；真实作者 CLI、官方来源和篡改负例保留。
+        preload = r / 'test-only-no-maintenance.cjs'
+        preload.write_text("""
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const root=ROOT_VALUE;
+require(GUARD_VALUE).assertNoPendingReaderReviewMaintenance=({processDirectory,analysisRoot,state})=>{
+ assert.equal(path.resolve(processDirectory),path.join(root,'conference-processes',state.processId));
+ assert.equal(path.resolve(analysisRoot),path.join(root,'conference-analysis-executions'));
+ assert.deepEqual(state.readerReviewMaintenanceObligations||[],[]);
+ assert.equal(fs.existsSync(path.join(processDirectory,'review-reader-maintenance')),false);
+ assert.deepEqual(state,JSON.parse(fs.readFileSync(path.join(processDirectory,'state.json'),'utf8')));
+ return true;
+};
+""".replace('ROOT_VALUE', json.dumps(str(r))).replace('GUARD_VALUE',
+                json.dumps(str(ROOT / 'scripts/lib/conference-reader-review-maintenance.js'))))
+        preload.chmod(0o600)
+        shared_publisher = new.load_publish_to_blog()
+        real_subprocess = shared_publisher._run_bounded_subprocess
+        def isolated_author_subprocess(command, *args, **kwargs):
+            if len(command) > 1 and command[1] == str(ROOT / 'scripts/lib/conference-publication-author-replay-cli.js'):
+                command = [command[0], '--require', str(preload), *command[1:]]
+            return real_subprocess(command, *args, **kwargs)
+        self.enterContext(mock.patch.object(shared_publisher, '_run_bounded_subprocess', isolated_author_subprocess))
+        for module in (old, new):
+            self.enterContext(mock.patch.object(module, 'load_publish_to_blog', return_value=shared_publisher))
         class Reached(Exception):pass
 
         def invoke(m):

@@ -1903,7 +1903,9 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
         matches = module.parse_markdown_images(content)
         if matches:
             from conference_publication_figure_view import review_contexts_for_page
-            selected_contexts = review_contexts_for_page(figure_review_contexts or {}, record, content, module.parse_markdown_images)
+            selected_contexts = (review_contexts_for_page(
+                figure_review_contexts, record, content, module.parse_markdown_images)
+                if figure_review_contexts else {})
             passed, findings = (module.multimodal_review_images(content, title, required=True,
                 publication_figure_contexts=selected_contexts) if selected_contexts else
                 module.multimodal_review_images(content, title, required=True))

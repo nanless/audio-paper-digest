@@ -377,6 +377,57 @@ class ConferencePublishTests(unittest.TestCase):
             M.review_pages(self.repo, [r])
             self.assertEqual(reviewer.calls, 2)
 
+    def test_native_image_review_without_view_context_does_not_enter_derived_target_adapter(self):
+        record = self.record(data=b'---\ntitle: native\n---\n![image](https://example.invalid/native.png)\n')
+        reviewer = FakeReviewer()
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch('conference_publication_figure_view.review_contexts_for_page',
+                           side_effect=AssertionError('No derived target adapter without actual contexts')), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            result = M.review_pages(self.repo, [record], figure_review_contexts={})
+        self.assertEqual(result['pages'][0]['path'], record['path'])
+        self.assertTrue(result['pages'][0]['passed'])
+        self.assertEqual(reviewer.image_calls, 1)
+
+    def test_aggregate_first_uses_same_five_lanes_and_restores_receipt_generation_order(self):
+        records = [self.record(f'content/posts/ordered-{i}.md') for i in range(7)]
+        records[4]['kind'] = 'aggregate'
+        reviewer, scheduled = FakeReviewer(), []
+        native_runner = M.run_bounded_llm_tasks
+        def observe(items, worker, count):
+            scheduled.append(([item['path'] for item in items], count))
+            return native_runner(items, worker, count)
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(M, 'run_bounded_llm_tasks', side_effect=observe), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            result = M.review_pages(self.repo, records, workers=5)
+            reviewer.protocol = 'protocol-after-code-change'
+            reused = M.review_pages(self.repo, records, workers=5)
+        self.assertEqual(scheduled[0], ([records[4]['path']] + [r['path'] for i, r in enumerate(records) if i != 4], 5))
+        self.assertEqual([r['path'] for r in result['pages']], [r['path'] for r in records])
+        self.assertEqual([r['path'] for r in reused['pages']], [r['path'] for r in records])
+        self.assertEqual(reviewer.calls, len(records))
+        self.assertEqual(len(list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json'))), len(records))
+
+    def test_relocated_aggregate_failure_keeps_original_batch_order_and_sibling_passes(self):
+        records = [self.record(f'content/posts/aggregate-failure-{i}.md',
+                   data=f'---\ntitle: page-{i}\n---\nfixture page {i}\n'.encode()) for i in range(4)]
+        records[2]['kind'] = 'aggregate'
+        reviewer = FakeReviewer()
+        def response(chunk, title, **_kwargs):
+            passed = title != 'page-2'
+            return passed, ([] if passed else [{'severity': 'error', 'description': 'Actual aggregate content rejection'}]), chunk
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(reviewer, '_llm_review_post_chunk', side_effect=response), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            with self.assertRaisesRegex(M.ConferencePublicationError, '整批正常审查已结束.*1 页拒稿'):
+                M.review_pages(self.repo, records, workers=5)
+        batch_file, = (M.PUBLICATION_ROOT / 'page-review-batch-failures').glob('*.json')
+        batch = json.loads(batch_file.read_text())
+        self.assertEqual([row['path'] for row in batch['pages']], [r['path'] for r in records])
+        self.assertEqual([row['passed'] for row in batch['pages']], [True, True, False, True])
+        self.assertEqual(len(list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json'))), 3)
+
     def test_multimodal_failure_no_pass_cached(self):
         r = self.record(data=b'---\ntitle: test\n---\n![figure](https://example.invalid/a.png)\n')
         reviewer = FakeReviewer()

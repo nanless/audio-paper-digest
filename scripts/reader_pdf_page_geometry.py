@@ -3,6 +3,12 @@
 Callers authenticate original PDF and source independently. This module accepts
 no crop, page number, profile, source root, or eligibility flag from a caller.
 """
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime('reader_pdf_page_geometry.py')
+    raise SystemExit('This pure helper is imported by the normal publisher, not a direct CLI.')
+
 import hashlib
 import math
 import re

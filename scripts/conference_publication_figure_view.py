@@ -4,6 +4,12 @@ Authority is the fixed local Node replay, never this module's hashes or tests.
 Raw process_bundle must pass before the publisher calls this module. Nothing in
 this module changes Reader/stage/source/fees or creates analysis permission.
 """
+
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime('conference_publication_figure_view.py')
+    raise SystemExit('This pure helper is imported by the normal publisher, not a direct CLI.')
+
 import copy
 import hashlib
 import json

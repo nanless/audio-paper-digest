@@ -293,7 +293,14 @@ function assertCanonicalReviewEvidence(batch) {
     const directory=path.join(roots.publication,g.conferenceId,m.processId);
     const candidates=[path.join(directory,'generation.json'),path.join(directory,
         'generation.superseded-'+generation.sha256.slice(0,12)+'.json')];
-    const exactGeneration=candidates.filter(filename=>fs.existsSync(filename)&&read(filename).sha256===generation.sha256);
+    const exactGeneration=candidates.filter(filename=>{
+        if(!fs.existsSync(filename))return false;
+        // Only these two fixed publisher originals may use publisher mode 0644.
+        // Registry snapshots and all other private evidence still use read().
+        privateFile(filename,false);
+        check([0o600,0o644].includes(fs.lstatSync(filename).mode&0o777),'canonical generation file mode');
+        return adapter().readJsonRecord(filename).sha256===generation.sha256;
+    });
     check(exactGeneration.length===1&&generation.sha256===m.generationFileSha256,
         'canonical generation original missing, ambiguous or different bytes');
     const canonicalReview=read(path.join(roots.publication,'page-review-batch-failures',review.value.batchSha256+'.json'));
