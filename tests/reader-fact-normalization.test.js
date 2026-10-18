@@ -20,8 +20,6 @@ test('AudioSet 原文的 validation set 不被改成 TidyVoice，仍可逐句绑
         '| A | validation set | 5.2% | matched |'
     ].join('\n');
     const candidate = { sections: [{ kind: 'result', body }] };
-    assert.equal(deep.normalizeReaderConferenceNarrowComparisonTable(candidate), false);
-    assert.equal(candidate.sections[0].body, body);
 
     const artifactBody = {
         version: 1,
@@ -43,6 +41,8 @@ test('AudioSet 原文的 validation set 不被改成 TidyVoice，仍可逐句绑
         structuredArtifacts: { ...artifactBody, payloadSha256: deep.stableFingerprint(artifactBody) },
         sections: candidate.sections
     });
+    assert.deepEqual(require('../scripts/analysis-contract').extractMarkdownTables(result.article)[0].rows[0],
+        ['A', 'validation set', '5.2%', 'matched']);
     assert.doesNotMatch(result.article, /TidyVoice/);
     assert.equal(result.tableBindings[0].sourceQuotes[0].quote, sourceText);
 });

@@ -92,7 +92,7 @@ function completionItemProjections(item, deps, sourceAncestors = new Set()) {
         }
         const next = new Set(sourceAncestors); next.add(item.analysisRunId);
         const original = require('./conference-source-resource-correction')
-            .readPreviousPublicationItem(item);
+            .readPreviousSourceIdentityItem(item);
         return [...result, ...completionItemProjections(original, deps, next)];
     }
     if (!item.readerRevision) return result;

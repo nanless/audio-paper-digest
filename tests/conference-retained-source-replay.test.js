@@ -283,3 +283,20 @@ test('保留来源只接受真实完成父稿到Reader子稿的连续链，父�
     fs.writeFileSync(parentFile, original);
     assert.equal(loader.forItem(revised).sourceRoot, f.plans[0].cacheRoot);
 });
+
+test('来源纠正成员仅投影原身份，来源重放不提前调用Reader出版冷核', t => {
+    const f = mixedFixture(t), original = structuredClone(f.items[0]);
+    const item = { ...structuredClone(original), sourceResourceCorrectionAdoption: { dispatchFixtureOnly: true } };
+    const correction = require('../scripts/lib/conference-source-resource-correction');
+    let projections = 0;
+    // Dispatch-only double: actual source plan/PDF/extraction is still replayed.
+    t.mock.method(correction, 'readPreviousSourceIdentityItem', received => {
+        assert.deepEqual(received, item); projections++; return structuredClone(original);
+    });
+    t.mock.method(correction, 'readPreviousPublicationItem', () => assert.fail('source identity must not require Reader publication'));
+    const replay = replayApi.createRetainedSourceReplay(f.context, f.deps);
+    assert.equal(replay.forItem(item).sourceRoot, f.plans[0].cacheRoot);
+    assert.equal(projections, 1);
+    const wrong = structuredClone(item); wrong.analysisProof.analysisSha256 = 'f'.repeat(64);
+    assert.throws(() => replay.forItem(wrong));
+});

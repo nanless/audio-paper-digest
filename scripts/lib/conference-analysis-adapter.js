@@ -701,8 +701,17 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
         let loaded = loadConferenceAnalysis({ analysisRoot, executionId });
         let readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
         const filename = path.join(loaded.directory, 'reader-revision.json');
+        // A complete source-correction paper signs its entire original output.
+        // Full normal analysis starts from this execution's authenticated fresh
+        // paper rather than copying an old local correction/score declaration.
+        // The immutable revision still binds the complete original parent CAS.
+        const freshNormalPaper = fullAnalysis && require('./conference-source-resource-correction')
+            .isSourceCorrectionRecord(parent.analysis.papers[0]);
+        const seedPaper = freshNormalPaper
+            ? normalizedPaper(contextApi.buildConferenceSourceContext({ planHandle,
+                paperId: parent.run.paperId, sourceRoot })) : clone(parent.analysis.papers[0]);
         const seeded = { ...loaded.analysis, status: 'partial', generation: 1,
-            papers: [clone(parent.analysis.papers[0])], readerRevisionProgress: { attempts: 0, failures: [] } };
+            papers: [seedPaper], readerRevisionProgress: { attempts: 0, failures: [] } };
         if (!fs.existsSync(filename)) {
             if (loaded.analysis.status !== 'pending') throw new Error('会议 Reader revision 缺少原身份凭证');
             let resourcePreflightFileSha256, mode = 'normal-analysis';

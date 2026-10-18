@@ -382,6 +382,38 @@ test('会议 Reader revision 保留原完成包，失败中断后从同一候选
     assert.equal(full.revision.mode, 'normal-analysis');
     assert.equal(adapter.loadConferenceReaderRevision({ analysisRoot, executionId: full.executionId })
         .analysis.papers[0].analysis, 'new normally verified core');
+    const correctedParentId = '38383838-3838-4838-8838-383838383838';
+    adapter.prepareConferenceAnalysis({ ...input, paperId: fixture.paperId, executionId: correctedParentId });
+    const correctedParent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: correctedParentId });
+    // Synthetic old local declaration: its full-output semantics are not a
+    // scientific positive. Normal replacement must use the real fresh input.
+    const correctedPaper = { ...paper, conferenceSourceCorrection: { executionId: correctedParentId },
+        conferenceSourceCorrectionObligation: { status: 'complete' } };
+    adapter.replaceJson(path.join(correctedParent.directory, 'analysis.json'), { ...correctedParent.analysis,
+        status: 'complete', completedAt: '2026-10-16T00:00:00.000Z', papers: [correctedPaper] }, correctedParent.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: correctedParentId }));
+    const correctedBytes = fs.readFileSync(path.join(correctedParent.directory, 'analysis.json'));
+    let freshNormalCalls = 0;
+    const correctedEngine = { ...fullEngine, analyzePaperWithRetry: async (value, options) => {
+        freshNormalCalls++;
+        assert.equal(value.id, fixture.paperId); assert.equal(value.source, 'conference');
+        for (const field of ['conferenceSourceCorrection', 'conferenceSourceCorrectionObligation',
+            'analysisManifest', 'analysis', 'apiReaderArticle', 'paidCost']) assert.equal(value[field], undefined, field);
+        assert.equal(context.getConferenceAnalysisSource(value).text.length > 1000, true);
+        value.analysis = 'new full normal scientific analysis'; value.apiReaderArticle = 'new valid Reader';
+        value.analysisManifest = { stages: { primaryAnalysis: { status: 'complete', model: 'new normal model' } } };
+        options.onCheckpoint(value); return { success: true, result: value };
+    } };
+    const correctedInput = { ...input, parentExecutionId: correctedParentId };
+    const corrected = await adapter.refreshConferenceReader(correctedInput, { engine: correctedEngine, deep: {} });
+    const correctedChild = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: corrected.executionId });
+    assert.equal(corrected.revision.mode, 'normal-analysis');
+    assert.equal(correctedChild.analysis.papers[0].conferenceSourceCorrection, undefined);
+    assert.deepEqual(fs.readFileSync(path.join(correctedParent.directory, 'analysis.json')), correctedBytes);
+    assert.equal(correctedChild.revision.parentAnalysisFileSha256,
+        adapter.loadConferenceAnalysis({ analysisRoot, executionId: correctedParentId }).analysisFileSha256);
+    await adapter.refreshConferenceReader(correctedInput, { engine: correctedEngine, deep: {} });
+    assert.equal(freshNormalCalls, 1, 'completed cold replay must not restart the new scientific analysis');
     const stoppedParentId = '55555555-5555-4555-8555-555555555555';
     adapter.prepareConferenceAnalysis({ ...input, paperId: fixture.paperId, executionId: stoppedParentId });
     const stoppedParent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: stoppedParentId });

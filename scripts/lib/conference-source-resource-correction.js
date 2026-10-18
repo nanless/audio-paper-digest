@@ -1068,6 +1068,83 @@ function assertAdoptedPage(loaded, item) {
     }
     return stage;
 }
+function sourceProjectionCanonical(item) {
+    const adapter = require('./conference-analysis-adapter');
+    const analysisRoot = require('../config').FILES.conferenceAnalysisDir;
+    const current = adapter.loadConferenceAnalysis({ analysisRoot, executionId: item.analysisRunId });
+    if (current.run.status !== 'complete' || current.analysis.status !== 'complete'
+        || current.run.paperId !== item.paperId || current.analysisFileSha256 !== item.analysisProof?.analysisSha256
+        || current.run.completionReceipt?.receiptSha256 !== item.analysisProof?.completionReceiptSha256
+        || current.run.sourceSnapshotSha256 !== item.analysisProof?.sourceSnapshotSha256) fail('来源投影不是实际完整当前稿');
+    let loaded = current;
+    const descendants = [], seen = new Set();
+    for (let depth = 0; depth < 16; depth++) {
+        if (seen.has(loaded.run.executionId)) fail('来源纠正后续维护父链循环');
+        seen.add(loaded.run.executionId);
+        if (isSourceCorrectionRecord(loaded.analysis.papers[0])) return { current, loaded, descendants };
+        const revision = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: loaded.run.executionId });
+        if (revision.analysisFileSha256 !== loaded.analysisFileSha256 || revision.runFileSha256 !== loaded.runFileSha256
+            || revision.parent.sourceFileSha256 !== current.sourceFileSha256
+            || !descendants.length && !isDeepStrictEqual(revision.revision, item.readerRevision)) fail('来源纠正后续维护父稿CAS或来源不符');
+        descendants.push(revision); loaded = revision.parent;
+    }
+    fail('来源纠正后续维护父链超过16层');
+}
+function assertSourceMaintenanceHistory(item, previous, projection) {
+    const adapter = require('./conference-analysis-adapter');
+    const childId = adapter.readerRevisionExecutionId(item.analysisRunId, item.analysisProof.analysisSha256);
+    const childFile = path.join(require('../config').FILES.conferenceAnalysisDir, childId, 'analysis.json');
+    const childExists = require('node:fs').existsSync(childFile);
+    const history = [...projection.descendants];
+    if (childExists) {
+        const analysisRoot = require('../config').FILES.conferenceAnalysisDir;
+        const revisionFile = path.join(analysisRoot, childId, 'reader-revision.json');
+        if (require('node:fs').existsSync(revisionFile)) history.push(adapter.loadConferenceReaderRevision({ analysisRoot, executionId: childId }));
+        else {
+            const prepared = adapter.loadConferenceAnalysis({ analysisRoot, executionId: childId });
+            if (prepared.analysis.status !== 'pending' || prepared.run.status !== 'source_ready'
+                || prepared.sourceFileSha256 !== projection.current.sourceFileSha256) fail('来源维护未签发子包不是同一真实待分析准备态');
+        }
+    }
+    const originalReleases = previous.retryReleases || [], releases = item.retryReleases || [];
+    const noDispatchedChild = history.every(child => child.analysis.status === 'partial' && child.run.status === 'source_ready'
+        && child.analysis.readerRevisionProgress?.attempts === 0
+        && child.analysis.readerRevisionProgress?.failures?.length === 0);
+    if (noDispatchedChild && item.attempts === previous.attempts && item.retryBudgetStart === previous.retryBudgetStart
+        && isDeepStrictEqual(releases, originalReleases)) return;
+    if (!Number.isSafeInteger(item.attempts) || item.attempts < previous.attempts
+        || releases.length < originalReleases.length
+        || !isDeepStrictEqual(releases.slice(0, originalReleases.length), originalReleases)) fail('来源维护删改原次数或重试历史');
+    let attempts = 0;
+    for (const child of history) {
+        const progress = child.analysis.readerRevisionProgress;
+        if (!progress || !Number.isSafeInteger(progress.attempts) || progress.attempts < 0
+            || progress.attempts === 0 && (child.analysis.status !== 'partial' || child.run.status !== 'source_ready')
+            || progress.attempts > child.revision.maxAttempts || !Array.isArray(progress.failures)
+            || progress.failures.length > progress.attempts
+            || progress.failures.length < progress.attempts - (child.analysis.status === 'complete' || item.status === 'analyzing' ? 1 : 0)
+            || progress.failures.some(failure => typeof failure?.message !== 'string' || !Number.isFinite(Date.parse(failure.at)))) {
+            fail('来源维护没有真实子运行轮次与完整失败记录');
+        }
+        attempts += progress.attempts;
+    }
+    const delta = item.attempts - previous.attempts;
+    const activeRelease = releases.at(-1);
+    if (delta !== attempts && !(item.status === 'analyzing' && delta === attempts + 1
+        && item.retryAuthorizedAtAttempt === activeRelease?.attempts
+        && item.retryBudgetStart === activeRelease.attempts
+        && item.attempts - activeRelease.attempts <= require('./conference-process-recovery').MAX_ATTEMPTS)) {
+        fail('来源维护增加次数未由实际子运行闭合');
+    }
+    let last = previous.attempts;
+    for (const release of releases.slice(originalReleases.length)) {
+        if (!Number.isSafeInteger(release.attempts) || release.attempts < last || release.attempts > item.attempts
+            || !Number.isFinite(Date.parse(release.at)) || typeof release.previousFailure?.message !== 'string'
+            || release.previousFailure.systemic === true || release.recoveryGrantId) fail('来源维护新增调度记录不属于正常原子维护');
+        last = release.attempts;
+    }
+    if (item.retryBudgetStart !== last) fail('来源维护调度预算不属于最后真实释放记录');
+}
 function readRegisteredTransaction(paper, projectionToken = null) {
     const locator = paper.conferenceSourceCorrection;
     if (![CONTRACT, CORE_CONTRACT].includes(locator?.contract) || !UUID.test(locator.processId || '')
@@ -1117,14 +1194,21 @@ function readRegisteredTransaction(paper, projectionToken = null) {
     if (actualState.sha256 !== batch.state.sha256) {
         require('./conference-process').assertState(actualState.value);
         const item = actualState.value.items[paper.id], adoption = item?.sourceResourceCorrectionAdoption;
-        if (item?.status !== 'complete' || item.analysisRunId !== locator.executionId
-            || item.analysisProof?.analysisSha256 !== loaded.analysisFileSha256
-            || item.analysisProof?.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256
-            || item.analysisProof?.completionReceiptSha256 !== loaded.run.completionReceipt?.receiptSha256
+        const sourceProjection = projectionToken === PROJECTION_ONLY && item
+            ? sourceProjectionCanonical(item) : null;
+        const sourceMaintenance = sourceProjection && item.readerRefreshRequired === true
+            && ['analysis_partial', 'analyzing'].includes(item.status);
+        const observed = sourceProjection?.current || loaded;
+        if ((!sourceMaintenance && item?.status !== 'complete')
+            || (sourceProjection?.loaded || loaded).run.executionId !== locator.executionId
+            || item.analysisRunId !== observed.run.executionId
+            || item.analysisProof?.analysisSha256 !== observed.analysisFileSha256
+            || item.analysisProof?.sourceSnapshotSha256 !== observed.run.sourceSnapshotSha256
+            || item.analysisProof?.completionReceiptSha256 !== observed.run.completionReceipt?.receiptSha256
             || adoption?.manifestSha256 !== batch.manifest.sha256
             || adoption.previousStateSha256 !== batch.state.value.stateSha256
             || !SHA.test(item.pageProof?.manifestSha256 || '') || !SHA.test(item.pageProof?.contentSha256 || '')) fail('当前进程未正常采纳本地纠正子稿');
-        assertAdoptedPage(loaded, item);
+        assertAdoptedPage(observed, item);
     }
     if (projectionToken === PROJECTION_ONLY) return { batch, row, loaded, receipt: body };
     const context = require('./conference-analysis-context').getConferenceAnalysisContext();
@@ -1184,20 +1268,17 @@ function exportPublicationVerification(presented, canonical) {
         presentedPaperSha256: stable(presented), scoringStageSha256: stable(canonical.analysisManifest.stages.scoringAudit),
         sourceSha256: canonical.sourceSha256, receiptSha256: stable(active.receipt), newApiRequests: 0 };
 }
-// This API is consumed only by retained-source completion projections. It
-// never accepts adoption.previousItem JSON or issues an analysis/source scope.
-function readPreviousPublicationItem(item) {
+// Read physical identity only. No caller JSON can replace the registered
+// transaction, actual canonical, preserved original tree or adopted page.
+function readPreviousItemProjection(item) {
     if (!item?.sourceResourceCorrectionAdoption) return null;
     const files = require('../config').FILES;
-    const loaded = require('./conference-analysis-adapter').loadConferenceAnalysis({
-        analysisRoot: files.conferenceAnalysisDir, executionId: item.analysisRunId });
+    const projection = sourceProjectionCanonical(item), loaded = projection.loaded;
     const paper = loaded.analysis.papers[0];
     if (loaded.run.status !== 'complete' || loaded.analysis.status !== 'complete'
-        || item.paperId !== paper.id || item.analysisProof?.analysisSha256 !== loaded.analysisFileSha256
-        || item.analysisProof?.completionReceiptSha256 !== loaded.run.completionReceipt?.receiptSha256
-        || item.analysisProof?.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) fail('出版回投不是实际完整本地child');
+        || item.paperId !== paper.id) fail('出版回投不是实际完整本地child');
     const record = readRegisteredTransaction(paper, PROJECTION_ONLY);
-    assertAdoptedPage(loaded, item);
+    assertAdoptedPage(projection.current, item);
     const actual = read(path.join(record.batch.processDirectory, 'state.json'));
     require('./conference-process').assertState(actual.value);
     equal(actual.value.items[item.paperId], item, '出版回投不是当前实际process成员');
@@ -1206,9 +1287,26 @@ function readPreviousPublicationItem(item) {
         || a.manifestFile !== record.batch.manifest.file || a.manifestSha256 !== record.batch.manifest.sha256
         || a.selectedMainExecutionId !== record.row.record.selectedMainExecutionId
         || a.readerParentExecutionId !== record.row.record.readerParentExecutionId
-        || item.attempts !== previous.attempts || item.retryBudgetStart !== previous.retryBudgetStart
-        || !isDeepStrictEqual(item.retryReleases, previous.retryReleases)
         || !isDeepStrictEqual(item.sourceProof, previous.sourceProof)) fail('出版原成员/次数/来源没有精确保留');
+    assertSourceMaintenanceHistory(item, previous, projection);
+    return { record, paper, previous };
+}
+function readPreviousSourceIdentityItem(item) {
+    const projection = readPreviousItemProjection(item);
+    if (!projection) return null;
+    // Source reconstruction must neither require nor grant current Reader
+    // publication qualification. The normal stage/publication gate still does.
+    const after = read(path.join(projection.record.batch.processDirectory, 'state.json'));
+    equal(after.value.items[item.paperId], item, '来源回投期间当前成员改变');
+    return clone(projection.previous);
+}
+function readPreviousPublicationItem(item) {
+    const projection = readPreviousItemProjection(item);
+    if (!projection) return null;
+    if (item.status !== 'complete') fail('完整出版回投只接受完成成员');
+    const { record, paper, previous } = projection;
+    if (item.analysisRunId !== paper.conferenceSourceCorrection?.executionId) fail('完整出版回投不能借用祖先纠正声明');
+    const actual = read(path.join(record.batch.processDirectory, 'state.json'));
     const key = `${actual.value.processId}:${item.paperId}:${item.analysisRunId}`;
     const stack = publicationProjection.getStore() || [];
     if (stack.includes(key)) {
@@ -1233,7 +1331,7 @@ function readPreviousPublicationItem(item) {
 module.exports = { CONTRACT, SCORE_KIND, BATCH, RECEIPT, CORE_CONTRACT, CORE_SCORE_KIND, CORE_BATCH, CORE_RECEIPT, openBatch, prepareChild,
     withLocalSourceCorrection, prepareFinalizerInput, assertFinalizerInput, scoringStage,
     seal, sealCorrection: seal, withCorrection, currentVerifiedCorrection, readVerifiedSignedFigures, batchDescription,
-    withSavedPaper, assertVerified, clearVerifiedReaderFailure, readPreviousPublicationItem,
+    withSavedPaper, assertVerified, clearVerifiedReaderFailure, readPreviousPublicationItem, readPreviousSourceIdentityItem,
     isSourceCorrectionRecord, localStabilityIsResolved, assertVerifiedScoringStage,
     withSavedPublicationPaper, exportPublicationVerification, readVerifiedPublicationPdfSource, assertVerifiedCoreStage,
     assertMayAccessNetwork, deriveLocalAudit };

@@ -571,3 +571,144 @@ test('来源纠正六Reader合同外的原科学合同与非Reader阶段仍逐�
     after.analysisManifest.stages.primaryAnalysis.fingerprint = 'changed';
     assert.notDeepEqual(structuredClone(h.protectedPaper(after)), structuredClone(h.protectedPaper(before)));
 });
+
+// Projection orchestration only: the opaque transaction and adopted-page
+// readers are explicit doubles here; their real admission is tested above.
+// Current canonical/state/proof/history checks below execute production code.
+function previousProjectionHarness() {
+    const source = fs.readFileSync(require.resolve('../scripts/lib/conference-source-resource-correction'), 'utf8');
+    const id = 'conference:icassp:2026:icassp-arnumber:100';
+    const previous = { paperId: id, analysisRunId: 'original', attempts: 3,
+        retryBudgetStart: 1, retryReleases: [{ attempts: 1 }], sourceProof: { textSha256: 'source' } };
+    const record = { batch: { processDirectory: '/synthetic-process', manifest: { file: '/manifest', sha256: 'manifest' },
+        state: { value: { stateSha256: 'old-state', items: { [id]: previous } } } },
+        row: { record: { selectedMainExecutionId: 'main', readerParentExecutionId: 'reader' } } };
+    const paper = { id, conferenceSourceCorrection: { executionId: 'current' } }, loaded = { analysisFileSha256: 'analysis',
+        analysis: { status: 'complete', papers: [paper] }, run: { status: 'complete',
+            executionId: 'current', paperId: id, sourceSnapshotSha256: 'snapshot', completionReceipt: { receiptSha256: 'completion' } } };
+    const item = { ...structuredClone(previous), status: 'complete', analysisRunId: 'current',
+        analysisProof: { analysisSha256: 'analysis', sourceSnapshotSha256: 'snapshot', completionReceiptSha256: 'completion' },
+        sourceResourceCorrectionAdoption: { previousItemSha256: hash(previous), previousStateSha256: 'old-state',
+            manifestFile: '/manifest', manifestSha256: 'manifest', selectedMainExecutionId: 'main', readerParentExecutionId: 'reader' } };
+    const actual = { processId: 'process', items: { [id]: structuredClone(item) } };
+    const controls = { registered: true, page: true, publicationCalls: 0, childExists: false };
+    const equal = (a, b, message) => assert.deepStrictEqual(structuredClone(a), structuredClone(b), message);
+    const environment = { path, stable: hash, clone: structuredClone,
+        isDeepStrictEqual: require('node:util').isDeepStrictEqual, PROJECTION_ONLY: {},
+        isSourceCorrectionRecord: value => !!value.conferenceSourceCorrection,
+        publicationProjection: new (require('node:async_hooks').AsyncLocalStorage)(),
+        fail: message => { throw Error(message); }, equal,
+        read: () => ({ value: structuredClone(actual) }),
+        readRegisteredTransaction: () => { assert.equal(controls.registered, true, 'missing actual registered transaction'); return record; },
+        assertAdoptedPage: () => assert.equal(controls.page, true, 'adopted page physical CAS mismatch'),
+        withSavedPaper: () => { controls.publicationCalls++; throw Object.assign(Error('actual Reader placeholder rejected'), { code: 'reader_placeholder_result_table' }); },
+        require: name => {
+            if (name === '../config') return { FILES: { conferenceAnalysisDir: '/synthetic-analysis' } };
+            if (name === './conference-analysis-adapter') return { loadConferenceAnalysis: () => loaded,
+                readerRevisionExecutionId: () => 'next-child', loadConferenceReaderRevision: () => controls.child };
+            if (name === 'node:fs') return { existsSync: filename => controls.childExists
+                && (filename.endsWith('analysis.json') || controls.childRevision !== false) };
+            if (name === './conference-process-recovery') return { MAX_ATTEMPTS: 3 };
+            if (name === './conference-process') return { assertState: () => {} };
+            if (name === './analysis-stop-control') return stop;
+            throw Error(`Unexpected projection dependency ${name}`);
+        } };
+    const methods = require('node:vm').runInNewContext(source.slice(source.indexOf('function sourceProjectionCanonical('),
+        source.indexOf('function readRegisteredTransaction(')) + source.slice(source.indexOf('function readPreviousItemProjection('),
+        source.indexOf('module.exports = ')) + '\n({readPreviousSourceIdentityItem, readPreviousPublicationItem, assertSourceMaintenanceHistory})', environment);
+    return { ...methods, item, previous, actual, loaded, controls };
+}
+
+test('仅来源回投不授Reader出版资格；完整出版仍真实进入旧Reader门禁（合成调度）', () => {
+    const f = previousProjectionHarness();
+    const previous = f.readPreviousSourceIdentityItem(f.item);
+    assert.deepEqual(previous, f.previous); assert.notEqual(previous, f.previous);
+    assert.equal(f.controls.publicationCalls, 0);
+    assert.throws(() => f.readPreviousPublicationItem(f.item), { code: 'reader_placeholder_result_table' });
+    assert.equal(f.controls.publicationCalls, 1);
+    f.controls.registered = false;
+    assert.throws(() => f.readPreviousSourceIdentityItem(f.item), /missing actual registered transaction/);
+});
+
+test('仅来源维护按真实子稿失败记录接受第二三轮在途，拒超预算、裸数字与counter回退（合成调度）', () => {
+    const f = previousProjectionHarness(), item = f.item;
+    item.status = 'analyzing'; item.readerRefreshRequired = true;
+    item.retryBudgetStart = item.retryAuthorizedAtAttempt = f.previous.attempts;
+    item.retryReleases.push({ at: '2026-10-18T00:00:00.000Z', attempts: f.previous.attempts,
+        previousFailure: { message: 'actual parent page failure', systemic: false } });
+    f.controls.childExists = true;
+    const child = f.controls.child = { analysis: { status: 'partial',
+        readerRevisionProgress: { attempts: 1, failures: [{ message: 'real saved child failure', at: '2026-10-18T00:01:00.000Z' }] } },
+        run: { status: 'source_ready' }, revision: { maxAttempts: 3 } };
+    const projection = { descendants: [] };
+    item.attempts = f.previous.attempts + 2;
+    f.assertSourceMaintenanceHistory(item, f.previous, projection);
+    child.analysis.readerRevisionProgress.attempts++;
+    child.analysis.readerRevisionProgress.failures.push({ message: 'second saved failure', at: '2026-10-18T00:02:00.000Z' });
+    item.attempts++;
+    f.assertSourceMaintenanceHistory(item, f.previous, projection);
+    item.attempts++;
+    assert.throws(() => f.assertSourceMaintenanceHistory(item, f.previous, projection), /实际子运行闭合/);
+    item.attempts = f.previous.attempts;
+    item.retryReleases = structuredClone(f.previous.retryReleases);
+    item.retryBudgetStart = f.previous.retryBudgetStart;
+    assert.throws(() => f.assertSourceMaintenanceHistory(item, f.previous, projection), /实际子运行闭合/);
+    f.controls.childExists = false;
+    assert.throws(() => f.assertSourceMaintenanceHistory(item, f.previous, { descendants: [child] }), /实际子运行闭合/);
+});
+
+test('仅来源身份沿真实新Reader父CAS回纠正祖先，不把旧adoption当新稿声明（合成调度）', () => {
+    const f = previousProjectionHarness(), ancestor = structuredClone(f.loaded);
+    ancestor.sourceFileSha256 = 'same-source';
+    f.loaded.run.executionId = 'normal-child'; f.loaded.runFileSha256 = 'new-run';
+    f.loaded.sourceFileSha256 = 'same-source';
+    f.loaded.analysis.papers[0] = { id: f.item.paperId };
+    f.loaded.analysis.readerRevisionProgress = { attempts: 1, failures: [] };
+    const revision = { parentExecutionId: 'current', maxAttempts: 3 };
+    f.controls.child = { ...f.loaded, parent: ancestor, revision };
+    f.item.analysisRunId = 'normal-child'; f.item.readerRevision = revision;
+    f.item.attempts = f.previous.attempts + 1;
+    f.item.retryBudgetStart = f.previous.attempts;
+    f.item.retryReleases.push({ at: '2026-10-18T00:00:00.000Z', attempts: f.previous.attempts,
+        previousFailure: { message: 'real parent page failure', systemic: false } });
+    f.actual.items[f.item.paperId] = structuredClone(f.item);
+    assert.deepEqual(f.readPreviousSourceIdentityItem(f.item), f.previous);
+    assert.equal(f.controls.publicationCalls, 0);
+    assert.throws(() => f.readPreviousPublicationItem(f.item), /不能借用祖先纠正声明/);
+    ancestor.sourceFileSha256 = 'different source';
+    assert.throws(() => f.readPreviousSourceIdentityItem(f.item), /父稿CAS或来源不符/);
+});
+
+test('同一来源准备中断的pending或零轮seed只作未派发准备，不冒充已付轮次（合成调度）', () => {
+    const f = previousProjectionHarness(); f.controls.childExists = true; f.controls.childRevision = false;
+    f.loaded.analysis.status = 'pending'; f.loaded.run.status = 'source_ready'; f.loaded.sourceFileSha256 = 'source';
+    const projection = { current: { sourceFileSha256: 'source' }, descendants: [] };
+    f.assertSourceMaintenanceHistory(f.item, f.previous, projection);
+    f.loaded.sourceFileSha256 = 'wrong';
+    assert.throws(() => f.assertSourceMaintenanceHistory(f.item, f.previous, projection), /同一真实待分析准备态/);
+    f.controls.childRevision = true;
+    f.controls.child = { analysis: { status: 'partial', readerRevisionProgress: { attempts: 0, failures: [] } },
+        run: { status: 'source_ready' }, revision: { maxAttempts: 3 } };
+    f.assertSourceMaintenanceHistory(f.item, f.previous, projection);
+    f.controls.child.analysis.readerRevisionProgress.attempts = 1;
+    assert.throws(() => f.assertSourceMaintenanceHistory(f.item, f.previous, projection));
+});
+
+test('仅来源回投仍拒canonical凭证、原次数、来源、adoption、当前成员及页CAS漂移（合成调度）', () => {
+    for (const alter of [
+        f => { f.loaded.analysis.status = 'partial'; },
+        f => { f.item.analysisProof.analysisSha256 = 'changed'; },
+        f => { f.item.analysisProof.completionReceiptSha256 = 'changed'; },
+        f => { f.item.analysisProof.sourceSnapshotSha256 = 'changed'; },
+        f => { f.item.sourceProof.textSha256 = 'changed'; },
+        f => { f.item.attempts = 0; },
+        f => { f.item.retryReleases = []; },
+        f => { f.item.sourceResourceCorrectionAdoption.selectedMainExecutionId = 'wrong'; },
+        f => { f.actual.items[f.item.paperId].unrelatedEvidence = 'changed'; },
+        f => { f.controls.page = false; }
+    ]) {
+        const f = previousProjectionHarness(); alter(f);
+        assert.throws(() => f.readPreviousSourceIdentityItem(f.item));
+        assert.equal(f.controls.publicationCalls, 0);
+    }
+});
