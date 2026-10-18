@@ -8,6 +8,7 @@ const { sha, stable } = evidence;
 const opaque = new WeakMap();
 const windowHandles = new WeakMap();
 const publicationHistoryHandles = new WeakMap();
+const parentReaderSeedHandles = new WeakMap();
 const evidenceCache = new Map();
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
@@ -616,7 +617,39 @@ function replayRevisionFeedback(loaded) {
     const seed=read(path.join(loaded.directory,'review-reader-seed.json'));
     check(seed.sha256===loaded.revision.readerReviewSeedFileSha256
         &&same(seed.value,verifiedParentSeed(loaded.parent,member.reviewFeedback.trim())),'original-scope signed parent Reader seed changed');
-    return {locator:loc,modelFeedback:member.reviewFeedback.trim(),member,revisionSeed:seed.value};
+    const parentSeedHandle=Object.freeze({});
+    parentReaderSeedHandles.set(parentSeedHandle,{parent:structuredClone(loaded.parent),
+        executionId:loaded.run.executionId,executionDir:loaded.directory,
+        revisionFileSha256:read(path.join(loaded.directory,'reader-revision.json')).sha256,
+        sourceFileSha256:loaded.sourceFileSha256,
+        seedPath:path.join(loaded.directory,'review-reader-seed.json'),seedFileSha256:seed.sha256,
+        sourceTextSha256:sha(loaded.source.sourceDetails.text),feedback:member.reviewFeedback.trim(),
+        seed:structuredClone(seed.value)});
+    return {locator:loc,modelFeedback:member.reviewFeedback.trim(),member,revisionSeed:seed.value,parentSeedHandle};
+}
+function readVerifiedParentReaderSeed(handle,{paper,sourceText,reviewFeedback,revisionSeed}={}) {
+    const bound=parentReaderSeedHandles.get(handle);check(bound,'opaque original parent Reader seed required');
+    const active=require('./conference-analysis-context').getConferenceAnalysisContext();
+    check(active?.executionId===bound.executionId&&active.executionDir===bound.executionDir
+        &&active.paperId===paper?.id&&sha(active.sourceDetails?.text||'')===bound.sourceTextSha256
+        &&read(path.join(bound.executionDir,'reader-revision.json')).sha256===bound.revisionFileSha256
+        &&read(path.join(bound.executionDir,'source.json')).sha256===bound.sourceFileSha256,
+        'original parent Reader seed left its actual child/source/revision scope');
+    const original=adapter().loadConferenceAnalysis({analysisRoot:path.dirname(bound.parent.directory),
+        executionId:bound.parent.run.executionId});
+    check(original.analysisFileSha256===bound.parent.analysisFileSha256
+        &&original.runFileSha256===bound.parent.runFileSha256
+        &&original.sourceFileSha256===bound.parent.sourceFileSha256,'original parent Reader seed CAS changed');
+    const parent=original.analysis.papers[0],saved=read(bound.seedPath);
+    check(saved.sha256===bound.seedFileSha256&&same(saved.value,bound.seed)
+        &&same(revisionSeed,bound.seed)&&String(reviewFeedback||'').trim()===bound.feedback
+        &&sha(String(sourceText||''))===bound.sourceTextSha256
+        &&paper?.id===parent.id&&paper.sourceSha256===parent.sourceSha256
+        &&same(protectedScience(paper),protectedScience(parent))
+        &&['apiReaderArticle','apiReaderArticleSha256','apiReaderPlan','apiReaderPlanSha256','apiReaderFigures']
+            .every(key=>same(paper[key],parent[key])),'original parent Reader seed input or protected surface changed');
+    check(same(bound.seed,verifiedParentSeed(original,bound.feedback)),'original parent Reader seed no longer qualifies');
+    return structuredClone(bound.seed);
 }
 function assertReaderOutput(loaded,paper,parent) {
     const bound=loaded.readerReview||replayRevisionFeedback(loaded),stage=paper.analysisManifest?.stages?.apiReaderArticle;
@@ -826,4 +859,4 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
 }
 module.exports={bindCompletedParent,replayRevisionFeedback,assertReaderOutput,
     runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,
-    resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory};
+    resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed};

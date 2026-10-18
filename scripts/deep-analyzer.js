@@ -8224,7 +8224,11 @@ function buildApiReaderGenerationStart(paper, options = {}) {
         throw new Error('精简输入只接受已核验原文章的普通定向修订，不能改变资源局部模式');
     }
     if (options.signedRevisionMinimalDisplay === true) {
-        const currentSeed = prepareApiReaderRevisionSeed(paper, options.sourceText, externalReviewFeedback);
+        const currentSeed = options.readerReviewParentSeedHandle
+            ? require('./lib/conference-reader-review-maintenance').readVerifiedParentReaderSeed(
+                options.readerReviewParentSeedHandle, { paper, sourceText: options.sourceText,
+                    reviewFeedback: externalReviewFeedback, revisionSeed: seed })
+            : prepareApiReaderRevisionSeed(paper, options.sourceText, externalReviewFeedback);
         if (seed.initialDraft !== currentSeed?.initialDraft
             || stableFingerprint(seed.metadata) !== stableFingerprint(currentSeed?.metadata)) {
             throw new Error('精简输入必须由当前已核验原文章重新派生，不能传入替换的参考正文');
@@ -9566,6 +9570,14 @@ function normalizeApiReaderFigureMarkdown(article, figures = []) {
     return normalized;
 }
 
+function selectReaderReviewCandidateDisplay(originals, choices) {
+    const allowed = require('./lib/reader-recovery-revision').ALLOWED_FIELDS;
+    const logical = identity => Object.fromEntries(Object.entries(identity).filter(([key]) => !allowed.includes(key)));
+    const matches = choices.filter(choice => originals.some(record => require('node:util').isDeepStrictEqual(
+        logical(record.envelope.identity),logical(choice.identity))));
+    if (matches.length !== 1) throw new Error('维护Reader原已付候选未与唯一真实父seed显示身份闭合，禁止新建输入或重置次数');
+    return matches[0].minimal;
+}
 async function refreshApiReaderArticleFromSource(paper, sourceDetails, options = {}) {
     if (!paper || typeof paper !== 'object') throw new Error('刷新读者文章需要 canonical paper');
     const analysis = String(paper.analysis || '');
@@ -9671,6 +9683,28 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         if (revisionSeed) throw new Error('原失败资源束不能混签已有Reader；须沿真实source-only失败候选恢复。');
         requireExistingSourceCandidate = true;
     }
+    if (options.readerReviewParentSeedHandle && revisionSeed
+        && options.signedRevisionMinimalDisplay === undefined) {
+        const repair = require('./lib/reader-repair');
+        const directory = conference.conferenceReaderAttemptsDirectory();
+        let names = [];
+        try { names = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (names.length) {
+            const originals = names.map(name => repair.readFailedCandidateEnvelope(directory, null, path.join(directory,name)));
+            if (originals.some(record => !record)) throw new Error('维护Reader原候选在显示身份核对期间消失');
+            const choices = [];
+            for (const minimal of [true,false]) {
+                const prepared = await generateApiReaderArticleDetailed(paper, analysis, evidenceContext, {
+                    reviewFeedback,initialDraft:revisionSeed.initialDraft,revisionSeed,sourceText,
+                    structuredArtifacts:sourceDetails.structuredArtifacts,readerResources,naturalResourceProse,
+                    signedRevisionMinimalDisplay:minimal,readerReviewParentSeedHandle:options.readerReviewParentSeedHandle,
+                    readerIdentityOnly:true });
+                choices.push({minimal,identity:prepared.identity});
+            }
+            options = { ...options,signedRevisionMinimalDisplay:selectReaderReviewCandidateDisplay(originals,choices) };
+        }
+    }
     // 正常定向刷新只展示已核稿的正文与来源记录，避免再次发送完整DOM归档。
     if (revisionSeed && options.signedRevisionMinimalDisplay === undefined
         && options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
@@ -9701,6 +9735,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             resourceLocalRevision: options.resourceLocalRevision === true,
             readerFactLocalRevision: options.readerFactLocalRevision === true,
             signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true,
+            ...(options.readerReviewParentSeedHandle ? { readerReviewParentSeedHandle: options.readerReviewParentSeedHandle } : {}),
             ...(options.paidReaderResponseReplay !== undefined
                 ? { paidReaderResponseReplay: options.paidReaderResponseReplay } : {}),
             readerResources,
@@ -10246,7 +10281,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     if (paper.analysis && manifest.stages.scoringAudit?.status === 'complete'
         && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.readerOnly) {
         require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(paper, sourceDetails,
-            { preserveUpstream: options.preserveReaderUpstream === true });
+            { preserveUpstream: options.preserveReaderUpstream === true
+                || options.preserveScientificUpstream === true });
     }
     return paper;
 }

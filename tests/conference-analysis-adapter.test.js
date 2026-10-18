@@ -341,6 +341,8 @@ test('会议 Reader revision 保留原完成包，失败中断后从同一候选
     }, refreshApiReaderArticleFromSource: async (value, source, options) => {
         calls += 1; assert.equal(options.resumeSavedSourceReader, true);
         assert.equal(options.signedRevisionMinimalDisplay, undefined);
+        assert.equal(options.preserveScientificUpstream, undefined);
+        assert.equal(options.preserveReaderUpstream, undefined);
         assert.equal(context.getConferenceAnalysisSource(value).text, source.text);
         assert.equal(value.paidCost, 42); assert.equal(value.analysis, 'paid original core');
         if (calls === 1) { value.apiReaderFailedBundleHistory = [{ draft: 'paid failed draft', cost: 9 }];
@@ -997,7 +999,11 @@ test('已核维护父 seed 与新预检资源走正常非精简修订，不把�
     const operations = { buildApiReaderResourceIdentity: async (_analysis, text) => emptyReaderResourceIdentity(text),
         refreshApiReaderArticleFromSource: async (value, _source, options) => {
             readers++; assert.equal(options.resumeSavedSourceReader, true);
-            assert.equal(options.signedRevisionMinimalDisplay, false);
+            assert.equal(options.signedRevisionMinimalDisplay, undefined);
+            assert.equal(options.readerReviewParentSeedHandle, bound.parentSeedHandle);
+            assert.equal(options.preserveScientificUpstream, true);
+            assert.equal(options.preserveReaderUpstream, undefined);
+            assert.doesNotThrow(() => require("../scripts/lib/analysis-stop-control").assertMayStartRequest());
             assert.deepEqual(options.revisionSeed, seed); assert.equal(options.reviewFeedback, bound.modelFeedback);
             assert.notEqual(value.apiReaderResources.identitySha256, value.analysisManifest.stages.apiReaderArticle.resourceIdentitySha256);
             assert.equal(value.analysis, paper.analysis); value.apiReaderArticle = 'actual new synthetic Reader'; return value;

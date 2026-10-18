@@ -116,6 +116,8 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 登记以 `registration.json` 和 `registered-state.json` 绑定 state 的 `readerReviewMaintenanceObligations`；只追加义务，不把原 complete 论文伪装失败。`progress.json` 持久保存真实 child、尝试、轮次意图和逐篇成功，成功稿先保存再处理兄弟失败。原签稿 seed 由真实父来源上下文重建为 child 的 `review-reader-seed.json`，revision 固定绑定 manifest/member/反馈 SHA；继承 Reader 或同反馈 SHA 的别篇稿不能清义务。
 
+精简修订输入另使用进程内 `parentSeedHandle`，不写入 JSON。该私有能力绑定实际子运行目录、修订和来源文件 SHA、原父三份文件 CAS、反馈和 seed；每次读取都复核这些身份及原受保护表面。已存在候选时须按完整逻辑身份唯一匹配原精简或完整显示，只有原恢复协议允许的实现字段可迁移，原请求和失败计数保留；无匹配不得新建输入绕账。Reader 定稿中的资源可达性同步仍检查同源证据与评分事实，但此维护分支保留原上游字节，不改变普通日更、历史或会议恢复的默认行为。
+
 下一窗使用 `conference-reader-review-maintenance-window-v1`，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。
 
 全部新稿正常完整资格及 stage 通过后，`adoption.json` 与 `adoption-after-state.json` 不可变绑定原 baseline、实际登记前后状态和全 child/page CAS，锁内原子采纳后正常重做汇总。pending 发布门同时核 state 定位器和私有实物，缺目录/旧成功/旧 passed 缓存都不能清义务。操作命令见[正常 Reader 维护](conference-workflow.md#博客拒稿后的正常-reader-维护)。
