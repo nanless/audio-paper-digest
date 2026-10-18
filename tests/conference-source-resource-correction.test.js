@@ -583,7 +583,7 @@ function previousProjectionHarness() {
     const record = { batch: { processDirectory: '/synthetic-process', manifest: { file: '/manifest', sha256: 'manifest' },
         state: { value: { stateSha256: 'old-state', items: { [id]: previous } } } },
         row: { record: { selectedMainExecutionId: 'main', readerParentExecutionId: 'reader' } } };
-    const paper = { id, conferenceSourceCorrection: { executionId: 'current' } }, loaded = { analysisFileSha256: 'analysis',
+    const paper = { id, conferenceSourceCorrection: { executionId: 'current' } }, loaded = { directory:'/synthetic-analysis/current', analysisFileSha256: 'analysis',
         analysis: { status: 'complete', papers: [paper] }, run: { status: 'complete',
             executionId: 'current', paperId: id, sourceSnapshotSha256: 'snapshot', completionReceipt: { receiptSha256: 'completion' } } };
     const item = { ...structuredClone(previous), status: 'complete', analysisRunId: 'current',
@@ -597,7 +597,7 @@ function previousProjectionHarness() {
     const environment = { path, stable: hash, clone: structuredClone,
         isDeepStrictEqual: require('node:util').isDeepStrictEqual, PROJECTION_ONLY: {},
         isSourceCorrectionRecord: value => !!value.conferenceSourceCorrection,
-        publicationProjection: new (require('node:async_hooks').AsyncLocalStorage)(),
+        publicationProjection: new (require('node:async_hooks').AsyncLocalStorage)(),sourceLineageRecords:new WeakMap(),
         fail: message => { throw Error(message); }, equal,
         read: () => ({ value: structuredClone(actual) }),
         readRegisteredTransaction: () => { assert.equal(controls.registered, true, 'missing actual registered transaction'); return record; },
@@ -606,7 +606,7 @@ function previousProjectionHarness() {
         require: name => {
             if (name === '../config') return { FILES: { conferenceAnalysisDir: '/synthetic-analysis' } };
             if (name === './conference-analysis-adapter') return { loadConferenceAnalysis: () => loaded,
-                readerRevisionExecutionId: () => 'next-child', loadConferenceReaderRevision: () => controls.child };
+                readerRevisionExecutionId: () => 'next-child',readJsonRecord:()=>({value:controls.child?.revision||{}}), loadConferenceReaderRevision: () => controls.child };
             if (name === 'node:fs') return { existsSync: filename => controls.childExists
                 && (filename.endsWith('analysis.json') || controls.childRevision !== false) };
             if (name === './conference-process-recovery') return { MAX_ATTEMPTS: 3 };
@@ -784,7 +784,7 @@ function publicationBridgeHarness() {
         analysisManifest:{stages:{scoringAudit:{executionKind:'deterministic_source_core_audit'},apiReaderArticle:{article:'parent'}}}};
     const child=structuredClone(parent);child.analysisManifest.stages.apiReaderArticle={article:'new Reader'};
     const mk=(id,paper)=>({analysis:{status:'complete',papers:[paper]},run:{status:'complete',executionId:id,paperId:'paper'},
-        analysisFileSha256:id,runFileSha256:id+'run',sourceFileSha256:'same-source',directory:'/analysis/'+id,source:{sourceDetails:{text:'source'}}});
+        analysisFileSha256:id,runFileSha256:id+'run',sourceFileSha256:'same-source',directory:'/analysis/'+id,source:{sourceDetails:{text:'source'}},readerReview:{scientificReplayHandle:Object.freeze({})}});
     const original=mk(parentId,parent),loaded=mk(childId,child);loaded.parent=original;
     const active={cold:true,receipt:{provenance:{sourceIdentity:{executionId:parentId}},real:'original receipt'},
         batch:{policy:{kind:'source_core_correction',contract:parent.conferenceSourceCorrection.contract}},row:{record:{childExecutionId:parentId}}};
@@ -792,7 +792,7 @@ function publicationBridgeHarness() {
     const presented=()=>({...structuredClone(child),paper_id:child.id});
     const env={clone:structuredClone,sha,stable:hash,isDeepStrictEqual:require('node:util').isDeepStrictEqual,
         inheritedReaderScience,CONTRACT:'conference-source-resource-correction-v1',CORE_CONTRACT:'conference-source-core-correction-v1',UUID:/^[a-f0-9-]{36}$/,
-        fail:message=>{throw Error(message);},current:()=>active,isSourceCorrectionRecord:paper=>!!paper.conferenceSourceCorrection,
+        fail:message=>{throw Error(message);},withVerifiedMaintenanceScientificParent:(handle,callback)=>callback(),current:()=>active,isSourceCorrectionRecord:paper=>!!paper.conferenceSourceCorrection,
         independentReaderMaintenanceChild:()=>controls.registered,
         assertOutput:paper=>assert.equal(paper,parent,'old receipt cannot authenticate the new child'),
         withSavedPaper:(paper,callback)=>paper===child?inheritedReaderScience.run({paper,parent,assertUnchanged:()=>assert.equal(controls.pins,true)},callback):callback(),
@@ -845,4 +845,13 @@ test('出版回调不能共同改写canonical与呈现Reader后以相等洗过�
         canonical.analysisManifest.stages.apiReaderArticle.article='tampered';
         presented.analysisManifest.stages.apiReaderArticle.article='tampered';
     }),/实际稿或呈现字节改变/);
+});
+
+test('采纳后同真实child正常重暂存可更新当前pageProof，不要求沿用原adoption页面元数据（合成编排）',()=>{
+    const f=adoptedIndependentPublicationFixture();f.controls.publicationPass=true;
+    f.item.pageProof={manifestSha256:'new-implementation-stage',contentSha256:'same-child-new-page',pagePath:'current-page.md'};
+    f.actual.items[f.item.paperId]=structuredClone(f.item);
+    assert.deepEqual(f.readPreviousPublicationItem(f.item),f.previous);
+    assert.equal(f.controls.publicationPaper.apiReaderArticle,'new actual Reader');
+    f.controls.page=false;assert.throws(()=>f.readPreviousPublicationItem(f.item),/page physical CAS/);
 });

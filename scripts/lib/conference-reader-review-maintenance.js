@@ -10,8 +10,10 @@ const windowHandles = new WeakMap();
 const savedCompletionHandles = new WeakMap();
 const publicationHistoryHandles = new WeakMap();
 const parentReaderSeedHandles = new WeakMap();
+const scientificParentReplayHandles = new WeakMap();
 const legacyParentReferenceScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const evidenceCache = new Map();
+const verifiedAdoptedChildIdentities = new WeakMap();
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
 const adapter = () => require('./conference-analysis-adapter');
@@ -30,6 +32,19 @@ function privateFile(filename,requirePrivateMode=true) {
     return absolute;
 }
 function read(filename) { privateFile(filename);return adapter().readJsonRecord(filename); }
+function privateFileSha256(filename) {
+    privateFile(filename);
+    const fd=fs.openSync(filename,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+    try {
+        const stat=fs.fstatSync(fd);
+        check(stat.isFile()&&stat.nlink===1&&(stat.mode&0o777)===0o600&&stat.size<=64*1024*1024,'private bounded file required');
+        const bytes=fs.readFileSync(fd),named=fs.lstatSync(filename);
+        check(bytes.length===stat.size&&named.isFile()&&!named.isSymbolicLink()&&named.nlink===1
+            &&(named.mode&0o777)===0o600&&named.dev===stat.dev&&named.ino===stat.ino&&named.size===stat.size,
+            'private file changed while reading');
+        return sha(bytes);
+    } finally {fs.closeSync(fd);}
+}
 function exact(filename,value) { adapter().writeBytesAtomic(filename,Buffer.from(JSON.stringify(value,null,2)+'\n')); }
 function self(value,key) {const copy=structuredClone(value);delete copy[key];check(stable(copy)===value[key],key+' mismatch');}
 function paths(processDirectory,batchId) {
@@ -813,11 +828,30 @@ function readMaintenanceRecoveryGrantMember(handle,paperId) {
             materialsSha256:row.materialsSha256,ledgerFileSha256:row.ledgerFileSha256}}:{}),files,assertUnchanged});
 }
 function isCurrentOrVerifiedDescendant(batch,item,adopted) {
+    const direct=item?.analysisRunId===adopted.executionId;
+    const identity=stable({executionId:adopted.executionId,analysis:adopted.analysisFileSha256,
+        run:adopted.runFileSha256,source:adopted.sourceFileSha256});
+    const verified=verifiedAdoptedChildIdentities.get(batch);
+    if(direct&&verified?.has(identity)) {
+        check(UUID.test(adopted.executionId)&&item.analysisProof?.analysisSha256===adopted.analysisFileSha256,
+            'current pointer analysis CAS');
+        const directory=path.join(batch.analysisRoot,adopted.executionId);
+        return privateFileSha256(path.join(directory,'analysis.json'))===adopted.analysisFileSha256
+            &&privateFileSha256(path.join(directory,'run.json'))===adopted.runFileSha256
+            &&privateFileSha256(path.join(directory,'source.json'))===adopted.sourceFileSha256;
+    }
     let current=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:item.analysisRunId});
     check(current.analysisFileSha256===item.analysisProof.analysisSha256,'current pointer analysis CAS');
     for(let depth=0;depth<16;depth++) {
-        if(current.run.executionId===adopted.executionId)return current.analysisFileSha256===adopted.analysisFileSha256
-            &&current.runFileSha256===adopted.runFileSha256&&current.sourceFileSha256===adopted.sourceFileSha256;
+        if(current.run.executionId===adopted.executionId) {
+            const matches=current.analysisFileSha256===adopted.analysisFileSha256
+                &&current.runFileSha256===adopted.runFileSha256&&current.sourceFileSha256===adopted.sourceFileSha256;
+            if(direct&&matches) {
+                const identities=verified||new Set();identities.add(identity);
+                verifiedAdoptedChildIdentities.set(batch,identities);
+            }
+            return matches;
+        }
         const file=path.join(current.directory,'reader-revision.json');if(!fs.existsSync(file))return false;
         // Raw immutable ordinary-chain verification avoids a recursive call
         // through a later maintenance batch's own cold admission gate.
@@ -837,13 +871,13 @@ function isCurrentOrVerifiedDescendant(batch,item,adopted) {
 function assertCurrentBatch(batch) {
     if(batch.aggregateMappingRecord)check(sha(fs.readFileSync(privateFile(batch.aggregateMappingRecord.filename,false)))===batch.aggregateMappingRecord.sha256,
         'original aggregate feedback source changed');
-    check(read(batch.p.manifest).sha256===batch.manifestFileSha256
-        &&read(path.join(batch.p.root,'baseline-state.json')).sha256===batch.baseline.sha256
-        &&read(path.join(batch.p.root,'generation.json')).sha256===batch.m.generationFileSha256
-        &&read(path.join(batch.p.root,'review-batch.json')).sha256===batch.m.reviewBatchFileSha256,'immutable batch bytes changed');
-    for(const member of batch.m.members)check(read(path.join(batch.p.root,'failures',member.failureSha256+'.json')).sha256===member.failureFileSha256,'immutable failure bytes changed');
-    for(const classified of [...(batch.m.imageClassifications||[]),...(batch.m.markdownClassifications||[]),...(batch.m.aggregateClassifications||[]),...(batch.m.nativeReviewClassifications||[])])check(read(path.join(batch.p.root,'classifications',classified.classificationSha256+'.json')).sha256===classified.classificationFileSha256
-        &&read(path.join(batch.p.root,'failures',classified.failureSha256+'.json')).sha256===classified.failureFileSha256,'immutable classification/failure bytes changed');
+    check(privateFileSha256(batch.p.manifest)===batch.manifestFileSha256
+        &&privateFileSha256(path.join(batch.p.root,'baseline-state.json'))===batch.baseline.sha256
+        &&privateFileSha256(path.join(batch.p.root,'generation.json'))===batch.m.generationFileSha256
+        &&privateFileSha256(path.join(batch.p.root,'review-batch.json'))===batch.m.reviewBatchFileSha256,'immutable batch bytes changed');
+    for(const member of batch.m.members)check(privateFileSha256(path.join(batch.p.root,'failures',member.failureSha256+'.json'))===member.failureFileSha256,'immutable failure bytes changed');
+    for(const classified of [...(batch.m.imageClassifications||[]),...(batch.m.markdownClassifications||[]),...(batch.m.aggregateClassifications||[]),...(batch.m.nativeReviewClassifications||[])])check(privateFileSha256(path.join(batch.p.root,'classifications',classified.classificationSha256+'.json'))===classified.classificationFileSha256
+        &&privateFileSha256(path.join(batch.p.root,'failures',classified.failureSha256+'.json'))===classified.failureFileSha256,'immutable classification/failure bytes changed');
     const current=read(batch.p.state);api().assertState(current.value);
     if(current.sha256===batch.baseline.sha256)return current;
     if(fs.existsSync(path.join(batch.p.root,'registration.json'))&&current.sha256===registeredState(batch).sha256)return current;
@@ -898,7 +932,7 @@ function replayRevisionFeedback(loaded) {
     check(SHA.test(loaded.revision.readerReviewSeedFileSha256),'immutable parent Reader seed SHA');
     const seed=read(path.join(loaded.directory,'review-reader-seed.json'));
     check(seed.sha256===loaded.revision.readerReviewSeedFileSha256
-        &&same(seed.value,verifiedParentSeed(loaded.parent,member.reviewFeedback.trim())),'original-scope signed parent Reader seed changed');
+        &&withScientificParentReplay(loaded,batch,member,()=>same(seed.value,verifiedParentSeed(loaded.parent,member.reviewFeedback.trim()))),'original-scope signed parent Reader seed changed');
     const parentSeedHandle=Object.freeze({});
     parentReaderSeedHandles.set(parentSeedHandle,{parent:structuredClone(loaded.parent),
         executionId:loaded.run.executionId,executionDir:loaded.directory,
@@ -906,8 +940,10 @@ function replayRevisionFeedback(loaded) {
         sourceFileSha256:loaded.sourceFileSha256,
         seedPath:path.join(loaded.directory,'review-reader-seed.json'),seedFileSha256:seed.sha256,
         sourceTextSha256:sha(loaded.source.sourceDetails.text),feedback:member.reviewFeedback.trim(),
-        seed:structuredClone(seed.value)});
-    return {locator:loc,modelFeedback:member.reviewFeedback.trim(),member,revisionSeed:seed.value,parentSeedHandle};
+        seed:structuredClone(seed.value),scientificReplay:{loaded,batch,member}});
+    const scientificReplayHandle=scientificParentReplayRequired(loaded,batch,member)?Object.freeze({}):null;
+    if(scientificReplayHandle)scientificParentReplayHandles.set(scientificReplayHandle,{loaded,batch,member});
+    return {locator:loc,modelFeedback:member.reviewFeedback.trim(),member,revisionSeed:seed.value,parentSeedHandle,scientificReplayHandle};
 }
 function readVerifiedParentReaderSeed(handle,{paper,sourceText,reviewFeedback,revisionSeed}={}) {
     const bound=parentReaderSeedHandles.get(handle);check(bound,'opaque original parent Reader seed required');
@@ -930,12 +966,89 @@ function readVerifiedParentReaderSeed(handle,{paper,sourceText,reviewFeedback,re
         &&same(protectedScience(paper),protectedScience(parent))
         &&['apiReaderArticle','apiReaderArticleSha256','apiReaderPlan','apiReaderPlanSha256','apiReaderFigures']
             .every(key=>same(paper[key],parent[key])),'original parent Reader seed input or protected surface changed');
-    check(same(bound.seed,verifiedParentSeed(original,bound.feedback)),'original parent Reader seed no longer qualifies');
+    check(withScientificParentReplay(bound.scientificReplay.loaded,bound.scientificReplay.batch,bound.scientificReplay.member,()=>same(bound.seed,verifiedParentSeed(original,bound.feedback))),'original parent Reader seed no longer qualifies');
     return structuredClone(bound.seed);
 }
 // Only compose an inherited, independently sealed scientific parent with this
 // actual maintenance child's newly generated Reader. The return value neither
 // authenticates model output nor grants a save/request budget.
+// Source identity only: no feedback, seed, resource or Reader qualification.
+// Read the real canonical revision and private registered/adopted material; this
+// deliberately does not call loadBatch/replayParentSource and cannot recurse
+// through the source plan it is reconstructing.
+function readReaderMaintenanceSourceLineage({executionId}) {
+    const analysisRoot=require('../config').FILES.conferenceAnalysisDir;
+    const loaded=adapter().loadConferenceReaderRevisionIdentity({analysisRoot,executionId});
+    const loc=loaded.revision.readerReviewMaintenance;
+    check(loc?.contract==='conference-reader-review-maintenance-member-v1'&&loc.window===null
+        &&loaded.revision.mode==='reader-only','ordinary initial Reader-only source lineage required');
+    const processDirectory=path.join(require('../config').FILES.conferenceProcessDir,loc.processId);
+    canonicalRoots(processDirectory,analysisRoot);
+    const p=paths(processDirectory,loc.batchId),manifest=read(p.manifest),m=manifest.value;
+    self(m,'manifestSha256');
+    check(m.contract==='conference-reader-review-maintenance-batch-v1'&&m.version===1
+        &&m.processId===loc.processId&&m.batchId===loc.batchId&&Array.isArray(m.members)
+        &&m.members.length>0&&new Set(m.members.map(row=>row.paperId)).size===m.members.length,'source-only registered manifest identity');
+    const baseline=read(path.join(p.root,'baseline-state.json'));
+    check(baseline.sha256===m.stateFileSha256&&baseline.value.stateSha256===m.baselineStateSha256,
+        'source-only baseline immutable manifest CAS');
+    const batch={m,p,analysisRoot,processDirectory,manifestFileSha256:manifest.sha256,baseline};
+    const member=m.members.find(row=>row.paperId===loaded.run.paperId);
+    check(member&&same(locator(batch,{...member,window:null}),loc)
+        &&member.executionId===loaded.run.executionId&&member.parentExecutionId===loaded.parent.run.executionId
+        &&member.parentCAS.analysisFileSha256===loaded.parent.analysisFileSha256
+        &&member.parentCAS.runFileSha256===loaded.parent.runFileSha256
+        &&member.parentCAS.sourceFileSha256===loaded.parent.sourceFileSha256
+        &&member.sourceSnapshotSha256===loaded.run.sourceSnapshotSha256
+        &&member.sourceSha256===sha(loaded.source.sourceDetails.text),'source-only actual member/parent/source CAS');
+    const before=baseline.value.items[member.paperId];
+    check(before.analysisRunId===member.parentExecutionId&&before.analysisProof.analysisSha256===member.parentCAS.analysisFileSha256,
+        'source-only baseline parent item');
+    registeredState(batch);assertCurrentBatch(batch);
+    const pins=[...['analysis.json','run.json','source.json','reader-revision.json'].map(name=>path.join(loaded.directory,name)),
+        ...['analysis.json','run.json','source.json'].map(name=>path.join(loaded.parent.directory,name))]
+        .map(file=>({file,sha256:read(file).sha256}));
+    const assertUnchanged=()=>{for(const pin of pins)check(read(pin.file).sha256===pin.sha256,'source-only canonical revision changed');assertCurrentBatch(batch);};
+    assertUnchanged();return {loaded,member,locator:loc,assertUnchanged};
+}
+// The original pre-adoption seed path permits its own legitimate child
+// attempt/checkpoint progress. Only an actual adopted current child requires
+// the extra full-canonical science-parent replay capability.
+function scientificParentReplayRequired(loaded,batch,member) {
+    if(loaded.revision.contract!==adapter().READER_REVISION_CONTRACT
+        ||!require('./conference-source-resource-correction').isSourceCorrectionRecord(loaded.parent.analysis.papers[0]))return false;
+    const state=assertCurrentBatch(batch).value,item=state.items[member.paperId];
+    if(item?.analysisRunId===loaded.parent.run.executionId)return false;
+    const adoption=item?.textMaintenanceAdoption;
+    check(item?.analysisRunId===loaded.run.executionId&&adoption?.batchId===batch.m.batchId
+        &&adoption.manifestSha256===batch.m.manifestSha256
+        &&adoption.previousExecutionId===loaded.parent.run.executionId,'scientific parent replay requires actual current adopted child');
+    return true;
+}
+function withScientificParentReplay(loaded,batch,member,callback) {
+    if(!scientificParentReplayRequired(loaded,batch,member))return callback();
+    const handle=Object.freeze({});
+    scientificParentReplayHandles.set(handle,{loaded,batch,member});
+    return require('./conference-source-resource-correction').withVerifiedMaintenanceScientificParent(handle,callback);
+}
+function readScientificParentReplay(handle) {
+    const bound=scientificParentReplayHandles.get(handle);check(bound,'private verified maintenance parent replay required');
+    const {loaded,batch,member}=bound;
+    const current=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:batch.analysisRoot,executionId:loaded.run.executionId});
+    check(current.analysisFileSha256===loaded.analysisFileSha256&&current.runFileSha256===loaded.runFileSha256
+        &&current.sourceFileSha256===loaded.sourceFileSha256&&same(current.revision,loaded.revision)
+        &&current.parent.analysisFileSha256===member.parentCAS.analysisFileSha256
+        &&current.parent.runFileSha256===member.parentCAS.runFileSha256
+        &&current.parent.sourceFileSha256===member.parentCAS.sourceFileSha256,'private scientific replay actual canonical CAS');
+    assertCurrentBatch(batch);
+    return {child:structuredClone(loaded.analysis.papers[0]),parent:structuredClone(loaded.parent.analysis.papers[0]),executionId:loaded.run.executionId,
+        assertUnchanged:()=>{const now=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:batch.analysisRoot,executionId:loaded.run.executionId});
+            check(now.analysisFileSha256===loaded.analysisFileSha256&&now.runFileSha256===loaded.runFileSha256
+                &&now.sourceFileSha256===loaded.sourceFileSha256&&same(now.revision,loaded.revision)
+                &&now.parent.analysisFileSha256===member.parentCAS.analysisFileSha256
+                &&now.parent.runFileSha256===member.parentCAS.runFileSha256
+                &&now.parent.sourceFileSha256===member.parentCAS.sourceFileSha256,'private scientific replay parent/child changed');assertCurrentBatch(batch);}};
+}
 function readVerifiedReaderScientificParent(paper) {
     const active=require('./conference-analysis-context').getConferenceAnalysisContext();
     const origin=paper?.conferenceSourceCorrection;
@@ -975,7 +1088,7 @@ function readVerifiedReaderScientificParent(paper) {
             &&stable([paper.conferenceSourceCorrection,paper.conferenceSourceCorrectionObligation])===locatorSha,
             'inherited scientific protected bytes changed during validation');
     };
-    assertUnchanged();return {parent,assertUnchanged};
+    assertUnchanged();return {parent,assertUnchanged,scientificReplayHandle:bound.scientificReplayHandle};
 }
 function assertReaderOutput(loaded,paper,parent) {
     const bound=loaded.readerReview||replayRevisionFeedback(loaded),stage=paper.analysisManifest?.stages?.apiReaderArticle;
@@ -1290,5 +1403,5 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
     return true;
 }
 module.exports={bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
-    runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,
+    runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,readReaderMaintenanceSourceLineage,readScientificParentReplay,
     resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed,readVerifiedReaderScientificParent,readLegacyPublicationParentReference};

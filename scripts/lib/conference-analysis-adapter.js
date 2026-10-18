@@ -739,11 +739,12 @@ function readerReviewParentSeedFile(loaded, parent, handle) {
     writeJson(filename, seed);
     return readJsonRecord(filename).sha256;
 }
-function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
+function loadConferenceReaderRevisionIdentity({ analysisRoot, executionId } = {}) {
     const loaded = loadConferenceAnalysis({ analysisRoot, executionId });
     const record = readJsonRecord(path.join(loaded.directory, 'reader-revision.json'));
     const { revisionSha256, ...body } = record.value;
-    if (body.contract === RECOVERY_WINDOW_CONTRACT) return loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, loaded, record);
+    // Source identity only: recovery windows retain their full grant/seed loader.
+    if (body.contract === RECOVERY_WINDOW_CONTRACT) throw new Error('Recovery windows require the complete conference revision loader');
     if (body.contract !== READER_REVISION_CONTRACT || body.version !== 1
         || !['reader-only', 'scoring-and-reader', 'normal-analysis'].includes(body.mode)
         || !Number.isSafeInteger(body.maxAttempts) || body.maxAttempts < 1 || body.maxAttempts > 3
@@ -760,12 +761,22 @@ function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
         || parent.sourceFileSha256 !== loaded.sourceFileSha256) {
         throw new Error('会议 Reader revision 原完成稿、原来源或原凭证发生变化');
     }
+    return { ...loaded, revision: record.value, revisionFileSha256: record.sha256, parent };
+}
+function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
+    const initial = loadConferenceAnalysis({ analysisRoot, executionId });
+    const record = readJsonRecord(path.join(initial.directory, 'reader-revision.json'));
+    if (record.value.contract === RECOVERY_WINDOW_CONTRACT) {
+        return loadGrantedConferenceRecoveryRecord({ analysisRoot, executionId }, initial, record);
+    }
+    const loaded = loadConferenceReaderRevisionIdentity({ analysisRoot, executionId });
+    const { revision: body, parent } = loaded;
     const readerReview = body.readerReviewMaintenance
         ? require('./conference-reader-review-maintenance').replayRevisionFeedback({
-            ...loaded, revision: record.value, parent }) : null;
+            ...loaded, revision: loaded.revision, parent }) : null;
     const resourcePreflight = body.mode === 'normal-analysis' ? null
         : readReaderResourcePreflight({ ...loaded, analysis: parent.analysis }, body.resourcePreflightFileSha256, body.mode);
-    return { ...loaded, revision: record.value, parent, resourcePreflight, readerReview };
+    return { ...loaded, resourcePreflight, readerReview };
 }
 async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHandle, sourceRoot,
     maxAttempts = 3, reusePaidCoreDiagnostics = false, reviewMaintenanceHandle = null } = {}, overrides = {}) {
@@ -1453,6 +1464,6 @@ module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INT
     stableHash, normalizedPaper, sourceDetails, validatePersistedSourceDetails,
     readJsonRecord, writeBytesAtomic, replaceJson, prepareArtifacts, prepareConferenceAnalysis, loadConferenceAnalysis, verifyPlanAuthority,
     sealCompletedRun, sealCompletedRunLocked, analyzeConference,
-    READER_REVISION_CONTRACT, RECOVERY_WINDOW_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevision,
+    READER_REVISION_CONTRACT, RECOVERY_WINDOW_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevisionIdentity, loadConferenceReaderRevision,
     grantedRecoveryExecutionId, loadGrantedConferenceRecovery, refreshConferenceGrantedRecovery,
     inspectConferenceReaderRevisionCompletion, replaySavedConferenceReaderRevision, refreshConferenceReader };

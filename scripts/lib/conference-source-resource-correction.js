@@ -9,6 +9,8 @@ const { isDeepStrictEqual } = require('node:util');
 const crypto = require('node:crypto');
 const scope = new AsyncLocalStorage();
 const inheritedReaderScience = new AsyncLocalStorage();
+const scientificParentReplay = new AsyncLocalStorage();
+const sourceLineageRecords = new WeakMap();
 const verified = new WeakMap();
 const CONTRACT = 'conference-source-resource-correction-v1';
 const SCORE_KIND = 'deterministic_source_resource_audit';
@@ -1105,7 +1107,13 @@ function sourceProjectionCanonical(item) {
         seen.add(loaded.run.executionId);
         if (isSourceCorrectionRecord(loaded.analysis.papers[0])
             &&loaded.analysis.papers[0].conferenceSourceCorrection?.executionId===loaded.run.executionId) return { current, loaded, descendants };
-        const revision = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: loaded.run.executionId });
+        const declaration=adapter.readJsonRecord(path.join(loaded.directory,'reader-revision.json')).value;
+        const sourceOnly=declaration.readerReviewMaintenance?.window===null
+            &&declaration.readerReviewMaintenance?.contract==='conference-reader-review-maintenance-member-v1';
+        const sourceRecord=sourceOnly?require('./conference-reader-review-maintenance')
+            .readReaderMaintenanceSourceLineage({executionId:loaded.run.executionId}):null;
+        const revision=sourceRecord?.loaded||adapter.loadConferenceReaderRevision({analysisRoot,executionId:loaded.run.executionId});
+        if(sourceRecord)sourceLineageRecords.set(revision,sourceRecord);
         if (revision.analysisFileSha256 !== loaded.analysisFileSha256 || revision.runFileSha256 !== loaded.runFileSha256
             || revision.parent.sourceFileSha256 !== current.sourceFileSha256
             || !descendants.length && !isDeepStrictEqual(revision.revision, item.readerRevision)) fail('来源纠正后续维护父稿CAS或来源不符');
@@ -1117,6 +1125,8 @@ function sourceProjectionCanonical(item) {
 // maintenance locator alone cannot move independent rounds into/out of process
 // accounting; its verified feedback/member/parent binding must also match.
 function independentReaderMaintenanceChild(child) {
+    const sourceOnly=sourceLineageRecords.get(child);
+    if(sourceOnly){sourceOnly.assertUnchanged();return true;} // Source lineage only; never a Reader-success proof.
     const locator=child.revision?.readerReviewMaintenance;
     if(locator===undefined)return false;
     const bound=child.readerReview,member=bound?.member;
@@ -1191,6 +1201,29 @@ function assertSourceMaintenanceHistory(item, previous, projection) {
     }
     if (item.retryBudgetStart !== last) fail('来源维护调度预算不属于最后真实释放记录');
 }
+function withVerifiedMaintenanceScientificParent(handle,callback) {
+    if(typeof callback!=='function')fail('原科学父冷核缺少回调');
+    const bound=require('./conference-reader-review-maintenance').readScientificParentReplay(handle);
+    return require('./analysis-stop-control').withModelRequestsForbidden(()=>scientificParentReplay.run(bound,()=>{
+        bound.assertUnchanged();const result=callback();
+        if(result&&typeof result.then==='function')return result.then(value=>{bound.assertUnchanged();return value;});
+        bound.assertUnchanged();return result;
+    }));
+}
+function inheritedScientificParentProjection(paper,item) {
+    const bound=scientificParentReplay.getStore();
+    if(!bound||!isDeepStrictEqual(bound.parent,paper)||item?.analysisRunId===paper.conferenceSourceCorrection?.executionId)return null;
+    bound.assertUnchanged();
+    const projection=sourceProjectionCanonical(item),chain=projection.descendants,current=projection.current;
+    if(!chain.length||!chain.every(independentReaderMaintenanceChild)
+        ||current.run.executionId!==bound.executionId
+        ||!isDeepStrictEqual(current.analysis.papers[0],bound.child)
+        ||!isDeepStrictEqual(projection.loaded.analysis.papers[0],paper))fail('原科学父回放未绑定当前真实维护子链');
+    const latest=chain[0],loc=latest.revision.readerReviewMaintenance,adoption=item.textMaintenanceAdoption;
+    if(adoption?.batchId!==loc.batchId||adoption.manifestSha256!==loc.manifestSha256
+        ||adoption.previousExecutionId!==latest.parent.run.executionId)fail('原科学父回放缺少当前真实维护采纳');
+    bound.assertUnchanged();return projection;
+}
 function readRegisteredTransaction(paper, projectionToken = null) {
     const locator = paper.conferenceSourceCorrection;
     if (![CONTRACT, CORE_CONTRACT].includes(locator?.contract) || !UUID.test(locator.processId || '')
@@ -1241,7 +1274,8 @@ function readRegisteredTransaction(paper, projectionToken = null) {
         require('./conference-process').assertState(actualState.value);
         const item = actualState.value.items[paper.id], adoption = item?.sourceResourceCorrectionAdoption;
         const sourceProjection = projectionToken === PROJECTION_ONLY && item
-            ? sourceProjectionCanonical(item) : null;
+            ? sourceProjectionCanonical(item) : item?inheritedScientificParentProjection(paper,item):null;
+        if(sourceProjection&&projectionToken!==PROJECTION_ONLY)assertSourceMaintenanceHistory(item,batch.state.value.items[paper.id],sourceProjection);
         const sourceMaintenance = sourceProjection && item.readerRefreshRequired === true
             && ['analysis_partial', 'analyzing'].includes(item.status);
         const observed = sourceProjection?.current || loaded;
@@ -1274,11 +1308,14 @@ function withSavedPaper(paper, callback) {
     if(inherited) {
         // Verify the sealed parent's entire original output under its original
         // receipt/source scope; only then validate the child's Reader normally.
-        withSavedPaper(inherited.parent,()=>true);
-        inherited.assertUnchanged();
-        return inheritedReaderScience.run({paper,...inherited},()=>{
-            const result=callback();inherited.assertUnchanged();return result;
-        });
+        const replayParent=()=>{
+            withSavedPaper(inherited.parent,()=>true);
+            inherited.assertUnchanged();
+            return inheritedReaderScience.run({paper,...inherited},()=>{
+                const result=callback();inherited.assertUnchanged();return result;
+            });
+        };
+        return inherited.scientificReplayHandle?withVerifiedMaintenanceScientificParent(inherited.scientificReplayHandle,replayParent):replayParent();
     }
     const handle = readRegisteredTransaction(paper);
     return withMember(handle, () => {
@@ -1334,7 +1371,9 @@ function withSavedPublicationPaper(presented, callback) {
         unchanged();return result;
     });
     if(loaded===original)return qualify();
-    const identity=withSavedPaper(original.analysis.papers[0],()=>clone(current().receipt.provenance.sourceIdentity));
+    const readIdentity=()=>withSavedPaper(original.analysis.papers[0],()=>clone(current().receipt.provenance.sourceIdentity));
+    const identity=loaded.readerReview.scientificReplayHandle
+        ?withVerifiedMaintenanceScientificParent(loaded.readerReview.scientificReplayHandle,readIdentity):readIdentity();
     const pdf=require('./conference-reader-publication-evidence').replayCanonicalReaderPdfSource(canonical,
         {...identity,executionId:loaded.run.executionId});
     return require('./conference-analysis-context').withConferenceAnalysisSource({executionId:loaded.run.executionId,
@@ -1415,7 +1454,8 @@ function readPreviousPublicationItem(item) {
     if (item.status !== 'complete') fail('完整出版回投只接受完成成员');
     const { record, paper, previous } = projection;
     const descendant=item.analysisRunId!==paper.conferenceSourceCorrection?.executionId;
-    const current=projection.projection.current,chain=projection.projection.descendants;
+    const current=projection.projection.current,chain=projection.projection.descendants.map(child=>sourceLineageRecords.has(child)
+        ?require('./conference-analysis-adapter').loadConferenceReaderRevision({analysisRoot:record.batch.analysisRoot,executionId:child.run.executionId}):child);
     if(descendant) {
         if(!chain.length||!chain.every(independentReaderMaintenanceChild))fail('完整出版回投不能借用祖先纠正声明');
         const latest=chain[0],locator=latest.revision.readerReviewMaintenance,adoption=item.textMaintenanceAdoption;
@@ -1462,5 +1502,5 @@ module.exports = { CONTRACT, SCORE_KIND, BATCH, RECEIPT, CORE_CONTRACT, CORE_SCO
     seal, sealCorrection: seal, withCorrection, currentVerifiedCorrection, readVerifiedSignedFigures, batchDescription,
     withSavedPaper, assertVerified, clearVerifiedReaderFailure, readPreviousPublicationItem, readPreviousSourceIdentityItem,
     isSourceCorrectionRecord, localStabilityIsResolved, assertVerifiedScoringStage,
-    withSavedPublicationPaper, exportPublicationVerification, readVerifiedPublicationPdfSource, assertVerifiedCoreStage,
+    withSavedPublicationPaper, exportPublicationVerification, readVerifiedPublicationPdfSource, assertVerifiedCoreStage, withVerifiedMaintenanceScientificParent,
     assertMayAccessNetwork, deriveLocalAudit };

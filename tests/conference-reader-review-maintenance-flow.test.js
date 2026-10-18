@@ -141,6 +141,9 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         if(id==='../config')return {FILES:{conferenceAnalysisDir:analysisRoot,conferenceProcessDir:path.dirname(processDirectory),conferencePublicationDir:publicationRoot,conferencePageStagingDir:deps.files.conferencePageStagingDir,conferenceAggregateDir:path.join(runtimeRoot,'conference-aggregates')}};
         if(id==='./conference-reader-review-maintenance-evidence')return evidence;
         if(id==='./conference-analysis-adapter')return adapter;if(id==='./conference-process')return processApi;
+        // These orchestration fixtures have no scientific source correction;
+        // real private parent scopes are tested in their separate suite.
+        if(id==='./conference-source-resource-correction')return {isSourceCorrectionRecord:()=>false};
         if(id==='./conference-recovery-grant')return recoveryMock;
         if(id==='./conference-reader-publication-evidence')return {replayCanonicalReaderPdfSource:()=>({syntheticSourceOnly:true})};
         if(id==='./conference-postprocess')return {readOriginalTagProof:()=>({rules:{syntheticOnly:true}})};
