@@ -248,6 +248,12 @@ test('保留来源只接受真实完成父稿到Reader子稿的连续链，父�
     const revised = { ...item, analysisRunId: executionId, readerRevision: revision,
         analysisProof: { analysisSha256: loaded.analysisFileSha256, completionReceiptSha256: loaded.run.completionReceipt.receiptSha256,
             sourceSnapshotSha256: loaded.run.sourceSnapshotSha256 } };
+    // Only original source/receipt ancestry is requested here. A broken
+    // present-day feedback/seed must remain a full-loader failure, not prevent
+    // source identity projection of an otherwise authentic ordinary revision.
+    const fullLoader = f.deps.adapter.loadConferenceReaderRevision;
+    t.mock.method(f.deps.adapter, 'loadConferenceReaderRevision', () => { throw new Error('synthetic full feedback/seed remains rejected'); });
+    assert.throws(() => f.deps.adapter.loadConferenceReaderRevision({ analysisRoot: f.deps.files.conferenceAnalysisDir, executionId }), /full feedback/);
     const loader = replayApi.createRetainedSourceReplay(f.context, f.deps);
     assert.equal(loader.forItem(revised).sourceRoot, f.plans[0].cacheRoot);
     // 此处只隔离外层process promotion审批（该层另有完整测试），原父子分析/计划/来源仍由真实loader核验。
@@ -299,4 +305,31 @@ test('来源纠正成员仅投影原身份，来源重放不提前调用Reader�
     assert.equal(projections, 1);
     const wrong = structuredClone(item); wrong.analysisProof.analysisSha256 = 'f'.repeat(64);
     assert.throws(() => replay.forItem(wrong));
+});
+
+const retainedFormalForTest=require('node:module');
+const retainedPathForTest=require.resolve('../scripts/lib/conference-retained-source-replay');
+const retainedModuleForTest=new retainedFormalForTest(retainedPathForTest,module);retainedModuleForTest.filename=retainedPathForTest;retainedModuleForTest.paths=retainedFormalForTest._nodeModulePaths(path.dirname(retainedPathForTest));
+retainedModuleForTest._compile(fs.readFileSync(retainedPathForTest,'utf8')+'\nmodule.exports.__sourceOnlyTest={sourceIdentityReaderRevision,completionItemProjections};',retainedPathForTest);
+const sourceOnlyTestApi=retainedModuleForTest.exports.__sourceOnlyTest;
+test('source-only loader routes actual contract, ordinary/unknown through strict identity and grant through original full loader',()=>{
+ let contract='conference-reader-source-revision-v1',identity=0,full=0;const deps={files:{conferenceAnalysisDir:'/synthetic'},adapter:{RECOVERY_WINDOW_CONTRACT:'conference-reader-recovery-window-v1',loadConferenceAnalysis(){return{directory:'/synthetic/execution'};},readJsonRecord(){return{value:{contract}};},loadConferenceReaderRevisionIdentity(){identity++;if(contract!=='conference-reader-source-revision-v1')throw Error('unknown ordinary contract');return{kind:'identity'};},loadConferenceReaderRevision(){full++;throw Error('strict original grant/seed');}}};
+ assert.equal(sourceOnlyTestApi.sourceIdentityReaderRevision('execution',deps).kind,'identity');assert.equal(identity,1);assert.equal(full,0);
+ contract='unknown';assert.throws(()=>sourceOnlyTestApi.sourceIdentityReaderRevision('execution',deps),/unknown/);assert.equal(full,0);
+ contract='conference-reader-recovery-window-v1';assert.throws(()=>sourceOnlyTestApi.sourceIdentityReaderRevision('execution',deps),/strict original grant/);assert.equal(full,1);
+});
+
+test('all ordinary ancestors use identity; revision/item CAS, cycle and16-depth limits remain',t=>{
+ const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'retained-identity-chain-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const rows=new Map(),calls=[];for(let i=0;i<18;i++){const id='execution-'+i,directory=path.join(root,id);fs.mkdirSync(directory);if(i<17)fs.writeFileSync(path.join(directory,'reader-revision.json'),'{}');rows.set(id,{directory,analysisFileSha256:String(i).padStart(64,'0'),run:{executionId:id,status:'complete',sourceSnapshotSha256:'source',completionReceipt:{receiptSha256:'receipt-'+i}},analysis:{status:'complete'},revision:{contract:'conference-reader-source-revision-v1',step:i}});}
+ for(let i=0;i<17;i++)rows.get('execution-'+i).parent=rows.get('execution-'+(i+1));
+ const deps={files:{conferenceAnalysisDir:root},adapter:{RECOVERY_WINDOW_CONTRACT:'conference-reader-recovery-window-v1',loadConferenceAnalysis:({executionId})=>rows.get(executionId),readJsonRecord:file=>({value:rows.get(path.basename(path.dirname(file))).revision}),loadConferenceReaderRevisionIdentity:({executionId})=>{calls.push(executionId);return rows.get(executionId);},loadConferenceReaderRevision:()=>{throw Error('ordinary ancestor cannot use full Reader gate');}}};
+ const proof=row=>({analysisSha256:row.analysisFileSha256,completionReceiptSha256:row.run.completionReceipt.receiptSha256,sourceSnapshotSha256:row.run.sourceSnapshotSha256});
+ const first=rows.get('execution-0'),item={paperId:'synthetic-source-only',analysisRunId:first.run.executionId,readerRevision:first.revision,analysisProof:proof(first),sourceProof:{pdf:'fixed'}};
+ fs.unlinkSync(path.join(rows.get('execution-2').directory,'reader-revision.json'));
+ assert.deepEqual(sourceOnlyTestApi.completionItemProjections(item,deps).map(x=>x.analysisRunId),['execution-0','execution-1','execution-2']);assert.deepEqual(calls,['execution-0','execution-1']);
+ assert.throws(()=>sourceOnlyTestApi.completionItemProjections({...item,analysisProof:{...item.analysisProof,analysisSha256:'wrong'}},deps),/当前成员原凭证/);
+ assert.throws(()=>sourceOnlyTestApi.completionItemProjections({...item,readerRevision:{...item.readerRevision,step:'wrong'}},deps),/当前成员原凭证/);
+ rows.get('execution-1').parent=first;assert.throws(()=>sourceOnlyTestApi.completionItemProjections(item,deps),/父链循环/);rows.get('execution-1').parent=rows.get('execution-2');
+ fs.writeFileSync(path.join(rows.get('execution-2').directory,'reader-revision.json'),'{}');assert.throws(()=>sourceOnlyTestApi.completionItemProjections(item,deps),/父链超过16层/);
 });

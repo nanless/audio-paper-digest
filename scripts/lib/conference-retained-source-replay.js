@@ -84,6 +84,17 @@ function analysisProof(loaded) {
         completionReceiptSha256: loaded.run.completionReceipt?.receiptSha256,
         sourceSnapshotSha256: loaded.run.sourceSnapshotSha256 };
 }
+// Completion receipt projection authenticates original source/CAS ancestry only.
+// Ordinary revisions must not replay today's Reader rules against old ancestors;
+// the actual current Reader is still fully qualified during normal staging.
+function sourceIdentityReaderRevision(executionId, deps) {
+    const options = { analysisRoot: deps.files.conferenceAnalysisDir, executionId };
+    const initial = deps.adapter.loadConferenceAnalysis(options);
+    const record = deps.adapter.readJsonRecord(path.join(initial.directory, 'reader-revision.json'));
+    return record.value.contract === deps.adapter.RECOVERY_WINDOW_CONTRACT
+        ? deps.adapter.loadConferenceReaderRevision(options)
+        : deps.adapter.loadConferenceReaderRevisionIdentity(options);
+}
 function completionItemProjections(item, deps, sourceAncestors = new Set()) {
     const result = [completionItem(item)];
     if (item.sourceResourceCorrectionAdoption) {
@@ -96,8 +107,7 @@ function completionItemProjections(item, deps, sourceAncestors = new Set()) {
         return [...result, ...completionItemProjections(original, deps, next)];
     }
     if (!item.readerRevision) return result;
-    let current = deps.adapter.loadConferenceReaderRevision({ analysisRoot: deps.files.conferenceAnalysisDir,
-        executionId: item.analysisRunId });
+    let current = sourceIdentityReaderRevision(item.analysisRunId, deps);
     if (api.stableHash(current.revision) !== api.stableHash(item.readerRevision)
         || current.run.status !== 'complete' || current.analysis.status !== 'complete'
         || api.stableHash(analysisProof(current)) !== api.stableHash(item.analysisProof)) {
@@ -111,8 +121,7 @@ function completionItemProjections(item, deps, sourceAncestors = new Set()) {
         result.push({ paperId: item.paperId, analysisRunId: parent.run.executionId,
             sourceProof: item.sourceProof, analysisProof: analysisProof(parent) });
         if (!fs.existsSync(path.join(parent.directory, 'reader-revision.json'))) return result;
-        current = deps.adapter.loadConferenceReaderRevision({ analysisRoot: deps.files.conferenceAnalysisDir,
-            executionId: parent.run.executionId });
+        current = sourceIdentityReaderRevision(parent.run.executionId, deps);
     }
     throw new Error('保留的会议 Reader 修订父链超过16层。');
 }
