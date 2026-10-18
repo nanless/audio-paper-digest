@@ -535,13 +535,15 @@ function migrateAndRun(options, runtime = {}) {
                     contentSha256: staged.manifest.contentSha256, pagePath: staged.manifest.pagePath } };
         };
         if (retained && !deps.aggregate) migrationDeps.aggregate = async (_context, currentShared, executionIds) =>
-            deps.postprocess.aggregateConference({
+            (!runtime.dependencies && deps.postprocess.aggregateConferenceParallel
+                ? deps.postprocess.aggregateConferenceParallel : deps.postprocess.aggregateConference)({
                 analysisRoot: deps.files.conferenceAnalysisDir, executionIds,
                 tagCatalogPath: deps.files.tagCatalogFile, stagingRoot: deps.files.conferencePageStagingDir,
                 aggregateRoot: deps.files.conferenceAggregateDir, planHandle: currentShared.planHandle,
                 sourceRoot: currentShared.sourceCacheRoot,
                 retainedSources: currentShared.retainedSources, apply: true
-            });
+            }, { processId: options.fromProcessId, concurrency: options.concurrency,
+                authoritySha256: processApi.stableHash(context.authority) });
         // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
         // 出来，流程完成时才能原子写入新凭证。
         archiveStaleCompletionReceipt(directory, state);

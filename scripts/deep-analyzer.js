@@ -3116,6 +3116,15 @@ function findReaderBridgeParagraph(articleBlocks, terms) {
     if (!Array.isArray(terms) || (terms.length < 2 || terms.length > 4)) return null;
     const expected = terms.map(normalizeReaderBridgeTerm);
     const matches = articleBlocks.filter(block => {
+        // 音标 /a:/ 等真实术语自身含冒号。只认已声明完整术语拼出的
+        // assembler 前缀，不能把内部冒号截成标题边界，也不取任意末冒号。
+        if (terms.some(term => /[:：]/u.test(String(term)))) {
+            const prefixes = [terms, [...terms].reverse()].flatMap(order => {
+                const prefix = `**${order.map(term => String(term).trim()).join(' × ')}：**`;
+                return [prefix, normalizeReaderProseFormatting(prefix)];
+            });
+            if (prefixes.some(prefix => String(block).trim().startsWith(prefix + ' '))) return true;
+        }
         const heading = /^\s*(?:\*\*\s*)?(.+?)\s*(?:：|:)\s*(?:\*\*)?/.exec(String(block).trim())?.[1];
         if (!heading) return false;
         // 声明项自身的无空白 × 属于术语；组合连接仍须是 assembler 的有空白分隔。
@@ -4141,7 +4150,11 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '');
             const collectiveAfter = after.replace(/^[\s，,:：；;]+/u, '')
                 .replace(/^(?:要|应|需)(?:分别|分开)(?:核实|核对|确认|验证|判断)[\s，,:：；;]*/u, '');
-            if (closedPending && !/^[。！？!?]?\s*$/u.test(value.slice(span.index + span[0].length))) continue;
+            if (closedPending) {
+                const tail = value.slice(span.index + span[0].length);
+                const nonEquivalenceInstruction = /^[，,]\s*(?:不能|不应|不可)(?:把|将)(?:代码|权重|数据|系统)(?:开源|公开|可用|可下载|可获取|可运行)(?:直接)?(?:等同于|视为|当作)(?:开箱即用|系统可运行|资源齐全)[。！？!?]?\s*$/u;
+                if (!/^[。！？!?]?\s*$/u.test(tail) && !nonEquivalenceInstruction.test(tail)) continue;
+            }
             if (countedMatters && declared === 3 && /[；;]\s*$/u.test(value)) continue;
             if (quoted || !/^(?:\s*(?:但|因此))?\s*$/u.test(prefix)
                 || /^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|区分|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)/u.test(after)
@@ -4652,6 +4665,9 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const forbiddenDescription = new RegExp('(?:不能|不应|不得|不可)(?:把|将)'
             + '(?:它|该链接|该地址|该资源|该状态|这个链接|这个地址|这个资源)(?:直接)?(?:写成|表述为)'
             + describedClaim + '(?:' + connector + describedClaim + '){0,3}', 'gu');
+        const unsupportedReleaseJudgment = new RegExp('(?:不支持|不足以支持)'
+            + '(?:作者|本文|本论文|本研究|本工作)?(?:已经|现已|已)(?:提供|发布|开放)'
+            + '(?:完整)?(?:训练)?' + resource + '的(?:判断|结论|说法|声明)', 'gu');
         const contains = span => matchIndex >= span.index && matchEnd <= span.index + span[0].length;
         const safeDenialIntroduction = span => {
             const before = value.slice(0, span.index);
@@ -4666,6 +4682,15 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         };
         for (const pattern of [qualifiedLinkDenial, forbiddenDescription]) for (const span of value.matchAll(pattern)) {
             if (contains(span) && safeDenialIntroduction(span)) return true;
+        }
+        for (const span of value.matchAll(unsupportedReleaseJudgment)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,]/u).at(-1).trim();
+            const suffix = value.slice(span.index + span[0].length).replace(/^[\s，,]+/u, '');
+            // 仅覆盖闭合的“证据不支持已提供资源的判断”，保留相邻实际发布
+            // 声明；引述、双重否定、转折与撤回不能借此掩盖肯定断言。
+            if (contains(span) && safeDenialIntroduction(span)
+                && /^(?:(?:本篇|本文|本论文|本研究|本工作)?(?:已有|现有)?证据)?$/u.test(prefix)
+                && !/^(?:(?:这(?:一|种|个)?|该|上述)?(?:判断|结论|说法|声明|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不准确|不属实|不正确)|^(?:(?:这(?:一|种|个)?|该|上述)?(?:判断|结论|说法|声明|否定))?(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)/u.test(suffix)) return true;
         }
         for (const span of value.matchAll(missingVerifiedAuthorRelease)) {
             const suffix = value.slice(span.index + span[0].length).replace(/^[\s，,]+/u, '');
@@ -5138,6 +5163,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const assertionPrefix = segment.slice(0, localMatchIndex);
             if (/(?:不能|无法|不可|不应)(?:否认|否定)[^。！？!?；;，,]{0,16}(?:作者|本文|本论文|本研究|本工作)?[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)
                 && !/(?:尚未|并未|未曾|没有|未公开|未发布|未确认|未验证|未发现|未找到|不存在|尚无)/u.test(assertionPrefix)) return true;
+            if (/(?:不能|无法|不可|不应)(?:说|声称|断言|认为)(?:证据)?不支持(?:作者|本文|本论文|本研究|本工作)?$/u.test(assertionPrefix)) return true;
             if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length)
                 || isThirdPartyTypeAttribution(segment, type, mentions)
                 || isDataSourceRepositoryAttribution(segment, type)

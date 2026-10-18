@@ -711,7 +711,7 @@ function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pl
     if (projected.assignment.status !== 'assigned') return { status: 'blocked', assignment: projected.assignment };
     return { status: apply ? 'staged' : 'dry-run', manifest: projected.manifest, markdown: projected.pageBytes.toString('utf8') };
 }
-function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
+function loadStageAndCompleted({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
     const implementation = fingerprint(dependencies); const expected = withCompletedPublicationEvidence(loaded,
@@ -731,9 +731,14 @@ function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pla
         const record = pageApi.readRegular(path.join(directory, 'assets', ...asset.path.split('/')), 32 * 1024 * 1024, 'conference staged asset');
         if (record.fileSha256 !== asset.sha256 || record.bytes.length !== asset.size) fail(`conference staged asset drifted: ${asset.path}`);
     }
-    return { directory, manifest, ...readStageTagMetadata(manifest), manifestFileSha256: manifestRecord.fileSha256,
-        assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 };
+    return { completed: loaded, staged: { directory, manifest, ...readStageTagMetadata(manifest),
+        manifestFileSha256: manifestRecord.fileSha256,
+        assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 } };
 }
+function loadStage(input, dependencies = {}) {
+    return loadStageAndCompleted(input, dependencies).staged;
+}
+
 function repairFormulaDelimiters(markdown) {
     return String(markdown).replace(/(?<!\\)\\+\[([\s\S]*?)(\\+)\]|(?<!\\)\\+\(([\s\S]*?)(\\+)\)/g,
         (_match, display, _displaySlashes, inline, _inlineSlashes) => {
@@ -1114,8 +1119,7 @@ function hierarchyLines(hierarchy, facetDisplayLabels) {
     return lines;
 }
 
-function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagingRoot, aggregateRoot,
-    planHandle, sourceRoot, preservedStages = {}, retainedSources, apply = false, trustEvidence = false }, dependencies = {}) {
+function aggregateContext({ executionIds, tagCatalogPath, planHandle, preservedStages = {}, retainedSources, trustEvidence = false }, dependencies = {}) {
     if (!Array.isArray(executionIds) || !executionIds.length || new Set(executionIds).size !== executionIds.length
         || executionIds.some(id => !UUID_RE.test(id))) fail('生成会议汇总需要非空的分析运行 ID 数组，各项必须是有效且不重复的 UUID。');
     const authenticated = planProof(planHandle, dependencies); const expectedIds = authenticated.proof.paperIds;
@@ -1125,7 +1129,14 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         || Object.keys(preservedStages).length || trustEvidence)) {
         fail('原来源映射必须精确覆盖全部分析运行，且不能混用保留页面或跳过计划核验。');
     }
-    const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath); const byPaper = new Map();
+    const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
+    return { authenticated, expectedIds, tagCatalog };
+}
+function aggregateConference(input, dependencies = {}) {
+    const { analysisRoot, executionIds, tagCatalogPath, stagingRoot, planHandle, sourceRoot,
+        preservedStages = {}, retainedSources, trustEvidence = false } = input;
+    const { authenticated, expectedIds, tagCatalog } = aggregateContext(input, dependencies);
+    const byPaper = new Map();
     for (const executionId of executionIds) {
         let originalSource = { planHandle, sourceRoot };
         if (retainedSources !== undefined) {
@@ -1142,8 +1153,11 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
             originalSource = { planHandle: retained.planHandle, sourceRoot: retained.sourceRoot };
         }
         const preserved = Object.hasOwn(preservedStages, executionId) ? preservedStages[executionId] : null;
-        const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, ...originalSource, trustEvidence }, dependencies);
-        const staged = preserved ? loadPreservedStage({ stagingRoot, executionId, paperId: preserved.paperId, pageProof: preserved.pageProof }, dependencies) : null;
+        const details = preserved ? null : loadStageAndCompleted({ analysisRoot, executionId,
+            tagCatalogPath, stagingRoot, ...originalSource, trustEvidence }, dependencies);
+        const completed = details?.completed || null;
+        const staged = preserved ? loadPreservedStage({ stagingRoot, executionId,
+            paperId: preserved.paperId, pageProof: preserved.pageProof }, dependencies) : details.staged;
         const paperId = preserved ? staged.manifest.paperId : completed.run.paperId;
         if (byPaper.has(paperId)) fail('同一篇入选论文对应了多个分析运行，不能生成汇总。');
         byPaper.set(paperId, { executionId, completed, originalSource, ...(staged ? { staged } : {}) });
@@ -1153,10 +1167,35 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         fail('分析运行对应的论文集合与已核验计划的完整入选集合不一致。');
     }
     const stages = expectedIds.map(paperId => {
-        const item = byPaper.get(paperId); const staged = item.staged || loadStage({ analysisRoot, executionId: item.executionId,
-            tagCatalogPath, stagingRoot, ...item.originalSource, trustEvidence }, dependencies);
-        return { ...staged, completed: item.completed };
+        const item = byPaper.get(paperId);
+        return { ...item.staged, completed: item.completed };
     });
+    return buildAggregateArtifacts({ ...input, authenticated, tagCatalog, stages }, dependencies);
+}
+
+async function aggregateConferenceParallel(input, operation) {
+    const { authenticated, expectedIds, tagCatalog } = aggregateContext(input);
+    if (input.trustEvidence || Object.keys(input.preservedStages || {}).length) fail('并行汇总仅接受普通完整来源，不能借旧保留页面跳核');
+    // Authentic parent plan handles stay here; workers reconstruct theirs from
+    // the real archived source. No handle is serialized across isolates.
+    if (input.retainedSources) for (const executionId of input.executionIds) {
+        const original = planProof(input.retainedSources.get(executionId).planHandle).proof;
+        if (['conferenceId', 'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256']
+            .some(key => original[key] !== authenticated.proof[key])
+            || stableHash(original.paperIds) !== stableHash(expectedIds)) fail('并行汇总原计划与完整入选集合不一致');
+    }
+    const pool = require('./conference-complete-stage-pool');
+    const batch = await pool.collectAggregateStageBatch(input, operation, authenticated.proof);
+    const stages = pool.readAggregateStageBatch(batch, input.executionIds, authenticated.proof);
+    const result = require('./analysis-stop-control').withModelRequestsForbidden(() =>
+        buildAggregateArtifacts({ ...input, apply: false, authenticated, tagCatalog, stages }));
+    pool.assertAggregateStageBatchUnchanged(batch);
+    require('./analysis-stop-control').assertMayStartRequest();
+    if (input.apply) writeAggregateArtifacts(input.aggregateRoot, result.manifest);
+    return { ...result, status: input.apply ? 'staged' : 'dry-run' };
+}
+
+function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, authenticated, tagCatalog, stages }, dependencies = {}) {
     if (new Set(stages.map(item => item.manifest.pagePath)).size !== stages.length) fail('selected pages have duplicate path ownership');
     const conferenceId = authenticated.proof.conferenceId;
     const members = stages.map(item => ({ paperId: item.manifest.paperId, title: item.manifest.title, date: item.manifest.date,
@@ -1338,14 +1377,17 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         memberSetSha256: stableHash(members), pagePath: `content/posts/conference-${conferenceId}.md`, markdown,
         markdownSha256: sha256(Buffer.from(markdown)) };
     const manifest = { ...body, manifestSha256: stableHash(body) };
-    if (apply) {
-        const root = fresh.assertSafeDirectory(aggregateRoot, true); const conference = fresh.assertSafeDirectory(path.join(root, conferenceId), true);
-        const directory = fresh.assertSafeDirectory(path.join(conference, aggregateId), true);
-        const entries = fs.readdirSync(directory); if (entries.some(name => !['aggregate.md', 'manifest.json'].includes(name))) fail('conference aggregate contains unexpected recovery content');
-        pageApi.writeExact(path.join(directory, 'aggregate.md'), Buffer.from(markdown));
-        pageApi.writeExact(path.join(directory, 'manifest.json'), canonicalBytes(manifest));
-    }
+    if (apply) writeAggregateArtifacts(aggregateRoot, manifest);
     return { status: apply ? 'staged' : 'dry-run', manifest };
+}
+function writeAggregateArtifacts(aggregateRoot, manifest) {
+    const root = fresh.assertSafeDirectory(aggregateRoot, true);
+    const conference = fresh.assertSafeDirectory(path.join(root, manifest.conferenceId), true);
+    const directory = fresh.assertSafeDirectory(path.join(conference, manifest.aggregateId), true);
+    const entries = fs.readdirSync(directory);
+    if (entries.some(name => !['aggregate.md', 'manifest.json'].includes(name))) fail('conference aggregate contains unexpected recovery content');
+    pageApi.writeExact(path.join(directory, 'aggregate.md'), Buffer.from(manifest.markdown));
+    pageApi.writeExact(path.join(directory, 'manifest.json'), canonicalBytes(manifest));
 }
 
 module.exports = { CONTRACT, PAGE_VERSION, LEGACY_PAGE_CONTRACT, AGGREGATE_CONTRACT, AGGREGATE_VERSION,
@@ -1354,5 +1396,5 @@ module.exports = { CONTRACT, PAGE_VERSION, LEGACY_PAGE_CONTRACT, AGGREGATE_CONTR
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,
     repairStatisticalSignificanceStars, repairUnpairedMarkdownStars, repairDollarMath,
-    stagePaper, loadStage, loadPreservedStage, aggregateConference, aggregateHierarchy, hierarchyLines, conceptHref,
+    stagePaper, loadStage, loadStageAndCompleted, loadPreservedStage, aggregateConference, aggregateConferenceParallel, aggregateHierarchy, hierarchyLines, conceptHref,
     repairConferenceImageUrls, repairCaptionQuotedGlossLinks, repairPreservedPage };

@@ -76,3 +76,13 @@ test('worker错误交接保留cause内真实磁盘故障和原运行级分类，
     assert.equal(pool.serializeError(Object.assign(Error('forbidden'), { code: stop.MODEL_REQUESTS_FORBIDDEN,
         scope: 'paper' })).scope, 'run');
 });
+
+test('聚合批能力只能由实际完整worker核验铸造，裸JSON/克隆不能读或通过CAS', async () => {
+    for (const forged of [{}, Object.freeze({ status: 'loaded-stage', results: [] }),
+        structuredClone({ ids: ['p'], planProof: 'a'.repeat(64) })]) {
+        assert.throws(() => pool.readAggregateStageBatch(forged, [], {}), { code: 'CONFERENCE_STAGE_WORKER_INTEGRITY' });
+        assert.throws(() => pool.assertAggregateStageBatchUnchanged(forged), { code: 'CONFERENCE_STAGE_WORKER_INTEGRITY' });
+    }
+    await assert.rejects(pool.collectAggregateStageBatch({ analysisRoot: '/tmp', tagCatalogPath: '/tmp' }, {}, {}),
+        { code: 'CONFERENCE_STAGE_WORKER_INTEGRITY' });
+});

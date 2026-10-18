@@ -158,6 +158,22 @@ function fixture(t, extraRuns = []) {
     return { root, one, two, extra, runs, planHandle, sourceRoot: path.join(root, 'source'), dependencies };
 }
 
+test('同步汇总复用同次loadStage完整资格，每篇只核一次且实物漂移仍拒', t => {
+    const f = fixture(t), stagingRoot = path.join(f.root, 'staging');
+    const options = { analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
+        stagingRoot, aggregateRoot: path.join(f.root, 'aggregate'), planHandle: f.planHandle, sourceRoot: f.sourceRoot };
+    for (const executionId of options.executionIds) api.stagePaper({ ...options, executionId, apply: true }, f.dependencies);
+    let qualified = 0, rendered = 0;
+    const deps = { ...f.dependencies, isSuccessful: (...args) => { qualified++; return f.dependencies.isSuccessful(...args); },
+        render: packet => { rendered++; return f.dependencies.render(packet); } };
+    const result = api.aggregateConference(options, deps);
+    assert.equal(result.manifest.members.length, 2); assert.equal(qualified, 2); assert.equal(rendered, 2);
+    const one = api.loadStage({ ...options, executionId: f.one }, f.dependencies);
+    fs.appendFileSync(path.join(one.directory, 'page.md'), 'drift');
+    assert.throws(() => api.aggregateConference(options, deps), /输出不一致/);
+    assert.equal(fs.existsSync(options.aggregateRoot), false);
+});
+
 test('新资源声明的会议冷资格只在原计划来源核验后重放，并保留具体失败诊断', t => {
     const f = fixture(t), loaded = f.runs.get(f.one), paper = loaded.analysis.papers[0];
     loaded.directory = path.join(f.root, f.one);

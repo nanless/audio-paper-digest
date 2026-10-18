@@ -1191,11 +1191,15 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     publishReviewQueue(state);
     assertRuntimeAuthorityUnchanged(context, deps, 'before aggregate');
     const executionIds = context.members.map(member => state.items[member.paperId].analysisRunId);
-    const aggregate = await (deps.aggregate || (async () => deps.postprocess.aggregateConference({
+    const aggregate = await (deps.aggregate || (async () => {
+        const method = !deps.loadAuthority && deps.postprocess.aggregateConferenceParallel
+            ? deps.postprocess.aggregateConferenceParallel : deps.postprocess.aggregateConference;
+        return method({
         analysisRoot: deps.files.conferenceAnalysisDir, executionIds, tagCatalogPath: deps.files.tagCatalogFile,
         stagingRoot: deps.files.conferencePageStagingDir, aggregateRoot: deps.files.conferenceAggregateDir,
         planHandle: shared.planHandle, sourceRoot: shared.sourceCacheRoot,
-        retainedSources: shared.retainedSources, apply: true })))(context, shared, executionIds, deps);
+        retainedSources: shared.retainedSources, apply: true }, { processId, concurrency: options.concurrency,
+            authoritySha256: stableHash(context.authority) }); }))(context, shared, executionIds, deps);
     const aggregateProof = { manifestSha256: aggregate.manifest.manifestSha256,
         markdownSha256: aggregate.manifest.markdownSha256, aggregateId: aggregate.manifest.aggregateId,
         pagePath: aggregate.manifest.pagePath };
