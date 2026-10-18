@@ -64,6 +64,32 @@ class ResourceClaimReplayTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(value['verified'])
 
+    def test_actual_python_publication_descriptor_rejects_placeholder_result_table(self):
+        body = ('下面比较同一协议下的来源结果。\n\n'
+                '| 来源证据 | 量化值一 | 量化值二 |\n'
+                '|---|---|---|\n'
+                '| 来源句一 | 3830 | 42.5 |\n\n'
+                '本表没有真实指标和实验条件身份，不能当作实验结果。')
+        result, value = self.run_replay(body)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(value['verified'])
+        self.assertEqual(value['code'], 'reader_placeholder_result_table')
+        self.assertTrue(value['issues'])
+
+    def test_semantic_results_source_explanations_and_fenced_examples_remain_valid(self):
+        bodies = [
+            '| 来源证据 | 报告值 |\n|---|---|\n| 统一协议 | 1.0 |',
+            '| 来源证据 | 原文引句 | 解释 |\n|---|---|---|\n'
+            '| 来源句一 | 原文说明测量协议 | 只是来源解释 |',
+            '下面给出需要避免的格式示例，代码围栏不是实际结果表。\n\n'
+            '```markdown\n| 来源证据 | 量化值一 |\n|---|---|\n| 来源句一 | 2025 |\n```',
+        ]
+        for body in bodies:
+            with self.subTest(body=body):
+                result, value = self.run_replay(body)
+                self.assertEqual(result.returncode, 0, result.stderr or value)
+                self.assertEqual(value, {'verified': True})
+
     def test_arbitrary_publication_quotes_cannot_supplement_source_bindings(self):
         for evidence in ({'tables': []}, {'executionId': '../outside', 'quotes': ['unit s']}):
             with self.subTest(evidence=evidence):

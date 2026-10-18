@@ -185,7 +185,7 @@ test('新资源声明的会议冷资格只在原计划来源核验后重放，�
     loaded.source.sourceDetails.text = previous;
     paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = 'unknown';
     assert.equal(engine.getApiReaderV3RecordDiagnostics(paper)[0].check, 'resource_claims_contract');
-    assert.throws(() => api.loadCompleted(options, deps), /读者文章/);
+    assert.throws(() => api.loadCompleted(options, deps), /读者文章.*resource_claims_contract/s);
 });
 
 test('会议冷后处理把已核验全文传入核心校验，参数来源不能借无来源检查通过', t => {

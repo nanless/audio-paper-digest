@@ -63,6 +63,9 @@ globalThis.fetch = deny;
     if (crypto.createHash('sha256').update(sourceText).digest('hex') !== input.paper.sourceSha256) throw new Error('Authenticated PDF source text SHA differs');
     const deep = require('../deep-analyzer');
     const draft = deep.readerResourceClaimDraftFromArticle(input.paper.apiReaderPlan, input.paper.apiReaderArticle);
+    // Python publication replays this same actual article/plan gate even when
+    // no Node analysis scheduler ran during an explicit generate/publish resume.
+    deep.assertReaderResultTableSemantics(draft);
     const response = { verified: true };
     const withAuthenticated = callback => authenticatedHandle
         ? require('./reader-authenticated-pdf-table-evidence').withVerifiedSource(authenticatedHandle,

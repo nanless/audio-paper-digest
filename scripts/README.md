@@ -273,7 +273,7 @@ npm run test:compat
 | `lib/reader-inline-svg.js` | Node 库：核对官方内嵌 SVG 的原始字节和来源定位，调用受控渲染器生成本次阅读所需图片。 |
 | `lib/reader-pdf-cell-evidence.js` | Reader PDF 表格单元格的来源绑定与跨 worker 证据核验。 |
 | `lib/reader-resource-binding.js` | Node 库：提取并规范化论文中的 GitHub、GitLab、Hugging Face 和 ModelScope 链接，保留原始 URL、逐字原文片段及资源类型，使换行 URL 也能准确核验来源。 |
-| `lib/reader-resource-claims-replay-cli.js` | 出版前从私有描述符重放资源宣称与封存全文绑定；禁止网络。 |
+| `lib/reader-resource-claims-replay-cli.js` | Python 出版前从私有描述符重放资源宣称与封存全文绑定，并以共享语义规则拒绝实际 Reader 正文的占位结果表；禁止网络。 |
 | `lib/reader-resource-input-admission.js` | Node 库：真实资源状态变化须逐字重放原请求、已付响应、费用与失败稿，并核完整父阶段和封存来源；同来源 Reader 范围仅一次新输入，固定正常 6/2 预算，旧稿与旧计数不迁移。仅元数据变化拒绝再开。 |
 | `lib/reader-resource-prose.js` | 把已核验资源身份投影为自然语言输入，保留作者与第三方归属。 |
 | `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |

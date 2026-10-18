@@ -105,13 +105,16 @@ function validateReaderAndScoring(paper, sourceText) {
         const issue = sectionIssue || coreSummaryIssue;
         fail(`会议论文必须有基于全文的分析，包含规定的 13 节，并通过核心摘要阶段校验${issue ? `: ${issue}` : ''}`);
     }
+    const readerDiagnostics = [];
     if (contracts.apiReaderArticle !== READER_CONTRACT
         || contracts.apiReaderSourceBindings !== SOURCE_BINDINGS_CONTRACT
         || paper?.apiReaderPlan?.contract !== READER_CONTRACT
         || paper?.apiReaderPlan?.sourceBindingsContract !== SOURCE_BINDINGS_CONTRACT
         || !analysisEngine.hasValidApiReaderV3Records(paper, { legacyConferenceResourceBindings: true,
-            conferencePublicationEvidence: true })) {
-        fail('读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验。');
+            conferencePublicationEvidence: true, diagnostics: readerDiagnostics })) {
+        const detail = readerDiagnostics.map(item => `${item.code || item.check}: ${item.message}`).join('；');
+        fail('读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验。'
+            + (detail ? ` ${detail}` : ''));
     }
     if (scoring.status !== 'complete' || scoring.scoringContract !== SCORING_CONTRACT
         || !analysisEngine.scoringAuditBindsFinalAnalysis(paper)

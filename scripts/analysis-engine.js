@@ -1133,6 +1133,21 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
         || !Array.isArray(figures)
         || !authors || typeof authors !== 'object' || Array.isArray(authors)
         || !resources || typeof resources !== 'object' || Array.isArray(resources)) return false;
+    // Saved signatures prove identity, not that a retired numeric placeholder
+    // table has meaningful result columns. Apply the current shared semantic
+    // check to the actual published body, including legacy signed records.
+    const resultTableIssues = require('./deep-analyzer').readerPlaceholderResultTableIssues({
+        sections: [{ body: article }], tableBindings: plan.tableBindings
+    });
+    if (resultTableIssues.length) {
+        if (Array.isArray(options.diagnostics)) options.diagnostics.push(...resultTableIssues.map(issue => ({
+            check: 'reader_result_table_semantics', code: issue.code, message: issue.message,
+            path: issue.path.startsWith('/tableBindings/')
+                ? `/apiReaderPlan${issue.path}` : '/apiReaderArticle',
+            tableIndex: issue.tableIndex
+        })));
+        return false;
+    }
     const articleSha256 = crypto.createHash('sha256').update(article).digest('hex');
     const planSha256 = stableSha256(plan);
     const figuresSha256 = stableSha256(figures);
