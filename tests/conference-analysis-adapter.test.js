@@ -340,6 +340,7 @@ test('会议 Reader revision 保留原完成包，失败中断后从同一候选
         resourceBuilds += 1; return emptyReaderResourceIdentity(text);
     }, refreshApiReaderArticleFromSource: async (value, source, options) => {
         calls += 1; assert.equal(options.resumeSavedSourceReader, true);
+        assert.equal(options.signedRevisionMinimalDisplay, undefined);
         assert.equal(context.getConferenceAnalysisSource(value).text, source.text);
         assert.equal(value.paidCost, 42); assert.equal(value.analysis, 'paid original core');
         if (calls === 1) { value.apiReaderFailedBundleHistory = [{ draft: 'paid failed draft', cost: 9 }];
@@ -955,4 +956,53 @@ test('已核验的弱 Reader 拒绝未经核实的开源声明，且只修它所
     }));
     assert.equal(calls, 2);
     assert.doesNotMatch(result.article, /代码已经开源并可下载/);
+});
+
+
+test('已核维护父 seed 与新预检资源走正常非精简修订，不把过渡旧 Reader 当完整子稿', async t => {
+    // Synthetic orchestration only: the real paid-parent/source positive and
+    // tampered input negatives are separately retained by the readonly diagnostic.
+    const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'review-seed-transition');
+    const input = { analysisRoot, parentExecutionId: EXECUTION, planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot };
+    adapter.prepareConferenceAnalysis({ ...input, executionId: EXECUTION, paperId: fixture.paperId });
+    const loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
+    const paper = { ...loaded.analysis.papers[0], analysis: 'protected original scientific analysis',
+        apiReaderArticle: 'original signed Reader', apiReaderResources: { identitySha256: 'old-resource-identity' },
+        analysisManifest: { sourceAcquisition: { modelTextSanitizationContract: 'model-text-unicode-scalars-v1' }, stages: {
+            primaryAnalysis: { status: 'complete' }, coreSummaryRepair: { status: 'complete' },
+            scoringAudit: { status: 'complete' }, apiReaderArticle: { status: 'complete', resourceIdentitySha256: 'old-resource-identity' } } } };
+    adapter.replaceJson(path.join(loaded.directory, 'analysis.json'), { ...loaded.analysis, status: 'complete', completedAt: '2026-10-16T00:00:00.000Z', papers: [paper] }, loaded.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }));
+    const original = fs.readFileSync(path.join(loaded.directory, 'analysis.json'));
+    const post = require('../scripts/lib/conference-postprocess'), maintenance = require('../scripts/lib/conference-reader-review-maintenance');
+    const previousRead = post.readOriginalTagProof;
+    const names = ['bindCompletedParent', 'prepareParentRevisionSeed', 'replayRevisionFeedback', 'assertReaderOutput'];
+    const saved = Object.fromEntries(names.map(name => [name, maintenance[name]]));
+    t.after(() => { post.readOriginalTagProof = previousRead; Object.assign(maintenance, saved); });
+    post.readOriginalTagProof = () => ({ rules: {} });
+    const seed = { initialDraft: 'authenticated synthetic parent reference', metadata: { revisionSeedSha256: 'synthetic' } };
+    const bound = { locator: { synthetic: true }, modelFeedback: 'original immutable raw review feedback', revisionSeed: seed };
+    maintenance.bindCompletedParent = () => bound;
+    maintenance.prepareParentRevisionSeed = () => seed;
+    maintenance.replayRevisionFeedback = child => {
+        const record = adapter.readJsonRecord(path.join(child.directory, 'review-reader-seed.json'));
+        assert.equal(record.sha256, child.revision.readerReviewSeedFileSha256);
+        assert.deepEqual(record.value, seed); return bound;
+    };
+    maintenance.assertReaderOutput = (_loaded, value) => assert.equal(value.analysis, paper.analysis);
+    let readers = 0;
+    const engine = { LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY: Symbol('synthetic'),
+        withPaperAnalysisLock: async (_paper, run) => run(), getConferenceReaderRefreshUpstreamReason: () => null,
+        isSuccessfulAnalysisRecordForReadOnlyConferencePublication: value => value.apiReaderArticle === 'actual new synthetic Reader' };
+    const operations = { buildApiReaderResourceIdentity: async (_analysis, text) => emptyReaderResourceIdentity(text),
+        refreshApiReaderArticleFromSource: async (value, _source, options) => {
+            readers++; assert.equal(options.resumeSavedSourceReader, true);
+            assert.equal(options.signedRevisionMinimalDisplay, false);
+            assert.deepEqual(options.revisionSeed, seed); assert.equal(options.reviewFeedback, bound.modelFeedback);
+            assert.notEqual(value.apiReaderResources.identitySha256, value.analysisManifest.stages.apiReaderArticle.resourceIdentitySha256);
+            assert.equal(value.analysis, paper.analysis); value.apiReaderArticle = 'actual new synthetic Reader'; return value;
+        } };
+    const result = await adapter.refreshConferenceReader({ ...input, reviewMaintenanceHandle: Object.freeze({ synthetic: true }) }, { engine, deep: operations });
+    assert.equal(result.status, 'complete'); assert.equal(readers, 1);
+    assert.deepEqual(fs.readFileSync(path.join(loaded.directory, 'analysis.json')), original);
 });

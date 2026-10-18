@@ -1391,7 +1391,12 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                         : deep.refreshApiReaderArticleFromSource(paper, loaded.source.sourceDetails,
                             { resumeSavedSourceReader: true,
                                 ...(loaded.readerReview ? { reviewFeedback: loaded.readerReview.modelFeedback,
-                                    revisionSeed: loaded.readerReview.revisionSeed } : {}) })));
+                                    // The immutable seed was authenticated against the original parent.
+                                    // The child already carries its fresh resource preflight, so use
+                                    // the normal article+plan display rather than rechecking the old
+                                    // Reader as a current completed child for optional minimal display.
+                                    revisionSeed: loaded.readerReview.revisionSeed,
+                                    signedRevisionMinimalDisplay: false } : {}) })));
             if (loaded.readerReview) require('./conference-reader-review-maintenance')
                 .assertReaderOutput(loaded, paper, parent.analysis.papers[0]);
             // Core and classification may never be rewritten by a Reader revision.
