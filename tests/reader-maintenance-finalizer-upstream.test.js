@@ -35,7 +35,7 @@ test('maintenance protected scientific comparison stays exact for body score tag
   analysisManifest:{stages:{scoringAudit:{status:'complete',outputAnalysisSha256:'b'.repeat(64)}}}};
  const paper=structuredClone(parent),bound={locator:{reviewFeedbackSha256:'c'.repeat(64)}};
  paper.apiReaderArticle='new Reader';paper.analysisManifest.stages.apiReaderArticle={status:'complete',reviewFeedbackSha256:bound.locator.reviewFeedbackSha256};
- const loaded={readerReview:bound};
+ const loaded={readerReview:bound,analysis:{}};
  assert.doesNotThrow(()=>maintenance.assertReaderOutput(loaded,paper,parent));
  for(const mutate of [p=>p.analysis+='changed',p=>p.parsed.score=9,p=>p.parsed.tagValidation={new:true},
   p=>p.analysisManifest.stages.scoringAudit.outputAnalysisSha256='d'.repeat(64),
