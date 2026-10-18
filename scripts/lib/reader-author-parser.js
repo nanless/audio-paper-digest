@@ -520,6 +520,35 @@ function parseConferencePdfAuthors(text) {
 }
 
 // 原 HTML 仅供本地身份重放，不是模型证据或图片缓存。
+
+const CONFERENCE_PDF_AUTHOR_LINES_V2 = 'conference-pdf-author-lines-v2';
+function parseConferencePdfAuthorsV2(text) {
+    const original=String(text||''), boundary=original.search(/\n\s*ABSTRACT\b/i);
+    const preamble=boundary>=0?original.slice(0,boundary):original.slice(0,12000);
+    const raw=preamble.split('\n'), projected=[];
+    for(let i=0;i<raw.length;i++) {
+        let line=raw[i];
+        // Only an explicitly unfinished labelled institution can own an
+        // indented continuation. Never absorb names, emails, another marker,
+        // Abstract, acknowledgements or ordinary paper prose.
+        if(/^\s*(?:[1-9]\d{0,2}|[†‡∗⋆*])\s+/.test(line)&&CONFERENCE_PDF_AFFILIATION_HINT.test(line)) {
+            for(let count=0;count<2&&/\b(?:of|and)\s*$/i.test(line)&&i+1<raw.length;count++) {
+                const next=raw[i+1];
+                if(!/^\s{2,}\S/u.test(next)||!/^\s*(?:Technology|Science|Engineering|School|University|Institute|Academy|Department|College|Center|Centre)\b/i.test(next)
+                    ||/[@]|^\s*(?:[1-9]\d{0,2}|[†‡∗⋆*])\s+|\b(?:Abstract|Acknowledg|Introduction|DOI)\b/i.test(next))break;
+                line+=' '+next.trim();i++;
+            }
+        }
+        projected.push(line);
+    }
+    const parsed=parseConferencePdfAuthors(projected.join('\n')+(boundary>=0?original.slice(boundary):''));
+    if(!parsed)return null;
+    const evidence=preamble.trim();
+    return {...parsed,contract:'conference-pdf-author-evidence-v2',sourceTextSha256:sha256(Buffer.from(original,'utf8')),
+        sourceEvidence:evidence,sourceEvidenceSha256:sha256(Buffer.from(evidence,'utf8')),
+        sourceDomSha256:sha256(Buffer.from(evidence,'utf8'))};
+}
+
 function canRetainAuthorSourceHtml(html) {
     if (typeof html !== 'string' || !html || Buffer.byteLength(html, 'utf8') > MAX_AUTHOR_SOURCE_HTML_BYTES
         || !/<html\b[^>]*>[\s\S]*<\/html\s*>/iu.test(html)
@@ -552,16 +581,25 @@ function replayHtmlReaderAuthors(details) {
     return parseArxivReaderAuthors(cheerio.load(html));
 }
 
-function verifiedReaderAuthorDetails(details) {
+function verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion = 1 } = {}) {
+    if (![1,2].includes(conferencePdfAuthorParserVersion)) throw new Error('Unknown conference author parser version');
     const readerAuthors = details?.source === 'conference_pdf_text'
-        ? parseConferencePdfAuthors(details.text) : replayHtmlReaderAuthors(details)
+        ? (conferencePdfAuthorParserVersion===2?parseConferencePdfAuthorsV2(details.text):parseConferencePdfAuthors(details.text)) : replayHtmlReaderAuthors(details)
             || (details?.source === 'html'
                 ? require('./fresh-analysis-context.js').readVerifiedBundleReaderAuthors(details) : null);
     return { ...details, readerAuthors: readerAuthors || null };
 }
 
-function resolveVerifiedReaderAuthors(paper, details) {
-    return resolveApiReaderAuthors(paper, verifiedReaderAuthorDetails(details));
+function resolveVerifiedReaderAuthors(paper, details, options = {}) {
+    const savedVersion=paper?.apiReaderAuthors?.identity?.conferencePdfAuthorParser;
+    if(savedVersion!==undefined&&savedVersion!==CONFERENCE_PDF_AUTHOR_LINES_V2)throw new Error('Unknown saved conference author parser');
+    const version=options.conferencePdfAuthorParserVersion ?? (savedVersion===CONFERENCE_PDF_AUTHOR_LINES_V2?2:1);
+    const resolved=resolveApiReaderAuthors(paper,verifiedReaderAuthorDetails(details,{conferencePdfAuthorParserVersion:version}));
+    if(details?.source==='conference_pdf_text'&&version===2) {
+        resolved.identity.conferencePdfAuthorParser=CONFERENCE_PDF_AUTHOR_LINES_V2;
+        resolved.identitySha256=stableFingerprint(resolved.identity);
+    }
+    return resolved;
 }
 
 const EXPLICIT_UNAVAILABLE_AFFILIATIONS = new Set([
@@ -632,7 +670,7 @@ function readerAuthorIdentityMatchesSource(paper, details) {
 module.exports = {
     normalizeReaderIdentityText, readerIdentityKey, readerIdentityTokens,
     sanitizeReaderAffiliationValue, isReaderResourceAffiliationLabel, parseArxivReaderAuthors,
-    resolveApiReaderAuthors, bindApiReaderAuthorIdentity, parseConferencePdfAuthors,
+    resolveApiReaderAuthors, bindApiReaderAuthorIdentity, parseConferencePdfAuthors, parseConferencePdfAuthorsV2, CONFERENCE_PDF_AUTHOR_LINES_V2,
     verifiedReaderAuthorDetails, resolveVerifiedReaderAuthors, readerAuthorIdentityMatchesSource, readerAuthorUnavailableIdentityMatches,
     MAX_AUTHOR_SOURCE_HTML_BYTES, canRetainAuthorSourceHtml, retainAuthorSourceHtml, replayHtmlReaderAuthors
 };

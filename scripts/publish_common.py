@@ -7180,6 +7180,142 @@ def normalize_bold_label_prefix_spacing(text):
     return ''.join(output)
 
 
+def escape_literal_source_figure_caption_dollars(text, *, _literal_pairs=None):
+    r"""Make literal PDF caption dollars Markdown-safe, without guessing metrics.
+
+    Only the generated standalone image + matching source-caption pair qualifies.
+    This is a publication display transformation, not a Reader/source correction.
+    Code, URLs, balanced math and existing escapes retain their original bytes.
+    """
+    if not text or '$' not in text or '*论文图 ' not in text:
+        return text
+    caption = re.compile(
+        r'^(?P<prefix>\*论文图 [1-9][0-9]*。原论文 '
+        r'(?P<label>(?:Figure|Fig\.) [1-9][0-9]*)：“)'
+        r'(?P<value>[^\r\n]*)(?P<suffix>”。\*)(?P<ending>\r?\n)?$')
+    image = re.compile(
+        r'^(?P<wrap>\[)?!\[(?P<alt>[^\r\n]*)\]\((?P<url>[^)\r\n]+)\)'
+        r'(?(wrap)\]\((?P=url)\))(?P<ending>\r?\n)?$')
+    source_note = re.compile(
+        r'^> \*\*图片来源：\*\* (?P<note>原论文 PDF 第 [1-9][0-9]* 页'
+        r'(?: Figure (?P<crop>[1-9][0-9]*)（出版显示裁切）'
+        r'|，本文讨论 Figure (?P<page>[1-9][0-9]*)（完整原页(?:；图注未完整抽取，以原页为准)?）))。(?:\r?\n)?$')
+    protected = re.compile(
+        r'(?P<ticks>`+)(?!`).*?(?<!`)(?P=ticks)(?!`)'
+        r'|https?://[^\s<>]+'
+        r'|(?<!\\)\\\([\s\S]*?\\\)'
+        r'|(?<!\\)\\\[[\s\S]*?\\\]'
+        r'|(?<!\\)\$\$.+?\$\$'
+        r'|(?<![\\$])\$(?!\$)([^\s$](?:[^$\n]*?[^\s$])?)\$(?![\d$])')
+
+    def escape_fragment(value):
+        spans = [(m.start(), m.end()) for m in protected.finditer(value)]
+        output, span_index, slash_run = [], 0, 0
+        for index, char in enumerate(value):
+            while span_index < len(spans) and spans[span_index][1] <= index:
+                span_index += 1
+            guarded = span_index < len(spans) and spans[span_index][0] <= index < spans[span_index][1]
+            if char == '$' and slash_run % 2 == 0 and not guarded:
+                output.append('\\')
+            output.append(char)
+            slash_run = slash_run + 1 if char == '\\' else 0
+        return ''.join(output)
+
+    lines, outside = text.splitlines(keepends=True), []
+    fence = None
+    for line in lines:
+        marker = re.match(r'^[ \t]{0,3}(`{3,}|~{3,})', line)
+        if marker:
+            token = marker[1]
+            if fence is None:
+                fence = (token[0], len(token))
+            elif token[0] == fence[0] and len(token) >= fence[1] and not line[marker.end():].strip():
+                fence = None
+            outside.append(False)
+        else:
+            outside.append(fence is None)
+    # CommonMark inline code may span newlines. Do not treat a generated-looking
+    # example inside such a span as an actual figure, including when its lines
+    # happen to start at column zero.
+    multiline_code = [(m.start(), m.end()) for m in re.finditer(
+        r'(?P<ticks>`+)(?!`).*?(?<!`)(?P=ticks)(?!`)', text, flags=re.DOTALL)
+        if '\n' in m.group(0)]
+    offsets, cursor = [], 0
+    for line in lines:
+        offsets.append(cursor)
+        cursor += len(line)
+    for index, line in enumerate(lines):
+        if not outside[index] or any(start < offsets[index] + len(line) and end > offsets[index]
+                                     for start, end in multiline_code):
+            continue
+        match = caption.fullmatch(line)
+        if not match:
+            continue
+        before = index - 1
+        while before >= 0 and not lines[before].strip():
+            before -= 1
+        note_value = ''
+        if before >= 0:
+            note = source_note.fullmatch(lines[before])
+            if note:
+                native_number = re.search(r'[0-9]+$', match['label']).group(0)
+                if not outside[before] or (note['crop'] or note['page']) != native_number:
+                    continue
+                note_value = '图片来源： ' + note['note'] + '。'
+                before -= 1
+                while before >= 0 and not lines[before].strip():
+                    before -= 1
+        if before < 0 or not outside[before]:
+            continue
+        node = image.fullmatch(lines[before])
+        if node is None or not node['alt'].startswith('原论文 ' + match['label'] + '：'):
+            continue
+        escaped_caption = match['prefix'] + escape_fragment(match['value']) + match['suffix']
+        escaped_alt = escape_fragment(node['alt'])
+        if _literal_pairs is not None:
+            _literal_pairs.append({'caption': line.rstrip('\r\n'), 'escapedCaption': escaped_caption,
+                                   'alt': node['alt'], 'escapedAlt': escaped_alt, 'url': node['url'],
+                                   'sourceNote': note_value})
+        lines[index] = escaped_caption + (match['ending'] or '')
+        # Replace precisely the alt span, preserving URL, wrapper, order, label,
+        # punctuation and every byte outside these two literal text fragments.
+        start, end = node.span('alt')
+        lines[before] = lines[before][:start] + escaped_alt + lines[before][end:]
+    return ''.join(lines)
+
+
+def markdown_inline_code_ranges(article):
+    text = str(article or '')
+    ranges = []
+    cursor = 0
+    paragraph_boundary = re.compile(
+        r'\n(?:[ \t]*\n| {0,3}(?:#{1,6}(?:[ \t]|$)|>|[-+*][ \t]+(?=\S)|'
+        r'0{0,8}1[.)][ \t]+(?=\S)|(?:-+|\*{3,}|_{3,}|=+)[ \t]*(?=\n|$)))'
+    )
+    while cursor < len(text):
+        opening = re.search(r'(?<!`)(`+)(?!`)', text[cursor:])
+        if not opening:
+            break
+        start = cursor + opening.start()
+        end = cursor + opening.end()
+        escaped = start
+        while escaped > 0 and text[escaped - 1] == '\\':
+            escaped -= 1
+        if (start - escaped) % 2:
+            cursor = end
+            continue
+        boundary = paragraph_boundary.search(text, end)
+        limit = boundary.start() if boundary else len(text)
+        closing = re.search(r'(?<!`)`{' + str(end - start) + r'}(?!`)', text[end:limit])
+        if closing:
+            closed = end + closing.end()
+            ranges.append((start, closed))
+            cursor = closed
+        else:
+            cursor = end
+    return ranges
+
+
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
     # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
@@ -7190,6 +7326,7 @@ def sanitize_markdown_for_publish(text):
     frontmatter_match = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
     latex_prefix = frontmatter_match.group(0) if frontmatter_match else ''
     latex_body = text[len(latex_prefix):]
+    latex_body = escape_literal_source_figure_caption_dollars(latex_body)
     latex_body = normalize_arxiv_math_double_extraction(latex_body)
     latex_body = fix_latex_delimiters(latex_body)
     # 嵌套 TeX 花括号里的论文控制记号可能看起来像 Hugo shortcode（如

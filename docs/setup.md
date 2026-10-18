@@ -122,9 +122,11 @@ npm run validate:data -- --allow-empty
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 字符 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 字符 |
 | `PD_API_READER_CONCURRENCY` | 默认 5 个进程内解读生成任务，可显式设置 1–60 |
-| `PD_BLOG_REVIEW_CONCURRENCY` | 5 个独立页面审查任务 |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 5 个独立页面审查任务，范围1–5；会议汇总优先派发，单页分块仍串行 |
 
 这些环境变量写入项目 `.env`。Reader 刷新另可用 `--rounds N` 覆写本次总轮数，范围 1–10；会议和历史分析使用公共配置，没有新增同名参数。总轮数、同时处理的论文数和单阶段/Reader预算各自独立；改变批次轮数不重开已耗尽的候选额度。会议还受原单篇3次尝试窗口约束，历史保持首次选定范围；人工建议不会发请求或将失败改成通过，见 [三流程批次规则](three-workflows.md#全批轮次与失败集合)。
+
+会议博客正常 Reader 维护使用 migrate 的 `--reader-review-feedback`，并发仍受 `PD_API_READER_CONCURRENCY` 与显式 `--concurrency` 控制，不使用博客审查并发代替。维护单窗当前固定3轮、6次内容响应、2次全文，必要新窗由持续授权下的显式 `--reader-review-window` 另行登记；没有新增环境变量或公共 npm 清单生成命令，不以修改原 env 重置账本。出版同 PDF 原页派生不调用模型，新视图仍正常审查，详见[会议博客维护](conference-workflow.md#博客拒稿后的正常-reader-维护)。
 
 ### MiMo 专属推理配置与旧记录兼容
 

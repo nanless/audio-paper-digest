@@ -25,7 +25,7 @@ Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1�
 
 ## 官方会议
 
-使用 `conference:acquire/discover/filter/process`；`conference:publish:generate/review/push/verify`独立处理发布。旧execution/analyze/postprocess CLI已删除，不能绕过统一process来源/权限检查。参数见 [会议说明](../docs/conference-workflow.md)。
+使用 `conference:acquire/discover/filter/process`；`conference:publish:generate/review/push/verify`独立处理发布。旧execution/analyze/postprocess CLI已删除，不能绕过统一process来源/权限检查。参数见 [会议说明](../docs/conference-workflow.md)。博客完整审查后的已完成稿正常维护使用同一 migrate 入口的 `--reader-review-feedback`，另窗加 `--reader-review-window`，不混用 `--retry-failed` 或人工修正清单。
 
 会议适配器负责将已认证的真实来源上下文保留到 Reader 完成及冷启动资格核验。恢复时先检查同一子运行已保存的新付费稿，满足真实签发与完整资格才零请求完成；继承父稿不算新修复。共享摘要修复的诊断记录按会议执行及规范 ID 隔离，不能套用日更 arXiv 路径或放宽修复标准。
 
@@ -154,12 +154,16 @@ npm run test:compat
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总，沿私有池每篇复用一次完整 `loadStage` 的结果。认证PDF多层/平表的新增失败后补证仍逐项重建完整原网格、条件与单位，不改变原成功证明。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
 | `lib/conference-recovery-grant.js` | 显式追加会议额度的不可变登记与私有运行能力，绑定原 process 完整失败集合、父子稿 CAS 和真实来源；同一许可中断重入，禁止 JSON 自授额度。 |
+| `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。 |
+| `lib/conference-publication-figure-crop.js`、`lib/conference-publication-figure-crop-replay-cli.js` | 认证同 PDF 的独立出版派生及固定禁网 FD 冷核。正常发布仍要求真实当前父稿；库内 ForMaintenance 仅接受维护模块私有历史能力，重算原 PDF/像素和全部实物闭包，不授 current 发布或 Reader 通过。 |
+| `conference_publication_figure_crop.py`、`reader_pdf_page_geometry.py` | 固定几何规则及唯一印刷图号/完整图注匹配；可派生精确图或完整原页。有限原页另需原认证 raw artifacts sourceRef/页能力与同页唯一印刷图号，完整图注 null/未完整抽取明确展示，普通裁切仍严格。共享几何内核不改旧日更 SVG 输出字节与 proof 合同，不接受用户自由矩形。 |
+| `conference_publication_figure_view.py`、`conference_publication_figure_view_replay.py` | 只消费真实 Node 重放结果，复用原生图片 parser 生成独立出版页，保留原 Reader/来源签名；私有 FD pure transform 只重算 raw→view 字节，不能单凭 JSON 自哈希签来源、审查或发布。 |
 | `lib/conference-reader-recovery-window.js` | 同一已登记会议窗口的 Reader 6次内容/2次全文累计账本；请求前预留，保留不可变原请求和响应，冷核损坏或删账即阻断。生成须持论文锁；只读身份重放强制禁止模型。 |
 | `lib/conference-retained-source-replay.js` | 完整来源升级进程的只读逐篇来源回放：按每篇原分析绑定的计划凭证认证筛选、暂存、导入、原计划与原抽取，缓存不同计划的已认证句柄；单篇与汇总使用各自原来源。仅词表元数据能恢复到原凭证精确 SHA 时才在系统临时目录重放原计划，不改现有文件或重新提取、分析。 |
 | `lib/conference-reader-active-candidate-replay.js` | 在禁用新模型请求的私有临时目录中重放会议子运行已付费候选；核验唯一原请求、响应、用量、来源及归档 Prompt，私有范围内保留原模板声明并传递真实 PDF 能力。正常解析与整篇资格通过后交由适配器保存，不授予新请求或预算，不覆盖原稿。 |
 | `lib/conference-reader-publication-evidence.js` | 为已完成会议的发布复核从原封存 PDF 派生可逐字重放的表头、单位与实验设置引文；绑定原计划、抽取、正文及表格，不修改旧稿或来源签名，不授予普通分析成功或跳过资格。 |
 | `lib/conference-process.js` | Node 库：对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–60；每篇内部并发固定为 1。外层并发不改变原阶段限流、请求额度和整批轮次。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
-| `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与配置加载。 |
+| `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；先消费实际 Reader 维护 pending 门，再输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与模型请求。 |
 | `lib/conference-publication-author-source.js` | Node 库：只读核验官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；原2.3.0凭证严格复用已有保留来源读取器，其它版本仍走当前严格核验。不新建来源、不重抽 PDF 或请求模型。 |
 | `lib/conference-queue.js` | 会议队列状态、领取与并发保护；调用统一 process。 |
 | `lib/conference-run.js` | Node 库：固定会议成员、分片、分类策略、选择策略版本和逐篇状态。通用状态接口拒绝直接写 `completed`；聚合发布接口还要求一项尚未实现的认证完成证明，因此不能据此宣布会议可以发布。 |
@@ -168,9 +172,9 @@ npm run test:compat
 | `lib/conference-source-upgrade.js` | 会议来源能力升级的身份和已有分析绑定检查。 |
 | `lib/conference-staging.js` | Node 库：将认证的会议入选集与人工复核的提取结果一一核验，生成导入清单和凭证；排除项和身份别名都不能进入。 |
 | `lib/official-conference-acquisition.js` | Node 库：按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
-| `migrate-conference-process.js` | CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。`--postprocess-only --preserve-failed-readers` 仅供人工准备保留原失败稿，不能混入重试或许可，不授资格。明确获准的额外付费清单使用 `--retry-failed --recovery-manifest ABSOLUTE_PATH`，同一许可最多3轮，详见[会议追加恢复](../docs/conference-workflow.md#原额度耗尽后的独立付费恢复)。 |
+| `migrate-conference-process.js` | CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。`--reader-review-feedback ABS` 独立维护完整博客拒稿，另窗用 `--reader-review-window ABS`；入口含直接库调用均先核互斥选项，pending 普通迁移在 grant 安装前拒绝。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。`--postprocess-only --preserve-failed-readers` 仅供人工准备保留原失败稿，不能混入重试或许可，不授资格。明确获准的额外付费清单使用 `--retry-failed --recovery-manifest ABSOLUTE_PATH`，同一许可最多3轮，详见[会议追加恢复](../docs/conference-workflow.md#原额度耗尽后的独立付费恢复)。 |
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
-| `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 核验并安装原单篇和汇总暂存文件；同批图片更新仅在旧清单精确归属及原字节匹配时，保留不可变旧图后CAS原子替换，已是新字节时复用；review 共用正文模型、逐图多模态及 Markdown/Hugo 审查；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 重验线上页面、引用文件和图片。已有 publish 的 ID 不因重复 generate 更新。部署工作流、页面标题及浏览器实际效果另行核验。 |
+| `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 核验并安装原单篇和汇总暂存文件；同批图片更新仅在旧清单精确归属及原字节匹配时，保留不可变旧图后CAS原子替换，已是新字节时复用；generate 可显式加 `--figure-crop-manifest ABS --figure-crop-base-sha SEMANTIC_SHA` 创建独立出版视图，review/push 只能重放 generation 已绑定视图；review 共用正文模型、目标图多模态及 Markdown/Hugo 审查，优先派汇总且默认并发仍5；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 重验线上页面、引用文件和图片。已有 publish 的 ID 不因重复 generate 更新。部署工作流、页面标题及浏览器实际效果另行核验。 |
 | `recover-conference-process-locks.js` | CLI：只在操作者确认本工作区、且锁的持有进程 PID 已经退出时，按文件锁协议恢复旧操作锁；活锁和不完整的锁一律跳过。 |
 
 ### 历史页面、来源与受限旧恢复

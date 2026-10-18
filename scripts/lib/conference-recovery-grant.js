@@ -354,6 +354,8 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
     return handle;
 }
 function readRecoveryGrantMember(handle, paperId) {
+    const maintenance = require('./conference-reader-review-maintenance').readMaintenanceRecoveryGrantMember(handle, paperId);
+    if (maintenance) return maintenance;
     const state = handles.get(handle);
     if (!state) fail('需要真实已登记的追加许可能力');
     const member = state.manifest.members.find(value => value.paperId === paperId);
@@ -376,6 +378,9 @@ function readRecoveryGrantMember(handle, paperId) {
 }
 function resolveRegisteredRecoveryGrant(grantId, grantSha256, { analysisRoot }) {
     if (!UUID.test(grantId || '') || !SHA.test(grantSha256 || '')) fail('冷恢复许可身份非法');
+    const maintenance = require('./conference-reader-review-maintenance')
+        .resolveRegisteredMaintenanceWindow(grantId, grantSha256, { analysisRoot });
+    if (maintenance) return maintenance;
     const registeredPath = path.join(grantRoot(analysisRoot), grantId, 'manifest.json');
     const cached = registrations.get(registeredPath);
     if (cached) {

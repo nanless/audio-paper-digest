@@ -119,6 +119,18 @@ conference:acquire → conference:discover → 全文证据与每会筛选
 
 论文必须有真实会议身份、官方PDF、来源SHA及能力记录。只有PDF时不能推断HTML DOM能力，不为会议补造arXiv ID。图像/公式仍按真实PDF像素核验。页面及JSON/BibTeX/RIS/上下文使用同一展示与导出核心，缺失摘要或公开URL如实标示。
 
+会议发布审查普通拒稿先等全批结束。汇总在原五个审查槽位中优先派发，论文原相对顺序不变，单页分块仍串行；最终记录恢复 generation 顺序。正文及共享格式清理仍不能解决的 Markdown 拒稿，以真实原阶段和完整集合进入正常 Reader 维护，不逐篇先精改：
+
+```bash
+npm run conference:migrate-process -- --apply --catalog CATALOG.json --report REPORT.json --filter FILTER_UUID --from PROCESS_UUID --concurrency 5 --reader-review-feedback /absolute/process/review-reader-maintenance/BATCH_UUID/manifest.json
+# 原独立维护窗口确已停止后，绑定完整实际失败集合追加下一窗：
+npm run conference:migrate-process -- --apply --catalog CATALOG.json --report REPORT.json --filter FILTER_UUID --from PROCESS_UUID --concurrency 5 --reader-review-feedback /absolute/process/review-reader-maintenance/BATCH_UUID/manifest.json --reader-review-window /absolute/process/review-reader-maintenance/BATCH_UUID/windows/WINDOW_UUID/manifest.json
+```
+
+示例消费已核验并安装的真实清单，不能手填 UUID/CAS 或把 O 内准备器当公共 npm 命令。每窗固定最多3轮、Reader累计6次内容响应及2次全文，必要新窗已获持续授权；先全批后失败集合，保留原主文、核心、评分、标签、原候选和全部费用。完成后同次入口仍执行正常全会 stage 与汇总，再 generate/review/push/verify。pending 时不得另跑普通迁移使原基线漂移，详见[正常 Reader 维护](docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。
+
+图片拒稿可先统一绑定原认证 PDF 的完整页展示并正常重审；目标印刷图和页码须明确；完整图注缺失时，仅真实原 sourceRef 页能力可进入有限原页展示，完整图注字段为 null 并显式提示未完整抽取，不补造图注，也不把整页其他图认作配错。未解决图文语义再进入上述正常维护。换展示像素不会改变 Reader 原输入或授予通过；新视图清单、PDF、派生证明和页面字节仍在每次发布冷核，详见[独立出版视图](docs/conference-workflow.md#认证-pdf-的独立出版视图)。
+
 ## 3. 历史博客更新
 
 ```text
@@ -203,7 +215,7 @@ npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-审查只读最终文件，逐页通过记录按路径和内容SHA复用；当前批次仍执行程序与Hugo检查并生成新凭证。发布器变化后重新生成，但不强制重审字节未变的通过页。已完成的内容失败页仅在保存的旧协议与当前协议均为合法SHA且确实不同时，才进入正常整页重审；原失败、响应与费用保留，缺失或非法协议不能授权重审。单图审查不能根据局部输入推断整篇缺图，须核对图例、分组及计数与比例，并保留发现原文与图自身矛盾的能力。审查Git基线、远端身份、来源、页面清单或凭证不符必须阻断。
+审查只读最终文件，逐页通过记录按路径和内容SHA复用；当前批次仍执行程序与Hugo检查并生成新凭证。发布器变化后重新生成，但不强制重审字节未变的通过页。已完成的内容失败页仅在保存的旧协议与当前协议均为合法SHA且确实不同时，才进入正常整页重审；原失败、响应与费用保留，缺失或非法协议不能授权重审。单图审查不能根据局部输入推断整篇缺图，须核对图例、分组及计数与比例，并保留发现原文与图自身矛盾的能力。会议后续完整审查可含真实旧协议通过页；按 canonical 路径/页 SHA 缓存及 result 自哈希复用，不把通过项改签成当前协议，失败项仍绑定当前协议。审查Git基线、远端身份、来源、页面清单或凭证不符必须阻断。
 
 已授权的独立人工审查只为文章记录真实语义及逐图结论；引用资料、词表和受控论文图以 `machineAssets` 沿用正常来源及已审引用页核验，完整并集仍必须等于生成清单。不得把二进制资产当 Markdown 或伪造其人工审查身份，具体声明和站内原图边界见[独立审查](manual/README.md)。
 

@@ -12,7 +12,7 @@ const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--postprocess-only [--preserve-failed-readers]] [--source-corrections ABSOLUTE_PATH] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--postprocess-only [--preserve-failed-readers]] [--source-corrections ABSOLUTE_PATH] [--reader-review-feedback ABSOLUTE_PATH [--reader-review-window ABSOLUTE_PATH]] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -24,7 +24,7 @@ function parseArgs(argv) {
             if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
-        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest', '--reader-corrections', '--source-corrections'].includes(flag)
+        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest', '--reader-corrections', '--source-corrections', '--reader-review-feedback', '--reader-review-window'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value; index += 2;
     }
@@ -36,6 +36,10 @@ function parseArgs(argv) {
         || (values['--reader-corrections'] && (!path.isAbsolute(values['--reader-corrections']) || !values['--recovery-manifest']))
         || (values['--preserve-failed-readers'] && (!values['--postprocess-only'] || values['--retry-failed']
             || values['--recovery-manifest'] || values['--reader-corrections'] || values['--source-corrections']))
+        || (values['--reader-review-window'] && (!path.isAbsolute(values['--reader-review-window']) || !values['--reader-review-feedback']))
+        || (values['--reader-review-feedback'] && (!path.isAbsolute(values['--reader-review-feedback'])
+            || values['--recovery-manifest'] || values['--reader-corrections'] || values['--source-corrections']
+            || values['--postprocess-only'] || values['--preserve-failed-readers'] || values['--retry-failed']))
         || (values['--source-corrections'] && (!path.isAbsolute(values['--source-corrections'])
             || !values['--postprocess-only'] || values['--reader-corrections']))) {
         throw new Error(`命令写法不对，用法：${USAGE}`);
@@ -46,6 +50,8 @@ function parseArgs(argv) {
         reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']),
         postprocessOnly: Boolean(values['--postprocess-only']), preserveFailedReaders: Boolean(values['--preserve-failed-readers']),
         ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}),
+        ...(values['--reader-review-window'] ? { readerReviewWindow: values['--reader-review-window'] } : {}),
+        ...(values['--reader-review-feedback'] ? { readerReviewFeedback: values['--reader-review-feedback'] } : {}),
         ...(values['--reader-corrections'] ? { readerCorrections: values['--reader-corrections'] } : {}),
         ...(values['--source-corrections'] ? { sourceCorrections: values['--source-corrections'] } : {}) };
 }
@@ -235,6 +241,11 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
 }
 
 function migrateAndRun(options, runtime = {}) {
+    if ((options.readerReviewWindow && !options.readerReviewFeedback)
+        || (options.readerReviewFeedback && (options.postprocessOnly || options.preserveFailedReaders
+            || options.retryFailed || options.recoveryManifest || options.readerCorrections || options.sourceCorrections))) {
+        throw new Error('Reader review maintenance requires its exclusive normal feedback mode');
+    }
     if (options.preserveFailedReaders && (!options.postprocessOnly || options.retryFailed
         || options.recoveryManifest || options.readerCorrections || options.sourceCorrections)) {
         throw new Error('--preserve-failed-readers 仅可单独搭配 --postprocess-only，不能混入恢复、重试或来源纠正');
@@ -250,6 +261,11 @@ function migrateAndRun(options, runtime = {}) {
     const migrationFile = path.join(directory, 'implementation-migration.json');
     const runLocked = async () => {
         let state = processApi.assertState(cli.readSafeJson(stateFile));
+        if (!options.readerReviewFeedback && ((state.readerReviewMaintenanceObligations || []).length
+            || fs.existsSync(path.join(directory, 'review-reader-maintenance')))) {
+            require('./lib/conference-reader-review-maintenance').assertNoPendingReaderReviewMaintenance({
+                processDirectory: directory, analysisRoot: deps.files.conferenceAnalysisDir, state });
+        }
         const grants = options.recoveryManifest ? require('./lib/conference-recovery-grant') : null;
         const grantHandle = grants ? grants.openRecoveryGrant({ manifestPath: options.recoveryManifest,
             processDirectory: directory, analysisRoot: deps.files.conferenceAnalysisDir, install: true }) : null;
@@ -294,6 +310,15 @@ function migrateAndRun(options, runtime = {}) {
             ? retainedSourceReplay.replayCompletedPromotedShared({ context, state, directory }, deps)
             : await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
         processApi.assertSourceContinuity(state, shared);
+        if (options.readerReviewFeedback) {
+            // Preserve complete analysis history; dispatch real new children only.
+            const maintenance = await require('./lib/conference-reader-review-maintenance')
+                .runReaderReviewMaintenanceBatch({ manifestPath: options.readerReviewFeedback,
+                    directory, state, shared, options }, deps);
+            if (maintenance.status !== 'adopted') return maintenance;
+            state = maintenance.state;
+            // Continue existing current-implementation stage and aggregate gates.
+        }
         if (options.readerCorrections) {
             if (!grantHandle || lifecycleNeedsRefresh) {
                 throw new Error('人工 Reader 修正要求同一原许可及当前已完成的实现迁移；先完成普通只读后处理再绑定最终失败清单');

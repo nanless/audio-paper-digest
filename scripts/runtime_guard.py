@@ -62,6 +62,8 @@ def required_workspace_role_for_command(command_name):
                 'push-blog.py', 'publish-to-blog.py',
                 'conference-filter-evidence-extract.py'}:
         return 'daily'
+    if name in {'conference_publication_figure_crop.py', 'conference_publication_figure_view_replay.py'}:
+        return 'daily'
     if name in {'conference-extract.py', 'history-inventory.py'}:
         return 'history'
     return None

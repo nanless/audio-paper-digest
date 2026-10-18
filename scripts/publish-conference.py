@@ -1235,7 +1235,66 @@ def validate_conference_tag_catalogs(repo, files):
         raise ConferencePublicationError(str(error)) from error
 
 
-def generate(conference_id, process_id):
+
+def _publication_figure_view_bundle(bundle, conference_id, process_id, *,
+                                    selection=None, expected=None, replay=False):
+    """Only called after ordinary process_bundle has authenticated all raw bytes."""
+    if selection is None and expected is None:
+        return bundle
+    from conference_publication_figure_view import materialize_view, FigureViewRejected
+    if expected is not None:
+        if not isinstance(expected, dict) or expected.get('contract') != 'conference-publication-figure-view-v1':
+            raise ConferencePublicationError('出版图片视图声明非法')
+        selection = {'manifestPath': expected.get('manifestPath'),
+                     'expectedGenerationSha256': expected.get('baseGenerationSha256')}
+    if not isinstance(selection, dict) or set(selection) != {'manifestPath', 'expectedGenerationSha256'} \
+            or not Path(str(selection['manifestPath'])).is_absolute() \
+            or not SHA_RE.fullmatch(str(selection['expectedGenerationSha256'] or '')):
+        raise ConferencePublicationError('出版图片派生须绑定绝对清单与原 generation SHA')
+    payload = {'runtimeRoot': str(RUNTIME), 'conferenceId': conference_id,
+               'processId': process_id, **selection}
+    if replay:
+        payload['expectedDerivation'] = expected['nodeDerivation']
+    encoded = json_bytes(payload)
+    if len(encoded) > 16 * 1024 * 1024:
+        raise ConferencePublicationError('出版图片冷重放输入超过上限')
+    node = shutil.which('node')
+    if not node:
+        raise ConferencePublicationError('出版图片冷重放需要 Node.js')
+    module = load_publish_to_blog()
+    with tempfile.TemporaryFile() as source_file:
+        source_file.write(encoded); source_file.flush(); source_file.seek(0)
+        result = module._run_bounded_subprocess(
+            [node, str(ROOT / 'scripts/lib/conference-publication-figure-crop-replay-cli.js'),
+             str(source_file.fileno())], cwd=str(ROOT),
+            env={key: value for key, value in os.environ.items()
+                 if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=600, max_output_bytes=16 * 1024 * 1024,
+            pass_fds=(source_file.fileno(),))
+    if result.returncode != 0 or result.timed_out or result.output_truncated:
+        raise ConferencePublicationError('出版图片未通过真实 Node 来源冷重放：' + str(result.stderr[-2000:]))
+    try:
+        # Node returns the complete authority-bound derivation, not an arbitrary
+        # self-hashed JSON file selected by Python.
+        outcome = json.loads(result.stdout)
+        return materialize_view(bundle, outcome, root=ROOT, conference_id=conference_id,
+            process_id=process_id, manifest_path=selection['manifestPath'],
+            parse_images=module.parse_markdown_images, read_bytes=read_bytes,
+            write_exact=write_exact, expected_declaration=expected, replay=replay)
+    except (ValueError, KeyError, TypeError, FigureViewRejected) as error:
+        raise ConferencePublicationError('出版图片视图重建失败：' + str(error)) from error
+
+
+def require_publication_figure_view_ready(generation):
+    declaration = generation.get('figurePublicationView')
+    if declaration is None:
+        return
+    node = declaration.get('nodeDerivation', {})
+    if node.get('status') != 'complete' or node.get('blocked') != [] \
+            or node.get('unresolvedRoutes') != [] or node.get('publicationPassed') is not False:
+        raise ConferencePublicationError('出版图片仍有未解决问题；已保存逐页审查，但拒绝封最终凭证或推送')
+
+def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_crop_base_sha=None):
     repo, images = blog_repo(), image_repo()
     with shared_blog_repository_lock(repo, owner=f'conference-generate:{conference_id}'), \
             shared_blog_repository_lock(images, owner=f'conference-generate-images:{conference_id}'):
@@ -1245,6 +1304,18 @@ def generate(conference_id, process_id):
             print(json.dumps(result, ensure_ascii=False))
             return result
         bundle = process_bundle(conference_id, process_id)
+        # Raw source/stage/science qualification always precedes any projection.
+        existing = publication_dir(conference_id, process_id) / 'generation.json'
+        expected_view = read_json(existing).get('figurePublicationView') if existing.exists() else None
+        if figure_crop_manifest is not None:
+            bundle = _publication_figure_view_bundle(bundle, conference_id, process_id,
+                selection={'manifestPath': str(Path(figure_crop_manifest).resolve()),
+                           'expectedGenerationSha256': figure_crop_base_sha})
+        elif expected_view is not None:
+            bundle = _publication_figure_view_bundle(bundle, conference_id, process_id,
+                                                     expected=expected_view, replay=True)
+        elif figure_crop_base_sha is not None:
+            raise ConferencePublicationError('原 generation SHA 必须配合显式出版裁切清单')
         snapshot = remote_snapshot(repo)
         files = sorted(bundle['files'], key=lambda item: item['path'])
         image_files = sorted(bundle['imageFiles'], key=lambda item: item['path'])
@@ -1291,15 +1362,16 @@ def generate(conference_id, process_id):
                     # old completion/page proofs, while preserving this process.
                     verify_author_sources=False,
                 )
+            view_changed = previous.get('figurePublicationView') != bundle.get('figurePublicationView')
             same_implementation = previous.get('implementationSha256') == gate_fingerprint()
             completion_changed = previous['completionReceiptSha256'] != bundle['completion']['receiptSha256']
-            if same_implementation and not completion_changed and (previous['files'] != files
+            if same_implementation and not completion_changed and not view_changed and (previous['files'] != files
                     or previous['imageFiles'] != image_files):
                 raise ConferencePublicationError('同一 process 的发布内容已变化')
             # 暂存 Markdown 对应当前渲染器和发布规则。渲染器或检查器一变，就必须
             # 把同一批已完成论文重新产出，review 才不会去审过期的 Markdown。
             # 更早的 v2 凭证没有这个指纹，因此会有意走一次重新生成。
-            if same_implementation and not completion_changed and not rebased:
+            if same_implementation and not completion_changed and not view_changed and not rebased:
                 print(json.dumps({'status': 'already-generated', 'conferenceId': conference_id}))
                 return
             current_by_path = {record['path']: record for record in files}
@@ -1359,6 +1431,8 @@ def generate(conference_id, process_id):
                 'remoteName': snapshot['remoteName'],
                 'remoteIdentitySha256': snapshot['remoteIdentitySha256'],
                 'files': files, 'imageFiles': image_files,
+                **({'figurePublicationView': bundle['figurePublicationView']}
+                   if bundle.get('figurePublicationView') is not None else {}),
                 'imageBaseHead': image_snapshot['head'],
                 'imageRemoteMainBefore': image_snapshot['remoteMain'],
                 'imageRemoteIdentitySha256': image_snapshot['remoteIdentitySha256']}
@@ -1423,6 +1497,13 @@ def validate_generation(conference_id, process_id, repo, images, *,
         validate_conference_tag_catalogs(repo, generation['files'])
     if verify_author_sources:
         bundle = process_bundle(conference_id, process_id)
+        if generation.get('figurePublicationView') is not None:
+            if generation.get('version') != 2:
+                raise ConferencePublicationError('出版图片视图只支持真实外部图片 v2 generation')
+            bundle = _publication_figure_view_bundle(bundle, conference_id, process_id,
+                expected=generation['figurePublicationView'], replay=True)
+            if generation.get('files') != bundle['files'] or generation.get('imageFiles') != bundle['imageFiles']:
+                raise ConferencePublicationError('出版图片视图逐记录重算与 generation 不一致')
         if generation.get('completionReceiptSha256') != bundle['completion']['receiptSha256'] \
                 or saved_files != publication_record_identities(bundle['files']) \
                 or saved_images != publication_record_identities(bundle['imageFiles'], images=True):
@@ -1477,7 +1558,16 @@ def gate_fingerprint():
                    ('publish-conference.py', 'conference_publication_gate.py',
                     'markdown_hugo_gate.py', 'conference-page-render.py',
                     'publish_common.py', 'analysis_sections.py', 'tag_stage_record.py',
-                    'tag_presentation.py', 'tag_catalog_publication.py', 'tag_catalog.py')})
+                    'tag_presentation.py', 'tag_catalog_publication.py', 'tag_catalog.py',
+                    'conference_publication_figure_view.py', 'conference_publication_figure_crop.py',
+                    'reader_pdf_page_geometry.py', 'conference_publication_figure_view_replay.py',
+                    'lib/conference-publication-figure-crop.js',
+                    'lib/conference-publication-figure-crop-replay-cli.js',
+                    'lib/conference-publication-author-replay-cli.js', 'publish-to-blog.py',
+                    'lib/conference-reader-publication-evidence.js',
+                    'lib/conference-retained-source-replay.js',
+                    'lib/conference-reader-review-maintenance.js',
+                    'lib/conference-reader-review-maintenance-evidence.js')})
 
 
 def publication_page_files(generation):
@@ -1726,7 +1816,7 @@ def _content_review_failure_index():
     return index
 
 
-def review_pages(repo, records, workers=None):
+def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
     """只复用「路径 + 字节」都通过的证据；确定性检查每次都要重跑。
 
     只补派已完成任务空出的并发位置；运行级账号错误立即停止新任务。
@@ -1808,7 +1898,11 @@ def review_pages(repo, records, workers=None):
             found.extend(findings)
         matches = module.parse_markdown_images(content)
         if matches:
-            passed, findings = module.multimodal_review_images(content, title, required=True)
+            from conference_publication_figure_view import review_contexts_for_page
+            selected_contexts = review_contexts_for_page(figure_review_contexts or {}, record, content, module.parse_markdown_images)
+            passed, findings = (module.multimodal_review_images(content, title, required=True,
+                publication_figure_contexts=selected_contexts) if selected_contexts else
+                module.multimodal_review_images(content, title, required=True))
             if passed is not True:
                 raise_content_review_failure(
                     record, digest, protocol, 'image', findings,
@@ -1843,7 +1937,15 @@ def review_pages(repo, records, workers=None):
     # Only explicit, durably recorded content rejections are collected. Provider,
     # storage, changed bytes and corrupt receipts still escape the worker and
     # stop new dispatch while already-started reviews settle and save passes.
-    results = run_bounded_llm_tasks(records, _collect_page, workers)
+    # Start the unique long aggregate while other page lanes are available.
+    # Keep the same global page/request bound; chunks inside each lane stay serial.
+    # Restore original generation order before receipts/full-batch SHA construction.
+    ordered_records = sorted(enumerate(records), key=lambda pair: (pair[1].get('kind') != 'aggregate', pair[0]))
+    scheduled = [record for _, record in ordered_records]
+    dispatched_results = run_bounded_llm_tasks(scheduled, _collect_page, workers)
+    if len(dispatched_results) != len(scheduled):
+        raise ConferencePublicationError('会议逐页审查返回集合不完整')
+    results = [result for _, result in sorted(zip((index for index, _ in ordered_records), dispatched_results))]
     failures = [result for result in results if result.get('passed') is not True]
     if failures:
         body = {'contract': 'conference-page-content-review-batch-failure-v1',
@@ -1867,13 +1969,16 @@ def review(conference_id, process_id):
         generation, _, _ = validate_generation(
             conference_id, process_id, repo, images, allow_committed=True)
         require_content_review_runtime(repo)
-        content_review = review_pages(repo, publication_page_files(generation))
+        from conference_publication_figure_view import review_contexts_from_generation
+        content_review = review_pages(repo, publication_page_files(generation),
+            figure_review_contexts=review_contexts_from_generation(generation))
         # 按已认证的 generation 重建 Hugo，跑完语义与多模态 review 之后再封凭证。
         # 整个 review 对博客仓库和图片仓库都是只读的。
         hugo = run_hugo(repo, generation)
         if content_review.get('status') != 'passed':
             raise ConferencePublicationError('会议页面语义 review 未通过')
         validate_generation(conference_id, process_id, repo, images, allow_committed=True)
+        require_publication_figure_view_ready(generation)
         legacy_generation = generation.get('version') == 1
         body = {'contract': 'conference-blog-review-v1', 'version': 1 if legacy_generation else 2,
                 'conferenceId': conference_id, 'processId': process_id,
@@ -2266,7 +2371,8 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
     if verify_urls:
         # 让凭证创建与 push 串行化，跨多个工作区也一样。
         with shared_blog_repository_lock(repo, owner=f'conference-verify:{conference_id}'):
-            generation, current, current_images = validate_generation(conference_id, process_id, repo, images, verify_author_sources=False)
+            generation, current, current_images = validate_generation(conference_id, process_id, repo, images)
+            require_publication_figure_view_ready(generation)
             if current != snapshot or current_images != image_snapshot:
                 raise ConferencePublicationError('verify 期间远端状态变化，请重试')
             accept_publication(conference_id, process_id, generation, receipt,
@@ -2301,6 +2407,7 @@ def push(conference_id, process_id):
     with shared_blog_repository_lock(repo, owner=f'conference-push:{conference_id}'):
         with shared_blog_repository_lock(images, owner=f'conference-images:{conference_id}'):
             generation, _, _ = validate_generation(conference_id, process_id, repo, images)
+            require_publication_figure_view_ready(generation)
             receipt = load_review(conference_id, process_id)
             validate_review(generation, receipt)
             # 对已经暂存的旧 generation，保留历史上的 v1 事务约定。
@@ -2359,14 +2466,21 @@ def main():
     parser.add_argument('action', choices=('generate', 'review', 'push', 'status', 'verify'))
     parser.add_argument('--conference-id', required=True)
     parser.add_argument('--process-id', required=True)
+    parser.add_argument('--figure-crop-manifest')
+    parser.add_argument('--figure-crop-base-sha')
     args = parser.parse_args()
     try:
         safe_uuid(args.process_id, 'processId')
         if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,80}', args.conference_id):
             raise ConferencePublicationError('conferenceId 不安全')
-        result = {'generate': generate, 'review': review, 'push': push,
-                  'status': status, 'verify': verify}[args.action](
-            args.conference_id, args.process_id)
+        if args.action != 'generate' and (args.figure_crop_manifest or args.figure_crop_base_sha):
+            raise ConferencePublicationError('出版裁切清单只允许 generate；review/push 从 generation 冷重放')
+        if args.action == 'generate':
+            result = generate(args.conference_id, args.process_id,
+                figure_crop_manifest=args.figure_crop_manifest, figure_crop_base_sha=args.figure_crop_base_sha)
+        else:
+            result = {'review': review, 'push': push, 'status': status, 'verify': verify}[args.action](
+                args.conference_id, args.process_id)
         if args.action == 'verify' and not result['complete']:
             raise SystemExit(2)
     except ConferencePublicationError as exc:

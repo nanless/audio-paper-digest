@@ -291,7 +291,7 @@ Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点
 
 逐页通过证据只按相对路径和页面内容 SHA 复用。实现、模型、协议或批次记录变化后，未变页面保留通过依据，当前批次仍须重跑程序检查并生成新审查记录。图片子审查不能脱离整页身份或省略来源检查。
 
-发布正文审查默认并发 5，`PD_BLOG_REVIEW_CONCURRENCY` 范围 1–5。程序只按空出的并发位置补派任务；正文、图片或 Markdown 的普通内容拒稿保存不可变失败审计后，继续审查其余页面，最后写整批 blocked 摘要并拒绝审查通过及推送。服务、存储、页面字节变化或凭证损坏停止补派，等待已经开始的审查结束，保留各页已保存的通过记录，再交回原错误。并发设为 1 时逐页顺序处理；同次审查不自动再请求失败页，正常修正后续审只复用已通过的页面或分块。
+发布正文审查默认并发 5，先在这五个槽位中稳定派发汇总，再按论文原相对顺序补派；每页分块串行，最终整批记录恢复原 generation 顺序，不改变完整审查集合。`PD_BLOG_REVIEW_CONCURRENCY` 范围 1–5。程序只按空出的并发位置补派任务；正文、图片或 Markdown 的普通内容拒稿保存不可变失败审计后，继续审查其余页面，最后写整批 blocked 摘要并拒绝审查通过及推送。服务、存储、页面字节变化或凭证损坏停止补派，等待已经开始的审查结束，保留各页已保存的通过记录，再交回原错误。并发设为 1 时逐页顺序处理；同次审查不自动再请求失败页，正常修正后续审只复用已通过的页面或分块。
 
 `push` 逐文件核验 Git 暂存区及提交内文件字节，核对本次允许变动的文件集合、父提交、推送身份和远端 OID，不只看工作区文件。博客与图床分别处理受控提交；图床完整资产清单和本次 Git 变动分开，相同已发布图片可零差异复用。自身提交后断网或重复发布，仅在父提交、文件集合、内容和远端身份精确一致时恢复。
 
@@ -305,7 +305,46 @@ Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点
 
 以上只允许 generate 重验来源和暂存结果后生成当前基线的清单，不修复损坏的来源或图片。被替换的未发布凭证先按原字节保存为 `superseded` 备份；review 可复用未变页面，但重跑当前基线的 Hugo 和程序检查，再签发当前审查记录。已有发布凭证保持不变；push 对允许变动的精确文件集合、父提交、暂存区、提交及远端的核验不变。
 
-正文或图片被拒绝时，具体 findings 保存为不可覆盖的 `data/runtime/conference-publications/page-review-failures/<failureSha256>.json`，绑定路径、内容 SHA、审查协议和阶段，异常给出文件路径。文件不含正文替换建议或图片字节，也不是通过缓存。先按 findings 修正生成阶段的内容或来源，再正常 generate/review；服务和账号异常保留原类型，不能当内容失败反复请求。
+正文、图片或 Markdown 被拒绝时，具体 findings 保存为不可覆盖的 `data/runtime/conference-publications/page-review-failures/<failureSha256>.json`，绑定路径、内容 SHA、审查协议和阶段，异常给出文件路径。原意见及其修正建议逐字保留，但记录不是正文替换稿，不含图片字节，也不是通过缓存。必须先完成整批正常审查，再按下节统一安排正常 Reader 或出版视图恢复，不能逐页先精改或把审查意见直接当论文事实。修正后正常 generate/review；服务和账号异常保留原类型，不能当内容失败反复请求。
+
+### 博客拒稿后的正常 Reader 维护
+
+本入口用于尚未发布、原 process 全部 complete，但博客完整正常审查已有内容拒稿的会议。先等全页审查结算，再绑定当前 generation、完整 batch-failure、每条正式原失败及实际父包/source/PDF/CAS。不能只扫描在途失败目录挑一部分，也不能把原 process 或论文改成 partial 来套旧恢复许可。所有 text/content 进入正常维护；全部 markdown/content 必须明确分类：当前真实 Markdown gate 已通过且字节未变的记 gate-rule-revalidation 待正常新协议全页复审；否则共享 sanitize 投影经正常 Markdown gate 仍失败的送 `normal-reader`，可仅通过出版格式修复的记 `deferred-publication-format`，保留待新页审查，不能猜币种或豁免科学正文裸符号。全部 image/content 同样保留完整原 SHA，可先 `deferred-review` 交独立出版视图与正常复审，不能假称都是裁切或已修。
+
+汇总页自己的内容拒稿不作为单篇 Reader 成员。清单用 `aggregateClassifications` 完整保留原 aggregate failure，固定 `deferred-aggregate-generation`、`pending-new-page-review` 和 `normal-aggregate-generation-then-normal-review`，交正常汇总重建及新页审查，不宣称原拒稿已修。已结算的 transient 另用 `nativeReviewClassifications` 完整保留原阶段及 failure，固定 `deferred-native-review`、待正常出版复审；不当作科学事实发送 Reader，缺失或尚未结算不能冒完整批次。单篇作者等来源问题须先正常修复，不能由汇总渲染器假补。
+
+默认 `raw-review-findings-v1` 将真实原意见逐字交公共 Reader，并明确这是待核验意见；模型须对照认证全文与原图，仅改真实错误。无需先给每篇人工编写纠正事实。只有额外 `corrective-assertion-v1` 才要求既有节点旧 SHA、原句和真正相关逐字来源。实际反馈上限4000字符，不能默默截断或以无关引文冒证据。 Markdown 通用指导只对确属原文金额等字面美元符号建议闭合行内代码保真，不猜币种；数学仍用正常 TeX 分隔符，代码外或未闭合代码中的真正语法问题仍拒。
+
+```bash
+npm run conference:migrate-process -- --apply --catalog CATALOG.json --report REPORT.json --filter FILTER_UUID --from PROCESS_UUID --concurrency 5 --reader-review-feedback /absolute/process/review-reader-maintenance/BATCH_UUID/manifest.json
+```
+
+命令消费已经核验、安装到该 process 私有根的清单；没有公共 npm 清单生成器。执行者可用经过审查的 O 内只读准备工具读取正式材料、输出完整字节树与安装计划，不能把准备结果当正常通过或让工具直接安装/发模型。字段与不可变材料见[数据格式](data-format.md#会议博客审查后的-reader-维护记录)。CLI 和直接库调用均拒绝混入 `--retry-failed`、旧 `--recovery-manifest`、人工清单、来源纠正或 `--postprocess-only`。
+
+正常维护只允许 Reader-only；原主文、核心、评分、标签及费用保护。原签稿 seed 在原父真实来源和签发上下文封存，新 Reader 必须有本 child 的真实签发与反馈证明，不能用继承父 Reader 清义务。先完成整批正常一轮，再续真实失败集合；每篇成功立即保存，未全成功时旧 process complete 历史和父稿保持。服务、存储、身份故障停止派发并保留在途结果。
+
+单窗固定最多3轮、Reader累计6次内容响应及2次全文。必要下一窗已获持续授权，绑定本独立维护批完整当前失败集合、唯一前窗、实际 child 请求/费用材料树和账本，不能重置旧计数或伪造原 process 失败：
+
+```bash
+npm run conference:migrate-process -- --apply --catalog CATALOG.json --report REPORT.json --filter FILTER_UUID --from PROCESS_UUID --concurrency 5 --reader-review-feedback /absolute/process/review-reader-maintenance/BATCH_UUID/manifest.json --reader-review-window /absolute/process/review-reader-maintenance/BATCH_UUID/windows/WINDOW_UUID/manifest.json
+```
+
+pending 由实际 state 定位器与私有目录共同核验；目录丢失不是无义务。生成、审查、推送均消费冷核门，普通迁移在任何 grant 安装及状态写入前也拒绝 pending，须用同一显式维护清单继续。全部新 child 的正常资格、冷核与 stage 通过后，才在真实锁与 CAS 下原子采纳，过程进入单篇完整、汇总待更新的 running，再正常全会 stage/aggregate。旧稿、原失败、旧清单和全部费用保留；不得补签 passed。
+
+### 认证 PDF 的独立出版视图
+
+正常 Reader 刷新仍使用原认证 source 的图像，重生成并不会自动恢复已裁掉的区域。对完整 image 失败集，可先统一从同篇认证 PDF 派生精确图，或用唯一印刷图号、完整图注和页码定位完整原页；原图注未完整抽取时，仅允许真实原 artifacts 物理/语义 SHA、原 ordinal/asset/caption/ref/page 与有效 DOM 严格匹配的选中图能力，重放同 PDF 原页及唯一印刷图号，完整图注保留 null，页面明示“图注未完整抽取，以原页为准”；这不授普通裁切、未知页码或非认证 ref 通过。完整页明确标示目标图及实际来源，审查只把其余内容当同页背景，不据此判错图。固定裁切规则不能覆盖的项须保持实际阻断，不接受自由矩形、猜补或删原图。
+
+```bash
+npm run conference:publish:generate -- --conference-id CONFERENCE_ID --process-id PROCESS_UUID --figure-crop-manifest /absolute/publication/figure-manifest.json --figure-crop-base-sha ORIGINAL_GENERATION_SEMANTIC_SHA
+npm run conference:publish:review -- --conference-id CONFERENCE_ID --process-id PROCESS_UUID
+```
+
+两个派生参数只属于 generate。它仍先完整核原生 process bundle，再经固定 Node 禁网来源重放派生，原 raw stage/Reader/原模型像素和旧证明不变；新 PNG 与 raw→view 页面按内容地址另存。review/push 从 generation 的 `figurePublicationView` 重新核原 PDF、完整派生证明及实际页面/图片字节，不接受自行构造的 view JSON。
+
+真实新页须正常多模态审查，换展示不消除原语义错误。完整页复审后仍有真实图文语义拒稿时，再以实际新失败和当前父稿正常 Reader 维护；同一坏 source crop 不应盲目多轮重付。反馈中的历史新视图先核真实 canonical 原批、原父/source 和当前真实后继，再由私有历史能力从同一 PDF 冷重放派生，并用原生纯变换逐字重算 raw→view；这只认证意见看过的历史材料，不授当前 publisher、新 Reader 或审查通过。新 Reader 若依赖原 crop 缺失的信息，须另核必要的真实来源输入，不能声称模型看过未送入的完整页。
+
+Reader 更新后，旧派生父 CAS 不会自动获得 current 出版权限；最终展示继续按新实际父稿重新派生与正常审查。旧日更 SVG 的恢复输出字节及 `reader-sealed-pdf-page-asset-v1` proof 合同保持，会议出版证明不冒用日更身份。
 
 ### 自动验收覆盖什么
 
@@ -330,7 +369,7 @@ GET 使用项目 HTTP CONNECT，逐跳核验公网地址并限制响应。全链
 | 独立 process | 并发 1，可设 1–60 | 每篇内部为 1，仍受共享阶段槽位和原窗口约束 |
 | 实现迁移 | 并发 3，可设 1–60 | 先核原状态，不因迁移增加模型预算 |
 | 队列项 | 并发 3，范围 1–3 | 与独立 process 的范围不同 |
-| 页面审查 | 并发 5，范围 1–5 | 普通拒稿保存后继续其余页；运行级故障停止补派 |
+| 页面审查 | 并发 5，范围 1–5 | 优先派汇总、论文保持相对顺序；普通拒稿保存后继续其余页，运行级故障停止补派 |
 | 线上核验 | 并发 4，范围 1–16 | 不重新分析未能访问的页面 |
 
 批次总轮次、单阶段尝试、process 窗口和子运行预算分别核验，任一耗尽都不由并发设置解除。详细公共规则见[全批轮次与失败集合](three-workflows.md#全批轮次与失败集合)。

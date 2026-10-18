@@ -977,8 +977,9 @@ function md(value) {
     // 汇总页标题或标签里的括号是普通文字，不是行内 TeX 分隔符。
     // 换成 HTML 实体渲染结果相同，又能避免写出 `\\(` / `\\)` 这种写法——
     // Markdown 数学检查要把这种写法留给真正的公式。
-    return String(value).replace(/[()]/g, char => char === '(' ? '&#40;' : '&#41;')
-        .replace(/([\\`*_\[\]<>|{}#+.!-])/g, '\\$1').replace(/\s+/g, ' ').trim();
+    return String(value).replace(/([\\`*_\[\]<>|{}#+.!-])/g, '\\$1')
+        .replace(/[()]/g, char => char === '(' ? '&#40;' : '&#41;')
+        .replace(/\s+/g, ' ').trim();
 }
 function isArxivResource(resource) {
     return [resource?.originalUrl, resource?.finalUrl].some(value => {

@@ -84,6 +84,7 @@ function requiredWorkspaceRoleForCommand(commandName) {
         'refresh-api-reader.js', 'official-conference-acquire.js', 'conference-queue.js',
         'conference-workspace.js', 'migrate-conference-process.js',
         'conference-complete-stage-worker.js',
+        'conference-publication-figure-crop-replay-cli.js',
         'recover-conference-process-locks.js'].includes(name)) return 'daily';
     if (name.startsWith('conference-') || name.startsWith('historical-')
         || name.startsWith('history-') || name === 'page-source-crosswalk.js'

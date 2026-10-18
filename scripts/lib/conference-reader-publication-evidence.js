@@ -7,6 +7,8 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage(), registered = new WeakMap();
 const canonicalReaderPdfSources = new WeakMap();
+// Separate, lazy read-only provenance. The base PDF accessor is unchanged.
+const canonicalReaderPdfRawArtifacts = new WeakMap();
 const root = path.resolve(__dirname, '../..');
 const program = path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -441,7 +443,57 @@ function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
         structuredArtifactsSha256: loaded.source.sourceDetails.structuredArtifacts.payloadSha256,
         rawStructuredArtifactsSha256: expected.rawStructuredArtifactsSha256,
         pdfSha256: verified.bound.pdfSha256, pdf: Buffer.from(verified.cached.pdf), sourceIdentity: structuredClone(expected), assertUnchanged });
+    canonicalReaderPdfRawArtifacts.set(handle, { raw: Buffer.from(verified.cached.artifacts),
+        artifactsFileSha256: loaded.source.sourceSnapshotBinding.sourceBinding.artifactsFileSha256,
+        artifactsPayloadSha256: expected.rawStructuredArtifactsSha256,
+        figures: structuredClone(loaded.source.sourceDetails.structuredArtifacts.figures || []),
+        readerFigures: structuredClone(original.apiReaderFigures || []) });
     return handle;
+}
+
+function projectAttestedRawFigure(rawScope, source, ordinal, normalInventory) {
+    if (!Number.isInteger(ordinal) || ordinal < 1) throw new Error('认证 PDF 原图序号无效');
+    if (sha(rawScope.raw) !== rawScope.artifactsFileSha256) throw new Error('认证 PDF 原始结构文件 SHA 改变');
+    const artifact = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rawScope.raw));
+    const payload = structuredClone(artifact); delete payload.payloadSha256;
+    const stable = value => { const order = item => Array.isArray(item) ? item.map(order) : item && typeof item === 'object'
+        ? Object.fromEntries(Object.keys(item).sort().map(key => [key, order(item[key])])) : item; return sha(JSON.stringify(order(value))); };
+    if (artifact.payloadSha256 !== rawScope.artifactsPayloadSha256 || sha(JSON.stringify(payload)) !== rawScope.artifactsPayloadSha256)
+        throw new Error('认证 PDF 原始结构 payload SHA 不闭合');
+    const found = (artifact.figures || []).filter(figure => figure.ordinal === ordinal);
+    if (found.length !== 1) throw new Error('认证 PDF 原始图序号与有效来源不一致');
+    const raw = found[0];
+    const ref = /^pdf:figure:([1-9][0-9]*):page:([1-9][0-9]*)$/u.exec(raw.sourceRef || '');
+    if (!ref || !Number.isInteger(raw.page) || raw.page < 1) return Object.freeze({ eligible: false, reason: 'original_attested_figure_page_ref_unavailable' });
+    if (Number(ref[2]) !== raw.page) throw new Error('认证 PDF 原始图页码与 sourceRef 不一致');
+    const effective = rawScope.figures.filter(figure => figure.ordinal === ordinal);
+    const dom = stable({ kind: 'pdf-figure', sourceRef: raw.sourceRef, caption: raw.caption, assetSha256: raw.asset?.sha256 || null });
+    const imageUrl = `conference-pdf-figure://${encodeURIComponent(source.paperId)}/${ordinal}`;
+    if (effective.length !== 1 || effective[0].label !== `Figure ${Number(ref[1])}`
+        || effective[0].caption !== raw.caption || effective[0].sourceDomSha256 !== dom
+        || !effective[0].images?.some(image => image.url === imageUrl && image.asset?.sha256 === raw.asset?.sha256))
+        throw new Error('认证 PDF 原始 sourceRef/像素与现有来源 DOM 投影不同');
+    const selected = rawScope.readerFigures.filter(figure => figure.ordinal === ordinal);
+    const normalFigure = normalInventory.filter(figure => figure.ordinal === ordinal);
+    if (selected.length !== 1 || normalFigure.length !== 1
+        || selected[0].label !== normalFigure[0].label || selected[0].caption !== normalFigure[0].caption
+        || selected[0].sourceDomSha256 !== dom || selected[0].url !== imageUrl)
+        throw new Error('认证 PDF 原图与正常 Reader 选图投影不同');
+    return Object.freeze({ eligible: true, contract: 'conference-reader-pdf-attested-figure-ref-v1',
+        paperId: source.paperId, executionId: source.sourceIdentity.executionId, ordinal,
+        figureNumber: Number(ref[1]), page: raw.page, sourceRef: raw.sourceRef,
+        sourceDomSha256: dom, originalCaptionSha256: sha(raw.caption), readerCaptionSha256: sha(selected[0].caption), originalSourceAssetSha256: raw.asset.sha256,
+        rawArtifactsFileSha256: rawScope.artifactsFileSha256, rawArtifactsPayloadSha256: rawScope.artifactsPayloadSha256,
+        rawFigureSha256: stable(raw), pdfSha256: source.pdfSha256 });
+}
+function readVerifiedPublicationReaderPdfAttestedFigureRef(handle, { ordinal } = {}) {
+    const source = handle && canonicalReaderPdfSources.get(handle), raw = handle && canonicalReaderPdfRawArtifacts.get(handle);
+    if (!source || !raw) return null;
+    source.assertUnchanged();
+    const inventory = require('../deep-analyzer').getApiReaderFigureInventory({ figures: raw.figures });
+    const result = projectAttestedRawFigure(raw, source, ordinal, inventory);
+    source.assertUnchanged();
+    return result;
 }
 
 function readVerifiedPublicationReaderPdfSource(handle) {
@@ -480,5 +532,5 @@ function supplementalQuotes(paper, table, tableIndex) {
     return entriesFor(paper, table, tableIndex).map(entry => structuredClone(entry.pdfQuoteEvidence));
 }
 module.exports = { derivePublicationEvidence, withPublicationEvidence, headerUnitCoverage, numericCoverage,
-    replayCanonicalReaderPdfSource, readVerifiedPublicationReaderPdfSource,
+    replayCanonicalReaderPdfSource, readVerifiedPublicationReaderPdfSource, readVerifiedPublicationReaderPdfAttestedFigureRef,
     supplementalQuotes, exportPublicationEvidence, replayDescriptor, tableWindow, proseWindows };

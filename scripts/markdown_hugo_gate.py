@@ -20,6 +20,8 @@ from publish_common import (
     is_publish_currency_literal,
     is_publish_currency_unit_literal,
     mask_protected_markdown_table_regions,
+    escape_literal_source_figure_caption_dollars,
+    markdown_inline_code_ranges,
 )
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
@@ -222,9 +224,77 @@ def _rendered_currency_dollar_positions(text):
     return parser.positions
 
 
+def mask_closed_code_for_format_gate(text, *, rendered_html=False):
+    """Mask only actual closed code nodes in a diagnostic copy, never bytes.
+
+    Markdown spans reuse the existing Reader CommonMark delimiter/paragraph
+    scanner. HTML requires a truly closed, properly nested code/pre element;
+    escaped markup, attributes elsewhere, unknown tags and unclosed nodes do
+    not acquire a code exemption.
+    """
+    text = str(text or '')
+    if not rendered_html:
+        ranges = markdown_inline_code_ranges(text)
+    else:
+        class ClosedCode(HTMLParser):
+            void = {'area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr'}
+            forbidden = {'script','style','textarea','template','noscript','svg','math'}
+            def __init__(self):
+                super().__init__(convert_charrefs=False)
+                self.stack, self.nodes = [], []
+                self.starts, total = [], 0
+                for line in text.splitlines(keepends=True):
+                    self.starts.append(total); total += len(line)
+                if not self.starts:self.starts=[0]
+            def position_offset(self):
+                line,column=self.getpos();return self.starts[line-1]+column
+            def invalidate(self):
+                for node in self.stack:node['valid']=False
+            def handle_starttag(self, tag, attrs):
+                for parent in self.stack:
+                    if parent['tag'] in {'code','pre'} and tag not in {'code','span'}:
+                        parent['valid']=False
+                if tag in self.void:return
+                node={'tag':tag,'start':self.position_offset(),'end':None,'valid':True,
+                      'ancestors':tuple(self.stack)}
+                if len({key for key,_ in attrs})!=len(attrs):node['valid']=False
+                self.nodes.append(node);self.stack.append(node)
+            def handle_startendtag(self, tag, attrs):
+                # HTML nonvoid <code/> is not a genuine closed code element.
+                if tag not in self.void:
+                    for node in self.stack:
+                        if node['tag'] in {'code','pre'}:node['valid']=False
+            def handle_endtag(self, tag):
+                if not self.stack or self.stack[-1]['tag']!=tag:
+                    self.invalidate();return
+                node=self.stack.pop();start=self.position_offset();end=text.find('>',start)
+                raw=text[start:end+1] if end>=0 else ''
+                if not re.fullmatch(r'</\s*'+re.escape(tag)+r'\s*>',raw,re.I):node['valid']=False
+                node['end']=end+1 if end>=0 else None
+            def handle_comment(self, data):
+                for node in self.stack:
+                    if node['tag'] in {'code','pre'}:node['valid']=False
+        parser=ClosedCode()
+        try:parser.feed(text);parser.close()
+        except Exception:return text
+        ranges=[]
+        for node in parser.nodes:
+            ancestry=(*node['ancestors'],node)
+            if (node['tag'] in {'code','pre'} and node['end'] is not None
+                    and all(parent['valid'] and parent['end'] is not None for parent in ancestry)
+                    and not any(parent['tag'] in parser.forbidden for parent in ancestry)):
+                ranges.append((node['start'],node['end']))
+    if not ranges:return text
+    chars=list(text)
+    for start,end in ranges:
+        for index in range(start,end):
+            if chars[index] not in '\r\n':chars[index]=' '
+    return ''.join(chars)
+
+
 def math_and_emphasis_issues(text, label, *, rendered_html=False):
     """Hugo 可能把语法渲染成破碎的纯文本时，这里按失败处理。"""
-    clean = strip_fenced_code_for_format_gate(text)
+    clean = mask_closed_code_for_format_gate(strip_fenced_code_for_format_gate(text), rendered_html=rendered_html)
     issues = []
     for opening, closing, name in (
             (r'\(', r'\)', r'\(…\)'), (r'\[', r'\]', r'\[…\]')):
@@ -264,6 +334,167 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
             )
             break
     return issues
+
+
+def mask_source_bound_figure_caption_dollars(rendered, artifact):
+    r"""Mask only literal dollars authenticated by an escaped generated image pair.
+
+    A diagnostic copy only. Full source caption, image alt/src, enclosing link,
+    closed elements and adjacent paragraphs must all match. No source/HTML write.
+    """
+    pairs = []
+    source = str(artifact.get('body') or '')
+    escape_literal_source_figure_caption_dollars(source, _literal_pairs=pairs)
+
+    def fully_escaped(value):
+        slash_run = 0
+        for char in value:
+            if char == '$' and slash_run % 2 == 0:
+                return False
+            slash_run = slash_run + 1 if char == '\\' else 0
+        return True
+
+    def plain(value):
+        return html.unescape(re.sub(r'\\([\\`*_{}\[\]()#+\-.!$>])', r'\1', value))
+
+    expected = {}
+    for pair in pairs:
+        if (pair['caption'] != pair['escapedCaption'] or pair['alt'] != pair['escapedAlt']
+                or not fully_escaped(pair['caption']) or not fully_escaped(pair['alt'])
+                or not (r'\$' in pair['caption'] or r'\$' in pair['alt'])
+                or '`' in pair['caption'] or '`' in pair['alt']):
+            continue
+        key = (html.unescape(pair['url']), plain(pair['alt']), plain(pair['caption'][1:-1]), pair['sourceNote'])
+        expected[key] = expected.get(key, 0) + 1
+    expected = {key for key, count in expected.items() if count == 1}
+    if not expected:
+        return rendered
+    offsets = _html_line_offsets(rendered)
+
+    class Nodes(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.root = {'tag': None, 'children': [], 'closed': True, 'hidden': False}
+            self.stack = [self.root]
+            self.valid = True
+
+        def position(self):
+            line, column = self.getpos()
+            return offsets[line - 1] + column
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            hidden = (self.stack[-1]['hidden'] or tag in {'script', 'style', 'pre', 'code', 'textarea', 'template', 'noscript'}
+                      or 'hidden' in attributes or str(attributes.get('aria-hidden') or '').lower() == 'true'
+                      or bool(re.search(r'(?:display\s*:\s*none|visibility\s*:\s*hidden)', str(attributes.get('style') or ''), re.I)))
+            node = {'tag': tag, 'attrs': attributes, 'uniqueAttrs': len(attributes) == len(attrs),
+                    'children': [], 'hidden': hidden, 'closed': False,
+                    'start': self.position(), 'raw': self.get_starttag_text()}
+            self.stack[-1]['children'].append(node)
+            if tag in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}:
+                node['closed'] = True
+            else:
+                self.stack.append(node)
+
+        def handle_startendtag(self, tag, attrs):
+            self.handle_starttag(tag, attrs)
+            if len(self.stack) > 1 and self.stack[-1]['tag'] == tag:
+                self.stack.pop()['closed'] = True
+
+        def handle_endtag(self, tag):
+            if len(self.stack) < 2 or self.stack[-1]['tag'] != tag:
+                self.valid = False
+                return
+            self.stack.pop()['closed'] = True
+
+        def handle_data(self, value):
+            self.stack[-1]['children'].append({'text': value, 'start': self.position(), 'literal': True})
+
+        def handle_entityref(self, name):
+            self.stack[-1]['children'].append({'text': html.unescape('&' + name + ';'), 'literal': False})
+
+        def handle_charref(self, name):
+            self.stack[-1]['children'].append({'text': html.unescape('&#' + name + ';'), 'literal': False})
+
+        def handle_comment(self, value):
+            self.stack[-1]['children'].append({'tag': '#comment'})
+
+    parser = Nodes()
+    parser.feed(rendered)
+    parser.close()
+    if not parser.valid or len(parser.stack) != 1:
+        return rendered
+
+    def children(node):
+        return [c for c in node.get('children', []) if not ('text' in c and not c['text'].strip())]
+
+    def safe(node, tag):
+        return node.get('tag') == tag and node.get('closed') and node.get('uniqueAttrs') and not node.get('hidden')
+
+    found = {}
+
+    def visit(parent):
+        siblings = children(parent)
+        for index, first in enumerate(siblings[:-1]):
+            second = siblings[index + 1]
+            note_text = ''
+            if safe(second, 'blockquote'):
+                note_parts = children(second)
+                if len(note_parts) != 1 or not safe(note_parts[0], 'p'):
+                    continue
+                note_parts = children(note_parts[0])
+                if (len(note_parts) < 2 or not safe(note_parts[0], 'strong')
+                        or any('text' not in c for c in note_parts[0]['children'])
+                        or ''.join(c['text'] for c in note_parts[0]['children']) != '图片来源：'
+                        or any('text' not in c for c in note_parts[1:]) or index + 2 >= len(siblings)):
+                    continue
+                note_text = '图片来源：' + ''.join(c['text'] for c in note_parts[1:])
+                second = siblings[index + 2]
+            if not safe(first, 'p') or not safe(second, 'p'):
+                continue
+            parts, caption = children(first), children(second)
+            if len(parts) != 1 or len(caption) != 1 or not safe(caption[0], 'em'):
+                continue
+            em = caption[0]
+            if any('text' not in item for item in em['children']):
+                continue
+            linked = parts[0] if safe(parts[0], 'a') else None
+            image_parts = children(linked) if linked else parts
+            if len(image_parts) != 1 or not safe(image_parts[0], 'img'):
+                continue
+            image = image_parts[0]
+            url, alt = image['attrs'].get('src'), image['attrs'].get('alt')
+            if linked and linked['attrs'].get('href') != url:
+                continue
+            key = (url, alt, ''.join(c['text'] for c in em['children']), note_text)
+            if key not in expected:
+                continue
+            # Only the actual alt attribute is a literal-text target. Dollars in
+            # href/src/title/other attributes stay subject to the normal gate.
+            attributes = list(re.finditer(r'''(?<!\S)alt\s*=\s*(["'])(.*?)\1''', image['raw'], re.S))
+            if len(attributes) != 1 or html.unescape(attributes[0][2]) != alt:
+                continue
+            positions = {c['start'] + m.start() for c in em['children'] if c['literal']
+                         for m in re.finditer(r'\$', c['text'])}
+            positions.update(image['start'] + attributes[0].start(2) + m.start()
+                             for m in re.finditer(r'\$', attributes[0][2]))
+            found.setdefault(key, []).append(positions)
+        for child in siblings:
+            if 'tag' in child and child.get('children'):
+                visit(child)
+    visit(parser.root)
+    positions = set()
+    for key, matches in found.items():
+        if len(matches) == 1:
+            positions.update(matches[0])
+    if not positions:
+        return rendered
+    result = list(rendered)
+    for position in positions:
+        if result[position] != '$':
+            return rendered
+        result[position] = 'X'
+    return ''.join(result)
 
 
 def mask_source_bound_title_dollars(rendered, artifact):
@@ -547,7 +778,8 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             continue
         rendered_path, rendered = candidates[0]
         reader_html = rendered_article_fragment(rendered)
-        gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_title_dollars(reader_html, artifact))
+        gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_title_dollars(
+            mask_source_bound_figure_caption_dollars(reader_html, artifact), artifact))
         rendered_label = f'{source_label} -> {rendered_path.name}'
         issues.extend(math_and_emphasis_issues(gate_html, rendered_label, rendered_html=True))
         if '**' in gate_html:

@@ -1847,10 +1847,26 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
     t.mock.restoreAll();
     assert.equal((await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps)).processId, promoted.processId);
     assert.equal(h.control.calls.length, beforePromotionCalls); assert.deepEqual(fs.readFileSync(originalFile), originalBytes);
-    const code = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_readonly',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.RUNTIME=Path(sys.argv[2]).parent;p.PROCESS_ROOT=Path(sys.argv[2]);p.PAGE_ROOT=Path(sys.argv[3]);p.AGGREGATE_ROOT=Path(sys.argv[4])\nb=p.process_bundle('odyssey-2026',sys.argv[5])\nprint(json.dumps({'files':len(b['files']),'status':b['state']['status']}))`;
+    // 此格式夹具使用独立临时根，没有 Reader 维护登记；仅在真实作者 CLI 的
+    // 测试子进程中显式隔离新增 canonical-root 守卫，作者来源重放保持原实现。
+    const noMaintenancePreload = path.join(f.root, 'no-reader-maintenance.fixture.cjs');
+    fs.writeFileSync(noMaintenancePreload, `
+const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
+const fixtureRoot = ${JSON.stringify(f.root)};
+require(${JSON.stringify(path.join(__dirname, '..', 'scripts/lib/conference-reader-review-maintenance.js'))})
+    .assertNoPendingReaderReviewMaintenance = ({processDirectory, analysisRoot, state}) => {
+        assert.equal(path.resolve(processDirectory), path.join(fixtureRoot, 'conference-processes', state.processId));
+        assert.equal(path.resolve(analysisRoot), path.join(fixtureRoot, 'conference-analysis-executions'));
+        assert.deepEqual(state.readerReviewMaintenanceObligations || [], []);
+        assert.equal(fs.existsSync(path.join(processDirectory, 'review-reader-maintenance')), false);
+        return true;
+    };
+`, { mode: 0o600 });
+    const isolatedNoMaintenanceGuard = `\nfixture_module=p.load_publish_to_blog()\nfixture_original_run=fixture_module._run_bounded_subprocess\ndef fixture_author_run(argv,*args,**kwargs):\n if len(argv)>1 and argv[1]==str(p.ROOT/'scripts/lib/conference-publication-author-replay-cli.js'):\n  argv=[argv[0],'--require',sys.argv[-1],*argv[1:]]\n return fixture_original_run(argv,*args,**kwargs)\nfixture_module._run_bounded_subprocess=fixture_author_run\np.load_publish_to_blog=lambda:fixture_module\n`;
+    const code = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_readonly',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.RUNTIME=Path(sys.argv[2]).parent;p.PROCESS_ROOT=Path(sys.argv[2]);p.PAGE_ROOT=Path(sys.argv[3]);p.AGGREGATE_ROOT=Path(sys.argv[4])${isolatedNoMaintenanceGuard}b=p.process_bundle('odyssey-2026',sys.argv[5])\nprint(json.dumps({'files':len(b['files']),'status':b['state']['status']}))`;
     const publisherRead = childProcess.execFileSync('bash', [path.join(__dirname, '..', 'scripts', 'python-runtime.sh'), '-c', code,
         path.join(__dirname, '..', 'scripts'), f.files.conferenceProcessDir, f.files.conferencePageStagingDir,
-        f.files.conferenceAggregateDir, promoted.processId], { encoding: 'utf8' });
+        f.files.conferenceAggregateDir, promoted.processId, noMaintenancePreload], { encoding: 'utf8' });
     assert.deepEqual(JSON.parse(publisherRead), { files: 4, status: 'complete' });
     // 原 v1 文件保持；以下均为独立合成资料，用真实发布读取门核格式及原 SHA 顺序。
     // 当前 writer 的实际 v2 输出由 conference-postprocess 测试另行覆盖。
@@ -1951,10 +1967,10 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
         fs.writeFileSync(path.join(aggregate, 'manifest.json'), JSON.stringify(manifest));
         fs.writeFileSync(path.join(aggregate, 'aggregate.md'), legacyBody.markdown);
     }
-    const formatCode = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_formats',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\nroot=Path(sys.argv[3]);p.RUNTIME=root.parent;results={}\nfor folder in sorted(root.iterdir()):\n p.PAGE_ROOT=folder/'pages';p.PROCESS_ROOT=folder/'processes';p.AGGREGATE_ROOT=folder/'aggregates'\n try:\n  b=p.process_bundle('odyssey-2026',sys.argv[4]);results[folder.name]={'files':len(b['files']),'status':b['state']['status']}\n except p.ConferencePublicationError as error:\n  results[folder.name]={'error':str(error)}\nprint(json.dumps(results))`;
+    const formatCode = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_formats',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)${isolatedNoMaintenanceGuard}root=Path(sys.argv[3]);p.RUNTIME=root.parent;results={}\nfor folder in sorted(root.iterdir()):\n p.PAGE_ROOT=folder/'pages';p.PROCESS_ROOT=folder/'processes';p.AGGREGATE_ROOT=folder/'aggregates'\n try:\n  b=p.process_bundle('odyssey-2026',sys.argv[4]);results[folder.name]={'files':len(b['files']),'status':b['state']['status']}\n except p.ConferencePublicationError as error:\n  results[folder.name]={'error':str(error)}\nprint(json.dumps(results))`;
     const formats = JSON.parse(childProcess.execFileSync('bash', [path.join(__dirname, '..', 'scripts', 'python-runtime.sh'),
         '-c', formatCode, path.join(__dirname, '..', 'scripts'), f.files.conferencePageStagingDir,
-        formatRoot, promoted.processId], { encoding: 'utf8' }));
+        formatRoot, promoted.processId, noMaintenancePreload], { encoding: 'utf8' }));
     assert.deepEqual(formats.current, { files: 4, status: 'complete' });
     assert.deepEqual(formats['page-current'], { files: 4, status: 'complete' });
     assert.match(formats['bad-sha-before-mixed'].error, /aggregate staging 与 completion proof 不一致/);

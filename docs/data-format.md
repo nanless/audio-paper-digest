@@ -102,6 +102,20 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 `reader-grant-budget.json` 使用 `conference-granted-reader-budget-v1`，逐请求预留，绑定实际 Reader 身份。`reader-grant-request-<id>.json` 和内容响应的 `reader-grant-response-<id>.json` 是不可变原账；冷核须逐项与账本和真实输出 SHA 相符。未结请求保守占额，账本缺失或裁剪不能重开额度。新增请求沿公共费用记录保存，以该 grantId 作为 `runId`、新子运行 ID 的 SHA 作为默认 `unitId`，覆盖必要主分析、摘要、评分及 Reader，旧费用与旧连续失败不修改。生成、冷后处理和发布仍须核验真实会议来源及原完整链，详见[操作与恢复边界](conference-workflow.md#原额度耗尽后的独立付费恢复)。
 
+## 会议博客审查后的 Reader 维护记录
+
+已完成会议的正常付费维护使用 `conference-reader-review-maintenance-batch-v1`，与原失败迁移 grant、零请求人工清单分开。私有根为 `conference-processes/<processId>/review-reader-maintenance/<batchId>/`，不可变 manifest 绑定实际停稳完整 state、当前 canonical generation、完整正常 review batch 及各原失败的物理/语义 SHA；原 current complete 父包 analysis/run/source、PDF、来源快照及重建 Reader draft 逐一 CAS 对应。generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找回，不能拿私造的自洽归档充当正常审查已结束。通过页还须核正式永久 pass cache。
+
+`baseline-state.json`、`generation.json`、`review-batch.json`、`failures/`、`classifications/` 保留原材料。全部 text 及分类为 normal-reader 的 Markdown/图片构成完整唯一成员集；其余 markdown/image 失败仍完整分类并保留原 stage，不改名为 text。`raw-review-findings-v1` 只发送带待核验警示的真实意见，`corrective-assertion-v1` 另绑定旧节点与逐字来源。deferred-review/deferred-publication-format 明确 pending-new-page-review，不得带 repaired/passed，也不能授新模型或发布通过。
+
+`aggregateClassifications` 逐条绑定真实汇总拒稿，固定8字段合同 `conference-reader-aggregate-review-classification-v1`：kind=`deferred-aggregate-generation`、status=`pending-new-page-review`、nextAction=`normal-aggregate-generation-then-normal-review`。`nativeReviewClassifications` 完整绑定已结算 transient 原件，固定8字段合同 `conference-reader-native-review-classification-v1`、kind=`deferred-native-review`、相同 pending 状态及 nextAction=`normal-publication-review`。两类都保留原路径、页/失败的物理与语义 SHA，不加入单篇 members、不声称 passed/repaired，也不能漏失败；后续仍正常生成/复审。
+
+登记以 `registration.json` 和 `registered-state.json` 绑定 state 的 `readerReviewMaintenanceObligations`；只追加义务，不把原 complete 论文伪装失败。`progress.json` 持久保存真实 child、尝试、轮次意图和逐篇成功，成功稿先保存再处理兄弟失败。原签稿 seed 由真实父来源上下文重建为 child 的 `review-reader-seed.json`，revision 固定绑定 manifest/member/反馈 SHA；继承 Reader 或同反馈 SHA 的别篇稿不能清义务。
+
+下一窗使用 `conference-reader-review-maintenance-window-v1`，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。
+
+全部新稿正常完整资格及 stage 通过后，`adoption.json` 与 `adoption-after-state.json` 不可变绑定原 baseline、实际登记前后状态和全 child/page CAS，锁内原子采纳后正常重做汇总。pending 发布门同时核 state 定位器和私有实物，缺目录/旧成功/旧 passed 缓存都不能清义务。操作命令见[正常 Reader 维护](conference-workflow.md#博客拒稿后的正常-reader-维护)。
+
 ## 会议零请求来源纠正
 
 `conference:migrate-process --postprocess-only` 保存真实统一后处理及迁移凭证后返回，结果含 `postprocessedOnly:true`、检查/通过/失败数量和 `newApiRequests:0`。它不派发分析、放行重试或生成聚合。
@@ -184,6 +198,10 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 页面明确标示原 PDF 页，不冒充精确裁图或旧模型输入；生成、审查和推送均重算该证明。没有这两个新字段的旧清单只按原输入语义、原来源和原 Reader 像素路径及 SHA 只读核验；不能删新证明字段，把新的替代 PNG 伪装成旧格式。替换旧资产经原清单的精确 owned 文件安装事务处理，其他图片不进入删除范围。
 
+会议原 PDF 出版派生另保存于 `conference-publications/<conferenceId>/<processId>/figure-crop-derivations/`，原页视图位于 `figure-publication-views/`。`generation.figurePublicationView` 绑定完整原 rawFiles/rawImageFiles/原 bundle SHA、真实 Node derivation、原 generation 双 SHA、固定实现及实际 changedPages；新像素和出版 body SHA 不冒充原 Reader 签名。完整页证明带目标印刷图号和 PDF 页码；正常模式核完整图注，有限源页模式须另核选中图的原认证 raw artifacts/ref/page/DOM/asset 能力，同页真实印刷图号唯一，completeTargetCaption:null 且 captionExtractionStatus 为 partial/unavailable，实际 sourceNote 明示未完整抽取；原 PDF、raw stage、原图、Reader 和费用保持。
+
+后续维护反馈的两阶段历史能力先验证原生批审查/父来源/真实当前后继，再通过库内 opaque 范围重算同 PDF 派生与全部实物闭包，以原生纯 FD 变换逐字对照 raw→view。缓存仍持真实 source assertUnchanged，不能只缓存 JSON 自哈希；它仅避免几何及纯 FD 重算，逐 child 仍可能重读完整批缓存与来源/页面/PNG 闭包，不承诺总 I/O 无重复；旧父不再 current 时也只认证历史意见材料，不授当前发布或新 Reader 成功。原日更 `reader-sealed-pdf-page-asset-v1` 字节及证明合同不因此改变。
+
 ### 页面元数据与四份下载文件
 
 当前 Reader v3 和已保存的旧 Manual v6 论文页使用 `researcher-workbench-v1` 页面元数据，保存读者标题、原始标题、规范 arXiv ID、明确输入或由已保存并核验的来源确定的 `vN`、版本一致的 abs/PDF URL、主任务、数值评分、排名分档、文档类型、一句话主线、结构化作者及原摘要 SHA。原始摘要保存在同批 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`，不塞入页面元数据。
@@ -210,7 +228,7 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 ## 审查记录与远端发布
 
-审查记录绑定生成清单 SHA、实际页面 SHA、当前审查协议、Git 基线、Hugo 构建结果和配置、布局、数据、前端代码的运行时指纹，以及发布依据。逐页通过记录单独保存，只按“相对路径 + 页面内容 SHA”长期复用。
+审查记录绑定生成清单 SHA、实际页面 SHA、当前审查协议、Git 基线、Hugo 构建结果和配置、布局、数据、前端代码的运行时指纹，以及发布依据。逐页通过记录单独保存，只按“相对路径 + 页面内容 SHA”长期复用。会议后续整批可混合旧协议 passed 与当前协议失败；passed 必须逐字段等于 canonical `page-review-passes/<stable({path,sha256})>.json` 的真实原件，核 `conference-page-content-review-v1`、`resultSha256`、路径/页 SHA 及合法原协议；不能无缓存伪造 passed 或改签原协议。失败仍严格绑定当前整批协议与原不可变 failure。
 
 独立人工审查 v4 将文章语义记录 `files` 与 `machineAssets` 分开；后者使用 `manual-review-controlled-assets-v1`，仅容纳 schema v3 清单中的现存受控引用资料、词表和论文图，逐项保存 `{path, deleted: false, sha256}`。两者的精确并集必须等于完整生成及发布清单，不能漏项、夹入未知资产或给资产伪造审查者。机器资产在签发和推送时重新核验当前生成、正式同源分析、封存来源、词表、伴随文件重建及已通过且 SHA 一致的引用页。逐图记录中的站内地址只接受当前部署前缀下、同一清单和当前字节匹配的受控论文图；旧纯文章声明保持原规则。
 
