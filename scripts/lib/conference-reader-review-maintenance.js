@@ -14,6 +14,7 @@ const scientificParentReplayHandles = new WeakMap();
 const legacyParentReferenceScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const evidenceCache = new Map();
 const verifiedAdoptedChildIdentities = new WeakMap();
+const validatedMetadata = new WeakMap();
 const verifiedCanonicalReviewEvidence = new WeakMap();
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
@@ -47,6 +48,33 @@ function privateFileSha256(filename,requirePrivateMode=true) {
         return sha(bytes);
     } finally {fs.closeSync(fd);}
 }
+// Only fixed metadata slots are retained per private batch, never old versions.
+function freezeMetadata(value) {
+    if(value&&typeof value==='object'&&!Object.isFrozen(value)) {
+        for(const child of Object.values(value))freezeMetadata(child);Object.freeze(value);
+    }
+    return value;
+}
+function metadataCache(batch) {
+    let cached=validatedMetadata.get(batch);
+    const matches=cached&&cached.manifest===batch.m&&cached.baseline===batch.baseline.value
+        &&cached.manifestFileSha256===batch.manifestFileSha256&&cached.baselineSha256===batch.baseline.sha256;
+    if(!matches) {
+        freezeMetadata(batch.m);freezeMetadata(batch.baseline.value);
+        cached={manifest:batch.m,baseline:batch.baseline.value,manifestFileSha256:batch.manifestFileSha256,
+            baselineSha256:batch.baseline.sha256,records:new Map(),registration:null};
+        validatedMetadata.set(batch,cached);
+    }
+    return cached;
+}
+function validatedMetadataRecord(batch,slot,filename,validate) {
+    check(['state','after','adoption'].includes(slot),'fixed metadata cache slot');
+    const actual=privateFileSha256(filename),cache=metadataCache(batch),previous=cache.records.get(slot);
+    if(previous?.filename===filename&&previous.record.sha256===actual)return previous.record;
+    const record=read(filename);check(record.sha256===actual,'metadata changed during validation');validate(record.value);
+    const immutable=Object.freeze({value:freezeMetadata(record.value),sha256:record.sha256});
+    cache.records.set(slot,{filename,record:immutable});return immutable;
+}
 function exact(filename,value) { adapter().writeBytesAtomic(filename,Buffer.from(JSON.stringify(value,null,2)+'\n')); }
 function self(value,key) {const copy=structuredClone(value);delete copy[key];check(stable(copy)===value[key],key+' mismatch');}
 function paths(processDirectory,batchId) {
@@ -59,15 +87,22 @@ function paths(processDirectory,batchId) {
 function obligation(batch) {return {batchId:batch.m.batchId,manifestSha256:batch.m.manifestSha256,
     manifestFileSha256:batch.manifestFileSha256};}
 function registeredState(batch) {
-    const state=read(path.join(batch.p.root,'registered-state.json'));
-    const registration=read(path.join(batch.p.root,'registration.json')).value;self(registration,'registrationSha256');
+    const stateFile=path.join(batch.p.root,'registered-state.json'),registrationFile=path.join(batch.p.root,'registration.json');
+    const stateSha256=privateFileSha256(stateFile),registrationSha256=privateFileSha256(registrationFile),cache=metadataCache(batch);
+    if(cache.registration?.stateSha256===stateSha256&&cache.registration.registrationSha256===registrationSha256)
+        return cache.registration.record;
+    const state=read(stateFile);check(state.sha256===stateSha256,'registered state changed during validation');
+    const registrationRecord=read(registrationFile);check(registrationRecord.sha256===registrationSha256,'registration changed during validation');
+    const registration=registrationRecord.value;self(registration,'registrationSha256');
     check(registration.contract==='conference-reader-review-maintenance-registration-v1'
         &&registration.manifestSha256===batch.m.manifestSha256&&registration.manifestFileSha256===batch.manifestFileSha256
         &&registration.baselineStateFileSha256===batch.baseline.sha256&&registration.registeredStateFileSha256===state.sha256,'pending registration CAS');
     const expected=structuredClone(batch.baseline.value);
     expected.readerReviewMaintenanceObligations=[...(expected.readerReviewMaintenanceObligations||[]),obligation(batch)];
     expected.generation++;expected.updatedAt=state.value.updatedAt;expected.stateSha256=api().stateDigest(expected);
-    check(same(expected,state.value),'registration changed original complete history');api().assertState(state.value);return state;
+    check(same(expected,state.value),'registration changed original complete history');api().assertState(state.value);
+    const record=Object.freeze({value:freezeMetadata(state.value),sha256:state.sha256});
+    cache.registration={stateSha256,registrationSha256,record};return record;
 }
 function registerPendingObligation(batch,now) {
     const current=read(batch.p.state);
@@ -896,12 +931,12 @@ function assertCurrentBatch(batch) {
     for(const member of batch.m.members)check(privateFileSha256(path.join(batch.p.root,'failures',member.failureSha256+'.json'))===member.failureFileSha256,'immutable failure bytes changed');
     for(const classified of [...(batch.m.imageClassifications||[]),...(batch.m.markdownClassifications||[]),...(batch.m.aggregateClassifications||[]),...(batch.m.nativeReviewClassifications||[])])check(privateFileSha256(path.join(batch.p.root,'classifications',classified.classificationSha256+'.json'))===classified.classificationFileSha256
         &&privateFileSha256(path.join(batch.p.root,'failures',classified.failureSha256+'.json'))===classified.failureFileSha256,'immutable classification/failure bytes changed');
-    const current=read(batch.p.state);api().assertState(current.value);
+    const current=validatedMetadataRecord(batch,'state',batch.p.state,value=>api().assertState(value));
     if(current.sha256===batch.baseline.sha256)return current;
     if(fs.existsSync(path.join(batch.p.root,'registration.json'))&&current.sha256===registeredState(batch).sha256)return current;
     check(fs.existsSync(batch.p.adoption),'baseline changed without real adoption');
-    const receipt=read(batch.p.adoption);self(receipt.value,'receiptSha256');
-    const r=receipt.value,after=read(batch.p.after);api().assertState(after.value);
+    const receipt=validatedMetadataRecord(batch,'adoption',batch.p.adoption,value=>self(value,'receiptSha256'));
+    const r=receipt.value,after=validatedMetadataRecord(batch,'after',batch.p.after,value=>api().assertState(value));
     check(r.contract==='conference-reader-review-maintenance-adoption-v1'
         &&r.manifestSha256===batch.m.manifestSha256&&r.manifestFileSha256===batch.manifestFileSha256
         &&r.beforeStateFileSha256===batch.baseline.sha256&&r.afterStateFileSha256===after.sha256
