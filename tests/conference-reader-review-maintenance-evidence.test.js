@@ -232,3 +232,48 @@ test('native transient cannot claim success or Reader repair, hide original evid
  for(const extra of [{passed:true},{kind:'normal-reader'},{status:'complete'}])assert.throws(()=>validateDocuments(nativeDeferredInput(extra)),/transient review cannot/);
  const bad=nativeDeferredInput();bad.reviewBatch.pages.at(-1).completed=false;bad.resealBatch();assert.throws(()=>validateDocuments(bad),/incomplete text rejection/);
 });
+function mappedAggregateAuthorInput() {
+ const input=fixture(2),member=input.manifest.members[1],page=input.generation.files.find(p=>p.paperId===member.paperId),aggregate=input.generation.files.find(p=>p.kind==='aggregate');
+ const oldIndex=input.reviewBatch.pages.findIndex(r=>r.path===page.path);
+ const passed=seal({contract:'conference-page-content-review-v1',path:page.path,sha256:page.sourceSha256,passed:true,issues:[],imageCount:0,protocol:input.reviewBatch.protocol},'resultSha256');
+ input.reviewBatch.pages[oldIndex]=passed;input.passCaches[stable({path:page.path,sha256:page.sourceSha256})]={value:passed,fileSha256:sha(JSON.stringify(passed))};
+ const official='https://example.org/synthetic-paper.html',author='Synthetic Author';
+ const aggregateMarkdown='### 522. [Synthetic paper](https://example.org/paper/)\n\n会议来源：[官方记录]('+official+')\n\n- '+author+'：Example University of\n';
+ aggregate.paperId=null;aggregate.sourceSha256=sha(aggregateMarkdown);input.aggregateMarkdown=aggregateMarkdown;input.state.aggregate={markdownSha256:aggregate.sourceSha256,manifestSha256:aggregate.manifestSha256};
+ const row=seal({contract:'conference-page-content-review-failure-v1',path:aggregate.path,sha256:aggregate.sourceSha256,paperId:null,passed:false,stage:'text',protocol:input.reviewBatch.protocol,issues:[{severity:'error',description:'论文522作者'+author+'机构截断'}],completed:true,failureKind:'content'},'failureSha256');
+ input.reviewBatch.pages=input.reviewBatch.pages.filter(r=>r.path!==aggregate.path);input.reviewBatch.pages.push(row);
+ const failureFileSha256=sha(JSON.stringify(row));input.failures[row.failureSha256]={value:row,fileSha256:failureFileSha256};
+ const classification=seal({contract:'conference-reader-aggregate-review-classification-v1',path:row.path,pageSha256:row.sha256,failureSha256:row.failureSha256,kind:'deferred-aggregate-generation',status:'pending-new-page-review',nextAction:'normal-aggregate-generation-then-normal-review'},'classificationSha256');
+ const classificationFileSha256=sha(JSON.stringify(classification));input.aggregateClassifications={[classification.classificationSha256]:{value:classification,fileSha256:classificationFileSha256}};
+ input.manifest.aggregateClassifications=[{failureSha256:row.failureSha256,failureFileSha256,classificationSha256:classification.classificationSha256,classificationFileSha256}];
+ const parent=input.parents[member.parentExecutionId];parent.analysis.papers=[{conferencePublication:{recordUrl:official}}];
+ input.manifest.aggregatePaperFeedback=[{contract:'conference-reader-aggregate-author-feedback-v1',paperId:member.paperId,failureSha256:row.failureSha256,aggregateEntryRank:522,aggregateEntrySha256:sha(aggregateMarkdown),officialRecordUrl:official,authorName:author,sourceQuote:parent.sourceText}];
+ Object.assign(member,{failureSha256:row.failureSha256,failureFileSha256,feedbackMode:'raw-review-findings-v1',reviewFeedback:rawReviewFeedback(row)});delete member.rejectedClaims;delete member.sourceQuotes;member.reviewFeedbackSha256=sha(member.reviewFeedback);
+ seal(input.generation,'generationSha256');input.manifest.generationSha256=input.generation.generationSha256;input.resealState();input.resealBatch();return input;
+}
+test('aggregate source-author feedback maps a real ranked entry to its passed paper without fabricating paper failure',()=>{
+ const input=mappedAggregateAuthorInput();assert.equal(validateDocuments(input).paperIds.length,2);
+ assert.equal(input.reviewBatch.pages.find(r=>r.path===input.manifest.members[1].pagePath).passed,true);
+ assert.equal(input.failures[input.manifest.members[1].failureSha256].value.paperId,null);
+});
+test('aggregate author feedback rejects wrong rank official metadata source quote or changed aggregate bytes',()=>{
+ for(const alter of [i=>i.manifest.aggregatePaperFeedback[0].aggregateEntryRank=521,i=>i.manifest.aggregatePaperFeedback[0].officialRecordUrl='https://other.example.org/',i=>i.manifest.aggregatePaperFeedback[0].sourceQuote='unrelated quote',i=>i.aggregateMarkdown+='changed']) {
+  const input=mappedAggregateAuthorInput();alter(input);input.resealManifest();assert.throws(()=>validateDocuments(input),/aggregate/);
+ }
+});
+
+function finalSurfaceInput() {
+ const input=fixture(1),member=input.manifest.members[0],parent=input.parents[member.parentExecutionId];
+ const paper={apiReaderArticle:'already signed complete article',apiReaderPlan:{sections:[{heading:'Signed heading'}]},apiReaderFigures:[]};
+ parent.analysis.papers=[paper];const surface={contract:'conference-reader-final-parent-surface-v1',article:paper.apiReaderArticle,plan:paper.apiReaderPlan,figures:paper.apiReaderFigures};
+ input.surfaces[member.parentExecutionId]=surface;member.parentReaderSurfaceContract=surface.contract;member.parentReaderSurfaceSha256=draftHash(surface);delete member.parentReaderDraftSha256;
+ member.feedbackMode='raw-review-findings-v1';member.reviewFeedback=rawReviewFeedback(input.failures[member.failureSha256].value);member.reviewFeedbackSha256=sha(member.reviewFeedback);delete member.rejectedClaims;delete member.sourceQuotes;input.resealManifest();return input;
+}
+test('raw maintenance binds exact signed final surface without pretending it is an inverse paid draft',()=>{
+ const input=finalSurfaceInput();assert.equal(validateDocuments(input).paperIds.length,1);assert.equal(input.manifest.members[0].parentReaderDraftSha256,undefined);
+});
+test('final surface rejects changed signed article plan figures, unknown contract and corrective old-node scope',()=>{
+ for(const alter of [i=>i.surfaces[i.manifest.members[0].parentExecutionId].article+='changed',i=>i.surfaces[i.manifest.members[0].parentExecutionId].plan.sections=[],i=>i.surfaces[i.manifest.members[0].parentExecutionId].figures.push({ordinal:99}),i=>i.manifest.members[0].parentReaderSurfaceContract='unknown',i=>i.manifest.members[0].feedbackMode='corrective-assertion-v1']){
+  const input=finalSurfaceInput();alter(input);input.resealManifest();assert.throws(()=>validateDocuments(input),/signed final Reader surface mismatch/);
+ }
+});

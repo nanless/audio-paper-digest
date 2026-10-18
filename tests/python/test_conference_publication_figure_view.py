@@ -204,6 +204,8 @@ class PublicationFigureViewTests(unittest.TestCase):
             payload=json.loads(os.pread(int(argv[2]),16*1024*1024,0));calls.append(payload)
             self.assertEqual(payload['runtimeRoot'],str(self.root/'data/runtime'))
             self.assertNotIn('NODE_OPTIONS',kwargs['env']);self.assertNotIn('NODE_PATH',kwargs['env'])
+            self.assertEqual(kwargs['env'].get('VERIFY_PROJECT_DISABLE_FILE_LOGS'),'1')
+            self.assertEqual(kwargs['timeout_seconds'],3600)
             return SimpleNamespace(returncode=0,timed_out=False,output_truncated=False,
                                    stdout=json.dumps(self.outcome),stderr='')
         module=SimpleNamespace(parse_markdown_images=parse,_run_bounded_subprocess=bounded)

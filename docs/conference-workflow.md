@@ -313,6 +313,10 @@ Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点
 
 汇总页自己的内容拒稿不作为单篇 Reader 成员。清单用 `aggregateClassifications` 完整保留原 aggregate failure，固定 `deferred-aggregate-generation`、`pending-new-page-review` 和 `normal-aggregate-generation-then-normal-review`，交正常汇总重建及新页审查，不宣称原拒稿已修。已结算的 transient 另用 `nativeReviewClassifications` 完整保留原阶段及 failure，固定 `deferred-native-review`、待正常出版复审；不当作科学事实发送 Reader，缺失或尚未结算不能冒完整批次。单篇作者等来源问题须先正常修复，不能由汇总渲染器假补。
 
+汇总作者来源拒稿可以用 `aggregatePaperFeedback` 绑定真实原失败、第几篇条目的完整 SHA、官方记录链接、作者名与同篇认证原文逐字窗口，交该真实单篇正常 Reader；原单篇通过记录及 summary 的 `paperId:null` 保留，不能伪造单篇失败。Loader 另核当前父包、真实作者 v2 解析确实改变对应机构，不能拿旧汇总或别篇机构移植。公共新 Reader/完整分析与独立作者刷新显式使用 `conference-pdf-author-lines-v2`，作者 identity 保存版本；旧无版本签名及旧发布冷核仍用原 v1，只刷新图片不改旧作者，零请求 operator 按原范围保留原作者字节。
+
+正常 raw-review 维护只读绑定原已签最终 article/plan/figures 的明确 `conference-reader-final-parent-surface-v1` 合同与 SHA，不要求先把旧桥接段落逆算成模型原始草稿。真实来源、父包和全部签名仍核验；新 child 仍通过正常已核 seed 接口发出自己的请求。旧 corrective 节点模式保持严格 inverse，不能借此授人工节点权限、旧预算或新通过。
+
 默认 `raw-review-findings-v1` 将真实原意见逐字交公共 Reader，并明确这是待核验意见；模型须对照认证全文与原图，仅改真实错误。无需先给每篇人工编写纠正事实。只有额外 `corrective-assertion-v1` 才要求既有节点旧 SHA、原句和真正相关逐字来源。实际反馈上限4000字符，不能默默截断或以无关引文冒证据。 Markdown 通用指导只对确属原文金额等字面美元符号建议闭合行内代码保真，不猜币种；数学仍用正常 TeX 分隔符，代码外或未闭合代码中的真正语法问题仍拒。
 
 ```bash

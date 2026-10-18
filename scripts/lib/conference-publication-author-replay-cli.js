@@ -1,4 +1,5 @@
 'use strict';
+process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 
 // 仅固定配置根及私有FD的本地来源重放，网络/模型禁用。
 const fs = require('node:fs');
@@ -23,9 +24,9 @@ try {
     require('./conference-reader-review-maintenance').assertNoPendingReaderReviewMaintenance({
         processDirectory: require('node:path').join(input.runtimeRoot, 'conference-processes', input.state.processId),
         analysisRoot: require('node:path').join(input.runtimeRoot, 'conference-analysis-executions'), state: input.state });
-    process.stdout.write(JSON.stringify({ verified: true, papers: verifyPublicationAuthorSources(input) }));
+    fs.writeSync(1, JSON.stringify({ verified: true, papers: verifyPublicationAuthorSources(input) }));
 } catch (error) {
     process.stderr.write(String(error.message).slice(0, 2000));
-    process.stdout.write('{"verified":false}');
+    fs.writeSync(1, '{"verified":false}');
     process.exitCode = 1;
 }

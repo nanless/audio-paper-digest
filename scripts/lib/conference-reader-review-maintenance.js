@@ -100,7 +100,17 @@ function replayParentSource(parent) {
     return require('./conference-reader-publication-evidence')
         .replayCanonicalReaderPdfSource(parent.analysis.papers[0],sourceIdentity(parent));
 }
-function readerSurface(parent) {
+function readerSurface(parent,member={}) {
+    if(member.parentReaderSurfaceContract==='conference-reader-final-parent-surface-v1') {
+        const paper=parent.analysis.papers[0],stage=paper.analysisManifest?.stages?.apiReaderArticle;
+        check(typeof paper.apiReaderArticle==='string'&&paper.apiReaderPlan&&Array.isArray(paper.apiReaderFigures)
+            &&sha(paper.apiReaderArticle)===paper.apiReaderArticleSha256
+            &&stable(paper.apiReaderPlan)===paper.apiReaderPlanSha256
+            &&stable(paper.apiReaderFigures)===stage?.figuresSha256,'signed final Reader surface bytes differ');
+        return {contract:member.parentReaderSurfaceContract,article:paper.apiReaderArticle,
+            plan:structuredClone(paper.apiReaderPlan),figures:structuredClone(paper.apiReaderFigures)};
+    }
+    check(member.parentReaderSurfaceContract===undefined,'unknown signed final Reader surface');
     return require('./reader-signed-draft-surface').reconstructReaderDraftSurface({
         paper:parent.analysis.papers[0],paperId:parent.run.paperId}).draft;
 }
@@ -345,15 +355,34 @@ function loadBatch({manifestPath,processDirectory,analysisRoot}) {
         parents[member.parentExecutionId]={fileShas:{analysis:parent.analysisFileSha256,run:parent.runFileSha256,
             source:parent.sourceFileSha256},run:parent.run,analysis:parent.analysis,sourceText:parent.source.sourceDetails.text,
             pdfSha256:parent.source.sourceSnapshotBinding.sourceBinding.pdfSha256};
-        surfaces[member.parentExecutionId]=readerSurface(parent);
+        surfaces[member.parentExecutionId]=readerSurface(parent,member);
         if(member.feedbackMode==='corrective-assertion-v1')check(member.sourceQuotes.every(quote=>member.reviewFeedback.includes(quote)),
             'actual model feedback must include exact source quotes');
     }
+    let aggregateMarkdown=null,aggregateMappingRecord=null;
+    if((m.aggregatePaperFeedback||[]).length) {
+        const aggregate=generation.value.files.find(record=>record.kind==='aggregate');
+        const root=require('../config').FILES.conferenceAggregateDir;
+        check(aggregate&&path.resolve(aggregate.sourcePath).startsWith(path.resolve(root)+path.sep),'canonical aggregate source required');
+        aggregateMappingRecord={filename:aggregate.sourcePath,sha256:aggregate.sourceSha256};
+        check(fs.statSync(privateFile(aggregate.sourcePath,false)).size===aggregate.size&&aggregate.size<=128*1024*1024,'actual aggregate source byte budget');
+        aggregateMarkdown=fs.readFileSync(aggregate.sourcePath,'utf8');
+        check(sha(aggregateMarkdown)===aggregate.sourceSha256,'actual aggregate source bytes changed');
+        for(const mapping of m.aggregatePaperFeedback) {
+            const member=m.members.find(member=>member.paperId===mapping.paperId);
+            const parent=adapter().loadConferenceAnalysis({analysisRoot,executionId:member?.parentExecutionId});
+            const parsed=require('./reader-author-parser').parseConferencePdfAuthorsV2(parent.source.sourceDetails.text);
+            const before=parent.analysis.papers[0].apiReaderAuthors?.authors.find(author=>author.name===mapping.authorName);
+            const after=parsed?.authors.find(author=>author.name===mapping.authorName);
+            check(parsed&&mapping.sourceQuote===parsed.sourceEvidence&&before&&after
+                &&!same(before.affiliations,after.affiliations),'aggregate author feedback must bind a real current parser-source correction');
+        }
+    }
     const documents={manifest:m,generation:generation.value,reviewBatch:review.value,state:baseline.value,
         actualPhysicalShas:{generation:generation.sha256,state:baseline.sha256,reviewBatch:review.sha256},
-        failures,parents,surfaces,imageClassifications,markdownClassifications,aggregateClassifications,nativeReviewClassifications,passCaches};
+        failures,parents,surfaces,imageClassifications,markdownClassifications,aggregateClassifications,nativeReviewClassifications,aggregateMarkdown,passCaches};
     evidence.validateReviewIdentity(documents);
-    const batch={m,p,analysisRoot,processDirectory,manifestFileSha256:initial.sha256,baseline,parents};
+    const batch={m,p,analysisRoot,processDirectory,manifestFileSha256:initial.sha256,baseline,parents,aggregateMappingRecord};
     assertCanonicalReviewEvidence(batch);
     assertCurrentBatch(batch);
     if(generation.value.figurePublicationView) {
@@ -516,6 +545,8 @@ function isCurrentOrVerifiedDescendant(batch,item,adopted) {
     fail('maintenance descendant chain too deep');
 }
 function assertCurrentBatch(batch) {
+    if(batch.aggregateMappingRecord)check(sha(fs.readFileSync(privateFile(batch.aggregateMappingRecord.filename,false)))===batch.aggregateMappingRecord.sha256,
+        'original aggregate feedback source changed');
     check(read(batch.p.manifest).sha256===batch.manifestFileSha256
         &&read(path.join(batch.p.root,'baseline-state.json')).sha256===batch.baseline.sha256
         &&read(path.join(batch.p.root,'generation.json')).sha256===batch.m.generationFileSha256

@@ -268,7 +268,7 @@ npm run test:compat
 | 文件 | 类型与职责 |
 |---|---|
 | `lib/pdf-layout.js` | 调用 PDF 布局 worker，取得单元格和图表证据。 |
-| `lib/reader-author-parser.js` | Node 库：从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
+| `lib/reader-author-parser.js` | Node 库：从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标。明确 v2 只接有来源依据的机构续行；新 Reader 写入实际版本，旧无版本 identity/发布重放仍用原 v1；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
 | `lib/reader-author-replay-cli.js` | Node 子进程入口：供 Python 发布器调用的本地作者核验入口；原单对象协议保持，有界批次最多8项/32MiB，逐项重读真实四源及父证明，全部精确通过才返回true；只读取私有FD，无网络与模型。 |
 | `lib/reader-pdf-extraction-scope.js` | 三流程单次 Reader 核验共用的纯 PDF 提取执行与 stdout 复用；日更保留最小环境，会议及历史认证 PDF 保留继承环境，未知启动覆盖或禁用 venv 按原路径执行。实时核对角色、私有输入和隔离运行时，来源及资格不缓存。 |
 | `lib/reader-authenticated-pdf-footnote-evidence.js` | 在真实会议/历史 PDF 句柄内导出并冷重放同栏作者声明、上标及同号资源网址；会议适配器在真实原计划及同源权限内完成预检生成复验和冷读取，归属与可达状态分别保留。旧身份只能生成独立纠正提案，不自动改稿或授予评分/Reader资格。 |

@@ -1,4 +1,5 @@
 'use strict';
+process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 // Normal-publisher private FD bridge, never a model / network entry.
 const fs = require('node:fs');
 const denyNetwork = () => { throw new Error('出版图片派生仅允许原本地来源'); };
@@ -19,6 +20,6 @@ async function main() {
     const input = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
     const api = require('./conference-publication-figure-crop.js');
     const method = input.expectedDerivation ? api.replayPublicationFigureCrops : api.derivePublicationFigureCrops;
-    process.stdout.write(JSON.stringify(await method(input)));
+    fs.writeSync(1, JSON.stringify(await method(input)));
 }
 main().catch(error => { process.stderr.write(String(error.message).slice(0, 4000)); process.exitCode = 1; });

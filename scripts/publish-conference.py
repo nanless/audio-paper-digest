@@ -527,8 +527,9 @@ def verify_process_author_sources(state, completion):
         source_file.seek(0)
         result = module._run_bounded_subprocess(
             [node, str(ROOT / 'scripts/lib/conference-publication-author-replay-cli.js'), str(source_file.fileno())],
-            cwd=str(ROOT), env={key: value for key, value in os.environ.items()
-                                if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            cwd=str(ROOT), env={**{key: value for key, value in os.environ.items()
+                                  if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+                                'VERIFY_PROJECT_DISABLE_FILE_LOGS': '1'},
             timeout_seconds=60, max_output_bytes=2 * 1024 * 1024, pass_fds=(source_file.fileno(),),
         )
     if result.returncode != 0 or result.timed_out or result.output_truncated:
@@ -1267,9 +1268,12 @@ def _publication_figure_view_bundle(bundle, conference_id, process_id, *,
         result = module._run_bounded_subprocess(
             [node, str(ROOT / 'scripts/lib/conference-publication-figure-crop-replay-cli.js'),
              str(source_file.fileno())], cwd=str(ROOT),
-            env={key: value for key, value in os.environ.items()
-                 if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=600, max_output_bytes=16 * 1024 * 1024,
+            env={**{key: value for key, value in os.environ.items()
+                    if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+                 'VERIFY_PROJECT_DISABLE_FILE_LOGS': '1'},
+            # Full authenticated batches include source replay and thousands
+            # of PDF figures; the 1,118-figure batch exceeds ten minutes.
+            timeout_seconds=3600, max_output_bytes=16 * 1024 * 1024,
             pass_fds=(source_file.fileno(),))
     if result.returncode != 0 or result.timed_out or result.output_truncated:
         raise ConferencePublicationError('出版图片未通过真实 Node 来源冷重放：' + str(result.stderr[-2000:]))

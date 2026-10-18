@@ -10131,7 +10131,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
-    let readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails);
+    let readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 });
     // A source correction can combine a new scientific main with a separately
     // authenticated signed Reader. Its author proof belongs to that Reader,
     // rather than the failed Reader stage of the selected scientific main.
@@ -10554,7 +10554,7 @@ function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
         || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
         throw new Error('刷新作者和机构信息所用的全文不能为空，其 SHA 必须同时与论文记录和来源获取记录一致。');
     }
-    const readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails);
+    const readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 });
     if (!readerAuthors.authors.length || !recoverySha256(readerAuthors.sourceDomSha256)) {
         throw new Error('未能取得作者列表或格式有效的来源内容 SHA，无法刷新作者和机构信息。');
     }
@@ -18464,7 +18464,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             if (directContext.getDirectRewriteAnalysisContext()) {
                 directContext.assertNoPersistentFigureFields(paper.apiReaderFigures);
             }
-            paper.apiReaderAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails);
+            paper.apiReaderAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails, { conferencePdfAuthorParserVersion: 2 });
             if (!paper.apiReaderResources
                 || paper.apiReaderResources.sourceTextSha256 !== paper.sourceSha256) {
                 paper.apiReaderResources = verifiedReaderResources;

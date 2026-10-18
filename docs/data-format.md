@@ -110,6 +110,10 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 `aggregateClassifications` 逐条绑定真实汇总拒稿，固定8字段合同 `conference-reader-aggregate-review-classification-v1`：kind=`deferred-aggregate-generation`、status=`pending-new-page-review`、nextAction=`normal-aggregate-generation-then-normal-review`。`nativeReviewClassifications` 完整绑定已结算 transient 原件，固定8字段合同 `conference-reader-native-review-classification-v1`、kind=`deferred-native-review`、相同 pending 状态及 nextAction=`normal-publication-review`。两类都保留原路径、页/失败的物理与语义 SHA，不加入单篇 members、不声称 passed/repaired，也不能漏失败；后续仍正常生成/复审。
 
+`aggregatePaperFeedback` 的 `conference-reader-aggregate-author-feedback-v1` 绑定 paperId、实际汇总 failureSha256、aggregateEntryRank/aggregateEntrySha256、officialRecordUrl、authorName 和 sourceQuote；父包/Reader surface/CAS 仍逐篇绑定，纯意见仍发送原失败。原单篇 passed 不改失败；真实来源重放与明确 v2 作者解析必须证实对应变化，原 aggregate 字节及当前父包持续核验。作者 identity 新字段 `conferencePdfAuthorParser: conference-pdf-author-lines-v2` 明确新解析；无该字段的旧签名按原逐行 v1 冷核，不倒写。
+
+原始意见维护的成员使用 `parentReaderSurfaceContract: conference-reader-final-parent-surface-v1` 与 `parentReaderSurfaceSha256`，绑定 `{contract,article,plan,figures}` 的真实原签字节，不宣称原付费 raw draft；不能同时放 `parentReaderDraftSha256`。旧无此字段的清单及 corrective 节点模式仍走原严格逆算。
+
 登记以 `registration.json` 和 `registered-state.json` 绑定 state 的 `readerReviewMaintenanceObligations`；只追加义务，不把原 complete 论文伪装失败。`progress.json` 持久保存真实 child、尝试、轮次意图和逐篇成功，成功稿先保存再处理兄弟失败。原签稿 seed 由真实父来源上下文重建为 child 的 `review-reader-seed.json`，revision 固定绑定 manifest/member/反馈 SHA；继承 Reader 或同反馈 SHA 的别篇稿不能清义务。
 
 下一窗使用 `conference-reader-review-maintenance-window-v1`，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。

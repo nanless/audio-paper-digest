@@ -35,7 +35,7 @@ function existingNode(draft, pointer) {
     return node;
 }
 function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: review, state,
-    actualPhysicalShas, failures, parents, surfaces, imageClassifications = {},markdownClassifications = {},aggregateClassifications = {},nativeReviewClassifications = {},passCaches = {} }) {
+    actualPhysicalShas, failures, parents, surfaces, imageClassifications = {},markdownClassifications = {},aggregateClassifications = {},nativeReviewClassifications = {},aggregateMarkdown = null,passCaches = {} }) {
     check(m?.contract === 'conference-reader-review-maintenance-batch-v1' && m.version === 1, 'maintenance contract');
     selfHash(m, 'manifestSha256'); selfHash(g, 'generationSha256');
     selfHash(review, 'batchSha256'); selfHash(state, 'stateSha256');
@@ -162,6 +162,32 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
         }
         selected.push({ page, row, saved });
     }
+    const aggregateMappings=m.aggregatePaperFeedback||[];
+    uniqueIds(aggregateMappings.map(mapping=>mapping.paperId),'duplicate aggregate paper source feedback');
+    for(const mapping of aggregateMappings) {
+        check(mapping.contract==='conference-reader-aggregate-author-feedback-v1'
+            &&Number.isInteger(mapping.aggregateEntryRank)&&mapping.aggregateEntryRank>0,
+            'aggregate author feedback identity');
+        const aggregate=pages.find(page=>page.kind==='aggregate');
+        const row=review.pages.find(row=>row.path===aggregate?.path&&row.failureSha256===mapping.failureSha256
+            &&row.passed===false&&row.stage==='text'&&row.failureKind==='content');
+        check(row&&typeof aggregateMarkdown==='string'&&sha(aggregateMarkdown)===aggregate.sourceSha256
+            &&state.aggregate?.markdownSha256===aggregate.sourceSha256
+            &&state.aggregate?.manifestSha256===aggregate.manifestSha256,'actual baseline aggregate source required');
+        const headings=[...aggregateMarkdown.matchAll(/^### ([1-9][0-9]*)\. \[/gm)];
+        const index=headings.findIndex(heading=>Number(heading[1])===mapping.aggregateEntryRank);
+        check(index>=0,'aggregate paper rank missing');
+        const entry=aggregateMarkdown.slice(headings[index].index,headings[index+1]?.index??aggregateMarkdown.length);
+        check(sha(entry)===mapping.aggregateEntrySha256&&entry.includes('('+mapping.officialRecordUrl+')')
+            &&typeof mapping.authorName==='string'&&mapping.authorName.length>1
+            &&entry.includes(mapping.authorName)
+            &&row.issues.some(issue=>issue.severity==='error'&&String(issue.description||'').includes(mapping.authorName)
+                &&String(issue.description).match(/论文[ ]*([1-9][0-9]*)/u)?.[1]===String(mapping.aggregateEntryRank)),
+            'aggregate author feedback does not bind actual rank author and official source');
+        const page=pages.find(page=>page.kind==='paper'&&page.paperId===mapping.paperId);
+        check(page&&!selected.some(item=>item.page.paperId===mapping.paperId),'aggregate paper mapping is missing or duplicates an existing Reader member');
+        selected.push({page,row,saved:failures[row.failureSha256],aggregateMapping:mapping});
+    }
     uniqueIds((m.imageClassifications||[]).map(row=>row.failureSha256),'duplicate image failure classification');
     equalIds(imageFailures,(m.imageClassifications||[]).map(row=>row.failureSha256),'not exact complete image classification set');
     uniqueIds((m.markdownClassifications||[]).map(row=>row.failureSha256),'duplicate markdown failure classification');
@@ -190,8 +216,22 @@ function validateReviewIdentity({ manifest: m, generation: g, reviewBatch: revie
             && member.pdfSha256 === parent.pdfSha256 && member.pdfSha256 === item.sourceProof.pdfSha256
             && member.sourceSnapshotSha256 === parent.run.sourceSnapshotSha256
             && member.sourceSnapshotSha256 === item.analysisProof.sourceSnapshotSha256, 'source text/PDF/snapshot mismatch');
+        const mapping=aggregateMappings.find(mapping=>mapping.paperId===member.paperId);
+        if(mapping)check(parent.analysis.papers[0]?.conferencePublication?.recordUrl===mapping.officialRecordUrl
+            &&typeof mapping.sourceQuote==='string'&&mapping.sourceQuote.length>=12&&parent.sourceText.includes(mapping.sourceQuote),
+            'aggregate author mapping needs true same-paper source quote and official metadata');
         const surface = surfaces[member.parentExecutionId];
-        check(surface && draftHash(surface) === member.parentReaderDraftSha256, 'signed Reader reconstruction mismatch');
+        if(member.parentReaderSurfaceContract!==undefined) {
+            const paper=parent.analysis.papers[0];
+            check(member.parentReaderSurfaceContract==='conference-reader-final-parent-surface-v1'
+                &&(member.feedbackMode||'raw-review-findings-v1')==='raw-review-findings-v1'
+                &&member.parentReaderDraftSha256===undefined&&surface?.contract===member.parentReaderSurfaceContract
+                &&isDeepStrictEqual(surface,{contract:member.parentReaderSurfaceContract,article:paper.apiReaderArticle,
+                    plan:paper.apiReaderPlan,figures:paper.apiReaderFigures})
+                &&draftHash(surface)===member.parentReaderSurfaceSha256,'signed final Reader surface mismatch');
+        } else {
+            check(surface && draftHash(surface) === member.parentReaderDraftSha256, 'signed Reader reconstruction mismatch');
+        }
         const mode=member.feedbackMode||'raw-review-findings-v1';
         check(['raw-review-findings-v1','corrective-assertion-v1'].includes(mode),'unknown feedback mode');
         if(mode==='raw-review-findings-v1') {
