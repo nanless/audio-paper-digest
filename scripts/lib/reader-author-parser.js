@@ -199,6 +199,25 @@ function parseReaderAuthorTable($) {
     return candidates.length === 1 ? candidates[0] : null;
 }
 
+// A captured group label is not a per-person affiliation merely because it sits in the last creator.
+// This deliberately downgrades only the complete, otherwise-unbound trailing multi-institution shape.
+function rejectUnboundTrailingAffiliationGroup(authors, labeledGroups) {
+    if (!Array.isArray(authors) || authors.length < 2) return authors;
+    const last = authors.at(-1), unavailable = value => /^机构信息未/.test(String(value || ''));
+    if (!authors.slice(0, -1).every(author => Array.isArray(author.affiliations)
+        && author.affiliations.every(unavailable)) || !Array.isArray(last.affiliations)
+        || last.affiliations.length !== 1 || unavailable(last.affiliations[0])) return authors;
+    const target = normalizeReaderIdentityText(last.affiliations[0]);
+    const ambiguous = labeledGroups.some(value => {
+        const match = String(value || '').match(/^\s*(?:Affiliation|Institution)\s*[:：]\s*([\s\S]+)$/i);
+        if (!match || normalizeReaderIdentityText(match[1]) !== target) return false;
+        const parts = match[1].split(/[\u2002-\u200b\u3000]+| {2,}/u).map(value => value.trim()).filter(Boolean);
+        return parts.length > 1 && parts.every(value => value.length >= 3);
+    });
+    return ambiguous ? authors.map((author, index) => index === authors.length - 1
+        ? { ...author, affiliations: [READER_AFFILIATION_UNBOUND] } : author) : authors;
+}
+
 function parseArxivReaderAuthors($) {
     const wrapper = $('.ltx_authors').first();
     const cleanName = value => normalizeReaderIdentityText(value)
@@ -258,6 +277,14 @@ function parseArxivReaderAuthors($) {
                 : (affiliations.length > 0 ? affiliations : fallbackAffiliations))]
         };
     }).filter(item => item.name);
+    // Explicit thanks mappings keep their independent named evidence. Numeric per-person markers
+    // are outside this narrow unmarked-block rejection and retain the existing parser behavior.
+    const lastCreator = authorElements.length ? $(authorElements.at(-1)) : null;
+    if (lastCreator && !thanksAffiliations.mappings.has(readerIdentityKey(authors.at(-1)?.name))
+        && !wrapper.find('.ltx_personname sup, .ltx_personname .ltx_note_mark, .ltx_contact.ltx_role_affiliation sup').length) {
+        authors = rejectUnboundTrailingAffiliationGroup(authors,
+            lastCreator.find('.ltx_contact.ltx_role_affiliation').toArray().map(node => $(node).text()));
+    }
     if (authors.length === 0 && metaAuthors.length > 0) {
         authors = metaAuthors.map(name => ({
             name,
@@ -583,10 +610,23 @@ function replayHtmlReaderAuthors(details) {
 
 function verifiedReaderAuthorDetails(details, { conferencePdfAuthorParserVersion = 1 } = {}) {
     if (![1,2].includes(conferencePdfAuthorParserVersion)) throw new Error('Unknown conference author parser version');
-    const readerAuthors = details?.source === 'conference_pdf_text'
-        ? (conferencePdfAuthorParserVersion===2?parseConferencePdfAuthorsV2(details.text):parseConferencePdfAuthors(details.text)) : replayHtmlReaderAuthors(details)
-            || (details?.source === 'html'
-                ? require('./fresh-analysis-context.js').readVerifiedBundleReaderAuthors(details) : null);
+    let readerAuthors = details?.source === 'conference_pdf_text'
+        ? (conferencePdfAuthorParserVersion===2?parseConferencePdfAuthorsV2(details.text):parseConferencePdfAuthors(details.text)) : replayHtmlReaderAuthors(details);
+    if (!readerAuthors && details?.source === 'html') {
+        // Authenticate the unchanged four-file bundle before inspecting its old derived author array.
+        // Plain JSON and caller-supplied details never acquire this source capability.
+        readerAuthors = require('./fresh-analysis-context.js').readVerifiedBundleReaderAuthors(details);
+        if (readerAuthors && !details.readerAuthors?.sourceHtml) {
+            const preamble = String(details.text || '').split(/\nAbstract\n/i)[0];
+            const lines = preamble.split(/\r?\n/);
+            const names = readerAuthors.authors || [];
+            if (names.every(author => lines.some(line => normalizeReaderIdentityText(line)
+                === normalizeReaderIdentityText(author.name)))) {
+                readerAuthors = { ...readerAuthors, authors: rejectUnboundTrailingAffiliationGroup(names,
+                    lines.filter(line => /^\s*(?:Affiliation|Institution)\s*[:：]/i.test(line))) };
+            }
+        }
+    }
     return { ...details, readerAuthors: readerAuthors || null };
 }
 
