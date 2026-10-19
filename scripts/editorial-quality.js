@@ -1303,6 +1303,18 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // UTMOS 是 MOS 预测得分，不是附近定性 WER 描述的百分数。
+            // 只遮住直接绑定 UTMOS 的单个 1–5 分值；新指标、其它裸值与错误范围仍保留。
+            .replace(/(?<![A-Za-z0-9_.-])UTMOS\s*(?:反而\s*)?(?:微升到|提升到|提高到|升至|降至|下降到|为|=)\s*(?:[1-4](?:\.\d+)?|5(?:\.0+)?)(?![A-Za-z0-9_.])(?=\s*(?:[，,。；;！？!?]|$))/giu,
+                (match, offset, original) => {
+                    // “不是 UTMOS …，而是 WER …”及“非UTMOS”没有肯定归属。
+                    // 保留原匹配，让原检测器继续核验；不借否定提及 UTMOS 遮住另一指标的值。
+                    const start = Math.max(...['。','！','？','!','?','；',';','，',',','\n']
+                        .map(delimiter => original.lastIndexOf(delimiter, offset - 1)));
+                    const prefix = original.slice(start + 1, offset);
+                    return /(?:不是|并非|而非|不能|不应|不宜|不要|不代表|不表示|不意味着|非\s*$)/u.test(prefix)
+                        ? match : ' '.repeat(match.length);
+                })
             // 明确的后验抽样次数是推断设置，不是邻近准确率模型的百分比结果。
             // 只遮住带“次”的完整整数设置，同句真正的指标值仍须核验单位。
             .replace(/后验(?:抽样|采样)次数\s*(?:设为|设置为|为|是|取|=|：|:)\s*(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?![\d.,])\s*次(?=\s*(?:[，,。！？!?；;]|$))/gu,
