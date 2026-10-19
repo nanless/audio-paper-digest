@@ -374,6 +374,12 @@ npm run conference:publish:review -- --conference-id CONFERENCE_ID --process-id 
 
 Reader 更新后，旧派生父 CAS 不会自动获得 current 出版权限；最终展示继续按新实际父稿重新派生与正常审查。旧日更 SVG 的恢复输出字节及 `reader-sealed-pdf-page-asset-v1` proof 合同保持，会议出版证明不冒用日更身份。
 
+维护冷核的来源文件按真实私有 PDF 句柄批量检查，每次只读取一遍共同引用的文件，仍检查完整字节、路径安全、大小策略和原 SHA。原失败集合、私有历史能力及实际当前状态另外照常检查，不能用文件观察清单替代。历史父包首次完整加载后，其不变守卫真实重读 intent、run、source、analysis 四份文件，并保护原成员和内存身份；当前子稿的完整加载和科学资格不省略。
+
+固定历史出版视图的来源实现改变时，执行者可在生产停稳后调用维护库的 `revalidateMaintenancePublicationSources()`，参数为真实 `manifestPath`、`processDirectory`、`analysisRoot`。它取得原操作锁，禁止模型请求，核对归档六实现的真实 Git blob，并正常重算全部原 PDF 几何、像素及完整证明。只允许来源核验实现及新 proof 身份改变，原 PDF、显示目标、像素、URL 和原完整证明必须一致；新凭证另存，旧 generation、nodeDerivation、PNG、Reader 和费用均保留。普通 cold 入口只读重放，缺少当前合法凭证即阻断，不自行写入。来源重验记录明确引用原 outcome 和真正的当前 outcome，不授 Reader 完成、付费额度或最终发布资格；全部维护采纳后仍正常生成新 mixed view、审查和推送。
+
+来源重验首次签发限于真实已核的 baseline 或 registered-state 原件，须在采纳前准备；不支持采纳后首次补签。凭证保留真实签发时的状态快照和原物理 SHA，私有签发者须独立核对其原件，不能只信凭证和快照自洽。后续合法采纳、实现迁移或汇总不改写该签发状态；每个新的 cold 调用必须由原完整当前批次及采纳后继链检查证明实际状态合法，再正常重放来源证明。同一次断言闭包内的当前状态仍须逐字不变；未知状态、断链后继、签发快照或证明漂移均拒绝。普通读取不自动续证或签发新状态。
+
 ### 自动验收覆盖什么
 
 Hugo 和正文审查的页面集合只包含单篇及汇总 Markdown。研究工作区的四份 sidecar 不冒充 HTML 页，仍完整保留在 generation、review、Git 精确差异及线上字节验收集合中；例如本会 1355 个页面与 5416 份 sidecar 分别核对，不能以总文件数代替 HTML 页面数。

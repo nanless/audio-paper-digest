@@ -158,6 +158,8 @@ npm run test:compat
 | `lib/conference-recovery-grant.js` | 显式追加会议额度的不可变登记与私有运行能力，绑定原 process 完整失败集合、父子稿 CAS 和真实来源；同一许可中断重入，禁止 JSON 自授额度。 |
 | `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。普通子稿的同步观察、读取和出版操作合并重复历史断言，首次及返回前完整重读，并核当前子稿/父稿/修订/种子/预检SHA及历史材料与暂存输出隔离；原完整loader、Reader/来源资格、渲染及字节核验照常执行，窗口/排除路径暂停作用域走原路，不跨异步、请求或成功保存。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。 |
 | `lib/conference-publication-figure-crop.js`、`lib/conference-publication-figure-crop-replay-cli.js` | 认证同 PDF 的独立出版派生及固定禁网 FD 冷核。正常发布仍要求真实当前父稿；库内 ForMaintenance 仅接受维护模块私有历史能力，重算原 PDF/像素和全部实物闭包，不授 current 发布或 Reader 通过。 |
+| `lib/conference-reader-publication-evidence.js` 的 `assertVerifiedPublicationReaderPdfSourcesUnchanged()` | 单次批核真实 WeakMap 来源句柄的共享原文件；先拒绝句柄、SHA 与读取策略冲突，再逐份完整读取唯一文件。无跨调用缓存，不替代来源、失败集合或当前状态资格。 |
+| `lib/conference-reader-review-maintenance.js` 的 `revalidateMaintenancePublicationSources()` | 持原 process 操作锁，硬禁模型，以正常来源和几何重算固定历史出版视图，另存当前 proof 与来源重验凭证；旧 outcome、PNG、原稿和费用不改。不新增公共 CLI，不授最终发布通过。 |
 | `conference_publication_figure_crop.py`、`reader_pdf_page_geometry.py` | 固定几何规则及唯一印刷图号/完整图注匹配；可派生精确图或完整原页。有限原页另需原认证 raw artifacts sourceRef/页能力与同页唯一印刷图号，完整图注 null/未完整抽取明确展示，普通裁切仍严格。共享几何内核不改旧日更 SVG 输出字节与 proof 合同，不接受用户自由矩形。 |
 | `conference_publication_figure_view.py`、`conference_publication_figure_view_replay.py` | 只消费真实 Node 重放结果，复用原生图片 parser 生成独立出版页，保留原 Reader/来源签名；私有 FD pure transform 只重算 raw→view 字节，不能单凭 JSON 自哈希签来源、审查或发布。 |
 | `lib/conference-reader-recovery-window.js` | 同一已登记会议窗口的 Reader 6次内容/2次全文累计账本；请求前预留，保留不可变原请求和响应，冷核损坏或删账即阻断。生成须持论文锁；只读身份重放强制禁止模型。 |

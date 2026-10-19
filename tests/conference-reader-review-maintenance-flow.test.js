@@ -28,6 +28,11 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         const source={sourceDetails:{text:parent.sourceText,structuredArtifacts:{payloadSha256:sha('artifacts')}},
             sourceSnapshotBinding:{sourceBinding:{pdfSha256:m.pdfSha256,artifactsPayloadSha256:sha('artifacts')}},planAuthorityBinding:{synthetic:true}};
         const directory=path.join(analysisRoot,parentId);
+        // Real private temp intent bytes bind the synthetic completed parent.
+        // Scientific/source validators remain explicit doubles in this suite.
+        write(path.join(directory,'intent.json'),{syntheticPrepareIntent:true,executionId:parentId,
+            paperId:m.paperId,sourceSnapshotSha256:m.sourceSnapshotSha256});
+        run.prepareIntentFileSha256=read(path.join(directory,'intent.json')).sha256;
         for(const [name,value] of Object.entries({analysis,run,source}))write(path.join(directory,name+'.json'),value);
         m.parentCAS={analysisFileSha256:read(path.join(directory,'analysis.json')).sha256,
             runFileSha256:read(path.join(directory,'run.json')).sha256,sourceFileSha256:read(path.join(directory,'source.json')).sha256};
@@ -65,7 +70,10 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         replaceJson:(p,v,expected)=>{assert.equal(read(p).sha256,expected);write(p,v);},
         loadConferenceAnalysis:({executionId})=>{
             const directory=path.join(analysisRoot,executionId),a=read(path.join(directory,'analysis.json')),
-                run=read(path.join(directory,'run.json')),source=read(path.join(directory,'source.json'));
+                run=read(path.join(directory,'run.json')),source=read(path.join(directory,'source.json')),
+                intent=read(path.join(directory,'intent.json'));
+            assert.equal(run.value.prepareIntentFileSha256,intent.sha256,'synthetic packet must bind its actual private prepare intent');
+            assert.equal(intent.value.executionId,executionId,'synthetic prepare intent must belong to this execution');
             return {directory,analysis:a.value,analysisFileSha256:a.sha256,run:run.value,runFileSha256:run.sha256,
                 source:source.value,sourceFileSha256:source.sha256};
         },
@@ -92,7 +100,10 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
             paper.analysisManifest.stages.apiReaderArticle={status:'complete',reviewFeedbackSha256:bound.locator.reviewFeedbackSha256};
             const analysis={status:failure?'partial':'complete',papers:[paper],readerRevisionProgress:{attempts,failures:failure?[{code:'SYNTHETIC_CONTENT',retryable:!failTerminal.includes(m.paperId)}]:[]}};
             write(path.join(directory,'source.json'),parent.source);write(path.join(directory,'analysis.json'),analysis);
-            write(path.join(directory,'run.json'),{...parent.run,executionId:m.executionId,status:failure?'source_ready':'complete'});
+            write(path.join(directory,'intent.json'),{syntheticPrepareIntent:true,executionId:m.executionId,
+                paperId:m.paperId,sourceSnapshotSha256:m.sourceSnapshotSha256});
+            write(path.join(directory,'run.json'),{...parent.run,executionId:m.executionId,
+                prepareIntentFileSha256:read(path.join(directory,'intent.json')).sha256,status:failure?'source_ready':'complete'});
             write(path.join(directory,'review-reader-seed.json'),module.prepareParentRevisionSeed(reviewMaintenanceHandle,parent));
             const revision=seal({contract:_testWindow?'conference-reader-recovery-window-v1':adapter.READER_REVISION_CONTRACT,executionId:m.executionId,parentExecutionId,
                 parentAnalysisFileSha256:parent.analysisFileSha256,parentRunFileSha256:parent.runFileSha256,
@@ -352,7 +363,12 @@ function syntheticPublicationHistory(h) {
     seal(g,'generationSha256');h.write(h.generationPath,g);h.write(path.join(h.batchRoot,'generation.json'),g);
     const m=h.input.manifest;m.generationSha256=g.generationSha256;m.generationFileSha256=h.read(h.generationPath).sha256;m.baselineStateSha256=state.stateSha256;m.stateFileSha256=h.read(path.join(h.batchRoot,'baseline-state.json')).sha256;seal(m,'manifestSha256');h.write(h.manifestPath,m);
     for(const name of ['conference_publication_figure_view.py','conference_publication_figure_view_replay.py','publish-to-blog.py','publish_common.py','python-runtime.sh']){const filename=path.join(h.temp,'scripts',name);fs.mkdirSync(path.dirname(filename),{recursive:true});fs.writeFileSync(filename,'explicit synthetic implementation '+name,{mode:0o644});}
-    const batch={m,p:{root:h.batchRoot,state:path.join(h.processDirectory,'state.json'),manifest:h.manifestPath},processDirectory:h.processDirectory,analysisRoot:h.analysisRoot,manifestFileSha256:h.read(h.manifestPath).sha256,baseline:h.read(path.join(h.batchRoot,'baseline-state.json')),parents:{}};
+    const batch={m,p:{root:h.batchRoot,state:path.join(h.processDirectory,'state.json'),manifest:h.manifestPath},processDirectory:h.processDirectory,analysisRoot:h.analysisRoot,manifestFileSha256:h.read(h.manifestPath).sha256,baseline:h.read(path.join(h.batchRoot,'baseline-state.json')),parents:Object.fromEntries(m.members.map(member=>{
+        const parent=h.adapter.loadConferenceAnalysis({executionId:member.parentExecutionId});
+        return [member.parentExecutionId,{fileShas:{analysis:parent.analysisFileSha256,run:parent.runFileSha256,source:parent.sourceFileSha256},
+            run:parent.run,analysis:parent.analysis,sourceText:parent.source.sourceDetails.text,
+            pdfSha256:parent.source.sourceSnapshotBinding.sourceBinding.pdfSha256}];
+    }))};
     return {batch,g,stages,projectedPath};
 }
 test('history-only opaque token rejects JSON callers and actual cached-source assertion remains mandatory',t=>{

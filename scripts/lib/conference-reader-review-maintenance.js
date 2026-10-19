@@ -18,6 +18,12 @@ const validatedMetadata = new WeakMap();
 const sourceLineageBatches = new Map();
 const MAX_SOURCE_LINEAGE_BATCHES = 8;
 const verifiedCanonicalReviewEvidence = new WeakMap();
+let registeringSourceRevalidation = null;
+function isRegisteringSourceRevalidation(manifestPath,processDirectory,analysisRoot) {
+    return registeringSourceRevalidation&&registeringSourceRevalidation.manifestPath===path.resolve(manifestPath)
+        &&registeringSourceRevalidation.processDirectory===path.resolve(processDirectory)
+        &&registeringSourceRevalidation.analysisRoot===path.resolve(analysisRoot);
+}
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const SHA = /^[a-f0-9]{64}$/u;
 const adapter = () => require('./conference-analysis-adapter');
@@ -222,6 +228,13 @@ function neutralReaderUpstreamView(parent,paper,resources) {
         parentProtectedScienceSha256:stable(protectedScience(parent)),resourceIdentitySha256:resources.identitySha256}};
 }
 function replaySavedNeutralReaderUpstream(loaded) {
+    if(typeof loaded?.directory!=='string'||!loaded.run?.executionId)
+        return withoutMaintenanceColdRead(()=>replaySavedNeutralReaderUpstreamWithOriginalChecks(loaded));
+    return withOrdinaryMaintenancePublicationColdRead({analysisRoot:path.dirname(loaded.directory),
+        executionId:loaded.run.executionId,stagingRoot:require('../config').FILES.conferencePageStagingDir},
+        ()=>replaySavedNeutralReaderUpstreamWithOriginalChecks(loaded));
+}
+function replaySavedNeutralReaderUpstreamWithOriginalChecks(loaded) {
     const source=require('./conference-analysis-context').getConferenceAnalysisContext();
     check(source?.executionId===loaded.run.executionId&&source.paperId===loaded.run.paperId
         &&source.executionDir===loaded.directory&&source.readerPdfSourceHandle
@@ -515,6 +528,17 @@ function prepareParentRevisionSeed(handle,parent) {
     const bound=bindCompletedParent(handle,parent);
     const seed=verifiedParentSeed(parent,bound.modelFeedback);check(seed,'actual completed parent signed seed required');return seed;
 }
+function assertPublicationSourceIssuanceState(scope,physicalSha256) {
+    check(SHA.test(physicalSha256||''),'source issuance requires a physical state SHA');
+    scope.assertUnchanged();
+    const batch=scope.batch;
+    // Historical issuance is traceable only to these actual immutable records.
+    // Current descendants are authenticated separately at every cold frame.
+    assertCurrentBatch(batch);
+    if(physicalSha256===batch.baseline.sha256)return;
+    const registered=registeredState(batch);
+    check(physicalSha256===registered.sha256,'source issuance state is not actual baseline or registered state');
+}
 function readMaintenancePublicationHistory(handle) {
     const scope=publicationHistoryHandles.get(handle);check(scope,'opaque maintenance history token required');
     scope.assertUnchanged();
@@ -523,7 +547,8 @@ function readMaintenancePublicationHistory(handle) {
         processDirectory:scope.batch.processDirectory,baselineState:structuredClone(scope.batch.baseline.value),
         baselineStateFileSha256:scope.batch.baseline.sha256,generation:structuredClone(scope.generation),
         generationFileSha256:scope.generationFileSha256,parents:structuredClone(scope.batch.parents),
-        assertUnchanged:scope.assertUnchanged};
+        assertUnchanged:scope.assertUnchanged,
+        assertIssuanceState:physicalSha256=>assertPublicationSourceIssuanceState(scope,physicalSha256)};
 }
 function purePublicationPageTransform(raw,record,outcome) {
     const files=require('../config').FILES,root=path.resolve(path.dirname(files.conferenceProcessDir),'../..');
@@ -549,35 +574,85 @@ function purePublicationPageTransform(raw,record,outcome) {
             &&projected.length===value.size,'pure publication transform exact bytes');return projected;
     } finally {if(fd!==undefined)fs.closeSync(fd);fs.rmSync(temporary,{recursive:true,force:true});}
 }
+// Issued only inside the full loadBatch view path, after its real parent
+// loader/source replay and validateReviewIdentity. Never a source-only batch.
+function viewParentByteAssertion(batch) {
+    const manifest=batch.m,parents=batch.parents,analysisRoot=batch.analysisRoot,members=manifest.members;
+    check(parents&&Array.isArray(members)&&members.length>0,'full view requires actual parent records');
+    check(same(Object.keys(parents).sort(),[...new Set(members.map(row=>row.parentExecutionId))].sort()),
+        'full view parent record universe differs');
+    freezeMetadata(manifest);freezeMetadata(parents);
+    const bindings=Object.freeze(members.map(member=>{
+        const parent=parents[member.parentExecutionId];
+        check(UUID.test(member.parentExecutionId)&&parent?.run?.executionId===member.parentExecutionId
+            &&parent.run.paperId===member.paperId&&parent.run.status==='complete'
+            &&parent.analysis?.status==='complete'&&parent.analysis.papers?.length===1
+            &&parent.analysis.papers[0].id===member.paperId
+            &&SHA.test(parent.run.prepareIntentFileSha256||''),'full view actual parent/intent identity');
+        for(const key of ['analysis','run','source'])check(SHA.test(parent.fileShas[key]||'')
+            &&parent.fileShas[key]===member.parentCAS[key+'FileSha256'],'full view parent member CAS differs');
+        const directory=path.join(analysisRoot,member.parentExecutionId);
+        const pins=Object.freeze([['intent.json',parent.run.prepareIntentFileSha256],
+            ['analysis.json',parent.fileShas.analysis],['run.json',parent.fileShas.run],['source.json',parent.fileShas.source]]
+            .map(([name,sha256])=>Object.freeze({filename:path.join(directory,name),sha256})));
+        return Object.freeze({member,parent,pins});
+    }));
+    return ()=>{
+        check(batch.m===manifest&&batch.parents===parents&&batch.analysisRoot===analysisRoot
+            &&batch.m.members===members&&Object.isFrozen(manifest)&&Object.isFrozen(parents),
+            'full view parent in-memory scope changed');
+        for(const {member,parent,pins}of bindings) {
+            check(parents[member.parentExecutionId]===parent&&member.paperId===parent.run.paperId
+                &&member.parentExecutionId===parent.run.executionId,'full view current parent binding changed');
+            for(const pin of pins)check(privateFileSha256(pin.filename)===pin.sha256,'history original parent four-file CAS changed');
+        }
+    };
+}
 function replayMaintenancePublicationView(batch,generation) {
     const view=generation.figurePublicationView;self(view,'viewSha256');
     check(view.contract==='conference-publication-figure-view-v1'&&view.version===1
         &&view.processId===batch.m.processId&&view.conferenceId===generation.conferenceId
         &&Array.isArray(view.rawFiles)&&Array.isArray(view.rawImageFiles),'canonical publication view raw records required');
     const initialState=read(batch.p.state).sha256,materialPins=[];
+    const assertParentBytes=viewParentByteAssertion(batch);
     const pin=(filename,requirePrivateMode=true)=>{privateFile(filename,requirePrivateMode);const bytes=fs.readFileSync(filename),digest=sha(bytes);
         materialPins.push({filename,sha256:digest,requirePrivateMode});return bytes;};
     const assertBase=coldEvidenceAssertion(()=>{
         check(read(batch.p.state).sha256===initialState,'history issuer actual state changed during replay');
         assertCanonicalReviewEvidence(batch);assertCurrentBatch(batch);
-        for(const member of batch.m.members) {
-            const parent=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.parentExecutionId});
-            check(parent.analysisFileSha256===member.parentCAS.analysisFileSha256&&parent.runFileSha256===member.parentCAS.runFileSha256
-                &&parent.sourceFileSha256===member.parentCAS.sourceFileSha256,'history original parent CAS changed');
-        }
+        assertParentBytes();
     });
     assertBase();const historyHandle={};
     publicationHistoryHandles.set(historyHandle,{batch,generation:structuredClone(generation),
         generationFileSha256:batch.m.generationFileSha256,assertUnchanged:assertBase});
     try {
-        const history=require('./conference-publication-figure-crop').replayPublicationFigureCropsForMaintenance({
+        const history=require('./conference-publication-figure-crop')[isRegisteringSourceRevalidation(batch.p.manifest,batch.processDirectory,batch.analysisRoot)
+            ?'revalidatePublicationFigureCropsForMaintenance':'replayPublicationFigureCropsForMaintenance']({
             runtimeRoot:path.dirname(batch.analysisRoot),processId:batch.m.processId,conferenceId:generation.conferenceId,
             manifestPath:view.manifestPath,expectedGenerationSha256:view.baseGenerationSha256,
             expectedDerivation:view.nodeDerivation},historyHandle);
-        check(history&&typeof history.assertUnchanged==='function'&&same(history.outcome,view.nodeDerivation),
-            'actual source-replayed historical crop capability required');
+        check(history&&typeof history.assertUnchanged==='function','actual source-replayed historical crop capability required');
+        let outcome;
+        if(history.referencedOriginalOutcome) {
+            const receipt=history.currentRevalidationReceipt;
+            check(!Object.hasOwn(history,'outcome')&&same(history.referencedOriginalOutcome,view.nodeDerivation)
+                &&receipt?.contract==='conference-publication-current-source-revalidation-v1'
+                &&receipt.version===1&&receipt.publicationPassed===false&&receipt.modelRequests===0
+                &&receipt.originalOutcomeSha256===view.nodeDerivation.derivationSha256
+                &&same(receipt.originalImplementation,view.nodeDerivation.implementation)
+                &&same(receipt.currentOutcome,history.currentOutcome)
+                &&same(receipt.currentImplementation,history.currentOutcome.implementation)
+                &&SHA.test(receipt.issuanceStateFileSha256||'')
+                &&receipt.baselineStateFileSha256===batch.baseline.sha256
+                &&receipt.generationFileSha256===batch.m.generationFileSha256,
+                'current source revalidation must close original outcome/current receipt/actual state');
+            self(receipt,'receiptSha256');self(history.currentOutcome,'derivationSha256');
+            // The old outcome is used solely to reconstruct the immutable old
+            // Markdown mapping. It is never represented as a new issuance.
+            outcome=history.referencedOriginalOutcome;
+        } else {check(same(history.outcome,view.nodeDerivation),'actual source-replayed historical crop capability required');outcome=history.outcome;}
         const assertHistory=coldEvidenceAssertion(()=>history.assertUnchanged());assertHistory();
-        const outcome=history.outcome,files=require('../config').FILES;
+        const files=require('../config').FILES;
         const rawFiles=view.rawFiles,rawImages=view.rawImageFiles;
         const scripts=path.resolve(path.dirname(batch.analysisRoot),'../../scripts');
         for(const name of ['conference_publication_figure_view.py','conference_publication_figure_view_replay.py','publish-to-blog.py','publish_common.py','python-runtime.sh'])pin(path.join(scripts,name),false);
@@ -660,8 +735,13 @@ function replayMaintenancePublicationView(batch,generation) {
         const assertUnchanged=coldEvidenceAssertion(()=>{assertBase();assertHistory();
             for(const material of materialPins){privateFile(material.filename,material.requirePrivateMode);check(sha(fs.readFileSync(material.filename))===material.sha256,'historical view material changed');}});
         const materialPaths=Object.freeze([...new Set([...materialPins.map(pin=>path.resolve(pin.filename)),
-            ...outcome.derivations.flatMap(item=>[item.derivedSourcePath,item.proofPath]).map(filename=>path.resolve(filename))])]);
-        assertUnchanged();return Object.freeze({rawFiles:structuredClone(rawFiles),materialPaths,assertUnchanged});
+            ...outcome.derivations.flatMap(item=>[item.derivedSourcePath,item.proofPath]),
+            ...(history.currentOutcome?history.currentOutcome.derivations.map(item=>item.proofPath):[]),
+            ...(history.currentRevalidationReceiptPath?[history.currentRevalidationReceiptPath]:[]),
+            ...(history.issuanceStateSnapshotPath?[history.issuanceStateSnapshotPath]:[])].map(filename=>path.resolve(filename))) ]);
+        assertUnchanged();return Object.freeze({rawFiles:structuredClone(rawFiles),materialPaths,assertUnchanged,
+            ...(history.currentRevalidationReceipt?{currentRevalidationReceipt:history.currentRevalidationReceipt,
+                currentRevalidationReceiptPath:history.currentRevalidationReceiptPath}:{} )});
     } catch(error) {publicationHistoryHandles.delete(historyHandle);throw error;}
 }
 function canonicalRoots(processDirectory,analysisRoot) {
@@ -731,7 +811,7 @@ function loadBatch({manifestPath,processDirectory,analysisRoot}) {
     check(path.resolve(manifestPath)===p.manifest&&m.processId===path.basename(processDirectory),'private manifest location');
     const cacheKey=p.manifest+':'+initial.sha256+':'+read(p.state).sha256;
     const cached=evidenceCache.get(cacheKey);
-    if(cached){assertCanonicalReviewEvidence(cached);assertCurrentBatch(cached);cached.publicationViewEvidence?.assertUnchanged();return cached;}
+    if(cached&&!isRegisteringSourceRevalidation(manifestPath,processDirectory,analysisRoot)){assertCanonicalReviewEvidence(cached);assertCurrentBatch(cached);cached.publicationViewEvidence?.assertUnchanged();return cached;}
     check(m.window?.maxAttempts===3&&m.window?.maxRounds===3,'fixed initial normal window required');
     const baseline=read(path.join(p.root,'baseline-state.json'));
     const generation=read(path.join(p.root,'generation.json'));
@@ -1249,6 +1329,25 @@ function qualifyPublicationChild(loaded) {
                 {paperId:loaded.run.paperId,executionId:loaded.run.executionId,executionDir:loaded.directory,readerPdfSourceHandle:pdf},execute)
             :execute()));
 }
+async function revalidateMaintenancePublicationSources(options) {
+    canonicalRoots(options.processDirectory,options.analysisRoot);
+    const engine=require('../analysis-engine');
+    return engine.withFileLock(path.join(options.processDirectory,'.operation'),()=>
+        require('./analysis-stop-control').withModelRequestsForbidden(()=>{
+            check(!registeringSourceRevalidation,'source revalidation cannot recursively register');
+            registeringSourceRevalidation={manifestPath:path.resolve(options.manifestPath),
+                processDirectory:path.resolve(options.processDirectory),analysisRoot:path.resolve(options.analysisRoot)};
+            try {
+                const batch=loadBatch(options),receipt=batch.publicationViewEvidence?.currentRevalidationReceipt;
+                check(receipt,'actual historical current-source revalidation required');
+                batch.publicationViewEvidence.assertUnchanged();assertCurrentBatch(batch);
+                return {status:'source_revalidated',publicationPassed:false,modelRequests:0,
+                    processId:batch.m.processId,manifestSha256:batch.m.manifestSha256,
+                    currentRevalidationReceipt:structuredClone(receipt),
+                    currentRevalidationReceiptPath:batch.publicationViewEvidence.currentRevalidationReceiptPath};
+            } finally {registeringSourceRevalidation=null;}
+        }),{recoveryPolicy:engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY});
+}
 function openMaintenanceBatch(options) {
     const batch=loadBatch(options);const handle=Object.freeze({});opaque.set(handle,batch);return handle;
 }
@@ -1644,6 +1743,6 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
     }
     return true;
 }
-module.exports={withOrdinaryMaintenancePublicationColdRead,bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
+module.exports={revalidateMaintenancePublicationSources,withOrdinaryMaintenancePublicationColdRead,bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
     runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,readReaderMaintenanceSourceLineage,readScientificParentReplay,
     resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed,readVerifiedReaderScientificParent,readLegacyPublicationParentReference};

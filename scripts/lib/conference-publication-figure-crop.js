@@ -213,7 +213,60 @@ function maintenancePublicationHistory(input, handle) {
         items: Object.entries(scope.baselineState.items).sort(([a], [b]) => a.localeCompare(b)) };
 }
 
-function operation(input, replay = false, maintenanceHandle = undefined) {
+const SOURCE_REVALIDATION = 'conference-publication-current-source-revalidation-v1';
+const LEGACY_SOURCE_COMMIT = 'd1a9e292d5b91b83dfc3f3ac036027a9a82fa397';
+const LEGACY_SOURCE_IMPLEMENTATION = Object.freeze({
+    moduleSha256: '561b6f6539ca3c5e0b56098cfb90439e88c0174f176caf6888aa1250e4a88673',
+    cliSha256: 'e4842546e5b4778e627f3e1aea0270e67548be36b00a7ac12c8e5ae2eb46c7f9',
+    geometrySha256: '08d477bc45f8d5502a1dfa310acce1e3e46d76d856338217d805fe1b3c66297e',
+    sharedPageGeometrySha256: '101417a041f5fa51859b5666076e83d506a2708b60cec6cb2fa273a1d458ee38',
+    canonicalPdfReplaySha256: 'e2b0dca9d7b316620c4bf2b10cd7668b8fa6f46c9ed04baf16ca71605958c784',
+    retainedSourceReplaySha256: '59d106dec623cc307db9dcfd17f9fd41f5401ab5378acba3e4c574a4b20a6280'
+});
+function verifyLegacySourceImplementation(original, implementationFiles) {
+    need(equal(original.implementation, LEGACY_SOURCE_IMPLEMENTATION)
+        && original.status === 'complete' && equal(original.blocked, []) && equal(original.unresolvedRoutes, []),
+        '只有固定原六实现的完整历史派生可做当前来源重验');
+    selfHash(original, 'derivationSha256');
+    for (const [key, filename] of implementationFiles) {
+        const relative = path.relative(root, filename).split(path.sep).join('/');
+        need(relative.startsWith('scripts/') && !relative.includes('..'), '历史实现不属于固定源码');
+        const bytes = require('node:child_process').execFileSync('git', ['show', `${LEGACY_SOURCE_COMMIT}:${relative}`],
+            { cwd: root, maxBuffer: 2 * 1024 * 1024, timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+        need(hash(bytes) === original.implementation[key], '原六实现真实Git blob与原声明不同');
+    }
+}
+function projectHistoricalOutcome(current, original) {
+    const old = new Map(original.derivations.map(item => [item.paperId + ':' + item.figureOrdinal, item]));
+    need(old.size === original.derivations.length && current.derivations.length === old.size,
+        '当前重验不能遗漏或重复原派生成员');
+    const derivations = current.derivations.map(item => {
+        const previous = old.get(item.paperId + ':' + item.figureOrdinal);
+        need(previous, '当前重验出现未知派生成员');
+        // These are the only changed fields: current proof locator/identity.
+        // All pixels, URLs, source notes, target captions/pages and source owner
+        // fields still participate in the complete outcome comparison below.
+        return { ...item, proofPath: previous.proofPath, proofSha256: previous.proofSha256 };
+    });
+    const body = { ...current, implementation: original.implementation, derivations };
+    delete body.derivationSha256;
+    const projected = { ...body, derivationSha256: stable(body) };
+    need(equal(projected, original), '当前来源重验改变原像素、几何显示目标、URL或完整原派生集合');
+    return projected;
+}
+function currentSourceReceipt({ original, current, issuanceStateFileSha256, baselineStateFileSha256,
+    generationFileSha256, originalProofs }) {
+    projectHistoricalOutcome(current, original);
+    const body = { contract: SOURCE_REVALIDATION, version: 1, purpose: 'read-only-source-revalidation',
+        publicationPassed: false, modelRequests: 0, originalOutcomeSha256: original.derivationSha256,
+        originalOutcomeCanonicalBytesSha256: hash(jsonBytes(original)), legacyImplementationCommit: LEGACY_SOURCE_COMMIT,
+        originalImplementation: original.implementation, currentImplementation: current.implementation,
+        issuanceStateFileSha256, baselineStateFileSha256, generationFileSha256,
+        manifestFileSha256: original.manifestFileSha256, originalProofs,
+        currentOutcome: current };
+    return { ...body, receiptSha256: stable(body) };
+}
+function operation(input, replay = false, maintenanceHandle = undefined, registerSourceRevalidation = false) {
     input = structuredClone(input); // Cache closures never depend on caller mutations.
     const expectedInput = ['runtimeRoot', 'conferenceId', 'processId', 'manifestPath', 'expectedGenerationSha256',
         ...(replay ? ['expectedDerivation'] : [])];
@@ -329,10 +382,54 @@ function operation(input, replay = false, maintenanceHandle = undefined) {
         ['retainedSourceReplaySha256', path.join(__dirname, 'conference-retained-source-replay.js')],
     ];
     const implementation = Object.fromEntries(implementationFiles.map(([key, filename]) => [key, regular(filename).sha256]));
+    const revalidation = history && !equal(implementation, input.expectedDerivation.implementation);
+    need(!registerSourceRevalidation || revalidation, '显式来源重验只用于真实历史实现升级');
+    const oldProofPins = [];
+    let receiptFile, receiptState, issuanceStateSnapshotPath;
+    let currentStatePin;
+    if (revalidation) {
+        verifyLegacySourceImplementation(input.expectedDerivation, implementationFiles);
+        // Source-only upgrade: geometry and every other fixed producer remain
+        // the authentic historical implementation; no general code migration.
+        for (const key of ['cliSha256', 'geometrySha256', 'sharedPageGeometrySha256', 'retainedSourceReplaySha256']) {
+            need(implementation[key] === input.expectedDerivation.implementation[key], '来源重验不得迁移几何、CLI或封存来源实现');
+        }
+        need(typeof history.scope.assertIssuanceState === 'function', '来源重验缺少真实opaque签发状态核验器');
+        const stateFile = path.join(history.scope.processDirectory, 'state.json');
+        const actualStateAtEntry = regular(stateFile);
+        history.scope.assertUnchanged();
+        currentStatePin = { filename: stateFile, sha256: actualStateAtEntry.sha256 };
+        const verificationDirectory = path.join(publication, 'figure-source-revalidations',
+            input.expectedDerivation.derivationSha256, stable(implementation));
+        receiptFile = path.join(verificationDirectory, 'receipt.json');
+        if (fs.existsSync(receiptFile)) {
+            const saved = readJson(receiptFile).value;
+            need(SHA.test(saved.issuanceStateFileSha256 || ''), '原来源重验缺少真实签发状态SHA');
+            history.scope.assertIssuanceState(saved.issuanceStateFileSha256);
+            issuanceStateSnapshotPath = path.join(verificationDirectory,
+                'issuance-state-' + saved.issuanceStateFileSha256 + '.json');
+            receiptState = regular(issuanceStateSnapshotPath);
+            need(receiptState.sha256 === saved.issuanceStateFileSha256, '来源重验签发状态原字节漂移');
+        } else {
+            // No cold installation and no implicit state transition signing.
+            need(registerSourceRevalidation, '当前来源重验receipt缺失，须显式正常重验');
+            history.scope.assertIssuanceState(actualStateAtEntry.sha256);
+            receiptState = actualStateAtEntry;
+            issuanceStateSnapshotPath = path.join(verificationDirectory,
+                'issuance-state-' + receiptState.sha256 + '.json');
+            writeImmutable(issuanceStateSnapshotPath, receiptState.bytes);
+        }
+        const issuance = require('./conference-process').assertState(JSON.parse(receiptState.bytes.toString('utf8')));
+        need(issuance.processId === processId && issuance.authority.conferenceId === conferenceId
+            && equal(Object.keys(issuance.items).sort(), current.items.map(([id]) => id).sort()),
+            '来源重验签发状态不属于同一真实完整成员集合');
+    }
+
     const outRoot = path.join(publication, 'figure-crop-derivations', manifest.sha256);
     const results = [], blocked = [], seen = new Set(), destinations = new Map(), stageIndexes = new Map(), sourceCache = new Map(), sourceHandles = new Map();
     const pins = [{ filename: manifestPath, sha256: manifest.sha256 }, { filename: base.filename, sha256: base.sha256 }, ...routeEvidencePins,
         ...implementationFiles.map(([key, filename]) => ({ filename, sha256: implementation[key] }))];
+    if (revalidation) pins.push(currentStatePin, { filename: issuanceStateSnapshotPath, sha256: receiptState.sha256 });
     for (const member of selection.members) {
         need(equal(Object.keys(member).sort(), allowedMemberFields.slice().sort()), '清单含未知字段或自由几何参数');
         need(Number.isInteger(member.figureOrdinal) && member.figureOrdinal > 0, '原figureOrdinal不合法');
@@ -466,10 +563,28 @@ function operation(input, replay = false, maintenanceHandle = undefined) {
                 : `原论文 PDF 第 ${derived.proof.geometry.page} 页 Figure ${derived.figureNumber}（出版显示裁切）` };
         const proof = { ...proofBody, proofSha256: stable(proofBody) };
         const derivedSourcePath = path.join(outRoot, hash(derived.pixels) + '.png');
-        const proofPath = path.join(outRoot, proof.proofSha256 + '.json');
+        const proofPath = revalidation
+            ? path.join(publication, 'figure-source-revalidations', input.expectedDerivation.derivationSha256,
+                stable(implementation), 'proofs', proof.proofSha256 + '.json')
+            : path.join(outRoot, proof.proofSha256 + '.json');
+        if (revalidation) {
+            const old = input.expectedDerivation.derivations.filter(item => item.paperId === member.paperId
+                && item.figureOrdinal === member.figureOrdinal);
+            need(old.length === 1, '原派生没有唯一同论文同图证明');
+            const originalBody = { ...proofBody, implementation: input.expectedDerivation.implementation };
+            const originalProof = { ...originalBody, proofSha256: stable(originalBody) };
+            const expectedPath = path.join(outRoot, originalProof.proofSha256 + '.json');
+            need(old[0].proofPath === expectedPath && old[0].proofSha256 === originalProof.proofSha256,
+                '原proof路径或身份与本次同PDF几何重算不一致');
+            const previous = regular(expectedPath);
+            need(previous.bytes.equals(jsonBytes(originalProof)), '原完整proof与当前正常几何或源逐字不同');
+            oldProofPins.push({ filename: expectedPath, sha256: previous.sha256 });
+            pins.push({ filename: expectedPath, sha256: previous.sha256 });
+        }
         if (replay) {
-            need(regular(derivedSourcePath, 8 * 1024 * 1024).bytes.equals(derived.pixels)
-                && regular(proofPath).bytes.equals(jsonBytes(proof)), '保存的派生图或完整proof无法冷重放');
+            need(regular(derivedSourcePath, 8 * 1024 * 1024).bytes.equals(derived.pixels), '保存的派生图无法冷重放');
+            if (revalidation && registerSourceRevalidation) writeImmutable(proofPath, jsonBytes(proof));
+            else need(regular(proofPath).bytes.equals(jsonBytes(proof)), '保存的完整proof无法冷重放');
         } else { writeImmutable(derivedSourcePath, derived.pixels); writeImmutable(proofPath, jsonBytes(proof)); }
         pins.push({ filename: derivedSourcePath, sha256: hash(derived.pixels) },
             { filename: proofPath, sha256: hash(jsonBytes(proof)) });
@@ -486,7 +601,7 @@ function operation(input, replay = false, maintenanceHandle = undefined) {
             proofPath, proofSha256: proof.proofSha256 });
     }
     const assertUnchanged = () => {
-        for (const source of sourceCache.values()) source.assertUnchanged();
+        pdfApi.assertVerifiedPublicationReaderPdfSourcesUnchanged([...sourceHandles.values()]);
         need(equal(failureSet(), originalFailureSet), '图片拒稿集合在操作中改变');
         for (const pin of pins) need(regular(pin.filename).sha256 === pin.sha256, '派生过程中原字节漂移');
         if (history) {
@@ -504,6 +619,21 @@ function operation(input, replay = false, maintenanceHandle = undefined) {
         manifestFileSha256: manifest.sha256, implementation, status: blocked.length || unresolvedRoutes.length ? 'partial' : 'complete',
         publicationPassed: false, derivations: results, blocked, deferredRoutes, unresolvedRoutes, nonblockingObservations };
     const outcome = { ...body, derivationSha256: stable(body) };
+    if (revalidation) {
+        const receipt = currentSourceReceipt({ original: input.expectedDerivation, current: outcome,
+            issuanceStateFileSha256: receiptState.sha256, baselineStateFileSha256: history.scope.baselineStateFileSha256,
+            generationFileSha256: history.scope.generationFileSha256, originalProofs: oldProofPins });
+        history.scope.assertUnchanged();
+        need(regular(path.join(history.scope.processDirectory, 'state.json')).sha256 === currentStatePin.sha256,
+            '当前来源重验期间真实state变化');
+        if (registerSourceRevalidation) writeImmutable(receiptFile, jsonBytes(receipt));
+        else need(regular(receiptFile).bytes.equals(jsonBytes(receipt)), '当前来源重验receipt不能正常重放');
+        pins.push({ filename: receiptFile, sha256: hash(jsonBytes(receipt)) });
+        assertUnchanged();
+        return Object.freeze({ referencedOriginalOutcome: freezeData(structuredClone(input.expectedDerivation)),
+            currentOutcome: freezeData(structuredClone(outcome)), currentRevalidationReceipt: freezeData(receipt),
+            currentRevalidationReceiptPath: receiptFile, issuanceStateSnapshotPath, assertUnchanged });
+    }
     if (replay) need(equal(outcome, input.expectedDerivation), '完整派生清单或来源发生漂移');
     return history ? Object.freeze({ outcome: freezeData(structuredClone(outcome)), assertUnchanged }) : outcome;
 }
@@ -517,4 +647,9 @@ function replayPublicationFigureCropsForMaintenance(input, maintenanceHandle) {
     need(input && input.expectedDerivation && maintenanceHandle, '维护历史重放需要真实原派生及私有能力');
     return require('./analysis-stop-control').withModelRequestsForbidden(() => operation(input, true, maintenanceHandle));
 }
-module.exports = { CONTRACT, derivePublicationFigureCrops, replayPublicationFigureCrops, replayPublicationFigureCropsForMaintenance };
+function revalidatePublicationFigureCropsForMaintenance(input, maintenanceHandle) {
+    need(input && input.expectedDerivation && maintenanceHandle, '显式当前来源重验需要真实历史能力');
+    return require('./analysis-stop-control').withModelRequestsForbidden(() => operation(input, true, maintenanceHandle, true));
+}
+module.exports = { CONTRACT, derivePublicationFigureCrops, replayPublicationFigureCrops, replayPublicationFigureCropsForMaintenance,
+    revalidatePublicationFigureCropsForMaintenance };

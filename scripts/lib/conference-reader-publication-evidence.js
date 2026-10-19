@@ -7,6 +7,8 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage(), registered = new WeakMap();
 const canonicalReaderPdfSources = new WeakMap();
+// Issued pure-byte dependencies stay private; callers receive only the real source handle.
+const canonicalReaderPdfSourceBytePins = new WeakMap();
 // Separate, lazy read-only provenance. The base PDF accessor is unchanged.
 const canonicalReaderPdfRawArtifacts = new WeakMap();
 const root = path.resolve(__dirname, '../..');
@@ -443,6 +445,7 @@ function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
         structuredArtifactsSha256: loaded.source.sourceDetails.structuredArtifacts.payloadSha256,
         rawStructuredArtifactsSha256: expected.rawStructuredArtifactsSha256,
         pdfSha256: verified.bound.pdfSha256, pdf: Buffer.from(verified.cached.pdf), sourceIdentity: structuredClone(expected), assertUnchanged });
+    rememberCanonicalPdfSourceBytePins(handle, pinnedFiles, deps.discovery);
     canonicalReaderPdfRawArtifacts.set(handle, { raw: Buffer.from(verified.cached.artifacts),
         artifactsFileSha256: loaded.source.sourceSnapshotBinding.sourceBinding.artifactsFileSha256,
         artifactsPayloadSha256: expected.rawStructuredArtifactsSha256,
@@ -496,6 +499,48 @@ function readVerifiedPublicationReaderPdfAttestedFigureRef(handle, { ordinal } =
     return result;
 }
 
+function rememberCanonicalPdfSourceBytePins(handle, pinnedFiles, discovery) {
+    if (!canonicalReaderPdfSources.has(handle) || !Array.isArray(pinnedFiles)) {
+        throw new Error('批核原来源字节需要本模块已签发的真实 PDF 句柄');
+    }
+    const pins = pinnedFiles.map(record => {
+        if (!record || !path.isAbsolute(record.filename || '') || !/^[a-f0-9]{64}$/u.test(record.sha256 || '')) {
+            throw new Error('原来源字节依赖缺少绝对路径或 SHA');
+        }
+        return Object.freeze({ filename: path.resolve(record.filename), sha256: record.sha256 });
+    });
+    canonicalReaderPdfSourceBytePins.set(handle, Object.freeze({ pins: Object.freeze(pins), discovery }));
+}
+
+// Pure byte guard only. Each invocation reads every unique original file again;
+// source, history, failure-universe and current-state qualification stay with callers.
+function assertVerifiedPublicationReaderPdfSourcesUnchanged(handles) {
+    if (!Array.isArray(handles)) throw new Error('批核原来源字节需要真实 PDF 句柄数组');
+    const unique = new Map();
+    for (const handle of handles) {
+        const bound = handle && canonicalReaderPdfSources.has(handle) && canonicalReaderPdfSourceBytePins.get(handle);
+        if (!bound) throw new Error('批核原来源字节拒绝未知或未签发的 PDF 句柄');
+        const { safeAbsoluteFile, MAX_PDF_BYTES: maxBytes } = bound.discovery || {};
+        if (typeof safeAbsoluteFile !== 'function' || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+            throw new Error('原来源安全读取策略不完整');
+        }
+        for (const record of bound.pins) {
+            const previous = unique.get(record.filename);
+            if (previous && previous.sha256 !== record.sha256) throw new Error('同一原来源文件绑定了冲突 SHA');
+            if (previous && (previous.safeAbsoluteFile !== safeAbsoluteFile || previous.maxBytes !== maxBytes)) {
+                throw new Error('同一原来源文件的安全读取策略不一致');
+            }
+            if (!previous) unique.set(record.filename, { ...record, discovery: bound.discovery, safeAbsoluteFile, maxBytes });
+        }
+    }
+    // All handle/path/hash conflicts above fail before any physical read.
+    for (const record of unique.values()) {
+        const bytes = record.safeAbsoluteFile.call(record.discovery,
+            record.filename, '会议 PDF 表格原来源', record.maxBytes).bytes;
+        if (sha(bytes) !== record.sha256) throw new Error('会议 PDF 表格冷核期间原凭证或来源字节改变');
+    }
+}
+
 function readVerifiedPublicationReaderPdfSource(handle) {
     const value = handle && canonicalReaderPdfSources.get(handle);
     if (!value) return null;
@@ -533,4 +578,5 @@ function supplementalQuotes(paper, table, tableIndex) {
 }
 module.exports = { derivePublicationEvidence, withPublicationEvidence, headerUnitCoverage, numericCoverage,
     replayCanonicalReaderPdfSource, readVerifiedPublicationReaderPdfSource, readVerifiedPublicationReaderPdfAttestedFigureRef,
+    assertVerifiedPublicationReaderPdfSourcesUnchanged,
     supplementalQuotes, exportPublicationEvidence, replayDescriptor, tableWindow, proseWindows };
