@@ -10,7 +10,8 @@ const fs = require('fs');
 const { formatAnalysisStatus, formatAnalysisCount, formatAnalysisSources } = require('./lib/analysis-terminal-summary.js');
 const path = require('path');
 const crypto = require('crypto');
-const { fetchCategoryPapersSince, DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
+const { DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
+const { fetchDailyArxivCategory, hasVerifiedCategoryPrefix } = require('./lib/daily-arxiv-prefix-source');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const { FILTER_SCOPE_EVIDENCE_VERSION, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
@@ -211,6 +212,7 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
         && provider.window?.until === boundary.until
         && provider.window?.covered === true
         && hasVerifiedFetchContinuity(health, boundary, huggingface)
+        && (huggingface || hasVerifiedCategoryPrefix(health, boundary))
         && (!huggingface || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
@@ -1694,6 +1696,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         // 全部分类共用主机调度器。分页与重试遵守至少三秒间隔及限流等待，
         // 摘要读取官方 Atom 返回内容，同批跨分类论文在本层合并。
         const arxivRequestScheduler = createProductionArxivRequestScheduler();
+        const arxivStrategyState = {};
         for (let i = 0; i < shuffledCategories.length; i++) {
             const category = shuffledCategories[i];
             const cachedCategory = fetchCheckpoint.arxiv[category.id];
@@ -1719,13 +1722,14 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             let fetchError = null;
             let categoryFetchHealth = null;
             try {
-                papers = await fetchCategoryPapersSince(
+                papers = await fetchDailyArxivCategory(
                     category.id,
                     fetchBoundary,
                     // 同批次跨类别重复项必须返回到本层合并 categories；这里只排除历史基线。
                     historicalExistingIds,
                     {
-                        requestScheduler: arxivRequestScheduler
+                        requestScheduler: arxivRequestScheduler,
+                        strategyState: arxivStrategyState
                     }
                 );
                 pinPapersToBatch(papers, batchStartedAt);

@@ -176,7 +176,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         }};
         throw new Error('unexpected dependency '+id);
     };
-    const sandbox={require:requireFake,module:{exports:{}},Buffer,console,structuredClone};
+    const sandbox={require:requireFake,module:{exports:{}},Buffer,console,structuredClone,setImmediate};
     vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),'utf8')+'\nmodule.exports.__testReplay=replayMaintenancePublicationView;module.exports.__testLoadBatch=loadBatch;',sandbox);
     module=sandbox.module.exports;
     return {module,adapter,deps,input,manifestPath,processDirectory,analysisRoot,batchRoot,read,write,events,

@@ -1351,6 +1351,9 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
     const outcomes=new Map(),unissuedReadmissions=new Set();
     // Complete children are always independently staged; progress flags never qualify them.
     for(const member of batch.m.members) {
+        // Let pending signals run between complete members, never inside a
+        // forbidden-model replay or between staging and its atomic save.
+        await new Promise(resolve=>setImmediate(resolve));stop.assertMayStartRequest();
         let actual=actualProgress(batch,member);
         if(actual.status==='pending'&&await recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared))unissuedReadmissions.add(member.paperId);
         if(actual.status==='partial'&&typeof deps.adapter.replaySavedConferenceReaderRevision==='function') {
@@ -1376,12 +1379,14 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
         // One full observation per eligible child for this synchronous phase.
         // These values select work only; they never certify a Reader. The next
         // while iteration rebuilds the map from actual saved children.
-        const scheduling=new Map(phaseCandidates.map(member=>{
+        const scheduling=new Map();
+        for(const member of phaseCandidates) {
+            await new Promise(resolve=>setImmediate(resolve));stop.assertMayStartRequest();
             const actual=actualProgress(batch,member);
-            return [member.paperId,Object.freeze({executionId:effectiveMember(batch,member).executionId,
+            scheduling.set(member.paperId,Object.freeze({executionId:effectiveMember(batch,member).executionId,
                 status:actual.status,attempts:actual.attempts,
-                progressKey:stable(actual.child?.analysis.readerRevisionProgress||{})})];
-        }));
+                progressKey:stable(actual.child?.analysis.readerRevisionProgress||{})}));
+        }
         const settledProgress=new Map();
         const retryable=phaseCandidates.filter(member=>scheduling.get(member.paperId).attempts<3);
         if(!retryable.length)break;

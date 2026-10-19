@@ -6,14 +6,15 @@ const {stable}=require('../scripts/lib/conference-reader-review-maintenance-evid
 const rounds=require('../scripts/lib/analysis-failure-rounds');
 const source=fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),'utf8');
 const body=source.slice(source.indexOf('async function runReaderReviewMaintenanceBatch('),source.indexOf('\nfunction assertNoPendingReaderReviewMaintenance('));
-function setup({count=4,existing=0,alwaysFail=null,stopAt=null,savedComplete=null,badSaved=false,mutateAfterIntent=false,blocked=null,denyRepeatedSuccessReads=false}={}){
+function setup({count=4,existing=0,alwaysFail=null,stopAt=null,savedComplete=null,badSaved=false,mutateAfterIntent=false,blocked=null,denyRepeatedSuccessReads=false,stopAfterStage=false,stopDuringScheduling=false}={}){
  const members=Array.from({length:count},(_,i)=>({paperId:'paper-'+i,executionId:'child-'+i,parentExecutionId:'parent-'+i}));
  const records=new Map(members.slice(0,existing).map(m=>[m.paperId,{attempts:1,status:'partial'}]));
  const events=[],stageChecks=[],reads=[],progress={members:{},rounds:[],roundIntents:[]};
+ let stopped=false,forbiddenDepth=0;
  if(blocked)progress.members[blocked]={executionId:members.find(m=>m.paperId===blocked).executionId,failure:{retryable:false,systemic:false}};
  const state={stateSha256:'state'},batch={m:{members,manifestSha256:'manifest',processId:'process'},p:{state:'state',progress:'progress',adoption:'none'},analysisRoot:'analysis'};
  const opaque=new WeakMap();
- const actualProgress=(_batch,m)=>{reads.push(m.paperId);const r=records.get(m.paperId);if(denyRepeatedSuccessReads&&progress.rounds.length&&r?.status==='complete')throw Error('successful child was cold-read in a later scheduling phase');return r?{...r,child:{analysis:{readerRevisionProgress:{attempts:r.attempts,failures:r.status==='partial'?[{code:'CONTENT'}]:[]}}}}:{attempts:0,status:'absent'};};
+ const actualProgress=(_batch,m)=>{reads.push(m.paperId);if(stopDuringScheduling&&reads.length===count+1)setImmediate(()=>{stopped=true;});const r=records.get(m.paperId);if(denyRepeatedSuccessReads&&progress.rounds.length&&r?.status==='complete')throw Error('successful child was cold-read in a later scheduling phase');return r?{...r,child:{analysis:{readerRevisionProgress:{attempts:r.attempts,failures:r.status==='partial'?[{code:'CONTENT'}]:[]}}}}:{attempts:0,status:'absent'};};
  const adapter={replaceJson:(_file,value)=>{
   Object.assign(progress,value);
   if(mutateAfterIntent&&progress.roundIntents.length===1){records.set(members[0].paperId,{attempts:1,status:'partial'});mutateAfterIntent=false;}
@@ -27,16 +28,18 @@ function setup({count=4,existing=0,alwaysFail=null,stopAt=null,savedComplete=nul
   if(failure)throw Object.assign(new Error('synthetic content or transport'),{retryable:true,scope:m.paperId===stopAt?'run':'paper',code:m.paperId===stopAt?'PROXY_CONNECT_TIMEOUT':'CONTENT'});
  }};
  const check=(v,message)=>{if(!v)throw Error(message);};
- const globals={module:{exports:{}},Map,Set,Object,Math,structuredClone,stable,fs:{existsSync:()=>false},opaque,
+ const globals={module:{exports:{}},Map,Set,Object,Math,structuredClone,setImmediate,stable,fs:{existsSync:()=>false},opaque,
   openMaintenanceBatch:()=>{const h={};opaque.set(h,batch);return h;},registerPendingObligation:()=>{},
   read:()=>({value:state,sha256:'physical'}),progressFor:()=>({value:structuredClone(progress),sha256:'progress-sha'}),
   effectiveMember:(_batch,m)=>m,actualProgress,adapter:()=>adapter,check,
   recoverUnissuedMaintenanceChild:async()=>false,
-  stageChild:(_batch,m)=>{stageChecks.push(m.paperId);assert.equal(records.get(m.paperId)?.status,'complete');
+  stageChild:(_batch,m)=>{stageChecks.push(m.paperId);if(stopAfterStage)setImmediate(()=>{stopped=true;});assert.equal(records.get(m.paperId)?.status,'complete');
    if(badSaved&&m.paperId===savedComplete)throw Error('synthetic real stage qualification rejected');return {paperId:m.paperId};},
   saveMember:(_batch,id,v)=>{progress.members[id]=v;},
   require:id=>id==='./analysis-failure-rounds'?rounds:id==='./analysis-stop-control'?{
-   withModelRequestsForbidden:fn=>fn(),assertMayStartRequest:()=>{},requestAnalysisStop:()=>{}}:id==='./conference-process-recovery'?{
+   withModelRequestsForbidden:async fn=>{forbiddenDepth++;try{return await fn();}finally{forbiddenDepth--;}},
+   assertMayStartRequest:()=>{assert.equal(forbiddenDepth,0,'stop checks must stay outside forbidden replay');
+    if(stopped)throw Object.assign(new Error('synthetic cooperative stop'),{code:'ANALYSIS_STOP_REQUESTED',scope:'run'});},requestAnalysisStop:()=>{}}:id==='./conference-process-recovery'?{
     classifyFailure:error=>({code:error.code,message:error.message,retryable:error.retryable!==false,systemic:error.scope==='run'})}:(()=>{throw Error('unexpected '+id);})()
  };
  vm.runInNewContext(body+';module.exports=runReaderReviewMaintenanceBatch;',globals);
@@ -78,4 +81,17 @@ test('known nonretryable child is read only by unchanged initialization, never b
  assert.equal(h.reads.filter(id=>id==='paper-0').length,2,'initial load plus saved partial replay reread only');
  assert.ok(h.events.every(e=>e.id!=='paper-0'));
  assert.deepEqual(h.progress.roundIntents.map(x=>x.inputIds),[['paper-2','paper-3','paper-4'],['paper-1'],['paper-1']]);
+});
+
+test('event-loop stop between initialization members preserves the fully staged and saved child',async()=>{
+ const h=setup({count:3,existing:1,savedComplete:'paper-0',stopAfterStage:true});
+ await assert.rejects(h.run,error=>error.code==='ANALYSIS_STOP_REQUESTED');
+ assert.deepEqual(h.stageChecks,['paper-0']);assert.equal(h.progress.members['paper-0'].status,'complete');
+ assert.ok(h.reads.every(id=>id==='paper-0'));assert.equal(h.events.length,0);assert.equal(h.progress.roundIntents.length,0);
+});
+test('event-loop stop between scheduling snapshots cannot create a round intent or model request',async()=>{
+ const h=setup({count:3,stopDuringScheduling:true});
+ await assert.rejects(h.run,error=>error.code==='ANALYSIS_STOP_REQUESTED');
+ assert.deepEqual(h.reads,['paper-0','paper-1','paper-2','paper-0']);
+ assert.equal(h.events.length,0);assert.equal(h.progress.roundIntents.length,0);assert.equal(h.progress.rounds.length,0);
 });

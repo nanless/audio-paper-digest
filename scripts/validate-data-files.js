@@ -280,6 +280,7 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
         && health.provider.window?.until === boundary.until
         && health.provider.window?.covered === true
         && require('./lib/daily-fetch-boundary.js').hasVerifiedFetchContinuity(health, boundary, huggingface)
+        && (huggingface || require('./lib/daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(health, boundary))
         && (!huggingface || (health.provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && health.provider.dailyCovered === true
                 && health.provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }

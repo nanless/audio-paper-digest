@@ -112,6 +112,18 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
         files: [{ path: old.provenance.indexPath, sha256: old.provenance.indexSha256 }, ...old.provenance.papers.map(p => ({ path: p.path, sha256: p.sha256 }))] });
     const result = resolveDailyFetchBoundary(f.root, { until, dataRoot });
     assert.equal(result.since, old.until); assert.equal(result.provenance.boundaryBasis, 'verified-previous-fetch-until');
+    // A tagged Atom prefix cannot reuse only legacy ok/window flags, even
+    // when an operator recomputes the outer content hashes consistently.
+    const brokenPrefix = structuredClone(cp);
+    brokenPrefix.arxiv['eess.AS'].health.provider.window.coverageContract = 'daily-arxiv-atom-prefix-coverage-v1';
+    brokenPrefix.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(brokenPrefix);
+    put('archive/2026-10-03/fetch-checkpoint.json', brokenPrefix);
+    put('archive/2026-10-03/raw-candidates.json', { ...raw, fetchSourcesSha256: brokenPrefix.fetchSourcesSha256 });
+    put('archive/2026-10-03/filtered-papers.json', { ...filtered, fetchSourcesSha256: brokenPrefix.fetchSourcesSha256 });
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot }), /拒绝缩短/);
+    put('archive/2026-10-03/fetch-checkpoint.json', cp);
+    put('archive/2026-10-03/raw-candidates.json', raw);
+    put('archive/2026-10-03/filtered-papers.json', filtered);
     const overlapping = resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true });
     assert.equal(overlapping.lastDigestDate, '2026-10-03');
     assert.equal(overlapping.continuity.originalSince, old.until);

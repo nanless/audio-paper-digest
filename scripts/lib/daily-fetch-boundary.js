@@ -195,18 +195,19 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
     try { validateDailyFetchBoundary(checkpoint.fetchBoundary); } catch { fail(); }
     const boundary = checkpoint.fetchBoundary;
     const categories = CATEGORIES;
-    const covered = (entry, hf = false) => {
+    const covered = (entry, hf = false, categoryId = null) => {
         const provider = entry?.health?.provider;
         return entry?.status === 'complete' && entry.health?.ok === true && Array.isArray(entry.papers)
             && entry.papersCount === entry.papers.length && entry.papersSha256 === stableSha(entry.papers)
             && provider?.boundaryIdentity === boundary.identitySha256 && provider.window?.since === boundary.since
             && provider.window?.until === boundary.until && provider.window?.covered === true
             && hasVerifiedFetchContinuity(entry.health, boundary, hf)
+            && (hf || require('./daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(entry.health, boundary, categoryId))
             && (!hf || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt'));
     };
     if (checkpoint.batchDate !== date || checkpoint.coverageStrategy !== 'previous-digest-window-v1'
-        || !categories.every(id => covered(checkpoint.arxiv?.[id])) || !covered(checkpoint.huggingface, true)
+        || !categories.every(id => covered(checkpoint.arxiv?.[id], false, id)) || !covered(checkpoint.huggingface, true)
         || Date.parse(checkpoint.batchStartedAt) !== Date.parse(boundary.until)) fail();
     const sources = stableSha({ fetchBoundary: boundary,
         providers: Object.fromEntries(Object.entries(checkpoint.arxiv || {}).map(([id, e]) => [id, e.health.provider])),
