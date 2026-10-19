@@ -7594,13 +7594,17 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                 cellBindings: binding.cellBindings.map(cell => {
                     const rows = [articleTables[index].header, ...articleTables[index].rows];
                     const renderedText = rows[cell.renderedRow]?.[cell.renderedColumn];
+                    const sourceMathDisplay = require('./lib/source-cell-math-display')
+                        .strictSourceCellMathDisplay(cell.sourceText);
                     if (typeof renderedText !== 'string'
                         || ((binding.pdfCellConfirmation || binding.sealedPdfTableEvidence)
                         ? !require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, renderedText)
                         : normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(cell.sourceText)
                             && !require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, renderedText)
                             && !require('./lib/reader-dom-span-projection').savedCellMatches(
-                                paper, binding, cell, renderedText, articleTables[index]))) {
+                                paper, binding, cell, renderedText, articleTables[index])
+                            && !(sourceMathDisplay?.kind === 'numeric-style-duplicate'
+                                && sourceMathDisplay.displayText === renderedText))) {
                         throw new Error('文章文字规范化后，表格单元格与绑定的原始来源不一致。');
                     }
                     return { ...cell, renderedText };
