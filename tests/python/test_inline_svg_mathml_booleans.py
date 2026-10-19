@@ -61,5 +61,26 @@ class MathmlBooleanTests(unittest.TestCase):
                     renderer.validate_svg(invalid.encode())
 
 
+    def test_fence_is_a_static_boolean_only_on_math_operators(self):
+        source = ('<svg width="100" height="100" viewBox="0 0 100 100">'
+                  '<foreignObject><math><mrow><mo fence="true">(</mo><mi>x</mi>'
+                  '<mo fence="true">)</mo></mrow></math></foreignObject></svg>')
+        for valid in [source, source.replace('fence="true"', 'fence="false"'),
+                      source.replace('<math>', '<math xmlns="http://www.w3.org/1998/Math/MathML">')]:
+            self.assertEqual(renderer.validate_svg(valid.encode()), valid)
+        for invalid in [
+            source.replace('<math>', '<g>').replace('</math>', '</g>'),
+            source.replace('<mo ', '<mi ').replace('</mo>', '</mi>'),
+            source.replace('fence="true"', 'fence="1"'),
+            source.replace('fence="true"', 'fence="url(https://evil)"'),
+            source.replace('fence="true"', 'xmlns:e="urn:evil" e:fence="true"'),
+            source.replace('<mo ', '<mo xmlns="urn:evil" '),
+            source.replace('fence="true"', 'fence="true" onclick="bad"'),
+            source.replace('fence="true"', 'fence="true" href="https://evil"'),
+        ]:
+            with self.subTest(source=invalid):
+                with self.assertRaises(ValueError):
+                    renderer.validate_svg(invalid.encode())
+
 if __name__ == '__main__':
     unittest.main()

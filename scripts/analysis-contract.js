@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|CCC(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|一致性相关系数(?![ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差|(?:对数似然比代价(?:[ \t]*[Cc][Ll][Ll][Rr](?![A-Za-z0-9_])|(?![ \t-]*[Cc][Ll][Ll][Rr]))|声对比度|声压级)(?=[ \t]*(?:指标|分数|得分)?(?:为|是|从|升至|降至)[ \t]*[-+]?[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))/;
@@ -2288,9 +2288,15 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
         // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
         // 不能顶替缺失的结果指标。
         const metricText = sentence.replace(/(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))/giu, '');
+        // Only the newly admitted CCC aliases lose metric status in an
+        // explicitly hypothetical, denied, quoted or foreign result clause.
+        // "未来表示" is an observed input type, not a future experiment.
+        const admittedMetricText = /\b(?:if|suppose|assuming|hypothetical|(?:future|planned|proposed)\s+experiments?|not\s+(?:observed|reported)|third[- ]party|quoted|retracted)\b|(?:假设|假想|假定|设想|如果|若(?:在|用|以)|可能|预计|预期|(?:未来|后续)(?:计划|实验|评测|测量)|计划(?:比较|评估|测量|报告)|讨论|提及|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|不能|尚未|否认|撤回|不成立|未报告|未观察|(?:未|没有|不)(?:能|曾|实际|真正)?(?:测量|报告|观察到|观察|检验|比较))/iu.test(sentence)
+            ? metricText.replace(/(?<![A-Za-z0-9_])CCC(?![A-Za-z0-9_])|一致性相关系数/giu, ' ')
+            : metricText;
         const hasRecognizedMetric = Boolean(sentence && (
-            CORE_SUMMARY_METRIC_PATTERN.test(metricText)
-            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(metricText)
+            CORE_SUMMARY_METRIC_PATTERN.test(admittedMetricText)
+            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(admittedMetricText)
             || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
@@ -3288,10 +3294,25 @@ function coreSummaryBoundMethodSource(paper) {
     const fresh = require('./lib/fresh-analysis-context');
     const context = fresh.getFreshAnalysisContext();
     let source;
+    const conference = require('./lib/conference-analysis-context');
+    const direct = require('./lib/direct-rewrite-analysis-context');
+    const conferenceContext = conference.getConferenceAnalysisContext();
+    const directContext = direct.getDirectRewriteAnalysisContext();
+    if (conferenceContext && (context || directContext)) throw new Error('摘要来源不能混用会议与日更或历史上下文');
     if (context) {
         // 使用原有完整 fresh 身份核验；另一个论文或来源上下文不能借来解释方法名。
         fresh.assertFreshPaper(paper);
-        source = fresh.readFreshSource(context.runDir, paper, context);
+        const id = require('./utils').normalizedId(paper);
+        if (context.paperId && context.paperId !== id) throw new Error('摘要来源上下文属于另一篇论文');
+        source = require('./lib/model-text-sanitization').currentModelInputSourceForPaperId(id);
+    } else if (conferenceContext) {
+        // 原论文对象保留别名冲突检查，不从上下文抄一个可通过的paperId。
+        conference.getConferenceAnalysisSource(paper);
+        source = require('./lib/model-text-sanitization').currentModelInputSourceForPaperId(
+            paper.id || paper.conferencePaperId);
+    } else if (directContext) {
+        direct.getDirectRewriteSource(paper);
+        source = require('./lib/model-text-sanitization').currentModelInputSourceForPaperId(direct.paperId(paper));
     } else {
         const daily = require('./lib/daily-fresh-source-plan');
         const data = require('./analysis-engine').readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
@@ -3319,15 +3340,26 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (!/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))) return '核心摘要阶段的输出正文哈希缺失，或格式无效。';
     if (options.skipSemantic !== true) {
         let semanticOptions = options;
+        let replayedBoundSource = false;
         const hasExplicitSource = typeof options === 'string' || Object.hasOwn(options, 'sourceText');
         if (!hasExplicitSource && (hasScopedSymbolicDemonstration(summary)
             || /(?:采样计划|render[- ]plan)\s*(?:哈希|hash)/iu.test(summary)
                 && /(?:输出\s*哈希|output[- ]byte\s+hash)/iu.test(summary)
             || /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3}!(?=的)/u.test(summary))) {
-            try { semanticOptions = { ...options, sourceText: coreSummaryBoundMethodSource(paper) }; }
-            catch (error) { return `核心摘要方法名的原封存来源未通过核验：${error.message}`; }
+            try {
+                semanticOptions = { ...options, sourceText: coreSummaryBoundMethodSource(paper) };
+                replayedBoundSource = true;
+            } catch (error) { return `核心摘要方法名的原封存来源未通过核验：${error.message}`; }
         }
-        const semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, semanticOptions);
+        let semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, semanticOptions);
+        // 新来源绑定规则在正常分析时收到全文；最终完整资格也须重放同一真实来源。
+        // 仅在无显式来源且首次语义失败时读取，普通已通过摘要不增加冷态来源IO。
+        // 显式空来源仍按原调用检查，不能被自动换成另一份全文。
+        if (semanticIssue && !hasExplicitSource && !replayedBoundSource) {
+            try { semanticOptions = { ...options, sourceText: coreSummaryBoundMethodSource(paper) }; }
+            catch (error) { return `核心摘要语义的原封存来源未通过核验：${error.message}`; }
+            semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, semanticOptions);
+        }
         if (semanticIssue) return semanticIssue;
     }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文的哈希与阶段记录不一致。';

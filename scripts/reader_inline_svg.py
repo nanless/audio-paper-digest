@@ -197,7 +197,7 @@ def validate_svg(raw):
         for name, value in element.attrib.items():
             original_name = name
             name = name.split('}')[-1].lower()
-            if name in {'accent', 'stretchy', 'symmetric', 'movablelimits', 'displaystyle'}:
+            if name in {'accent', 'stretchy', 'symmetric', 'movablelimits', 'displaystyle', 'fence'}:
                 ancestor = element
                 in_math = False
                 while ancestor is not None:
