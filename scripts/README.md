@@ -439,6 +439,7 @@ npm run test:compat
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
 | `utils.js` | 提供 Node 原子文件写入、时间、ID、分析解析、提示词、LLM 协议和代理工具；`readTagValidation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
+| `lib/active-time-budget.js` | Node 模型请求和 CONNECT/TLS 共用的有效时间计量；排除长时间系统或事件循环停顿，短停顿照常累计。连接总预算仍为60秒，不改变账号、请求次数或 Reader 额度。 |
 | `utils.py` | Python 分析与评分解析、发布侧通用文本工具；`read_tag_validation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
 | `validate-data-files.js` | 只读核验当前数据、跨文件论文集合、评分及兼容结果的来源记录。 |
 | `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据检查；`--quick` 仅语法与数据，不是完整验收。 |

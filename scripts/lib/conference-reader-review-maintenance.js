@@ -1368,24 +1368,37 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
     let pending=batch.m.members.filter(member=>!outcomes.has(member.paperId));
     while(true) {
         const previous=progressFor(batch).value.members;
-        const retryable=pending.filter(member=>!outcomes.has(member.paperId)
+        // Keep the original cheap eligibility short-circuits before any cold
+        // child read: pending also contains successes from previous phases.
+        const phaseCandidates=pending.filter(member=>!outcomes.has(member.paperId)
             &&(unissuedReadmissions.has(member.paperId)||previous[member.paperId]?.executionId!==effectiveMember(batch,member).executionId
-            ||previous[member.paperId]?.failure?.retryable!==false||previous[member.paperId]?.failure?.systemic===true)
-            &&actualProgress(batch,member).attempts<3);
+            ||previous[member.paperId]?.failure?.retryable!==false||previous[member.paperId]?.failure?.systemic===true));
+        // One full observation per eligible child for this synchronous phase.
+        // These values select work only; they never certify a Reader. The next
+        // while iteration rebuilds the map from actual saved children.
+        const scheduling=new Map(phaseCandidates.map(member=>{
+            const actual=actualProgress(batch,member);
+            return [member.paperId,Object.freeze({executionId:effectiveMember(batch,member).executionId,
+                status:actual.status,attempts:actual.attempts,
+                progressKey:stable(actual.child?.analysis.readerRevisionProgress||{})})];
+        }));
+        const settledProgress=new Map();
+        const retryable=phaseCandidates.filter(member=>scheduling.get(member.paperId).attempts<3);
         if(!retryable.length)break;
         // Real persisted child attempts, not this invocation's loop counter,
         // finish all unstarted members of an interrupted round before retrying
         // members already attempted in that round.
-        const minimumAttempt=Math.min(...retryable.map(member=>actualProgress(batch,member).attempts));
-        const input=retryable.filter(member=>actualProgress(batch,member).attempts===minimumAttempt);
+        const minimumAttempt=Math.min(...retryable.map(member=>scheduling.get(member.paperId).attempts));
+        const input=retryable.filter(member=>scheduling.get(member.paperId).attempts===minimumAttempt);
         await roundApi.runFailureRounds(input,{
             concurrency:options.concurrency||3,maxRounds:1,getItemId:member=>member.paperId,
-            getProgressKey:member=>stable(actualProgress(batch,member).child?.analysis.readerRevisionProgress||{}),
+            getProgressKey:(member,outcome)=>outcome===null?scheduling.get(member.paperId).progressKey
+                :settledProgress.get(member.paperId),
             shouldStop:()=>{stop.assertMayStartRequest();return false;},
             onRoundStart:round=>{const current=progressFor(batch);adapter().replaceJson(batch.p.progress,
                 {...current.value,roundIntents:[...(current.value.roundIntents||[]),{
                     inputIds:round.inputIds,normalRoundOrdinal:minimumAttempt+1,
-                    startingAttempts:Object.fromEntries(input.map(member=>[member.paperId,actualProgress(batch,member).attempts])),
+                    startingAttempts:Object.fromEntries(input.map(member=>[member.paperId,scheduling.get(member.paperId).attempts])),
                     windowByPaper:Object.fromEntries(input.map(member=>[member.paperId,effectiveMember(batch,member).window?.windowId||null]))}]},current.sha256);},
             onRoundDone:round=>{const current=progressFor(batch);adapter().replaceJson(batch.p.progress,
                 {...current.value,rounds:[...current.value.rounds,{...round,normalRoundOrdinal:minimumAttempt+1}]},current.sha256);},
@@ -1393,6 +1406,15 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
                 unissuedReadmissions.delete(member.paperId);
                 const original=shared.retainedSources?.get(member.parentExecutionId);
                 try {
+                    // Dispatch observes the real child again. A changed attempt,
+                    // selected window, or saved state stops before any request;
+                    // the ordinary adapter still rereads under the paper lock.
+                    const expected=scheduling.get(member.paperId),actual=actualProgress(batch,member);
+                    if(effectiveMember(batch,member).executionId!==expected.executionId
+                        ||actual.attempts!==expected.attempts||actual.status!==expected.status
+                        ||stable(actual.child?.analysis.readerRevisionProgress||{})!==expected.progressKey)
+                        throw Object.assign(new Error('Reader maintenance progress changed after scheduling'),
+                            {code:'READER_MAINTENANCE_SCHEDULING_DRIFT',scope:'run',retryable:false});
                     const selected=effectiveMember(batch,member),source={planHandle:original?.planHandle||shared.planHandle,
                         sourceRoot:original?.sourceRoot||shared.sourceCacheRoot};
                     if(selected.window) {
@@ -1406,12 +1428,13 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
                 } catch(error) {
                     const failure=recovery.classifyFailure(error,deps.now());
                     const actual=actualProgress(batch,member);
+                    settledProgress.set(member.paperId,stable(actual.child?.analysis.readerRevisionProgress||{}));
                     if(actual.status==='complete'||actual.attempts===minimumAttempt&&!failure.systemic)failure.retryable=false;
                     saveMember(batch,member.paperId,{status:'failed',executionId:effectiveMember(batch,member).executionId,
-                        failure,attempts:actualProgress(batch,member).attempts});
+                        failure,attempts:actual.attempts});
                     if(failure.systemic)stop.requestAnalysisStop(failure.code||'maintenance_failure');
                     return {success:false,error,retryable:failure.retryable&&!failure.systemic,
-                        scope:failure.systemic?'run':'paper',budgetExhausted:actualProgress(batch,member).attempts>=3};
+                        scope:failure.systemic?'run':'paper',budgetExhausted:actual.attempts>=3};
                 }
             }
         });

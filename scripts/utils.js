@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const { createActiveTimeBudget } = require('./lib/active-time-budget');
 const {
     PAPER_EVALUATION_TITLE,
     extractAnalysisSection,
@@ -1751,8 +1752,11 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
 
     const agent = new https.Agent({ keepAlive: false });
     const pendingSockets = new Set();
+    const pendingDeadlines = new Set();
     const destroyAgent = agent.destroy.bind(agent);
     agent.destroy = () => {
+        for (const cancel of pendingDeadlines) cancel();
+        pendingDeadlines.clear();
         for (const pendingSocket of pendingSockets) pendingSocket.destroy();
         pendingSockets.clear();
         destroyAgent();
@@ -1762,26 +1766,55 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
         let callbackCalled = false;
         let socket = null;
         let connectTimer = null;
+        let deadlineTurn = null;
+        const budget = createActiveTimeBudget(60000);
+        const cancelDeadline = () => {
+            // Agent destruction may precede an already queued TCP/TLS event.
+            // A cancelled connection cannot settle or create another tunnel.
+            callbackCalled = true;
+            if (connectTimer) clearTimeout(connectTimer);
+            if (deadlineTurn) clearImmediate(deadlineTurn);
+            connectTimer = null;
+            deadlineTurn = null;
+            budget.stop();
+            pendingDeadlines.delete(cancelDeadline);
+        };
         const done = (error, connectedSocket) => {
             if (callbackCalled) return;
             callbackCalled = true;
-            if (connectTimer) clearTimeout(connectTimer);
+            cancelDeadline();
             if (socket) pendingSockets.delete(socket);
             callback(error, connectedSocket);
         };
-        connectTimer = setTimeout(() => {
-            const error = new Error('代理 CONNECT 连接或 TLS 握手超过 60000ms，已超时');
-            error.code = 'PROXY_CONNECT_TIMEOUT';
-            socket?.destroy(error);
-            done(error);
-        }, 60000);
-        connectTimer.unref?.();
+        const armDeadline = () => {
+            connectTimer = setTimeout(() => {
+                connectTimer = null;
+                if (callbackCalled) return;
+                if (budget.elapsedMs() < 60000) { armDeadline(); return; }
+                // A long synchronous stall may leave ready CONNECT/TLS I/O
+                // behind the timers phase. Give the poll phase one turn first.
+                deadlineTurn = setImmediate(() => {
+                    deadlineTurn = null;
+                    if (callbackCalled) return;
+                    if (budget.elapsedMs() < 60000) { armDeadline(); return; }
+                    const error = new Error('代理 CONNECT 连接或 TLS 握手超过 60000ms，已超时');
+                    error.code = 'PROXY_CONNECT_TIMEOUT';
+                    socket?.destroy(error);
+                    done(error);
+                });
+                deadlineTurn.unref?.();
+            }, Math.min(1000, Math.max(1, 60000 - budget.elapsedMs())));
+            connectTimer.unref?.();
+        };
+        pendingDeadlines.add(cancelDeadline);
+        armDeadline();
         socket = proxy.protocol === 'https:'
             ? tls.connect({ host: proxy.hostname, port: proxyPort, servername: proxy.hostname, rejectUnauthorized: true })
             : net.connect({ host: proxy.hostname, port: proxyPort });
         pendingSockets.add(socket);
 
         socket.once(proxy.protocol === 'https:' ? 'secureConnect' : 'connect', () => {
+            if (callbackCalled) return;
             const proxyAuthorization = buildProxyAuthorizationHeader(proxy);
             const authHeader = proxyAuthorization ? `Proxy-Authorization: ${proxyAuthorization}\r\n` : '';
             const connectHost = targetHost.includes(':') ? `[${targetHost}]` : targetHost;
@@ -1791,6 +1824,7 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
 
             let buffer = '';
             const onData = (chunk) => {
+                if (callbackCalled) return;
                 buffer += chunk.toString('binary');
                 const headerEnd = buffer.indexOf('\r\n\r\n');
                 if (headerEnd !== -1) {

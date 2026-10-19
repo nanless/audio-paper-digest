@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { createActiveTimeBudget } = require('./lib/active-time-budget');
 const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
 
@@ -8559,6 +8560,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/active-time-budget.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
@@ -13603,41 +13605,6 @@ function createOverallTimeoutError(
     return error;
 }
 
-function createActiveTimeBudget(totalMs, options = {}) {
-    const now = options.now || Date.now;
-    const tickMs = options.tickMs || 1000;
-    const suspendThresholdMs = options.suspendThresholdMs || 30000;
-    let lastSample = now();
-    let activeElapsedMs = 0;
-    let excludedSuspendMs = 0;
-    let stopped = false;
-
-    const sample = () => {
-        if (stopped) return;
-        const current = now();
-        const delta = Math.max(0, current - lastSample);
-        lastSample = current;
-        if (delta > suspendThresholdMs) {
-            const resumeCost = Math.min(delta, tickMs * 2);
-            activeElapsedMs += resumeCost;
-            excludedSuspendMs += delta - resumeCost;
-        } else {
-            activeElapsedMs += delta;
-        }
-    };
-    const timer = options.autoStart === false ? null : setInterval(sample, tickMs);
-    timer?.unref?.();
-
-    return {
-        elapsedMs() { sample(); return Math.min(totalMs, Math.floor(activeElapsedMs)); },
-        suspendedMs() { sample(); return Math.floor(excludedSuspendMs); },
-        stop() {
-            sample();
-            stopped = true;
-            if (timer) clearInterval(timer);
-        }
-    };
-}
 
 function getActiveRemainingTimeoutMs(totalMs, elapsedMs) {
     const remaining = Math.floor(totalMs - elapsedMs);

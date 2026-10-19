@@ -70,6 +70,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
                 source:source.value,sourceFileSha256:source.sha256};
         },
         loadConferenceReaderRevision:({executionId})=>{
+            bridgeState.revisionLoads=(bridgeState.revisionLoads||0)+1;
             const loaded=adapter.loadConferenceAnalysis({executionId}),revision=read(path.join(loaded.directory,'reader-revision.json')).value;
             loaded.revision=revision;loaded.parent=adapter.loadConferenceAnalysis({executionId:revision.parentExecutionId});
             loaded.readerReview=module.replayRevisionFeedback(loaded);return loaded;
@@ -155,7 +156,24 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         if(id==='./reader-signed-draft-surface')return {reconstructReaderDraftSurface:({paper})=>({draft:surfaces.get(input.manifest.members.find(m=>m.paperId===paper.id).parentExecutionId)})};
         if(id==='./analysis-stop-control')return stop;
         if(id==='./conference-process-recovery')return {classifyFailure:error=>({code:error.code||'error',message:error.message,retryable:error.retryable!==false,systemic:error.scope==='run'})};
-        if(id==='./analysis-failure-rounds')return require(path.join(root,'scripts/lib/analysis-failure-rounds.js'));
+        if(id==='./analysis-failure-rounds')return {runFailureRounds:async(items,options)=>{
+            const real=require(path.join(root,'scripts/lib/analysis-failure-rounds.js'));
+            if(!bridgeState.auditScheduling)return real.runFailureRounds(items,options);
+            const getKey=options.getProgressKey,start=options.onRoundStart;
+            return real.runFailureRounds(items,{...options,getProgressKey:(member,outcome)=>{
+                const before=bridgeState.revisionLoads||0,key=getKey(member,outcome);
+                assert.equal(bridgeState.revisionLoads||0,before,'pure scheduling progress key must not cold-load a child');
+                if(outcome!==null){
+                    const current=read(path.join(analysisRoot,input.manifest.members.find(m=>m.paperId===member.paperId).executionId,'analysis.json')).value;
+                    assert.equal(key,stable(current.readerRevisionProgress),'failure progress key must match the actual new saved attempt');
+                }
+                return key;
+            },onRoundStart:async info=>{
+                const before=bridgeState.revisionLoads||0;await start(info);
+                assert.equal(bridgeState.revisionLoads||0,before,'round intent must use the same phase observation');
+                if(bridgeState.afterRoundIntent)bridgeState.afterRoundIntent(info);
+            }});
+        }};
         throw new Error('unexpected dependency '+id);
     };
     const sandbox={require:requireFake,module:{exports:{}},Buffer,console,structuredClone};
@@ -482,4 +500,32 @@ test('publisher generation permission: symlink and hardlink originals remain rej
         fs[kind==='symlink'?'symlinkSync':'linkSync'](real,h.generationPath);
         assert.throws(()=>loadSyntheticBatch(h),/symlink|single-link/);
     }
+});
+
+test('scheduling phase reuses real observations for keys and intents, refreshes failed attempts for the next round',async t=>{
+    const h=setup(t,{failFirst:['synthetic-paper-0']});h.bridgeState.auditScheduling=true;
+    const args={manifestPath:h.manifestPath,directory:h.processDirectory,state:h.state(),shared:h.shared,options:{concurrency:2}};
+    const result=await h.module.runReaderReviewMaintenanceBatch(args,h.deps);
+    assert.equal(result.status,'adopted');
+    assert.deepEqual(h.events,['synthetic-paper-0:1','synthetic-paper-1:1','synthetic-paper-0:2']);
+    const progress=h.read(path.join(h.batchRoot,'progress.json')).value;
+    assert.deepEqual(progress.roundIntents.map(row=>row.normalRoundOrdinal),[1,2]);
+    assert.deepEqual(progress.roundIntents[0].startingAttempts,{'synthetic-paper-0':0,'synthetic-paper-1':0});
+    assert.deepEqual(progress.roundIntents[1].startingAttempts,{'synthetic-paper-0':1});
+    assert.equal(progress.rounds[0].noProgressById['synthetic-paper-0'],0);
+});
+test('scheduling phase refuses concurrent actual attempt changes before dispatch without another paid operation',async t=>{
+    const h=setup(t,{failFirst:['synthetic-paper-0']});h.bridgeState.auditScheduling=true;
+    h.bridgeState.afterRoundIntent=()=>{
+        const progress=h.read(path.join(h.batchRoot,'progress.json')).value;
+        if(progress.roundIntents.at(-1).normalRoundOrdinal!==2)return;
+        const member=h.input.manifest.members[0],filename=path.join(h.analysisRoot,member.executionId,'analysis.json');
+        const value=h.read(filename).value;value.readerRevisionProgress.attempts=2;h.write(filename,value);
+    };
+    await assert.rejects(()=>h.module.runReaderReviewMaintenanceBatch({manifestPath:h.manifestPath,directory:h.processDirectory,
+        state:h.state(),shared:h.shared,options:{concurrency:2}},h.deps),/progress changed after scheduling/);
+    assert.deepEqual(h.events,['synthetic-paper-0:1','synthetic-paper-1:1']);
+    assert.equal(h.state().status,'complete');
+    assert.equal(h.read(path.join(h.batchRoot,'progress.json')).value.members['synthetic-paper-0'].failure.code,
+        'READER_MAINTENANCE_SCHEDULING_DRIFT');
 });
