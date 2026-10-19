@@ -14,7 +14,8 @@ const {
     MANUAL_COMPLETE_STATUS,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
     manualSha256,
-    manualTextSha256
+    manualTextSha256,
+    validateCoreSummarySemanticContract
 } = require('../scripts/analysis-contract.js');
 const {
     validAnalysisText,
@@ -567,8 +568,13 @@ describe('validate-data-files', () => {
             '## 核心摘要\n本文解决语音问题，方法先编码再输出，结果很好但仍有局限与部署成本。\n'
         );
         fs.writeFileSync(resultFile, JSON.stringify({ papers: [shallow] }));
-        assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+        // The semantic contract remains strict independently of source lookup.
+        assert.match(validateCoreSummarySemanticContract(shallow.analysis),
             /核心摘要未达到 core-summary-detailed-v3.*中文字符不足/);
+        // This temporary paper has no authenticated sealed source. Final stage
+        // validation must reject that missing authority, rather than invent one.
+        assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
+            /\.analysisManifest 核心摘要语义的原封存来源未通过核验：/);
     });
 
     it('validate:data 可只读检查旧 API 完成记录，但声明摘要版本时仍执行当前严格检查', () => {

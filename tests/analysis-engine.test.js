@@ -1385,7 +1385,11 @@ describe('analyzePaperWithRetry', () => {
             outputCoreSummarySha256: summarySha
         });
         assert.strictEqual(isSuccessfulAnalysisRecord(paper), false);
-        assert.match(contract.validateCoreSummaryStageBinding(paper), /中文字符不足/);
+        assert.match(contract.validateCoreSummarySemanticContract(paper.analysis), /中文字符不足/);
+        // Self-signed JSON supplies no authenticated source capability. The
+        // final binding check must still reject, without inventing that source.
+        assert.match(contract.validateCoreSummaryStageBinding(paper),
+            /核心摘要语义的原封存来源未通过核验：/);
     });
 
     it('核心摘要接收标签阶段的输出，而不使用更早的结构修复输出', () => {
