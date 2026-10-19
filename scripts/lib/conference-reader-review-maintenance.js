@@ -1673,10 +1673,11 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
             const restored=read(newFile);check(restored.sha256===receipt.newPreflightFileSha256,'unissued new preflight snapshot changed');
             const original=shared.retainedSources?.get(member.parentExecutionId),planHandle=original?.planHandle||shared.planHandle,sourceRoot=original?.sourceRoot||shared.sourceCacheRoot;
             const pdf=adapter().verifyPlanAuthority(initial.loaded,planHandle,sourceRoot);
-            require('./conference-analysis-context').withConferenceAnalysisSource({executionId:selected.executionId,executionDir:initial.loaded.directory,
+            const restoredMode=require('./conference-analysis-context').withConferenceAnalysisSource({executionId:selected.executionId,executionDir:initial.loaded.directory,
                 paperId:member.paperId,sourceDetails:initial.loaded.source.sourceDetails,readerPdfSourceHandle:pdf},()=>
-                require('../deep-analyzer').replayVerifiedReaderResourceIdentity(restored.value,initial.loaded.source.sourceDetails.text));
-            check(receipt.status!=='reader-only-ready'||unissuedResourceMode(paper,restored.value)==='reader-only',
+                {require('../deep-analyzer').replayVerifiedReaderResourceIdentity(restored.value,initial.loaded.source.sourceDetails.text);
+                    return unissuedResourceMode(paper,restored.value);});
+            check(receipt.status!=='reader-only-ready'||restoredMode==='reader-only',
                 'unissued receipt cannot grant a changed scoring mode');
             for(const name of beforeNames)check(read(path.join(beforeDir,name)).sha256===receipt.before[name],
                 'unissued original before archive changed');
@@ -1685,7 +1686,7 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
             const scoringReady=receipt.status==='still-requires-scoring';
             if(scoringReady) {
                 const verified=readUnissuedScoringReceipt(batch,member,parent),body=scoringAdmissionBody(batch,member,verified);
-                check(unissuedResourceMode(paper,restored.value)==='scoring-and-reader','normal scoring resource mode no longer matches');
+                check(restoredMode==='scoring-and-reader','normal scoring resource mode no longer matches');
                 exact(verified.p.admission,{...body,admissionSha256:stable(body)});
             }
             for(const name of beforeNames)check(name==='reader-resource-preflight.json'
@@ -1695,10 +1696,23 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
                 adapter().replaceJson(path.join(initial.loaded.directory,'reader-resource-preflight.json'),restored.value,initial.records['reader-resource-preflight.json'].sha256);
             return receipt.status==='reader-only-ready'||scoringReady;
         }
-        for(const [name,row] of Object.entries(initial.records))adapter().writeBytesAtomic(path.join(beforeDir,name),row.bytes);
-        exact(path.join(beforeDir,'member-progress.json'),saved);
+        // A normal probe may have reached its immutable snapshot write before
+        // a later mode/receipt check stopped. Preserve and replay that actual
+        // snapshot; never probe again or reconstruct its missing before packet.
+        const savedProbe=fs.existsSync(newFile)?read(newFile):null;
+        if(savedProbe) {
+            check(same(fs.readdirSync(beforeDir).sort(),[...beforeNames,'member-progress.json'].sort()),
+                'interrupted probe requires original complete six-file before archive');
+            for(const [name,row] of Object.entries(initial.records))check(read(path.join(beforeDir,name)).sha256===row.sha256,
+                'interrupted probe original before/current five-file CAS changed');
+            check(same(read(path.join(beforeDir,'member-progress.json')).value,saved),
+                'interrupted probe original member failure changed');
+        } else {
+            for(const [name,row] of Object.entries(initial.records))adapter().writeBytesAtomic(path.join(beforeDir,name),row.bytes);
+            exact(path.join(beforeDir,'member-progress.json'),saved);
+        }
         const old=initial.records['reader-resource-preflight.json'].value;
-        let identity=old,probeInvocations=0;
+        let identity=old,probeInvocations=0,verifiedMode;
         const original=shared.retainedSources?.get(member.parentExecutionId);
         const planHandle=original?.planHandle||shared.planHandle,sourceRoot=original?.sourceRoot||shared.sourceCacheRoot;
         const source=initial.loaded.source.sourceDetails,pdf=adapter().verifyPlanAuthority(initial.loaded,planHandle,sourceRoot),deep=require('../deep-analyzer');
@@ -1707,10 +1721,13 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
             if(unissuedResourceMode(paper,old)!=='reader-only') {
                 check(old.resources.some(resource=>resource.availability==='temporarily_unreachable'&&resource.retryable===true),
                     'unissued scoring input changed without a temporary resource failure');
-                identity=await deep.buildApiReaderResourceIdentity(paper.analysis,source.text,paper.analysisManifest?.stages?.demoLinkScan,
+                identity=savedProbe?savedProbe.value:await deep.buildApiReaderResourceIdentity(paper.analysis,source.text,paper.analysisManifest?.stages?.demoLinkScan,
                     {paper,structuredArtifacts:source.structuredArtifacts});probeInvocations=1;
             }
+            if(savedProbe&&probeInvocations===0)check(same(savedProbe.value,old),
+                'interrupted no-probe snapshot differs from original Reader-only identity');
             deep.replayVerifiedReaderResourceIdentity(identity,source.text);
+            verifiedMode=unissuedResourceMode(paper,identity);
         };
         await require('./conference-analysis-context').withConferenceAnalysisSource({executionId:selected.executionId,
             executionDir:initial.loaded.directory,paperId:member.paperId,sourceDetails:source,readerPdfSourceHandle:pdf},sourceOperation);
@@ -1721,13 +1738,15 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
         const lockedParent=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.parentExecutionId});check(lockedParent.analysisFileSha256===parent.analysisFileSha256
             &&lockedParent.runFileSha256===parent.runFileSha256&&lockedParent.sourceFileSha256===parent.sourceFileSha256,
             'unissued parent changed during normal resource recheck');assertCurrentBatch(batch);
+        if(savedProbe)check(read(newFile).sha256===savedProbe.sha256,'interrupted saved probe changed during source replay');
         exact(newFile,identity);const replacement=read(newFile);
         const body={contract:'conference-reader-unissued-preflight-recovery-v1',manifestSha256:batch.m.manifestSha256,
             manifestFileSha256:batch.manifestFileSha256,paperId:member.paperId,executionId:selected.executionId,
             parentCAS:member.parentCAS,before:Object.fromEntries(Object.entries(initial.records).map(([name,row])=>[name,row.sha256])),
             oldMemberProgressFileSha256:read(path.join(beforeDir,'member-progress.json')).sha256,
             newPreflightFileSha256:replacement.sha256,oldIdentitySha256:old.identitySha256,newIdentitySha256:identity.identitySha256,
-            normalProbeInvocations:probeInvocations,status:unissuedResourceMode(paper,identity)==='reader-only'?'reader-only-ready':'still-requires-scoring'};
+            ...(savedProbe?{resumedSavedPreflightFileSha256:savedProbe.sha256,normalProbeInvocationsThisResume:0}:{}),
+            normalProbeInvocations:probeInvocations,status:verifiedMode==='reader-only'?'reader-only-ready':'still-requires-scoring'};
         exact(receiptFile,{...body,receiptSha256:stable(body)});
         if(body.status!=='reader-only-ready') {
             const verified=readUnissuedScoringReceipt(batch,member,parent),admission=scoringAdmissionBody(batch,member,verified);
