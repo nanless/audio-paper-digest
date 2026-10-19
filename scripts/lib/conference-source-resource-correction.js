@@ -1130,7 +1130,8 @@ function independentReaderMaintenanceChild(child) {
     const locator=child.revision?.readerReviewMaintenance;
     if(locator===undefined)return false;
     const bound=child.readerReview,member=bound?.member;
-    if(child.revision.mode!=='reader-only'||!bound||!isDeepStrictEqual(bound.locator,locator)
+    if(!(child.revision.mode==='reader-only'||child.revision.mode==='scoring-and-reader'&&bound?.unissuedScoringRecovery)
+        ||!bound||!isDeepStrictEqual(bound.locator,locator)
         ||!bound.parentSeedHandle||member?.paperId!==child.run.paperId
         ||!['analysisFileSha256','runFileSha256','sourceFileSha256'].every(key=>/^[a-f0-9]{64}$/u.test(String(child.parent?.[key]||'')))
         ||member.executionId!==child.run.executionId||member.parentExecutionId!==child.parent?.run.executionId

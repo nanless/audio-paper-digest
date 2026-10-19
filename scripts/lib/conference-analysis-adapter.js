@@ -853,8 +853,14 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                     return readerResourceRevisionMode(parent.analysis.papers[0], identity);
                 });
             }
-            if (readerReview && mode !== 'reader-only') throw new Error('Text maintenance cannot change resources or scoring');
+            let readerReviewUnissuedResourceScoring;
+            if (readerReview && mode !== 'reader-only') {
+                readerReviewUnissuedResourceScoring = require('./conference-reader-review-maintenance')
+                    .readVerifiedUnissuedScoringRecovery(readerReview.unissuedScoringRecoveryHandle,
+                        { loaded, parent, mode, resourcePreflightFileSha256 });
+            }
             const body = { contract: READER_REVISION_CONTRACT, version: 1, executionId,
+                ...(readerReviewUnissuedResourceScoring ? { readerReviewUnissuedResourceScoring } : {}),
                 ...(readerReview ? { readerReviewMaintenance: readerReview.locator,
                     readerReviewSeedFileSha256: readerReviewParentSeedFile(loaded, parent, reviewMaintenanceHandle) } : {}),
                 parentExecutionId, parentAnalysisFileSha256: parent.analysisFileSha256,
@@ -1360,6 +1366,8 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
             ? [...new Set([...retainedBlockedStages,
                 ...stageRequests.failedAuxiliaryStages(loaded.analysis.papers[0].analysisManifest)])].sort() : [];
         if (loaded.resourcePreflight && !savedScoring) paper.apiReaderResources = clone(loaded.resourcePreflight);
+        if (loaded.readerReview?.unissuedScoringRecovery && !savedScoring) paper = require('./conference-reader-review-maintenance')
+            .prepareUnissuedScoringPaper(loaded, paper);
         let current = { ...loaded.analysis, generation: loaded.analysis.generation + 1,
             readerRevisionProgress: { ...progress, attempts: progress.attempts + 1,
                 ...(loaded.revision.mode === 'normal-analysis' ? { blockedAuxiliaryModelStages: failedStages } : {}) } };
@@ -1399,6 +1407,9 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                         })
                     : loaded.revision.mode === 'scoring-and-reader' && !savedScoring
                         ? deep.refreshApiScoringAndReaderFromSource(paper, loaded.source.sourceDetails, {
+                            ...(loaded.readerReview ? { reviewFeedback: loaded.readerReview.modelFeedback,
+                                preserveScientificUpstream: true, revisionSeed: loaded.readerReview.revisionSeed,
+                                readerReviewParentSeedHandle: loaded.readerReview.parentSeedHandle } : {}),
                             onScoringComplete: async scored => {
                                 for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'taxonomySeal']) {
                                     if (stableHash(scored.analysisManifest?.stages?.[name] || null)

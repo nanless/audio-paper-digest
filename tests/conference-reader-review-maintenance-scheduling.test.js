@@ -38,6 +38,8 @@ function setup({count=4,existing=0,alwaysFail=null,stopAt=null,savedComplete=nul
    const actual=actualProgress(_batch,m);return {actual,proof:actual.status==='complete'?globals.stageChild(_batch,m,shared,deps):null};
   }finally{forbiddenDepth--;}},
   recoverUnissuedMaintenanceChild:async()=>false,
+  // Gate selection has dedicated real-body tests; preserve this scheduler-only fixture.
+  shouldDeferInitialSavedReplayToNormal:()=>false,
   stageChild:(_batch,m)=>{stageChecks.push(m.paperId);if(stopAfterStage)setImmediate(()=>{stopped=true;});assert.equal(records.get(m.paperId)?.status,'complete');
    if(badSaved&&m.paperId===savedComplete)throw Error('synthetic real stage qualification rejected');return {paperId:m.paperId};},
   saveMember:(_batch,id,v)=>{progress.members[id]=v;},

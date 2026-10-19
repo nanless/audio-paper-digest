@@ -530,7 +530,8 @@ def verify_process_author_sources(state, completion):
             cwd=str(ROOT), env={**{key: value for key, value in os.environ.items()
                                   if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
                                 'VERIFY_PROJECT_DISABLE_FILE_LOGS': '1'},
-            timeout_seconds=600, max_output_bytes=2 * 1024 * 1024, pass_fds=(source_file.fileno(),),
+            # One complete conference batch includes adopted Reader history/source replay.
+            timeout_seconds=3600, max_output_bytes=2 * 1024 * 1024, pass_fds=(source_file.fileno(),),
         )
     diagnostics = (f'returncode={result.returncode}, timed_out={result.timed_out}, '
                    f'output_truncated={result.output_truncated}, '

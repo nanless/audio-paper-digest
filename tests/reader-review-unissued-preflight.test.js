@@ -13,11 +13,11 @@ function setup(t){
  for(const id of [parentId,childId]){
   const dir=path.join(analysisRoot,id);write(path.join(dir,'source.json'),source);write(path.join(dir,'analysis.json'),id===childId?{status:'pending',generation:0,papers:[{id:paperId}]}:{status:'complete',papers:[paper]});write(path.join(dir,'run.json'),{status:id===childId?'source_ready':'complete',paperId,executionId:id,sourceSnapshotSha256:'snapshot'});
  }
- const dir=path.join(analysisRoot,childId),intent={initialAnalysisFileSha256:realAdapter.readJsonRecord(path.join(dir,'analysis.json')).sha256};write(path.join(dir,'intent.json'),intent);
- const run=realAdapter.readJsonRecord(path.join(dir,'run.json'));write(path.join(dir,'run.json'),{...run.value,prepareIntentFileSha256:realAdapter.readJsonRecord(path.join(dir,'intent.json')).sha256});write(path.join(dir,'reader-resource-preflight.json'),originalIdentity);
+ const dir=path.join(analysisRoot,childId),intentBody={executionId:childId,paperId,initialAnalysisFileSha256:realAdapter.readJsonRecord(path.join(dir,'analysis.json')).sha256};const intent={...intentBody,intentSha256:stable(intentBody)};write(path.join(dir,'intent.json'),intent);
+ const run=realAdapter.readJsonRecord(path.join(dir,'run.json')),runBody={...run.value,prepareIntentFileSha256:realAdapter.readJsonRecord(path.join(dir,'intent.json')).sha256};write(path.join(dir,'run.json'),{...runBody,runSha256:stable(runBody)});write(path.join(dir,'reader-resource-preflight.json'),originalIdentity);
  function load({executionId}){const directory=path.join(analysisRoot,executionId),a=realAdapter.readJsonRecord(path.join(directory,'analysis.json')),r=realAdapter.readJsonRecord(path.join(directory,'run.json')),s=realAdapter.readJsonRecord(path.join(directory,'source.json'));return {directory,analysis:a.value,run:r.value,source:s.value,analysisFileSha256:a.sha256,runFileSha256:r.sha256,sourceFileSha256:s.sha256}}
- const parent=load({executionId:parentId}),member={paperId,parentExecutionId:parentId,executionId:childId,reviewFeedback:'exact original feedback',sourceSnapshotSha256:'snapshot',parentCAS:{analysisFileSha256:parent.analysisFileSha256,runFileSha256:parent.runFileSha256,sourceFileSha256:parent.sourceFileSha256}};
- const batch={analysisRoot,manifestFileSha256:'original-manifest-file',p:{root:batchRoot,progress:path.join(batchRoot,'progress.json')},m:{manifestSha256:'original-manifest',members:[member]}};
+ const parent=load({executionId:parentId}),member={paperId,parentExecutionId:parentId,executionId:childId,reviewFeedback:'exact original feedback',reviewFeedbackSha256:sha('exact original feedback'),sourceSnapshotSha256:'snapshot',parentCAS:{analysisFileSha256:parent.analysisFileSha256,runFileSha256:parent.runFileSha256,sourceFileSha256:parent.sourceFileSha256}};
+ const batch={analysisRoot,manifestFileSha256:'original-manifest-file',p:{root:batchRoot,progress:path.join(batchRoot,'progress.json')},m:{processId:'11111111-1111-4111-a111-111111111111',batchId:'22222222-2222-4222-a222-222222222222',manifestSha256:'original-manifest',members:[member]}};
  const saved={status:'failed',executionId:childId,attempts:0,failure:{retryable:false,systemic:false,message:'Text maintenance cannot change resources or scoring'}};write(batch.p.progress,{manifestSha256:batch.m.manifestSha256,members:{[paperId]:saved},rounds:[]});
  let probes=0,active=null,seedValid=true,interrupt=false,onProbe=null,available=true;
  const adapter={...realAdapter,loadConferenceAnalysis:load,verifyPlanAuthority:()=>({synthetic:true}),replaceJson:(file,value,hash)=>{if(interrupt&&file===path.join(dir,'reader-resource-preflight.json')){interrupt=false;throw Error('synthetic crash before CAS')}return realAdapter.replaceJson(file,value,hash)}};
@@ -43,7 +43,13 @@ test('已有revision/seed/候选/请求或attempt、源/父CAS漂移一律拒；
  for(const kind of ['attempt','source']){const x=setup(t),file=path.join(x.dir,kind==='attempt'?'analysis.json':'source.json'),v=realAdapter.readJsonRecord(file).value;x.write(file,kind==='attempt'?{...v,readerRevisionProgress:{attempts:1}}:{...v,changed:true});await assert.rejects(x.run(),/zero-attempt CAS/);assert.equal(x.getProbes(),0)}
  const x=setup(t);x.setSeedValid(false);await assert.rejects(x.run(),/seed still invalid/);assert.equal(x.getProbes(),0);
 });
-test('仍不可达不替换旧预检也不增加评分权限，probe期间CAS漂移拒绝',async t=>{
- const x=setup(t);x.setAvailable(false);assert.equal(await x.run(),false);assert.equal(await x.run(),false);assert.equal(x.getProbes(),1);
+test('真实一次重探仍需评分只登记首次模式准入，不签revision或消费尝试；探测期间CAS漂移拒绝',async t=>{
+ const x=setup(t);x.setAvailable(false);assert.equal(await x.run(),true);assert.equal(await x.run(),true);assert.equal(x.getProbes(),1);
+ const recovery=path.join(x.batch.p.root,'unissued-preflight-recoveries',x.member.executionId);
+ const receipt=realAdapter.readJsonRecord(path.join(recovery,'receipt.json')),admission=realAdapter.readJsonRecord(path.join(recovery,'scoring-admission.json'));
+ assert.equal(receipt.value.status,'still-requires-scoring');assert.equal(receipt.value.normalProbeInvocations,1);
+ assert.equal(admission.value.originalRecoveryReceiptFileSha256,receipt.sha256);assert.equal(admission.value.newPreflightFileSha256,receipt.value.newPreflightFileSha256);
+ assert.equal(admission.value.mode,'scoring-and-reader');assert.equal(fs.existsSync(path.join(x.dir,'reader-revision.json')),false);
+ assert.equal(fs.existsSync(path.join(x.dir,'review-reader-seed.json')),false);assert.equal(realAdapter.readJsonRecord(path.join(x.dir,'analysis.json')).value.readerRevisionProgress,undefined);
  const y=setup(t);y.onProbe(()=>y.write(path.join(y.dir,'intent.json'),{changed:true}));await assert.rejects(y.run(),/zero-attempt CAS/);
 });

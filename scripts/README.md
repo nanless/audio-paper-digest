@@ -156,7 +156,7 @@ npm run test:compat
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总，沿私有池每篇复用一次完整 `loadStage` 的结果。认证PDF多层/平表的新增失败后补证仍逐项重建完整原网格、条件与单位，不改变原成功证明。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
 | `lib/conference-recovery-grant.js` | 显式追加会议额度的不可变登记与私有运行能力，绑定原 process 完整失败集合、父子稿 CAS 和真实来源；同一许可中断重入，禁止 JSON 自授额度。 |
-| `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。普通子稿的同步观察、读取和出版操作合并重复历史断言，首次及返回前完整重读，并核当前子稿/父稿/修订/种子/预检SHA及历史材料与暂存输出隔离；原完整loader、Reader/来源资格、渲染及字节核验照常执行，窗口/排除路径暂停作用域走原路，不跨异步、请求或成功保存。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。 |
+| `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。合格普通 partial 的重复初始化恢复可交原正常入口；仅真实未签发、零尝试及一次资源重探回执允许首次评分＋Reader，固定预检与新评分检查点冷热重放，原阶段及费用保护，详见[维护边界](../docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。普通子稿的同步观察、读取和出版操作合并重复历史断言，首次及返回前完整重读，并核当前子稿/父稿/修订/种子/预检SHA及历史材料与暂存输出隔离；原完整loader、Reader/来源资格、渲染及字节核验照常执行，窗口/排除路径暂停作用域走原路，不跨异步、请求或成功保存。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。 |
 | `lib/conference-publication-figure-crop.js`、`lib/conference-publication-figure-crop-replay-cli.js` | 认证同 PDF 的独立出版派生及固定禁网 FD 冷核。正常发布仍要求真实当前父稿；库内 ForMaintenance 仅接受维护模块私有历史能力，重算原 PDF/像素和全部实物闭包，不授 current 发布或 Reader 通过。 |
 | `lib/conference-reader-publication-evidence.js` 的 `assertVerifiedPublicationReaderPdfSourcesUnchanged()` | 单次批核真实 WeakMap 来源句柄的共享原文件；先拒绝句柄、SHA 与读取策略冲突，再逐份完整读取唯一文件。无跨调用缓存，不替代来源、失败集合或当前状态资格。 |
 | `lib/conference-reader-review-maintenance.js` 的 `revalidateMaintenancePublicationSources()` | 持原 process 操作锁，硬禁模型，以正常来源和几何重算固定历史出版视图，另存当前 proof 与来源重验凭证；旧 outcome、PNG、原稿和费用不改。不新增公共 CLI，不授最终发布通过。 |
@@ -167,7 +167,7 @@ npm run test:compat
 | `lib/conference-reader-active-candidate-replay.js` | 在禁用新模型请求的私有临时目录中重放会议子运行已付费候选；核验唯一原请求、响应、用量、来源及归档 Prompt，私有范围内保留原模板声明并传递真实 PDF 能力。正常解析与整篇资格通过后交由适配器保存，不授予新请求或预算，不覆盖原稿。 |
 | `lib/conference-reader-publication-evidence.js` | 为已完成会议的发布复核从原封存 PDF 派生可逐字重放的表头、单位与实验设置引文；绑定原计划、抽取、正文及表格，不修改旧稿或来源签名，不授予普通分析成功或跳过资格。 |
 | `lib/conference-process.js` | Node 库：对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–60；每篇内部并发固定为 1。外层并发不改变原阶段限流、请求额度和整批轮次。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
-| `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；显式新会议模式随真实 daily 包装层运行，原 history 调用保持原角色检查。先消费实际 Reader 维护 pending 门，再输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与模型请求。 |
+| `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；显式新会议模式随真实 daily 包装层运行，原 history 调用保持原角色检查。先消费实际 Reader 维护 pending 门，再输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与模型请求。Python 调用者一次核完整会议及维护历史，期限3600秒、输出限2 MiB；不改变单篇会议渲染600秒或普通资源30秒期限。 |
 | `lib/conference-publication-author-source.js` | Node 库：只读核验官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；原2.3.0凭证严格复用已有保留来源读取器，其它版本仍走当前严格核验。不新建来源、不重抽 PDF 或请求模型。 |
 | `lib/conference-queue.js` | 会议队列状态、领取与并发保护；调用统一 process。 |
 | `lib/conference-run.js` | Node 库：固定会议成员、分片、分类策略、选择策略版本和逐篇状态。通用状态接口拒绝直接写 `completed`；聚合发布接口还要求一项尚未实现的认证完成证明，因此不能据此宣布会议可以发布。 |

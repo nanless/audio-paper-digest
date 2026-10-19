@@ -10427,7 +10427,8 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     const requestedReviewFeedbackSha256 = requestedReviewFeedback
         ? crypto.createHash('sha256').update(requestedReviewFeedback).digest('hex')
         : null;
-    const existingReaderReusable = require('./analysis-engine.js').hasValidApiReaderV3Records(paper)
+    const existingReaderReusable = !options.readerReviewParentSeedHandle
+        && require('./analysis-engine.js').hasValidApiReaderV3Records(paper)
         && require('./lib/reader-author-source.js').canReuseReaderAuthorInputs(paper, sourceDetails)
         && (paper.analysisManifest?.stages?.apiReaderArticle?.reviewFeedbackSha256
             === requestedReviewFeedbackSha256
@@ -10461,7 +10462,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     const readerRefreshedAt = Date.parse(String(
         manifest?.stages?.apiReaderArticle?.refreshedAt || ''
     ));
-    if (paper.latestAnalysisAttemptError
+    if (!options.readerReviewParentSeedHandle && paper.latestAnalysisAttemptError
         && Number.isFinite(failedAt)
         && Number.isFinite(readerRefreshedAt)
         && readerRefreshedAt > failedAt
@@ -10482,13 +10483,19 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     if (scoringOnly && !existingReaderReusable) {
         throw new Error('独立评分范围需要保持已核验Reader和资源身份，不能请求正文重写');
     }
-    const readerRevisionSeed = scoringOnly ? null : prepareApiReaderRevisionSeed(
-        paper, sourceText, options.reviewFeedback || ''
-    );
-    const readerResources = await buildApiReaderResourceIdentity(
-        analysis, sourceText, manifest?.stages?.demoLinkScan,
-        { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
-    );
+    const readerRevisionSeed = scoringOnly ? null : options.readerReviewParentSeedHandle
+        ? require('./lib/conference-reader-review-maintenance').readVerifiedParentReaderSeed(
+            options.readerReviewParentSeedHandle, { paper, sourceText,
+                reviewFeedback: requestedReviewFeedback, revisionSeed: options.revisionSeed })
+        : prepareApiReaderRevisionSeed(paper, sourceText, options.reviewFeedback || '');
+    const readerResources = options.readerReviewParentSeedHandle
+        ? require('./lib/conference-reader-review-maintenance').readVerifiedUnissuedScoringResources(
+            options.readerReviewParentSeedHandle, { paper, sourceText,
+                reviewFeedback: requestedReviewFeedback, revisionSeed: options.revisionSeed })
+        : await buildApiReaderResourceIdentity(
+            analysis, sourceText, manifest?.stages?.demoLinkScan,
+            { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
+        );
     if (scoringFactReview.current(getPaperArxivId(paper))?.scoringOnly
         && (!existingReaderReusable || readerResources.identitySha256 !== existingReaderResourceSha256)) {
         throw new Error('独立评分范围需要保持已核验Reader和资源身份，不能请求正文重写');
@@ -10637,7 +10644,10 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
             readerResources,
             resourceLocalRevision: options.resourceLocalRevision === true,
             revisionSeed: readerRevisionSeed,
-            reviewFeedback: requestedReviewFeedback
+            reviewFeedback: requestedReviewFeedback,
+            ...(options.readerReviewParentSeedHandle ? {
+                readerReviewParentSeedHandle: options.readerReviewParentSeedHandle,
+                preserveScientificUpstream: true } : {})
         });
     }
     const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];

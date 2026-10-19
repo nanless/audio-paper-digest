@@ -1097,6 +1097,149 @@ function locator(batch,member) {
         memberSha256:stable(batch.m.members.find(row=>row.paperId===member.paperId)),reviewFeedbackSha256:member.reviewFeedbackSha256,
         window:member.window||null};
 }
+// The only scoring exception is a still-unissued child whose normal one-probe
+// recovery really selected scoring. Old receipts and five-file snapshots stay immutable.
+const unissuedScoringHandles=new WeakMap();
+function unissuedScoringFiles(batch,member) {
+    const directory=path.join(batch.p.root,'unissued-preflight-recoveries',member.executionId);
+    return {directory,receipt:path.join(directory,'receipt.json'),preflight:path.join(directory,'new-preflight.json'),
+        admission:path.join(directory,'scoring-admission.json'),before:path.join(directory,'before')};
+}
+function readUnissuedScoringReceipt(batch,member,parent) {
+    const p=unissuedScoringFiles(batch,member),row=read(p.receipt),r=row.value;
+    self(r,'receiptSha256');
+    check(r.contract==='conference-reader-unissued-preflight-recovery-v1'&&r.status==='still-requires-scoring'
+        &&r.normalProbeInvocations===1&&r.executionId===member.executionId&&r.paperId===member.paperId
+        &&r.manifestSha256===batch.m.manifestSha256&&r.manifestFileSha256===batch.manifestFileSha256
+        &&same(r.parentCAS,member.parentCAS),'unissued scoring requires actual original one-probe receipt');
+    const names=['analysis.json','intent.json','reader-resource-preflight.json','run.json','source.json'];
+    check(same(Object.keys(r.before).sort(),names),'unissued scoring requires original exact five-file snapshot');
+    const before=Object.fromEntries(names.map(name=>{const record=read(path.join(p.before,name));
+        check(record.sha256===r.before[name],'unissued scoring before snapshot changed');return [name,record];}));
+    const oldFailure=read(path.join(p.before,'member-progress.json'));
+    check(oldFailure.sha256===r.oldMemberProgressFileSha256&&oldFailure.value.status==='failed'
+        &&oldFailure.value.executionId===member.executionId&&oldFailure.value.attempts===0
+        &&oldFailure.value.failure?.retryable===false&&!oldFailure.value.failure.systemic
+        &&oldFailure.value.failure.message==='Text maintenance cannot change resources or scoring',
+        'unissued scoring requires actual original zero-attempt resource-mode failure');
+    const a=before['analysis.json'].value,run=before['run.json'].value,intent=before['intent.json'].value;
+    self(run,'runSha256');self(intent,'intentSha256');
+    check(a.status==='pending'&&a.generation===0&&!Object.hasOwn(a,'readerRevisionProgress')
+        &&a.papers?.length===1&&a.papers[0].id===member.paperId
+        &&run.status==='source_ready'&&run.executionId===member.executionId&&run.paperId===member.paperId
+        &&run.prepareIntentFileSha256===before['intent.json'].sha256
+        &&intent.executionId===member.executionId&&intent.paperId===member.paperId
+        &&intent.initialAnalysisFileSha256===before['analysis.json'].sha256
+        &&run.sourceSnapshotSha256===member.sourceSnapshotSha256
+        &&before['source.json'].sha256===member.parentCAS.sourceFileSha256
+        &&parent.analysisFileSha256===member.parentCAS.analysisFileSha256
+        &&parent.runFileSha256===member.parentCAS.runFileSha256&&parent.sourceFileSha256===member.parentCAS.sourceFileSha256,
+        'unissued scoring original prepared packet or parent CAS differs');
+    const preflight=read(p.preflight);check(preflight.sha256===r.newPreflightFileSha256,'unissued scoring normal preflight changed');
+    const actualParent=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.parentExecutionId});
+    check(actualParent.analysisFileSha256===member.parentCAS.analysisFileSha256
+        &&actualParent.runFileSha256===member.parentCAS.runFileSha256&&actualParent.sourceFileSha256===member.parentCAS.sourceFileSha256
+        &&same(actualParent.analysis,parent.analysis),'unissued scoring actual original parent changed');
+    check(SHA.test(r.oldIdentitySha256)&&SHA.test(r.newIdentitySha256)
+        &&r.oldIdentitySha256===before['reader-resource-preflight.json'].value.identitySha256
+        &&r.newIdentitySha256===preflight.value.identitySha256,'unissued scoring resource identity labels differ from actual probe snapshots');
+    const annotation=parent.analysis.papers[0].conferenceSourceCorrection;
+    check(!require('./conference-source-resource-correction').isSourceCorrectionRecord(parent.analysis.papers[0])
+        ||annotation?.contract==='conference-source-resource-correction-v1',
+        'unissued scoring cannot expand a source-core or unknown parent correction');
+    return {p,row,preflight,before,oldFailure};
+}
+function scoringAdmissionBody(batch,member,receipt) {
+    return {contract:'conference-unissued-resource-scoring-admission-v1',version:1,purpose:'normal-scoring-and-reader-only',
+        processId:batch.m.processId,batchId:batch.m.batchId,manifestSha256:batch.m.manifestSha256,
+        manifestFileSha256:batch.manifestFileSha256,memberSha256:stable(member),executionId:member.executionId,
+        paperId:member.paperId,parentExecutionId:member.parentExecutionId,parentCAS:member.parentCAS,
+        sourceSnapshotSha256:member.sourceSnapshotSha256,reviewFeedbackSha256:member.reviewFeedbackSha256,
+        originalRecoveryReceiptFileSha256:receipt.row.sha256,newPreflightFileSha256:receipt.preflight.sha256,
+        originalFiveFileSha256:receipt.row.value.before,originalFailureFileSha256:receipt.oldFailure.sha256,
+        mode:'scoring-and-reader',maxAttempts:3};
+}
+function readScoringAdmission(batch,member,parent,loaded=null) {
+    const receipt=readUnissuedScoringReceipt(batch,member,parent),row=read(receipt.p.admission),body=scoringAdmissionBody(batch,member,receipt);
+    self(row.value,'admissionSha256');check(same(row.value,{...body,admissionSha256:stable(body)}),
+        'unissued scoring admission differs from actual source/parent/feedback receipt');
+    const binding={contract:row.value.contract,admissionFileSha256:row.sha256,
+        originalRecoveryReceiptFileSha256:receipt.row.sha256,newPreflightFileSha256:receipt.preflight.sha256};
+    if(loaded)check(loaded.revision?.contract===adapter().READER_REVISION_CONTRACT
+        &&loaded.revision.mode==='scoring-and-reader'&&loaded.revision.readerReviewMaintenance?.window===null
+        &&same(loaded.revision.readerReviewUnissuedResourceScoring,binding)
+        &&loaded.revision.resourcePreflightFileSha256===receipt.preflight.sha256,
+        'scoring revision lacks its original unissued issuance/normal preflight binding');
+    return {binding,receipt};
+}
+function readVerifiedUnissuedScoringRecovery(handle,{loaded,parent,mode,resourcePreflightFileSha256}) {
+    const bound=unissuedScoringHandles.get(handle);check(bound,'private real unissued scoring capability required');
+    const {batch,member}=bound;assertCurrentBatch(batch);
+    const admission=readScoringAdmission(batch,member,parent);
+    check(mode==='scoring-and-reader'&&loaded.run.executionId===member.executionId
+        &&loaded.sourceFileSha256===parent.sourceFileSha256
+        &&resourcePreflightFileSha256===admission.receipt.preflight.sha256,'unissued scoring factory mode/source/preflight differs');
+    const current=readUnissuedMaintenanceChild(batch,member);
+    for(const name of Object.keys(admission.receipt.before))check(current.records[name].sha256===(name==='reader-resource-preflight.json'
+        ?admission.receipt.preflight.sha256:admission.receipt.before[name].sha256),'unissued scoring was already dispatched or changed');
+    return structuredClone(admission.binding);
+}
+function readVerifiedUnissuedScoringResources(handle,options) {
+    const bound=parentReaderSeedHandles.get(handle);
+    check(bound?.unissuedScoringRecovery,'actual unissued scoring parent seed capability required');
+    readVerifiedParentReaderSeed(handle,options);
+    const {loaded,batch,member}=bound.scientificReplay;
+    const admitted=readScoringAdmission(batch,member,loaded.parent,loaded);
+    const record=read(path.join(loaded.directory,'reader-resource-preflight.json'));
+    check(record.sha256===admitted.receipt.preflight.sha256&&same(record.value,options.paper.apiReaderResources),
+        'normal scoring input must retain its first fixed resource preflight');
+    require('../deep-analyzer').replayVerifiedReaderResourceIdentity(record.value,options.sourceText);
+    return structuredClone(record.value);
+}
+function assertActualUnissuedScoringCheckpoint(loaded,paper) {
+    check(loaded.readerReview?.unissuedScoringRecovery,'new scoring requires actual unissued issuance receipt');
+    const current=adapter().loadConferenceAnalysis({analysisRoot:path.dirname(loaded.directory),executionId:loaded.run.executionId});
+    const saved=current.analysis.papers?.[0],stage=paper.analysisManifest?.stages?.scoringAudit;
+    const preflight=read(path.join(loaded.directory,'reader-resource-preflight.json'));
+    check(preflight.sha256===loaded.revision.resourcePreflightFileSha256
+        &&preflight.sha256===loaded.readerReview.unissuedScoringRecovery.newPreflightFileSha256
+        &&same(preflight.value,paper.apiReaderResources),'new scoring changed its fixed original resource preflight');
+    const expected={revisionSha256:loaded.revision.revisionSha256,sourceSha256:paper.sourceSha256,
+        resourceIdentitySha256:paper.apiReaderResources?.identitySha256,
+        analysisSha256:sha(paper.analysis),scoringStageSha256:stable(stage)};
+    check(current.sourceFileSha256===loaded.sourceFileSha256&&saved?.id===paper.id
+        &&same(current.analysis.readerRevisionProgress?.scoringCheckpoint,expected)
+        &&same(saved.apiReaderResources,paper.apiReaderResources)
+        &&saved.analysis===paper.analysis&&same(saved.analysisManifest?.stages?.scoringAudit,stage)
+        &&stage?.status==='complete'&&stage.outputAnalysisSha256===expected.analysisSha256,
+        'new Reader must use this actual child saved normal scoring checkpoint');
+    return true;
+}
+function scoringRecoveryProjection(parent,paper) {
+    const deep=require('../deep-analyzer'),score=paper.analysisManifest?.stages?.scoringAudit;
+    check(score?.status==='complete'&&score.auditSha256===stable(score.audit),'normal new scoring audit is incomplete');
+    const expected=deep.applyApiReaderResourceAvailability(deep.applyScoringAuditResult(
+        deep.applyApiReaderResourceAvailability(parent.analysis,paper.apiReaderResources),score.audit),paper.apiReaderResources);
+    check(paper.analysis===expected&&same(paper.parsed,require('../utils').parseAnalysis(expected)),
+        'scoring recovery changed text outside deterministic normal resource/score fields');
+    const before=protectedScience(parent),after=protectedScience(paper);
+    for(const value of [before,after]){delete value.analysis;delete value.parsed;delete value.stages.scoringAudit;}
+    check(same(before,after),'scoring recovery changed original primary/core/tags/checkpoints');
+    return true;
+}
+function prepareUnissuedScoringPaper(loaded,paper) {
+    check(loaded.readerReview?.unissuedScoringRecovery,'real unissued scoring binding required');
+    const value=structuredClone(paper),parent=loaded.parent.analysis.papers[0];
+    const annotation=parent.conferenceSourceCorrection;
+    if(annotation) {
+        check(annotation.contract==='conference-source-resource-correction-v1'
+            &&same(value.conferenceSourceCorrection,annotation),'cannot retire an unknown scientific correction');
+        delete value.conferenceSourceCorrection;delete value.conferenceSourceCorrectionObligation;
+        const stage=value.analysisManifest?.stages?.apiReaderArticle;
+        if(stage?.operatorProvenance?.contract==='conference-source-resource-correction-v1')delete stage.operatorProvenance;
+    }
+    return value;
+}
 function bindCompletedParent(handle,parent) {
     const batch=opaque.get(handle);check(batch,'opaque maintenance handle required');assertCurrentBatch(batch);
     const member=batch.m.members.find(x=>x.paperId===parent.run.paperId);
@@ -1104,11 +1247,18 @@ function bindCompletedParent(handle,parent) {
         &&parent.analysisFileSha256===member.parentCAS.analysisFileSha256
         &&parent.runFileSha256===member.parentCAS.runFileSha256
         &&parent.sourceFileSha256===member.parentCAS.sourceFileSha256,'actual parent CAS');
-    return {locator:locator(batch,effectiveMember(batch,member)),modelFeedback:member.reviewFeedback.trim()};
+    let unissuedScoringRecoveryHandle;
+    if(!effectiveMember(batch,member).window&&fs.existsSync(unissuedScoringFiles(batch,member).admission)) {
+        readScoringAdmission(batch,member,parent);unissuedScoringRecoveryHandle=Object.freeze({});
+        unissuedScoringHandles.set(unissuedScoringRecoveryHandle,{batch,member});
+    }
+    return {locator:locator(batch,effectiveMember(batch,member)),modelFeedback:member.reviewFeedback.trim(),
+        ...(unissuedScoringRecoveryHandle?{unissuedScoringRecoveryHandle}:{})};
 }
 function replayRevisionFeedback(loaded) {
     const loc=loaded.revision.readerReviewMaintenance;
-    check(loc?.contract==='conference-reader-review-maintenance-member-v1'&&loaded.revision.mode==='reader-only','text revision scope');
+    check(loc?.contract==='conference-reader-review-maintenance-member-v1'
+        &&['reader-only','scoring-and-reader'].includes(loaded.revision.mode),'text revision scope');
     const analysisRoot=path.dirname(loaded.directory),processDirectory=path.join(path.dirname(analysisRoot),'conference-processes',loc.processId);
     const p=paths(processDirectory,loc.batchId),batch=loadBatch({manifestPath:p.manifest,processDirectory,analysisRoot});
     const original=batch.m.members.find(x=>x.paperId===loaded.run.paperId);
@@ -1119,6 +1269,8 @@ function replayRevisionFeedback(loaded) {
     check(loaded.parent.analysisFileSha256===member.parentCAS.analysisFileSha256
         &&loaded.parent.runFileSha256===member.parentCAS.runFileSha256
         &&loaded.parent.sourceFileSha256===member.parentCAS.sourceFileSha256,'cold original parent bytes changed');
+    const unissuedScoringRecovery=loaded.revision.mode==='scoring-and-reader'
+        ?readScoringAdmission(batch,original,loaded.parent,loaded).binding:null;
     replayParentSource(loaded.parent);
     check(SHA.test(loaded.revision.readerReviewSeedFileSha256),'immutable parent Reader seed SHA');
     const seed=read(path.join(loaded.directory,'review-reader-seed.json'));
@@ -1128,13 +1280,13 @@ function replayRevisionFeedback(loaded) {
     parentReaderSeedHandles.set(parentSeedHandle,{parent:structuredClone(loaded.parent),
         executionId:loaded.run.executionId,executionDir:loaded.directory,
         revisionFileSha256:read(path.join(loaded.directory,'reader-revision.json')).sha256,
-        sourceFileSha256:loaded.sourceFileSha256,
+        unissuedScoringRecovery,sourceFileSha256:loaded.sourceFileSha256,
         seedPath:path.join(loaded.directory,'review-reader-seed.json'),seedFileSha256:seed.sha256,
         sourceTextSha256:sha(loaded.source.sourceDetails.text),feedback:member.reviewFeedback.trim(),
         seed:structuredClone(seed.value),scientificReplay:{loaded,batch,member}});
     const scientificReplayHandle=scientificParentReplayRequired(loaded,batch,member)?Object.freeze({}):null;
     if(scientificReplayHandle)scientificParentReplayHandles.set(scientificReplayHandle,{loaded,batch,member});
-    return {locator:loc,modelFeedback:member.reviewFeedback.trim(),member,revisionSeed:seed.value,parentSeedHandle,scientificReplayHandle};
+    return {locator:loc,modelFeedback:member.reviewFeedback.trim(),member,revisionSeed:seed.value,parentSeedHandle,scientificReplayHandle,unissuedScoringRecovery};
 }
 function readVerifiedParentReaderSeed(handle,{paper,sourceText,reviewFeedback,revisionSeed}={}) {
     const bound=parentReaderSeedHandles.get(handle);check(bound,'opaque original parent Reader seed required');
@@ -1154,7 +1306,9 @@ function readVerifiedParentReaderSeed(handle,{paper,sourceText,reviewFeedback,re
         &&same(revisionSeed,bound.seed)&&String(reviewFeedback||'').trim()===bound.feedback
         &&sha(String(sourceText||''))===bound.sourceTextSha256
         &&paper?.id===parent.id&&paper.sourceSha256===parent.sourceSha256
-        &&same(protectedScience(paper),protectedScience(parent))
+        &&(same(protectedScience(paper),protectedScience(parent))
+            ||bound.unissuedScoringRecovery&&scoringRecoveryProjection(parent,paper)
+                &&assertActualUnissuedScoringCheckpoint({...bound.scientificReplay.loaded,readerReview:{unissuedScoringRecovery:bound.unissuedScoringRecovery}},paper))
         &&['apiReaderArticle','apiReaderArticleSha256','apiReaderPlan','apiReaderPlanSha256','apiReaderFigures']
             .every(key=>same(paper[key],parent[key])),'original parent Reader seed input or protected surface changed');
     check(withScientificParentReplay(bound.scientificReplay.loaded,bound.scientificReplay.batch,bound.scientificReplay.member,()=>same(bound.seed,verifiedParentSeed(original,bound.feedback))),'original parent Reader seed no longer qualifies');
@@ -1172,7 +1326,7 @@ function readReaderMaintenanceSourceLineage({executionId}) {
     const loaded=adapter().loadConferenceReaderRevisionIdentity({analysisRoot,executionId});
     const loc=loaded.revision.readerReviewMaintenance;
     check(loc?.contract==='conference-reader-review-maintenance-member-v1'&&loc.window===null
-        &&loaded.revision.mode==='reader-only','ordinary initial Reader-only source lineage required');
+        &&['reader-only','scoring-and-reader'].includes(loaded.revision.mode),'ordinary initial Reader-only source lineage required');
     const processDirectory=path.join(require('../config').FILES.conferenceProcessDir,loc.processId);
     canonicalRoots(processDirectory,analysisRoot);
     const p=paths(processDirectory,loc.batchId),cacheKey=analysisRoot+'\0'+processDirectory+'\0'+p.root;
@@ -1202,6 +1356,7 @@ function readReaderMaintenanceSourceLineage({executionId}) {
         &&member.parentCAS.sourceFileSha256===loaded.parent.sourceFileSha256
         &&member.sourceSnapshotSha256===loaded.run.sourceSnapshotSha256
         &&member.sourceSha256===sha(loaded.source.sourceDetails.text),'source-only actual member/parent/source CAS');
+    if(loaded.revision.mode==='scoring-and-reader')readScoringAdmission(batch,member,loaded.parent,loaded);
     const before=baseline.value.items[member.paperId];
     check(before.analysisRunId===member.parentExecutionId&&before.analysisProof.analysisSha256===member.parentCAS.analysisFileSha256,
         'source-only baseline parent item');
@@ -1307,7 +1462,8 @@ function readVerifiedReaderScientificParent(paper) {
 function assertReaderOutput(loaded,paper,parent) {
     const bound=loaded.readerReview||replayRevisionFeedback(loaded),stage=paper.analysisManifest?.stages?.apiReaderArticle;
     check(stage?.status==='complete'&&stage.reviewFeedbackSha256===bound.locator.reviewFeedbackSha256,'actual new Reader feedback identity');
-    check(same(protectedScience(paper),protectedScience(parent)),'protected scientific upstream changed');
+    if(bound.unissuedScoringRecovery){scoringRecoveryProjection(parent,paper);assertActualUnissuedScoringCheckpoint({...loaded,readerReview:bound},paper);}
+    else check(same(protectedScience(paper),protectedScience(parent)),'protected scientific upstream changed');
     assertSavedMaintenanceReaderRecovery(loaded,paper);
     if(bound.member?.feedbackMode==='corrective-assertion-v1')for(const claim of bound.member.rejectedClaims)
         check(!paper.apiReaderArticle.includes(claim.quote),'rejected original claim survived');
@@ -1426,7 +1582,8 @@ function withOrdinaryMaintenancePublicationColdRead({analysisRoot,executionId,st
     const revisionPath=path.join(analysisRoot,executionId,'reader-revision.json');
     if(!fs.existsSync(revisionPath))return withoutMaintenanceColdRead(operation);
     const declared=read(revisionPath).value;
-    if(declared.contract!==adapter().READER_REVISION_CONTRACT||!declared.readerReviewMaintenance)return withoutMaintenanceColdRead(operation);
+    if(declared.contract!==adapter().READER_REVISION_CONTRACT||!declared.readerReviewMaintenance
+        ||declared.mode!=='reader-only')return withoutMaintenanceColdRead(operation);
     return require('./analysis-stop-control').withModelRequestsForbidden(()=>
         withMaintenanceSynchronousColdRead(()=>{
             const child=adapter().loadConferenceReaderRevisionIdentity({analysisRoot,executionId});
@@ -1525,12 +1682,18 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
                 'unissued original before archive changed');
             check(read(path.join(beforeDir,'member-progress.json')).sha256===receipt.oldMemberProgressFileSha256,
                 'unissued original failure archive changed');
+            const scoringReady=receipt.status==='still-requires-scoring';
+            if(scoringReady) {
+                const verified=readUnissuedScoringReceipt(batch,member,parent),body=scoringAdmissionBody(batch,member,verified);
+                check(unissuedResourceMode(paper,restored.value)==='scoring-and-reader','normal scoring resource mode no longer matches');
+                exact(verified.p.admission,{...body,admissionSha256:stable(body)});
+            }
             for(const name of beforeNames)check(name==='reader-resource-preflight.json'
-                ?[receipt.before[name],...(receipt.status==='reader-only-ready'?[receipt.newPreflightFileSha256]:[])].includes(initial.records[name].sha256)
+                ?[receipt.before[name],...(['reader-only-ready','still-requires-scoring'].includes(receipt.status)?[receipt.newPreflightFileSha256]:[])].includes(initial.records[name].sha256)
                 :initial.records[name].sha256===receipt.before[name],'unissued child changed after preflight restoration');
-            if(receipt.status==='reader-only-ready'&&initial.records['reader-resource-preflight.json'].sha256!==restored.sha256)
+            if((receipt.status==='reader-only-ready'||scoringReady)&&initial.records['reader-resource-preflight.json'].sha256!==restored.sha256)
                 adapter().replaceJson(path.join(initial.loaded.directory,'reader-resource-preflight.json'),restored.value,initial.records['reader-resource-preflight.json'].sha256);
-            return receipt.status==='reader-only-ready';
+            return receipt.status==='reader-only-ready'||scoringReady;
         }
         for(const [name,row] of Object.entries(initial.records))adapter().writeBytesAtomic(path.join(beforeDir,name),row.bytes);
         exact(path.join(beforeDir,'member-progress.json'),saved);
@@ -1566,12 +1729,51 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
             newPreflightFileSha256:replacement.sha256,oldIdentitySha256:old.identitySha256,newIdentitySha256:identity.identitySha256,
             normalProbeInvocations:probeInvocations,status:unissuedResourceMode(paper,identity)==='reader-only'?'reader-only-ready':'still-requires-scoring'};
         exact(receiptFile,{...body,receiptSha256:stable(body)});
-        if(body.status!=='reader-only-ready')return false;
+        if(body.status!=='reader-only-ready') {
+            const verified=readUnissuedScoringReceipt(batch,member,parent),admission=scoringAdmissionBody(batch,member,verified);
+            exact(verified.p.admission,{...admission,admissionSha256:stable(admission)});
+        }
         if(replacement.sha256!==initial.records['reader-resource-preflight.json'].sha256)
             adapter().replaceJson(path.join(initial.loaded.directory,'reader-resource-preflight.json'),identity,
                 initial.records['reader-resource-preflight.json'].sha256);
         return true;
     }),{recoveryPolicy:deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY});
+}
+// Select ordinary work only. This is not a saved Reader qualification: the
+// normal adapter repeats its locked saved/active recovery before attempts/models.
+function shouldDeferInitialSavedReplayToNormal(batch,member,actual,shared,deps) {
+    const selected=effectiveMember(batch,member);
+    if(selected.window||actual.status!=='partial'||!actual.child
+        ||!Number.isSafeInteger(actual.attempts)||actual.attempts<0||actual.attempts>=3
+        ||!actual.child.revision||actual.child.revision.contract!==deps.adapter.READER_REVISION_CONTRACT
+        ||actual.child.revision.mode!=='reader-only'||actual.child.revision.maxAttempts!==3
+        ||actual.child.revision.readerReviewMaintenance?.window!==null)return false;
+    const previous=progressFor(batch).value.members[member.paperId];
+    if(!(previous?.executionId!==selected.executionId||previous?.failure?.retryable!==false
+        ||previous?.failure?.systemic===true))return false;
+    return require('./analysis-stop-control').withModelRequestsForbidden(()=>{
+        // Match refreshConferenceReader's actual parent/source/tag/upstream
+        // preflight. A difference/error preserves the original initial replay.
+        try {
+            const parent=deps.adapter.loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.parentExecutionId});
+            if(parent.run.status!=='complete'||parent.analysis.status!=='complete'
+                ||parent.analysisFileSha256!==member.parentCAS.analysisFileSha256
+                ||parent.runFileSha256!==member.parentCAS.runFileSha256
+                ||parent.sourceFileSha256!==member.parentCAS.sourceFileSha256
+                ||actual.child.sourceFileSha256!==parent.sourceFileSha256
+                ||actual.child.run.executionId!==selected.executionId)return false;
+            const original=shared.retainedSources?.get(member.parentExecutionId);
+            const pdf=deps.adapter.verifyPlanAuthority(parent,original?.planHandle||shared.planHandle,
+                original?.sourceRoot||shared.sourceCacheRoot);
+            const tag=require('./conference-postprocess').readOriginalTagProof(parent.analysis.papers[0]);
+            const issue=require('./conference-analysis-context').withConferenceAnalysisSource({
+                executionId:parent.run.executionId,executionDir:parent.directory,paperId:parent.run.paperId,
+                sourceDetails:parent.source.sourceDetails,readerPdfSourceHandle:pdf},()=>
+                deps.engine.getConferenceReaderRefreshUpstreamReason(parent.analysis.papers[0],{tagRules:tag.rules}));
+            return !issue&&require('./model-text-sanitization').canReuseModelTextInputs(
+                parent.analysis.papers[0],parent.source.sourceDetails);
+        } catch(error) {return false;}
+    });
 }
 async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,shared,options},deps) {
     check(!options.postprocessOnly&&!options.recoveryManifest&&!options.readerCorrections&&!options.sourceCorrections,'exclusive normal maintenance mode');
@@ -1591,7 +1793,8 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
         await new Promise(resolve=>setImmediate(resolve));stop.assertMayStartRequest();
         let observed=observeAndStageSavedMember(batch,member,shared,deps),actual=observed.actual;
         if(actual.status==='pending'&&await recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared))unissuedReadmissions.add(member.paperId);
-        if(actual.status==='partial'&&typeof deps.adapter.replaySavedConferenceReaderRevision==='function') {
+        if(actual.status==='partial'&&typeof deps.adapter.replaySavedConferenceReaderRevision==='function'
+            &&!shouldDeferInitialSavedReplayToNormal(batch,member,actual,shared,deps)) {
             const original=shared.retainedSources?.get(member.parentExecutionId),selected=effectiveMember(batch,member);
             await stop.withModelRequestsForbidden(()=>deps.adapter.replaySavedConferenceReaderRevision({analysisRoot:batch.analysisRoot,
                 executionId:selected.executionId,planHandle:original?.planHandle||shared.planHandle,
@@ -1745,4 +1948,5 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
 }
 module.exports={revalidateMaintenancePublicationSources,withOrdinaryMaintenancePublicationColdRead,bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
     runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,readReaderMaintenanceSourceLineage,readScientificParentReplay,
-    resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed,readVerifiedReaderScientificParent,readLegacyPublicationParentReference};
+    resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed,readVerifiedReaderScientificParent,readLegacyPublicationParentReference,
+    readVerifiedUnissuedScoringRecovery,readVerifiedUnissuedScoringResources,prepareUnissuedScoringPaper};

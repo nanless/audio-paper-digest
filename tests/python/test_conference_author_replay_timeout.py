@@ -11,7 +11,7 @@ class AuthorTimeoutTests(unittest.TestCase):
  def call(self,result,papers=None):
   seen={}
   def replay(command,**kwargs):
-   seen.update(kwargs);self.assertTrue(command[1].endswith('conference-publication-author-replay-cli.js'));self.assertEqual(kwargs['timeout_seconds'],600);self.assertEqual(kwargs['max_output_bytes'],2*1024*1024);self.assertGreaterEqual(kwargs['pass_fds'][0],3)
+   seen.update(kwargs);self.assertTrue(command[1].endswith('conference-publication-author-replay-cli.js'));self.assertEqual(kwargs['timeout_seconds'],3600);self.assertEqual(kwargs['max_output_bytes'],2*1024*1024);self.assertGreaterEqual(kwargs['pass_fds'][0],3)
    self.assertNotIn('NODE_OPTIONS',kwargs['env']);self.assertNotIn('NODE_PATH',kwargs['env']);return result
   runner=types.SimpleNamespace(_run_bounded_subprocess=replay)
   with mock.patch.object(publisher,'load_publish_to_blog',return_value=runner):return publisher.verify_process_author_sources({'items':papers or {'p':{}}},{})
