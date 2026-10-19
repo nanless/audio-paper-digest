@@ -1626,7 +1626,7 @@ function hasConditionalMetricDeltaDirection(sentence) {
 function hasPrefixedCoreMetricComparison(sentence, sourceText = '') {
     if (/(?:假设|假想|假定|设想|如果|若|可能|预计|预期|计划|未来|建议|讨论|提及|相关工作|先前工作|先前研究|既有研究|其他研究|第三方|外部团队|其他团队|他人|引用|引述|转述|并非|并未|不是|没有|不能|尚未|否认|否定|反驳|撤回|不成立|不正确|错误|有误|未测|未报告|未在|未进行|未比较|未实际|不进行|不做|未做)/u.test(sentence)) return false;
     const scoped = /(?:^|[，,])\s*以((?:偶数|奇数)试次)?(?:留出)?(对数似然|log[- ]likelihood)为指标[，,]\s*([^，,；;。！？!?\n]+)/iu.exec(sentence);
-    if (!scoped) return false;
+    if (!scoped || scoped[1] !== '偶数试次') return false;
     const comparison = /^((?:完整|本文|本|所提)模型)比(冻结(?:极角精度|半球权重)学习的简化模型)高(?:了|出)?\s*(\d+(?:\.\d+)?)\s*nats?\s*$/iu.exec(scoped[3]);
     if (!comparison || !(Number(comparison[3]) > 0)) return false;
     const source = String(sourceText || '').replace(/\s+/gu, ' ');
@@ -2629,12 +2629,12 @@ function hasTypedProcessingProductChain(summary, sourceText = '') {
                 && (() => {
                     const model = /^(?:论文)?冻结([^，,]{1,60})/u.exec(first)?.[1];
                     const quotedModel = model && new RegExp(model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/gu, '\\s+'), 'iu');
-                    return quotedModel && new RegExp(`${quotedModel.source} model[^.!?]{0,100}as a frozen feature extractor`, 'iu').test(typedSource)
+                    return quotedModel && new RegExp(`(?<![A-Za-z0-9_.-])${quotedModel.source} model[^.!?]{0,100}as a frozen feature extractor`, 'iu').test(typedSource)
                         && /mean and standard deviation pooling/iu.test(typedSource)
-                        && new RegExp(`${pooledVector[1]}-dimensional frame representations`, 'iu').test(typedSource)
-                        && new RegExp(`${pooledVector[2]}-dimensional utterance-level vector`, 'iu').test(typedSource)
+                        && new RegExp(`(?<![A-Za-z0-9_.+-])${pooledVector[1]}-dimensional frame representations`, 'iu').test(typedSource)
+                        && new RegExp(`(?<![A-Za-z0-9_.+-])${pooledVector[2]}-dimensional utterance-level vector`, 'iu').test(typedSource)
                         && new RegExp(`reduce layer representations to ${explainedVector[2]} dimensions via principal component analysis`, 'iu').test(typedSource)
-                        && new RegExp(`${explainedVector[3]} (?:handcrafted )?acoustic features`, 'iu').test(typedSource)
+                        && new RegExp(`(?<![A-Za-z0-9_.+-])${explainedVector[3]} (?:handcrafted )?acoustic features`, 'iu').test(typedSource)
                         && /projection-weighted CCA/iu.test(typedSource);
                 })()) return true;
             // A behavioural protocol passes the actual recorded responses to

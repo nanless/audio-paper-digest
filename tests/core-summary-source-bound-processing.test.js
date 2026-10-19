@@ -158,3 +158,17 @@ test('source heldout likelihood difference cannot be changed', () => {
 test('source-free counted subset cannot pass the new setting', () => assert.equal(settingPredicate(subset), false));
 test('source-free odd/even comparison cannot pass the new metric', () => assert.equal(metricPredicate(parity), false));
 test('source-free acoustic purpose cannot pass the new purpose', () => assert.equal(purposePredicate(acousticPurpose), false));
+
+test('declared likelihood metric cannot use the fitting parity as heldout evaluation', () => {
+    assert.equal(metricPredicate(parity.replace('以偶数试次留出', '以奇数试次留出'), byId['2610.23196'].sourceText), false);
+});
+for (const [name, changeSource, changeText] of [
+    ['model name left token', s => s.replaceAll('WavLM Base', 'OtherWavLM Base'), s => s],
+    ['frame dimension left number', s => s.replaceAll('768-dimensional', '1768-dimensional'), s => s],
+    ['utterance dimension left number', s => s.replaceAll('1536-dimensional', '11536-dimensional'), s => s],
+    ['feature count left number', s => s.replaceAll('17 acoustic features', '18 acoustic features').replaceAll('17 handcrafted acoustic features', '18 handcrafted acoustic features'), s => s.replace('17个人工声学特征', '8个人工声学特征')],
+]) test(`source typed chain rejects borrowed ${name}`, () => {
+    const source = byId['2610.23526'].sourceText;
+    assert.notEqual(changeSource(source), source, 'the source counterexample must change actual evidence');
+    assert.equal(chain(changeText(ssl), changeSource(source)), false);
+});
