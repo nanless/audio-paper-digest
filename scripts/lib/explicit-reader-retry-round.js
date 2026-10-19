@@ -161,6 +161,34 @@ function atomic(file, value) {
     try { fs.writeFileSync(fd, JSON.stringify(value)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(temp, file);
 }
+// A first explicit window may follow two completed, unusable full responses.
+// This only recognizes the normal saved stop; it neither repairs the response
+// nor grants authority outside the existing source/lock/CAS and budget checks.
+function exhaustedInitialFullWithoutLocalDraft(payload, paper) {
+    const repair = useModule('./reader-repair');
+    if (payload?.status !== 'failed' || payload.explicitReaderRetryRound
+        || payload.attempts !== 2 || payload.fullAttempts !== 2 || payload.draft !== null
+        || payload.noProgress !== 0 || payload.validationFailureStreak !== 1
+        || (payload.transportFailures || 0) !== 0
+        || typeof payload.rawDraft !== 'string' || !payload.rawDraft.trim()
+        || payload.rawDraft.length > 16 * 1024 * 1024
+        || !/^[a-f0-9]{64}$/.test(payload.failureSignature || '')
+        || !Array.isArray(payload.issues) || !payload.issues.length
+        || payload.issues.some(issue => issue?.path !== null || issue.diagnosticOnly === true
+            || !/^读者文章 (?:version 必须为|JSON 无法解析:|顶层 缺少字段:)/.test(issue.message || ''))
+        || payload.validationFailureSignature !== repair.validationFailureSignature(payload.issues)
+        || paper?.latestAnalysisAttemptErrorCode !== 'READER_FULL_ATTEMPTS_EXHAUSTED'
+        || paper.latestAnalysisAttemptErrorCategory !== 'reader_recovery'
+        || paper.latestAnalysisAttemptErrorScope !== 'paper'
+        || paper.latestAnalysisAttemptRetryable !== false
+        || !payload.issues.some(issue => String(paper.latestAnalysisAttemptError || '').includes(issue.message))
+        || repair.parseRecoveryDraft(payload.draft) || repair.parseRecoveryDraft(payload.rawDraft)
+        || repair.buildTopLevelMetadataRepairContext(payload.rawDraft)) return false;
+    try {
+        const value = JSON.parse(payload.rawDraft);
+        return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+    } catch (_) { return false; }
+}
 function beginExplicitRound(directory, identity, recovered, paper) {
     const scope = grantScope.getStore();
     if (!scope) {
@@ -223,7 +251,8 @@ function beginExplicitRound(directory, identity, recovered, paper) {
         if (!old || repair.hasUnusedImplementationAllowance(old)
             || (grant.contract === CONTRACT
                 && old.attempts < (old.explicitReaderRetryRound?.maxResponses || 6)
-                && old.noProgress < 2 && old.validationFailureStreak < 2)) {
+                && old.noProgress < 2 && old.validationFailureStreak < 2
+                && !exhaustedInitialFullWithoutLocalDraft(old, paper))) {
             throw new Error('Reader 候选仍有合法尝试或并非经过校验的失败');
         }
         const originalFile = path.join(directory, `${grant.originalIdentitySha256}.json`);

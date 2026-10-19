@@ -1355,3 +1355,68 @@ test('公开迁移扫描保留链外JSON null原拒绝语义，迁移前没有�
     },{refreshReaderDiagnostics:true}));
     assert.deepEqual(fs.readFileSync(f.file),original);assert.equal(fs.existsSync(targetFile),false);
 });
+
+// A malformed completed full response is retained verbatim; this does not adapt
+// unsupported Reader versions or bypass any normal content/source validation.
+function prepareFirstFullStop(t, payload) {
+    Object.assign(payload, {status:'failed',attempts:2,fullAttempts:2,noProgress:0,
+        validationFailureStreak:1,transportFailures:0,draft:null,
+        rawDraft:JSON.stringify({...createReaderTestArticle(),version:4}),
+        issues:[{path:null,message:'读者文章 version 必须为 2 或 3'}],
+        failureSignature:sha('saved complete Reader structural rejection')});
+    payload.validationFailureSignature=repair.validationFailureSignature(payload.issues);
+    const keys=['latestAnalysisAttemptErrorCode','latestAnalysisAttemptErrorCategory',
+        'latestAnalysisAttemptErrorScope','latestAnalysisAttemptRetryable','latestAnalysisAttemptError'];
+    const before=Object.fromEntries(keys.map(k=>[k,{has:Object.hasOwn(paper,k),value:paper[k]}]));
+    t.after(()=>{for(const k of keys){if(before[k].has)paper[k]=before[k].value;else delete paper[k];}});
+    Object.assign(paper,{latestAnalysisAttemptErrorCode:'READER_FULL_ATTEMPTS_EXHAUSTED',
+        latestAnalysisAttemptErrorCategory:'reader_recovery',latestAnalysisAttemptErrorScope:'paper',
+        latestAnalysisAttemptRetryable:false,latestAnalysisAttemptError:payload.issues[0].message});
+}
+test('首个显式轮可承接两次完整响应已耗尽且无可局部恢复稿，原稿及2/2原账不改',async t=>{
+    const f=setup(t,p=>prepareFirstFullStop(t,p)),original=fs.readFileSync(f.file);
+    await f.locked(()=>retry.withExplicitRound(paper,f.grant,()=>{
+        const next=retry.beginExplicitRound(directory,f.identity,f.payload,paper);
+        assert.equal(next.draft,null);assert.equal(next.rawDraft,'');
+        assert.equal(next.attempts,0);assert.equal(next.fullAttempts,0);
+        const receipt=JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+        assert.equal(receipt.oldAttempts,2);assert.equal(receipt.oldFullAttempts,2);
+        assert.deepEqual(fs.readFileSync(receipt.archivedFile),original);
+        assert.equal(JSON.parse(fs.readFileSync(receipt.archivedFile)).payload.rawDraft,f.payload.rawDraft);
+        assert.deepEqual([receipt.grant.maxResponses,receipt.grant.maxFullResponses,
+            receipt.grant.maxPhysicalRequests,receipt.grant.maxReservedOutputTokens],[3,1,6,80000]);
+        assert.equal(retry.beginExplicitRound(directory,f.identity,next,paper),null);
+        assert.equal(f.payload.attempts,2);assert.equal(f.payload.fullAttempts,2);
+    }));
+});
+const unusableFullStopNegatives=[
+    ['还有一个全文额度',p=>{p.fullAttempts=1;}],
+    ['有正常可恢复局部稿',p=>{p.draft=createReaderTestArticle();p.rawDraft=JSON.stringify(p.draft);}],
+    ['已有传输失败',p=>{p.transportFailures=1;}],
+    ['没有原完整响应',p=>{p.rawDraft='';}],
+    ['只有截断JSON',p=>{p.rawDraft=p.rawDraft.slice(0,-1);}],
+    ['未知结构问题',p=>{p.issues=[{path:null,message:'unknown content failure'}];p.validationFailureSignature=repair.validationFailureSignature(p.issues);}],
+    ['校验签名不符',p=>{p.validationFailureSignature='reader-validation-v2:stale';}],
+    ['未知停止原因',()=>{paper.latestAnalysisAttemptErrorCode='UNKNOWN_ERROR';}],
+    ['认证失败',()=>{paper.latestAnalysisAttemptErrorCode='HTTP_401';}],
+    ['额度失败',()=>{paper.latestAnalysisAttemptErrorCode='GO_USAGE_LIMIT';}],
+    ['来源失败',()=>{paper.latestAnalysisAttemptErrorCategory='source';}],
+    ['可重试传输错误',()=>{paper.latestAnalysisAttemptRetryable=true;}]
+];
+for(const [name,mutate]of unusableFullStopNegatives)test('首轮全文耗尽例外仍拒绝'+name,async t=>{
+    const f=setup(t,p=>{prepareFirstFullStop(t,p);mutate(p);}),before=fs.readFileSync(f.file);
+    await f.locked(()=>retry.withExplicitRound(paper,f.grant,()=>{
+        assert.throws(()=>retry.beginExplicitRound(directory,f.identity,f.payload,paper),/仍有合法尝试/);
+    }));
+    assert.deepEqual(fs.readFileSync(f.file),before);
+});
+for(const [name,change,pattern]of [
+    ['原稿SHA',g=>{g.payloadSha256='0'.repeat(64);},/原稿 SHA/],
+    ['来源SHA',g=>{g.sourceFiles['source.pdf']='0'.repeat(64);},/来源 SHA/],
+    ['新轮预算',g=>{g.maxResponses=4;},/预算/]
+])test('首轮全文耗尽不放宽'+name+'门',async t=>{
+    const f=setup(t,p=>prepareFirstFullStop(t,p)),before=fs.readFileSync(f.file);change(f.grant);
+    await f.locked(()=>assert.throws(()=>retry.withExplicitRound(paper,f.grant,()=>
+        retry.beginExplicitRound(directory,f.identity,f.payload,paper)),pattern));
+    assert.deepEqual(fs.readFileSync(f.file),before);
+});
