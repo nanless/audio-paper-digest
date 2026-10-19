@@ -190,13 +190,13 @@ function verifyChain(paper, payload, authenticated, deep, pinnedPaid) {
     return { patch, paidUsage: usage, expectedPaidRequest: expectedRequest, fpDetails, coreFingerprint: coreFp,
         outputAnalysisSha256: sha(payload.analysisCheckpoint), sourceFiles: authenticated.sourceFiles };
 }
-function requiredMarker(paper) { return paper.analysisManifest?.contracts?.primaryLocalValidationReplay; }
+function requiredMarker(paper) { return paper?.analysisManifest?.contracts?.primaryLocalValidationReplay; }
 function requireOperationBinding(paper) {
     const found = records(paper), marker = requiredMarker(paper);
     if (found.length !== 1 || marker?.contract !== CONTRACT || marker.operationSha256 !== found[0].operationSha256)
         fail('原局部验证兼容操作与必需合同没有唯一互绑');
 }
-function records(paper) { return (paper.analysisManifest?.compatibilityMigrations || []).filter(item => item?.contract === CONTRACT); }
+function records(paper) { return (paper?.analysisManifest?.compatibilityMigrations || []).filter(item => item?.contract === CONTRACT); }
 function operationApplies(paper) {
     const found = records(paper); if (!found.length) return false;
     if (found.length !== 1) fail('原兼容操作不是唯一');
@@ -253,7 +253,7 @@ function validateOperation(paper, authenticated, deep) {
 }
 function validateColdOperation(paper) {
     const found = records(paper), marker = requiredMarker(paper);
-    const legacy = paper.analysisManifest?.stages?.primaryAnalysis?.primaryLocalFactRepair
+    const legacy = paper?.analysisManifest?.stages?.primaryAnalysis?.primaryLocalFactRepair
         && paper.analysisManifest?.stages?.revision?.localFactValidation?.contract === 'primary-local-fact-validation-v1';
     if (!found.length && !marker && !legacy) return null;
     try {

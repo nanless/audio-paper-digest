@@ -13,6 +13,17 @@ function sample() {
         replacements: [{ from: plan.targets[0].text, to: plan.targets[0].text.replace('无掩码基线', 'random掩码未适配基线') }] });
     return { input, feedback, ...result };
 }
+test('public qualification keeps absent and non-record inputs unsuccessful without throwing', () => {
+    for (const paper of [undefined, null, false, 0, 'not-a-record', [], {}]) {
+        assert.equal(helper.validateColdOperation(paper), null);
+        assert.equal(engine.isSuccessfulAnalysisRecord(paper), false);
+        assert.equal(engine.getIncompleteAnalysisContentReason(paper), '分析正文未通过内容检查。');
+    }
+    const marked = { analysisManifest: { contracts: { primaryLocalValidationReplay: {
+        contract: helper.CONTRACT, operationSha256: 'a'.repeat(64) } } } };
+    assert.match(engine.getIncompleteAnalysisContentReason(marked), /兼容操作与必需合同/);
+    assert.equal(engine.isSuccessfulAnalysisRecord(marked), false);
+});
 test('normal bounded patch receipt proves saved before/after relation and preserves exterior', () => {
     const p = sample();
     assert.deepEqual(helper.primaryPatchProof(p.input, p.analysis, p.feedback, p.receipt), {

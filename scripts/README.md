@@ -94,6 +94,7 @@ npm run test:compat
 | `lib/merge-failed-reader-bundle.js` | 失败保存时保持读者文章与对应阶段一致，保留真实失败稿、请求及费用历史，避免旧正文混用新记录。 |
 | `lib/paid-final-analysis-recovery.js` | 按当前来源和阶段身份恢复已有付费最终分析。 |
 | `lib/primary-fact-local-repair.js` | Node 库：为来源绑定的主文事实纠错限定唯一原段落，严格核验 JSON 的 from/to、原稿 SHA 和修改范围；未授权正文逐字保留，完整正文与评分检查仍由正常分析入口执行。 |
+| `lib/primary-local-validation-replay.js` | Node 库：在真实日更来源与原主文反馈内重放旧局部验证的双输入链，核对原付费、快照及必要操作标记；原阶段、失败、费用与事实义务保留，不授予模型额度或整篇成功。正常冷核对无记录输入保留原有失败判断。 |
 | `lib/saved-fact-feedback.js` | Node 库：deep 与 batch 共用原反馈恢复，显式新反馈优先，核对各阶段证明；整篇和摘要采用不同说明时分别恢复。Reader 旧父恢复先核真实主检查点，保存前保护原对象与传入对象的所有非 Reader 上游，错误还原内存和回调；保留原稿、失败与费用。 |
 | `lib/scoring-third-party-resource-replay.js` | Node 库：精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
