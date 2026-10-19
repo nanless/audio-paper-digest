@@ -1342,7 +1342,10 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
             throw Object.assign(new Error('会议新评分检查点的资源、正文或原修订 SHA 改变'), { retryable: false });
         }
         if (loaded.revision.mode === 'scoring-and-reader' && !savedScoring
-            && progress.failures.length > 0) {
+            && progress.failures.length > 0
+            && !(loaded.readerReview?.unissuedScoringRecovery
+                && require('./analysis-stop-control').withModelRequestsForbidden(() => withVerifiedSource(() =>
+                    require('./conference-reader-review-maintenance').inspectUnissuedScoringPreRequestRecovery(loaded))))) {
             // A failed refresh may still carry its parent's complete audit.
             // Only this revision's saved scoring checkpoint can prove the new
             // scoring finished. Even a transport failure can follow already

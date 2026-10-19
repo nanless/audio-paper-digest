@@ -277,6 +277,321 @@ function firstInheritedOneImageReaderSuccess(loaded,stage) {
         'saved inherited Reader only supports one actual nonexcluded source figure');
     return true;
 }
+function firstInheritedResourceFourImageReaderSuccess(loaded,stage) {
+    const parent=loaded.parent.analysis.papers[0];
+    if(parent.conferenceSourceCorrection?.contract!=='conference-source-resource-correction-v1'
+        ||stage?.figureCount!==4||stage?.imageEvidenceCount!==4)return false;
+    const progress=loaded.analysis.readerRevisionProgress,failures=progress?.failures,first=failures?.[0];
+    if(first?.message!=='保留 Reader 上游需要原评分与当前 Reader 的完整绑定仍然有效。')return false;
+    check(loaded.analysis.status==='partial'&&loaded.revision.mode==='reader-only'
+        &&loaded.revision.readerReviewMaintenance?.window===null
+        &&parent.conferenceSourceCorrection.executionId===loaded.parent.run.executionId
+        &&Number.isSafeInteger(progress.attempts)&&progress.attempts>=1&&progress.attempts<=3
+        &&Array.isArray(failures)&&failures.length===progress.attempts
+        &&failures.every((failure,index)=>failure.systemic!==true&&failure.category==='paper'
+            &&Number.isFinite(Date.parse(failure.at))&&Date.parse(failure.at)>=Date.parse(index?failures[index-1].at:stage.refreshedAt))
+        &&stage.status==='complete'&&stage.contentMode==='reader-source-signed-revision-v1'
+        &&stage.attempts===1&&stage.fullAttempts===1&&(stage.transportFailures||0)===0
+        &&SHA.test(stage.imageEvidenceSha256)&&SHA.test(stage.modelImagePreflightEvidenceSha256)
+        &&stage.providerImageExclusionCount===0&&same(stage.providerImageExclusions,[])
+        &&loaded.analysis.papers[0].apiReaderFigures?.length===4,
+        'saved resource four-image Reader needs exact original first-success scope');
+    return true;
+}
+function assertSavedBoundSourceImages(loaded,paper,native,count) {
+    const stage=paper.analysisManifest?.stages?.apiReaderArticle,figures=paper.apiReaderFigures;
+    check([3,4].includes(count)&&figures?.length===count&&stage?.figureCount===count&&stage.imageEvidenceCount===count
+        &&native.imageEvidenceCount===count&&native.imageEvidenceSha256===stage.imageEvidenceSha256
+        &&native.modelImagePreflightEvidenceSha256===stage.modelImagePreflightEvidenceSha256
+        &&Array.isArray(native.sourcePixelProofs)&&native.sourcePixelProofs.length===count
+        &&new Set(figures.map(f=>f.ordinal)).size===count,
+        'saved source-image evidence/preflight must close every original paid figure');
+    for(let index=0;index<count;index++) {
+        const f=figures[index],expected={ordinal:f.ordinal,url:f.url,cachePath:f.cachePath,assetSha256:f.assetSha256,
+            assetBytes:f.assetBytes,originalSourceAssetSha256:f.asset?.sha256,sourceDomSha256:f.sourceDomSha256};
+        check(same(native.sourcePixelProofs[index],expected)&&SHA.test(f.assetSha256)&&SHA.test(f.asset?.sha256)
+            &&SHA.test(f.sourceDomSha256)&&Number.isSafeInteger(f.ordinal)&&f.ordinal>=1
+            &&Number.isSafeInteger(f.assetBytes)&&f.assetBytes>0
+            &&f.cachePath===path.join(loaded.directory,'reader-assets',`figure-${f.ordinal}-${f.assetSha256.slice(0,16)}.png`),
+            'saved source-image raw/rendered pixel proof changed');
+        privateFile(f.cachePath);const bytes=fs.readFileSync(f.cachePath);
+        check(bytes.length===f.assetBytes&&sha(bytes)===f.assetSha256,'saved source-image actual sealed PNG changed');
+    }
+}
+// Both identities remain immutable: rederive the parent's source declaration
+// through the actual child's PDF scope and require exact current identity bytes.
+function firstReadmittedResourceThreeImageReaderSuccess(loaded,stage) {
+    const parent=loaded.parent.analysis.papers[0];
+    if(parent.conferenceSourceCorrection?.contract!=='conference-source-resource-correction-v1'
+        ||stage?.figureCount!==3||stage?.imageEvidenceCount!==3)return false;
+    const progress=loaded.analysis.readerRevisionProgress,failures=progress?.failures,first=failures?.[0];
+    if(first?.code!=='ANALYSIS_STOP_REQUESTED'||first.message!=='已请求停止分析；保留已返回内容，不再发送新的模型请求。')return false;
+    check(loaded.analysis.status==='partial'&&loaded.revision.mode==='reader-only'
+        &&loaded.revision.readerReviewMaintenance?.window===null
+        &&parent.conferenceSourceCorrection.executionId===loaded.parent.run.executionId
+        &&Number.isSafeInteger(progress.attempts)&&progress.attempts>=2&&progress.attempts<=3
+        &&Array.isArray(failures)&&failures.length===progress.attempts
+        &&first.category==='run'&&first.systemic===true&&first.retryable===false
+        &&Number.isFinite(Date.parse(first.at))&&Date.parse(first.at)<=Date.parse(stage.refreshedAt)
+        &&failures.slice(1).every((failure,index)=>failure.category==='paper'&&failure.systemic===false
+            &&failure.retryable===true&&failure.code===null
+            &&failure.message==='读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。'
+            &&Number.isFinite(Date.parse(failure.at))&&Date.parse(failure.at)>=Date.parse(stage.refreshedAt)
+            &&Date.parse(failure.at)>=Date.parse(failures[index].at))
+        &&stage.status==='complete'&&stage.contentMode==='reader-source-signed-revision-v1'
+        &&stage.attempts===1&&stage.fullAttempts===1&&(stage.transportFailures||0)===0
+        &&SHA.test(stage.imageEvidenceSha256)&&SHA.test(stage.modelImagePreflightEvidenceSha256)
+        &&stage.providerImageExclusionCount===0&&same(stage.providerImageExclusions,[])
+        &&loaded.analysis.papers[0].apiReaderFigures?.length===3,
+        'saved readmitted three-image Reader needs original stop/binding first-success history');
+    return true;
+}
+function readSavedResourceReadmission(loaded,paper,batch,member) {
+    assertCurrentBatch(batch);
+    const records=new Map(),pinnedRead=filename=>{const record=read(filename);records.set(filename,record.sha256);return record;};
+    const originals=batch.m.members.filter(row=>row.paperId===member?.paperId);
+    check(originals.length===1&&(same(member,originals[0])||same(member,{...originals[0],window:null})),
+        'saved readmission requires exact original ordinary member');
+    member=originals[0];
+    const revision=loaded.revision,parent=loaded.parent,original=parent.analysis.papers[0];
+    check(revision?.contract===adapter().READER_REVISION_CONTRACT&&revision.mode==='reader-only'
+        &&revision.maxAttempts===3&&revision.readerReviewMaintenance?.window===null
+        &&same(revision.readerReviewMaintenance,locator(batch,{...member,window:null}))
+        &&loaded.run.executionId===member.executionId&&parent.run.executionId===member.parentExecutionId
+        &&loaded.run.paperId===member.paperId&&paper.id===member.paperId
+        &&parent.analysisFileSha256===member.parentCAS.analysisFileSha256
+        &&parent.runFileSha256===member.parentCAS.runFileSha256
+        &&parent.sourceFileSha256===member.parentCAS.sourceFileSha256
+        &&loaded.sourceFileSha256===parent.sourceFileSha256
+        &&loaded.run.sourceSnapshotSha256===member.sourceSnapshotSha256
+        &&revision.parentExecutionId===member.parentExecutionId
+        &&revision.parentAnalysisFileSha256===parent.analysisFileSha256
+        &&revision.parentRunFileSha256===parent.runFileSha256
+        &&revision.sourceSnapshotSha256===member.sourceSnapshotSha256
+        &&original.conferenceSourceCorrection?.contract==='conference-source-resource-correction-v1'
+        &&original.conferenceSourceCorrection.executionId===parent.run.executionId
+        &&same(paper.conferenceSourceCorrection,original.conferenceSourceCorrection)
+        &&same(paper.conferenceSourceCorrectionObligation,original.conferenceSourceCorrectionObligation)
+        &&same(protectedScience(paper),protectedScience(original)),
+        'saved readmission actual source/resource parent/science or locator changed');
+    const directory=path.join(batch.p.root,'unissued-preflight-recoveries',member.executionId);
+    check(same(fs.readdirSync(directory).sort(),['before','new-preflight.json','receipt.json']),
+        'saved readmission requires exact original recovery directory');
+    const row=pinnedRead(path.join(directory,'receipt.json')),r=row.value;self(r,'receiptSha256');
+    const receiptKeys=['contract','manifestSha256','manifestFileSha256','paperId','executionId','parentCAS','before',
+        'oldMemberProgressFileSha256','newPreflightFileSha256','oldIdentitySha256','newIdentitySha256',
+        'normalProbeInvocations','status','receiptSha256',
+        ...(Object.hasOwn(r,'resumedSavedPreflightFileSha256')?['resumedSavedPreflightFileSha256','normalProbeInvocationsThisResume']:[])];
+    check(same(Object.keys(r).sort(),receiptKeys.sort()),'saved readmission unknown receipt fields');
+    check(r.contract==='conference-reader-unissued-preflight-recovery-v1'&&r.status==='reader-only-ready'
+        &&r.normalProbeInvocations===1&&r.executionId===member.executionId&&r.paperId===member.paperId
+        &&r.manifestSha256===batch.m.manifestSha256&&r.manifestFileSha256===batch.manifestFileSha256
+        &&same(r.parentCAS,member.parentCAS)
+        &&(!Object.hasOwn(r,'resumedSavedPreflightFileSha256')
+            ?!Object.hasOwn(r,'normalProbeInvocationsThisResume')
+            :r.resumedSavedPreflightFileSha256===r.newPreflightFileSha256&&r.normalProbeInvocationsThisResume===0),
+        'saved readmission requires actual original reader-only one-probe receipt');
+    const names=['analysis.json','intent.json','reader-resource-preflight.json','run.json','source.json'];
+    const beforeDirectory=path.join(directory,'before');
+    check(same(Object.keys(r.before).sort(),names)
+        &&same(fs.readdirSync(beforeDirectory).sort(),[...names,'member-progress.json'].sort()),
+        'saved readmission requires original exact six-file archive');
+    const before=Object.fromEntries(names.map(name=>{const record=pinnedRead(path.join(beforeDirectory,name));
+        check(record.sha256===r.before[name],'saved readmission before snapshot changed');return [name,record];}));
+    const oldFailure=pinnedRead(path.join(beforeDirectory,'member-progress.json'));
+    check(oldFailure.sha256===r.oldMemberProgressFileSha256&&oldFailure.value.status==='failed'
+        &&oldFailure.value.executionId===member.executionId&&oldFailure.value.attempts===0
+        &&oldFailure.value.failure?.retryable===false&&oldFailure.value.failure.systemic===false
+        &&oldFailure.value.failure.message==='Text maintenance cannot change resources or scoring',
+        'saved readmission needs original zero-attempt resource-mode failure');
+    const initial=before['analysis.json'].value,run=before['run.json'].value,intent=before['intent.json'].value;
+    self(run,'runSha256');self(intent,'intentSha256');
+    const actualIntent=pinnedRead(path.join(loaded.directory,'intent.json'));
+    check(actualIntent.sha256===before['intent.json'].sha256
+        &&loaded.run.prepareIntentFileSha256===before['intent.json'].sha256
+        &&loaded.run.prepareIntentSha256===intent.intentSha256,'saved readmission current original intent binding changed');
+    check(initial.status==='pending'&&initial.generation===0&&!Object.hasOwn(initial,'readerRevisionProgress')
+        &&initial.papers?.length===1&&initial.papers[0].id===member.paperId
+        &&run.status==='source_ready'&&run.executionId===member.executionId&&run.paperId===member.paperId
+        &&run.prepareIntentFileSha256===before['intent.json'].sha256
+        &&run.prepareIntentSha256===intent.intentSha256
+        &&intent.executionId===member.executionId&&intent.paperId===member.paperId
+        &&intent.initialAnalysisFileSha256===before['analysis.json'].sha256
+        &&run.sourceSnapshotSha256===member.sourceSnapshotSha256
+        &&intent.sourceSnapshotSha256===member.sourceSnapshotSha256
+        &&intent.sourceFileSha256===member.parentCAS.sourceFileSha256
+        &&before['source.json'].sha256===member.parentCAS.sourceFileSha256,
+        'saved readmission original prepared packet differs from actual parent/source');
+    const preflight=pinnedRead(path.join(directory,'new-preflight.json'));
+    const actual=pinnedRead(path.join(loaded.directory,'reader-resource-preflight.json'));
+    check(preflight.sha256===r.newPreflightFileSha256&&actual.sha256===preflight.sha256
+        &&revision.resourcePreflightFileSha256===preflight.sha256
+        &&same(actual.value,loaded.resourcePreflight)&&same(actual.value,paper.apiReaderResources)
+        &&SHA.test(r.oldIdentitySha256)&&SHA.test(r.newIdentitySha256)
+        &&r.oldIdentitySha256===before['reader-resource-preflight.json'].value.identitySha256
+        &&r.newIdentitySha256===actual.value.identitySha256,
+        'saved readmission changed its fixed actual old/new resource preflight');
+    const revisionRecord=pinnedRead(path.join(loaded.directory,'reader-revision.json'));
+    check(same(revisionRecord.value,revision),'saved readmission actual revision bytes changed');
+    const proof={contract:'conference-saved-reader-resource-readmission-v1',
+        executionId:member.executionId,paperId:member.paperId,parentExecutionId:member.parentExecutionId,
+        manifestSha256:batch.m.manifestSha256,manifestFileSha256:batch.manifestFileSha256,
+        memberSha256:stable(member),reviewFeedbackSha256:member.reviewFeedbackSha256,
+        sourceSnapshotSha256:member.sourceSnapshotSha256,sourceFileSha256:loaded.sourceFileSha256,
+        parentCAS:structuredClone(member.parentCAS),revisionFileSha256:revisionRecord.sha256,
+        originalRecoveryReceiptFileSha256:row.sha256,originalRecoveryReceiptSha256:r.receiptSha256,
+        originalFiveFileSha256:structuredClone(r.before),originalFailureFileSha256:oldFailure.sha256,
+        fixedPreflightFileSha256:actual.sha256,resourceIdentitySha256:actual.value.identitySha256};
+    return {identity:actual.value,proof,assertUnchanged:()=>{
+        for(const [filename,expected] of records)check(read(filename).sha256===expected,'saved readmission archived/current material changed');
+        assertCurrentBatch(batch);
+    }};
+}
+function assertSavedResourceReadmissionProjection(loaded,paper,batch,member) {
+    const context=require('./conference-analysis-context'),active=context.getConferenceAnalysisContext();
+    check(active?.executionId===loaded.run.executionId&&active.executionDir===loaded.directory
+        &&active.paperId===paper.id&&active.readerPdfSourceHandle
+        &&sha(active.sourceDetails?.text||'')===paper.sourceSha256,
+        'saved readmission needs actual own-child PDF/source scope');
+    require('./conference-source-context').readerPdfSourceForContext(active.readerPdfSourceHandle);
+    const admitted=readSavedResourceReadmission(loaded,paper,batch,member);
+    const parent=adapter().loadConferenceAnalysis({analysisRoot:path.dirname(loaded.directory),executionId:loaded.parent.run.executionId});
+    check(parent.analysisFileSha256===loaded.parent.analysisFileSha256&&parent.runFileSha256===loaded.parent.runFileSha256
+        &&parent.sourceFileSha256===loaded.parent.sourceFileSha256&&same(parent.analysis,loaded.parent.analysis),
+        'saved readmission actual original parent CAS changed');
+    const deep=require('../deep-analyzer'),pdf=replayParentSource(parent);
+    context.withConferenceAnalysisSource({executionId:parent.run.executionId,executionDir:parent.directory,
+        paperId:parent.run.paperId,sourceDetails:parent.source.sourceDetails,readerPdfSourceHandle:pdf},()=>
+        deep.replayVerifiedReaderResourceIdentity(parent.analysis.papers[0].apiReaderResources,parent.source.sourceDetails.text));
+    // Use the original fixed probe, including its real temporary/available states.
+    // Reclassification derives only actual child PDF evidence; no owner/status edits.
+    deep.replayVerifiedReaderResourceIdentity(admitted.identity,active.sourceDetails.text);
+    check(unissuedResourceMode(parent.analysis.papers[0],admitted.identity)==='reader-only',
+        'saved readmission cannot change scoring resource flags');
+    const rederived=require('./reader-authenticated-pdf-footnote-evidence').deriveCorrectedIdentity(admitted.identity,active.sourceDetails.text);
+    check(same(rederived.identity,admitted.identity),'saved readmission fixed child source declaration is not exactly reproducible');
+    admitted.assertUnchanged();
+    const now=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:path.dirname(loaded.directory),executionId:loaded.run.executionId});
+    check(now.analysisFileSha256===loaded.analysisFileSha256&&now.runFileSha256===loaded.runFileSha256
+        &&now.sourceFileSha256===loaded.sourceFileSha256&&same(now.revision,loaded.revision)
+        &&now.parent.analysisFileSha256===parent.analysisFileSha256&&now.parent.runFileSha256===parent.runFileSha256
+        &&now.parent.sourceFileSha256===parent.sourceFileSha256,
+        'saved readmission parent/child changed during source replay');
+    return true;
+}
+
+function savedResourceReaderContext(loaded,seedBinding=null) {
+    const bound=seedBinding||scientificParentReplayHandles.get(loaded.readerReview?.scientificReplayHandle)
+        ||parentReaderSeedHandles.get(loaded.readerReview?.parentSeedHandle)?.scientificReplay;
+    check(bound&&bound.loaded.directory===loaded.directory&&bound.loaded.run.executionId===loaded.run.executionId
+        &&bound.loaded.analysisFileSha256===loaded.analysisFileSha256&&bound.loaded.runFileSha256===loaded.runFileSha256
+        &&bound.loaded.sourceFileSha256===loaded.sourceFileSha256
+        &&bound.loaded.parent.analysisFileSha256===loaded.parent.analysisFileSha256
+        &&bound.loaded.parent.runFileSha256===loaded.parent.runFileSha256
+        &&bound.loaded.parent.sourceFileSha256===loaded.parent.sourceFileSha256,
+        'saved resource Reader needs its actual private registered parent/child binding');
+    return bound;
+}
+function savedResourceReaderKind(loaded,paper,seedBinding=null) {
+    let original=loaded;
+    if(loaded.analysis.status==='complete') {
+        assertSavedMaintenanceReaderRecovery(loaded,paper);
+        const receipt=loaded.analysis.readerSavedStageRecovery;
+        check(['inherited-source-resource-four-image-first-success-v1','readmitted-source-resource-three-image-first-success-v1']
+            .includes(receipt?.savedReaderRecoveryKind),'saved resource Reader complete requires original immutable recovery kind');
+        const before=read(path.join(loaded.directory,'saved-reader-stage-recovery',receipt.originalPartialAnalysisFileSha256,'analysis.json'));
+        check(before.sha256===receipt.originalPartialAnalysisFileSha256,'saved resource Reader original partial CAS');
+        original={...loaded,analysis:before.value};
+    }
+    const stage=paper.analysisManifest?.stages?.apiReaderArticle;
+    if(firstInheritedResourceFourImageReaderSuccess(original,stage))
+        return {kind:'inherited-source-resource-four-image-first-success-v1',imageCount:4};
+    if(!firstReadmittedResourceThreeImageReaderSuccess(original,stage))return null;
+    const {batch,member}=savedResourceReaderContext(loaded,seedBinding);
+    const admitted=readSavedResourceReadmission(loaded,paper,batch,member);
+    admitted.assertUnchanged();
+    return {kind:'readmitted-source-resource-three-image-first-success-v1',imageCount:3,resourceReadmission:admitted.proof};
+}
+function assertSavedResourceScientificResources(loaded,paper,seedBinding=null) {
+    const recovery=savedResourceReaderKind(loaded,paper,seedBinding);
+    check(recovery,'saved resource Reader does not match either original source-bound recovery');
+    if(recovery.imageCount===4)return assertSavedResourceOwnerProjection(loaded,paper);
+    const {batch,member}=savedResourceReaderContext(loaded,seedBinding);
+    return assertSavedResourceReadmissionProjection(loaded,paper,batch,member);
+}
+function assertSavedFourSourceImages(loaded,paper,native) {
+    return assertSavedBoundSourceImages(loaded,paper,native,4);
+}
+function assertSavedResourceOwnerProjection(loaded,paper) {
+    const context=require('./conference-analysis-context'),active=context.getConferenceAnalysisContext();
+    check(active?.executionId===loaded.run.executionId&&active.executionDir===loaded.directory
+        &&active.paperId===paper.id&&active.readerPdfSourceHandle
+        &&sha(active.sourceDetails.text)===paper.sourceSha256
+        &&loaded.sourceFileSha256===loaded.parent.sourceFileSha256,
+        'saved resource-owner replay requires actual child PDF/source scope');
+    let original=loaded;
+    if(loaded.analysis.status==='complete') {
+        assertSavedMaintenanceReaderRecovery(loaded,paper);
+        const receipt=loaded.analysis.readerSavedStageRecovery;
+        check(receipt?.savedReaderRecoveryKind==='inherited-source-resource-four-image-first-success-v1',
+            'complete resource-owner replay needs actual immutable four-image recovery');
+        const before=read(path.join(loaded.directory,'saved-reader-stage-recovery',receipt.originalPartialAnalysisFileSha256,'analysis.json'));
+        check(before.sha256===receipt.originalPartialAnalysisFileSha256,'saved resource-owner original partial CAS');
+        original={...loaded,analysis:before.value};
+    }
+    check(firstInheritedResourceFourImageReaderSuccess(original,paper.analysisManifest.stages.apiReaderArticle)
+        &&same(protectedScience(paper),protectedScience(loaded.parent.analysis.papers[0]))
+        &&same(paper.apiReaderResources,loaded.resourcePreflight),
+        'saved resource-owner replay cannot change protected science or fixed preflight');
+    const parent=adapter().loadConferenceAnalysis({analysisRoot:path.dirname(loaded.directory),executionId:loaded.parent.run.executionId});
+    check(parent.analysisFileSha256===loaded.parent.analysisFileSha256&&parent.runFileSha256===loaded.parent.runFileSha256
+        &&parent.sourceFileSha256===loaded.parent.sourceFileSha256&&same(parent.analysis,loaded.parent.analysis),
+        'saved resource-owner original canonical parent CAS changed');
+    const pdf=replayParentSource(parent),deep=require('../deep-analyzer');
+    context.withConferenceAnalysisSource({executionId:parent.run.executionId,executionDir:parent.directory,
+        paperId:parent.run.paperId,sourceDetails:parent.source.sourceDetails,readerPdfSourceHandle:pdf},()=>
+        deep.replayVerifiedReaderResourceIdentity(parent.analysis.papers[0].apiReaderResources,parent.source.sourceDetails.text));
+    deep.replayVerifiedReaderResourceIdentity(paper.apiReaderResources,active.sourceDetails.text);
+    const proposal=require('./reader-authenticated-pdf-footnote-evidence').deriveCorrectedIdentity(
+        parent.analysis.papers[0].apiReaderResources,active.sourceDetails.text);
+    check(same(proposal.identity,paper.apiReaderResources),'saved child resources differ from actual PDF owner rederivation');
+    const now=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:path.dirname(loaded.directory),executionId:loaded.run.executionId});
+    check(now.analysisFileSha256===loaded.analysisFileSha256&&now.runFileSha256===loaded.runFileSha256
+        &&now.sourceFileSha256===loaded.sourceFileSha256&&now.parent.analysisFileSha256===parent.analysisFileSha256
+        &&now.parent.runFileSha256===parent.runFileSha256&&now.parent.sourceFileSha256===parent.sourceFileSha256,
+        'saved resource-owner parent/child changed during replay');
+    return true;
+}
+function readVerifiedSavedReaderImageLimit(handle,selectedCount) {
+    const bound=parentReaderSeedHandles.get(handle);
+    check(bound&&[3,4].includes(selectedCount)&&bound.scientificReplay?.loaded&&bound.unissuedScoringRecovery==null,
+        'saved resource input proof requires actual original Reader-only parent seed capability');
+    // The genuine seed capability is minted before the public loader attaches
+    // resourcePreflight/readerReview. Read the original canonical preflight,
+    // never a caller projection or a fabricated public-loader result.
+    const raw=bound.scientificReplay.loaded,record=read(path.join(raw.directory,'reader-resource-preflight.json'));
+    const revision=read(path.join(raw.directory,'reader-revision.json'));
+    check(record.sha256===raw.revision.resourcePreflightFileSha256&&same(revision.value,raw.revision),
+        'saved resource input actual fixed preflight/revision changed');
+    const context=require('./conference-analysis-context'),active=context.getConferenceAnalysisContext();
+    check(active?.executionId===raw.run.executionId&&active.executionDir===raw.directory
+        &&active.paperId===raw.run.paperId&&active.readerPdfSourceHandle
+        &&same(active.sourceDetails,raw.source.sourceDetails),'saved resource input needs original own-child source scope');
+    require('./conference-source-context').readerPdfSourceForContext(active.readerPdfSourceHandle);
+    const identity=require('../deep-analyzer').replayVerifiedReaderResourceIdentity(record.value,raw.source.sourceDetails.text);
+    const demos=raw.parent.analysis.papers[0]?.analysisManifest?.stages?.demoLinkScan?.discoveredLinks||[];
+    check(same(identity,record.value)&&!identity.resources.some(resource=>resource.origin==='validated_demo'&&!demos.includes(resource.originalUrl))
+        &&unissuedResourceMode(raw.parent.analysis.papers[0],identity)==='reader-only',
+        'saved resource input fixed preflight changed original Demo/scoring mode');
+    const loaded={...raw,resourcePreflight:identity},paper=loaded.analysis.papers[0];
+    const recovery=savedResourceReaderKind(loaded,paper,bound.scientificReplay);
+    check(recovery?.imageCount===selectedCount,'saved resource input count differs from actual original paid stage');
+    assertSavedResourceScientificResources(loaded,paper,bound.scientificReplay);
+    check(read(path.join(raw.directory,'reader-resource-preflight.json')).sha256===record.sha256
+        &&read(path.join(raw.directory,'reader-revision.json')).sha256===revision.sha256,
+        'saved resource input preflight/revision changed during replay');
+    return recovery.imageCount;
+}
 function usageHistoryRows(loaded,until) {
     const root=require('../config').FILES.llmUsageDir,since=Date.parse(loaded.run.createdAt),events=[];
     check(Number.isFinite(since)&&Number.isFinite(Date.parse(until)),'saved usage history interval');
@@ -354,21 +669,24 @@ async function inspectSavedMaintenanceReaderCompletion(loaded) {
     if(!loaded.readerReview||stage?.status!=='complete'||stage.contentMode!=='reader-source-signed-revision-v1')return null;
     const neutral=last?.code==='CONFERENCE_READER_REVIEW_MAINTENANCE_INTEGRITY'
         &&last.message==='Text maintenance: protected scientific upstream changed';
-    const oneImage=neutral?false:firstInheritedOneImageReaderSuccess(loaded,stage);
-    if(!neutral&&!oneImage)return null;
+    const resourceRecovery=neutral?null:savedResourceReaderKind(loaded,loaded.analysis.papers[0]);
+    const fourImages=Boolean(resourceRecovery);
+    const oneImage=neutral||fourImages?false:firstInheritedOneImageReaderSuccess(loaded,stage);
+    const inheritedImages=oneImage||fourImages;
+    if(!neutral&&!inheritedImages)return null;
     return require('./analysis-stop-control').withModelRequestsForbidden(async()=>{
         const view=replaySavedNeutralReaderUpstream(loaded),bound=loaded.readerReview;
         check(stage.attempts===1&&stage.fullAttempts===1&&(stage.transportFailures||0)===0
-            &&(oneImage?view.projection===null:view.projection&&loaded.analysis.readerRevisionProgress.attempts===1),
+            &&(inheritedImages?view.projection===null:view.projection&&loaded.analysis.readerRevisionProgress.attempts===1),
             'saved first successful signed Reader only');
-        if(oneImage)readVerifiedReaderScientificParent(view.paper);
+        if(inheritedImages)readVerifiedReaderScientificParent(view.paper);
         check(stable(stage)!==stable(loaded.parent.analysis.papers[0].analysisManifest?.stages?.apiReaderArticle),
             'saved Reader must be this new feedback result');
         for(const [key,value] of Object.entries(bound.revisionSeed.metadata))check(same(stage[key],value),'saved Reader original seed metadata '+key);
         const input=structuredClone(loaded.parent.analysis.papers[0]);input.apiReaderResources=structuredClone(loaded.resourcePreflight);
         const native=await require('../deep-analyzer').prepareConferenceReaderSavedRequestInput(input,loaded.source.sourceDetails,{
             reviewFeedback:bound.modelFeedback,revisionSeed:bound.revisionSeed,readerReviewParentSeedHandle:bound.parentSeedHandle});
-        check(native.contract==='conference-saved-signed-reader-request-input-v1'&&native.images===(oneImage?1:0)&&native.modelRequests===0
+        check(native.contract==='conference-saved-signed-reader-request-input-v1'&&native.images===(inheritedImages?stage.imageEvidenceCount:0)&&native.modelRequests===0
             &&native.evidenceSha256===stage.evidenceSha256
             &&native.model===stage.model&&native.protocol===stage.protocol&&native.maxTokens===stage.maxTokens
             &&native.temperature===stage.temperature,'saved Reader actual native request/stage identity');
@@ -378,8 +696,9 @@ async function inspectSavedMaintenanceReaderCompletion(loaded) {
             &&identity.repairPromptSha256===stage.repairPromptTemplateSha256
             &&identity.signedRevisionDisplayContract===stage.signedRevisionDisplayContract
             &&identity.signedRevisionDisplaySha256===stage.signedRevisionDisplaySha256,'saved Reader source/prompt/display binding');
-        const usage=savedReaderUsageProof(loaded,native,stage,oneImage),engine=require('../analysis-engine');
+        const usage=savedReaderUsageProof(loaded,native,stage,inheritedImages),engine=require('../analysis-engine');
         if(oneImage)assertSavedSingleSourceImage(loaded,view.paper,native);
+        if(resourceRecovery)assertSavedBoundSourceImages(loaded,view.paper,native,resourceRecovery.imageCount);
         assertReaderOutput(loaded,view.paper,loaded.parent.analysis.papers[0]);
         const rules=require('./conference-postprocess').readOriginalTagProof(view.paper).rules;
         check(engine.hasValidApiReaderV3Records(view.paper)
@@ -393,11 +712,13 @@ async function inspectSavedMaintenanceReaderCompletion(loaded) {
             parentAnalysisFileSha256:loaded.parent.analysisFileSha256,parentRunFileSha256:loaded.parent.runFileSha256,
             sourceFileSha256:loaded.sourceFileSha256,preflightFileSha256:loaded.revision.resourcePreflightFileSha256,
             projection:view.projection,readerStageSha256:stable(stage),restoredPaperSha256:stable(view.paper),
-            ...(oneImage?{savedReaderRecoveryKind:'inherited-source-core-one-image-first-success-v1'}:{}),
+            ...(inheritedImages?{savedReaderRecoveryKind:resourceRecovery?resourceRecovery.kind
+                :'inherited-source-core-one-image-first-success-v1'}:{}),
+            ...(resourceRecovery?.resourceReadmission?{resourceReadmission:resourceRecovery.resourceReadmission}:{}),
             nativeRequest:{inputSha256:native.inputSha256,stageFingerprint:stage.fingerprint,
                 currentInputPreparationFingerprint:native.currentInputPreparationFingerprint,
                 preparerImplementationSha256:native.preparerImplementationSha256,
-                ...(oneImage?{imageEvidenceCount:native.imageEvidenceCount,imageEvidenceSha256:native.imageEvidenceSha256,
+                ...(inheritedImages?{imageEvidenceCount:native.imageEvidenceCount,imageEvidenceSha256:native.imageEvidenceSha256,
                     modelImagePreflightEvidenceSha256:native.modelImagePreflightEvidenceSha256,sourcePixelProofs:native.sourcePixelProofs}:{}),
                 evidenceSha256:native.evidenceSha256,promptSha256:identity.promptSha256,repairPromptSha256:identity.repairPromptSha256},
             usage,beforeFiles:beforeFiles.map(x=>({name:x.name,sha256:x.sha256})),newApiRequests:0};
@@ -439,13 +760,23 @@ function assertSavedMaintenanceReaderRecovery(loaded,paper) {
         &&paper.analysisManifest.stages.apiReaderArticle.fingerprint===receipt.nativeRequest.stageFingerprint
         &&same(before.readerRevisionProgress,loaded.analysis.readerRevisionProgress),'saved completion exact restored Reader and unchanged consumption');
     if(receipt.savedReaderRecoveryKind!==undefined) {
-        check(receipt.savedReaderRecoveryKind==='inherited-source-core-one-image-first-success-v1'
-            &&view.projection===null&&firstInheritedOneImageReaderSuccess({...loaded,analysis:before},paper.analysisManifest.stages.apiReaderArticle),
-            'saved one-image original first-success scope changed');
+        const resourceCount=receipt.savedReaderRecoveryKind==='inherited-source-resource-four-image-first-success-v1'?4
+            :receipt.savedReaderRecoveryKind==='readmitted-source-resource-three-image-first-success-v1'?3:null;
+        check((resourceCount||receipt.savedReaderRecoveryKind==='inherited-source-core-one-image-first-success-v1')
+            &&view.projection===null&&(resourceCount===4?firstInheritedResourceFourImageReaderSuccess
+                :resourceCount===3?firstReadmittedResourceThreeImageReaderSuccess:firstInheritedOneImageReaderSuccess)(
+                {...loaded,analysis:before},paper.analysisManifest.stages.apiReaderArticle),
+            'saved image original first-success scope changed');
         const history=usageHistoryRows(loaded,receipt.usage.historyObservedAt).map(row=>({name:row.name,sha256:row.sha256}));
         check(history.length===3&&same(history,receipt.usage.historyFiles)
             &&stable(history)===receipt.usage.historySha256,'saved one-image complete original usage history changed');
-        assertSavedSingleSourceImage(loaded,paper,receipt.nativeRequest);
+        if(resourceCount===3) {
+            const {batch,member}=savedResourceReaderContext(loaded),admitted=readSavedResourceReadmission(loaded,paper,batch,member);
+            check(same(receipt.resourceReadmission,admitted.proof),'saved Reader actual resource readmission proof changed');
+            admitted.assertUnchanged();
+        } else check(!Object.hasOwn(receipt,'resourceReadmission'),'unrelated saved Reader cannot borrow readmission evidence');
+        if(resourceCount)assertSavedBoundSourceImages(loaded,paper,receipt.nativeRequest,resourceCount);
+        else assertSavedSingleSourceImage(loaded,paper,receipt.nativeRequest);
     }
     const feeRows=receipt.usage.records.map(row=>{const record=read(path.join(require('../config').FILES.llmUsageDir,row.name));check(record.sha256===row.sha256,'saved completion live usage SHA');return record.value;});
     check(feeRows.length===3&&feeRows[0].kind==='request_started'&&feeRows[1].kind==='request'&&feeRows[2].kind==='disposition'
@@ -1188,6 +1519,145 @@ function readVerifiedUnissuedScoringRecovery(handle,{loaded,parent,mode,resource
         ?admission.receipt.preflight.sha256:admission.receipt.before[name].sha256),'unissued scoring was already dispatched or changed');
     return structuredClone(admission.binding);
 }
+function unissuedScoringPreRequestCandidate(loaded) {
+    const progress=loaded.analysis?.readerRevisionProgress,failures=progress?.failures,first=failures?.[0];
+    return loaded.analysis?.status==='partial'&&loaded.revision?.mode==='scoring-and-reader'
+        &&loaded.revision.maxAttempts===3&&loaded.revision.readerReviewMaintenance?.window===null
+        &&progress?.attempts===1&&progress.scoringCheckpoint===undefined&&failures?.length===1
+        &&first?.code==='CONFERENCE_READER_REVIEW_MAINTENANCE_INTEGRITY'
+        &&first.message==='Text maintenance: unissued scoring admission differs from actual source/parent/feedback receipt'
+        &&first.category==='run'&&first.systemic===true&&first.retryable===false;
+}
+function inspectUnissuedScoringPreRequestRecovery(loaded) {
+    if(!unissuedScoringPreRequestCandidate(loaded))return null;
+    const progress=loaded.analysis.readerRevisionProgress,first=progress.failures[0];
+    const seed=parentReaderSeedHandles.get(loaded.readerReview?.parentSeedHandle);
+    if(!seed?.unissuedScoringRecovery)return null;
+    const bound=savedResourceReaderContext(loaded,seed.scientificReplay),{batch,member}=bound;
+    assertCurrentBatch(batch);
+    const context=require('./conference-analysis-context'),active=context.getConferenceAnalysisContext();
+    check(active?.executionId===loaded.run.executionId&&active.executionDir===loaded.directory
+        &&active.paperId===loaded.run.paperId&&active.readerPdfSourceHandle
+        &&same(active.sourceDetails,loaded.source.sourceDetails),
+        'pre-request scoring recovery requires actual own-child PDF/source scope');
+    require('./conference-source-context').readerPdfSourceForContext(active.readerPdfSourceHandle);
+    check(same(Object.keys(progress).sort(),['attempts','failures'])
+        &&same(first,{category:'run',code:'CONFERENCE_READER_REVIEW_MAINTENANCE_INTEGRITY',
+            message:'Text maintenance: unissued scoring admission differs from actual source/parent/feedback receipt',
+            systemic:true,retryable:false,at:first.at})
+        &&Number.isFinite(Date.parse(first.at))&&Number.isFinite(Date.parse(loaded.run.createdAt))
+        &&Date.parse(first.at)>=Date.parse(loaded.run.createdAt),
+        'pre-request scoring recovery requires the sole actual original pre-I/O failure');
+    const current=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:batch.analysisRoot,executionId:loaded.run.executionId});
+    check(current.analysisFileSha256===loaded.analysisFileSha256&&current.runFileSha256===loaded.runFileSha256
+        &&current.sourceFileSha256===loaded.sourceFileSha256&&same(current.analysis,loaded.analysis)
+        &&same(current.run,loaded.run)&&same(current.revision,loaded.revision)
+        &&current.parent.analysisFileSha256===loaded.parent.analysisFileSha256
+        &&current.parent.runFileSha256===loaded.parent.runFileSha256
+        &&current.parent.sourceFileSha256===loaded.parent.sourceFileSha256
+        &&loaded.run.status==='source_ready'
+        &&same(protectedScience(loaded.analysis.papers[0]),protectedScience(loaded.parent.analysis.papers[0])),
+        'pre-request scoring recovery actual parent/child science or CAS changed');
+    const fixedCurrentFiles=[['reader-revision.json',seed.revisionFileSha256],['source.json',seed.sourceFileSha256],
+        ['review-reader-seed.json',seed.seedFileSha256]].map(([name,expected])=>{
+        const file=path.join(loaded.directory,name),record=read(file);
+        check(record.sha256===expected,'pre-request scoring original source/revision/seed bytes changed');
+        return {file,sha256:record.sha256};
+    });
+    check(same(loaded.readerReview.revisionSeed,seed.seed),'pre-request scoring original signed seed view changed');
+    const admitted=readScoringAdmission(batch,member,loaded.parent,loaded);
+    const originalRun=admitted.receipt.before['run.json'];
+    check(loaded.runFileSha256===originalRun.sha256&&same(loaded.run,originalRun.value),
+        'pre-request scoring recovery requires its unchanged original prepared run/time');
+    check(same(seed.unissuedScoringRecovery,admitted.binding)
+        &&same(loaded.readerReview.unissuedScoringRecovery,admitted.binding),
+        'pre-request scoring recovery lacks original opaque admission');
+    const intent=read(path.join(loaded.directory,'intent.json'));
+    check(intent.sha256===admitted.receipt.before['intent.json'].sha256
+        &&loaded.run.prepareIntentFileSha256===intent.sha256
+        &&loaded.run.prepareIntentSha256===intent.value.intentSha256,
+        'pre-request scoring recovery original prepared intent changed');
+    const preflight=read(path.join(loaded.directory,'reader-resource-preflight.json'));
+    check(preflight.sha256===admitted.receipt.preflight.sha256
+        &&same(preflight.value,loaded.resourcePreflight)
+        &&same(preflight.value,loaded.analysis.papers[0].apiReaderResources),
+        'pre-request scoring recovery changed original fixed resource input');
+    require('../deep-analyzer').replayVerifiedReaderResourceIdentity(preflight.value,loaded.source.sourceDetails.text);
+    check(unissuedResourceMode(loaded.parent.analysis.papers[0],preflight.value)==='scoring-and-reader',
+        'pre-request scoring recovery lost its normal fixed scoring mode');
+    const since=Date.parse(originalRun.value.createdAt),usageDirectory=require('../config').FILES.llmUsageDir;
+    const targetRows=[],names=fs.readdirSync(usageDirectory).sort();
+    check(!names.some(name=>/^\.[a-f0-9-]{36}\.tmp$/u.test(name)),'pre-request scoring usage has an unfinished atomic record');
+    const inspectUsageName=name=>{
+        if(!name.endsWith('.json')||!UUID.test(name.slice(0,-5))){check(!name.endsWith('.json'),'pre-request scoring usage has unknown record name');return;}
+        const file=path.join(usageDirectory,name);
+        // Only metadata is archived here. Atomic usage writers keep incomplete
+        // temporary files out of this fixed *.json namespace.
+        const record=read(file),value=record.value;
+        check(value&&typeof value==='object'&&!Array.isArray(value),'pre-request scoring usage record is malformed');
+        if(value.stage==='scoringAudit')check(Number.isFinite(Date.parse(value.at))
+            &&(Date.parse(value.at)<since||typeof value.paperId==='string'
+                &&require('./llm-usage').normalizeUsagePaperId(value.paperId)===value.paperId),
+            'pre-request scoring usage has unknown time/paper attribution');
+        if(value.paperId!==loaded.run.paperId&&value.runId!==loaded.run.executionId)return;
+        check(Number.isFinite(Date.parse(value.at)),'pre-request scoring usage has unknown timestamp');
+        if(Date.parse(value.at)<since)return;
+        check(value.paperId===loaded.run.paperId&&value.version==='llm-usage-v1'
+            &&typeof value.stage==='string'&&value.stage!=='unknown'
+            &&['request_started','request','disposition'].includes(value.kind),
+            'pre-request scoring usage identity is unknown or changed');
+        check(value.stage!=='scoringAudit',
+            'pre-request scoring recovery cannot reopen any actual scoring request or disposition');
+        targetRows.push({file,sha256:record.sha256});
+    };
+    for(const name of names)inspectUsageName(name);
+    for(const row of targetRows)check(read(row.file).sha256===row.sha256,'pre-request scoring usage changed');
+    check(!fs.readdirSync(usageDirectory).some(name=>/^\.[a-f0-9-]{36}\.tmp$/u.test(name)),
+        'pre-request scoring usage became unfinished during observation');
+    const after=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:batch.analysisRoot,executionId:loaded.run.executionId});
+    check(after.analysisFileSha256===current.analysisFileSha256&&after.runFileSha256===current.runFileSha256
+        &&after.sourceFileSha256===current.sourceFileSha256&&same(after.revision,current.revision)
+        &&after.parent.analysisFileSha256===current.parent.analysisFileSha256
+        &&after.parent.runFileSha256===current.parent.runFileSha256
+        &&after.parent.sourceFileSha256===current.parent.sourceFileSha256,
+        'pre-request scoring recovery changed during observation');
+    check(read(path.join(loaded.directory,'intent.json')).sha256===intent.sha256
+        &&read(path.join(loaded.directory,'reader-resource-preflight.json')).sha256===preflight.sha256,
+        'pre-request scoring recovery intent/preflight changed during observation');
+    for(const pin of fixedCurrentFiles)check(read(pin.file).sha256===pin.sha256,
+        'pre-request scoring source/revision/seed changed during observation');
+    const finalNames=fs.readdirSync(usageDirectory);
+    check(!finalNames.some(name=>/^\.[a-f0-9-]{36}\.tmp$/u.test(name)),'pre-request scoring usage became unfinished');
+    const originalNames=new Set(names);for(const name of finalNames)if(!originalNames.has(name))inspectUsageName(name);
+    for(const row of targetRows)check(read(row.file).sha256===row.sha256,'pre-request scoring usage changed at final fence');
+    assertCurrentBatch(batch);
+    // Selection only. The adapter repeats this under its actual paper lock;
+    // the normal scoring path consumes the next original outer attempt.
+    return {contract:'conference-unissued-scoring-pre-request-readmission-v1',
+        executionId:loaded.run.executionId,paperId:loaded.run.paperId,
+        analysisFileSha256:current.analysisFileSha256,runFileSha256:current.runFileSha256,
+        originalProgressSha256:stable(progress),admissionFileSha256:admitted.binding.admissionFileSha256,
+        scoringRequestsObserved:0};
+}
+
+async function readmitUnissuedScoringPreRequestChild(batch,member,actual,shared,deps) {
+    if(actual.status!=='partial'||!unissuedScoringPreRequestCandidate(actual.child))return false;
+    const selected=effectiveMember(batch,member);
+    if(selected.window!==null)return false;
+    check(selected.executionId===actual.child.run.executionId&&member.paperId===actual.child.run.paperId,
+        'pre-request scoring selection changed actual ordinary child');
+    const stop=require('./analysis-stop-control');
+    return stop.withModelRequestsForbidden(()=>deps.engine.withPaperAnalysisLock({id:member.paperId},()=>{
+        const original=shared.retainedSources?.get(member.parentExecutionId),loaded=actual.child;
+        const pdf=deps.adapter.verifyPlanAuthority(loaded,original?.planHandle||shared.planHandle,
+            original?.sourceRoot||shared.sourceCacheRoot);
+        return require('./conference-analysis-context').withConferenceAnalysisSource({
+            executionId:loaded.run.executionId,executionDir:loaded.directory,paperId:loaded.run.paperId,
+            sourceDetails:loaded.source.sourceDetails,readerPdfSourceHandle:pdf},()=>
+            Boolean(inspectUnissuedScoringPreRequestRecovery(loaded)));
+    },{recoveryPolicy:deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY}));
+}
+
 function readVerifiedUnissuedScoringResources(handle,options) {
     const bound=parentReaderSeedHandles.get(handle);
     check(bound?.unissuedScoringRecovery,'actual unissued scoring parent seed capability required');
@@ -1441,7 +1911,7 @@ function readVerifiedReaderScientificParent(paper) {
         &&same(paper.conferenceSourceCorrectionObligation,parent.conferenceSourceCorrectionObligation)
         &&same(protectedScience(paper),protectedScience(parent))
         &&same(paper.apiReaderResources,loaded.resourcePreflight)
-        &&same(paper.apiReaderResources,parent.apiReaderResources),
+        &&(same(paper.apiReaderResources,parent.apiReaderResources)||assertSavedResourceScientificResources(loaded,paper)),
         'inherited scientific source/core/scoring/locator or resources changed');
     check(stage.status==='complete'&&stage.reviewFeedbackSha256===bound.locator.reviewFeedbackSha256
         &&stage.revisionMode==='api-reader-signed-revision-v1'
@@ -1816,6 +2286,8 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
         await new Promise(resolve=>setImmediate(resolve));stop.assertMayStartRequest();
         let observed=observeAndStageSavedMember(batch,member,shared,deps),actual=observed.actual;
         if(actual.status==='pending'&&await recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared))unissuedReadmissions.add(member.paperId);
+        if(actual.status==='partial'&&actual.child?.readerReview?.unissuedScoringRecovery
+            &&await readmitUnissuedScoringPreRequestChild(batch,member,actual,shared,deps))unissuedReadmissions.add(member.paperId);
         if(actual.status==='partial'&&typeof deps.adapter.replaySavedConferenceReaderRevision==='function'
             &&!shouldDeferInitialSavedReplayToNormal(batch,member,actual,shared,deps)) {
             const original=shared.retainedSources?.get(member.parentExecutionId),selected=effectiveMember(batch,member);
@@ -1972,4 +2444,4 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
 module.exports={revalidateMaintenancePublicationSources,withOrdinaryMaintenancePublicationColdRead,bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
     runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,readReaderMaintenanceSourceLineage,readScientificParentReplay,
     resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed,readVerifiedReaderScientificParent,readLegacyPublicationParentReference,
-    readVerifiedUnissuedScoringRecovery,readVerifiedUnissuedScoringResources,prepareUnissuedScoringPaper};
+    readVerifiedUnissuedScoringRecovery,readVerifiedUnissuedScoringResources,inspectUnissuedScoringPreRequestRecovery,prepareUnissuedScoringPaper,readVerifiedSavedReaderImageLimit};

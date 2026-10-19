@@ -8827,13 +8827,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const operatorCorrection = require('./lib/daily-reader-operator-correction').current(paper,identity)
         || require('./lib/conference-reader-operator-correction').current(paper, identity);
     const inputProofOnly = options[READER_SAVED_REQUEST_INPUT_PROOF] === true;
+    const savedProofImageLimit = inputProofOnly && figureEvidenceEntries.length > 1
+        ? require('./lib/conference-reader-review-maintenance').readVerifiedSavedReaderImageLimit(
+            options.readerReviewParentSeedHandle, figureEvidenceEntries.length) : 1;
     if (inputProofOnly) {
         let savedNames = [];
         try { savedNames = fs.readdirSync(candidateDirectory); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
         if (!conference.getConferenceAnalysisContext() || !options.readerReviewParentSeedHandle
             || contentMode !== READER_SIGNED_REVISION_CONTENT_MODE
-            || options.signedRevisionMinimalDisplay !== true || figureEvidenceEntries.length > 1
+            || options.signedRevisionMinimalDisplay !== true || figureEvidenceEntries.length > savedProofImageLimit
             || supplementaryPreflight.ready.length || supplementaryPreflight.rejected.length || operatorCorrection || savedNames.length) {
             throw new Error('已保存首轮签名请求的只读输入证明只接受最多一张认证原图，无候选或重试窗口');
         }
@@ -9311,7 +9314,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
         const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
         if (inputProofOnly) {
-            if (attempt !== 1 || repairContext || candidate || recovered || explicitRound || selectedInputs.length > 1
+            if (attempt !== 1 || repairContext || candidate || recovered || explicitRound || selectedInputs.length > savedProofImageLimit
                 || selectedInputs.length !== figureEvidenceEntries.length || providerImageExclusions.length
                 || completedAttempts || fullAttempts || transportFailures) {
                 throw new Error('已保存签名请求输入只能重放真实首次至多一图全文');
