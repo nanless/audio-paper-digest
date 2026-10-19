@@ -1,0 +1,27 @@
+{
+  "contract": "public-negative-evidence-regression-excerpts-v1",
+  "notes": [
+    "来源片段逐字摘自官方封存 source.txt；每片段附公开arXiv地址与文本SHA。",
+    "outputExcerpt只保留真实已保存tableRepair/methodRepair检查点中的短句和表；不含完整付费响应、诊断、身份或账本。",
+    "测试通过仅证明本负面证据门；不代表整篇论文资格通过。",
+    "其余带mutation/constructed的例子均为明确构造的负例；不是声称模型真实返回。"
+  ],
+  "known": {
+    "arxivId": "2610.23063",
+    "sourceUrl": "https://arxiv.org/html/2610.23063v1",
+    "sourceQuote": "The future-only model reduces RMSE in all four cells and MAE in three; its PMEmo 15-s MAE is 1.2% higher.",
+    "sourceQuoteSha256": "d3cb1ba27770b689071767df0e3aaec010a4bb79fc60052be3877f50d9b50685",
+    "outputExcerpt": "未来-only 模型在全部 4 格降低均方根误差，在 3 格降低平均绝对误差，PMEmo 15 秒平均绝对误差高 1.2%"
+  },
+  "mub": {
+    "arxivId": "2610.22989",
+    "sourceUrl": "https://arxiv.org/html/2610.22989v1",
+    "sourceQuote": "6.1 Waveform DSP Reference\nTable 4 reports scores from existing local prediction and report files.\nMeasure\nDSP\nConstant prior\nBPM hit rate (±\\pm4%)\n53.6%\n9.0%\nBPM median relative error\n2.9%\n22.3%\nLegacy key score (defective rule)\n25.4%\n9.2%\nTime-signature accuracy\n36.6%\n98.4%\nMean interval F1 (no intervals predicted)\n0.000\n0.000\nTable 4: Local reference results under the current implementation. Legacy key scores are not standard exact-key accuracies. Both systems abstain on segmentation. No MLLM results are included.",
+    "sourceQuoteSha256": "b1e895361db865f058a30daf41fa8e962d00ede7ad32b2f96e642b09795a7117",
+    "sourceQuoteComposition": "Exact public source heading, table-introduction sentence, contiguous Table 4 cells, and Table 4 caption joined by newlines; no fabricated numbers.",
+    "outputExcerpt": "拍号方向相反，常数猜 4/4 因 492 首参考为 4/4 而得到 98.4%，高于波形启发式的 36.6%",
+    "outputTableExcerpt": "| 方法 | 速度命中率 ↑ | 速度中位相对误差 ↓ | 旧调性分数 ↑ | 拍号准确率 ↑ | 平均区间 F1 ↑ |\n|---|---|---|---|---|---|\n| 波形参考 | 53.6% | 2.9% | 25.4% | 36.6% | 0.000 |\n| 分布常数 | 9.0% | 22.3% | 9.2% | 98.4% | 0.000 |",
+    "futureRequirementSourceQuote": "A future experiment should compare audio-present and audio-absent conditions, log tool restrictions, validate outputs, and report failures rather than silently excluding them.",
+    "outputIntegrationExcerpt": "## 实验结果\n为检验存档预测在现行评分器下受先验主导的程度，本文在固定的 500 首清单上对比 2 种非模型参考：基于波形的 DSP 启发式和取自测试分布的常数猜测。两者都不预测结构区间，结构 F1 的 0.000 反映弃权而非分割能力上限。保留这 2 行是因为它们是原文唯一可核对的完整评分结果，且直接暴露速度与拍号任务中先验强度和指标缺陷，论文未给出多模态语言模型的任何可核对分数。\n\n| 方法 | 速度命中率 ↑ | 速度中位相对误差 ↓ | 旧调性分数 ↑ | 拍号准确率 ↑ | 平均区间 F1 ↑ |\n|---|---|---|---|---|---|\n| 波形参考 | 53.6% | 2.9% | 25.4% | 36.6% | 0.000 |\n| 分布常数 | 9.0% | 22.3% | 9.2% | 98.4% | 0.000 |\n\n表中分母均为 500 首，2 个文件各包含 500 个唯一且匹配的编号，因此覆盖率缺陷不影响这组汇总。速度上波形估计超出用 101 BPM 猜测的常数 44.6 个百分点，中位误差低约 19.4 个百分点，说明频谱通量自相关在 60–180 BPM 搜索范围内提供了超出中位先验的信息。拍号方向相反，常数猜 4/4 因 492 首参考为 4/4 而得到 98.4%，高于波形启发式的 36.6%，且后者分母固定为 4 而无法输出 6/8，表明在该极不平衡分布下总准确率会被先验主导。旧调性分数沿用非对称亲属调规则，只能叫旧指标分数，不能与标准准确率混用。结论只适用于当前实现和存档预测，不支持模型排名或普遍音乐理解判断。\n\n为剥离上述非对称规则的方向错误，原文对同一批存档预测做了对称亲属调诊断性重算。保留该对照是因为它是理解调性得分虚高或虚低来源的关键消融，方法列仍为 2 种存档参考，数据集和预测文件与主结果完全相同。\n\n| 方法 | 对称亲属调重算准确率 ↑ |\n|---|---|\n| 波形参考 | 29.4% |\n| 分布常数 | 11.0% |\n\n重算把小调主音 p 映射为 (p + 3) mod 12 后再比较相对大调主音，得到波形参考 29.4% 和常数 11.0%，高于旧规则下的 25.4% 和 9.2%。该增量来自双向接受相对大小调，而非修复后评分器的输出，也不是精确主音加调式准确率。论文未给出具体数值的细分结果只作文字说明：速度范围 47–180 BPM，中位 101 BPM，四分位为 75 BPM 和 128 BPM；调性覆盖 24 种大小调组合，268 首大调和 232 首小调；结构区间共 4676 条，每首 5–22 条，中位 9 条。原文未披露训练、推理或部署成本，DSP 也未为本稿重跑，算术核对仅确认存档文件与清单的一致性。\n"
+  }
+}

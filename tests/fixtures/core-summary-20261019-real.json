@@ -1,0 +1,158 @@
+[
+  {
+    "paperId": "2610.23526",
+    "sourceUrl": "https://arxiv.org/abs/2610.23526",
+    "rawResponse": "## 核心摘要\n\n伪造语音检测要判断输入语音来自真人还是语音合成、语音转换或对抗滤波处理，难点在于自监督前端内部表示不透明，难以知道判别线索藏在哪一层、随攻击类型如何变化。论文冻结WavLM Base，先把每层768维帧级表示经均值加标准差池化拼成1536维话语向量，再用训练集为每层单独训练线性分类器，以开发集等错误率选模型并报告真伪可分性，判别强的层向量直接作为后续解释的输入。接着把该1536维层向量经主成分分析降至50维后，与17个人工声学特征做投影加权典型相关分析，输出各层与各特征对齐强度以解释行为差异与失效原因。然后把不同层子集的1536维向量拼接成k×1536维向量重训探针做8191种组合搜索，并对同一层向量用t-SNE观察攻击组织方式。结果显示中后层最具判别力，第11层在评测集上等错误率为6.07%，低于第12层的7.3%，显示语音质量敏感性与谱信息保留需平衡。在同一评测集等错误率下，7-9-10-11-12五层组合以6.1%超过全部13层池化的8.08%，优选子集均集中在6-12层。多数谱与韵律特征在第7层附近对齐最强后衰减，只有抖动、闪烁和谐波噪声比随层加深而增强，深层把攻击组织成连续流形而非离散类别。这些结论只在ASVspoof 5第一赛道划分下成立，A22、A24、A28在深层等错误率超约30%，对抗滤波攻击在所有层等错误率远高于20%，且未在其他语料、真实录音或新攻击族验证。原文未披露训练、推理或部署成本。\n",
+    "outputTextSha256": "5cdd004a2a5a07554bf6e566b843d533f6f55ebffaaf62b5fa26781f84d0c840",
+    "sourceFullTextSha256": "f574c12a6bebc37deafe05a3951002d026a34b602eaf25d9e57ef5c4c76a5ead",
+    "sourceExcerpts": [
+      {
+        "startLine": 77,
+        "endLine": 84,
+        "start": 9620,
+        "end": 11094,
+        "sha256": "d643e4d0fac18d6bbff19a1594cf73c4f071018320f486dcd59b0fbbb2db0aae",
+        "text": "We use the WavLM Base model [4] as a frozen feature extractor extracting representations from all layers (L0–L12).\nUnlike wav2vec2.0 [11], which is trained solely with a contrastive objective using clean speech, WavLM incorporates an additional denoising objective that exposes the model to noisy and overlapped speech during pre-training.\nThis design makes WavLM particularly relevant to our analysis, since spoof detection depends on both acoustic distortions and speaker-related properties.\nWe use the Base variant rather than the Large model for computational efficiency and because its 13-layer architecture provides a tractable setting for layer-wise analysis while still achieving competitive performance for many speech-related tasks.\nSince all WavLM layers produce 768-dimensional frame representations, direct layer-wise comparison is straightforward.\nFor each layer, we compute mean and standard deviation pooling over the time frame axis, yielding two 768-dimensional statistics which are concatenated into a single 1536-dimensional utterance-level vector suitable for classification.\nUsing training data only, we learn distinct linear classifiers using the representations extracted from each layer to distinguish bona fide from spoofed utterances.\nWe select the best model according to that which produces the lowest equal error rate (EER) for the development set and report EERs for all bona fide and spoofed data in both the development and evaluation sets.\n"
+      },
+      {
+        "startLine": 87,
+        "endLine": 104,
+        "start": 11275,
+        "end": 13451,
+        "sha256": "e53074eeb3fecfd3d1d54413333d64f39fb7ae1272edd1dde310a354115ae737",
+        "text": "To ground WavLM representations in interpretable acoustic properties, we estimate the correlation between the representations of each layer and a set of 17 handcrafted acoustic features organised into four categories:\n• \nVoice quality (3): jitter, shimmer and the harmonic-to-noise ratio (HNR), measures of vocal fold micro-perturbations known to be distorted by TTS vocoders [18].\n• \nProsodic (4): F0 mean, F0 standard deviation, energy mean, onset strength.\n• \nSpectral (6): MFCC mean, spectral centroid, spectral roll-off, ZCR, spectral entropy, spectral flux, general signal descriptors used in CM [21].\n• \nHarmonic/formant (4): harmonic ratio, F1 mean, F2 mean, F3 mean, formant trajectories expose voice conversion artifacts [19, 20].\nWe use canonical correlation analysis (CCA) to measure how well each WavLM layer’s representations align with a set of handcrafted acoustic features [17]. CCA identifies linear projections of two variable sets that are maximally correlated. Here, these correspond to the pooled layer representation 𝐱∈ℝd1\\mathbf{x}\\in\\mathbb{R}^{d_{1}} and the acoustic feature vector 𝐲∈ℝd2\\mathbf{y}\\in\\mathbb{R}^{d_{2}}, yielding coefficients ρ1≥ρ2≥⋯≥ρk\\rho_{1}\\geq\\rho_{2}\\geq\\cdots\\geq\\rho_{k}, where k=min⁡(d1,d2)k=\\min(d_{1},d_{2}).\nStandard CCA can be sensitive to directions with low variance.\nWe therefore adopt projection-weighted CCA (PWCCA) [17], which computes a weighted mean of canonical correlations:\nPWCCA=∑i=1kαi​ρi∑i=1kαi\\text{PWCCA}=\\frac{\\sum_{i=1}^{k}\\alpha_{i}\\rho_{i}}{\\sum_{i=1}^{k}\\alpha_{i}}\n(1)\nwhere αi\\alpha_{i} is the sum of absolute projection weights onto the ii-th canonical direction, giving greater weight to directions that capture greater variance in the original representation.\nCCA requires the number of samples to exceed the dimensionality of both inputs; following [17], we reduce layer representations to 50 dimensions via principal component analysis (PCA) prior to computing PWCCA.\nWe compute correlations between each 1536-dimensional layer representation and the 17 acoustic features matrix.\nCanonical correlations are weighted by projection magnitudes and symmetrised by averaging in both directions.\n"
+      },
+      {
+        "startLine": 119,
+        "endLine": 137,
+        "start": 15483,
+        "end": 20012,
+        "sha256": "61ec10c4c2df8958f4f364db8751eee1ea94dd45ceaeece7c66ce80976e5036c",
+        "text": "For the eval set, most attacks follow a similar pattern of decreasing EER with depth. However, for three TTS attacks, A22 (ToucanTTS variant), A24 (ASR-based TTS), and A28 (pre-trained YourTTS), we observe the opposite trend: EERs exceed ∼\\sim30% in later layers, higher than that for mid-layers. What distinguishes these attacks from others that become easier to detect with depth is explored further in Section IV-B.\nFor attacks augmented with Malafide [23] (A18, A20, A23) and Malacopula [24] (A27, A30–32) adversarial filtering, EERs are consistently high (EER>>20%) for all layers, with either flat or inverted layer trends.\nThis is expected since adversarial filters are optimised to suppress detectable artifacts, whether by maximising CM scores (Malafide) or matching target speaker embeddings (Malacopula).\nThe uniform failure across all layers suggests that adversarial optimisation successfully removes detectable artifacts regardless of representation depth, exposing a fundamental limitation of artifact-based detection.\nIV-B CCA analysis\nPWCCA results are illustrated by a heatmap shown in Figure 3.\nColours indicate the correlation between representations extracted from each WavLM layer and individual acoustic features. Two distinct patterns emerge.\nCorrelation Peak Around L7- Most acoustic features follow a consistent pattern: correlation increases from L0, peaks at around L7, and then decays toward L12. Spectral features show the strongest mid-layer alignment, with that for the spectral centroid reaching 0.96 at L7, followed by MFCC mean (0.92) and spectral roll-off (0.91). Prosodic features (F0, energy) follow the same trend with slightly lower peak values. Formant features (F1–F3) show the weakest correlations overall (peaks of 0.70–0.78), suggesting that formant information is less accessible from WavLM representations than spectral or prosodic properties. This pattern mirrors the acoustic-to-abstract transitions reported previously for SSL models [13]: mid-layers encode signal-level properties while later layers encode more abstract representations.\nUniform Increase in Correlation- In contrast, jitter, shimmer, and HNR show monotonically increasing correlation with layer depth. Jitter rises from 0.52 (L0) to 0.89 (L12), shimmer from 0.53 to 0.90, and HNR from 0.55 to 0.94. These features measure micro-perturbations in pitch period, amplitude, and harmonic structure properties that vocoders and TTS systems are known to distort  [18].\nThese two patterns help explain the probing results. The EER improvements from early to mid-layers coincide with stronger spectral and prosodic encoding, while the further gains at late layers are driven by increasing voice quality sensitivity — even as spectral alignment decays.\nVoice quality correlation is greatest for L12, yet EERs are slightly worse than for L11 (7.3% vs. 6.07%), suggesting a greater balance between retained spectral information and voice quality sensitivity.\nFig. 3: PWCCA correlation between WavLM layers and individual acoustic features. Most features peak at mid-layers and decay, while voice quality measures (jitter, shimmer, HNR) increase with depth.\nIV-C Layer subset search\nThe per-layer results show clear variation in discriminability across layers, raising the question of whether a compact subset can match or outperform full-layer pooling. To test this, we perform an exhaustive grid search over all ∑k=113(13k)=8191\\sum_{k=1}^{13}\\binom{13}{k}=8191 possible layer combinations. For each subset of kk layers, we concatenate the corresponding 1536-dimensional representations into a single k×1536k\\times 1536-dimensional vector and train a linear probe. Subsets are selected on dev only; eval is used once for final reporting.\nTable I compares the top subsets against the full 13-layer baseline (19 968-dimensional input). The best 5-layer subset (L7–9–10–11–12) achieves 6.1% eval EER, outperforming the full baseline (8.08%). All top subsets concentrate in the L6–L12 range. This is consistent with the CCA findings in Section IV-B: layers beyond L6 exhibit the strongest alignment with spoofing-relevant acoustic properties, particularly the voice quality features (jitter, shimmer, HNR) whose correlation increases monotonically with depth. Early layers, which encode primarily low-level spectral information with weaker discriminative relevance, do not contribute complementary information in the linear pooling setting.\nTABLE I: Top layer subsets from grid search vs. all-layer pooling.\nLayers\nkk\nDev EER\n"
+      }
+    ]
+  },
+  {
+    "paperId": "2610.23196",
+    "sourceUrl": "https://arxiv.org/abs/2610.23196",
+    "rawResponse": "## 核心摘要\n\n读者需要理解人在逐试次视觉反馈下如何学会判断不可见声源方向，难点是侧向误差、前后混淆与极角分散交织且个体学习速度不同。论文把每次试验真实方向记为 $\\bm{\\varphi}_{t}=(\\alpha_{t},\\beta_{t})$，把指向反应记为 $\\bm{\\varphi}_{r}=(\\alpha_{r},\\beta_{r})$，输入为这两对方向角，输出是对听者内部信念的逐试次更新。知觉推断依据当前信念向量 $\\bm{\\theta}=(\\kappa_{L},\\kappa_{P},w)$，把侧向分量写成以真实侧向为中心的单峰冯·米塞斯分布，把极角分量写成正确半球与镜像半球共用精度并经余弦平方几何压缩的双成分混合，混合权重表示辨别前后半球的能力。信念修正以视觉反馈揭示的真实方向为高精度教学信号计算变分自由能预测误差，再经Fisher信息缩放做在线自然梯度更新，使不同尺度的侧向精度、极角精度和半球权重一致变化，更新后信念进入下一试次的知觉推断。参数标定先用基线块尾部试次极大似然估计初始信念，再在反馈块上按序贯更新为每名被试拟合学习率，相对以往静态贝叶斯定位，该研究把知觉与学习写成统一在线更新并保留几何压缩因子。在反馈块上奇数试次拟合、偶数试次评估的留出比较中，以偶数试次留出对数似然为指标，完整模型比冻结极角精度学习的简化模型高167 nats，比冻结半球权重学习的简化模型高82 nats。结论适用于有逐试次视觉反馈的头部静止指向任务，未验证头部运动参与的主动消除混淆，原文未披露训练、推理或部署成本。\n",
+    "outputTextSha256": "7d9c77c2ae0c36d58f85e5f11c6ff870d78ebea0731e71dea5c1a4740d87ce84",
+    "sourceFullTextSha256": "b4ed472a1e28d4e2e90cb076eb7641160e35e55449f477ed6fc4460a2caf4c55",
+    "sourceExcerpts": [
+      {
+        "startLine": 94,
+        "endLine": 98,
+        "start": 15013,
+        "end": 18146,
+        "sha256": "ea916a4f08a51b6ac41498c6d91995966744cb774df6d35ecf710554c9058ab3",
+        "text": "Initial beliefs 𝜽0\\bm{\\theta}_{0} were estimated per subject by maximum likelihood from the last 100 trials of the baseline block (naive localisation without feedback [10]). The learning rates (ηL,ηP,ηw)(\\eta_{L},\\eta_{P},\\eta_{w}) are the only free parameters of the learning model. They were fitted per subject by minimising the mean negative log-likelihood of the responses in the feedback block under the sequential updates of Eqs. A6–A8, using Bayesian adaptive direct search [1]. Because the likelihood factorises, (ηP,ηw)(\\eta_{P},\\eta_{w}) and ηL\\eta_{L} are estimated independently.\nA.3 Model comparison and robustness\nHeld-out comparison. To test whether all three learning rates are needed, they were fitted on the odd-numbered feedback trials and the summed log-likelihood was evaluated on the even-numbered trials, with beliefs updated sequentially over all trials in both cases (Table 1, left). Relative to the full model, freezing κP\\kappa_{P} (ηP=0\\eta_{P}=0) reduced the held-out log-likelihood by 167 nats in total and freezing ww (ηw=0\\eta_{w}=0) by 82 nats. Hemifield learning was required in every subject (NH12 only marginally), and polar-precision learning in all but NH17, for which ηP\\eta_{P} was indistinguishable from zero (parametric bootstrap, B=100B=100, 95% interval reaching zero). Over the feedback block, κP\\kappa_{P} rose by 2.8 to 4.5 in the other four subjects (95% intervals excluding zero) and by 0.3 in NH17, with the largest relative gain in the two subjects with the lowest baseline κP\\kappa_{P} (NH15, NH18). A first-half/second-half split gave the same ordering.\nRobustness to the cos2\\cos^{2} scaling. The Laplace approximation with a flat prior affects only the curvature of ℱ\\mathcal{F}, not the location of the update, so it cannot mask a change in κP\\kappa_{P}. The cos2⁡(α)\\cos^{2}(\\alpha) scaling changes the size of polar learning but not its direction (Table 1, right): removing it from likelihood, update and baseline fit lowers the median ηP\\eta_{P} from 0.015 to 0.006, κP\\kappa_{P} still rises by 0.6 to 2.8 over the feedback block, and the unscaled model fits worse with the same number of parameters (summed in-sample Δ​LL=−53\\Delta\\mathrm{LL}=-53 nats, although NH15 and NH17 favour it). The rise of ww and the necessity of hemifield learning are unaffected. The rise of κP\\kappa_{P} is therefore not conditional on the geometric weighting of lateral targets. The unscaled model, however, does not respect the problem geometry: the cone of confusion collapses to a point at lateral positions (α=±90∘\\alpha=\\pm 90^{\\circ}), where the polar angle is undefined, and polar errors become progressively less informative about spectral decoding as |α||\\alpha| increases.\nTable 1: Left: held-out comparison, log-likelihood differences in nats relative to the full model (Δ​LL<0\\Delta\\mathrm{LL}<0: reduced model predicts worse). Right: cos2\\cos^{2} robustness, polar-precision learning rate ηP\\eta_{P} with bootstrap 95% interval, with and without the cos2⁡(α)\\cos^{2}(\\alpha) scaling, and Δ​κP\\Delta\\kappa_{P}, the change of κP\\kappa_{P} over the feedback block without scaling.\n"
+      }
+    ]
+  },
+  {
+    "paperId": "2610.22440",
+    "sourceUrl": "https://arxiv.org/abs/2610.22440",
+    "rawResponse": "## 核心摘要\n\n输入是一段待验视频及其声称的拍摄时间和电网区域，输出是该记录是否来自真实电网环境下的拍摄，并在有时钟可查时恢复拍摄时刻，难点在于生成视频已能复现与真实相当的光学闪烁强度。统一双通道估计器在二次谐波附近带通，经短时傅里叶变换与抛物线插值恢复漂移轨迹，再由共享一维卷积与轨迹统计融合的六分类头判断一致性模式，输出的轨迹与类别进入后继验证。合成注入训练用Ornstein-Uhlenbeck过程拟合真实漂移并注入无哼声载体，生成六类一致性标签数据，为上一步估计器提供标注稀缺下的训练样本。参考匹配把记录轨迹与独立电网记录做归一化互相关验证或全时滞盲搜峰值，输出匹配分与恢复时刻，无外部参考时改为同一片段光学闪烁与音频哼声轨迹互查，结论送入编排器。编排器按非对称规则融合记录真实性与内容篡改证据，把缺席视为无信息而非造假证据，仅在廉价层无结论且有人脸时升级调用人脸相关昂贵检测器，关键差异是从检测有无谱线转向验证漂移是否与独立记录一致。在分布外FakeAVCeleb的40个片段子集上，级联相对全量集成的准确率从0.48升至0.52，每段耗时从11.3 s降至5.1 s，解码帧数从100%降至36%。系统在单个消费级图形处理器上用Python与PyTorch实现，训练开销未量化披露；结论仅在有可用电网参考或可做光声互查且为市电照明卷帘快门拍摄时适用，对16 fps等混叠拍摄、非市电照明及篡改后仍保留真实场景电网信号的内容编辑未验证。\n",
+    "outputTextSha256": "7534c7bb747b63c6d720fafac31ce75ea73f49f82f6332a0a413d349ebc9a230",
+    "sourceFullTextSha256": "a63c3b0cea76a5c020ef9de19d57919854d6ad89b53efc4501fc0ab2d3c0ddf9",
+    "sourceExcerpts": [
+      {
+        "startLine": 137,
+        "endLine": 145,
+        "start": 12933,
+        "end": 13462,
+        "sha256": "0847e0aee7167b37f693ccbf1aaa53fcf99016bab2deb206a55b18a1c679ff08",
+        "text": " pathways with four content baselines under a two-axis\n orchestrator (Fig. 2). The two discrimination channels, audio\n and optical, share one extractor and one network and judge\n whether a recording carries a coherent, naturally drifting ENF.\n A third, authentication channel matches that ENF against an\n independent grid reference to verify or recover a time of\n recording. The four content baselines address manipulation of\n the depicted scene rather than the recording, and the\n orchestrator fuses all of them along two axes.\n"
+      },
+      {
+        "startLine": 152,
+        "endLine": 164,
+        "start": 13946,
+        "end": 14842,
+        "sha256": "914c497b27e5e8be30f6949577a1b61fce814bbf07804d91a7b72e4a446ab2ef",
+        "text": " A. Unified two-channel ENF extraction\nTwo distinct questions are not always distinguished in video\n The estimator band-passes the signal around the second\nforensics. The first is whether the footage was captured from a harmonic, so the fundamental ENF is recovered as f̂₀ = f̂ₕ / h\nreal scene at all, its recording authenticity; the second is (5), where f̂ₕ is the tracked frequency of the h-th harmonic and\nwhether the depicted content has been manipulated, for\n h = 2. It then computes a short-time Fourier transform, locates\nexample by swapping a face into otherwise genuine footage.\n the dominant peak, and refines it to sub-bin accuracy by\nENF speaks to the first: a coherent, reference-consistent ENF\n parabolic interpolation (6): α, β and γ are the magnitudes of\nis strong evidence that a real scene was recorded under mains\n the bin below the peak, the peak bin, and the bin above; δ is\n"
+      },
+      {
+        "startLine": 266,
+        "endLine": 268,
+        "start": 20974,
+        "end": 21306,
+        "sha256": "8455c3a9fe3662a78329fbad3944637d0e0ed52b3f35823f26092d65c10c437d",
+        "text": "Fig. 6. The unified ENFDetector. One shared second-harmonic extractor feeds\na 1-D convolutional branch and a trace-statistics branch, fused into a six-class 7) and implemented both directly and as an equivalent state\nhead, and serves both the audio and optical channels. machine, the two verified to agree. To bound cost, the graph\n"
+      },
+      {
+        "startLine": 351,
+        "endLine": 353,
+        "start": 27632,
+        "end": 27799,
+        "sha256": "be03de19826b00d4d81858499256c95905d44054c89a521112590e613858efbc",
+        "text": " language) fake) III, Figs. 8 and 9).FakeAVCeleb Out-of- On request 40 within a 90-\n[29] distribution real clip out-of-\n face-swaps for the distribution set TABLE III\n"
+      },
+      {
+        "startLine": 418,
+        "endLine": 441,
+        "start": 31822,
+        "end": 32984,
+        "sha256": "dffe4d7e029df1701f9c43f8eef0a8cc07931e4676a9df5825310dc391a95e41",
+        "text": " On the out-of-distribution FakeAVCeleb test the two-axis\n routing and a flat averaging ensemble reach the same\n accuracy, and routing reduces the false-accusation rate from\n 0.47 to 0.30 by trusting an ENF-genuine verdict unless a\n content baseline is confidently fake, although this difference isFig. 12. Claimed-time authentication. Match-score separation between\ngenuine, impostor and no-ENF cases, and the corresponding ROC curve not significant at this sample size (McNemar, p = 0.27; Fig.\n(AUC 1.00). 15, Table IV). Run as an escalating cascade, the framework\n matches the accuracy of evaluating every detector while\n cutting wall-clock time by 54% and frames decoded by 64%,\n because the expensive detectors are invoked only when the\n cheap tier is inconclusive (Fig. 16). The agentic policy\n therefore matches the full ensemble's accuracy at substantially\n reduced compute.\n TABLE IV\n THE AGENTIC ENSEMBLE: ROUTING AND CASCADE\n Metric Flat Two-axis Agentic\n averaging routing cascade\n Accuracy 0.48 0.48 0.52\n False-accusation 0.47 0.30 0.37\n rate\n Fake-recall 0.45 0.37 0.45\n Wall-clock time 11.3 s 11.3 s 5.1 s\n per clip\n Frames decoded 100% 100% 36%\n"
+      }
+    ]
+  },
+  {
+    "paperId": "2610.22936",
+    "sourceUrl": "https://arxiv.org/abs/2610.22936",
+    "rawResponse": "## 核心摘要\n住宅远场跨房间语音随房间拓扑、几何、连通性和表面声学变化，单麦克风难覆盖整屋，需由户型生成多通道房间脉冲响应与混响音频支撑评测。AcousticAgent将结构化向量、栅格图或自然语言户型统一为房间多边形、墙体洞口与家具的可编辑场景，图像文本经可选大语言与视觉模型解析后归一，材料库按语义赋予六个倍频带参数作为求解条件。混合求解器枚举有效洞口门户路径求解直达透射绕射，以接收端蒙特卡罗射线追踪累积早中期反射并用反馈延迟网络合成晚期混响，卷积干声得混响音频，静态几何材料连通性不变时仅重算传播即复用于不同声源与布设。在混入空间MUSAN音乐干扰与30 dB设备噪声的整屋房间分类中，每房一麦克风的GCC-FP在20、10、5 dB下准确率为92.5%、89.9%、84.0%，高于同布设GCC-Euclidean的81.9%、80.6%、76.5%，以约四分之一通道接近每房一阵列的94.4%、90.0%、85.2%。在65、55、30 dB声压级校准混合且同一多通道维纳滤波下，GCC-FP所选四通道湿测PESQ为3.175、STOI为0.968，高于固定客厅阵列的2.561和0.899。在五间或十间房带家具与空房、8192至131072条射线下，Numba吞吐5.80至12.86个RIR每秒，CUDA为12.29至14.47个RIR每秒并高于前者，测于Xeon Gold 6346与单张RTX 4090，异步设备等尚未验证。\n",
+    "outputTextSha256": "47f883aff44a9d45715191c9956afcd457a0f08e66b0a4cf25b003dddc7eac48",
+    "sourceFullTextSha256": "f2619b6ec643cb6803cb222224c4788b51940ca1985c95b54306eae3f3e34885",
+    "sourceExcerpts": [
+      {
+        "startLine": 17,
+        "endLine": 20,
+        "start": 2073,
+        "end": 5377,
+        "sha256": "c79d188b6ce7e95bcf786af2f841e4d243377eae639df92582488755916ba1a4",
+        "text": "Residential speech interfaces often operate under far-field and cross-room conditions, where sound sources and microphones may be far apart, obstructed by furniture, or separated by intervening walls. The received signal therefore varies with room topology, source–receiver geometry, inter-room connectivity, and the acoustic properties of surrounding surfaces [31, 36]. This spatial variability makes it difficult for a single microphone to provide uniform coverage throughout a home. Distributed microphone systems alleviate this limitation by combining spatially complementary observations and have been studied for source localization, distributed beamforming, speech enhancement, and multi-device speech processing [4, 15, 12, 7].\nDeveloping and evaluating such systems requires acoustic data spanning diverse residential layouts, material properties, and source–microphone configurations. Measured corpora preserve real propagation effects, but each recording campaign is tied to a finite set of physical spaces and device deployments; broader coverage requires additional deployment and data collection [30, 28, 13]. Room impulse response (RIR) simulation provides a scalable means of varying these factors, but its practical scalability depends not only on propagation computation, but also on how efficiently acoustic scenes can be specified. Parameterized simulators often require room geometry, materials, and device positions to be explicitly defined, which becomes cumbersome when many irregular multi-room layouts must be instantiated. Mesh-based platforms can represent richer three-dimensional environments, but rely on preconstructed scene assets [10, 32, 5, 19]. Large-scale residential simulation therefore calls for a scene representation that is both acoustically meaningful and easy to construct, edit, and vary.\nStructured floorplans provide a compact representation of room geometry, semantics, and connectivity. They can be parsed from raster images or generated from structural constraints and natural-language descriptions without requiring complete three-dimensional assets [17, 8, 1, 11, 22]. To form a computational acoustic scene, however, they must be augmented with furniture, acoustic materials, source and microphone configurations, and models of within-room and cross-room propagation. Although floorplans are widely used for visual parsing, layout generation, and embodied scene construction, their use as the core representation for large-scale acoustic simulation remains underexplored.\nTo address this gap, we present AcousticAgent, a floorplan-centric platform for multi-room acoustic simulation. AcousticAgent converts structured floorplans into editable, acoustically connected scenes that jointly represent room geometry and connectivity, furniture, materials, sound sources, and microphone configurations. A scene-oriented Acoustic Materials Database maps semantic scene elements to acoustic properties, while a floorplan-aware hybrid geometrical-acoustics solver models within-room and cross-room sound propagation to generate multichannel RIRs and reverberant audio. The platform further supports directional and moving sources, microphone arrays, distributed microphones, and VLM-assisted scene construction from floorplan images and textual descriptions.\n"
+      },
+      {
+        "startLine": 130,
+        "endLine": 164,
+        "start": 14516,
+        "end": 16886,
+        "sha256": "deaebf46381710305bbf0169c2b1301aab825104659fed75ff9c265d994dd644",
+        "text": "3.3 Floorplan-Aware Acoustic Simulation\nGiven the scene geometry, material parameters, and a source–receiver\nconfiguration, AcousticAgent employs a hybrid geometrical-acoustics solver that\ncombines deterministic propagation, Monte Carlo ray tracing, and parametric\nlate reverberation. The room-connectivity graph guides the search for\ncross-room routes, while the three-dimensional scene is used to validate\nvisibility, occlusion, and geometric interactions.\nDeterministic propagation models perceptually important arrivals, including\nline-of-sight direct sound, transmission through surfaces, propagation through\ndoors and wall-free openings, and edge-diffraction paths in non-line-of-sight\nconditions. Portal sequences connecting the source and receiver rooms are\nenumerated on 𝒢room\\mathcal{G}_{\\mathrm{room}} and validated against the scene\ngeometry. Diffraction is approximated using a UTD-inspired formulation\n [18].\nEarly and mid reflections are modeled using receiver-centered Monte Carlo ray\ntracing. At each surface interaction, frequency-dependent absorption and\ntransmission reduce the propagated energy, while scattering controls its\nspecular and diffuse components. The resulting arrivals are accumulated into\nbandwise echograms. Late reverberation is synthesized using a feedback delay\nnetwork whose decay is conditioned on band-dependent reverberation estimates\nobtained through Schroeder backward integration\n [33, 16].\nFor receiver qq, source state kk, and frequency band bb, the hybrid\nresponse is written as\nhq,k,b​[n]=hq,k,bdet​[n]+wrt​[n]​hq,k,brt​[n]+wlate​[n]​hq,k,blate​[n],\\begin{split}h_{q,k,b}[n]={}&h^{\\mathrm{det}}_{q,k,b}[n]+w_{\\mathrm{rt}}[n]h^{\\mathrm{rt}}_{q,k,b}[n]\\\\\n&+w_{\\mathrm{late}}[n]h^{\\mathrm{late}}_{q,k,b}[n],\\end{split}\n(3)\nwhere hdeth^{\\mathrm{det}}, hrth^{\\mathrm{rt}}, and\nhlateh^{\\mathrm{late}} denote deterministic arrivals, ray-traced reflections,\nand the parametric late tail, respectively. The transition weights satisfy\nwrt2​[n]+wlate2​[n]=1w_{\\mathrm{rt}}^{2}[n]+w_{\\mathrm{late}}^{2}[n]=1 within the overlap region,\nproviding an equal-power transition between the traced and synthesized\nresponses. The bandwise responses are finally reconstructed into a full-band\nmultichannel RIR. This decomposition preserves important geometric arrivals\nwithout requiring dense high-order path tracing throughout the complete\n"
+      },
+      {
+        "startLine": 186,
+        "endLine": 189,
+        "start": 18262,
+        "end": 18544,
+        "sha256": "81d91fefd89a104ea981133de811ece41f4a7ab0f97e7277c6095cb02d93552b",
+        "text": "unchanged, only source–receiver-dependent propagation needs to be recomputed\nwhen varying source trajectories or microphone layouts. The generated RIRs\ncan subsequently be convolved with task-specific dry signals to synthesize\nstatic or time-varying multichannel reverberant audio.\n"
+      },
+      {
+        "startLine": 224,
+        "endLine": 228,
+        "start": 21778,
+        "end": 22121,
+        "sha256": "395e0d5a72b7ba755d7166f010a534a061ccf643280a712db29cea56d42d8971",
+        "text": "post-processing. Experiments are conducted using an Intel Xeon Gold 6346 CPU\nand a single NVIDIA RTX 4090 GPU. Across the evaluated settings, Numba achieves\n5.80–12.86 RIRs per second, while CUDA achieves 12.29–14.47 RIRs per second,\nsupporting efficient large-scale RIR generation.\nQualitative scene analysis. Figure 4 presents furnished and\n"
+      },
+      {
+        "startLine": 322,
+        "endLine": 325,
+        "start": 26636,
+        "end": 26930,
+        "sha256": "9b1cf35ea642b2d5249b774275f598328ae01b609a86f563f0063baa022873c2",
+        "text": "With one microphone per room, GCC-FP achieves 92.5%, 89.9%, and 84.0%\naccuracy at 20, 10, and 5 dB, respectively, approaching the distributed-array\nbaseline while using only one quarter of the channels. Floorplan-aware\npropagation consistently outperforms Euclidean steering, demonstrating the\n"
+      },
+      {
+        "startLine": 345,
+        "endLine": 349,
+        "start": 28195,
+        "end": 28526,
+        "sha256": "806151c27274e68e8c6b2269a1b8ca9c6c9baa18627ddfeb05ef3bfba5af70b5",
+        "text": "Results. As shown in Table 2, distributed arrays achieve the\nbest overall performance, with a PESQ of 3.619 and a STOI of 0.988. Selecting\ndistributed microphones with GCC-FP also consistently outperforms the fixed\nliving-room array and provides a modest improvement over GCC-Euclidean.\nFigure 5 further shows that the fixed array\n"
+      }
+    ]
+  }
+]
