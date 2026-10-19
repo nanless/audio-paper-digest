@@ -12,7 +12,7 @@ const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--reuse-complete-pages] [--retry-failed] [--postprocess-only [--preserve-failed-readers]] [--source-corrections ABSOLUTE_PATH] [--reader-review-feedback ABSOLUTE_PATH [--reader-review-window ABSOLUTE_PATH]] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--postprocess-concurrency 1..5] [--reuse-complete-pages] [--retry-failed] [--postprocess-only [--preserve-failed-readers]] [--source-corrections ABSOLUTE_PATH] [--reader-review-feedback ABSOLUTE_PATH [--reader-review-window ABSOLUTE_PATH]] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -24,7 +24,7 @@ function parseArgs(argv) {
             if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
-        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--recovery-manifest', '--reader-corrections', '--source-corrections', '--reader-review-feedback', '--reader-review-window'].includes(flag)
+        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--postprocess-concurrency', '--recovery-manifest', '--reader-corrections', '--source-corrections', '--reader-review-feedback', '--reader-review-window'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value; index += 2;
     }
@@ -32,6 +32,7 @@ function parseArgs(argv) {
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !UUID_RE.test(values['--filter'] || '') || !UUID_RE.test(values['--from'] || '')
         || (values['--concurrency'] && !/^(?:[1-9]|[1-5][0-9]|60)$/.test(values['--concurrency']))
+        || (values['--postprocess-concurrency'] && !/^[1-5]$/.test(values['--postprocess-concurrency']))
         || (values['--recovery-manifest'] && (!path.isAbsolute(values['--recovery-manifest']) || !values['--retry-failed']))
         || (values['--reader-corrections'] && (!path.isAbsolute(values['--reader-corrections']) || !values['--recovery-manifest']))
         || (values['--preserve-failed-readers'] && (!values['--postprocess-only'] || values['--retry-failed']
@@ -47,6 +48,7 @@ function parseArgs(argv) {
     return { apply: true, statusOnly: false, catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'],
         fromProcessId: values['--from'], concurrency: Number(values['--concurrency'] || 3),
+        ...(values['--postprocess-concurrency'] ? { postprocessConcurrency: Number(values['--postprocess-concurrency']) } : {}),
         reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']),
         postprocessOnly: Boolean(values['--postprocess-only']), preserveFailedReaders: Boolean(values['--preserve-failed-readers']),
         ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}),
@@ -241,6 +243,11 @@ async function adoptCompletedGrantedChildren({ state, directory, shared }, deps)
 }
 
 function migrateAndRun(options, runtime = {}) {
+    if (options.postprocessConcurrency !== undefined && (!Number.isInteger(options.postprocessConcurrency)
+        || options.postprocessConcurrency < 1 || options.postprocessConcurrency > 5)) {
+        throw new Error('--postprocess-concurrency 必须是1–5的整数，仅用于完成稿暂存与汇总');
+    }
+    const postprocessConcurrency = options.postprocessConcurrency ?? options.concurrency;
     if ((options.readerReviewWindow && !options.readerReviewFeedback)
         || (options.readerReviewFeedback && (options.postprocessOnly || options.preserveFailedReaders
             || options.retryFailed || options.recoveryManifest || options.readerCorrections || options.sourceCorrections))) {
@@ -391,7 +398,7 @@ function migrateAndRun(options, runtime = {}) {
                     registrySha256: context.authority.tagCatalogSha256,
                     projectionSha256: deps.postprocess.implementationFingerprint().implementationSha256 };
                 const canonicalResults = new Map();
-                await stagePool.runStagePool(complete, { concurrency: options.concurrency, init,
+                await stagePool.runStagePool(complete, { concurrency: postprocessConcurrency, init,
                     shouldStop: () => stop.assertMayStartRequest(), onResult: (item, staged, error) => {
                         if (!error) {
                             stagePool.verifyStageResult(staged, item, init, deps.files);
@@ -580,7 +587,7 @@ function migrateAndRun(options, runtime = {}) {
                 pageProof: { manifestSha256: staged.manifest.manifestSha256,
                     contentSha256: staged.manifest.contentSha256, pagePath: staged.manifest.pagePath } };
         };
-        if (retained && !deps.aggregate) migrationDeps.aggregate = async (_context, currentShared, executionIds) =>
+        if ((retained || options.postprocessConcurrency !== undefined) && !deps.aggregate) migrationDeps.aggregate = async (_context, currentShared, executionIds) =>
             (!runtime.dependencies && deps.postprocess.aggregateConferenceParallel
                 ? deps.postprocess.aggregateConferenceParallel : deps.postprocess.aggregateConference)({
                 analysisRoot: deps.files.conferenceAnalysisDir, executionIds,
@@ -588,7 +595,7 @@ function migrateAndRun(options, runtime = {}) {
                 aggregateRoot: deps.files.conferenceAggregateDir, planHandle: currentShared.planHandle,
                 sourceRoot: currentShared.sourceCacheRoot,
                 retainedSources: currentShared.retainedSources, apply: true
-            }, { processId: options.fromProcessId, concurrency: options.concurrency,
+            }, { processId: options.fromProcessId, concurrency: postprocessConcurrency,
                 authoritySha256: processApi.stableHash(context.authority) });
         // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
         // 出来，流程完成时才能原子写入新凭证。

@@ -69,6 +69,11 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
             return {directory,analysis:a.value,analysisFileSha256:a.sha256,run:run.value,runFileSha256:run.sha256,
                 source:source.value,sourceFileSha256:source.sha256};
         },
+        // Synthetic identity loader reads the real temp parent/CAS; it grants no Reader qualification.
+        loadConferenceReaderRevisionIdentity:({executionId})=>{
+            const loaded=adapter.loadConferenceAnalysis({executionId}),revision=read(path.join(loaded.directory,'reader-revision.json')).value;
+            loaded.revision=revision;loaded.parent=adapter.loadConferenceAnalysis({executionId:revision.parentExecutionId});return loaded;
+        },
         loadConferenceReaderRevision:({executionId})=>{
             bridgeState.revisionLoads=(bridgeState.revisionLoads||0)+1;
             const loaded=adapter.loadConferenceAnalysis({executionId}),revision=read(path.join(loaded.directory,'reader-revision.json')).value;
@@ -334,8 +339,9 @@ function syntheticPublicationHistory(h) {
     state.completionReceiptSha256=sha('real-shaped but synthetic completion');seal(state,'stateSha256');h.write(path.join(h.processDirectory,'state.json'),state);h.write(path.join(h.batchRoot,'baseline-state.json'),state);
     const sorted=rows=>rows.slice().sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0),first=rawFiles.find(x=>x.paperId==='synthetic-paper-0');
     const derived=Buffer.from('explicit synthetic PNG bytes'),derivedPath=path.join(h.publicationRoot,g.conferenceId,state.processId,'figure-crop-derivations','synthetic.png');fs.mkdirSync(path.dirname(derivedPath),{recursive:true});fs.writeFileSync(derivedPath,derived,{mode:0o600});
+    const proofPath=path.join(path.dirname(derivedPath),'synthetic-proof.json');fs.writeFileSync(proofPath,'synthetic proof',{mode:0o600});
     const node=seal({contract:'conference-publication-figure-crops-v1',purpose:'publication-display-only',conferenceId:g.conferenceId,processId:state.processId,baseGenerationSha256:sha('synthetic base'),baseGenerationFileSha256:sha('synthetic base file'),manifestFileSha256:sha('synthetic manifest'),
-        status:'complete',publicationPassed:false,derivations:[{paperId:first.paperId,newImagePath:'synthetic/new.png',derivedSourcePath:derivedPath,sha256:sha(derived),size:derived.length,proofSha256:sha('synthetic proof')}],blocked:[],deferredRoutes:[],unresolvedRoutes:[]},'derivationSha256');
+        status:'complete',publicationPassed:false,derivations:[{paperId:first.paperId,newImagePath:'synthetic/new.png',derivedSourcePath:derivedPath,proofPath,sha256:sha(derived),size:derived.length,proofSha256:sha('synthetic proof')}],blocked:[],deferredRoutes:[],unresolvedRoutes:[]},'derivationSha256');
     const projected=Buffer.from('synthetic exact projected view bytes');h.bridgeState.projected=projected;
     const projectedPath=path.join(h.publicationRoot,g.conferenceId,state.processId,'figure-publication-views',node.derivationSha256,sha(projected)+'.md');fs.mkdirSync(path.dirname(projectedPath),{recursive:true});fs.writeFileSync(projectedPath,projected,{mode:0o600});
     g.files=sorted(rawFiles.map(x=>x.path===first.path?{...x,sourcePath:projectedPath,sourceSha256:sha(projected),size:projected.length}:x));
@@ -528,4 +534,12 @@ test('scheduling phase refuses concurrent actual attempt changes before dispatch
     assert.equal(h.state().status,'complete');
     assert.equal(h.read(path.join(h.batchRoot,'progress.json')).value.members['synthetic-paper-0'].failure.code,
         'READER_MAINTENANCE_SCHEDULING_DRIFT');
+});
+
+test('historical material paths are immutable exact pinned files plus source-replayed derivation pixels/proofs',t=>{
+ const h=setup(t),f=syntheticPublicationHistory(h),proof=h.module.__testReplay(f.batch,f.g);
+ assert.ok(Object.isFrozen(proof));assert.ok(Object.isFrozen(proof.materialPaths));
+ for(const record of f.g.figurePublicationView.rawFiles)assert.ok(proof.materialPaths.includes(path.resolve(record.sourcePath)));
+ for(const item of f.g.figurePublicationView.nodeDerivation.derivations){assert.ok(proof.materialPaths.includes(path.resolve(item.derivedSourcePath)));assert.ok(proof.materialPaths.includes(path.resolve(item.proofPath)));}
+ assert.throws(()=>proof.materialPaths.push('/invented'));
 });

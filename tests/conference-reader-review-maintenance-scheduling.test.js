@@ -32,6 +32,11 @@ function setup({count=4,existing=0,alwaysFail=null,stopAt=null,savedComplete=nul
   openMaintenanceBatch:()=>{const h={};opaque.set(h,batch);return h;},registerPendingObligation:()=>{},
   read:()=>({value:state,sha256:'physical'}),progressFor:()=>({value:structuredClone(progress),sha256:'progress-sha'}),
   effectiveMember:(_batch,m)=>m,actualProgress,adapter:()=>adapter,check,
+  // This suite extracts only scheduler control flow; the exact cold transaction
+  // and physical member-CAS fences have their own real-temp-file tests.
+  observeAndStageSavedMember:(_batch,m,shared,deps)=>{forbiddenDepth++;try {
+   const actual=actualProgress(_batch,m);return {actual,proof:actual.status==='complete'?globals.stageChild(_batch,m,shared,deps):null};
+  }finally{forbiddenDepth--;}},
   recoverUnissuedMaintenanceChild:async()=>false,
   stageChild:(_batch,m)=>{stageChecks.push(m.paperId);if(stopAfterStage)setImmediate(()=>{stopped=true;});assert.equal(records.get(m.paperId)?.status,'complete');
    if(badSaved&&m.paperId===savedComplete)throw Error('synthetic real stage qualification rejected');return {paperId:m.paperId};},

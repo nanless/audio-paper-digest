@@ -25,6 +25,54 @@ const api = () => require('./conference-process');
 function fail(message) { throw Object.assign(new Error('Text maintenance: '+message), {
     code:'CONFERENCE_READER_REVIEW_MAINTENANCE_INTEGRITY',scope:'run',retryable:false }); }
 function check(value,message) { if(!value) fail(message); }
+// A private synchronous transaction coalesces only already-issued immutable
+// evidence assertions. Its first use and its final fence both run the original
+// full checks. It never certifies a Reader or survives an await/save boundary.
+let maintenanceColdReadScope = null;
+function requireSynchronousColdRead(value) {
+    check(!value || typeof value.then !== 'function','cold read transaction must be synchronous');
+    return value;
+}
+function coldEvidenceAssertion(assertFull) {
+    const full=()=>{const value=requireSynchronousColdRead(assertFull());check(value===undefined,'cold evidence assertion must return void');};
+    const checked=()=>{
+        const scope=maintenanceColdReadScope;
+        if(!scope)return full();
+        scope.assertions.add(checked);
+        if(scope.completed.has(checked))return;
+        check(!scope.running.has(checked),'recursive cold evidence assertion');
+        scope.running.add(checked);
+        try {full();scope.completed.add(checked);}
+        finally {scope.running.delete(checked);}
+    };
+    return checked;
+}
+function withMaintenanceSynchronousColdRead(callback,namespace=null) {
+    if(maintenanceColdReadScope&&(!namespace||maintenanceColdReadScope.namespace===namespace))
+        return requireSynchronousColdRead(callback());
+    const previousScope=maintenanceColdReadScope;
+    const scope={namespace,assertions:new Set(),completed:new Set(),running:new Set()};
+    maintenanceColdReadScope=scope;
+    let value,bodyError,bodyFailed=false;
+    try {
+        try {value=requireSynchronousColdRead(callback());}catch(error){bodyError=error;bodyFailed=true;}
+        // This is another full byte pass, not a saved boolean. Nested assertions
+        // are coalesced within this final pass, including old-batch ancestors.
+        scope.completed.clear();
+        try {for(const assertion of scope.assertions)assertion();}
+        catch(error) {
+            if(bodyError&&error!==bodyError)error.cause??=bodyError;
+            throw error;
+        }
+        if(bodyFailed)throw bodyError;
+        return value;
+    } finally {maintenanceColdReadScope=previousScope;}
+}
+// A fallback inside another member's fence must retain its original full checks.
+function withoutMaintenanceColdRead(operation) {
+    const previousScope=maintenanceColdReadScope;maintenanceColdReadScope=null;
+    try{return operation();}finally{maintenanceColdReadScope=previousScope;}
+}
 function privateFile(filename,requirePrivateMode=true) {
     const absolute=path.resolve(filename);let cursor=path.parse(absolute).root;
     for(const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
@@ -509,7 +557,7 @@ function replayMaintenancePublicationView(batch,generation) {
     const initialState=read(batch.p.state).sha256,materialPins=[];
     const pin=(filename,requirePrivateMode=true)=>{privateFile(filename,requirePrivateMode);const bytes=fs.readFileSync(filename),digest=sha(bytes);
         materialPins.push({filename,sha256:digest,requirePrivateMode});return bytes;};
-    const assertBase=()=>{
+    const assertBase=coldEvidenceAssertion(()=>{
         check(read(batch.p.state).sha256===initialState,'history issuer actual state changed during replay');
         assertCanonicalReviewEvidence(batch);assertCurrentBatch(batch);
         for(const member of batch.m.members) {
@@ -517,7 +565,7 @@ function replayMaintenancePublicationView(batch,generation) {
             check(parent.analysisFileSha256===member.parentCAS.analysisFileSha256&&parent.runFileSha256===member.parentCAS.runFileSha256
                 &&parent.sourceFileSha256===member.parentCAS.sourceFileSha256,'history original parent CAS changed');
         }
-    };
+    });
     assertBase();const historyHandle={};
     publicationHistoryHandles.set(historyHandle,{batch,generation:structuredClone(generation),
         generationFileSha256:batch.m.generationFileSha256,assertUnchanged:assertBase});
@@ -527,7 +575,8 @@ function replayMaintenancePublicationView(batch,generation) {
             manifestPath:view.manifestPath,expectedGenerationSha256:view.baseGenerationSha256,
             expectedDerivation:view.nodeDerivation},historyHandle);
         check(history&&typeof history.assertUnchanged==='function'&&same(history.outcome,view.nodeDerivation),
-            'actual source-replayed historical crop capability required');history.assertUnchanged();
+            'actual source-replayed historical crop capability required');
+        const assertHistory=coldEvidenceAssertion(()=>history.assertUnchanged());assertHistory();
         const outcome=history.outcome,files=require('../config').FILES;
         const rawFiles=view.rawFiles,rawImages=view.rawImageFiles;
         const scripts=path.resolve(path.dirname(batch.analysisRoot),'../../scripts');
@@ -608,9 +657,11 @@ function replayMaintenancePublicationView(batch,generation) {
                 rawPageSha256:record.sourceSha256,publicationViewSha256:sha(projected)});
         }
         check(same(ordered(expectedFiles),ordered(generation.files))&&same(changed,view.changedPages),'historical full view page mapping differs');
-        const assertUnchanged=()=>{assertBase();history.assertUnchanged();
-            for(const material of materialPins){privateFile(material.filename,material.requirePrivateMode);check(sha(fs.readFileSync(material.filename))===material.sha256,'historical view material changed');}};
-        assertUnchanged();return {rawFiles:structuredClone(rawFiles),assertUnchanged};
+        const assertUnchanged=coldEvidenceAssertion(()=>{assertBase();assertHistory();
+            for(const material of materialPins){privateFile(material.filename,material.requirePrivateMode);check(sha(fs.readFileSync(material.filename))===material.sha256,'historical view material changed');}});
+        const materialPaths=Object.freeze([...new Set([...materialPins.map(pin=>path.resolve(pin.filename)),
+            ...outcome.derivations.flatMap(item=>[item.derivedSourcePath,item.proofPath]).map(filename=>path.resolve(filename))])]);
+        assertUnchanged();return Object.freeze({rawFiles:structuredClone(rawFiles),materialPaths,assertUnchanged});
     } catch(error) {publicationHistoryHandles.delete(historyHandle);throw error;}
 }
 function canonicalRoots(processDirectory,analysisRoot) {
@@ -659,13 +710,16 @@ function assertCanonicalReviewEvidence(batch) {
         check(original.sha256===archived.sha256,'canonical failure bytes differ from archive');
     }
     const expected={processId:m.processId,generationFileSha256:m.generationFileSha256,reviewBatchFileSha256:m.reviewBatchFileSha256};
+    const assertOriginalBytes=coldEvidenceAssertion(()=>{
+        for(const pin of pins)check(privateFileSha256(pin.filename)===pin.sha256,'canonical review evidence bytes changed');
+        const exact=candidates.filter(filename=>fs.existsSync(filename)&&privateFileSha256(filename,false)===generation.sha256);
+        check(exact.length===1&&exact[0]===exactGeneration[0],'canonical generation original missing, ambiguous or different bytes');
+    });
     const assertBytes=currentRoots=>{
         check(currentRoots.publication===roots.publication&&same(expected,{processId:batch.m.processId,
             generationFileSha256:batch.m.generationFileSha256,reviewBatchFileSha256:batch.m.reviewBatchFileSha256}),
             'canonical review identity changed');
-        for(const pin of pins)check(privateFileSha256(pin.filename)===pin.sha256,'canonical review evidence bytes changed');
-        const exact=candidates.filter(filename=>fs.existsSync(filename)&&privateFileSha256(filename,false)===generation.sha256);
-        check(exact.length===1&&exact[0]===exactGeneration[0],'canonical generation original missing, ambiguous or different bytes');
+        assertOriginalBytes();
     };
     // The first call still performs every normal protocol/self/row validation.
     // Later calls reread every original byte with safe FD/path/mode checks.
@@ -756,7 +810,9 @@ function loadBatch({manifestPath,processDirectory,analysisRoot}) {
 }
 function loadChild(batch,member) {
     member=effectiveMember(batch,member);
-    return adapter().loadConferenceReaderRevision({analysisRoot:batch.analysisRoot,executionId:member.executionId});
+    return withOrdinaryMaintenancePublicationColdRead({analysisRoot:batch.analysisRoot,executionId:member.executionId,
+        stagingRoot:require('../config').FILES.conferencePageStagingDir},()=>
+        adapter().loadConferenceReaderRevision({analysisRoot:batch.analysisRoot,executionId:member.executionId}));
 }
 function registeredWindows(batch) {
     const root=path.join(batch.p.root,'windows');if(!fs.existsSync(root))return [];
@@ -1235,6 +1291,86 @@ function stageChild(batch,member,shared,deps,readOnly=false) {
         pageManifestSha256:staged.manifest.manifestSha256,pagePath:staged.manifest.pagePath,
         contentSha256:staged.manifest.contentSha256,revision:child.revision};
 }
+function pinOrdinaryColdMember(child) {
+    const revision=read(path.join(child.directory,'reader-revision.json'));
+    check(child.revision.contract===adapter().READER_REVISION_CONTRACT,'cold transaction requires ordinary revision');
+    check(same(revision.value,child.revision),'observed member revision changed');
+    const pins=[{file:path.join(child.directory,'analysis.json'),sha256:child.analysisFileSha256},
+        {file:path.join(child.directory,'run.json'),sha256:child.runFileSha256},
+        {file:path.join(child.directory,'source.json'),sha256:child.sourceFileSha256},
+        {file:revision.filename||path.join(child.directory,'reader-revision.json'),sha256:revision.sha256},
+        ...['analysis','run','source'].map(name=>({file:path.join(child.parent.directory,name+'.json'),
+            sha256:child.parent[name+'FileSha256']})),
+        ...[['review-reader-seed.json','readerReviewSeedFileSha256'],['reader-resource-preflight.json','resourcePreflightFileSha256']]
+            .filter(([,field])=>child.revision[field]!==undefined)
+            .map(([name,field])=>({file:path.join(child.directory,name),sha256:child.revision[field]}))];
+    const assertMember=coldEvidenceAssertion(()=>{for(const pin of pins)
+        check(privateFileSha256(pin.file)===pin.sha256,'observed member/parent/seed bytes changed');});
+    assertMember();
+    return assertMember;
+}
+function assertColdStageDisjoint(batch,executionId,stagingRoot) {
+    const outputRoot=path.resolve(stagingRoot,executionId);
+    for(const filename of batch.publicationViewEvidence?.materialPaths||[]) {
+        const original=path.resolve(filename);
+        check(original!==outputRoot&&!original.startsWith(outputRoot+path.sep),
+            'new stage output overlaps immutable historical evidence');
+    }
+}
+function withOrdinaryMaintenancePublicationColdRead({analysisRoot,executionId,stagingRoot},operation) {
+    // This is a transparent single-operation fence, never a qualification or
+    // caller-provided bypass. Every canonical identity is read here afresh.
+    const files=require('../config').FILES;
+    if(typeof analysisRoot!=='string'||typeof stagingRoot!=='string'||!UUID.test(executionId||'')
+        ||path.resolve(analysisRoot)!==path.resolve(files.conferenceAnalysisDir)
+        ||path.resolve(stagingRoot)!==path.resolve(files.conferencePageStagingDir))return withoutMaintenanceColdRead(operation);
+    const revisionPath=path.join(analysisRoot,executionId,'reader-revision.json');
+    if(!fs.existsSync(revisionPath))return withoutMaintenanceColdRead(operation);
+    const declared=read(revisionPath).value;
+    if(declared.contract!==adapter().READER_REVISION_CONTRACT||!declared.readerReviewMaintenance)return withoutMaintenanceColdRead(operation);
+    return require('./analysis-stop-control').withModelRequestsForbidden(()=>
+        withMaintenanceSynchronousColdRead(()=>{
+            const child=adapter().loadConferenceReaderRevisionIdentity({analysisRoot,executionId});
+            check(child.revision.mode==='reader-only','publication cold fence requires actual Reader-only child');
+            const loc=child.revision.readerReviewMaintenance;
+            check(loc?.contract==='conference-reader-review-maintenance-member-v1'&&loc.window===null
+                &&UUID.test(loc.processId)&&UUID.test(loc.batchId),'publication cold fence actual ordinary locator');
+            const processDirectory=path.join(files.conferenceProcessDir,loc.processId),p=paths(processDirectory,loc.batchId);
+            const batch=loadBatch({manifestPath:p.manifest,processDirectory,analysisRoot});
+            const member=batch.m.members.find(row=>row.paperId===child.run.paperId);
+            check(member&&same(locator(batch,{...member,window:null}),loc)
+                &&member.executionId===executionId&&member.parentExecutionId===child.parent.run.executionId
+                &&member.parentCAS.analysisFileSha256===child.parent.analysisFileSha256
+                &&member.parentCAS.runFileSha256===child.parent.runFileSha256
+                &&member.parentCAS.sourceFileSha256===child.parent.sourceFileSha256
+                &&member.sourceSnapshotSha256===child.run.sourceSnapshotSha256,'publication cold fence original member/source CAS');
+            pinOrdinaryColdMember(child);
+            assertColdStageDisjoint(batch,executionId,stagingRoot);
+            // The existing normal operation still invokes its full loader,
+            // Reader/source qualification, renderer and actual stage-byte checks.
+            return operation();
+        },path.resolve(analysisRoot)+'\0'+executionId));
+}
+function observeAndStageSavedMember(batch,member,shared,deps) {
+    return require('./analysis-stop-control').withModelRequestsForbidden(()=>{
+        // Recovery windows keep their complete grant/material/seed replay at
+        // every original call. This transaction admits ordinary revisions only.
+        if(effectiveMember(batch,member).window) {
+            return withoutMaintenanceColdRead(()=>{
+                const actual=actualProgress(batch,member);
+                return {actual,proof:actual.status==='complete'?stageChild(batch,member,shared,deps):null};
+            });
+        }
+        return withMaintenanceSynchronousColdRead(()=>{
+            const actual=actualProgress(batch,member);
+            if(!actual.child)return {actual,proof:null};
+            const child=actual.child;pinOrdinaryColdMember(child);
+            if(actual.status!=='complete')return {actual,proof:null};
+            assertColdStageDisjoint(batch,child.run.executionId,deps.files.conferencePageStagingDir);
+            return {actual,proof:stageChild(batch,member,shared,deps)};
+        },path.resolve(batch.analysisRoot)+'\0'+member.executionId);
+    });
+}
 function readUnissuedMaintenanceChild(batch,member) {
     const directory=path.join(batch.analysisRoot,member.executionId);
     const names=['analysis.json','intent.json','reader-resource-preflight.json','run.json','source.json'];
@@ -1354,17 +1490,17 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
         // Let pending signals run between complete members, never inside a
         // forbidden-model replay or between staging and its atomic save.
         await new Promise(resolve=>setImmediate(resolve));stop.assertMayStartRequest();
-        let actual=actualProgress(batch,member);
+        let observed=observeAndStageSavedMember(batch,member,shared,deps),actual=observed.actual;
         if(actual.status==='pending'&&await recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared))unissuedReadmissions.add(member.paperId);
         if(actual.status==='partial'&&typeof deps.adapter.replaySavedConferenceReaderRevision==='function') {
             const original=shared.retainedSources?.get(member.parentExecutionId),selected=effectiveMember(batch,member);
             await stop.withModelRequestsForbidden(()=>deps.adapter.replaySavedConferenceReaderRevision({analysisRoot:batch.analysisRoot,
                 executionId:selected.executionId,planHandle:original?.planHandle||shared.planHandle,
                 sourceRoot:original?.sourceRoot||shared.sourceCacheRoot}));
-            actual=actualProgress(batch,member);
+            observed=observeAndStageSavedMember(batch,member,shared,deps);actual=observed.actual;
         }
         if(actual.status==='complete') {
-            const proof=await stop.withModelRequestsForbidden(()=>stageChild(batch,member,shared,deps));
+            const proof=observed.proof;check(proof,'completed synchronous cold stage proof required');
             saveMember(batch,member.paperId,{status:'complete',proof});outcomes.set(member.paperId,proof);
         }
     }
@@ -1508,6 +1644,6 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
     }
     return true;
 }
-module.exports={bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
+module.exports={withOrdinaryMaintenancePublicationColdRead,bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
     runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,readReaderMaintenanceSourceLineage,readScientificParentReplay,
     resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed,readVerifiedReaderScientificParent,readLegacyPublicationParentReference};

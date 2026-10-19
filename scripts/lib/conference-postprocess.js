@@ -683,6 +683,8 @@ function rejectExtraStageFiles(directory, allowed) {
     const entries = fs.readdirSync(directory).sort(); if (entries.some(name => !allowed.includes(name))) fail('conference stage contains unexpected recovery content');
 }
 function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, apply = false, trustEvidence = false }, dependencies = {}) {
+    return require('./conference-reader-review-maintenance').withOrdinaryMaintenancePublicationColdRead(
+        {analysisRoot,executionId,stagingRoot},()=>{
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
     const implementation = fingerprint(dependencies); const projected = withCompletedPublicationEvidence(loaded,
@@ -710,8 +712,11 @@ function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pl
     }
     if (projected.assignment.status !== 'assigned') return { status: 'blocked', assignment: projected.assignment };
     return { status: apply ? 'staged' : 'dry-run', manifest: projected.manifest, markdown: projected.pageBytes.toString('utf8') };
+    });
 }
 function loadStageAndCompleted({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
+    return require('./conference-reader-review-maintenance').withOrdinaryMaintenancePublicationColdRead(
+        {analysisRoot,executionId,stagingRoot},()=>{
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
     const implementation = fingerprint(dependencies); const expected = withCompletedPublicationEvidence(loaded,
@@ -734,6 +739,7 @@ function loadStageAndCompleted({ analysisRoot, executionId, tagCatalogPath, stag
     return { completed: loaded, staged: { directory, manifest, ...readStageTagMetadata(manifest),
         manifestFileSha256: manifestRecord.fileSha256,
         assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 } };
+    });
 }
 function loadStage(input, dependencies = {}) {
     return loadStageAndCompleted(input, dependencies).staged;
