@@ -1160,6 +1160,10 @@ function scoringAdmissionBody(batch,member,receipt) {
         mode:'scoring-and-reader',maxAttempts:3};
 }
 function readScoringAdmission(batch,member,parent,loaded=null) {
+    const original=batch.m.members.filter(row=>row.paperId===member?.paperId);
+    check(original.length===1&&(same(member,original[0])||same(member,{...original[0],window:null})),
+        'scoring admission requires original member or its exact ordinary window-null projection');
+    member=original[0];
     const receipt=readUnissuedScoringReceipt(batch,member,parent),row=read(receipt.p.admission),body=scoringAdmissionBody(batch,member,receipt);
     self(row.value,'admissionSha256');check(same(row.value,{...body,admissionSha256:stable(body)}),
         'unissued scoring admission differs from actual source/parent/feedback receipt');

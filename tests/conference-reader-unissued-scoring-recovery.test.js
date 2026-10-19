@@ -6,7 +6,7 @@ const maintenance=fs.readFileSync(path.join(root,'lib/conference-reader-review-m
 const deepSource=fs.readFileSync(path.join(root,'deep-analyzer.js'),'utf8');
 const stable=value=>crypto.createHash('sha256').update(JSON.stringify(sort(value))).digest('hex');
 function sort(value){return Array.isArray(value)?value.map(sort):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,sort(value[k])])):value;}
-const sha=value=>crypto.createHash('sha256').update(value).digest('hex'),same=(a,b)=>a===undefined||b===undefined?a===b:stable(a)===stable(b);
+const sha=value=>crypto.createHash('sha256').update(value).digest('hex'),same=(a,b)=>require('node:util').isDeepStrictEqual(structuredClone(a),structuredClone(b));
 function code(text,start,end){const a=text.indexOf(start);assert(a>=0,start);const b=text.indexOf(end,a+start.length);assert(b>a,end);return text.slice(a,b);}
 const applyResources=(text,resources)=>JSON.stringify({...JSON.parse(text),resource:resources.available});
 const applyScore=(text,audit)=>JSON.stringify({...JSON.parse(text),score:audit.total});
@@ -89,3 +89,20 @@ test('actual resource-only corrected parent is admitted but unknown correction i
 function fixedResourceScope(f){const binding=f.admission(),loaded={...f.load(f.member.executionId),parent:f.parent,revision:{contract:'conference-reader-revision-v1',mode:'scoring-and-reader',readerReviewMaintenance:{window:null},readerReviewUnissuedResourceScoring:binding,resourcePreflightFileSha256:binding.newPreflightFileSha256}};return f.api.mintSeed({unissuedScoringRecovery:binding,scientificReplay:{loaded,batch:f.batch,member:f.member}});}
 test('scorer consumes the fixed real preflight via private seed cap, not second probe',t=>{const f=setup(t),handle=fixedResourceScope(f),paper={apiReaderResources:f.read(path.join(f.dir,'reader-resource-preflight.json')).value};assert(same(f.api.readVerifiedUnissuedScoringResources(handle,{paper,sourceText:'source'}),paper.apiReaderResources));assert.throws(()=>f.api.readVerifiedUnissuedScoringResources({},{paper,sourceText:'source'}),/capability/);paper.apiReaderResources.available=true;assert.throws(()=>f.api.readVerifiedUnissuedScoringResources(handle,{paper,sourceText:'source'}),/first fixed/);});
 test('fixed preflight cannot drift even when current scored paper and saved checkpoint agree',t=>{const f=setup(t),p=scored(f),preflight=f.read(path.join(f.dir,'reader-resource-preflight.json')),loaded={...f.load(f.member.executionId),revision:{revisionSha256:'r',resourcePreflightFileSha256:preflight.sha256},readerReview:{unissuedScoringRecovery:{newPreflightFileSha256:preflight.sha256}}};p.apiReaderResources.available=true;const checkpoint={revisionSha256:'r',sourceSha256:p.sourceSha256,resourceIdentitySha256:p.apiReaderResources.identitySha256,analysisSha256:sha(p.analysis),scoringStageSha256:stable(p.analysisManifest.stages.scoringAudit)};f.write(path.join(f.dir,'analysis.json'),{status:'partial',papers:[p],readerRevisionProgress:{scoringCheckpoint:checkpoint}});assert.throws(()=>f.api.assertActualUnissuedScoringCheckpoint(loaded,p),/fixed original resource preflight/);});
+
+// Exact ordinary effective-member projection must consume the immutable original admission.
+test('scoring admission accepts only original or exact window-null derived member, without rewriting evidence',t=>{
+ const f=setup(t),binding=f.admission(),dir=f.rdir,names=['receipt.json','new-preflight.json','scoring-admission.json'];
+ const hashes=names.map(n=>f.read(path.join(dir,n)).sha256),effective={...f.member,window:null};
+ assert(same(f.api.readScoringAdmission(f.batch,effective,f.parent).binding,binding));
+ const loaded={...f.load(f.member.executionId),parent:f.parent,revision:{contract:'conference-reader-revision-v1',mode:'scoring-and-reader',readerReviewMaintenance:{window:null},readerReviewUnissuedResourceScoring:binding,resourcePreflightFileSha256:binding.newPreflightFileSha256}};
+ const handle=f.api.mintSeed({unissuedScoringRecovery:binding,scientificReplay:{loaded,batch:f.batch,member:effective}});
+ assert(same(f.api.readVerifiedUnissuedScoringResources(handle,{paper:{apiReaderResources:f.read(path.join(f.dir,'reader-resource-preflight.json')).value},sourceText:'source'}),f.read(path.join(f.dir,'reader-resource-preflight.json')).value));
+ for(let i=0;i<names.length;i++)assert.equal(f.read(path.join(dir,names[i])).sha256,hashes[i]);
+});
+for(const [label,change]of [
+ ['non-null window',m=>m.window={windowId:'other'}],['unknown field',m=>m.extra=true],['undefined extra',m=>m.extra=undefined],
+ ['parent',m=>m.parentExecutionId='other'],['parentCAS',m=>m.parentCAS.analysisFileSha256='0'.repeat(64)],
+ ['source',m=>m.sourceSnapshotSha256='0'.repeat(64)],['feedback',m=>m.reviewFeedbackSha256='0'.repeat(64)],['execution',m=>m.executionId='other']
+])test('scoring original-member gate rejects '+label,t=>{const f=setup(t);f.admission();const member=structuredClone(f.member);change(member);assert.throws(()=>f.api.readScoringAdmission(f.batch,member,f.parent),/original member|exact ordinary/);});
+test('scoring member lookup requires one actual canonical member',t=>{for(const duplicate of [false,true]){const f=setup(t);f.admission();f.batch.m.members=duplicate?[f.member,f.member]:[];assert.throws(()=>f.api.readScoringAdmission(f.batch,{...f.member,window:null},f.parent),/original member/);}});
