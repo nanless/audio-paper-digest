@@ -764,6 +764,11 @@ function loadConferenceReaderRevisionIdentity({ analysisRoot, executionId } = {}
     return { ...loaded, revision: record.value, revisionFileSha256: record.sha256, parent };
 }
 function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
+    return require('./conference-reader-review-maintenance').withOrdinaryMaintenancePublicationColdRead({
+        analysisRoot, executionId, stagingRoot: require('../config').FILES.conferencePageStagingDir
+    }, () => loadConferenceReaderRevisionWithOriginalChecks({ analysisRoot, executionId }));
+}
+function loadConferenceReaderRevisionWithOriginalChecks({ analysisRoot, executionId } = {}) {
     const initial = loadConferenceAnalysis({ analysisRoot, executionId });
     const record = readJsonRecord(path.join(initial.directory, 'reader-revision.json'));
     if (record.value.contract === RECOVERY_WINDOW_CONTRACT) {
