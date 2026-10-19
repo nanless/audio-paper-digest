@@ -910,6 +910,8 @@ function getIncompleteAnalysisContentReason(paper) {
 }
 
 function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOptions = {}) {
+    const localValidationIssue = require('./lib/primary-local-validation-replay').validateColdOperation(paper);
+    if (localValidationIssue) return localValidationIssue;
     const local = require('./lib/conference-source-resource-correction');
     if (local.isSourceCorrectionRecord(paper)) {
         try { local.withSavedPaper(paper, () => local.assertVerified(paper)); }

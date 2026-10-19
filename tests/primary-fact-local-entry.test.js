@@ -69,7 +69,18 @@ test('正常主分析入口发送局部JSON并保存新证明，完整审校不�
             primarySaved = structuredClone(paper);
         }
         if (paper.analysisManifest.stages.revision?.localFactValidation && !localValidationSaved) {
-            localValidationSaved = structuredClone(paper);
+            localValidationSaved = JSON.parse(JSON.stringify(paper));
+            const stage = localValidationSaved.analysisManifest.stages.revision;
+            const validation = stage.localFactValidation;
+            assert.equal(validation.contract, 'primary-local-fact-validation-v2');
+            assert.equal(review.sha(validation.inputAnalysisText), stage.inputAnalysisSha256);
+            const prepared = deep.prepareTextRecoveryStage(localValidationSaved,
+                localValidationSaved.analysisManifest, 'revision', localValidationSaved.analysisCheckpoint, sourceText);
+            assert.equal(prepared.invalidated, false);
+            assert.equal(prepared.inputAnalysis, validation.inputAnalysisText);
+            assert.equal(prepared.inputAnalysisSha256, stage.inputAnalysisSha256);
+            assert.equal(prepared.evidenceSha256, stage.evidenceSha256);
+            assert.equal(prepared.fingerprint, stage.fingerprint);
             throw new Error('TEST_LOCAL_VALIDATION_SAVED');
         }
     };
@@ -86,7 +97,7 @@ test('正常主分析入口发送局部JSON并保存新证明，完整审校不�
         revision: localValidationSaved.analysisManifest.stages.revision
     } }, 'revision'), true);
     assert.equal(localValidationSaved.analysisManifest.stages.revision.localFactValidation.contract,
-        'primary-local-fact-validation-v1');
+        'primary-local-fact-validation-v2');
     assert.ok(review.validateFeedback(sample.feedback, sample.plan, primarySaved));
     console.log('PUBLIC_LOCAL_PRIMARY_CHECKPOINT_AND_VALIDATION_CONFIRMED');
     fs.rmSync(sample.root, { recursive: true, force: true });

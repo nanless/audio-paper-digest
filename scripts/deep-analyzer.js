@@ -11354,6 +11354,10 @@ function repairRequestPolicyFields(stage, declaredStage) {
     };
 }
 
+function buildPrimaryAnalysisEvidenceContext(sourceText) {
+    return buildTaskEvidenceContext(sourceText, FULL_TEXT_MAX_CHARS, BROAD_EVIDENCE_PATTERNS, 'PRIMARY');
+}
+
 function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, promptTextContract, declaredStage) {
     const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
     if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
@@ -11515,6 +11519,17 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
         compatibilityReused: true, invalidated: false
     };
     let inputAnalysis = getTextStageInputAnalysis(paper, stage, currentAnalysis);
+    // A local validation consumes the actual current body; old saved declarations locate their exact input bytes.
+    if (stage === 'revision' && manifest.stages.primaryAnalysis?.primaryLocalFactRepair) {
+        const validation = manifest.stages.revision?.localFactValidation;
+        if (validation) {
+            const matches = [...new Set(['primaryAnalysis', 'openSourceScan', 'demoLinkScan']
+                .map(name => paper.analysisStageCheckpoints?.[name]).concat(validation.contract === 'primary-local-fact-validation-v2' ? [validation.inputAnalysisText] : []).filter(text => typeof text === 'string'
+                    && crypto.createHash('sha256').update(text).digest('hex') === validation.inputAnalysisSha256))];
+            if (matches.length !== 1) throw contractRejectedError('原局部审校实际输入没有唯一前置检查点');
+            inputAnalysis = matches[0];
+        } else inputAnalysis = String(currentAnalysis || '');
+    }
     let evidenceContext = buildStageEvidenceContext(stage, inputAnalysis, sourceText);
     let promptTextContract = textStagePromptTextContract(paper, manifest, stage);
     const savedStage = manifest.stages?.[physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints)] || {};
@@ -11523,6 +11538,10 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
         && !(typeof savedCheckpoint === 'string' && savedCheckpoint.trim()) ? {} : savedStage;
     let fingerprint = buildTextStageFingerprint(
         stage, inputAnalysis, evidenceContext, promptTextContract, declaredStage);
+    if (stage === 'revision' && savedStage.localFactValidation?.contract === 'primary-local-fact-validation-v1' && fingerprint !== savedStage.fingerprint) {
+        const legacyInput = require('./lib/primary-local-validation-replay').legacyFingerprintInput(paper, manifest, sourceText, module.exports);
+        fingerprint = buildTextStageFingerprint(stage, legacyInput, evidenceContext, promptTextContract, declaredStage);
+    }
     let evidenceSha256 = crypto.createHash('sha256').update(evidenceContext).digest('hex');
     let inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
     const policyFields = repairRequestPolicyFields(stage, manifest.stages?.[stage] || {});
@@ -16859,6 +16878,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     if (directSource && conferenceSource) {
         throw new Error('Direct rewrite source and conference source cannot both be active');
     }
+    if (!fullStageReanalysis) require('./lib/primary-local-validation-replay').replaySaved(paper,
+        directSource || conferenceSource || require('./lib/model-text-sanitization').currentModelInputSource(paper), module.exports);
     const completedCoreRecoveryActive = !fullStageReanalysis && prepareCompletedCoreRecovery(paper,
         directSource || require('./lib/model-text-sanitization').currentModelInputSource(paper));
     const previousScore = Number.parseFloat(paper?.parsed?.score);
@@ -16947,12 +16968,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     const { hasFullText } = textProfile;
     const abstractText = paper.abstract || paper.summary || '';
     const rawTextForAnalysis = hasFullText ? fullText : (abstractText || fullText);
-    const textForAnalysis = buildTaskEvidenceContext(
-        rawTextForAnalysis,
-        FULL_TEXT_MAX_CHARS,
-        BROAD_EVIDENCE_PATTERNS,
-        'PRIMARY'
-    );
+    const textForAnalysis = buildPrimaryAnalysisEvidenceContext(rawTextForAnalysis);
     const sourceWarnings = [...sourceDetails.warnings];
     if (rawTextForAnalysis.length > textForAnalysis.length) {
         sourceWarnings.push(`输入文本由 ${rawTextForAnalysis.length} 字符按跨全文任务证据取样为 ${textForAnalysis.length} 字符`);
@@ -17567,7 +17583,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             );
             require('./lib/daily-fact-review').validateRepairedClaims('revision', analysis, arxivId);
             const localFactValidation = localPrimaryReceipt ? {
-                contract: localFactRepair.VALIDATION_CONTRACT,
+                contract: 'primary-local-fact-validation-v2',
+                inputAnalysisText: revisionStage.inputAnalysis,
                 inputAnalysisSha256: revisionStage.inputAnalysisSha256,
                 outputAnalysisSha256: localFactRepair.sha(analysis),
                 sourceTextSha256: localFactRepair.sha(rawTextForAnalysis),
@@ -17585,7 +17602,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 ...(revisionStage.promptTextContract
                     ? { promptTextContract: revisionStage.promptTextContract } : {}),
                 fingerprint: localFactValidation ? buildTextStageFingerprint('revision',
-                    revisionStage.analysis, revisionStage.evidenceContext, revisionStage.promptTextContract,
+                    revisionStage.inputAnalysis, revisionStage.evidenceContext, revisionStage.promptTextContract,
                     { localFactValidation }) : revisionStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -20649,6 +20666,7 @@ module.exports = {
     currentTextStagePromptPath,
     promptFilePathForContract,
     buildTextStageFingerprint,
+    buildPrimaryAnalysisEvidenceContext,
     resolveRepairRequestPolicy,
     tagRuleFingerprintFields,
     parseTagRepairResult,
