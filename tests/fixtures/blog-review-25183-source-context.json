@@ -1,0 +1,18 @@
+{
+  "paperId": "2610.25183",
+  "sourceText": "Fig. 2 reports the EER computed using test embeddings extracted from overlapped speech segments containing less than 1.6​s1.6\\,\\mathrm{s} of non-overlapped target speech. Enrollment embeddings are extracted from segments with at least 1.6​s1.6\\,\\mathrm{s} of non-overlapped target speech. This evaluation measures the ability of the embedding extractor to associate challenging overlapped speech with the corresponding clean speaker representation. As expected, speaker-activity conditioning provides the largest improvements on datasets with higher overlap ratios. However, these gains do not translate proportionally to DER, since the downstream EEND-VC pipeline is also affected by inaccuracies in the local DiariZen speaker-activity estimates.",
+  "figures": [
+    {
+      "sourceArtifactOrdinal": 2,
+      "printedLabel": "Fig. 2:",
+      "sourceCaption": "Fig. 2: EER performance across datasets for overlapped (<1.6\\,\\mathrm{s} target single speaker segments) vs non-overlapped (\\geq 1.6\\,\\mathrm{s} target single speaker segments) speaker embeddings with ground-truth segmentation.",
+      "url": "https://arxiv.org/html/2610.25183v1/chart_eer_noisy_vs_clean_gt_sac.svg",
+      "sourceDomSha256": "a9b6301a8b6e6d5ed4fe3435c04e1ffafc17bd61f6f0551600e64abeed4512c9",
+      "readerPixelSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "articleImageAndCaptionLines": [
+    "![原论文图](https://arxiv.org/html/2610.25183v1/chart_eer_noisy_vs_clean_gt_sac.svg)",
+    "*论文图 2。原论文 Fig. 2: EER performance across datasets for overlapped (<1.6\\,\\mathrm{s} target single speaker segments) vs non-overlapped (\\geq 1.6\\,\\mathrm{s} target single speaker segments) speaker embeddings with ground-truth segmentation.*"
+  ]
+}

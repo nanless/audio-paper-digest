@@ -37,17 +37,20 @@ def sealed_excerpt(entry, *, parser='arxiv-html-dom-v4', printed_labels=True):
             for original, figure in zip(originals, figures):
                 original['label'] = ''
                 figure['label'] = f"Figure {figure['ordinal']}"
-        runtime = {'paperId': 'arxiv:' + entry['paperId'], 'textSha256': 'b' * 64,
+        text_bytes = entry.get('sourceText', 'Offline source text without figure references.').encode()
+        text_sha = hashlib.sha256(text_bytes).hexdigest()
+        (directory / 'source.txt').write_bytes(text_bytes)
+        runtime = {'paperId': 'arxiv:' + entry['paperId'], 'textSha256': text_sha,
                    'structuredArtifacts': {'parserVersion': parser, 'payloadSha256': 'a' * 64,
-                       'flattenedTextSha256': 'b' * 64, 'figures': originals}}
+                       'flattenedTextSha256': text_sha, 'figures': originals}}
         raw = json.dumps(runtime, ensure_ascii=False).encode()
         (directory / 'source-runtime.json').write_bytes(raw)
-        manifest = json.dumps({'runtimeMetadata': {
+        manifest = json.dumps({'text': {'responseSha256': text_sha, 'responseBytes': len(text_bytes)}, 'runtimeMetadata': {
             'responseSha256': hashlib.sha256(raw).hexdigest(), 'responseBytes': len(raw)}}).encode()
         (directory / 'source-manifest.json').write_bytes(manifest)
-        for filename in ('source-runtime.json', 'source-manifest.json'):
+        for filename in ('source.txt', 'source-runtime.json', 'source-manifest.json'):
             (directory / filename).chmod(0o600)
-        proof = {'runId': run, 'sourceSha256': 'b' * 64,
+        proof = {'runId': run, 'sourceSha256': text_sha,
                  'sourceManifestSha256': hashlib.sha256(manifest).hexdigest()}
         blocks = []
         for index in range(len(figures)):
@@ -55,13 +58,13 @@ def sealed_excerpt(entry, *, parser='arxiv-html-dom-v4', printed_labels=True):
                            '> **看图路径：** 1. 核对原图图例与实际坐标。',
                            *entry['articleImageAndCaptionLines'][2 * index:2 * index + 2],
                            '这是本张原图的说明，来源真实不保证任何科学主张正确。'])
-        paper = {'arxivId': entry['paperId'] + 'v1', 'sourceSha256': 'b' * 64,
+        paper = {'arxivId': entry['paperId'] + 'v1', 'sourceSha256': text_sha,
                  'apiReaderArticle': '\n\n'.join(blocks),
                  'apiReaderPlan': {'version': 3}, 'apiReaderFigures': figures,
                  'freshRewriteProvenance': proof,
                  'analysisManifest': {'contracts': {'apiReaderArticle': pub.LLM_API_READER_CONTRACT},
                      'freshRewriteProvenance': copy.deepcopy(proof),
-                     'sourceAcquisition': {'sourceSha256': 'b' * 64, 'structuredArtifactsSha256': 'a' * 64},
+                     'sourceAcquisition': {'sourceSha256': text_sha, 'structuredArtifactsSha256': 'a' * 64},
                      'stages': {'apiReaderArticle': {'status': 'complete', 'figureCount': len(figures),
                          'structuredArtifactsSha256': 'a' * 64}}}}
         resign(paper)
@@ -78,6 +81,21 @@ def resign(paper):
 
 
 class ReviewSourceFigureSemanticsTest(unittest.TestCase):
+    def test_real_nbsp_figure_condition_paragraph_is_exact_bounded_context(self):
+        entry = json.loads((FIXTURE.parent / 'blog-review-25183-source-context.json').read_text())
+        with sealed_excerpt(entry) as (paper, _):
+            note = pub._review_source_figure_semantics_note(paper)
+            self.assertIn(entry['sourceText'], json.loads(note.split('上下文】', 1)[1].split('\n', 1)[1]))
+            self.assertIn('Enrollment embeddings', note)
+            self.assertIn('不替代本图像素', note)
+            self.assertLess(len(note), 5000)
+        original = {'label': 'Fig. 2:', 'caption': 'Fig. 2: Original caption.'}
+        source = ('Fig. 2: Original caption.\n\nFigure 20 reports unrelated results.\n\n'
+                  'Fig. 3 reports another experiment.\n\n' + entry['sourceText'])
+        self.assertEqual(pub._review_source_figure_context_quotes(source, [original]), [entry['sourceText']])
+        self.assertEqual(pub._review_source_figure_context_quotes('Fig. 2 reports ' + 'x' * 1200, [original]), [])
+        self.assertEqual(pub._review_source_figure_context_quotes(source, [{'label': 'Unnumbered', 'caption': ''}]), [])
+
     def test_real_three_numbering_mappings_and_author_caption_get_same_note(self):
         expected = [([1, 3, 4], ['Figure 1:', 'Figure 2:', 'Figure 3:']),
                     ([1, 2, 4], ['Figure 1:', 'Figure 3:', 'Figure 5:']),
@@ -123,10 +141,10 @@ class ReviewSourceFigureSemanticsTest(unittest.TestCase):
             self.assertEqual(pub._review_source_figure_semantics_note(paper), '')
 
     def test_source_bytes_and_parent_cas_drift_rejected_before_model(self):
-        for mutation in ('runtime', 'manifest', 'article', 'plan', 'pixels'):
+        for mutation in ('runtime', 'manifest', 'text', 'article', 'plan', 'pixels'):
             with self.subTest(mutation=mutation), sealed_excerpt(PAPERS[0]) as (paper, directory):
-                if mutation in ('runtime', 'manifest'):
-                    file = directory / ('source-' + mutation + '.json')
+                if mutation in ('runtime', 'manifest', 'text'):
+                    file = directory / ('source.txt' if mutation == 'text' else 'source-' + mutation + '.json')
                     file.write_bytes(file.read_bytes() + b' ')
                 elif mutation == 'pixels':
                     paper['apiReaderFigures'][0]['assetSha256'] = 'c' * 64

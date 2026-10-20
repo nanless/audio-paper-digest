@@ -307,6 +307,7 @@ npm run test:compat
 | `reader_inline_svg.py` | Python 共享：校验内嵌 SVG 的元素、属性和本地引用，在禁用脚本与网络的浏览器中渲染 PNG，供阅读和发布共用。 |
 | `reader_inline_svg_pixel_replay.py` | Python 库：先执行当前 SVG 安全检查，只从当前 HEAD 的可信 Git 历史重放渲染器；生成图片必须与原模型像素 SHA 完全相同，才供正常发布器暂存。 |
 | `reader_pdf_page_asset.py` | Python 库：仅对缺失或循环绘图依赖的封存 SVG，从同一日更封存 PDF 的唯一图号及完整图注派生完整原页 PNG；保留 Reader 旧像素 SHA，以独立来源证明供发布、审查与推送重验。 |
+| `reader_damaged_raster_pdf_asset.py` | Python 库：仅承接显式单目标坏 PNG 出版恢复，重放原官方响应 SHA、截断 IDAT 结构回执、四源、唯一完整 PDF 图注及印刷号，派生明确标注的整页新像素；不改原 Reader 或来源，不放宽严格解码。 |
 | `reader_pdf_cell_evidence.py` | 按受控 PDF 提取和核验表格单元格证据。 |
 | `reader_pdf_visual_audit_cache.py` | Python 库：有界缓存旧 PDF 后端成功的纯视觉抽取；每次核对真实 PDF 和完整实现字节，返回独立副本；四份封存来源、当前绑定与逐格数字资格仍由原核验器每次重放。 |
 | `reader_sealed_pdf_column_units.py` | 核验受控 PDF 原表列单位证据，供 Node 和发布器重放。 |

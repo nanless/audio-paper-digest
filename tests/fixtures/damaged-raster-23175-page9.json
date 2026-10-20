@@ -1,0 +1,29 @@
+{
+  "description": "Single complete original PDF page extracted losslessly; fixture page 1 equals sealed source page 9. No original damaged raster bytes retained or reconstructed. Structural PNG cases in test are synthetic.",
+  "originalPaperId": "2610.23175",
+  "originalPdfSha256": "945213084982d9897a9e6b00ba9d24a340d2efd052eced1f359b8b3730d4cf9b",
+  "originalPage": 9,
+  "fixturePdfSha256": "6dd8bdf2f47a2181a9314dc4a17a658a3667d67d9bf9fe0efbf35205af6faa41",
+  "fixtureGzipSha256": "da24bc57ec3d152159e79a666231bdc007957056744909a4af68bb39820b1596",
+  "figure": {
+    "ordinal": 2,
+    "label": "Figure 3:",
+    "caption": "Figure 3: (a) Self-RSA on character, phoneme, fusion embedding. (b) Cross-RSA between Phoneme Embedding-Audio Embedding, Phoneme Embedding-Audio Embedding, and Fusion Embedding-Text Embedding. (c) Temporal activation patterns of GRU, transformer, and proposed BEST.",
+    "url": "https://arxiv.org/html/2610.23175v1/Frame_3.png",
+    "sourceDomSha256": "0c90550879316bc6bea6772a3978aa21289e901cf4a94282d0cbca0374e2ce5c"
+  },
+  "originalSourceFiles": {
+    "source.txt": "3bcd1a6f4762857adb211adbd065035e3a6ee9948d50d179324be87ee0d3339e",
+    "source.pdf": "945213084982d9897a9e6b00ba9d24a340d2efd052eced1f359b8b3730d4cf9b",
+    "source-runtime.json": "acc19fbec3a235de158b390161022ac511142998e51dd837c9102a430a0a4b46",
+    "source-manifest.json": "4e247cf38ec6acf76cf5c165f21a28cbe4787dfb6663b95a566bdad33fecf106"
+  },
+  "actualDamageObservation": {
+    "originalPixelSha256": "661b4fcdf7e91bb2d98d73f398c0f1e13abb9508726c605ce681479fbe4ef1f1",
+    "bytes": 463031,
+    "offset": 54,
+    "type": "IDAT",
+    "declaredLength": 539091,
+    "availableDataAndCRC": 462969
+  }
+}
