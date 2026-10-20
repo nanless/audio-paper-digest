@@ -12,6 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { fetchDailyArxivCategory, hasVerifiedCategoryPrefix } = require('./lib/daily-arxiv-prefix-source');
+const { isDailyXmlOperationalError } = require('./lib/daily-xml-file-stdin');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const { FILTER_SCOPE_EVIDENCE_VERSION, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
@@ -1751,7 +1752,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             } catch (e) {
                 fetchError = e;
                 papers = [];
-                categoryFetchHealth = e.sourceHealth || null;
+                categoryFetchHealth = e.sourceHealth || categoryFetchHealth || null;
                 console.log(`    ⚠️ ${category.id} 抓取失败: ${e.message}`);
             }
             const fetchDuration = Date.now() - fetchStartTime;
@@ -1764,6 +1765,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 sourceHealth.arxiv.categories.push(categoryHealth);
                 fetchCheckpoint.arxiv[category.id] = { status: 'failed', papers: [], health: categoryHealth };
                 saveFetchCheckpoint(fetchCheckpoint);
+                if (isDailyXmlOperationalError(fetchError)) throw fetchError;
             }
 
             // 合并同批跨分类论文并保留分类

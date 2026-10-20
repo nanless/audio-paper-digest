@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { runDailyXmlPython, isDailyXmlOperationalError } = require('./daily-xml-file-stdin');
 const CONTRACT = 'daily-arxiv-oai-coverage-v1';
 const PREFIX_CONTRACT = 'daily-arxiv-atom-prefix-coverage-v1';
 const BASE_URL = 'https://oaipmh.arxiv.org/oai';
@@ -75,8 +75,7 @@ function parseOaiXml(xml) {
     require('../env-loader').requireExternalRuntime('daily-arxiv-oai-source');
     const input = Buffer.isBuffer(xml) ? xml : Buffer.from(String(xml), 'utf8');
     if (!input.length || input.length > MAX_BYTES) throw new Error('OAI XML response size invalid');
-    const result = spawnSync('bash', [path.join(__dirname, '../python-runtime.sh'), '-c', XML_PARSER,
-        path.join(__dirname, '..')], { input, encoding: 'utf8', maxBuffer: MAX_BYTES, timeout: 30000 });
+    const result = runDailyXmlPython(XML_PARSER, input, { argv: [path.join(__dirname, '..')], outputKind: 'oai' });
     if (result.error || result.status !== 0) throw new Error(`OAI XML parse failed: ${result.error?.message || result.stderr?.trim() || result.status}`);
     return JSON.parse(result.stdout);
 }
@@ -402,7 +401,8 @@ function replay(health, boundary, categoryId, expectedPapers, expectedExistingId
 }
 
 function hasVerifiedOaiCoverage(health, boundary, categoryId = health?.categoryId || health?.id, expectedPapers, expectedExistingIds) {
-    try { replay(health, boundary, categoryId, expectedPapers, expectedExistingIds); return true; } catch { return false; }
+    try { replay(health, boundary, categoryId, expectedPapers, expectedExistingIds); return true; }
+    catch (error) { if (isDailyXmlOperationalError(error)) throw error; return false; }
 }
 
 async function fetchDailyOaiCategory(categoryId, boundary, existingIds, options = {}) {
@@ -525,6 +525,7 @@ async function fetchDailyOaiCategory(categoryId, boundary, existingIds, options 
         return merged.papers;
     } catch (cause) {
         health.failures.push({ error: cause.message }); health.allFailed = health.successfulRequests === 0;
+        if (isDailyXmlOperationalError(cause)) { cause.sourceHealth = health; throw cause; }
         throw Object.assign(new Error(`arXiv ${categoryId} official OAI incomplete: ${cause.message}`, { cause }),
             { code: 'SOURCE_FETCH_FAILED', sourceHealth: health });
     }

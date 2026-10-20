@@ -17,8 +17,9 @@ for (const key of ['rawCandidates', 'filteredPapers', 'filterDecisions', 'fetchC
 config.ARXIV_CATEGORIES = [{ id: 'cs.SD', name: '声音', priority: 'core' }];
 const sharedPacing = scenario === 'shared-pacing';
 const sourceIsolation = scenario === 'source-isolation';
-let sourceIsolationRetry = false, arxivCalls = 0;
-if (sourceIsolation) config.ARXIV_CATEGORIES = ['eess.AS', 'cs.SD'].map(id => ({ id, name: id, priority: 'core' }));
+const operationalStop = scenario === 'xml-operational-stop';
+let sourceIsolationRetry = false, arxivCalls = 0, hfCalls = 0, operationalError, attemptedCategory;
+if (sourceIsolation || operationalStop) config.ARXIV_CATEGORIES = ['eess.AS', 'cs.SD'].map(id => ({ id, name: id, priority: 'core' }));
 let fakeNow = Date.now(), extraWaitMs = 0;
 if (sharedPacing) {
     config.ARXIV_CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM']
@@ -50,6 +51,21 @@ function health(boundary, hf) {
 }
 fetchApi.fetchCategoryPapersSince = async (category, boundary, ids, options) => {
     arxivCalls++;
+    if (operationalStop) {
+        attemptedCategory = category;
+        const child = require('node:child_process'), original = child.spawnSync;
+        try {
+            child.spawnSync = () => ({ error: Object.assign(new Error('real bridge timeout fixture'), { code: 'ETIMEDOUT' }),
+                status: null, signal: 'SIGTERM' });
+            require('../../scripts/lib/daily-xml-file-stdin').runDailyXmlPython('print("{}")', Buffer.from('<root/>'));
+        } catch (error) { operationalError = error; }
+        finally { child.spawnSync = original; }
+        assert.ok(require('../../scripts/lib/daily-xml-file-stdin').isDailyXmlOperationalError(operationalError));
+        operationalError.sourceHealth = { ...health(boundary, false), categoryId: category, ok: false,
+            attempts: 4, successfulRequests: 3, failures: [{ error: operationalError.message }] };
+        operationalError.sourceHealth.provider.window.covered = false;
+        throw operationalError;
+    }
     if (scenario === 'arxiv-failed') throw new Error('本地模拟 arXiv 后页失败');
     if (sharedPacing) await options.requestScheduler.run('export.arxiv.org', async () => ({ status: 200 }), { minimumCooldownMs: 3000 });
     const papers = [sourcePaper('arxiv', sharedPacing ? `2610.${99000 + config.ARXIV_CATEGORIES.findIndex(item => item.id === category)}` : '2610.09998')];
@@ -57,6 +73,7 @@ fetchApi.fetchCategoryPapersSince = async (category, boundary, ids, options) => 
     papers._sourceHealth = health(boundary, false); return papers;
 };
 require('../../scripts/fetch-huggingface-papers').fetchHuggingFacePapers = async (ids, options) => {
+    hfCalls++;
     if (scenario === 'hf-failed' || (sourceIsolation && !sourceIsolationRetry)) throw new Error('本地模拟 HuggingFace 后页失败');
     const papers = [sourcePaper('huggingface', '2610.09999')];
     papers._sourceHealth = health(options.boundary, true); return papers;
@@ -67,6 +84,19 @@ engine.analyzeBatch = async () => { analysisCalls++; throw new Error('本地测�
 const pipeline = require('../../scripts/full-fetch');
 async function main() {
     try {
+        if (operationalStop) {
+            await assert.rejects(pipeline.fullFetch({ lockTarget: path.join(folder, 'operation') }), error => error === operationalError);
+            const saved = JSON.parse(fs.readFileSync(config.FILES.fetchCheckpoint));
+            assert.equal(arxivCalls, 1); assert.equal(hfCalls, 0); assert.equal(modelCalls, 0); assert.equal(analysisCalls, 0);
+            assert.deepEqual(Object.keys(saved.arxiv), [attemptedCategory]);
+            const failed = saved.arxiv[attemptedCategory];
+            assert.equal(failed.status, 'failed'); assert.equal(failed.health.ok, false);
+            assert.equal(failed.health.attempts, 4); assert.equal(failed.health.successfulRequests, 3);
+            assert.deepEqual(failed.health.provider, operationalError.sourceHealth.provider);
+            assert.match(failed.health.error, /real bridge timeout fixture/);
+            assert.deepEqual(failed.papers, []); assert.equal(saved.huggingface, null);
+            return;
+        }
         if (sourceIsolation) {
             let original;
             for (const retry of [false, true]) {

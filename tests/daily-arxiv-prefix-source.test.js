@@ -425,3 +425,25 @@ test('a normally anchored OAI failure survives a later pre-health failure and th
     assert.deepEqual(JSON.parse(fs.readFileSync(newest.filePath)), retained);
     assert.notEqual(newest.filePath, intermediate.filePath);
 });
+
+test('cold OAI routing propagates only genuine file-bridge operational errors instead of triggering source refetch', t => {
+    const { previous } = failedOaiFixture(t);
+    const child = require('node:child_process'), originalSpawn = child.spawnSync;
+    const bridge = require('../scripts/lib/daily-xml-file-stdin');
+    let failure;
+    try {
+        child.spawnSync = () => ({ error: Object.assign(new Error('actual private bridge timeout'), { code: 'ETIMEDOUT' }),
+            status: null, signal: 'SIGTERM' });
+        bridge.runDailyXmlPython('print("{}")', Buffer.from('<root/>'));
+    } catch (error) { failure = error; }
+    finally { child.spawnSync = originalSpawn; }
+    assert.equal(bridge.isDailyXmlOperationalError(failure), true);
+    const source = require('../scripts/lib/daily-arxiv-oai-source'), original = source.hasVerifiedOaiCoverage;
+    t.after(() => { source.hasVerifiedOaiCoverage = original; });
+    source.hasVerifiedOaiCoverage = () => { throw failure; };
+    assert.throws(() => hasVerifiedCategoryPrefix(previous, boundary, 'eess.AS'), error => error === failure);
+    const lookalike = Object.assign(new Error(failure.message), { code: failure.code, operational: true });
+    assert.equal(bridge.isDailyXmlOperationalError(lookalike), false);
+    source.hasVerifiedOaiCoverage = () => { throw lookalike; };
+    assert.equal(hasVerifiedCategoryPrefix(previous, boundary, 'eess.AS'), false);
+});

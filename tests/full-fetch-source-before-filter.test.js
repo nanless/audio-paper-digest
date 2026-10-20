@@ -9,6 +9,7 @@ for (const [scenario, description] of Object.entries({
     complete: '完整来源仍进入真实筛选请求封装',
     'shared-pacing': '七类公共请求保留必要间隔，不重复等待整分钟',
     'source-isolation': '首次抓取及缓存续跑的跨分类合并保护原来源论文顺序与元数据',
+    'xml-operational-stop': '真实文件桥运行故障保存原健康状态后停止其他来源和模型派发',
     'resume-failed': '续筛选来源缺失时保留原记录且不请求模型',
     'resume-complete': '完整来源续筛选仍进入真实请求封装'
 })) {

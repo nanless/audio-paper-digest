@@ -5,7 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { runDailyXmlPython } = require('./daily-xml-file-stdin');
 const PROJECT = path.resolve(__dirname, '../..');
 const CONTRACT = 'daily-arxiv-announcement-evidence-v1';
 const MAX_BYTES = 16 * 1024 * 1024;
@@ -141,10 +141,9 @@ function replayDailyAnnouncement(evidence, boundary, categoryId) {
         || Date.parse(evidence.retrievedAt) > Date.now() + 300000) throw new Error('Invalid announcement file descriptor');
     const bytes = readEvidenceBytes(evidence, categoryId);
     const xml = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    const result = spawnSync('bash', [path.join(PROJECT, 'scripts/python-runtime.sh'), '-c', PARSER], {
-        cwd: PROJECT, encoding: 'utf8', timeout: 30000, maxBuffer: MAX_BYTES,
-        input: JSON.stringify({ xml, category: categoryId, until: boundary.until, retrievedAt: evidence.retrievedAt })
-    });
+    const result = runDailyXmlPython(PARSER,
+        Buffer.from(JSON.stringify({ xml, category: categoryId, until: boundary.until, retrievedAt: evidence.retrievedAt })),
+        { cwd: PROJECT, outputKind: 'announcement' });
     if (result.error || result.status !== 0) throw new Error(`Announcement XML replay failed: ${result.error?.message || result.stderr?.trim() || result.status}`);
     readEvidenceBytes(evidence, categoryId);
     return JSON.parse(result.stdout);

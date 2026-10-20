@@ -23,7 +23,10 @@ function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health
             verifyOaiContinuationAnchor(health, boundary, expectedCategoryId,
                 expectedExistingIds ?? provider.oai?.existingIds);
             return require('./daily-arxiv-oai-source').hasVerifiedOaiCoverage(health, boundary, expectedCategoryId, expectedPapers, expectedExistingIds);
-        } catch { return false; }
+        } catch (error) {
+            if (require('./daily-xml-file-stdin').isDailyXmlOperationalError(error)) throw error;
+            return false;
+        }
     }
     if (!prefix && provider?.window?.coverageContract === undefined) return true;
     try {

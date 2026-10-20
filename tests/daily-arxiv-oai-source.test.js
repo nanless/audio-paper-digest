@@ -298,7 +298,7 @@ test('a local save failure with a transport-looking code never retries the alrea
     const b = boundary(), opts = setup(t, b), actualWrite = fs.writeFileSync;
     const original = Object.assign(new Error('Local response preservation failed'), { code: 'ECONNRESET' });
     t.mock.method(fs, 'writeFileSync', function (filename, ...args) {
-        if (path.dirname(filename) === opts.evidenceDir) throw original;
+        if (typeof filename === 'string' && path.dirname(filename) === opts.evidenceDir) throw original;
         return actualWrite.call(fs, filename, ...args);
     });
     await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), error => error.cause === original);
@@ -427,6 +427,24 @@ test('OAI actual XML/RSS candidates survive normal checkpoint reload; recomputed
     pipeline.saveFetchCheckpoint(omitted, filename);
     assert.equal(pipeline.hasCompleteFetchCheckpoint(omitted), false);
     assert.ok(validator.validateFetchCheckpointFile(filename).some(issue => JSON.stringify(issue).includes('未证明完整补更范围')));
+});
+
+test('a local XML operational failure propagates from cold coverage and fresh RSS preflight without starting network', async t => {
+    const { isDailyXmlOperationalError } = require('../scripts/lib/daily-xml-file-stdin');
+    const b = boundary(), good = setup(t, b), papers = await fetchDailyOaiCategory('eess.AS', b, [], good);
+    const fresh = setup(t, b);
+    const timeout = Object.assign(new Error('spawnSync bash ETIMEDOUT'), { code: 'ETIMEDOUT', errno: -60 });
+    t.mock.method(require('node:child_process'), 'spawnSync', () => ({ error: timeout, status: null, signal: 'SIGTERM', stdout: '', stderr: '' }));
+    assert.throws(() => hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers, []), error => {
+        assert.equal(isDailyXmlOperationalError(error), true); assert.equal(error.cause, timeout); return true;
+    });
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], fresh), error => {
+        assert.equal(isDailyXmlOperationalError(error), true); assert.equal(error.cause, timeout);
+        assert.equal(error.sourceHealth.provider.oai.evidenceDir, fresh.evidenceDir);
+        assert.equal(error.sourceHealth.attempts, 0); assert.equal(error.sourceHealth.coverageComplete, false);
+        return true;
+    });
+    assert.equal(fresh.calls.length, 0);
 });
 
 test('scientific text comes unchanged from structured XML without converting Raw TeX commands', () => {
