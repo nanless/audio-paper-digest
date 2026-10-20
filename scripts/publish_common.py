@@ -4885,9 +4885,11 @@ def validate_digest_index_reader_quality(markdown, required=False):
     body = text[frontmatter.end():] if frontmatter else text
     # 分类路径是程序生成的元数据；只在检查副本中排除逐字重放相等的规范块。
     # 在复用内容遮蔽之前核验，异常 marker 不能藏入作者/摘要等复用区域。
-    from tag_presentation import mask_verified_tag_hierarchy_for_quality
+    from tag_presentation import (mask_verified_tag_hierarchy_for_quality,
+                                  mask_verified_overview_root_task_links_for_quality)
     try:
         body = mask_verified_tag_hierarchy_for_quality(body)
+        body = mask_verified_overview_root_task_links_for_quality(body)
     except ValueError as error:
         return f'汇总页多级分类元数据无效: {error}'
     if not re.search(r'^##\s+.*今日概览', body, re.MULTILINE) \

@@ -1,5 +1,7 @@
 """Index-only quality checks never cross a copied paper component's boundary."""
 import unittest
+from unittest import mock
+from urllib.parse import quote
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
@@ -46,6 +48,38 @@ class DigestIndexComponentBoundaryTests(unittest.TestCase):
                 copied = ENTRY + label + '\n\n' + ('- ' if label.startswith('👥') else '') + '来源正文。\n\n![图2](https://example.org/image.png)\n\n'
                 self.assertIn('数值排版', self.check(copied))
                 self.assertIsNone(self.check(copied.replace('![图2]', '![图 2]')))
+
+    def test_only_current_root_task_overview_navigation_is_metadata(self):
+        from tag_catalog import load_tag_catalog
+        from tag_presentation import mask_verified_overview_root_task_links_for_quality
+        root = next(n for n in load_tag_catalog()['concepts'] if n['id'] == 'task.audio-driven-3d-generation')
+        label = root['preferredLabel']['zh']
+        self.assertIn('三维', label)
+        for base in ('/audio-paper-digest-blog', '/custom/site', ''):
+            with mock.patch.dict('os.environ', {'PAPER_DIGEST_BLOG_BASE_PATH': base}):
+                link = f'[{label}]({base}/papers/?concept={quote(root["id"], safe="")})'
+                page = HEADER.replace('## 论文列表', f'| 主任务 |\n|---|\n| {link} |\n\n## 论文列表') + ENTRY
+                before = page
+                self.assertIsNone(validate_digest_index_reader_quality(page, required=True))
+                self.assertEqual(page, before)
+                masked = mask_verified_overview_root_task_links_for_quality(page)
+                self.assertEqual(len(masked), len(page))
+                self.assertNotIn(link, masked)
+                for wrong in (link.replace(label, label + '三次'),
+                              link.replace(root['id'], 'task.asr'),
+                              link.replace(root['id'], 'task.av-speech-separation'),
+                              link.replace('/papers/', '/wrong/'),
+                              link.replace('concept=', 'other='),
+                              link.replace('/papers/', '/papers/?extra=1&'),
+                              f'[{label}](https://example.org/papers/?concept={root["id"]})'):
+                    self.assertIn('精确定量', validate_digest_index_reader_quality(page.replace(link, wrong), required=True))
+                # The same canonical link cannot hide scientific text after the list boundary.
+                self.assertIn('精确定量', validate_digest_index_reader_quality(HEADER + ENTRY + link, required=True))
+                self.assertIn('精确定量', validate_digest_index_reader_quality(page + '\n\n三维特征在三次运行中测量。', required=True))
+                self.assertIn('精确定量', validate_digest_index_reader_quality(page.replace(link, '三维'), required=True))
+                self.assertIn('精确定量', validate_digest_index_reader_quality(page.replace(link, '三次运行'), required=True))
+                # Image alt text is not navigation metadata.
+                self.assertIn('精确定量', validate_digest_index_reader_quality(page.replace(link, '!' + link), required=True))
 
     def test_source_links_and_duplicate_alt_generator_preserve_values(self):
         source = '![原文图 1](https://example.org/fig2.png)\n![same](a.png)\n![same](b.png)\n![](c.png)'

@@ -126,6 +126,25 @@ def mask_verified_tag_hierarchy_for_quality(markdown, catalog=None, *, base_path
     return pattern.sub(verified, text)
 
 
+def mask_verified_overview_root_task_links_for_quality(markdown):
+    """Mask only exact current root-task navigation in the index-owned overview."""
+    text = str(markdown or '')
+    boundary = re.search(r'^##\s+.*论文列表\s*$', text, re.MULTILINE)
+    if boundary is None:
+        return text
+    from tag_catalog import load_tag_catalog
+    catalog = load_tag_catalog()
+    _validate_tag_catalog_content(catalog)
+    base_path = resolve_blog_base_path()
+    links = {_tag_link(node['id'], node['preferredLabel']['zh'], base_path)
+             for node in catalog['concepts']
+             if node['status'] == 'active' and node['facet'] == 'task' and node['broaderId'] is None}
+    overview = text[:boundary.start()]
+    overview = re.sub(r'(?<!!)\[(?:\\.|[^\]\\\n])*\]\([^()\s]+\)',
+        lambda match: ' ' * len(match[0]) if match[0] in links else match[0], overview)
+    return overview + text[boundary.start():]
+
+
 if __name__ == '__main__':
     from runtime_guard import require_external_runtime
     require_external_runtime('tag_presentation.py')
