@@ -7877,6 +7877,52 @@ def _reader_merged_accuracy_unit_coverage(rendered, quotes, tables):
     return result
 
 
+def _reader_full_width_body_bands(table):
+    """Mirror the Reader's complete DOM ownership proof for condition bands."""
+    matrix, cells = table.get('matrix'), table.get('cells')
+    if (table.get('recoveryStatus') != 'complete' or type(table.get('ordinal')) is not int
+            or table['ordinal'] < 1 or not re.fullmatch(r'[a-f0-9]{64}', table.get('sourceDomSha256', ''))
+            or not isinstance(matrix, list) or not 3 <= len(matrix) <= 65
+            or not isinstance(matrix[0], list) or not 3 <= len(matrix[0]) <= 16
+            or any(not isinstance(row, list) or len(row) != len(matrix[0])
+                   or any(not isinstance(value, str) for value in row) for row in matrix)
+            or not isinstance(cells, list) or len(cells) > len(matrix) * len(matrix[0])):
+        return False
+    width = len(matrix[0])
+    grid = [[None] * width for _ in matrix]
+    for cell in cells:
+        if (not isinstance(cell, dict)
+                or any(type(cell.get(key)) is not int for key in ('row', 'column', 'rowspan', 'colspan'))
+                or cell['row'] < 0 or cell['column'] < 0 or cell['rowspan'] < 1 or cell['colspan'] < 1
+                or cell['row'] + cell['rowspan'] > len(matrix) or cell['column'] + cell['colspan'] > width
+                or not isinstance(cell.get('text'), str)
+                or not re.fullmatch(r'[a-f0-9]{64}', cell.get('sourceDomSha256', ''))):
+            return False
+        for row in range(cell['row'], cell['row'] + cell['rowspan']):
+            for column in range(cell['column'], cell['column'] + cell['colspan']):
+                if grid[row][column] is not None or matrix[row][column] != cell['text']:
+                    return False
+                grid[row][column] = cell
+    if any(cell is None for row in grid for cell in row):
+        return False
+    if any(cell['row'] != 0 or cell['rowspan'] != 1 or cell['colspan'] != 1 for cell in grid[0]):
+        return False
+    bands = 0
+    for row in range(1, len(grid)):
+        owners = {id(cell) for cell in grid[row]}
+        first = grid[row][0]
+        if (len(owners) == 1 and first['row'] == row and first['column'] == 0
+                and first['rowspan'] == 1 and first['colspan'] == width
+                and re.sub(r'[*_`\s]', '', _normalize_api_reader_source_cell(first['text']))):
+            if row + 1 == len(grid) or len({id(cell) for cell in grid[row + 1]}) == 1:
+                return False
+            bands += 1
+        elif (len(owners) != width or any(cell['row'] != row or cell['column'] != column
+                or cell['rowspan'] != 1 or cell['colspan'] != 1 for column, cell in enumerate(grid[row]))):
+            return False
+    return bands > 0
+
+
 def _reader_dom_table_unit_coverage(rendered, quotes, tables):
     """Original DOM columns, exact rows and values, plus bounded merged paths."""
     def text(value):
@@ -7906,7 +7952,9 @@ def _reader_dom_table_unit_coverage(rendered, quotes, tables):
             matrix, cells = table.get('matrix'), table.get('cells')
             if (table.get('recoveryStatus') != 'complete' or not re.fullmatch(r'[a-f0-9]{64}', table.get('sourceDomSha256', ''))
                     or not isinstance(matrix, list) or len(matrix) < 2 or not isinstance(cells, list)
-                    or any(cell.get('rowspan') != 1 or cell.get('colspan') != 1 or not re.fullmatch(r'[a-f0-9]{64}', cell.get('sourceDomSha256', '')) for cell in cells)
+                    or any(not re.fullmatch(r'[a-f0-9]{64}', cell.get('sourceDomSha256', '')) for cell in cells)
+                    or (any(cell.get('rowspan') != 1 or cell.get('colspan') != 1 for cell in cells)
+                        and not _reader_full_width_body_bands(table))
                     or any(not isinstance(row, list) or len(row) != len(headers) for row in matrix)):
                 continue
             caption = re.split(r'(?<=\.)\s', text(table.get('caption', '')))[0]
@@ -7998,7 +8046,15 @@ def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
         actual = prove_pdf_bytes(pdf_bytes, artifacts['tables'],
             [rendered['header']] + rendered['rows'], [item['quote'] for item in saved_quotes])
     except ValueError:
-        return set()
+        # The normal Reader CLI retains the original DOM/PDF projection first,
+        # then derives a complete independent PDF grid for literal headers and
+        # conditions. Publication must replay that same strict source path.
+        from reader_sealed_pdf_literal_column_units import prove_pdf_bytes as prove_literal_pdf_bytes
+        try:
+            actual = prove_literal_pdf_bytes(pdf_bytes, [rendered['header']] + rendered['rows'],
+                [item['quote'] for item in saved_quotes])
+        except ValueError:
+            return set()
     return {(row + 1, column['column'], token, column['unit'])
             for column in actual['units'] for row, value in enumerate(column['values'])
             for token in _api_reader_numeric_tokens(value)}
@@ -13454,6 +13510,8 @@ def generation_template_fingerprint():
         'reader_sealed_pdf_table_evidence.py': script_dir / 'reader_sealed_pdf_table_evidence.py',
         'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
         'reader_sealed_pdf_column_units.py': script_dir / 'reader_sealed_pdf_column_units.py',
+        'reader_sealed_pdf_literal_column_units.py': script_dir / 'reader_sealed_pdf_literal_column_units.py',
+        'reader_authenticated_pdf_hierarchical_table.py': script_dir / 'reader_authenticated_pdf_hierarchical_table.py',
         'analysis-contract.js': script_dir / 'analysis-contract.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
         'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
