@@ -54,6 +54,9 @@ async function main() {
             assert.throws(() => api.parseFullFetchArgs(['--date', '0000-01-01']), /有效/);
             assert.throws(() => api.parseFullFetchArgs(['--unknown', '2026-10-10']), /用法/);
             assert.deepEqual(api.parseFullFetchArgs([]), {});
+            assert.deepEqual(api.parseFullFetchArgs(['--official-oai-recovery', '--date', '2026-10-10', '--require-previously-fetched']),
+                { officialOaiRecovery: true, date: '2026-10-10', requirePreviouslyFetched: true });
+            assert.throws(() => api.parseFullFetchArgs(['--official-oai-recovery', '--official-oai-recovery']), /重复/);
             return;
         }
         let options = scenario === 'no-date' ? {} : { date: '2026-10-10' };

@@ -202,7 +202,8 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
             && provider?.boundaryIdentity === boundary.identitySha256 && provider.window?.since === boundary.since
             && provider.window?.until === boundary.until && provider.window?.covered === true
             && hasVerifiedFetchContinuity(entry.health, boundary, hf)
-            && (hf || require('./daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(entry.health, boundary, categoryId))
+            && (hf || require('./daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(entry.health, boundary, categoryId, true,
+                entry.papers, checkpoint.historicalDedupIds))
             && (!hf || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt'));
     };

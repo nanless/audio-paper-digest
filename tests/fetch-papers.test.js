@@ -905,6 +905,37 @@ describe('抓取健康状态', () => {
         );
     });
 
+    it('arXiv HTTP 响应保留真实状态、正文和 Retry-After 头供共享调度恢复', async () => {
+        const responseHeaders = { 'retry-after': '37', 'content-type': 'text/plain' };
+        const agent = {};
+        const httpsModule = {
+            request(options, onResponse) {
+                assert.equal(options.agent, agent);
+                assert.equal(options.hostname, 'oaipmh.arxiv.org');
+                const req = new EventEmitter();
+                req.destroy = error => req.emit('error', error);
+                req.end = () => {
+                    const res = new EventEmitter();
+                    res.statusCode = 503; res.headers = responseHeaders;
+                    onResponse(res);
+                    res.emit('data', Buffer.from('temporarily '));
+                    res.emit('data', Buffer.from('unavailable'));
+                    res.emit('end');
+                };
+                return req;
+            }
+        };
+        const result = await httpsRequestWithProxy('https://oaipmh.arxiv.org/oai?verb=ListRecords', {},
+            'http://127.0.0.1:1', 1000, 1024, { httpsModule,
+                proxyAgentFactory: (proxy, hostname, port) => {
+                    assert.equal(proxy, 'http://127.0.0.1:1');
+                    assert.equal(hostname, 'oaipmh.arxiv.org'); assert.equal(port, 443); return agent;
+                } });
+        assert.deepEqual(result, { status: 503, headers: responseHeaders, data: 'temporarily unavailable' });
+        assert.equal(require('../scripts/fetch-papers').parseRetryAfterMs(result.headers,
+            { nowMs: 0, maxMs: Number.MAX_SAFE_INTEGER }), 37000);
+    });
+
     it('arXiv 元数据慢速/悬挂响应受绝对截止时间约束', async () => {
         const httpsModule = {
             request() {

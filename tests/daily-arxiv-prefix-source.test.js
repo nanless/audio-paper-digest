@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { fetchCategoryPrefix, fetchDailyArxivCategory, hasVerifiedCategoryPrefix } = require('../scripts/lib/daily-arxiv-prefix-source');
+const { fetchCategoryPrefix, fetchDailyArxivCategory, hasVerifiedCategoryPrefix, hasEligibleOaiTrigger } = require('../scripts/lib/daily-arxiv-prefix-source');
 const boundary = { since: '2026-10-15T12:00:00.000Z', until: '2026-10-19T02:00:00.000Z',
     identitySha256: 'a'.repeat(64), continuity: { required: true, witnesses: { arxiv: [
         { categoryId: 'eess.AS', status: 'expected', arxivId: '2610.00003', published: '2026-10-15T12:00:00Z' }
@@ -141,6 +141,16 @@ test('formal health projection and checkpoint reload retain and enforce prefix e
     assert.equal(pipeline.hasCompleteFetchCheckpoint(stored), true);
     assert.deepEqual(validator.validateFetchCheckpointFile(filename), []);
     assert.deepEqual(stored.arxiv['eess.AS'].health.provider.categoryPrefix, health.provider.categoryPrefix);
+    assert.equal(pipeline.isReusableArxivCheckpoint(stored.arxiv['eess.AS'], bound, 'eess.AS'), true);
+    assert.equal(pipeline.isReusableArxivCheckpoint(stored.arxiv['eess.AS'], bound, 'cs.SD'), false);
+    const wrongSlot = structuredClone(stored);
+    wrongSlot.arxiv['cs.SD'] = structuredClone(wrongSlot.arxiv['eess.AS']);
+    pipeline.saveFetchCheckpoint(wrongSlot, filename);
+    assert.equal(pipeline.hasCompleteFetchCheckpoint(wrongSlot), false);
+    assert.ok(validator.validateFetchCheckpointFile(filename).some(issue => JSON.stringify(issue).includes('arxiv.cs.SD 未证明完整补更范围')));
+    pipeline.saveFetchCheckpoint(stored, filename);
+    assert.equal(pipeline.hasCompleteFetchCheckpoint(stored), true);
+    assert.deepEqual(validator.validateFetchCheckpointFile(filename), []);
     const originalSha = stored.fetchSourcesSha256;
     stored.arxiv['eess.AS'].health.provider.categoryPrefix.replay.entriesSha256 = 'f'.repeat(64);
     pipeline.saveFetchCheckpoint(stored, filename);
@@ -156,4 +166,69 @@ test('wrapper rejects mismatched original HTTP429 trigger before promoting strat
             failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: 'f'.repeat(64) } } }); }
     }), error => error.code === 'SOURCE_FETCH_FAILED' && error.sourceHealth.ok === false);
     assert.equal(state.categoryPrefix, undefined);
+});
+
+function oaiTrigger() {
+    const provider = { boundaryIdentity: boundary.identitySha256,
+        window: { since: boundary.since, until: boundary.until, covered: false } };
+    return { id: 'eess.AS', categoryId: 'eess.AS', ok: false, failures: [{ error: 'HTTP 429' }],
+        provider: { ...structuredClone(provider),
+            window: { ...provider.window, coverageContract: 'daily-arxiv-atom-prefix-coverage-v1' },
+            categoryPrefix: { contract: 'daily-arxiv-atom-prefix-coverage-v1', categoryId: 'eess.AS',
+                boundaryIdentity: boundary.identitySha256, dateQueryFailure: { health: {
+                    categoryId: 'eess.AS', failures: [{ error: 'HTTP 429' }], provider: structuredClone(provider) } } } } };
+}
+
+test('official OAI trigger requires both real category-specific HTTP429 failures and the exact old window', () => {
+    const trigger = oaiTrigger();
+    assert.equal(hasEligibleOaiTrigger(trigger, boundary, 'eess.AS'), true);
+    for (const mutate of [
+        h => { h.ok = true; },
+        h => { h.categoryId = 'cs.SD'; },
+        h => { h.provider.window.until = '2026-10-20T00:00:00.000Z'; },
+        h => { h.provider.window.coverageContract = 'unknown'; },
+        h => { h.failures.push({ error: 'HTTP 500' }); },
+        h => { h.failures = [{ error: 'network failed' }]; },
+        h => { h.provider.categoryPrefix.dateQueryFailure.health.categoryId = 'cs.SD'; },
+        h => { h.provider.categoryPrefix.dateQueryFailure.health.provider.boundaryIdentity = 'f'.repeat(64); },
+        h => { h.provider.categoryPrefix.dateQueryFailure.health.failures = [{ error: 'invalid XML' }]; }
+    ]) {
+        const invalid = structuredClone(trigger); mutate(invalid);
+        assert.equal(hasEligibleOaiTrigger(invalid, boundary, 'eess.AS'), false);
+    }
+});
+
+test('explicit OAI recovery reuses the saved exact failed source instead of repeating failed Atom routes', async t => {
+    const source = require('../scripts/lib/daily-arxiv-oai-source');
+    const original = source.fetchDailyOaiCategory, trigger = oaiTrigger();
+    t.after(() => { source.fetchDailyOaiCategory = original; });
+    let calls = 0, directories = 0;
+    const expected = [];
+    source.fetchDailyOaiCategory = async (category, bound, existing, opts) => {
+        calls++;
+        assert.equal(category, 'eess.AS'); assert.equal(bound, boundary);
+        assert.equal(opts.triggerFailure, trigger); assert.equal(opts.evidenceDir, '/new/private/attempt/eess.AS');
+        assert.deepEqual([...existing], ['2610.00003']); return expected;
+    };
+    const opts = { officialOaiRecovery: true, triggerFailure: trigger,
+        createOaiEvidenceDir: () => { directories++; return '/new/private/attempt/eess.AS'; },
+        windowFetch: async () => { throw new Error('saved failures must not be re-requested'); } };
+    assert.equal(await fetchDailyArxivCategory('eess.AS', boundary, new Set(['2610.00003']), opts), expected);
+    assert.equal(calls, 1); assert.equal(directories, 1);
+    await assert.rejects(fetchDailyArxivCategory('eess.AS', boundary, new Set(), { ...opts, officialOaiRecovery: false }),
+        /saved failures must not be re-requested/);
+    assert.equal(calls, 1); assert.equal(directories, 1);
+    const unrelated = structuredClone(trigger); unrelated.provider.window.until = '2026-10-20T00:00:00.000Z';
+    await assert.rejects(fetchDailyArxivCategory('eess.AS', boundary, new Set(), { ...opts, triggerFailure: unrelated }),
+        /saved failures must not be re-requested/);
+    assert.equal(calls, 1); assert.equal(directories, 1);
+});
+
+test('cold route dispatcher rejects missing OAI evidence and unknown coverage contracts', () => {
+    for (const provider of [
+        { oai: {}, window: {} },
+        { window: { coverageContract: 'daily-arxiv-oai-coverage-v1' } },
+        { window: { coverageContract: 'unknown-route' } },
+        { oai: {}, window: { coverageContract: 'daily-arxiv-atom-prefix-coverage-v1' } }
+    ]) assert.equal(hasVerifiedCategoryPrefix({ categoryId: 'eess.AS', provider }, boundary), false);
 });

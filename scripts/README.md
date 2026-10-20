@@ -69,6 +69,7 @@ npm run test:compat
 | `analysis-waiver.js` | Node 库：核验用户针对当前日更批次的分析豁免，检查 deep、filtered、papers 三份文件的精确字节和逐篇来源 SHA；不修改分析正文。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，初次明确付费轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出；后续局部或缺正文恢复使用单独的有界追加清单，原账和累计上限继续核验。无清单、坏绑定、仍有次数或成功稿拒绝。见 恢复说明。 |
+| `lib/daily-arxiv-oai-source.js`、`lib/daily-arxiv-announcement-source.js` | 日更显式 `--official-oai-recovery` 的官方元数据恢复与公告核验。仅同一类别、同一固定窗口内日期查询和类别列表均真实 HTTP 429 时启用；封存两种 OAI 格式的完整 XML 分页及目标日 RSS，按共同身份核对完整集合，版本时间以 Raw 为准，标题、摘要及有序作者以结构化格式为准。恢复、数据校验和下一日边界均重读原字节重建实际候选，保留原批次、已完成来源和原失败，见[补抓边界](../docs/daily-fetch-boundary.md#两条-atom-查询均限流时的官方-oai-恢复)。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `deep-analyzer.js` | Node 核心：获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |

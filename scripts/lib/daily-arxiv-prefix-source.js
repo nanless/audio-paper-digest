@@ -12,8 +12,11 @@ const sha = value => crypto.createHash('sha256').update(JSON.stringify(value)).d
 // Optional route evidence extends v7 coverage without changing its time window
 // or candidate identity. Both production reuse and the read-only validator use
 // this same check; legacy date-window providers retain their existing rules.
-function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health?.categoryId || health?.id, requireTrigger = true) {
+function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health?.categoryId || health?.id, requireTrigger = true, expectedPapers, expectedExistingIds) {
     const provider = health?.provider, prefix = provider?.categoryPrefix;
+    if (provider?.oai || provider?.window?.coverageContract === 'daily-arxiv-oai-coverage-v1') {
+        return require('./daily-arxiv-oai-source').hasVerifiedOaiCoverage(health, boundary, expectedCategoryId, expectedPapers, expectedExistingIds);
+    }
     if (!prefix && provider?.window?.coverageContract === undefined) return true;
     try {
         const category = expectedCategoryId;
@@ -173,7 +176,40 @@ async function fetchCategoryPrefix(categoryId, boundary, existingIds, options = 
     }
 }
 
+function hasEligibleOaiTrigger(health, boundary, categoryId) {
+    if (!boundary || !SHA256.test(boundary.identitySha256 || '')
+        || !Number.isFinite(Date.parse(boundary.since)) || !Number.isFinite(Date.parse(boundary.until))) return false;
+    const provider = health?.provider, prefix = provider?.categoryPrefix;
+    const original = prefix?.dateQueryFailure?.health;
+    const limited = h => Array.isArray(h?.failures) && h.failures.length > 0
+        && h.failures.every(item => item?.error === 'HTTP 429');
+    const sameBoundary = h => h?.categoryId === categoryId && (h.id === undefined || h.id === categoryId)
+        && h.provider?.boundaryIdentity === boundary?.identitySha256
+        && h.provider.window?.since === boundary.since && h.provider.window?.until === boundary.until
+        && h.provider.window.covered === false;
+    return health?.ok === false && sameBoundary(health) && limited(health)
+        && provider.window.coverageContract === CONTRACT && prefix?.contract === CONTRACT
+        && prefix.categoryId === categoryId && prefix.boundaryIdentity === boundary.identitySha256
+        && sameBoundary(original) && limited(original);
+}
+
 async function fetchDailyArxivCategory(categoryId, boundary, existingIds, options = {}) {
+    const recover = async triggerFailure => {
+        const evidenceDir = options.createOaiEvidenceDir?.();
+        return require('./daily-arxiv-oai-source').fetchDailyOaiCategory(categoryId, boundary, existingIds,
+            { evidenceDir, requestScheduler: options.requestScheduler, triggerFailure });
+    };
+    if (options.officialOaiRecovery === true && hasEligibleOaiTrigger(options.triggerFailure, boundary, categoryId)) {
+        return recover(options.triggerFailure);
+    }
+    try { return await fetchDailyAtomCategory(categoryId, boundary, existingIds, options); }
+    catch (error) {
+        if (options.officialOaiRecovery !== true || !hasEligibleOaiTrigger(error.sourceHealth, boundary, categoryId)) throw error;
+        return recover(error.sourceHealth);
+    }
+}
+
+async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options = {}) {
     const state = options.strategyState || {};
     const windowFetch = options.windowFetch || require('../fetch-papers').fetchCategoryPapersSince;
     let failure = state.categoryPrefixFailure;
@@ -203,4 +239,4 @@ async function fetchDailyArxivCategory(categoryId, boundary, existingIds, option
     }
 }
 
-module.exports = { CONTRACT, fetchCategoryPrefix, fetchDailyArxivCategory, hasVerifiedCategoryPrefix };
+module.exports = { CONTRACT, fetchCategoryPrefix, fetchDailyArxivCategory, hasVerifiedCategoryPrefix, hasEligibleOaiTrigger };

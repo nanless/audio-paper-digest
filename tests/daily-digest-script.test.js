@@ -164,3 +164,27 @@ test('阶段计时记录成功和失败，保留真实退出码且失败后不�
     assert.doesNotMatch(failed.stdout, /阶段完成: 发布博客|登记当前发布版本/);
     assert.doesNotMatch(fs.readFileSync(log, 'utf8'), /waive-post-publish-visuals|visual-summary-state/);
 });
+
+test('官方 OAI 恢复仅在显式抓取参数中透传，默认不启用', t => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'daily-oai-option-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const log = path.join(dir, 'commands.log');
+    const fake = path.join(dir, 'node');
+    fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexit 23\n`);
+    fs.chmodSync(fake, 0o755);
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH || ''}` };
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    for (const extra of [[], ['--official-oai-recovery']]) {
+        fs.writeFileSync(log, '');
+        const result = spawnSync('bash', [scriptPath, today, '--no-visuals', ...extra], { env, encoding: 'utf8' });
+        assert.equal(result.status, 23, result.stderr);
+        const command = fs.readFileSync(log, 'utf8').trim();
+        assert.equal(command, `scripts/full-fetch.js --date ${today} --require-previously-fetched${extra.length ? ' --official-oai-recovery' : ''}`);
+    }
+    for (const extra of [['--official-oai-recovery', '--official-oai-recovery'], ['--from', 'push', '--official-oai-recovery']]) {
+        fs.writeFileSync(log, '');
+        const result = spawnSync('bash', [scriptPath, today, ...extra], { env, encoding: 'utf8' });
+        assert.equal(result.status, 2, result.stderr);
+        assert.equal(fs.readFileSync(log, 'utf8'), '');
+    }
+});

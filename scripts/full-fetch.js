@@ -203,7 +203,7 @@ function hasValidFetchSourceIntegrity(entry) {
         && entry.papersSha256 === stableContentSha256(entry.papers);
 }
 
-function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
+function hasCoveredFetchBoundary(health, boundary, huggingface = false, expectedPapers, expectedCategoryId, expectedExistingIds) {
     try { validateDailyFetchBoundary(boundary); } catch { return false; }
     const provider = health?.provider;
     return Boolean(boundary && /^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
@@ -212,7 +212,10 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
         && provider.window?.until === boundary.until
         && provider.window?.covered === true
         && hasVerifiedFetchContinuity(health, boundary, huggingface)
-        && (huggingface || hasVerifiedCategoryPrefix(health, boundary))
+        && (huggingface || ((expectedCategoryId === undefined
+                || ((health?.categoryId === undefined || health.categoryId === expectedCategoryId)
+                    && (health?.id === undefined || health.id === expectedCategoryId)))
+            && hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId, true, expectedPapers, expectedExistingIds)))
         && (!huggingface || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
@@ -357,7 +360,7 @@ function hasCompleteSourceHealth(sourceHealth, expectedCategoryIds = Config.ARXI
     const byId = new Map(categories.map(item => [item?.id, item]));
     if (byId.size !== expectedCategoryIds.length) return false;
     if (expectedCategoryIds.some(id => byId.get(id)?.ok !== true)) return false;
-    if (sourceHealth.sourceContractVersion === 7 && (expectedCategoryIds.some(id => !hasCoveredFetchBoundary(byId.get(id), sourceHealth.fetchBoundary))
+    if (sourceHealth.sourceContractVersion === 7 && (expectedCategoryIds.some(id => !hasCoveredFetchBoundary(byId.get(id), sourceHealth.fetchBoundary, false, undefined, id))
             || !hasCoveredFetchBoundary(sourceHealth.huggingface, sourceHealth.fetchBoundary, true))) return false;
     return sourceHealth?.huggingface?.ok === true;
 }
@@ -365,10 +368,11 @@ function hasCompleteSourceHealth(sourceHealth, expectedCategoryIds = Config.ARXI
 function hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds = Config.ARXIV_CATEGORIES.map(c => c.id)) {
     return Boolean(checkpoint)
         && (checkpoint.sourceContractVersion !== 7 || (checkpoint.coverageStrategy === 'previous-digest-window-v1'
-            && checkpoint.pageSize === DAILY_ARXIV_API_PAGE_SIZE))
+            && checkpoint.pageSize === DAILY_ARXIV_API_PAGE_SIZE && Array.isArray(checkpoint.historicalDedupIds)))
         && expectedCategoryIds.every(id => checkpoint.arxiv?.[id]?.status === 'complete'
             && checkpoint.arxiv[id].health?.ok === true
-            && (checkpoint.sourceContractVersion !== 7 || hasCoveredFetchBoundary(checkpoint.arxiv[id].health, checkpoint.fetchBoundary))
+            && (checkpoint.sourceContractVersion !== 7 || hasCoveredFetchBoundary(checkpoint.arxiv[id].health, checkpoint.fetchBoundary, false,
+                checkpoint.arxiv[id].papers, id, checkpoint.historicalDedupIds))
             && hasValidFetchSourceIntegrity(checkpoint.arxiv[id]))
         && checkpoint.huggingface?.status === 'complete'
         && checkpoint.huggingface.health?.ok === true
@@ -382,7 +386,8 @@ function hasCrossProcessReusableFetchCheckpoint(
     expectedCategoryIds = Config.ARXIV_CATEGORIES.map(c => c.id)
 ) {
     return hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds)
-        && expectedCategoryIds.every(id => isReusableArxivCheckpoint(checkpoint.arxiv?.[id], checkpoint.sourceContractVersion === 7 ? checkpoint.fetchBoundary : null));
+        && expectedCategoryIds.every(id => isReusableArxivCheckpoint(checkpoint.arxiv?.[id],
+            checkpoint.sourceContractVersion === 7 ? checkpoint.fetchBoundary : null, id, checkpoint.historicalDedupIds));
 }
 
 function isDefinitiveFilterDecision(decision) {
@@ -742,13 +747,13 @@ function getSourceFetchedCount(sourceHealth, sourceName, fallbackCount = 0) {
     return Number.isFinite(value) ? value : fallbackCount;
 }
 
-function isReusableArxivCheckpoint(entry, fetchBoundary = null) {
+function isReusableArxivCheckpoint(entry, fetchBoundary = null, expectedCategoryId, expectedExistingIds) {
     return entry?.status === 'complete'
         && entry.health?.ok === true
         && Array.isArray(entry.papers)
         // arXiv 新批次在各端点可能分阶段上线。空结果只能证明当次请求成功，
         // 不能跨进程永久证明当天没有新论文；续跑时必须重新确认。
-        && (fetchBoundary ? hasCoveredFetchBoundary(entry.health, fetchBoundary) : entry.papers.length > 0);
+        && (fetchBoundary ? hasCoveredFetchBoundary(entry.health, fetchBoundary, false, entry.papers, expectedCategoryId, expectedExistingIds) : entry.papers.length > 0);
 }
 
 function getSourceFailures(sourceHealth) {
@@ -1287,12 +1292,13 @@ function parseFullFetchArgs(argv = []) {
     const options = {};
     for (let index = 0; index < argv.length; index += 2) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (flag === '--require-previously-fetched') {
-            if (options.requirePreviouslyFetched) throw new Error('参数不得重复：--require-previously-fetched');
-            options.requirePreviouslyFetched = true; index -= 1; continue;
+        if (['--require-previously-fetched', '--official-oai-recovery'].includes(flag)) {
+            const key = flag === '--require-previously-fetched' ? 'requirePreviouslyFetched' : 'officialOaiRecovery';
+            if (options[key]) throw new Error(`参数不得重复：${flag}`);
+            options[key] = true; index -= 1; continue;
         }
         if (!value || !['--date', '--refilter', '--refilter-reason'].includes(flag)) {
-            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--refilter ARXIV_ID --refilter-reason 复核原因]');
+            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--official-oai-recovery] [--refilter ARXIV_ID --refilter-reason 复核原因]');
         }
         if (flag === '--refilter') (options.refilterIds ||= []).push(value);
         else {
@@ -1700,7 +1706,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         for (let i = 0; i < shuffledCategories.length; i++) {
             const category = shuffledCategories[i];
             const cachedCategory = fetchCheckpoint.arxiv[category.id];
-            if (isReusableArxivCheckpoint(cachedCategory, fetchBoundary)) {
+            if (isReusableArxivCheckpoint(cachedCategory, fetchBoundary, category.id, historicalDedupIds)) {
                 console.log(`  [${i+1}/${shuffledCategories.length}] 复用已有抓取结果：${category.name} (${category.id})，共 ${cachedCategory.papers.length} 篇`);
                 sourceHealth.arxiv.categories.push(cachedCategory.health);
                 for (const p of cachedCategory.papers) {
@@ -1708,8 +1714,9 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                     const id = normalizedId(p);
                     if (id && !existingIds.has(id)) {
                         existingIds.add(id);
-                        arxivPapers.push(p);
-                        arxivById.set(id, p);
+                        const aggregatePaper = structuredClone(p);
+                        arxivPapers.push(aggregatePaper);
+                        arxivById.set(id, aggregatePaper);
                     } else if (id && arxivById.has(id)) {
                         mergePaperCategories(arxivById.get(id), p);
                     }
@@ -1729,12 +1736,16 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                     historicalExistingIds,
                     {
                         requestScheduler: arxivRequestScheduler,
-                        strategyState: arxivStrategyState
+                        strategyState: arxivStrategyState,
+                        officialOaiRecovery: options.officialOaiRecovery === true,
+                        triggerFailure: cachedCategory?.status === 'failed' ? cachedCategory.health : undefined,
+                        createOaiEvidenceDir: () => path.join(Config.DATA_DIR, 'runtime', 'daily-oai-source-runs',
+                            batchId, crypto.randomUUID(), category.id)
                     }
                 );
                 pinPapersToBatch(papers, batchStartedAt);
                 categoryFetchHealth = papers._sourceHealth || null;
-                if (!hasCoveredFetchBoundary(categoryFetchHealth, fetchBoundary)) {
+                if (!hasCoveredFetchBoundary(categoryFetchHealth, fetchBoundary, false, papers, category.id, historicalDedupIds)) {
                     throw new Error('arXiv 抓取未证明覆盖上次日更至本批开始的完整时间范围');
                 }
             } catch (e) {
@@ -1764,8 +1775,9 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                     if (arxivById.has(id)) mergePaperCategories(arxivById.get(id), p);
                 } else {
                     existingIds.add(id);
-                    arxivPapers.push(p);
-                    arxivById.set(id, p);
+                    const aggregatePaper = structuredClone(p);
+                    arxivPapers.push(aggregatePaper);
+                    arxivById.set(id, aggregatePaper);
                     newInCategory++;
                 }
             }

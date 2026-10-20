@@ -16,6 +16,9 @@ for (const key of ['rawCandidates', 'filteredPapers', 'filterDecisions', 'fetchC
 }
 config.ARXIV_CATEGORIES = [{ id: 'cs.SD', name: '声音', priority: 'core' }];
 const sharedPacing = scenario === 'shared-pacing';
+const sourceIsolation = scenario === 'source-isolation';
+let sourceIsolationRetry = false, arxivCalls = 0;
+if (sourceIsolation) config.ARXIV_CATEGORIES = ['eess.AS', 'cs.SD'].map(id => ({ id, name: id, priority: 'core' }));
 let fakeNow = Date.now(), extraWaitMs = 0;
 if (sharedPacing) {
     config.ARXIV_CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM']
@@ -46,13 +49,15 @@ function health(boundary, hf) {
             ...(hf ? { cutoffDate: boundary.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } : {}) } };
 }
 fetchApi.fetchCategoryPapersSince = async (category, boundary, ids, options) => {
+    arxivCalls++;
     if (scenario === 'arxiv-failed') throw new Error('本地模拟 arXiv 后页失败');
     if (sharedPacing) await options.requestScheduler.run('export.arxiv.org', async () => ({ status: 200 }), { minimumCooldownMs: 3000 });
     const papers = [sourcePaper('arxiv', sharedPacing ? `2610.${99000 + config.ARXIV_CATEGORIES.findIndex(item => item.id === category)}` : '2610.09998')];
+    if (sourceIsolation) papers[0].categories = category === 'eess.AS' ? ['eess.AS', 'cs.SD'] : ['cs.SD', 'eess.AS'];
     papers._sourceHealth = health(boundary, false); return papers;
 };
 require('../../scripts/fetch-huggingface-papers').fetchHuggingFacePapers = async (ids, options) => {
-    if (scenario === 'hf-failed') throw new Error('本地模拟 HuggingFace 后页失败');
+    if (scenario === 'hf-failed' || (sourceIsolation && !sourceIsolationRetry)) throw new Error('本地模拟 HuggingFace 后页失败');
     const papers = [sourcePaper('huggingface', '2610.09999')];
     papers._sourceHealth = health(options.boundary, true); return papers;
 };
@@ -62,6 +67,29 @@ engine.analyzeBatch = async () => { analysisCalls++; throw new Error('本地测�
 const pipeline = require('../../scripts/full-fetch');
 async function main() {
     try {
+        if (sourceIsolation) {
+            let original;
+            for (const retry of [false, true]) {
+                sourceIsolationRetry = retry;
+                await assert.rejects(pipeline.fullFetch({ lockTarget: path.join(folder, 'operation') }),
+                    retry ? /本地筛选请求已到达/ : /抓取来源不完整/);
+                const saved = JSON.parse(fs.readFileSync(config.FILES.fetchCheckpoint));
+                assert.deepEqual(saved.arxiv['eess.AS'].papers[0].categories, ['eess.AS', 'cs.SD']);
+                assert.deepEqual(saved.arxiv['cs.SD'].papers[0].categories, ['cs.SD', 'eess.AS']);
+                if (!retry) original = saved;
+                else {
+                    assert.equal(saved.batchId, original.batchId);
+                    assert.equal(saved.batchStartedAt, original.batchStartedAt);
+                    assert.deepEqual(saved.fetchBoundary, original.fetchBoundary);
+                    assert.deepEqual(saved.arxiv, original.arxiv);
+                }
+                const raw = JSON.parse(fs.readFileSync(config.FILES.rawCandidates));
+                assert.deepEqual(raw.papers.find(p => p.arxivId === '2610.09998').categories, ['cs.SD', 'eess.AS']);
+            }
+            assert.equal(arxivCalls, 2, '第二次须复用两类原来源，不能重新抓取');
+            assert.equal(analysisCalls, 0);
+            return;
+        }
         if (scenario.startsWith('resume-')) {
             const boundary = require('../../scripts/lib/daily-fetch-boundary').resolveDailyFetchBoundary(
                 config.PUBLISH_CONFIG.blogRepo, { until: new Date().toISOString() });

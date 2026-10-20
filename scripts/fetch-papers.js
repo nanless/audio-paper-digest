@@ -690,6 +690,7 @@ function httpsRequestWithProxy(
             res.on('end', () => {
                 finish(resolve, {
                     status: res.statusCode,
+                    headers: res.headers,
                     data: Buffer.concat(chunks).toString('utf8')
                 });
             });

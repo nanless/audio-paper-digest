@@ -10,7 +10,7 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--official-oai-recovery]
 
 运行 LLM/API 抓取、筛选、深度分析和博客审查。已退役整批 Manual 写作链；
 单篇受控人工修正与独立审查仍可用于三个流程的失败恢复。
@@ -71,6 +71,7 @@ shift
 
 start_stage="fetch"
 no_visuals=0
+official_oai_recovery=0
 if [ "${PD_DAILY_API_MODE:-1}" != "1" ]; then
   echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
   exit 2
@@ -96,6 +97,14 @@ while [ "$#" -gt 0 ]; do
       no_visuals=1
       shift
       ;;
+    --official-oai-recovery)
+      if [ "$official_oai_recovery" -eq 1 ]; then
+        echo "--official-oai-recovery 不能重复使用" >&2
+        exit 2
+      fi
+      official_oai_recovery=1
+      shift
+      ;;
     --manual)
       echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
       exit 2
@@ -119,6 +128,11 @@ case "$start_stage" in
     exit 2
     ;;
 esac
+
+if [ "$official_oai_recovery" -eq 1 ] && [ "$start_index" -ne 1 ]; then
+  echo "--official-oai-recovery 仅适用于抓取阶段。" >&2
+  exit 2
+fi
 
 # full-fetch.js 将新抓取绑定到启动时的北京时间日期，不能指定历史日期。
 # 在归档或覆盖当前运行数据前拒绝日期不符的请求。历史批次可从已有数据续跑；
@@ -155,7 +169,9 @@ run_stage() {
 }
 
 if [ "$start_index" -eq 1 ]; then
-  run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js --date "$target_date" --require-previously-fetched
+  fetch_options=(--require-previously-fetched)
+  if [ "$official_oai_recovery" -eq 1 ]; then fetch_options+=(--official-oai-recovery); fi
+  run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js --date "$target_date" "${fetch_options[@]}"
 fi
 
 run_stage 5 "生成博客" bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"

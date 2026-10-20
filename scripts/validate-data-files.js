@@ -272,7 +272,7 @@ function validateSourceHealth(filePath, sourceHealth, issues) {
     }
 }
 
-function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
+function hasCoveredFetchBoundary(health, boundary, huggingface = false, expectedPapers, expectedCategoryId, expectedExistingIds) {
     try { require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary); } catch { return false; }
     return Boolean(boundary && /^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
         && health?.provider?.boundaryIdentity === boundary.identitySha256
@@ -280,7 +280,10 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
         && health.provider.window?.until === boundary.until
         && health.provider.window?.covered === true
         && require('./lib/daily-fetch-boundary.js').hasVerifiedFetchContinuity(health, boundary, huggingface)
-        && (huggingface || require('./lib/daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(health, boundary))
+        && (huggingface || ((expectedCategoryId === undefined
+                || ((health?.categoryId === undefined || health.categoryId === expectedCategoryId)
+                    && (health?.id === undefined || health.id === expectedCategoryId)))
+            && require('./lib/daily-arxiv-prefix-source').hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId, true, expectedPapers, expectedExistingIds)))
         && (!huggingface || (health.provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && health.provider.dailyCovered === true
                 && health.provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
@@ -303,7 +306,7 @@ function validateFetchBoundary(filePath, data, issues) {
         addIssue(issues, filePath, 'v7 抓取范围必须绑定上次日更、合法起止时间和完整身份 SHA');
     }
     for (const [id, entry] of Object.entries(data.arxiv || {})) {
-        if (entry?.status === 'complete' && !hasCoveredFetchBoundary(entry.health, boundary)) {
+        if (entry?.status === 'complete' && !hasCoveredFetchBoundary(entry.health, boundary, false, entry.papers, id, data.historicalDedupIds)) {
             addIssue(issues, filePath, `arxiv.${id} 未证明完整补更范围`);
         }
     }
