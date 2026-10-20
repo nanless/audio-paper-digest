@@ -47,6 +47,24 @@ test('caption百分比仅赋予该原表精确英文指标，中文猜译和跨�
         [raw], doc(raw), raw), null);
 });
 
+test('大小写及规范罗马表号只定位同一完整表；非法编号和下一表不能借单位', () => {
+    // Controlled text isolates caption syntax. The complete real SENTRY PDF
+    // and merged HTML table are exercised in reader-full-width-body-bands.
+    const rendered = table(markdown);
+    for (const caption of ['TABLE II:', 'Table IV:', 'table IX.', 'TABLE MMMCMXCIX:']) {
+        const raw = lines.join('\n').replace('Table 1:', caption);
+        assert.ok(api.matchLiteralTable(rendered, [raw], doc(raw), raw));
+    }
+    for (const caption of ['TABLE IIII:', 'TABLE IC:', 'TABLE VX:', 'TABLE MMMM:', 'TABLE IIV:', 'TABLE Model:']) {
+        const raw = lines.join('\n').replace('Table 1:', caption);
+        assert.equal(api.matchLiteralTable(rendered, [raw], doc(raw), raw), null);
+    }
+    const first = lines.slice(0, 6).join('\n').replace('Table 1:', 'TABLE II:');
+    const next = lines.join('\n').replace('Table 1:', 'TABLE III:').replace('EDT (s)', 'EDT (ms)');
+    const raw = first + '\n' + next;
+    assert.equal(api.matchLiteralTable(rendered, [raw], doc(raw), raw), null);
+});
+
 test('混合原列保留位置，仅明确单位列获能力，完整原行引文不能省略中间数值', () => {
     const raw = ['Table 4: Measured comparisons.', 'Method', 'CER (%)', 'Similarity', 'BadRate (%)',
         'OriginalAlpha', '1.2', '0.81', '5.2', 'OriginalBeta', '1.1', '0.83', '4.2'].join('\n');

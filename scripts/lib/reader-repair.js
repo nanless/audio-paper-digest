@@ -3219,6 +3219,25 @@ function repairTableEvidenceGuidance(draft, issues, targets, sourceText, options
         + '没有证据不能恢复已删除的列；原表与引用字节保持不变。' + pdfGuidance;
 }
 
+function budgetReaderRepairSourceEvidence(sourceEvidence, supplementalEvidence, options = {}) {
+    const original = String(sourceEvidence || '');
+    if (options.sourceEvidenceBudget === undefined) return original;
+    const maximum = options.sourceEvidenceBudget;
+    const extra = String(supplementalEvidence || '').length;
+    const remaining = maximum - extra;
+    const fail = () => Object.assign(new Error(`Reader 修复的聚合来源展示超出预算: ${original.length}+${extra}/${maximum}`),
+        { code: 'READER_REPAIR_SOURCE_CONTEXT_BUDGET', retryable: false });
+    if (!Number.isSafeInteger(maximum) || maximum < 1
+        || maximum > require('../config.js').ANALYSIS_CONFIG.apiReaderEvidenceMaxChars) throw fail();
+    if (original.length <= remaining) return original;
+    if (remaining < 4000 || typeof options.sourceEvidenceForBudget !== 'function') throw fail();
+    // Rebuild the broad display through the original source selector. Never
+    // slice a serialized table/quote or change the saved generation identity.
+    const selected = options.sourceEvidenceForBudget(remaining);
+    if (typeof selected !== 'string' || !selected.length || selected.length > remaining) throw fail();
+    return selected;
+}
+
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
     const targets = buildRepairTargets(draft, issues, options);
     const requestedOperation = observedFigureSelectionOperation(draft, options)
@@ -3247,7 +3266,6 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
     }
     // 安全的收窄办法证明不了语义覆盖时，就保留完整证据。无论哪种情况，
     // 输出和允许的改动都严格限制在局部。
-    const evidence = String(sourceEvidence || '');
     const exactQuotes = [...new Set(targets.flatMap(target => target.value?.sourceQuotes || []))]
         .filter(quote => typeof quote === 'string' && String(sourceText).includes(quote));
     const formulaAppendGuidance = atomicOperation?.kind === 'complete_existing_formula_bindings_v1'
@@ -3300,6 +3318,8 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         ? atomicOperation.requiredPostconditions.join('；') : '';
     const lengthGuidance = issues.some(issue => readerLengthShortfall(issue) > 0)
         ? '篇幅不足时，在允许正文内补充原文支持的机制分工或执行过程，按当前诊断缺额补足并多留至少100中文字余量；保留正确旧文，不回传仍低于下限的原段，也不复制其他小节凑数。' : '';
+    const supplementalSourceGuidance = scientificDoubleRenderingGuidance(draft, issues, targets, sourceText)
+        + repairTableEvidenceGuidance(draft, issues, targets, sourceText, options);
     const targetGuidance = lengthGuidance + conceptGuidance + (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
         ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
         + (atomicOperation?.kind === 'select_observed_figures_v1'
@@ -3310,8 +3330,8 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         ? '本轮明确授权整组小节重排，只提交/sections完整数组；其他顶层信息与全部来源记录逐字保留。不能据此删除图表、公式或正确事实；重排后仍须通过完整解析与来源检查。' : '')
         + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
         + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n')
-        + '\n' + scientificDoubleRenderingGuidance(draft, issues, targets, sourceText)
-        + repairTableEvidenceGuidance(draft, issues, targets, sourceText, options);
+        + '\n' + supplementalSourceGuidance;
+    const evidence = budgetReaderRepairSourceEvidence(sourceEvidence, supplementalSourceGuidance, options);
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         ...(atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseSectionIndexGroups(draft)
             ? { sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT }
@@ -3700,7 +3720,7 @@ function compileConceptTermsPatch(draft, response, context) {
         path: `/conceptBridges/${index}`, oldSha256: hashDraft(draft.conceptBridges[index]), value })) };
 }
 
-module.exports = { repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

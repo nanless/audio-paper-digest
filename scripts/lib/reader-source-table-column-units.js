@@ -51,6 +51,27 @@ function mergedGrid(table) {
     const paths = grid[0].map((_value, column) => [...new Set(grid.slice(0,height).map(row => row[column]))]);
     return { grid, height, paths };
 }
+
+// A body condition band owns the whole physical row. It cannot provide a
+// metric/unit, hide a partial span, or disambiguate repeated method names by
+// their result values. The original grid and every owning cell remain bound.
+function fullWidthBodyBands(table) {
+    const grid = sourceSpanGrid(table);
+    if (!grid || grid[0].some(cell => cell.row !== 0 || cell.rowspan !== 1 || cell.colspan !== 1)) return null;
+    const width = grid[0].length, bands = [];
+    for (let row = 1; row < grid.length; row++) {
+        const cells = [...new Set(grid[row])];
+        if (cells.length === 1 && cells[0].row === row && cells[0].column === 0
+            && cells[0].rowspan === 1 && cells[0].colspan === width && text(cells[0].text)) {
+            // A trailing/adjacent band has no data scope and is not a complete
+            // condition group. Ordinary rows must be physically 1 x 1 below it.
+            if (row + 1 >= grid.length || new Set(grid[row + 1]).size === 1) return null;
+            bands.push(cells[0]);
+        } else if (cells.length !== width || cells.some((cell, column) => cell.row !== row
+            || cell.column !== column || cell.rowspan !== 1 || cell.colspan !== 1)) return null;
+    }
+    return bands.length ? { grid, bands } : null;
+}
 // An explicit Accuracy (%) parent applies only to its exact split leaf and
 // Model+Optimizer row. This does not infer percentages from result magnitudes.
 function mergedHeaderPercentCoverage(rendered, quotes, tables) {
@@ -179,7 +200,8 @@ function coverageFromTables(rendered, quotes, tables) {
         const candidates = (tables || []).filter(table => {
             if (table.recoveryStatus !== 'complete' || !/^[a-f0-9]{64}$/.test(table.sourceDomSha256 || '')
                 || !Array.isArray(table.matrix) || table.matrix.length < 2 || !Array.isArray(table.cells)
-                || table.cells.some(cell => cell.rowspan !== 1 || cell.colspan !== 1 || !/^[a-f0-9]{64}$/.test(cell.sourceDomSha256 || ''))
+                || table.cells.some(cell => !/^[a-f0-9]{64}$/.test(cell.sourceDomSha256 || ''))
+                || (table.cells.some(cell => cell.rowspan !== 1 || cell.colspan !== 1) && !fullWidthBodyBands(table))
                 || table.matrix.some(row => !Array.isArray(row) || row.length !== headers.length)) return false;
             const caption = text(table.caption).split(/(?<=\.)\s/)[0];
             if (caption.length < 24 || !quoteStrings.some(quote => quote.includes(caption))) return false;
@@ -202,7 +224,9 @@ function coverageFromTables(rendered, quotes, tables) {
             if (cells.length !== 2 || cells.some(cell => compact(cell.text) !== compact(item.values[cell.column]))) continue;
             for (const value of renderedValues) result.push({row:row+1,column,value,unit:'%',sourceTableOrdinal:source.ordinal,
                 sourceRow:item.sourceRow,sourceColumn:column,rowName:text(item.values[0]),sourceTableDomSha256:source.sourceDomSha256,
-                headerCellDomSha256:headerCell[0].sourceDomSha256,sourceCellDomSha256:cells.find(cell=>cell.column===column).sourceDomSha256});
+                headerCellDomSha256:headerCell[0].sourceDomSha256,sourceCellDomSha256:cells.find(cell=>cell.column===column).sourceDomSha256,
+                ...(source.cells.some(cell => cell.colspan !== 1) ? { bodyBandDomSha256s:
+                    fullWidthBodyBands(source).bands.map(cell => cell.sourceDomSha256) } : {})});
         }
     }
     return [...result, ...mergedCaptionPercentCoverage(rendered, quotes, tables),

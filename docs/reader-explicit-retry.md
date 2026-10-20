@@ -48,6 +48,8 @@ Reader 保存资格与发布校验对术语采用同一窄显示规则：完整�
 
 先在没有其他写入进程的冷态，完整核对当前批次来源与正文，再使用实际 Reader 输入构造生成、审查重试清单。`prepareApiReaderRetryIdentity(paper, analysis, sourceEvidence, options)` 使用正常 Reader 的身份构造，必须传入与正式调用相同的来源证据、事实反馈和预算；它不请求模型、不下载论文图，也不改变保存稿。不能手工改旧 SHA 让清单通过。
 
+局部修复中的表格诊断与独立 PDF 原字符补充，共用原 Reader 证据展示上限（默认180000字符）。程序保留原已选取的结构化图表、资源声明和本次 PDF 补充，剩余展示空间由同一来源选择器重新选取广泛全文；不截断已序列化的表格或引文，不改最初生成的输入身份、来源及旧账本。显式完整再生的表格反馈同样受此限制；必要材料仍无法容纳时，在请求前停止。最终提示词继续核验原总上下文上限（默认240000字符），不通过追加反馈扩大预算或修改范围。
+
 ```bash
 npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json --refresh-reader-diagnostics
 ```

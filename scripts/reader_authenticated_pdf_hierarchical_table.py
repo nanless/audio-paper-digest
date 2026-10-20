@@ -18,6 +18,9 @@ UNIT = r'%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp'
 DECLARATION = re.compile(r'(.+?)\s*(?:\(\s*(' + UNIT + r')\s*\)|\[\s*(' + UNIT + r')\s*\])\Z', re.I)
 COMPLETE_DECLARATION = re.compile(r'(.+?)\s*(?:\(\s*(' + UNIT + r'|M|B)\s*\)|\[\s*(' + UNIT + r'|M|B)\s*\])\Z', re.I)
 COMPLETE_NUMBER = re.compile(r'[∼~]?[+−-]?\d+(?:\.\d+)?\Z')
+TABLE_NUMBER = r'(?:\d+|(?=[MDCLXVI])M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3}))'
+TABLE_CAPTION = re.compile(r'^\s*Table\s+' + TABLE_NUMBER + r'\s*[:.]', re.I)
+NEXT_CAPTION = re.compile(r'^\s*(?:Table|Figure|Fig\.)\s*' + TABLE_NUMBER + r'\s*[:.]', re.I)
 
 
 def surface(value):
@@ -190,7 +193,7 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
     tops = [r for r in rules if 0 <= r[1] - cap[3] <= 40 and r[0] <= (cap[0] + cap[2]) / 2 <= r[2]]
     need(tops, 'table_top_rule_missing')
     top = min(tops, key=lambda r: r[1])
-    following = [b[1] for b in page.get_text('blocks') if re.match(r'^\s*(?:Table|Figure|Fig\.)\s*\d+\s*[:.]', b[4])
+    following = [b[1] for b in page.get_text('blocks') if NEXT_CAPTION.match(b[4])
                  and b[1] > cap[3] and max(b[0], top[0]) < min(b[2], top[2])]
     limit = min(following or [page.rect.height])
     full_rules = sorted(set(r[1] for r in rules if abs(r[0] - top[0]) < .1 and abs(r[2] - top[2]) < .1
@@ -526,7 +529,7 @@ def prove_pdf_bytes(raw, table, quotes):
         need(len(doc) <= 256, 'pdf_page_limit')
         for page in doc:
             for block in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT):
-                if not re.match(r'^\s*Table\s+\d+\s*[:.]', block[4]):
+                if not TABLE_CAPTION.match(block[4]):
                     continue
                 try:
                     grid = table_grid(page, block, document)

@@ -48,6 +48,112 @@ function parseWithClaim(f, text, index = 10) {
     return deep.parseApiReaderArticleResult(JSON.stringify(draft), f.options);
 }
 
+// 10月20日已保存失败稿的原句及封存原文片段；不依赖本机运行数据。
+const oct20ResourceCases = [
+    { claim: 'SheetSage-MSA 的起点是 SheetSage-data 仓库已发布的函数标签和边界注释。',
+        source: 'We construct an MSA dataset from the function\nlabels and boundary annotations released with\nSheetSage11\n 1\n https://github.com/chrisdonahue/sheetsage-data/\n [15].',
+        urls: ['https://github.com/chrisdonahue/sheetsage-data/'] },
+    { claim: '复现应从公开检查点和数据划分做起：学生用CosyVoice-1 300M和GPT-SoVITS v4的已发布权重，合成专家用Qwen3-TTS-12Hz-1.7B-Base生成，评价转写用Whisper-large-v3，说话人嵌入用ERes2Net，内容与相似度工具遵循CV3-Eval。',
+        source: 'We initialize the students from the publicly released\nCosyVoice-1 300M11\n 1\n https://huggingface.co/FunAudioLLM/CosyVoice-300M\nand GPT-SoVITS v422\n 2\n https://huggingface.co/lj1995/GPT-SoVITS\ncheckpoints.',
+        urls: ['https://huggingface.co/FunAudioLLM/CosyVoice-300M', 'https://huggingface.co/lj1995/GPT-SoVITS'] },
+    { claim: '本文没有公开代码、模型或数据可用的证据，来源清单显示无可用作者资源，所以复现只能按正文参数自己实现，不存在权重下载或开箱运行之说。',
+        source: 'We report a single-subject feasibility case study.' },
+    { claim: '需要先明确：论文没有提出并训练新的识别结构，它的训练动作是对已有预训练语音模型做微调，作为验证数据集可用的基线。',
+        source: 'The results of our baseline experiments demonstrate that the datasets are useful for examining gender and speaker-type attribute bias in the target languages.' },
+    { claim: '关于资源，本次只确认论文提到的公开基准与模型名称，未确认作者代码权重是否当前可用，因此应把代码可得、权重可下载与系统可运行分开核对，不要把论文提到链接等同于已开源。',
+        source: 'We evaluate neural speech decoding on existing benchmarks.' }
+];
+
+function oct20Identity(row, source = row.source) {
+    const resources = (row.urls || []).map(originalUrl => ({ type: 'third_party', origin: 'paper_source',
+        sourceQuote: source, sourceQuoteSha256: sha(source), originalUrl, finalUrl: originalUrl,
+        redirects: [], availability: 'available', status: 200, retryable: false }));
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(source), resources };
+    return { ...body, identitySha256: deep.stableFingerprint(body) };
+}
+
+test('五份真实失败原句分别按第三方输入、闭合否定及实验用途完整解析，不升级作者资源', () => {
+    for (const row of oct20ResourceCases) {
+        const sourceText = 'The source reports a controlled measurement of 1.0 under the same protocol.\n\n' + row.source;
+        const f = fixture({ noFigures: true, sourceText });
+        f.draft.tableBindings.forEach(binding => { binding.sourceQuotes = [sourceText.split('\n\n')[0]]; });
+        f.draft.sections[10].body += '\n\n' + row.claim;
+        const identity = oct20Identity(row, sourceText);
+        const before = JSON.stringify(f.draft);
+        const result = deep.parseApiReaderArticleResult(before, { arxivId: f.paper.arxivId,
+            requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
+            requireSourceBindings: true, availableFigureOrdinals: [],
+            structuredArtifacts: f.sourceDetails.structuredArtifacts, sourceText,
+            verifiedResourceIdentity: identity });
+        assert.ok(result.article, row.claim);
+        assert.equal(JSON.stringify(f.draft), before);
+        assert.ok(identity.resources.every(resource => resource.type === 'third_party'));
+        for (const suffix of ['但权重已可下载。', '但事实上本文代码已经开源。', '数据集现已公开下载。']) {
+            const issues = deep.readerResourceClaimIssues({ sections: [{ kind: 'reproduction',
+                body: row.claim + suffix }] }, identity, sourceText);
+            assert.ok(issues.length > 0, row.claim + suffix);
+        }
+    }
+});
+
+test('闭合否定、功能用途与裸概念区分不能掩盖反驳、引述、撤回或另一项真实开放声明', () => {
+    const row = oct20ResourceCases[2], identity = oct20Identity(row);
+    const issues = text => deep.readerResourceClaimIssues({ sections: [{ kind: 'reproduction', body: text }] },
+        identity, row.source);
+    for (const text of [
+        '本文没有公开代码、模型或数据可用的证据，但权重已可下载。',
+        '并非本文没有公开代码、模型或数据可用的证据，本文代码当前可用。',
+        '不能否认本文代码已开源，本文没有公开代码、模型或数据可用的证据。',
+        '“本文没有公开代码、模型或数据可用的证据”这一说法是错误的，本文代码已开源。',
+        '本文没有公开代码、模型或数据可用的证据，上述否定已撤回，本文代码已开源。',
+        '作为验证数据集已经公开下载的基线。',
+        '作为验证数据集可用的基线，但数据集现已公开下载。',
+        '因此应把本文代码可得、权重可下载与系统可运行分开核对。',
+        '因此应把代码可得、权重可下载与系统可运行分开核对，但本文模型权重已公开。'
+    ]) assert.ok(issues(text).length > 0, text);
+    for (const text of ['如果以后数据集可用，可以再设基线。',
+        '若本文权重当前可下载，仍需先核对许可。',
+        '因此应把代码可得、权重可下载与系统可运行分开核对。']) {
+        assert.deepEqual(issues(text), [], text);
+    }
+});
+
+test('第三方输入豁免绑定同一原文、资源名与学生版本，假设、否定及错误归属不给能力', () => {
+    for (const row of oct20ResourceCases.slice(0, 2)) {
+        const issues = (claim, source = row.source) => deep.readerResourceClaimIssues({ sections: [
+            { kind: 'reproduction', body: claim }
+        ] }, oct20Identity(row, source), source);
+        assert.deepEqual(issues(row.claim), []);
+        for (const source of ['If ' + row.source, 'We never said: ' + row.source,
+            'A previous paper reported: ' + row.source, '“' + row.source + '”',
+            row.source + ' This statement is false.', row.source + ' This claim has been withdrawn.']) {
+            assert.ok(issues(row.claim, source).length > 0, source);
+        }
+        assert.ok(issues(row.claim.replace('SheetSage-data', 'Invented-data')
+            .replace('GPT-SoVITS v4', 'GPT-SoVITS v42')).length > 0);
+        assert.ok(issues(row.claim + '第三方资源可用，因此本文微调后的模型权重已经公开。').length > 0);
+    }
+});
+
+test('一份来源内其他仓库的肯定声明不能为假设、否定或另一引文的仓库背书', () => {
+    for (const row of oct20ResourceCases.slice(0, 2)) {
+        const other = row.source.replaceAll('SheetSage', 'Other').replace('chrisdonahue', 'another-team')
+            .replaceAll('CosyVoice', 'DifferentVoice').replaceAll('GPT-SoVITS', 'Different-TTS');
+        for (const first of ['If ' + row.source, 'We never said: ' + row.source,
+            'A previous paper reported: ' + row.source]) {
+            for (const later of [other, row.source]) {
+                const source = first + '\n\n' + later;
+                const { identitySha256: _old, ...body } = oct20Identity(row, source);
+                body.resources = body.resources.map(resource => ({ ...resource, sourceQuote: first,
+                    sourceQuoteSha256: sha(first) }));
+                const checked = { ...body, identitySha256: deep.stableFingerprint(body) };
+                assert.ok(deep.readerResourceClaimIssues({ sections: [{ kind: 'component', body: row.claim }] },
+                    checked, source).length > 0, first);
+            }
+        }
+    }
+});
+
 test('旧会议资源原身份只读，当前投影不把项目链接升级为数据开放且仍拒虚假正文', () => {
     const sourceText = '1Project page: https://example.com/project/';
     const originalUrl = 'https://example.com/project/';

@@ -192,6 +192,8 @@ const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差|(?:对数似然比代价(?:[ \t]*[Cc][Ll][Ll][Rr](?![A-Za-z0-9_])|(?![ \t-]*[Cc][Ll][Ll][Rr]))|声对比度|声压级)(?=[ \t]*(?:指标|分数|得分)?(?:为|是|从|升至|降至)[ \t]*[-+]?[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))/;
 const CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN = /(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])/i;
+// Source-native vertex/gesture metrics; an alias naming a model is not a metric.
+const CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN = /(?<![A-Za-z0-9_])(?:LVE|MVE|Lip[ -]+Vertex[ -]+Error|Mean[ -]+Vertex[ -]+Error|Fr[eé]chet[ -]+Gesture[ -]+Distance|Beat[ -]+Consistency)(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作|这个|这一|那个|这种|一种|一个|该)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|(?:平均)?(?:唇顶点误差|全脸顶点误差)(?![ \t]*(?:的|这个|这一|那个|这种|一种|一个|该)?(?:模型|方法|系统|基线|算法|网络))/iu;
 const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|\bon par\b|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
 const CORE_SUMMARY_COMPARISON_OBJECT_PATTERN = /(?:\bbaseline\b|\bcontrol\b|\breference\b|\bcomparison\b|\b(?:our|ours|proposed|present|this)\s+(?:approach|method|model|system|technique)\b|基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|完整模型|竞品)/i;
 // 这些量描述系统怎么运行、怎么配置。写成本段落时有用，但没有基线或对照，
@@ -243,7 +245,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (/^推理窗长$/u.test(normalized)) return true;
@@ -763,8 +765,11 @@ function sourceBackedIdentityColumns(table, sourceText) {
         const heading = /(?:^|\n)\s*(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+[A-Z][^\n]{0,100}|(?:conclusions?|discussion|references?|appendix)(?:[ :：][^\n]{0,80})?)(?:\n|$)/im.exec(block);
         return heading ? block.slice(0, heading.index) : block;
     });
+    const stageSwitchColumns = table.header.flatMap((header, index) => /^S[1-9][0-9]?$/.test(String(header).trim()) ? [index] : []);
+    const sourceBoundStageSwitches = hasObservedStageSwitchTable(table, rawSource, stageSwitchColumns);
     return new Set(table.header.flatMap((header, index) => {
         if (table.rows.length < 2) return [];
+        if (sourceBoundStageSwitches && stageSwitchColumns.includes(index)) return [index];
         const labels = table.rows.map(row => String(row[index] || '').trim());
         if (String(header).trim() === '来源') {
             const completeLabels = labels.every(label => label.length >= 1 && label.length <= 80 && /\p{L}/u.test(label));
@@ -781,12 +786,89 @@ function sourceBackedIdentityColumns(table, sourceText) {
     }));
 }
 
+function ownObservedSourceScope(text) {
+    return observedExperimentClaim(text)
+        && !/\b(?:hypothes(?:is|izes?|ized)|hypothetical|illustrative|proposed only|not our experiment|(?:previous|other|related)\s+(?:paper|work|study|method)|(?:did|do|does) not conduct|no ablation experiment|not performed|not conducted|withdrawn|revoked|false statement)\b|(?:^|\n)\s*[>“"]|(?:他人|其他研究|转述|撤回|不是本研究)/iu.test(String(text));
+}
+
+function adjacentSourceStatementAfter(source, end) {
+    const nextLine = String(source).slice(end).split(/\r?\n/u).find(line => line.trim());
+    return (nextLine || '').slice(0, 400).split(/(?<=[.!?])\s+(?=[A-Z])/u)[0];
+}
+
+function hasOwnSourceStatement(sourceText, pattern) {
+    const lines = String(sourceText || '').split(/\r?\n/u);
+    return lines.some((line, index) => pattern.test(line)
+        && ownObservedSourceScope((lines[index - 1] || '').slice(-300) + '\n' + line));
+}
+
+function hasObservedStageSwitchTable(table, source, controls) {
+    if (controls.length < 2 || table.rows.length < 2
+        || new Set(table.rows.map(row => controls.map(index => row[index]).join('|'))).size < 2
+        || !controls.every(index => table.rows.every(row => /^(?:✓|✔|×|✗|[-—])$/u.test(String(row[index] || '').trim())))) return false;
+    const normalize = value => String(value).trim().replace(/\\(?:times|checkmark)/gu, '').replace(/\s+/gu, '');
+    const lines = source.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+    const claims = [...source.matchAll(/^In Tab\.\s*(\d+), we conduct stage-wise ablations[^\n]{0,300}$/gimu)]
+        .filter(match => ownObservedSourceScope(source.slice(0, match.index).trim().split('\n').slice(-1).join(' ') + '\n' + match[0] + '\n' + adjacentSourceStatementAfter(source, match.index + match[0].length)));
+    return claims.some(claim => {
+        const caption = lines.findIndex((line, index) => new RegExp(`^Table ${claim[1]}:$`, 'iu').test(line)
+            && /^Performance with respect to variants of the stages/iu.test(lines[index + 1] || ''));
+        if (caption < 0) return false;
+        const headers = table.header.map(header => String(header).replace(/\([^)]*\)|[↑↓]/gu, '').trim());
+        for (let start = Math.max(0, caption - 200); start < caption; start++) {
+            const actual = lines.slice(start, caption).map(normalize);
+            const expected = [...headers, ...table.rows.flat()].map(normalize);
+            if (actual.length === expected.length && actual.every((value, index) => value === expected[index])
+                && controls.every(index => hasOwnSourceStatement(source, new RegExp(`^Stage ${headers[index].slice(1)}\\s*[-–—:]`, 'iu')))) return true;
+        }
+        return false;
+    });
+}
+
 function hasReportedExperimentPhrase(text, pattern) {
     return [...String(text).matchAll(pattern)].some(match => {
         const prefix = String(text).slice(Math.max(0, match.index - 60), match.index)
             .split(/[。！？；\n]/).at(-1);
         return !/(?:并非|不是|未能|没有|尚未|未曾|不能|不应|如果|假设|假如|倘若|若|未|不|计划|讨论|建议|拟|将|未来|有待|打算|设想)[^，,]{0,30}$/.test(prefix);
     });
+}
+
+function hasSourceBackedSequenceOrderAblation(results, tables, sourceText, requireRegression = false) {
+    const source = String(sourceText || '');
+    const observed = [...source.matchAll(/^Table\s+\d+: Order sensitivity ablation[^\n]*\n/gimu)].filter(caption => {
+        const before = source.slice(0, caption.index).trim().split('\n').slice(-2).join(' ');
+        return /\bwe disrupt subtoken order before spectral filtering\b/iu.test(before) && ownObservedSourceScope(before);
+    });
+    const blocks = observed.map(caption => {
+        const tail = source.slice(caption.index + caption[0].length, caption.index + 1800);
+        const boundary = /^(?:(?:Table|Figure|Fig\.)\s+(?:[A-Z]?\d+|[IVXLCDM]+)\s*[:.]|(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?[ \t]+[A-Z][^\n]{0,100}$|(?:Conclusions?|Discussion|References?|Appendix)\b)/gimu.exec(tail);
+        const body = tail.slice(0, boundary ? boundary.index : tail.length);
+        return ownObservedSourceScope(body) ? (caption[0] + body).split(/\r?\n/u).map(line => line.trim()) : [];
+    });
+    if (!blocks.length || !ownObservedSourceScope(String(results).split(/\n/u).filter(line => !/^\s*\|/u.test(line)).join(' '))) return false;
+    if (!hasReportedExperimentPhrase(results, /(?:只破坏|打乱|反转)[^。；\n]{0,24}(?:输入|子词条|序列|顺序)|(?:输入|子词条|序列)[^。；\n]{0,24}(?:反转|打乱)/gu)) return false;
+    return blocks.some(lines => tables.some(table => {
+        const identifier = table.header.findIndex(isTableIdentifierHeader);
+        const cer = table.header.findIndex(header => /^CER\s*↓$/iu.test(String(header).trim()));
+        const wer = table.header.findIndex(header => /^WER\s*↓$/iu.test(String(header).trim()));
+        if (identifier < 0 || cer < 0 || wer < 0) return false;
+        const rows = ['Original', 'Reversed', 'Shuffled'].map(variant => {
+            for (const [index, line] of lines.entries()) {
+                const match = /^([A-Za-z][A-Za-z0-9_-]{1,39}) \((Original|Reversed|Shuffled)\)$/u.exec(line);
+                if (!match || match[2] !== variant || !/^\d+(?:\.\d+)?$/u.test(lines[index + 1] || '') || !/^\d+(?:\.\d+)?$/u.test(lines[index + 2] || '')) continue;
+                return { method: match[1], variant, cer: lines[index + 1], wer: lines[index + 2] };
+            }
+            return null;
+        });
+        if (rows.some(row => !row) || new Set(rows.map(row => row.method)).size !== 1) return false;
+        if (requireRegression && !rows.slice(1).some(row => Number(row.cer) > Number(rows[0].cer)
+            || Number(row.wer) > Number(rows[0].wer))) return false;
+        return rows.every(row => table.rows.some(cells => {
+            const label = String(cells[identifier]).trim().replace(/[()]/gu, '').replace(/\s+/gu, ' ');
+            return (label === `${row.method} ${row.variant}` || row.variant === 'Original' && label === row.method)
+                && String(cells[cer]).trim() === `${row.cer}%` && String(cells[wer]).trim() === `${row.wer}%`;
+        }));
+    }));
 }
 
 function hasSourceBackedTrainingStageAblation(tables, sourceText) {
@@ -1022,6 +1104,10 @@ function observedExperimentClaim(text) {
 function observedSourceNegativeEvidence(sourceText) {
     return String(sourceText || '').split(/(?<=[.!?])\s+(?=[A-Z])|[。；\n]|;\s*|,\s*(?=(?:but|however|yet)\b)|[，,]\s*(?=(?:但|然而|实测|测试显示|实验显示))/u)
         .filter(proposition => {
+            // Describing how a service routes an execution failure is not an
+            // observed performance failure. Keep explicit measured failures.
+            if (/\b(?:agent execution|execution fail(?:ure|s)|failures? return|failure feedback|in the case of failure|when execution fails)\b/iu.test(proposition)
+                && !/\b(?:observed|measured|experiment|evaluation|test results?|failure rate)\b|\d+(?:\.\d+)?%/iu.test(proposition)) return false;
             if (observedExperimentClaim(proposition)) return true;
             // An asserted measured failure can have an empirical condition.
             // A leading hypothetical/foreign assertion cannot borrow "show".
@@ -1031,6 +1117,17 @@ function observedSourceNegativeEvidence(sourceText) {
             return measuredCondition
                 && !/(?:hypothetical|suppose|planned|future experiment|previous work|other model|not observed|not reported)|(?:假设|假想|假定|计划|未来实验|先前研究|其他模型|他人|并非|未观察到|没有观察到)/iu.test(proposition);
         }).join('\n');
+}
+
+function sourceHasObservedReasoningFailure(sourceText) {
+    const source = String(sourceText || '');
+    // This is the paper's own contiguous failure example, not two independently
+    // discovered keywords from another paper or an illustrative conditional.
+    const block = /^Our approach assumes that[^\n]{1,260}\nThis assumption has an inherent limitation: when the reasoning phase itself is incorrect,[^\n]{1,220}cannot recover the correct target\.\nWe illustrate a failure case[^\n]{1,160}\nIn the example, the model compresses[^\n]{1,260}reasoning phase misidentifies[^\n]{1,200}/gmu;
+    return [...source.matchAll(block)].some(match => {
+        const before = source.slice(Math.max(0, match.index - 200), match.index).split('\n').slice(-2).join(' ');
+        return ownObservedSourceScope(before + match[0] + '\n' + adjacentSourceStatementAfter(source, match.index + match[0].length));
+    });
 }
 function sourceBoundLowerMetricIncrease(results, sourceText) {
     const metrics = { MAE: '平均绝对误差|MAE', RMSE: '均方根误差|RMSE',
@@ -1183,6 +1280,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     );
     const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceAblationEvidence);
     const resultHasAblation = hasSourceBackedTrainingStageAblation(tables, sourceAblationEvidence)
+        || hasSourceBackedSequenceOrderAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedSettingVariantAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedZeroCorrectionAblation(results, sourceAblationEvidence)
         || /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除|无外推/i.test(results)
@@ -1226,6 +1324,11 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
     const resultHasNegative = sourceBoundLowerMetricIncrease(results, sourceText)
+        || hasSourceBackedSequenceOrderAblation(results, tables, sourceText, true)
+        || sourceHasObservedReasoningFailure(options.sourceText)
+            && String(results).split(/[。；\n]/u).some(sentence =>
+                !/(?:假设|假想|如果|未来|计划|讨论|提及|他人|其他(?:模型|方法)|第三方|引用|转述|并非|不是|不意味着|否认|反驳)/u.test(sentence)
+                && /当推理阶段[^。；\n]{0,30}误识别目标时[^。；\n]{0,30}压缩无法恢复正确目标/u.test(sentence))
         || sourceBoundReverseBaselineComparison(results, tables, sourceText)
         || contextualNegative
         || hasSourceBackedWindowConfusion(results, sourceText)
@@ -1549,6 +1652,10 @@ function stripCoreSummaryNonResultNumerals(text) {
         .replace(/§\s*\d+(?:\.\d+)*/g, ' ')
         .replace(/\b(?:theorem|lemma|proposition|corollary|definition|def\.?|problem|prob\.?|assumption|equation|fig(?:ure)?\.?|table|section|appendix)\s*\d+(?:\.\d+)*/gi, ' ')
         .replace(/(?:定理|引理|命题|推论|公理|定义|假设|公式|方程|等式|式|图|表|章节|附录)\s*(?:编号)?\s*\d+(?:\.\d+)*/g, ' ')
+        // Calendar intervals and decades describe recording/composition history,
+        // not a measured from/to improvement. Other numbers in the sentence stay.
+        .replace(/\b(?:from|between)\s+(?:[12]?[0-9]|3[01])\s+(?:to|and)\s+(?:[12]?[0-9]|3[01])\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)(?:\s+(?:19|20)\d{2})?\b/gi, ' ')
+        .replace(/\b(?:throughout|during|in|since)\s+the\s+(?:19|20)\d{2}s\b/gi, ' ')
         .replace(/(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])/gi, ' ')
         .replace(/\b(?:19|20)\d{2}\b/g, ' ')
         .replace(/\b\d+(?:\.\d+)?\s*[BbMmKk]\b/g, ' ')
@@ -1744,7 +1851,8 @@ function hasCoreSummaryQuantitativeEvidence(text) {
             new RegExp(CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.source, 'gi'), ' '
         );
         const hasSpecificMetric = CORE_SUMMARY_METRIC_PATTERN.test(withoutGenericEnglishMetrics)
-            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(withoutGenericEnglishMetrics);
+            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(withoutGenericEnglishMetrics)
+            || CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(withoutGenericEnglishMetrics);
         const hasExplicitGenericMetric = CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.test(sentence)
             && (hasDirection || /(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])[^。！？!?\n]{0,24}\b(?:is|are|was|were|at|of)\b\s*[-+]?\d/i.test(sentence));
         const nonOperationalSentence = sentence.replace(
@@ -1754,6 +1862,7 @@ function hasCoreSummaryQuantitativeEvidence(text) {
         );
         const hasNonOperationalMetric = CORE_SUMMARY_METRIC_PATTERN.test(nonOperationalWithoutGeneric)
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(nonOperationalWithoutGeneric)
+            || CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(nonOperationalWithoutGeneric)
             || hasExplicitGenericMetric;
         // 延迟、吞吐、硬件、训练设置的数字不会因为邻近句子出现
         // “experiment”或“evaluation”就变成结果对比。只有原文点明了对比对象，
@@ -2178,6 +2287,26 @@ function stripDuplicatedLineFootnoteMarkers(text) {
 function hasConcreteCoreSummarySetting(sentence, sourceText = '') {
     if (/(?:假设|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做)/.test(sentence)) return false;
     const affirmedSetting = !/(?:讨论|提及|并非|不是|不能|假想|设想|计划|未来|无关|文件目录|否认|反驳|引用|引述)/u.test(sentence);
+    const observedSetting = affirmedSetting && !/(?:他人|第三方|其他研究|先前研究|相关工作|转述|撤回|不成立|错误|有误)/u.test(sentence);
+    const durationBenchmark = /(?:在|于)\s*([1-9][0-9]*(?:\.[0-9]+)?)小时\s*([A-Z][A-Za-z0-9._-]{1,39}-Bench)(?:上|中)[^。！？!?\n]{0,60}(?:评估|评测)/u.exec(sentence);
+    const sourceHasDurationBenchmark = durationBenchmark && hasOwnSourceStatement(sourceText,
+        new RegExp(`(?<![A-Za-z0-9_])${durationBenchmark[2].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])\\s+is\\s+[^.!?\\n]{0,100}\\btotal duration of ${durationBenchmark[1].replace('.', '\\.')}\\s+hours?\\b`, 'iu'));
+    // A named Chinese keyword corpus plus an actual annotation split is a
+    // setting, even without the generic word 数据集. Require source-observed
+    // police keyword evaluation and both split roles, never a bare place name.
+    const keywordScope = /(?:在|于)([\u3400-\u9fff]{2,12})警务关键词集(?:上|中)/u.exec(sentence);
+    const annotationSplit = /(?:百分之([一二三四五六七八九十]+)|([1-9][0-9]?)%)人工转写加(?:百分之([一二三四五六七八九十]+)|([1-9][0-9]?)%)(?:仅)?机器转写划分/u.exec(sentence);
+    const percent = value => {
+        if (/^[0-9]+$/u.test(value)) return Number(value);
+        const digits = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+        const parts = String(value).split('十');
+        return parts.length === 2 ? (parts[0] ? digits[parts[0]] : 1) * 10 + (parts[1] ? digits[parts[1]] : 0) : digits[value];
+    };
+    const city = keywordScope && ({ 巴尔的摩: 'Baltimore', 芝加哥: 'Chicago' })[keywordScope[1]];
+    const keywordCorpus = city && annotationSplit
+        && hasOwnSourceStatement(sourceText, new RegExp(`(?:\\b${city}\\b[^.!?\\n]{0,100}\\b(?:police|data|dataset)\\b|\\b(?:police|data|dataset)\\b[^.!?\\n]{0,100}\\b${city}\\b)`, 'iu'))
+        && hasOwnSourceStatement(sourceText, /\bpolice\b[^.!?\n]{0,100}\bkeywords?\b/iu)
+        && hasOwnSourceStatement(sourceText, new RegExp(`\\bWe\\b[^\\n]{0,100}\\b(?:${city}|${city[0]}PD)\\b[^.!?\\n]{0,160}\\b${percent(annotationSplit[1] || annotationSplit[2])}%\\s+transcribed\\s*(?:and|,)\\s*${percent(annotationSplit[3] || annotationSplit[4])}%\\s+untranscribed`, 'iu'));
     // Odd/even trial holdout is a concrete split only when fitting and
     // evaluation consume disjoint parity sets and an observed comparison follows.
     const parityHoldout = affirmedSetting
@@ -2219,7 +2348,8 @@ function hasConcreteCoreSummarySetting(sentence, sourceText = '') {
         }
         return false;
     });
-    return parityHoldout || countedNamedSubset || languageNamedDataset || heldOutConversations
+    return observedSetting && (sourceHasDurationBenchmark || keywordCorpus)
+        || parityHoldout || countedNamedSubset || languageNamedDataset || heldOutConversations
         || syntheticSetting || speakerSplit || timedHardware || namedRequestEvaluation || heldOutSpeakerComparison || measuredNaturalSetting;
 }
 
@@ -2297,6 +2427,8 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
         const hasRecognizedMetric = Boolean(sentence && (
             CORE_SUMMARY_METRIC_PATTERN.test(admittedMetricText)
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(admittedMetricText)
+            || !/(?:假设|假想|如果|预计|预期|可能|计划|未来|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|尚未|未报告|否认|撤回|不成立|错误说法)|\b(?:hypothetical|assuming|if|planned|quoted|third[- ]party|not reported)\b/iu.test(sentence)
+                && CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(sentence)
             || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
@@ -2366,6 +2498,15 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
 
 function nearestCoreSummaryMetricLabel(segment, fromRight) {
     const candidates = [];
+    for (const match of String(segment || '').matchAll(new RegExp(CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.source, 'giu'))) {
+        const key = /(?:LVE|lip|唇)/iu.test(match[0]) ? 'lve'
+            : /(?:MVE|mean|全脸)/iu.test(match[0]) ? 'mve'
+                : /(?:fr[eé]chet|gesture)/iu.test(match[0]) ? 'fgd' : 'bc';
+        candidates.push({ index: match.index, value: key });
+    }
+    for (const match of String(segment || '').matchAll(/(?<![A-Za-z0-9_])(WER|CER|DER|MAE|RMSE|MOS|FGD|BC)(?![A-Za-z0-9_])(?=\s*(?:(?:指标|分数|得分))?(?:(?:为|是|=)\s*)?[-+]?\d)/giu)) {
+        candidates.push({ index: match.index, value: match[1].toLowerCase() });
+    }
     // PESQ 这样的裸词既可能是指标，也可能是基线方法。
     // Only an explicit "X分数/X得分/X指标" label is safe to compare here.
     const custom = /(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{1,39})(?=\s*(?:分数|得分|指标))/g;
@@ -2527,6 +2668,11 @@ function hasNaturalScopedBoundary(summary) {
     return String(summary || '').split(/[。！？!?\n]/u).some(sentence => {
         if (/(?:并非|不是|不能说|不能认为|不应认为|否认)[^，,；;]{0,30}(?:限于|仅在|未经)/u.test(sentence)) return false;
         if (/(?:未经证实|效果未知)[^。]{0,30}(?:说法|表述|观点|判断)[^。]{0,20}(?:不成立|不正确|有误|错误)/u.test(sentence)) return false;
+        // A conditional limitation can legitimately say 可能失效. It must name
+        // this estimator and concrete data scarcity, not quote a foreign failure
+        // or deny that failure. Keep this separate from measured-result guards.
+        if (!/(?:假设|假想|设想|未来计划|引用|引述|转述|他人|其他(?:方法|模型|估计)|第三方|否认|反驳)|(?:并非|不是|不会|没有|不意味着|不能说)[^，,；;]{0,35}失效|失效[^，,；;]{0,20}(?:说法|表述)[^，,；;]{0,15}(?:错误|不成立)/u.test(sentence)
+            && /(?:该(?:方法|模型|估计量)|本(?:方法|模型|估计量)|校正估计)[^。！？!?\n]{0,80}(?:词频过低|(?:人工|标注|无标注)样本过少|无标注数据过少)[^。！？!?\n]{0,70}(?:时|下)(?:仍)?(?:可能|易|会)失效/u.test(sentence)) return true;
         const measuredScope = /(?:结论|研究结果|研究发现|该提升|这些结果)(?:只|仅)在[^。！？!?；;\n]{1,140}(?:测试集|评测集|实录数据)[^。！？!?；;\n]{0,40}?(?:内|上|下|中)(?:得到)?(?:验证|成立)/u.exec(sentence);
         if (measuredScope && !/(?:并非|不是|不能|不应|否认|尚未|未经|没有|未曾|未被|假设|假想|假定|设想|如果|若|可能|预计|预期|计划|未来|讨论|声称|据说)/u.test(sentence.slice(0, measuredScope.index + measuredScope[0].length))
             && !/(?:说法|表述|观点|判断|结论)[^。！？!?；;\n]{0,20}(?:不成立|不正确|不属实|不是事实|错误|有误)|^(?:是|为)?(?:不成立|不正确|不属实|错误|有误)/u.test(sentence.slice(measuredScope.index + measuredScope[0].length, measuredScope.index + measuredScope[0].length + 50))) return true;

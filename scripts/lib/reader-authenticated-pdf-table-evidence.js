@@ -11,6 +11,11 @@ const stable = value => require('./reader-repair').hashDraft(value);
 const text = value => String(value ?? '').normalize('NFKC').replace(/[*`↑↓]/gu, '').replace(/\s+/gu, ' ').trim();
 const compact = value => text(value).replace(/\s+/gu, '');
 const SHA = /^[a-f0-9]{64}$/u;
+// Canonical Roman numerals only; a caption-like word or IIII is not a table ID.
+const TABLE_NUMBER = '(?:\\d+|(?=[MDCLXVI])M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3}))';
+const TABLE_CAPTION = new RegExp('^Table\\s+' + TABLE_NUMBER + '\\s*[:.]', 'iu');
+const NEXT_CAPTION = new RegExp('^(?:Table|Figure)\\s+' + TABLE_NUMBER + '\\s*[:.]', 'iu');
+const PERCENT_CAPTION = new RegExp('^Table\\s+' + TABLE_NUMBER + '\\s*[:.]\\s*Results\\s*\\[%\\]', 'iu');
 function numeric(value) {
     const input = compact(value).replace(/−/gu, '-');
     if (/^[-–—]$/u.test(input)) return '-';
@@ -62,9 +67,9 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
     if (!originalQuotes.length || document?.contract !== 'reader-sealed-pdf-quotes-v1' || !document.available
         || typeof document.rawFullText !== 'string') return null;
     const lines = literalLines(document.rawFullText), candidates = [];
-    const captions = lines.map((line, index) => /^Table\s+\d+\s*[:.]/u.test(line.value) ? index : -1).filter(index => index >= 0);
+    const captions = lines.map((line, index) => TABLE_CAPTION.test(line.value) ? index : -1).filter(index => index >= 0);
     for (const captionIndex of captions) {
-        const next = lines.findIndex((line,index) => index > captionIndex && /^(?:Table\s+\d+\s*[:.]|Figure\s+\d+\s*[:.])/u.test(line.value));
+        const next = lines.findIndex((line,index) => index > captionIndex && NEXT_CAPTION.test(line.value));
         const limit = next < 0 ? lines.length : next;
         for (let first = captionIndex + 2; first + 2 < limit; first++) {
             if (lines[first].start - lines[captionIndex].start > 6000 || numeric(lines[first].value) !== null) continue;
@@ -74,7 +79,7 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
             const headers = lines.slice(first - width, first).map(line => line.value);
             const explicit = headers.map(declaration);
             const caption = lines.slice(captionIndex, first - width).map(line => line.value).join(' ');
-            const percentCaption = /^Table\s+\d+\s*[:.]\s*Results\s*\[%\]/u.test(caption);
+            const percentCaption = PERCENT_CAPTION.test(caption);
             const captionColumns = percentCaption && headers.every(header => /^[A-Za-z][A-Za-z0-9 ._-]{0,63}$/u.test(header))
                 ? headers.map(metric => ({ metric: compact(metric), unit: '%' })) : null;
             const sourceColumns = headers.map((header, index) => explicit[index] || captionColumns?.[index] || opaqueColumn(header));

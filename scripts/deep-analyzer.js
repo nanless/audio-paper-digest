@@ -4969,6 +4969,13 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const resource = '(?:源代码|代码仓库|模型权重|数据集|语料库|代码|模型|权重|检查点|数据|资源)';
         const list = resource + '(?:(?:、|或|与|和|及)' + resource + '){0,4}';
         const release = '(?:已(?:经)?|当前)?(?:公开|开源|开放|可下载|可获取|可用)';
+        // 发布限定也可能在资源名前面；否定只覆盖以「证据」闭合的命题，
+        // 不把同句后续真正的开放声明藏在整段豁免里。
+        for (const span of value.matchAll(new RegExp('(?:没有|尚无|并无|不存在)'
+            + '(?:可验证的)?(?:公开|开源|开放)' + list
+            + '(?:可用|可下载|可获取)?的证据', 'gu'))) {
+            if (contains(span) && safeRecoverySpan(span)) return true;
+        }
         // Only the governed resource proposition is denied. An affirmative
         // embedded object such as 本文已经公开的代码 is outside this grammar.
         const inferredProposition = '(?:(?:作者(?:团队)?|本文|本论文|本研究|本工作)的?)?'
@@ -4987,6 +4994,11 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             || bounded(/(?:部分)?标为公开的数据集实际上通过所给链接无法获取或只部分发布/gu))) return true;
         const property = '(?:代码(?:开源|公开|可得|可跑|可运行)|开源代码|包可下载|(?:模型)?权重(?:可下载|下载)|(?:端到端)?系统可(?:一键)?运行|演示可听|开源|可运行)';
         const properties = property + '(?:(?:、|与|和)' + property + '){1,3}';
+        for (const span of value.matchAll(new RegExp('(?:因此)?(?:应|需|要)把('
+            + properties + ')分开(?:核对|核实|确认)', 'gu'))) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (contains(span) && safeRecoverySpan(span) && !prefix.trim()) return true;
+        }
         // Bare, owner-free concepts followed by an explicit distinction or
         // pending state are not present availability. Ownership is not optional.
         const lists = new RegExp('(' + properties + ')(?:是(?:三件独立的事|三件事|不同的)|三件事|要分开说|要当作三件未确认的事|(?:同样)?未确认|在本篇中均未给出明确证据|更需要分别核验|(?:要|应|需)(?:分开|分别)(?:核实|核对|确认))(?=[，,：:。！？!?；;]|$)', 'gu');
@@ -5022,14 +5034,72 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         if (type === 'model' && (bounded(/(?:对应)?模态可用(?=时)/gu)
             || bounded(/可用(?:容量|知识)/gu))) return true;
         if (type === 'dataset' && bounded(/临床可用(?=的结论)/gu)) return true;
+        if (type === 'dataset' && bounded(/(?:作为|用作)(?:验证|检验|评估)数据集(?:可用|有效|适用)(?:性)?的基线/gu)) return true;
         if (type === 'code' && (bounded(/(?:从)?各模态仓库取出可用线索/gu)
             || bounded(/数据可得指仓库经注册申请后可访问/gu))) return true;
         const source = String(sourceText || '').replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
             .replace(/^[ \t]*>.*$/gm, ' ').replace(/“[^”]*”|「[^」]*」|"[^"\n]*"|'[^'\n]*'/g, ' ');
-        const sourceAffirms = pattern => [...source.matchAll(pattern)].some(span => {
+        const sourceAffirms = (pattern, checkFollowingRetraction = false, boundQuote = null, accepts = null) => [...source.matchAll(pattern)].some(span => {
+            if (boundQuote !== null) {
+                let offset = source.indexOf(boundQuote), contained = false;
+                while (offset >= 0) {
+                    if (span.index >= offset && span.index + span[0].length <= offset + boundQuote.length) {
+                        contained = true; break;
+                    }
+                    offset = source.indexOf(boundQuote, offset + 1);
+                }
+                if (!contained) return false;
+            }
+            if (accepts && !accepts(span[0])) return false;
             const before = source.slice(Math.max(0, span.index - 240), span.index).split(/[.!?]/u).at(-1);
-            return !/\b(?:not|never|no|if|would|could|might|will|future|planned|plans?|unlikely|likely|expected|intended|may|can|should|must|aims?|whether|said|says?|wrote|written|quoted|quote|quotation|false|untrue|incorrect|inaccurate|claims?|claimed|reports?|reported|reportedly|alleged|assumed|third[- ]party)\b/iu.test(before + span[0]);
+            if (/\b(?:not|never|no|if|would|could|might|will|future|planned|plans?|unlikely|likely|expected|intended|may|can|should|must|aims?|whether|said|says?|wrote|written|quoted|quote|quotation|false|untrue|incorrect|inaccurate|claims?|claimed|reports?|reported|reportedly|alleged|assumed|third[- ]party)\b/iu.test(before + span[0])) return false;
+            if (!checkFollowingRetraction) return true;
+            // 先移除URL，避免域名中的点伪装句界；只核当前声明的句尾与紧邻撤回。
+            const tail = source.slice(span.index + span[0].length).replace(/https?:\/\/\S+/gu, '');
+            const end = tail.search(/[.!?]/u);
+            const continuation = end < 0 ? tail : tail.slice(0, end);
+            const next = end < 0 ? '' : tail.slice(end + 1).replace(/^[\s.!?]+/u, '');
+            return !/\b(?:not|never|no|if|unless|would|could|might|may|will|future|planned|plans?|assuming)\b/iu.test(continuation)
+                && !/^(?:This|That|The|These|Those|Above)(?:\s+(?:statement|claim|assertion|release|description))?\s+(?:(?:is|are|was|were)\s+(?:false|untrue|incorrect|inaccurate|not true|withdrawn|revoked)|(?:has|have)\s+been\s+(?:withdrawn|revoked|denied))\b/iu.test(next);
         });
+        // 这些是有来源和确切第三方身份的实验输入。只豁免输入的发布谓词，
+        // 作者的新数据、实现或微调后权重仍由各自后续断言核验。
+        if (type === 'code') for (const span of value.matchAll(/([A-Za-z][A-Za-z0-9_.+-]{0,79})\s*的起点是\s*([A-Za-z][A-Za-z0-9_.+-]{0,79})\s*仓库已发布的(?:函数|功能)标签和边界注释/gu)) {
+            if (!contains(span) || !safeRecoverySpan(span)) continue;
+            const dependency = span[2].toLowerCase();
+            const evidence = verified.resources.filter(resource => resource.type === 'third_party'
+                && resource.origin === 'paper_source' && resource.availability === 'available'
+                && (() => {
+                    try { return new URL(resource.originalUrl).pathname.split('/').filter(Boolean)
+                        .some(part => decodeURIComponent(part).toLowerCase() === dependency); }
+                    catch { return false; }
+                })());
+            if (evidence.some(resource => {
+                const url = resource.originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // Bind this declaration, this quote and its actual URL together;
+                // an affirmative about another repository cannot back a denial.
+                const statement = new RegExp('\\bWe construct an MSA dataset from the function\\s+'
+                    + 'labels and boundary annotations released with\\b[^.!?]{1,400}' + url, 'giu');
+                return sourceAffirms(statement, true, resource.sourceQuote);
+            })) return true;
+        }
+        if (type === 'model') for (const span of value.matchAll(/学生(?:用|使用|采用)\s*([A-Za-z][A-Za-z0-9_.+\- \t]*(?:(?:和|与|、)[A-Za-z][A-Za-z0-9_.+\- \t]*){0,3})\s*的已发布权重/gu)) {
+            if (!contains(span) || !safeRecoverySpan(span)) continue;
+            // HTML文字层会把脚注1排成「11\n 1\n URL」。仅去除这组闭合脚注，
+            // 保留模型名、版本和规模，不能把任意数字当脚注抹掉。
+            const clean = text => String(text).replace(/([A-Za-z0-9])(\d{1,2})\2\s+\2\s+https:\/\/\S+/gu, '$1')
+                .replace(/\s+/gu, ' ').trim();
+            const names = span[1].split(/和|与|、/u).map(name => name.trim());
+            const escaped = name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const named = (text, name) => new RegExp('(?:^|[^A-Za-z0-9_.+-])'
+                + escaped(name) + '(?=$|[^A-Za-z0-9_.+-])', 'u').test(clean(text));
+            const thirdParty = verified.resources.filter(resource => resource.type === 'third_party'
+                && resource.origin === 'paper_source' && resource.availability === 'available');
+            const initialization = /\bWe initialize the students from the publicly released\s+(?:https?:\/\/\S+|[^.!?]){1,600}?\bcheckpoints\b/giu;
+            if (names.every(name => thirdParty.some(resource => named(resource.sourceQuote, name)
+                && sourceAffirms(initialization, true, resource.sourceQuote, statement =>
+                    statement.includes(resource.originalUrl) && names.every(input => named(statement, input)))))) return true;
+        }
         if (type === 'model') {
             const own = '\\b(?:Our|The\\s+proposed)\\s+';
             const checkpoint = '(?:model[ \\t]+)?checkpoints?\\s+(?:is|are|have\\s+been)\\s+(?:open[- ]sourced|publicly\\s+released)\\b';
@@ -5381,8 +5451,11 @@ function buildApiReaderEvidenceContext(
     arxivId = '',
     readerCapabilityPolicy = null,
     verifiedResourceIdentity = null,
-    naturalResourceProse = false
+    naturalResourceProse = false,
+    displayBudget = API_READER_EVIDENCE_MAX_CHARS
 ) {
+    if (!Number.isSafeInteger(displayBudget) || displayBudget < 1
+        || displayBudget > API_READER_EVIDENCE_MAX_CHARS) throw new Error('Reader 来源展示预算无效');
     const capabilityEvidence = readerCapabilityPolicyNotice(readerCapabilityPolicy);
     const resourceEvidence = buildApiReaderResourceEvidence(verifiedResourceIdentity, naturalResourceProse);
     const separatorReserve = [capabilityEvidence, resourceEvidence].filter(Boolean).length * 2 + 2;
@@ -5397,7 +5470,7 @@ function buildApiReaderEvidenceContext(
     );
     const sourceBudget = Math.max(
         0,
-        API_READER_EVIDENCE_MAX_CHARS - artifactEvidence.length - capabilityEvidence.length
+        displayBudget - artifactEvidence.length - capabilityEvidence.length
             - resourceEvidence.length - separatorReserve
     );
     const sourceEvidence = buildTypeAwareSourceContext(
@@ -5409,9 +5482,9 @@ function buildApiReaderEvidenceContext(
     );
     const combined = [capabilityEvidence, resourceEvidence, sourceEvidence, artifactEvidence]
         .filter(Boolean).join('\n\n');
-    if (combined.length > API_READER_EVIDENCE_MAX_CHARS) {
+    if (combined.length > displayBudget) {
         throw new Error(
-            `读者文章证据超出硬上限: ${combined.length}/${API_READER_EVIDENCE_MAX_CHARS}`
+            `读者文章证据超出硬上限: ${combined.length}/${displayBudget}`
         );
     }
     return combined;
@@ -9150,6 +9223,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 'reader_workflow_leakage', 'reader_awkward_translation'].includes(issue?.code))
             && candidate && repair.parseRecoveryDraft(candidate);
         const repairOptions = { availableFigureOrdinals: pixelFigureOrdinals, structuredArtifacts: options.structuredArtifacts,
+            sourceEvidenceBudget: API_READER_EVIDENCE_MAX_CHARS,
+            sourceEvidenceForBudget: budget => buildApiReaderEvidenceContext('', options.sourceText,
+                options.structuredArtifacts, getPaperArxivId(paper), readerCapabilityPolicy,
+                verifiedReaderResources, naturalResourceProse, budget),
             ...(options.readerFactLocalRevision === true ? { readerFactLocalPaths: start.readerFactLocalPaths,
                 readerFactLocalClaims: require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper)) } : {}) };
         const proposedRepairContext = canPlanLocalQuotes
@@ -9251,6 +9328,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? withReaderSourceTableEvidence(() => repair.repairTableEvidenceGuidance(candidate, currentIssues,
                 repair.buildRepairTargets(candidate, currentIssues, repairOptions), options.sourceText,
                 { ...repairOptions, fullDraftRegenerationDiagnostics: true })) : '';
+        const fullRegenerationEvidence = fullRegenerationTableFeedback
+            ? repair.budgetReaderRepairSourceEvidence(sourceEvidence, fullRegenerationTableFeedback, repairOptions)
+            : sourceEvidence;
         const buildReaderPrompt = indexExamples => require('./lib/reader-resource-prose').renderPrompt(
             conceptTermsContext
             ? loadPrompt(conceptTermsContext.promptPath, { title: paper.title || '', arxivId: getPaperArxivId(paper),
@@ -9278,7 +9358,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         }) : loadPrompt(currentTextStagePromptPath('apiReaderArticle'), {
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
-            sourceEvidence,
+            sourceEvidence: fullRegenerationEvidence,
             validationFeedback: [validationFeedback, fullRegenerationTableFeedback,
                 savedInputContinuity?.validationFeedback,
                 ...(!candidate ? currentIssues.filter(issue => issue.diagnosticOnly === true).map(issueFeedback) : []),
