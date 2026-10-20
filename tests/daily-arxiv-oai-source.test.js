@@ -209,6 +209,102 @@ test('an empty official 503 body preserves its status and Retry-After; a 200 emp
     await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], emptySuccess), /body size invalid/);
 });
 
+test('a real-shape TLS ECONNRESET retries the same proxied page and preserves original failure identity', async t => {
+    const original = Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), { code: 'ECONNRESET' });
+    const b = boundary(), opts = setup(t, b, (r, ctx) => { if (ctx.call === 1) throw original; return r; });
+    const request = opts.requestFn, inputs = [];
+    opts.requestFn = (...args) => { inputs.push(args); return request(...args); };
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    assert.equal(opts.calls.length, 5);
+    assert.equal(opts.calls[0], opts.calls[1]);
+    assert.deepEqual(inputs[0].slice(0, 5), inputs[1].slice(0, 5));
+    const failed = papers._sourceHealth.failures[0];
+    assert.equal(failed.code, 'ECONNRESET'); assert.equal(failed.error, original.message);
+    assert.equal(failed.url, opts.calls[0]); assert.equal(failed.prefix, 'arXivRaw');
+    assert.equal(failed.index, 0); assert.equal(failed.requestToken, '');
+    assert.equal(failed.replayPage, false); assert.equal(failed.attempt, 1);
+    assert.equal('file' in failed, false);
+    assert.equal(fs.readdirSync(opts.evidenceDir).length, 4);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers, []), true);
+});
+
+for (const code of ['ECONNRESET', 'ETIMEDOUT', 'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT']) {
+    test(`transport ${code} consumes only the original three page attempts`, async t => {
+        const errors = [], b = boundary(), opts = setup(t, b, () => {
+            const error = Object.assign(new Error(`Original ${code} transport failure`), { code });
+            errors.push(error); throw error;
+        });
+        await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), error => {
+            assert.equal(error.code, 'SOURCE_FETCH_FAILED'); assert.equal(error.cause, errors[2]);
+            assert.equal(error.cause.code, code); assert.equal(error.sourceHealth.coverageComplete, false);
+            assert.deepEqual(error.sourceHealth.failures.filter(item => item.code === code).map(item => item.attempt), [1, 2, 3]);
+            return true;
+        });
+        assert.equal(opts.calls.length, 3); assert.equal(new Set(opts.calls).size, 1);
+        assert.deepEqual(fs.readdirSync(opts.evidenceDir), []);
+    });
+}
+
+test('HTTP 503 and TLS failures share one three-attempt page limit', async t => {
+    const original = Object.assign(new Error('TLS reset after Retry-After'), { code: 'ECONNRESET' });
+    const b = boundary(), opts = setup(t, b, (r, ctx) => {
+        if (ctx.call === 2) throw original;
+        return { status: 503, data: '', headers: { 'retry-after': '37' } };
+    });
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), error => {
+        const failures = error.sourceHealth.failures.filter(item => item.attempt !== undefined);
+        assert.deepEqual(failures.map(item => item.attempt), [1, 2, 3]);
+        assert.deepEqual(failures.map(item => item.code || item.error), ['HTTP 503', 'ECONNRESET', 'HTTP 503']);
+        assert.equal(failures[1].error, original.message); assert.equal('file' in failures[1], false);
+        return true;
+    });
+    assert.equal(opts.calls.length, 3); assert.equal(new Set(opts.calls).size, 1);
+    assert.deepEqual(opts.deferrals, [{ host: 'oaipmh.arxiv.org', delay: 37000 }]);
+    assert.equal(fs.readdirSync(opts.evidenceDir).length, 2);
+});
+
+test('structured first-page replay retains its identity when its TLS request is retried', async t => {
+    const b = boundary(), opts = setup(t, b, (r, ctx) => {
+        if (ctx.call === 4) throw Object.assign(new Error('TLS replay reset'), { code: 'ECONNRESET' });
+        return r;
+    });
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    const failure = papers._sourceHealth.failures[0];
+    assert.equal(failure.prefix, 'arXiv'); assert.equal(failure.replayPage, true); assert.equal(failure.attempt, 1);
+    assert.equal(opts.calls[3], opts.calls[4]); assert.equal(opts.calls.length, 5);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers, []), true);
+});
+
+test('nontransport request errors, scheduler errors and XML failures do not gain retries', async t => {
+    for (const code of ['CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID', 'ENOTFOUND', 'EAUTH', undefined]) {
+        const original = Object.assign(new Error('Original nonretryable request error'), code ? { code } : {});
+        const b = boundary(), opts = setup(t, b, () => { throw original; });
+        await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), error => error.cause === original);
+        assert.equal(opts.calls.length, 1); assert.deepEqual(fs.readdirSync(opts.evidenceDir), []);
+    }
+    const b = boundary(), scheduler = setup(t, b);
+    scheduler.requestScheduler.run = async () => { throw Object.assign(new Error('Scheduler failure'), { code: 'ECONNRESET' }); };
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], scheduler), /Scheduler failure/);
+    assert.equal(scheduler.calls.length, 0);
+    const malformed = setup(t, b, r => ({ ...r, data: '<broken>' }));
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], malformed), /XML parse failed/);
+    assert.equal(malformed.calls.length, 1); assert.equal(fs.readdirSync(malformed.evidenceDir).length, 1);
+    const identity = setup(t, b, r => ({ ...r, data: r.data.replace('set="eess:eess:AS"', 'set="cs:cs:AI"') }));
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], identity), /request identity mismatch/);
+    assert.equal(identity.calls.length, 1);
+});
+
+test('a local save failure with a transport-looking code never retries the already returned response', async t => {
+    const b = boundary(), opts = setup(t, b), actualWrite = fs.writeFileSync;
+    const original = Object.assign(new Error('Local response preservation failed'), { code: 'ECONNRESET' });
+    t.mock.method(fs, 'writeFileSync', function (filename, ...args) {
+        if (path.dirname(filename) === opts.evidenceDir) throw original;
+        return actualWrite.call(fs, filename, ...args);
+    });
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), error => error.cause === original);
+    assert.equal(opts.calls.length, 1); assert.deepEqual(fs.readdirSync(opts.evidenceDir), []);
+});
+
 test('DTD/entities and nested foreign records are rejected by actual XML parser', () => {
     assert.throws(() => parseOaiXml('<!DOCTYPE x [<!ENTITY foo "bar">]><x/>'), /forbidden/);
     assert.throws(() => parseOaiXml(envelope('arXivRaw', [record('arXivRaw')]).replace('<ListRecords>', '<ListRecords><wrapper><record/></wrapper>')), /nested/);
@@ -387,4 +483,240 @@ for (const fixture of REAL_FIELD_AUTHORITIES) test('real field authorities remai
     }
     const changed = structuredClone(normal); changed[0].datestamp = '2026-10-17';
     assert.throws(() => reconstructOaiCandidates(raw, changed, fixture.categoryId, b), /header drift/);
+});
+
+// Official server query_data[FROM] mutation, with explicit synthetic protocol
+// variations below. These small cases do not stand in for the raw-page fixture.
+function dateToken(prefix, from, skip, entries) {
+    return encodeURIComponent(new URLSearchParams(entries || [
+        ['verb', 'ListRecords'], ['metadataPrefix', prefix], ['from', from], ['set', 'eess:eess:AS'], ['skip', String(skip)]
+    ]).toString());
+}
+function cursorSetup(t, config = {}) {
+    const b = boundary(), rows = ['2610.23539', '2610.23540'];
+    const opts = setup(t, b, undefined, rows);
+    const pageDays = config.pageDays || ['2026-10-19', '2026-10-19'];
+    opts.requestFn = async url => {
+        opts.calls.push(url);
+        const params = new URL(url).searchParams, incoming = params.get('resumptionToken') || '';
+        const decoded = incoming ? new URLSearchParams(decodeURIComponent(incoming)) : params;
+        const prefix = decoded.get('metadataPrefix'), index = incoming ? 1 : 0;
+        const out = index || config.noToken ? '' : dateToken(prefix, config.from || '2026-10-19', config.skip ?? 1);
+        const records = [record(prefix, rows[index]).replace('<datestamp>2026-10-19</datestamp>', `<datestamp>${pageDays[index]}</datestamp>`)];
+        let data = envelope(prefix, records, out, incoming);
+        if (!incoming) {
+            assert.equal(params.get('from'), '2026-10-16');
+            const echo = config.echoFrom || (out ? config.from || '2026-10-19' : '2026-10-16');
+            data = data.replace('from="2026-10-16"', `from="${echo}"`);
+        }
+        const result = { status: 200, data };
+        return config.transform ? config.transform(result, { prefix, index, incoming, out, call: opts.calls.length }) : result;
+    };
+    return { b, opts };
+}
+
+test('official canonical date token permits only its verified initial from echo and closes same-day skip', async t => {
+    const { b, opts } = cursorSetup(t);
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    assert.equal(papers.length, 2);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers, []), true);
+    for (const prefix of ['arXivRaw', 'arXiv']) {
+        const proof = papers._sourceHealth.provider.oai.streams[prefix];
+        assert.equal(new URL(proof[0].url).searchParams.get('from'), '2026-10-16');
+        assert.equal(parseOaiXml(fs.readFileSync(path.join(opts.evidenceDir, proof[0].file))).request.from, '2026-10-19');
+    }
+});
+
+test('official next-day skip zero closes on next first date and preserves the complete earlier page', async t => {
+    const { b, opts } = cursorSetup(t, { pageDays: ['2026-10-16', '2026-10-19'], skip: 0 });
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    assert.deepEqual(papers.map(p => p.arxivId), ['2610.23539v1', '2610.23540v1']);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers), true);
+});
+
+for (const [name, config] of [
+    ['fabricated echo from', { echoFrom: '2026-10-20' }],
+    ['from drift without output token', { noToken: true, echoFrom: '2026-10-19' }],
+    ['wrong tail-day skip', { skip: 2 }],
+    ['negative skip', { skip: -1 }],
+    ['zero skip on displayed same day', { skip: 0 }],
+    ['date cursor before original query', { from: '2026-10-15' }],
+    ['date cursor behind displayed last day', { from: '2026-10-18' }],
+    ['date cursor after response date', { from: '2026-10-21', skip: 0 }],
+    ['unclosed jump to a later day', { from: '2026-10-20', skip: 0 }],
+    ['next-page date regression', { pageDays: ['2026-10-19', '2026-10-16'] }],
+    ['next-day zero skip not closed', { pageDays: ['2026-10-16', '2026-10-20'], skip: 0 }],
+    ['invalid calendar day', { from: '2026-02-30', skip: 0 }]
+]) test(`official cursor rejects ${name}`, async t => {
+    const { b, opts } = cursorSetup(t, config);
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), e => e.code === 'SOURCE_FETCH_FAILED' && !e.sourceHealth.coverageComplete);
+});
+
+for (const [name, change] of [
+    ['duplicate from field', entries => [...entries, ['from', '2026-10-19']]],
+    ['extra field', entries => [...entries, ['until', '2026-10-20']]],
+    ['wrong verb', entries => entries.map(([k,v]) => [k, k === 'verb' ? 'ListIdentifiers' : v])],
+    ['wrong prefix', entries => entries.map(([k,v]) => [k, k === 'metadataPrefix' ? 'arXivOld' : v])],
+    ['wrong set', entries => entries.map(([k,v]) => [k, k === 'set' ? 'cs:cs:LG' : v])],
+    ['noncanonical skip', entries => entries.map(([k,v]) => [k, k === 'skip' ? '01' : v])],
+    ['missing skip', entries => entries.filter(([k]) => k !== 'skip')]
+]) test(`official cursor rejects ${name} without opaque-token fallback`, async t => {
+    const { b, opts } = cursorSetup(t, { transform: (r, ctx) => {
+        if (ctx.index) return r;
+        const entries = [...new URLSearchParams(decodeURIComponent(ctx.out))];
+        return { ...r, data: r.data.replace(ctx.out, dateToken(ctx.prefix, '', 0, change(entries))) };
+    } });
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), /cursor/);
+});
+
+test('official tokens reject damaged encoding, downgraded output and changed continuation request echo', async t => {
+    for (const kind of ['damaged', 'single-encoded', 'downgrade', 'echo']) {
+        const { b, opts } = cursorSetup(t, { transform: (r, ctx) => {
+            if (!ctx.index && kind === 'damaged') return { ...r, data: r.data.replace(ctx.out, ctx.out.replace('%3D', '%3G')) };
+            if (!ctx.index && kind === 'single-encoded') return { ...r, data: r.data.replace(ctx.out, decodeURIComponent(ctx.out).replaceAll('&', '&amp;')) };
+            if (ctx.index && kind === 'downgrade') return { ...r, data: r.data.replace('<resumptionToken></resumptionToken>', '<resumptionToken>normal-next</resumptionToken>') };
+            if (ctx.index && kind === 'echo') return { ...r, data: r.data.replace(`resumptionToken="${ctx.incoming}"`, 'resumptionToken="changed-token"') };
+            return r;
+        } });
+        await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), /cursor|identity/);
+    }
+});
+
+test('official cursor still rejects cross-format complete-set changes and changed first-page replay', async t => {
+    for (const kind of ['set', 'replay']) {
+        const { b, opts } = cursorSetup(t, { transform: (r, ctx) => {
+            if (kind === 'set' && ctx.prefix === 'arXiv' && ctx.index) return { ...r, data: r.data.replaceAll('2610.23540', '2610.23541') };
+            if (kind === 'replay' && ctx.call === 3) return { ...r, data: r.data.replaceAll('2610.23539', '2610.23541') };
+            return r;
+        } });
+        await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), /member sets|first page/);
+    }
+});
+
+test('official cursor response generation may go backward between cached pages but each page remains fresh', async t => {
+    const { b, opts } = cursorSetup(t, { transform: (r, ctx) => ({ ...r, data: r.data.replace('2026-10-20T03:00:00Z',
+        ctx.index ? '2026-10-20T03:17:41Z' : '2026-10-20T03:42:53Z') }) });
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers), true);
+});
+
+// Complete original official cs.LG XML pages captured in the 2026-10-20
+// read-only preflight, plus the independently captured actual Tuesday RSS.
+// No response body/date/request has been rewritten. SHA/size bind every byte.
+const REAL_LG_CURSOR_FIXTURE_BYTES = require('node:zlib').gunzipSync(fs.readFileSync(
+    path.join(__dirname, 'fixtures/daily-arxiv-lg-cursor-20261020.json.gz')));
+assert.equal(crypto.createHash('sha256').update(REAL_LG_CURSOR_FIXTURE_BYTES).digest('hex'),
+    '0e0695f446df926896cab5c5d7f6572e219ad451b11833122f6c5bec11817bd1');
+const REAL_LG_CURSOR_FIXTURE = JSON.parse(REAL_LG_CURSOR_FIXTURE_BYTES);
+
+function originalFixtureBytes(fixture) {
+    const bytes = require('node:zlib').gunzipSync(Buffer.from(fixture.gzip, 'base64'));
+    assert.equal(bytes.length, fixture.bytes);
+    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), fixture.sha256);
+    return bytes;
+}
+test('complete original 1733-member LG pages and current 817-item RSS pass real byte-backed cold replay', async t => {
+    const fixture = REAL_LG_CURSOR_FIXTURE, b = fixture.boundary;
+    const opts = setup(t, b), directory = path.dirname(opts.evidenceDir);
+    const rssBytes = originalFixtureBytes(fixture.rss);
+    const rssPath = path.join(directory, `rss-cs.LG-${fixture.rss.sha256}.xml`);
+    fs.writeFileSync(rssPath, rssBytes, { mode: 0o600, flag: 'wx' });
+    opts.announcementEvidence = { ...fixture.announcement, filePath: rssPath };
+    opts.triggerFailure = fixture.triggerFailure;
+    const pages = Object.fromEntries(Object.entries(fixture.pages).map(([prefix, list]) => [prefix, list.map(originalFixtureBytes)]));
+    opts.requestFn = async url => {
+        opts.calls.push(url);
+        const params = new URL(url).searchParams, token = params.get('resumptionToken') || '';
+        const query = token ? new URLSearchParams(decodeURIComponent(token)) : params;
+        const prefix = query.get('metadataPrefix');
+        if (!token) {
+            assert.equal(params.get('from'), '2026-10-16');
+            assert.equal(params.get('set'), 'cs:cs:LG');
+        } else {
+            assert.equal(query.get('from'), '2026-10-20');
+            assert.equal(query.get('skip'), '430');
+        }
+        return { status: 200, data: pages[prefix][token ? 1 : 0] };
+    };
+    opts.requestScheduler = { run: async (host, action, options) => {
+        assert.equal(host, 'oaipmh.arxiv.org'); assert.equal(options.minimumCooldownMs, 5000); return action();
+    } };
+    const papers = await fetchDailyOaiCategory('cs.LG', b, [], opts);
+    const health = papers._sourceHealth;
+    assert.equal(opts.calls.length, 6);
+    assert.equal(hasVerifiedOaiCoverage(health, b, 'cs.LG', papers, []), true);
+    for (const prefix of ['arXivRaw', 'arXiv']) {
+        const records = pages[prefix].flatMap(bytes => parseOaiXml(bytes).records);
+        assert.equal(records.length, 1733);
+        assert.equal(new Set(records.map(r => r.id)).size, 1733);
+        assert.deepEqual(records.reduce((counts, r) => {
+            counts[r.datestamp] = (counts[r.datestamp] || 0) + 1; return counts;
+        }, {}), { '2026-10-16': 472, '2026-10-19': 398, '2026-10-20': 863 });
+    }
+    assert.equal(parseOaiXml(pages.arXiv[0]).responseDate, '2026-10-20T03:42:53Z');
+    assert.equal(parseOaiXml(pages.arXiv[1]).responseDate, '2026-10-20T03:17:41Z');
+    assert.equal(health.provider.oai.witnessEncounter.arxivId, '2610.23847');
+    assert.ok(papers.some(p => p.arxivId.startsWith('2610.23847v')));
+    assert.equal(require('../scripts/lib/daily-arxiv-announcement-source').replayDailyAnnouncement(
+        opts.announcementEvidence, b, 'cs.LG').ids.length, 817);
+    const moved = structuredClone(health);
+    moved.provider.oai.streams.arXivRaw[0].url = moved.provider.oai.streams.arXivRaw[0].url.replace('from=2026-10-16', 'from=2026-10-20');
+    assert.equal(hasVerifiedOaiCoverage(moved, b, 'cs.LG', papers, []), false);
+    const changed = structuredClone(papers);
+    changed[0].abstract += ' Unrelated fabricated result.';
+    assert.equal(hasVerifiedOaiCoverage(health, b, 'cs.LG', changed, []), false);
+});
+
+test('official same-day branch retains an earlier original from and advances the real query skip', async t => {
+    const { b, opts } = cursorSetup(t, { from: '2026-10-16', echoFrom: '2026-10-16', skip: 1 });
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers), true);
+});
+
+test('official same-day continuation skip is cumulative across all displayed records in the active range', async t => {
+    const b = boundary(), rows = ['2610.23539', '2610.23540', '2610.23541'];
+    const opts = setup(t, b, undefined, rows);
+    opts.requestFn = async url => {
+        opts.calls.push(url);
+        const params = new URL(url).searchParams, incoming = params.get('resumptionToken') || '';
+        const q = incoming ? new URLSearchParams(decodeURIComponent(incoming)) : params;
+        const prefix = q.get('metadataPrefix'), index = incoming ? Number(q.get('skip')) : 0;
+        const out = index < 2 ? dateToken(prefix, '2026-10-16', index + 1) : '';
+        return { status: 200, data: envelope(prefix, [record(prefix, rows[index])], out, incoming) };
+    };
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    assert.equal(papers.length, 3);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers), true);
+});
+
+test('opaque padded base64 tokens keep their original protocol path', async t => {
+    const b = boundary(), rows = ['2610.23539', '2610.23540'], opts = setup(t, b, undefined, rows);
+    opts.requestFn = async url => {
+        opts.calls.push(url);
+        const params = new URL(url).searchParams, incoming = params.get('resumptionToken') || '';
+        const marker = incoming ? Buffer.from(incoming, 'base64').toString('utf8') : '';
+        const prefix = params.get('metadataPrefix') || (marker === 'raw-next' ? 'arXivRaw' : 'arXiv');
+        const output = incoming ? '' : Buffer.from(prefix === 'arXivRaw' ? 'raw-next' : 'normal-next').toString('base64');
+        return { status: 200, data: envelope(prefix, [record(prefix, rows[incoming ? 1 : 0])], output, incoming) };
+    };
+    const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
+    assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers), true);
+});
+
+test('official record dates cannot regress inside a page', async t => {
+    const { b, opts } = cursorSetup(t, { transform: (r, ctx) => !ctx.index ? {
+        ...r, data: r.data.replace('</ListRecords>', record(ctx.prefix, '2610.23542').replace(
+            '<datestamp>2026-10-19</datestamp>', '<datestamp>2026-10-16</datestamp>') + '</ListRecords>')
+    } : r });
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), /dates regress/);
+});
+
+test('percent-encoded official query keys cannot disguise a noncanonical cursor as opaque', async t => {
+    const { b, opts } = cursorSetup(t, { echoFrom: '2026-10-16', transform: (r, ctx) => {
+        if (ctx.index) return r;
+        const encodedKeys = ctx.out.replace('verb', '%76erb').replace('metadataPrefix', '%6DetadataPrefix')
+            .replace('from', '%66rom').replace('set', '%73et').replace('skip', '%73kip');
+        return { ...r, data: r.data.replace(ctx.out, encodedKeys) };
+    } });
+    await assert.rejects(fetchDailyOaiCategory('eess.AS', b, [], opts), /fields\/encoding/);
 });

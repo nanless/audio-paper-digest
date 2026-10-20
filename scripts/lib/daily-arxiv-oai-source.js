@@ -133,19 +133,96 @@ function isoDay(value) {
     return value;
 }
 
+function officialDateCursor(token, prefix, categoryId, boundary, responseDate) {
+    if (!token) return null;
+    // Other OAI implementations can use opaque tokens. Only a query-shaped
+    // token claims this official server's quote(urlencode(params + skip)) form;
+    // a malformed claimed form must not escape into the opaque-token path.
+    const queryShape = /(?:^|%26|&)(?:verb|metadataPrefix|from|set|skip)(?:%|=)/;
+    let decoded;
+    try { decoded = decodeURIComponent(token); }
+    catch {
+        if (queryShape.test(token)) throw new Error('OAI official date cursor encoding invalid');
+        return null;
+    }
+    if (!queryShape.test(token) && !queryShape.test(decoded)) return null;
+    const entries = [...new URLSearchParams(decoded)];
+    const names = entries.map(([name]) => name);
+    if (!same([...names].sort(), ['from', 'metadataPrefix', 'set', 'skip', 'verb'])
+        || new Set(names).size !== names.length
+        || encodeURIComponent(new URLSearchParams(entries).toString()) !== token) {
+        throw new Error('OAI official date cursor fields/encoding invalid');
+    }
+    const values = Object.fromEntries(entries);
+    if (values.verb !== 'ListRecords' || values.metadataPrefix !== prefix || values.set !== SETS[categoryId]
+        || !/^(?:0|[1-9]\d*)$/.test(values.skip) || !Number.isSafeInteger(Number(values.skip))) {
+        throw new Error('OAI official date cursor identity/skip invalid');
+    }
+    const from = isoDay(values.from);
+    if (from < boundary.since.slice(0, 10) || from > responseDate.slice(0, 10)) {
+        throw new Error('OAI official date cursor outside original range');
+    }
+    return { from, skip: Number(values.skip) };
+}
+
+function checkOfficialDateCursors(page, prefix, categoryId, boundary, token, seen) {
+    const incoming = officialDateCursor(token, prefix, categoryId, boundary, page.responseDate);
+    const outgoing = officialDateCursor(page.token, prefix, categoryId, boundary, page.responseDate);
+    if (!incoming && !outgoing) return null;
+    if ((token && !incoming && outgoing) || (incoming && page.token && !outgoing)) {
+        throw new Error('OAI official date cursor changed token format');
+    }
+    const previous = [...seen.values()];
+    const dates = page.records.map(record => isoDay(record.datestamp));
+    const lastPrevious = previous.at(-1)?.datestamp;
+    if (!dates.length || dates.some((day, index) => index > 0 && day < dates[index - 1])
+        || (lastPrevious && dates[0] < lastPrevious)) throw new Error('OAI official date cursor record dates regress');
+    if (incoming) {
+        const skipped = previous.filter(record => record.datestamp >= incoming.from).length;
+        // The server fetched one extra record to produce this token. That
+        // record must be the next page's first day, including a day transition
+        // with skip=0; termination cannot silently drop the pending day.
+        if (incoming.skip !== skipped || dates[0] !== (lastPrevious && lastPrevious > incoming.from ? lastPrevious : incoming.from)) {
+            throw new Error('OAI official incoming date cursor does not close previous page');
+        }
+    }
+    if (outgoing) {
+        const last = dates.at(-1);
+        const minimum = incoming?.from || boundary.since.slice(0, 10);
+        const skipped = previous.filter(record => record.datestamp === outgoing.from).length
+            + dates.filter(day => day === outgoing.from).length;
+        // The source's other explicit branch (first_date == last_date) retains
+        // the original active FROM even when that date has no matching records.
+        // It advances the actual query offset by the displayed page length.
+        const sameDayOffset = outgoing.from === minimum && dates.every(day => day === last)
+            && outgoing.skip === previous.filter(record => record.datestamp >= minimum).length + dates.length;
+        const lastDayOffset = outgoing.from === last && outgoing.skip === skipped;
+        const pendingNextDay = outgoing.from > last && outgoing.skip === 0;
+        if (outgoing.from < minimum || (!sameDayOffset && !lastDayOffset && !pendingNextDay)) {
+            throw new Error('OAI official outgoing date cursor/skip does not close displayed records');
+        }
+    }
+    return outgoing;
+}
+
 function checkPage(page, prefix, categoryId, boundary, token, seen, previousResponse, counts = { total: null }) {
     const expectedRequest = token ? { verb: 'ListRecords', resumptionToken: token }
         : { verb: 'ListRecords', metadataPrefix: prefix, set: SETS[categoryId], from: boundary.since.slice(0, 10) };
-    if (!same(page.request, expectedRequest)
-        || !['http://oaipmh.arxiv.org/oai', BASE_URL].includes(page.requestBase)) throw new Error('OAI response request identity mismatch');
+    if (!['http://oaipmh.arxiv.org/oai', BASE_URL].includes(page.requestBase)) throw new Error('OAI response request identity mismatch');
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(page.responseDate)
         || !Number.isFinite(Date.parse(page.responseDate))
         || new Date(page.responseDate).toISOString().replace('.000Z', 'Z') !== page.responseDate
         || Date.parse(page.responseDate) > Date.now() + 300000
-        || Date.parse(page.responseDate) < Date.parse(boundary.until)
-        || (previousResponse && Date.parse(page.responseDate) < Date.parse(previousResponse))) {
+        || Date.parse(page.responseDate) < Date.parse(boundary.until)) {
         throw new Error('OAI responseDate is stale or invalid for the fixed batch boundary');
     }
+    const outgoing = checkOfficialDateCursors(page, prefix, categoryId, boundary, token, seen);
+    // arXiv/oaipmh fetch_list.py mutates query_data[FROM] in place when creating
+    // its date cursor. Accept only that field, closed by the actual output
+    // token and displayed records; the sealed initial request URL stays fixed.
+    const officialFromEcho = !token && outgoing && page.request.from === outgoing.from
+        && same({ ...page.request, from: boundary.since.slice(0, 10) }, expectedRequest);
+    if (!same(page.request, expectedRequest) && !officialFromEcho) throw new Error('OAI response request identity mismatch');
     if (!page.records.length && page.token) throw new Error('OAI empty intermediate page');
     if (page.token.length > 16384 || /[\x00-\x1f\x7f]/.test(page.token)) throw new Error('OAI invalid resumption token');
     if (page.tokenAttributes.expirationDate && (!Number.isFinite(Date.parse(page.tokenAttributes.expirationDate))
@@ -356,18 +433,38 @@ async function fetchDailyOaiCategory(categoryId, boundary, existingIds, options 
     const runNonce = crypto.randomUUID();
     const fetchPage = async (prefix, index, token, replayPage = false) => {
         const url = urlFor(prefix, categoryId, boundary, token);
+        const retryableTransportCodes = new Set(['ECONNRESET', 'ETIMEDOUT',
+            'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT']);
         let response, file;
         for (let attempt = 0; attempt < 3; attempt++) {
             health.attempts++;
-            response = await scheduler.run('oaipmh.arxiv.org', () => request(url,
-                { 'User-Agent': 'audio-paper-digest/1.0', Accept: 'application/xml,text/xml;q=0.9' },
-                proxy, ARXIV_CONFIG.fetchTimeoutMs, MAX_BYTES), { minimumCooldownMs: 5000 });
+            let rejectedRequest;
+            try {
+                response = await scheduler.run('oaipmh.arxiv.org', async () => {
+                    // Catch only the real transport promise. Scheduler, XML,
+                    // identity and filesystem failures cannot gain a retry.
+                    try {
+                        return await request(url,
+                            { 'User-Agent': 'audio-paper-digest/1.0', Accept: 'application/xml,text/xml;q=0.9' },
+                            proxy, ARXIV_CONFIG.fetchTimeoutMs, MAX_BYTES);
+                    } catch (error) { rejectedRequest = error; throw error; }
+                }, { minimumCooldownMs: 5000 });
+            } catch (error) {
+                if (error !== rejectedRequest) throw error;
+                health.failures.push({ error: error?.message || String(error), code: error?.code || null,
+                    url, prefix, index, requestToken: token, replayPage, attempt: attempt + 1 });
+                // This uses the same three-attempt page budget as HTTP 503.
+                // A rejected request has no response body/file to invent.
+                if (!retryableTransportCodes.has(error?.code) || attempt === 2) throw error;
+                continue;
+            }
             const bytes = Buffer.isBuffer(response.data) ? response.data : Buffer.from(String(response.data || ''), 'utf8');
             if (bytes.length > MAX_BYTES || (response.status === 200 && !bytes.length)) throw new Error('OAI response body size invalid');
             file = `${prefix}-${runNonce}-${replayPage ? 'replay-' : ''}${String(index).padStart(6, '0')}-${attempt}.xml`;
             fs.writeFileSync(path.join(evidenceDir, file), bytes, { mode: 0o600, flag: 'wx' });
             if (response.status === 200) break;
-            health.failures.push({ error: `HTTP ${response.status}`, url, file, bytes: bytes.length, responseSha256: hash(bytes) });
+            health.failures.push({ error: `HTTP ${response.status}`, url, prefix, index, requestToken: token,
+                replayPage, attempt: attempt + 1, file, bytes: bytes.length, responseSha256: hash(bytes) });
             if (response.status !== 503 || attempt === 2) throw new Error(`OAI HTTP ${response.status}`);
             const wait = api.parseRetryAfterMs(response.headers, { nowMs: Date.now(), maxMs: Number.MAX_SAFE_INTEGER });
             if (typeof scheduler.defer !== 'function') throw new Error('OAI Retry-After requires shared scheduler defer');

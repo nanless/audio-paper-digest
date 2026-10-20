@@ -4,7 +4,11 @@
 // official Atom API; a category prefix is eligible only after full-page lower
 // boundary coverage, continuity and an independent first-page replay.
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { isDeepStrictEqual } = require('node:util');
 const CONTRACT = 'daily-arxiv-atom-prefix-coverage-v1';
+const OAI_CONTRACT = 'daily-arxiv-oai-coverage-v1';
 const SHA256 = /^[a-f0-9]{64}$/;
 const prefixUrl = (category, start, size) => `https://export.arxiv.org/api/query?search_query=cat:${category}&sortBy=submittedDate&sortOrder=descending&start=${start}&max_results=${size}`;
 const sha = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -14,8 +18,12 @@ const sha = value => crypto.createHash('sha256').update(JSON.stringify(value)).d
 // this same check; legacy date-window providers retain their existing rules.
 function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health?.categoryId || health?.id, requireTrigger = true, expectedPapers, expectedExistingIds) {
     const provider = health?.provider, prefix = provider?.categoryPrefix;
-    if (provider?.oai || provider?.window?.coverageContract === 'daily-arxiv-oai-coverage-v1') {
-        return require('./daily-arxiv-oai-source').hasVerifiedOaiCoverage(health, boundary, expectedCategoryId, expectedPapers, expectedExistingIds);
+    if (provider?.oai || provider?.window?.coverageContract === OAI_CONTRACT) {
+        try {
+            verifyOaiContinuationAnchor(health, boundary, expectedCategoryId,
+                expectedExistingIds ?? provider.oai?.existingIds);
+            return require('./daily-arxiv-oai-source').hasVerifiedOaiCoverage(health, boundary, expectedCategoryId, expectedPapers, expectedExistingIds);
+        } catch { return false; }
     }
     if (!prefix && provider?.window?.coverageContract === undefined) return true;
     try {
@@ -193,12 +201,162 @@ function hasEligibleOaiTrigger(health, boundary, categoryId) {
         && sameBoundary(original) && limited(original);
 }
 
+function originalOaiContinuationTrigger(health, boundary, categoryId, existingIds) {
+    const provider = health?.provider, proof = provider?.oai;
+    const baseline = [...new Set(Array.from(existingIds || [], require('../utils').normalizedId))].sort();
+    if (health?.ok !== false || !Array.isArray(health.failures) || !health.failures.length
+        || health.categoryId !== categoryId || (health.id !== undefined && health.id !== categoryId)
+        || provider?.window?.coverageContract !== OAI_CONTRACT || provider.window.covered !== false
+        || provider.window.since !== boundary.since || provider.window.until !== boundary.until
+        || provider.boundaryIdentity !== boundary.identitySha256 || proof?.contract !== OAI_CONTRACT
+        || proof.categoryId !== categoryId || proof.boundaryIdentity !== boundary.identitySha256
+        || !isDeepStrictEqual(proof.boundary, boundary) || !isDeepStrictEqual(proof.existingIds, baseline)
+        || !path.isAbsolute(proof.evidenceDir || '') || fs.realpathSync(proof.evidenceDir) !== proof.evidenceDir
+        || !fs.lstatSync(proof.evidenceDir).isDirectory()
+        || !hasEligibleOaiTrigger(proof.triggerFailure, boundary, categoryId)) {
+        throw new Error('OAI 失败延续的类别、完整边界、原去重基线或原双429不符');
+    }
+    return proof.triggerFailure;
+}
+
+function verifyPreviousOaiFailures(descriptor, boundary, categoryId, existingIds) {
+    const visited = new Set();
+    while (descriptor !== undefined) {
+        if (!descriptor || !SHA256.test(descriptor.sha256 || '') || !path.isAbsolute(descriptor.filePath || '')
+            || !Number.isSafeInteger(descriptor.bytes) || descriptor.bytes < 1 || descriptor.bytes > 16 * 1024 * 1024
+            || path.basename(descriptor.filePath) !== `failed-source-health-${descriptor.sha256}.json`
+            || visited.has(descriptor.filePath)) throw new Error('OAI 原失败归档描述符无效');
+        visited.add(descriptor.filePath);
+        const directory = path.dirname(descriptor.filePath);
+        if (fs.realpathSync(directory) !== directory) throw new Error('OAI 原失败归档目录变化');
+        const fd = fs.openSync(descriptor.filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        let bytes;
+        try {
+            const stat = fs.fstatSync(fd);
+            if (!stat.isFile() || stat.nlink !== 1 || stat.size !== descriptor.bytes || (stat.mode & 0o777) !== 0o600) {
+                throw new Error('OAI 原失败归档不是私有普通文件');
+            }
+            bytes = fs.readFileSync(fd);
+            const after = fs.fstatSync(fd), named = fs.lstatSync(descriptor.filePath);
+            if (stat.dev !== after.dev || stat.ino !== after.ino || stat.size !== after.size
+                || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs
+                || named.isSymbolicLink() || named.dev !== stat.dev || named.ino !== stat.ino || named.nlink !== 1
+                || bytes.length !== descriptor.bytes || crypto.createHash('sha256').update(bytes).digest('hex') !== descriptor.sha256
+                || fs.realpathSync(directory) !== directory) throw new Error('OAI 原失败归档字节或路径变化');
+        } finally { fs.closeSync(fd); }
+        const previous = JSON.parse(bytes.toString('utf8'));
+        originalOaiContinuationTrigger(previous, boundary, categoryId, existingIds);
+        if (previous.provider.oai.evidenceDir !== directory) throw new Error('OAI 原失败归档不属于其原采集目录');
+        descriptor = previous.provider.oai.continuationDispatchFailure?.failedSourceSnapshot
+            || previous.provider.oai.previousFailure;
+    }
+}
+
+function verifyOaiContinuationAnchor(health, boundary, categoryId, existingIds) {
+    const proof = health?.provider?.oai;
+    if (!path.isAbsolute(proof?.evidenceDir || '')) throw new Error('OAI 延续锚点缺少真实采集目录');
+    const filename = path.join(proof.evidenceDir, 'previous-oai-failure.json');
+    let fd;
+    try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
+    catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        if (proof.previousFailure !== undefined) throw new Error('OAI 延续历史缺少不可变实物锚点');
+        return;
+    }
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size < 1 || stat.size > 65536 || (stat.mode & 0o777) !== 0o600
+            || fs.realpathSync(proof.evidenceDir) !== proof.evidenceDir) throw new Error('OAI 延续锚点不是私有普通文件');
+        const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd), named = fs.lstatSync(filename);
+        if (stat.dev !== after.dev || stat.ino !== after.ino || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs
+            || stat.ctimeMs !== after.ctimeMs || bytes.length !== stat.size || named.isSymbolicLink()
+            || named.dev !== stat.dev || named.ino !== stat.ino || named.nlink !== 1) throw new Error('OAI 延续锚点在读取时变化');
+        const anchor = JSON.parse(bytes.toString('utf8'));
+        const expectedAnchor = { contract: 'daily-arxiv-oai-continuation-v1', categoryId,
+            boundaryIdentity: boundary.identitySha256, previousFailure: proof.previousFailure };
+        if (anchor.contract !== 'daily-arxiv-oai-continuation-v1' || anchor.categoryId !== categoryId
+            || anchor.boundaryIdentity !== boundary.identitySha256 || !anchor.previousFailure
+            || !isDeepStrictEqual(anchor.previousFailure, proof.previousFailure)
+            || !bytes.equals(Buffer.from(JSON.stringify(expectedAnchor, null, 2) + '\n'))) throw new Error('OAI 延续锚点与当前历史指针不符');
+        verifyPreviousOaiFailures(anchor.previousFailure, boundary, categoryId, existingIds);
+    } finally { fs.closeSync(fd); }
+}
+
+function writeOaiContinuationAnchor(health, descriptor, boundary, categoryId, existingIds) {
+    health.provider.oai.previousFailure = descriptor;
+    const body = { contract: 'daily-arxiv-oai-continuation-v1', categoryId,
+        boundaryIdentity: boundary.identitySha256, previousFailure: descriptor };
+    require('./immutable-file').writeImmutableFile(path.join(health.provider.oai.evidenceDir, 'previous-oai-failure.json'),
+        Buffer.from(JSON.stringify(body, null, 2) + '\n'), message => { throw new Error(message); });
+    verifyOaiContinuationAnchor(health, boundary, categoryId, existingIds);
+}
+
+function archiveOaiFailure(health, boundary, categoryId, existingIds) {
+    const trigger = originalOaiContinuationTrigger(health, boundary, categoryId, existingIds);
+    verifyOaiContinuationAnchor(health, boundary, categoryId, existingIds);
+    if (health.provider.oai.continuationDispatchFailure) {
+        if (health.provider.oai.continuationDispatchFailure.retainedOriginalFailure !== true
+            || !health.provider.oai.continuationDispatchFailure.failedSourceSnapshot) throw new Error('OAI 派发前失败缺少完整原失败快照');
+        verifyPreviousOaiFailures(health.provider.oai.continuationDispatchFailure.failedSourceSnapshot, boundary, categoryId, existingIds);
+    }
+    const bytes = Buffer.from(JSON.stringify(health, null, 2) + '\n');
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    const filePath = path.join(health.provider.oai.evidenceDir, `failed-source-health-${digest}.json`);
+    require('./immutable-file').writeImmutableFile(filePath, bytes, message => { throw new Error(message); });
+    const descriptor = { filePath, bytes: bytes.length, sha256: digest };
+    verifyPreviousOaiFailures(descriptor, boundary, categoryId, existingIds);
+    return { trigger, descriptor };
+}
+
 async function fetchDailyArxivCategory(categoryId, boundary, existingIds, options = {}) {
-    const recover = async triggerFailure => {
-        const evidenceDir = options.createOaiEvidenceDir?.();
-        return require('./daily-arxiv-oai-source').fetchDailyOaiCategory(categoryId, boundary, existingIds,
-            { evidenceDir, requestScheduler: options.requestScheduler, triggerFailure });
+    require('../env-loader').requireExternalRuntime('daily-arxiv-prefix-source');
+    const recover = async (triggerFailure, previousFailure) => {
+        let evidenceDir, returnedHealth;
+        try {
+            evidenceDir = options.createOaiEvidenceDir?.();
+            const result = await require('./daily-arxiv-oai-source').fetchDailyOaiCategory(categoryId, boundary, existingIds,
+                { evidenceDir, requestScheduler: options.requestScheduler, triggerFailure });
+            returnedHealth = result._sourceHealth;
+            if (previousFailure) writeOaiContinuationAnchor(returnedHealth, previousFailure, boundary, categoryId, existingIds);
+            return result;
+        } catch (error) {
+            if (!previousFailure) throw error;
+            const actualHealth = error.sourceHealth || returnedHealth;
+            if (actualHealth) {
+                error.sourceHealth = actualHealth;
+                try { writeOaiContinuationAnchor(actualHealth, previousFailure, boundary, categoryId, existingIds); }
+                catch (archiveError) {
+                    archiveError.sourceHealth = actualHealth;
+                    archiveError.cause ||= error;
+                    throw archiveError;
+                }
+            } else {
+                // No source health was created: retain the actual old failure,
+                // its counters and evidence directory, with the new dispatch
+                // error. Do not invent a new harvest or put its anchor in the
+                // old directory.
+                const retained = structuredClone(options.triggerFailure);
+                retained.provider.oai.continuationDispatchFailure = { retainedOriginalFailure: true,
+                    failedSourceSnapshot: previousFailure,
+                    error: error.message || String(error), code: error.code || null };
+                retained.failures.push({ error: error.message || String(error), code: error.code || null,
+                    phase: 'oai-continuation-dispatch' });
+                error.sourceHealth = retained;
+            }
+            throw error;
+        }
     };
+    const previous = options.triggerFailure;
+    if (options.officialOaiRecovery === true && (previous?.provider?.oai
+        || previous?.provider?.window?.coverageContract === OAI_CONTRACT)) {
+        let continuation;
+        try { continuation = archiveOaiFailure(previous, boundary, categoryId, existingIds); }
+        catch (cause) {
+            throw Object.assign(new Error(`OAI 失败延续被拒绝：${cause.message}`, { cause }),
+                { code: 'SOURCE_FETCH_FAILED', sourceHealth: structuredClone(previous) });
+        }
+        return recover(continuation.trigger, continuation.descriptor);
+    }
     if (options.officialOaiRecovery === true && hasEligibleOaiTrigger(options.triggerFailure, boundary, categoryId)) {
         return recover(options.triggerFailure);
     }
