@@ -289,32 +289,45 @@ test('指定论文公共重分析入口保存首请求失败及原账，未选�
     const input = { batchDate: sample.plan.batchDate, dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [sample.paper, sample.other] };
     fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(input));
     const original = structuredClone(sample.paper);
+    const unselectedBytes = JSON.stringify(sample.other);
     calls.length = 0;
-    const result = await require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], {
+    let runFailure;
+    await assert.rejects(require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], {
         fullStageReanalysis: options(sample), feedbackFiles: [feedbackFile],
+    }), error => {
+        runFailure = error;
+        return error.code === 'MODEL_AUTH_ERROR' && error.scope === 'run' && error.retryable === false;
     });
     const savedPayload = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
     assert.deepEqual(savedPayload.papers[1], sample.other);
+    assert.equal(JSON.stringify(savedPayload.papers[1]), unselectedBytes);
     const saved = savedPayload.papers[0];
-    assert.equal(result.failed, 1);
+    assert.equal(runFailure.stats.failed, 1);
+    assert.equal(runFailure.stats.stopped, true);
     assert.deepEqual(saved.fullStageReanalysisHistory[0].originalPaper, original);
     assert.equal(saved.fullStageReanalysis.runId, options(sample).runId);
     assert.match(saved.latestAnalysisAttemptError || saved.error, /主分析模型传输入口停止/);
+    assert.equal(saved.latestAnalysisAttemptErrorCode, 'MODEL_AUTH_ERROR');
+    assert.equal(saved.latestAnalysisAttemptErrorScope, 'run');
+    assert.equal(saved.latestAnalysisAttemptRetryable, false);
     assert.equal(saved.analysisManifest.stages.primaryAnalysis.primaryLocalFactRepair, undefined);
-    assert.ok(calls.length >= 1 && calls.every(call => call.stage === 'primaryAnalysis'));
+    assert.equal(calls.length, 1);
+    assert.ok(calls.every(call => call.stage === 'primaryAnalysis'));
     const outside = policy.fingerprintFields(saved);
     const inside = await inScope(sample, () => policy.fingerprintFields(saved));
     assert.deepEqual(outside, inside);
     calls.length = 0;
     // 第二次正常调用同run应继续新失败阶段，而不是再次归档旧canonical/清掉新费用。
     const historyLength = saved.fullStageReanalysisHistory.length;
-    await require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], {
+    await assert.rejects(require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], {
         fullStageReanalysis: options(sample), feedbackFiles: [feedbackFile],
-    });
+    }), error => error.code === 'MODEL_AUTH_ERROR' && error.scope === 'run' && error.retryable === false);
     const resumed = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
     assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[1], sample.other);
     assert.equal(resumed.fullStageReanalysisHistory.length, historyLength);
     assert.deepEqual(resumed.fullStageReanalysisHistory[0].originalPaper, original);
+    assert.equal(calls.length, 1);
+    assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[1]), unselectedBytes);
 });
 
 test('签名完整成功样本退出作用域仍合格，同run公共再次进入零模型请求且不改两篇记录', async t => {

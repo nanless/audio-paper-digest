@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_reader_table_header_units import fixture, publish
 from test_publish_to_blog import reseal_llm_api_reader_fixture
+from publication_local_replay import LocalReplayFailure
 
 
 class AuthenticatedPdfTableBridgeTests(unittest.TestCase):
@@ -50,8 +51,15 @@ class AuthenticatedPdfTableBridgeTests(unittest.TestCase):
 
     def test_declared_json_alone_uses_real_worker_and_cannot_grant_capability(self):
         paper, _ = self.fixture()
-        with self.assertRaisesRegex(publish.PublishDataValidationError, '原规范来源冷重放'):
+        with self.assertRaises(publish.PublishDataValidationError) as caught:
             publish._validate_api_reader_source_bindings(paper)
+        error = caught.exception
+        self.assertIsInstance(error, LocalReplayFailure)
+        self.assertEqual(error.worker, 'reader-resource-claims-replay-cli.js')
+        self.assertIsInstance(error.returncode, int)
+        self.assertNotEqual(error.returncode, 0)
+        self.assertFalse(error.timed_out)
+        self.assertFalse(error.output_truncated)
 
     def test_historical_arxiv_uses_direct_canonical_id_without_bypassing_figure_checks(self):
         paper, report = self.fixture()

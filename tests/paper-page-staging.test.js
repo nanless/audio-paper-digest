@@ -29,8 +29,12 @@ test('默认渲染器使用私有临时输入文件和受约束的子进程', ()
         execFileSync: (command, args, options) => {
             assert.equal(command, 'bash');
             assert.equal(options.input, undefined);
-            assert.equal(options.timeout, 60_000);
-            assert.equal(options.killSignal, 'SIGKILL');
+            assert.equal(options.timeout, 195_000);
+            assert.equal(options.killSignal, 'SIGTERM');
+            assert.equal(options.env.PD_PUBLICATION_ERROR_FD, '3');
+            const failureFile = fs.fstatSync(options.stdio[3]);
+            assert.equal(failureFile.mode & 0o777, 0o600);
+            assert.equal(failureFile.nlink, 1);
             assert.equal(args.at(-2), '--input-file');
             observedInputFile = args.at(-1);
             assert.deepEqual(JSON.parse(fs.readFileSync(observedInputFile, 'utf8')),

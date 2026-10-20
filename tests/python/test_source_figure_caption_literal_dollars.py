@@ -1,18 +1,24 @@
-"""Uninstalled display-only repair; no source/scientific/publication approval."""
+"""Portable display rules; explicitly pinned private audits grant no publication authority."""
 import ast
 import hashlib
 import importlib.util
 import json
 import re
+import os
+import stat
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 ROOT=next(p for p in Path(__file__).resolve().parents if (p/'package.json').is_file())
-O=next((p for p in Path(__file__).resolve().parents if (p/'proposed/scripts/publish_common.py').is_file()),None)
+REAL_AUDIT=os.environ.get('PD_SOURCE_FIGURE_CAPTION_REAL_AUDIT')
+REAL_AUDIT_SHA=os.environ.get('PD_SOURCE_FIGURE_CAPTION_REAL_AUDIT_SHA256')
+HUGO_AUDIT=os.environ.get('PD_SOURCE_FIGURE_CAPTION_HUGO_REAL_AUDIT')
+HUGO_AUDIT_SHA=os.environ.get('PD_SOURCE_FIGURE_CAPTION_HUGO_REAL_AUDIT_SHA256')
 sys.path.insert(0,str(ROOT/'scripts'))
 sys.path.insert(0,str(ROOT/'manual/scripts'))
-filename=O/'proposed/scripts/publish_common.py' if O else ROOT/'scripts/publish_common.py'
+filename=ROOT/'scripts/publish_common.py'
 spec=importlib.util.spec_from_file_location('caption_publish_common_proposal',filename)
 common=importlib.util.module_from_spec(spec);spec.loader.exec_module(common)
 from markdown_hugo_gate import parse_frontmatter_content,validate_markdown_format_gate
@@ -25,9 +31,107 @@ for node in tree.body:
         exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual conference repair>', 'exec'),namespace)
 repair=namespace['repair_formula_delimiters']
 URL='https://example.org/source$literal.png'
+
+def read_pinned(record):
+    if not isinstance(record,dict) or set(record)!={'path','sha256'} \
+            or not isinstance(record['path'],str) or not Path(record['path']).is_absolute() \
+            or not re.fullmatch('[a-f0-9]{64}',str(record['sha256'] or '')):
+        raise ValueError('真实审计输入须有绝对路径和精确原字节SHA')
+    path=Path(record['path'])
+    fd=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0))
+    try:
+        before=os.fstat(fd);named=path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or path.is_symlink() \
+                or (before.st_dev,before.st_ino)!=(named.st_dev,named.st_ino) or before.st_size>32*1024*1024:
+            raise ValueError('真实审计输入不是唯一普通有界文件')
+        with os.fdopen(fd,'rb',closefd=False) as handle: raw=handle.read(32*1024*1024+1)
+        after=os.fstat(fd);final=path.lstat()
+        keys=('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns','st_nlink')
+        if any(tuple(getattr(info,key) for key in keys)!=tuple(getattr(before,key) for key in keys)
+               for info in (after,final)) or hashlib.sha256(raw).hexdigest()!=record['sha256']:
+            raise ValueError('真实审计原文件SHA或读取身份已变化')
+        return raw
+    finally: os.close(fd)
+
+def audit_manifest(filename,sha,contract):
+    value=json.loads(read_pinned({'path':filename,'sha256':sha}))
+    if not isinstance(value,dict) or value.get('contract')!=contract:
+        raise ValueError('真实审计清单合同无效')
+    return value
+
+def real_caption_case(filename,sha,role,failure_name):
+    manifest=audit_manifest(filename,sha,'source-figure-caption-real-audit-v1')
+    case=(manifest.get('cases') or {}).get(role)
+    if not isinstance(case,dict) or set(case)!={'failure','markdown'}:
+        raise ValueError('真实审计清单缺少完整原拒稿及原Markdown，不能改选当前稿')
+    if Path(case['failure']['path']).name!=failure_name+'.json':
+        raise ValueError('真实审计必须绑定指定的原失败记录')
+    failure=json.loads(read_pinned(case['failure']));raw=read_pinned(case['markdown'])
+    if failure.get('sha256')!=case['markdown']['sha256']:
+        raise ValueError('真实拒稿记录与原Markdown的SHA不一致')
+    return Path(case['markdown']['path']),raw,failure
+
+def real_hugo_audit():
+    manifest=audit_manifest(HUGO_AUDIT,HUGO_AUDIT_SHA,'source-figure-caption-hugo-audit-v1')
+    root=Path(manifest.get('root',''))
+    files=manifest.get('files')
+    if not root.is_absolute() or not root.is_dir() or not isinstance(files,dict) or not files:
+        raise ValueError('真实Hugo审计须绑定独立完整目录及逐文件SHA')
+    actual={p.relative_to(root).as_posix() for p in root.rglob('*') if not p.is_dir()}
+    if actual!=set(files):raise ValueError('真实Hugo审计目录文件集合已变化')
+    for relative,digest in files.items():
+        if Path(relative).is_absolute() or '..' in Path(relative).parts:
+            raise ValueError('真实Hugo审计目录路径无效')
+        read_pinned({'path':str(root/relative),'sha256':digest})
+    generation=json.loads(read_pinned(manifest.get('generation')))
+    return root,generation
+
 def pair(value,alt=None):
     alt=alt if alt is not None else value
     return f'[![原论文 Figure 2：{alt}]({URL})]({URL})\n\n*论文图 7。原论文 Figure 2：“{value}”。*\n'
+
+class ExplicitPrivateAuditInputTests(unittest.TestCase):
+    def record(self,path):
+        return {'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    def fixture(self,root):
+        # Synthetic metadata only: this does not claim a real source or pass.
+        markdown=root/'synthetic-original.md';markdown.write_text('synthetic original fixture')
+        name='a'*64;failure=root/(name+'.json')
+        failure.write_text(json.dumps({'path':'content/posts/synthetic.md','sha256':self.record(markdown)['sha256']}))
+        manifest=root/'audit.json';manifest.write_text(json.dumps({
+            'contract':'source-figure-caption-real-audit-v1',
+            'cases':{'synthetic':{'failure':self.record(failure),'markdown':self.record(markdown)}}}))
+        return manifest,markdown,failure,name
+
+    def test_exact_original_case_is_independent_of_active_runtime_generation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest,markdown,_failure,name=self.fixture(Path(directory))
+            p,raw,failure=real_caption_case(str(manifest),self.record(manifest)['sha256'],'synthetic',name)
+            self.assertEqual(p,markdown);self.assertEqual(raw,b'synthetic original fixture')
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),failure['sha256'])
+            self.assertEqual(markdown.read_bytes(),raw)
+
+    def test_opted_in_missing_case_bad_manifest_or_changed_original_fails_never_skips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest,markdown,_failure,name=self.fixture(Path(directory));pin=self.record(manifest)['sha256']
+            for role,digest in [('missing',pin),('synthetic','0'*64),('synthetic',None)]:
+                with self.subTest(role=role,digest=digest),self.assertRaises(ValueError):
+                    real_caption_case(str(manifest),digest,role,name)
+            markdown.write_text('a newer draft must not replace the original')
+            with self.assertRaisesRegex(ValueError,'SHA'):
+                real_caption_case(str(manifest),pin,'synthetic',name)
+
+    def test_wrong_original_failure_or_markdown_sha_cannot_retarget_case(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest,_markdown,failure,name=self.fixture(Path(directory))
+            with self.assertRaisesRegex(ValueError,'指定的原失败'):
+                real_caption_case(str(manifest),self.record(manifest)['sha256'],'synthetic','b'*64)
+            failure.write_text(json.dumps({'path':'content/posts/synthetic.md','sha256':'0'*64}))
+            value=json.loads(manifest.read_text());value['cases']['synthetic']['failure']=self.record(failure)
+            manifest.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError,'原Markdown'):
+                real_caption_case(str(manifest),self.record(manifest)['sha256'],'synthetic',name)
 
 class SourceFigureCaptionLiteralDollarTests(unittest.TestCase):
     def test_literal_corruption_is_escaped_without_guessing_metric(self):
@@ -63,12 +167,11 @@ class SourceFigureCaptionLiteralDollarTests(unittest.TestCase):
                 invalid=pair('C$$%').replace('\n\n*论文图','\n\n'+bad+'*论文图')
                 self.assertEqual(common.escape_literal_source_figure_caption_dollars(invalid),invalid)
 
+    @unittest.skipUnless(REAL_AUDIT,'explicit SHA-bound private caption audit opt-in')
     def test_real_louro_body_currency_dollars_remain_outside_caption_permission(self):
-        f=ROOT/'data/runtime/conference-publications/page-review-failures/fe6bf534f56f8337461a2cd8a43850a62c39bdad604106ea85191711369907c3.json'
-        if not f.exists():self.skipTest('private exact Louro failure unavailable')
-        failure=json.loads(f.read_text());g=json.loads((ROOT/'data/runtime/conference-publications/interspeech-2026/d1dcba74-6042-43cb-8352-6f81723055bc/generation.json').read_text())
-        r=next(r for r in g['files'] if r['path']==failure['path'] and r['sourceSha256']==failure['sha256'])
-        p=Path(r['sourcePath']);raw=p.read_bytes();self.assertEqual(hashlib.sha256(raw).hexdigest(),failure['sha256'])
+        p,raw,failure=real_caption_case(REAL_AUDIT,REAL_AUDIT_SHA,'louro-body',
+            'fe6bf534f56f8337461a2cd8a43850a62c39bdad604106ea85191711369907c3')
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),failure['sha256'])
         text=raw.decode();self.assertIn('原文 $50 与 $100 的写法',text)
         out=common.escape_literal_source_figure_caption_dollars(text)
         self.assertEqual(out,text)
@@ -94,19 +197,14 @@ class SourceFigureCaptionLiteralDollarTests(unittest.TestCase):
         repaired=repair(shared)
         self.assertIn(r'C##\$',repaired);self.assertIn(r'C\$\$%',repaired)
         self.assertEqual(repair(repaired),repaired)
+    @unittest.skipUnless(REAL_AUDIT,'explicit SHA-bound private caption audit opt-in')
     def test_both_real_saved_rejections_pass_normal_markdown_gate_after_display_repair(self):
-        paths=ROOT/'data/runtime/conference-publications/page-review-failures'
         names=['bf761176d70256cb7598795a1226e0d8321d07a53eed4881277f93667a0963a1',
                '92b97c0fe946cf7b4e053f83715c1fef59f660b8b00a53cdf55d94699c13e3fa']
-        generation=ROOT/'data/runtime/conference-publications/interspeech-2026/d1dcba74-6042-43cb-8352-6f81723055bc/generation.json'
-        if not generation.exists():self.skipTest('private exact rejected pages not available')
-        g=json.loads(generation.read_bytes());done=0
-        for name in names:
-            f=paths/(name+'.json')
-            if not f.exists():continue
-            failure=json.loads(f.read_bytes());r=next((r for r in g['files'] if r['path']==failure['path'] and r['sourceSha256']==failure['sha256']),None)
-            if r is None:continue
-            p=Path(r['sourcePath']);raw=p.read_bytes();self.assertEqual(hashlib.sha256(raw).hexdigest(),failure['sha256'])
+        done=0
+        for index,name in enumerate(names):
+            p,raw,failure=real_caption_case(REAL_AUDIT,REAL_AUDIT_SHA,f'caption-rejection-{index+1}',name)
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),failure['sha256'])
             text=raw.decode();fm,body=parse_frontmatter_content(p,text)
             before=validate_markdown_format_gate(p,fm,body);self.assertTrue(any('裸 $' in i for i in before))
             out=common.sanitize_markdown_for_publish(text);fm2,body2=parse_frontmatter_content(p,out)
@@ -117,7 +215,7 @@ class SourceFigureCaptionLiteralDollarTests(unittest.TestCase):
             narrow=common.escape_literal_source_figure_caption_dollars(text)
             self.assertEqual(narrow.replace(r'\$','$'),text)
             self.assertEqual(p.read_bytes(),raw);done+=1
-        if done!=2:self.skipTest('both exact original private rejection identities required')
+        self.assertEqual(done,2)
 
 def load_gate(name, filename):
     spec=importlib.util.spec_from_file_location(name,filename)
@@ -125,8 +223,8 @@ def load_gate(name, filename):
     with patch.dict(sys.modules,{'publish_common':common}):
         spec.loader.exec_module(module)
     return module
-shared_gate=load_gate('caption_dollar_gate_proposal',O/'proposed/scripts/markdown_hugo_gate.py' if O else ROOT/'scripts/markdown_hugo_gate.py')
-conference_gate=load_gate('caption_dollar_conference_gate_proposal',O/'proposed/scripts/conference_publication_gate.py' if O else ROOT/'scripts/conference_publication_gate.py')
+shared_gate=load_gate('caption_dollar_gate_proposal',ROOT/'scripts/markdown_hugo_gate.py')
+conference_gate=load_gate('caption_dollar_conference_gate_proposal',ROOT/'scripts/conference_publication_gate.py')
 
 class SourceBoundCaptionHtmlMaskTests(unittest.TestCase):
     def setUp(self):
@@ -179,10 +277,11 @@ class SourceBoundCaptionHtmlMaskTests(unittest.TestCase):
         masked=self.mask(html=rendered)
         self.assertIn('title="C$$%"',masked)
         self.assertTrue(shared_gate.math_and_emphasis_issues(masked,'HTML',rendered_html=True))
+    @unittest.skipUnless(HUGO_AUDIT,'explicit SHA-bound private Hugo audit opt-in')
     def test_real_hugo_outputs_pass_both_normal_shared_and_conference_gates(self):
-        if O is None or not (O/'native-goldmark-two-page-rendered').exists():
-            self.skipTest('private actual two-page native Hugo rendering not available')
-        cases=[];generation=json.loads((ROOT/'data/runtime/conference-publications/interspeech-2026/d1dcba74-6042-43cb-8352-6f81723055bc/generation.json').read_text())
+        O,generation=real_hugo_audit()
+        self.assertTrue((O/'native-goldmark-two-page-rendered').is_dir())
+        cases=[]
         for d in (O/'display-projections-only').glob('ishihara*'):
             evidence=json.loads((d/'evidence.json').read_text());md=(d/'normal-sanitized-display-only.md').read_text()
             fm,body=shared_gate.parse_frontmatter_content('page.md',md)
@@ -199,10 +298,11 @@ class SourceBoundCaptionHtmlMaskTests(unittest.TestCase):
         self.assertEqual(len(cases),2)
         self.assertEqual(shared_gate.validate_hugo_rendered_html_gate(O/'native-goldmark-two-page-rendered',cases),[])
 
+    @unittest.skipUnless(HUGO_AUDIT,'explicit SHA-bound private Hugo audit opt-in')
     def test_real_hugo_note_structure_fixtures_pass_without_losing_native_caption(self):
-        if O is None or not (O/'native-goldmark-two-page-noted-rendered').exists():
-            self.skipTest('private real Hugo note structure fixture unavailable')
-        g=json.loads((ROOT/'data/runtime/conference-publications/interspeech-2026/d1dcba74-6042-43cb-8352-6f81723055bc/generation.json').read_text());artifacts=[]
+        O,g=real_hugo_audit()
+        self.assertTrue((O/'native-goldmark-two-page-noted-rendered').is_dir())
+        artifacts=[]
         for d in (O/'display-projections-only').glob('ishihara*'):
             e=json.loads((d/'evidence.json').read_text());p=O/'native-goldmark-two-page-noted-copy'/e['generationRecord']['path'];md=p.read_text()
             fm,body=shared_gate.parse_frontmatter_content(p,md)
@@ -218,10 +318,11 @@ class SourceBoundCaptionHtmlMaskTests(unittest.TestCase):
         self.assertEqual(len(artifacts),2)
         self.assertEqual(shared_gate.validate_hugo_rendered_html_gate(O/'native-goldmark-two-page-noted-rendered',artifacts),[])
 
+    @unittest.skipUnless(HUGO_AUDIT,'explicit SHA-bound private Hugo audit opt-in')
     def test_real_hugo_limited_note_structure_fixtures_pass_without_losing_native_caption(self):
-        if O is None or not (O/'native-goldmark-two-page-limited-noted-rendered').exists():
-            self.skipTest('private real Hugo note structure fixture unavailable')
-        g=json.loads((ROOT/'data/runtime/conference-publications/interspeech-2026/d1dcba74-6042-43cb-8352-6f81723055bc/generation.json').read_text());artifacts=[]
+        O,g=real_hugo_audit()
+        self.assertTrue((O/'native-goldmark-two-page-limited-noted-rendered').is_dir())
+        artifacts=[]
         for d in (O/'display-projections-only').glob('ishihara*'):
             e=json.loads((d/'evidence.json').read_text());p=O/'native-goldmark-two-page-limited-noted-copy'/e['generationRecord']['path'];md=p.read_text()
             fm,body=shared_gate.parse_frontmatter_content(p,md)
@@ -260,9 +361,10 @@ class ClosedCodeMathGateTests(unittest.TestCase):
                       '<code x="a" x="b">$50</code>','<p title="<code>$50</code>">$100</p>']:
             self.assertTrue(shared_gate.math_and_emphasis_issues(value,'HTML',rendered_html=True),value)
 
+    @unittest.skipUnless(HUGO_AUDIT,'explicit SHA-bound private Hugo audit opt-in')
     def test_real_louro_inline_projection_and_actual_hugo_pass_shared_and_conference_format_gates(self):
-        if O is None or not (O/'native-goldmark-louro-inline-rendered').exists():
-            self.skipTest('private actual full Louro inline display projection unavailable')
+        O,g=real_hugo_audit()
+        self.assertTrue((O/'native-goldmark-louro-inline-rendered').is_dir())
         evidence=json.loads((O/'louro26-body-currency-readonly.json').read_text())
         p=O/'native-goldmark-louro-inline-copy'/evidence['generationRecord']['path'];md=p.read_text()
         self.assertIn('原文 `$50` 与 `$100`',md)
@@ -270,7 +372,6 @@ class ClosedCodeMathGateTests(unittest.TestCase):
         candidates=shared_gate.rendered_page_candidates(O/'native-goldmark-louro-inline-rendered',fm['title'],evidence['generationRecord']['path']);self.assertEqual(len(candidates),1)
         htmlpath,rendered=candidates[0];original=htmlpath.read_bytes()
         self.assertIn('<code>$50</code>',rendered);self.assertIn('<code>$100</code>',rendered)
-        g=json.loads((ROOT/'data/runtime/conference-publications/interspeech-2026/d1dcba74-6042-43cb-8352-6f81723055bc/generation.json').read_text())
         with patch.dict(sys.modules,{'markdown_hugo_gate':shared_gate}):
             result=conference_gate.inspect_html(md,rendered,[a for a in g['imageFiles'] if a['paperId']==evidence['generationRecord']['paperId']],
                 'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main')
@@ -280,7 +381,11 @@ class ClosedCodeMathGateTests(unittest.TestCase):
         self.assertEqual(htmlpath.read_bytes(),original)
         # Actual original plain-dollar source remains rejected: code is not a
         # global currency exemption and no source/scientific pass is granted.
-        original_md=Path(evidence['generationRecord']['sourcePath']).read_text();fm0,body0=shared_gate.parse_frontmatter_content(p,original_md)
+        manifest=audit_manifest(HUGO_AUDIT,HUGO_AUDIT_SHA,'source-figure-caption-hugo-audit-v1')
+        original=manifest.get('louroOriginalMarkdown')
+        if not isinstance(original,dict) or original.get('sha256')!=evidence['generationRecord']['sourceSha256']:
+            raise ValueError('真实Louro审计缺少原稿的精确SHA绑定，不能改读当前来源路径')
+        original_md=read_pinned(original).decode();fm0,body0=shared_gate.parse_frontmatter_content(p,original_md)
         self.assertTrue(any('裸 $' in issue for issue in validate_markdown_format_gate(p,fm0,body0)))
 
 if __name__=='__main__':unittest.main(verbosity=2)
