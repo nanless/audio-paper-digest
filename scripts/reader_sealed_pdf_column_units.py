@@ -152,6 +152,14 @@ def main():
     need(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and st.st_mode&0o077==0 and 2<=st.st_size<=96*1024*1024,'private_bounded_descriptor_required')
     data=json.loads(os.read(fd,st.st_size));need(set(data)=={'pdfBase64','pdfSha256','tables','view','quotes'},'descriptor_fields_invalid');raw=base64.b64decode(data['pdfBase64'],validate=True);need(sha(raw)==data['pdfSha256'],'pdf_sha_changed')
     try:result={'contract':CONTRACT,'eligible':True,'evidence':prove_pdf_bytes(raw,data['tables'],data['view'],data['quotes'])}
-    except ValueError as e:result={'contract':CONTRACT,'eligible':False,'reason':str(e)}
+    except ValueError as original:
+        # Keep the existing successful DOM/PDF projection and proof unchanged.
+        # The fallback has independent PDF authority; it never invents a DOM
+        # ordinal or treats an undisplayable HTML cell as an equivalent source.
+        try:
+            from reader_sealed_pdf_literal_column_units import prove_pdf_bytes as prove_literal
+            result={'contract':CONTRACT,'eligible':True,'evidence':prove_literal(raw,data['view'],data['quotes'])}
+        except ValueError as e:
+            result={'contract':CONTRACT,'eligible':False,'reason':str(original)+'; '+str(e)}
     print(json.dumps(result,ensure_ascii=False,separators=(',',':')))
 if __name__=='__main__':main()
