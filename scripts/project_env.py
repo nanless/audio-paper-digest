@@ -3,6 +3,7 @@
 
 项目脚本读取 Paper Digest 配置时必须用当前仓库的 .env，避免混入从
 启动程序或终端继承来的变量。
+唯一例外是显式出版恢复清单路径；它是受严格来源核验的进程输入，不改变模型或代理配置。
 """
 
 import os
@@ -29,6 +30,10 @@ PROJECT_ENV_KEYS = {
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
 }
+
+# This is an explicit publication input, not inherited model/proxy settings.
+# Its file, original receipt and sealed sources are validated by the publisher.
+PROCESS_INPUT_KEYS = ("PD_PUBLISH_RASTER_RECOVERY_FILE",)
 
 CHILD_ENV_PASSTHROUGH_KEYS = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",
@@ -82,6 +87,7 @@ def parse_env_file(env_file=None):
 
 
 def load_project_env(env_file=None):
+    process_inputs = {key: os.environ[key] for key in PROCESS_INPUT_KEYS if key in os.environ}
     parsed = parse_env_file(env_file)
 
     for key in list(os.environ.keys()):
@@ -89,6 +95,7 @@ def load_project_env(env_file=None):
             os.environ.pop(key, None)
 
     os.environ.update(parsed)
+    os.environ.update(process_inputs)
     return parsed
 
 

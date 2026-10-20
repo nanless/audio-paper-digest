@@ -1,4 +1,6 @@
 import os
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -84,6 +86,54 @@ class ProjectEnvTest(unittest.TestCase):
             self.assertNotIn("PAPER_ANALYZER_API_KEY", child_env)
             self.assertNotIn("PAPER_ANALYZER_FALLBACK_API_KEYS", child_env)
             self.assertNotIn("SSH_AUTH_SOCK", child_env)
+
+    def test_only_explicit_raster_input_survives_reload_without_importing_outer_configuration(self):
+        with project_env_scope(), tempfile.TemporaryDirectory() as tmp:
+            explicit = Path(tmp) / '.env'
+            explicit.write_text('PAPER_ANALYZER_MODEL=inner-model\nHTTPS_PROXY=http://project-proxy.invalid\n'
+                                'PD_PUBLISH_RASTER_RECOVERY_FILE=/configuration/other-recovery.json\n', encoding='utf-8')
+            os.environ['PD_PUBLISH_RASTER_RECOVERY_FILE'] = '/private/runtime/explicit-recovery.json'
+            os.environ['PD_ANALYSIS_CONCURRENCY'] = '99'
+            os.environ['PAPER_ANALYZER_MODEL'] = 'outer-model'
+            os.environ['HTTPS_PROXY'] = 'http://outer-proxy.invalid'
+            for _ in range(2):
+                load_project_env(explicit)
+                self.assertEqual(os.environ['PD_PUBLISH_RASTER_RECOVERY_FILE'], '/private/runtime/explicit-recovery.json')
+                self.assertNotIn('PD_ANALYSIS_CONCURRENCY', os.environ)
+                self.assertEqual(os.environ['PAPER_ANALYZER_MODEL'], 'inner-model')
+                self.assertEqual(os.environ['HTTPS_PROXY'], 'http://project-proxy.invalid')
+            os.environ['PD_PUBLISH_RASTER_RECOVERY_FILE'] = ''
+            load_project_env(explicit)
+            self.assertEqual(os.environ['PD_PUBLISH_RASTER_RECOVERY_FILE'], '')
+
+    def test_fresh_process_actual_publication_loader_receives_input_and_still_rejects_invalid_manifest(self):
+        # The key is supplied at process creation, before the real shared entry
+        # loader imports publish-to-blog.py and calls load_project_env().
+        filename = '/nonexistent-explicit-recovery/manifest.json'
+        program = '''
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+from blog_entry_loader import load_publish_to_blog
+publisher = load_publish_to_blog()
+received = os.environ.get('PD_PUBLISH_RASTER_RECOVERY_FILE') == sys.argv[2]
+try:
+    publisher._publication_raster_recovery_input()
+except publisher.PublishDataValidationError:
+    rejected = True
+else:
+    rejected = False
+print(json.dumps({'receivedBeforeBusiness': received, 'invalidManifestRejected': rejected,
+                  'unrelatedOuterPdCleared': 'PD_UNTRUSTED_PUBLICATION_TEST' not in os.environ}))
+'''
+        environment = dict(os.environ)
+        environment['PD_PUBLISH_RASTER_RECOVERY_FILE'] = filename
+        environment['PD_UNTRUSTED_PUBLICATION_TEST'] = 'must-not-survive'
+        result = subprocess.run([sys.executable, '-c', program, str(SCRIPTS), filename],
+                                cwd=str(ROOT), env=environment, text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(actual, {'receivedBeforeBusiness': True, 'invalidManifestRejected': True,
+                                  'unrelatedOuterPdCleared': True})
 
     def test_fetch_proxy_requires_project_http_connect_url(self):
         with project_env_scope():
