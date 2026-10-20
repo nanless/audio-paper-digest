@@ -132,7 +132,8 @@ function writeLlmUsageEvent(event, options = {}) {
     let current = path.parse(directory).root;
     for (const part of directory.slice(current.length).split(path.sep).filter(Boolean)) {
         current = path.join(current, part);
-        if (!fs.existsSync(current)) fs.mkdirSync(current, { mode: 0o700 });
+        try { fs.mkdirSync(current, { mode: 0o700 }); }
+        catch (error) { if (error.code !== 'EEXIST') throw error; }
         const stat = fs.lstatSync(current);
         if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('用量目录必须是真实目录，不能是符号链接');
     }
@@ -152,12 +153,13 @@ function writeLlmUsageEvent(event, options = {}) {
     return true;
 }
 
-let warned = false;
 function recordLlmUsage(input, options = {}) {
     let event = null;
     try { event = buildLlmUsageEvent(input); writeLlmUsageEvent(event, options); }
-    catch (_) {
-        if (!warned) { console.warn('[llm-usage] 模型请求的用量记录未能保存；本次统计不完整'); warned = true; }
+    catch (cause) {
+        throw require('./llm-response-recovery').persistenceError(cause, event,
+            input.response === undefined ? null : { statusCode: input.statusCode, body: input.response,
+                ...(typeof input.rawResponse === 'string' ? { raw: input.rawResponse } : {}) }, options);
     }
     return event;
 }
@@ -170,8 +172,9 @@ function recordLlmDisposition(input, options = {}) {
         at: new Date().toISOString(), runtime: 'node', ...usageContext(input),
         outputTextSha256: input.outputTextSha256, disposition: input.disposition,
         errorCode: label(input.errorCode) };
-    try { writeLlmUsageEvent(event, options); } catch (_) {
-        if (!warned) { console.warn('[llm-usage] 模型结果是否被接受的记录未能保存；统计不完整'); warned = true; }
+    try { writeLlmUsageEvent(event, options); } catch (cause) {
+        throw require('./llm-response-recovery').persistenceError(cause, event,
+            typeof input.responseText === 'string' ? { statusCode: 200, body: { outputText: input.responseText } } : null, options);
     }
     return event;
 }

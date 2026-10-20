@@ -30,7 +30,7 @@
 |---|---|
 | 批次轮数、失败集合与人工接手建议 | [共享批次规则](three-workflows.md#全批轮次与失败集合) |
 | 停止正在运行的任务 | [停止说明](analysis-stop.md) |
-| 按报错定位恢复入口 | [故障排查](troubleshooting.md) |
+| 按报错定位恢复入口、费用落盘故障与本地冷核超时 | [故障排查](troubleshooting.md)、[异常响应记录](data-format.md#请求开始终态与异常响应保全) |
 | Reader 原付费稿核验、有界追加及已授权修正 | [Reader 恢复](reader-explicit-retry.md) |
 | 会议原额度耗尽后，明确获准的剩余集合追加 | [独立会议窗口](conference-workflow.md#原额度耗尽后的独立付费恢复)、[记录格式](data-format.md#会议独立追加窗口) |
 | 会议博客完整审查后有正文、格式或图片拒稿 | [正常 Reader 维护与独立出版视图](conference-workflow.md#博客拒稿后的正常-reader-维护)、[维护记录](data-format.md#会议博客审查后的-reader-维护记录) |

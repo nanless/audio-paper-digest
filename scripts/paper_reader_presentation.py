@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 import shutil
 import tempfile
+from publication_local_replay import (checked_replay_response, publication_replay_result, publication_replay_scope)
 
 from blog_entry_loader import load_publish_to_blog
 from publish_common import escape_html_like_tags
@@ -65,8 +66,9 @@ def build_aggregate_reader_presentations(records, *, publisher=None):
         parsed = publisher.parse_analysis(paper.get('analysis', ''))
         if not isinstance(parsed, dict):
             raise ValueError('汇总展示需要可重新解析的正式分析正文。')
-        decision = resolve_reader_decision_display(publisher, paper,
-            plan=paper['apiReaderPlan'], resources=resources, parsed=parsed, source_text=record['sourceText'])
+        with publication_replay_scope(paper, record['sourceText'], publisher=publisher):
+            decision = resolve_reader_decision_display(publisher, paper,
+                plan=paper['apiReaderPlan'], resources=resources, parsed=parsed, source_text=record['sourceText'])
         output.append({'paperKey': key, **decision, 'scoreLine': reader_score_line(parsed)})
     return output
 
@@ -135,23 +137,23 @@ def replay_resource_presentation(paper, source_text, publication_evidence=None, 
                          ensure_ascii=False, separators=(',', ':')).encode()
     if len(payload) > 128 * 1024 * 1024:
         raise ValueError('资源展示的来源重放输入超过上限。')
-    with tempfile.TemporaryFile() as source:
-        source.write(payload); source.flush(); source.seek(0)
-        result = publisher._run_bounded_subprocess(
-            [node, str(root / 'scripts/lib/reader-resource-claims-replay-cli.js'), str(source.fileno())],
-            cwd=str(root), env={key: value for key, value in os.environ.items()
-                               if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            # Declared source corrections also replay their original canonical
-            # source, even without table/footnote markers. Node still verifies
-            # the complete chain; this declaration only selects its time bound.
-            timeout_seconds=180 if publication_evidence is not None or authenticated_pdf or declared_source_correction else 30,
-            max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
-    try:
-        value = json.loads(result.stdout)
-    except (ValueError, TypeError) as error:
-        raise ValueError('资源展示的公共来源重放响应无效。') from error
-    if result.returncode != 0 or result.timed_out or result.output_truncated \
-            or value.get('verified') is not True or not isinstance(value.get('resources'), list):
+    value = publication_replay_result(paper, source_text, publication_evidence)
+    if value is None:
+        with tempfile.TemporaryFile() as source:
+            source.write(payload); source.flush(); source.seek(0)
+            timeout_seconds = 180 if publication_evidence is not None or authenticated_pdf or declared_source_correction else 30
+            result = publisher._run_bounded_subprocess(
+                [node, str(root / 'scripts/lib/reader-resource-claims-replay-cli.js'), str(source.fileno())],
+                cwd=str(root), env={key: value for key, value in os.environ.items()
+                                   if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+                # Declared source corrections also replay their original canonical
+                # source, even without table/footnote markers. Node still verifies
+                # the complete chain; this declaration only selects its time bound.
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
+        value = checked_replay_response(result, worker='reader-resource-claims-replay-cli.js',
+                                       timeout_seconds=timeout_seconds)
+    if value.get('verified') is not True or not isinstance(value.get('resources'), list):
         raise ValueError('资源展示或正文声明未通过当前封存来源核验：' + str(value.get('message', '')))
     if publication_evidence is not None or authenticated_pdf_tables:
         # Only this fresh response from the source-replaying generic worker may

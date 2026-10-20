@@ -47,11 +47,11 @@ for (const protocol of protocols) {
     }
 }
 for (const terminal of ['failed', 'cancelled']) {
-    test(`Responses ${terminal} 保留服务失败分类和有界重试`, async () => {
+    test(`Responses ${terminal} 在内部有界重试用尽后作为运行故障停派`, async () => {
         let calls = 0; let sleeps = 0; const protocol = protocols[2];
         await assert.rejects(callModelWithConfig([], 100, 2,
             requestConfig(protocol, protocol.body(terminal), () => { calls++; }, () => { sleeps++; })),
-        error => error.code === 'MODEL_RESPONSE_FAILED' && error.retryable === true);
+        error => error.code === 'MODEL_RESPONSE_FAILED' && error.retryable === false && error.scope === 'run');
         assert.equal(calls, 2); assert.equal(sleeps, 1);
     });
 }

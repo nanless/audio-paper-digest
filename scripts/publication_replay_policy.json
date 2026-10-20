@@ -1,0 +1,10 @@
+{
+  "contract": "publication-local-replay-policy-v1",
+  "sourceReplaySeconds": 600,
+  "simpleReplaySeconds": 30,
+  "renderOverheadSeconds": 120,
+  "ordinaryConferenceSeconds": 600,
+  "ordinaryHistorySeconds": 180,
+  "transportGraceSeconds": 15,
+  "maxAggregatePapers": 8
+}

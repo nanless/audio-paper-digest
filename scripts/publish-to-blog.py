@@ -5390,6 +5390,11 @@ def _source_bound_core_summary_semantic_issue(paper, summary, *, source_text=Non
 
 
 def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
+    from publication_local_replay import publication_replay_result
+    same_render = publication_replay_result(paper, source_text) if stage_replay else None
+    if same_render is not None:
+        # The actual source-bound worker ran the same normal stage validator.
+        return same_render['coreSummaryIssue']
     cli = SHARED_SCRIPTS_DIR / 'lib' / 'core-summary-semantic-replay-cli.js'
     implementations = (
         _sha256_file(cli),
@@ -5420,12 +5425,10 @@ def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
             env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
             timeout_seconds=180 if source_correction_stage else 30,
             max_output_bytes=64 * 1024, pass_fds=(source_file.fileno(),))
-    if result.returncode != 0 or result.timed_out or result.output_truncated:
-        raise PublishDataValidationError('核心摘要当前语义规则无法完整重放。')
-    try:
-        response = json.loads(result.stdout)
-    except (ValueError, TypeError) as error:
-        raise PublishDataValidationError('核心摘要当前语义规则返回无效结果。') from error
+    from publication_local_replay import checked_replay_response
+    response = checked_replay_response(result, worker='core-summary-semantic-replay-cli.js',
+                                      timeout_seconds=180 if source_correction_stage else 30,
+                                      failure_label='核心摘要当前语义规则无法完整重放。')
     if not isinstance(response, dict) or set(response) != {'issue'} \
             or not (response['issue'] is None or isinstance(response['issue'], str)):
         raise PublishDataValidationError('核心摘要当前语义规则返回字段无效。')
@@ -8003,6 +8006,12 @@ def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
 
 def _replay_authenticated_pdf_table_bindings(paper):
     """Only the shared private-FD worker can reopen a canonical authenticated source."""
+    from publication_local_replay import publication_replay_result, checked_replay_response
+    same_render = publication_replay_result(paper)
+    if same_render is not None:
+        if not isinstance(same_render.get('tableEvidence'), dict):
+            raise PublishDataValidationError('同次真实来源重放缺少表格证明。')
+        return same_render['tableEvidence']
     node = shutil.which('node')
     if not node:
         raise PublishDataValidationError('PDF 表格原来源冷重放需要 Node.js。')
@@ -8015,11 +8024,8 @@ def _replay_authenticated_pdf_table_bindings(paper):
             str(source.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
             env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
             timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
-    try:
-        response = json.loads(result.stdout)
-    except (ValueError, TypeError) as error:
-        raise PublishDataValidationError('PDF 表格原来源冷重放响应无效。') from error
-    if result.returncode != 0 or result.timed_out or result.output_truncated or response.get('verified') is not True \
+    response = checked_replay_response(result, worker='reader-resource-claims-replay-cli.js', timeout_seconds=180)
+    if response.get('verified') is not True \
             or not isinstance(response.get('tableEvidence'), dict):
         raise PublishDataValidationError('PDF 表格证明未由同一原规范来源冷重放。')
     return response['tableEvidence']
@@ -8631,6 +8637,10 @@ def _validate_api_reader_resource_identity(paper):
 
 def _validate_authenticated_pdf_resource_identity_replay(paper):
     """Never promote an explicit PDF resource proof from JSON alone."""
+    from publication_local_replay import publication_replay_result, checked_replay_response
+    same_render = publication_replay_result(paper)
+    if same_render is not None:
+        return same_render
     node = shutil.which('node')
     if not node:
         raise PublishDataValidationError('认证 PDF 资源冷重放需要 Node.js。')
@@ -8644,12 +8654,8 @@ def _validate_authenticated_pdf_resource_identity_replay(paper):
             cwd=str(SHARED_SCRIPTS_DIR.parent),
             env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
             timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
-    try:
-        response = json.loads(result.stdout)
-    except (ValueError, TypeError) as error:
-        raise PublishDataValidationError('认证 PDF 资源冷重放响应无效。') from error
-    if result.returncode != 0 or result.timed_out or result.output_truncated \
-            or not isinstance(response, dict) or response.get('verified') is not True:
+    response = checked_replay_response(result, worker='reader-resource-claims-replay-cli.js', timeout_seconds=180)
+    if response.get('verified') is not True:
         reason = response.get('message', '') if isinstance(response, dict) else '响应必须为对象'
         raise PublishDataValidationError('认证 PDF 脚注资源未通过真实来源冷重放：' + str(reason))
     return response
@@ -13430,6 +13436,9 @@ def generation_template_fingerprint():
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'publish_common.py': script_dir / 'publish_common.py',
         'paper_reader_presentation.py': script_dir / 'paper_reader_presentation.py',
+        'publication_local_replay.py': script_dir / 'publication_local_replay.py',
+        'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
+        'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
@@ -13581,6 +13590,9 @@ def review_protocol_fingerprint():
         'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
         'publish_common.py': script_dir / 'publish_common.py',
         'paper_reader_presentation.py': script_dir / 'paper_reader_presentation.py',
+        'publication_local_replay.py': script_dir / 'publication_local_replay.py',
+        'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
+        'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
         'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
         'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
         'llm_account_pool.py': script_dir / 'llm_account_pool.py',

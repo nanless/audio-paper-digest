@@ -1655,7 +1655,9 @@ test('会议暂存恢复在返回「已恢复」之前，拒绝暂存之后的 P
         mutation.mutate(f);
         const recovered = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
             queue: 'conference', paperIds: [staged.results[0].paperId] }, dependencies);
-        assert.equal(recovered.status, 'partial'); assert.equal(recovered.results[0].status, 'failed');
+        assert.equal(recovered.status, 'paused'); assert.equal(recovered.results[0].status, 'failed');
+        assert.equal(recovered.results[0].scope, 'run');
+        assert.equal(recovered.pauseReason.code, 'recovery-source-failed');
         assert.match(recovered.results[0].error, mutation.expectedError);
         assert.equal(recovered.failed, 1); assert.equal(analyses, 1, `${mutation.name} 被修改后，必须在第二次分析前失败`);
         const registry = JSON.parse(fs.readFileSync(recovered.registryFile, 'utf8'));
@@ -1957,4 +1959,86 @@ test('直改暂存要求旧分析的 Unicode 输入可复用，正文与来源 S
     const registry = JSON.parse(fs.readFileSync(result.registryFile, 'utf8'));
     const entry = registry.entries.find(item => item.paperId === result.results[0].paperId);
     assert.equal(entry.staging, null);
+});
+
+for (const failurePoint of ['source-storage', 'source-identity', 'renderer-storage', 'renderer-run']) {
+    test(`完成稿恢复的 ${failurePoint} 停止派发并保留付费分析指针`, async t => {
+        const f = fixture(t); const roots = files(f.root);
+        const item = f.plan.queue.find(entry => entry.paperId === 'arxiv:2601.00001');
+        const capture = directArxivCapture(); let analyses = 0;
+        const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+            queue: 'arxiv', arxivGeneration: 1 }, {
+            captureFreshArxivRewriteSource: capture, renderDirectPage,
+            analyze: async ({ sourceDescriptor, sourceDetails }) => {
+                analyses += 1; return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+            }
+        });
+        const completed = asInterruptedAnalysisComplete(
+            JSON.parse(fs.readFileSync(first.registryFile, 'utf8')), f.plan, item.paperId);
+        const before = structuredClone(completed.entries.find(entry => entry.paperId === item.paperId));
+        const analysisFile = path.join(before.analysis.directory, 'analysis.json');
+        const originalBytes = fs.readFileSync(analysisFile);
+        fs.rmSync(roots.stagingRoot, { recursive: true, force: true });
+        write(first.registryFile, `${JSON.stringify(completed, null, 2)}\n`);
+        const injected = Object.assign(new Error('isolated completed replay failure'),
+            failurePoint === 'renderer-run' ? { code: 'MODEL_SERVICE_UNAVAILABLE', scope: 'run', retryable: false }
+                : failurePoint === 'source-identity' ? { code: 'ARXIV_SOURCE_AUTHORITY_INTEGRITY' } : { code: 'EIO' });
+        const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+            concurrency: 1, arxivGeneration: 1 }, {
+            captureFreshArxivRewriteSource: async input => {
+                if (failurePoint.startsWith('source-')) throw injected;
+                return capture(input);
+            },
+            renderDirectPage: () => { throw injected; },
+            analyze: async () => { analyses += 1; throw new Error('must not analyze after a recovery run fault'); }
+        });
+        assert.equal(resumed.status, 'paused');
+        assert.equal(resumed.results.length, 1);
+        assert.equal(resumed.results[0].scope, 'run');
+        assert.equal(resumed.results[0].retryable, false);
+        assert.equal(resumed.registryCounts.pending, 1, '下一篇论文不应派发');
+        assert.equal(analyses, 1, '付费分析不得重发');
+        const after = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+            .find(entry => entry.paperId === item.paperId);
+        assert.equal(after.status, 'failed');
+        assert.deepEqual(after.analysis, before.analysis);
+        assert.deepEqual(after.analysisRecovery, before.analysisRecovery);
+        assert.deepEqual(after.source, before.source);
+        assert.equal(after.attempts, before.attempts);
+        assert.equal(after.latestFailure.systemic, true);
+        assert.equal(after.latestFailure.retryable, false);
+        assert.deepEqual(fs.readFileSync(analysisFile), originalBytes);
+        assert.equal(resumed.pauseReason.code, failurePoint.endsWith('storage') ? 'recovery-storage-failed'
+            : failurePoint === 'source-identity' ? 'recovery-source-failed' : 'account-service-unavailable');
+    });
+}
+
+test('已暂存稿来源冷核故障保留页面和付费指针，停止其它成员派发', async t => {
+    const f = fixture(t); const roots = files(f.root);
+    const item = f.plan.queue.find(entry => entry.paperId === 'arxiv:2601.00001');
+    let analyses = 0;
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(), renderDirectPage,
+        analyze: async ({ sourceDescriptor, sourceDetails }) => {
+            analyses += 1; return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    });
+    const before = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+        .find(entry => entry.paperId === item.paperId);
+    t.mock.method(require('../scripts/lib/fresh-arxiv-rewrite-source.js'), 'readFreshArxivRewriteSource', () => {
+        throw Object.assign(new Error('isolated staged source read failure'), { code: 'EIO' });
+    });
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        paperIds: f.plan.queue.map(entry => entry.paperId), concurrency: 1, arxivGeneration: 1 }, {
+        renderDirectPage, analyze: async () => { analyses += 1; throw new Error('must not issue analysis'); }
+    });
+    assert.equal(resumed.status, 'paused');
+    assert.equal(resumed.registryCounts.pending, 1); assert.equal(analyses, 1);
+    assert.equal(resumed.pauseReason.code, 'recovery-storage-failed');
+    const after = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+        .find(entry => entry.paperId === item.paperId);
+    for (const key of ['analysis', 'analysisRecovery', 'source', 'staging', 'attempts']) {
+        assert.deepEqual(after[key], before[key]);
+    }
 });

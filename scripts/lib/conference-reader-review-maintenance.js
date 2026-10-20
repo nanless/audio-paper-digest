@@ -18,6 +18,7 @@ const validatedMetadata = new WeakMap();
 const sourceLineageBatches = new Map();
 const MAX_SOURCE_LINEAGE_BATCHES = 8;
 const verifiedCanonicalReviewEvidence = new WeakMap();
+const immutableBatchAssertions = new WeakMap();
 let registeringSourceRevalidation = null;
 function isRegisteringSourceRevalidation(manifestPath,processDirectory,analysisRoot) {
     return registeringSourceRevalidation&&registeringSourceRevalidation.manifestPath===path.resolve(manifestPath)
@@ -1391,6 +1392,15 @@ function isCurrentOrVerifiedDescendant(batch,item,adopted) {
     fail('maintenance descendant chain too deep');
 }
 function assertCurrentBatch(batch) {
+    let assertImmutable=immutableBatchAssertions.get(batch);
+    if(!assertImmutable) {
+        assertImmutable=coldEvidenceAssertion(()=>assertImmutableBatchBytes(batch));
+        immutableBatchAssertions.set(batch,assertImmutable);
+    }
+    assertImmutable();
+    return assertDynamicBatchState(batch);
+}
+function assertImmutableBatchBytes(batch) {
     if(batch.aggregateMappingRecord)check(sha(fs.readFileSync(privateFile(batch.aggregateMappingRecord.filename,false)))===batch.aggregateMappingRecord.sha256,
         'original aggregate feedback source changed');
     check(privateFileSha256(batch.p.manifest)===batch.manifestFileSha256
@@ -1400,6 +1410,8 @@ function assertCurrentBatch(batch) {
     for(const member of batch.m.members)check(privateFileSha256(path.join(batch.p.root,'failures',member.failureSha256+'.json'))===member.failureFileSha256,'immutable failure bytes changed');
     for(const classified of [...(batch.m.imageClassifications||[]),...(batch.m.markdownClassifications||[]),...(batch.m.aggregateClassifications||[]),...(batch.m.nativeReviewClassifications||[])])check(privateFileSha256(path.join(batch.p.root,'classifications',classified.classificationSha256+'.json'))===classified.classificationFileSha256
         &&privateFileSha256(path.join(batch.p.root,'failures',classified.failureSha256+'.json'))===classified.failureFileSha256,'immutable classification/failure bytes changed');
+}
+function assertDynamicBatchState(batch) {
     const current=validatedMetadataRecord(batch,'state',batch.p.state,value=>api().assertState(value));
     if(current.sha256===batch.baseline.sha256)return current;
     if(fs.existsSync(path.join(batch.p.root,'registration.json'))&&current.sha256===registeredState(batch).sha256)return current;
@@ -2308,6 +2320,103 @@ function shouldDeferInitialSavedReplayToNormal(batch,member,actual,shared,deps) 
         } catch(error) {return false;}
     });
 }
+// Scheduling metadata only. A complete flag selects a fixed worker job; it
+// never supplies source authority or qualifies the child for publication.
+function savedMaintenanceStageItem(batch,original) {
+    const member=effectiveMember(batch,original),filename=path.join(batch.analysisRoot,member.executionId,'analysis.json');
+    if(!fs.existsSync(filename))return null;
+    const loaded=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.executionId});
+    if(loaded.analysis.status!=='complete'||loaded.run.status!=='complete')return null;
+    check(loaded.run.paperId===member.paperId&&loaded.run.sourceSnapshotSha256===member.sourceSnapshotSha256,
+        'saved stage task actual child/source differs');
+    return {paperId:member.paperId,status:'complete',analysisRunId:member.executionId,
+        analysisProof:{analysisSha256:loaded.analysisFileSha256,
+            completionReceiptSha256:loaded.run.completionReceipt?.receiptSha256,
+            sourceSnapshotSha256:loaded.run.sourceSnapshotSha256}};
+}
+// Called only by the fixed private worker after it has reconstructed the real
+// operation lock, authority, process snapshot and retained-source replay.
+function openSavedMaintenanceStageSession({manifestPath,processDirectory,analysisRoot},deps) {
+    const batch=loadBatch({manifestPath,processDirectory,analysisRoot});
+    const readTask=task=>{
+        const original=batch.m.members.find(member=>member.paperId===task?.paperId);
+        check(original,'saved stage task outside original full maintenance batch');
+        const item=savedMaintenanceStageItem(batch,original);
+        check(item&&item.analysisRunId===task.executionId&&stable(item)===task.itemSha256,
+            'saved stage task changed actual child or canonical package');
+        return {original,item};
+    };
+    return {
+        assertUnchanged() {assertCurrentBatch(batch);batch.publicationViewEvidence?.assertUnchanged();},
+        readTask:task=>readTask(task).item,
+        parentItem:task=>{
+            const {original}=readTask(task),state=assertCurrentBatch(batch).value,item=state.items[original.paperId];
+            check(item?.status==='complete'&&item.analysisRunId===original.parentExecutionId
+                &&item.analysisProof.analysisSha256===original.parentCAS.analysisFileSha256,
+                'saved stage worker parent is not actual registered baseline member');
+            return item;
+        },
+        stage(task,retained) {
+            const {original}=readTask(task);let staged;
+            const shared={retainedSources:new Map([[original.parentExecutionId,retained]])};
+            const localDeps={...deps,postprocess:{...deps.postprocess,stagePaper:input=>{
+                staged=deps.postprocess.stagePaper(input);return staged;
+            }}};
+            const observed=observeAndStageSavedMember(batch,original,shared,localDeps);
+            check(observed.actual.status==='complete'&&observed.proof&&staged?.status==='staged',
+                'saved stage worker did not normally qualify and stage the actual complete child');
+            return staged;
+        }
+    };
+}
+async function stageMaintenanceSavedMembers({batch,shared,options,outcomes,excludeIds=new Set()},deps) {
+    const stop=require('./analysis-stop-control'),pool=require('./conference-complete-stage-pool');
+    const items=[];
+    for(const member of batch.m.members) {
+        if(excludeIds.has(member.paperId))continue;
+        await new Promise(resolve=>setImmediate(resolve));stop.assertMayStartRequest();
+        const item=savedMaintenanceStageItem(batch,member);if(item)items.push(item);
+    }
+    const handled=new Set();if(!items.length)return handled;
+    const before=read(batch.p.state),context=api().loadAuthority(options,deps);
+    const init={options:{catalogName:options.catalogName,reportName:options.reportName,
+        filterId:options.filterId,fromProcessId:options.fromProcessId},operation:'maintenance-saved-stage',
+        maintenanceManifestPath:batch.p.manifest,operationLock:pool.operationLockStamp(batch.processDirectory),
+        stagingRoot:deps.files.conferencePageStagingDir,stateFileSha256:before.sha256,stateSha256:before.value.stateSha256,
+        authoritySha256:stable(context.authority),registrySha256:context.authority.tagCatalogSha256,
+        projectionSha256:deps.postprocess.implementationFingerprint().implementationSha256};
+    const completedResults=new Map();
+    await pool.runStagePool(items,{concurrency:options.postprocessConcurrency??options.concurrency??3,init,
+        shouldStop:()=>stop.assertMayStartRequest(),onResult:(item,result,error)=>{
+            const member=batch.m.members.find(row=>row.paperId===item.paperId);
+            if(error) {
+                const failure=require('./conference-process-recovery').classifyFailure(error,deps.now());
+                if(failure.systemic)throw error;
+                // A completed child must never be sent back to the model only
+                // because local qualification/rendering failed. Preserve it.
+                const current=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:item.analysisRunId});
+                saveMember(batch,item.paperId,{status:'failed',executionId:item.analysisRunId,
+                    failure:{...failure,retryable:false},attempts:current.analysis.readerRevisionProgress?.attempts||0});
+            } else {
+                const {loaded}=pool.readVerifiedStageResult(result,item,init,deps.files),revision=read(path.join(loaded.directory,'reader-revision.json'));
+                check(result.pins.extra['reader-revision.json']===revision.sha256,'saved stage handoff revision changed');
+                const manifest=result.manifest,proof={paperId:item.paperId,executionId:item.analysisRunId,
+                    analysisFileSha256:loaded.analysisFileSha256,runFileSha256:loaded.runFileSha256,
+                    sourceFileSha256:loaded.sourceFileSha256,completionReceiptSha256:loaded.run.completionReceipt.receiptSha256,
+                    pageManifestSha256:manifest.manifestSha256,pagePath:manifest.pagePath,
+                    contentSha256:manifest.contentSha256,revision:revision.value};
+                check(member&&effectiveMember(batch,member).executionId===proof.executionId,'saved stage selected window changed');
+                saveMember(batch,item.paperId,{status:'complete',proof});outcomes.set(item.paperId,proof);
+                completedResults.set(item.paperId,{item,result});
+            }
+            handled.add(item.paperId);
+            if(handled.size%100===0||handled.size===items.length)process.stderr.write(
+                `[会议维护保存稿后处理] 已检查 ${handled.size}/${items.length}，通过 ${completedResults.size}，失败 ${handled.size-completedResults.size}\n`);
+        }});
+    check(read(batch.p.state).sha256===before.sha256,'saved maintenance stage process snapshot changed');
+    for(const {item,result}of completedResults.values())pool.assertStageCanonical(result,item,deps.files);
+    assertCurrentBatch(batch);batch.publicationViewEvidence?.assertUnchanged();return handled;
+}
 async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,shared,options},deps) {
     check(!options.postprocessOnly&&!options.recoveryManifest&&!options.readerCorrections&&!options.sourceCorrections,'exclusive normal maintenance mode');
     const handle=openMaintenanceBatch({manifestPath,processDirectory:directory,analysisRoot:deps.files.conferenceAnalysisDir});
@@ -2319,12 +2428,15 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
     }
     const stop=require('./analysis-stop-control'),roundApi=require('./analysis-failure-rounds'),recovery=require('./conference-process-recovery');
     const outcomes=new Map(),unissuedReadmissions=new Set();
+    const initialized=await (deps.stageMaintenanceSavedMembers||stageMaintenanceSavedMembers)({batch,shared,options,outcomes},deps);
     // Complete children are always independently staged; progress flags never qualify them.
     for(const member of batch.m.members) {
+        if(initialized.has(member.paperId))continue;
         // Let pending signals run between complete members, never inside a
         // forbidden-model replay or between staging and its atomic save.
         await new Promise(resolve=>setImmediate(resolve));stop.assertMayStartRequest();
-        let observed=observeAndStageSavedMember(batch,member,shared,deps),actual=observed.actual;
+        try {
+        let actual=actualProgress(batch,member);
         if(actual.status==='pending'&&await recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared))unissuedReadmissions.add(member.paperId);
         if(actual.status==='partial'&&actual.child?.readerReview?.unissuedScoringRecovery
             &&await readmitUnissuedScoringPreRequestChild(batch,member,actual,shared,deps))unissuedReadmissions.add(member.paperId);
@@ -2334,13 +2446,21 @@ async function runReaderReviewMaintenanceBatch({manifestPath,directory,state,sha
             await stop.withModelRequestsForbidden(()=>deps.adapter.replaySavedConferenceReaderRevision({analysisRoot:batch.analysisRoot,
                 executionId:selected.executionId,planHandle:original?.planHandle||shared.planHandle,
                 sourceRoot:original?.sourceRoot||shared.sourceCacheRoot}));
-            observed=observeAndStageSavedMember(batch,member,shared,deps);actual=observed.actual;
+            actual=actualProgress(batch,member);
         }
-        if(actual.status==='complete') {
-            const proof=observed.proof;check(proof,'completed synchronous cold stage proof required');
-            saveMember(batch,member.paperId,{status:'complete',proof});outcomes.set(member.paperId,proof);
+        } catch(error) {
+            const failure=recovery.classifyFailure(error,deps.now());
+            if(failure.systemic)throw error;
+            const selected=effectiveMember(batch,member),previous=progressFor(batch).value.members[member.paperId]||{};
+            saveMember(batch,member.paperId,{...previous,status:'failed',executionId:selected.executionId,
+                failure:{...failure,retryable:false}});
+            initialized.add(member.paperId);
         }
     }
+    // Saved-only replay can have sealed more children. Stage this whole new
+    // set through the same pool after the entire initial recovery pass, never
+    // re-queue the first pass's successful or failed local jobs.
+    await (deps.stageMaintenanceSavedMembers||stageMaintenanceSavedMembers)({batch,shared,options,outcomes,excludeIds:initialized},deps);
     let pending=batch.m.members.filter(member=>!outcomes.has(member.paperId));
     while(true) {
         const previous=progressFor(batch).value.members;
@@ -2481,7 +2601,7 @@ function assertNoPendingReaderReviewMaintenance({processDirectory,analysisRoot,s
     }
     return true;
 }
-module.exports={revalidateMaintenancePublicationSources,withOrdinaryMaintenancePublicationColdRead,bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
+module.exports={openSavedMaintenanceStageSession,revalidateMaintenancePublicationSources,withOrdinaryMaintenancePublicationColdRead,bindCompletedParent,replayRevisionFeedback,assertReaderOutput,replaySavedNeutralReaderUpstream,inspectSavedMaintenanceReaderCompletion,archiveSavedMaintenanceReaderCompletion,
     runReaderReviewMaintenanceBatch,assertNoPendingReaderReviewMaintenance,readReaderMaintenanceSourceLineage,readScientificParentReplay,
     resolveRegisteredMaintenanceWindow,readMaintenanceRecoveryGrantMember,prepareParentRevisionSeed,readMaintenancePublicationHistory,readVerifiedParentReaderSeed,readVerifiedReaderScientificParent,readLegacyPublicationParentReference,
     readVerifiedUnissuedScoringRecovery,readVerifiedUnissuedScoringResources,inspectUnissuedScoringPreRequestRecovery,prepareUnissuedScoringPaper,readVerifiedSavedReaderImageLimit};

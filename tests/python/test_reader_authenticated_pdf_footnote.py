@@ -121,7 +121,7 @@ class AuthenticatedFootnotePublicationTests(unittest.TestCase):
         rejected = SimpleNamespace(stdout='{"verified":false,"message":"canonical source mismatch"}',
                                    returncode=1, timed_out=False, output_truncated=False)
         with mock.patch.object(publisher, '_run_bounded_subprocess', return_value=rejected):
-            with self.assertRaisesRegex(ValueError, 'canonical source mismatch'):
+            with self.assertRaisesRegex(ValueError, '真实来源冷重放未完整正常退出'):
                 presentation.replay_resource_presentation(current, source, publisher=publisher)
 
     def test_private_cli_resource_json_cannot_fake_source_or_satisfy_table_only(self):

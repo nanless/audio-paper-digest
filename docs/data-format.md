@@ -25,6 +25,12 @@
 
 Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号选择与状态更新，HTTP 请求在锁外发送。未知格式、损坏 JSON 或符号链接状态路径会使程序停止。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才触发向后切换及冷却记录；普通认证 401 停止运行，其他 429、5xx、传输或内容失败不触发切换。冷却到期也不会自动把流量从当前成功账号切回。
 
+## 请求开始、终态与异常响应保全
+
+`data/runtime/llm-usage/` 中 Node/Python 的 `request_started` 与真实终态请求事件共用 `eventId`。只有开始记录的请求仍是未知消费，不能按零消费处理；旧终态协议继续只读兼容。终态或 Reader 采用事件保存失败停止新请求，费用统计不能把缺失事件补成成功。
+
+账本故障时的实际响应使用独立 `llm-response-recovery-v1` 保存在 `data/runtime/llm-response-recovery/`，绑定原安全事件、响应及文件 SHA。它属于受保护运行证据，不能上传或清理，也不能直接提供来源、完成或发布资格；恢复须走原受控入口。完整故障处理见[费用记录保存失败](troubleshooting.md#费用记录保存失败)。
+
 ## `data/current/` 核心文件
 
 ### `papers.json`

@@ -45,7 +45,7 @@ function orphanedPendingLlmRequests(events = [], pairingEvents = events) {
             model: event.model, request: {}, eventId: event.eventId });
         return { version: usage.VERSION, kind: 'request_started', eventId: event.eventId,
             at: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(String(event.at || '')) ? event.at : null,
-            runtime: 'node', ...Object.fromEntries(labels.filter(key => key !== 'inputSha256')
+            runtime: event.runtime === 'python' ? 'python' : 'node', ...Object.fromEntries(labels.filter(key => key !== 'inputSha256')
                 .map(key => [key, clean[key] ?? null])),
             inputSha256: /^[a-f0-9]{64}$/.test(String(event.inputSha256 || '')) ? event.inputSha256 : null,
             phase: 'authorized_before_transport', outcome: 'result_unknown', chargeState: 'unknown' };

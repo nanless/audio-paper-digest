@@ -127,7 +127,18 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
     const processApi={assertState:value=>{const body=structuredClone(value);delete body.stateSha256;assert.equal(stable(body),value.stateSha256);return value;},
         stateDigest:value=>{const body=structuredClone(value);delete body.stateSha256;return stable(body);}};
     const stop={withModelRequestsForbidden:fn=>fn(),assertMayStartRequest:()=>{},requestAnalysisStop:()=>{}};
-    const deps={adapter,engine:{withPaperAnalysisLock:async(_id,fn)=>fn()},files:{conferenceAnalysisDir:analysisRoot,
+    // This portable orchestration fixture has synthetic authority. The real
+    // fixed worker/session handoff is exercised in its own isolated tests.
+    const deps={adapter,stageMaintenanceSavedMembers:async({batch,shared,outcomes,excludeIds=new Set()})=>{
+        const handled=new Set();for(const member of batch.m.members) {
+            if(excludeIds.has(member.paperId))continue;
+            const selected=module.__testEffectiveMember(batch,member),file=path.join(analysisRoot,selected.executionId,'analysis.json');
+            if(!fs.existsSync(file)||read(file).value.status!=='complete')continue;
+            const observed=module.__testObserve(batch,member,shared,deps);
+            module.__testSaveMember(batch,member.paperId,{status:'complete',proof:observed.proof});
+            outcomes.set(member.paperId,observed.proof);handled.add(member.paperId);
+        }return handled;
+    },engine:{withPaperAnalysisLock:async(_id,fn)=>fn()},files:{conferenceAnalysisDir:analysisRoot,
         conferencePageStagingDir:path.join(runtimeRoot,'conference-page-staging'),tagCatalogFile:'synthetic'},now:()=>new Date(0).toISOString(),postprocess:{
         stagePaper:({executionId})=>{
             const child=adapter.loadConferenceReaderRevision({executionId}),m=input.manifest.members.find(x=>x.paperId===child.run.paperId);
@@ -193,7 +204,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
         throw new Error('unexpected dependency '+id);
     };
     const sandbox={require:requireFake,module:{exports:{}},Buffer,console,structuredClone,setImmediate};
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),'utf8')+'\nmodule.exports.__testReplay=replayMaintenancePublicationView;module.exports.__testLoadBatch=loadBatch;',sandbox);
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),'utf8')+'\nmodule.exports.__testReplay=replayMaintenancePublicationView;module.exports.__testLoadBatch=loadBatch;module.exports.__testObserve=observeAndStageSavedMember;module.exports.__testSaveMember=saveMember;module.exports.__testEffectiveMember=effectiveMember;',sandbox);
     module=sandbox.module.exports;
     return {module,adapter,deps,input,manifestPath,processDirectory,analysisRoot,batchRoot,read,write,events,
         recoveryMock,publicationRoot,generationPath,reviewPath,runtimeRoot,temp,bridgeState,shared:{retainedSources:sources},state:()=>read(path.join(processDirectory,'state.json')).value};

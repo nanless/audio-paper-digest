@@ -25,6 +25,8 @@ from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
                          TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
 from runtime_guard import require_external_runtime
 from publish_common import _assert_hash_key_premises, _assert_ecmascript_number_premises
+from publication_local_replay import (publication_replay_scope, render_process_guard,
+    render_budget_seconds, LocalReplayFailure, RenderDeadlineExceeded, emit_replay_failure)
 
 
 PAPER_ID = re.compile(r'^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$')
@@ -708,7 +710,14 @@ def main():
     if len(raw) > 64 * 1024 * 1024:
         raise ValueError('conference renderer packet exceeds 64 MiB')
     packet = json.loads(raw.decode('utf-8'))
-    sys.stdout.write(json.dumps(render_packet(packet), ensure_ascii=False))
+    try:
+        with render_process_guard(render_budget_seconds(packet, 'conference'), renderer=__file__):
+            with publication_replay_scope(packet.get('paper'), packet.get('sourceText'),
+                    packet.get('publicationEvidence'), publisher=load_publish_to_blog()):
+                sys.stdout.write(json.dumps(render_packet(packet), ensure_ascii=False))
+    except (LocalReplayFailure, RenderDeadlineExceeded) as error:
+        emit_replay_failure(error, __file__)
+        raise SystemExit(1) from None
 
 
 if __name__ == '__main__':

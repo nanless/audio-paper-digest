@@ -1352,6 +1352,7 @@ function recoverInterruptedRegistryEntry({ registry, plan, item, generation, exe
                 detail = 'analyzing was interrupted before a recovery envelope was persisted';
             }
         } catch (error) {
+            if (classifyFailure(error, now).systemic) throw error;
             recoveryStatus = 'invalid';
             detail = `analyzing was interrupted; recovery rejected: ${safeErrorText(error, 1200)}`;
         }
@@ -1370,25 +1371,47 @@ function recoverInterruptedRegistryEntry({ registry, plan, item, generation, exe
     return { registry: next, audit };
 }
 
+function requiresHistoricalPdfScope(analysis) {
+    return (analysis?.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)
+        || (analysis?.apiReaderResources?.resources || []).some(resource => resource?.authenticatedPdfFootnoteEvidence !== undefined);
+}
+
+function completedSourceReplayError(cause) {
+    const error = new Error(`Completed historical source replay failed: ${safeErrorText(cause, 1200)}`, { cause });
+    error.code = 'HISTORICAL_DIRECT_SOURCE_REPLAY_FAILED';
+    error.scope = 'run'; error.retryable = false;
+    return error;
+}
+function replayCompletedSourceSync(operation) {
+    try { return operation(); } catch (cause) { throw completedSourceReplayError(cause); }
+}
+async function replayCompletedSource(operation) {
+    try { return await operation(); } catch (cause) { throw completedSourceReplayError(cause); }
+}
+
 async function replayCompletedAnalysisForStaging({ plan, item, active, generation, executionRoot,
     freshArxivSourceRoot, readFreshArxivSource }) {
-    const sourceDescriptor = validateInterruptedSourceDescriptor(item, active.source, generation);
-    let sourceDetails = null;
-    if (item.route.kind === 'arxiv-fresh-fetch') {
-        const stored = await readFreshArxivSource({ rootDir: freshArxivSourceRoot,
-            arxivId: item.route.arxivId, generation });
-        if (!stored || stored.arxivId !== item.route.arxivId || stored.generation !== generation) {
-            fail(`${item.paperId} completed analysis source generation cannot be replayed`);
+    const { sourceDescriptor, sourceDetails: replayedSourceDetails } = await replayCompletedSource(async () => {
+        const sourceDescriptor = validateInterruptedSourceDescriptor(item, active.source, generation);
+        let sourceDetails = null;
+        if (item.route.kind === 'arxiv-fresh-fetch') {
+            const stored = await readFreshArxivSource({ rootDir: freshArxivSourceRoot,
+                arxivId: item.route.arxivId, generation });
+            if (!stored || stored.arxivId !== item.route.arxivId || stored.generation !== generation) {
+                fail(`${item.paperId} completed analysis source generation cannot be replayed`);
+            }
+            stored.paperId = item.paperId;
+            const replayedDescriptor = compactSourceDescriptor(item.route.kind, stored, item);
+            if (stableHash(replayedDescriptor) !== stableHash(sourceDescriptor)) {
+                fail(`${item.paperId} completed analysis source descriptor drifted from sealed bytes`);
+            }
+            sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
+        } else {
+            planApi.verifyConferenceWriterInputs(item);
         }
-        stored.paperId = item.paperId;
-        const replayedDescriptor = compactSourceDescriptor(item.route.kind, stored, item);
-        if (stableHash(replayedDescriptor) !== stableHash(sourceDescriptor)) {
-            fail(`${item.paperId} completed analysis source descriptor drifted from sealed bytes`);
-        }
-        sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
-    } else {
-        planApi.verifyConferenceWriterInputs(item);
-    }
+        return { sourceDescriptor, sourceDetails };
+    });
+    let sourceDetails = replayedSourceDetails;
     const analysisFields = ['directory', 'analysisFileSha256', 'analysisRecordSha256',
         'sourceSnapshotSha256', ...(Object.hasOwn(active.analysis || {}, 'recovery') ? ['recovery'] : [])];
     exactObjectKeys(active.analysis, analysisFields, `${item.paperId} completed analysis receipt`);
@@ -1421,17 +1444,19 @@ async function replayCompletedAnalysisForStaging({ plan, item, active, generatio
         }
     }
     let readerPdfSourceHandle = null;
-    if ((analysis.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)) {
-        const source = item.route.kind === 'arxiv-fresh-fetch'
-            ? await freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
-                arxivId: item.route.arxivId, generation }) : await extractConferenceSource(item);
-        source.paperId = item.paperId;
-        sourceDetails = source.sourceDetails || source.runtimeDetails || fallbackArxivDetails(source);
-        if (stableHash(compactSourceDescriptor(item.route.kind, source, item)) !== stableHash(sourceDescriptor)) {
-            fail('completed historical PDF source no longer reproduces its original descriptor');
-        }
-        readerPdfSourceHandle = historicalReaderPdfSource({ plan, item, source, sourceDetails,
-            descriptor: sourceDescriptor, freshArxivSourceRoot, executionRoot });
+    if (requiresHistoricalPdfScope(analysis)) {
+        readerPdfSourceHandle = await replayCompletedSource(async () => {
+            const source = item.route.kind === 'arxiv-fresh-fetch'
+                ? await freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
+                    arxivId: item.route.arxivId, generation }) : await extractConferenceSource(item);
+            source.paperId = item.paperId;
+            sourceDetails = source.sourceDetails || source.runtimeDetails || fallbackArxivDetails(source);
+            if (stableHash(compactSourceDescriptor(item.route.kind, source, item)) !== stableHash(sourceDescriptor)) {
+                fail('completed historical PDF source no longer reproduces its original descriptor');
+            }
+            return historicalReaderPdfSource({ plan, item, source, sourceDetails,
+                descriptor: sourceDescriptor, freshArxivSourceRoot, executionRoot });
+        });
     }
     assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails, readerPdfSourceHandle });
     return { sourceDescriptor, sourceDetails, analysis, readerPdfSourceHandle };
@@ -1474,7 +1499,7 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
 }
 
 function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails = null, readerPdfSourceHandle = null }) {
-    if (readerPdfSourceHandle && (analysis?.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)) {
+    if (readerPdfSourceHandle && requiresHistoricalPdfScope(analysis)) {
         return withHistoricalReaderPdfSource(readerPdfSourceHandle,
             () => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails }));
     }
@@ -1612,23 +1637,24 @@ function replayDirectPageStaging({ plan, item, active, stagingRoot, executionRoo
         || staging.analysisArtifact.analysisRecordSha256 !== active.analysis.analysisRecordSha256) {
         fail(`${item.paperId} staged analysis bytes drifted`);
     }
-    let sourceDetails = null;
-    if (item.route.kind === 'arxiv-fresh-fetch') {
-        const stored = freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
-            arxivId: item.route.arxivId, generation: active.source.generation });
-        stored.paperId = item.paperId;
-        if (stableHash(compactSourceDescriptor(item.route.kind, stored, item)) !== stableHash(active.source)) {
-            fail(`${item.paperId} 暂存分析的来源描述与封存字节不符`);
+    let sourceDetails = null, readerPdfSourceHandle = null;
+    replayCompletedSourceSync(() => {
+        if (item.route.kind === 'arxiv-fresh-fetch') {
+            const stored = freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
+                arxivId: item.route.arxivId, generation: active.source.generation });
+            stored.paperId = item.paperId;
+            if (stableHash(compactSourceDescriptor(item.route.kind, stored, item)) !== stableHash(active.source)) {
+                fail(`${item.paperId} 暂存分析的来源描述与封存字节不符`);
+            }
+            sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
         }
-        sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
-    }
-    let readerPdfSourceHandle = null;
-    if ((analysis.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)) {
-        if (!plan || plan.queue?.find(value => value.paperId === item.paperId)?.runId !== item.runId) fail('historical PDF staged replay lacks the real original plan');
-        const replayed = replayHistoricalReaderPdfSourceForStaging({ plan, item, sourceDescriptor: active.source,
-            executionRoot, freshArxivSourceRoot });
-        sourceDetails = replayed.sourceDetails; readerPdfSourceHandle = replayed.readerPdfSourceHandle;
-    }
+        if (requiresHistoricalPdfScope(analysis)) {
+            if (!plan || plan.queue?.find(value => value.paperId === item.paperId)?.runId !== item.runId) fail('historical PDF staged replay lacks the real original plan');
+            const replayed = replayHistoricalReaderPdfSourceForStaging({ plan, item, sourceDescriptor: active.source,
+                executionRoot, freshArxivSourceRoot });
+            sourceDetails = replayed.sourceDetails; readerPdfSourceHandle = replayed.readerPdfSourceHandle;
+        }
+    });
     const manifest = directPages.validateManifest({
         value: JSON.parse(readRegular(path.join(directory, 'page-staging-manifest.json')).bytes.toString('utf8')),
         item, sourceDescriptor: active.source, publicationSource: body.publicationSource,
@@ -1730,6 +1756,21 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
     // 这个阶段只能读调度器标记为 ready 的那个 generation。旧的依赖名
     // 保留下来，作为测试注入 fixture 的入口；生产默认实现不能再抓取
     // 或修补缺失的 bundle。
+    const preserveSystemicReplayFailure = (item, error) => {
+        const failure = classifyFailure(error, clock());
+        if (!failure.systemic) return null;
+        const reason = failure.category === 'storage' ? 'recovery-storage-failed'
+            : error.code === 'HISTORICAL_DIRECT_SOURCE_REPLAY_FAILED' ? 'recovery-source-failed'
+                : globalAccountFailure(error) || 'recovery-run-failed';
+        requestPause({ code: reason, detail: safeErrorText(error) });
+        // A service or disk failure cannot invalidate or erase a paid completed draft.
+        registry = transition(registry, plan, item.paperId, 'failed', {
+            latestError: safeErrorText(error), latestFailure: { ...failure, retryable: false }
+        }, clock());
+        persist();
+        return { paperId: item.paperId, status: 'failed', retryable: false,
+            scope: 'run', error: safeErrorText(error) };
+    };
     const readFreshArxivSource = dependencies.captureFreshArxivRewriteSource
         || freshArxiv.readFreshArxivRewriteSource;
     const analyze = dependencies.analyze || defaultAnalyze;
@@ -1771,6 +1812,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 }
             } catch (error) {
                 if (saveErrors.has(error)) throw error;
+                const systemic = preserveSystemicReplayFailure(item, error);
+                if (systemic) return systemic;
                 const detail = `${replayFromStatus} completed-analysis replay rejected: ${safeErrorText(error, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     analysis: undefined, analysisRecovery: undefined, staging: undefined,
@@ -1826,6 +1869,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 return { paperId: item.paperId, status: rendererRestaging ? 'restaged' : 'staged' };
             } catch (error) {
                 if (saveErrors.has(error)) throw error;
+                const systemic = preserveSystemicReplayFailure(item, error);
+                if (systemic) return systemic;
                 const detail = `${replayFromStatus} completed-analysis staging failed: ${safeErrorText(error, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     latestError: `[crash-recovery] ${detail}`
@@ -1845,8 +1890,16 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 return { paperId: item.paperId, status: 'failed', error: detail };
             }
         }
-        const interrupted = recoverInterruptedRegistryEntry({ registry, plan, item,
-            generation: arxivGeneration, executionRoot: options.executionRoot, now: clock() });
+        let interrupted;
+        try {
+            interrupted = recoverInterruptedRegistryEntry({ registry, plan, item,
+                generation: arxivGeneration, executionRoot: options.executionRoot, now: clock() });
+        } catch (error) {
+            if (saveErrors.has(error)) throw error;
+            const systemic = preserveSystemicReplayFailure(item, error);
+            if (systemic) return systemic;
+            throw error;
+        }
         if (interrupted) {
             registry = interrupted.registry;
             persist();
@@ -1858,30 +1911,34 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
         }
         if (active.status === 'staged') {
             try {
-                if (item.route.kind === 'arxiv-fresh-fetch') {
-                    // 暂存记录只有在同一个已核验 generation 下才可恢复。registry 文件名
-                    // 按 generation 区分，新 generation 本来就选不到它；这次重放检查
-                    // 还能发现来源 bundle 被删掉或被换掉。
-                    const stored = freshArxiv.readFreshArxivRewriteSource({ rootDir: options.freshArxivSourceRoot,
-                        arxivId: item.route.arxivId, generation: arxivGeneration });
-                    if (active.source?.generation !== arxivGeneration
-                        || active.source?.sourceManifestSha256 !== stored.sourceManifestSha256
-                        || active.source?.textSha256 !== stored.manifest.text.responseSha256
-                        || active.source?.pdfSha256 !== stored.manifest.pdf.responseSha256) {
-                        fail(`${item.paperId} staged output belongs to a different sealed arXiv source generation`);
+                replayCompletedSourceSync(() => {
+                    if (item.route.kind === 'arxiv-fresh-fetch') {
+                        // 暂存记录只有在同一个已核验 generation 下才可恢复。registry 文件名
+                        // 按 generation 区分，新 generation 本来就选不到它；这次重放检查
+                        // 还能发现来源 bundle 被删掉或被换掉。
+                        const stored = freshArxiv.readFreshArxivRewriteSource({ rootDir: options.freshArxivSourceRoot,
+                            arxivId: item.route.arxivId, generation: arxivGeneration });
+                        if (active.source?.generation !== arxivGeneration
+                            || active.source?.sourceManifestSha256 !== stored.sourceManifestSha256
+                            || active.source?.textSha256 !== stored.manifest.text.responseSha256
+                            || active.source?.pdfSha256 !== stored.manifest.pdf.responseSha256) {
+                            fail(`${item.paperId} staged output belongs to a different sealed arXiv source generation`);
+                        }
                     }
-                }
-                else {
-                    // 要把暂存的分析当成可恢复，先重放规划里的两份本地字节：拿元数据
-                    // 和每个本地 PDF，跟不可改的计划值重新算哈希比对。
-                    planApi.verifyConferenceWriterInputs(item);
-                }
+                    else {
+                        // 要把暂存的分析当成可恢复，先重放规划里的两份本地字节：拿元数据
+                        // 和每个本地 PDF，跟不可改的计划值重新算哈希比对。
+                        planApi.verifyConferenceWriterInputs(item);
+                    }
+                });
                 replayDirectPageStaging({ plan, item, active, stagingRoot: options.stagingRoot, executionRoot: options.executionRoot,
                     freshArxivSourceRoot: options.freshArxivSourceRoot,
                     publicationMetadataRoot: options.publicationMetadataRoot,
                     readPublicationMetadata: dependencies.readPublicationMetadata });
             } catch (error) {
                 if (saveErrors.has(error)) throw error;
+                const systemic = preserveSystemicReplayFailure(item, error);
+                if (systemic) return systemic;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     latestError: safeErrorText(error)
                 }, clock()); persist();

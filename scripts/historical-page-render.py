@@ -16,6 +16,8 @@ from blog_entry_loader import load_publish_to_blog
 from paper_reader_presentation import build_reader_presentation, normalize_repeated_bold_prefixes
 from tag_presentation import render_tag_hierarchy_markdown
 from runtime_guard import require_external_runtime
+from publication_local_replay import (publication_replay_scope, render_process_guard,
+    render_budget_seconds, LocalReplayFailure, RenderDeadlineExceeded, emit_replay_failure)
 
 
 DIRECT_PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1'
@@ -197,13 +199,14 @@ def render_packet(packet):
         )
         tags = [str(item).lstrip('#') for item in parsed.get('tags', []) if str(item).strip()]
         score_line = publisher.format_complete_score_line(parsed)
-        presentation = build_reader_presentation(
-            projected,
-            publisher=publisher, source_text=packet.get('sourceText'),
-            plan=projected.get('apiReaderPlan'),
-            resources=(projected.get('apiReaderResources') or {}).get('resources'),
-            authors=(projected.get('apiReaderAuthors') or {}).get('authors'),
-        )
+        with publication_replay_scope(projected, packet.get('sourceText'), publisher=publisher):
+            presentation = build_reader_presentation(
+                projected,
+                publisher=publisher, source_text=packet.get('sourceText'),
+                plan=projected.get('apiReaderPlan'),
+                resources=(projected.get('apiReaderResources') or {}).get('resources'),
+                authors=(projected.get('apiReaderAuthors') or {}).get('authors'),
+            )
         workbench = publisher.build_verified_conference_workbench_bundle(
             projected, date,
             paper_id=projected['directPaperId'],
@@ -268,7 +271,8 @@ def render_packet(packet):
             'primaryMethodId': assignment['primaryMethodId'],
             'conceptIds': ordered,
         }
-    markdown, _ = publisher.generate_paper_page(projected, date, '论文速递', source_text=packet.get('sourceText'))
+    with publication_replay_scope(projected, packet.get('sourceText'), publisher=publisher):
+        markdown, _ = publisher.generate_paper_page(projected, date, '论文速递', source_text=packet.get('sourceText'))
     assets = []
     with tempfile.TemporaryDirectory(prefix='historical-page-render-') as temporary:
         root = Path(temporary)
@@ -306,8 +310,14 @@ def read_packet_bytes(argv):
 def main():
     require_external_runtime('historical-page-render.py')
     raw = read_packet_bytes(sys.argv)
-    rendered = render_packet(json.loads(raw.decode('utf-8')))
-    sys.stdout.write(json.dumps(rendered, ensure_ascii=False))
+    packet = json.loads(raw.decode('utf-8'))
+    try:
+        with render_process_guard(render_budget_seconds(packet, 'history'), renderer=__file__):
+            rendered = render_packet(packet)
+            sys.stdout.write(json.dumps(rendered, ensure_ascii=False))
+    except (LocalReplayFailure, RenderDeadlineExceeded) as error:
+        emit_replay_failure(error, __file__)
+        raise SystemExit(1) from None
 
 
 if __name__ == '__main__':

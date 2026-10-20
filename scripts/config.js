@@ -185,6 +185,7 @@ const FILES = {
     // 放在 runtime/，避免随 current/ 的日批次文件一起归档。
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
     llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
+    llmResponseRecoveryDir: path.join(DATA_DIR, 'runtime', 'llm-response-recovery'),
     freshRewriteRunsDir: path.join(DATA_DIR, 'runtime', 'fresh-rewrites'),
     // 默认日更 API 路线有自己的一套已封存四文件来源：
     // source.txt、source.pdf、source-runtime.json 和 source-manifest.json。

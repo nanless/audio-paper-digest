@@ -550,6 +550,23 @@ test('用尽的候选可以免费重跑一次完整解析：有效就退场，�
     });
     assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(valid), { sourceText, structuredArtifacts: artifacts,
         requiredVersion: 3, requireSourceBindings: true, requireIntegratedTables: true, minimumIntegratedTables: 2 }));
+    const acceptedDirectory = temporary(t), dispositions = [];
+    const storageError = Object.assign(new Error('accepted disposition could not be persisted'), {
+        code: 'LLM_USAGE_NOT_PERSISTED', category: 'storage', scope: 'run', retryable: false
+    });
+    let paidCalls = 0;
+    await assert.rejects(generateApiReaderArticleDetailed(paper, '', '', {
+        ...base, readerAttemptsDir: acceptedDirectory,
+        readerCallModel: async () => { paidCalls++; return JSON.stringify(valid); },
+        readerRecordDisposition: event => { dispositions.push(event.disposition); throw storageError; }
+    }), error => error === storageError);
+    assert.equal(paidCalls, 1);
+    assert.deepEqual(dispositions, ['accepted'], 'ledger failure must not fabricate a rejected validation');
+    const acceptedEnvelope = JSON.parse(fs.readFileSync(path.join(acceptedDirectory,
+        fs.readdirSync(acceptedDirectory).find(name => /^[a-f0-9]{64}\.json$/.test(name)))));
+    assert.equal(acceptedEnvelope.payload.attempts, 1);
+    assert.equal(acceptedEnvelope.payload.fullAttempts, 1);
+    assert.deepEqual(acceptedEnvelope.payload.draft, valid);
     const reordered = structuredClone(valid);
     reordered.conceptBridges.reverse();
     const parserOptions = { sourceText, structuredArtifacts: artifacts, requiredVersion: 3,

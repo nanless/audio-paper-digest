@@ -1844,7 +1844,9 @@ function transportRunFailure(receipt, originalError = null) {
         LLM_ACCOUNT_AUTH_ERROR: 'authentication',
         LLM_ACCOUNT_POOL_EXHAUSTED: 'quota_exhausted',
         LLM_ACCOUNT_POOL_STATE_ERROR: 'state',
-        LLM_ACCOUNT_POOL_CONFIG_ERROR: 'config'
+        LLM_ACCOUNT_POOL_CONFIG_ERROR: 'config',
+        LLM_USAGE_NOT_PERSISTED: 'storage',
+        LLM_REQUEST_START_NOT_PERSISTED: 'storage'
     };
     const code = receipt.outcome === 'received' && receipt.statusCode === 401
         ? 'LLM_ACCOUNT_AUTH_ERROR' : receipt.errorCode;
@@ -2213,8 +2215,11 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
                                 apiKeys: config.apiKeys, accountPoolStateFile: config.accountPoolStateFile, usageContext,
                                 usageSink: event => {
                                     let persisted = false;
-                                    try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); } catch (_) { /* 下面按类型处理 */ }
+                                    let persistenceError = null;
+                                    try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); }
+                                    catch (error) { persistenceError = error; }
                                     usageEvents.push({ event, persisted });
+                                    if (persistenceError) throw persistenceError;
                                 } });
                     } catch (caught) { error = caught; }
                     if (error?.scope === 'run') runFailure = error;
@@ -2298,8 +2303,11 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
                         apiKeys: config.apiKeys, accountPoolStateFile: config.accountPoolStateFile, usageContext,
                         usageSink: event => {
                             let persisted = false;
-                            try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); } catch (_) { /* 下面按类型处理 */ }
+                            let persistenceError = null;
+                            try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); }
+                            catch (error) { persistenceError = error; }
                             usageEvents.push({ event, persisted });
+                            if (persistenceError) throw persistenceError;
                         } });
             } catch (caught) { error = caught; }
             if (error?.scope === 'run') runFailure = error;

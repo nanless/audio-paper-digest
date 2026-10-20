@@ -167,7 +167,7 @@ npm run test:compat
 | `lib/conference-reader-active-candidate-replay.js` | 在禁用新模型请求的私有临时目录中重放会议子运行已付费候选；核验唯一原请求、响应、用量、来源及归档 Prompt，私有范围内保留原模板声明并传递真实 PDF 能力。正常解析与整篇资格通过后交由适配器保存，不授予新请求或预算，不覆盖原稿。 |
 | `lib/conference-reader-publication-evidence.js` | 为已完成会议的发布复核从原封存 PDF 派生可逐字重放的表头、单位与实验设置引文；绑定原计划、抽取、正文及表格，不修改旧稿或来源签名，不授予普通分析成功或跳过资格。 |
 | `lib/conference-process.js` | Node 库：对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–60；每篇内部并发固定为 1。外层并发不改变原阶段限流、请求额度和整批轮次。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
-| `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；显式新会议模式随真实 daily 包装层运行，原 history 调用保持原角色检查。先消费实际 Reader 维护 pending 门，再输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与模型请求。Python 调用者一次核完整会议及维护历史，期限3600秒、输出限2 MiB；不改变单篇会议渲染600秒或普通资源30秒期限。 |
+| `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；显式新会议模式随真实 daily 包装层运行，原 history 调用保持原角色检查。先消费实际 Reader 维护 pending 门，再输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与模型请求。Python 调用者一次核完整会议及维护历史，期限3600秒、输出限2 MiB；页面渲染按共享角色预算执行；普通资源30秒期限保持。 |
 | `lib/conference-publication-author-source.js` | Node 库：只读核验官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；原2.3.0凭证严格复用已有保留来源读取器，其它版本仍走当前严格核验。不新建来源、不重抽 PDF 或请求模型。 |
 | `lib/conference-queue.js` | 会议队列状态、领取与并发保护；调用统一 process。 |
 | `lib/conference-run.js` | Node 库：固定会议成员、分片、分类策略、选择策略版本和逐篇状态。通用状态接口拒绝直接写 `completed`；聚合发布接口还要求一项尚未实现的认证完成证明，因此不能据此宣布会议可以发布。 |
@@ -423,7 +423,9 @@ npm run test:compat
 | `lib/model-text-sanitization.js` | Node 库：记录保留合法 Unicode 字符的请求清洗版本；生产恢复、提升和暂存核验当前来源，旧受影响输入须重分析，缺少受控来源不能推定可复用。旧成功结构和已发布只读状态不改。 |
 | `lib/paper-identity.js` | Node 库：实现 Node `paper-identity-v1` 身份规范化、官方来源 URL 检查和稳定 SHA；不替换既有 arXiv 辅助函数。 |
 | `lib/paper-source-authority.js` | Node 库：核验规范论文身份、完整身份记录、来源快照、凭证和全文 SHA，返回只含来源、且只能由实际核验过程生成的引用对象。普通磁盘 arXiv 加载器不能恢复发布授权；会议路径还要求当前进程持有实际核验生成的计划引用对象。 |
-| `lib/python-json-packet-bridge.js` | 会议与历史单篇渲染共用的私有 Python 输入文件传输；独占创建 `0600` 临时文件，限制输入、输出与期限并清理；仅固定会议页面及 `--packet-file` 组合外层允许600秒，其余入口60秒，内部来源核验期限不变；packet 身份、JSON 和正文资格仍由调用方核验。 |
+| `lib/python-json-packet-bridge.js` | 会议与历史单篇渲染共用的私有 Python 输入文件传输；独占创建 `0600` 临时文件，限制输入、输出与期限并清理；固定会议、历史及汇总按 `publication_replay_policy.json` 的实际角色预算加15秒清理余量；未知入口仍60秒。私有FD只传真实固定程序的失败状态，packet 身份、JSON 和正文资格仍由调用方核验。 |
+| `publication_local_replay.py`、`publication_replay_policy.json` | 会议/历史固定页面进程的共同期限、子进程清理和真实来源合并重放；私有 ContextVar 只绑定同一次同步 render 的原论文、封存全文及正常 Node 返回值，退出即销毁，不提供模型、来源或完成许可。 |
+| `lib/llm-response-recovery.js` | Node费用保存故障时保全真实返回正文和安全事件元数据；与 Python `llm_usage.py` 对应，仅故障时写受保护私有目录，没有自动重放或授予资格入口。 |
 | `lib/reanalysis-helpers.js` | Node 库：供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
 | `lib/source-classification-failures.js` | Node 库：只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |
 | `lib/source-classification-scheduler.js` | Node 库：以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |

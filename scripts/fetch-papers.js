@@ -308,7 +308,7 @@ function makeFilterRequestError(message, properties = {}) {
 }
 
 function classifyFilterRequestError(sourceError, context = {}) {
-    if (sourceError?.filterClassified) return sourceError;
+    if (sourceError?.filterClassified && sourceError?.scope !== 'run') return sourceError;
     const status = Number(sourceError?.status ?? context.status);
     const originalCode = String(sourceError?.code || '');
     const message = sanitizeFilterErrorMessage(sourceError?.message || sourceError, context.secrets);
@@ -317,6 +317,15 @@ function classifyFilterRequestError(sourceError, context = {}) {
         filterClassified: true,
         cause: sourceError
     };
+
+    if (sourceError?.scope === 'run') {
+        return makeFilterRequestError(message, {
+            ...common, code: originalCode || 'FILTER_RUN_FAILURE', scope: 'run',
+            category: sourceError.category || 'run', retryable: false,
+            systemFailure: true, stopBatch: true,
+            systemFingerprint: (originalCode || 'FILTER_RUN_FAILURE').toLowerCase()
+        });
+    }
 
     if (originalCode === 'LLM_ACCOUNT_POOL_LOCK_TIMEOUT') {
         return makeFilterRequestError(message, {
@@ -2065,6 +2074,7 @@ async function filterPapersWithLLM(papers, options = {}) {
                     code: rejected.reason?.code || 'FILTER_BATCH_ABORTED',
                     status: rejected.reason?.status,
                     category: rejected.reason?.category,
+                    scope: rejected.reason?.scope,
                     retryable: rejected.reason?.retryable,
                     systemFailure: rejected.reason?.systemFailure,
                     stopBatch: true,

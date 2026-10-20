@@ -8,7 +8,7 @@ const adapterSource=fs.readFileSync(path.join(root,'scripts/lib/conference-analy
 const sha=v=>crypto.createHash('sha256').update(v).digest('hex');
 const stable=v=>JSON.stringify(v);
 const extract=(s,a,b)=>s.slice(s.indexOf(a),s.indexOf(b,s.indexOf(a)));
-const gate=extract(source,'function shouldDeferInitialSavedReplayToNormal(','async function runReaderReviewMaintenanceBatch(');
+const gate=extract(source,'function shouldDeferInitialSavedReplayToNormal(','function savedMaintenanceStageItem(');
 function fixture(t,changes={}) {
  const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'maintenance-defer-'));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));
  const feeFile=path.join(tmp,'synthetic-paid-usage.json');fs.writeFileSync(feeFile,'synthetic retained fee event bytes');const feeSha=sha(fs.readFileSync(feeFile));
@@ -52,7 +52,7 @@ function fixture(t,changes={}) {
   prepareConferenceAnalysis:()=>events.push('prepare-existing'),readerRevisionExecutionId:()=>childId,conferencePaperLockOptions:()=>({}),
   replaceJson:(file,value,expected)=>{assert.equal(readJsonRecord(file).sha256,expected);events.push('CAS-save');write(file,value)},
   sealCompletedRun:()=>{events.push('seal');const f=path.join(directory,'run.json'),v=readJsonRecord(f).value;write(f,{...v,status:'complete'});},
-  effectiveMember:(_b,m)=>m,progressFor:()=>({value:progress,sha256:'progress-sha'}),check:(v,m)=>{if(!v)throw Error(m)},
+  effectiveMember:(_b,m)=>m,stageMaintenanceSavedMembers:async()=>new Set(),progressFor:()=>({value:progress,sha256:'progress-sha'}),check:(v,m)=>{if(!v)throw Error(m)},
  };
  vm.runInNewContext(extract(adapterSource,'async function inspectLoadedReaderRevisionCompletion(','async function inspectConferenceReaderRevisionCompletion(')+extract(adapterSource,'async function refreshConferenceReader(','function recoveryWindowError(')+extract(adapterSource,'async function continueConferenceRevision(','module.exports = ')+gate+';module.exports={refreshConferenceReader,shouldDeferInitialSavedReplayToNormal};',g);
  const api=g.module.exports;

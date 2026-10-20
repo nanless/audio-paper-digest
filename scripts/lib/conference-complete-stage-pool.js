@@ -12,8 +12,22 @@ const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const LOCAL_EXTRACTORS = Object.freeze(['reader_sealed_pdf_quote_evidence.py',
     'reader_authenticated_pdf_hierarchical_table.py', 'reader_authenticated_pdf_footnote_evidence.py']);
 const LOCAL_RENDERER = 'conference-page-render.py';
+const SOURCE_AUTHORITY_CODES = new Set(['CONFERENCE_SOURCE_CONTEXT_INTEGRITY',
+    'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY','READER_IMAGE_SOURCE_INTEGRITY']);
+function scopeActualStageSourceFailure(cause) {
+    if(!(cause instanceof Error)||!SOURCE_AUTHORITY_CODES.has(cause.code))return cause;
+    return Object.assign(new Error('worker实际论文来源或来源凭证核验失败', {cause}), {
+        code:cause.code,scope:'run',retryable:false});
+}
 function localTimeoutEvidence(error) {
     const wrapper = path.join(PROJECT_ROOT, 'scripts/python-runtime.sh');
+    const nested = require('./python-json-packet-bridge').getVerifiedLocalReplayTimeout(error);
+    if (nested) {
+        if (!verifiedNestedTimeout(nested)) return null;
+        const sha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+        return {contract:LOCAL_TIMEOUT,program:LOCAL_RENDERER,wrapperSha256:sha(wrapper),
+            programSha256:sha(path.join(PROJECT_ROOT,'scripts',LOCAL_RENDERER)),nestedReplay:{...nested}};
+    }
     if (!(error instanceof Error) || error.code !== 'ETIMEDOUT' || error.syscall !== 'spawnSync bash'
         || error.path !== 'bash' || !Array.isArray(error.spawnargs) || error.spawnargs[0] !== wrapper) return null;
     const args = error.spawnargs, program = args[1];
@@ -33,11 +47,40 @@ function localTimeoutEvidence(error) {
     return { contract: LOCAL_TIMEOUT, program: path.basename(program),
         wrapperSha256: sha(fs.readFileSync(wrapper)), programSha256: sha(fs.readFileSync(program)) };
 }
+function verifiedNestedTimeout(proof) {
+    if(proof?.contract==='publication-fixed-render-deadline-v1') {
+        const keys=['contract','renderer','rendererSha256','signal','timeoutSeconds','returncode'];
+        const policy=require('../publication_replay_policy.json'),budgets=new Set([policy.ordinaryConferenceSeconds,
+            policy.sourceReplaySeconds+policy.renderOverheadSeconds]);
+        for(let count=1;count<=policy.maxAggregatePapers;count++)for(let sources=0;sources<=count;sources++)
+            budgets.add(policy.renderOverheadSeconds+sources*policy.sourceReplaySeconds+(count-sources)*policy.simpleReplaySeconds);
+        if(Object.keys(proof).sort().join(',')!==keys.sort().join(',')||proof.renderer!==LOCAL_RENDERER
+            ||proof.signal!=='SIGALRM'||proof.returncode!==1||!budgets.has(proof.timeoutSeconds))return false;
+        const sha=require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(PROJECT_ROOT,'scripts',LOCAL_RENDERER))).digest('hex');
+        if(proof.rendererSha256!==sha)throw integrity('本地页面总期限的固定渲染实现已变化');
+        return true;
+    }
+    const keys=['contract','renderer','worker','workerSha256','rendererSha256','timedOut','outputTruncated',
+        'returncode','timeoutSeconds','stdoutSha256','stderrSha256','stdoutBytes','stderrBytes'];
+    if (!proof || Object.keys(proof).sort().join(',')!==keys.sort().join(',')
+        || proof.contract!=='publication-local-replay-failure-v1' || proof.renderer!==LOCAL_RENDERER
+        || !['reader-resource-claims-replay-cli.js','core-summary-semantic-replay-cli.js'].includes(proof.worker)
+        || proof.timedOut!==true || proof.outputTruncated!==false || !Number.isInteger(proof.returncode) || proof.returncode===0
+        || ![30,180,require('../publication_replay_policy.json').sourceReplaySeconds].includes(proof.timeoutSeconds)
+        || !['stdoutSha256','stderrSha256'].every(key=>/^[a-f0-9]{64}$/u.test(proof[key]||''))
+        || !['stdoutBytes','stderrBytes'].every(key=>Number.isSafeInteger(proof[key])&&proof[key]>=0)) return false;
+    const sha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    if(proof.rendererSha256!==sha(path.join(PROJECT_ROOT,'scripts',LOCAL_RENDERER))
+        ||proof.workerSha256!==sha(path.join(PROJECT_ROOT,'scripts/lib',proof.worker))) throw integrity('内部本地超时的固定来源重放实现已变化');
+    return true;
+}
 function verifiedLocalTimeout(error) {
     const proof = error?.localTimeout;
-    if (error?.code !== 'ETIMEDOUT' || error.scope === 'run' || proof?.contract !== LOCAL_TIMEOUT
-        || Object.keys(proof).sort().join(',') !== 'contract,program,programSha256,wrapperSha256'
+    const nested = proof && Object.hasOwn(proof,'nestedReplay');
+    if ((!nested && error?.code !== 'ETIMEDOUT') || error?.scope === 'run' || proof?.contract !== LOCAL_TIMEOUT
+        || Object.keys(proof).sort().join(',') !== (nested?'contract,nestedReplay,program,programSha256,wrapperSha256':'contract,program,programSha256,wrapperSha256')
         || ![...LOCAL_EXTRACTORS, LOCAL_RENDERER].includes(proof.program)) return false;
+    if(nested&&(proof.program!==LOCAL_RENDERER||!verifiedNestedTimeout(proof.nestedReplay)))return false;
     const sha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     if (proof.wrapperSha256 !== sha(path.join(PROJECT_ROOT, 'scripts/python-runtime.sh'))
         || proof.programSha256 !== sha(path.join(PROJECT_ROOT, 'scripts', proof.program))) throw integrity('本地超时的固定提取或页面实现已变化');
@@ -57,6 +100,8 @@ function serializeError(error) {
         || error?.code === require('./analysis-stop-control').MODEL_REQUESTS_FORBIDDEN) result.scope = 'run';
     const storage = recovery.findStorageFailure(error);
     if (storage && storage !== error) result.cause = { code: storage.code, message: String(storage.message).slice(0, 2000) };
+    else if(error?.scope==='run'&&SOURCE_AUTHORITY_CODES.has(error.cause?.code))result.cause={
+        code:error.cause.code,message:recovery.classifyFailure(error.cause,new Date().toISOString()).message};
     const timeout = localTimeoutEvidence(error);
     if (timeout && result.scope !== 'run') result.localTimeout = timeout;
     return result;
@@ -94,7 +139,7 @@ function createStageSession(init) {
     if (!init || !path.isAbsolute(init.stagingRoot || '') || !/^[a-f0-9]{64}$/.test(init.stateFileSha256 || '')) {
         throw integrity('缺少固定暂存根或实际状态SHA');
     }
-    if (init.operation !== undefined && init.operation !== 'read-stage') throw integrity('未知私有后处理操作');
+    if (init.operation !== undefined && !['read-stage','maintenance-saved-stage'].includes(init.operation)) throw integrity('未知私有后处理操作');
     const options = require('../migrate-conference-process').parseArgs(['--apply', '--catalog', init.options?.catalogName,
         '--report', init.options?.reportName, '--filter', init.options?.filterId, '--from', init.options?.fromProcessId]);
     const directory = api.safeProcessDirectory(deps.files.conferenceProcessDir, options.fromProcessId, false);
@@ -107,8 +152,13 @@ function createStageSession(init) {
     const replay = require('./conference-retained-source-replay').createRetainedSourceReplay(context, deps);
     const projection = deps.postprocess.implementationFingerprint();
     if (projection.implementationSha256 !== init.projectionSha256) throw integrity('worker页面实现指纹不一致');
-    if (init.operation === 'read-stage') assertOperationLock(directory, init.operationLock);
-    const pins = new Map();
+    const lockedOperation = init.operation === 'read-stage' || init.operation === 'maintenance-saved-stage';
+    if (lockedOperation) assertOperationLock(directory, init.operationLock);
+    const maintenance = init.operation === 'maintenance-saved-stage'
+        ? require('./conference-reader-review-maintenance').openSavedMaintenanceStageSession({
+            manifestPath:init.maintenanceManifestPath,processDirectory:directory,
+            analysisRoot:deps.files.conferenceAnalysisDir},deps) : null;
+    const pins = new Map(), expectedTasks = new Map();
     function canonicalPins(item) {
         const loaded = adapter.loadConferenceAnalysis({ analysisRoot: deps.files.conferenceAnalysisDir, executionId: item.analysisRunId });
         if (loaded.analysis.status !== 'complete' || loaded.run.status !== 'complete'
@@ -118,46 +168,54 @@ function createStageSession(init) {
         return loadedPins(loaded);
     }
     async function stage(task) {
-        const item = state.items[task?.paperId];
+        const item = maintenance ? maintenance.readTask(task) : state.items[task?.paperId];
         if (!item || item.status !== 'complete' || item.analysisRunId !== task.executionId
             || api.stableHash(item) !== task.itemSha256) throw integrity('任务不是同一快照的完整成员');
         return deps.engine.withPaperAnalysisLock({ id: item.paperId }, () =>
             require('./analysis-stop-control').withModelRequestsForbidden(() => {
-                if (init.operation === 'read-stage') assertOperationLock(directory, init.operationLock);
+                if (lockedOperation) assertOperationLock(directory, init.operationLock);
                 const before = canonicalPins(item);
                 let original;
-                try { original = replay.forItem(item); }
+                try { original = replay.forItem(maintenance ? maintenance.parentItem(task) : item); }
                 catch (cause) { throw Object.assign(integrity(`worker原来源重放失败：${cause.message}`), { cause }); }
                 const request = { analysisRoot: deps.files.conferenceAnalysisDir,
                     executionId: item.analysisRunId, tagCatalogPath: deps.files.tagCatalogFile,
                     stagingRoot: init.stagingRoot, planHandle: original.planHandle, sourceRoot: original.sourceRoot, apply: true };
-                const staged = init.operation === 'read-stage'
-                    ? { status: 'loaded-stage', ...deps.postprocess.loadStageAndCompleted(request).staged }
-                    : deps.postprocess.stagePaper(request);
+                let staged;
+                try {
+                    staged = maintenance ? maintenance.stage(task,original) : init.operation === 'read-stage'
+                        ? { status: 'loaded-stage', ...deps.postprocess.loadStageAndCompleted(request).staged }
+                        : deps.postprocess.stagePaper(request);
+                } catch(cause) {throw scopeActualStageSourceFailure(cause);}
                 if (!['staged', 'loaded-stage'].includes(staged.status)) throw Object.assign(new Error(`已完成论文正常暂存仍为 ${staged.status}`),
                     { code: 'CONFERENCE_POSTPROCESS_INTEGRITY' });
                 assertManifestItem(staged.manifest, item);
                 if (api.stableHash(before) !== api.stableHash(canonicalPins(item))) throw integrity('资格核验期间原完整包改变');
                 pins.set(item.paperId, before);
+                expectedTasks.set(item.paperId, {...task});
                 return { status: staged.status, manifest: staged.manifest, pins: before };
             }));
     }
     function assertUnchanged() {
-        if (init.operation === 'read-stage') assertOperationLock(directory, init.operationLock);
+        if (lockedOperation) assertOperationLock(directory, init.operationLock);
+        maintenance?.assertUnchanged();
         if (publication.readRegular(stateFile).sha256 !== init.stateFileSha256
             || api.implementationSha256() !== context.authority.implementationSha256
             || deps.postprocess.implementationFingerprint().implementationSha256 !== init.projectionSha256) {
             throw integrity('并行阶段结束前实际状态或实现变化');
         }
-        for (const [paperId, expected] of pins) if (api.stableHash(canonicalPins(state.items[paperId])) !== api.stableHash(expected)) {
+        for (const [paperId, expected] of pins) {
+            const item = maintenance ? maintenance.readTask(expectedTasks.get(paperId)) : state.items[paperId];
+            if (api.stableHash(canonicalPins(item)) !== api.stableHash(expected)) {
             throw integrity('并行暂存后原完整包变化');
+            }
         }
     }
     return { stage, assertUnchanged };
 }
 
 // Verify the actual immutable hand-off bytes without repeating Reader/rendering.
-function verifyStageResult(result, item, init, files) {
+function readVerifiedStageResult(result, item, init, files) {
     const api = require('./conference-process'), publication = require('./publication-file-primitives');
     if (!['staged', 'loaded-stage'].includes(result?.status)) throw integrity('worker未返回真实暂存结果');
     const manifest = result.manifest; assertManifestItem(manifest, item);
@@ -182,9 +240,10 @@ function verifyStageResult(result, item, init, files) {
         const record = read(path.join('assets', asset.path), 32 * 1024 * 1024);
         if (record.sha256 !== asset.sha256 || record.bytes.length !== asset.size) throw integrity('暂存资源交接SHA不一致');
     }
-    assertStageCanonical(result, item, files);
-    return manifest;
+    const loaded=assertStageCanonical(result, item, files);
+    return {manifest,loaded};
 }
+function verifyStageResult(result, item, init, files) {return readVerifiedStageResult(result,item,init,files).manifest;}
 function assertStageCanonical(result, item, files) {
     const api = require('./conference-process'), adapter = require('./conference-analysis-adapter');
     const loaded = adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir, executionId: item.analysisRunId });
@@ -238,8 +297,7 @@ async function collectAggregateStageBatch(input, operation, planProof) {
         shouldStop: () => stop.assertMayStartRequest(), onResult: (item, result, error) => {
             if (error) throw error; // aggregate cannot certify a partial set
             if (result.status !== 'loaded-stage') throw integrity('聚合worker没有运行只读正常loadStage');
-            const manifest = verifyStageResult(result, item, init, deps.files);
-            const loaded = assertStageCanonical(result, item, deps.files);
+            const {manifest,loaded} = readVerifiedStageResult(result, item, init, deps.files);
             const stageDirectory = path.join(input.stagingRoot, item.analysisRunId, init.registrySha256, init.projectionSha256);
             const read = name => require('./publication-file-primitives').readRegular(path.join(stageDirectory, name)).sha256;
             stages.set(item.paperId, { directory: stageDirectory, manifest, tagMetadata: manifest.tagMetadata,
@@ -395,6 +453,6 @@ async function runStagePool(items, { concurrency, init, shouldStop = () => {}, o
     }
     shouldStop();
 }
-module.exports = { MAX_STAGE_WORKERS, integrity, serializeError, createStageSession, verifyStageResult,
+module.exports = { MAX_STAGE_WORKERS, integrity, serializeError, createStageSession, verifyStageResult, readVerifiedStageResult, operationLockStamp,
     assertStageCanonical, runStagePool, assertManifestItem, collectAggregateStageBatch,
     readAggregateStageBatch, assertAggregateStageBatchUnchanged };

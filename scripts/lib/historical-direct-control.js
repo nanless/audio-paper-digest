@@ -184,7 +184,8 @@ function pauseRecord(plan, generation, requestedAt, reason) {
     if (reason !== undefined && (!reason || typeof reason !== 'object'
         || Object.keys(reason).sort().join(',') !== 'code,detail'
         || !['SIGINT', 'SIGTERM', 'external-pause', 'account-pool-exhausted',
-            'account-balance-unavailable', 'account-authentication-failed', 'account-service-unavailable'].includes(reason.code)
+            'account-balance-unavailable', 'account-authentication-failed', 'account-service-unavailable',
+            'recovery-storage-failed', 'recovery-source-failed', 'recovery-run-failed'].includes(reason.code)
         || typeof reason.detail !== 'string' || reason.detail !== runner.safeErrorText(reason.detail))) {
         fail('暂停原因的字段或原因代码无效，或说明中含不安全文本');
     }

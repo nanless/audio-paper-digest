@@ -42,6 +42,15 @@ function setup({count=4,existing=0,alwaysFail=null,stopAt=null,savedComplete=nul
   shouldDeferInitialSavedReplayToNormal:()=>false,
   stageChild:(_batch,m)=>{stageChecks.push(m.paperId);if(stopAfterStage)setImmediate(()=>{stopped=true;});assert.equal(records.get(m.paperId)?.status,'complete');
    if(badSaved&&m.paperId===savedComplete)throw Error('synthetic real stage qualification rejected');return {paperId:m.paperId};},
+  stageMaintenanceSavedMembers:async({outcomes,excludeIds=new Set()})=>{
+   const handled=new Set();for(const m of members) {
+    if(excludeIds.has(m.paperId)||records.get(m.paperId)?.status!=='complete')continue;
+    try {const observed=globals.observeAndStageSavedMember(batch,m,{},{});
+     progress.members[m.paperId]={status:'complete',proof:observed.proof};outcomes.set(m.paperId,observed.proof);
+    } catch(error) {progress.members[m.paperId]={status:'failed',executionId:m.executionId,failure:{message:error.message,retryable:false,systemic:false}};}
+    handled.add(m.paperId);
+   }return handled;
+  },
   saveMember:(_batch,id,v)=>{progress.members[id]=v;},
   require:id=>id==='./analysis-failure-rounds'?rounds:id==='./analysis-stop-control'?{
    withModelRequestsForbidden:async fn=>{forbiddenDepth++;try{return await fn();}finally{forbiddenDepth--;}},
@@ -79,7 +88,12 @@ test('post-selection actual attempt drift stops before a paid dispatch',async()=
 });
 test('saved partial-to-complete recovery still requires normal stage qualification before reuse',async()=>{
  const h=setup({count:2,existing:1,savedComplete:'paper-0',badSaved:true});
- await assert.rejects(h.run,/stage qualification rejected/);assert.deepEqual(h.stageChecks,['paper-0']);assert.equal(h.events.length,0);
+ const result=await h.run();assert.equal(result.status,'reader_review_maintenance_pending');
+ assert.deepEqual(Array.from(result.failed),['paper-0']);assert.deepEqual(h.stageChecks,['paper-0','paper-1']);
+ assert.deepEqual(h.events,[{id:'paper-1',attempt:1}]);
+ assert.equal(h.progress.members['paper-0'].status,'failed');
+ assert.match(h.progress.members['paper-0'].failure.message,/stage qualification rejected/);
+ assert.equal(h.progress.members['paper-0'].failure.retryable,false);
 });
 
 test('known nonretryable child is read only by unchanged initialization, never by scheduling phases',async()=>{
@@ -90,11 +104,12 @@ test('known nonretryable child is read only by unchanged initialization, never b
  assert.deepEqual(h.progress.roundIntents.map(x=>x.inputIds),[['paper-2','paper-3','paper-4'],['paper-1'],['paper-1']]);
 });
 
-test('event-loop stop between initialization members preserves the fully staged and saved child',async()=>{
+test('event-loop stop after the saved-only completed pool preserves its saved child and forbids paid dispatch',async()=>{
  const h=setup({count:3,existing:1,savedComplete:'paper-0',stopAfterStage:true});
  await assert.rejects(h.run,error=>error.code==='ANALYSIS_STOP_REQUESTED');
  assert.deepEqual(h.stageChecks,['paper-0']);assert.equal(h.progress.members['paper-0'].status,'complete');
- assert.ok(h.reads.every(id=>id==='paper-0'));assert.equal(h.events.length,0);assert.equal(h.progress.roundIntents.length,0);
+ assert.ok(h.reads.includes('paper-1')&&h.reads.includes('paper-2'),'finish the initial read-only pass before staging newly sealed children');
+ assert.equal(h.events.length,0);assert.equal(h.progress.roundIntents.length,0);
 });
 test('event-loop stop between scheduling snapshots cannot create a round intent or model request',async()=>{
  const h=setup({count:3,stopDuringScheduling:true});

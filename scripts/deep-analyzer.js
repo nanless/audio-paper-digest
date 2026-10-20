@@ -8564,6 +8564,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/llm-usage.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/llm-pending-request.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/llm-response-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/active-time-budget.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
@@ -9394,6 +9397,38 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 selectedOrdinals = isolated.activeInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
             }
         } catch (error) {
+            if (error?.code === 'LLM_USAGE_NOT_PERSISTED' && error.llmResponse?.body) {
+                let paidRaw = null;
+                try { paidRaw = parseResponseText(error.usageEvent?.protocol, error.llmResponse.body); } catch (_) { /* retained verbatim in response archive */ }
+                if (typeof paidRaw === 'string' && paidRaw.length) {
+                    // The provider did return content. A failed fee write must
+                    // neither refund this response nor trigger another model.
+                    grantedReaderBudget.settleReaderResponse(grantedResponseLease, 'content', paidRaw);
+                    if (!repairContext) fullAttempts += 1;
+                    let paidCandidate = candidate;
+                    if (!repairContext) {
+                        paidCandidate = null;
+                        try { paidCandidate = repair.parseRepairableDraft(extractJsonObjectText(paidRaw)); }
+                        catch (_) { /* Raw paid content is retained; parsing cannot replace the storage fault. */ }
+                    }
+                    try { repair.saveFailedCandidate(candidateDirectory, identity, {
+                        status: 'failed', draft: paidCandidate,
+                        rawDraft: repairContext ? previousDraft : paidRaw,
+                        draftOrderMappings, readerRecoveryRevisions, issues: currentIssues,
+                        attempts: attempt, fullAttempts, noProgress,
+                        failureSignature: previousFailureSignature, validationFailureStreak,
+                        validationFailureSignature: previousValidationFailureSignature,
+                        imageEvidence, providerImageExclusions, implementationRepairAllowanceProof,
+                        ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}), transportFailures,
+                        lastContentError: { code: error.code, requestKind: repairContext ? 'patch' : 'full',
+                            responseRecovery: error.responseRecovery || null }
+                    }); } catch (candidateSaveError) {
+                        error.candidateSaveFailed = true;
+                        Object.defineProperty(error, 'candidateSaveError', { value: candidateSaveError, enumerable: false });
+                    }
+                    throw error;
+                }
+            }
             grantedReaderBudget.settleReaderResponse(grantedResponseLease,
                 ['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(error?.code) ? 'truncated' : 'no_content');
             if (error?.code === require('./lib/analysis-stop-control').CODE) throw error;
@@ -9452,6 +9487,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             .saveReaderRepairResponse(repairDiagnostic, raw);
         if (!repairContext) fullAttempts += 1;
         const responseSha256 = repair.shaText(raw);
+        const originalPaidResponse = raw;
         const dispositionBase = { paperId: getPaperArxivId(paper),
             stage: repairContext ? 'apiReaderRepair' : 'apiReaderArticle',
             contentAttempt: attempt, outputTextSha256: responseSha256 };
@@ -9503,7 +9539,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             normalizeCandidate();
             if (candidate) raw = JSON.stringify(candidate);
             const parsed = parseCandidate(raw);
-            recordDisposition({ ...dispositionBase, disposition: 'accepted' });
+            recordDisposition({ ...dispositionBase, disposition: 'accepted', responseText: originalPaidResponse });
             const result = {
                 ...parsed,
                 contentMode,
@@ -9536,7 +9572,32 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             if (retiredCandidate) result.retiredCandidate = retiredCandidate;
             return result;
         } catch (error) {
-            recordDisposition({ ...dispositionBase, disposition: 'rejected', errorCode: error.code || 'READER_VALIDATION_FAILED' });
+            const preservePaidCandidateOnLedgerFailure = storageError => {
+                try { repair.saveFailedCandidate(candidateDirectory, identity, {
+                    status: 'failed', draft: candidate,
+                    rawDraft: candidate ? JSON.stringify(candidate) : originalPaidResponse,
+                    draftOrderMappings, readerRecoveryRevisions, issues: currentIssues,
+                    attempts: attempt, fullAttempts, transportFailures, noProgress,
+                    failureSignature: previousFailureSignature, validationFailureStreak,
+                    validationFailureSignature: previousValidationFailureSignature,
+                    imageEvidence, providerImageExclusions, implementationRepairAllowanceProof,
+                    ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
+                    lastContentError: { code: storageError.code,
+                        requestKind: repairContext ? 'patch' : 'full', responseRecovery: storageError.responseRecovery || null }
+                }); } catch (candidateSaveError) {
+                    storageError.candidateSaveFailed = true;
+                    Object.defineProperty(storageError, 'candidateSaveError', { value: candidateSaveError, enumerable: false });
+                }
+                throw storageError;
+            };
+            if (error?.code === 'LLM_USAGE_NOT_PERSISTED') preservePaidCandidateOnLedgerFailure(error);
+            try {
+                recordDisposition({ ...dispositionBase, disposition: 'rejected',
+                    errorCode: error.code || 'READER_VALIDATION_FAILED', responseText: originalPaidResponse });
+            } catch (storageError) {
+                if (storageError?.code === 'LLM_USAGE_NOT_PERSISTED') preservePaidCandidateOnLedgerFailure(storageError);
+                throw storageError;
+            }
             if (require('./lib/reader-authenticated-pdf-table-evidence').isSourceFailure(error)) {
                 // A returned response remains paid even if its source changed
                 // during validation. Preserve it without spending another call
@@ -13564,6 +13625,7 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
         throw makeModelRequestError(`LLM endpoint 配置无效: ${error.message}`, {
             code: 'MODEL_ENDPOINT_CONFIG_ERROR',
             retryable: false,
+            scope: 'run',
             category: 'endpoint_config'
         }, cfg);
     }
@@ -13579,7 +13641,6 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            const attemptSuspendedMs = budget.suspendedMs();
             try {
                 const timeoutMs = getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs());
                 return await _callModelOnce(safeMessages, maxTokens, {
@@ -13590,20 +13651,12 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                 lastError = classified;
                 if (classified.retryable === false) throw classified;
                 const duration = (budget.elapsedMs() / 1000).toFixed(1);
-                const suspendedBeforeAttempt = attemptSuspendedMs;
                 const suspendedMs = budget.suspendedMs();
                 if (suspendedMs - reportedSuspendedMs >= 1000) {
-                    console.log(`    [api] 💤 检测到系统睡眠/长时间挂起，已从超时预算排除 ${((suspendedMs - reportedSuspendedMs) / 1000).toFixed(1)}s`);
+                    console.log(`    [api] 检测到长时间事件循环停顿，已从有效时间预算排除 ${((suspendedMs - reportedSuspendedMs) / 1000).toFixed(1)}s；这不能单独证明系统睡眠`);
                     reportedSuspendedMs = suspendedMs;
                 }
                 console.log(`    [api] ⚠️  模型调用失败 (尝试 ${attempt}/${maxRetries}) | active=${duration}s | ${classified.code} | ${classified.message}`);
-
-                if (suspendedMs - suspendedBeforeAttempt >= 1000
-                        && ['REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'].includes(classified.code)) {
-                    console.log('    [api] ↻ 本次失败由系统睡眠触发，不消耗重试次数，立即恢复请求');
-                    attempt -= 1;
-                    continue;
-                }
 
                 if (attempt < maxRetries) {
                     const delay = Math.pow(2, attempt) * API_RETRY_BASE_DELAY_MS;
@@ -13624,6 +13677,13 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
             throw createOverallTimeoutError(budget.elapsedMs(), lastError, overallTimeoutMs);
         }
         lastError.attempts = maxRetries;
+        if (['network', 'request', 'api_error', 'response_parse', 'response_terminal',
+            'stream_terminal', 'http_transient', 'state_contention'].includes(lastError.category)) {
+            // The current logical request has already exhausted its transport
+            // retries. A service outage must not restart for every next paper.
+            lastError.scope = 'run';
+            lastError.retryable = false;
+        }
         throw lastError;
     } finally {
         budget.stop();
@@ -13637,6 +13697,10 @@ function createOverallTimeoutError(
 ) {
     const error = new Error(`模型调用整体超时: 预算 ${totalMs}ms，已用 ${elapsedMs}ms`);
     error.code = 'MODEL_OVERALL_TIMEOUT';
+    error.scope = 'run';
+    error.retryable = false;
+    error.category = 'network';
+    error.modelRequestClassified = true;
     if (cause) error.cause = cause;
     return error;
 }
@@ -18970,7 +19034,7 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
     } catch (error) {
         // 只有模型响应无法解析时，才从已核验全文中明确出现的仓库 URL 生成这一节。
         // 网络或其他模型错误继续抛出，不能用这段替代内容掩盖失败。
-        if (error?.code !== 'MODEL_INVALID_RESPONSE') throw error;
+        if (error?.scope === 'run' || error?.code !== 'MODEL_INVALID_RESPONSE') throw error;
         const fallback = buildDeterministicOpenSourceScan(sourceText);
         console.warn('    [deep] 开源扫描模型响应无效，使用 sealed source URL 后备');
         return fallback;

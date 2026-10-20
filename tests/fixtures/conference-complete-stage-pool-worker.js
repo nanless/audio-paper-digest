@@ -27,7 +27,8 @@ parentPort.on('message', message => {
         if (workerData.wrongId) { parentPort.postMessage({ type: 'result', id: message.id + 1 }); return; }
         if ((workerData.timeouts || []).includes(index) && attempt <= (workerData.timeoutTimes || 1)) {
             let error;
-            if (workerData.fakeTimeout) error = { message: 'spawnSync bash ETIMEDOUT', code: 'ETIMEDOUT' };
+            if (workerData.serializedNestedTimeout) error = workerData.serializedNestedTimeout;
+            else if (workerData.fakeTimeout) error = { message: 'spawnSync bash ETIMEDOUT', code: 'ETIMEDOUT' };
             else {
                 const path = require('node:path'), root = path.resolve(__dirname, '../..');
                 const args = workerData.wrongProgram ? ['-c', 'sleep 1'] : [path.join(root, 'scripts/python-runtime.sh'),
@@ -40,7 +41,7 @@ parentPort.on('message', message => {
             parentPort.postMessage({ type: 'error', id: message.id, error }); return;
         }
         if (workerData.fail === index) parentPort.postMessage({ type: 'error', id: message.id,
-            error: { message: 'synthetic stored failure', code: workerData.systemic ? 'EIO' : 'CONFERENCE_POSTPROCESS_INTEGRITY',
+            error: workerData.serializedFailure || { message: 'synthetic stored failure', code: workerData.systemic ? 'EIO' : 'CONFERENCE_POSTPROCESS_INTEGRITY',
                 ...(workerData.systemic ? { scope: 'run' } : {}) } });
         else parentPort.postMessage({ type: 'result', id: message.id, result: { index } });
     });

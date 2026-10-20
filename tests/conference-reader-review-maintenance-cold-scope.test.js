@@ -18,7 +18,14 @@ function memberFixture(t,{overlap=false,mutate=null}={}){const root=fs.mkdtempSy
 test('member observation and normal stage both run; final member CAS is before result/save',t=>{const f=memberFixture(t);const result=f.h.observeAndStageSavedMember(f.batch,{executionId:'child-execution'},null,f.deps);assert.equal(result.proof.syntheticStage,true);assert.equal(f.gates(),2);assert.equal(f.writes.length,1);});
 for(const file of ['analysis.json','run.json','source.json','reader-revision.json','review-reader-seed.json','reader-resource-preflight.json','parent/analysis.json','parent/run.json','parent/source.json'])test('member/current/parent/seed exit drift blocks stage proof: '+file,t=>{const f=memberFixture(t,{mutate:file});assert.throws(()=>f.h.observeAndStageSavedMember(f.batch,{executionId:'child-execution'},null,f.deps),/bytes changed/);assert.equal(f.gates(),2);});
 test('overlapping historical stage owner is refused before any stage write',t=>{const f=memberFixture(t,{overlap:true});assert.throws(()=>f.h.observeAndStageSavedMember(f.batch,{executionId:'child-execution'},null,f.deps),/overlaps/);assert.equal(f.gates(),1);assert.equal(f.writes.length,0);});
-test('private assertion source is wired only to initialization and all original failure/model dispatch code remains',()=>{assert.equal((source.match(/observeAndStageSavedMember\(batch,member,shared,deps\)/g)||[]).length,3);assert.ok(source.includes('await stop.withModelRequestsForbidden(()=>deps.adapter.replaySavedConferenceReaderRevision('));assert.ok(source.includes('await deps.adapter.refreshConferenceReader('));assert.ok(source.includes('const proof=await stop.withModelRequestsForbidden(()=>stageChild(batch,member,shared,deps));'));});
+test('private member fence is used by real saved-stage worker while original paid dispatch guards remain',()=>{
+ assert.ok(source.includes('observeAndStageSavedMember(batch,original,shared,localDeps)'));
+ const scheduler=source.slice(source.indexOf('async function runReaderReviewMaintenanceBatch('));
+ assert.equal(scheduler.includes('observeAndStageSavedMember(batch,member,shared,deps)'),false,'initial staging routes through the private pool');
+ assert.ok(source.includes('await stop.withModelRequestsForbidden(()=>deps.adapter.replaySavedConferenceReaderRevision('));
+ assert.ok(source.includes('await deps.adapter.refreshConferenceReader('));
+ assert.ok(source.includes('const proof=await stop.withModelRequestsForbidden(()=>stageChild(batch,member,shared,deps));'));
+});
 
 test('registered recovery windows keep original full loaders and assertions without transaction coalescing',()=>{let n=0,h;h=setup({effectiveMember:()=>({window:{windowId:'synthetic'}}),actualProgress:()=>{a();return {status:'complete'};},stageChild:()=>{a();a();return {synthetic:true};},require:()=>({withModelRequestsForbidden:fn=>fn()})});const a=h.coldEvidenceAssertion(()=>{n++;});assert.equal(h.observeAndStageSavedMember({},null,null,null).proof.synthetic,true);assert.equal(n,3);});
 

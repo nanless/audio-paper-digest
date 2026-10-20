@@ -76,6 +76,7 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'fresh-rewrites', root: path.join(runtime, 'fresh-rewrites') },
         { key: 'fresh-source-diagnostics', root: path.join(runtime, 'fresh-source-diagnostics') },
         { key: 'llm-usage', root: path.join(runtime, 'llm-usage') },
+        { key: 'llm-response-recovery', root: path.join(runtime, 'llm-response-recovery') },
         { key: 'publication-amendments', root: path.join(runtime, 'publication-amendments') },
         { key: 'reader-attempts', root: path.join(runtime, 'reader-attempts') },
         { key: 'reader-efficiency-evaluations', root: path.join(runtime, 'reader-efficiency-evaluations') },

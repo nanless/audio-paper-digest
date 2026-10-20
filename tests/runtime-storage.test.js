@@ -41,7 +41,7 @@ const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-cros
     'historical-page-staging', 'historical-daily-aggregates', 'historical-publications', 'paper-source-authorities',
     'daily-fresh-source-runs', 'fetched-arxiv-sources', 'historical-arxiv-fresh-failure-handoffs',
     'historical-arxiv-publication-metadata', 'blog-republication-archives', 'canonical-maintenance',
-    'daily-fetch-refresh-backups', 'fresh-rewrites', 'fresh-source-diagnostics', 'llm-usage',
+    'daily-fetch-refresh-backups', 'fresh-rewrites', 'fresh-source-diagnostics', 'llm-usage', 'llm-response-recovery',
     'publication-amendments', 'reader-attempts', 'reader-efficiency-evaluations', 'stale-locks',
     'tag-taxonomy-audit', 'taxonomy-preview', 'tag-preview', 'taxonomy-reseal-reports', 'tag-record-update-reports',
     'direct-local-inputs', 'historical-conference-local-sources', 'historical-conference-page-projections',

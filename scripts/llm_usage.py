@@ -4,6 +4,7 @@ if __name__ == '__main__':
     require_external_runtime('llm_usage.py')
 
 import contextvars
+import base64
 import hashlib
 import json
 import os
@@ -14,11 +15,28 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from path_config import LLM_USAGE_DIR
+from path_config import LLM_USAGE_DIR, LLM_RESPONSE_RECOVERY_DIR
 
 VERSION = 'llm-usage-v1'
 _SCOPE = contextvars.ContextVar('paper_digest_llm_usage', default={})
-_WARNED = False
+
+class LlmUsagePersistenceError(RuntimeError):
+    __slots__ = ('_llm_response', '_usage_event', '_response_recovery_error')
+    code = 'LLM_USAGE_NOT_PERSISTED'
+    scope = 'run'
+    category = 'storage'
+    retryable = False
+
+    llm_response = property(lambda self: self._llm_response,
+                            lambda self, value: setattr(self, '_llm_response', value))
+    usage_event = property(lambda self: self._usage_event,
+                           lambda self, value: setattr(self, '_usage_event', value))
+    response_recovery_error = property(lambda self: self._response_recovery_error,
+                                      lambda self, value: setattr(self, '_response_recovery_error', value))
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
 
 def _count(value):
@@ -82,7 +100,8 @@ def with_llm_usage_context(context):
 
 
 def build_llm_usage_event(*, protocol, model, request, response=None, status_code=None,
-                          duration_ms=0, error_code=None, output_text=None, context=None):
+                          duration_ms=0, error_code=None, output_text=None, context=None,
+                          event_id=None, at=None, transport_started=None):
     context = {**_SCOPE.get(), **(context or {})}
     body = response if isinstance(response, dict) else {}
     messages = request.get('input', request.get('messages', []))
@@ -110,7 +129,9 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         and choice.get('finish_reason') not in ('stop', 'length') for choice in choices)
     anthropic_terminal_failed = protocol == 'anthropic' and 'stop_reason' in body \
         and body.get('stop_reason') not in ('end_turn', 'stop_sequence', 'max_tokens')
-    if error_code:
+    if transport_started is False:
+        outcome = 'blocked_before_transport'
+    elif error_code:
         outcome = 'transport_error'
     elif not isinstance(status_code, int) or not 200 <= status_code < 300:
         outcome = 'http_error'
@@ -124,8 +145,8 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         outcome = 'completed'
     paper_id = context.get('paperId')
     return {
-        'version': VERSION, 'kind': 'request', 'eventId': str(uuid.uuid4()),
-        'at': datetime.now(timezone.utc).isoformat(), 'runtime': 'python',
+        'version': VERSION, 'kind': 'request', 'eventId': event_id or str(uuid.uuid4()),
+        'at': at or _now(), 'runtime': 'python',
         'runId': context.get('runId') if re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', str(context.get('runId') or '')) else None,
         'paperId': normalize_usage_paper_id(paper_id),
         'stage': _label(context.get('stage')) or 'unknown',
@@ -137,6 +158,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         'outputTextSha256': _digest(output_text) if isinstance(output_text, str) else None,
         'estimates': {'textCharacters': text_chars, 'estimatedInputTextTokens': (text_chars + 2) // 3, 'images': images},
         'usage': normalize_llm_usage(protocol, response),
+        **({'transportStarted': transport_started} if isinstance(transport_started, bool) else {}),
     }
 
 
@@ -171,10 +193,81 @@ def write_llm_usage_event(event, directory=None):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, target)
+    directory_fd = os.open(target_dir, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    saved_stat = target.lstat()
+    if not stat.S_ISREG(saved_stat.st_mode) or saved_stat.st_nlink != 1 \
+            or stat.S_IMODE(saved_stat.st_mode) != 0o600:
+        raise OSError('用量文件保存后的类型、链接或权限不符合要求')
+    return target
+
+
+def preserve_response_recovery(event, response, *, directory=None):
+    """Keep actual returned bytes separately from the metadata-only fee ledger."""
+    target_dir = Path(directory) / 'response-recovery' if directory else LLM_RESPONSE_RECOVERY_DIR
+    saved_response = response
+    body = {'contract': 'llm-response-recovery-v1', 'event': event,
+            'eventSha256': _digest(json.dumps(event, ensure_ascii=False, separators=(',', ':'))),
+            'response': saved_response,
+            'responseSha256': _digest(json.dumps(saved_response, ensure_ascii=False, separators=(',', ':')))}
+    # The writer applies the same private directories, exclusive atomic file and
+    # fsync discipline. Capture its actual filename for controlled recovery.
+    filename = write_llm_usage_event(body, target_dir)
+    named = Path(filename).lstat()
+    fd = os.open(filename, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+    with os.fdopen(fd, 'rb') as handle:
+        before = os.fstat(handle.fileno())
+        raw = handle.read()
+        after = os.fstat(handle.fileno())
+    final = Path(filename).lstat()
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    if any(not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or stat.S_IMODE(value.st_mode) != 0o600
+           or any(getattr(value, field) != getattr(named, field) for field in fields)
+           for value in (before, after, final)) or raw != (json.dumps(body, ensure_ascii=False) + '\n').encode():
+        raise OSError('响应恢复文件回读字节或身份不一致')
+    return {'filename': str(filename), 'sha256': hashlib.sha256(raw).hexdigest(),
+            'responseSha256': body['responseSha256'], 'eventId': event.get('eventId') if event else None}
+
+
+def persistence_error(cause, event, response=None, *, directory=None):
+    error = LlmUsagePersistenceError('模型费用记录保存失败，已停止新请求；保留原费用和实际响应后受控恢复')
+    error.__cause__ = cause
+    error.event_id = event.get('eventId') if event else None
+    # Python exception string/repr does not display these response attributes.
+    error.llm_response = response
+    error.usage_event = event
+    try:
+        error.response_recovery = preserve_response_recovery(event, response, directory=directory)
+    except Exception as recovery_error:
+        error.response_recovery_failed = True
+        error.response_recovery_error = recovery_error
+    return error
+
+
+def begin_pending_llm_request(*, directory=None, **kwargs):
+    shape = build_llm_usage_event(**kwargs)
+    labels = ('runId', 'paperId', 'stage', 'unitId', 'contentAttempt', 'transportAttempt',
+              'protocol', 'model', 'inputSha256', 'estimates')
+    event = {'version': VERSION, 'kind': 'request_started', 'eventId': shape['eventId'],
+             'at': shape['at'], 'runtime': 'python', **{key: shape[key] for key in labels},
+             'phase': 'authorized_before_transport', 'outcome': 'result_unknown', 'chargeState': 'unknown'}
+    try:
+        if directory is not None or not _running_unittest():
+            write_llm_usage_event(event, directory)
+    except Exception as cause:
+        error = LlmUsagePersistenceError('模型请求发送前的持久记录无法保存，尚未调用传输层')
+        error.code = 'LLM_REQUEST_START_NOT_PERSISTED'
+        raise error from cause
+    return event
 
 
 def record_llm_usage(*, sink=None, directory=None, **kwargs):
-    global _WARNED
+    event = None
+    raw_response = kwargs.pop('raw_response', None)
+    raw_truncated = kwargs.pop('raw_response_truncated', False)
     try:
         event = build_llm_usage_event(**kwargs)
         if sink is not None:
@@ -184,11 +277,21 @@ def record_llm_usage(*, sink=None, directory=None, **kwargs):
         else:
             event['recordingStatus'] = 'skipped_test_runner_without_explicit_sink'
         return event
-    except Exception:
-        if not _WARNED:
-            print('[llm-usage] 用量元数据未能记录；不改变模型请求结果')
-            _WARNED = True
-        return None
+    except Exception as cause:
+        raw_fields = {}
+        if isinstance(raw_response, bytes):
+            raw_fields = {'rawBytes': len(raw_response), 'rawSha256': hashlib.sha256(raw_response).hexdigest()}
+            try:
+                raw_fields['raw'] = raw_response.decode('utf-8')
+            except UnicodeError:
+                raw_fields['rawBase64'] = base64.b64encode(raw_response).decode('ascii')
+        elif isinstance(raw_response, str):
+            raw_fields = {'raw': raw_response}
+        if raw_fields and raw_truncated:
+            raw_fields['rawTruncated'] = True
+        response = None if kwargs.get('response') is None and not raw_fields else {
+            'statusCode': kwargs.get('status_code'), 'body': kwargs.get('response'), **raw_fields}
+        raise persistence_error(cause, event, response, directory=directory) from cause
 
 
 def _running_unittest():

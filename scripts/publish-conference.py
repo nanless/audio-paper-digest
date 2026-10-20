@@ -1566,6 +1566,9 @@ def gate_fingerprint():
     return stable({name: sha_bytes(read_bytes(ROOT / 'scripts' / name)) for name in
                    ('publish-conference.py', 'conference_publication_gate.py',
                     'markdown_hugo_gate.py', 'conference-page-render.py',
+                    'publication_local_replay.py', 'publication_replay_policy.json',
+                    'paper_reader_presentation.py', 'lib/python-json-packet-bridge.js',
+                    'lib/reader-resource-claims-replay-cli.js',
                     'publish_common.py', 'analysis_sections.py', 'tag_stage_record.py',
                     'tag_presentation.py', 'tag_catalog_publication.py', 'tag_catalog.py',
                     'conference_publication_figure_view.py', 'conference_publication_figure_crop.py',

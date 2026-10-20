@@ -933,6 +933,12 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
             res.on('end', () => {
                 if (settled) return;
                 const raw = Buffer.concat(chunks).toString('utf8');
+                const responseFailure = error => {
+                    Object.defineProperty(error, 'llmResponse', { value: {
+                        statusCode: res.statusCode, body: null, raw
+                    }, enumerable: false });
+                    return error;
+                };
                 try {
                     const json = JSON.parse(raw);
                     finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: json, raw });
@@ -947,7 +953,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                     try {
                         streamed = parseSseResponse(raw);
                     } catch (sseError) {
-                        finish(reject, sseError);
+                        finish(reject, responseFailure(sseError));
                         return;
                     }
                     if (streamed) {
@@ -958,7 +964,9 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                             raw
                         });
                     } else {
-                        finish(reject, new Error(`响应无法解析为 JSON 或 SSE（HTTP ${res.statusCode}）：${err.message}; body=${raw.substring(0, 300)}`));
+                        const error = new Error(`响应无法解析为 JSON 或 SSE（HTTP ${res.statusCode}）：${err.message}; body=${raw.substring(0, 300)}`);
+                        error.code = 'LLM_RESPONSE_PARSE_ERROR';
+                        finish(reject, responseFailure(error));
                     }
                 }
             });
@@ -1086,10 +1094,13 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
             return response;
         } catch (error) {
             failure = error;
+            if (!response && error?.llmResponse) response = error.llmResponse;
             throw error;
         } finally {
             // 用量记录里绝不保留请求头、凭据、提示词、响应正文或 URL。
             // 诊断性失败不得重新发起 API 调用。
+            if (failure?.code === 'LLM_REQUEST_START_NOT_PERSISTED') throw failure;
+            let usageEvent = null;
             try {
                 const protocol = detectApiType(endpoint, model);
                 const { recordLlmUsage, buildLlmUsageEvent } = require('./lib/llm-usage.js');
@@ -1099,15 +1110,30 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                 const input = { ...(pendingRequest ? { eventId: pendingRequest.eventId }
                     : failure?.pendingRequestEventId ? { eventId: failure.pendingRequestEventId } : {}),
                     protocol, model, request: bodyObj, response: response?.body,
+                    rawResponse: response?.raw,
                     statusCode: response?.statusCode, durationMs: Date.now() - started,
                     transportStarted,
                     errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null),
                     context: options.usageContext,
                     outputText };
-                if (typeof options.usageSink === 'function') options.usageSink(buildLlmUsageEvent(input));
+                if (typeof options.usageSink === 'function') {
+                    usageEvent = buildLlmUsageEvent(input);
+                    options.usageSink(usageEvent);
+                }
                 else recordLlmUsage(input, { enabled: options.recordUsage !== false, directory: options.usageDirectory });
-            } catch (_) {
-                console.warn('[llm-usage] 本次请求用量不可记录；不改变请求结果');
+            } catch (cause) {
+                if (cause?.code === 'LLM_USAGE_NOT_PERSISTED') throw cause;
+                // Custom sinks have the same durable-storage obligation as the
+                // default ledger. Never turn a storage failure into API retry.
+                const event = usageEvent || require('./lib/llm-usage').buildLlmUsageEvent({
+                    ...(pendingRequest ? { eventId: pendingRequest.eventId } : {}),
+                    protocol: detectApiType(endpoint, model), model, request: bodyObj,
+                    response: response?.body, statusCode: response?.statusCode,
+                    durationMs: Date.now() - started, transportStarted,
+                    errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null), context: options.usageContext
+                });
+                throw require('./lib/llm-response-recovery').persistenceError(cause, event,
+                    response, { directory: options.usageDirectory });
             }
         }
     } finally {

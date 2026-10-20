@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 // Importing the analysis module installs human log timestamps. Keep the private
 // replay response on its original machine-readable stream.
-const writeOutput = process.stdout.write.bind(process.stdout);
+const writeOutput = value => fs.writeSync(1, value);
+process.stdout.write = process.stderr.write.bind(process.stderr);
 const deny = () => { throw new Error('Resource claim replay forbids network access'); };
 require('node:net').Socket.prototype.connect = deny;
 require('node:tls').connect = deny;
@@ -25,12 +26,17 @@ globalThis.fetch = deny;
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || ![0, 1].includes(stat.nlink) || (stat.mode & 0o777) !== 0o600
         || stat.size < 2 || stat.size > 128 * 1024 * 1024) throw new Error('Unsafe replay input');
-    const input = JSON.parse(fs.readFileSync(fd, 'utf8'));
+    const inputBytes = fs.readFileSync(fd);
+    const input = JSON.parse(inputBytes.toString('utf8'));
     const keys = input && Object.keys(input).sort().join(',');
     const pdfOnly = keys === 'authenticatedPdfTables,paper' && input.authenticatedPdfTables === true;
     const pdfResourcesOnly = keys === 'authenticatedPdfResources,paper' && input.authenticatedPdfResources === true;
+    const publicationReplay = input?.publicationReplay === true
+        && ['paper,publicationReplay,resourcePresentation,sourceText',
+            'paper,publicationEvidence,publicationReplay,resourcePresentation,sourceText'].includes(keys)
+        && input.resourcePresentation === true;
     if (!input || !['authenticatedPdfTables,paper', 'authenticatedPdfResources,paper', 'paper,sourceText', 'paper,resourcePresentation,sourceText',
-        'paper,publicationEvidence,resourcePresentation,sourceText'].includes(keys)
+        'paper,publicationEvidence,resourcePresentation,sourceText'].includes(keys) && !publicationReplay
         || (Object.hasOwn(input, 'resourcePresentation') && input.resourcePresentation !== true)
         || !input.paper || (!pdfOnly && !pdfResourcesOnly && (typeof input.sourceText !== 'string'
         || crypto.createHash('sha256').update(input.sourceText).digest('hex') !== input.paper.sourceSha256))) {
@@ -111,6 +117,14 @@ globalThis.fetch = deny;
     });
     if (local.isSourceCorrectionRecord(canonicalPaper)) {
         response.localSourceCorrection = local.exportPublicationVerification(presentedPaper, canonicalPaper);
+    }
+    if (publicationReplay) {
+        response.coreSummaryIssue = require('../analysis-contract').validateCoreSummaryStageBinding(
+            input.paper, { sourceText });
+        if (response.coreSummaryIssue !== null) throw new Error(
+            'Publication core summary stage did not pass normal source replay: ' + response.coreSummaryIssue);
+        response.publicationReplay = { contract: 'publication-one-invocation-source-replay-v1',
+            inputSha256: crypto.createHash('sha256').update(inputBytes).digest('hex') };
     }
     writeOutput(JSON.stringify(response));
     });

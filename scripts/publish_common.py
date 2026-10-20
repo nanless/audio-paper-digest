@@ -70,7 +70,7 @@ from tag_catalog import (
     resolve_append_only_proof_catalog,
     tag_prompt_text_sha256,
 )
-from llm_usage import record_llm_usage, with_llm_usage_context
+from llm_usage import record_llm_usage, with_llm_usage_context, begin_pending_llm_request, LlmUsagePersistenceError
 
 BJ_TZ = timezone(timedelta(hours=8))
 BEIJING_TIMESTAMP_RE = re.compile(
@@ -5867,7 +5867,12 @@ def _open_publish_json_with_account_pool(
         usage_started = time.monotonic()
         usage_status = None
         usage_body = None
+        usage_raw = None
+        usage_raw_truncated = False
         usage_error = None
+        pending_usage = begin_pending_llm_request(
+            protocol=api_type, model=model, request=payload, directory=usage_directory,
+        )
         try:
             with opener.open(request, timeout=remaining) as response:
                 status = response.status
@@ -5876,12 +5881,17 @@ def _open_publish_json_with_account_pool(
                     raise RuntimeError(f'HTTP {response.status}')
                 response_limit = 2 * 1024 * 1024
                 raw_response = response.read(response_limit + 1)
+                usage_raw = raw_response
+                usage_raw_truncated = len(raw_response) > response_limit
                 if len(raw_response) > response_limit:
                     raise RuntimeError('LLM 响应超过 2 MiB 安全上限')
-                usage_body = json.loads(raw_response.decode('utf-8'))
+                usage_raw = raw_response.decode('utf-8')
+                usage_body = json.loads(usage_raw)
                 return status, usage_body
         except urllib.error.HTTPError as exc:
             raw_text, parsed = _read_publish_http_error(exc)
+            usage_raw = getattr(exc, '_paper_digest_error_raw', None) or raw_text
+            usage_raw_truncated = isinstance(usage_raw, bytes) and len(usage_raw) >= 4096
             usage_status, usage_body = exc.code, parsed
             quota = classify_opencode_go_quota_response(
                 exc.code, exc.headers, parsed, raw=raw_text, endpoint=endpoint,
@@ -5917,6 +5927,9 @@ def _open_publish_json_with_account_pool(
                 error_code=usage_error,
                 output_text=usage_text,
                 sink=usage_sink, directory=usage_directory,
+                raw_response=usage_raw,
+                raw_response_truncated=usage_raw_truncated,
+                event_id=pending_usage['eventId'], transport_started=True,
             )
     earliest = min(blocked_until_values) if blocked_until_values else None
     suffix = '' if earliest is None else (
@@ -6216,6 +6229,7 @@ def call_publish_llm_api(
                 f'{time.monotonic() - started_at:.1f}s): HTTP {exc.code}{suffix}'
             )
         except (
+            LlmUsagePersistenceError,
             LlmAccountPoolExhaustedError,
             LlmAccountAuthError,
             LlmAccountPoolStateError,

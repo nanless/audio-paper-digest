@@ -4,6 +4,16 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {performance}=require('node:perf_hooks');
 const sha=x=>crypto.createHash('sha256').update(x).digest('hex');
 const root=process.cwd(),formal=path.join(root,'scripts/lib/conference-reader-review-maintenance.js');
+function immutableFixture(t) {
+ const h=harness(t),dir=path.join(h.directory,'immutable');fs.mkdirSync(dir);fs.mkdirSync(path.join(dir,'failures'));fs.mkdirSync(path.join(dir,'classifications'));
+ const state=path.join(h.directory,'state.json'),baseline=h.writes(state,{status:'synthetic-only'});
+ const b={p:{root:dir,manifest:path.join(dir,'manifest.json'),state,adoption:path.join(dir,'adoption.json')},
+   manifestFileSha256:h.writes(path.join(dir,'manifest.json'),{manifest:1}),baseline:{sha256:baseline},m:{members:[]}};
+ h.writes(path.join(dir,'baseline-state.json'),{status:'synthetic-only'});
+ b.m.generationFileSha256=h.writes(path.join(dir,'generation.json'),{generation:1});
+ b.m.reviewBatchFileSha256=h.writes(path.join(dir,'review-batch.json'),{review:1});
+ return {...h,b,api:h.api};
+}
 function harness(t,size=1024){
  const directory=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'maintenance-byte-test-'));t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
  const id='77777777-7777-4777-8777-777777777777',child=path.join(directory,id);fs.mkdirSync(child);
@@ -19,7 +29,7 @@ function harness(t,size=1024){
  loadConferenceAnalysis({executionId}){loads++;assert.equal(executionId,id);for(const name of ['analysis','run','source'])this.readJsonRecord(path.join(child,name+'.json'));return structuredClone(loaded);}};
  const m=new Module(formal,module);m.filename=formal;m.paths=Module._nodeModulePaths(path.dirname(formal));const native=m.require.bind(m);
  m.require=name=>name==='./conference-analysis-adapter'?fakeAdapter:name==='./conference-process'?{assertState(){validations++},stateDigest:require(path.join(root,'scripts/lib/conference-process.js')).stateDigest}:native(name);
- m._compile(fs.readFileSync(formal,'utf8')+'\nmodule.exports.__test={isCurrentOrVerifiedDescendant,assertCurrentBatch,privateFileSha256,registeredState,validatedMetadataRecord,metadataCache};',formal);
+ m._compile(fs.readFileSync(formal,'utf8')+'\nmodule.exports.__test={isCurrentOrVerifiedDescendant,assertCurrentBatch,privateFileSha256,registeredState,validatedMetadataRecord,metadataCache,withMaintenanceSynchronousColdRead};',formal);
  return {directory,child,id,loaded,adopted,item,batch:{analysisRoot:directory},api:m.exports.__test,writes,get loads(){return loads},get parses(){return parses},get validations(){return validations}};
 }
 test('首次完整加载，后续仍逐字节SHA核三文件与state proof；改变同size内容仍拒',t=>{
@@ -90,4 +100,40 @@ test('registeredState完整关系首次校验，重复免clone/digest；各物�
  for(const file of [sf,rf]){const bytes=fs.readFileSync(file);fs.appendFileSync(file,' ');if(file===sf)assert.throws(()=>h.api.registeredState(batch),/CAS|SHA|history/);else{const count=h.parses;h.api.registeredState(batch);assert.ok(h.parses>count);}fs.writeFileSync(file,bytes);fs.chmodSync(file,0o644);assert.throws(()=>h.api.registeredState(batch),/private/);fs.chmodSync(file,0o600);}
  assert.throws(()=>h.api.registeredState({...batch,baseline:{...batch.baseline,sha256:'d'.repeat(64)}}),/CAS/);
  fs.unlinkSync(rf);assert.throws(()=>h.api.registeredState(batch),/ENOENT/);
+});
+test('same-member synchronous scope coalesces only immutable bytes; entry/exit each reread, state remains dynamic',t=>{
+ const h=immutableFixture(t),count=new Map(),native=fs.openSync;
+ fs.openSync=function(file,...args){if(typeof file==='string')count.set(file,(count.get(file)||0)+1);return native.call(this,file,...args);};
+ try {
+  h.api.withMaintenanceSynchronousColdRead(()=>{for(let i=0;i<5;i++)h.api.assertCurrentBatch(h.b);},'member-one');
+  assert.equal(count.get(h.b.p.manifest),2,'immutable original is read on entry and final fence');
+  assert.ok(count.get(h.b.p.state)>=5,'current state is re-read on every call, not inherited from immutable guard');
+  h.api.withMaintenanceSynchronousColdRead(()=>{h.api.assertCurrentBatch(h.b);h.api.assertCurrentBatch(h.b);},'member-two');
+  assert.equal(count.get(h.b.p.manifest),4,'next member creates a new full entry and exit');
+  h.api.assertCurrentBatch(h.b);h.api.assertCurrentBatch(h.b);
+  assert.equal(count.get(h.b.p.manifest),6,'outside scope every full immutable guard still runs');
+ } finally {fs.openSync=native;}
+});
+test('same-size immutable mutation with restored mtime is rejected at scope exit before delivering a result',t=>{
+ const h=immutableFixture(t),file=h.b.p.manifest,bytes=fs.readFileSync(file),stat=fs.statSync(file);
+ assert.throws(()=>h.api.withMaintenanceSynchronousColdRead(()=>{
+  h.api.assertCurrentBatch(h.b);const changed=Buffer.from(bytes);changed[changed.indexOf('1')]='2'.charCodeAt(0);
+  fs.writeFileSync(file,changed);fs.utimesSync(file,stat.atime,stat.mtime);h.api.assertCurrentBatch(h.b);
+  return 'not delivered';
+ },'member-one'),/immutable batch bytes changed/);
+ fs.writeFileSync(file,bytes);h.api.assertCurrentBatch(h.b);
+});
+test('dynamic state mutation rejects within the scope; immutable coalescing cannot postpone current CAS',t=>{
+ const h=immutableFixture(t);
+ h.api.withMaintenanceSynchronousColdRead(()=>{
+  h.api.assertCurrentBatch(h.b);h.writes(h.b.p.state,{status:'changed-state'});
+  assert.throws(()=>h.api.assertCurrentBatch(h.b),/baseline changed without real adoption/);
+ },'member-one');
+});
+test('async and save boundaries cannot carry an immutable check to the next operation',t=>{
+ const h=immutableFixture(t);
+ assert.throws(()=>h.api.withMaintenanceSynchronousColdRead(()=>{h.api.assertCurrentBatch(h.b);return Promise.resolve();},'member-one'),/synchronous/);
+ h.api.withMaintenanceSynchronousColdRead(()=>h.api.assertCurrentBatch(h.b),'member-one');
+ fs.appendFileSync(h.b.p.manifest,' ');
+ assert.throws(()=>h.api.withMaintenanceSynchronousColdRead(()=>h.api.assertCurrentBatch(h.b),'member-one'),/immutable batch bytes changed/);
 });

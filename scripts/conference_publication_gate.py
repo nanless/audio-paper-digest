@@ -54,6 +54,10 @@ class Page(HTMLParser):
         self.text = []
         self.body_html = []
         self.math_runtime = False
+        self.titles = []
+        self.h1s = []
+        self.tag_sections = []
+        self.tag_depth = None
         self.feed(source)
         self.close()
         if self.bodies != 1 or self.depth is not None:
@@ -61,6 +65,24 @@ class Page(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if tag == 'title':
+            self.titles.append([])
+        if tag == 'h1':
+            self.h1s.append([])
+        if 'paper-tags' in attrs.get('class', '').split():
+            if self.tag_depth is not None:
+                raise ValueError('研究分类区不应互相嵌套')
+            self.tag_depth = len(self.stack)
+            self.tag_sections.append({'text': [], 'links': [], 'facets': [], 'nodes': [], 'direct': []})
+        if self.tag_depth is not None:
+            if tag == 'a':
+                self.tag_sections[-1]['links'].append(attrs.get('href', ''))
+            if 'data-classification-facet' in attrs:
+                self.tag_sections[-1]['facets'].append(attrs['data-classification-facet'])
+            if 'data-classification-concept' in attrs:
+                self.tag_sections[-1]['nodes'].append(attrs['data-classification-concept'])
+                if attrs.get('data-direct-classification') == 'true':
+                    self.tag_sections[-1]['direct'].append(attrs['data-classification-concept'])
         if tag == 'link' and 'canonical' in attrs.get('rel', '').split():
             self.canonicals.append(attrs.get('href', ''))
         if tag == 'script' and re.search(r'mathjax|katex', attrs.get('src', ''), re.I):
@@ -99,10 +121,18 @@ class Page(HTMLParser):
             self.tables[-1].append(''.join(self.cell).strip())
             self.cell = None
         self.stack.pop()
+        if self.tag_depth == len(self.stack):
+            self.tag_depth = None
         if self.depth == len(self.stack):
             self.depth = None
 
     def handle_data(self, data):
+        if 'title' in self.stack and self.titles:
+            self.titles[-1].append(data)
+        if 'h1' in self.stack and self.h1s:
+            self.h1s[-1].append(data)
+        if self.tag_depth is not None:
+            self.tag_sections[-1]['text'].append(data)
         if self.depth is not None and not any(tag in {'script', 'style'} for tag in self.stack):
             self.text.append(data)
             self.body_html.append(html.escape(data, quote=False))
@@ -113,6 +143,16 @@ class Page(HTMLParser):
         # 浏览器或压缩工具调整空白，不影响已审内容。
         return {'text': re.sub(r'\s+', '', ''.join(self.text)), 'images': self.images,
                 'tables': [[re.sub(r'\s+', '', cell) for cell in table] for table in self.tables]}
+
+    def page_identity_fields(self):
+        """Current receipts also bind the title and hierarchy outside post-content."""
+        normal = lambda parts: re.sub(r'\s+', ' ', ''.join(parts)).strip()
+        return {'titles': [normal(parts) for parts in self.titles],
+                'h1s': [normal(parts) for parts in self.h1s],
+                'tagSections': [{'text': normal(section['text']),
+                                 'links': section['links'], 'facets': section['facets'],
+                                 'nodes': section['nodes'], 'direct': section['direct']}
+                                for section in self.tag_sections]}
 
 
 def markdown_tables(body):
@@ -173,6 +213,24 @@ def inspect_html(markdown, rendered, image_records, image_base):
                                     mask_source_bound_figure_caption_dollars)
 
     page = Page(rendered)
+    if markdown.startswith('---\n'):
+        from markdown_hugo_gate import parse_frontmatter_content
+        frontmatter, _ = parse_frontmatter_content('conference-page.md', markdown)
+        if frontmatter.get('paper_digest_tags_contract') == 'paper-tag-flat-tags-v2' \
+                and frontmatter.get('paper_digest_page_type') == 'paper':
+            concepts = frontmatter.get('paper_digest_tags_concepts')
+            if not isinstance(concepts, list) or not concepts or len(page.tag_sections) != 1:
+                raise ValueError('单篇论文须呈现且仅呈现一组当前多级分类')
+            section = page.tag_sections[0]
+            ids = [c.get('id') for c in concepts if isinstance(c, dict)]
+            if len(ids) != len(concepts) or set(section['direct']) != set(ids) \
+                    or len(section['direct']) != len(ids) \
+                    or set(section['facets']) != {c.get('facet') for c in concepts} \
+                    or any(str(c.get('label', '')) not in ''.join(section['text']) for c in concepts):
+                raise ValueError('HTML多级分类的直接概念、标签或分面与本篇所选集合不一致')
+            if not page.titles or not any(''.join(t).strip() for t in page.titles) \
+                    or not page.h1s or not any(''.join(t).strip() for t in page.h1s):
+                raise ValueError('当前论文页面缺少标题或H1')
     if len(page.canonicals) != 1:
         raise ValueError(f'HTML canonical URL 不唯一：实际 {len(page.canonicals)} 个')
     url = public_url(page.canonicals[0])
@@ -253,6 +311,8 @@ def inspect_html(markdown, rendered, image_records, image_base):
     visible_content = page.visible_content_fields()
     return {'url': url, 'htmlSha256': digest(rendered.encode()),
             'projectionSha256': digest(json.dumps(visible_content, ensure_ascii=False, sort_keys=True).encode()),
+            'pageIdentityContract': 'conference-visible-page-identity-v1',
+            'pageIdentitySha256': digest(json.dumps(page.page_identity_fields(), ensure_ascii=False, sort_keys=True).encode()),
             'imageUrls': page.images, 'tableCount': len(page.tables), 'formulaCount': len(formulas),
             'layers': {'htmlMechanical': 'passed', 'semanticReview': 'not_performed',
                        'visualInspection': 'not_performed', 'mathBrowserExecution': 'not_performed'}}
@@ -351,6 +411,12 @@ def verify_publication_urls(pages, image_records, image_base):
         if visible_content_sha256 != expected['projectionSha256'] or page.canonicals != [expected['url']] \
                 or (expected['formulaCount'] and not page.math_runtime):
             raise ValueError(f'线上正文/图片/表格/公式未匹配已审 HTML：已审摘要 {expected["projectionSha256"]}，线上摘要 {visible_content_sha256}')
+        if 'pageIdentityContract' in expected or 'pageIdentitySha256' in expected:
+            identity_sha = digest(json.dumps(page.page_identity_fields(), ensure_ascii=False, sort_keys=True).encode())
+            if expected.get('pageIdentityContract') != 'conference-visible-page-identity-v1' \
+                    or not re.fullmatch(r'[a-f0-9]{64}', str(expected.get('pageIdentitySha256', ''))) \
+                    or identity_sha != expected['pageIdentitySha256']:
+                raise ValueError('线上标题、H1或多级研究分类与已审HTML不一致')
 
         return {'url': expected['url'], 'sha256': digest(result['body'])}
 
