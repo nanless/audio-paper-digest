@@ -254,7 +254,7 @@ npm run test:compat
 | `lib/reader-draft-order.js` | Node 库：调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
 | `lib/reader-historical-draft-normalizer-replay.js` | 核真实请求绑定的 Git 程序、完整依赖 blob 与纯闭包证明，逐字回放旧失败稿付费来源；v2 显式记录闭包，旧 v1 原字节只读核验，不恢复发布资格或增加预算。 |
 | `lib/reader-historical-markdown-closure.js` | 从原 Git analysis-contract blob 精确提取固定 SHA 的 6 个表头正则和 7 个纯函数，在无 require 的隔离上下文中装载；保留逐声明字节边界与哈希，不导入旧 Manual/生产依赖。 |
-| `lib/reader-paid-resolved-render.js` | Node 库：通过正常论文锁校验原付费响应与当前文章的对应关系，重算排版，保留原费用、图片与其他阶段；保存前再次核对原档和旧代码。 |
+| `lib/reader-paid-resolved-render.js` | Node 库：通过正常论文锁校验原付费稿与当前文章的对应关系，重算排版；另有当前唯一已签单次修订的硬禁模型表格重渲染，核对原派发、父 seed、反馈、用量和固定旧版本逐字重放，保留原费用、图片、表外文字与其他阶段；保存前再次核对原档和代码。 |
 | `lib/reader-paid-resolved-replay-worker.js` | Node 内部子进程：在无生产密钥且禁止网络的独立进程中运行固定旧渲染器，验证原响应能逐字恢复当前文章及计划；不直接接受发布任务。 |
 | `lib/reader-paid-response-replay.js` | Node 库：显式复验被旧程序变换损坏的付费原响应：正式用量记录须绑定原输出 SHA，真实后续修复请求及响应须精确关联原候选；保留原次数和失败记录，经正常完整解析与来源、事实反馈校验后才可保存。缺少这些证明时拒绝，不能作为通用原响应导入入口。 |
 | `lib/reader-parent-recovery.js` | Node 库：为已付费失败稿规划有累计上限的后续修复，核对每轮原稿、费用和父回执；公开诊断准备只允许实现变化，保留旧账，不自动添加请求额度。 |

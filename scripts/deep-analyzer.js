@@ -1906,7 +1906,14 @@ function readerNumericTokenMatches(value) {
             }
             return ' '.repeat(prefix.length) + number;
         }
-    ).replace(/[０-９．＋－]/g, character => String.fromCharCode(character.charCodeAt(0) - 0xfee0));
+    // LaTeXML may emit the visible ± immediately followed by its identical TeX
+    // operator before an uncertainty, e.g. 75.7±\\pm1.1. Mask only that duplicate
+    // operator, at the same length, so the full following scalar retains its
+    // original index. Unknown commands, signed/partial numbers and units are
+    // not decoded or inferred here.
+    ).replace(/±\\pm(?=(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?![A-Za-z0-9_.]))/g,
+        operator => ' '.repeat(operator.length))
+        .replace(/[０-９．＋－]/g, character => String.fromCharCode(character.charCodeAt(0) - 0xfee0));
     const matches = [...numericSurface.matchAll(pattern)];
     // LaTeXML 有时会把可见公式和它的 TeX 注解紧挨着压平在一起。为正文和表格文本里确实
     // 见到的两种形态各留一个范围很窄的别名，好让后面的单位仍挂在它真正描述的数值上。
