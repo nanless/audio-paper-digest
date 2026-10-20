@@ -1,5 +1,8 @@
 import sys
 import re
+import gzip
+import hashlib
+import json
 import unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'scripts'))
@@ -30,6 +33,29 @@ class SourceIdentityTest(unittest.TestCase):
             self.assertRegex(validate(article('来源'),'Table 1: Other.\nMethod\nBaseline\nProposed\n'+heading+'\nSource\n甲\n乙\n丙'),'缺少方法、数据集或设置识别列')
         for h in ('来源准确率 ↑','评价项目得分 ↑','问卷项目误差 ↓','合并位置准确率 ↑','未知量'):
             self.assertRegex(validate(article(h)),'缺少方法、数据集或设置识别列')
+    def test_selector_is_an_exact_identity_not_a_metric_prefix(self):
+        for header in ('选择器', 'selector', 'Selector'):
+            self.assertIsNone(validate(article(header)))
+        for header in ('选择器准确率 ↑', 'selector accuracy ↑', '选择延迟 ↓', 'selector latency ↓', 'Selector score', '选择器延迟 ↓', '未知量'):
+            self.assertRegex(validate(article(header)), '缺少方法、数据集或设置识别列')
+        for header in ('选择器', 'selector'):
+            self.assertRegex(validate(article(header).replace('WER ↓', 'WER')), '缺少 ↑/↓ 方向')
+
+    def test_real_visagent_six_routing_rows_are_accepted_unchanged(self):
+        raw = (Path(__file__).resolve().parents[1] / 'fixtures/core-summary-daily-20261020-real.json.gz').read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), '964cb2f120aa4dcaa41d01d7163ebf6f136d1acd1c56de3c4bd116caf1c76161')
+        fixture = json.loads(gzip.decompress(raw))
+        paper = next(p for p in fixture['papers'] if p['paperId'] == '2610.26168')
+        text = paper['checkpointAnalysis']
+        self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), paper['checkpointAnalysisSha256'])
+        self.assertIsNone(validate(text))
+        for row in ('| DeepSeek V3 | 单级 | 98% | 9 s |', '| DeepSeek V3 | 两级 | 100% | <1 s |',
+                    '| Qwen3 | 单级 | 99% | 8 s |', '| Qwen3 | 两级 | 100% | <1 s |',
+                    '| Kimi K2 | 单级 | 98% | 10 s |', '| Kimi K2 | 两级 | 100% | <1 s |'):
+            self.assertIn(row, text)
+        for header in ('选择器准确率 ↑', 'Selector score', 'selector latency ↓'):
+            self.assertRegex(validate(text.replace('| 选择器 | 路由 |', f'| {header} | 路由 |')), '缺少方法、数据集或设置识别列')
+
     def test_loss_requires_actual_source_labels(self):
         a=r'\mathcal{L}_{\text{KD}}'; b=r'\mathcal{L}_{\text{CL}}'
         source=f'The distillation loss {a} and {b} are compared.'

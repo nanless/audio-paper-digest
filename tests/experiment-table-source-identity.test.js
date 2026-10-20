@@ -40,3 +40,9 @@ test('来源和中间身份列里的编号不能凑成结果数字',()=>{
  }).join('\n');
  assert.match(validate(middle,source),/只有 0 个可核对数字/);
 });
+
+test('选择器是精确中英文身份，指标复合名和缺失方向不借裸词放行',()=>{
+ for(const h of ['选择器','selector','Selector'])assert.equal(validate(article(h)),null,h);
+ for(const h of ['选择器准确率 ↑','selector accuracy ↑','选择延迟 ↓','selector latency ↓','Selector score','选择器延迟 ↓','未知量'])assert.match(validate(article(h)),/缺少方法、数据集或设置识别列/,h);
+ for(const h of ['选择器','selector'])assert.match(validate(article(h).replace('WER ↓','WER')),/缺少 ↑\/↓ 方向/,h);
+});
