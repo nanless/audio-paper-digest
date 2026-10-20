@@ -7251,6 +7251,12 @@ def _api_reader_numeric_tokens(value):
         r'(\\textcolor(?:black|blue|brown|cyan|darkgray|gray|green|lightgray|lime|magenta|olive|orange|pink|purple|red|teal|violet|white|yellow))([-+－−]?[0-9０-９][0-9.０-９．]*)',
         mask_color, original_surface,
     )
+    # Mirror the Reader's exact LaTeXML duplicate-operator boundary. Keep the
+    # original scalar, precision, units and offsets; do not decode other TeX.
+    numeric_surface = re.sub(
+        r'±\\pm(?=(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?![A-Za-z0-9_.]))',
+        lambda match: ' ' * len(match.group(0)), numeric_surface,
+    )
     tokens = []
     for match in pattern.finditer(unicodedata.normalize('NFKC', numeric_surface)):
         normalized_numeric_token = _normalize_api_reader_numeric_token(match.group(0))
