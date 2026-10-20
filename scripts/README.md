@@ -115,6 +115,7 @@ npm run test:compat
 | `lib/arxiv-metadata-source.js` | Node 库：通过项目 HTTP CONNECT 获取单篇 arXiv Atom 元数据，核验原始响应 SHA，并提取白名单中的标题、摘要、作者与类别。现行 v1 先严格校验 XML，再按既有规则保留字段中的实体和作者空白，以按原规则重新计算并核验旧封存 SHA；正常日更抓取使用解码后的 XML 字段。 |
 | `lib/daily-arxiv-prefix-source.js` | Node 库：日期查询终止于 HTTP 429 时，使用同一官方 Atom 类别列表完整覆盖固定窗口，保存旧见证、分页端点、响应 SHA 和首页重放证明；当前恢复、只读校验及下次补抓共用覆盖核验。 |
 | `lib/daily-fetch-boundary.js` | Node 库：从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见边界说明。 |
+| `lib/daily-xml-file-stdin.js` | Node 库：为日更 OAI 与 RSS 的原 Python 校验器传递完整输入，通过私有临时普通文件的只读描述符避免同步管道等待结束；保留原期限及输出上限，调用后清理，并将本地运行故障与来源内容否定分开。 |
 | `lib/daily-fresh-source-plan.js` | Node 库：日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
 | `lib/fetch-scheduler.js` | Node 库：按主机串行调度抓取，记录冷却时间并识别失败类型。 |
 | `lib/filter-input-contract.js` | Node 库：算出筛选决定对应的输入 SHA；使用官方范围证据时，一并绑定实际交给模型的证据。 |
