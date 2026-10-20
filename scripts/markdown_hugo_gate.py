@@ -623,6 +623,150 @@ def mask_source_bound_title_dollars(rendered, artifact):
     return ''.join(' ' if index in parser.positions else char for index, char in enumerate(rendered))
 
 
+def mask_source_bound_author_dollars(rendered, artifact):
+    """Only complete escaped source author lists can project literal dollar glyphs."""
+    frontmatter = artifact.get('frontmatter') or {}
+    single = (frontmatter.get('paper_digest_api_reader_author_identity_contract') == 'api-reader-author-identity-v1'
+              and re.fullmatch(r'[a-f0-9]{64}', str(frontmatter.get('paper_digest_api_reader_author_identity_sha256') or ''))
+              and type(frontmatter.get('paper_digest_api_reader_author_count')) is int
+              and frontmatter['paper_digest_api_reader_author_count'] > 0)
+    authors = frontmatter.get('paper_digest_authors')
+    if not single or not isinstance(authors, list) or not authors or any(
+            not isinstance(author, dict) or not isinstance(author.get('name'), str)
+            or not isinstance(author.get('affiliations'), list)
+            or any(not isinstance(value, str) for value in author['affiliations']) for author in authors):
+        return rendered
+    original_items = tuple(author['name'] + '：' + '；'.join(author['affiliations']) for author in authors)
+    source = str(artifact.get('body') or '')
+    expected = {}
+    pattern = re.compile('^##[ \\t]+👥 作者与机构[ \\t]*\\n\\n((?:- [^\\n]+(?:\\n|$))+)', re.MULTILINE)
+    for match in pattern.finditer(source):
+        block = match[1]
+        dollars = [match.start() for match in re.finditer(re.escape('$'), block)]
+        if not dollars or '`' in block:
+            continue
+        if any((position - len(block[:position].rstrip(chr(92)))) % 2 != 1 for position in dollars):
+            continue
+        # Each list item must be an explicit author/affiliation pair. The
+        # normal publication binding still authenticates the original record.
+        items = tuple(html.unescape(re.sub(re.escape(chr(92)) + '([' + re.escape('\\`*_{}[]()#+-.!$>') + '])',
+                      lambda value: value[1], line[2:])) for line in block.splitlines())
+        if items != original_items:
+            continue
+        expected[items] = expected.get(items, 0) + 1
+    if not expected:
+        return rendered
+    offsets = _html_line_offsets(rendered)
+
+    class Authors(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.stack, self.heading, self.pending, self.block, self.item = [], None, False, None, None
+            self.positions = set()
+            self.anchor = None
+
+        def handle_starttag(self, tag, attrs):
+            attributes = dict(attrs)
+            hidden = (tag in {'script', 'style', 'pre', 'code', 'textarea', 'template', 'noscript'}
+                      or 'hidden' in attributes or str(attributes.get('aria-hidden') or '').lower() == 'true'
+                      or bool(re.search('display\\s*:\\s*none|visibility\\s*:\\s*hidden', str(attributes.get('style') or ''), re.I))
+                      or any(value for _tag, value in self.stack) or len(attributes) != len(attrs))
+            if self.heading is not None:
+                if (tag == 'a' and self.anchor is None and not self.heading.get('anchorSeen')
+                        and self.heading.get('id') == '-作者与机构'
+                        and self.stack and self.stack[-1][0] == 'h2'
+                        and ''.join(self.heading['parts']) == '👥 作者与机构'
+                        and len(attrs) == 4 and attributes == {'hidden': None, 'class': 'anchor',
+                            'aria-hidden': 'true', 'href': '#-作者与机构'}):
+                    self.anchor = []
+                else:
+                    self.heading['valid'] = False
+            if self.block is not None:
+                if tag == 'li' and self.item is None and self.stack and self.stack[-1][0] == 'ul':
+                    self.item = {'parts': [], 'dollars': []}
+                else:
+                    self.block['valid'] = False
+            if self.pending:
+                self.pending = False
+                if tag == 'ul' and not hidden:
+                    self.block = {'items': [], 'dollars': [], 'valid': True}
+            if self.block is None and tag == 'h2':
+                self.heading = {'tag': tag, 'id': attributes.get('id'), 'parts': [], 'valid': not hidden}
+            if hidden and self.block is not None:
+                self.block['valid'] = False
+            if tag not in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}:
+                self.stack.append((tag, hidden))
+
+        def handle_data(self, value):
+            if self.anchor is not None:
+                self.anchor.append(value)
+                return
+            if self.heading is not None:
+                self.heading['parts'].append(value)
+            if self.item is not None:
+                self.item['parts'].append(value)
+                line, column = self.getpos()
+                start = offsets[line - 1] + column
+                self.item['dollars'].extend(start + m.start() for m in re.finditer(re.escape('$'), value))
+            elif self.pending and value.strip():
+                self.pending = False
+
+        def handle_entityref(self, name):
+            self._entity(html.unescape('&' + name + ';'))
+
+        def handle_charref(self, name):
+            self._entity(html.unescape('&#' + name + ';'))
+
+        def _entity(self, value):
+            if self.anchor is not None:
+                self.anchor.append(value)
+                return
+            if self.heading is not None:
+                self.heading['parts'].append(value)
+            if self.item is not None:
+                self.item['parts'].append(value)
+
+        def handle_comment(self, _value):
+            self.pending = False
+            if self.heading is not None:
+                self.heading['valid'] = False
+            if self.block is not None:
+                self.block['valid'] = False
+
+        def handle_endtag(self, tag):
+            if self.anchor is not None and (tag != 'a' or not self.stack or self.stack[-1][0] != 'a'):
+                self.heading['valid'] = False
+            if self.anchor is not None and tag == 'a':
+                self.heading['valid'] = self.heading['valid'] and ''.join(self.anchor) == '#'
+                self.heading['anchorSeen'] = True
+                self.anchor = None
+            if self.block is not None and (not self.stack or self.stack[-1][0] != tag):
+                self.block['valid'] = False
+            if self.item is not None and tag == 'li':
+                self.block['items'].append(''.join(self.item['parts']))
+                self.block['dollars'].extend(self.item['dollars'])
+                self.item = None
+            if self.block is not None and tag == 'ul':
+                key = tuple(self.block['items'])
+                if self.block['valid'] and self.item is None and expected.get(key, 0):
+                    expected[key] -= 1
+                    self.positions.update(self.block['dollars'])
+                self.block, self.item = None, None
+            if self.heading is not None and tag == self.heading['tag']:
+                self.pending = self.heading['valid'] and ''.join(self.heading['parts']).strip() == '👥 作者与机构'
+                self.heading = None
+            for i in range(len(self.stack) - 1, -1, -1):
+                if self.stack[i][0] == tag:
+                    del self.stack[i:]
+                    break
+
+    parser = Authors()
+    parser.feed(rendered)
+    parser.close()
+    return ''.join(' ' if index in parser.positions else char for index, char in enumerate(rendered))
+
+
+
 def mask_rendered_symbolic_table_cells(text):
     """在渲染后的 Markdown 扫描中隐藏已校验的序列字面字形。
 
@@ -809,8 +953,8 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             continue
         rendered_path, rendered = candidates[0]
         reader_html = rendered_article_fragment(rendered)
-        gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_title_dollars(
-            mask_source_bound_figure_caption_dollars(reader_html, artifact), artifact))
+        gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_author_dollars(
+            mask_source_bound_title_dollars(mask_source_bound_figure_caption_dollars(reader_html, artifact), artifact), artifact))
         rendered_label = f'{source_label} -> {rendered_path.name}'
         issues.extend(math_and_emphasis_issues(gate_html, rendered_label, rendered_html=True))
         if '**' in gate_html:

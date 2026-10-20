@@ -3064,7 +3064,10 @@ def render_verified_reader_authors(authors, *, source_note=''):
             or any(not isinstance(value, str) for value in author['affiliations'])
             for author in authors):
         raise PublishDataValidationError('作者展示需要已核验的姓名和机构列表。')
-    block = '\n'.join(f'- {author["name"]}：{"；".join(author["affiliations"])}' for author in authors)
+    def literal(value):
+        # A verified metadata dollar is a literal author glyph, never math.
+        return value.replace('\\', '\\\\').replace('$', r'\$') if '$' in value else value
+    block = '\n'.join(f'- {literal(author["name"])}：{"；".join(literal(value) for value in author["affiliations"])}' for author in authors)
     if source_note:
         block += ('\n\n' if block else '') + source_note
     return block
@@ -5706,7 +5709,8 @@ def _api_reader_index_display_fields_issue(content, papers):
     """逐篇核对汇总页中的展示内容是否与对应读者文章记录一致，不修改页面。"""
     blocks = re.split(r'^### ', content.split('## 📋 论文列表', 1)[-1], flags=re.MULTILINE)[1:]
     for paper in papers:
-        reader_display_fields = _build_api_reader_display_fields(paper)
+        payload = _api_reader_payload(paper)
+        reader_display_fields = _build_api_reader_display_fields(paper, payload)
         if reader_display_fields is None:
             continue
         aid = paper.get('arxivId', '')
@@ -5717,6 +5721,12 @@ def _api_reader_index_display_fields_issue(content, papers):
         block = matches[0]
         if find_evaluation_headings(block, rendered=True):
             return f'{aid}：汇总页中对应论文的内容含有不允许展示的论文评价栏目。'
+        authors = re.search(r'^👥 \*\*作者与机构\*\*\n\n([\s\S]*?)(?=\n\n(?:📌|🔗|💡) \*\*|\n\n---|\Z)', block, re.MULTILINE)
+        expected_authors = sanitize_markdown_for_publish(
+            _render_api_reader_author_block(paper, payload)
+        ).strip()
+        if not authors or authors[1].strip() != expected_authors:
+            return f'{aid}：汇总页中作者机构与对应读者文章的原作者展示记录不一致。'
         for key, label, end in (
                 ('summary', '📌 **核心摘要**', r'\n\n🔗 \*\*开源资源\*\*'),
                 ('opensource', '🔗 **开源资源**', r'\n\n---')):
