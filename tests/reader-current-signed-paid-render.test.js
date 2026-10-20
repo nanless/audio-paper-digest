@@ -17,9 +17,32 @@ const stable = value => sha(JSON.stringify((function order(item) {
 })(value)));
 function fixture() {
     const bytes = fs.readFileSync(path.join(__dirname, 'fixtures/reader-current-signed-mscr-paid-render.json.gz'));
-    assert.equal(sha(bytes), '493635eb6344bdba79a5b252e990c1e720171fa2cddf9c83176b64abbc7c6c3f');
+    assert.equal(sha(bytes), '04cd289d2f7a176e3d07287f263525b3adb5e481bc1878fa2962b7558fe091b0');
     return JSON.parse(zlib.gunzipSync(bytes));
 }
+// A signed parent cold-replays its actual four-file source. Never rely on a
+// developer's production runtime being present, and never mock the seed gate.
+const sealed = fixture();
+const config = require('../scripts/config');
+const previousSourceRoot = config.FILES.dailyFreshSourceRunsDir;
+const privateSourceRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'current-paid-sealed-'));
+const runDir = path.join(privateSourceRoot, sealed.parent.freshRewriteProvenance.runId);
+const bundleDir = path.join(runDir, 'sources', '2610.24395', 'generation-000001');
+fs.mkdirSync(bundleDir, { recursive: true, mode: 0o700 });
+const runBytes = Buffer.from(sealed.portableSealedSource.runManifestBase64, 'base64');
+assert.equal(sha(runBytes), sealed.originalPhysicalSha256['run.json']);
+fs.writeFileSync(path.join(runDir, 'run.json'), runBytes, { flag: 'wx', mode: 0o600 });
+for (const [name, base64] of Object.entries(sealed.portableSealedSource.filesBase64)) {
+    assert(['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json'].includes(name));
+    const bytes = Buffer.from(base64, 'base64');
+    assert.equal(sha(bytes), sealed.originalPhysicalSha256[name]);
+    fs.writeFileSync(path.join(bundleDir, name), bytes, { flag: 'wx', mode: 0o600 });
+}
+config.FILES.dailyFreshSourceRunsDir = privateSourceRoot;
+test.after(() => {
+    config.FILES.dailyFreshSourceRunsDir = previousSourceRoot;
+    fs.rmSync(privateSourceRoot, { recursive: true, force: true });
+});
 function input() {
     const f = fixture();
     return { ...f, checked: { envelope: f.envelope, identitySha: hashDraft(f.envelope.identity),
@@ -55,6 +78,21 @@ test('真实当前签名修订只接原唯一已付完整稿，不改候选、�
     assert.match(main[2], /^\| MCR \| 74\.5 ± 0\.8 \| 85\.1 ± 0\.5/);
     assert.match(main[3], /^\| MSCR \| 75\.7 ± 1\.1 \| 86\.4 ± 0\.9/);
     assert.equal(draft.sections[12].body.split('\n').filter(line => line.startsWith('|')).length, 7);
+});
+test('隔离空runtime仍从真实原四文件冷核；缺失PDF或原字节变化不能建立父seed', () => {
+    const f = input();
+    assert.notEqual(path.resolve(privateSourceRoot), path.resolve(previousSourceRoot));
+    assert.deepEqual(require('../scripts/analysis-engine').getApiReaderV3RecordDiagnostics(f.parent), []);
+    assert.equal(fs.readdirSync(path.join(runDir, 'sources')).length, 1);
+    const pdf = path.join(bundleDir, 'source.pdf'), pdfBytes = fs.readFileSync(pdf);
+    fs.unlinkSync(pdf);
+    try { assert.throws(() => validate(f), /定向修订需要完整/u); }
+    finally { fs.writeFileSync(pdf, pdfBytes, { flag: 'wx', mode: 0o600 }); }
+    const text = path.join(bundleDir, 'source.txt'), textBytes = fs.readFileSync(text);
+    fs.appendFileSync(text, '\nnot original source bytes');
+    try { assert.throws(() => validate(f), /定向修订需要完整/u); }
+    finally { fs.writeFileSync(text, textBytes, { mode: 0o600 }); }
+    assert.deepEqual(validate(f), f.envelope.payload);
 });
 test('当前父CAS、原签名parent、反馈、来源和请求身份逐项漂移均拒', () => {
     const changes = [
