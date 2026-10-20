@@ -1528,6 +1528,37 @@ function unissuedScoringPreRequestCandidate(loaded) {
         &&first.message==='Text maintenance: unissued scoring admission differs from actual source/parent/feedback receipt'
         &&first.category==='run'&&first.systemic===true&&first.retryable===false;
 }
+function readHistoricalPreRequestUsageTemporary(file,since) {
+    check(/^\.[a-f0-9-]{36}\.tmp$/u.test(path.basename(file))&&UUID.test(path.basename(file).slice(1,-4)),
+        'pre-request scoring usage has an unfinished or unknown temporary record');
+    privateFile(file);
+    const namedBefore=fs.lstatSync(file,{bigint:true});
+    const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+    try {
+        const opened=fs.fstatSync(fd,{bigint:true});
+        check(opened.isFile()&&opened.nlink===1n&&(opened.mode&0o777n)===0o600n
+            &&opened.size>0n&&opened.size<=64n*1024n*1024n,'pre-request scoring usage temporary is not a bounded private file');
+        const bytes=fs.readFileSync(fd),after=fs.fstatSync(fd,{bigint:true});
+        // Reuse the normal strict UTF-8/duplicate-key JSON reader, and prove
+        // that its independently opened bytes are exactly the pinned FD bytes.
+        const record=read(file),namedAfter=fs.lstatSync(file,{bigint:true});
+        const fields=['dev','ino','size','mode','nlink','mtimeNs','ctimeNs','birthtimeNs'];
+        check(fields.every(key=>typeof opened[key]==='bigint'
+            &&[namedBefore,after,namedAfter].every(stat=>stat[key]===opened[key]))
+            &&BigInt(bytes.length)===opened.size&&record.sha256===sha(bytes),
+            'pre-request scoring usage temporary changed while reading');
+        const value=record.value,at=Date.parse(value?.at),cutoff=BigInt(since)*1000000n;
+        check(value&&typeof value==='object'&&!Array.isArray(value)&&value.version==='llm-usage-v1'
+            &&UUID.test(value.eventId||'')&&typeof value.at==='string'&&Number.isFinite(at)&&at>0&&at<since
+            &&['mtimeNs','ctimeNs','birthtimeNs'].every(key=>opened[key]>0n&&opened[key]<cutoff)
+            &&(value.kind==='request'&&value.outcome==='completed'
+                ||value.kind==='disposition'&&['accepted','rejected'].includes(value.disposition)
+                    &&/^[a-f0-9]{64}$/u.test(value.outputTextSha256||'')),
+            'pre-request scoring usage has an unfinished, recent or unknown-time temporary record');
+        return {file,sha256:record.sha256,size:bytes.length,eventAt:value.at,kind:value.kind,eventId:value.eventId,
+            fileIdentity:Object.fromEntries(fields.map(key=>[key,opened[key].toString()]))};
+    } finally {fs.closeSync(fd);}
+}
 function inspectUnissuedScoringPreRequestRecovery(loaded) {
     if(!unissuedScoringPreRequestCandidate(loaded))return null;
     const progress=loaded.analysis.readerRevisionProgress,first=progress.failures[0];
@@ -1587,7 +1618,16 @@ function inspectUnissuedScoringPreRequestRecovery(loaded) {
         'pre-request scoring recovery lost its normal fixed scoring mode');
     const since=Date.parse(originalRun.value.createdAt),usageDirectory=require('../config').FILES.llmUsageDir;
     const targetRows=[],names=fs.readdirSync(usageDirectory).sort();
-    check(!names.some(name=>/^\.[a-f0-9-]{36}\.tmp$/u.test(name)),'pre-request scoring usage has an unfinished atomic record');
+    const historicalTemporaryUsageRecords=names.filter(name=>name.endsWith('.tmp'))
+        .map(name=>readHistoricalPreRequestUsageTemporary(path.join(usageDirectory,name),since));
+    const assertHistoricalTemporaries=currentNames=>{
+        check(same(currentNames.filter(name=>name.endsWith('.tmp')).sort(),
+            historicalTemporaryUsageRecords.map(row=>path.basename(row.file)).sort()),
+            'pre-request scoring usage temporary set changed during observation');
+        for(const row of historicalTemporaryUsageRecords)
+            check(same(readHistoricalPreRequestUsageTemporary(row.file,since),row),
+                'pre-request scoring historical temporary changed during observation');
+    };
     const inspectUsageName=name=>{
         if(!name.endsWith('.json')||!UUID.test(name.slice(0,-5))){check(!name.endsWith('.json'),'pre-request scoring usage has unknown record name');return;}
         const file=path.join(usageDirectory,name);
@@ -1612,8 +1652,7 @@ function inspectUnissuedScoringPreRequestRecovery(loaded) {
     };
     for(const name of names)inspectUsageName(name);
     for(const row of targetRows)check(read(row.file).sha256===row.sha256,'pre-request scoring usage changed');
-    check(!fs.readdirSync(usageDirectory).some(name=>/^\.[a-f0-9-]{36}\.tmp$/u.test(name)),
-        'pre-request scoring usage became unfinished during observation');
+    assertHistoricalTemporaries(fs.readdirSync(usageDirectory));
     const after=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:batch.analysisRoot,executionId:loaded.run.executionId});
     check(after.analysisFileSha256===current.analysisFileSha256&&after.runFileSha256===current.runFileSha256
         &&after.sourceFileSha256===current.sourceFileSha256&&same(after.revision,current.revision)
@@ -1627,17 +1666,18 @@ function inspectUnissuedScoringPreRequestRecovery(loaded) {
     for(const pin of fixedCurrentFiles)check(read(pin.file).sha256===pin.sha256,
         'pre-request scoring source/revision/seed changed during observation');
     const finalNames=fs.readdirSync(usageDirectory);
-    check(!finalNames.some(name=>/^\.[a-f0-9-]{36}\.tmp$/u.test(name)),'pre-request scoring usage became unfinished');
+    assertHistoricalTemporaries(finalNames);
     const originalNames=new Set(names);for(const name of finalNames)if(!originalNames.has(name))inspectUsageName(name);
     for(const row of targetRows)check(read(row.file).sha256===row.sha256,'pre-request scoring usage changed at final fence');
     assertCurrentBatch(batch);
+    assertHistoricalTemporaries(fs.readdirSync(usageDirectory));
     // Selection only. The adapter repeats this under its actual paper lock;
     // the normal scoring path consumes the next original outer attempt.
     return {contract:'conference-unissued-scoring-pre-request-readmission-v1',
         executionId:loaded.run.executionId,paperId:loaded.run.paperId,
         analysisFileSha256:current.analysisFileSha256,runFileSha256:current.runFileSha256,
         originalProgressSha256:stable(progress),admissionFileSha256:admitted.binding.admissionFileSha256,
-        scoringRequestsObserved:0};
+        scoringRequestsObserved:0,historicalTemporaryUsageRecords};
 }
 
 async function readmitUnissuedScoringPreRequestChild(batch,member,actual,shared,deps) {
