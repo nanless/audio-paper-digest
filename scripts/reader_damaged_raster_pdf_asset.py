@@ -11,8 +11,13 @@ from pathlib import Path
 import re
 import struct
 import zlib
-import fitz
 from runtime_guard import require_external_runtime
+
+if __name__ == '__main__':
+    require_external_runtime('reader-damaged-raster-pdf-asset')
+    raise SystemExit('This helper is called through the normal blog publisher.')
+
+import fitz
 from reader_pdf_page_asset import DPI, MAX_OUTPUT_BYTES, _caption_display_projection, norm, stable
 
 CONTRACT = 'reader-damaged-raster-pdf-page-asset-v1'
