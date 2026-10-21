@@ -681,7 +681,7 @@ describe('digest-run-report --watch 参数与循环', () => {
     it('真实 CLI --json --watch：首行纯 JSON，且不创建日志、不触发 prune', async t => {
         const projectRoot = path.resolve(__dirname, '..');
         const logsDir = path.join(projectRoot, 'logs');
-        const before = fs.readdirSync(logsDir).filter(name => name.endsWith('.log')).sort();
+        const before = fs.existsSync(logsDir) ? fs.readdirSync(logsDir).filter(name => name.endsWith('.log')).sort() : [];
         const child = spawn(process.execPath, [
             'scripts/digest-run-report.js',
             '--date', '2026-10-21',
@@ -710,7 +710,7 @@ describe('digest-run-report --watch 参数与循环', () => {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
         await Promise.race([once(child, 'exit'), new Promise(resolve => setTimeout(resolve, 5000))]);
 
-        const after = fs.readdirSync(logsDir).filter(name => name.endsWith('.log')).sort();
+        const after = fs.existsSync(logsDir) ? fs.readdirSync(logsDir).filter(name => name.endsWith('.log')).sort() : [];
         assert.deepStrictEqual(after, before, 'watch 不得新建或删除 logs/ 下的日志文件');
         assert.ok(!stdout.includes('[log] 输出文件'), `stdout 不应出现日志初始化行：${stderr}`);
         const lines = stdout.split(/\r?\n/).filter(line => line.trim());

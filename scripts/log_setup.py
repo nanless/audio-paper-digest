@@ -27,7 +27,7 @@ def redact_log_text(value):
     for secret in _CONFIGURED_SECRETS:
         text = text.replace(secret, '[REDACTED]')
     text = re.sub(
-        r'\b([a-z][a-z0-9+.-]*://)([^\s/@]+)@',
+        r'\b([a-z][a-z0-9+.-]*://)[^\s/\"\'<>]*@',
         r'\1[REDACTED]@',
         text,
         flags=re.IGNORECASE,
@@ -331,6 +331,8 @@ def _sanitize_stage_summary_text(value):
     text = text.replace('\x1b', '')
     text = re.sub(r'[\r\n]+', ' ', text)
     text = re.sub(r'[\x0b\x0c\x1c-\x1e\x85\u2028\u2029]', '', text)
+    # 其余 C0/C1、bidi 与零宽字符也不能进入单行摘要（防终端注入/隐藏文本）。
+    text = re.sub(r'[\x00-\x08\x0e-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff]', '', text)
     return text
 
 
@@ -361,7 +363,7 @@ def redact_stage_summary_text(value):
     # 与文件日志同一批凭证形态；值只遮到空白/分隔符，保留单行摘要的可读性。
     # 统一用 ASCII 字符类与 lookbehind，避免 Node/Python 的 \b、\s 语义差异。
     text = re.sub(
-        r'(?<![A-Za-z0-9_])([a-z][a-z0-9+.-]*://)([^ \t/@]+)@',
+        r'(?<![A-Za-z0-9_])([a-z][a-z0-9+.-]*://)[^ \t\"\'<>]*@',
         r'\1[REDACTED]@',
         text,
         flags=re.IGNORECASE,
