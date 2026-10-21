@@ -5867,7 +5867,7 @@ def _open_publish_json_with_account_pool(
     *, api_url, endpoint, model, api_type, api_keys, payload, opener, timeout,
     state_file=None, usage_sink=None, usage_directory=None,
 ):
-    """已确认的 Go 配额/余额失败只按顺序向更靠后的 key 重试。"""
+    """已确认的 Go 配额/余额失败才在同一次逻辑请求内切换到下一个账号（每个账号至多一次）。"""
     try:
         expected_api_type = detect_publish_api_type(endpoint, model)
         expected_api_url = build_publish_api_url(expected_api_type, endpoint)

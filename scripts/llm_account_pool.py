@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Python 调用方使用的跨进程 OpenCode Go 固定账号池。"""
+"""Python 调用方使用的跨进程 OpenCode Go 账号池。
+
+同一个池内的所有 API key 完全同权：按账号 ID 的稳定排序（与配置里的
+key 顺序无关）做跨请求轮转，每次选择把游标推进到下一个可用账号；
+冷却中的账号被跳过，冷却到期后重新回到轮转。activeAccountId 只作为
+可观测字段，不再代表优先账号。只有服务端明确返回 GoUsageLimitError
+或余额不足的 401 才会把账号标记为冷却；普通 429/5xx 不切换账号。
+"""
 
 import hashlib
 import json
@@ -28,7 +35,7 @@ MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 class LlmAccountPoolExhaustedError(RuntimeError):
-    """所有已配置的 OpenCode Go 账号都已被确认处于配额封禁状态。"""
+    """账号池没有可用账号：全部冷却中或已被本次逻辑请求排除。"""
 
     code = 'LLM_ACCOUNT_POOL_EXHAUSTED'
     retryable = False
@@ -389,11 +396,31 @@ def read_state_strict(state_file=LLM_ACCOUNT_POOL_STATE_FILE):
                     f'LLM 账号池状态 account 非法，已阻止覆盖 {target}'
                 )
         for group in service['groups'].values():
-            active = group.get('activeAccountId') if isinstance(group, dict) else None
-            if not isinstance(group, dict) or (active is not None and not isinstance(active, str)):
+            if not isinstance(group, dict):
                 raise LlmAccountPoolStateError(
                     f'LLM 账号池状态 group 非法，已阻止覆盖 {target}'
                 )
+            active = group.get('activeAccountId')
+            # rotationCursor / lastSelectedAtMs 是等权轮转新增的可选字段。
+            # 旧版状态没有它们也必须继续可读，所以只有出现时才校验类型。
+            if active is not None and not isinstance(active, str):
+                raise LlmAccountPoolStateError(
+                    f'LLM 账号池状态 group 非法，已阻止覆盖 {target}'
+                )
+            if 'rotationCursor' in group:
+                cursor = group['rotationCursor']
+                if type(cursor) is not int or not (0 <= cursor <= MAX_SAFE_INTEGER):
+                    raise LlmAccountPoolStateError(
+                        f'LLM 账号池状态 group 非法，已阻止覆盖 {target}'
+                    )
+            if 'lastSelectedAtMs' in group:
+                selected_at = group['lastSelectedAtMs']
+                if isinstance(selected_at, bool) \
+                        or not isinstance(selected_at, (int, float)) \
+                        or not math.isfinite(selected_at) or selected_at < 0:
+                    raise LlmAccountPoolStateError(
+                        f'LLM 账号池状态 group 非法，已阻止覆盖 {target}'
+                    )
     return state
 
 
@@ -441,16 +468,37 @@ def _build_exhausted_error(service, account_ids, now_ms):
         + datetime.fromtimestamp(earliest / 1000, tz=timezone.utc).isoformat()
     )
     return LlmAccountPoolExhaustedError(
-        f'当前及后续 OpenCode Go 账号均不可用，禁止向前回切{suffix}',
+        f'OpenCode Go 账号池没有可用账号（全部冷却中或已被排除）{suffix}',
         earliest_retry_at_ms=earliest,
         blocked_account_count=len(blocked),
     )
+
+
+def _ordered_account_ids(identity):
+    # 轮转顺序不能依赖配置里的 key 顺序：按 account_id 稳定排序后，主账号
+    # 和任一备用账号完全同权，配置顺序不同也不会改变选择序列。
+    return sorted(identity['account_ids'])
+
+
+def _resolve_rotation_cursor(group, ordered_account_ids):
+    size = len(ordered_account_ids)
+    stored = group.get('rotationCursor')
+    if type(stored) is int and 0 <= stored <= MAX_SAFE_INTEGER:
+        return stored % size
+    # 兼容旧版 v1 状态：旧实现只保存 activeAccountId（最后使用的账号）。
+    # 把它的排序位置当作下一个候选，使升级后的首次选择仍与旧状态连续，
+    # 随后自然进入等权轮转。
+    active_id = group.get('activeAccountId')
+    if isinstance(active_id, str) and active_id in ordered_account_ids:
+        return ordered_account_ids.index(active_id)
+    return 0
 
 
 def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *,
                    now_ms=None, exclude_account_ids=()):
     keys = normalize_api_keys(api_keys)
     identity = get_pool_identity(keys, endpoint)
+    ordered_account_ids = _ordered_account_ids(identity)
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
     excluded = set(exclude_account_ids or ())
     selection = {}
@@ -458,43 +506,36 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
     def updater(state):
         service = _ensure_service(state, identity)
         group = service['groups'].get(identity['group_id'])
-        is_new_group = group is None
         if group is None:
-            for length in range(len(keys) - 1, 0, -1):
-                previous = service['groups'].get(get_pool_identity(keys[:length], endpoint)['group_id'])
-                if previous:
-                    group = dict(previous)
-                    break
-        group = group or {
-            'activeAccountId': None,
-            'switchedAt': None,
-        }
+            group = {
+                'activeAccountId': None,
+                'switchedAt': None,
+            }
         service['groups'][identity['group_id']] = group
         keys_by_id = dict(zip(identity['account_ids'], keys))
-        active_id = group.get('activeAccountId')
-        if active_id in keys_by_id and active_id not in excluded \
-                and not _account_is_blocked(service['accounts'].get(active_id, {}), now_ms):
-            selection.update({
-                'api_key': keys_by_id[active_id],
-                'account_id': active_id,
-                **identity,
-            })
-            if service['accounts'].get(active_id, {}).get('status') == 'quota_blocked':
-                service['accounts'][active_id]['status'] = 'eligible_after_reset'
-                return state
-            return state if is_new_group else None
-        floor = identity['account_ids'].index(active_id) if active_id in keys_by_id else max(
-            [0] + [index for index, account_id in enumerate(identity['account_ids'])
-                   if service['accounts'].get(account_id, {}).get('lastFailureAt')])
-        eligible_ids = identity['account_ids'][floor:]
-        next_id = next((account_id for account_id in eligible_ids
-                        if account_id not in excluded
-                        and not _account_is_blocked(service['accounts'].get(account_id, {}), now_ms)), None)
-        if next_id is None:
-            raise _build_exhausted_error(service, eligible_ids, now_ms)
+        start_index = _resolve_rotation_cursor(group, ordered_account_ids)
+        # 从游标开始扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
+        # 仍在冷却中的账号（blockedUntilMs 未到）；冷却到期的账号自然重新
+        # 加入轮转。整圈都不可用时按最早恢复时间报错。
+        selected_index = None
+        for step in range(len(ordered_account_ids)):
+            index = (start_index + step) % len(ordered_account_ids)
+            account_id = ordered_account_ids[index]
+            if account_id in excluded:
+                continue
+            if _account_is_blocked(service['accounts'].get(account_id, {}), now_ms):
+                continue
+            selected_index = index
+            break
+        if selected_index is None:
+            raise _build_exhausted_error(service, ordered_account_ids, now_ms)
+        next_id = ordered_account_ids[selected_index]
         group['activeAccountId'] = next_id
-        group['switchedAt'] = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat()
-        service['groups'][identity['group_id']] = group
+        group['rotationCursor'] = (selected_index + 1) % len(ordered_account_ids)
+        group['lastSelectedAtMs'] = now_ms
+        group['switchedAt'] = datetime.fromtimestamp(
+            now_ms / 1000, tz=timezone.utc
+        ).isoformat()
         if service['accounts'].get(next_id, {}).get('status') == 'quota_blocked':
             service['accounts'][next_id]['status'] = 'eligible_after_reset'
         selection.update({
@@ -532,7 +573,8 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
             'lastFailureAt': datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(),
             'lastFailureStatus': 401 if (quota or {}).get('type') == 'InsufficientBalanceError' else 429,
         }
-        # 被封禁期间，active 只作单向前进的游标。
+        # 冷却只影响账号可用性，不移动轮转游标：该账号在 select_api_key 里已被
+        # 明确排除，下一次选择会从游标继续，冷却到期后自动重新加入轮转。
         return state
 
     _update_state(state_file, updater)

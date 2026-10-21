@@ -2150,19 +2150,30 @@ primary_method_tag: #基准测试
         self.assertEqual(payload['max_output_tokens'], 100)
         self.assertNotIn('messages', payload)
 
-    def test_balance_failover_is_forward_and_authentication_is_run_scoped(self):
-        from llm_account_pool import select_api_key, mark_quota_exhausted, LlmAccountAuthError
+    def test_balance_failover_switches_to_next_account_and_authentication_is_run_scoped(self):
+        from llm_account_pool import (
+            LlmAccountAuthError, get_account_id, get_pool_identity,
+            mark_quota_exhausted, select_api_key,
+        )
         endpoint = 'https://opencode.ai/zen/go/v1'
         keys = ['a', 'b', 'c', 'd']
+        # 等权轮转的权威顺序：账号 ID 稳定排序；配置顺序不再决定首选账号。
+        ordered_ids = sorted(get_pool_identity(keys, endpoint)['account_ids'])
+        key_by_id = {get_account_id(key): key for key in keys}
+        ordered_keys = [key_by_id[account_id] for account_id in ordered_ids]
         for message in ('Insufficient balance',
                         'Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_test_placeholder/billing',
                         'Invalid API key'):
             with self.subTest(message=message), tempfile.TemporaryDirectory() as tmp:
                 state_file = Path(tmp) / 'pool.json'
-                for now_ms in (1000, 1100):
+                # 前两次选择把两个账号标记为冷却，第三次把游标推进到 ordered_keys[3]；
+                # 下一次逻辑请求从该游标开始，冷却在真实时间已过期但轮转位置保留。
+                for now_ms in (1000, 1100, 1200):
                     selected = select_api_key(keys, endpoint, state_file, now_ms=now_ms)
-                    mark_quota_exhausted(selected, {'blocked_until_ms': 2200}, state_file, now_ms=now_ms)
-                select_api_key(keys, endpoint, state_file, now_ms=1200)
+                    if now_ms < 1200:
+                        mark_quota_exhausted(selected, {'blocked_until_ms': 2200}, state_file, now_ms=now_ms)
+                first_account = ordered_keys[3]
+                next_account = ordered_keys[0]
                 error = urllib.error.HTTPError(
                     endpoint + '/responses', 401, 'Unauthorized', {},
                     io.BytesIO(json.dumps({'error': {'message': message}}).encode()),
@@ -2182,12 +2193,13 @@ primary_method_tag: #基准测试
                 kwargs['api_type'] = detect_publish_api_type(endpoint, kwargs['model'])
                 if message != 'Invalid API key':
                     self.assertEqual(_open_publish_json_with_account_pool(**kwargs)[0], 200)
-                    expected = ['Bearer c', 'Bearer d']
+                    # 只有明确配额/余额失败才切到下一个账号，同一逻辑请求每账号至多一次。
+                    expected = [f'Bearer {first_account}', f'Bearer {next_account}']
                 else:
                     with self.assertRaises(LlmAccountAuthError) as caught:
                         _open_publish_json_with_account_pool(**kwargs)
                     self.assertEqual(caught.exception.scope, 'run')
-                    expected = ['Bearer c']
+                    expected = [f'Bearer {first_account}']
                 self.assertEqual([call.args[0].get_header('Authorization')
                                   for call in opener.open.call_args_list], expected)
 

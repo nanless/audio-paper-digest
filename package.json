@@ -92,7 +92,8 @@
     "blog:manual-plan": "bash scripts/python-runtime.sh manual/scripts/assemble-manual-review-attestation.py --plan",
     "blog:push": "node scripts/workspace-role.js exec daily -- bash scripts/python-runtime.sh scripts/push-blog.py",
     "test:compat": "node --test --test-concurrency=1 manual/tests/*.test.js",
-    "reanalyze:selected": "node scripts/workspace-role.js exec daily -- node scripts/reanalyze-selected.js"
+    "reanalyze:selected": "node scripts/workspace-role.js exec daily -- node scripts/reanalyze-selected.js",
+    "doctor": "node scripts/doctor.js"
   },
   "keywords": [
     "arxiv",

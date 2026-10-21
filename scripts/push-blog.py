@@ -4,9 +4,16 @@
 import argparse
 import sys
 from contextlib import nullcontext
+from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
+
+_LIB_DIR = Path(__file__).resolve().parent / 'lib'
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+from error_guidance import print_error_guidance  # noqa: E402
 
 
 def parse_options(module, argv=None):
@@ -41,9 +48,10 @@ def parse_date(module, argv=None):
 
 def main():
     require_external_runtime('push-blog.py')
-    from log_setup import setup_script_logging
+    from log_setup import setup_script_logging, write_stage_summary
     setup_script_logging(__file__)
     module = load_publish_to_blog()
+    write_stage_summary('推送', 'start', '按审查凭证提交并推送博客页面')
     try:
         module.validate_publish_target()
         date_str, require_visual_plan, include_id = parse_options(module)
@@ -68,15 +76,25 @@ def main():
                     if require_visual_plan and not visual_planned:
                         print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
                         print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
+                        write_stage_summary('推送', 'warn', '页面已推送并验证远端 OID，但发布后视觉任务规划失败')
                         sys.exit(2)
                 else:
                     visual_planned = None
     except module.PublishDataValidationError as exc:
         print(f'\n❌ 博客推送失败: {exc}')
+        write_stage_summary('推送', 'error', f'博客推送失败: {exc}')
+        print_error_guidance(exc, 'blog-push')
         sys.exit(1)
     except TimeoutError as exc:
         print(f'\n❌ 博客仓库或同日期事务正在运行: {exc}')
+        write_stage_summary('推送', 'error', f'博客仓库或同日期事务正在运行: {exc}')
+        print_error_guidance(exc, 'blog-push')
         sys.exit(1)
+    except Exception as exc:
+        write_stage_summary('推送', 'error', f'推送异常: {exc}')
+        print_error_guidance(exc, 'blog-push')
+        raise
+    write_stage_summary('推送', 'ok', f'发布 {len(paths)} 个已审查页面，远端 OID 已核验')
     if visual_planned:
         print('\n🎉 全部博客推送完成；TOP 10 论文长图与汇总图任务已建立！')
     elif visual_planned is False:

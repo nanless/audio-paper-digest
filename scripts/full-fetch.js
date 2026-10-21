@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const { setupScriptLogging } = require('./log-setup');
+const { setupScriptLogging, writeStageSummary } = require('./log-setup');
+const { printErrorGuidance } = require('./lib/error-guidance.js');
 setupScriptLogging(__filename);
 
 /**
@@ -1690,6 +1691,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         saveFetchCheckpoint(fetchCheckpoint);
         // ========== 第一步：从 arxiv 抓取 ==========
         console.log('📥 第一步：从 arxiv 抓取论文');
+        writeStageSummary({ stage: '抓取', status: 'start', message: `arXiv ${categories.length} 个分类 + HuggingFace 抓取与合并去重` });
 
         const categoryById = new Map(categories.map(category => [category.id, category]));
         const shuffledCategories = fetchCheckpoint.categoryOrder.map(id => categoryById.get(id));
@@ -1908,9 +1910,14 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         if (hasRequiredSourceFailure(sourceHealth)) {
             throw new Error(`抓取来源不完整，已保存原始候选和抓取检查点，禁止调用筛选模型: ${getSourceFailures(sourceHealth).join('; ')}`);
         }
+        writeStageSummary({
+            stage: '抓取', status: 'ok',
+            message: `抓取合并 ${allPapers.length} 篇，博客去重 ${blogSkippedCount} 篇，候选 ${allPapersFiltered.length} 篇`
+        });
 
         // ========== 第四步：大模型筛选 ==========
         console.log('\n第四步：模型筛选（判断论文是否与语音或音频相关）');
+        writeStageSummary({ stage: '筛选', status: 'start', message: `模型筛选 ${allPapersFiltered.length} 篇候选` });
         filterDecisions = loadReusableFilterDecisions(today, filterModel, acceptedFilterPromptHashes, {
             ...candidateFingerprints, filterConfigFingerprint: acceptedFilterConfigFingerprints
         });
@@ -1973,6 +1980,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             throw new Error(`筛选未完成：明确决定 ${filterRunStats.decided}/${filterRunStats.totalCandidates}，待重试 ${filterRunStats.retryable || filterRunStats.retryableIds?.length || 0} 篇${filterRunStats.retryableIds?.length ? `（${filterRunStats.retryableIds.join(', ')}）` : ''}`);
         }
         console.log(`筛选后: ${filtered.length} 篇相关论文`);
+        writeStageSummary({ stage: '筛选', status: 'ok', message: `${allPapersFiltered.length} 候选→${filtered.length} 入选` });
         writeFilterArtifacts({
             allPapers,
             allPapersFiltered,
@@ -2079,6 +2087,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
 
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
+    writeStageSummary({ stage: '分析', status: 'start', message: `深度分析 ${filteredNew.length} 篇` });
     // 日更 API 分析以来源为先：入选集合先固化成一份独立的运行计划，每篇论文都抓到
     // 官方 HTML 与 PDF，之后才进入 LLM 各阶段。旧的分析结果即使当时成功过也不能直接
     // 复用，必须能对上这一天的 PDF/TXT 清单。
@@ -2208,6 +2217,10 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     const { stats: analysisStats } = dailySourcePlan
         ? await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runDailyAnalysis)
         : await runDailyAnalysis();
+    writeStageSummary({
+        stage: '分析', status: 'ok',
+        message: `分析完成 成功 ${analysisStats?.success ?? 0} 篇，失败 ${analysisStats?.failed ?? 0} 篇，跳过 ${analysisStats?.skipped ?? 0} 篇`
+    });
 
     // ========== 第六步：保存深度分析结果 ==========
     console.log('\n💾 第六步：保存深度分析结果');
@@ -2325,6 +2338,8 @@ if (require.main === module) {
         process.exitCode = result.exitCode;
     }).catch(err => {
         console.error(`❌ 失败: ${err.message}`);
+        writeStageSummary({ stage: '抓取', status: 'error', message: `入口失败: ${err.message}` });
+        printErrorGuidance(err, { stage: 'fetch' });
         process.exitCode = 1;
     });
 }

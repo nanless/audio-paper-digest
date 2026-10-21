@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const { setupScriptLogging } = require('./log-setup');
+const { setupScriptLogging, writeStageSummary } = require('./log-setup');
+const { printErrorGuidance } = require('./lib/error-guidance.js');
 setupScriptLogging(__filename);
 
 /**
@@ -254,6 +255,12 @@ async function main(options = {}) {
         });
         const summary = getBatchAnalysisRunSummary(finalPayload.papers, dailySourcePlan, feedbacks);
         console.log(summary.status === 'complete' ? '所有论文已分析完成！' : `检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
+        writeStageSummary({
+            stage: '分析', status: 'ok',
+            message: summary.status === 'complete'
+                ? '无待分析论文，全部已完成'
+                : `无待分析论文，但仍有 ${summary.remaining} 篇未完成`
+        });
         return {
             status: summary.status,
             exitCode: getAnalysisExitCode(summary.status),
@@ -274,6 +281,7 @@ async function main(options = {}) {
         return payload;
     });
 
+    writeStageSummary({ stage: '分析', status: 'start', message: `批量分析 ${notAnalyzed.length} 篇` });
     const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: RESULT_FILE,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
@@ -389,6 +397,10 @@ async function main(options = {}) {
 
     console.log('\n=== 批量分析完成 ===');
     console.log(`成功: ${stats.success} | 失败: ${stats.failed} | 总计处理: ${notAnalyzed.length}`);
+    writeStageSummary({
+        stage: '分析', status: 'ok',
+        message: `批量分析完成 成功 ${stats.success ?? 0} 篇，失败 ${stats.failed ?? 0} 篇，总计 ${notAnalyzed.length} 篇`
+    });
     const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
     if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
@@ -424,6 +436,8 @@ if (require.main === module) {
         process.exitCode = result.exitCode;
     }).catch(err => {
         console.error('批量分析异常:', err);
+        writeStageSummary({ stage: '分析', status: 'error', message: `入口失败: ${err.message}` });
+        printErrorGuidance(err, { stage: 'batch-analyze' });
         process.exitCode = 1;
     });
 }

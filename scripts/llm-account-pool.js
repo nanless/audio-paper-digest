@@ -2,9 +2,12 @@
 /**
  * OpenCode Go 账号池的共享状态实现。
  *
- * 成功后继续使用已选账号，直到服务端明确返回
- * GoUsageLimitError 或余额不足的 401。它不会在成功请求之间轮流切换账号，
- * 也不会把普通的 429/5xx/网络故障当成账号耗尽。
+ * 同一个池内的所有 API key 完全同权：按账号 ID 的稳定排序（与配置里的
+ * key 顺序无关）做跨请求轮转，每次选择把游标推进到下一个可用账号。
+ * 冷却中的账号被跳过，冷却到期后重新回到轮转；activeAccountId 只作为
+ * 可观测字段，不再代表优先账号。只有服务端明确返回 GoUsageLimitError
+ * 或余额不足的 401 才会把账号标记为冷却；普通的 429/5xx/网络故障既不
+ * 切换账号，也不改变轮转位置。
  */
 
 const crypto = require('crypto');
@@ -403,10 +406,16 @@ function readStateStrict(stateFile) {
             }
         }
         for (const group of Object.values(service.groups)) {
+            // rotationCursor / lastSelectedAtMs 是等权轮转新增的可选字段。
+            // 旧版状态没有它们也必须继续可读，所以只有出现时才校验类型。
             if (!group || Array.isArray(group) || typeof group !== 'object'
                     || (group.activeAccountId !== null
                         && group.activeAccountId !== undefined
-                        && typeof group.activeAccountId !== 'string')) {
+                        && typeof group.activeAccountId !== 'string')
+                    || (group.rotationCursor !== undefined
+                        && (!Number.isSafeInteger(group.rotationCursor) || group.rotationCursor < 0))
+                    || (group.lastSelectedAtMs !== undefined
+                        && (!Number.isFinite(group.lastSelectedAtMs) || group.lastSelectedAtMs < 0))) {
                 throw new LlmAccountPoolStateError(`LLM 账号池状态 group 非法，已阻止覆盖 ${stateFile}`);
             }
         }
@@ -459,55 +468,65 @@ function buildExhaustedError(service, accountIds, nowMs) {
     const suffix = earliestRetryAtMs
         ? `，最早恢复时间 ${new Date(earliestRetryAtMs).toISOString()}`
         : '';
-    return new LlmAccountPoolExhaustedError(`当前及后续 OpenCode Go 账号均不可用，禁止向前回切${suffix}`, {
-        earliestRetryAtMs,
-        blockedAccountCount: blocked.length
-    });
+    return new LlmAccountPoolExhaustedError(
+        `OpenCode Go 账号池没有可用账号（全部冷却中或已被排除）${suffix}`, {
+            earliestRetryAtMs,
+            blockedAccountCount: blocked.length
+        });
+}
+
+function getOrderedAccountIds(identity) {
+    // 轮转顺序不能依赖配置里的 key 顺序：按 accountId 稳定排序后，主账号
+    // 和任一备用账号完全同权，配置顺序不同也不会改变选择序列。
+    return [...identity.accountIds].sort();
+}
+
+function resolveRotationCursor(group, orderedAccountIds) {
+    const size = orderedAccountIds.length;
+    const stored = group?.rotationCursor;
+    if (Number.isSafeInteger(stored) && stored >= 0) return stored % size;
+    // 兼容旧版 v1 状态：旧实现只保存 activeAccountId（最后使用的账号）。
+    // 把它的排序位置当作下一个候选，使升级后的首次选择仍与旧状态连续，
+    // 随后自然进入等权轮转。
+    const activeId = group?.activeAccountId;
+    if (typeof activeId === 'string') {
+        const position = orderedAccountIds.indexOf(activeId);
+        if (position >= 0) return position;
+    }
+    return 0;
 }
 
 function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     const keys = normalizeApiKeys(apiKeys);
     const identity = getPoolIdentity(keys, endpoint);
+    const orderedAccountIds = getOrderedAccountIds(identity);
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const excluded = new Set(options.excludeAccountIds || []);
     let selection;
     updateState(stateFile, state => {
         const service = ensureService(state, identity);
-        let group = service.groups[identity.groupId];
-        const isNewGroup = !group;
-        // 追加账号不能重置已有选择。旧版 v1 分组没有有序成员关系，
-        // 所以按精确前缀身份匹配。
-        if (!group) {
-            for (let length = keys.length - 1; length > 0; length -= 1) {
-                const previous = service.groups[getPoolIdentity(keys.slice(0, length), endpoint).groupId];
-                if (previous) { group = { ...previous }; break; }
-            }
-        }
-        group ||= { activeAccountId: null, switchedAt: null };
+        const group = service.groups[identity.groupId] || { activeAccountId: null, switchedAt: null };
         service.groups[identity.groupId] = group;
         const byId = new Map(keys.map(key => [getAccountId(key), key]));
-        const activeId = group.activeAccountId;
-        if (activeId && byId.has(activeId) && !excluded.has(activeId)
-                && !accountIsBlocked(service.accounts[activeId], nowMs)) {
-            selection = { apiKey: byId.get(activeId), accountId: activeId, ...identity };
-            if (service.accounts[activeId]?.status === 'quota_blocked') {
-                service.accounts[activeId].status = 'eligible_after_reset';
-                return state;
-            }
-            return isNewGroup ? state : undefined;
+        const startIndex = resolveRotationCursor(group, orderedAccountIds);
+        // 从游标开始扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
+        // 仍在冷却中的账号（blockedUntilMs 未到）；冷却到期的账号自然重新
+        // 加入轮转。整圈都不可用时按最早恢复时间报错。
+        let selectedIndex = -1;
+        for (let step = 0; step < orderedAccountIds.length; step += 1) {
+            const index = (startIndex + step) % orderedAccountIds.length;
+            const accountId = orderedAccountIds[index];
+            if (excluded.has(accountId)) continue;
+            if (accountIsBlocked(service.accounts[accountId], nowMs)) continue;
+            selectedIndex = index;
+            break;
         }
-        // 旧实现会在配额失败时清空 active。这里从最远的已确认失败账号
-        // 恢复那个只向前推进的游标。
-        const floor = activeId ? identity.accountIds.indexOf(activeId) : Math.max(0,
-            ...identity.accountIds.map((id, index) => service.accounts[id]?.lastFailureAt ? index : 0));
-        const eligibleIds = identity.accountIds.slice(Math.max(0, floor));
-        const nextId = eligibleIds.find(id => (
-            !excluded.has(id) && !accountIsBlocked(service.accounts[id], nowMs)
-        ));
-        if (!nextId) throw buildExhaustedError(service, eligibleIds, nowMs);
+        if (selectedIndex < 0) throw buildExhaustedError(service, orderedAccountIds, nowMs);
+        const nextId = orderedAccountIds[selectedIndex];
         group.activeAccountId = nextId;
+        group.rotationCursor = (selectedIndex + 1) % orderedAccountIds.length;
+        group.lastSelectedAtMs = nowMs;
         group.switchedAt = new Date(nowMs).toISOString();
-        service.groups[identity.groupId] = group;
         if (service.accounts[nextId]?.status === 'quota_blocked') {
             service.accounts[nextId].status = 'eligible_after_reset';
         }
@@ -536,7 +555,8 @@ function markQuotaExhausted(selection, quota, stateFile, options = {}) {
             lastFailureAt: new Date(nowMs).toISOString(),
             lastFailureStatus: quota?.type === 'InsufficientBalanceError' ? 401 : 429
         };
-        // active 只向前推进；即使它被阻塞也保留。
+        // 冷却只影响账号可用性，不移动轮转游标：该账号在 selectApiKey 里已被
+        // 明确排除，下一次选择会从游标继续，冷却到期后自动重新加入轮转。
         return state;
     });
     return blockedUntilMs;

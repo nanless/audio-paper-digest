@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const { setupScriptLogging } = require('./log-setup');
+const { setupScriptLogging, writeStageSummary } = require('./log-setup');
+const { printErrorGuidance } = require('./lib/error-guidance.js');
 setupScriptLogging(__filename);
 
 /**
@@ -118,6 +119,7 @@ async function reanalyzeAll(options = {}) {
     console.log(`[reanalyze] 并发度: ${CONCURRENCY}`);
     console.log(`[reanalyze] 开始时间: ${getBeijingLocaleString()}`);
     console.log('');
+    writeStageSummary({ stage: '分析', status: 'start', message: `重新分析 ${papers.length} 篇` });
 
     // 保存中间结果的辅助函数
     const batchDate = inferAnalysisBatchDate(
@@ -230,6 +232,10 @@ async function reanalyzeAll(options = {}) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
+    writeStageSummary({
+        stage: '分析', status: 'ok',
+        message: `重新分析完成 成功 ${stats.success ?? 0} 篇，失败 ${stats.failed ?? 0} 篇`
+    });
 
     const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
@@ -286,6 +292,8 @@ if (require.main === module) {
         process.exitCode = result.exitCode;
     }).catch(err => {
         console.error('[reanalyze] 错误:', err);
+        writeStageSummary({ stage: '分析', status: 'error', message: `入口失败: ${err.message}` });
+        printErrorGuidance(err, { stage: 'reanalyze' });
         process.exitCode = 1;
     });
 }

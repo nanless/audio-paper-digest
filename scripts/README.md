@@ -411,7 +411,8 @@ npm run test:compat
 |---|---|
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |
 | `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
-| `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；尚未自动核验部署与网页。 |
+| `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。默认 `--offline` 不联网，`--network` 才探测；不写文件、不发模型请求、不打印密钥。 |
+| `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
 | `editorial-quality.js` | Node 共享：检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |
@@ -425,6 +426,9 @@ npm run test:compat
 | `lib/legacy-manual-source.js` | 只读核验旧 Manual 官方来源的日期、版本、路径和 SHA。 |
 | `lib/llm-pending-request.js` | 模型请求发起前的持久记录，防止中断后退还已预留预算。 |
 | `lib/llm-usage.js` | Node 库：规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
+| `lib/llm-usage-summary.js` | Node 库：按日期聚合真实请求用量（成功/失败、阶段/模型/账号、可用费用字段），先按目录/文件 mtime 过滤再读取，提供缓存与文本/JSON 输出。 |
+| `lib/digest-live-status.js` | Node 库：只读合成日更运行状态（阶段、数量、当前论文、失败列表、最近日志、账号池、费用、无进度提示），供 `digest:status --watch` 使用。 |
+| `lib/error-guidance.js` | Node 库：把已知错误映射成“原因、下一步、可复制命令、文档位置”，供各入口在打印原错误后追加人话指引；不改变错误码与堆栈。 |
 | `lib/model-text-sanitization.js` | Node 库：记录保留合法 Unicode 字符的请求清洗版本；生产恢复、提升和暂存核验当前来源，旧受影响输入须重分析，缺少受控来源不能推定可复用。旧成功结构和已发布只读状态不改。 |
 | `lib/paper-identity.js` | Node 库：实现 Node `paper-identity-v1` 身份规范化、官方来源 URL 检查和稳定 SHA；不替换既有 arXiv 辅助函数。 |
 | `lib/paper-source-authority.js` | Node 库：核验规范论文身份、完整身份记录、来源快照、凭证和全文 SHA，返回只含来源、且只能由实际核验过程生成的引用对象。普通磁盘 arXiv 加载器不能恢复发布授权；会议路径还要求当前进程持有实际核验生成的计划引用对象。 |
@@ -436,12 +440,13 @@ npm run test:compat
 | `lib/source-classification-scheduler.js` | Node 库：以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |
 | `lib/source-evidence-snippets.js` | Node 库：`buildSourceEvidenceSnippets` 按字符预算提取并编号连续原文片段；`fillConceptQuotesFromSnippets` 按模型选择的编号填入原文引文。保留原始空白及 UTF16 位置，拒绝未知编号。 |
 | `lib/workflow-implementation-files.js` | 静态收集实际可执行传递依赖，供当前实现指纹核验。 |
-| `llm-account-pool.js` | 管理 Node OpenCode Go 账号池，持续使用成功账号，识别额度错误，并保存跨进程账号状态。 |
+| `llm-account-pool.js` | 管理 Node OpenCode Go 账号池：同一池内所有 key 等权，按账号 ID 稳定排序轮转，跳过已排除或冷却未到期账号，冷却到期自动回归；只在明确额度/余额错误时切换，并保存跨进程轮转与冷却状态。 |
 | `llm-usage-report.js` | 只读汇总真实请求用量；`--paper` 支持新旧 arXiv ID 和完整会议论文 ID。区分服务提供的 usage、不可得状态和字符估算，不推算未经证实的费用；旧记录缺失的论文身份不能自动补回。 |
-| `llm_account_pool.py` | 按与 Node 相同的数据格式和锁协议管理 OpenCode Go 账号池。 |
+| `llm_account_pool.py` | 按与 Node 相同的等权轮转语义、数据格式和锁协议管理 OpenCode Go 账号池。 |
 | `llm_usage.py` | 记录 Python 发布请求的用量与失败事件，沿用跨运行请求归因格式。 |
-| `log-setup.js` | 记录 Node 终端和文件日志，加时间戳，并对敏感信息脱敏。 |
-| `log_setup.py` | 统一 Python 日志并脱敏。 |
+| `log-setup.js` | 记录 Node 终端和文件日志，加时间戳，并对敏感信息脱敏；`writeStageSummary` 追加人话阶段摘要到 `logs/summaries/<date>-summary.log`（0700/0600、脱敏、失败降级）。 |
+| `log_setup.py` | 统一 Python 日志并脱敏；`write_stage_summary` 写与 Node 同格式的阶段摘要文件。 |
+| `lib/error_guidance.py` | Python 库：与 Node 对应的错误“下一步”指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈。 |
 | `manual_agent_policy.py` | Python 共享：按可信外层规则核对 Manual 新旧模型身份；当前声明要求 Sol/high 与对应版本，旧记录保留原身份，新声明不能借旧模型规则绕过检查。只验证记录字段，不证明远端模型实际执行。 |
 | `paper_identity.py` | 实现与 Node 相同的 `paper-identity-v1`，用共享测试向量核对身份与 SHA 结果。 |
 | `path_config.py` | 定义 Python 共享路径、日期与原子写入配置。 |

@@ -151,6 +151,14 @@ npm run storage:prune -- --apply
 
 JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前整批阻断。本机锁持有者 PID 存活，或远端/非法持有者无法可靠判活时，同样拒绝删除；清理器不替调用者删锁。它会复扫引用与候选，但扫描和删除之间没有所有写入者共用的事务锁，仍可能发生竞态，因此 `--apply` 前停写是必要条件。预览可以报告这些阻断，不能把预览成功当成删除授权。
 
+## 运行前体检、运行中状态与错误指引
+
+开跑前运行 `npm run doctor -- --offline` 做只读体检：Node/Python、依赖、`.env` 权限与模型配置、HTTP CONNECT 代理、工作区角色、`data/current`/`data/runtime`/`logs` 占用、博客仓库未提交改动与目标日重叠、账号池冷却情况。默认不联网；加 `--network` 才用项目代理对 arXiv Atom/官方 OAI/RSS 各探测一次，并按 RSS `pubDate` 判断目标日公告是否已生成。任何 ❌ 项会给出可复制的下一条命令并返回非零退出码；命令不写文件、不发模型请求、不打印密钥。
+
+运行中用 `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒刷新，`--interval N` 可调，`--json --watch` 每行一个 JSON）查看阶段、数量、失败列表、最近日志、账号池可用数、本次费用和无进度提示；默认不带 `--watch` 时输出与原来一致。费用按日期聚合 `data/runtime/llm-usage`，不联网、不推算未记录的费用。
+
+Node 与 Python 入口在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
+
 ## 验证矩阵
 
 用户明确要求从原文重写既有日批次或全部历史页面时，使用 [当前历史计划流程](history-rewrite.md)：冻结页面范围，核验会议本地元数据/PDF，按明确获取序号封存 arXiv 官方文本/PDF。备用 `history:arxiv-batch` 仅接受本次官方获取失败保存的命名交接；普通 `reanalyze`、Reader 刷新或清除 analysis 字段不能替代完整历史范围与来源证明。

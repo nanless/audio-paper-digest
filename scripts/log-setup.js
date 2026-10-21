@@ -379,6 +379,173 @@ function closeScriptLogging() {
     return activeLogger ? activeLogger.close() : Promise.resolve();
 }
 
+const STAGE_SUMMARY_STATUS_LABELS = Object.freeze({
+    start: '开始',
+    ok: '完成',
+    warn: '注意',
+    error: '失败'
+});
+const STAGE_SUMMARY_MESSAGE_MAX_CHARS = 500;
+const STAGE_SUMMARY_DIR_MODE = 0o700;
+const STAGE_SUMMARY_FILE_MODE = 0o600;
+
+function stageSummaryLineText(value) {
+    return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function redactStageSummaryText(value) {
+    let text = String(value ?? '');
+    for (const secret of configuredSecrets) {
+        if (secret && text.includes(secret)) text = text.split(secret).join('[REDACTED]');
+    }
+    // 阶段摘要只按已知密钥形态做定向替换，避免把整行「人话」消息吞掉。
+    text = text.replace(/oc_sk_[A-Za-z0-9_-]+/g, '[REDACTED]');
+    text = text.replace(
+        /([A-Za-z0-9_-]*api[-_ ]?keys?)\s*=\s*[^\s&;,。，；;]+/gi,
+        '$1=[REDACTED]'
+    );
+    text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
+    text = text.replace(/\bsk-[A-Za-z0-9._-]{3,}/gi, '[REDACTED]');
+    return text;
+}
+
+function truncateStageSummaryText(text, maxChars = STAGE_SUMMARY_MESSAGE_MAX_CHARS) {
+    const chars = Array.from(String(text ?? ''));
+    if (chars.length <= maxChars) return chars.join('');
+    return `${chars.slice(0, Math.max(maxChars - 1, 0)).join('')}…`;
+}
+
+function normalizeStageSummaryStatus(status) {
+    const raw = stageSummaryLineText(status).toLowerCase();
+    if (Object.prototype.hasOwnProperty.call(STAGE_SUMMARY_STATUS_LABELS, raw)) {
+        return { status: raw, warning: null };
+    }
+    return {
+        status: 'error',
+        warning: `阶段摘要 status 非法：「${stageSummaryLineText(status)}」，按 error 处理`
+    };
+}
+
+function stageSummaryDate(now) {
+    const values = getBeijingTimeParts(now);
+    return `${values.year}-${values.month}-${values.day}`;
+}
+
+function stageSummaryTimestamp(now) {
+    const values = getBeijingTimeParts(now);
+    return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;
+}
+
+function resolveStageSummaryNow(now) {
+    if (now instanceof Date) return Number.isNaN(now.getTime()) ? new Date() : now;
+    if (typeof now === 'number' && Number.isFinite(now)) return new Date(now);
+    if (typeof now === 'string' && now.trim()) {
+        const parsed = new Date(now);
+        if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    return new Date();
+}
+
+function resolveStageSummaryDate(date, fallbackNow) {
+    if (date instanceof Date && !Number.isNaN(date.getTime())) return stageSummaryDate(date);
+    const text = stageSummaryLineText(date);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    if (text) {
+        const parsed = new Date(text);
+        if (!Number.isNaN(parsed.getTime())) return stageSummaryDate(parsed);
+    }
+    return stageSummaryDate(fallbackNow);
+}
+
+function formatStageSummaryElapsed(elapsedMs) {
+    if (elapsedMs === undefined || elapsedMs === null || typeof elapsedMs === 'boolean' || elapsedMs === '') {
+        return '';
+    }
+    const value = Number(elapsedMs);
+    if (!Number.isFinite(value) || value < 0) return '';
+    const tenths = Math.round(value / 100);
+    return tenths % 10 === 0 ? `${tenths / 10}s` : `${(tenths / 10).toFixed(1)}s`;
+}
+
+function stageSummaryExtraText(extra) {
+    if (extra === undefined || extra === null) return '';
+    if (typeof extra === 'string') return stageSummaryLineText(extra);
+    if (typeof extra === 'number') return Number.isFinite(extra) ? String(extra) : '';
+    if (typeof extra === 'boolean') return String(extra);
+    try {
+        return stageSummaryLineText(JSON.stringify(extra));
+    } catch (_) {
+        return '';
+    }
+}
+
+function buildStageSummaryLine(options = {}) {
+    const now = resolveStageSummaryNow(options.now);
+    const normalizedStatus = normalizeStageSummaryStatus(options.status);
+    const stage = truncateStageSummaryText(redactStageSummaryText(stageSummaryLineText(options.stage)))
+        || '未命名阶段';
+    const message = truncateStageSummaryText(
+        redactStageSummaryText(stageSummaryLineText(options.message))
+    );
+    const elapsed = formatStageSummaryElapsed(options.elapsedMs);
+    const extra = truncateStageSummaryText(
+        redactStageSummaryText(stageSummaryExtraText(options.extra))
+    );
+    const line = [
+        `[${stageSummaryTimestamp(now)}]`,
+        `[阶段 ${stage}]`,
+        STAGE_SUMMARY_STATUS_LABELS[normalizedStatus.status],
+        message,
+        elapsed ? `用时 ${elapsed}` : '',
+        extra
+    ].filter(field => field !== '').join(' ');
+    return {
+        line,
+        status: normalizedStatus.status,
+        warning: normalizedStatus.warning,
+        date: resolveStageSummaryDate(options.date, now)
+    };
+}
+
+function ensureStageSummaryDir(dirPath) {
+    fs.mkdirSync(dirPath, { recursive: true, mode: STAGE_SUMMARY_DIR_MODE });
+    if (process.platform !== 'win32') fs.chmodSync(dirPath, STAGE_SUMMARY_DIR_MODE);
+}
+
+function appendStageSummaryLine(filePath, line) {
+    fs.appendFileSync(filePath, `${line}\n`, { encoding: 'utf8', mode: STAGE_SUMMARY_FILE_MODE });
+    // appendFileSync 的 mode 只在新建文件时生效；已有文件要显式收紧。
+    if (process.platform !== 'win32') fs.chmodSync(filePath, STAGE_SUMMARY_FILE_MODE);
+}
+
+/**
+ * 往 logs/summaries/<YYYY-MM-DD>-summary.log 追加一行「人话」阶段摘要。
+ * 写日志是旁路能力：任何失败都只 console.warn，不向业务层抛错。
+ * 返回 { filePath, line, status }；写入失败返回 null。
+ */
+function writeStageSummary(options = {}) {
+    const safeOptions = options && typeof options === 'object' ? options : {};
+    const built = buildStageSummaryLine(safeOptions);
+    if (built.warning) console.warn(`[log] ${built.warning}`);
+    const logsDir = safeOptions.logsDir
+        ? path.resolve(String(safeOptions.logsDir))
+        : path.join(__dirname, '..', 'logs', 'summaries');
+    const filePath = path.join(logsDir, `${built.date}-summary.log`);
+    try {
+        ensureStageSummaryDir(logsDir);
+        appendStageSummaryLine(filePath, built.line);
+        return { filePath, line: built.line, status: built.status };
+    } catch (error) {
+        try {
+            const detail = redactStageSummaryText(error?.message ?? String(error));
+            console.warn(`[log] 阶段摘要写入失败: ${detail}`);
+        } catch (_) {
+            // 连警告都失败时也不能打断业务调用方。
+        }
+        return null;
+    }
+}
+
 module.exports = {
     setupScriptLogging,
     closeScriptLogging,
@@ -389,6 +556,7 @@ module.exports = {
     formatLogTimestamp,
     timestampLogLines,
     pruneLogFiles,
+    writeStageSummary,
     DEFAULT_LOG_RETENTION_DAYS,
     DEFAULT_LOG_MAX_TOTAL_BYTES,
     ACTIVE_LOG_GRACE_MS

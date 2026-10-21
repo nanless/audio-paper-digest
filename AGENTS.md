@@ -39,11 +39,13 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ## 运行前六项检查
 
+开跑前可先运行 `npm run doctor -- --offline` 做只读体检（环境、Python、模型配置、代理、账号池、磁盘、博客仓库、来源入口；默认不联网，需探测 arXiv 时用 `--network`）。体检通过后再逐项核对：
+
 0. 先运行 `npm run workspace:role -- status`。当前目录必须是 `daily`，历史命令须通过已配置的跨角色开关运行；角色标记缺失或真实路径不匹配时先停止，确认工作区用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定。
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    npm 中的 Python 命令还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，加载器会将文件权限收紧为 `0600`。
-3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；用户已指定后续论文 LLM 统一使用 `muse-spark-1.3-contributor`，主、副模型配置均须核对；实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 为同一路由提供备用账号；切换后持续使用成功账号，不能代替副模型配置。
+3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；用户已指定后续论文 LLM 统一使用 `muse-spark-1.3-contributor`，主、副模型配置均须核对；实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 与其他备用账号配置会合并成同一路由的等权账号池，顺序不代表优先级，不能代替副模型配置。
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败，当前统一使用的 `muse-spark-1.3-contributor` 必须走该代理。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
@@ -91,7 +93,7 @@ npm run digest:prepare -- YYYY-MM-DD
 - Node CONNECT 与 TLS 握手共用 60 秒有效时间预算；长时间系统挂起或同步核验阻塞不按网络等待计时，连续短停顿仍累计。日志中的“挂起”不能单独证明系统睡眠；结合系统电源记录、进程执行和实际响应诊断。真实超时仍停止新派发并保存结果，不原样反复重启。
 - 请求开始与终态用同一 `eventId` 留账；终态或 Reader 采用记录保存失败停止新派发，保全真实已返回内容，不返还已发次数。私有异常响应目录受保护；完全无法保存时须明确报告，不能声称恢复材料已落盘，见[费用故障](docs/troubleshooting.md#费用记录保存失败)。
 - 兼容的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，按直连处理，不复用上面的代理设置。
-- OpenCode Go 账号池：成功时持续使用当前账号。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才在同一逻辑请求内按配置顺序向后切换，并保存冷却状态；不返回前面已冷却的账号。普通认证 401 会停止本次运行，不切换账号；普通 429、5xx、网络错误、输出截断和正文校验失败也不得切换。全部后续账号不可用时保存断点并停止新请求，避免整批论文反复遭遇同一服务故障。
+- OpenCode Go 账号池：同一池内所有 key 同权，不再区分主账号与 fallback。选择按账号 ID 的稳定排序做轮转（round-robin），跳过已排除账号和当前冷却未到期的账号；冷却到期后自动重新加入轮转。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才允许在同一逻辑请求内切换账号并保存冷却状态，同一逻辑请求内每个账号至多尝试一次。普通认证 401 会停止本次运行，不切换账号；普通 429、5xx、网络错误、输出截断和正文校验失败也不得切换。全部账号不可用时保存断点并停止新请求，避免整批论文反复遭遇同一服务故障。
 - 认证故障排查须核对完整配置账号池，不能因一个账号的 401 就要求用户更新全部凭据。生产停止后，在独立诊断中逐个账号使用声明的真实路由、模型及代理发送最小请求，每个账号每条路由一次，不在论文请求内自动绕过认证故障。诊断受持续付费授权覆盖，正常记录用量；密钥、认证头及稳定凭据指纹不得展示。区分认证失败、配额耗尽、传输故障与真实成功；HTTP 200 截断只证明请求被接受，选用账号后还须确认完整响应。实际有可用账号就备份原配置、同步主副配置后继续，保留原账号池冷却及历史，不先让用户重新提供密钥。
 - 其他 LLM：默认以 `agent:false` 直连，防止误用 Muse 的代理设置影响 MiMo/Kimi。
 - arXiv 元数据、HTML、PDF、图片：强制项目 HTTP CONNECT。

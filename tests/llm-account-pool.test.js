@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const {
+    LlmAccountPoolExhaustedError,
     LlmAccountPoolLockTimeoutError,
     LlmAccountPoolStateError,
     POLICY_VERSION,
@@ -29,45 +30,317 @@ function tempState() {
     return { dir, file: path.join(dir, 'llm-account-pool.json') };
 }
 
-describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
-    it('追加账号后继续使用第三个账号，旧冷却过期也不向前面的账号切换', () => {
-        const { file } = tempState();
-        const keys = ['a', 'b', 'c'];
-        for (const nowMs of [1000, 1100]) {
-            const selected = selectApiKey(keys, ENDPOINT, file, { nowMs });
-            markQuotaExhausted(selected, { blockedUntilMs: 2200 }, file, { nowMs });
+// 等权轮转的权威顺序：账号 ID 的稳定排序，与配置里的 key 顺序无关。
+function orderedAccountIds(keys) {
+    return [...getPoolIdentity(keys, ENDPOINT).accountIds].sort();
+}
+
+function expectedKeyOrder(keys) {
+    const byId = new Map(keys.map(key => [getAccountId(key), key]));
+    return orderedAccountIds(keys).map(accountId => byId.get(accountId));
+}
+
+function selectionFor(keys, apiKey) {
+    return { apiKey, accountId: getAccountId(apiKey), ...getPoolIdentity(keys, ENDPOINT) };
+}
+
+function readGroup(file, keys) {
+    const identity = getPoolIdentity(keys, ENDPOINT);
+    return readStateStrict(file).services[identity.serviceId].groups[identity.groupId];
+}
+
+function writeLegacyState(file, keys, activeAccountId) {
+    const identity = getPoolIdentity(keys, ENDPOINT);
+    fs.writeFileSync(file, JSON.stringify({
+        schemaVersion: 1,
+        policyVersion: POLICY_VERSION,
+        generation: 3,
+        services: {
+            [identity.serviceId]: {
+                endpoint: identity.service,
+                accounts: {},
+                groups: {
+                    [identity.groupId]: {
+                        activeAccountId,
+                        switchedAt: new Date(1000).toISOString()
+                    }
+                }
+            }
         }
-        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 }).apiKey, 'c');
-        keys.push('d');
-        const third = selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 });
-        assert.strictEqual(third.apiKey, 'c');
-        markQuotaExhausted(third, { blockedUntilMs: 5000 }, file, { nowMs: 3000 });
-        const fourth = selectApiKey(keys, ENDPOINT, file, { nowMs: 3001 });
-        assert.strictEqual(fourth.apiKey, 'd');
-        markQuotaExhausted(fourth, { blockedUntilMs: 6000 }, file, { nowMs: 3001 });
-        assert.throws(() => selectApiKey(keys, ENDPOINT, file, { nowMs: 3002 }),
-            error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED' && error.scope === 'run');
+    }, null, 2), { mode: 0o600 });
+    return identity;
+}
+
+describe('OpenCode Go 账号池的等权轮转状态', () => {
+    it('三个账号按账号 ID 的稳定顺序依次轮转', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
+        const picks = [];
+        for (let index = 0; index < 7; index += 1) {
+            picks.push(selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 + index }).apiKey);
+        }
+        assert.deepStrictEqual(picks, [
+            expected[0], expected[1], expected[2],
+            expected[0], expected[1], expected[2], expected[0]
+        ]);
+        const group = readGroup(file, keys);
+        assert.strictEqual(group.activeAccountId, getAccountId(expected[0]));
+        assert.strictEqual(group.rotationCursor, 1);
+        assert.strictEqual(group.lastSelectedAtMs, 1006);
+        assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
+        // activeAccountId 只作可观测字段：下一次仍按游标继续，而不是一直用它。
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 }).apiKey, expected[1]);
     });
 
-    it('Node 与 Python 共用追加后的账号集合，第三个账号额度耗尽后使用第四个', () => {
-        const { file } = tempState();
-        const keys = ['a', 'b', 'c'];
-        for (const nowMs of [1000, 1100]) {
-            markQuotaExhausted(selectApiKey(keys, ENDPOINT, file, { nowMs }),
-                { blockedUntilMs: 2200 }, file, { nowMs });
+    it('key 列表顺序打乱后选择序列等价，主账号不再优先', () => {
+        const permutations = [
+            ['key-a', 'key-b', 'key-c'],
+            ['key-c', 'key-b', 'key-a'],
+            ['key-b', 'key-a', 'key-c']
+        ];
+        const expected = orderedAccountIds(permutations[0]);
+        const sequences = permutations.map(keys => {
+            const { file } = tempState();
+            return Array.from({ length: 6 }, (unused, index) => (
+                selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 + index }).accountId
+            ));
+        });
+        for (const sequence of sequences) {
+            assert.deepStrictEqual(sequence, [
+                expected[0], expected[1], expected[2],
+                expected[0], expected[1], expected[2]
+            ]);
         }
-        selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 });
-        const script = [
-            'import sys',
-            `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
-            'from llm_account_pool import select_api_key, mark_quota_exhausted',
-            `s=select_api_key(['a','b','c','d'], ${JSON.stringify(ENDPOINT)}, sys.argv[1], now_ms=3000)`,
-            "assert s['api_key']=='c'",
-            "mark_quota_exhausted(s, {'blocked_until_ms': 9000}, sys.argv[1], now_ms=3000)"
-        ].join('; ');
-        const result = spawnSync(process.env.PD_PYTHON_BIN || 'python3', ['-c', script, file], { encoding: 'utf8' });
-        assert.strictEqual(result.status, 0, result.stderr);
-        assert.strictEqual(selectApiKey([...keys, 'd'], ENDPOINT, file, { nowMs: 3001 }).apiKey, 'd');
+        // 主账号/备用账号配置顺序不同（甚至反序）也得到同一账号集合与序列。
+        const primary = resolvePrimaryApiKeyPool('key-a', 'key-b', 'key-c');
+        const reversed = resolveApiKeyPool('key-c', 'key-a,key-b');
+        const first = tempState();
+        const second = tempState();
+        assert.strictEqual(
+            selectApiKey(primary, ENDPOINT, first.file, { nowMs: 1000 }).accountId,
+            selectApiKey(reversed, ENDPOINT, second.file, { nowMs: 1000 }).accountId
+        );
+        assert.deepStrictEqual(
+            expectedKeyOrder(reversed),
+            expectedKeyOrder(primary)
+        );
+    });
+
+    it('冷却中的账号被跳过，冷却到期后重新回到轮转', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
+        const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
+        assert.strictEqual(first.apiKey, expected[0]);
+        markQuotaExhausted(first, { blockedUntilMs: 5000 }, file, { nowMs: 1000 });
+
+        const duringCooldown = [];
+        for (const nowMs of [1001, 1002, 1003, 1004]) {
+            duringCooldown.push(selectApiKey(keys, ENDPOINT, file, { nowMs }).apiKey);
+        }
+        assert.deepStrictEqual(duringCooldown, [
+            expected[1], expected[2], expected[1], expected[2]
+        ]);
+
+        const resumed = selectApiKey(keys, ENDPOINT, file, { nowMs: 5000 });
+        assert.strictEqual(resumed.apiKey, expected[0]);
+        const identity = getPoolIdentity(keys, ENDPOINT);
+        const record = readStateStrict(file).services[identity.serviceId].accounts[getAccountId(expected[0])];
+        assert.strictEqual(record.status, 'eligible_after_reset');
+    });
+
+    it('同一逻辑请求内 exclude 后每个账号最多尝试一次', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
+        const attempted = [];
+        const excludeAccountIds = [];
+        for (let index = 0; index < keys.length; index += 1) {
+            const selection = selectApiKey(keys, ENDPOINT, file, {
+                nowMs: 1000 + index,
+                excludeAccountIds
+            });
+            excludeAccountIds.push(selection.accountId);
+            attempted.push(selection.apiKey);
+            markQuotaExhausted(selection, { blockedUntilMs: 9000 }, file, { nowMs: 1000 + index });
+        }
+        assert.deepStrictEqual(attempted, expected);
+        assert.throws(() => selectApiKey(keys, ENDPOINT, file, {
+            nowMs: 1005,
+            excludeAccountIds
+        }), error => error instanceof LlmAccountPoolExhaustedError
+            && error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED');
+    });
+
+    it('账号都没冷却但全部被本请求排除时，立即报耗尽且不写阻塞记录', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const ordered = orderedAccountIds(keys);
+        const { file } = tempState();
+        assert.throws(() => selectApiKey(keys, ENDPOINT, file, {
+            nowMs: 1000,
+            excludeAccountIds: ordered
+        }), error => {
+            assert.ok(error instanceof LlmAccountPoolExhaustedError);
+            assert.strictEqual(error.code, 'LLM_ACCOUNT_POOL_EXHAUSTED');
+            assert.strictEqual(error.earliestRetryAtMs, null);
+            assert.strictEqual(error.blockedAccountCount, 0);
+            assert.match(error.message, /没有可用账号/);
+            return true;
+        });
+        const identity = getPoolIdentity(keys, ENDPOINT);
+        const service = readStateStrict(file).services[identity.serviceId];
+        assert.deepStrictEqual(service?.accounts ?? {}, {});
+    });
+
+    it('全部账号冷却时报耗尽错误并保留最早恢复时间', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const expected = expectedKeyOrder(keys);
+        const blockedUntilValues = [6000, 4000, 8000];
+        const { file } = tempState();
+        for (let index = 0; index < keys.length; index += 1) {
+            markQuotaExhausted(selectionFor(keys, expected[index]), {
+                blockedUntilMs: blockedUntilValues[index]
+            }, file, { nowMs: 1000 });
+        }
+        assert.throws(() => selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 }), error => {
+            assert.ok(error instanceof LlmAccountPoolExhaustedError);
+            assert.strictEqual(error.code, 'LLM_ACCOUNT_POOL_EXHAUSTED');
+            assert.strictEqual(error.scope, 'run');
+            assert.strictEqual(error.category, 'quota_exhausted');
+            assert.strictEqual(error.retryable, false);
+            assert.strictEqual(error.earliestRetryAtMs, 4000);
+            assert.strictEqual(error.blockedAccountCount, 3);
+            assert.ok(error.message.includes(new Date(4000).toISOString()));
+            return true;
+        });
+        // 最早恢复时间一过，该账号重新加入轮转。
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 4001 }).apiKey, expected[1]);
+    });
+
+    it('旧状态只有 activeAccountId 时按其排序位置推导游标', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const expected = expectedKeyOrder(keys);
+        const ordered = orderedAccountIds(keys);
+        const { file } = tempState();
+        writeLegacyState(file, keys, ordered[1]);
+
+        const legacyState = readStateStrict(file);
+        assert.strictEqual(legacyState.policyVersion, POLICY_VERSION);
+        assert.strictEqual(legacyState.generation, 3);
+
+        // 升级后的首次选择与旧 active 连续，随后自然进入等权轮转。
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 }).apiKey, expected[1]);
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 2001 }).apiKey, expected[2]);
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 2002 }).apiKey, expected[0]);
+        const group = readGroup(file, keys);
+        assert.strictEqual(group.activeAccountId, getAccountId(expected[0]));
+        assert.strictEqual(group.rotationCursor, 1);
+    });
+
+    it('旧状态的 active 账号仍在冷却时按轮转跳过它', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const expected = expectedKeyOrder(keys);
+        const ordered = orderedAccountIds(keys);
+        const { file } = tempState();
+        writeLegacyState(file, keys, ordered[0]);
+        markQuotaExhausted(selectionFor(keys, expected[0]), { blockedUntilMs: 5000 }, file, { nowMs: 1000 });
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 }).apiKey, expected[1]);
+    });
+
+    it('旧状态里的 activeAccountId 不在当前账号集合时从头开始轮转', () => {
+        const keys = ['key-alpha', 'key-beta'];
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
+        writeLegacyState(file, keys, 'f'.repeat(64));
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 }).apiKey, expected[0]);
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 1001 }).apiKey, expected[1]);
+    });
+
+    it('追加账号后新分组从稳定顺序的第一个账号重新轮转', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const { file } = tempState();
+        selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
+        selectApiKey(keys, ENDPOINT, file, { nowMs: 1001 });
+        const appended = [...keys, 'key-delta'];
+        const expectedAppended = expectedKeyOrder(appended);
+        // 追加账号建立新分组，不再继承旧分组的 active/cursor；新分组 cursor=0。
+        assert.strictEqual(
+            selectApiKey(appended, ENDPOINT, file, { nowMs: 1002 }).apiKey,
+            expectedAppended[0]
+        );
+        assert.strictEqual(
+            selectApiKey(appended, ENDPOINT, file, { nowMs: 1003 }).apiKey,
+            expectedAppended[1]
+        );
+        const identity = getPoolIdentity(keys, ENDPOINT);
+        const appendedIdentity = getPoolIdentity(appended, ENDPOINT);
+        const state = readStateStrict(file);
+        assert.ok(state.services[identity.serviceId].groups[identity.groupId]);
+        assert.ok(state.services[identity.serviceId].groups[appendedIdentity.groupId]);
+    });
+
+    it('同一账号集合的不同排列共享同一轮转游标', () => {
+        const primary = resolvePrimaryApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
+        const ordered = expectedKeyOrder(primary);
+        const orderedIds = orderedAccountIds(primary);
+        const { file } = tempState();
+        const chosen = selectApiKey(primary, ENDPOINT, file, {
+            nowMs: 1000,
+            excludeAccountIds: orderedIds.slice(0, 3)
+        });
+        assert.strictEqual(chosen.accountId, getAccountId(ordered[3]));
+        // 不排除时继续轮转回序号 0，而不是粘住刚选中的第四个账号。
+        assert.strictEqual(selectApiKey(primary, ENDPOINT, file, { nowMs: 2000 }).apiKey, ordered[0]);
+        // key 列表打乱后仍沿用同一个共享游标。
+        const shuffled = [primary[2], primary[0], primary[3], primary[1]];
+        assert.strictEqual(selectApiKey(shuffled, ENDPOINT, file, { nowMs: 3000 }).apiKey, ordered[1]);
+
+        const identity = getPoolIdentity(primary, ENDPOINT);
+        const state = readStateStrict(file);
+        assert.deepStrictEqual(state.services[identity.serviceId].accounts, {});
+        for (const key of primary) assert.ok(!fs.readFileSync(file, 'utf8').includes(key));
+    });
+
+    it('新增的可选轮转字段通过严格校验，非法值被拒绝', () => {
+        const keys = ['a', 'b'];
+        const identity = getPoolIdentity(keys, ENDPOINT);
+        const buildState = group => JSON.stringify({
+            schemaVersion: 1,
+            policyVersion: POLICY_VERSION,
+            generation: 1,
+            services: {
+                [identity.serviceId]: {
+                    endpoint: identity.service,
+                    accounts: {},
+                    groups: { [identity.groupId]: group }
+                }
+            }
+        });
+        const { dir, file } = tempState();
+        fs.writeFileSync(file, buildState({
+            activeAccountId: null,
+            rotationCursor: 1,
+            lastSelectedAtMs: 1234
+        }), { mode: 0o600 });
+        assert.strictEqual(readStateStrict(file).generation, 1);
+
+        const invalidGroups = [
+            { rotationCursor: -1 },
+            { rotationCursor: 1.5 },
+            { rotationCursor: '1' },
+            { lastSelectedAtMs: -1 },
+            { lastSelectedAtMs: 'yesterday' }
+        ];
+        invalidGroups.forEach((group, index) => {
+            const invalidFile = path.join(dir, `invalid-group-${index}.json`);
+            fs.writeFileSync(invalidFile, buildState({ activeAccountId: null, ...group }), { mode: 0o600 });
+            assert.throws(
+                () => readStateStrict(invalidFile),
+                error => error instanceof LlmAccountPoolStateError
+                    && error.code === 'LLM_ACCOUNT_POOL_STATE_ERROR'
+            );
+        });
     });
 
     it('只有官方 Go 的精确 401 才算余额不足，普通失败一律不算', () => {
@@ -128,22 +401,6 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         );
     });
 
-    it('人工选定第四个账号后，匹配的主账号和备用账号列表继续使用它', () => {
-        const { file } = tempState();
-        const primary = resolvePrimaryApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
-        const secondary = resolveApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
-        const chosen = selectApiKey(primary, ENDPOINT, file, {
-            excludeAccountIds: primary.slice(0, 3).map(getAccountId), nowMs: 1000
-        });
-        assert.equal(chosen.accountId, getAccountId(primary[3]));
-        assert.equal(selectApiKey(primary, ENDPOINT, file, { nowMs: 2000 }).accountId, chosen.accountId);
-        assert.equal(selectApiKey(secondary, 'https://opencode.ai/zen/go/v1/responses', file,
-            { nowMs: 3000 }).accountId, chosen.accountId);
-        const state = readStateStrict(file);
-        assert.deepEqual(state.services[chosen.serviceId].accounts, {});
-        for (const key of primary) assert.ok(!fs.readFileSync(file, 'utf8').includes(key));
-    });
-
     it('拒绝带凭证或被改写查询串的 OpenCode 端点', () => {
         for (const endpoint of [
             'https://user:pass@opencode.ai/zen/go/v1',
@@ -175,22 +432,23 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         }
     });
 
-    it('一个账号保持生效，直到它自己被额度阻塞', () => {
-        const { file } = tempState();
+    it('账号被额度阻塞后按轮转使用下一个账号，冷却到期再回到轮转', () => {
         const keys = resolveApiKeyPool('account-a-secret', 'account-b-secret');
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
         const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
-        assert.strictEqual(first.apiKey, 'account-a-secret');
+        assert.strictEqual(first.apiKey, expected[0]);
 
         markQuotaExhausted(first, {
             limitName: '5-hour rolling',
             blockedUntilMs: 2000
         }, file, { nowMs: 1000 });
         const second = selectApiKey(keys, ENDPOINT, file, { nowMs: 1100 });
-        assert.strictEqual(second.apiKey, 'account-b-secret');
+        assert.strictEqual(second.apiKey, expected[1]);
 
-        // A 已经恢复，但之前成功的 B 仍然保持选中，不会切回去。
-        const stillSecond = selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 });
-        assert.strictEqual(stillSecond.apiKey, 'account-b-secret');
+        // A 冷却到期后重新加入轮转，而不是固定粘住 B。
+        const recovered = selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 });
+        assert.strictEqual(recovered.apiKey, expected[0]);
         const raw = fs.readFileSync(file, 'utf8');
         assert.ok(!raw.includes('account-a-secret'));
         assert.ok(!raw.includes('account-b-secret'));
@@ -198,16 +456,20 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
     });
 
-    it('只有第一个账号和普通备用账号都被额度阻塞后才使用第三个账号', () => {
-        const { file } = tempState();
+    it('账号冷却期间按稳定顺序在两个可用账号之间轮转', () => {
         const keys = resolvePrimaryApiKeyPool('account-a-secret', 'account-b-secret', 'account-c-secret');
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
         const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
+        assert.strictEqual(first.apiKey, expected[0]);
         markQuotaExhausted(first, { limitName: 'quota', blockedUntilMs: 9000 }, file, { nowMs: 1000 });
-        const second = selectApiKey(keys, ENDPOINT, file, { nowMs: 1100 });
-        assert.strictEqual(second.apiKey, 'account-b-secret');
-        markQuotaExhausted(second, { limitName: 'quota', blockedUntilMs: 9000 }, file, { nowMs: 1100 });
-        const third = selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 });
-        assert.strictEqual(third.apiKey, 'account-c-secret');
+        const picks = [];
+        for (const nowMs of [1100, 1200, 1300, 1400]) {
+            picks.push(selectApiKey(keys, ENDPOINT, file, { nowMs }).apiKey);
+        }
+        assert.deepStrictEqual(picks, [
+            expected[1], expected[2], expected[1], expected[2]
+        ]);
     });
 
     it('只有明确的 GoUsageLimitError 才算额度耗尽', () => {
@@ -336,23 +598,6 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         } finally {
             release();
         }
-    });
-
-    it('该账号再次被选中时，已过期的额度记录重新算可用', () => {
-        const { file } = tempState();
-        const keys = ['account-a', 'account-b'];
-        const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
-        markQuotaExhausted(first, { blockedUntilMs: 2000 }, file, { nowMs: 1000 });
-        const second = selectApiKey(keys, ENDPOINT, file, { nowMs: 1100 });
-        markQuotaExhausted(second, { blockedUntilMs: 4000 }, file, { nowMs: 3000 });
-
-        assert.throws(() => selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 }),
-            error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED' && error.scope === 'run');
-        const recovered = selectApiKey(keys, ENDPOINT, file, { nowMs: 4001 });
-        assert.strictEqual(recovered.apiKey, 'account-b');
-        const state = readStateStrict(file);
-        const service = state.services[recovered.serviceId];
-        assert.strictEqual(service.accounts[recovered.accountId].status, 'eligible_after_reset');
     });
 
     it('状态损坏时直接失败，不覆盖', () => {
@@ -491,17 +736,15 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         const { file } = tempState();
         const firstGroup = ['a', 'b'];
         const secondGroup = ['a', 'c'];
-        const selection = selectApiKey(firstGroup, ENDPOINT, file, { nowMs: 1000 });
-        markQuotaExhausted(selection, { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
+        markQuotaExhausted(selectionFor(firstGroup, 'a'), { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
         assert.strictEqual(selectApiKey(secondGroup, ENDPOINT, file, { nowMs: 2000 }).apiKey, 'c');
-        assert.ok(readStateStrict(file).generation >= 3);
+        assert.ok(readStateStrict(file).generation >= 2);
         assert.ok(getAccountId('a') in Object.values(readStateStrict(file).services)[0].accounts);
     });
 
-    it('保存账号状态后，Python 发布端与 Node 继续选择同一个可用账号', () => {
+    it('Node 写入的账号阻塞状态可被 Python 发布端读取并遵守', () => {
         const { file } = tempState();
-        const first = selectApiKey(['a', 'b'], ENDPOINT, file, { nowMs: 1000 });
-        markQuotaExhausted(first, { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
+        markQuotaExhausted(selectionFor(['a', 'b'], 'a'), { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
         const script = [
             'import sys',
             `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
@@ -513,16 +756,42 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         });
         assert.strictEqual(result.status, 0, result.stderr);
         assert.strictEqual(result.stdout.trim(), 'b');
+        // Python 旧运行时的选择写回共享状态后，Node 仍能读取并遵守冷却记录。
         assert.strictEqual(selectApiKey(['a', 'b'], ENDPOINT, file, { nowMs: 3000 }).apiKey, 'b');
+        assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
+    });
+
+    it('Node 与 Python 共用追加后的账号集合与冷却状态', () => {
+        const keys = ['a', 'b', 'c'];
+        const { file } = tempState();
+        markQuotaExhausted(selectionFor(keys, 'b'), { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
+        const nodePick = selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 });
+        assert.notStrictEqual(nodePick.apiKey, 'b');
+        const script = [
+            'import sys',
+            `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
+            'from llm_account_pool import select_api_key',
+            `print(select_api_key(['a','b','c','d'], ${JSON.stringify(ENDPOINT)}, sys.argv[1], now_ms=3000)['api_key'])`
+        ].join('; ');
+        const result = spawnSync(process.env.PD_PYTHON_BIN || 'python3', ['-c', script, file], {
+            encoding: 'utf8'
+        });
+        assert.strictEqual(result.status, 0, result.stderr);
+        assert.ok(['a', 'c', 'd'].includes(result.stdout.trim()));
+        const appended = selectApiKey(['a', 'b', 'c', 'd'], ENDPOINT, file, { nowMs: 4000 });
+        assert.notStrictEqual(appended.apiKey, 'b');
+        assert.ok(['a', 'c', 'd'].includes(appended.apiKey));
     });
 });
 
 describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
     it('四次余额失败后以带类型的运行错误停止，不保存计费 URL', async () => {
         const { file } = tempState();
+        const keys = ['a', 'b', 'c', 'd'];
+        const expected = expectedKeyOrder(keys);
         const seen = [];
         await assert.rejects(requestLlmJson(`${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {}, {
-            apiKeys: ['a', 'b', 'c', 'd'], accountPoolStateFile: file, timeoutMs: 5000, recordUsage: false,
+            apiKeys: keys, accountPoolStateFile: file, timeoutMs: 5000, recordUsage: false,
             transportRequestFn: async (_url, _body, headers) => {
                 seen.push(headers.Authorization);
                 return { statusCode: 401, body: { error: { message:
@@ -530,7 +799,7 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
             }
         }), error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
             && error.scope === 'run' && error.category === 'quota_exhausted' && error.retryable === false);
-        assert.deepStrictEqual(seen, ['Bearer a', 'Bearer b', 'Bearer c', 'Bearer d']);
+        assert.deepStrictEqual(seen, expected.map(key => `Bearer ${key}`));
         assert.ok(!fs.readFileSync(file, 'utf8').includes('wrk_test_placeholder'));
     });
     it('精确的余额 401 会从第三个复核到第四个；普通 401 直接停止，不轮换', async () => {
@@ -539,28 +808,28 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
             'Invalid API key']) {
             const { file } = tempState();
             const keys = ['a', 'b', 'c', 'd'];
+            const expected = expectedKeyOrder(keys);
             for (const nowMs of [1000, 1100]) {
                 markQuotaExhausted(selectApiKey(keys, ENDPOINT, file, { nowMs }),
                     { blockedUntilMs: 2200 }, file, { nowMs });
             }
-            selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 });
             const seen = [];
             const request = requestLlmJson(`${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {}, {
                 apiKeys: keys, accountPoolStateFile: file, timeoutMs: 5000,
                 transportRequestFn: async (_url, _body, headers) => {
                     seen.push(headers.Authorization);
-                    return headers.Authorization === 'Bearer c'
+                    return headers.Authorization === `Bearer ${expected[2]}`
                         ? { statusCode: 401, body: { error: { message } } }
                         : { statusCode: 200, body: {} };
                 }
             });
             if (message !== 'Invalid API key') {
                 assert.strictEqual((await request).statusCode, 200);
-                assert.deepStrictEqual(seen, ['Bearer c', 'Bearer d']);
+                assert.deepStrictEqual(seen, [`Bearer ${expected[2]}`, `Bearer ${expected[3]}`]);
             } else {
                 await assert.rejects(request, error => error.code === 'LLM_ACCOUNT_AUTH_ERROR'
                     && error.category === 'authentication' && error.scope === 'run' && !error.retryable);
-                assert.deepStrictEqual(seen, ['Bearer c']);
+                assert.deepStrictEqual(seen, [`Bearer ${expected[2]}`]);
             }
         }
     });
@@ -583,8 +852,10 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         assert.strictEqual(calls, 0);
     });
 
-    it('切换到备用账号后，下一次请求继续使用该账号', async () => {
+    it('额度失败切到可用账号后，下一次请求按等权轮转继续并避开冷却账号', async () => {
         const { file } = tempState();
+        const keys = ['key-a', 'key-b'];
+        const expected = expectedKeyOrder(keys);
         const seen = [];
         const transportRequestFn = async (url, _body, headers) => {
             seen.push({
@@ -593,7 +864,7 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
                 session: headers['x-opencode-session'],
                 userAgent: headers['User-Agent']
             });
-            if (headers.Authorization === 'Bearer key-a') {
+            if (headers.Authorization === `Bearer ${expected[0]}`) {
                 return {
                     statusCode: 429,
                     headers: { 'retry-after': '1800' },
@@ -610,7 +881,7 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         const apiUrl = 'https://opencode.ai/zen/go/v1/chat/completions';
         const options = {
             timeoutMs: 5000,
-            apiKeys: ['key-a', 'key-b'],
+            apiKeys: keys,
             accountPoolStateFile: file,
             transportRequestFn
         };
@@ -621,11 +892,11 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         assert.strictEqual(first.statusCode, 200);
         const second = await requestLlmJson(
             apiUrl, ENDPOINT, 'test-model', { input: 'again' },
-            { Authorization: 'Bearer key-a', 'Content-Type': 'application/json' }, options
+            { Authorization: `Bearer ${expected[0]}`, 'Content-Type': 'application/json' }, options
         );
         assert.strictEqual(second.statusCode, 200);
         assert.deepStrictEqual(seen.map(item => item.authorization), [
-            'Bearer key-a', 'Bearer key-b', 'Bearer key-b'
+            `Bearer ${expected[0]}`, `Bearer ${expected[1]}`, `Bearer ${expected[1]}`
         ]);
         assert.ok(seen.every(item => item.url === apiUrl));
         assert.ok(seen.every(item => item.session && item.session === seen[0].session));
@@ -634,13 +905,15 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
 
     it('普通 429 不轮换账号', async () => {
         const { file } = tempState();
+        const keys = ['key-a', 'key-b'];
+        const expected = expectedKeyOrder(keys);
         const seen = [];
         const response = await requestLlmJson(
             'https://opencode.ai/zen/go/v1/chat/completions', ENDPOINT, 'test-model', { input: 'hi' },
             { Authorization: 'Bearer key-a' },
             {
                 timeoutMs: 5000,
-                apiKeys: ['key-a', 'key-b'],
+                apiKeys: keys,
                 accountPoolStateFile: file,
                 transportRequestFn: async (_url, _body, headers) => {
                     seen.push(headers.Authorization);
@@ -649,7 +922,7 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
             }
         );
         assert.strictEqual(response.statusCode, 429);
-        assert.deepStrictEqual(seen, ['Bearer key-a']);
+        assert.deepStrictEqual(seen, [`Bearer ${expected[0]}`]);
     });
 
     it('两个账号都额度耗尽时停止，不进入死循环', async () => {
@@ -681,6 +954,8 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
 
     it('即使先前的额度阻塞在请求中途过期，每个账号也最多尝试一次', async () => {
         const { file } = tempState();
+        const keys = ['key-a', 'key-b'];
+        const expected = expectedKeyOrder(keys);
         const realNow = Date.now;
         let nowMs = 100000;
         Date.now = () => nowMs;
@@ -689,14 +964,14 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
             await assert.rejects(
                 requestLlmJson(
                     'https://opencode.ai/zen/go/v1/chat/completions', ENDPOINT, 'test-model', {},
-                    { Authorization: 'Bearer key-a' },
+                    { Authorization: `Bearer ${expected[0]}` },
                     {
                         timeoutMs: 10000,
-                        apiKeys: ['key-a', 'key-b'],
+                        apiKeys: keys,
                         accountPoolStateFile: file,
                         transportRequestFn: async (_url, _body, headers) => {
                             seen.push(headers.Authorization);
-                            if (headers.Authorization === 'Bearer key-b') nowMs += 1500;
+                            if (headers.Authorization === `Bearer ${expected[1]}`) nowMs += 1500;
                             return {
                                 statusCode: 429,
                                 headers: { 'retry-after-ms': '1' },
@@ -712,11 +987,13 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         } finally {
             Date.now = realNow;
         }
-        assert.deepStrictEqual(seen, ['Bearer key-a', 'Bearer key-b']);
+        assert.deepStrictEqual(seen, [`Bearer ${expected[0]}`, `Bearer ${expected[1]}`]);
     });
 
     it('备用账号只拿到逻辑请求剩余的那段截止时间', async () => {
         const { file } = tempState();
+        const keys = ['key-a', 'key-b'];
+        const expected = expectedKeyOrder(keys);
         const realNow = Date.now;
         let nowMs = 100000;
         Date.now = () => nowMs;
@@ -727,11 +1004,11 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
                 { Authorization: 'Bearer key-a' },
                 {
                     timeoutMs: 5000,
-                    apiKeys: ['key-a', 'key-b'],
+                    apiKeys: keys,
                     accountPoolStateFile: file,
                     transportRequestFn: async (_url, _body, headers, options) => {
                         timeouts.push(options.timeoutMs);
-                        if (headers.Authorization === 'Bearer key-a') {
+                        if (headers.Authorization === `Bearer ${expected[0]}`) {
                             nowMs += 1200;
                             return {
                                 statusCode: 429,
@@ -780,12 +1057,14 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         assert.strictEqual(calls, 0);
     });
 
-    it('并发的第一个账号额度响应只收敛到同一个备用账号一次', async () => {
+    it('并发请求的额度失败只让每个逻辑请求各自切到下一个可用账号', async () => {
         const { file } = tempState();
+        const keys = ['key-a', 'key-b'];
+        const expected = expectedKeyOrder(keys);
         const seen = [];
         const transportRequestFn = async (_url, _body, headers) => {
             seen.push(headers.Authorization);
-            if (headers.Authorization === 'Bearer key-a') {
+            if (headers.Authorization === `Bearer ${expected[0]}`) {
                 await new Promise(resolve => setImmediate(resolve));
                 return {
                     statusCode: 429,
@@ -798,7 +1077,7 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         };
         const options = {
             timeoutMs: 5000,
-            apiKeys: ['key-a', 'key-b'],
+            apiKeys: keys,
             accountPoolStateFile: file,
             transportRequestFn
         };
@@ -807,8 +1086,9 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
             { Authorization: 'Bearer key-a' }, options
         )));
         assert.ok(results.every(response => response.statusCode === 200));
-        assert.strictEqual(seen.filter(value => value === 'Bearer key-a').length, 5);
-        assert.strictEqual(seen.filter(value => value === 'Bearer key-b').length, 5);
-        assert.strictEqual(selectApiKey(['key-a', 'key-b'], ENDPOINT, file).apiKey, 'key-b');
+        // 等权轮转下 5 个并发请求的首次选择是 a,b,a,b,a；3 个 a 失败后各切到 b。
+        assert.strictEqual(seen.filter(value => value === `Bearer ${expected[0]}`).length, 3);
+        assert.strictEqual(seen.filter(value => value === `Bearer ${expected[1]}`).length, 5);
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file).apiKey, expected[1]);
     });
 });

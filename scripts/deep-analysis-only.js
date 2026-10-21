@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const { setupScriptLogging } = require('./log-setup');
+const { setupScriptLogging, writeStageSummary } = require('./log-setup');
+const { printErrorGuidance } = require('./lib/error-guidance.js');
 setupScriptLogging(__filename);
 
 /**
@@ -175,6 +176,12 @@ async function runDeepAnalysis(options = {}) {
         console.log(summary.status === 'complete'
             ? '✅ 所有论文已分析完成！'
             : `⚠️ 检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
+        writeStageSummary({
+            stage: '分析', status: 'ok',
+            message: summary.status === 'complete'
+                ? '无待分析论文，全部已完成'
+                : `无待分析论文，但仍有 ${summary.remaining} 篇未完成`
+        });
         return {
             status: summary.status,
             exitCode: getAnalysisExitCode(summary.status),
@@ -195,6 +202,7 @@ async function runDeepAnalysis(options = {}) {
         return payload;
     });
 
+    writeStageSummary({ stage: '分析', status: 'start', message: `深度分析 ${notAnalyzed.length} 篇` });
     const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: resultPath,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
@@ -291,6 +299,10 @@ async function runDeepAnalysis(options = {}) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
+    writeStageSummary({
+        stage: '分析', status: 'ok',
+        message: `分析完成 成功 ${stats.success ?? 0} 篇，失败 ${stats.failed ?? 0} 篇，跳过 ${stats.skipped ?? 0} 篇`
+    });
 
     const finalPayload = updateJsonFileLocked(resultPath, current => {
         dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan: dailySourcePlan });
@@ -334,6 +346,8 @@ if (require.main === module) {
         process.exitCode = result.exitCode;
     }).catch(err => {
         console.error(`❌ 失败: ${err.message}`);
+        writeStageSummary({ stage: '分析', status: 'error', message: `入口失败: ${err.message}` });
+        printErrorGuidance(err, { stage: 'deep-analysis' });
         process.exitCode = 1;
     });
 }

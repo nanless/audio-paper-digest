@@ -8615,6 +8615,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                         publish_to_blog.plan_post_publish_visual_assets('2026-07-10')
                     )
 
+    @mock.patch.dict(os.environ, {'PD_VISUAL_PLANNER_TIMEOUT_SECONDS': ''})
     def test_post_publish_planner_timeout_is_bounded_and_retryable(self):
         with tempfile.TemporaryDirectory() as tmp:
             current = Path(tmp)

@@ -1,4 +1,6 @@
 import atexit
+import json
+import math
 import os
 import re
 import sys
@@ -310,3 +312,173 @@ def setup_script_logging(script_path=None):
     if log_file:
         print(f"[log] 输出文件: {log_file}")
     return _ACTIVE_LOGGER
+
+
+STAGE_SUMMARY_STATUS_LABELS = {'start': '开始', 'ok': '完成', 'warn': '注意', 'error': '失败'}
+STAGE_SUMMARY_MESSAGE_MAX_CHARS = 500
+STAGE_SUMMARY_DIR_MODE = 0o700
+STAGE_SUMMARY_FILE_MODE = 0o600
+
+
+def _stage_summary_line_text(value):
+    text = str(value if value is not None else '')
+    return re.sub(r'[\r\n]+', ' ', text).strip()
+
+
+def redact_stage_summary_text(value):
+    text = str(value if value is not None else '')
+    for secret in _CONFIGURED_SECRETS:
+        if secret:
+            text = text.replace(secret, '[REDACTED]')
+    # 阶段摘要只按已知密钥形态做定向替换，避免把整行「人话」消息吞掉。
+    text = re.sub(r'oc_sk_[A-Za-z0-9_-]+', '[REDACTED]', text)
+    text = re.sub(
+        r'([A-Za-z0-9_-]*api[-_ ]?keys?)\s*=\s*[^\s&;,。，；;]+',
+        r'\1=[REDACTED]',
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r'\bBearer\s+[A-Za-z0-9._~+/=-]+', '[REDACTED]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bsk-[A-Za-z0-9._-]{3,}', '[REDACTED]', text, flags=re.IGNORECASE)
+    return text
+
+
+def _truncate_stage_summary_text(text, max_chars=STAGE_SUMMARY_MESSAGE_MAX_CHARS):
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars - 1] + '…'
+
+
+def _normalize_stage_summary_status(status):
+    raw = _stage_summary_line_text(status).lower()
+    if raw in STAGE_SUMMARY_STATUS_LABELS:
+        return raw, None
+    warning = f'阶段摘要 status 非法：「{_stage_summary_line_text(status)}」，按 error 处理'
+    return 'error', warning
+
+
+def _stage_summary_datetime(now):
+    if isinstance(now, datetime):
+        if now.tzinfo is None:
+            return now.replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+        return now.astimezone(ZoneInfo('Asia/Shanghai'))
+    return datetime.now(tz=ZoneInfo('Asia/Shanghai'))
+
+
+def _format_stage_summary_timestamp(now):
+    return _stage_summary_datetime(now).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _resolve_stage_summary_date(date, now):
+    if isinstance(date, datetime):
+        return _stage_summary_datetime(date).strftime('%Y-%m-%d')
+    text = _stage_summary_line_text(date)
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', text):
+        return text
+    return _stage_summary_datetime(now).strftime('%Y-%m-%d')
+
+
+def _format_stage_summary_elapsed(elapsed_ms):
+    if elapsed_ms is None or isinstance(elapsed_ms, bool):
+        return ''
+    if isinstance(elapsed_ms, str) and not elapsed_ms.strip():
+        return ''
+    try:
+        value = float(elapsed_ms)
+    except (TypeError, ValueError):
+        return ''
+    if not math.isfinite(value) or value < 0:
+        return ''
+    tenths = math.floor(value / 100 + 0.5)
+    if tenths % 10 == 0:
+        return f'{tenths // 10}s'
+    return f'{tenths / 10:.1f}s'
+
+
+def _stage_summary_extra_text(extra):
+    if extra is None:
+        return ''
+    if isinstance(extra, str):
+        return _stage_summary_line_text(extra)
+    if isinstance(extra, bool):
+        return 'true' if extra else 'false'
+    if isinstance(extra, (int, float)):
+        if isinstance(extra, float):
+            if not math.isfinite(extra):
+                return ''
+            if extra.is_integer():
+                return str(int(extra))
+        return str(extra)
+    try:
+        return _stage_summary_line_text(
+            json.dumps(extra, ensure_ascii=False, separators=(',', ':'), default=str),
+        )
+    except (TypeError, ValueError):
+        return ''
+
+
+def _stage_summary_logs_dir():
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(os.path.dirname(scripts_dir), 'logs', 'summaries')
+
+
+def _append_stage_summary_line(file_path, line):
+    fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, STAGE_SUMMARY_FILE_MODE)
+    try:
+        handle = os.fdopen(fd, 'a', encoding='utf-8')
+    except Exception:
+        os.close(fd)
+        raise
+    with handle:
+        handle.write(line)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def write_stage_summary(stage, status, message, elapsed_ms=None, date=None, extra=None, *, logs_dir=None, now=None):
+    """往 logs/summaries/<YYYY-MM-DD>-summary.log 追加一行「人话」阶段摘要。
+
+    写日志是旁路能力：任何失败都只打印警告，不向业务调用方抛错。
+    返回 {'path', 'line', 'status'}；写入失败返回 None。
+    """
+    current = _stage_summary_datetime(now)
+    status_key, status_warning = _normalize_stage_summary_status(status)
+    if status_warning:
+        print(redact_stage_summary_text(f'[log] {status_warning}'), file=sys.stderr)
+    stage_text = (
+        _truncate_stage_summary_text(redact_stage_summary_text(_stage_summary_line_text(stage)))
+        or '未命名阶段'
+    )
+    message_text = _truncate_stage_summary_text(
+        redact_stage_summary_text(_stage_summary_line_text(message)),
+    )
+    elapsed_text = _format_stage_summary_elapsed(elapsed_ms)
+    extra_text = _truncate_stage_summary_text(
+        redact_stage_summary_text(_stage_summary_extra_text(extra)),
+    )
+    line = ' '.join(field for field in [
+        f'[{_format_stage_summary_timestamp(current)}]',
+        f'[阶段 {stage_text}]',
+        STAGE_SUMMARY_STATUS_LABELS[status_key],
+        message_text,
+        f'用时 {elapsed_text}' if elapsed_text else '',
+        extra_text,
+    ] if field)
+    summary_date = _resolve_stage_summary_date(date, current)
+    base_dir = os.path.abspath(os.fspath(logs_dir)) if logs_dir else _stage_summary_logs_dir()
+    file_path = os.path.join(base_dir, f'{summary_date}-summary.log')
+    try:
+        os.makedirs(base_dir, mode=STAGE_SUMMARY_DIR_MODE, exist_ok=True)
+        if os.name == 'posix':
+            os.chmod(base_dir, STAGE_SUMMARY_DIR_MODE)
+        _append_stage_summary_line(file_path, f'{line}\n')
+        # 已有文件的权限不受 open 的 mode 影响，显式收紧。
+        if os.name == 'posix':
+            os.chmod(file_path, STAGE_SUMMARY_FILE_MODE)
+        return {'path': file_path, 'line': line, 'status': status_key}
+    except Exception as error:  # 阶段摘要失败不能打断业务调用方
+        print(
+            redact_stage_summary_text(f'[log] 阶段摘要写入失败: {error}'),
+            file=sys.stderr,
+        )
+        return None

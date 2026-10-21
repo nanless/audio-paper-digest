@@ -27,6 +27,7 @@
 | 你要做什么 | 从哪里开始 | 操作说明 |
 |---|---|---|
 | 运行北京时间当天的论文速递 | `npm run digest:prepare -- YYYY-MM-DD` | [操作手册](SKILL.md#1-日更) |
+| 开跑前只读体检（环境、账号、来源、磁盘、博客仓库） | `npm run doctor -- --offline`；需要探测 arXiv 时加 `--network` | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
 | 获取、筛选并整理官方会议 | 获取官方来源，再提取摘要证据、筛选并执行 `conference:process` | [会议流程](docs/conference-workflow.md) |
 | 从原文重新分析既有博客，保留已有 URL | 冻结页面清单，再建立历史来源与重写计划 | [历史更新](docs/history-rewrite.md) |
 | 发布已完成的历史重写结果 | `history:publication` 的 plan、generate、review、publish、status | [历史发布](docs/history-direct-publication.md) |

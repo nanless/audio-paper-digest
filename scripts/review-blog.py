@@ -11,6 +11,12 @@ from pathlib import Path
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 
+_LIB_DIR = Path(__file__).resolve().parent / 'lib'
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+from error_guidance import print_error_guidance  # noqa: E402
+
 
 def _is_api_reader_asset_path(module, path):
     """让阶段包装器兼容注入的或旧版的发布器模块。"""
@@ -387,9 +393,10 @@ def _run_review(module, date_str):
 
 def main():
     require_external_runtime('review-blog.py')
-    from log_setup import setup_script_logging
+    from log_setup import setup_script_logging, write_stage_summary
     setup_script_logging(__file__)
     module = load_publish_to_blog()
+    write_stage_summary('审查', 'start', '按生成清单严格审查博客页面')
     try:
         date_str, include_id = parse_options(module)
         scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
@@ -398,10 +405,20 @@ def main():
                 receipt = _run_review(module, date_str)
     except (module.PublishDataValidationError, module.PublishLLMUnavailable) as exc:
         print(f'\n❌ 审查失败，未生成本次审查凭证: {exc}')
+        write_stage_summary('审查', 'error', f'审查失败: {exc}')
+        print_error_guidance(exc, 'blog-review')
         sys.exit(1)
     except TimeoutError as exc:
         print(f'\n❌ 博客仓库或同日期事务正在运行: {exc}')
+        write_stage_summary('审查', 'error', f'博客仓库或同日期事务正在运行: {exc}')
+        print_error_guidance(exc, 'blog-review')
         sys.exit(1)
+    except Exception as exc:
+        write_stage_summary('审查', 'error', f'审查异常: {exc}')
+        print_error_guidance(exc, 'blog-review')
+        raise
+    page_count = len(receipt.get('files', [])) if isinstance(receipt, dict) else 0
+    write_stage_summary('审查', 'ok', f'审查通过 {page_count} 个文件并签发凭证')
     print(f'🧾 审查凭证: {receipt}')
     print(f'\n✅ 审查完成；下一步: python3 scripts/push-blog.py --date {date_str}')
 

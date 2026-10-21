@@ -1,4 +1,17 @@
 #!/usr/bin/env node
+// --watch 是交互式只读监控：它的 stdout 要能被 --json 逐行解析。validate-data-files.js
+// 在 require 阶段就会安装带时间戳前缀的文件日志包装，所以要在加载它之前临时禁用文件
+// 日志；加载完立刻恢复环境，默认报告路径完全不受影响。
+const __rawArgv = process.argv.slice(2);
+const __watchRequestedAtStartup = __rawArgv.includes('--watch');
+const __savedDisableFileLogs = {
+    paper: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS,
+    pd: process.env.PD_DISABLE_FILE_LOGS
+};
+if (__watchRequestedAtStartup) {
+    process.env.PAPER_DIGEST_DISABLE_FILE_LOGS = '1';
+    process.env.PD_DISABLE_FILE_LOGS = '1';
+}
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -15,7 +28,7 @@ const {
     hasValidApiReaderV3Records,
     updateJsonFileLocked
 } = require('./analysis-engine.js');
-const { setupScriptLogging } = require('./log-setup.js');
+const { setupScriptLogging, closeScriptLogging } = require('./log-setup.js');
 const { validateDailyFreshSourceRun } = require('./validate-data-files.js');
 const { loadAnalysisWaiver, validateAnalysisWaiver } = require('./analysis-waiver.js');
 const {
@@ -32,6 +45,15 @@ const {
     validateCompletedCover,
     assertDigestCoverManifestCurrent
 } = require('./digest-cover-state.js');
+const { buildLiveStatus, formatLiveStatus } = require('./lib/digest-live-status.js');
+const { createUsageSummaryCache } = require('./lib/llm-usage-summary.js');
+
+if (__watchRequestedAtStartup) {
+    if (__savedDisableFileLogs.paper === undefined) delete process.env.PAPER_DIGEST_DISABLE_FILE_LOGS;
+    else process.env.PAPER_DIGEST_DISABLE_FILE_LOGS = __savedDisableFileLogs.paper;
+    if (__savedDisableFileLogs.pd === undefined) delete process.env.PD_DISABLE_FILE_LOGS;
+    else process.env.PD_DISABLE_FILE_LOGS = __savedDisableFileLogs.pd;
+}
 
 function parseDate(argv) {
     const index = argv.indexOf('--date');
@@ -830,7 +852,157 @@ function formatDigestRunSummary(report) {
     return lines.join('\n');
 }
 
+const DEFAULT_WATCH_INTERVAL_SECONDS = 10;
+
+// 只解析 watch 相关参数；未给出 --watch 时默认路径与旧行为完全一致。
+function parseWatchOptions(argv = []) {
+    const options = {
+        watch: false,
+        json: false,
+        intervalSeconds: DEFAULT_WATCH_INTERVAL_SECONDS,
+        intervalMs: DEFAULT_WATCH_INTERVAL_SECONDS * 1000
+    };
+    const setIntervalValue = rawValue => {
+        const raw = String(rawValue ?? '');
+        const seconds = Number(raw);
+        if (!/^\d+(?:\.\d+)?$/.test(raw) || !Number.isFinite(seconds) || seconds <= 0 || seconds > 3600) {
+            throw new Error('用法: --interval 秒数必须是大于 0 且不超过 3600 的数字');
+        }
+        options.intervalSeconds = seconds;
+        options.intervalMs = Math.max(1, Math.round(seconds * 1000));
+    };
+    for (let index = 0; index < argv.length; index += 1) {
+        const arg = argv[index];
+        if (arg === '--watch') {
+            options.watch = true;
+            continue;
+        }
+        if (arg === '--json') {
+            options.json = true;
+            continue;
+        }
+        if (arg === '--date') {
+            index += 1;
+            continue;
+        }
+        if (arg === '--interval') {
+            if (index + 1 >= argv.length) throw new Error('用法: --interval 缺少秒数');
+            setIntervalValue(argv[index + 1]);
+            index += 1;
+            continue;
+        }
+        if (typeof arg === 'string' && arg.startsWith('--interval=')) {
+            setIntervalValue(arg.slice('--interval='.length));
+        }
+    }
+    return options;
+}
+
+function buildWatchSnapshot(targetDate, usageCache) {
+    return buildLiveStatus({ date: targetDate, usageCache });
+}
+
+async function runWatch(options = {}) {
+    const targetDate = String(options.targetDate || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+        throw new Error('用法: --watch 需要与 --date YYYY-MM-DD 一起使用');
+    }
+    const intervalMs = Number.isFinite(options.intervalMs) && options.intervalMs > 0
+        ? Math.round(options.intervalMs) : DEFAULT_WATCH_INTERVAL_SECONDS * 1000;
+    const json = options.json === true;
+    const print = typeof options.print === 'function' ? options.print : line => console.log(line);
+    const signal = options.signal || null;
+    const maxSnapshots = Number.isSafeInteger(options.maxSnapshots) && options.maxSnapshots > 0
+        ? options.maxSnapshots : Infinity;
+    const buildSnapshot = typeof options.buildSnapshot === 'function'
+        ? options.buildSnapshot
+        : () => buildWatchSnapshot(targetDate, options.usageCache);
+
+    return new Promise((resolve, reject) => {
+        let timer = null;
+        let stopped = false;
+        let inFlight = false;
+        let iterations = 0;
+
+        const cleanup = () => {
+            if (timer) {
+                clearTimeout(timer);
+                timer = null;
+            }
+            if (signal) signal.removeEventListener('abort', onAbort);
+        };
+        const finish = stoppedBy => {
+            if (stopped) return;
+            stopped = true;
+            cleanup();
+            resolve({ iterations, stoppedBy });
+        };
+        const onAbort = () => finish('signal');
+
+        if (signal) {
+            if (signal.aborted) {
+                resolve({ iterations: 0, stoppedBy: 'signal' });
+                return;
+            }
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        const schedule = () => {
+            if (stopped) return;
+            timer = setTimeout(tick, intervalMs);
+        };
+        const tick = async () => {
+            timer = null;
+            if (stopped || inFlight) return;
+            inFlight = true;
+            try {
+                const snapshot = await buildSnapshot();
+                if (stopped) return;
+                iterations += 1;
+                if (json) print(JSON.stringify(snapshot));
+                else print(formatLiveStatus(snapshot));
+            } catch (error) {
+                if (stopped) return;
+                const message = error?.message || String(error);
+                // 一次快照读失败不应结束 watch；按同一输出格式继续下一轮。
+                if (json) print(JSON.stringify({ version: 1, error: message }));
+                else print(`[digest-live] 快照失败: ${message}`);
+            } finally {
+                inFlight = false;
+                if (stopped) return;
+                if (iterations >= maxSnapshots) finish('maxSnapshots');
+                else schedule();
+            }
+        };
+        tick();
+    });
+}
+
+async function runWatchCli(targetDate, watchOptions) {
+    // 关掉 require 阶段安装的 stdout 时间戳包装，保证 --json --watch 每行都是纯 JSON。
+    await closeScriptLogging();
+    const usageCache = createUsageSummaryCache();
+    const controller = new AbortController();
+    const onSignal = () => controller.abort();
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+    try {
+        return await runWatch({
+            targetDate,
+            intervalMs: watchOptions.intervalMs,
+            json: watchOptions.json,
+            signal: controller.signal,
+            usageCache
+        });
+    } finally {
+        process.removeListener('SIGINT', onSignal);
+        process.removeListener('SIGTERM', onSignal);
+    }
+}
+
 function main(argv = process.argv.slice(2)) {
+    const watchOptions = parseWatchOptions(argv);
+    if (watchOptions.watch) return runWatchCli(parseDate(argv), watchOptions);
     setupScriptLogging(__filename);
     const targetDate = parseDate(argv);
     const report = buildDigestRunReport(targetDate);
@@ -842,12 +1014,25 @@ function main(argv = process.argv.slice(2)) {
     if (report.overallStatus !== 'complete') process.exitCode = 1;
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+    const result = main();
+    if (result && typeof result.then === 'function') {
+        result.catch(error => {
+            console.error(error?.message || String(error));
+            process.exitCode = 1;
+        });
+    }
+}
 
 module.exports = {
     createAnalysisBatchRetryReporter,
     currentAnalysisBatchRetryDiagnostic,
     parseDate,
+    parseWatchOptions,
+    runWatch,
+    runWatchCli,
+    buildWatchSnapshot,
+    DEFAULT_WATCH_INTERVAL_SECONDS,
     snapshotMatchesDate,
     resolveDigestRuntimeSnapshot,
     sourceHealthComplete,
