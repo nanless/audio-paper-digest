@@ -1182,7 +1182,7 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
         : [];
     const apiKeys = normalizeApiKeys(configuredKeys);
     if (apiKeys.length !== configuredKeys.length) {
-        const error = new Error('OpenCode Go 主账号与备用账号 API key 不能相同或重复');
+        const error = new Error('同一 OpenCode Go 账号池内的 API key 不能相同或重复');
         error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
         error.scope = 'run';
         error.category = 'config';

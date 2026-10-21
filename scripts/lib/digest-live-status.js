@@ -130,11 +130,25 @@ function stageStatus(stage) {
     return typeof stage?.status === 'string' ? stage.status : null;
 }
 
+// running/pending 只是还没结束，不是失败；只有明确的 fail/error 终态才算失败。
+function stageStatusKind(stage) {
+    const status = String(stageStatus(stage) || '').toLowerCase();
+    if (!status) return 'unknown';
+    if (/fail|error/.test(status)) return 'failed';
+    if (/running|pending|in_progress|in-progress|started|queued|processing|retrying/.test(status)) return 'running';
+    if (status === 'complete') return 'complete';
+    if (/skip|not_needed/.test(status)) return 'skipped';
+    return 'incomplete';
+}
+
 function stageFailureMessage(stage) {
-    const status = stageStatus(stage);
-    if (!status || !/fail|error/i.test(status)) return null;
-    const message = stage?.error || stage?.message || stage?.errorCode || status;
-    return typeof message === 'string' ? message : status;
+    if (stageStatusKind(stage) !== 'failed') return null;
+    const message = stage?.error || stage?.message || stage?.errorCode || stageStatus(stage);
+    return typeof message === 'string' ? message : stageStatus(stage);
+}
+
+function stageIsRunning(stage) {
+    return stageStatusKind(stage) === 'running';
 }
 
 function paperAnalysisPassed(paper) {
@@ -147,6 +161,19 @@ function paperAnalysisPassed(paper) {
     return false;
 }
 
+// 返回失败原因字符串；null 表示“未通过但尚未终态失败”（running/pending）。
+function paperAnalysisFailure(paper) {
+    if (paperAnalysisPassed(paper)) return null;
+    const stages = paper?.analysisManifest?.stages;
+    const primary = stages?.primaryAnalysis;
+    const scoring = stages?.scoringAudit;
+    if (stageIsRunning(primary) || stageIsRunning(scoring)) return null;
+    const stageError = stageFailureMessage(primary) || stageFailureMessage(scoring);
+    if (stageError) return stageError;
+    if (typeof paper?.error === 'string' && paper.error) return paper.error;
+    return null;
+}
+
 function paperReaderStage(paper) {
     return paper?.analysisManifest?.stages?.apiReaderArticle || null;
 }
@@ -155,6 +182,20 @@ function paperReaderPassed(paper) {
     const stage = paperReaderStage(paper);
     if (stage) return stageStatus(stage) === 'complete';
     return typeof paper?.apiReaderArticle === 'string' && paper.apiReaderArticle.trim().length > 0;
+}
+
+// 未通过 Reader 但仍在运行时返回 null，避免把 running 记成失败。
+function paperReaderFailure(paper) {
+    if (paperReaderPassed(paper)) return null;
+    const stage = paperReaderStage(paper);
+    const article = typeof paper?.apiReaderArticle === 'string' && paper.apiReaderArticle.trim();
+    // 没有 Reader 阶段也没有正文时，Reader 对这篇不适用（旧分析记录），
+    // 不能当成失败；只有确实开始过 Reader 的论文才会计入失败/待处理。
+    if (!stage && !article) return null;
+    if (stageIsRunning(stage)) return null;
+    const stageError = stageFailureMessage(stage);
+    if (stageError) return stageError;
+    return stage ? 'Reader 未完成' : 'Reader 记录缺失';
 }
 
 function paperLatestUpdatedAtMs(paper) {
@@ -173,25 +214,36 @@ function paperLatestUpdatedAtMs(paper) {
 function inferAnalysisCounts(deep) {
     const papers = papersOf(deep);
     let analysisPassed = 0;
+    let analysisFailed = 0;
     let readerApplicable = 0;
     let readerPassed = 0;
+    let readerFailed = 0;
     for (const paper of papers) {
         const analyzed = paperAnalysisPassed(paper);
         if (analyzed) analysisPassed += 1;
+        else if (paperAnalysisFailure(paper)) analysisFailed += 1;
         const readerStage = paperReaderStage(paper);
         const readerArticle = typeof paper?.apiReaderArticle === 'string' && paper.apiReaderArticle.trim();
-        if (readerStage || readerArticle) {
+        // 分析已通过就视为 Reader 适用：没有 Reader 阶段/正文是“未开始/中断”，
+        // 计入 pending，而不是从统计里消失（否则会显示 Reader 0/0 看起来全过）。
+        if (readerStage || readerArticle || analyzed) {
             readerApplicable += 1;
             if (analyzed && paperReaderPassed(paper)) readerPassed += 1;
+            else if (analyzed) {
+                const failure = paperReaderFailure(paper);
+                if (failure) readerFailed += 1;
+            }
         }
     }
     return {
         total: papers.length,
         analysisPassed,
-        analysisFailed: Math.max(0, papers.length - analysisPassed),
+        analysisFailed,
+        analysisPending: Math.max(0, papers.length - analysisPassed - analysisFailed),
         readerTotal: readerApplicable,
         readerPassed,
-        readerFailed: Math.max(0, readerApplicable - readerPassed)
+        readerFailed,
+        readerPending: Math.max(0, readerApplicable - readerPassed - readerFailed)
     };
 }
 
@@ -201,25 +253,21 @@ function collectFailedPapers(deep) {
     papers.forEach((paper, index) => {
         const id = paperId(paper);
         const title = typeof paper?.title === 'string' ? paper.title : null;
-        const analyzed = paperAnalysisPassed(paper);
-        if (!analyzed) {
-            const stageError = stageFailureMessage(paper?.analysisManifest?.stages?.primaryAnalysis)
-                || stageFailureMessage(paper?.analysisManifest?.stages?.scoringAudit);
-            const error = typeof paper?.error === 'string' && paper.error
-                ? paper.error : (stageError || '分析未完成');
+        if (!paperAnalysisPassed(paper)) {
+            const error = paperAnalysisFailure(paper);
+            // running/pending 不是失败，不进失败列表。
+            if (!error) return;
             failures.push({ id, title, index: index + 1, stage: 'analysis', error });
             return;
         }
         if (paperReaderPassed(paper)) return;
         const readerStage = paperReaderStage(paper);
-        const stageError = stageFailureMessage(readerStage);
-        failures.push({
-            id,
-            title,
-            index: index + 1,
-            stage: 'reader',
-            error: stageError || (readerStage ? 'Reader 未完成' : 'Reader 记录缺失')
-        });
+        const readerArticle = typeof paper?.apiReaderArticle === 'string' && paper.apiReaderArticle.trim();
+        // 没有任何 Reader 证据的记录属于“尚未进入 Reader”，不是终态失败。
+        if (!readerStage && !readerArticle) return;
+        const error = paperReaderFailure(paper);
+        if (!error) return;
+        failures.push({ id, title, index: index + 1, stage: 'reader', error });
     });
     return failures;
 }
@@ -256,9 +304,28 @@ function fileAgeSeconds(mtimeMsValue, nowMs) {
     return Math.max(0, Math.floor((nowMs - mtimeMsValue) / 1000));
 }
 
+function dateInLogFileName(name) {
+    const compact = String(name || '').match(/(?:^|\D)(20\d{2})(\d{2})(\d{2})(?:\D|$)/);
+    if (compact) {
+        const candidate = `${compact[1]}-${compact[2]}-${compact[3]}`;
+        if (isValidDate(candidate)) return candidate;
+    }
+    const dashed = String(name || '').match(/(20\d{2}-\d{2}-\d{2})/);
+    if (dashed && isValidDate(dashed[1])) return dashed[1];
+    return null;
+}
+
+// “最近日志”必须属于目标日期：优先从文件名解析日期，文件名没日期时退回文件写入日期。
+function logMatchesTargetDate(name, mtimeMs, date) {
+    const fromName = dateInLogFileName(name);
+    if (fromName) return fromName === date;
+    return beijingDateFromMs(mtimeMs) === date;
+}
+
 function readLatestLog(logsDir, options = {}) {
     if (!logsDir) return null;
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const date = options.date && isValidDate(options.date) ? options.date : null;
     let names;
     try {
         names = fs.readdirSync(logsDir).filter(name => name.endsWith('.log'));
@@ -275,6 +342,7 @@ function readLatestLog(logsDir, options = {}) {
             continue;
         }
         if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        if (date && !logMatchesTargetDate(name, stat.mtimeMs, date)) continue;
         if (!newest || stat.mtimeMs > newest.mtimeMs) newest = { name, filePath, mtimeMs: stat.mtimeMs };
     }
     if (!newest) return null;
@@ -301,7 +369,8 @@ function readLatestLog(logsDir, options = {}) {
         line,
         message: match ? match[2] : line,
         timestamp: match ? match[1] : null,
-        ageSeconds: fileAgeSeconds(newest.mtimeMs, nowMs)
+        ageSeconds: fileAgeSeconds(newest.mtimeMs, nowMs),
+        dateMatched: date !== null
     };
 }
 
@@ -400,23 +469,25 @@ function logStageHint(latestLog, options = {}) {
     return null;
 }
 
-function applyLogStageHint(stage, hint) {
+function applyLogStageHint(stage, hint, latestLog = null) {
     if (!hint || !(hint in STAGE_INDEX) || !(stage in STAGE_INDEX)) return stage;
     // 日志只用来把文件证据往前推：新日志提到更靠后的阶段时采用它。
     if (STAGE_INDEX[hint] > STAGE_INDEX[stage]) return hint;
-    // 已完成批次后又出现新的抓取日志，说明重跑已开始。
-    if (stage === 'complete' && hint === 'fetch') return hint;
+    // 已完成批次后又出现新的抓取日志，说明同一日期重跑已开始；日志必须属于目标日期。
+    if (stage === 'complete' && hint === 'fetch' && latestLog?.dateMatched === true) return hint;
     return stage;
 }
 
 function visualGateComplete(date, generation, visualManifest, coverManifest) {
     const visualRequired = generation?.visualSummaryRequired !== false;
     const coverRequired = generation?.digestCoverRequired !== false;
+    const counts = visualManifest?.counts || {};
     const visualOk = !visualRequired || (
         documentMatchesDate(visualManifest, date, ['batchDate'])
         && visualManifest?.overallStatus === 'complete'
-        && visualManifest?.counts?.completeCards === visualManifest?.counts?.totalCards
-        && Number(visualManifest?.counts?.pendingCards || 0) === 0
+        && Number.isInteger(counts.totalCards) && counts.totalCards > 0
+        && Number.isInteger(counts.completeCards) && counts.completeCards === counts.totalCards
+        && Number(counts.pendingCards || 0) === 0
     );
     const coverOk = !coverRequired || (
         documentMatchesDate(coverManifest, date, ['batchDate'])
@@ -572,7 +643,7 @@ function buildLiveStatus(options = {}) {
 
     const counts = inferAnalysisCounts(deep);
     const latestLog = options.latestLog !== undefined
-        ? options.latestLog : readLatestLog(paths.logsDir, { nowMs });
+        ? options.latestLog : readLatestLog(paths.logsDir, { nowMs, date });
     const { stage, logStageHint: hint } = inferStage({
         date,
         raw,
@@ -597,20 +668,23 @@ function buildLiveStatus(options = {}) {
     const failedPapers = collectFailedPapers(deep);
     const accountPool = readAccountPoolStatus(paths.accountPoolState, { nowMs });
     const { usage, usageError } = usageForDate(paths, date, options, nowMs);
-    const progress = computeProgress([
-        paths.rawCandidates,
-        paths.fetchCheckpoint,
-        paths.filterDecisions,
-        paths.filteredPapers,
-        paths.deepAnalysisResult,
-        generationPath,
-        reviewPath,
-        visualPath,
-        coverPath
-    ], nowMs);
+    // 只有属于目标日期的产物才参与“无进度”计算；新日期尚未开跑时不报 stalled。
+    const progressFiles = [];
+    if (documentMatchesDate(raw, date, ['batchDate'])) progressFiles.push(paths.rawCandidates);
+    if (documentMatchesDate(fetchCheckpoint, date, ['batchDate'])) progressFiles.push(paths.fetchCheckpoint);
+    if (documentMatchesDate(decisions, date, ['batchDate'])) progressFiles.push(paths.filterDecisions);
+    if (documentMatchesDate(filtered, date, ['batchDate'])) progressFiles.push(paths.filteredPapers);
+    if (documentMatchesDate(deep, date, ['batchDate'])) progressFiles.push(paths.deepAnalysisResult);
+    if (documentMatchesDate(generation, date, ['date'])) progressFiles.push(generationPath);
+    if (documentMatchesDate(review, date, ['date'])) progressFiles.push(reviewPath);
+    if (documentMatchesDate(visualManifest, date, ['batchDate'])) progressFiles.push(visualPath);
+    if (documentMatchesDate(coverManifest, date, ['batchDate'])) progressFiles.push(coverPath);
+    const batchStarted = progressFiles.length > 0;
+    const progress = computeProgress(progressFiles, nowMs);
     const stallThresholdSeconds = Number.isFinite(options.stallThresholdSeconds)
         ? options.stallThresholdSeconds : DEFAULT_STALL_THRESHOLD_SECONDS;
-    const stalled = stage !== 'complete'
+    const stalled = batchStarted
+        && stage !== 'complete'
         && progress.secondsSinceProgress !== null
         && progress.secondsSinceProgress >= stallThresholdSeconds;
 
@@ -621,6 +695,7 @@ function buildLiveStatus(options = {}) {
         stage,
         stageLabel: STAGE_LABELS[stage] || stage,
         logStageHint: hint,
+        batchStarted,
         counts: {
             candidates: rawCount,
             selected: selectedCount,
@@ -628,9 +703,11 @@ function buildLiveStatus(options = {}) {
             analysisTotal: counts.total,
             analysisPassed: counts.analysisPassed,
             analysisFailed: counts.analysisFailed,
+            analysisPending: counts.analysisPending,
             readerTotal: counts.readerTotal,
             readerPassed: counts.readerPassed,
             readerFailed: counts.readerFailed,
+            readerPending: counts.readerPending,
             reviewTotal: reviewInfo.total,
             reviewReviewed: reviewInfo.reviewed,
             reviewPassed: reviewInfo.passed,
@@ -675,8 +752,10 @@ function formatLiveStatus(status) {
     const counts = status.counts || {};
     lines.push(
         `  候选=${display(counts.candidates)} 入选=${display(counts.selected)}`
-        + ` | 分析通过=${display(counts.analysisPassed)}/${display(counts.analysisTotal)} 失败=${display(counts.analysisFailed)}`
-        + ` | Reader 通过=${display(counts.readerPassed)}/${display(counts.readerTotal)} 失败=${display(counts.readerFailed)}`
+        + ` | 分析通过=${display(counts.analysisPassed)}/${display(counts.analysisTotal)}`
+        + ` 失败=${display(counts.analysisFailed)} 进行中=${display(counts.analysisPending)}`
+        + ` | Reader 通过=${display(counts.readerPassed)}/${display(counts.readerTotal)}`
+        + ` 失败=${display(counts.readerFailed)} 进行中=${display(counts.readerPending)}`
     );
     if (status.currentPaper) {
         const paper = status.currentPaper;
@@ -691,9 +770,13 @@ function formatLiveStatus(status) {
     );
     const accountPool = status.accountPool || {};
     const usage = status.usage;
-    const usageText = usage
-        ? `调用=${usage.total} 成功=${usage.success} 失败=${usage.failed} 费用=$${Number(usage.cost || 0).toFixed(4)}`
-        : `未知${status.usageError ? `（${status.usageError}）` : ''}`;
+    let usageText;
+    if (!usage) usageText = `未知${status.usageError ? `（${status.usageError}）` : ''}`;
+    else if (Number(usage.costEvents || 0) > 0) {
+        usageText = `调用=${usage.total} 成功=${usage.success} 失败=${usage.failed} 费用=$${Number(usage.cost || 0).toFixed(4)}`;
+    } else {
+        usageText = `调用=${usage.total} 成功=${usage.success} 失败=${usage.failed} 费用=无费用记录（仅有 token 用量）`;
+    }
     lines.push(
         `  账号池 可用=${display(accountPool.available)} 冷却=${display(accountPool.cooling)}`
         + `${accountPool.earliestRetryAt ? ` 最早恢复=${accountPool.earliestRetryAt}` : ''}`
@@ -701,6 +784,9 @@ function formatLiveStatus(status) {
     );
     if (status.stage === 'complete') {
         lines.push('  状态=已完成（无需等待）');
+        lines.push('  注意: 本状态未核验部署与网页；报告完成不等于已上线，还须确认 GitHub Pages build/deploy 与逐页 HTTP 200 和标题。');
+    } else if (!status.batchStarted) {
+        lines.push('  连续无进度=未知（目标日期尚未开始，无产物可判断）');
     } else {
         lines.push(
             `  连续无进度=${status.secondsSinceProgress === null ? '未知' : `${status.secondsSinceProgress} 秒`}`
@@ -723,34 +809,20 @@ function formatLiveStatus(status) {
     return lines.join('\n');
 }
 
-function formatLiveStatusJson(status, options = {}) {
-    return JSON.stringify(status, null, options.pretty ? 2 : 0);
-}
-
 module.exports = {
     VERSION,
     STAGES,
     STAGE_LABELS,
     DEFAULT_STALL_THRESHOLD_SECONDS,
     DEFAULT_LOG_FRESH_SECONDS,
-    beijingDateFromMs,
-    formatBeijingIso,
-    defaultPaths,
-    resolvePaths,
-    readJsonSafe,
-    papersOf,
     inferAnalysisCounts,
     collectFailedPapers,
     inferCurrentPaper,
     logStageHint,
     applyLogStageHint,
     inferStage,
-    reviewCounts,
-    suggestCommands,
-    computeProgress,
     readLatestLog,
     readAccountPoolStatus,
     buildLiveStatus,
-    formatLiveStatus,
-    formatLiveStatusJson
+    formatLiveStatus
 };

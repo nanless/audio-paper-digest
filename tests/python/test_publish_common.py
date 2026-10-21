@@ -2203,7 +2203,7 @@ primary_method_tag: #基准测试
                 self.assertEqual([call.args[0].get_header('Authorization')
                                   for call in opener.open.call_args_list], expected)
 
-    def test_muse_confirmed_quota_switches_once_and_keeps_fallback_sticky(self):
+    def test_muse_confirmed_quota_switches_once_and_next_request_skips_cooling_account(self):
         quota_body = json.dumps({
             'type': 'GoUsageLimitError',
             'message': '5-hour usage limit reached. Resets in 30min.',
@@ -2247,12 +2247,110 @@ primary_method_tag: #基准测试
                 'inspect again', required=True, max_retries=1, max_tokens=100,
             ), 'again')
         requests = [call.args[0] for call in opener.open.call_args_list]
+        # 等权轮转：明确配额失败在同一次请求内切到下一个账号；下一次逻辑请求
+        # 从持久化游标继续，因 primary 仍在冷却而使用 fallback。
         self.assertEqual(
             [request.get_header('Authorization') for request in requests],
             ['Bearer primary-key', 'Bearer fallback-key', 'Bearer fallback-key'],
         )
         self.assertTrue(all(request.get_header('X-opencode-session') for request in requests))
         sleep.assert_not_called()
+
+    def test_ordinary_failure_never_switches_within_request_but_rotates_across_retries(self):
+        from llm_account_pool import get_account_id, get_pool_identity
+        endpoint = 'https://opencode.ai/zen/go/v1'
+        keys = ['key-a', 'key-b', 'key-c']
+        by_id = {get_account_id(key): key for key in keys}
+        ordered = [by_id[account_id]
+                   for account_id in sorted(get_pool_identity(keys, endpoint)['account_ids'])]
+        env = {
+            'PAPER_ANALYZER_API_KEY': keys[0],
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': ','.join(keys[1:]),
+            'PAPER_ANALYZER_ENDPOINT': endpoint,
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+
+        def ordinary_429():
+            return urllib.error.HTTPError(
+                endpoint + '/responses', 429, 'Too Many Requests',
+                {'Content-Type': 'application/json'},
+                io.BytesIO(json.dumps({'error': {'type': 'rate_limit_error'}}).encode('utf-8')),
+            )
+
+        opener = mock.Mock()
+        opener.open.side_effect = [ordinary_429(), ordinary_429(), ordinary_429()]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep'):
+            state_file = Path(tmp) / 'pool.json'
+            seen = []
+            for _round in range(3):
+                # 普通 429 不切换账号，也不写冷却；同一次请求只尝试一个账号。
+                with self.assertRaises(PublishLLMUnavailable):
+                    call_publish_llm_api(
+                        'inspect', required=True, max_retries=1, max_tokens=100,
+                        usage_sink=lambda _event: None,
+                    )
+                seen.append(opener.open.call_args_list[-1].args[0].get_header('Authorization'))
+            self.assertEqual(seen, [f'Bearer {ordered[0]}', f'Bearer {ordered[1]}',
+                                    f'Bearer {ordered[2]}'])
+            state = json.loads(state_file.read_text(encoding='utf-8'))
+            service = next(iter(state['services'].values()))
+            # 外层重试推进游标，但普通失败不产生任何冷却记录。
+            self.assertEqual(service['accounts'], {})
+            group = next(iter(service['groups'].values()))
+            self.assertEqual(group['rotationCursor'], 0)
+            self.assertEqual(group['activeAccountId'], get_account_id(ordered[2]))
+
+    def test_single_account_pool_bypasses_pool_state(self):
+        endpoint = 'https://opencode.ai/zen/go/v1'
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'solo-key',
+            'PAPER_ANALYZER_FALLBACK_API_KEYS': '',
+            'PAPER_ANALYZER_ENDPOINT': endpoint,
+            'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+            'HTTPS_PROXY': 'http://127.0.0.1:7897',
+        }
+        success = mock.Mock()
+        success.status = 200
+        success.read.return_value = b'{"status":"completed","output_text":"ok"}'
+        success.__enter__ = mock.Mock(return_value=success)
+        success.__exit__ = mock.Mock(return_value=False)
+        opener = mock.Mock()
+        opener.open.return_value = success
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener):
+            state_file = Path(tmp) / 'pool.json'
+            self.assertEqual(call_publish_llm_api(
+                'inspect', required=True, max_retries=1, max_tokens=100,
+                usage_sink=lambda _event: None,
+            ), 'ok')
+            self.assertFalse(state_file.exists(), '单账号成功请求不应创建账号池状态')
+
+        balance_error = urllib.error.HTTPError(
+            endpoint + '/responses', 401, 'Unauthorized', {},
+            io.BytesIO(json.dumps({'error': {'message': 'Insufficient balance'}}).encode('utf-8')),
+        )
+        opener = mock.Mock()
+        opener.open.side_effect = [balance_error]
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep'):
+            from llm_account_pool import LlmAccountPoolExhaustedError
+            state_file = Path(tmp) / 'pool.json'
+            with self.assertRaisesRegex(LlmAccountPoolExhaustedError, '未配置后续账号'):
+                call_publish_llm_api(
+                    'inspect', required=True, max_retries=1, max_tokens=100,
+                    usage_sink=lambda _event: None,
+                )
+            self.assertFalse(state_file.exists(), '单账号额度失败也不应创建账号池状态')
 
     def test_muse_all_accounts_quota_exhausted_is_bounded_and_typed(self):
         from llm_account_pool import LlmAccountPoolExhaustedError

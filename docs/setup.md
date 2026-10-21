@@ -56,7 +56,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 账号选择与冷却时间保存在 `data/runtime/llm-account-pool.json`，供 Node、Python 和后续日期的运行共同使用；两边共享同一轮转游标，配置顺序不同也不会改变选择序列。
 
-`PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的更多账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 排在这份列表之后，也可填写第三、第四等账号的列表。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。
+`PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的更多账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 与这份列表合并进同一等权账号池（顺序不代表优先级），也可填写第三、第四等账号。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。
 
 账号池文件不保存原始密钥，但账号的稳定指纹仍属于敏感操作记录，权限须为 `0600`，不得上传或归档。发送认证信息前，程序还会核对实际请求地址是否与端点和模型确定的 API 路由一致。
 

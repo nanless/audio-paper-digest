@@ -6,6 +6,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const project = path.resolve(__dirname, '..');
 const python = process.env.PD_PYTHON_BIN || 'python3';
+// Python 语言矩阵需要真实解释器；缺失时跳过这些用例而不是硬失败。
+const HAS_PYTHON = spawnSync(python, ['-c', 'print(1)'], { encoding: 'utf8' }).status === 0;
 
 function childProgram(language, release, swapBeforeOpen) {
     if (language === 'node') return `
@@ -96,7 +98,7 @@ function assertRejectedChild(language, stateFile, target, options = {}) {
 for (const language of ['node', 'python']) {
     for (const location of ['state', 'owner']) {
         for (const swapBeforeOpen of [false, true]) {
-            test(`${language} 账号池拒绝 ${location} ${swapBeforeOpen ? '检查后换入的 ' : ''}FIFO，保留节点且不挂住`, () => {
+            test(`${language} 账号池拒绝 ${location} ${swapBeforeOpen ? '检查后换入的 ' : ''}FIFO，保留节点且不挂住`, { skip: language === 'python' && !HAS_PYTHON }, () => {
                 const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pool-fifo-proof-'));
                 try {
                     const stateFile = path.join(directory, 'pool.json');
@@ -124,7 +126,7 @@ for (const language of ['node', 'python']) {
             });
         }
     }
-    test(`${language} 释放账号池锁时也拒绝被替换为 FIFO 的 owner`, () => {
+    test(`${language} 释放账号池锁时也拒绝被替换为 FIFO 的 owner`, { skip: language === 'python' && !HAS_PYTHON }, () => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pool-release-fifo-'));
         try {
             const stateFile = path.join(directory, 'pool.json');

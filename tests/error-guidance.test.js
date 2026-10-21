@@ -1,12 +1,28 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const {
     guidanceFor,
+    ruleIdFor,
     printErrorGuidance,
     redactSensitive,
     collectErrorChain,
-    formatGuidanceLines
+    formatGuidanceLines,
+    DATE_PLACEHOLDER
 } = require('../scripts/lib/error-guidance.js');
+
+const ENTRY_FILES = [
+    'scripts/full-fetch.js',
+    'scripts/batch-analyze.js',
+    'scripts/deep-analysis-only.js',
+    'scripts/reanalyze.js',
+    'scripts/refresh-api-reader.js',
+    'scripts/generate-blog.py',
+    'scripts/review-blog.py',
+    'scripts/push-blog.py'
+];
 
 const DOCS = 'docs/';
 
@@ -16,7 +32,7 @@ const CASES = [
         name: 'arXiv 429 限流',
         error: Object.assign(new Error('Too Many Requests'), { code: 'ARXIV_RATE_LIMITED', status: 429 }),
         stage: 'fetch',
-        cause: /arXiv 或外部来源限流/,
+        cause: /arXiv 限流/,
         commandIncludes: ['sleep 60', 'npm run fetch -- --date'],
         docRef: 'docs/daily-fetch-boundary.md'
     },
@@ -195,9 +211,11 @@ test('错误字段里的日期与 arXiv ID 会进入可复制命令', () => {
     });
     const guidance = guidanceFor(error, 'deep-analysis');
     assert.ok(guidance.commands.includes('npm run digest:prepare -- 2026-10-21'));
-    // docRef 与命令都不允许出现占位符未替换的错误。
-    assert.ok(!guidance.commands.some(command => command.includes('YYYY-MM-DD')));
-    assert.match(guidanceFor(new Error('来源 SHA 不符'), 'deep-analysis').commands.join('\n'), /YYYY-MM-DD/);
+    assert.ok(!guidance.commands.some(command => command.includes(DATE_PLACEHOLDER)));
+    const undated = guidanceFor(new Error('来源 SHA 不符'), 'deep-analysis');
+    assert.ok(undated.commands.some(command => command.includes(DATE_PLACEHOLDER)));
+    assert.ok(undated.nextSteps.some(step => step.includes(DATE_PLACEHOLDER) && step.includes('YYYY-MM-DD')),
+        '无日期时必须说明 <DATE> 占位要替换成批次日期');
 });
 
 test('命令可按 entrypoint 阶段恢复，且不含换行/未定义值', () => {
@@ -289,4 +307,171 @@ test('默认 logger 使用 console.error 写 stderr，而不是 stdout', () => {
     }
     assert.ok(errors.length > 0);
     assert.deepEqual(logs, []);
+});
+
+
+test('429/401 只在专属信号下命中专用规则（负例）', () => {
+    assert.equal(ruleIdFor({ status: 429, message: 'upstream busy' }, 'api-reader'), 'upstream-rate-limit');
+    assert.equal(ruleIdFor({ status: 429, message: '论文来源刷新限流' }, 'fetch'), 'upstream-rate-limit');
+    assert.equal(ruleIdFor({ status: 401, message: 'upstream rejected the request' }, 'fetch'), 'generic-fallback');
+    assert.equal(ruleIdFor({ code: 'ARXIV_RATE_LIMITED', message: 'Too Many Requests' }, 'fetch'), 'arxiv-rate-limit');
+    assert.equal(ruleIdFor({ status: 401, message: 'Insufficient balance' }, 'fetch'), 'llm-account-pool');
+    // 泛词（fetch/html/pdf/来源）不再被当成 arXiv 专属信号。
+    for (const message of ['fetch failed 429', 'html 429', 'pdf download 429', '来源 429']) {
+        assert.equal(ruleIdFor({ status: 429, message }, 'fetch'), 'upstream-rate-limit', message);
+    }
+});
+
+test('状态键两语言统一：status/statusCode/status_code/httpStatus/http_status/errno/code', () => {
+    for (const key of ['status', 'statusCode', 'status_code', 'httpStatus', 'http_status', 'errno', 'code']) {
+        const error = { message: 'request failed', [key]: 429 };
+        assert.equal(ruleIdFor(error, 'fetch'), 'upstream-rate-limit', key);
+        const unauthorized = { message: 'Insufficient balance', [key]: 401 };
+        assert.equal(ruleIdFor(unauthorized, 'fetch'), 'llm-account-pool', key);
+    }
+});
+
+test('匹配文本不拼接整条 stack，路径里的 arXiv 不会误报', () => {
+    const error = new Error('plain upstream failure');
+    error.stack = 'Error: plain upstream failure\n    at fetchHtml (/srv/arxiv.org/fetch-paper.js:1:1)';
+    assert.equal(ruleIdFor(error, 'fetch'), 'generic-fallback');
+    assert.equal(ruleIdFor({ status: 429, message: 'plain', stack: 'at /srv/arxiv.org/x.js' }, 'fetch'), 'upstream-rate-limit');
+});
+
+test('Reader 阶段 429 给 Reader 恢复命令，抓取阶段才给抓取命令', () => {
+    const readerError = { status: 429, message: 'arxiv.org HTML 429' };
+    assert.ok(guidanceFor(readerError, 'api-reader').commands.some(c => c.startsWith('npm run api:reader:refresh -- --all --date')));
+    assert.ok(guidanceFor(readerError, 'fetch').commands.some(c => c.startsWith('npm run fetch -- --date')));
+    const plain429 = { status: 429, message: 'busy' };
+    assert.ok(guidanceFor(plain429, 'api-reader').commands.some(c => c.startsWith('npm run api:reader:refresh -- --all --date')));
+    assert.ok(guidanceFor(plain429, 'deep-analysis').commands.some(c => c.startsWith('npm run deep -- --date')));
+});
+
+test('source-sha-mismatch 指向 data-format 的真实来源校验章节', () => {
+    const guidance = guidanceFor({ message: '来源 SHA 与 sourceSha256 不一致' }, 'deep-analysis');
+    assert.equal(guidance.docRef, 'docs/data-format.md#日更来源的保存与核验');
+});
+
+// 两语言必须映射到同一组规则 id；Python 测试用同一份 fixtures 断言。
+const RULE_ID_FIXTURES = [
+    ['llm-account-pool', { status: 401, message: 'Insufficient balance' }, 'fetch'],
+    ['official-oai-rss-stale', { message: 'OAI responseDate is stale or invalid for the fixed batch boundary' }, 'fetch'],
+    ['arxiv-rate-limit', { code: 'ARXIV_RATE_LIMITED', message: 'Too Many Requests' }, 'fetch'],
+    ['reader-repair-no-progress', { code: 'READER_REPAIR_NO_PROGRESS', message: 'stopped' }, 'api-reader'],
+    ['reader-operator-correction-rejected', { code: 'READER_OPERATOR_CORRECTION_REJECTED', message: 'x' }, 'api-reader'],
+    ['reader-table-adhesion', { message: '单元格存在疑似粘连复写，表格核对' }, 'api-reader'],
+    ['reader-table-header-units', { message: '第 3 个表格的列头单位缺少对应原文证据。' }, 'api-reader'],
+    ['reader-table-ablation-missing', { message: '全文包含消融实验，但实验结果没有保留关键消融或组件对照' }, 'api-reader'],
+    ['blog-repository-dirty', { message: '博客必须停在基线 HEAD 上且没有未提交改动' }, 'blog-review'],
+    ['blog-lock-busy', { message: '等待共享博客仓库锁超时: /tmp/lock' }, 'blog-push'],
+    ['paper-lock-busy', { message: '等待文件锁超时: data/.locks/paper.lock' }, 'batch-analyze'],
+    ['source-sha-mismatch', { message: '分析结果中的论文来源 SHA 与 sourceSha256 不一致' }, 'deep-analysis'],
+    ['generation-snapshot-stale', { message: '博客生成清单无法读取: /tmp/manifest.json' }, 'blog-push'],
+    ['blog-review-receipt-missing', { message: '缺少与当前页面字节匹配的审查凭证' }, 'blog-push'],
+    ['upstream-rate-limit', { status: 429, message: 'busy' }, 'api-reader'],
+    ['generic-fallback', { message: '完全未知的故障' }, 'fetch']
+];
+
+test('两语言规则 id 一致：fixtures 映射到固定规则 id', () => {
+    for (const [expected, error, stage] of RULE_ID_FIXTURES) {
+        assert.equal(ruleIdFor(error, stage), expected, `${expected} 映射错误`);
+        const guidance = guidanceFor(error, stage);
+        assert.ok(guidance.cause && guidance.commands.length > 0);
+    }
+});
+
+test('入口静态接线：指引只在 catch 内、摘要带批次日期与耗时、错误摘要先脱敏', () => {
+    for (const relative of ENTRY_FILES) {
+        const source = fs.readFileSync(path.resolve(__dirname, '..', relative), 'utf8');
+        const isPython = relative.endsWith('.py');
+        const guidanceName = isPython ? 'print_error_guidance' : 'printErrorGuidance';
+        const summaryName = isPython ? 'write_stage_summary' : 'writeStageSummary';
+        const redactName = isPython ? 'redact_sensitive' : 'redactSensitive';
+        assert.ok(source.includes(summaryName), `${relative} 未接入阶段摘要`);
+        assert.ok(source.includes(guidanceName), `${relative} 未接入错误指引`);
+        let index = source.indexOf(guidanceName);
+        let count = 0;
+        while (index !== -1) {
+            const lineStart = source.lastIndexOf('\n', index) + 1;
+            const lineEnd = source.indexOf('\n', index);
+            const line = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+            const isImport = line.includes('require(') || line.startsWith('from ') || line.startsWith('import ');
+            if (!isImport) {
+                count += 1;
+                const window = source.slice(Math.max(0, index - 900), index);
+                const inHandler = isPython ? /except[\s\S]*$/.test(window) : /catch[\s\S]*$/.test(window);
+                // 入口级参数校验失败也允许：指引后必须立即以原退出码退出或重新抛出。
+                const exitsAfter = /(process\.exit\(|sys\.exit\(|raise\b)/.test(source.slice(index, index + 500));
+                assert.ok(inHandler || exitsAfter,
+                    `${relative} 的指引必须写在 catch/except 内或紧随原退出码退出（成功路径不得打印）`);
+            }
+            index = source.indexOf(guidanceName, index + 1);
+        }
+        assert.ok(count >= 1);
+        if (relative !== 'scripts/generate-blog.py') {
+            assert.ok(source.includes(isPython ? 'date=date_str' : 'date:'), `${relative} 摘要未传批次日期`);
+        }
+        assert.ok(source.includes(redactName), `${relative} 错误摘要未先脱敏`);
+        assert.ok(source.includes(isPython ? 'elapsed_ms=' : 'elapsedMs:'), `${relative} 摘要缺少耗时`);
+    }
+});
+
+test('generate-blog.py 的 SystemExit(0) 不写成失败摘要或兜底指引', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../scripts/generate-blog.py'), 'utf8');
+    assert.match(source, /if code == 0:/);
+    assert.match(source, /write_stage_summary\('生成', 'ok', '生成结束（退出码 0）'/);
+    assert.match(source, /else:\n\s+write_stage_summary\('生成', 'error'/);
+    assert.match(source, /else:\n\s+write_stage_summary\('生成', 'error'[\s\S]{0,200}print_error_guidance/);
+});
+
+test('入口 refresh-api-reader：失败保留原错误与退出码，摘要脱敏，随后追加 [下一步]', () => {
+    const SECRET = 'sk-live-ENTRY-SECRET-123456';
+    const filename = path.resolve(__dirname, '../scripts/refresh-api-reader.js');
+    const source = fs.readFileSync(filename, 'utf8').replace(/^#![^\n]*\n/, '');
+    const summaries = [];
+    const printed = [];
+    const failure = Object.assign(new Error(`arXiv 429 抓取失败 ${SECRET}`), { status_code: 429 });
+    const modules = {
+        './log-setup': { writeStageSummary: options => { summaries.push(options); return { line: 'stub', status: options.status }; } },
+        './lib/error-guidance.js': require('../scripts/lib/error-guidance.js'),
+        './config.js': { FILES: { deepAnalysisResult: 'no-file' } },
+        './deep-analyzer.js': {},
+        './analysis-engine.js': { readJsonFileStrict: () => { throw failure; } },
+        './lib/daily-fresh-source-plan.js': {},
+        './lib/reader-tables.js': {},
+        './digest-status.js': {},
+        './utils.js': { normalizedId: value => value, getBeijingISOString: () => '2026-10-21T00:00:00.000Z' },
+        './lib/analysis-failure-rounds.js': require('../scripts/lib/analysis-failure-rounds.js'),
+        './lib/analysis-batch-report.js': { writeAnalysisBatchReport: () => null },
+        './lib/analysis-stop-control': { withAnalysisStopControl: fn => fn() }
+    };
+    const entryModule = { exports: {} };
+    const localRequire = name => {
+        if (Object.hasOwn(modules, name)) return modules[name];
+        if (name.startsWith('node:')) return require(name);
+        throw new Error(`未预期的依赖：${name}`);
+    };
+    localRequire.main = entryModule;
+    const originalError = console.error;
+    const originalArgv = process.argv;
+    const originalExitCode = process.exitCode;
+    console.error = line => printed.push(String(line));
+    process.argv = ['node', 'refresh-api-reader.js', '--all', '--date', '2026-10-21'];
+    try {
+        new vm.Script(`(function(require,module,exports){${source}\n})`, { filename })
+            .runInThisContext()(localRequire, entryModule, entryModule.exports);
+        assert.equal(process.exitCode, 1, '失败必须保持原退出码 1');
+        assert.ok(printed.some(line => line.includes(failure.message)), '原始错误必须照常打印，不得被指引替换');
+        const guidance = printed.filter(line => line.includes('[下一步]'));
+        assert.ok(guidance.length >= 3, '失败后必须追加 [下一步] 指引');
+        assert.ok(guidance.some(line => line.includes('npm run api:reader:refresh')), 'Reader 阶段应给 Reader 恢复命令');
+        assert.ok(summaries.length >= 1, '入口必须写阶段摘要');
+        assert.equal(summaries[0].status, 'error');
+        assert.equal(summaries[0].date, '2026-10-21');
+        assert.ok(!summaries.some(item => String(item.message).includes(SECRET)), '摘要不得包含 secret');
+    } finally {
+        console.error = originalError;
+        process.argv = originalArgv;
+        process.exitCode = originalExitCode;
+    }
 });

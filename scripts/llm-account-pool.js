@@ -5,9 +5,17 @@
  * 同一个池内的所有 API key 完全同权：按账号 ID 的稳定排序（与配置里的
  * key 顺序无关）做跨请求轮转，每次选择把游标推进到下一个可用账号。
  * 冷却中的账号被跳过，冷却到期后重新回到轮转；activeAccountId 只作为
- * 可观测字段，不再代表优先账号。只有服务端明确返回 GoUsageLimitError
- * 或余额不足的 401 才会把账号标记为冷却；普通的 429/5xx/网络故障既不
- * 切换账号，也不改变轮转位置。
+ * 可观测字段，不再代表优先账号。
+ *
+ * 一次逻辑请求（一次 requestLlmJson 调用）内部不会因为普通故障切换账号：
+ * 调用方把本次请求已试过的账号放进 excludeAccountIds，保证每个账号至多
+ * 尝试一次；只有明确的 GoUsageLimitError / Insufficient balance 才会在
+ * 同一请求内切到下一个账号并写冷却。普通的 401/429/5xx/网络故障不额外
+ * 切换、不写冷却，但选择本身已经推进并持久化了轮转游标，所以外层重试
+ * （新的逻辑请求）会按等权轮转继续使用下一个账号。
+ *
+ * 单账号配置不经过本模块：调用方在 apiKeys.length < 2 时直接发请求
+ * （既有行为，见 utils.js 的单账号分支），不会写账号池状态。
  */
 
 const crypto = require('crypto');
@@ -16,11 +24,18 @@ const os = require('os');
 const path = require('path');
 
 const STATE_SCHEMA_VERSION = 1;
+// policyVersion 保持旧字符串只为兼容已落盘状态和跨运行时读取；它不再是
+// “粘滞主账号”语义，当前语义是同一池内所有 key 等权轮转。
 const POLICY_VERSION = 'opencode-go-sticky-quota-failover-v1';
 const LOCK_TIMEOUT_MS = 3000;
 const LOCK_STALE_MS = 120000;
 const MAX_BLOCK_MS = 370 * 24 * 60 * 60 * 1000;
 const UNKNOWN_QUOTA_BLOCK_MS = 30 * 60 * 1000;
+// 成员集合变化会生成新的 groupId（新组 cursor 从 0 开始）。同一 service
+// 下超过这段时间没有被任何选择使用的其他分组会被清理，避免状态文件随历次
+// key 变更无限增长；仍在并行使用的不同 key 集合（例如主/副模型各自的池）
+// 因为刚被选择过而不会被误删。
+const STALE_GROUP_MS = 7 * 24 * 60 * 60 * 1000;
 
 class LlmAccountPoolExhaustedError extends Error {
     constructor(message, details = {}) {
@@ -98,7 +113,7 @@ function resolveApiKeyPool(primaryKey, fallbackValue) {
             : String(fallbackValue || '').split(',').map(value => value.trim()).filter(Boolean))
         .filter(Boolean);
     if (new Set(rawKeys).size !== rawKeys.length) {
-        throw new LlmAccountPoolConfigError('OpenCode Go 主账号与备用账号 API key 不能相同或重复');
+        throw new LlmAccountPoolConfigError('同一 OpenCode Go 账号池内的 API key 不能相同或重复');
     }
     return rawKeys;
 }
@@ -460,6 +475,25 @@ function accountIsBlocked(record, nowMs) {
     return Number.isFinite(record?.blockedUntilMs) && record.blockedUntilMs > nowMs;
 }
 
+function groupLastUsedAtMs(group) {
+    if (Number.isFinite(group?.lastSelectedAtMs) && group.lastSelectedAtMs >= 0) {
+        return group.lastSelectedAtMs;
+    }
+    const switchedAtMs = Date.parse(String(group?.switchedAt || ''));
+    return Number.isFinite(switchedAtMs) ? switchedAtMs : null;
+}
+
+function pruneStaleGroups(service, currentGroupId, nowMs) {
+    for (const groupId of Object.keys(service.groups)) {
+        if (groupId === currentGroupId) continue;
+        const lastUsedAtMs = groupLastUsedAtMs(service.groups[groupId]);
+        // 没有可解析时间戳的旧分组属于历史遗留，同样清理；当前分组始终保留。
+        if (lastUsedAtMs === null || nowMs - lastUsedAtMs > STALE_GROUP_MS) {
+            delete service.groups[groupId];
+        }
+    }
+}
+
 function buildExhaustedError(service, accountIds, nowMs) {
     const blocked = accountIds.map(id => service.accounts[id]).filter(record => accountIsBlocked(record, nowMs));
     const earliestRetryAtMs = blocked.length > 0
@@ -469,7 +503,7 @@ function buildExhaustedError(service, accountIds, nowMs) {
         ? `，最早恢复时间 ${new Date(earliestRetryAtMs).toISOString()}`
         : '';
     return new LlmAccountPoolExhaustedError(
-        `OpenCode Go 账号池没有可用账号（全部冷却中或已被排除）${suffix}`, {
+        `OpenCode Go 账号池没有可用账号（全部冷却中或已被本次逻辑请求排除）；下一逻辑请求会从轮转游标继续${suffix}`, {
             earliestRetryAtMs,
             blockedAccountCount: blocked.length
         });
@@ -496,6 +530,8 @@ function resolveRotationCursor(group, orderedAccountIds) {
     return 0;
 }
 
+// 单账号配置（apiKeys.length < 2）不会调用本函数：调用方走各自的单账号
+// 直连分支，因此不写账号池状态（既有行为，测试已固化）。
 function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     const keys = normalizeApiKeys(apiKeys);
     const identity = getPoolIdentity(keys, endpoint);
@@ -505,6 +541,9 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     let selection;
     updateState(stateFile, state => {
         const service = ensureService(state, identity);
+        // 成员集合变化会产生新的 groupId（新组 cursor=0）；顺手清理同一
+        // service 下已经不再使用的旧分组，当前分组始终保留。
+        pruneStaleGroups(service, identity.groupId, nowMs);
         const group = service.groups[identity.groupId] || { activeAccountId: null, switchedAt: null };
         service.groups[identity.groupId] = group;
         const byId = new Map(keys.map(key => [getAccountId(key), key]));
@@ -531,6 +570,9 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
             service.accounts[nextId].status = 'eligible_after_reset';
         }
         selection = { apiKey: byId.get(nextId), accountId: nextId, ...identity };
+        // 写放大说明：等权轮转下每次选择都会推进游标，跨进程/跨请求的公平
+        // 依赖持久化的 rotationCursor，所以这里必须每次写状态（一次原子写
+        // 加已有的文件锁），不能按“选择结果是否变化”跳过写入。
         return state;
     });
     return selection;

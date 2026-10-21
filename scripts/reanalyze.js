@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 const { setupScriptLogging, writeStageSummary } = require('./log-setup');
-const { printErrorGuidance } = require('./lib/error-guidance.js');
+const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
+
+let currentReanalyzeBatchDate = null;
+let currentReanalyzeStageStartedAt = Date.now();
 setupScriptLogging(__filename);
 
 /**
@@ -33,6 +36,12 @@ if (missingEnvVars.length > 0) {
     console.error('[reanalyze] 错误: 缺少必需环境变量');
     console.error(`[reanalyze] 缺少: ${missingEnvVars.join(', ')}`);
     console.error('[reanalyze] 请在项目根目录的 .env 文件中配置后重试');
+    writeStageSummary({
+        stage: '分析', status: 'error',
+        message: `缺少必需环境变量: ${missingEnvVars.join(', ')}`
+    });
+    printErrorGuidance(Object.assign(new Error(`缺少必需环境变量: ${missingEnvVars.join(', ')}`), { code: 'ENV_MISSING' }),
+        { stage: 'reanalyze' });
     process.exit(1);
 }
 
@@ -56,6 +65,9 @@ const DATA_FILE = dataFileArg || DEFAULT_CURRENT_FILE;
 const CONCURRENCY = concurrencyArg ?? (parseInt(process.env.PD_REANALYZE_CONCURRENCY, 10) || Config.ANALYSIS_CONFIG.concurrency);
 if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) {
     console.error(`[reanalyze] 错误: --concurrency / PD_REANALYZE_CONCURRENCY 必须是正整数，收到: ${CONCURRENCY}`);
+    writeStageSummary({ stage: '分析', status: 'error', message: `并发参数非法: ${CONCURRENCY}` });
+    printErrorGuidance(Object.assign(new Error(`--concurrency / PD_REANALYZE_CONCURRENCY 必须是正整数，收到: ${CONCURRENCY}`),
+        { code: 'INVALID_CONCURRENCY' }), { stage: 'reanalyze' });
     process.exit(1);
 }
 
@@ -85,6 +97,9 @@ async function reanalyzeAll(options = {}) {
 
     if (!fs.existsSync(DATA_FILE)) {
         console.error(`[reanalyze] ❌ 文件不存在: ${DATA_FILE}`);
+        writeStageSummary({ stage: '分析', status: 'error', message: `分析结果文件不存在: ${DATA_FILE}` });
+        printErrorGuidance(Object.assign(new Error(`分析结果文件不存在: ${DATA_FILE}`), { code: 'ENOENT' }),
+            { stage: 'reanalyze' });
         process.exit(1);
     }
 
@@ -119,7 +134,6 @@ async function reanalyzeAll(options = {}) {
     console.log(`[reanalyze] 并发度: ${CONCURRENCY}`);
     console.log(`[reanalyze] 开始时间: ${getBeijingLocaleString()}`);
     console.log('');
-    writeStageSummary({ stage: '分析', status: 'start', message: `重新分析 ${papers.length} 篇` });
 
     // 保存中间结果的辅助函数
     const batchDate = inferAnalysisBatchDate(
@@ -127,6 +141,9 @@ async function reanalyzeAll(options = {}) {
         Array.isArray(data) ? {} : data,
         getBeijingISOString()
     );
+    currentReanalyzeBatchDate = batchDate;
+    currentReanalyzeStageStartedAt = Date.now();
+    writeStageSummary({ stage: '分析', status: 'start', date: batchDate, message: `重新分析 ${papers.length} 篇` });
     const attemptResults = [];
     const preparedIds = new Set();
     let digestStatusUpdated = 0;
@@ -232,11 +249,6 @@ async function reanalyzeAll(options = {}) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
-    writeStageSummary({
-        stage: '分析', status: 'ok',
-        message: `重新分析完成 成功 ${stats.success ?? 0} 篇，失败 ${stats.failed ?? 0} 篇`
-    });
-
     const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const { remaining: remainingFailed, status } = getAnalysisRunSummary(currentPapers);
@@ -261,6 +273,11 @@ async function reanalyzeAll(options = {}) {
         return payload;
     });
     const status = finalPayload.stats.reanalyzeStatus;
+    writeStageSummary({
+        stage: '分析', status: status === 'complete' ? 'ok' : 'warn', date: batchDate,
+        elapsedMs: Date.now() - currentReanalyzeStageStartedAt,
+        message: `重新分析结束 ${status}：成功 ${stats.success ?? 0} 篇，失败 ${stats.failed ?? 0} 篇，总计 ${papers.length} 篇`
+    });
     console.log('');
     console.log(`[reanalyze] ════════════════════════════════════════════`);
     console.log(`[reanalyze] 重新分析状态: ${status}`);
@@ -292,7 +309,11 @@ if (require.main === module) {
         process.exitCode = result.exitCode;
     }).catch(err => {
         console.error('[reanalyze] 错误:', err);
-        writeStageSummary({ stage: '分析', status: 'error', message: `入口失败: ${err.message}` });
+        writeStageSummary({
+            stage: '分析', status: 'error', date: currentReanalyzeBatchDate,
+            elapsedMs: Date.now() - currentReanalyzeStageStartedAt,
+            message: `入口失败: ${redactSensitive(err.message)}`
+        });
         printErrorGuidance(err, { stage: 'reanalyze' });
         process.exitCode = 1;
     });

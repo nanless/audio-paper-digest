@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -15,7 +16,7 @@ _LIB_DIR = Path(__file__).resolve().parent / 'lib'
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from error_guidance import print_error_guidance  # noqa: E402
+from error_guidance import print_error_guidance, redact_sensitive  # noqa: E402
 
 
 def _is_api_reader_asset_path(module, path):
@@ -391,12 +392,24 @@ def _run_review(module, date_str):
         return receipt
 
 
+def _date_from_argv(argv):
+    """在 parse_options 之前从 argv 提取 --date，供阶段摘要按批次日期归档。"""
+    for index, value in enumerate(argv):
+        if value == '--date' and index + 1 < len(argv):
+            return argv[index + 1]
+        if isinstance(value, str) and value.startswith('--date='):
+            return value.split('=', 1)[1]
+    return None
+
+
 def main():
     require_external_runtime('review-blog.py')
     from log_setup import setup_script_logging, write_stage_summary
     setup_script_logging(__file__)
     module = load_publish_to_blog()
-    write_stage_summary('审查', 'start', '按生成清单严格审查博客页面')
+    date_str = None
+    started = time.monotonic()
+    write_stage_summary('审查', 'start', '按生成清单严格审查博客页面', date=_date_from_argv(sys.argv))
     try:
         date_str, include_id = parse_options(module)
         scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
@@ -405,20 +418,35 @@ def main():
                 receipt = _run_review(module, date_str)
     except (module.PublishDataValidationError, module.PublishLLMUnavailable) as exc:
         print(f'\n❌ 审查失败，未生成本次审查凭证: {exc}')
-        write_stage_summary('审查', 'error', f'审查失败: {exc}')
+        write_stage_summary('审查', 'error', f'审查失败: {redact_sensitive(exc)}',
+                            elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
         print_error_guidance(exc, 'blog-review')
         sys.exit(1)
     except TimeoutError as exc:
         print(f'\n❌ 博客仓库或同日期事务正在运行: {exc}')
-        write_stage_summary('审查', 'error', f'博客仓库或同日期事务正在运行: {exc}')
+        write_stage_summary('审查', 'error', f'博客仓库或同日期事务正在运行: {redact_sensitive(exc)}',
+                            elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
         print_error_guidance(exc, 'blog-review')
         sys.exit(1)
+    except SystemExit as exc:
+        # 参数解析等显式退出：保持原退出码；0 视为正常结束。
+        code = exc.code if exc.code is not None else 0
+        elapsed = (time.monotonic() - started) * 1000
+        if code == 0:
+            write_stage_summary('审查', 'ok', '审查结束（退出码 0）', elapsed_ms=elapsed, date=date_str)
+        else:
+            write_stage_summary('审查', 'error', f'审查参数或退出错误（退出码 {code}）',
+                                elapsed_ms=elapsed, date=date_str)
+            print_error_guidance(exc, 'blog-review')
+        raise
     except Exception as exc:
-        write_stage_summary('审查', 'error', f'审查异常: {exc}')
+        write_stage_summary('审查', 'error', f'审查异常: {redact_sensitive(exc)}',
+                            elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
         print_error_guidance(exc, 'blog-review')
         raise
     page_count = len(receipt.get('files', [])) if isinstance(receipt, dict) else 0
-    write_stage_summary('审查', 'ok', f'审查通过 {page_count} 个文件并签发凭证')
+    write_stage_summary('审查', 'ok', f'审查通过 {page_count} 个文件并签发凭证',
+                        elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
     print(f'🧾 审查凭证: {receipt}')
     print(f'\n✅ 审查完成；下一步: python3 scripts/push-blog.py --date {date_str}')
 

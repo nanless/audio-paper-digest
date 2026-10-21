@@ -35,6 +35,7 @@ from llm_account_pool import (  # noqa: E402
 )
 
 ENDPOINT = 'https://opencode.ai/zen/go/v1'
+STALE_GROUP_MS = 7 * 24 * 60 * 60 * 1000
 
 
 def ordered_account_ids(keys):
@@ -75,6 +76,29 @@ def write_legacy_state(state_file, keys, active_account_id):
             },
         },
     }), encoding='utf-8')
+
+
+def write_stale_group_state(state_file, keys):
+    """只写入一个“最后使用时间”已过期的旧分组，用于验证成员集合变化后的清理。"""
+    identity = get_pool_identity(keys, ENDPOINT)
+    state_file.write_text(json.dumps({
+        'schemaVersion': 1,
+        'policyVersion': POLICY_VERSION,
+        'generation': 1,
+        'services': {
+            identity['service_id']: {
+                'endpoint': identity['service'],
+                'accounts': {},
+                'groups': {
+                    identity['group_id']: {
+                        'activeAccountId': None,
+                        'switchedAt': '1970-01-01T00:00:01+00:00',
+                    },
+                },
+            },
+        },
+    }), encoding='utf-8')
+    return identity
 
 
 class LlmAccountPoolTest(unittest.TestCase):
@@ -179,6 +203,8 @@ class LlmAccountPoolTest(unittest.TestCase):
             self.assertIsNone(caught.exception.earliest_retry_at_ms)
             self.assertEqual(caught.exception.blocked_account_count, 0)
             self.assertIn('没有可用账号', str(caught.exception))
+            # 错误措辞必须写清“本次请求已排除 / 下次请求从游标继续”。
+            self.assertIn('下一逻辑请求会从轮转游标继续', str(caught.exception))
             identity = get_pool_identity(keys, ENDPOINT)
             service = read_state_strict(state_file)['services'].get(identity['service_id'])
             self.assertEqual(service['accounts'] if service else {}, {})
@@ -280,6 +306,52 @@ class LlmAccountPoolTest(unittest.TestCase):
                 appended_identity['group_id'],
                 state['services'][appended_identity['service_id']]['groups'],
             )
+
+    def test_stale_group_is_pruned_when_members_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'pool.json'
+            keys = ['key-alpha', 'key-beta']
+            identity = write_stale_group_state(state_file, keys)
+            appended = [*keys, 'key-gamma']
+            expected_appended = expected_key_order(appended)
+            now_ms = 1000 + STALE_GROUP_MS + 1
+            # 旧分组已超过 STALE_GROUP_MS 未被选择：先清理，再为新成员集合建 cursor=0 的组。
+            self.assertEqual(
+                select_api_key(appended, ENDPOINT, state_file, now_ms=now_ms)['api_key'],
+                expected_appended[0],
+            )
+            groups = read_state_strict(state_file)['services'][identity['service_id']]['groups']
+            self.assertNotIn(identity['group_id'], groups, '已停用的旧分组应被清理')
+            appended_identity = get_pool_identity(appended, ENDPOINT)
+            self.assertEqual(groups[appended_identity['group_id']]['rotationCursor'], 1)
+            self.assertEqual(groups[appended_identity['group_id']]['lastSelectedAtMs'], now_ms)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'pool.json'
+            keys = ['key-alpha', 'key-beta', 'key-gamma']
+            identity = write_stale_group_state(state_file, keys)
+            reduced = keys[:2]
+            expected_reduced = expected_key_order(reduced)
+            # 移除账号时同样清理已停用的旧分组。
+            self.assertEqual(
+                select_api_key(reduced, ENDPOINT, state_file, now_ms=1000 + STALE_GROUP_MS + 1)['api_key'],
+                expected_reduced[0],
+            )
+            groups = read_state_strict(state_file)['services'][identity['service_id']]['groups']
+            self.assertNotIn(identity['group_id'], groups, '已停用的旧分组应被清理')
+            self.assertIn(get_pool_identity(reduced, ENDPOINT)['group_id'], groups)
+
+    def test_fresh_groups_for_other_key_sets_are_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'pool.json'
+            first = ['key-alpha', 'key-beta']
+            second = ['key-alpha', 'key-gamma']
+            select_api_key(first, ENDPOINT, state_file, now_ms=1000)
+            select_api_key(second, ENDPOINT, state_file, now_ms=2000)
+            identity = get_pool_identity(first, ENDPOINT)
+            groups = read_state_strict(state_file)['services'][identity['service_id']]['groups']
+            self.assertIn(identity['group_id'], groups)
+            self.assertIn(get_pool_identity(second, ENDPOINT)['group_id'], groups)
 
     def test_matched_key_lists_share_one_rotation_cursor(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -405,6 +477,12 @@ class LlmAccountPoolTest(unittest.TestCase):
             'https://opencode.ai/zen/go/.%2E/v1',
             'https://opencode.ai/zen/go/%2e%2e/v1',
             'https://opencode.ai/zen/go/%2e%2e%2fprivate',
+            # 与 Node 对齐：反斜杠与编码过的路由分隔符一律拒绝。
+            'https://opencode.ai/zen/go/v1%2fresponses',
+            'https://opencode.ai/zen/go/v1%5cresponses',
+            'https://opencode.ai/zen/go/v1%2Fresponses',
+            'https://opencode.ai/zen/go\\v1',
+            'https://opencode.ai\\zen\\go\\v1',
         ):
             with self.subTest(endpoint=endpoint):
                 self.assertIsNone(normalize_opencode_go_service(endpoint))

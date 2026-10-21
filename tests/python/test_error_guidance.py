@@ -18,6 +18,7 @@ from error_guidance import (  # noqa: E402
     guidance_for,
     print_error_guidance,
     redact_sensitive,
+    rule_id_for,
 )
 
 DOCS = 'docs/'
@@ -28,7 +29,7 @@ CASES = (
         'name': 'arXiv 429 限流',
         'error': {'code': 'ARXIV_RATE_LIMITED', 'message': 'Too Many Requests', 'status_code': 429},
         'stage': 'fetch',
-        'cause': r'arXiv 或外部来源限流',
+        'cause': r'arXiv 限流',
         'commands': ('sleep 60', 'npm run fetch -- --date'),
         'doc_ref': 'docs/daily-fetch-boundary.md',
     },
@@ -218,7 +219,9 @@ class GuidanceRulesTest(unittest.TestCase):
         self.assertIn('npm run digest:prepare -- 2026-10-21', guidance['commands'])
         self.assertNotIn('YYYY-MM-DD', '\n'.join(guidance['commands']))
         fallback = guidance_for({'message': '来源 SHA 不符'}, 'deep-analysis')
-        self.assertIn('YYYY-MM-DD', '\n'.join(fallback['commands']))
+        self.assertIn('<DATE>', '\n'.join(fallback['commands']))
+        self.assertTrue(any('<DATE>' in step and 'YYYY-MM-DD' in step for step in fallback['next_steps']),
+                        '无日期时必须说明 <DATE> 占位要替换成批次日期')
 
         rate_limited = guidance_for({'message': 'request failed', 'status_code': 429, 'code': 'X'}, 'fetch')
         self.assertRegex(rate_limited['cause'], r'限流')
@@ -311,6 +314,91 @@ class PrintGuidanceTest(unittest.TestCase):
                     self.assertIn('cause', guidance)
         self.assertTrue(stderr.getvalue())
 
+
+
+class RuleIdConsistencyTest(unittest.TestCase):
+    # 与 tests/error-guidance.test.js 的 RULE_ID_FIXTURES 完全相同：两语言规则 id 必须一致。
+    FIXTURES = (
+        ('llm-account-pool', {'status': 401, 'message': 'Insufficient balance'}, 'fetch'),
+        ('official-oai-rss-stale', {'message': 'OAI responseDate is stale or invalid for the fixed batch boundary'}, 'fetch'),
+        ('arxiv-rate-limit', {'code': 'ARXIV_RATE_LIMITED', 'message': 'Too Many Requests'}, 'fetch'),
+        ('reader-repair-no-progress', {'code': 'READER_REPAIR_NO_PROGRESS', 'message': 'stopped'}, 'api-reader'),
+        ('reader-operator-correction-rejected', {'code': 'READER_OPERATOR_CORRECTION_REJECTED', 'message': 'x'}, 'api-reader'),
+        ('reader-table-adhesion', {'message': '单元格存在疑似粘连复写，表格核对'}, 'api-reader'),
+        ('reader-table-header-units', {'message': '第 3 个表格的列头单位缺少对应原文证据。'}, 'api-reader'),
+        ('reader-table-ablation-missing', {'message': '全文包含消融实验，但实验结果没有保留关键消融或组件对照'}, 'api-reader'),
+        ('blog-repository-dirty', {'message': '博客必须停在基线 HEAD 上且没有未提交改动'}, 'blog-review'),
+        ('blog-lock-busy', {'message': '等待共享博客仓库锁超时: /tmp/lock'}, 'blog-push'),
+        ('paper-lock-busy', {'message': '等待文件锁超时: data/.locks/paper.lock'}, 'batch-analyze'),
+        ('source-sha-mismatch', {'message': '分析结果中的论文来源 SHA 与 sourceSha256 不一致'}, 'deep-analysis'),
+        ('generation-snapshot-stale', {'message': '博客生成清单无法读取: /tmp/manifest.json'}, 'blog-push'),
+        ('blog-review-receipt-missing', {'message': '缺少与当前页面字节匹配的审查凭证'}, 'blog-push'),
+        ('upstream-rate-limit', {'status': 429, 'message': 'busy'}, 'api-reader'),
+        ('generic-fallback', {'message': '完全未知的故障'}, 'fetch'),
+    )
+
+    def test_rule_ids_match_js_fixtures(self):
+        for expected, error, stage in self.FIXTURES:
+            with self.subTest(expected=expected):
+                self.assertEqual(rule_id_for(error, stage), expected)
+
+    def test_negative_cases_do_not_over_match(self):
+        self.assertEqual(rule_id_for({'status': 429, 'message': 'upstream busy'}, 'api-reader'), 'upstream-rate-limit')
+        self.assertEqual(rule_id_for({'status': 401, 'message': 'upstream rejected the request'}, 'fetch'), 'generic-fallback')
+        for message in ('fetch failed 429', 'html 429', 'pdf download 429', '来源 429'):
+            self.assertEqual(rule_id_for({'status': 429, 'message': message}, 'fetch'), 'upstream-rate-limit', message)
+        self.assertEqual(rule_id_for({'code': 'ARXIV_RATE_LIMITED', 'message': 'Too Many Requests'}, 'fetch'),
+                         'arxiv-rate-limit')
+
+    def test_status_keys_are_unified_across_languages(self):
+        for key in ('status', 'statusCode', 'status_code', 'httpStatus', 'http_status', 'errno', 'code'):
+            with self.subTest(key=key):
+                self.assertEqual(rule_id_for({'message': 'request failed', key: 429}, 'fetch'), 'upstream-rate-limit')
+                self.assertEqual(rule_id_for({'message': 'Insufficient balance', key: 401}, 'fetch'), 'llm-account-pool')
+
+    def test_reader_stage_429_gets_reader_command(self):
+        reader_error = {'status': 429, 'message': 'arxiv.org HTML 429'}
+        self.assertTrue(any(command.startswith('npm run api:reader:refresh -- --all --date')
+                            for command in guidance_for(reader_error, 'api-reader')['commands']))
+        self.assertTrue(any(command.startswith('npm run fetch -- --date')
+                            for command in guidance_for(reader_error, 'fetch')['commands']))
+        plain = {'status': 429, 'message': 'busy'}
+        self.assertTrue(any(command.startswith('npm run deep -- --date')
+                            for command in guidance_for(plain, 'deep-analysis')['commands']))
+
+    def test_source_sha_doc_ref_points_to_data_format(self):
+        guidance = guidance_for({'message': '来源 SHA 与 sourceSha256 不一致'}, 'deep-analysis')
+        self.assertEqual(guidance['doc_ref'], 'docs/data-format.md#日更来源的保存与核验')
+
+    def test_python_entries_wire_summaries_dates_and_guidance(self):
+        for name in ('generate-blog.py', 'review-blog.py', 'push-blog.py'):
+            with self.subTest(name=name):
+                source = (ROOT / 'scripts' / name).read_text(encoding='utf-8')
+                self.assertIn('write_stage_summary', source)
+                self.assertIn('print_error_guidance', source)
+                self.assertIn('redact_sensitive', source)
+                self.assertIn('elapsed_ms=', source)
+                if name != 'generate-blog.py':
+                    self.assertIn('date=date_str', source)
+                    self.assertIn('except SystemExit as exc', source)
+                # 指引只允许出现在 except 处理器或紧随原退出码退出的分支。
+                for match in re.finditer(r'print_error_guidance', source):
+                    line = source[source.rfind('\n', 0, match.start()) + 1:match.start()]
+                    if 'import' in line:
+                        continue
+                    window = source[max(0, match.start() - 900):match.start()]
+                    after = source[match.start():match.start() + 500]
+                    self.assertTrue('except' in window or 'raise' in after or 'sys.exit(' in after,
+                                    f'{name} 的指引必须写在 except 内或紧随原退出码退出')
+
+    def test_generate_entry_treats_systemexit_zero_as_ok(self):
+        source = (ROOT / 'scripts' / 'generate-blog.py').read_text(encoding='utf-8')
+        self.assertIn('if code == 0:', source)
+        self.assertIn("write_stage_summary('生成', 'ok', '生成结束（退出码 0）'", source)
+        zero_branch = source.split('if code == 0:', 1)[1].split('else:', 1)[0]
+        self.assertNotIn('print_error_guidance', zero_branch)
+        error_branch = source.split('if code == 0:', 1)[1].split('else:', 1)[1]
+        self.assertIn('print_error_guidance', error_branch.split('raise', 1)[0])
 
 if __name__ == '__main__':
     unittest.main()

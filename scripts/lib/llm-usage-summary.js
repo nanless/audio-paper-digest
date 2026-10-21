@@ -61,16 +61,18 @@ function safeLabel(value, fallback = 'unknown') {
     return cleaned || fallback;
 }
 
+// 真实 llm-usage 事件当前没有 accountId 字段，所以“按账号”默认不可得，不能伪造
+// unknown 分组。写入端以后补上账号时只接受 64 位十六进制指纹；其他形态转成不可逆短指纹，
+// 不把原始凭据带进状态面板。
 function accountKey(event) {
-    const raw = event?.accountId ?? event?.account_id ?? event?.account ?? event?.accountName
-        ?? event?.accountNameId ?? event?.keyId ?? event?.apiKeyId;
-    if (raw === null || raw === undefined || raw === '') return 'unknown';
-    if (typeof raw === 'object') return 'unknown';
+    const raw = event?.accountId ?? event?.account_id ?? event?.accountKey ?? event?.account_key
+        ?? event?.apiKeyId ?? event?.api_key_id ?? event?.keyId ?? event?.account;
+    if (raw === null || raw === undefined || raw === '') return null;
+    if (typeof raw === 'object') return null;
     const text = String(raw).trim();
-    if (!text) return 'unknown';
-    // 账号通常是稳定哈希；万一写入的是原始凭据，只保留不可逆短指纹。
-    if (/^[a-f0-9]{64}$/i.test(text) || /^[A-Za-z0-9_.:-]{1,64}$/.test(text)) return text;
-    return require('node:crypto').createHash('sha256').update(text).digest('hex').slice(0, 16);
+    if (!text) return null;
+    if (/^[a-f0-9]{64}$/i.test(text)) return text.toLowerCase();
+    return `sha256:${require('node:crypto').createHash('sha256').update(text).digest('hex').slice(0, 16)}`;
 }
 
 function costNumber(value) {
@@ -159,6 +161,10 @@ function emptyBucket() {
     return { total: 0, success: 0, failed: 0, cost: 0, costEvents: 0 };
 }
 
+function roundCost(value) {
+    return Number(Number(value || 0).toFixed(8));
+}
+
 function addToBucket(bucket, record) {
     bucket.total += 1;
     if (record.outcome === 'completed') bucket.success += 1;
@@ -172,7 +178,7 @@ function addToBucket(bucket, record) {
 function sortedBuckets(buckets) {
     return Object.fromEntries([...buckets.entries()].sort((left, right) => (
         right[1].total - left[1].total || left[0].localeCompare(right[0])
-    )));
+    )).map(([key, bucket]) => [key, { ...bucket, cost: roundCost(bucket.cost) }]));
 }
 
 function aggregateRecords(records, date) {
@@ -189,6 +195,8 @@ function aggregateRecords(records, date) {
         }
         addToBucket(summary, record);
         for (const [map, key] of [[byStage, record.stage], [byModel, record.model], [byAccount, record.account]]) {
+            // 账号字段缺失时不生成分组，也不伪造 unknown。
+            if (key === null || key === undefined) continue;
             if (!map.has(key)) map.set(key, emptyBucket());
             addToBucket(map.get(key), record);
         }
@@ -196,7 +204,7 @@ function aggregateRecords(records, date) {
     summary.byStage = sortedBuckets(byStage);
     summary.byModel = sortedBuckets(byModel);
     summary.byAccount = sortedBuckets(byAccount);
-    summary.cost = Number(summary.cost.toFixed(8));
+    summary.cost = roundCost(summary.cost);
     return summary;
 }
 
@@ -443,13 +451,20 @@ function formatBuckets(label, buckets, limit = 8) {
 }
 
 function formatText(summary) {
+    const costText = summary.costEvents > 0
+        ? formatCost(summary.cost)
+        : '无费用记录（仅有 token 用量）';
     const lines = [
-        `[llm-usage] ${summary.date} 调用=${summary.total} 成功=${summary.success} 失败=${summary.failed} 费用=${formatCost(summary.cost)}`
+        `[llm-usage] ${summary.date} 调用=${summary.total} 成功=${summary.success} 失败=${summary.failed} 费用=${costText}`
     ];
     if (summary.total === 0) lines.push('  该日期没有可用的用量事件。');
     lines.push(...formatBuckets('按阶段', summary.byStage));
     lines.push(...formatBuckets('按模型', summary.byModel));
-    lines.push(...formatBuckets('按账号', summary.byAccount));
+    if (Object.keys(summary.byAccount || {}).length > 0) {
+        lines.push(...formatBuckets('按账号', summary.byAccount));
+    } else {
+        lines.push('  按账号: 不可得（事件未记录账号字段）');
+    }
     if (summary.costEvents > 0) lines.push(`  费用事件数=${summary.costEvents}`);
     return lines.join('\n');
 }

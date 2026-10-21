@@ -67,7 +67,7 @@ function redactLogText(value) {
 
     // URL 里的凭证要先去掉，再处理通用的凭证字段。
     text = text.replace(
-        /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+)@/gi,
+        /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/"'<>]*@/gi,
         '$1[REDACTED]@'
     );
 
@@ -79,7 +79,9 @@ function redactLogText(value) {
 
     // 还要遮住单独出现的 authorization 值，以及经常被打印出来的密钥片段。
     text = text.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
-    text = text.replace(/\bsk-[A-Za-z0-9._-]{3,}/gi, '[REDACTED]');
+    text = text.replace(/\bsk-[A-Za-z0-9._-]+/gi, '[REDACTED]');
+    // 项目账号池的 oc_sk_ 前缀不区分大小写。
+    text = text.replace(/(?<![A-Za-z0-9_])oc_sk_[A-Za-z0-9_-]+/gi, '[REDACTED]');
 
     return text;
 }
@@ -386,26 +388,53 @@ const STAGE_SUMMARY_STATUS_LABELS = Object.freeze({
     error: '失败'
 });
 const STAGE_SUMMARY_MESSAGE_MAX_CHARS = 500;
+const STAGE_SUMMARY_RAW_INPUT_MAX_CHARS = 20000;
+const STAGE_SUMMARY_REDACTION_SLACK_MAX = 65536;
 const STAGE_SUMMARY_DIR_MODE = 0o700;
 const STAGE_SUMMARY_FILE_MODE = 0o600;
+const STAGE_SUMMARY_MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
+
+function sanitizeStageSummaryText(value) {
+    let text = String(value ?? '');
+    // 先去掉 ANSI CSI 序列，再清掉残留 ESC 与行分隔控制字符，保证只写一行。
+    text = text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
+    text = text.replace(/\x1b/g, '');
+    text = text.replace(/[\r\n]+/g, ' ');
+    text = text.replace(/[\u000b\u000c\u001c-\u001e\u0085\u2028\u2029]/g, '');
+    // 其余 C0/C1、bidi 与零宽字符也不能进入单行摘要（防终端注入/隐藏文本）。
+    text = text.replace(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff]/g, '');
+    return text;
+}
 
 function stageSummaryLineText(value) {
-    return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+    return sanitizeStageSummaryText(value).trim();
+}
+
+function stageSummarySecrets() {
+    const merged = new Map();
+    for (const secret of environmentSecrets()) if (secret) merged.set(secret, true);
+    for (const secret of configuredSecrets) if (secret) merged.set(secret, true);
+    return [...merged.keys()].sort((left, right) => right.length - left.length);
 }
 
 function redactStageSummaryText(value) {
     let text = String(value ?? '');
-    for (const secret of configuredSecrets) {
-        if (secret && text.includes(secret)) text = text.split(secret).join('[REDACTED]');
+    for (const secret of stageSummarySecrets()) {
+        if (text.includes(secret)) text = text.split(secret).join('[REDACTED]');
     }
-    // 阶段摘要只按已知密钥形态做定向替换，避免把整行「人话」消息吞掉。
-    text = text.replace(/oc_sk_[A-Za-z0-9_-]+/g, '[REDACTED]');
+    // 与文件日志同一批凭证形态；值只遮到空白/分隔符，保留单行摘要的可读性。
+    // 统一用 ASCII 字符类与 lookbehind，避免 Node/Python 的 \b、\s 语义差异。
     text = text.replace(
-        /([A-Za-z0-9_-]*api[-_ ]?keys?)\s*=\s*[^\s&;,。，；;]+/gi,
-        '$1=[REDACTED]'
+        /(?<![A-Za-z0-9_])([a-z][a-z0-9+.-]*:\/\/)[^ \t"\'<>]*@/gi,
+        '$1[REDACTED]@'
     );
-    text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
-    text = text.replace(/\bsk-[A-Za-z0-9._-]{3,}/gi, '[REDACTED]');
+    text = text.replace(/(?<![A-Za-z0-9_])(?:Bearer|Basic)[ \t]+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
+    text = text.replace(
+        /((?:["']?(?:authorization|proxy-authorization|x-api-key|api[-_ ]?keys?|key|access[-_ ]?token|refresh[-_ ]?token|token|secret|password|passwd|cookie|set-cookie|paper_analyzer_api_keys?|kimi_api_key|[a-z0-9_-]+_(?:api_keys?|token|secret|password))["']?)[ \t]*[:=][ \t]*)([^ \t&;；,，。]+)/gi,
+        '$1[REDACTED]'
+    );
+    text = text.replace(/(?<![A-Za-z0-9_])oc_sk_[A-Za-z0-9_-]+/gi, '[REDACTED]');
+    text = text.replace(/(?<![A-Za-z0-9_])sk-[A-Za-z0-9._-]+/gi, '[REDACTED]');
     return text;
 }
 
@@ -413,6 +442,115 @@ function truncateStageSummaryText(text, maxChars = STAGE_SUMMARY_MESSAGE_MAX_CHA
     const chars = Array.from(String(text ?? ''));
     if (chars.length <= maxChars) return chars.join('');
     return `${chars.slice(0, Math.max(maxChars - 1, 0)).join('')}…`;
+}
+
+function capStageSummaryText(text, maxChars = STAGE_SUMMARY_RAW_INPUT_MAX_CHARS) {
+    const chars = Array.from(String(text ?? ''));
+    return chars.length > maxChars ? chars.slice(0, maxChars).join('') : chars.join('');
+}
+
+// 截断窗口多留出最长密钥的长度，避免密钥恰好跨在窗口边界上漏掉前缀。
+function stageSummaryRedactionSlack() {
+    let maxLength = 0;
+    for (const secret of stageSummarySecrets()) maxLength = Math.max(maxLength, secret.length);
+    return Math.min(Math.max(maxLength - 1, 0), STAGE_SUMMARY_REDACTION_SLACK_MAX);
+}
+
+// 先按上限截断原始输入，再跑脱敏正则，避免在超长文本上反复全量匹配。
+function prepareStageSummaryField(value, maxChars = STAGE_SUMMARY_MESSAGE_MAX_CHARS) {
+    const text = stageSummaryLineText(value);
+    const capped = capStageSummaryText(
+        text,
+        STAGE_SUMMARY_RAW_INPUT_MAX_CHARS + stageSummaryRedactionSlack()
+    );
+    return truncateStageSummaryText(redactStageSummaryText(capped), maxChars);
+}
+
+function splitShortestDecimal(text) {
+    let mantissa = text;
+    let exponent = 0;
+    const eIndex = mantissa.search(/[eE]/);
+    if (eIndex >= 0) {
+        exponent = Number.parseInt(mantissa.slice(eIndex + 1), 10);
+        mantissa = mantissa.slice(0, eIndex);
+    }
+    const dotIndex = mantissa.indexOf('.');
+    const intPart = dotIndex >= 0 ? mantissa.slice(0, dotIndex) : mantissa;
+    const fracPart = dotIndex >= 0 ? mantissa.slice(dotIndex + 1) : '';
+    let digits = `${intPart}${fracPart}`;
+    let pointPos = intPart.length + exponent;
+    let leading = 0;
+    while (leading < digits.length && digits[leading] === '0') leading += 1;
+    digits = digits.slice(leading);
+    pointPos -= leading;
+    digits = digits.replace(/0+$/, '');
+    if (digits === '') return null;
+    return { digits, pointPos };
+}
+
+// 统一 Node/Python 的数字文本：安全整数用整数写法，其余按十进制最短表示重排。
+function formatStageSummaryNumber(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '';
+    if (value === 0) return '0';
+    if (Number.isSafeInteger(value)) return String(value);
+    const negative = value < 0;
+    const absValue = Math.abs(value);
+    const parts = splitShortestDecimal(String(absValue));
+    if (!parts) return '0';
+    const { digits, pointPos } = parts;
+    let body;
+    if (absValue >= 1e21 || absValue < 1e-6) {
+        const mantissa = digits.length > 1 ? `${digits[0]}.${digits.slice(1)}` : digits;
+        const exponent = pointPos - 1;
+        body = `${mantissa}e${exponent >= 0 ? '+' : ''}${exponent}`;
+    } else if (pointPos <= 0) {
+        body = `0.${'0'.repeat(-pointPos)}${digits}`;
+    } else if (pointPos >= digits.length) {
+        body = `${digits}${'0'.repeat(pointPos - digits.length)}`;
+    } else {
+        body = `${digits.slice(0, pointPos)}.${digits.slice(pointPos)}`;
+    }
+    return negative ? `-${body}` : body;
+}
+
+function renderStageSummaryJson(value) {
+    if (value === null) return 'null';
+    const type = typeof value;
+    if (type === 'boolean') return value ? 'true' : 'false';
+    if (type === 'number') return formatStageSummaryNumber(value) || 'null';
+    if (type === 'bigint') return JSON.stringify(String(value));
+    if (type === 'string') return JSON.stringify(value);
+    if (Array.isArray(value)) {
+        return `[${value.map(item => renderStageSummaryJson(item) ?? 'null').join(',')}]`;
+    }
+    if (type === 'object') {
+        const parts = [];
+        for (const [key, item] of Object.entries(value)) {
+            const itemText = renderStageSummaryJson(item);
+            if (itemText === undefined) continue;
+            parts.push(`${JSON.stringify(key)}:${itemText}`);
+        }
+        return `{${parts.join(',')}}`;
+    }
+    return undefined;
+}
+
+function stageSummaryJsonText(value) {
+    try {
+        const rendered = renderStageSummaryJson(value);
+        return rendered === undefined ? '' : rendered;
+    } catch (_) {
+        return '';
+    }
+}
+
+function stageSummaryExtraText(extra) {
+    if (extra === undefined || extra === null) return '';
+    if (typeof extra === 'string') return stageSummaryLineText(extra);
+    if (typeof extra === 'boolean') return extra ? 'true' : 'false';
+    if (typeof extra === 'number') return formatStageSummaryNumber(extra);
+    if (typeof extra === 'bigint') return JSON.stringify(String(extra));
+    return stageSummaryJsonText(extra);
 }
 
 function normalizeStageSummaryStatus(status) {
@@ -446,51 +584,50 @@ function resolveStageSummaryNow(now) {
     return new Date();
 }
 
+function isStageSummaryDateText(text) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) return false;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (month < 1 || month > 12 || day < 1) return false;
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    return parsed.getUTCFullYear() === year
+        && parsed.getUTCMonth() === month - 1
+        && parsed.getUTCDate() === day;
+}
+
 function resolveStageSummaryDate(date, fallbackNow) {
     if (date instanceof Date && !Number.isNaN(date.getTime())) return stageSummaryDate(date);
     const text = stageSummaryLineText(date);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-    if (text) {
-        const parsed = new Date(text);
-        if (!Number.isNaN(parsed.getTime())) return stageSummaryDate(parsed);
-    }
+    if (isStageSummaryDateText(text)) return text;
     return stageSummaryDate(fallbackNow);
 }
 
 function formatStageSummaryElapsed(elapsedMs) {
-    if (elapsedMs === undefined || elapsedMs === null || typeof elapsedMs === 'boolean' || elapsedMs === '') {
+    let value;
+    if (typeof elapsedMs === 'number') {
+        value = elapsedMs;
+    } else if (typeof elapsedMs === 'string') {
+        const text = elapsedMs.trim();
+        // 只接受十进制数字串：拒绝 0x10、1e3、空白等形态。
+        if (!/^\d+(?:\.\d+)?$/.test(text)) return '';
+        value = Number(text);
+    } else {
         return '';
     }
-    const value = Number(elapsedMs);
     if (!Number.isFinite(value) || value < 0) return '';
     const tenths = Math.round(value / 100);
     return tenths % 10 === 0 ? `${tenths / 10}s` : `${(tenths / 10).toFixed(1)}s`;
 }
 
-function stageSummaryExtraText(extra) {
-    if (extra === undefined || extra === null) return '';
-    if (typeof extra === 'string') return stageSummaryLineText(extra);
-    if (typeof extra === 'number') return Number.isFinite(extra) ? String(extra) : '';
-    if (typeof extra === 'boolean') return String(extra);
-    try {
-        return stageSummaryLineText(JSON.stringify(extra));
-    } catch (_) {
-        return '';
-    }
-}
-
 function buildStageSummaryLine(options = {}) {
     const now = resolveStageSummaryNow(options.now);
     const normalizedStatus = normalizeStageSummaryStatus(options.status);
-    const stage = truncateStageSummaryText(redactStageSummaryText(stageSummaryLineText(options.stage)))
-        || '未命名阶段';
-    const message = truncateStageSummaryText(
-        redactStageSummaryText(stageSummaryLineText(options.message))
-    );
+    const stage = prepareStageSummaryField(options.stage) || '未命名阶段';
+    const message = prepareStageSummaryField(options.message);
     const elapsed = formatStageSummaryElapsed(options.elapsedMs);
-    const extra = truncateStageSummaryText(
-        redactStageSummaryText(stageSummaryExtraText(options.extra))
-    );
+    const extra = prepareStageSummaryField(stageSummaryExtraText(options.extra));
     const line = [
         `[${stageSummaryTimestamp(now)}]`,
         `[阶段 ${stage}]`,
@@ -507,43 +644,100 @@ function buildStageSummaryLine(options = {}) {
     };
 }
 
+function warnStageSummary(message) {
+    try {
+        console.warn(`[log] ${message}`);
+    } catch (_) {
+        // 连警告都失败时也不能打断业务调用方。
+    }
+}
+
+function warnStageSummaryFailure(prefix, error) {
+    try {
+        const detail = redactStageSummaryText(error?.message ?? String(error));
+        warnStageSummary(`${prefix}: ${detail}`);
+    } catch (_) {
+        // 连失败详情都处理不了时，退化成不带详情的警告，绝不影响业务调用方。
+        warnStageSummary(prefix);
+    }
+}
+
+function assertStageSummaryNotSymlink(targetPath, label) {
+    try {
+        const stat = fs.lstatSync(targetPath);
+        if (stat.isSymbolicLink()) throw new Error(`${label}是符号链接：${targetPath}`);
+    } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+    }
+}
+
 function ensureStageSummaryDir(dirPath) {
+    assertStageSummaryNotSymlink(dirPath, '阶段摘要目录');
     fs.mkdirSync(dirPath, { recursive: true, mode: STAGE_SUMMARY_DIR_MODE });
-    if (process.platform !== 'win32') fs.chmodSync(dirPath, STAGE_SUMMARY_DIR_MODE);
+    // mkdir 之后再核一次，防止检查与创建之间被换成符号链接。
+    assertStageSummaryNotSymlink(dirPath, '阶段摘要目录');
 }
 
 function appendStageSummaryLine(filePath, line) {
-    fs.appendFileSync(filePath, `${line}\n`, { encoding: 'utf8', mode: STAGE_SUMMARY_FILE_MODE });
-    // appendFileSync 的 mode 只在新建文件时生效；已有文件要显式收紧。
-    if (process.platform !== 'win32') fs.chmodSync(filePath, STAGE_SUMMARY_FILE_MODE);
+    assertStageSummaryNotSymlink(filePath, '阶段摘要文件');
+    // lstat 与 append 之间仍可能被换成符号链接；POSIX 上用 O_NOFOLLOW 兜底。
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    const flags = fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | noFollow;
+    const fd = fs.openSync(filePath, flags, STAGE_SUMMARY_FILE_MODE);
+    try {
+        fs.writeSync(fd, `${line}\n`);
+    } finally {
+        try { fs.closeSync(fd); } catch (_) { /* 已尽力写入 */ }
+    }
 }
 
 /**
  * 往 logs/summaries/<YYYY-MM-DD>-summary.log 追加一行「人话」阶段摘要。
  * 写日志是旁路能力：任何失败都只 console.warn，不向业务层抛错。
- * 返回 { filePath, line, status }；写入失败返回 null。
+ * 未显式传 logsDir 且处于测试上下文时直接返回 null，避免污染真实日志目录。
+ * 返回 { filePath, line, status, permissionsTightened }；写入失败返回 null。
  */
 function writeStageSummary(options = {}) {
     const safeOptions = options && typeof options === 'object' ? options : {};
+    const explicitLogsDir = Boolean(safeOptions.logsDir);
+    if (!explicitLogsDir && isTestProcess() && safeOptions.allowInTestProcess !== true) return null;
     const built = buildStageSummaryLine(safeOptions);
-    if (built.warning) console.warn(`[log] ${built.warning}`);
-    const logsDir = safeOptions.logsDir
+    if (built.warning) warnStageSummary(built.warning);
+    const logsDir = explicitLogsDir
         ? path.resolve(String(safeOptions.logsDir))
         : path.join(__dirname, '..', 'logs', 'summaries');
     const filePath = path.join(logsDir, `${built.date}-summary.log`);
+    let permissionsTightened = true;
     try {
         ensureStageSummaryDir(logsDir);
-        appendStageSummaryLine(filePath, built.line);
-        return { filePath, line: built.line, status: built.status };
     } catch (error) {
-        try {
-            const detail = redactStageSummaryText(error?.message ?? String(error));
-            console.warn(`[log] 阶段摘要写入失败: ${detail}`);
-        } catch (_) {
-            // 连警告都失败时也不能打断业务调用方。
-        }
+        warnStageSummaryFailure('阶段摘要写入失败', error);
         return null;
     }
+    if (process.platform !== 'win32') {
+        try {
+            fs.chmodSync(logsDir, STAGE_SUMMARY_DIR_MODE);
+        } catch (error) {
+            permissionsTightened = false;
+            warnStageSummaryFailure('阶段摘要目录权限收紧失败', error);
+        }
+    }
+    try {
+        appendStageSummaryLine(filePath, built.line);
+    } catch (error) {
+        warnStageSummaryFailure('阶段摘要写入失败', error);
+        return null;
+    }
+    if (process.platform !== 'win32') {
+        try {
+            // appendFileSync 的 mode 只在新建文件时生效；已有文件要显式收紧。
+            fs.chmodSync(filePath, STAGE_SUMMARY_FILE_MODE);
+        } catch (error) {
+            permissionsTightened = false;
+            warnStageSummaryFailure('阶段摘要文件权限收紧失败', error);
+        }
+    }
+    return { filePath, line: built.line, status: built.status, permissionsTightened };
 }
 
 module.exports = {

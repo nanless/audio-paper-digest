@@ -18,19 +18,14 @@
  * 不走 readStateStrict（它也会 chmod）。工作区角色只调用只读的
  * workspace-role.readWorkspaceRole。doctor 本身是“角色/环境坏了也要能跑”的
  * 诊断入口，所以不调用 requireExternalRuntime（避免角色检查挡住体检）；但可靠
- * 的 CODEX_SANDBOX 标记仍在任何检查前退出，符合项目“脚本只在沙箱外运行”的约束。
+ * 的 CODEX_SANDBOX 标记仍在 main()/require.main 入口、任何检查前 exit 1，
+ * 符合项目“脚本只在沙箱外运行”的约束；被 import 时不杀进程。
  */
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const SANDBOX_MARKER = String(process.env.CODEX_SANDBOX || '').trim();
-if (SANDBOX_MARKER) {
-    console.error(`doctor 必须在沙箱外运行（检测到 CODEX_SANDBOX=${SANDBOX_MARKER}）。`
-        + '体检会读取本机 .env、运行目录和 Git 仓库；请以沙箱外权限重新执行。');
-    process.exit(1);
-}
 
 const {
     STATE_SCHEMA_VERSION: LLM_POOL_STATE_SCHEMA_VERSION,
@@ -116,10 +111,16 @@ function truncatedText(value, maxLength = 160) {
 function maskPath(value, homeDirectory = os.homedir()) {
     const text = String(value == null ? '' : value);
     const home = String(homeDirectory || '');
-    if (!home) return text;
-    if (text === home) return '~';
-    if (text.startsWith(`${home}${path.sep}`)) return `~${text.slice(home.length)}`;
-    if (text.startsWith(`${home}/`)) return `~${text.slice(home.length)}`;
+    if (home) {
+        if (text === home) return '~';
+        if (text.startsWith(`${home}${path.sep}`)) return `~${text.slice(home.length)}`;
+        if (text.startsWith(`${home}/`)) return `~${text.slice(home.length)}`;
+    }
+    // 非主目录的绝对路径只保留末两级，避免体检输出泄露无关的本机目录结构。
+    if (path.isAbsolute(text)) {
+        const parts = text.split(path.sep).filter(Boolean);
+        if (parts.length > 2) return `…${path.sep}${parts.slice(-2).join(path.sep)}`;
+    }
     return text;
 }
 
@@ -315,7 +316,14 @@ function compareVersionParts(left, right) {
     return 0;
 }
 
+function isPrereleaseVersion(version) {
+    // semver 预发布版本（如 22.3.0-rc.1）低于同版本正式版，不满足 engines。
+    const core = String(version == null ? '' : version).trim().replace(/^v/, '');
+    return core.split('+')[0].includes('-');
+}
+
 function satisfiesNodeRange(version) {
+    if (isPrereleaseVersion(version)) return false;
     const parts = parseVersionParts(version);
     if (!parts) return false;
     const [major] = parts;
@@ -331,7 +339,11 @@ function checkNodeVersion(version) {
         return makeCheck('fail', 'Node 版本', `无法识别 Node 版本: ${truncatedText(version, 40)}`,
             `安装满足 ${REQUIRED_NODE_RANGE} 的 Node 后重试`);
     }
-    const display = `v${parts.join('.')}`;
+    const display = `v${String(version).trim().replace(/^v/, '')}`;
+    if (isPrereleaseVersion(version)) {
+        return makeCheck('fail', 'Node 版本', `${display} 是预发布版本，不满足 ${REQUIRED_NODE_RANGE}`,
+            '安装正式版 Node 22.3+（或 20.18.1+）后重试');
+    }
     if (!satisfiesNodeRange(version)) {
         return makeCheck('fail', 'Node 版本', `${display} 不满足 ${REQUIRED_NODE_RANGE}`,
             '安装 Node 22.3+（或 20.18.1+）后重试');
@@ -590,6 +602,7 @@ function walkDirSizeLimited(root, options = {}) {
     const result = {
         path: path.resolve(String(root)),
         exists: false,
+        rootKind: 'missing',
         complete: true,
         bytes: 0,
         files: 0,
@@ -604,26 +617,32 @@ function walkDirSizeLimited(root, options = {}) {
         rootStat = fsModule.lstatSync(result.path);
     } catch (error) {
         if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return result;
+        result.rootKind = 'error';
         result.complete = false;
         result.errors.push({ path: result.path, message: error?.code || error?.message || String(error) });
         return result;
     }
     result.exists = true;
     if (rootStat.isSymbolicLink()) {
+        // 根是符号链接时不能跟随（统计范围必须留在受控目录内），也不能报 0 B。
+        result.rootKind = 'symlink';
         result.symlinks += 1;
         result.entries = 1;
         return result;
     }
     if (rootStat.isFile()) {
+        result.rootKind = 'file';
         result.files = 1;
         result.bytes = rootStat.size;
         result.entries = 1;
         return result;
     }
     if (!rootStat.isDirectory()) {
+        result.rootKind = 'other';
         result.entries = 1;
         return result;
     }
+    result.rootKind = 'directory';
     const stack = [result.path];
     while (stack.length > 0) {
         if (result.entries >= maxEntries || now() > deadline) {
@@ -695,8 +714,21 @@ function checkDiskUsage(measurements) {
         if (!item) {
             return makeCheck('fail', target.label, '未能统计该目录');
         }
+        if (item.rootKind === 'error') {
+            return makeCheck('fail', target.label, '无法读取目录信息（权限或 I/O 错误）',
+                '检查该目录权限后重试；不要为此修改权限或删除目录');
+        }
         if (!item.exists) {
             return makeCheck('ok', target.label, '目录不存在（未初始化或已清理）');
+        }
+        if (item.rootKind === 'symlink') {
+            return makeCheck('warn', target.label, '根是符号链接，未跟随符号链接，无法统计占用',
+                '把该路径改为真实目录（或确认软链指向的目录后再统计）');
+        }
+        if (item.rootKind === 'file' || item.rootKind === 'other') {
+            const kind = item.rootKind === 'file' ? '普通文件' : '非目录项';
+            return makeCheck('warn', target.label, `根不是目录（${kind}），无法统计目录占用`,
+                '检查该路径是否被文件占用或挂载异常');
         }
         if (!item.complete) {
             const note = item.bytes > target.softLimitBytes
@@ -737,6 +769,14 @@ function pathKind(target, fsModule = fs) {
     }
 }
 
+function unquoteGitPath(value) {
+    const text = String(value == null ? '' : value);
+    if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
+        return text.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    }
+    return text;
+}
+
 function parseGitStatusPaths(stdout) {
     const paths = [];
     let lineCount = 0;
@@ -744,18 +784,17 @@ function parseGitStatusPaths(stdout) {
         const line = rawLine.replace(/\r$/, '');
         if (!line.trim()) continue;
         lineCount += 1;
-        let rest = line.slice(3);
-        if (rest.startsWith('"') && rest.endsWith('"')) {
-            rest = rest.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-        }
+        const rest = line.slice(3);
+        // 先按 " -> " 拆分（改名行两侧可能各自带引号），再去引号。
         const renameIndex = rest.indexOf(' -> ');
         if (renameIndex >= 0) {
-            const before = rest.slice(0, renameIndex);
-            const after = rest.slice(renameIndex + 4);
+            const before = unquoteGitPath(rest.slice(0, renameIndex));
+            const after = unquoteGitPath(rest.slice(renameIndex + 4));
             if (before) paths.push(before);
             if (after) paths.push(after);
-        } else if (rest) {
-            paths.push(rest);
+        } else {
+            const single = unquoteGitPath(rest);
+            if (single) paths.push(single);
         }
     }
     return { lineCount, paths };
@@ -764,17 +803,41 @@ function parseGitStatusPaths(stdout) {
 function findDateOverlap(paths, date) {
     const target = String(date || '');
     if (!target) return [];
+    // 日期段后只要不是数字就算重叠：覆盖 "2026-10-22 new.md"、"2026-10-22_v2.md"、
+    // "2026-10-22-a.md"，但不匹配 "2026-10-220-x.md"。
+    const pattern = new RegExp(`^${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\d)`);
     const found = new Set();
     for (const candidate of paths || []) {
         const normalized = String(candidate).replace(/\\/g, '/');
         const segments = normalized.split('/');
-        if (segments.some(segment => segment === target
-            || segment.startsWith(`${target}-`)
-            || segment.startsWith(`${target}.`))) {
+        if (segments.some(segment => pattern.test(segment))) {
             found.add(String(candidate));
         }
     }
     return [...found];
+}
+
+const HUGO_CONFIG_CANDIDATES = Object.freeze([
+    'hugo.toml',
+    'hugo.yaml',
+    'hugo.json',
+    'config.toml',
+    'config.yaml',
+    'config.json',
+    'config/_default'
+]);
+
+function findHugoConfig(repoPath, fsModule = fs) {
+    for (const candidate of HUGO_CONFIG_CANDIDATES) {
+        const target = path.join(repoPath, candidate);
+        try {
+            const stat = fsModule.statSync(target);
+            if (stat.isDirectory() || stat.isFile()) return candidate;
+        } catch (_error) {
+            // 继续检查下一个候选。
+        }
+    }
+    return null;
 }
 
 function inspectBlogRepo(repoPath) {
@@ -782,12 +845,15 @@ function inspectBlogRepo(repoPath) {
         repoPath,
         exists: false,
         postsExists: false,
+        hugoConfig: null,
         isGitRepo: false,
         git: null
     };
     if (!repoPath || pathKind(repoPath) !== 'directory') return result;
     result.exists = true;
     result.postsExists = pathKind(path.join(repoPath, 'content', 'posts')) === 'directory';
+    result.hugoConfig = findHugoConfig(repoPath);
+    if (!result.postsExists && !result.hugoConfig) return result;
     if (!result.postsExists) return result;
 
     // GIT_OPTIONAL_LOCKS=0：git status 不刷新索引，保持只读。
@@ -838,22 +904,29 @@ function evaluateBlogRepo(input) {
             '在 .env 设置 PAPER_DIGEST_BLOG_REPO 指向真实 Hugo 仓库');
     }
     if (!state.postsExists) {
-        return makeCheck('fail', '博客仓库', `${prefix}仓库缺少 content/posts，不是 Hugo 博客仓库: ${displayRepo}`,
+        if (state.hugoConfig) {
+            // 显式配置的仓库缺少 content/posts 时仍是硬错误：发布/去重会得到空集合。
+            return makeCheck(state.configured ? 'fail' : 'warn', '博客仓库',
+                `${prefix}仓库像 Hugo（找到 ${state.hugoConfig}）但缺少 content/posts: ${displayRepo}`,
+                '确认博客仓库的 posts 目录位置；发布与去重都依赖 content/posts');
+        }
+        return makeCheck('fail', '博客仓库',
+            `${prefix}仓库缺少 content/posts 且未找到 Hugo 配置，不是 Hugo 博客仓库: ${displayRepo}`,
             '确认 PAPER_DIGEST_BLOG_REPO 指向 Hugo 博客仓库根目录');
     }
     if (!state.isGitRepo) {
         return makeCheck('fail', '博客仓库', `${prefix}不是 Git 仓库: ${displayRepo}`,
-            `git -C ${displayRepo} rev-parse --is-inside-work-tree`);
+            'git -C "$PAPER_DIGEST_BLOG_REPO" rev-parse --is-inside-work-tree');
     }
     const git = state.git || { error: { message: 'git status 未执行' } };
     if (git.error || git.timedOut) {
         const reason = git.timedOut ? `git status 超过 ${GIT_STATUS_TIMEOUT_MS}ms` : truncatedText(git.error?.message || git.error);
         return makeCheck('fail', '博客仓库', `${prefix}${displayRepo}；git status 失败: ${reason}`,
-            `git -C ${displayRepo} status --porcelain`);
+            'git -C "$PAPER_DIGEST_BLOG_REPO" status --porcelain');
     }
     if (git.status !== 0) {
         return makeCheck('fail', '博客仓库', `${prefix}${displayRepo}；git status 退出码 ${git.status}: ${truncatedText(String(git.stderr || '').trim())}`,
-            `git -C ${displayRepo} status --porcelain`);
+            'git -C "$PAPER_DIGEST_BLOG_REPO" status --porcelain');
     }
     const parsed = parseGitStatusPaths(git.stdout);
     const overlap = findDateOverlap(parsed.paths, date);
@@ -867,7 +940,7 @@ function evaluateBlogRepo(input) {
     if (parsed.lineCount > 0) {
         return makeCheck('warn', '博客仓库',
             `${prefix}${displayRepo}；${parsed.lineCount} 个未提交改动，与${targetLabel}不重叠`,
-            `git -C ${displayRepo} status --porcelain`);
+            'git -C "$PAPER_DIGEST_BLOG_REPO" status --porcelain');
     }
     return makeCheck('ok', '博客仓库', `${prefix}${displayRepo}；工作区干净（${targetLabel}无重叠）`);
 }
@@ -877,27 +950,41 @@ function evaluateBlogRepo(input) {
 // ═══════════════════════════════════════════════════════
 
 function readAccountPoolState(stateFile, nowMs = Date.now()) {
+    let stat;
+    try {
+        stat = fs.lstatSync(stateFile);
+    } catch (error) {
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+            return { exists: false, valid: true, error: null, mode: null };
+        }
+        return { exists: true, valid: false, error: `无法读取: ${error?.code || error?.message || error}`, mode: null };
+    }
+    // 生产读取（readStateStrict）拒绝 symlink；体检也不能跟随它。
+    if (stat.isSymbolicLink()) {
+        return { exists: true, valid: false, error: '状态路径是符号链接（生产读取会拒绝）', mode: null };
+    }
+    if (!stat.isFile()) {
+        return { exists: true, valid: false, error: '状态路径不是普通文件', mode: null };
+    }
+    const mode = stat.mode & 0o777;
     let raw;
     try {
         raw = fs.readFileSync(stateFile, 'utf8');
     } catch (error) {
-        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
-            return { exists: false, valid: true, error: null };
-        }
-        return { exists: true, valid: false, error: `无法读取: ${error?.code || error?.message || error}` };
+        return { exists: true, valid: false, error: `无法读取: ${error?.code || error?.message || error}`, mode };
     }
     let state;
     try {
         state = JSON.parse(raw);
     } catch (_error) {
-        return { exists: true, valid: false, error: 'JSON 无法解析' };
+        return { exists: true, valid: false, error: 'JSON 无法解析', mode };
     }
     if (!state || typeof state !== 'object' || Array.isArray(state)
         || state.schemaVersion !== LLM_POOL_STATE_SCHEMA_VERSION
         || state.policyVersion !== LLM_POOL_POLICY_VERSION
         || !isPlainObject(state.services)
         || !Number.isSafeInteger(state.generation) || state.generation < 0) {
-        return { exists: true, valid: false, error: 'schema 非法' };
+        return { exists: true, valid: false, error: 'schema 非法', mode };
     }
     let accounts = 0;
     let blocked = 0;
@@ -906,14 +993,14 @@ function readAccountPoolState(stateFile, nowMs = Date.now()) {
     for (const service of Object.values(state.services)) {
         if (!isPlainObject(service) || typeof service.endpoint !== 'string'
             || !isPlainObject(service.accounts) || !isPlainObject(service.groups)) {
-            return { exists: true, valid: false, error: 'service 记录非法' };
+            return { exists: true, valid: false, error: 'service 记录非法', mode };
         }
         services += 1;
         for (const record of Object.values(service.accounts)) {
             if (!isPlainObject(record)
                 || (record.blockedUntilMs !== undefined
                     && (!Number.isFinite(record.blockedUntilMs) || record.blockedUntilMs < 0))) {
-                return { exists: true, valid: false, error: 'account 记录非法' };
+                return { exists: true, valid: false, error: 'account 记录非法', mode };
             }
             accounts += 1;
             if (Number.isFinite(record.blockedUntilMs) && record.blockedUntilMs > nowMs) {
@@ -924,19 +1011,40 @@ function readAccountPoolState(stateFile, nowMs = Date.now()) {
             }
         }
         for (const group of Object.values(service.groups)) {
+            // rotationCursor / lastSelectedAtMs 是等权轮转新增的可选字段，
+            // 与 llm-account-pool.readStateStrict 的校验保持一致。
             if (!isPlainObject(group)
                 || (group.activeAccountId !== null
                     && group.activeAccountId !== undefined
-                    && typeof group.activeAccountId !== 'string')) {
-                return { exists: true, valid: false, error: 'group 记录非法' };
+                    && typeof group.activeAccountId !== 'string')
+                || (group.rotationCursor !== undefined
+                    && (!Number.isSafeInteger(group.rotationCursor) || group.rotationCursor < 0))
+                || (group.lastSelectedAtMs !== undefined
+                    && (!Number.isFinite(group.lastSelectedAtMs) || group.lastSelectedAtMs < 0))) {
+                return { exists: true, valid: false, error: 'group 记录非法', mode };
             }
         }
     }
-    return { exists: true, valid: true, error: null, accounts, blocked, services, earliestRecoveryMs };
+    return { exists: true, valid: true, error: null, mode, accounts, blocked, services, earliestRecoveryMs };
 }
 
-function evaluateAccountPool(input) {
+function evaluateAccountPool(input, platform = process.platform) {
     const state = input || {};
+    const modeLabel = Number.isInteger(state.mode) ? state.mode.toString(8).padStart(3, '0') : null;
+    const modeWarning = platform !== 'win32' && modeLabel !== null && state.mode !== 0o600;
+    const withMode = (check) => {
+        if (!modeWarning) return check;
+        const detail = `权限 ${modeLabel}（应为 0600）；${check.detail}`;
+        const chmodHint = 'chmod 600 data/runtime/llm-account-pool.json';
+        if (check.ok === 'ok') {
+            return makeCheck('warn', check.label, detail, chmodHint);
+        }
+        if (check.ok === 'warn') {
+            const hint = check.hint ? `${chmodHint}；${check.hint}` : chmodHint;
+            return { ...check, detail, hint };
+        }
+        return { ...check, detail };
+    };
     if (!state.exists) {
         return makeCheck('ok', '账号池状态', '无状态文件（尚未使用账号池或已清理）');
     }
@@ -945,20 +1053,20 @@ function evaluateAccountPool(input) {
             '检查 data/runtime/llm-account-pool.json（只读）；修复前不要开新批次');
     }
     if (!state.accounts) {
-        return makeCheck('ok', '账号池状态', '状态文件存在，尚无账号记录');
+        return withMode(makeCheck('ok', '账号池状态', '状态文件存在，尚无账号记录'));
     }
     const recovery = Number.isFinite(state.earliestRecoveryMs)
         ? new Date(state.earliestRecoveryMs).toISOString()
         : null;
     if (state.blocked === 0) {
-        return makeCheck('ok', '账号池状态', `${state.accounts} 个账号，全部可用`);
+        return withMode(makeCheck('ok', '账号池状态', `${state.accounts} 个账号，全部可用`));
     }
     if (state.blocked >= state.accounts) {
-        return makeCheck('fail', '账号池状态', `${state.accounts} 个账号全部冷却；最早恢复 ${recovery || '未知'}`,
-            '等待恢复或补充备用账号；不要对同一故障反复重试');
+        return withMode(makeCheck('fail', '账号池状态', `${state.accounts} 个账号全部冷却；最早恢复 ${recovery || '未知'}`,
+            '等待恢复或补充备用账号；不要对同一故障反复重试'));
     }
-    return makeCheck('warn', '账号池状态', `${state.accounts} 个账号，${state.blocked} 个冷却；最早恢复 ${recovery || '未知'}`,
-        'npm run usage:report 查看账号用量');
+    return withMode(makeCheck('warn', '账号池状态', `${state.accounts} 个账号，${state.blocked} 个冷却；最早恢复 ${recovery || '未知'}`,
+        'npm run usage:report 查看账号用量'));
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1032,7 +1140,7 @@ function formatDateInTimeZone(date, timeZone) {
     }
 }
 
-function evaluateRssProbe(probe, targetDate) {
+function evaluateRssProbe(probe, targetDate, options = {}) {
     const result = probe || {};
     if (result.error) {
         return makeCheck('fail', 'arXiv RSS 公告', `请求失败: ${friendlyNetworkError(result.error)}`,
@@ -1053,37 +1161,165 @@ function evaluateRssProbe(probe, targetDate) {
         return makeCheck('warn', 'arXiv RSS 公告', `pubDate 已解析但无法换算东部日期: ${truncatedText(parsed.raw, 60)}`,
             '手动检查 RSS pubDate');
     }
-    if (announcementDate === String(targetDate)) {
-        return makeCheck('ok', 'arXiv RSS 公告', `目标日 ${targetDate} 公告已生成（pubDate ${parsed.raw}）`);
+    const target = String(targetDate || '');
+    if (announcementDate === target) {
+        return makeCheck('ok', 'arXiv RSS 公告', `目标日 ${target} 公告已生成（pubDate ${parsed.raw}）`);
+    }
+    const today = options.todayDate || beijingDateString();
+    if (target && target < today) {
+        return makeCheck('warn', 'arXiv RSS 公告',
+            `目标日 ${target} 是历史日期，当前公告日 ${announcementDate}（pubDate ${parsed.raw}）`,
+            '历史日期不依赖当天公告；使用受控历史入口和已有数据');
+    }
+    if (target && target > today) {
+        return makeCheck('warn', 'arXiv RSS 公告',
+            `目标日 ${target} 尚未到来，当前公告日 ${announcementDate}（pubDate ${parsed.raw}）`,
+            '确认目标日期是否正确；arXiv 每日公告通常在北京时间 08:00 后生成');
     }
     return makeCheck('warn', 'arXiv RSS 公告',
-        `RSS 当前公告日 ${announcementDate}，目标日 ${targetDate} 尚未生成（pubDate ${parsed.raw}）`,
+        `RSS 当前公告日 ${announcementDate}，目标日 ${target} 尚未生成（pubDate ${parsed.raw}）`,
         'arXiv 每日公告通常在北京时间 08:00 后生成；稍后重试或先确认目标日期');
+}
+
+const MAX_PROBE_REDIRECTS = 3;
+
+function isPrivateOrReservedHost(hostname) {
+    const host = String(hostname == null ? '' : hostname).trim().toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host) return true;
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+    if (host.includes(':')) {
+        if (host === '::' || host === '::1') return true;
+        if (/^f[cd]/.test(host)) return true; // fc00::/7 ULA
+        if (/^fe[89ab]/.test(host)) return true; // fe80::/10 link-local
+        if (/^ff/.test(host)) return true; // ff00::/8 multicast
+        if (/^64:ff9b::/.test(host)) return true; // NAT64
+        if (/^2002:/.test(host)) return true; // 6to4
+        if (host.startsWith('::ffff:')) {
+            // WHATWG URL 会把 IPv4-mapped 写成十六进制（如 ::ffff:7f00:1），
+            // 先还原为点分 IPv4 再走同一套私网判断；无法还原时按保留处理。
+            const tail = host.slice(7);
+            const groups = tail.split(':').filter(Boolean);
+            if (groups.length === 2 && groups.every(g => /^[0-9a-f]{1,4}$/.test(g))) {
+                const hi = parseInt(groups[0], 16), lo = parseInt(groups[1], 16);
+                const ipv4 = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+                return isPrivateOrReservedHost(ipv4);
+            }
+            return true;
+        }
+        return false;
+    }
+    const octets = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!octets) return false; // 普通域名交给代理/DNS 解析
+    const numbers = octets.slice(1).map(Number);
+    if (numbers.some(value => value > 255)) return true;
+    const [a, b] = numbers;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    if (a === 192 && b === 0) return true; // 192.0.0/24、192.0.2/24
+    if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+    if (a === 198 && b === 51) return true; // 198.51.100/24
+    if (a === 203 && b === 0) return true; // 203.0.113/24
+    if (a >= 224) return true; // multicast / reserved
+    return false;
+}
+
+function assertAllowedProbeUrl(rawUrl) {
+    let parsed;
+    try {
+        parsed = new URL(String(rawUrl));
+    } catch (_error) {
+        throw Object.assign(new Error(`探测 URL 非法: ${truncatedText(rawUrl, 80)}`), { code: 'PROBE_URL_INVALID' });
+    }
+    if (parsed.protocol !== 'https:') {
+        throw Object.assign(new Error(`探测只允许 HTTPS: ${parsed.protocol}//${parsed.hostname}`), { code: 'PROBE_URL_INSECURE' });
+    }
+    const normalizedHost = String(parsed.hostname || '').replace(/\.$/, '');
+    if (isPrivateOrReservedHost(normalizedHost)) {
+        throw Object.assign(new Error(`探测拒绝私网/保留地址: ${parsed.hostname}`), { code: 'PROBE_URL_PRIVATE' });
+    }
+    return parsed;
+}
+
+function probeTooLargeError(maxBytes) {
+    return Object.assign(new Error(`响应超过 ${maxBytes} 字节上限`), { code: 'PROBE_TOO_LARGE' });
+}
+
+async function readProbeBody(response, maxBytes) {
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+        const declared = Number(response.headers?.get?.('content-length'));
+        if (Number.isFinite(declared) && declared > maxBytes) throw probeTooLargeError(maxBytes);
+        const buffer = Buffer.from(await response.arrayBuffer());
+        if (buffer.length > maxBytes) throw probeTooLargeError(maxBytes);
+        return buffer.toString('utf8');
+    }
+    const chunks = [];
+    let total = 0;
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value) continue;
+            total += value.byteLength ?? value.length ?? 0;
+            if (total > maxBytes) {
+                try { await reader.cancel(); } catch (_error) { /* 已超限，取消失败不影响结论 */ }
+                throw probeTooLargeError(maxBytes);
+            }
+            chunks.push(Buffer.from(value));
+        }
+    } finally {
+        try { reader.releaseLock?.(); } catch (_error) { /* 释放锁失败可忽略 */ }
+    }
+    return Buffer.concat(chunks).toString('utf8');
 }
 
 async function fetchProbeText(fetchImpl, url, headers, options = {}) {
     const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : NETWORK_TIMEOUT_MS;
     const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : NETWORK_MAX_BYTES;
+    const maxRedirects = Number.isFinite(options.maxRedirects) ? options.maxRedirects : MAX_PROBE_REDIRECTS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const response = await fetchImpl(url, {
-            method: 'GET',
-            headers,
-            signal: controller.signal,
-            redirect: 'follow',
-            dispatcher: options.dispatcher
-        });
-        const declared = Number(response.headers?.get?.('content-length') || 0);
-        if (Number.isFinite(declared) && declared > maxBytes) {
-            throw Object.assign(new Error(`响应超过 ${maxBytes} 字节上限`), { code: 'PROBE_TOO_LARGE' });
+        let currentUrl = String(url);
+        for (let hop = 0; hop <= maxRedirects; hop += 1) {
+            // 手动处理重定向：每一跳都重新校验 HTTPS 与非私网/保留地址。
+            const parsed = assertAllowedProbeUrl(currentUrl);
+            const response = await fetchImpl(parsed.toString(), {
+                method: 'GET',
+                headers,
+                signal: controller.signal,
+                redirect: 'manual',
+                dispatcher: options.dispatcher
+            });
+            if ([301, 302, 303, 307, 308].includes(response.status)) {
+                const location = response.headers?.get?.('location');
+                try { await response.body?.cancel?.(); } catch (_error) { /* 重定向响应体无需读取 */ }
+                if (!location) {
+                    throw Object.assign(new Error(`HTTP ${response.status} 重定向缺少 Location`), { code: 'PROBE_REDIRECT_INVALID' });
+                }
+                if (hop === maxRedirects) {
+                    throw Object.assign(new Error(`重定向超过 ${maxRedirects} 次`), { code: 'PROBE_REDIRECT_LIMIT' });
+                }
+                currentUrl = new URL(String(location), parsed).toString();
+                continue;
+            }
+            const declared = Number(response.headers?.get?.('content-length'));
+            if (Number.isFinite(declared) && declared > maxBytes) {
+                try { await response.body?.cancel?.(); } catch (_error) { /* 已超限 */ }
+                throw probeTooLargeError(maxBytes);
+            }
+            const body = await readProbeBody(response, maxBytes);
+            return { status: response.status, body, error: null };
         }
-        const buffer = Buffer.from(await response.arrayBuffer());
-        if (buffer.length > maxBytes) {
-            throw Object.assign(new Error(`响应超过 ${maxBytes} 字节上限`), { code: 'PROBE_TOO_LARGE' });
-        }
-        return { status: response.status, body: buffer.toString('utf8'), error: null };
+        throw Object.assign(new Error(`重定向超过 ${maxRedirects} 次`), { code: 'PROBE_REDIRECT_LIMIT' });
     } catch (error) {
+        if (error?.code === 'PROBE_TOO_LARGE') {
+            // 超过 maxBytes 时取消读取并中止底层请求，避免继续传输。
+            try { controller.abort(); } catch (_error) { /* 已取消 */ }
+        }
         if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') {
             return { status: null, body: '', error: Object.assign(new Error(`请求超过 ${timeoutMs}ms`), { code: 'PROBE_TIMEOUT' }) };
         }
@@ -1100,6 +1336,7 @@ async function probeNetwork(options = {}) {
         return { proxyError: resolved.error, atom: null, oai: null, rss: null };
     }
     const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : NETWORK_TIMEOUT_MS;
+    const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : NETWORK_MAX_BYTES;
     const fetchImpl = options.fetchImpl || require('undici').fetch;
     let dispatcher = options.dispatcher || null;
     try {
@@ -1109,9 +1346,9 @@ async function probeNetwork(options = {}) {
         }
         const headers = { 'User-Agent': ARXIV_USER_AGENT };
         const [atom, oai, rss] = await Promise.all([
-            fetchProbeText(fetchImpl, ARXIV_ATOM_URL, { ...headers, Accept: 'application/atom+xml' }, { timeoutMs, dispatcher }),
-            fetchProbeText(fetchImpl, ARXIV_OAI_URL, { ...headers, Accept: 'text/xml' }, { timeoutMs, dispatcher }),
-            fetchProbeText(fetchImpl, ARXIV_RSS_URL, { ...headers, Accept: 'application/rss+xml' }, { timeoutMs, dispatcher })
+            fetchProbeText(fetchImpl, ARXIV_ATOM_URL, { ...headers, Accept: 'application/atom+xml' }, { timeoutMs, maxBytes, dispatcher }),
+            fetchProbeText(fetchImpl, ARXIV_OAI_URL, { ...headers, Accept: 'text/xml' }, { timeoutMs, maxBytes, dispatcher }),
+            fetchProbeText(fetchImpl, ARXIV_RSS_URL, { ...headers, Accept: 'application/rss+xml' }, { timeoutMs, maxBytes, dispatcher })
         ]);
         return { proxyError: null, atom, oai, rss };
     } finally {
@@ -1121,7 +1358,7 @@ async function probeNetwork(options = {}) {
     }
 }
 
-function evaluateNetworkProbes(network, targetDate) {
+function evaluateNetworkProbes(network, targetDate, options = {}) {
     const result = network || {};
     if (result.proxyError) {
         const hint = '在 .env 配置 HTTP CONNECT 代理后重试';
@@ -1134,7 +1371,7 @@ function evaluateNetworkProbes(network, targetDate) {
     return [
         evaluateAtomProbe(result.atom),
         evaluateOaiProbe(result.oai),
-        evaluateRssProbe(result.rss, targetDate)
+        evaluateRssProbe(result.rss, targetDate, options)
     ];
 }
 
@@ -1231,10 +1468,14 @@ async function runDoctor(options = {}) {
         return evaluateEnvFile(envState, platform);
     }));
     const env = isPlainObject(envState?.entries) ? envState.entries : {};
+    // .env 缺失/不可读时，模型与代理检查无法判定；不要再级联出三个 fail。
+    const envUsable = Boolean(envState?.exists) && !envState?.readError;
+    const notEvaluated = (label) => makeCheck('warn', label, '因 .env 不可读未判定',
+        '修复 .env 后重跑 npm run doctor -- --offline');
 
-    checks.push(...safeCollect('主模型配置', () => evaluatePrimaryModel(env)));
-    checks.push(...safeCollect('副模型配置', () => evaluateSecondaryModel(env)));
-    checks.push(...safeCollect('HTTP 代理', () => evaluateProxy(env)));
+    checks.push(...safeCollect('主模型配置', () => (envUsable ? evaluatePrimaryModel(env) : notEvaluated('主模型配置'))));
+    checks.push(...safeCollect('副模型配置', () => (envUsable ? evaluateSecondaryModel(env) : notEvaluated('副模型配置'))));
+    checks.push(...safeCollect('HTTP 代理', () => (envUsable ? evaluateProxy(env) : notEvaluated('HTTP 代理'))));
     checks.push(...safeCollect('运行环境', () => evaluateSandbox(env)));
     checks.push(...safeCollect('工作区角色', () => evaluateWorkspaceRole(deps.readWorkspaceRole())));
     checks.push(...safeCollect('磁盘占用', () => checkDiskUsage(deps.measureDisk())));
@@ -1244,12 +1485,13 @@ async function runDoctor(options = {}) {
         dateNote,
         configured: resolveBlogRepoPath(env).configured
     })));
-    checks.push(...safeCollect('账号池状态', () => evaluateAccountPool(deps.readAccountPool())));
+    checks.push(...safeCollect('账号池状态', () => evaluateAccountPool(deps.readAccountPool(), platform)));
 
     if (parsed.network) {
+        const todayDate = beijingDateString(nowMs);
         checks.push(...await safeCollectAsync('网络探测', async () => {
             const network = await deps.probeNetwork({ env, date: parsed.date, timeoutMs: NETWORK_TIMEOUT_MS });
-            return evaluateNetworkProbes(network, parsed.date);
+            return evaluateNetworkProbes(network, parsed.date, { todayDate });
         }));
     } else {
         checks.push(makeCheck('warn', '网络探测', '未联网：--offline 默认跳过 arXiv Atom/OAI/RSS 探测',
@@ -1291,8 +1533,17 @@ async function main(argv = process.argv.slice(2)) {
         process.exitCode = 2;
         return;
     }
+    // 沙箱守卫只放在真实入口：被 import 时不杀进程，spawn 时在任何检查/输出前拒绝。
+    const sandbox = String(process.env.CODEX_SANDBOX || '').trim();
+    if (sandbox) {
+        console.error(`[doctor] 必须在沙箱外运行（检测到 CODEX_SANDBOX=${sandbox}）。`);
+        process.exitCode = 1;
+        return;
+    }
     if (parsed.help) {
-        console.log(USAGE);
+        // --help 优先；同时给了 --json 时仍输出可解析的 JSON 数组。
+        if (parsed.json) console.log(JSON.stringify([makeCheck('ok', 'help', USAGE)], null, 2));
+        else console.log(USAGE);
         return;
     }
     const { checks } = await runDoctor({ parsed });
@@ -1334,6 +1585,7 @@ module.exports = {
     parseArgs,
     parseVersionParts,
     compareVersionParts,
+    isPrereleaseVersion,
     satisfiesNodeRange,
     checkNodeVersion,
     evaluatePythonRuntime,
@@ -1353,8 +1605,11 @@ module.exports = {
     checkDiskUsage,
     resolveBlogRepoPath,
     pathKind,
+    unquoteGitPath,
     parseGitStatusPaths,
     findDateOverlap,
+    HUGO_CONFIG_CANDIDATES,
+    findHugoConfig,
     inspectBlogRepo,
     evaluateBlogRepo,
     readAccountPoolState,
@@ -1364,6 +1619,11 @@ module.exports = {
     evaluateAtomProbe,
     evaluateOaiProbe,
     evaluateRssProbe,
+    MAX_PROBE_REDIRECTS,
+    isPrivateOrReservedHost,
+    assertAllowedProbeUrl,
+    readProbeBody,
+    fetchProbeText,
     evaluateNetworkProbes,
     probeNetwork,
     createDefaultDeps,

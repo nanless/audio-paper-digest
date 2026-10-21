@@ -39,7 +39,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ## 运行前六项检查
 
-开跑前可先运行 `npm run doctor -- --offline` 做只读体检（环境、Python、模型配置、代理、账号池、磁盘、博客仓库、来源入口；默认不联网，需探测 arXiv 时用 `--network`）。体检通过后再逐项核对：
+开跑前可先运行 `npm run doctor -- --offline` 做只读体检（环境、Python、模型配置、代理、账号池、磁盘、博客仓库、来源入口；默认不联网，需探测 arXiv 时用 `--network`）。doctor 是有意的只读诊断例外：仍拒绝 `CODEX_SANDBOX`，但不要求工作区角色通过（角色结论仍会显示）。体检通过后再逐项核对：
 
 0. 先运行 `npm run workspace:role -- status`。当前目录必须是 `daily`，历史命令须通过已配置的跨角色开关运行；角色标记缺失或真实路径不匹配时先停止，确认工作区用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定。
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。

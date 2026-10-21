@@ -131,6 +131,16 @@ test('北京时间日期字符串独立于本机时区', () => {
 // Node 版本
 // ═══════════════════════════════════════════════════════
 
+test('Node 预发布版本不满足 engines', () => {
+    assert.equal(doctor.isPrereleaseVersion('22.3.0-rc.1'), true);
+    assert.equal(doctor.satisfiesNodeRange('22.3.0-rc.1'), false);
+    assert.equal(doctor.satisfiesNodeRange('20.18.1-beta.2'), false);
+    assert.equal(doctor.satisfiesNodeRange('22.3.0+build.5'), true);
+    const check = doctor.checkNodeVersion('22.3.0-rc.1');
+    assert.equal(check.ok, 'fail');
+    assert.match(check.detail, /预发布/);
+});
+
 test('Node 版本按 engines 边界判断', () => {
     const cases = [
         ['20.18.0', false],
@@ -362,8 +372,43 @@ test('目录缺失视为空，不报错', () => {
         maxEntries: 10
     });
     assert.equal(result.exists, false);
+    assert.equal(result.rootKind, 'missing');
     assert.equal(result.bytes, 0);
     assert.equal(result.complete, true);
+});
+
+test('磁盘根为 symlink/普通文件时记录 rootKind 并给 warn', () => {
+    const linkRoot = '/fake/link-root';
+    const link = doctor.walkDirSizeLimited(linkRoot, {
+        fsModule: createFakeFs({ [linkRoot]: { kind: 'symlink' } }),
+        now: () => 0,
+        budgetMs: 10,
+        maxEntries: 10
+    });
+    assert.equal(link.exists, true);
+    assert.equal(link.rootKind, 'symlink');
+    assert.equal(link.bytes, 0);
+
+    const fileRoot = '/fake/file-root';
+    const file = doctor.walkDirSizeLimited(fileRoot, {
+        fsModule: createFakeFs({ [fileRoot]: { kind: 'file', size: 5 } }),
+        now: () => 0,
+        budgetMs: 10,
+        maxEntries: 10
+    });
+    assert.equal(file.rootKind, 'file');
+    assert.equal(file.bytes, 5);
+
+    const checks = doctor.checkDiskUsage([
+        { key: 'data/current', exists: true, rootKind: 'symlink', complete: true, bytes: 0, files: 0, entries: 1, budgetMs: 10 },
+        { key: 'data/runtime', exists: true, rootKind: 'file', complete: true, bytes: 5, files: 1, entries: 1, budgetMs: 10 },
+        { key: 'logs', exists: true, rootKind: 'directory', complete: true, bytes: 10, files: 1, entries: 2, budgetMs: 10 }
+    ]);
+    assert.equal(checks[0].ok, 'warn');
+    assert.match(checks[0].detail, /未跟随符号链接/);
+    assert.equal(checks[1].ok, 'warn');
+    assert.match(checks[1].detail, /根不是目录/);
+    assert.equal(checks[2].ok, 'ok');
 });
 
 test('measureDiskUsage 只统计三个受控目录且顺序稳定', () => {
@@ -424,15 +469,35 @@ test('解析 git status 输出（含改名与特殊字符）', () => {
     assert.ok(parsed.paths.includes('content/posts/space name.md'));
 });
 
-test('目标日期重叠检测只匹配完整日期段', () => {
+test('git status 改名行：先按箭头拆分再去引号', () => {
+    const parsed = doctor.parseGitStatusPaths(
+        'R  "content/posts/old name.md" -> "content/posts/2026-10-22 new.md"\n'
+    );
+    assert.equal(parsed.lineCount, 1);
+    assert.deepEqual(parsed.paths.sort(), [
+        'content/posts/2026-10-22 new.md',
+        'content/posts/old name.md'
+    ]);
+    assert.ok(!parsed.paths.some(item => item.includes('"')), '两侧引号都要去掉');
+    assert.equal(doctor.unquoteGitPath('"a\\"b"'), 'a"b');
+});
+
+test('目标日期重叠检测覆盖空格/下划线后缀且排除更长数字', () => {
     const paths = [
         'content/posts/2026-10-22-a.md',
         'content/posts/2026-10-22.md',
+        'content/posts/2026-10-22 new.md',
+        'content/posts/2026-10-22_v2.md',
         'content/posts/2026-10-220-x.md',
         'content/posts/2026-10-21-a.md'
     ];
     const overlap = doctor.findDateOverlap(paths, '2026-10-22');
-    assert.deepEqual(overlap.sort(), ['content/posts/2026-10-22-a.md', 'content/posts/2026-10-22.md']);
+    assert.deepEqual(overlap.sort(), [
+        'content/posts/2026-10-22 new.md',
+        'content/posts/2026-10-22-a.md',
+        'content/posts/2026-10-22.md',
+        'content/posts/2026-10-22_v2.md'
+    ]);
     assert.deepEqual(doctor.findDateOverlap(paths, ''), []);
 });
 
@@ -480,7 +545,92 @@ test('inspectBlogRepo 在临时目录中为只读探测', t => {
     const result = doctor.inspectBlogRepo(directory);
     assert.equal(result.exists, true);
     assert.equal(result.postsExists, true);
+    assert.equal(result.hugoConfig, null);
     assert.equal(result.isGitRepo, false);
+});
+
+test('Hugo 判定：显式配置缺 content/posts 为 fail，未配置默认路径才降级 warn', t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-hugo-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(directory, 'hugo.toml'), 'baseURL = "https://example.com"\n');
+    const inspected = doctor.inspectBlogRepo(directory);
+    assert.equal(inspected.exists, true);
+    assert.equal(inspected.postsExists, false);
+    assert.equal(inspected.hugoConfig, 'hugo.toml');
+
+    const withConfig = doctor.evaluateBlogRepo(blogState({
+        postsExists: false,
+        hugoConfig: 'hugo.toml'
+    }));
+    assert.equal(withConfig.ok, 'fail');
+    assert.match(withConfig.detail, /content\/posts/);
+    assert.match(withConfig.detail, /hugo\.toml/);
+    assert.ok(!withConfig.detail.includes('不是 Hugo'), '找到 Hugo 配置时不应判定为非 Hugo');
+
+    const defaultPath = doctor.evaluateBlogRepo(blogState({
+        configured: false,
+        postsExists: false,
+        hugoConfig: 'hugo.toml'
+    }));
+    assert.equal(defaultPath.ok, 'warn');
+    assert.match(defaultPath.detail, /content\/posts/);
+
+    const withoutConfig = doctor.evaluateBlogRepo(blogState({ postsExists: false, hugoConfig: null }));
+    assert.equal(withoutConfig.ok, 'fail');
+    assert.match(withoutConfig.detail, /不是 Hugo 博客仓库/);
+});
+
+test('真实 git 仓库回归：目标日改动判 fail 且 .git/index 字节不变', t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-git-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const git = (args) => require('node:child_process').spawnSync('git', ['-C', directory, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }
+    });
+    assert.equal(git(['init', '-q']).status, 0);
+    assert.equal(git(['config', 'user.email', 'doctor@example.com']).status, 0);
+    assert.equal(git(['config', 'user.name', 'Doctor Test']).status, 0);
+    fs.mkdirSync(path.join(directory, 'content', 'posts'), { recursive: true });
+    const page = path.join(directory, 'content', 'posts', '2026-10-22-a.md');
+    fs.writeFileSync(page, '# a\n');
+    assert.equal(git(['add', '.']).status, 0);
+    assert.equal(git(['commit', '-q', '-m', 'init']).status, 0);
+
+    const indexPath = path.join(directory, '.git', 'index');
+    const indexBefore = require('node:crypto').createHash('sha256').update(fs.readFileSync(indexPath)).digest('hex');
+    fs.appendFileSync(page, 'changed\n');
+
+    const inspected = doctor.inspectBlogRepo(directory);
+    assert.equal(inspected.isGitRepo, true);
+    assert.match(inspected.git.stdout, /2026-10-22-a\.md/);
+    const check = doctor.evaluateBlogRepo({
+        ...inspected,
+        date: '2026-10-22',
+        configured: true,
+        homeDirectory: '/nonexistent-home'
+    });
+    assert.equal(check.ok, 'fail');
+    assert.match(check.detail, /重叠/);
+
+    const indexAfter = require('node:crypto').createHash('sha256').update(fs.readFileSync(indexPath)).digest('hex');
+    assert.equal(indexAfter, indexBefore, 'GIT_OPTIONAL_LOCKS=0 下 git status 不得改写索引');
+});
+
+test('createDefaultDeps(tmpRoot) 冒烟：不写文件、不联网', t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-deps-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const before = fs.readdirSync(directory).sort();
+    const deps = doctor.createDefaultDeps(directory, Date.now());
+    assert.equal(deps.nodeVersion(), process.versions.node);
+    assert.equal(deps.readEnvFile().exists, false);
+    assert.equal(deps.pathKind(path.join(directory, 'node_modules')), null);
+    assert.equal(deps.readWorkspaceRole().ok, false);
+    assert.equal(deps.readAccountPool().exists, false);
+    assert.equal(deps.measureDisk().length, 3);
+    const blog = deps.inspectBlog({ PAPER_DIGEST_BLOG_REPO: directory });
+    assert.equal(blog.exists, true);
+    assert.equal(blog.postsExists, false);
+    assert.deepEqual(fs.readdirSync(directory).sort(), before, '冒烟调用不得创建文件');
 });
 
 // ═══════════════════════════════════════════════════════
@@ -529,6 +679,58 @@ test('账号池状态只读统计：可用/冷却/最早恢复', t => {
     assert.equal(doctor.evaluateAccountPool(allFree).ok, 'ok');
 });
 
+test('账号池状态：权限非 0600 给 warn 且不改权限', t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-pool-mode-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const stateFile = path.join(directory, 'llm-account-pool.json');
+    const nowMs = Date.parse('2026-10-21T00:00:00Z');
+    fs.writeFileSync(stateFile, JSON.stringify(validAccountPoolState(nowMs)), { mode: 0o644 });
+    fs.chmodSync(stateFile, 0o644);
+
+    const state = doctor.readAccountPoolState(stateFile, nowMs);
+    assert.equal(state.mode, 0o644);
+    assert.equal(fs.statSync(stateFile).mode & 0o777, 0o644);
+    const check = doctor.evaluateAccountPool(state, 'darwin');
+    assert.equal(check.ok, 'warn');
+    assert.match(check.detail, /权限 644/);
+    assert.match(check.hint, /chmod 600/);
+});
+
+test('账号池状态：symlink 与非法 rotationCursor/lastSelectedAtMs 报 fail', t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-pool-invalid-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const nowMs = Date.parse('2026-10-21T00:00:00Z');
+
+    const realFile = path.join(directory, 'real.json');
+    fs.writeFileSync(realFile, JSON.stringify(validAccountPoolState(nowMs)), { mode: 0o600 });
+    const linkFile = path.join(directory, 'link.json');
+    fs.symlinkSync(realFile, linkFile);
+    const linked = doctor.readAccountPoolState(linkFile, nowMs);
+    assert.equal(linked.valid, false);
+    assert.match(linked.error, /符号链接/);
+    assert.equal(doctor.evaluateAccountPool(linked).ok, 'fail');
+
+    const badCursor = validAccountPoolState(nowMs);
+    badCursor.services.serviceA.groups.groupA = { activeAccountId: null, rotationCursor: -1 };
+    const badCursorFile = path.join(directory, 'bad-cursor.json');
+    fs.writeFileSync(badCursorFile, JSON.stringify(badCursor), { mode: 0o600 });
+    assert.equal(doctor.readAccountPoolState(badCursorFile, nowMs).valid, false);
+
+    const badSelected = validAccountPoolState(nowMs);
+    badSelected.services.serviceA.groups.groupA = { activeAccountId: null, lastSelectedAtMs: 'soon' };
+    const badSelectedFile = path.join(directory, 'bad-selected.json');
+    fs.writeFileSync(badSelectedFile, JSON.stringify(badSelected), { mode: 0o600 });
+    assert.equal(doctor.readAccountPoolState(badSelectedFile, nowMs).valid, false);
+
+    const goodGroup = validAccountPoolState(nowMs);
+    goodGroup.services.serviceA.groups.groupA = { activeAccountId: 'bbbb', rotationCursor: 2, lastSelectedAtMs: nowMs };
+    const goodFile = path.join(directory, 'good-group.json');
+    fs.writeFileSync(goodFile, JSON.stringify(goodGroup), { mode: 0o600 });
+    const good = doctor.readAccountPoolState(goodFile, nowMs);
+    assert.equal(good.valid, true);
+    assert.equal(doctor.evaluateAccountPool(good, 'darwin').ok, 'warn');
+});
+
 // ═══════════════════════════════════════════════════════
 // 网络探测结果评估（不实际联网）
 // ═══════════════════════════════════════════════════════
@@ -542,14 +744,27 @@ test('RSS pubDate 解析与目标日期判断', () => {
     const parsed = doctor.parseRssPubDate(rssBody);
     assert.equal(parsed.raw, 'Wed, 21 Oct 2026 00:00:00 -0400');
     assert.equal(doctor.formatDateInTimeZone(parsed.date, 'America/New_York'), '2026-10-21');
-    assert.equal(doctor.evaluateRssProbe({ status: 200, body: rssBody, error: null }, '2026-10-21').ok, 'ok');
-    const notYet = doctor.evaluateRssProbe({ status: 200, body: rssBody, error: null }, '2026-10-22');
+    assert.equal(doctor.evaluateRssProbe({ status: 200, body: rssBody, error: null }, '2026-10-21', { todayDate: '2026-10-21' }).ok, 'ok');
+    const notYet = doctor.evaluateRssProbe({ status: 200, body: rssBody, error: null }, '2026-10-22', { todayDate: '2026-10-22' });
     assert.equal(notYet.ok, 'warn');
     assert.match(notYet.detail, /尚未生成/);
 
     assert.equal(doctor.parseRssPubDate('<rss></rss>'), null);
     assert.equal(doctor.evaluateRssProbe({ status: 200, body: '<rss></rss>', error: null }, '2026-10-22').ok, 'fail');
     assert.equal(doctor.evaluateRssProbe({ status: 200, body: rssBody, error: new Error('boom') }, '2026-10-21').ok, 'fail');
+});
+
+test('RSS 历史/未来目标日措辞', () => {
+    const rssBody = '<rss><channel><pubDate>Wed, 21 Oct 2026 00:00:00 -0400</pubDate></channel></rss>';
+    const probe = { status: 200, body: rssBody, error: null };
+    const historical = doctor.evaluateRssProbe(probe, '2026-09-01', { todayDate: '2026-10-22' });
+    assert.equal(historical.ok, 'warn');
+    assert.match(historical.detail, /历史日期/);
+    assert.match(historical.detail, /当前公告日 2026-10-21/);
+
+    const future = doctor.evaluateRssProbe(probe, '2026-11-01', { todayDate: '2026-10-22' });
+    assert.equal(future.ok, 'warn');
+    assert.match(future.detail, /尚未到来/);
 });
 
 test('Atom / OAI 探测结果评估', () => {
@@ -568,6 +783,137 @@ test('网络探测在缺少代理时报告未探测而不是直连', () => {
     assert.equal(checks.length, 3);
     assert.ok(checks.every(check => check.ok === 'fail'));
     assert.ok(checks.every(check => check.detail.includes('未探测')));
+});
+
+function fakeHeaders(map = {}) {
+    const lower = new Map(Object.entries(map).map(([key, value]) => [String(key).toLowerCase(), String(value)]));
+    return { get: name => (lower.has(String(name).toLowerCase()) ? lower.get(String(name).toLowerCase()) : null) };
+}
+
+function streamingResponse({ status = 200, headers = {}, chunks = [], onCancel } = {}) {
+    let index = 0;
+    let cancelled = false;
+    return {
+        status,
+        headers: fakeHeaders(headers),
+        body: {
+            getReader() {
+                return {
+                    async read() {
+                        if (index >= chunks.length) return { done: true };
+                        const value = chunks[index];
+                        index += 1;
+                        return { done: false, value };
+                    },
+                    async cancel() { cancelled = true; if (onCancel) onCancel(); },
+                    releaseLock() {}
+                };
+            },
+            async cancel() { cancelled = true; if (onCancel) onCancel(); }
+        },
+        arrayBuffer: async () => Buffer.concat(chunks.map(chunk => Buffer.from(chunk))).buffer,
+        wasCancelled: () => cancelled
+    };
+}
+
+function redirectResponse(location, status = 302) {
+    return {
+        status,
+        headers: fakeHeaders(location ? { location } : {}),
+        body: { cancel: async () => {} },
+        arrayBuffer: async () => new ArrayBuffer(0)
+    };
+}
+
+test('探测 URL 只允许 HTTPS 且拒绝私网/保留地址', () => {
+    assert.throws(() => doctor.assertAllowedProbeUrl('http://export.arxiv.org/api'), /HTTPS/);
+    assert.throws(() => doctor.assertAllowedProbeUrl('https://127.0.0.1/x'), /私网/);
+    assert.throws(() => doctor.assertAllowedProbeUrl('https://10.0.0.5/x'), /私网/);
+    assert.throws(() => doctor.assertAllowedProbeUrl('https://localhost/x'), /私网/);
+    assert.throws(() => doctor.assertAllowedProbeUrl('https://[::1]/x'), /私网/);
+    assert.equal(doctor.assertAllowedProbeUrl('https://export.arxiv.org/api/query').hostname, 'export.arxiv.org');
+
+    assert.equal(doctor.isPrivateOrReservedHost('192.168.1.1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('172.20.1.1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('169.254.1.1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('8.8.8.8'), false);
+    assert.equal(doctor.isPrivateOrReservedHost('example.com'), false);
+    assert.equal(doctor.isPrivateOrReservedHost('::1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('fd00::1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('fe80::1'), true);
+    assert.equal(doctor.isPrivateOrReservedHost('2001:4860:4860::8888'), false);
+});
+
+test('fetchProbeText 真正限制 maxBytes（流式累计与 Content-Length）', async () => {
+    const chunk = new Uint8Array(4).fill(65);
+    const tooBigStream = await doctor.fetchProbeText(
+        async () => streamingResponse({ chunks: [chunk, chunk] }),
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 5, timeoutMs: 1000 }
+    );
+    assert.equal(tooBigStream.error?.code, 'PROBE_TOO_LARGE');
+
+    let cancelled = false;
+    const declared = await doctor.fetchProbeText(
+        async () => streamingResponse({ headers: { 'content-length': '100' }, chunks: [], onCancel: () => { cancelled = true; } }),
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 5, timeoutMs: 1000 }
+    );
+    assert.equal(declared.error?.code, 'PROBE_TOO_LARGE');
+    assert.equal(cancelled, true, '超限时应取消响应体');
+
+    const ok = await doctor.fetchProbeText(
+        async () => streamingResponse({ chunks: [Buffer.from('hello')] }),
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 100, timeoutMs: 1000 }
+    );
+    assert.equal(ok.error, null);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body, 'hello');
+});
+
+test('fetchProbeText 手动重定向：逐跳校验并限制次数', async () => {
+    const calls = [];
+    const ok = await doctor.fetchProbeText(
+        async (url, options) => {
+            calls.push({ url, redirect: options.redirect });
+            if (calls.length === 1) return redirectResponse('https://export.arxiv.org/next');
+            return streamingResponse({ chunks: [Buffer.from('final')] });
+        },
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 100, timeoutMs: 1000 }
+    );
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(call => call.redirect === 'manual'));
+    assert.equal(ok.body, 'final');
+
+    const insecure = await doctor.fetchProbeText(
+        async () => redirectResponse('http://127.0.0.1/x'),
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 100, timeoutMs: 1000 }
+    );
+    assert.equal(insecure.error?.code, 'PROBE_URL_INSECURE');
+
+    const missing = await doctor.fetchProbeText(
+        async () => redirectResponse(''),
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 100, timeoutMs: 1000 }
+    );
+    assert.equal(missing.error?.code, 'PROBE_REDIRECT_INVALID');
+
+    const loop = await doctor.fetchProbeText(
+        async () => redirectResponse('https://export.arxiv.org/api/query'),
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 100, timeoutMs: 1000, maxRedirects: 1 }
+    );
+    assert.equal(loop.error?.code, 'PROBE_REDIRECT_LIMIT');
 });
 
 // ═══════════════════════════════════════════════════════
@@ -599,11 +945,14 @@ test('人话表格包含图标、详情、提示和退出码汇总', () => {
     assert.match(table, /离线/);
 });
 
-test('主目录掩码只替换完整路径前缀', () => {
+test('主目录掩码与非主目录绝对路径截断', () => {
     assert.equal(doctor.maskPath('/Users/tester/blog', '/Users/tester'), '~/blog');
     assert.equal(doctor.maskPath('/Users/tester', '/Users/tester'), '~');
-    assert.equal(doctor.maskPath('/Users/tester-other/blog', '/Users/tester'), '/Users/tester-other/blog');
     assert.equal(doctor.maskPath('/tmp/x', '/Users/tester'), '/tmp/x');
+    // 非主目录的绝对路径只保留末两级，避免泄露本机目录结构。
+    assert.equal(doctor.maskPath('/Users/tester-other/blog', '/Users/tester'), '…/tester-other/blog');
+    assert.equal(doctor.maskPath('/var/log/app/data', '/Users/tester'), '…/app/data');
+    assert.equal(doctor.maskPath('data/current', '/Users/tester'), 'data/current');
 });
 
 test('密钥收集与输出脱敏', () => {
@@ -727,4 +1076,57 @@ test('runDoctor 中单个检查抛错时变成 fail 而不是崩溃', async () =
     assert.equal(disk.ok, 'fail');
     assert.match(disk.detail, /检查执行失败/);
     assert.equal(result.exitCode, 1);
+});
+
+test('runDoctor：.env 不可读时模型/代理检查输出“未判定”而不级联 fail', async () => {
+    const parsed = doctor.parseArgs(['--offline']);
+    const result = await doctor.runDoctor({
+        parsed,
+        projectRoot: '/fake/project',
+        deps: fakeDeps({
+            readEnvFile: () => ({ exists: true, mode: 0o600, entries: {}, readError: '无法读取 .env: EACCES', error: null })
+        })
+    });
+    assert.equal(byLabel(result.checks, '.env 文件与权限').ok, 'fail');
+    for (const label of ['主模型配置', '副模型配置', 'HTTP 代理']) {
+        const check = byLabel(result.checks, label);
+        assert.equal(check.ok, 'warn', label);
+        assert.match(check.detail, /因 \.env 不可读未判定/);
+    }
+    assert.equal(result.exitCode, 1);
+});
+
+test('CLI --help：普通输出为用法文本，--json 时仍输出可解析 JSON', () => {
+    const { spawnSync } = require('node:child_process');
+    const script = path.join(__dirname, '..', 'scripts', 'doctor.js');
+    const plain = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8' });
+    assert.equal(plain.status, 0);
+    assert.match(plain.stdout, /用法: node scripts\/doctor\.js/);
+
+    const asJson = spawnSync(process.execPath, [script, '--json', '--help'], { encoding: 'utf8' });
+    assert.equal(asJson.status, 0);
+    const parsed = JSON.parse(asJson.stdout);
+    assert.ok(Array.isArray(parsed));
+    assert.equal(parsed[0].label, 'help');
+    assert.match(parsed[0].detail, /用法: node scripts\/doctor\.js/);
+});
+
+test('CLI 沙箱守卫：spawn 时业务前 exit 1，import 时不杀进程', () => {
+    const { spawnSync } = require('node:child_process');
+    const script = path.join(__dirname, '..', 'scripts', 'doctor.js');
+    const guarded = spawnSync(process.execPath, [script, '--offline'], {
+        encoding: 'utf8',
+        env: { ...process.env, CODEX_SANDBOX: '1' }
+    });
+    assert.equal(guarded.status, 1);
+    assert.match(guarded.stderr, /沙箱外运行/);
+    assert.ok(!guarded.stdout.includes('论文速递体检'), '沙箱内不得执行业务检查');
+
+    // import 路径不得在模块加载时退出：子进程先设置沙箱标志再 require。
+    const imported = spawnSync(process.execPath, [
+        '-e',
+        `process.env.CODEX_SANDBOX='1';require(${JSON.stringify(script)});process.stdout.write('imported-ok')`
+    ], { encoding: 'utf8' });
+    assert.equal(imported.status, 0);
+    assert.equal(imported.stdout, 'imported-ok');
 });

@@ -18,11 +18,12 @@ _DOC_TROUBLESHOOTING = 'docs/troubleshooting.md'
 _DOC_FETCH_BOUNDARY = 'docs/daily-fetch-boundary.md'
 _DOC_READER_RETRY = 'docs/reader-explicit-retry.md'
 _DOC_READER_WRITING = 'docs/reader-writing.md'
-_DOC_LOCKED_SOURCE = 'docs/locked-source-validation.md'
+_DOC_DATA_FORMAT_SOURCES = 'docs/data-format.md#日更来源的保存与核验'
 _DOC_DATA_FORMAT = 'docs/data-format.md'
 _DOC_THREE_WORKFLOWS = 'docs/three-workflows.md'
 
-_FALLBACK_DATE = 'YYYY-MM-DD'
+_DATE_PLACEHOLDER = '<DATE>'
+_FALLBACK_DATE = _DATE_PLACEHOLDER
 _MAX_CHAIN_DEPTH = 8
 
 _SECRET_PATTERNS = (
@@ -160,13 +161,20 @@ def _codes_of(chain):
     return codes
 
 
+# 两语言共用的状态键集合：camelCase、snake_case、errno 与数值 code 都算同一状态。
+_STATUS_KEYS = ('status', 'status_code', 'statusCode', 'http_status', 'httpStatus', 'errno', 'code')
+
+
 def _status_of(chain):
     for item in chain:
-        values = item.items() if isinstance(item, dict) else (
-            (key, getattr(item, key, None)) for key in ('status', 'status_code', 'http_status')
-        )
-        for key, value in values:
-            if key in ('status', 'status_code', 'http_status') and isinstance(value, int) and not isinstance(value, bool):
+        if isinstance(item, dict):
+            pairs = ((key, item.get(key)) for key in _STATUS_KEYS)
+        elif isinstance(item, BaseException):
+            pairs = ((key, getattr(item, key, None)) for key in _STATUS_KEYS)
+        else:
+            continue
+        for key, value in pairs:
+            if isinstance(value, int) and not isinstance(value, bool):
                 return value
     return None
 
@@ -189,11 +197,11 @@ def _field_of(chain, keys):
 def _build_context(error, stage):
     chain = _error_chain(error)
     text = _text_of(chain)
-    date = _normalize_date(_field_of(chain, ('date', 'batch_date', 'publish_date', 'target_date')))
+    date = _normalize_date(_field_of(chain, ('date', 'batchDate', 'batch_date', 'publishDate', 'publish_date', 'targetDate', 'target_date')))
     if not date:
         match = _DATE_ANY_RE.search(text)
         date = _normalize_date(match.group(1)) if match else None
-    arxiv_id = _normalize_arxiv_id(_field_of(chain, ('arxiv_id', 'paper_id', 'normalized_id', 'id')))
+    arxiv_id = _normalize_arxiv_id(_field_of(chain, ('arxivId', 'arxiv_id', 'paperId', 'paper_id', 'normalizedId', 'normalized_id', 'id')))
     if not arxiv_id:
         match = _ARXIV_ID_ANY_RE.search(text)
         arxiv_id = _normalize_arxiv_id(match.group(1)) if match else None
@@ -203,9 +211,13 @@ def _build_context(error, stage):
         'codes': _codes_of(chain),
         'status': _status_of(chain),
         'stage': stage.strip() if isinstance(stage, str) and stage.strip() else None,
-        'date': date or _FALLBACK_DATE,
+        'date': date,
         'arxiv_id': arxiv_id,
     }
+
+
+def _date_token(context):
+    return context['date'] or _DATE_PLACEHOLDER
 
 
 def _fetch_command(date):
@@ -246,7 +258,7 @@ def _digest_status_command(date):
 
 def _resume_command(context):
     stage = context['stage']
-    date = context['date']
+    date = _date_token(context)
     if stage == 'fetch':
         return _fetch_command(date)
     if stage == 'deep-analysis':
@@ -260,9 +272,16 @@ def _resume_command(context):
     return f'npm run digest:prepare -- {date}'
 
 
+def _arxiv_resume_command(context):
+    """arXiv 429 的恢复入口随当前阶段走：Reader/分析阶段不要求重跑抓取。"""
+    if context['stage'] in ('api-reader', 'deep-analysis', 'batch-analyze', 'reanalyze'):
+        return _resume_command(context)
+    return _fetch_command(_date_token(context))
+
+
 def _blog_stage_command(context):
     stage = context['stage']
-    date = context['date']
+    date = _date_token(context)
     if isinstance(stage, str) and 'push' in stage:
         return _push_command(date)
     if isinstance(stage, str) and 'review' in stage:
@@ -303,11 +322,12 @@ def _match_arxiv_rate_limit(context):
         or re.search(r'\b429\b|too many requests|rate[_\s-]?limit|限流', text, re.IGNORECASE)
         or any('RATE_LIMIT' in code for code in context['codes'])
     )
-    external = (
-        re.search(r'arxiv|arxiv\.org|抓取|拉取|fetch|下载|html|pdf|来源|download', text, re.IGNORECASE)
-        or any(re.search(r'ARXIV|FETCH|RATE_LIMIT', code) for code in context['codes'])
+    # 只认 arXiv 专属信号；泛词（来源/fetch/html/pdf/下载）留给通用 429 规则。
+    arxiv_specific = (
+        any(code.startswith('ARXIV') for code in context['codes'])
+        or re.search(r'arxiv\.org|export\.arxiv|oaipmh|rss\.arxiv|\barxiv\b', text, re.IGNORECASE)
     )
-    return bool(limited and external)
+    return bool(limited and arxiv_specific)
 
 
 def _match_reader_repair_no_progress(context):
@@ -419,7 +439,7 @@ _RULES = (
         'commands': lambda context: [
             "grep -c '^PAPER_ANALYZER_API_KEY=' .env",
             'npm run workspace:role -- status',
-            _digest_status_command(context['date']),
+            _digest_status_command(_date_token(context)),
         ],
     },
     {
@@ -433,8 +453,8 @@ _RULES = (
             '只有北京时间当天且检查点确实过期时才重新抓取；历史日期保留失败记录，按历史维护流程处理。',
         ),
         'commands': lambda context: [
-            _fetch_command(context['date']),
-            _fetch_command(context['date']) + ' --require-previously-fetched',
+            _fetch_command(_date_token(context)),
+            _fetch_command(_date_token(context)) + ' --require-previously-fetched',
             'npm run validate:data',
         ],
     },
@@ -442,14 +462,14 @@ _RULES = (
         'id': 'arxiv-rate-limit',
         'doc_ref': _DOC_FETCH_BOUNDARY,
         'match': _match_arxiv_rate_limit,
-        'cause': 'arXiv 或外部来源限流（HTTP 429），请求被拒绝且当前批次已暂停。',
+        'cause': 'arXiv 限流（HTTP 429），抓取请求被拒绝且当前批次已暂停。',
         'next_steps': (
             '先等待冷却（抓取失败通常需要数十秒到数分钟退避），不要立刻整批重启。',
             '确认 HTTPS_PROXY/HTTP_PROXY 是项目 .env 里的 HTTP CONNECT 地址，且代理没有额外限流。',
             '恢复时只重跑同一来源和同一批次，已抓到的页与已成功论文不重抓。',
             '不要通过并发数、分页大小或直连来绕过限流。',
         ),
-        'commands': lambda context: ['sleep 60', _fetch_command(context['date'])],
+        'commands': lambda context: ['sleep 60', _arxiv_resume_command(context)],
     },
     {
         'id': 'reader-repair-no-progress',
@@ -462,7 +482,7 @@ _RULES = (
             '整批首轮结束后只对真实可重试失败集合重跑 Reader，已通过论文复用原结果。',
             '多轮仍顽固时走受控人工/签名修正，并绑定原来源、失败稿 SHA 与修改范围。',
         ),
-        'commands': lambda context: [_reader_command(context['date']), _digest_status_command(context['date'])],
+        'commands': lambda context: [_reader_command(_date_token(context)), _digest_status_command(_date_token(context))],
     },
     {
         'id': 'reader-operator-correction-rejected',
@@ -474,7 +494,7 @@ _RULES = (
             '修正只允许 1–8 个既有节点，且每个改动都要有真实逐字来源；不要新增节点或手写数值。',
             '重新走正常 Reader 入口并通过整篇资格与来源检查，不能跳过校验、手填成功或删失败记录。',
         ),
-        'commands': lambda context: [_reader_command(context['date']), _digest_status_command(context['date'])],
+        'commands': lambda context: [_reader_command(_date_token(context)), _digest_status_command(_date_token(context))],
     },
     {
         'id': 'reader-table-adhesion',
@@ -486,7 +506,7 @@ _RULES = (
             '优先用完整原表或逐字引文重建该表，保留原条件、单位和数值列。',
             '重跑 Reader 后仍需通过来源、数字和整篇资格检查，再重新生成与审查博客。',
         ),
-        'commands': lambda context: [_reader_command(context['date']), _generate_command(context['date'])],
+        'commands': lambda context: [_reader_command(_date_token(context)), _generate_command(_date_token(context))],
     },
     {
         'id': 'reader-table-header-units',
@@ -498,7 +518,7 @@ _RULES = (
             '不改数字、不造伪列、不把别处指标单位搬到本表。',
             '重跑 Reader 后重新执行页面审查，确认表格条件、指标和单位一致。',
         ),
-        'commands': lambda context: [_reader_command(context['date']), _review_command(context['date'])],
+        'commands': lambda context: [_reader_command(_date_token(context)), _review_command(_date_token(context))],
     },
     {
         'id': 'reader-table-ablation-missing',
@@ -510,7 +530,7 @@ _RULES = (
             '只从本篇原表或逐字引文取数，不搬入数据、配置或成本表，保持原表数与绑定。',
             '重跑 Reader 并通过整篇资格后，再重新生成、审查和推送博客。',
         ),
-        'commands': lambda context: [_reader_command(context['date']), _generate_command(context['date'])],
+        'commands': lambda context: [_reader_command(_date_token(context)), _generate_command(_date_token(context))],
     },
     {
         'id': 'blog-repository-dirty',
@@ -554,12 +574,12 @@ _RULES = (
         ),
         'commands': lambda context: [
             "ps -eo pid,etime,command | grep -E 'deep-analysis-only|batch-analyze|reanalyze|refresh-api-reader|full-fetch' | grep -v grep",
-            _digest_status_command(context['date']),
+            _digest_status_command(_date_token(context)),
         ],
     },
     {
         'id': 'source-sha-mismatch',
-        'doc_ref': _DOC_LOCKED_SOURCE,
+        'doc_ref': _DOC_DATA_FORMAT_SOURCES,
         'match': _match_source_sha_mismatch,
         'cause': '来源文件 SHA 与分析记录不一致：封存来源被替换、缺失或没有刷新。',
         'next_steps': (
@@ -569,7 +589,7 @@ _RULES = (
         ),
         'commands': lambda context: [
             'npm run validate:data',
-            f"npm run digest:prepare -- {context['date']}",
+            f'npm run digest:prepare -- {_date_token(context)}',
         ],
     },
     {
@@ -583,9 +603,9 @@ _RULES = (
             '只有 review 通过后才能 push；远端推送后还要核对部署与页面 HTTP 200。',
         ),
         'commands': lambda context: [
-            _generate_command(context['date']),
-            _review_command(context['date']),
-            _push_command(context['date']),
+            _generate_command(_date_token(context)),
+            _review_command(_date_token(context)),
+            _push_command(_date_token(context)),
         ],
     },
     {
@@ -598,7 +618,7 @@ _RULES = (
             '不要手填、复制或复用旧凭证，也不要跳过审查直接推送。',
             'review 通过后再 push，并核对远端 main OID 与部署结果。',
         ),
-        'commands': lambda context: [_review_command(context['date']), _push_command(context['date'])],
+        'commands': lambda context: [_review_command(_date_token(context)), _push_command(_date_token(context))],
     },
     {
         'id': 'upstream-rate-limit',
@@ -624,16 +644,21 @@ _FALLBACK = {
         '用 digest:status 查看当前批次断点，修复后只续失败集合，不重跑已成功论文。',
         '把完整错误交给维护者时先删除密钥、认证头和个人路径。',
     ),
-    'commands': lambda context: ['npm run workspace:role -- status', 'npm run validate:data', _digest_status_command(context['date'])],
+    'commands': lambda context: ['npm run workspace:role -- status', 'npm run validate:data', _digest_status_command(_date_token(context))],
 }
 
 
 def _result_from_rule(rule, context):
-    # 命令全部是写死的 npm/git/ps 模板，只插入已校验的日期；不经过密钥抹除，
-    # 以免把 `PAPER_ANALYZER_API_KEY=` 这类安全的环境变量名误伤成不可执行的命令。
+    # 命令全部是写死的 npm/git/ps 模板，只插入已校验的日期或 <DATE> 占位；不经过
+    # 密钥抹除，以免把 `PAPER_ANALYZER_API_KEY=` 这类安全的环境变量名误伤成命令。
+    next_steps = list(rule['next_steps'])
+    if not context['date']:
+        next_steps.append(
+            f'命令里的 {_DATE_PLACEHOLDER} 是批次日期占位：请先替换为 YYYY-MM-DD，或运行带 --date 的入口。'
+        )
     return {
         'cause': rule['cause'],
-        'next_steps': list(rule['next_steps']),
+        'next_steps': next_steps,
         'commands': [str(command) for command in rule['commands'](context)],
         'doc_ref': rule['doc_ref'],
     }
@@ -650,7 +675,7 @@ def guidance_for(error, stage=None):
         context = {
             'chain': [], 'text': '', 'codes': [], 'status': None,
             'stage': stage if isinstance(stage, str) and stage.strip() else None,
-            'date': _FALLBACK_DATE, 'arxiv_id': None,
+            'date': None, 'arxiv_id': None,
         }
     for rule in _RULES:
         try:
@@ -660,6 +685,21 @@ def guidance_for(error, stage=None):
         if matched:
             return _result_from_rule(rule, context)
     return _result_from_rule(_FALLBACK, context)
+
+
+def rule_id_for(error, stage=None):
+    """只返回命中的规则 id（两语言用同一组 id）；未命中返回 'generic-fallback'。"""
+    try:
+        context = _build_context(error, stage)
+        for rule in _RULES:
+            try:
+                if rule['match'](context):
+                    return rule['id']
+            except Exception:
+                continue
+    except Exception:
+        return _FALLBACK['id']
+    return _FALLBACK['id']
 
 
 def format_guidance_lines(guidance):

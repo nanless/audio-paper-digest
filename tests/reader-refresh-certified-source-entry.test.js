@@ -44,6 +44,8 @@ function loadRefresh(f, mutateAtLock = () => {}, saveError = null) {
         withDailyFreshPaperSource: (plan, paper, fn) => fn(daily.readDailyFreshSource(plan, paper))
     };
     const modules = {
+        './log-setup': { writeStageSummary: () => null },
+        './lib/error-guidance.js': require('../scripts/lib/error-guidance.js'),
         './config.js': { FILES: { deepAnalysisResult: 'no-file' } },
         './deep-analyzer.js': { stableFingerprint: value => JSON.stringify(value), hasReviewedCompletedPrimaryReaderSeed: () => false },
         './analysis-engine.js': {

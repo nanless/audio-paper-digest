@@ -21,6 +21,8 @@ async function probe() {
     };
     const stop = { withAnalysisStopControl: fn => fn(), assertMayStartRequest() {} };
     const modules = {
+        './log-setup': { writeStageSummary: () => null },
+        './lib/error-guidance.js': require('../scripts/lib/error-guidance.js'),
         './config.js': { FILES: { deepAnalysisResult: 'unused' } },
         './deep-analyzer.js': { stableFingerprint: value => JSON.stringify(value) },
         './analysis-engine.js': {

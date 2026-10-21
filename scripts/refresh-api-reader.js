@@ -2,26 +2,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
-// 摘要日志与错误指引按需加载：入口测试会用受控 require 白名单载入本文件，
-// 顶层 require 新模块会破坏其依赖隔离；调用时失败也只降级，不影响刷新逻辑。
-let stageSummaryModule = null;
-let errorGuidanceModule = null;
-function writeStageSummary(options) {
-    try {
-        stageSummaryModule ||= require('./log-setup');
-        return stageSummaryModule.writeStageSummary(options);
-    } catch (_) {
-        return null;
-    }
-}
-function printErrorGuidance(error, context) {
-    try {
-        errorGuidanceModule ||= require('./lib/error-guidance.js');
-        return errorGuidanceModule.printErrorGuidance(error, context);
-    } catch (_) {
-        return null;
-    }
-}
+const { writeStageSummary } = require('./log-setup');
+const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
 const refreshRecoveryEntryScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const Config = require('./config.js');
 const {
@@ -724,22 +706,41 @@ async function refreshApiReaderInternal(targetId, options = {}) {
 }
 
 if (require.main === module) {
+    let refreshStageStartedAt = Date.now();
+    let refreshBatchDate = null;
     try {
         const options = parseRefreshCliArgs(process.argv.slice(2));
+        refreshBatchDate = options.date || null;
+        refreshStageStartedAt = Date.now();
         const ids = resolveBatchRefreshIds(options);
-        writeStageSummary({ stage: 'Reader', status: 'start', message: `刷新 ${ids.length} 篇论文的 Reader 文章` });
+        writeStageSummary({
+            stage: 'Reader', status: 'start', date: refreshBatchDate,
+            message: `刷新 ${ids.length} 篇论文的 Reader 文章`
+        });
         refreshApiReaders(ids, options).then(results => {
             console.log(`✅ 读者文章批量刷新已完成: ${results.length} 篇`);
-            writeStageSummary({ stage: 'Reader', status: 'ok', message: `Reader 刷新完成 ${results.length} 篇` });
+            writeStageSummary({
+                stage: 'Reader', status: 'ok', date: refreshBatchDate,
+                elapsedMs: Date.now() - refreshStageStartedAt,
+                message: `Reader 刷新完成 ${results.length} 篇`
+            });
         }).catch(error => {
             console.error(`❌ API 读者文章刷新失败: ${error.message}`);
-            writeStageSummary({ stage: 'Reader', status: 'error', message: `Reader 刷新失败: ${error.message}` });
+            writeStageSummary({
+                stage: 'Reader', status: 'error', date: refreshBatchDate,
+                elapsedMs: Date.now() - refreshStageStartedAt,
+                message: `Reader 刷新失败: ${redactSensitive(error.message)}`
+            });
             printErrorGuidance(error, { stage: 'api-reader' });
             process.exitCode = 1;
         });
     } catch (error) {
         console.error(`❌ ${error.message}`);
-        writeStageSummary({ stage: 'Reader', status: 'error', message: `Reader 刷新入口失败: ${error.message}` });
+        writeStageSummary({
+            stage: 'Reader', status: 'error', date: refreshBatchDate,
+            elapsedMs: Date.now() - refreshStageStartedAt,
+            message: `Reader 刷新入口失败: ${redactSensitive(error.message)}`
+        });
         printErrorGuidance(error, { stage: 'api-reader' });
         process.exitCode = 1;
     }

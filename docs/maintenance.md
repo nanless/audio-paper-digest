@@ -157,7 +157,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 运行中用 `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒刷新，`--interval N` 可调，`--json --watch` 每行一个 JSON）查看阶段、数量、失败列表、最近日志、账号池可用数、本次费用和无进度提示；默认不带 `--watch` 时输出与原来一致。费用按日期聚合 `data/runtime/llm-usage`，不联网、不推算未记录的费用。
 
-Node 与 Python 入口在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
+主要生产入口（fetch、deep、batch、reanalyze、Reader 刷新与博客三阶段）在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
 
 ## 验证矩阵
 

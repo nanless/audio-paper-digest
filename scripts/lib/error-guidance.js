@@ -10,11 +10,12 @@ const DOC_TROUBLESHOOTING = 'docs/troubleshooting.md';
 const DOC_FETCH_BOUNDARY = 'docs/daily-fetch-boundary.md';
 const DOC_READER_RETRY = 'docs/reader-explicit-retry.md';
 const DOC_READER_WRITING = 'docs/reader-writing.md';
-const DOC_LOCKED_SOURCE = 'docs/locked-source-validation.md';
+const DOC_DATA_FORMAT_SOURCES = 'docs/data-format.md#日更来源的保存与核验';
 const DOC_DATA_FORMAT = 'docs/data-format.md';
 const DOC_THREE_WORKFLOWS = 'docs/three-workflows.md';
 
-const FALLBACK_DATE = 'YYYY-MM-DD';
+const DATE_PLACEHOLDER = '<DATE>';
+const FALLBACK_DATE = DATE_PLACEHOLDER;
 const MAX_CHAIN_DEPTH = 8;
 
 const SECRET_PATTERNS = [
@@ -72,7 +73,7 @@ function collectText(chain) {
             if (typeof item[key] === 'string' && item[key].trim()) parts.push(item[key]);
         }
         if (typeof item.code === 'string' || typeof item.code === 'number') parts.push(String(item.code));
-        if (typeof item.stack === 'string' && item.stack.trim()) parts.push(item.stack);
+        // 有意不拼接 stack：错误位置里的路径会把 arXiv/账号池等泛词误判成专属信号。
     }
     return parts.join('\n');
 }
@@ -89,10 +90,15 @@ function collectCodes(chain) {
     return [...codes];
 }
 
+// 两语言共用的状态键集合：camelCase、snake_case、errno 与数值 code 都算同一状态。
+const STATUS_KEYS = Object.freeze([
+    'status', 'statusCode', 'status_code', 'httpStatus', 'http_status', 'errno', 'code'
+]);
+
 function collectStatus(chain) {
     for (const item of chain) {
         if (typeof item !== 'object' || item === null) continue;
-        for (const key of ['status', 'statusCode', 'httpStatus']) {
+        for (const key of STATUS_KEYS) {
             const value = item[key];
             if (Number.isInteger(value)) return value;
         }
@@ -112,14 +118,14 @@ function collectField(chain, keys) {
 }
 
 function collectDate(chain, text) {
-    const field = normalizeDate(collectField(chain, ['date', 'batchDate', 'publishDate', 'targetDate']));
+    const field = normalizeDate(collectField(chain, ['date', 'batchDate', 'batch_date', 'publishDate', 'publish_date', 'targetDate', 'target_date']));
     if (field) return field;
     const match = /(20\d{2}-\d{2}-\d{2})/.exec(text);
     return match ? normalizeDate(match[1]) : null;
 }
 
 function collectArxivId(chain, text) {
-    const field = normalizeArxivId(collectField(chain, ['arxivId', 'paperId', 'normalizedId', 'id']));
+    const field = normalizeArxivId(collectField(chain, ['arxivId', 'arxiv_id', 'paperId', 'paper_id', 'normalizedId', 'normalized_id', 'id']));
     if (field) return field;
     const match = /\b(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\b/.exec(text);
     return match ? normalizeArxivId(match[1]) : null;
@@ -134,9 +140,13 @@ function buildContext(error, stage) {
         codes: collectCodes(chain),
         status: collectStatus(chain),
         stage: typeof stage === 'string' && stage.trim() ? stage.trim() : null,
-        date: collectDate(chain, text) || FALLBACK_DATE,
+        date: collectDate(chain, text),
         arxivId: collectArxivId(chain, text)
     };
+}
+
+function dateToken(context) {
+    return context && context.date ? context.date : DATE_PLACEHOLDER;
 }
 
 const FETCH_COMMAND = date => `npm run fetch -- --date ${date}`;
@@ -151,7 +161,8 @@ const DIGEST_STATUS_COMMAND = date => `npm run digest:status -- --date ${date}`;
 
 /** 按当前阶段给出"从该阶段继续"的恢复命令。 */
 function resumeCommand(context) {
-    const { stage, date } = context;
+    const { stage } = context;
+    const date = dateToken(context);
     if (stage === 'fetch') return FETCH_COMMAND(date);
     if (stage === 'deep-analysis') return DEEP_COMMAND(date);
     if (stage === 'batch-analyze') return BATCH_COMMAND();
@@ -160,9 +171,18 @@ function resumeCommand(context) {
     return `npm run digest:prepare -- ${date}`;
 }
 
+/** arXiv 429 的恢复入口随当前阶段走：Reader/分析阶段不要求重跑抓取。 */
+function arxivResumeCommand(context) {
+    if (['api-reader', 'deep-analysis', 'batch-analyze', 'reanalyze'].includes(context.stage)) {
+        return resumeCommand(context);
+    }
+    return FETCH_COMMAND(dateToken(context));
+}
+
 /** 博客阶段命令：generate/review/push 各自只恢复自己的阶段。 */
 function blogStageCommand(context) {
-    const { stage, date } = context;
+    const { stage } = context;
+    const date = dateToken(context);
     if (typeof stage === 'string' && /push/.test(stage)) return PUSH_COMMAND(date);
     if (typeof stage === 'string' && /review/.test(stage)) return REVIEW_COMMAND(date);
     return GENERATE_COMMAND(date);
@@ -185,7 +205,7 @@ const RULES = [
         commands: context => [
             `grep -c '^PAPER_ANALYZER_API_KEY=' .env`,
             'npm run workspace:role -- status',
-            DIGEST_STATUS_COMMAND(context.date)
+            DIGEST_STATUS_COMMAND(dateToken(context))
         ]
     },
     {
@@ -199,8 +219,8 @@ const RULES = [
             '只有北京时间当天且检查点确实过期时才重新抓取；历史日期保留失败记录，按历史维护流程处理。'
         ],
         commands: context => [
-            FETCH_COMMAND(context.date),
-            FETCH_COMMAND(context.date) + ' --require-previously-fetched',
+            FETCH_COMMAND(dateToken(context)),
+            FETCH_COMMAND(dateToken(context)) + ' --require-previously-fetched',
             'npm run validate:data'
         ]
     },
@@ -210,18 +230,19 @@ const RULES = [
         match: ({ text, codes, status }) => {
             const limited = status === 429 || /\b429\b|too many requests|rate[_\s-]?limit|限流/i.test(text)
                 || codes.some(code => /RATE_LIMIT/.test(code));
-            const external = /arxiv|arxiv\.org|抓取|拉取|fetch|下载|html|pdf|来源|download/i.test(text)
-                || codes.some(code => /ARXIV|FETCH|RATE_LIMIT/.test(code));
-            return limited && external;
+            // 只认 arXiv 专属信号；泛词（来源/fetch/html/pdf/下载）留给通用 429 规则。
+            const arxivSpecific = codes.some(code => /^ARXIV/.test(code))
+                || /arxiv\.org|export\.arxiv|oaipmh|rss\.arxiv|\barxiv\b/i.test(text);
+            return limited && arxivSpecific;
         },
-        cause: 'arXiv 或外部来源限流（HTTP 429），请求被拒绝且当前批次已暂停。',
+        cause: 'arXiv 限流（HTTP 429），抓取请求被拒绝且当前批次已暂停。',
         nextSteps: [
             '先等待冷却（抓取失败通常需要数十秒到数分钟退避），不要立刻整批重启。',
             '确认 HTTPS_PROXY/HTTP_PROXY 是项目 .env 里的 HTTP CONNECT 地址，且代理没有额外限流。',
             '恢复时只重跑同一来源和同一批次，已抓到的页与已成功论文不重抓。',
             '不要通过并发数、分页大小或直连来绕过限流。'
         ],
-        commands: context => ['sleep 60', FETCH_COMMAND(context.date)]
+        commands: context => ['sleep 60', arxivResumeCommand(context)]
     },
     {
         id: 'reader-repair-no-progress',
@@ -236,7 +257,7 @@ const RULES = [
             '整批首轮结束后只对真实可重试失败集合重跑 Reader，已通过论文复用原结果。',
             '多轮仍顽固时走受控人工/签名修正，并绑定原来源、失败稿 SHA 与修改范围。'
         ],
-        commands: context => [READER_COMMAND(context.date), DIGEST_STATUS_COMMAND(context.date)]
+        commands: context => [READER_COMMAND(dateToken(context)), DIGEST_STATUS_COMMAND(dateToken(context))]
     },
     {
         id: 'reader-operator-correction-rejected',
@@ -249,7 +270,7 @@ const RULES = [
             '修正只允许 1–8 个既有节点，且每个改动都要有真实逐字来源；不要新增节点或手写数值。',
             '重新走正常 Reader 入口并通过整篇资格与来源检查，不能跳过校验、手填成功或删失败记录。'
         ],
-        commands: context => [READER_COMMAND(context.date), DIGEST_STATUS_COMMAND(context.date)]
+        commands: context => [READER_COMMAND(dateToken(context)), DIGEST_STATUS_COMMAND(dateToken(context))]
     },
     {
         id: 'reader-table-adhesion',
@@ -262,7 +283,7 @@ const RULES = [
             '优先用完整原表或逐字引文重建该表，保留原条件、单位和数值列。',
             '重跑 Reader 后仍需通过来源、数字和整篇资格检查，再重新生成与审查博客。'
         ],
-        commands: context => [READER_COMMAND(context.date), GENERATE_COMMAND(context.date)]
+        commands: context => [READER_COMMAND(dateToken(context)), GENERATE_COMMAND(dateToken(context))]
     },
     {
         id: 'reader-table-header-units',
@@ -274,7 +295,7 @@ const RULES = [
             '不改数字、不造伪列、不把别处指标单位搬到本表。',
             '重跑 Reader 后重新执行页面审查，确认表格条件、指标和单位一致。'
         ],
-        commands: context => [READER_COMMAND(context.date), REVIEW_COMMAND(context.date)]
+        commands: context => [READER_COMMAND(dateToken(context)), REVIEW_COMMAND(dateToken(context))]
     },
     {
         id: 'reader-table-ablation-missing',
@@ -286,7 +307,7 @@ const RULES = [
             '只从本篇原表或逐字引文取数，不搬入数据、配置或成本表，保持原表数与绑定。',
             '重跑 Reader 并通过整篇资格后，再重新生成、审查和推送博客。'
         ],
-        commands: context => [READER_COMMAND(context.date), GENERATE_COMMAND(context.date)]
+        commands: context => [READER_COMMAND(dateToken(context)), GENERATE_COMMAND(dateToken(context))]
     },
     {
         id: 'blog-repository-dirty',
@@ -330,12 +351,12 @@ const RULES = [
         ],
         commands: context => [
             `ps -eo pid,etime,command | grep -E 'deep-analysis-only|batch-analyze|reanalyze|refresh-api-reader|full-fetch' | grep -v grep`,
-            DIGEST_STATUS_COMMAND(context.date)
+            DIGEST_STATUS_COMMAND(dateToken(context))
         ]
     },
     {
         id: 'source-sha-mismatch',
-        docRef: DOC_LOCKED_SOURCE,
+        docRef: DOC_DATA_FORMAT_SOURCES,
         match: ({ text }) => /来源\s*SHA|source[_\s-]?sha|来源清单\s*SHA|sha-?256.*(?:不一致|不符|mismatch)|(?:不一致|不符|mismatch).*sha-?256|来源.*SHA.*不一致/i.test(text),
         cause: '来源文件 SHA 与分析记录不一致：封存来源被替换、缺失或没有刷新。',
         nextSteps: [
@@ -345,7 +366,7 @@ const RULES = [
         ],
         commands: context => [
             'npm run validate:data',
-            `npm run digest:prepare -- ${context.date}`
+            `npm run digest:prepare -- ${dateToken(context)}`
         ]
     },
     {
@@ -359,9 +380,9 @@ const RULES = [
             '只有 review 通过后才能 push；远端推送后还要核对部署与页面 HTTP 200。'
         ],
         commands: context => [
-            GENERATE_COMMAND(context.date),
-            REVIEW_COMMAND(context.date),
-            PUSH_COMMAND(context.date)
+            GENERATE_COMMAND(dateToken(context)),
+            REVIEW_COMMAND(dateToken(context)),
+            PUSH_COMMAND(dateToken(context))
         ]
     },
     {
@@ -374,7 +395,7 @@ const RULES = [
             '不要手填、复制或复用旧凭证，也不要跳过审查直接推送。',
             'review 通过后再 push，并核对远端 main OID 与部署结果。'
         ],
-        commands: context => [REVIEW_COMMAND(context.date), PUSH_COMMAND(context.date)]
+        commands: context => [REVIEW_COMMAND(dateToken(context)), PUSH_COMMAND(dateToken(context))]
     },
     {
         id: 'upstream-rate-limit',
@@ -401,15 +422,19 @@ const FALLBACK = {
         '用 digest:status 查看当前批次断点，修复后只续失败集合，不重跑已成功论文。',
         '把完整错误交给维护者时先删除密钥、认证头和个人路径。'
     ],
-    commands: context => ['npm run workspace:role -- status', 'npm run validate:data', DIGEST_STATUS_COMMAND(context.date)]
+    commands: context => ['npm run workspace:role -- status', 'npm run validate:data', DIGEST_STATUS_COMMAND(dateToken(context))]
 };
 
 function resultFromRule(rule, context) {
+    const nextSteps = [...rule.nextSteps];
+    if (!context.date) {
+        nextSteps.push(`命令里的 ${DATE_PLACEHOLDER} 是批次日期占位：请先替换为 YYYY-MM-DD，或运行带 --date 的入口。`);
+    }
     return {
         cause: rule.cause,
-        nextSteps: [...rule.nextSteps],
-        // 命令全部是写死的 npm/git/ps 模板，只插入已校验的日期；不经过密钥抹除，
-        // 以免把 `PAPER_ANALYZER_API_KEY=` 这类安全的环境变量名误伤成不可执行的命令。
+        nextSteps,
+        // 命令全部是写死的 npm/git/ps 模板，只插入已校验的日期或 <DATE> 占位；不经过
+        // 密钥抹除，以免把 `PAPER_ANALYZER_API_KEY=` 这类安全的环境变量名误伤成命令。
         commands: rule.commands(context).map(String),
         docRef: rule.docRef
     };
@@ -424,7 +449,7 @@ function guidanceFor(error, stage) {
     try {
         context = buildContext(error, stage);
     } catch {
-        context = { chain: [], text: '', codes: [], status: null, stage: stage || null, date: FALLBACK_DATE, arxivId: null };
+        context = { chain: [], text: '', codes: [], status: null, stage: stage || null, date: null, arxivId: null };
     }
     for (const rule of RULES) {
         let matched = false;
@@ -436,6 +461,25 @@ function guidanceFor(error, stage) {
         if (matched) return resultFromRule(rule, context);
     }
     return resultFromRule(FALLBACK, context);
+}
+
+/**
+ * 只返回命中的规则 id（两语言用同一组 id）；未命中返回 'generic-fallback'。
+ */
+function ruleIdFor(error, stage) {
+    try {
+        const context = buildContext(error, stage);
+        for (const rule of RULES) {
+            try {
+                if (rule.match(context)) return rule.id;
+            } catch {
+                // 单条规则异常不影响后续匹配。
+            }
+        }
+    } catch {
+        return FALLBACK.id;
+    }
+    return FALLBACK.id;
 }
 
 function formatGuidanceLines(guidance) {
@@ -474,9 +518,11 @@ function printErrorGuidance(error, options = {}) {
 
 module.exports = {
     guidanceFor,
+    ruleIdFor,
     printErrorGuidance,
     redactSensitive,
     collectErrorChain,
     formatGuidanceLines,
-    FALLBACK_DATE
+    FALLBACK_DATE,
+    DATE_PLACEHOLDER
 };

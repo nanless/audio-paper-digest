@@ -28,6 +28,7 @@
 |---|---|---|
 | 运行北京时间当天的论文速递 | `npm run digest:prepare -- YYYY-MM-DD` | [操作手册](SKILL.md#1-日更) |
 | 开跑前只读体检（环境、账号、来源、磁盘、博客仓库） | `npm run doctor -- --offline`；需要探测 arXiv 时加 `--network` | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
+| 运行中查看阶段、失败与费用 | `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒） | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
 | 获取、筛选并整理官方会议 | 获取官方来源，再提取摘要证据、筛选并执行 `conference:process` | [会议流程](docs/conference-workflow.md) |
 | 从原文重新分析既有博客，保留已有 URL | 冻结页面清单，再建立历史来源与重写计划 | [历史更新](docs/history-rewrite.md) |
 | 发布已完成的历史重写结果 | `history:publication` 的 plan、generate、review、publish、status | [历史发布](docs/history-direct-publication.md) |
@@ -96,7 +97,7 @@ npm run digest:prepare -- YYYY-MM-DD
 4. 确认对应提交或保留已审页面字节的后续提交部署成功，逐页核验 HTTP 200、正式地址及标题，并保存证据。
 5. 完成视觉任务，或记录用户明确授权、仍与当前发布绑定的视觉处置；最后重新读取状态。
 
-`digest:status` 是读取时的完整冷核报告，不能代替部署和网页检查，也不适合秒级进度轮询。Git 推送成功、process complete 或暂存文件存在，都不足以宣告上线。
+`digest:status` 是读取时的完整冷核报告，不能代替部署和网页检查。需要运行中观察时用 `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒刷新，适合分钟级进度，不做秒级轮询）。Git 推送成功、process complete 或暂存文件存在，都不足以宣告上线。
 
 会议维护的历史来源检查在同次调用内合并共享文件读取，并以四份原文件字节守卫减少父包重复解析；每次仍重读原字节，当前论文的来源、Reader 和页面检查保留。历史出版实现升级须显式重算并另存当前证明，不改旧来源、原稿或费用，详见[独立出版视图](docs/conference-workflow.md#认证-pdf-的独立出版视图)。
 

@@ -4,8 +4,17 @@
 同一个池内的所有 API key 完全同权：按账号 ID 的稳定排序（与配置里的
 key 顺序无关）做跨请求轮转，每次选择把游标推进到下一个可用账号；
 冷却中的账号被跳过，冷却到期后重新回到轮转。activeAccountId 只作为
-可观测字段，不再代表优先账号。只有服务端明确返回 GoUsageLimitError
-或余额不足的 401 才会把账号标记为冷却；普通 429/5xx 不切换账号。
+可观测字段，不再代表优先账号。
+
+一次逻辑请求（一次 call_publish_llm_api / 发布请求）内部不会因为普通
+故障切换账号：调用方把本次请求已试过的账号放进 exclude_account_ids，
+保证每个账号至多尝试一次；只有明确的 GoUsageLimitError / Insufficient
+balance 才会在同一请求内切到下一个账号并写冷却。普通的 401/429/5xx/
+网络故障不额外切换、不写冷却，但选择本身已经推进并持久化了轮转游标，
+所以外层重试（新的逻辑请求）会按等权轮转继续使用下一个账号。
+
+单账号配置（len(api_keys) < 2）不经过本模块的选择函数：调用方直接发
+请求（既有行为，见 publish_common.py 的单账号分支），不写账号池状态。
 """
 
 import hashlib
@@ -26,12 +35,19 @@ from urllib.parse import unquote, urlsplit
 from path_config import PROJECT_ROOT, LLM_ACCOUNT_POOL_STATE_FILE, atomic_write_json
 
 STATE_SCHEMA_VERSION = 1
+# policyVersion 保持旧字符串只为兼容已落盘状态和跨运行时读取；它不再是
+# “粘滞主账号”语义，当前语义是同一池内所有 key 等权轮转。
 POLICY_VERSION = 'opencode-go-sticky-quota-failover-v1'
 LOCK_TIMEOUT_SECONDS = 3
 LOCK_STALE_SECONDS = 120
 MAX_BLOCK_MS = 370 * 24 * 60 * 60 * 1000
 UNKNOWN_QUOTA_BLOCK_MS = 30 * 60 * 1000
 MAX_SAFE_INTEGER = (1 << 53) - 1
+# 成员集合变化会生成新的 group_id（新组 cursor 从 0 开始）。同一 service
+# 下超过这段时间没有被任何选择使用的其他分组会被清理，避免状态文件随历次
+# key 变更无限增长；仍在并行使用的不同 key 集合（例如主/副模型各自的池）
+# 因为刚被选择过而不会被误删。
+STALE_GROUP_MS = 7 * 24 * 60 * 60 * 1000
 
 
 class LlmAccountPoolExhaustedError(RuntimeError):
@@ -115,7 +131,7 @@ def resolve_api_key_pool(primary_key, fallback_value):
     keys = [key for key in keys if key]
     if len(set(keys)) != len(keys):
         raise LlmAccountPoolConfigError(
-            'OpenCode Go 主账号与备用账号 API key 不能相同或重复'
+            '同一 OpenCode Go 账号池内的 API key 不能相同或重复'
         )
     return keys
 
@@ -129,8 +145,13 @@ def resolve_primary_api_key_pool(primary_key, fallback_value, tertiary_fallback_
 
 
 def normalize_opencode_go_service(endpoint):
+    raw_endpoint = str(endpoint or '')
+    # 反斜杠和编码过的路径分隔符会让路由取决于由哪一层解码，与 Node 侧
+    # normalizeOpenCodeGoService 保持一致：一律拒绝，不进入 URL 解析。
+    if '\\' in raw_endpoint:
+        return None
     try:
-        parsed = urlsplit(str(endpoint or ''))
+        parsed = urlsplit(raw_endpoint)
         hostname = (parsed.hostname or '').lower()
         port = parsed.port
     except (TypeError, ValueError):
@@ -143,6 +164,8 @@ def normalize_opencode_go_service(endpoint):
     decoded_path = unquote(raw_path)
     if any(segment in {'.', '..'} for path_value in (raw_path, decoded_path)
            for segment in path_value.split('/')):
+        return None
+    if re.search(r'%(?:2f|5c)', raw_path, re.IGNORECASE):
         return None
     pathname = raw_path.rstrip('/').lower()
     if parsed.scheme.lower() != 'https' or hostname != 'opencode.ai':
@@ -459,6 +482,33 @@ def _account_is_blocked(record, now_ms):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > now_ms
 
 
+def _group_last_used_at_ms(group):
+    selected_at = group.get('lastSelectedAtMs') if isinstance(group, dict) else None
+    if isinstance(selected_at, (int, float)) and not isinstance(selected_at, bool) \
+            and math.isfinite(selected_at) and selected_at >= 0:
+        return selected_at
+    switched_at = group.get('switchedAt') if isinstance(group, dict) else None
+    if not isinstance(switched_at, str) or not switched_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(switched_at)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp() * 1000
+
+
+def _prune_stale_groups(service, current_group_id, now_ms):
+    for group_id in list(service['groups']):
+        if group_id == current_group_id:
+            continue
+        last_used_at_ms = _group_last_used_at_ms(service['groups'][group_id])
+        # 没有可解析时间戳的旧分组属于历史遗留，同样清理；当前分组始终保留。
+        if last_used_at_ms is None or now_ms - last_used_at_ms > STALE_GROUP_MS:
+            del service['groups'][group_id]
+
+
 def _build_exhausted_error(service, account_ids, now_ms):
     blocked = [service['accounts'].get(account_id, {}) for account_id in account_ids]
     blocked = [record for record in blocked if _account_is_blocked(record, now_ms)]
@@ -468,7 +518,7 @@ def _build_exhausted_error(service, account_ids, now_ms):
         + datetime.fromtimestamp(earliest / 1000, tz=timezone.utc).isoformat()
     )
     return LlmAccountPoolExhaustedError(
-        f'OpenCode Go 账号池没有可用账号（全部冷却中或已被排除）{suffix}',
+        f'OpenCode Go 账号池没有可用账号（全部冷却中或已被本次逻辑请求排除）；下一逻辑请求会从轮转游标继续{suffix}',
         earliest_retry_at_ms=earliest,
         blocked_account_count=len(blocked),
     )
@@ -494,6 +544,8 @@ def _resolve_rotation_cursor(group, ordered_account_ids):
     return 0
 
 
+# 单账号配置（len(api_keys) < 2）不会调用本函数：调用方走各自的单账号
+# 直连分支，因此不写账号池状态（既有行为，测试已固化）。
 def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *,
                    now_ms=None, exclude_account_ids=()):
     keys = normalize_api_keys(api_keys)
@@ -505,6 +557,9 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
 
     def updater(state):
         service = _ensure_service(state, identity)
+        # 成员集合变化会产生新的 group_id（新组 cursor=0）；顺手清理同一
+        # service 下已经不再使用的旧分组，当前分组始终保留。
+        _prune_stale_groups(service, identity['group_id'], now_ms)
         group = service['groups'].get(identity['group_id'])
         if group is None:
             group = {
@@ -543,6 +598,9 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
             'account_id': next_id,
             **identity,
         })
+        # 写放大说明：等权轮转下每次选择都会推进游标，跨进程/跨请求的公平
+        # 依赖持久化的 rotationCursor，所以这里必须每次写状态（一次原子写
+        # 加已有的文件锁），不能按“选择结果是否变化”跳过写入。
         return state
 
     _update_state(state_file, updater)

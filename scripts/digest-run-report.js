@@ -1,17 +1,11 @@
 #!/usr/bin/env node
-// --watch 是交互式只读监控：它的 stdout 要能被 --json 逐行解析。validate-data-files.js
-// 在 require 阶段就会安装带时间戳前缀的文件日志包装，所以要在加载它之前临时禁用文件
-// 日志；加载完立刻恢复环境，默认报告路径完全不受影响。
+// --watch 是只读监控：不得安装文件日志、不得创建 logs/ 文件、不得触发 pruneLogFiles，
+// 否则 --json --watch 的首行会被 "[log] 输出文件" 污染。validate-data-files.js 在 require
+// 阶段就会安装文件日志，所以 watch 模式延迟加载它；默认报告路径仍在模块加载时 require，
+// 行为与原来完全一致。
 const __rawArgv = process.argv.slice(2);
 const __watchRequestedAtStartup = __rawArgv.includes('--watch');
-const __savedDisableFileLogs = {
-    paper: process.env.PAPER_DIGEST_DISABLE_FILE_LOGS,
-    pd: process.env.PD_DISABLE_FILE_LOGS
-};
-if (__watchRequestedAtStartup) {
-    process.env.PAPER_DIGEST_DISABLE_FILE_LOGS = '1';
-    process.env.PD_DISABLE_FILE_LOGS = '1';
-}
+
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -28,8 +22,12 @@ const {
     hasValidApiReaderV3Records,
     updateJsonFileLocked
 } = require('./analysis-engine.js');
-const { setupScriptLogging, closeScriptLogging } = require('./log-setup.js');
-const { validateDailyFreshSourceRun } = require('./validate-data-files.js');
+const { setupScriptLogging } = require('./log-setup.js');
+const validateDataFilesModule = __watchRequestedAtStartup ? null : require('./validate-data-files.js');
+function validateDailyFreshSourceRun(...args) {
+    const moduleValue = validateDataFilesModule || require('./validate-data-files.js');
+    return moduleValue.validateDailyFreshSourceRun(...args);
+}
 const { loadAnalysisWaiver, validateAnalysisWaiver } = require('./analysis-waiver.js');
 const {
     cardTaskToken,
@@ -47,13 +45,6 @@ const {
 } = require('./digest-cover-state.js');
 const { buildLiveStatus, formatLiveStatus } = require('./lib/digest-live-status.js');
 const { createUsageSummaryCache } = require('./lib/llm-usage-summary.js');
-
-if (__watchRequestedAtStartup) {
-    if (__savedDisableFileLogs.paper === undefined) delete process.env.PAPER_DIGEST_DISABLE_FILE_LOGS;
-    else process.env.PAPER_DIGEST_DISABLE_FILE_LOGS = __savedDisableFileLogs.paper;
-    if (__savedDisableFileLogs.pd === undefined) delete process.env.PD_DISABLE_FILE_LOGS;
-    else process.env.PD_DISABLE_FILE_LOGS = __savedDisableFileLogs.pd;
-}
 
 function parseDate(argv) {
     const index = argv.indexOf('--date');
@@ -854,7 +845,8 @@ function formatDigestRunSummary(report) {
 
 const DEFAULT_WATCH_INTERVAL_SECONDS = 10;
 
-// 只解析 watch 相关参数；未给出 --watch 时默认路径与旧行为完全一致。
+// 只解析 watch 相关参数。未给出 --watch 时 --interval 一律忽略（保持旧行为），
+// 只有 --watch 才校验秒数。
 function parseWatchOptions(argv = []) {
     const options = {
         watch: false,
@@ -871,6 +863,8 @@ function parseWatchOptions(argv = []) {
         options.intervalSeconds = seconds;
         options.intervalMs = Math.max(1, Math.round(seconds * 1000));
     };
+    let intervalRaw = null;
+    let intervalMissing = false;
     for (let index = 0; index < argv.length; index += 1) {
         const arg = argv[index];
         if (arg === '--watch') {
@@ -886,14 +880,18 @@ function parseWatchOptions(argv = []) {
             continue;
         }
         if (arg === '--interval') {
-            if (index + 1 >= argv.length) throw new Error('用法: --interval 缺少秒数');
-            setIntervalValue(argv[index + 1]);
+            if (index + 1 >= argv.length) intervalMissing = true;
+            else intervalRaw = argv[index + 1];
             index += 1;
             continue;
         }
         if (typeof arg === 'string' && arg.startsWith('--interval=')) {
-            setIntervalValue(arg.slice('--interval='.length));
+            intervalRaw = arg.slice('--interval='.length);
         }
+    }
+    if (options.watch) {
+        if (intervalMissing) throw new Error('用法: --interval 缺少秒数');
+        if (intervalRaw !== null) setIntervalValue(intervalRaw);
     }
     return options;
 }
@@ -905,7 +903,7 @@ function buildWatchSnapshot(targetDate, usageCache) {
 async function runWatch(options = {}) {
     const targetDate = String(options.targetDate || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
-        throw new Error('用法: --watch 需要与 --date YYYY-MM-DD 一起使用');
+        throw new Error('--watch 需要 --date YYYY-MM-DD，例如 npm run digest:status -- --date 2026-10-22 --watch');
     }
     const intervalMs = Number.isFinite(options.intervalMs) && options.intervalMs > 0
         ? Math.round(options.intervalMs) : DEFAULT_WATCH_INTERVAL_SECONDS * 1000;
@@ -979,8 +977,7 @@ async function runWatch(options = {}) {
 }
 
 async function runWatchCli(targetDate, watchOptions) {
-    // 关掉 require 阶段安装的 stdout 时间戳包装，保证 --json --watch 每行都是纯 JSON。
-    await closeScriptLogging();
+    // watch 模式没有安装文件日志（validate-data-files 延迟加载），stdout 不需要额外解包。
     const usageCache = createUsageSummaryCache();
     const controller = new AbortController();
     const onSignal = () => controller.abort();
@@ -1002,7 +999,18 @@ async function runWatchCli(targetDate, watchOptions) {
 
 function main(argv = process.argv.slice(2)) {
     const watchOptions = parseWatchOptions(argv);
-    if (watchOptions.watch) return runWatchCli(parseDate(argv), watchOptions);
+    if (watchOptions.watch) {
+        let targetDate;
+        try {
+            targetDate = parseDate(argv);
+        } catch (error) {
+            console.error(`[digest-live] ${error.message}`);
+            console.error('[digest-live] 提示: --watch 需要 --date YYYY-MM-DD，例如 npm run digest:status -- --date 2026-10-22 --watch');
+            process.exitCode = 1;
+            return;
+        }
+        return runWatchCli(targetDate, watchOptions);
+    }
     setupScriptLogging(__filename);
     const targetDate = parseDate(argv);
     const report = buildDigestRunReport(targetDate);
@@ -1015,12 +1023,18 @@ function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
-    const result = main();
-    if (result && typeof result.then === 'function') {
-        result.catch(error => {
-            console.error(error?.message || String(error));
-            process.exitCode = 1;
-        });
+    try {
+        const result = main();
+        if (result && typeof result.then === 'function') {
+            result.catch(error => {
+                console.error(error?.message || String(error));
+                process.exitCode = 1;
+            });
+        }
+    } catch (error) {
+        // 同步参数/读取错误按 CLI 惯例只打印一行，不向用户抛整段堆栈。
+        console.error(error?.message || String(error));
+        process.exitCode = 1;
     }
 }
 

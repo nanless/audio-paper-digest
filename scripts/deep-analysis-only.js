@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 const { setupScriptLogging, writeStageSummary } = require('./log-setup');
-const { printErrorGuidance } = require('./lib/error-guidance.js');
+const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
+
+let currentDeepStageBatchDate = null;
+let currentDeepStageStartedAt = Date.now();
 setupScriptLogging(__filename);
 
 /**
@@ -177,7 +180,8 @@ async function runDeepAnalysis(options = {}) {
             ? '✅ 所有论文已分析完成！'
             : `⚠️ 检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
         writeStageSummary({
-            stage: '分析', status: 'ok',
+            stage: '分析', status: summary.status === 'complete' ? 'ok' : 'warn',
+            date: today, elapsedMs: Date.now() - currentDeepStageStartedAt,
             message: summary.status === 'complete'
                 ? '无待分析论文，全部已完成'
                 : `无待分析论文，但仍有 ${summary.remaining} 篇未完成`
@@ -202,7 +206,9 @@ async function runDeepAnalysis(options = {}) {
         return payload;
     });
 
-    writeStageSummary({ stage: '分析', status: 'start', message: `深度分析 ${notAnalyzed.length} 篇` });
+    currentDeepStageBatchDate = today;
+    currentDeepStageStartedAt = Date.now();
+    writeStageSummary({ stage: '分析', status: 'start', date: today, message: `深度分析 ${notAnalyzed.length} 篇` });
     const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: resultPath,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
@@ -299,11 +305,6 @@ async function runDeepAnalysis(options = {}) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
-    writeStageSummary({
-        stage: '分析', status: 'ok',
-        message: `分析完成 成功 ${stats.success ?? 0} 篇，失败 ${stats.failed ?? 0} 篇，跳过 ${stats.skipped ?? 0} 篇`
-    });
-
     const finalPayload = updateJsonFileLocked(resultPath, current => {
         dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan: dailySourcePlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
@@ -328,6 +329,11 @@ async function runDeepAnalysis(options = {}) {
     });
     await synchronizeCompletedAnalysisDigestStatuses(resultPath, dailySourcePlan, { batchDate: today });
     const { remaining, status } = getAnalysisRunSummary(finalPayload.papers);
+    writeStageSummary({
+        stage: '分析', status: status === 'complete' ? 'ok' : 'warn', date: today,
+        elapsedMs: Date.now() - currentDeepStageStartedAt,
+        message: `分析结束 ${status}：成功 ${stats.success ?? 0} 篇，失败 ${stats.failed ?? 0} 篇，跳过 ${stats.skipped ?? 0} 篇`
+    });
 
     console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 深度分析状态: ${formatAnalysisStatus(status)}`);
     console.log(`📊 统计:`);
@@ -346,7 +352,11 @@ if (require.main === module) {
         process.exitCode = result.exitCode;
     }).catch(err => {
         console.error(`❌ 失败: ${err.message}`);
-        writeStageSummary({ stage: '分析', status: 'error', message: `入口失败: ${err.message}` });
+        writeStageSummary({
+            stage: '分析', status: 'error', date: currentDeepStageBatchDate,
+            elapsedMs: Date.now() - currentDeepStageStartedAt,
+            message: `入口失败: ${redactSensitive(err.message)}`
+        });
         printErrorGuidance(err, { stage: 'deep-analysis' });
         process.exitCode = 1;
     });

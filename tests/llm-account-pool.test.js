@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const {
     LlmAccountPoolExhaustedError,
@@ -24,6 +24,10 @@ const {
 const { requestLlmJson } = require('../scripts/utils.js');
 
 const ENDPOINT = 'https://opencode.ai/zen/go/v1';
+const PYTHON_BIN = process.env.PD_PYTHON_BIN || 'python3';
+// 交叉运行时用例需要真实的 Python 解释器；缺失时跳过而不是硬失败。
+const HAS_PYTHON = spawnSync(PYTHON_BIN, ['-c', 'print(1)'], { encoding: 'utf8' }).status === 0;
+const STALE_GROUP_MS = 7 * 24 * 60 * 60 * 1000;
 
 function tempState() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-llm-pool-'));
@@ -62,6 +66,29 @@ function writeLegacyState(file, keys, activeAccountId) {
                 groups: {
                     [identity.groupId]: {
                         activeAccountId,
+                        switchedAt: new Date(1000).toISOString()
+                    }
+                }
+            }
+        }
+    }, null, 2), { mode: 0o600 });
+    return identity;
+}
+
+// 只写入一个“最后使用时间”已过期的旧分组，用于验证成员集合变化后的清理。
+function writeStaleGroupState(file, keys) {
+    const identity = getPoolIdentity(keys, ENDPOINT);
+    fs.writeFileSync(file, JSON.stringify({
+        schemaVersion: 1,
+        policyVersion: POLICY_VERSION,
+        generation: 1,
+        services: {
+            [identity.serviceId]: {
+                endpoint: identity.service,
+                accounts: {},
+                groups: {
+                    [identity.groupId]: {
+                        activeAccountId: null,
                         switchedAt: new Date(1000).toISOString()
                     }
                 }
@@ -186,6 +213,8 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
             assert.strictEqual(error.earliestRetryAtMs, null);
             assert.strictEqual(error.blockedAccountCount, 0);
             assert.match(error.message, /没有可用账号/);
+            // 错误措辞必须写清“本次请求已排除 / 下次请求从游标继续”。
+            assert.match(error.message, /下一逻辑请求会从轮转游标继续/);
             return true;
         });
         const identity = getPoolIdentity(keys, ENDPOINT);
@@ -300,6 +329,87 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         const state = readStateStrict(file);
         assert.deepStrictEqual(state.services[identity.serviceId].accounts, {});
         for (const key of primary) assert.ok(!fs.readFileSync(file, 'utf8').includes(key));
+    });
+
+    it('追加账号并超过保留期后清理旧分组，新分组从 cursor 0 开始', () => {
+        const keys = ['key-alpha', 'key-beta'];
+        const { file } = tempState();
+        const identity = writeStaleGroupState(file, keys);
+        const appended = [...keys, 'key-gamma'];
+        const expectedAppended = expectedKeyOrder(appended);
+        const nowMs = 1000 + STALE_GROUP_MS + 1;
+        // 旧分组已超过 STALE_GROUP_MS 未被选择：先清理，再为新成员集合建 cursor=0 的组。
+        assert.strictEqual(
+            selectApiKey(appended, ENDPOINT, file, { nowMs }).apiKey,
+            expectedAppended[0]
+        );
+        const state = readStateStrict(file);
+        const groups = state.services[identity.serviceId].groups;
+        assert.ok(!(identity.groupId in groups), '已停用的旧分组应被清理');
+        const appendedIdentity = getPoolIdentity(appended, ENDPOINT);
+        assert.strictEqual(groups[appendedIdentity.groupId].rotationCursor, 1);
+        assert.strictEqual(groups[appendedIdentity.groupId].lastSelectedAtMs, nowMs);
+    });
+
+    it('移除账号并超过保留期后同样清理旧分组', () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const { file } = tempState();
+        const identity = writeStaleGroupState(file, keys);
+        const reduced = keys.slice(0, 2);
+        const expectedReduced = expectedKeyOrder(reduced);
+        assert.strictEqual(
+            selectApiKey(reduced, ENDPOINT, file, { nowMs: 1000 + STALE_GROUP_MS + 1 }).apiKey,
+            expectedReduced[0]
+        );
+        const groups = readStateStrict(file).services[identity.serviceId].groups;
+        assert.ok(!(identity.groupId in groups), '已停用的旧分组应被清理');
+        assert.ok(getPoolIdentity(reduced, ENDPOINT).groupId in groups);
+    });
+
+    it('仍在并行使用的其他 key 集合分组不会被清理', () => {
+        const first = ['key-alpha', 'key-beta'];
+        const second = ['key-alpha', 'key-gamma'];
+        const { file } = tempState();
+        selectApiKey(first, ENDPOINT, file, { nowMs: 1000 });
+        selectApiKey(second, ENDPOINT, file, { nowMs: 2000 });
+        const identity = getPoolIdentity(first, ENDPOINT);
+        const groups = readStateStrict(file).services[identity.serviceId].groups;
+        assert.ok(identity.groupId in groups);
+        assert.ok(getPoolIdentity(second, ENDPOINT).groupId in groups);
+    });
+
+    it('多进程并发选择仍按等权轮转分摊到每个账号', async () => {
+        const keys = ['key-alpha', 'key-beta', 'key-gamma'];
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
+        const modulePath = path.join(__dirname, '..', 'scripts', 'llm-account-pool.js');
+        const program = [
+            'const p = require(process.argv[1]);',
+            `const s = p.selectApiKey(${JSON.stringify(keys)}, process.argv[2], process.argv[3], { nowMs: 1000 });`,
+            'process.stdout.write(s.apiKey);'
+        ].join('\n');
+        const runChild = () => new Promise((resolve, reject) => {
+            const child = spawn(process.execPath, ['-e', program, modulePath, ENDPOINT, file], {
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+            let stdout = '';
+            let stderr = '';
+            child.stdout.on('data', chunk => { stdout += chunk; });
+            child.stderr.on('data', chunk => { stderr += chunk; });
+            child.on('error', reject);
+            child.on('close', code => {
+                if (code === 0) resolve(stdout);
+                else reject(new Error(stderr || `子进程退出码 ${code}`));
+            });
+        });
+        // 6 个子进程各选择一次：文件锁串行化后正好是两圈完整轮转。
+        const picks = await Promise.all(Array.from({ length: 6 }, runChild));
+        assert.strictEqual(new Set(picks).size, keys.length);
+        assert.deepStrictEqual(
+            [...picks].sort(),
+            [...expected, ...expected].sort()
+        );
+        assert.strictEqual(readGroup(file, keys).rotationCursor, 0);
     });
 
     it('新增的可选轮转字段通过严格校验，非法值被拒绝', () => {
@@ -742,7 +852,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         assert.ok(getAccountId('a') in Object.values(readStateStrict(file).services)[0].accounts);
     });
 
-    it('Node 写入的账号阻塞状态可被 Python 发布端读取并遵守', () => {
+    it('Node 写入的账号阻塞状态可被 Python 发布端读取并遵守', { skip: !HAS_PYTHON }, () => {
         const { file } = tempState();
         markQuotaExhausted(selectionFor(['a', 'b'], 'a'), { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
         const script = [
@@ -751,17 +861,37 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
             'from llm_account_pool import select_api_key',
             `print(select_api_key(['a','b'], ${JSON.stringify(ENDPOINT)}, sys.argv[1], now_ms=2000)['api_key'])`
         ].join('; ');
-        const result = spawnSync(process.env.PD_PYTHON_BIN || 'python3', ['-c', script, file], {
+        const result = spawnSync(PYTHON_BIN, ['-c', script, file], {
             encoding: 'utf8'
         });
         assert.strictEqual(result.status, 0, result.stderr);
         assert.strictEqual(result.stdout.trim(), 'b');
-        // Python 旧运行时的选择写回共享状态后，Node 仍能读取并遵守冷却记录。
+        // Python 写回共享状态后，Node 仍能读取并遵守冷却记录。
         assert.strictEqual(selectApiKey(['a', 'b'], ENDPOINT, file, { nowMs: 3000 }).apiKey, 'b');
         assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
     });
 
-    it('Node 与 Python 共用追加后的账号集合与冷却状态', () => {
+    it('Node 可读取 Python 写入的等权轮转状态', { skip: !HAS_PYTHON }, () => {
+        const keys = ['key-a', 'key-b'];
+        const expected = expectedKeyOrder(keys);
+        const { file } = tempState();
+        const script = [
+            'import sys',
+            `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
+            'from llm_account_pool import mark_quota_exhausted, select_api_key',
+            `s = select_api_key(${JSON.stringify(keys)}, ${JSON.stringify(ENDPOINT)}, sys.argv[1], now_ms=1000)`,
+            "mark_quota_exhausted(s, {'blocked_until_ms': 100000}, sys.argv[1], now_ms=1000)",
+            "print(s['api_key'])"
+        ].join('; ');
+        const result = spawnSync(PYTHON_BIN, ['-c', script, file], { encoding: 'utf8' });
+        assert.strictEqual(result.status, 0, result.stderr);
+        assert.strictEqual(result.stdout.trim(), expected[0]);
+        // Python 持久化的 rotationCursor 被 Node 继续使用，且跳过冷却中的账号。
+        assert.strictEqual(readGroup(file, keys).rotationCursor, 1);
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 2000 }).apiKey, expected[1]);
+    });
+
+    it('Node 与 Python 共用追加后的账号集合与冷却状态', { skip: !HAS_PYTHON }, () => {
         const keys = ['a', 'b', 'c'];
         const { file } = tempState();
         markQuotaExhausted(selectionFor(keys, 'b'), { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
@@ -773,7 +903,7 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
             'from llm_account_pool import select_api_key',
             `print(select_api_key(['a','b','c','d'], ${JSON.stringify(ENDPOINT)}, sys.argv[1], now_ms=3000)['api_key'])`
         ].join('; ');
-        const result = spawnSync(process.env.PD_PYTHON_BIN || 'python3', ['-c', script, file], {
+        const result = spawnSync(PYTHON_BIN, ['-c', script, file], {
             encoding: 'utf8'
         });
         assert.strictEqual(result.status, 0, result.stderr);
@@ -923,6 +1053,102 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         );
         assert.strictEqual(response.statusCode, 429);
         assert.deepStrictEqual(seen, [`Bearer ${expected[0]}`]);
+    });
+
+    it('普通 429/5xx 不切换账号，但跨外层重试按等权轮转继续', async () => {
+        const keys = ['key-a', 'key-b', 'key-c'];
+        const expected = expectedKeyOrder(keys);
+        for (const statusCode of [429, 500]) {
+            const { file } = tempState();
+            const seen = [];
+            const options = {
+                timeoutMs: 5000,
+                apiKeys: keys,
+                accountPoolStateFile: file,
+                recordUsage: false,
+                transportRequestFn: async (_url, _body, headers) => {
+                    seen.push(headers.Authorization);
+                    return {
+                        statusCode,
+                        headers: {},
+                        body: statusCode === 429
+                            ? { error: { type: 'rate_limit_error' } }
+                            : { error: { message: 'boom' } },
+                        raw: '{}'
+                    };
+                }
+            };
+            // 同一逻辑请求内只尝试一个账号；4 次外层重试跨请求继续轮转。
+            for (let round = 0; round < 4; round += 1) {
+                const response = await requestLlmJson(
+                    'https://opencode.ai/zen/go/v1/chat/completions', ENDPOINT, 'test-model',
+                    { input: `round-${round}` }, { Authorization: 'Bearer key-a' }, options
+                );
+                assert.strictEqual(response.statusCode, statusCode);
+            }
+            assert.deepStrictEqual(seen, [
+                `Bearer ${expected[0]}`, `Bearer ${expected[1]}`,
+                `Bearer ${expected[2]}`, `Bearer ${expected[0]}`
+            ]);
+            const identity = getPoolIdentity(keys, ENDPOINT);
+            const service = readStateStrict(file).services[identity.serviceId];
+            // 普通失败既不写冷却，也不被误判成配额耗尽。
+            assert.deepStrictEqual(service.accounts, {});
+            assert.strictEqual(service.groups[identity.groupId].rotationCursor, 1);
+            assert.strictEqual(
+                service.groups[identity.groupId].activeAccountId,
+                getAccountId(expected[0])
+            );
+        }
+    });
+
+    it('单账号配置绕过账号池状态，不写冷却或轮转状态', async () => {
+        const { file } = tempState();
+        const seen = [];
+        const response = await requestLlmJson(
+            'https://opencode.ai/zen/go/v1/chat/completions', ENDPOINT, 'test-model', { input: 'hi' },
+            { Authorization: 'Bearer solo' },
+            {
+                apiKeys: ['solo-key'], accountPoolStateFile: file, timeoutMs: 5000, recordUsage: false,
+                transportRequestFn: async (_url, _body, headers) => {
+                    seen.push(headers.Authorization);
+                    return { statusCode: 200, headers: {}, body: { output_text: 'ok' }, raw: '{}' };
+                }
+            }
+        );
+        assert.strictEqual(response.statusCode, 200);
+        // 单账号路径直接使用调用方传入的凭据头，不经过账号池选择。
+        assert.deepStrictEqual(seen, ['Bearer solo']);
+        assert.ok(!fs.existsSync(file), '单账号成功请求不应创建账号池状态');
+
+        // 明确额度失败：报“未配置后续账号”，仍然不写状态。
+        await assert.rejects(requestLlmJson(
+            'https://opencode.ai/zen/go/v1/chat/completions', ENDPOINT, 'test-model', {},
+            { Authorization: 'Bearer solo' },
+            {
+                apiKeys: ['solo-key'], accountPoolStateFile: file, timeoutMs: 5000, recordUsage: false,
+                transportRequestFn: async () => ({
+                    statusCode: 401,
+                    body: { error: { message: 'Insufficient balance' } }
+                })
+            }
+        ), error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
+            && /未配置后续账号/.test(error.message));
+        assert.ok(!fs.existsSync(file));
+
+        // 普通认证 401 停止运行，同样不写状态。
+        await assert.rejects(requestLlmJson(
+            'https://opencode.ai/zen/go/v1/chat/completions', ENDPOINT, 'test-model', {},
+            { Authorization: 'Bearer solo' },
+            {
+                apiKeys: ['solo-key'], accountPoolStateFile: file, timeoutMs: 5000, recordUsage: false,
+                transportRequestFn: async () => ({
+                    statusCode: 401,
+                    body: { error: { message: 'Invalid API key' } }
+                })
+            }
+        ), error => error.code === 'LLM_ACCOUNT_AUTH_ERROR');
+        assert.ok(!fs.existsSync(file));
     });
 
     it('两个账号都额度耗尽时停止，不进入死循环', async () => {

@@ -12,6 +12,7 @@ const {
     formatText,
     formatJson,
     extractCost,
+    accountKey,
     eventDate,
     beijingDateFromMs
 } = require('../scripts/lib/llm-usage-summary.js');
@@ -25,17 +26,31 @@ function temporaryDirectory(t) {
     return directory;
 }
 
+// 与真实 data/runtime/llm-usage 事件一致：只有 token 用量，没有 accountId/cost。
 function usageEvent(overrides = {}) {
     return {
         version: 'llm-usage-v1',
         kind: 'request',
         eventId: crypto.randomUUID(),
         at: `${DATE_A}T10:00:00+08:00`,
+        runtime: 'node',
+        runId: null,
+        paperId: '2601.00001',
         stage: 'primaryAnalysis',
+        unitId: null,
+        contentAttempt: null,
+        transportAttempt: 1,
+        protocol: 'openai_responses',
         model: 'muse-spark-1.3-contributor',
         outcome: 'completed',
-        usage: { status: 'reported', inputTokens: 10, outputTokens: 5 },
-        estimates: { textCharacters: 100 },
+        statusCode: 200,
+        errorCode: null,
+        durationMs: 1200,
+        inputSha256: 'a'.repeat(64),
+        outputTextSha256: 'b'.repeat(64),
+        estimates: { textCharacters: 100, estimatedInputTextTokens: 34, images: 0 },
+        usage: { status: 'reported', inputSemantics: 'provider_reported', inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        transportStarted: true,
         ...overrides
     };
 }
@@ -54,30 +69,26 @@ function at(iso) {
     return new Date(iso);
 }
 
-describe('llm-usage-summary 日期过滤与聚合', () => {
-    it('按北京日期聚合成功、失败、阶段、模型、账号与费用字段', t => {
+describe('llm-usage-summary 日期过滤与聚合（真实事件 schema）', () => {
+    it('按北京日期聚合成功与失败，不伪造账号/费用分组', t => {
         const directory = temporaryDirectory(t);
         writeEvent(directory, usageEvent({
             eventId: 'evt-1',
             stage: 'primaryAnalysis',
-            model: 'muse-spark-1.3-contributor',
-            accountId: 'acct-a',
-            estimatedCost: 0.25
+            model: 'muse-spark-1.3-contributor'
         }), at('2026-01-05T09:00:00+08:00'));
         writeEvent(directory, usageEvent({
             eventId: 'evt-2',
             stage: 'revision',
             model: 'mimo-v2.6-flash',
-            accountId: 'acct-b',
             outcome: 'http_error',
-            errorCode: 'HTTP_429',
-            cost: { usd: 1.5 }
+            errorCode: 'HTTP_429'
         }), at('2026-01-05T11:00:00+08:00'));
         writeEvent(directory, usageEvent({
             eventId: 'evt-3',
             stage: 'revision',
             model: 'mimo-v2.6-flash',
-            usage: { status: 'reported', cost: 0.05 }
+            outcome: 'incomplete'
         }), at('2026-01-05T23:59:00+08:00'));
         // 非 request 终态不计入调用数。
         writeEvent(directory, {
@@ -92,20 +103,24 @@ describe('llm-usage-summary 日期过滤与聚合', () => {
         const summary = buildDailyUsageSummary({ directory, date: DATE_A });
         assert.strictEqual(summary.date, DATE_A);
         assert.strictEqual(summary.total, 3);
-        assert.strictEqual(summary.success, 2);
-        assert.strictEqual(summary.failed, 1);
-        assert.strictEqual(summary.cost, 1.8);
-        assert.strictEqual(summary.costEvents, 3);
+        assert.strictEqual(summary.success, 1);
+        assert.strictEqual(summary.failed, 2);
+        assert.strictEqual(summary.cost, 0);
+        assert.strictEqual(summary.costEvents, 0);
+        // 事件没有账号字段：不生成任何账号分组，也不伪造 unknown。
+        assert.deepStrictEqual(summary.byAccount, {});
         assert.deepStrictEqual(summary.byStage.primaryAnalysis, {
-            total: 1, success: 1, failed: 0, cost: 0.25, costEvents: 1
+            total: 1, success: 1, failed: 0, cost: 0, costEvents: 0
         });
         assert.deepStrictEqual(summary.byStage.revision, {
-            total: 2, success: 1, failed: 1, cost: 1.55, costEvents: 2
+            total: 2, success: 0, failed: 2, cost: 0, costEvents: 0
         });
         assert.strictEqual(summary.byModel['muse-spark-1.3-contributor'].total, 1);
-        assert.strictEqual(summary.byModel['mimo-v2.6-flash'].failed, 1);
-        assert.strictEqual(summary.byAccount['acct-a'].total, 1);
-        assert.strictEqual(summary.byAccount.unknown.total, 1);
+        assert.strictEqual(summary.byModel['mimo-v2.6-flash'].failed, 2);
+        const text = formatText(summary);
+        assert.match(text, /费用=无费用记录（仅有 token 用量）/);
+        assert.match(text, /按账号: 不可得（事件未记录账号字段）/);
+        assert.ok(!text.includes('unknown'));
     });
 
     it('用事件 at 决定日期，mtime 只控制读取范围', t => {
@@ -137,6 +152,61 @@ describe('llm-usage-summary 日期过滤与聚合', () => {
         writeEvent(directory, event, at('2026-01-05T10:00:01+08:00'));
         const summary = buildDailyUsageSummary({ directory, date: DATE_A });
         assert.strictEqual(summary.total, 1);
+    });
+});
+
+describe('llm-usage-summary 费用与账号字段兼容', () => {
+    it('兼容 estimatedCost / cost / usage.cost 并统一金额精度', t => {
+        const directory = temporaryDirectory(t);
+        const accountA = 'a'.repeat(64);
+        const accountB = 'b'.repeat(64);
+        writeEvent(directory, usageEvent({ eventId: 'cost-1', accountId: accountA, estimatedCost: 0.25 }),
+            at('2026-01-05T09:00:00+08:00'));
+        writeEvent(directory, usageEvent({ eventId: 'cost-2', accountId: accountB, cost: { usd: 1.5 } }),
+            at('2026-01-05T10:00:00+08:00'));
+        writeEvent(directory, usageEvent({
+            eventId: 'cost-3', accountId: 'acct-c', usage: { status: 'reported', cost: 0.05 }
+        }), at('2026-01-05T11:00:00+08:00'));
+
+        const summary = buildDailyUsageSummary({ directory, date: DATE_A });
+        assert.strictEqual(summary.cost, 1.8);
+        assert.strictEqual(summary.costEvents, 3);
+        assert.strictEqual(summary.byAccount[accountA].total, 1);
+        assert.strictEqual(summary.byAccount[accountB].total, 1);
+        const fingerprinted = Object.keys(summary.byAccount).filter(key => key.startsWith('sha256:'));
+        assert.strictEqual(fingerprinted.length, 1);
+        assert.match(fingerprinted[0], /^sha256:[a-f0-9]{16}$/);
+        assert.ok(!Object.prototype.hasOwnProperty.call(summary.byAccount, 'unknown'));
+        const text = formatText(summary);
+        assert.match(text, /按账号:/);
+        assert.match(text, /费用=\$1\.80/);
+    });
+
+    it('bucket cost 统一到 8 位小数，避免浮点尾差', t => {
+        const directory = temporaryDirectory(t);
+        writeEvent(directory, usageEvent({ eventId: 'precision-1', estimatedCost: 0.1 }),
+            at('2026-01-05T09:00:00+08:00'));
+        writeEvent(directory, usageEvent({ eventId: 'precision-2', estimatedCost: 0.2 }),
+            at('2026-01-05T10:00:00+08:00'));
+        const summary = buildDailyUsageSummary({ directory, date: DATE_A });
+        assert.strictEqual(summary.cost, 0.3);
+        assert.strictEqual(summary.byStage.primaryAnalysis.cost, 0.3);
+    });
+
+    it('账号键只接受 64 位 hex；缺失返回 null，其余转不可逆短指纹', () => {
+        const hex = 'A'.repeat(64);
+        assert.strictEqual(accountKey({ accountId: hex }), hex.toLowerCase());
+        assert.strictEqual(accountKey({ accountId: 'acct-a' }).startsWith('sha256:'), true);
+        assert.match(accountKey({ accountId: 'acct-a' }), /^sha256:[a-f0-9]{16}$/);
+        assert.strictEqual(accountKey({}), null);
+        assert.strictEqual(accountKey({ accountId: '' }), null);
+        assert.strictEqual(accountKey({ accountId: { value: 'x' } }), null);
+        assert.strictEqual(extractCost({ estimatedCost: 0.25 }), 0.25);
+        assert.strictEqual(extractCost({ cost: { usd: 1.5 } }), 1.5);
+        assert.strictEqual(extractCost({ usage: { cost: 0.05 } }), 0.05);
+        assert.strictEqual(extractCost({ usage: { status: 'reported', inputTokens: 99 } }), null);
+        assert.strictEqual(extractCost({ estimatedCost: '0.125' }), 0.125);
+        assert.strictEqual(extractCost({}), null);
     });
 });
 
@@ -179,34 +249,28 @@ describe('llm-usage-summary 大目录缓存与增量读取', () => {
         });
         assert.strictEqual(summary.total, 0);
         assert.strictEqual(summary.cost, 0);
+        assert.deepStrictEqual(summary.byAccount, {});
         assert.strictEqual(summary.scan.directoryMissing, true);
-    });
-
-    it('费用字段兼容 estimatedCost / cost / usage.cost', () => {
-        assert.strictEqual(extractCost({ estimatedCost: 0.25 }), 0.25);
-        assert.strictEqual(extractCost({ cost: { usd: 1.5 } }), 1.5);
-        assert.strictEqual(extractCost({ usage: { cost: 0.05 } }), 0.05);
-        assert.strictEqual(extractCost({ usage: { status: 'reported', inputTokens: 99 } }), null);
-        assert.strictEqual(extractCost({ estimatedCost: '0.125' }), 0.125);
-        assert.strictEqual(extractCost({}), null);
     });
 });
 
 describe('llm-usage-summary 文本输出', () => {
     it('formatText/formatJson 输出日期、总量与分组', t => {
         const directory = temporaryDirectory(t);
-        writeEvent(directory, usageEvent({ estimatedCost: 0.5 }), at('2026-01-05T09:00:00+08:00'));
+        writeEvent(directory, usageEvent({}), at('2026-01-05T09:00:00+08:00'));
         const summary = buildDailyUsageSummary({ directory, date: DATE_A });
         const text = formatText(summary);
         assert.match(text, /\[llm-usage\] 2026-01-05/);
         assert.match(text, /调用=1 成功=1 失败=0/);
+        assert.match(text, /费用=无费用记录/);
         assert.match(text, /按阶段/);
         assert.match(text, /按模型/);
-        assert.match(text, /按账号/);
+        assert.match(text, /按账号: 不可得/);
         const parsed = JSON.parse(formatJson(summary));
         assert.strictEqual(parsed.date, DATE_A);
         assert.strictEqual(parsed.total, 1);
         assert.strictEqual(parsed.byStage.primaryAnalysis.total, 1);
+        assert.deepStrictEqual(parsed.byAccount, {});
         assert.ok(formatJson(summary).includes('\n') === false);
     });
 
