@@ -8223,7 +8223,18 @@ def _reader_dom_column_unit_coverage(paper, rendered, binding):
         raise PublishDataValidationError('DOM列单位与封存结构化来源不一致。')
     source_text = _daily_fresh_read_private_file(source_dir / 'source.txt', 'DOM列单位原文', 64 * 1024 * 1024).decode('utf-8')
     quotes = [item['quote'] for item in binding.get('sourceQuotes', []) if isinstance(item, dict) and isinstance(item.get('quote'), str) and item['quote'] in source_text]
-    return _reader_dom_table_unit_coverage(rendered, quotes, artifacts['tables'])
+    covered = _reader_dom_table_unit_coverage(rendered, quotes, artifacts['tables'])
+    if binding.get('sealedPdfQuoteEvidence') and any(
+            table.get('matrix') and table['matrix'][0] and table['matrix'][0][0] == ''
+            and len(table['matrix']) > 2 and str(table['matrix'][2][0]).strip().startswith('(')
+            for table in artifacts['tables']):
+        # Replay the actual sealed quotations here too: callers cannot grant
+        # column units with copied proof objects or unverified PDF strings.
+        verified_quotes = _verify_reader_sealed_pdf_quote_bindings(paper).get(binding.get('tableIndex'), [])
+        from reader_grouped_vector_column_units import coverage as grouped_coverage
+        covered |= grouped_coverage(rendered, quotes, verified_quotes, artifacts['tables'],
+                                    _normalize_api_reader_source_cell)
+    return covered
 
 
 def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
@@ -13744,6 +13755,7 @@ def generation_template_fingerprint():
         'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
         'reader_sealed_pdf_column_units.py': script_dir / 'reader_sealed_pdf_column_units.py',
         'reader_sealed_pdf_literal_column_units.py': script_dir / 'reader_sealed_pdf_literal_column_units.py',
+        'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
         'reader_authenticated_pdf_hierarchical_table.py': script_dir / 'reader_authenticated_pdf_hierarchical_table.py',
         'analysis-contract.js': script_dir / 'analysis-contract.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
@@ -13875,6 +13887,7 @@ def review_protocol_fingerprint():
     script_dir = Path(__file__).resolve().parent
     dependency_paths = {
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
+        'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
         'review-blog.py': script_dir / 'review-blog.py',
         'manual/manual-review-blog.py': MANUAL_SCRIPTS_DIR / 'manual-review-blog.py',
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
