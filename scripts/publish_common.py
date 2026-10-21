@@ -6720,6 +6720,23 @@ def strict_source_cell_math_display(value):
         return {'contract': 'source-cell-math-display-v1', 'kind': 'nested-power-duplicate',
                 'sourceText': value, 'sourceTextSha256': hashlib.sha256(value.encode('utf-8')).hexdigest(),
                 'displayText': prefix + r'\(' + power['tex'] + r'\)'}
+    # MathML exposes a flattened identifier before its literal TeX annotation.
+    # A subscript and superscript may be flattened in either visual order, but
+    # every base/script character must match; no symbol or value is inferred.
+    identifier = re.fullmatch(
+        r'(?P<visible>[A-Za-z][A-Za-z0-9\u200b-\u200d\u2061\ufeff]{0,80})'
+        r'(?P<tex>[A-Za-z](?:[_^]\{[A-Za-z0-9]{1,16}\}){1,2})', text)
+    if identifier:
+        atoms = re.findall(r'([_^])\{([A-Za-z0-9]{1,16})\}', identifier['tex'])
+        kinds = [kind for kind, _ in atoms]
+        flattened = re.sub(r'[\u200b-\u200d\u2061\ufeff]', '', identifier['visible'])
+        base = identifier['tex'][0]
+        allowed = {base + ''.join(value for _, value in atoms),
+                   base + ''.join(value for _, value in reversed(atoms))}
+        if len(set(kinds)) == len(kinds) and flattened in allowed:
+            return {'contract': 'source-cell-math-display-v1', 'kind': 'identifier-script-duplicate',
+                    'sourceText': value, 'sourceTextSha256': hashlib.sha256(value.encode('utf-8')).hexdigest(),
+                    'displayText': r'\(' + identifier['tex'] + r'\)'}
     return None
 
 

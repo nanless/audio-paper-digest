@@ -9098,6 +9098,40 @@ def _source_bound_figure_math_note(paragraph, figure):
     return f'*论文图 {figure["ordinal"]}。原论文 {label}：“{projected}”。*'
 
 
+def _source_bound_figure_literal_tokens(image, note, figure):
+    """Quote dot-terminated control tokens in an exact same-source caption pair."""
+    caption = figure.get('caption')
+    if not isinstance(caption, str):
+        return image, note
+    original = re.sub(r'\s+', ' ', caption).strip()
+    original = re.sub(r'^Fig(?:ure)?\.?\s*\d+[a-z]?\s*[:.]?\s*', '', original, flags=re.I)
+    tokens = set(re.findall(r'<[A-Za-z][A-Za-z0-9_-]{0,31}\.>', original))
+    if not tokens:
+        return image, note
+    label = re.sub(r'\s+', ' ', str(figure.get('label') or f'Figure {figure.get("ordinal", "")}')).strip()
+    prefix = f'*论文图 {figure["ordinal"]}。原论文 {label}：“'
+    suffix = '”。*'
+    if not note.startswith(prefix) or not note.endswith(suffix):
+        return image, note
+    raw = note[len(prefix):-len(suffix)]
+    for token in tokens:
+        raw = raw.replace('`' + token + '`', token)
+    if raw != original:
+        return image, note
+
+    def quote_tokens(value):
+        ranges = _api_reader_inline_code_ranges(value)
+        pattern = '|'.join(re.escape(token) for token in sorted(tokens))
+        return re.sub(pattern, lambda match: match[0] if any(
+            start <= match.start() < end for start, end in ranges) else '`' + match[0] + '`', value)
+
+    match = re.fullmatch(r'(?P<before>\s*!\[)(?P<alt>(?:\\.|[^\]\\\n])*)'
+        + r'(?P<after>\]\(' + re.escape(figure['url']) + r'\)\s*)', image)
+    if not match:
+        return image, note
+    return match['before'] + quote_tokens(match['alt']) + match['after'], prefix + quote_tokens(note[len(prefix):-len(suffix)]) + suffix
+
+
 def render_ephemeral_api_reader_figures(article, figures):
     """核对保存正文中的论文图位置和 URL 顺序，不写入本地图片文件。
 
@@ -9148,6 +9182,8 @@ def render_ephemeral_api_reader_figures(article, figures):
             if image_pattern.fullmatch(visible[begin:end].strip()) \
                     and visible[note_begin:note_end] == paragraphs[index + 2]:
                 paragraphs[index + 2] = _source_bound_figure_math_note(paragraphs[index + 2], figure)
+                paragraphs[index], paragraphs[index + 2] = _source_bound_figure_literal_tokens(
+                    paragraphs[index], paragraphs[index + 2], figure)
     return ''.join(paragraphs)
 
 
