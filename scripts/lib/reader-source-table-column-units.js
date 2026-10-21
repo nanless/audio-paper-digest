@@ -232,6 +232,116 @@ function coverageFromTables(rendered, quotes, tables) {
     return [...result, ...mergedCaptionPercentCoverage(rendered, quotes, tables),
         ...mergedHeaderPercentCoverage(rendered, quotes, tables)];
 }
+// This profile keeps the complete two-level DOM grid. Printed PDF rows only
+// resolve explicit duplicate math renderings; they never supply another unit.
+function groupedVectorCoverage(rendered, htmlQuotes, pdfProofs, tables) {
+    const canonical = value => text(value).replace(/−/gu, '-').replace(/∆/gu, 'Δ')
+        .replace(/([A-Za-z])\\mathbf\{\1\}/gu, '$1');
+    const dense = value => canonical(value).replace(/\s+/gu, '');
+    const vector = value => {
+        const raw = dense(value), match = /^\(([-+\d.,]+)\)$/u.exec(raw);
+        if (!match) return null;
+        const parts = match[1].split(',');
+        if (parts.length < 2 || parts.length > 4) return null;
+        const numbers = parts.map(part => /^[-+]?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(part)
+            ? numericCell(part.replace(/^([-+]?)\./u, (_all, sign) => sign + '0.')) : null);
+        return numbers.every(item => item?.length === 1) ? numbers.map(item => item[0]).join(',') : null;
+    };
+    const scalar = value => {
+        const raw = dense(value);
+        if (numericCell(raw)?.length === 1) return raw;
+        const repeated = /^([+-]?\d+(?:\.\d+)?)\1$/u.exec(raw);
+        const tex = /^([+-]?\d+(?:\.\d+)?)\\mathbf\{\1\}$/u.exec(raw);
+        return repeated?.[1] || tex?.[1] || null;
+    };
+    const captionKey = value => dense(value).replace(/Table(\d+)[.:]/giu, 'Table$1:');
+    const captionIdentity = table => String(table.caption || '').split(/(?<=[.!?])\s+(?=[A-Z])/u)[0];
+    const sourceHeaders = table => {
+        const grid = sourceSpanGrid(table);
+        if (!grid || grid.length < 4 || !Array.isArray(table.headerRows)
+            || !['', '0,1'].includes(table.headerRows.join(','))
+            || grid[0][0].text !== '' || grid[0][0].rowspan !== 1 || grid[0][0].colspan !== 1
+            || !/[A-Za-z]/u.test(canonical(grid[1][0].text))) return null;
+        const flags = [...new Set(grid.slice(0, 2).flatMap(row => row.slice(1).map(cell => cell.header)))];
+        if (flags.length !== 1 || typeof flags[0] !== 'boolean'
+            || table.headerRows.join(',') !== (flags[0] ? '0,1' : '')) return null;
+        const headers = [], units = [];
+        for (let column = 0; column < grid[0].length; column++) {
+            const parent = grid[0][column], leaf = grid[1][column];
+            if (parent.row !== 0 || leaf.row !== 1 || parent.rowspan !== 1 || leaf.rowspan !== 1
+                || leaf.colspan !== 1 || (!column && (parent.header !== true || leaf.header !== true))
+                || (column && (parent.colspan < 2 || parent.colspan > 8))) return null;
+            const path = column ? `${canonical(parent.text)} ${canonical(leaf.text)}` : canonical(leaf.text);
+            const declarations = [...path.matchAll(/\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)/giu)];
+            if (declarations.length > 1) return null;
+            const unit = declarations[0]?.[1] || null;
+            const base = path.replace(/[↑↓→]/gu, '').replace(/\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)/giu, '');
+            headers.push({ name: dense(base + (unit ? ` (${unit})` : '')), directions: [...new Set(path.match(/[↑↓→]/gu) || [])].join('') });
+            units.push(unit?.toLowerCase() || null);
+        }
+        if (new Set(headers.map(header => header.name)).size !== headers.length) return null;
+        const printedHeaders = [...new Set(grid[0])].map(cell => canonical(cell.text)).filter(Boolean)
+            .concat(grid[1].map(cell => canonical(cell.text))).join(' ');
+        return { grid, headers, units, printedHeaders };
+    };
+    if (!Array.isArray(pdfProofs) || !pdfProofs.length) return [];
+    const matches = [];
+    for (const table of tables || []) {
+        const profile = sourceHeaders(table);
+        if (!profile || rendered.header.length !== profile.headers.length || rendered.rows.length !== profile.grid.length - 2
+            || !htmlQuotes.some(quote => captionKey(quote).includes(captionKey(captionIdentity(table))))) continue;
+        if (rendered.header.some((header, column) => dense(canonical(header).replace(/[↑↓→]/gu, '')) !== profile.headers[column].name
+            || [...new Set(String(header).match(/[↑↓→]/gu) || [])].join('') !== profile.headers[column].directions)) continue;
+        const proofCandidates = pdfProofs.filter(proof => captionKey(proof.quote).includes(captionKey(captionIdentity(table))));
+        const complete = [];
+        for (const proof of proofCandidates) {
+            const quoted = dense(proof.quote), headerToken = dense(profile.printedHeaders);
+            const headerStart = quoted.indexOf(headerToken);
+            if (headerStart < 0 || quoted.indexOf(headerToken, headerStart + 1) >= 0) continue;
+            let position = headerStart + headerToken.length - 1, valid = true; const covered = [];
+            for (let row = 0; row < rendered.rows.length && valid; row++) {
+                const values = rendered.rows[row], cells = profile.grid[row + 2], label = cells[0];
+                if (values.length !== rendered.header.length || label.row !== row + 2 || label.column !== 0
+                    || label.rowspan !== 1 || label.colspan !== 1) { valid = false; break; }
+                const delta = /^Mean\s*Δ$/u.test(canonical(label.text)) && row === rendered.rows.length - 1;
+                let printed = canonical(label.text);
+                if (!delta) {
+                    const repeated = /^(\([^()]{1,80}\))\1$/u.exec(dense(label.text));
+                    if (repeated) printed = repeated[1];
+                    if (!vector(printed) || vector(printed) !== vector(values[0])) { valid = false; break; }
+                } else if (dense(values[0]) !== dense(label.text)) { valid = false; break; }
+                const printedValues = [];
+                for (let column = 1; column < values.length && valid; column++) {
+                    const source = cells[column];
+                    if (source.row !== row + 2 || source.rowspan !== 1 || source.header !== false
+                        || (!delta && source.colspan !== 1) || (delta && (source.colspan !== 2
+                            || profile.units[source.column] !== profile.units[source.column + 1]
+                            || profile.grid[0][source.column] !== profile.grid[0][source.column + 1]))) { valid = false; break; }
+                    if (delta && column < source.column + source.colspan - 1) {
+                        if (String(values[column]).trim() !== '—') valid = false;
+                        continue;
+                    }
+                    const original = scalar(source.text), actual = numericCell(values[column]);
+                    if (!original || !actual || actual.length !== 1 || numericCell(original)[0] !== actual[0]) { valid = false; break; }
+                    printedValues.push(original);
+                    if (profile.units[column]) covered.push({ row: row + 1, column, value: actual[0], unit: profile.units[column],
+                        sourceTableOrdinal: table.ordinal, sourceRow: row + 2, sourceColumn: source.column,
+                        sourceTableDomSha256: table.sourceDomSha256, sourceCellDomSha256: source.sourceDomSha256,
+                        headerPathCellDomSha256: [profile.grid[0][column].sourceDomSha256, profile.grid[1][column].sourceDomSha256],
+                        sourceRowIdentityCellDomSha256: [label.sourceDomSha256], printedRowPdfQuoteSha256: proof.quoteSha256 });
+                }
+                const token = dense(printed + printedValues.join(' '));
+                const start = quoted.indexOf(token);
+                if (start < 0 || start <= position || quoted.indexOf(token, start + 1) >= 0) valid = false;
+                position = start;
+            }
+            if (valid && covered.length) complete.push(covered);
+        }
+        if (complete.length === 1) matches.push(complete[0]);
+    }
+    return matches.length === 1 ? matches[0] : [];
+}
+
 function coverage(rendered, quotes) {
     const context = savedScope.getStore() || require('./reader-sealed-pdf-quote-evidence').verifiedSourceContext();
     if (!context) return [];
@@ -242,7 +352,21 @@ function coverage(rendered, quotes) {
             || (context.sourceText !== undefined && !context.sourceText.includes(quote))) return [];
         return [quote];
     });
-    return coverageFromTables(rendered, strings, context.artifacts.tables).map(item => ({...item,
+    const pdf = (quotes || []).filter(item => item?.contract === 'reader-sealed-pdf-quotes-v1');
+    let grouped = [];
+    const hasVectorGrid = context.artifacts.tables.some(table => table?.matrix?.[0]?.[0] === ''
+        && /^\(/u.test(String(table?.matrix?.[2]?.[0] || '').trim()));
+    if (pdf.length && hasVectorGrid) {
+        const quoteApi = require('./reader-sealed-pdf-quote-evidence');
+        pdf.forEach(proof => quoteApi.assertQuoteEvidence(proof));
+        const verified = quoteApi.verifiedSourceContext();
+        const original = require('./fresh-arxiv-rewrite-source').readFreshArxivRewriteSource(verified.expectation);
+        if (!require('node:util').isDeepStrictEqual(original.runtimeDetails.structuredArtifacts, context.artifacts)
+            || original.text !== context.sourceText) throw new Error('Grouped column source artifacts changed inside verified scope');
+        grouped = groupedVectorCoverage(rendered, strings, pdf, context.artifacts.tables);
+    }
+    return [...coverageFromTables(rendered, strings, context.artifacts.tables),
+        ...grouped].map(item => ({...item,
         sourceManifestSha256:context.expectation.sourceManifestSha256,sourceSnapshotSha256:context.expectation.sourceSnapshotSha256}));
 }
 
@@ -256,7 +380,7 @@ function withSavedPaper(paper, callback) {
     const tables = require('../analysis-contract').extractMarkdownTables(paper.apiReaderArticle);
     const possible = plan.tableBindings.some((binding,index) => binding.sourceType === 'source_quotes' && tables[index]
         && deep.readerTableHeaderUnitEvidenceFailures(tables[index], [...(binding.sourceQuotes || []), ...(binding.sealedPdfQuoteEvidence || [])])
-            .some(issue => issue.unit === '%'));
+            .some(issue => /^(?:%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)$/.test(issue.unit)));
     if (!possible) return callback();
     const fresh = require('./fresh-analysis-context'), provenance = paper.freshRewriteProvenance;
     if (provenance?.contract !== 'fresh-source-analysis-v1' || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) return callback();

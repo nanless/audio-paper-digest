@@ -3463,6 +3463,53 @@ def _has_reported_experiment_phrase(text, pattern):
     return False
 
 
+def _has_source_backed_presence_comparison(results, tables, source_text):
+    # Mirror the Node recognition of measured absence/presence comparisons.
+    denied = (
+        r'\b(?:if|suppos(?:e|ing)|hypothetical)\b|'
+        r'\b(?:future|planned|proposed)\s+(?:experiments?|work|evaluation|validation)\b|'
+        r'\b(?:should|must|needs?\s+to)\s+(?:compare|report|score|require|validate)\b|'
+        r'\b(?:previous|related|other)\s+(?:work|stud(?:y|ies)|models?|systems?)\b|'
+        r'\b(?:does|do|did)\s+not\s+(?:identify|explain)\s+why\b|'
+        r'\b(?:not|never)\s+(?:observed|reported|obtained)\b|'
+        r'如果|假设|假想|计划|未来实验|后续实验|相关工作|先前研究|其他模型|他人|错误说法|'
+        r'并非|不是|未报告|尚未报告|未观察到|没有观察到|否认|'
+        r'\b(?:hypothes(?:is|izes?|ized)|hypothetical|illustrative|proposed only|not our experiment|'
+        r'(?:previous|other|related)\s+(?:paper|work|study|method)|(?:did|do|does) not conduct|'
+        r'no ablation experiment|not performed|not conducted|withdrawn|revoked|false statement)\b|'
+        r'(?:^|\n)\s*[>“"]|他人|其他研究|转述|撤回|不是本研究|'
+        r'假定|假如|倘若|设想|该研究|该论文|文献|据报告|(?:^|[，,:：\s])若(?=无)|'
+        r'(?:拟|预计|将来)[^。；\n]{0,24}无|\bIn\s*\[[\d,–— -]+\]|'
+        r"\b[A-Z][A-Za-z'-]+\s+et\s+al\.|\baccording\s+to\b"
+    )
+    for match in re.finditer(r'无([\u4e00-\u9fffA-Za-z]{1,12})时([^。；\n]{1,300})[。；]\s*有\1后[^。；\n]{1,300}', results):
+        context = re.split(r'\n\s*\n', results[:match.start()])[-1] + match[0]
+        if re.search(denied, context, re.I):
+            continue
+        comparison = r'(?:比较|对比)[^。；\n]{0,60}无' + re.escape(match[1]) + r'的[^。；\n]{0,40}与'
+        if not _has_reported_experiment_phrase(results, comparison):
+            continue
+        values = re.findall(r'(?<![\d.])\d+(?:\.\d+)?%', match[2])
+        def row_pair_matches(table):
+            columns = [column for column, header in enumerate(table['header'])
+                       if re.search(r'%|百分', str(header))]
+            rows = [[str(cell).strip().removesuffix('%') for cell in row] for row in table['rows']]
+            return any(first != second and all(any(
+                before[column] == values[index][:-1] and after[column] == values[index + 1][:-1]
+                for column in columns) for index in range(0, len(values), 2))
+                for first, before in enumerate(rows) for second, after in enumerate(rows))
+        if len(set(values)) < 2 or len(values) % 2 or not any(row_pair_matches(table) for table in tables):
+            continue
+        source_lines = source_text.splitlines()
+        for index, line in enumerate(source_lines):
+            context = ((source_lines[index - 1][-300:] if index else '') + '\n' + line + '\n'
+                       + (source_lines[index + 1][:400] if index + 1 < len(source_lines) else ''))
+            if (not re.search(denied, context, re.I) and re.search(r'\bwithout\b', line, re.I)
+                    and all(re.search(r'(?<![\d.])' + re.escape(value), line) for value in values)):
+                return True
+    return False
+
+
 def _has_source_backed_training_stage_ablation(tables, source_text):
     source = str(source_text or '')
     removal = re.compile(
@@ -3716,7 +3763,7 @@ def _validate_experiment_table_evidence_depth(
         source_text,
         re.I,
     )
-    result_has_ablation = _has_source_backed_training_stage_ablation(tables, source_text) or _has_source_backed_zero_correction_ablation(results, source_text) or re.search(
+    result_has_ablation = _has_source_backed_presence_comparison(results, tables, source_text) or _has_source_backed_training_stage_ablation(tables, source_text) or _has_source_backed_zero_correction_ablation(results, source_text) or re.search(
         r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
         r'消融|移除|去掉|不含|排除|无外推',
         results,

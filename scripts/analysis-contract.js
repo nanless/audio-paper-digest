@@ -871,6 +871,36 @@ function hasSourceBackedSequenceOrderAblation(results, tables, sourceText, requi
     }));
 }
 
+// A measured "without X / with X" comparison is an ablation even when
+// its Chinese explanation never uses the literal word 消融. Require the same
+// component, an explicit comparison, table values and one own-source statement.
+function hasSourceBackedPresenceComparison(results, tables, sourceText) {
+    const denied = /假定|假如|倘若|设想|该研究|该论文|文献|据报告|(?:^|[，,:：\s])若(?=无)|(?:拟|预计|将来)[^。；\n]{0,24}无|\bIn\s*\[[\d,–— -]+\]|\b[A-Z][A-Za-z'-]+\s+et\s+al\.|\baccording\s+to\b/iu;
+    const pairs = /无([\u4e00-\u9fffA-Za-z]{1,12})时([^。；\n]{1,300})[。；]\s*有\1后[^。；\n]{1,300}/gu;
+    for (const match of String(results).matchAll(pairs)) {
+        const context = String(results).slice(0, match.index).split(/\n\s*\n/u).at(-1) + match[0];
+        if (!ownObservedSourceScope(context) || denied.test(context)) continue;
+        const comparison = new RegExp(`(?:比较|对比)[^。；\\n]{0,60}无${match[1]}的[^。；\\n]{0,40}与`, 'gu');
+        if (!hasReportedExperimentPhrase(results, comparison)) continue;
+        const values = [...match[2].matchAll(/(?<![\d.])\d+(?:\.\d+)?%/gu)].map(value => value[0]);
+        const rowPairMatches = table => {
+            const columns = table.header.flatMap((header, column) => /%|百分/u.test(String(header)) ? [column] : []);
+            const rows = table.rows.map(row => row.map(cell => String(cell).trim().replace(/%$/u, '')));
+            return rows.some((before, first) => rows.some((after, second) => first !== second
+                && values.every((value, index) => index % 2 || columns.some(column =>
+                    before[column] === value.slice(0, -1) && after[column] === values[index + 1].slice(0, -1)))));
+        };
+        if (new Set(values).size < 2 || values.length % 2 || !tables.some(rowPairMatches)) continue;
+        const sourceLines = String(sourceText).split(/\r?\n/u);
+        if (sourceLines.some((line, index) => ownObservedSourceScope(
+            (sourceLines[index - 1] || '').slice(-300) + '\n' + line + '\n' + (sourceLines[index + 1] || '').slice(0, 400))
+            && !denied.test((sourceLines[index - 1] || '').slice(-300) + '\n' + line + '\n' + (sourceLines[index + 1] || '').slice(0, 400))
+            && /\bwithout\b/iu.test(line) && values.every(value =>
+                new RegExp(`(?<![\\d.])${value.replace('.', '\\.')}`, 'u').test(line)))) return true;
+    }
+    return false;
+}
+
 function hasSourceBackedTrainingStageAblation(tables, sourceText) {
     const source = String(sourceText || '');
     const removal = /\b(?:w\/?o|without)\s+(?:the\s+)?(?:two[- ]stage\s+training\b|second[- ]stage\s+(?:training|fine[- ]tuning)\b)/gi;
@@ -1279,7 +1309,8 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         ' '
     );
     const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceAblationEvidence);
-    const resultHasAblation = hasSourceBackedTrainingStageAblation(tables, sourceAblationEvidence)
+    const resultHasAblation = hasSourceBackedPresenceComparison(results, tables, sourceAblationEvidence)
+        || hasSourceBackedTrainingStageAblation(tables, sourceAblationEvidence)
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedSettingVariantAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedZeroCorrectionAblation(results, sourceAblationEvidence)

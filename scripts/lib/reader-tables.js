@@ -78,6 +78,28 @@ function bracketedNumericVectors(value) {
     return vectors;
 }
 
+function hasSourceBoundPreferenceVector(cell, context = {}, duplicate = null) {
+    if (context.columnIndex !== 0 || !/^(?:Preference|Request\s+p|偏好|请求偏好(?:\s*p)?)$/iu.test(
+        String(context.header?.[0] || '').normalize('NFKC').trim())) return false;
+    const normalize = raw => {
+        const value = String(raw).normalize('NFKC').replace(/\s+/gu, '').replace(/−/gu, '-');
+        if (!/^\([-+\d.,]+\)$/u.test(value)) return null;
+        const parts = value.slice(1, -1).split(',');
+        if (parts.length < 2 || parts.length > 4 || parts.some(part => !/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(part))) return null;
+        return JSON.stringify(parts.map(part => {
+            const [integer, fraction = ''] = part.replace(/^\+/u, '').replace(/^(-?)\./u, (_all, sign) => sign + '0.').split('.');
+            return integer.replace(/^0+(?=\d)/u, '') + (fraction.replace(/0+$/u, '') ? '.' + fraction.replace(/0+$/u, '') : '');
+        }));
+    };
+    const expected = normalize(cell);
+    if (!expected || duplicate && (duplicate.index < 0 || duplicate.index + duplicate.length > String(cell).length)) return false;
+    return (context.sourceTexts || []).some(source => {
+        const raw = String(source).normalize('NFKC').replace(/\s+/gu, '');
+        return [...raw.matchAll(/\([-+\d.,]+\)/gu)].some(match => raw[match.index - 1] !== ')'
+            && raw[match.index + match[0].length] !== '(' && normalize(match[0]) === expected);
+    });
+}
+
 function hasSourceBoundRepeatedNumericVector(cell, context = {}, duplicate = null) {
     const text = String(cell || '');
     const rowContext = [text, context.header?.[context.columnIndex], ...(context.row || [])
@@ -230,6 +252,8 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         if (hasSourceBoundRepeatedRangeChain(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasSourceBoundRepeatedNumericVector(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
+        if (hasSourceBoundPreferenceVector(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasSourceBoundRepeatedColonVector(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
