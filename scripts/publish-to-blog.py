@@ -13792,6 +13792,7 @@ def generation_template_fingerprint():
         'reader_sealed_pdf_column_units.py': script_dir / 'reader_sealed_pdf_column_units.py',
         'reader_sealed_pdf_literal_column_units.py': script_dir / 'reader_sealed_pdf_literal_column_units.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
+        'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'reader_authenticated_pdf_hierarchical_table.py': script_dir / 'reader_authenticated_pdf_hierarchical_table.py',
         'analysis-contract.js': script_dir / 'analysis-contract.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
@@ -13924,6 +13925,7 @@ def review_protocol_fingerprint():
     dependency_paths = {
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
+        'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'review-blog.py': script_dir / 'review-blog.py',
         'manual/manual-review-blog.py': MANUAL_SCRIPTS_DIR / 'manual-review-blog.py',
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',

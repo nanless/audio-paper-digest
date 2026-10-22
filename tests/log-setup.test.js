@@ -22,19 +22,26 @@ function createEnvFile(extraLines) {
     return { dir, envPath };
 }
 
-function runLogger(base, envPath, lines = []) {
+function loggerFixtureEnv(overrides = {}) {
+    const env = { ...process.env };
+    // 日志行为由本用例的临时 env/显式覆盖决定，不继承外部验证任务的关闭开关。
+    for (const key of ['NODE_TEST_CONTEXT', 'PAPER_DIGEST_TEST_ENV_FILE',
+        'PAPER_DIGEST_DISABLE_FILE_LOGS', 'PD_DISABLE_FILE_LOGS', 'VERIFY_PROJECT_DISABLE_FILE_LOGS']) {
+        delete env[key];
+    }
+    return { ...env, ...overrides };
+}
+
+function runLogger(base, envPath, lines = [], envOverrides = {}) {
     const code = [
         "const { setupScriptLogging, closeScriptLogging } = require('./scripts/log-setup');",
         `setupScriptLogging('scripts/${base}.js', { envFile: process.argv[1] });`,
         ...lines.map(line => `console.log(${JSON.stringify(line)});`),
         "closeScriptLogging().catch(err => { console.error(err.message); process.exitCode = 1; });"
     ].join('\n');
-    const env = { ...process.env };
-    delete env.NODE_TEST_CONTEXT;
-    delete env.PAPER_DIGEST_TEST_ENV_FILE;
     return spawnSync(process.execPath, ['-e', code, envPath], {
         cwd: ROOT,
-        env,
+        env: loggerFixtureEnv(envOverrides),
         encoding: 'utf8'
     });
 }
@@ -217,9 +224,7 @@ describe('日志初始化', () => {
         const exitBase = `exit-log-test-${runId}`;
         const errorBase = `error-log-test-${runId}`;
         const { dir, envPath } = createEnvFile('PD_DISABLE_FILE_LOGS=0');
-        const env = { ...process.env };
-        delete env.NODE_TEST_CONTEXT;
-        delete env.PAPER_DIGEST_TEST_ENV_FILE;
+        const env = loggerFixtureEnv();
         try {
             const exitCode = [
                 "const { setupScriptLogging } = require('./scripts/log-setup');",
@@ -281,6 +286,26 @@ describe('日志初始化', () => {
                 name => !before.includes(name) && name.startsWith(`${base}-`)
             );
             assert.deepStrictEqual(created, []);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('显式 VERIFY 关闭开关仍禁止文件日志并保留输出脱敏，父环境不变', () => {
+        const keys = ['PAPER_DIGEST_DISABLE_FILE_LOGS', 'PD_DISABLE_FILE_LOGS', 'VERIFY_PROJECT_DISABLE_FILE_LOGS'];
+        const beforeEnv = keys.map(key => [key, process.env[key]]);
+        const before = listLogFiles();
+        const base = `verify-disabled-log-test-${process.pid}-${Date.now()}`;
+        const { dir, envPath } = createEnvFile('PD_DISABLE_FILE_LOGS=0\nPAPER_DIGEST_DISABLE_FILE_LOGS=0\nPAPER_ANALYZER_API_KEY=verify-disabled-provider-secret');
+        try {
+            const result = runLogger(base, envPath, ['provider echoed verify-disabled-provider-secret', 'visible-output'],
+                { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' });
+            assert.strictEqual(result.status, 0, result.stderr);
+            assert.match(result.stdout, /visible-output/);
+            assert.match(result.stdout, /\[REDACTED\]/);
+            assert.ok(!result.stdout.includes('verify-disabled-provider-secret'));
+            assert.deepStrictEqual(listLogFiles().filter(name => !before.includes(name) && name.startsWith(`${base}-`)), []);
+            assert.deepStrictEqual(keys.map(key => [key, process.env[key]]), beforeEnv);
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
         }

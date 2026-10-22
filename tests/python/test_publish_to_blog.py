@@ -8020,6 +8020,76 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertEqual(generation_before, generation_after)
         self.assertNotEqual(review_before, review_after)
 
+    @contextlib.contextmanager
+    def _rules_fingerprint_fixture(self):
+        original_hash = publish_to_blog._sha256_file
+        original_rules = Path(MODULE_PATH).parent / 'lib' / 'validation-rules.json'
+        original_bytes = original_rules.read_bytes()
+        completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0,
+                                    timed_out=False, output_truncated=False)
+        calls = []
+        publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                rules = Path(tmp) / 'validation-rules.json'
+                rules.write_bytes(original_bytes)
+
+                def dependency_digest(path):
+                    path = Path(path)
+                    calls.append(path)
+                    return original_hash(rules if path == original_rules else path)
+
+                with mock.patch.object(publish_to_blog, '_sha256_file', side_effect=dependency_digest), \
+                        mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
+                        mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
+                        mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed) as version:
+                    yield rules, original_rules, original_bytes, calls, version
+        finally:
+            publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+            self.assertEqual(original_rules.read_bytes(), original_bytes)
+
+    def test_rules_json_changes_generation_and_review_fingerprints(self):
+        for fingerprint in (publish_to_blog.generation_template_fingerprint,
+                            publish_to_blog.review_protocol_fingerprint):
+            with self.subTest(function=fingerprint.__name__), self._rules_fingerprint_fixture() as fixture:
+                rules, original_rules, original_bytes, calls, version = fixture
+                first = fingerprint()
+                version_calls = version.call_count
+                self.assertEqual(fingerprint(), first)
+                self.assertEqual(version.call_count, version_calls)
+                mutated = json.loads(original_bytes)
+                mutated['tableHeaderUnits'] = mutated['tableHeaderUnits'][1:]
+                for changed in (json.dumps(mutated).encode('utf-8'), original_bytes + b'\n'):
+                    rules.write_bytes(changed)
+                    calls.clear()
+                    # Keep the real protocol cache warm: data changes must alter its key too.
+                    self.assertNotEqual(fingerprint(), first)
+                    self.assertIn(original_rules, calls)
+                    rules.write_bytes(original_bytes)
+                    self.assertEqual(fingerprint(), first)
+                unrelated = rules.with_name('unrelated.json')
+                unrelated.write_text('{"unrelated": "changed"}\n')
+                calls.clear()
+                self.assertEqual(fingerprint(), first)
+                self.assertIn(original_rules, calls)
+                self.assertNotIn(unrelated, calls)
+
+    def test_rules_json_dependency_is_required(self):
+        for fingerprint in (publish_to_blog.generation_template_fingerprint,
+                            publish_to_blog.review_protocol_fingerprint):
+            for kind, error in (('missing', FileNotFoundError), ('directory', IsADirectoryError)):
+                with self.subTest(function=fingerprint.__name__, kind=kind), \
+                        self._rules_fingerprint_fixture() as fixture:
+                    rules, original_rules, _original_bytes, calls, _version = fixture
+                    fingerprint()  # A cached success must not hide a later unreadable dependency.
+                    rules.unlink()
+                    if kind == 'directory':
+                        rules.mkdir()
+                    calls.clear()
+                    with self.assertRaises(error):
+                        fingerprint()
+                    self.assertIn(original_rules, calls)
+
     def test_tag_presentation_dependencies_change_generation_and_review_fingerprints(self):
         completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0,
                                     timed_out=False, output_truncated=False)
