@@ -150,6 +150,12 @@ const CASES = [
     }
 ];
 
+test('双429等中文紧邻数字不会被误判为限流', () => {
+    const guidance = require('../scripts/lib/error-guidance');
+    const rule = guidance.ruleIdFor('OAI 失败延续的类别、完整边界、原去重基线或原双429不符');
+    assert.notStrictEqual(rule, 'upstream-rate-limit');
+});
+
 test('表驱动：至少 10 类真实错误都有专用下一步指引', () => {
     assert.ok(CASES.length >= 10, `用例数应不少于 10，实际 ${CASES.length}`);
     for (const item of CASES) {

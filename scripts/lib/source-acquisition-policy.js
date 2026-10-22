@@ -30,10 +30,10 @@ function preflightWarnings({ date, nowMs } = {}) {
 
 function fetchFailureAdvice(error) {
     const text = String(error && (error.message || error) || '');
-    if (/429|rate.?limit|too many requests/i.test(text)) {
+    if (/(?<![\d])429(?![\d])|HTTP\s*429|status\s*429|rate.?limit|too many requests/i.test(text)) {
         return ['arXiv 限流：等待 10–30 分钟或降低并发后重试；先运行 npm run source:probe -- --date <DATE> 确认三个入口。'];
     }
-    if (/50[0-9]|bad gateway|service unavailable/i.test(text)) {
+    if (/(?<![\d])5\d\d(?![\d])|HTTP\s*5\d{2}|status\s*5\d{2}|bad gateway|service unavailable/i.test(text)) {
         return ['arXiv 服务暂时 5xx：先探测 Atom/OAI/RSS；若仅某入口失败可改用官方 OAI 恢复，仍失败则等待后重试。'];
     }
     if (/rss|pubdate|公告|stale/i.test(text)) {

@@ -99,7 +99,7 @@ test('runVerifyWebCli: 200/404/标题不符，写原子 artifact 并返回 1', a
         currentDir: dir,
         env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
         fetchImpl: pageFetch({
-            [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递 2099-01-02' },
+            [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递 2099-01-02 汇总' },
             [`${DATE}-a`]: { status: 404 },
             [`${DATE}-b`]: { status: 200, title: '完全不同的标题' }
         }),
@@ -122,12 +122,12 @@ test('runVerifyWebCli --json 每行可解析且没有多余日志', async t => {
     const dir = tempDir(t);
     writeManifest(dir, DATE, [`${DATE}`, `${DATE}-a`]);
     const lines = [];
-    const code = await verifyWeb.runVerifyWebCli(['--date', DATE, '--json'], {
+    const code = await verifyWeb.runVerifyWebCli(['--date', DATE, '--json', '--allow-partial'], {
         currentDir: dir,
         env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
         fetchImpl: pageFetch({
-            [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递' },
-            [`${DATE}-a`]: { status: 200, title: '语音/音乐/音频论文速递' }
+            [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递 2099-01-02 汇总' },
+            [`${DATE}-a`]: { status: 200, title: '语音/音乐/音频论文速递 某篇论文标题' }
         }),
         print: line => lines.push(line),
         printError: line => { throw new Error(`不应有错误输出: ${line}`); }
@@ -137,7 +137,7 @@ test('runVerifyWebCli --json 每行可解析且没有多余日志', async t => {
     const parsed = parseLines(lines);
     assert.strictEqual(parsed[0].type, 'summary');
     assert.strictEqual(parsed[0].ok, 2);
-    assert.strictEqual(parsed[0].partial, false);
+    assert.strictEqual(parsed[0].partial, true);
 });
 
 test('--deploy --wait: in_progress→completed success，--json 每行可解析', async t => {
@@ -165,7 +165,7 @@ test('--deploy --wait: in_progress→completed success，--json 每行可解析'
     ], {
         currentDir: dir,
         env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
-        fetchImpl: pageFetch({ [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递' } }),
+        fetchImpl: pageFetch({ [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递 2099-01-02 汇总' } }),
         spawnSync,
         sleep: async ms => { slept.push(ms); },
         print: line => lines.push(line),
@@ -188,7 +188,7 @@ test('--deploy --wait: in_progress→completed success，--json 每行可解析'
 test('部署 completed+failure 返回非零；无 gh 默认非零，--allow-degraded 放行', async t => {
     const dir = tempDir(t);
     writeManifest(dir, DATE, [`${DATE}`]);
-    const fetchImpl = pageFetch({ [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递' } });
+    const fetchImpl = pageFetch({ [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递 2099-01-02 汇总' } });
     const base = {
         currentDir: dir,
         env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },

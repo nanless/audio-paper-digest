@@ -50,10 +50,11 @@ function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
                 ? Math.max(0, Math.round((nowMs - Date.parse(heartbeat)) / 1000)) : null;
             const local = !hostname || hostname === os.hostname();
             const alive = local && pid !== null ? isAlive(pid) : null;
+            const needsReview = pid === null && ageSeconds !== null && ageSeconds > 86400;
             rows.push({
                 file: path.relative(root, target), kind: entry.isDirectory() ? 'directory' : 'file',
                 pid, hostname, startedAt: started, heartbeatAt: heartbeat, ageSeconds,
-                alive, stale: local && pid !== null ? (!alive && (ageSeconds === null || ageSeconds > 120)) : false
+                alive, needsReview, stale: local && pid !== null ? (!alive && (ageSeconds === null || ageSeconds > 120)) : needsReview
             });
         }
     };
@@ -70,7 +71,7 @@ function main(argv = process.argv.slice(2)) {
     const rows = scanLocks();
     if (json) console.log(JSON.stringify({ locks: rows }, null, 2));
     else if (!rows.length) console.log('未发现运行锁。');
-    else for (const row of rows) console.log(`- ${row.file}  pid=${row.pid || '?'}  ${row.alive === null ? '远端/未知' : row.alive ? '存活' : '已退出'}  心跳=${row.heartbeatAt || '?'}${row.stale ? '  ⚠ 疑似陈旧' : ''}`);
+    else for (const row of rows) console.log(`- ${row.file}  pid=${row.pid || '?'}  ${row.alive === null ? '远端/未知' : row.alive ? '存活' : '已退出'}  心跳=${row.heartbeatAt || '?'}${row.stale ? '  ⚠ 疑似陈旧/需复核' : ''}`);
     if (recover) {
         const stale = rows.filter(row => row.stale);
         console.log(stale.length ? `\n疑似可回收 ${stale.length} 个（仅预览，未删除）：\n${stale.map(row => `  ${row.file}`).join('\n')}` : '\n没有疑似陈旧锁。');

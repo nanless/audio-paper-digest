@@ -7,6 +7,8 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
 
+function shaOf(file) { try { return require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch (_) { return null; } }
+
 function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('publish-finish.js'); } catch (error) { console.error(`[publish-finish] ${error.message}`); return 1; }
 
@@ -23,11 +25,32 @@ function main(argv = process.argv.slice(2)) {
             const manifestFile = path.join(CURRENT, 'blog-generation-manifest-' + date + '.json');
             const manifestExists = fs.existsSync(manifestFile);
             const manifestSha = manifestExists ? require('node:crypto').createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex') : null;
+            const receiptFile = path.join(CURRENT, `blog-review-receipt-${date}.json`);
+            const receipt = fs.existsSync(receiptFile) ? JSON.parse(fs.readFileSync(receiptFile, 'utf8')) : null;
+            const receiptCommit = receipt && (receipt.publicationCommit || receipt.remoteVerifiedOid || receipt.reviewedCommit) || null;
+            const oidPattern = /^[0-9a-f]{40}$/i;
+            const oid = data.publicationCommit || data.remoteVerifiedOid || null;
+            const webArtifact = path.join(CURRENT, `web-verification-${date}.json`);
+            let webOk = false;
+            if (fs.existsSync(webArtifact)) {
+                try {
+                    const web = JSON.parse(fs.readFileSync(webArtifact, 'utf8'));
+                    webOk = web.partial !== true && web.deploy && web.deploy.status === 'completed' && web.deploy.conclusion === 'success';
+                } catch (_) { webOk = false; }
+            }
             const valid = data.status === 'waived' && data.batchDate === date
                 && Boolean(manifestSha) && data.generationManifestSha256 === manifestSha
-                && Boolean(data.publicationCommit || data.remoteVerifiedOid);
-            if (valid) console.log(`3) 视觉：豁免有效且已绑定当前批次（${waiver}）；不要执行视觉:prepare 或生图。`);
-            else console.log(`3) 视觉：豁免文件存在但与当前批次不匹配（${waiver}）；请核对 status/batchDate/清单 SHA/发布 OID，不要直接跳过。`);
+                && oidPattern.test(String(oid || ''))
+                && Boolean(receiptCommit) && oid === receiptCommit
+                && (!data.visualManifestSha256 || data.visualManifestSha256 === shaOf(path.join(CURRENT, 'visual-summary-manifest-' + date + '.json')))
+                && (!data.coverManifestSha256 || data.coverManifestSha256 === shaOf(path.join(CURRENT, 'digest-cover-manifest-' + date + '.json')));
+            if (valid) {
+                console.log(`3) 视觉：豁免有效且已绑定当前批次（${waiver}）；不要执行视觉:prepare 或生图。`);
+                if (!webOk) console.log('   注意：web-verification artifact 缺失或未证明部署成功，最终验收仍需 verify:web --deploy。');
+            } else {
+                console.log(`3) 视觉：豁免文件存在但与当前批次不匹配（${waiver}）；请核对 status/batchDate/清单 SHA/发布 OID/审查凭证，不要直接跳过。`);
+                process.exitCode = 1;
+            }
         } catch (error) {
             console.log(`3) 视觉：豁免文件无法读取（${error.message}）；按未豁免处理。`);
         }

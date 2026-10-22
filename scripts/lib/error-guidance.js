@@ -228,11 +228,11 @@ const RULES = [
         id: 'arxiv-rate-limit',
         docRef: DOC_FETCH_BOUNDARY,
         match: ({ text, codes, status }) => {
-            const limited = status === 429 || /\b429\b|too many requests|rate[_\s-]?limit|限流/i.test(text)
+            const limited = status === 429 || /(?<![\p{L}\p{N}_])429(?![\p{L}\p{N}_])|too many requests|rate[_\s-]?limit|限流/iu.test(text)
                 || codes.some(code => /RATE_LIMIT/.test(code));
             // 只认 arXiv 专属信号；泛词（来源/fetch/html/pdf/下载）留给通用 429 规则。
             const arxivSpecific = codes.some(code => /^ARXIV/.test(code))
-                || /arxiv\.org|export\.arxiv|oaipmh|rss\.arxiv|\barxiv\b/i.test(text);
+                || /arxiv\.org|export\.arxiv|oaipmh|rss\.arxiv|(?<![\p{L}\p{N}_])arxiv(?![\p{L}\p{N}_])/i.test(text);
             return limited && arxivSpecific;
         },
         cause: 'arXiv 限流（HTTP 429），抓取请求被拒绝且当前批次已暂停。',
@@ -400,7 +400,7 @@ const RULES = [
     {
         id: 'upstream-rate-limit',
         docRef: DOC_TROUBLESHOOTING,
-        match: ({ text, codes, status }) => status === 429 || /\b429\b|too many requests|rate[_\s-]?limit|限流/i.test(text)
+        match: ({ text, codes, status }) => status === 429 || /(?<![\p{L}\p{N}_])429(?![\p{L}\p{N}_])|too many requests|rate[_\s-]?limit|限流/iu.test(text)
             || codes.some(code => /RATE_LIMIT/.test(code)),
         cause: '上游服务限流（HTTP 429），请求被拒绝，当前阶段已暂停。',
         nextSteps: [

@@ -478,8 +478,12 @@ function applyLogStageHint(stage, hint, latestLog = null) {
     return stage;
 }
 
-function visualGateComplete(date, generation, visualManifest, coverManifest) {
-    const visualRequired = generation?.visualSummaryRequired !== false;
+function visualGateComplete(date, generation, visualManifest, coverManifest, review) {
+    // 生产 generation.visualSummaryRequired 恒为 false（视觉是发布后独立阶段），
+    // 是否要求长图/封面以审查凭证的 postPublishVisuals 为准；没有凭证时才回退 generation。
+    const visualRequired = review && typeof review.postPublishVisuals === 'string'
+        ? review.postPublishVisuals === 'required'
+        : generation?.visualSummaryRequired !== false;
     const coverRequired = generation?.digestCoverRequired !== false;
     const counts = visualManifest?.counts || {};
     const visualOk = !visualRequired || (
@@ -538,7 +542,7 @@ function inferStage(evidence = {}) {
         else if (!generationMatches) stage = 'pages';
         else if (!reviewMatches || review.strictReview !== true) stage = 'review';
         else if (!pushComplete) stage = 'push';
-        else if (!visualGateComplete(date, generation, visualManifest, coverManifest)) stage = 'visual';
+        else if (!visualGateComplete(date, generation, visualManifest, coverManifest, review)) stage = 'visual';
         else stage = 'complete';
     }
     const hint = logStageHint(latestLog, { logFreshSeconds });
@@ -810,6 +814,7 @@ function formatLiveStatus(status) {
 }
 
 module.exports = {
+    visualGateComplete,
     VERSION,
     STAGES,
     STAGE_LABELS,

@@ -89,6 +89,9 @@ function atomicWriteJson(targetPath, value) {
         fd = fs.openSync(temporary, flags, 0o600);
         fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
         fs.fsyncSync(fd);
+    } catch (error) {
+        try { fs.unlinkSync(temporary); } catch (_error) { /* 清理失败不掩盖原错误 */ }
+        throw error;
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
     }
@@ -115,7 +118,10 @@ async function verify(date, options = {}) {
     const currentDir = options.currentDir || CURRENT;
     const manifestFile = path.join(currentDir, `blog-generation-manifest-${date}.json`);
     if (!fs.existsSync(manifestFile)) throw new Error(`找不到生成清单：${manifestFile}`);
-    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    const manifestBytes = fs.readFileSync(manifestFile);
+    const manifest = JSON.parse(manifestBytes.toString('utf8'));
+    if (manifest && manifest.date && manifest.date !== date) throw new Error(`生成清单日期 ${manifest.date} 与 --date ${date} 不一致`);
+    const generationManifestSha256 = crypto.createHash('sha256').update(manifestBytes).digest('hex');
     const allPages = pageUrls(date, env, manifest);
     const expected = allPages.length;
     let pages = allPages;
@@ -125,8 +131,14 @@ async function verify(date, options = {}) {
     for (const page of pages) {
         try {
             const fetched = await fetchPage(page.url, options);
-            const titleOk = fetched.status === 200 && titleMatches(fetched.title, marker);
-            results.push({ ...page, ...fetched, titleOk, ok: titleOk });
+            const normalize = value => String(value || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+            const redirectOk = !fetched.finalUrl || normalize(fetched.finalUrl) === normalize(page.url);
+            const slug = path.basename(page.url.replace(/\/$/, ''));
+            const isSummary = /^\d{4}-\d{2}-\d{2}$/.test(slug);
+            const dateInTitle = fetched.title ? fetched.title.includes(date) : false;
+            const titleOk = fetched.status === 200 && titleMatches(fetched.title, marker)
+                && (isSummary ? dateInTitle : String(fetched.title || '').replace(marker, '').trim().length > 4);
+            results.push({ ...page, ...fetched, titleOk, redirectOk, ok: titleOk && redirectOk });
         } catch (error) {
             results.push({ ...page, status: null, title: null, titleOk: false, ok: false, error: error.message });
         }
@@ -139,6 +151,8 @@ async function verify(date, options = {}) {
         date,
         partial: failed > 0 || results.length === 0 || results.length < expected,
         deploy: options.deploy || null,
+        publicationOid: options.deploy || null,
+        generationManifestSha256,
         expected,
         checked: results.length,
         ok,
@@ -171,7 +185,14 @@ function normalizeDeployRun(run) {
 // gh CLI 输出或公开 Actions API 的 workflow_runs 数组都走同一套归一化。
 function parseDeployRuns(runs, oid, options = {}) {
     if (!Array.isArray(runs)) return { available: true, oid, message: '部署接口返回格式无法解析。' };
-    const match = runs.find(run => String(run?.headSha || run?.head_sha || '') === String(oid));
+    const pagesRuns = runs.filter(run => {
+        const name = String(run?.workflowName || run?.name || run?.path || '');
+        if (name && !/(pages|hugo|deploy)/i.test(name)) return false;
+        const event = String(run?.event || '');
+        if (event && !['push', 'workflow_dispatch', 'dynamic'].includes(event)) return false;
+        return true;
+    });
+    const match = pagesRuns.find(run => String(run?.headSha || run?.head_sha || '') === String(oid));
     if (!match) {
         return { available: true, oid, message: `未找到 oid=${oid} 的 Pages 部署记录（可能尚未触发或需要 --wait）。` };
     }
@@ -183,7 +204,7 @@ function deployStatus(oid, options = {}) {
     const repository = options.repository || deployRepository(options.env || {});
     const result = runGh('gh', [
         'run', 'list', '-R', repository, '-L', '20',
-        '--json', 'headSha,status,conclusion,url,workflowName,databaseId'
+        '--json', 'headSha,status,conclusion,url,workflowName,event,databaseId'
     ], { encoding: 'utf8', timeout: 30000 });
     if (!result || result.error || result.status !== 0) {
         return {
@@ -246,6 +267,8 @@ function parseVerifyArgs(argv = []) {
         json: false,
         timeoutMs: 20000,
         allowDegraded: false,
+        allowPartial: false,
+        receipt: null,
         wait: false,
         waitSeconds: 120,
         pollIntervalMs: 10000,
@@ -259,6 +282,8 @@ function parseVerifyArgs(argv = []) {
         else if (value === '--json') options.json = true;
         else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
         else if (value === '--allow-degraded') options.allowDegraded = true;
+        else if (value === '--allow-partial') options.allowPartial = true;
+        else if (value === '--receipt') options.receipt = argv[++index] || null;
         else if (value === '--wait') options.wait = true;
         else if (value === '--wait-seconds') {
             const seconds = Number(argv[++index]);
@@ -272,7 +297,7 @@ function parseVerifyArgs(argv = []) {
     return options;
 }
 
-const USAGE = '用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--wait] [--allow-degraded] [--json]';
+const USAGE = '用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--receipt RECEIPT.json] [--wait] [--allow-degraded] [--allow-partial] [--json]';
 
 // 可测 CLI：所有副作用（目录、fetch、gh、时钟、输出）都从 deps 注入。
 async function runVerifyWebCli(argv = [], deps = {}) {
@@ -298,6 +323,10 @@ async function runVerifyWebCli(argv = [], deps = {}) {
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
         printError('[verify-web] --date 必须是 YYYY-MM-DD');
+        return 2;
+    }
+    if (options.wait && !options.deploy) {
+        printError('[verify-web] --wait 需要同时提供 --deploy OID');
         return 2;
     }
 
@@ -339,11 +368,24 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             limit: options.limit,
             deploy
         });
-        if (deploy && (deploy.available === false || deploy.status !== 'completed')) {
-            summary.partial = true;
-            // 部署状态可能已在 --wait 期间变化；以最终状态为准回写 artifact。
-            writeVerificationArtifact(currentDir, options.date, summary);
+        // 自动绑定当前批次的审查凭证（存在时强制），防止旧 OID/旧清单被当成验收证据。
+        let receiptPath = options.receipt;
+        if (!receiptPath) {
+            const candidate = path.join(currentDir, `blog-review-receipt-${options.date}.json`);
+            if (fs.existsSync(candidate)) receiptPath = candidate;
         }
+        if (receiptPath) {
+            if (!fs.existsSync(receiptPath)) throw new Error(`审查凭证不存在：${receiptPath}`);
+            validateReceiptBinding({
+                receipt: JSON.parse(fs.readFileSync(receiptPath, 'utf8')),
+                manifestSha256: summary.generationManifestSha256,
+                deployOid: options.deploy
+            });
+        }
+        const deployOk = Boolean(deploy && deploy.available && deploy.status === 'completed' && deploy.conclusion === 'success');
+        if (options.limit && summary.checked < summary.expected) summary.partial = true;
+        if (!deployOk) summary.partial = true;
+        if (summary.partial) writeVerificationArtifact(currentDir, options.date, summary);
         if (options.json) {
             print(JSON.stringify({ type: 'summary', ...summary }));
             if (deploy) {
@@ -364,7 +406,8 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                     : deploy.message}`);
             }
         }
-        return summary.failed > 0 ? 1 : deployExitCode(deploy, options);
+        const partialFailed = summary.partial && !options.allowPartial && !options.allowDegraded;
+        return summary.failed > 0 || deployExitCode(deploy, options) !== 0 || partialFailed ? 1 : 0;
     } catch (error) {
         printError(`[verify-web] ${error.message}`);
         return 2;

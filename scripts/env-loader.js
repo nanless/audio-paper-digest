@@ -108,7 +108,10 @@ function parseEnvFile(envFile) {
     if (!fs.existsSync(envFile)) return parsed;
 
     try {
-        fs.chmodSync(envFile, 0o600);
+        // 已经是 0600 时不再写元数据，保证只读监控（如 --watch）不产生写副作用。
+        if (process.platform === 'win32' || (fs.statSync(envFile).mode & 0o777) !== 0o600) {
+            fs.chmodSync(envFile, 0o600);
+        }
     } catch (error) {
         if (process.platform !== 'win32') throw error;
     }

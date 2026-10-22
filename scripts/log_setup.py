@@ -44,8 +44,8 @@ def redact_log_text(value):
         text,
         flags=re.IGNORECASE,
     )
-    text = re.sub(r'\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+', '[REDACTED]', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bsk-[A-Za-z0-9._-]+', '[REDACTED]', text, flags=re.IGNORECASE)
+    text = re.sub(r'(?<![A-Za-z0-9_])(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+', '[REDACTED]', text, flags=re.IGNORECASE)
+    text = re.sub(r'(?<![A-Za-z0-9_])sk-[A-Za-z0-9._-]+', '[REDACTED]', text, flags=re.IGNORECASE)
     # 项目账号池的 oc_sk_ 前缀不区分大小写。
     text = re.sub(r'(?<![A-Za-z0-9_])oc_sk_[A-Za-z0-9_-]+', '[REDACTED]', text, flags=re.IGNORECASE)
     return text
@@ -277,14 +277,14 @@ def setup_script_logging(script_path=None):
         return _ACTIVE_LOGGER
     _LOG_SETUP_DONE = True
     load_project_env()
-    _CONFIGURED_SECRETS = tuple(
+    _CONFIGURED_SECRETS = tuple(sorted((
         item.strip()
         for key, value in os.environ.items()
         if re.search(r'(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$', key, re.IGNORECASE)
         and len(str(value)) >= 6
         for item in str(value).split(',')
         if len(item.strip()) >= 6
-    )
+    ), key=len, reverse=True))
     disable_file_logs = (
         os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1"
         or os.environ.get("PD_DISABLE_FILE_LOGS") == "1"

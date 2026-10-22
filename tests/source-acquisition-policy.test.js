@@ -7,6 +7,13 @@ function beijingMs(date, hour) {
     return Date.parse(`${date}T${String(hour).padStart(2, '0')}:00:00+08:00`);
 }
 
+test('超时/论文编号不会误判为 arXiv 5xx/429', () => {
+    const policy = require('../scripts/lib/source-acquisition-policy');
+    assert.ok(!String(policy.fetchFailureAdvice(new Error('请求超过 15000ms 的总等待时间')) || '').includes('5xx'));
+    assert.ok(!String(policy.fetchFailureAdvice(new Error('论文 2410.14290 分析失败')) || '').includes('限流'));
+    assert.ok(String(policy.fetchFailureAdvice(new Error('HTTP 429 Too Many Requests')) || '').includes('限流'));
+});
+
 test('抓取预检：当天早于 8 点提醒公告未生成', () => {
     const warnings = policy.preflightWarnings({ date: '2026-10-21', nowMs: beijingMs('2026-10-21', 7) });
     assert.strictEqual(warnings[0].level, 'warn');
