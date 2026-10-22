@@ -420,6 +420,88 @@ def _git_command(binary, root, env, args, limit, limits, deadline, *, phase):
     return output
 
 
+def _prepare_repository(repo, limits, deadline):
+    """Capture the actual baseline before the remaining Git admission queries."""
+    entry = _select_git()
+    binary = _binary_identity(entry, limits)
+    root = Path(repo)
+    before = _repository_snapshot(repo, limits)
+    env = _git_env(binary['resolved'])
+    return {'repo': repo, 'entry': entry, 'binary': binary, 'root': root, 'before': before,
+            'env': env, 'version': None, 'limits': limits, 'deadline': deadline}
+
+
+def _complete_admission(state):
+    repo, root, binary = state['repo'], state['root'], state['binary']
+    env, limits, deadline = state['env'], state['limits'], state['deadline']
+    version_raw = _git_command(binary['resolved'], root, env, ['version'], 4096, limits, deadline, phase='version')
+    if not re.fullmatch(rb'git version [^\x00-\x20\x7f-\xff]+(?: [^\x00-\x1f\x7f-\xff]+)?\n', version_raw):
+        _fail('unsupported_git', 'version_header')
+    state['version'] = version_raw[:-1].decode('ascii')
+    config = _git_command(binary['resolved'], root, env,
+        ['config', '--file', str(root / '.git/config'), '--no-includes', '--null', '--list'],
+        min(256 * 1024, limits.max_metadata_bytes), limits, deadline, phase='metadata')
+    _parse_config(config, limits=limits)
+    pointers = _git_command(binary['resolved'], root, env, ['rev-parse', '--path-format=absolute',
+        '--show-toplevel', '--git-dir', '--git-common-dir', '--is-bare-repository', '--show-object-format=storage'],
+        32768, limits, deadline, phase='metadata')
+    expected_pointers = '\n'.join((repo, str(root / '.git'), str(root / '.git'), 'false', 'sha1')) + '\n'
+    if pointers != expected_pointers.encode('utf-8'):
+        _fail('unsupported_repository', 'repository_identity')
+    return state
+
+
+def _admit_repository(repo, limits, deadline):
+    # The old public raw wrapper keeps its original early-error ordering.
+    return _complete_admission(_prepare_repository(repo, limits, deadline))
+
+
+def _object_header(state, oid, expected_type):
+    actual_type = _parse_type(_git_command(state['binary']['resolved'], state['root'], state['env'],
+        ['cat-file', '-t', oid], 16, state['limits'], state['deadline'], phase='object'))
+    if actual_type != expected_type:
+        _fail('type_mismatch', 'object_type')
+    return _parse_size(_git_command(state['binary']['resolved'], state['root'], state['env'],
+        ['cat-file', '-s', oid], 32, state['limits'], state['deadline'], phase='object'))
+
+
+def _read_object_bytes(state, oid, actual_type, size):
+    raw = _git_command(state['binary']['resolved'], state['root'], state['env'],
+        ['cat-file', actual_type, oid], size, state['limits'], state['deadline'], phase='object')
+    if len(raw) != size:
+        _fail('read_error', 'object_length')
+    git_digest = hashlib.sha1(actual_type.encode('ascii') + b' ' + str(size).encode('ascii') + bytes([0]))
+    content_digest = hashlib.sha256()
+    view = memoryview(raw)
+    for offset in range(0, len(raw), 65536):
+        git_digest.update(view[offset:offset + 65536])
+        content_digest.update(view[offset:offset + 65536])
+    if git_digest.hexdigest() != oid:
+        _fail('oid_mismatch', 'object_identity')
+    return raw, content_digest.hexdigest()
+
+
+def _assert_unchanged(state):
+    try:
+        after = _repository_snapshot(state['repo'], state['limits'])
+        final_binary = _binary_identity(state['entry'], state['limits'])
+    except (OSError, LocalGitReadError):
+        _fail('metadata_changed', 'final_observation')
+    if after != state['before'] or final_binary != state['binary']:
+        _fail('metadata_changed', 'final_observation')
+    if time.monotonic() >= state['deadline']:
+        _fail('timeout', 'child_deadline')
+
+
+def _observation_metadata(state):
+    return {'repository': {'worktreeRoot': state['repo'], 'gitDir': str(state['root'] / '.git'),
+                'commonDir': str(state['root'] / '.git'), 'objectFormat': 'sha1',
+                **{key: state['before'][key] for key in
+                    ('configSha256', 'controlFilesSha256', 'objectStoreMetadataSha256')}},
+            'gitIdentity': {'resolvedPath': state['binary']['resolved'], 'version': state['version'],
+                            'binarySha256': state['binary']['sha256']}}
+
+
 def read_local_git_object(repo, *, oid, expected_type, limits=DEFAULT_LIMITS):
     """Read one fixed local raw object; all returned data is mechanical only."""
     from runtime_guard import require_external_runtime
@@ -427,65 +509,22 @@ def read_local_git_object(repo, *, oid, expected_type, limits=DEFAULT_LIMITS):
     _validate_args(repo, oid, expected_type, limits)
     try:
         deadline = time.monotonic() + limits.child_deadline_seconds
-        entry = _select_git()
-        binary = _binary_identity(entry, limits)
-        root = Path(repo)
-        before = _repository_snapshot(repo, limits)
-        env = _git_env(binary['resolved'])
-        version_raw = _git_command(binary['resolved'], root, env, ['version'], 4096, limits, deadline, phase='version')
-        if not re.fullmatch(rb'git version [^\x00-\x20\x7f-\xff]+(?: [^\x00-\x1f\x7f-\xff]+)?\n', version_raw):
-            _fail('unsupported_git', 'version_header')
-        version = version_raw[:-1].decode('ascii')
-        config = _git_command(binary['resolved'], root, env,
-            ['config', '--file', str(root / '.git/config'), '--no-includes', '--null', '--list'],
-            min(256 * 1024, limits.max_metadata_bytes), limits, deadline, phase='metadata')
-        _parse_config(config, limits=limits)
-        pointers = _git_command(binary['resolved'], root, env, ['rev-parse', '--path-format=absolute',
-            '--show-toplevel', '--git-dir', '--git-common-dir', '--is-bare-repository', '--show-object-format=storage'],
-            32768, limits, deadline, phase='metadata')
-        expected_pointers = '\n'.join((repo, str(root / '.git'), str(root / '.git'), 'false', 'sha1')) + '\n'
-        if pointers != expected_pointers.encode('utf-8'):
-            _fail('unsupported_repository', 'repository_identity')
-        actual_type = _parse_type(_git_command(binary['resolved'], root, env,
-            ['cat-file', '-t', oid], 16, limits, deadline, phase='object'))
-        if actual_type != expected_type:
-            _fail('type_mismatch', 'object_type')
-        size = _parse_size(_git_command(binary['resolved'], root, env,
-            ['cat-file', '-s', oid], 32, limits, deadline, phase='object'))
-        maximum = getattr(limits, 'max_' + actual_type + '_bytes')
-        if size > maximum:
+        state = _admit_repository(repo, limits, deadline)
+        size = _object_header(state, oid, expected_type)
+        if size > getattr(limits, 'max_' + expected_type + '_bytes'):
             _fail('size_exceeded', 'object_bytes')
-        raw = _git_command(binary['resolved'], root, env, ['cat-file', actual_type, oid],
-                           size, limits, deadline, phase='object')
-        if len(raw) != size:
-            _fail('read_error', 'object_length')
-        git_digest = hashlib.sha1(actual_type.encode('ascii') + b' ' + str(size).encode('ascii') + bytes([0]))
-        content_digest = hashlib.sha256()
-        view = memoryview(raw)
-        for offset in range(0, len(raw), 65536):
-            git_digest.update(view[offset:offset + 65536])
-            content_digest.update(view[offset:offset + 65536])
-        if git_digest.hexdigest() != oid:
-            _fail('oid_mismatch', 'object_identity')
-        try:
-            after = _repository_snapshot(repo, limits)
-            final_binary = _binary_identity(entry, limits)
-        except (OSError, LocalGitReadError):
-            _fail('metadata_changed', 'final_observation')
-        if after != before or final_binary != binary:
-            _fail('metadata_changed', 'final_observation')
-        if time.monotonic() >= deadline:
-            _fail('timeout', 'child_deadline')
+        raw, content_sha = _read_object_bytes(state, oid, expected_type, size)
+        # Preserve the old raw API: early failures keep their original priority;
+        # only its successful read reaches the same complete final observation.
+        _assert_unchanged(state)
         reservation = 4096 + 6 * sum(len(text.encode('utf-8')) for text in
-            (repo, str(root / '.git'), str(root / '.git'), binary['resolved'], version))
+            (repo, str(state['root'] / '.git'), str(state['root'] / '.git'),
+             state['binary']['resolved'], state['version']))
         if reservation > limits.max_result_metadata_bytes:
             _fail('size_exceeded', 'result_metadata')
         return {'contract': CONTRACT, 'version': 1, 'status': 'raw_object_observed',
-            'repository': {'worktreeRoot': repo, 'gitDir': str(root / '.git'), 'commonDir': str(root / '.git'),
-                'objectFormat': 'sha1', **{key: before[key] for key in
-                    ('configSha256', 'controlFilesSha256', 'objectStoreMetadataSha256')}},
-            'gitIdentity': {'resolvedPath': binary['resolved'], 'version': version, 'binarySha256': binary['sha256']},
-            'object': {'oid': oid, 'type': actual_type, 'bytes': size, 'contentSha256': content_digest.hexdigest(), 'raw': raw},
+            **_observation_metadata(state),
+            'object': {'oid': oid, 'type': expected_type, 'bytes': size, 'contentSha256': content_sha, 'raw': raw},
             'inputBinding': 'before_after_observation',
             'qualification': {'source': 'not_checked', 'normal': 'not_checked', 'publication': 'not_checked'},
             'unknownInputs': list(_UNKNOWN)}
