@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const { setupScriptLogging, writeStageSummary } = require('./log-setup');
 const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js');
+const sourceAcquisitionPolicy = require('./lib/source-acquisition-policy.js');
 
 // 顶层 catch 需要知道失败发生在哪个阶段，以及该阶段的批次日期与起始时间。
 let currentFullFetchStage = '抓取';
@@ -1695,6 +1696,10 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             throw new Error('抓取记录中的历史去重列表与本次计算的去重列表不一致，不能混用。');
         }
         saveFetchCheckpoint(fetchCheckpoint);
+        for (const warning of sourceAcquisitionPolicy.preflightWarnings({ date: batchDate })) {
+            if (warning.level === 'warn') console.warn(`⚠️ 抓取预检: ${warning.message}`);
+            else console.log(`ℹ️ 抓取预检: ${warning.message}`);
+        }
         // ========== 第一步：从 arxiv 抓取 ==========
         console.log('📥 第一步：从 arxiv 抓取论文');
         currentFullFetchStage = '抓取';
@@ -2371,6 +2376,7 @@ if (require.main === module) {
             message: `入口失败（${currentFullFetchStage}阶段）: ${redactSensitive(err.message)}`
         });
         printErrorGuidance(err, { stage: FULL_FETCH_GUIDANCE_STAGE[currentFullFetchStage] || 'fetch' });
+        for (const advice of sourceAcquisitionPolicy.fetchFailureAdvice(err)) console.error(`[下一步] ${advice}`);
         process.exitCode = 1;
     });
 }

@@ -159,6 +159,13 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 主要生产入口（fetch、deep、batch、reanalyze、Reader 刷新与博客三阶段）在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
 
+## 抓取前探测与配置检查
+
+- `npm run source:probe -- --date YYYY-MM-DD`：只读探测 arXiv Atom/官方 OAI/RSS 三入口，并判断 RSS 公告是否目标日；失败时给出等待/换入口/官方 OAI 的建议，不抓取、不写数据。
+- `npm run llm:accounts`：只读查看账号池每个账号的状态、冷却与最早恢复；账号只显示 12 位指纹，不显示原始 key。
+- `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，支持 `--json`。
+- `npm run doctor` 与这三条命令都只读；抓取失败时 full-fetch 会追加 `[下一步]` 的限流/5xx/RSS 建议。
+
 ## 验证矩阵
 
 用户明确要求从原文重写既有日批次或全部历史页面时，使用 [当前历史计划流程](history-rewrite.md)：冻结页面范围，核验会议本地元数据/PDF，按明确获取序号封存 arXiv 官方文本/PDF。备用 `history:arxiv-batch` 仅接受本次官方获取失败保存的命名交接；普通 `reanalyze`、Reader 刷新或清除 analysis 字段不能替代完整历史范围与来源证明。

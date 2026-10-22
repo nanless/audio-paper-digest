@@ -411,6 +411,9 @@ npm run test:compat
 |---|---|
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |
 | `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
+| `source-probe.js` | Node 入口：`npm run source:probe -- --date YYYY-MM-DD` 只读探测 arXiv Atom/官方 OAI/RSS 三入口并判断公告是否目标日；支持 `--json`，不抓取、不写 data/current。 |
+| `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 只读展示账号池状态、冷却、最早恢复与活动分组；账号只显示 12 位指纹，支持 `--json`。 |
+| `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥，支持 `--json`。 |
 | `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥。 |
 | `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
@@ -425,6 +428,8 @@ npm run test:compat
 | `lib/immutable-file.js` | Node 库：先写临时文件并同步，再用硬链接保存正式文件，不覆盖已有内容；只回收同机已退出写者留下、且与正式文件指向同一文件的临时硬链接，拒绝清理其他文件。 |
 | `lib/legacy-manual-source.js` | 只读核验旧 Manual 官方来源的日期、版本、路径和 SHA。 |
 | `lib/llm-pending-request.js` | 模型请求发起前的持久记录，防止中断后退还已预留预算。 |
+| `lib/env-schema.js` | Node 库：`.env` 的集中 schema（必填/类型/范围/密钥标记）与只读解析，供 config:check 与 doctor 复用。 |
+| `lib/source-acquisition-policy.js` | Node 库：抓取前公告时段提示与 429/5xx/RSS 失败的“下一步”纯函数，不联网。 |
 | `lib/llm-usage.js` | Node 库：规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
 | `lib/llm-usage-summary.js` | Node 库：按日期聚合真实请求用量（成功/失败、阶段/模型/账号、可用费用字段），先按目录/文件 mtime 过滤再读取，提供缓存与文本/JSON 输出。 |
 | `lib/digest-live-status.js` | Node 库：只读合成日更运行状态（阶段、数量、当前论文、失败列表、最近日志、账号池、费用、无进度提示），供 `digest:status --watch` 使用。 |

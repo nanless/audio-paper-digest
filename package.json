@@ -93,7 +93,10 @@
     "blog:push": "node scripts/workspace-role.js exec daily -- bash scripts/python-runtime.sh scripts/push-blog.py",
     "test:compat": "node --test --test-concurrency=1 manual/tests/*.test.js",
     "reanalyze:selected": "node scripts/workspace-role.js exec daily -- node scripts/reanalyze-selected.js",
-    "doctor": "node scripts/doctor.js"
+    "doctor": "node scripts/doctor.js",
+    "source:probe": "node scripts/source-probe.js",
+    "llm:accounts": "node scripts/llm-accounts-report.js",
+    "config:check": "node scripts/config-check.js"
   },
   "keywords": [
     "arxiv",

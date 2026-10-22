@@ -28,6 +28,7 @@
 |---|---|---|
 | 运行北京时间当天的论文速递 | `npm run digest:prepare -- YYYY-MM-DD` | [操作手册](SKILL.md#1-日更) |
 | 开跑前只读体检（环境、账号、来源、磁盘、博客仓库） | `npm run doctor -- --offline`；需要探测 arXiv 时加 `--network` | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
+| 抓取前探测 arXiv 三入口 / 看账号池 / 查配置 | `npm run source:probe -- --date YYYY-MM-DD`、`npm run llm:accounts`、`npm run config:check` | [维护与验证](docs/maintenance.md#抓取前探测与配置检查) |
 | 运行中查看阶段、失败与费用 | `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒） | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
 | 获取、筛选并整理官方会议 | 获取官方来源，再提取摘要证据、筛选并执行 `conference:process` | [会议流程](docs/conference-workflow.md) |
 | 从原文重新分析既有博客，保留已有 URL | 冻结页面清单，再建立历史来源与重写计划 | [历史更新](docs/history-rewrite.md) |
