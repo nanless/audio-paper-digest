@@ -37,6 +37,21 @@ test('识别目录锁 owner.json 与普通锁文件，跳过 .hugo_build.lock', 
     }
 });
 
+test('扫描 conference-processes 嵌套 .operation.lock', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'locks-nested-'));
+    const nested = path.join(root, 'data/runtime/conference-processes/p1/.operation.lock');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'owner.json'), JSON.stringify({ pid: 999999, hostname: os.hostname(), acquiredAt: '2026-01-01T00:00:00Z' }));
+    try {
+        const rows = locks.scanLocks(['data/runtime'], Date.now(), { root });
+        assert.strictEqual(rows.length, 1);
+        assert.ok(rows[0].file.includes('.operation.lock'));
+        assert.strictEqual(rows[0].stale, true);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('远端 hostname 不按本地 PID 判死', () => {
     const root = makeRoot([['remote.lock/owner.json', { pid: 999999, hostname: 'other-host', acquiredAt: new Date().toISOString() }]]);
     try {

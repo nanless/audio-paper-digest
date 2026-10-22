@@ -35,4 +35,4 @@ npm run digest:prepare -- YYYY-MM-DD
 └─ 推送/部署 → push --dry-run → push → verify:web → publish:finish
 ```
 
-原则：不改旧失败与费用、不跳过来源/质量门禁、不自动豁免视觉；所有命令都可先 dry-run 或只读查看。
+原则：不改旧失败与费用、不跳过来源/质量门禁、不自动豁免视觉；能用 dry-run/只读查看的命令先 dry-run，付费或写正式数据的入口仍按文档门禁执行。

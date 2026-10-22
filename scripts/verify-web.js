@@ -62,13 +62,16 @@ async function verify(date, options = {}) {
     return summary;
 }
 
+function deployRepository() { return process.env.PAPER_DIGEST_BLOG_REPO_RUN || 'nanless/audio-paper-digest-blog'; }
+
 function deployStatus(oid) {
     const { spawnSync } = require('node:child_process');
-    const result = spawnSync('gh', ['run', 'list', '-R', 'nanless/audio-paper-digest-blog', '-L', '20', '--json', 'headSha,status,conclusion,url'], { encoding: 'utf8' });
+    const result = spawnSync('gh', ['run', 'list', '-R', deployRepository(), '-L', '20', '--json', 'headSha,status,conclusion,url'], { encoding: 'utf8', timeout: 30000 });
     if (result.status !== 0) return { available: false, message: 'gh CLI 不可用或未登录；请到 GitHub Actions 手动确认部署。' };
     try {
         const runs = JSON.parse(result.stdout || '[]');
-        const match = runs.find(run => String(run.headSha || '').startsWith(String(oid || '')));
+        if (!oid) return { available: false, message: '--deploy 需要完整提交 OID。' };
+        const match = runs.find(run => String(run.headSha || '') === String(oid));
         return match ? { available: true, ...match } : { available: true, message: `未找到 oid=${oid} 的部署记录（可能尚未触发或需 wait）。` };
     } catch (error) {
         return { available: false, message: `解析 gh 输出失败：${error.message}` };
@@ -78,7 +81,7 @@ function deployStatus(oid) {
 async function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('verify-web.js'); } catch (error) { console.error(`[verify-web] ${error.message}`); return Promise.resolve(1); }
 
-    const options = { date: null, limit: null, deploy: null, json: false, timeoutMs: 20000 };
+    const options = { date: null, limit: null, deploy: null, json: false, timeoutMs: 20000, allowDegraded: false };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
         if (value === '--date') options.date = argv[++index] || null;
@@ -86,10 +89,12 @@ async function main(argv = process.argv.slice(2)) {
         else if (value === '--deploy') options.deploy = argv[++index] || null;
         else if (value === '--json') options.json = true;
         else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
+        else if (value === '--allow-degraded') options.allowDegraded = true;
         else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
     }
-    if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--json]'); return options.help ? 0 : 2; }
+    if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--allow-degraded] [--json]'); return options.help ? 0 : 2; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) throw new Error('--date 必须是 YYYY-MM-DD');
     const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
     const deploy = options.deploy ? deployStatus(options.deploy) : null;
     if (options.json) console.log(JSON.stringify({ ...summary, deploy }, null, 2));
@@ -100,8 +105,8 @@ async function main(argv = process.argv.slice(2)) {
         console.log(`合计：${summary.ok}/${summary.checked} 通过，${summary.failed} 失败；结果已写入 data/current/web-verification-${options.date}.json`);
         if (deploy) console.log(`部署：${deploy.available ? `${deploy.status || ''} ${deploy.conclusion || ''} ${deploy.url || deploy.message || ''}` : deploy.message}`);
     }
-    const deployFailed = Boolean(deploy && deploy.available && (deploy.conclusion && deploy.conclusion !== 'success'
-        || (!deploy.conclusion && deploy.message)));
+    const deploySucceeded = Boolean(deploy && deploy.available && deploy.status === 'completed' && deploy.conclusion === 'success');
+    const deployFailed = Boolean(deploy && !deploySucceeded && !options.allowDegraded);
     if (!options.json && deployFailed) console.log('部署核验失败：目标提交没有成功完成 Pages build/deploy。');
     return summary.failed > 0 || deployFailed ? 1 : 0;
 }

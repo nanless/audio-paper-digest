@@ -31,8 +31,12 @@ function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
             if (entry.name === '.hugo_build.lock' || entry.name === 'node_modules' || entry.name === '.git') continue;
             const target = path.join(directory, entry.name);
             if (!entry.name.endsWith('.lock')) {
-                // 只向下看一层（例如 .analysis-runs），避免遍历 data/runtime 的海量运行目录。
-                if (entry.isDirectory() && depth === 0 && (entry.name === '.analysis-runs' || entry.name === 'locks')) visit(target, depth + 1);
+                if (entry.isDirectory() && depth < 3) {
+                    const base = path.basename(directory);
+                    const descend = depth === 0 && ['.analysis-runs', 'locks', 'conference-processes'].includes(entry.name)
+                        || base === 'conference-processes' && depth === 1;
+                    if (descend) visit(target, depth + 1);
+                }
                 continue;
             }
             const record = readOwnerRecord(target, entry);

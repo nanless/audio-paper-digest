@@ -186,7 +186,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ## 锁视图与文档一致性
 
-- `npm run locks`：只读列出 `data/runtime`、`data/current` 下的锁文件、持有者 PID、心跳与存活判断；`--recover` 只预览疑似陈旧锁，不删除。
+- `npm run locks`：只读列出 `data/runtime`、`data/current` 下的目录锁/文件锁（含 `.analysis-runs`、`conference-processes/*/.operation.lock` 等嵌套位置）、持有者 PID、心跳与存活判断；`--recover` 只预览疑似陈旧锁，不删除。
 - `npm run docs:check`：检查 README/AGENTS/maintenance/scripts README 里的 `npm run <script>` 是否都存在于 package.json，文档漂移时非零退出；新增命令时应同步文档。
 
 ## 验证矩阵
