@@ -424,8 +424,19 @@ def main():
             try:
                 from pathlib import Path
                 current = Path(__file__).resolve().parent.parent / 'data' / 'current'
-                write_review_help(current / f'blog-review-failure-{date_str}.json',
-                                  current / f'blog-review-help-{date_str}.json')
+                failure_path = None
+                resolver = getattr(module, 'review_failure_path', None)
+                if callable(resolver):
+                    try:
+                        failure_path = Path(resolver(date_str))
+                    except Exception:
+                        failure_path = None
+                if failure_path is None or not failure_path.exists():
+                    candidates = sorted(current.glob(f'blog-review-failure-{date_str}*.json'),
+                                        key=lambda item: item.stat().st_mtime, reverse=True)
+                    failure_path = candidates[0] if candidates else current / f'blog-review-failure-{date_str}.json'
+                help_name = failure_path.name.replace('blog-review-failure-', 'blog-review-help-')
+                write_review_help(failure_path, current / help_name)
             except Exception:
                 pass
         print_error_guidance(exc, 'blog-review')

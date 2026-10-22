@@ -55,7 +55,7 @@ async function verify(date, options = {}) {
             results.push({ ...page, status: null, title: null, ok: false, error: error.message });
         }
     }
-    const summary = { date, checked: results.length, ok: results.filter(item => item.ok).length, failed: results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0), results };
+    const summary = { date, deploy: options.deploy || null, checked: results.length, ok: results.filter(item => item.ok).length, failed: results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0), results };
     if (!options.noWrite) {
         fs.mkdirSync(currentDir, { recursive: true });
         fs.writeFileSync(path.join(currentDir, `web-verification-${date}.json`), JSON.stringify(summary, null, 2));
@@ -109,14 +109,14 @@ async function main(argv = process.argv.slice(2)) {
         else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
         else if (value === '--allow-degraded') options.allowDegraded = true;
         else if (value === '--wait') options.wait = true;
-        else if (value === '--wait-seconds') options.waitSeconds = Number(argv[++index]) || 120;
+        else if (value === '--wait-seconds') { const seconds = Number(argv[++index]); options.waitSeconds = Number.isFinite(seconds) && seconds >= 0 ? seconds : 120; }
         else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
     }
     if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--allow-degraded] [--json]'); return options.help ? 0 : 2; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) throw new Error('--date 必须是 YYYY-MM-DD');
     let deploy = options.deploy ? deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository }) : null;
-    const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
+    const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs, deploy });
     if (options.deploy && options.wait) {
         const waited = await waitForDeploy(options.deploy, {
             spawnSync: options.spawnSync, repository: options.repository,

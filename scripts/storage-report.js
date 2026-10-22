@@ -16,6 +16,9 @@ function adviceLines() {
 
 function main(argv = process.argv.slice(2)) {
     try { requireExternalRuntime('storage-report.js'); } catch (error) { console.error(`[storage-report] ${error.message}`); return 1; }
+    const allowed = new Set(['--advice-only', '--help']);
+    const unknown = argv.filter(value => !allowed.has(value));
+    if (unknown.length) { console.error(`[storage-report] 未知参数：${unknown.join(', ')}`); return 2; }
     if (argv.includes('--help')) {
         console.log('用法: node scripts/storage-report.js [--advice-only]');
         console.log('只读：默认运行 storage:status 概览并打印保留建议；--advice-only 只打印建议。');
