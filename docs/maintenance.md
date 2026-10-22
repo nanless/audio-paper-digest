@@ -189,6 +189,10 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run locks`：只读列出 `data/runtime`、`data/current` 下的目录锁/文件锁（含 `.analysis-runs`、`conference-processes/*/.operation.lock` 等嵌套位置）、持有者 PID、心跳与存活判断；`--recover` 只预览疑似陈旧锁，不删除。
 - `npm run docs:check`：检查 README/AGENTS/maintenance/scripts README 里的 `npm run <script>` 是否都存在于 package.json，文档漂移时非零退出；新增命令时应同步文档。
 
+## 存储保留建议
+
+`npm run storage:report` 只读运行 `storage:status` 概览并打印三类建议：必须保留（封存来源/正式 JSON/发布与审查清单/费用账本）、可压缩（旧清单/旧通过缓存/归档成品）、可删（logs/缓存/旧调试目录）。真正删除仍须先 `npm run storage:prune` 预览，再停写后显式 `--apply`。
+
 ## 验证矩阵
 
 用户明确要求从原文重写既有日批次或全部历史页面时，使用 [当前历史计划流程](history-rewrite.md)：冻结页面范围，核验会议本地元数据/PDF，按明确获取序号封存 arXiv 官方文本/PDF。备用 `history:arxiv-batch` 仅接受本次官方获取失败保存的命名交接；普通 `reanalyze`、Reader 刷新或清除 analysis 字段不能替代完整历史范围与来源证明。

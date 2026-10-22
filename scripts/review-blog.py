@@ -16,7 +16,7 @@ _LIB_DIR = Path(__file__).resolve().parent / 'lib'
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from error_guidance import print_error_guidance, redact_sensitive  # noqa: E402
+from error_guidance import print_error_guidance, redact_sensitive, write_review_help  # noqa: E402
 
 
 def _is_api_reader_asset_path(module, path):
@@ -420,6 +420,14 @@ def main():
         print(f'\n❌ 审查失败，未生成本次审查凭证: {exc}')
         write_stage_summary('审查', 'error', f'审查失败: {redact_sensitive(exc)}',
                             elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
+        if date_str:
+            try:
+                from pathlib import Path
+                current = Path(__file__).resolve().parent.parent / 'data' / 'current'
+                write_review_help(current / f'blog-review-failure-{date_str}.json',
+                                  current / f'blog-review-help-{date_str}.json')
+            except Exception:
+                pass
         print_error_guidance(exc, 'blog-review')
         sys.exit(1)
     except TimeoutError as exc:

@@ -104,7 +104,8 @@
     "verify:web": "node scripts/verify-web.js",
     "publish:finish": "node scripts/publish-finish.js",
     "locks": "node scripts/locks.js",
-    "docs:check": "node scripts/docs-consistency.js"
+    "docs:check": "node scripts/docs-consistency.js",
+    "storage:report": "node scripts/storage-report.js"
   },
   "keywords": [
     "arxiv",

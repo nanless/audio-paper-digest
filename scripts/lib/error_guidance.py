@@ -736,3 +736,39 @@ def print_error_guidance(error, stage=None, logger=None):
             # 打印指引绝不能掩盖原始错误。
             pass
     return guidance
+
+
+def write_review_help(failure_path, help_path):
+    """从博客审查失败集生成只读的人话修复建议（不修改原失败文件）。"""
+    import json
+    from pathlib import Path
+    source = Path(failure_path)
+    if not source.exists():
+        return None
+    try:
+        payload = json.loads(source.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    entries = []
+    for file in payload.get('files') or []:
+        for issue in file.get('issues') or []:
+            severity = str(issue.get('severity') or issue.get('level') or '')
+            if 'error' not in severity.lower():
+                continue
+            description = str(issue.get('description') or issue.get('message') or issue.get('issue') or '')
+            guidance = guidance_for({'message': description}, 'blog-review')
+            entries.append({
+                'path': file.get('path'),
+                'pageSha256': file.get('sha256'),
+                'claim': description,
+                'howToFix': (guidance.get('nextSteps') or ['检查该页并回到生成/Reader 阶段修正'])[0],
+                'docRef': guidance.get('docRef')
+            })
+    target = Path(help_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({'contract': 'blog-review-help-v1', 'entries': entries}, ensure_ascii=False, indent=2), encoding='utf-8')
+    try:
+        target.chmod(0o600)
+    except OSError:
+        pass
+    return entries
