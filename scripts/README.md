@@ -381,6 +381,8 @@ npm run test:compat
 |---|---|
 | `blog_entry_loader.py` | Python 桥：以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `daily_hugo_capture.py` | Python 内部库：保留正常日更审查中同次 Hugo 的输入观察、机器页面映射和主 HTML，以不可覆盖记录供新审查凭证引用及冷核；不授予完整输入快照、科学资格或部署通过，见[观察记录边界](../docs/three-workflows.md#日更审查的同次-html-观察记录)。 |
+| `daily_html_projection.py` | Python 纯库：按有限静态 HTML 合同计算身份、正文结构及分域引用；保留词界、代码和受支持公式的字面，不执行 HTML 或请求资源。普通返回值不授予来源或出版资格。 |
+| `daily_observed_projection.py` | Python 内部读取器：按日期和显式单篇范围进入原正常凭证与同次 HTML 观察链，复核完整集合和返回前变化，再派生有界静态摘要；不重建或补签旧记录，不检查部署、网页或当前科学资格。 |
 | `blog_repository_lock.py` | 管理共享博客锁，以 Git common-dir 协调不同项目工作区；核对 PID、hostname、token、lease、inode 和 SHA 后才回收或释放，不污染博客 Git。 |
 | `generate-blog.py` | Python 入口：只生成并安装 Hugo Markdown。 |
 | `lib/paper-page-staging.js` | 三流程页面 worker 私有输入、超时、实现指纹和暂存文件校验。 |
