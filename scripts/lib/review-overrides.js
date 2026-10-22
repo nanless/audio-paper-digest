@@ -31,6 +31,7 @@ function applyOverrides(failure, overrides) {
     }
     const matched = new Set();
     const applyToIssues = (issues, file) => (Array.isArray(issues) ? issues : []).map(issue => {
+        if (!/error/i.test(String(issue.severity || issue.level || ''))) return issue;
         const text = String(issue.description || issue.message || issue.issue || '').trim();
         const entry = entries.find(item => item.claim.trim() === text
             && (file ? (item.path === file.path && item.pageSha256 === file.sha256) : item.path === 'batch'));
