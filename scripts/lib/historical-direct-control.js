@@ -521,11 +521,15 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
             publicationId, liveRemote: effectiveLiveRemote, blogRepo, remoteName }, dependencies.publicationDependencies || {});
         publication = { supported: true, selected: true, outputRoot: publicationRoot,
             liveRemoteRequested: effectiveLiveRemote, ...publication };
-        if (publication.planSha256 && publication.planSha256 !== plan.planSha256) {
+        const rewritePlanSha256 = publication.rewritePlanSha256;
+        if (typeof rewritePlanSha256 !== 'string' || !SHA_RE.test(rewritePlanSha256)) {
+            publication = { ...publication, complete: false, planMatchesHistory: false };
+            blockers.push({ code: 'historical-publication-plan-identity-invalid' });
+        } else if (rewritePlanSha256 !== plan.planSha256) {
             publication = { ...publication, complete: false, planMatchesHistory: false };
             blockers.push({ code: 'historical-publication-plan-mismatch' });
         } else {
-            publication.planMatchesHistory = publication.planSha256 === plan.planSha256;
+            publication.planMatchesHistory = true;
             if (!publication.complete) blockers.push({ code: 'historical-publication-incomplete', phase: publication.phase });
         }
     }

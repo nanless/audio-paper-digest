@@ -289,6 +289,43 @@ describe('digest-live-status 阶段推断', () => {
         })).stage, 'visual');
     });
 
+    it('发布后视觉 required 同时要求长图和封面，不受 generation 的旧 false 标志影响', () => {
+        const generation = { date: DATE, visualSummaryRequired: false, digestCoverRequired: false };
+        const review = {
+            date: DATE, strictReview: true, postPublishVisuals: 'required',
+            publicationCommit: 'abc123', remoteVerifiedOid: 'abc123'
+        };
+        const visualManifest = {
+            batchDate: DATE, overallStatus: 'complete',
+            counts: { completeCards: 1, totalCards: 1, pendingCards: 0 }
+        };
+        const coverManifest = { batchDate: DATE, overallStatus: 'complete' };
+        const evidence = stageEvidence({ deep: completedDeep(), generation, review, visualManifest });
+        for (const cover of [null, { ...coverManifest, overallStatus: 'pending' },
+            { ...coverManifest, batchDate: '2026-01-01' }]) {
+            assert.strictEqual(inferStage({ ...evidence, coverManifest: cover }).stage, 'visual');
+        }
+        assert.strictEqual(inferStage({ ...evidence, coverManifest }).stage, 'complete');
+        assert.strictEqual(inferStage({ ...evidence, visualManifest: null, coverManifest }).stage, 'visual');
+    });
+
+    it('仅已知的不适用视觉模式可以省略长图和封面', () => {
+        const generation = { date: DATE, visualSummaryRequired: false, digestCoverRequired: false };
+        const review = {
+            date: DATE, strictReview: true,
+            publicationCommit: 'abc123', remoteVerifiedOid: 'abc123'
+        };
+        const evidence = stageEvidence({ deep: completedDeep(), generation, review });
+        for (const mode of ['not_applicable_single_paper', 'not_applicable_legacy_maintenance']) {
+            assert.strictEqual(inferStage({ ...evidence,
+                review: { ...review, postPublishVisuals: mode } }).stage, 'complete');
+        }
+        for (const mode of ['unknown', '', null, false, 'waived']) {
+            assert.strictEqual(inferStage({ ...evidence,
+                review: { ...review, postPublishVisuals: mode } }).stage, 'visual');
+        }
+    });
+
     it('最新日志只能把阶段往前推，且必须是目标日期', () => {
         const freshReaderLog = {
             file: 'api-reader-refresh-20260102-120000-1-0.log',

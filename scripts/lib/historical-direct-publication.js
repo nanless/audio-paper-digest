@@ -1242,6 +1242,7 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
         : !reviewOk ? 'generated' : !activationOk ? 'reviewed' : !publicationOk ? 'activated'
             : !liveRemote ? 'awaiting-live-remote-verification' : 'awaiting-visual-disposition';
     return { contract: STATUS_CONTRACT, version: VERSION, publicationId, phase, complete, planSha256: loaded.plan.planSha256,
+        publicationPlanSha256: loaded.plan.planSha256, rewritePlanSha256: loaded.plan.authorityProof.plan.planSha256,
         retainedPages: { status: 'retained-unchanged', count: loaded.plan.retainedPages.length,
             setSha256: loaded.plan.retainedPageSetSha256 }, visual, stages, blockers };
 }

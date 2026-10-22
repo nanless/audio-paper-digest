@@ -479,12 +479,21 @@ function applyLogStageHint(stage, hint, latestLog = null) {
 }
 
 function visualGateComplete(date, generation, visualManifest, coverManifest, review) {
-    // 生产 generation.visualSummaryRequired 恒为 false（视觉是发布后独立阶段），
-    // 是否要求长图/封面以审查凭证的 postPublishVisuals 为准；没有凭证时才回退 generation。
-    const visualRequired = review && typeof review.postPublishVisuals === 'string'
-        ? review.postPublishVisuals === 'required'
-        : generation?.visualSummaryRequired !== false;
-    const coverRequired = generation?.digestCoverRequired !== false;
+    // 现代 generation 的两项标志均为 false：发布后长图和封面由审查凭证共同决定。
+    // 旧凭证没有此字段时沿用原标志；未知值不提供省略视觉的依据。
+    let visualRequired = generation?.visualSummaryRequired !== false;
+    let coverRequired = generation?.digestCoverRequired !== false;
+    if (review && Object.prototype.hasOwnProperty.call(review, 'postPublishVisuals')) {
+        if (review.postPublishVisuals === 'required') {
+            visualRequired = true;
+            coverRequired = true;
+        } else if (['not_applicable_single_paper', 'not_applicable_legacy_maintenance'].includes(review.postPublishVisuals)) {
+            visualRequired = false;
+            coverRequired = false;
+        } else {
+            return false;
+        }
+    }
     const counts = visualManifest?.counts || {};
     const visualOk = !visualRequired || (
         documentMatchesDate(visualManifest, date, ['batchDate'])

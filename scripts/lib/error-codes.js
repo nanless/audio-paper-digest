@@ -12,6 +12,8 @@ const ENTRIES = Object.freeze([
     { id: 'reader-table-header-units', label: '表头单位缺少来源证据', retryable: false, command: 'npm run table:check -- --draft <FILE>', doc: 'docs/maintenance.md' },
     { id: 'reader-table-ablation-missing', label: '缺少消融/组件对照', retryable: false, command: 'npm run api:reader:refresh -- --all --date <DATE> --concurrency 5 --scoring-and-reader', doc: 'docs/reader-explicit-retry.md' },
     { id: 'blog-repository-dirty', label: '博客仓库有清单外改动', retryable: false, command: 'git -C "$PAPER_DIGEST_BLOG_REPO" status --porcelain', doc: 'docs/maintenance.md' },
+    { id: 'blog-review-receipt-missing', label: '缺少当前页面的审查凭证', retryable: false, command: 'npm run blog:review -- --date <DATE>', doc: 'docs/three-workflows.md' },
+    { id: 'blog-lock-busy', label: '共享博客仓库锁被占用', retryable: true, command: 'npm run locks', doc: 'docs/troubleshooting.md' },
     { id: 'paper-lock-busy', label: '论文/运行锁被占用', retryable: true, command: 'npm run locks', doc: 'docs/troubleshooting.md' },
     { id: 'source-sha-mismatch', label: '封存来源 SHA 不一致', retryable: false, command: 'npm run validate:data', doc: 'docs/data-format.md#日更来源的保存与核验' },
     { id: 'generation-snapshot-stale', label: '生成快照未随 Reader 更新', retryable: true, command: 'npm run blog:generate -- --date <DATE>', doc: 'docs/troubleshooting.md' },
@@ -47,7 +49,7 @@ function classify(text) {
     const codeToken = value.trim().split(/\s+/)[0].toLowerCase().replace(/_/g, '-');
     if (BY_ID.has(codeToken)) return BY_ID.get(codeToken);
     for (const rule of PATTERNS) {
-        if (rule.regex.test(value)) return BY_ID.get(rule.id);
+        if (rule.regex.test(value)) return describe(rule.id);
     }
     return BY_ID.get('generic-fallback');
 }

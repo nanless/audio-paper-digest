@@ -157,6 +157,8 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 运行中用 `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒刷新，`--interval N` 可调，`--json --watch` 每行一个 JSON）查看阶段、数量、失败列表、最近日志、账号池可用数、本次费用和无进度提示；默认不带 `--watch` 时输出与原来一致。费用按日期聚合 `data/runtime/llm-usage`，不联网、不推算未记录的费用。
 
+轻量监控遇到审查记录的 `postPublishVisuals: required` 时，同时等待长图和封面，不使用生成清单的发布前视觉标志省略其中一项。该字段只接受已知的单篇或旧维护不适用模式来略过视觉，未知值仍显示视觉待办；旧审查记录没有该字段时沿用原生成标志。监控不核验完整图片资产、视觉豁免或部署网页，最终完成仍按正常状态及上线核验判断。
+
 主要生产入口（fetch、deep、batch、reanalyze、Reader 刷新与博客三阶段）在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
 
 ## 抓取前探测与配置检查
@@ -184,6 +186,8 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态/标题并写 `data/current/web-verification-<date>.json`；`--deploy` 查询对应提交的 Pages workflow（仓库可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖，默认 `nanless/audio-paper-digest-blog`；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`）；`--wait` 最多等待 120 秒直到 completed，无 gh/进行中默认判失败，`--allow-degraded` 可显式放宽。`--json` 在等待时输出 JSONL（部署快照行 + summary + 最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy/generationManifestSha256/publicationOid；页面重定向必须回到期望 URL，标题须为具体页面（汇总页还需含日期）。默认要求部署证据：无 `--deploy`、`--limit` 抽样或部署未成功时 artifact 标记 partial 并返回非零，只有显式 `--allow-partial` 才放宽页面/抽样 partial；`--allow-degraded` 只放宽部署不可得/进行中，不降低页面与凭证证据要求。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
 - `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]`：只读核对误报记录，验证 schema、页面 SHA 与逐字 claim，报告匹配数与剩余真实 error；不修改失败文件/审查凭证，也不自动放行；剩余真实 error>0 或存在无法解释的 pending 页（passed:false 且无 error issue）时返回非零；页级 error 全部被严格记录解释但页仍 passed:false 时计入 overriddenFailedPages 并放行（需人工复核）；批次级 error 用 `path:'batch'` 的 override 解释；执行/参数错误退出码为 2。
 - `npm run publish:finish -- --date DATE`：打印推送后收尾清单（digest:status、网页核验、视觉 prepare/豁免），不调用图像 API、不自动登记豁免。
+
+`verify:web` 的完整部署结果还要求明确的 `jobVerified: true`。缺 runId、jobs 查询失败或超时、无法解析响应等均保留为未核验，不以 run 的成功结论替代 job 证据。此时结果仍为 `partial:true`；同时显式使用 `--allow-degraded --allow-partial` 只允许诊断命令退出成功，不会把证据升级为完整验收。实际 job 失败、取消或跳过继续返回失败。
 
 ## 锁视图与文档一致性
 

@@ -218,9 +218,20 @@ function deployStatus(oid, options = {}) {
     try {
         const runs = JSON.parse(result.stdout || '[]');
         const parsed = parseDeployRuns(runs, oid, { repository });
-        if (parsed && parsed.available && parsed.runId && parsed.status === 'completed' && parsed.conclusion === 'success') {
-            const jobsResult = runGh('gh', ['run', 'view', String(parsed.runId), '-R', repository, '--json', 'jobs'], { encoding: 'utf8', timeout: 30000 });
-            if (jobsResult && jobsResult.status === 0) {
+        if (parsed && parsed.available && parsed.status === 'completed' && parsed.conclusion === 'success') {
+            // run 成功只保留为观察事实；完整部署必须另外取得明确的 jobs 证据。
+            const unverifiedJobs = message => ({ ...parsed, jobVerified: false, degraded: true, message });
+            if (!parsed.runId) return unverifiedJobs('部署 run 缺少 runId，无法核验 jobs。');
+            let jobsResult;
+            try {
+                jobsResult = runGh('gh', ['run', 'view', String(parsed.runId), '-R', repository, '--json', 'jobs'], { encoding: 'utf8', timeout: 30000 });
+            } catch (_error) {
+                return unverifiedJobs('读取部署 jobs 失败，不能证明部署完成。');
+            }
+            if (!jobsResult || jobsResult.error || jobsResult.status !== 0) {
+                return unverifiedJobs('部署 jobs 查询失败或超时，不能证明部署完成。');
+            }
+            if (jobsResult.status === 0) {
                 try {
                     const jobs = JSON.parse(jobsResult.stdout || '{}').jobs;
                     if (Array.isArray(jobs) && jobs.length) {
@@ -235,7 +246,9 @@ function deployStatus(oid, options = {}) {
                         return { ...parsed, jobVerified: true, jobConclusion: 'success' };
                     }
                     return { ...parsed, conclusion: 'failure', jobVerified: false, message: '无法读取部署 jobs，不能证明 Pages deploy 成功。' };
-                } catch (_error) { /* jobs 解析失败时保留 run 级结论 */ }
+                } catch (_error) {
+                    return unverifiedJobs('解析部署 jobs 失败，不能证明部署完成。');
+                }
             }
         }
         return parsed;
@@ -281,7 +294,10 @@ async function waitForDeploy(oid, options = {}) {
 function deployExitCode(deploy, options = {}) {
     if (!deploy) return 0;
     if (!deploy.available) return options.allowDegraded ? 0 : 1;
-    if (deploy.status === 'completed') return deploy.conclusion === 'success' ? 0 : 1;
+    if (deploy.status === 'completed') {
+        if (deploy.conclusion !== 'success') return 1;
+        return deploy.jobVerified === true || options.allowDegraded ? 0 : 1;
+    }
     // 排队/进行中/超时：只有显式 --allow-degraded 才放行。
     return options.allowDegraded ? 0 : 1;
 }
@@ -413,7 +429,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
         } else {
             summary.partial = true; // 无审查凭证不能作为完整验收证据
         }
-        const deployOk = Boolean(deploy && deploy.available && deploy.status === 'completed' && deploy.conclusion === 'success' && deploy.jobVerified !== false);
+        const deployOk = Boolean(deploy && deploy.available && deploy.status === 'completed' && deploy.conclusion === 'success' && deploy.jobVerified === true);
         if (options.limit && summary.checked < summary.expected) summary.partial = true;
         if (!deployOk) summary.partial = true;
         // 所有校验完成后再写 artifact，避免绑定失败留下“通过”证据。

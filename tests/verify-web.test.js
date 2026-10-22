@@ -153,8 +153,12 @@ test('--deploy --wait: in_progress→completed success，--json 每行可解析'
     writeManifest(dir, DATE, [`${DATE}`]);
     writeReceipt(dir, DATE);
     let calls = 0;
+    let verifiedJobs = 0;
     const spawnSync = (command, args = []) => {
-        if (args.includes('view')) return { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'success' }] }) };
+        if (args.includes('view')) {
+            verifiedJobs += 1;
+            return { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'success' }] }) };
+        }
         calls += 1;
         const completed = calls >= 3;
         return {
@@ -178,7 +182,10 @@ test('--deploy --wait: in_progress→completed success，--json 每行可解析'
     ], {
         currentDir: dir,
         env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
-        fetchImpl: pageFetch({ [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递 2099-01-02 汇总' } }),
+        fetchImpl: async url => {
+            assert.ok(calls >= 3 && verifiedJobs > 0, '应先等待部署及 jobs 结果，再请求网页');
+            return pageFetch({ [`${DATE}`]: { status: 200, title: '语音/音乐/音频论文速递 2099-01-02 汇总' } })(url);
+        },
         spawnSync,
         sleep: async ms => { slept.push(ms); },
         print: line => lines.push(line),
@@ -192,10 +199,11 @@ test('--deploy --wait: in_progress→completed success，--json 每行可解析'
     const final = parsed.find(item => item.type === 'deploy-final');
     assert.strictEqual(final.deploy.status, 'completed');
     assert.strictEqual(final.deploy.conclusion, 'success');
+    assert.strictEqual(final.deploy.jobVerified, true);
     const summary = parsed.find(item => item.type === 'summary');
     assert.strictEqual(summary.deploy.conclusion, 'success');
     assert.strictEqual(summary.partial, false);
-    assertArtifact(dir, DATE);
+    assert.strictEqual(assertArtifact(dir, DATE).deploy.jobVerified, true);
 });
 
 test('部署 completed+failure 返回非零；无 gh 默认非零，--allow-degraded 放行', async t => {
@@ -305,6 +313,74 @@ test('waitForDeploy 轮询直到 completed，超时返回最后状态', async ()
         spawnSync: timeoutSpawn, sleep: async () => {}, pollIntervalMs: 10, waitSeconds: 0.001
     });
     assert.strictEqual(timedOut.deploy.status, 'in_progress');
+});
+
+test('CLI 部署 jobs 缺失或不可核验时保留 partial，宽松退出不能写 full', async t => {
+    const unavailable = [
+        { name: 'view 非零', result: { status: 1, stdout: '' } },
+        { name: 'view error 即使 status 为零', result: { status: 0, error: new Error('spawn failed'), stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'success' }] }) } },
+        { name: 'view 超时', result: { status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), stdout: '' } },
+        { name: 'view 抛异常', throws: true },
+        { name: 'view 无返回值', result: undefined },
+        { name: 'view 坏 JSON', result: { status: 0, stdout: '{bad json' } },
+        { name: 'run 缺少 runId', noRunId: true }
+    ];
+    const rejected = [
+        { name: 'jobs 空数组', result: { status: 0, stdout: JSON.stringify({ jobs: [] }) } },
+        { name: 'jobs 缺失', result: { status: 0, stdout: '{}' } },
+        { name: 'jobs 非数组', result: { status: 0, stdout: JSON.stringify({ jobs: {} }) } },
+        { name: '只有 build job', result: { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'build', conclusion: 'success' }] }) } },
+        { name: 'deploy cancelled', result: { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'cancelled' }] }) } },
+        { name: 'deploy skipped', result: { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'skipped' }] }) } }
+    ];
+    for (const sample of [...unavailable.map(item => ({ ...item, degraded: true })), ...rejected]) {
+        for (const flags of [[], ['--allow-partial'], ['--allow-degraded'], ['--allow-degraded', '--allow-partial']]) {
+            await t.test(`${sample.name}: ${flags.join(' ') || 'default'}`, async sub => {
+                const dir = tempDir(sub);
+                writeManifest(dir, DATE, [DATE]);
+                writeReceipt(dir, DATE);
+                const lines = [];
+                let viewCalls = 0;
+                const code = await verifyWeb.runVerifyWebCli(['--date', DATE, '--deploy', OID, '--json', ...flags], {
+                    currentDir: dir,
+                    env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
+                    fetchImpl: pageFetch({ [DATE]: { title: `语音/音乐/音频论文速递 ${DATE} 汇总` } }),
+                    spawnSync: (_command, args) => {
+                        if (args.includes('view')) {
+                            viewCalls += 1;
+                            if (sample.throws) throw new Error('view threw');
+                            return sample.result;
+                        }
+                        return { status: 0, stdout: JSON.stringify([{
+                            headSha: OID, status: 'completed', conclusion: 'success',
+                            workflowName: 'pages build and deployment', event: 'push',
+                            ...(sample.noRunId ? {} : { databaseId: 1 })
+                        }]) };
+                    },
+                    print: line => lines.push(line),
+                    printError: line => assert.fail(`不应丢弃可保存的部分观察：${line}`)
+                });
+                const artifact = assertArtifact(dir, DATE);
+                assert.strictEqual(artifact.partial, true, 'run success 不能替代 jobs 证据');
+                assert.strictEqual(artifact.deploy.jobVerified, false);
+                const summary = parseLines(lines).find(item => item.type === 'summary');
+                assert.strictEqual(summary.partial, true);
+                assert.strictEqual(summary.deploy.jobVerified, false);
+                const diagnosticExit = sample.degraded && flags.includes('--allow-degraded') && flags.includes('--allow-partial');
+                assert.strictEqual(code, diagnosticExit ? 0 : 1);
+                assert.strictEqual(viewCalls, sample.noRunId ? 0 : 1);
+            });
+        }
+    }
+});
+
+test('部署退出条件必须有明确 jobVerified true，未知只允许诊断降级', () => {
+    const run = { available: true, status: 'completed', conclusion: 'success' };
+    assert.strictEqual(verifyWeb.deployExitCode(run), 1);
+    assert.strictEqual(verifyWeb.deployExitCode({ ...run, jobVerified: false }), 1);
+    assert.strictEqual(verifyWeb.deployExitCode({ ...run, jobVerified: true }), 0);
+    assert.strictEqual(verifyWeb.deployExitCode(run, { allowDegraded: true }), 0);
+    assert.strictEqual(verifyWeb.deployExitCode({ ...run, conclusion: 'failure', jobVerified: false }, { allowDegraded: true }), 1);
 });
 
 test('verify 缺生成清单时报错而不是静默通过', async t => {

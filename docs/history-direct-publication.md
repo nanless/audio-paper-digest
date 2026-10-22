@@ -111,6 +111,8 @@ npm run history:publication -- status --publication-id UUID
 
 默认 `status` 再次查询真实远端，只有 receipt、远端身份及 `refs/heads/main` OID 对应，才允许进入 Git 发布终态。`status --live-remote false` 仅作离线诊断，不会给出完整发布状态。
 
+状态输出的 `planSha256` 和 `publicationPlanSha256` 都指本次独立发布计划；`rewritePlanSha256` 指该计划绑定的历史重写计划。`history:status` 使用后者核对当前历史计划，不能直接比较两个不同用途的 SHA。重写身份缺失、无效或不匹配时仍阻断完成；新增状态字段不改写旧计划或发布凭证。
+
 Git 发布状态 `complete` 不表示网站已上线，也不把视觉标成完成。向用户确认本次任务完成前，仍须人工检查发布提交（或保留本批已审页面字节的后续提交）对应的 GitHub Pages 构建和部署均成功，并逐页核验全部已发布单篇、每日、会议及任务汇总的 HTTP 200、正式地址和标题，保存部署与页面核验记录。当前历史 status 没有自动执行这些检查；部署失败时须读取日志、修复并继续验收。
 
 视觉仅按用户实际确认的本次范围或有效豁免处理；它不豁免来源、审查、远端、部署或网页检查。任何后续发布改变状态后，都应重新查询并按最新字节核验。

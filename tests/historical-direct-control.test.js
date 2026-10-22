@@ -158,7 +158,7 @@ test('选中的发布默认走实时远端，且必须绑定当前历史计划',
     const selected = control.buildStatus({ planFile, ...roots,
         publicationId: '12345678-1234-4123-8123-123456789abc' }, {
         publicationStatus: options => { observed = options; return { contract: 'fixture', phase: 'published',
-            complete: true, planSha256: plan.planSha256 }; }
+            complete: true, planSha256: 'e'.repeat(64), rewritePlanSha256: plan.planSha256 }; }
     });
     assert.equal(observed.liveRemote, true);
     assert.equal(selected.publication.outputRoot, roots.publicationRoot);
@@ -166,10 +166,20 @@ test('选中的发布默认走实时远端，且必须绑定当前历史计划',
     const mismatch = control.buildStatus({ planFile, ...roots,
         publicationId: '12345678-1234-4123-8123-123456789abc' }, {
         publicationStatus: () => ({ contract: 'fixture', phase: 'published', complete: true,
-            planSha256: 'f'.repeat(64) })
+            planSha256: 'e'.repeat(64), rewritePlanSha256: 'f'.repeat(64) })
     });
     assert.equal(mismatch.publication.complete, false);
     assert.ok(mismatch.completion.blockers.some(item => item.code === 'historical-publication-plan-mismatch'));
+    for (const rewritePlanSha256 of [undefined, null, '', 'invalid', 42]) {
+        const invalid = control.buildStatus({ planFile, ...roots,
+            publicationId: '12345678-1234-4123-8123-123456789abc' }, {
+            publicationStatus: () => ({ contract: 'fixture', phase: 'published', complete: true,
+                planSha256: plan.planSha256, rewritePlanSha256 })
+        });
+        assert.equal(invalid.publication.complete, false);
+        assert.equal(invalid.publication.planMatchesHistory, false);
+        assert.ok(invalid.completion.blockers.some(item => item.code === 'historical-publication-plan-identity-invalid'));
+    }
 });
 
 test('汇总快照报告精确的普通任务和会议任务总数', t => {
