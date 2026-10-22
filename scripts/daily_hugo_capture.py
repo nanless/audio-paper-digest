@@ -23,6 +23,12 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 
+if __name__ == '__main__':
+    from runtime_guard import require_external_runtime
+    require_external_runtime('daily_hugo_capture.py')
+    raise SystemExit('此模块只供日更正常发布器内部调用。')
+
+
 REF_CONTRACT = 'daily-render-observation-ref-v1'
 RECORD_CONTRACT = 'daily-hugo-render-observation-v1'
 CONFIG_NAMES = ('hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json',

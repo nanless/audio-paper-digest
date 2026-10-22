@@ -19,6 +19,55 @@ def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+class CaptureEntrypointTest(unittest.TestCase):
+    def test_direct_execution_is_rejected_as_an_internal_library(self):
+        result = subprocess.run(
+            [sys.executable, '-B', str(Path(capture.__file__).resolve())],
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('只供日更正常发布器内部调用', result.stderr)
+        self.assertEqual(result.stdout, '')
+
+    def test_import_does_not_run_runtime_or_environment_business_hooks(self):
+        program = r'''
+import builtins
+import importlib
+import io
+import os
+import socket
+import subprocess
+import sys
+from unittest import mock
+import runtime_guard
+
+original_import = builtins.__import__
+def import_without_business(name, *args, **kwargs):
+    if name in {'project_env', 'publish_common', 'path_config', 'blog_entry_loader'}:
+        raise AssertionError('environment or normal owner loaded during import')
+    return original_import(name, *args, **kwargs)
+
+before = dict(os.environ)
+with mock.patch.object(runtime_guard, 'require_external_runtime', side_effect=AssertionError('import runtime guard')), \
+     mock.patch.object(builtins, '__import__', side_effect=import_without_business), \
+     mock.patch.object(builtins, 'open', side_effect=AssertionError('business file open')), \
+     mock.patch.object(io, 'open', side_effect=AssertionError('business path open')), \
+     mock.patch.object(os, 'open', side_effect=AssertionError('business fd open')), \
+     mock.patch.object(subprocess, 'Popen', side_effect=AssertionError('business subprocess')), \
+     mock.patch.object(socket, 'socket', side_effect=AssertionError('business network')):
+    module = importlib.import_module('daily_hugo_capture')
+    assert module.current_session() is None
+assert dict(os.environ) == before
+'''
+        env = dict(os.environ)
+        env['PYTHONPATH'] = str(Path(capture.__file__).resolve().parent)
+        result = subprocess.run([sys.executable, '-B', '-c', program], env=env,
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr, '')
+
+
 class CaptureTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='capture-test-')
