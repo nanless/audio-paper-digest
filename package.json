@@ -100,7 +100,9 @@
     "recover": "node scripts/recover.js",
     "manifest:new": "node scripts/manifest-new.js",
     "table:check": "node scripts/table-check.js",
-    "impact": "node scripts/impact.js"
+    "impact": "node scripts/impact.js",
+    "verify:web": "node scripts/verify-web.js",
+    "publish:finish": "node scripts/publish-finish.js"
   },
   "keywords": [
     "arxiv",

@@ -82,6 +82,13 @@ def main():
                 module.validate_git_index(paths)
                 print(f'🧾 已验证审查凭证: {receipt}')
                 print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
+                if '--dry-run' in sys.argv:
+                    print(f'[dry-run] 将提交 {len(paths)} 个已审查文件（不实际 commit/push）：')
+                    for item in paths:
+                        print(f'  - {item}')
+                    write_stage_summary('推送', 'ok', f'dry-run：列出 {len(paths)} 个待提交文件',
+                                        elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
+                    return
                 if not module.git_push(date_str, paths):
                     raise module.PublishDataValidationError('Git 提交或推送未完成')
                 if visual_capable:
