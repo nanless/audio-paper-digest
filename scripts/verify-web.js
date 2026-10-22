@@ -80,6 +80,22 @@ function deployStatus(oid, options = {}) {
     }
 }
 
+async function waitForDeploy(oid, options = {}) {
+    const spawnSyncImpl = options.spawnSync;
+    const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const intervalMs = Number.isFinite(options.pollIntervalMs) ? options.pollIntervalMs : 10000;
+    const waitMs = Number.isFinite(options.waitSeconds) ? options.waitSeconds * 1000 : 120000;
+    const deadline = Date.now() + waitMs;
+    let deploy = deployStatus(oid, { spawnSync: spawnSyncImpl, repository: options.repository });
+    const snapshots = [deploy];
+    while (Date.now() < deadline && !(deploy && deploy.available && deploy.status === 'completed')) {
+        await sleep(intervalMs);
+        deploy = deployStatus(oid, { spawnSync: spawnSyncImpl, repository: options.repository });
+        snapshots.push(deploy);
+    }
+    return { deploy, snapshots };
+}
+
 async function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('verify-web.js'); } catch (error) { console.error(`[verify-web] ${error.message}`); return Promise.resolve(1); }
 
@@ -102,12 +118,12 @@ async function main(argv = process.argv.slice(2)) {
     const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
     let deploy = options.deploy ? deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository }) : null;
     if (options.deploy && options.wait) {
-        const deadline = Date.now() + options.waitSeconds * 1000;
-        while (Date.now() < deadline && !(deploy && deploy.available && deploy.status === 'completed')) {
-            await new Promise(resolve => setTimeout(resolve, 10000));
-            deploy = deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository });
-            console.log(`[verify-web] 部署状态：${deploy.available ? `${deploy.status} ${deploy.conclusion || ''}` : deploy.message}`);
-        }
+        const waited = await waitForDeploy(options.deploy, {
+            spawnSync: options.spawnSync, repository: options.repository,
+            pollIntervalMs: options.pollIntervalMs, sleep: options.sleep, waitSeconds: options.waitSeconds
+        });
+        deploy = waited.deploy;
+        for (const snapshot of waited.snapshots.slice(1)) console.log(`[verify-web] 部署状态：${snapshot.available ? `${snapshot.status} ${snapshot.conclusion || ''}` : snapshot.message}`);
     }
     if (options.json) console.log(JSON.stringify({ ...summary, deploy }, null, 2));
     else {
@@ -123,7 +139,7 @@ async function main(argv = process.argv.slice(2)) {
     return summary.failed > 0 || deployFailed ? 1 : 0;
 }
 
-module.exports = { pageUrls, titleOf, fetchPage, verify, deployStatus, main };
+module.exports = { pageUrls, titleOf, fetchPage, verify, deployStatus, waitForDeploy, main };
 
 if (require.main === module) {
     main().then(code => { process.exitCode = code; }).catch(error => { console.error(`[verify-web] ${error.message}`); process.exitCode = 2; });

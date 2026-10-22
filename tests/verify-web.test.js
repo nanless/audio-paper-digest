@@ -53,6 +53,25 @@ test('deployStatus 严格要求 completed+success', () => {
     assert.strictEqual(noGh.available, false);
 });
 
+test('waitForDeploy 轮询直到 completed，且超时返回最后状态', async () => {
+    const oid = 'c'.repeat(40);
+    let calls = 0;
+    const spawnSync = () => {
+        calls += 1;
+        const completed = calls >= 2;
+        return { status: 0, stdout: JSON.stringify([{ headSha: oid, status: completed ? 'completed' : 'in_progress', conclusion: completed ? 'success' : '' }]) };
+    };
+    const slept = [];
+    const waited = await verifyWeb.waitForDeploy(oid, { spawnSync, sleep: async ms => slept.push(ms), pollIntervalMs: 10, waitSeconds: 5 });
+    assert.strictEqual(waited.deploy.conclusion, 'success');
+    assert.ok(slept.length >= 1);
+    assert.strictEqual(waited.snapshots.length, 2);
+
+    const timeoutSpawn = () => ({ status: 0, stdout: JSON.stringify([{ headSha: oid, status: 'in_progress', conclusion: '' }]) });
+    const timedOut = await verifyWeb.waitForDeploy(oid, { spawnSync: timeoutSpawn, sleep: async () => {}, pollIntervalMs: 10, waitSeconds: 0.001 });
+    assert.strictEqual(timedOut.deploy.status, 'in_progress');
+});
+
 test('verify 汇总成功/失败并写结果', async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-web-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

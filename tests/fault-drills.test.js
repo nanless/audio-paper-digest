@@ -51,6 +51,21 @@ test('演练：今天真实出现过的发布失败都有可读分类', () => {
     }
 });
 
+test('演练：table-check CLI 对粘连草稿返回非零', () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'drill-table-'));
+    const draft = path.join(dir, 'draft.json');
+    fs.writeFileSync(draft, JSON.stringify({ sections: [{ body: '| A | B |\n| --- | --- |\n| (x)(x) | 1 |' }] }));
+    const logs = [];
+    const original = console.log;
+    console.log = line => logs.push(String(line));
+    try { assert.strictEqual(tableCheck.main(['--draft', draft]), 1); } finally { console.log = original; }
+    assert.match(logs.join('\n'), /粘连/);
+    fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('演练：文档中的 <script> 占位不会被误判成真实命令', () => {
     const fs = require('node:fs');
     const dir = fs.mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'drill-docs-'));
