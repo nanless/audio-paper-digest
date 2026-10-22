@@ -34,6 +34,20 @@ test('review-overrides-cli 报告匹配与剩余 error', () => {
     logs.length = 0;
     console.log = line => logs.push(String(line));
     try { assert.strictEqual(cli.main(['--date', '2099-01-01', '--file', overrideFile, '--failure-file', failure, '--json']), 0); } finally { console.log = original; }
+    // 页级 error 全部被解释但仍 passed:false：应报告为已被解释的失败页并放行（无未解释 pending）
+    fs.writeFileSync(failure, JSON.stringify({ files: [{ path: 'content/posts/a.md', sha256: 'a'.repeat(64), passed: false, issues: [
+        { severity: 'error', description: '某句 与像素冲突' }
+    ] }] }));
+    logs.length = 0;
+    console.log = line => logs.push(String(line));
+    let overriddenCode;
+    try { overriddenCode = cli.main(['--date', '2099-01-01', '--file', overrideFile, '--failure-file', failure, '--json']); } finally { console.log = original; }
+    assert.strictEqual(overriddenCode, 0);
+    const overriddenReport = JSON.parse(logs.join('\n'));
+    assert.strictEqual(overriddenReport.remainingErrors, 0);
+    assert.strictEqual(overriddenReport.pendingBlockedFiles, 0);
+    assert.strictEqual(overriddenReport.overriddenFailedPages, 1);
+
     // pending 页面（passed:false, issues 空）不能被 overrides 放行
     fs.writeFileSync(failure, JSON.stringify({ files: [{ path: 'content/posts/b.md', sha256: 'b'.repeat(64), passed: false, failureKind: 'pending', issues: [] }] }));
     logs.length = 0;

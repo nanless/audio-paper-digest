@@ -13,12 +13,14 @@ function validateOverrides(value) {
     return value.overrides.map((entry, index) => {
         const prefix = `overrides[${index}]`;
         if (!entry || typeof entry !== 'object') throw new Error(`${prefix} 必须是对象`);
-        if (typeof entry.path !== 'string' || !entry.path.startsWith('content/posts/')) throw new Error(`${prefix}.path 非法`);
-        if (!SHA256.test(entry.pageSha256 || '')) throw new Error(`${prefix}.pageSha256 非法`);
+        if (typeof entry.path !== 'string' || !(entry.path.startsWith('content/posts/') || entry.path === 'batch')) throw new Error(`${prefix}.path 非法`);
+        if (entry.path === 'batch') {
+            if (entry.pageSha256 !== null && entry.pageSha256 !== undefined && entry.pageSha256 !== '') throw new Error(`${prefix}.pageSha256 批次条目必须为空`);
+        } else if (!SHA256.test(entry.pageSha256 || '')) throw new Error(`${prefix}.pageSha256 非法`);
         if (typeof entry.claim !== 'string' || entry.claim.trim().length < 6) throw new Error(`${prefix}.claim 太短或不精确`);
         if (typeof entry.evidence !== 'string' || !entry.evidence.trim()) throw new Error(`${prefix}.evidence 不能为空`);
         if (typeof entry.reviewer !== 'string' || !entry.reviewer.trim()) throw new Error(`${prefix}.reviewer 不能为空`);
-        return { path: entry.path, pageSha256: entry.pageSha256, claim: entry.claim, evidence: entry.evidence, reviewer: entry.reviewer };
+        return { path: entry.path, pageSha256: entry.pageSha256 ?? null, claim: entry.claim, evidence: entry.evidence, reviewer: entry.reviewer };
     });
 }
 

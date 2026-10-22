@@ -9,16 +9,21 @@ const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
 
 function main(argv = process.argv.slice(2)) {
-    try { require('./env-loader').requireExternalRuntime('review-overrides-cli.js'); } catch (error) { console.error(`[review-overrides] ${error.message}`); return 1; }
-    let date = null; let file = null; let json = false; let failureFileOption = null;
+    try { require('./env-loader').requireExternalRuntime('review-overrides-cli.js'); } catch (error) { console.error(`[review-overrides] ${error.message}`); return 2; }
+    let date = null; let file = null; let json = false; let failureFileOption = null; const options = {};
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
         if (value === '--date') date = argv[++index] || null;
         else if (value === '--file') file = path.resolve(argv[++index] || '');
         else if (value === '--json') json = true;
         else if (value === '--failure-file') failureFileOption = path.resolve(argv[++index] || '');
-        else if (value === '--help') { if (json) console.log(JSON.stringify({ usage: 'node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json [--json]' })); else console.log('用法: node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json [--json]'); return 0; }
+        else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
+    }
+    if (options.help) {
+        const usage = 'node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json [--json]';
+        console.log(json ? JSON.stringify({ usage }) : `用法: ${usage}`);
+        return 0;
     }
     if (!date || !file) throw new Error('需要 --date 与 --file');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('--date 必须是 YYYY-MM-DD');
@@ -34,11 +39,17 @@ function main(argv = process.argv.slice(2)) {
         ...(failure.issues || [])
     ].filter(issue => /error/i.test(String(issue.severity || issue.level || '')));
     // passed:false 的页面（pending/transient）也是真实阻断，override 不能把它们改成通过。
-    const pendingBlockedFiles = (failure.files || []).filter(file => file.passed !== true).length;
-    const report = { date, overrides: overrides.length, matched, remainingErrors: remaining.length, pendingBlockedFiles, wouldPass: remaining.length === 0 && pendingBlockedFiles === 0 };
+    const errorIssuesOf = file => (file.issues || []).filter(issue => /error/i.test(String(issue.severity || issue.level || '')));
+    const failedFiles = (failure.files || []).filter(file => file.passed !== true);
+    // 真正无法解释的 pending：失败但没有任何 error issue 可被 override。
+    const everOverridden = file => (file.issues || []).some(issue => issue.overridden === true);
+    const pendingBlockedFiles = failedFiles.filter(file => errorIssuesOf(file).length === 0 && !everOverridden(file)).length;
+    // 曾失败但所有 error 均已由严格记录解释的页面，单独计数，供人工复核。
+    const overriddenFailedPages = failedFiles.filter(file => everOverridden(file) && errorIssuesOf(file).length === 0).length;
+    const report = { date, overrides: overrides.length, matched, remainingErrors: remaining.length, pendingBlockedFiles, overriddenFailedPages, wouldPass: remaining.length === 0 && pendingBlockedFiles === 0 };
     if (json) console.log(JSON.stringify(report, null, 2));
     else {
-        console.log(`误报记录：${overrides.length} 条，匹配 ${matched} 条，匹配后剩余 error ${remaining.length} 个，pending/未通过页 ${pendingBlockedFiles} 个。`);
+        console.log(`误报记录：${overrides.length} 条，匹配 ${matched} 条，匹配后剩余 error ${remaining.length} 个，未解释 pending 页 ${pendingBlockedFiles} 个，已被解释的失败页 ${overriddenFailedPages} 个。`);
         console.log(report.wouldPass ? '若人工复核这些记录成立，则该批审查失败项可全部解释为误报（不含 pending 页面）。' : '仍有真实 error 或 pending/未通过页未覆盖，不能仅凭 overrides 放行。');
         console.log('本命令只读；不会修改失败文件或审查凭证。');
     }
