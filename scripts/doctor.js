@@ -31,11 +31,33 @@ const {
     STATE_SCHEMA_VERSION: LLM_POOL_STATE_SCHEMA_VERSION,
     POLICY_VERSION: LLM_POOL_POLICY_VERSION
 } = require('./llm-account-pool.js');
+// 复用 config:check 的集中 .env schema：必填项、模型名、密钥识别与运行时一致的解析。
+const {
+    EXPECTED_MODEL: ENV_SCHEMA_EXPECTED_MODEL,
+    SCHEMA: ENV_SCHEMA,
+    SCHEMA_BY_NAME: ENV_SCHEMA_BY_NAME,
+    parseEnvText: parseEnvTextLikeRuntime,
+    secret: isSecretEnvName
+} = require('./lib/env-schema.js');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ENV_FILE_NAME = '.env';
 const REQUIRED_NODE_RANGE = '>=20.18.1 <21 || >=22.3.0';
-const REQUIRED_MODEL = 'muse-spark-1.3-contributor';
+// 模型名与必填项都由 env-schema 决定，doctor 不再维护第二份清单。
+const REQUIRED_MODEL = ENV_SCHEMA_EXPECTED_MODEL;
+const PRIMARY_REQUIRED_KEYS = Object.freeze(
+    ENV_SCHEMA.filter(item => item.required && item.name.startsWith('PAPER_ANALYZER_')).map(item => item.name)
+);
+const SECONDARY_MODEL_ENV = Object.freeze({
+    model: 'PAPER_ANALYZER_SECONDARY_MODEL',
+    endpoint: 'PAPER_ANALYZER_SECONDARY_ENDPOINT',
+    apiKey: 'PAPER_ANALYZER_SECONDARY_API_KEY'
+});
+for (const name of [...PRIMARY_REQUIRED_KEYS, ...Object.values(SECONDARY_MODEL_ENV)]) {
+    if (!ENV_SCHEMA_BY_NAME.has(name)) {
+        throw new Error(`env-schema 缺少 doctor 依赖的变量定义: ${name}`);
+    }
+}
 const DEFAULT_BLOG_REPO = '~/code/github_repos/audio-paper-digest-blog';
 
 const PYTHON_TIMEOUT_MS = 15000;
@@ -168,7 +190,7 @@ function collectSecretValues(env) {
     for (const [key, rawValue] of Object.entries(env)) {
         const value = typeof rawValue === 'string' ? rawValue.trim() : '';
         if (!value) continue;
-        if (/(API_?KEY|TOKEN|SECRET|PASSWORD)/i.test(key) || /FALLBACK_API_KEYS$/i.test(key)) {
+        if (isSecretEnvName(key) || /FALLBACK_API_KEYS$/i.test(key)) {
             for (const part of value.split(',')) {
                 const candidate = part.trim();
                 if (candidate.length >= 4) secrets.add(candidate);
@@ -397,26 +419,11 @@ function evaluateNodeModules(kind) {
 // ═══════════════════════════════════════════════════════
 
 /**
- * 只读解析 .env：不 chmod、不写回、不修改 process.env。
- * 取值规则与 env-loader 保持一致（后出现的同名键覆盖前面的）。
+ * 只读解析 .env：复用 env-schema 的实现，与 env-loader 运行时语义保持一致。
+ * 不 chmod、不写回、不修改 process.env。
  */
 function parseDotEnvText(raw) {
-    const entries = {};
-    for (const line of String(raw == null ? '' : raw).split(/\r?\n/)) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eq = trimmed.indexOf('=');
-        if (eq <= 0) continue;
-        const key = trimmed.slice(0, eq).trim();
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-        let value = trimmed.slice(eq + 1).trim();
-        if ((value.startsWith('"') && value.endsWith('"'))
-            || (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-        }
-        entries[key] = value;
-    }
-    return entries;
+    return parseEnvTextLikeRuntime(raw);
 }
 
 function readEnvFileReadOnly(envFile) {
@@ -468,7 +475,7 @@ function describeEndpoint(value) {
 }
 
 function evaluatePrimaryModel(env) {
-    const required = ['PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_MODEL', 'PAPER_ANALYZER_ENDPOINT'];
+    const required = PRIMARY_REQUIRED_KEYS;
     const missing = required.filter(key => !hasEnvValue(env, key));
     if (missing.length > 0) {
         return makeCheck('fail', '主模型配置', `缺少 ${missing.join('、')}`,
@@ -489,11 +496,7 @@ function evaluatePrimaryModel(env) {
 }
 
 function evaluateSecondaryModel(env) {
-    const keys = {
-        model: 'PAPER_ANALYZER_SECONDARY_MODEL',
-        endpoint: 'PAPER_ANALYZER_SECONDARY_ENDPOINT',
-        apiKey: 'PAPER_ANALYZER_SECONDARY_API_KEY'
-    };
+    const keys = SECONDARY_MODEL_ENV;
     const present = Object.entries(keys).filter(([, key]) => hasEnvValue(env, key));
     const missingKeys = Object.values(keys).filter(key => !hasEnvValue(env, key));
     if (present.length === 0) {
@@ -1611,6 +1614,8 @@ module.exports = {
     PROJECT_ROOT,
     REQUIRED_NODE_RANGE,
     REQUIRED_MODEL,
+    PRIMARY_REQUIRED_KEYS,
+    SECONDARY_MODEL_ENV,
     DEFAULT_BLOG_REPO,
     DISK_TARGETS,
     USAGE,

@@ -33,12 +33,17 @@ function describe(state, atMs) {
         for (const [accountId, record] of Object.entries(accounts)) {
             const blockedUntil = Number(record && record.blockedUntilMs);
             const blocked = Number.isFinite(blockedUntil) && blockedUntil > atMs;
+            const matchingGroups = [...activeByGroup.entries()].filter(([, group]) => group && group.activeAccountId === accountId);
+            const groupSelected = matchingGroups
+                .map(([, group]) => Number(group.lastSelectedAtMs))
+                .filter(value => Number.isFinite(value) && value > 0);
+            const lastSelected = groupSelected.length ? Math.max(...groupSelected) : null;
             rows.push({
                 account: `账号 ${rows.length + 1}`,
-                status: blocked ? 'quota_blocked' : (record && record.status) || 'eligible',
+                status: blocked ? 'quota_blocked' : (record && record.status === 'quota_blocked' ? 'eligible_after_cooldown' : (record && record.status) || 'eligible'),
                 blockedUntil: blocked ? new Date(blockedUntil).toISOString() : null,
-                lastSelectedAt: record && Number.isFinite(Number(record.lastSelectedAtMs)) ? new Date(Number(record.lastSelectedAtMs)).toISOString() : null,
-                groups: [...activeByGroup.entries()].filter(([, group]) => group && group.activeAccountId === accountId).map(([, group], index) => `组 ${index + 1}`)
+                lastSelectedAt: lastSelected ? new Date(lastSelected).toISOString() : null,
+                groups: matchingGroups.map(([, group], index) => `组 ${index + 1}`)
             });
         }
     }

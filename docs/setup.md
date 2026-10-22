@@ -40,6 +40,9 @@ PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
+# verify:web：站点 posts 根地址与 Pages workflow 所属仓库（可选）
+PAPER_DIGEST_BLOG_URL=https://<owner>.github.io/<repo>/posts
+PAPER_DIGEST_BLOG_REPO_RUN=<owner>/<repo>
 # 可选：历史 ICLR 2026 路线使用的本地官方论文信息与 PDF 根目录
 PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```

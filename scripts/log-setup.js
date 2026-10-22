@@ -270,6 +270,8 @@ function normalizeWriteArgs(chunk, encoding, callback) {
 function setupScriptLogging(scriptPath, options = {}) {
     if (activeLogger) return activeLogger;
 
+    // 测试进程默认不读真实 .env（避免注入真实凭据/chmod）；只有显式 envFile 或 allowInTestProcess 才加载。
+    if (isTestProcess() && !options.allowInTestProcess && !options.envFile) return null;
     // 只有走这个显式的测试/编程接口，才允许指定非默认的 env 文件。
     loadProjectEnv(options.envFile);
     configuredSecrets = environmentSecrets();

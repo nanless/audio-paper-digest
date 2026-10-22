@@ -40,14 +40,22 @@ function validateSpec(spec) {
     }
 }
 
-function findCandidate(attemptsDir, paperId) {
+function findCandidate(attemptsDir, paperId, planRunId = null) {
     const candidates = fs.readdirSync(attemptsDir)
         .filter(name => /^[a-f0-9]{64}\.json$/.test(name))
         .map(name => ({ name, absolutePath: path.join(attemptsDir, name), mtime: fs.statSync(path.join(attemptsDir, name)).mtimeMs }))
         .sort((left, right) => right.mtime - left.mtime);
+    const target = utils.normalizedId({ arxivId: paperId });
     for (const candidate of candidates) {
-        const envelope = repair.readFailedCandidateEnvelope(attemptsDir, null, candidate.absolutePath);
-        if (envelope && String(envelope.envelope.identity.paperId || '').startsWith(paperId)) {
+        let envelope;
+        try {
+            envelope = repair.readFailedCandidateEnvelope(attemptsDir, null, candidate.absolutePath);
+        } catch (_error) {
+            continue; // 无关/损坏旧候选只跳过，不中止整个清单生成。
+        }
+        const candidateId = utils.normalizedId({ arxivId: envelope?.envelope?.identity?.paperId || '' });
+        if (envelope && candidateId === target && envelope.envelope?.identity?.runId
+            && envelope.envelope?.identity?.runId === planRunId && envelope.envelope?.payload?.sourceOnly !== false) {
             return { absolutePath: candidate.absolutePath, ...envelope };
         }
     }
@@ -103,7 +111,7 @@ function main(argv = process.argv.slice(2)) {
         const paper = papers.find(item => utils.normalizedId({ arxivId: item.arxivId || item.paper_id || item.paperId }) === utils.normalizedId({ arxivId: spec.paperId }));
         if (!paper) throw new Error(`当前批次找不到论文：${spec.paperId}`);
         const details = daily.readDailyFreshSource(plan, paper);
-        const found = findCandidate(plan.readerAttemptsDir, spec.paperId);
+        const found = findCandidate(plan.readerAttemptsDir, spec.paperId, plan.runId);
         if (!found) throw new Error(`找不到 ${spec.paperId} 的活动付费候选`);
         const preview = buildSpecPreview({ paper, draft: found.envelope.payload.draft, spec, found, sourceDescriptor: details.freshSourceDescriptor });
         preview.record.runId = plan.runId;

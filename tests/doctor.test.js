@@ -1176,3 +1176,32 @@ test('CLI 沙箱守卫：spawn 时业务前 exit 1，import 时不杀进程', ()
     assert.equal(imported.status, 0);
     assert.equal(imported.stdout, 'imported-ok');
 });
+
+test('doctor 复用 env-schema：模型名/必填项/密钥识别/解析同源', () => {
+    const envSchema = require('../scripts/lib/env-schema.js');
+    assert.equal(doctor.REQUIRED_MODEL, envSchema.EXPECTED_MODEL);
+    assert.deepEqual([...doctor.PRIMARY_REQUIRED_KEYS],
+        envSchema.SCHEMA.filter(item => item.required).map(item => item.name));
+    for (const name of Object.values(doctor.SECONDARY_MODEL_ENV)) {
+        assert.ok(envSchema.SCHEMA_BY_NAME.has(name), name);
+    }
+
+    // 解析必须与 env-schema（进而与 env-loader 运行时语义）完全一致。
+    const sample = [
+        '# comment',
+        'PAPER_ANALYZER_API_KEY="abc"',
+        'PD_FILTER_BATCH_SIZE=3 # inline',
+        'export NOT_SUPPORTED=1'
+    ].join('\n');
+    assert.deepEqual(doctor.parseDotEnvText(sample), envSchema.parseEnvText(sample));
+
+    // 密钥识别也来自 schema：新登记的平台凭据会被脱敏。
+    const secrets = doctor.collectSecretValues({
+        FEISHU_APP_SECRET: 'feishu-secret-value',
+        XIAOHONGSHU_COOKIES: 'xhs-cookie-value',
+        PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor'
+    });
+    assert.ok(secrets.includes('feishu-secret-value'));
+    assert.ok(secrets.includes('xhs-cookie-value'));
+    assert.ok(!secrets.includes('muse-spark-1.3-contributor'));
+});

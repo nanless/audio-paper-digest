@@ -10,7 +10,7 @@ const ENTRIES = Object.freeze([
     { id: 'reader-operator-correction-rejected', label: 'Reader 人工修正被拒', retryable: false, command: 'npm run manifest:new -- --spec SPEC.json', doc: 'docs/reader-explicit-retry.md' },
     { id: 'reader-table-adhesion', label: '表格单元格粘连复写', retryable: false, command: 'npm run table:check -- --draft <FILE>', doc: 'docs/maintenance.md' },
     { id: 'reader-table-header-units', label: '表头单位缺少来源证据', retryable: false, command: 'npm run table:check -- --draft <FILE>', doc: 'docs/maintenance.md' },
-    { id: 'reader-ablation-missing', label: '缺少消融/组件对照', retryable: false, command: 'npm run deep -- --date <DATE>', doc: 'docs/reader-explicit-retry.md' },
+    { id: 'reader-table-ablation-missing', label: '缺少消融/组件对照', retryable: false, command: 'npm run api:reader:refresh -- --all --date <DATE> --concurrency 5 --scoring-and-reader', doc: 'docs/reader-explicit-retry.md' },
     { id: 'blog-repository-dirty', label: '博客仓库有清单外改动', retryable: false, command: 'git -C "$PAPER_DIGEST_BLOG_REPO" status --porcelain', doc: 'docs/maintenance.md' },
     { id: 'paper-lock-busy', label: '论文/运行锁被占用', retryable: true, command: 'npm run locks', doc: 'docs/troubleshooting.md' },
     { id: 'source-sha-mismatch', label: '封存来源 SHA 不一致', retryable: false, command: 'npm run validate:data', doc: 'docs/data-format.md#日更来源的保存与核验' },
@@ -24,25 +24,28 @@ const BY_ID = new Map(ENTRIES.map(entry => [entry.id, entry]));
 
 const PATTERNS = [
     { id: 'config-invalid', regex: /config|配置|missing (?:api|model|endpoint)|缺少 PAPER_ANALYZER/i },
-    { id: 'llm-account-pool', regex: /account.?pool|账号池|gousagelimiterror|insufficient[_\s-]?balance|余额不足/i },
-    { id: 'paper-lock-busy', regex: /lock|锁|busy|held|timeout.*lock/i },
+    { id: 'llm-account-pool', regex: /invalid api key|认证失败|鉴权失败|unauthorized|LLM_ACCOUNT_AUTH_ERROR|gousagelimiterror|insufficient[ _-]?balance|余额不足|账号池/i },
     { id: 'source-sha-mismatch', regex: /sha-?256.*(?:mismatch|不一致)|来源.*(?:sha|哈希).*不一致/i },
     { id: 'blog-repository-dirty', regex: /uncommitted|未提交|清单外.*改动|dirty/i },
-    { id: 'reader-table-adhesion', regex: /粘连|复写|duplicat/i },
+    { id: 'reader-table-adhesion', regex: /(?:table|cell|表格|单元格).*(?:粘连|复写|duplicate)|(?:粘连|复写).*(?:table|cell|表格|单元格)/i },
     { id: 'reader-table-header-units', regex: /列头单位|header unit|单位缺少.*证据/i },
-    { id: 'reader-ablation-missing', regex: /消融|ablation/i },
+    { id: 'reader-table-ablation-missing', regex: /消融|ablation/i },
     { id: 'reader-operator-correction-rejected', regex: /操作员|operator|人工修正.*拒绝/i },
     { id: 'reader-repair-no-progress', regex: /无进展|no.?progress/i },
     { id: 'official-oai-rss-stale', regex: /oai|rss|公告未生成|pubdate/i },
+    { id: 'blog-review-receipt-missing', regex: /审查凭证|review receipt|缺少凭证/i },
+    { id: 'blog-lock-busy', regex: /共享博客.*锁|blog.*lock|博客仓库.*锁/i },
+    { id: 'paper-lock-busy', regex: /\block\b|锁.*(?:占用|超时)|lock timeout|paper lock/i },
     { id: 'arxiv-rate-limit', regex: /arxiv.*(?:429|rate|限流)|429.*arxiv/i },
-    { id: 'upstream-rate-limit', regex: /429|rate.?limit|too many requests/i },
-    { id: 'generation-snapshot-stale', regex: /快照|snapshot/i },
+    { id: 'upstream-rate-limit', regex: /(?<![\p{L}\p{N}_])(?:HTTP\s*)?429(?:$|[^\p{L}\p{N}_])|rate.?limit|too many requests/i },
     { id: 'generation-snapshot-stale', regex: /清单.*(?:删除|状态|不一致)|manifest.*(?:delete|stale|inconsistent)|生成快照|snapshot/i },
     { id: 'blog-push-guard', regex: /推送|push|审查凭证|review receipt|hugo|preflight|渲染失败|视觉规划/i }
 ];
 
 function classify(text) {
     const value = String(text || '');
+    const codeToken = value.trim().split(/\s+/)[0].toLowerCase().replace(/_/g, '-');
+    if (BY_ID.has(codeToken)) return BY_ID.get(codeToken);
     for (const rule of PATTERNS) {
         if (rule.regex.test(value)) return BY_ID.get(rule.id);
     }

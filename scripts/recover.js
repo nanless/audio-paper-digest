@@ -44,8 +44,8 @@ function collectFailures(date) {
         }
         if (paper.analysisFactReviewObligation) {
             failures.push({ source: 'analysis', paperId: (paper.arxivId || paper.paper_id || '').replace(/v\d+$/, ''),
-                code: 'reader-repair-no-progress', label: '事实反馈义务未完成', retryable: false,
-                command: `npm run recover -- --date ${date}`, doc: 'docs/reader-explicit-retry.md', message: '存在 analysisFactReviewObligation，须先完成当前事实反馈。' });
+                code: 'fact-review-obligation', label: '事实反馈义务未完成', retryable: false,
+                command: 'npm run batch -- --fact-feedback-file <FILE>', doc: 'docs/reader-explicit-retry.md', message: '存在 analysisFactReviewObligation，须先完成当前事实反馈。' });
         }
     }
     const review = readJson(path.join(CURRENT, `blog-review-failure-${date}.json`));
@@ -138,14 +138,16 @@ function main(argv = process.argv.slice(2)) {
     else console.log(render(date, failures, groups));
     if (!options.execute) return options.strict && failures.length ? 1 : 0;
     if (!options.yes) throw new Error('--execute 需要同时传 --yes（确认会调用真实入口）');
+    let skipped = 0;
     for (const group of groups) {
-        if (!group.command.startsWith('npm run ')) { console.log(`\n跳过非 npm 命令（请手工执行）：${group.command}`); continue; }
+        if (!group.command.startsWith('npm run ')) { skipped += 1; console.log(`\n跳过非 npm 命令（请手工执行）：${group.command}`); continue; }
         const args = buildExecutionArgs(group.command, date);
-        if (!args) { console.log(`\n需手工执行（含占位符或自指）：${group.command}`); continue; }
+        if (!args) { skipped += 1; console.log(`\n需手工执行（含占位符或自指）：${group.command}`); continue; }
         console.log(`\n执行：npm ${args.join(' ')}（来自 ${group.code}）`);
         const result = spawnSync('npm', args, { stdio: 'inherit', cwd: ROOT });
         if (result.status !== 0) return result.status || 1;
     }
+    if (skipped) { console.log(`\n共 ${skipped} 个入口需要手工执行，未视为已恢复。`); return options.strict ? 1 : 2; }
     return 0;
 }
 
