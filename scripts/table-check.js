@@ -138,7 +138,7 @@ function tablesOfText(text) {
         if (!isCaptionLine(line) && hasUnescapedPipe(line) && index + 1 < lines.length) {
             const delimiter = lines[index + 1];
             const headerCells = splitRowCells(line);
-            if (headerCells.length >= 2
+            if (headerCells.length >= 1
                 && headerCells.some(cell => cell !== '')
                 && isSeparatorRow(delimiter)
                 && splitRowCells(delimiter).length === headerCells.length) {
@@ -205,8 +205,9 @@ function checkTable(lines) {
         cells.forEach((cell, column) => {
             const glued = findGluedDuplicate(cell);
             if (glued) {
+                const numericVersionLike = /^v?\d+\.\d+/.test(glued);
                 issues.push({
-                    severity: 'error',
+                    severity: numericVersionLike ? 'warn' : 'error',
                     code: 'table-glued-duplicate',
                     message: `第 ${rowIndex + 2} 行第 ${column + 1} 格疑似粘连复写：${glued}`,
                     howToFix: '核对封存原表的完整单元格值；不要只按重复形状删数字。'
