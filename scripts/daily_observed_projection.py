@@ -7,6 +7,7 @@ import ast
 import hashlib
 import json
 import sys
+import urllib.parse
 from pathlib import Path
 from types import CodeType, FunctionType, ModuleType
 
@@ -20,6 +21,7 @@ import blog_entry_loader
 
 
 CONTRACT = 'daily-observed-static-page-set-v1'
+TARGET_CONTRACT = 'daily-reviewed-primary-targets-v1'
 PROFILE = 'daily-static-html-projection-v1'
 VERSION = 1
 _HERE = Path(__file__).resolve().parent
@@ -39,6 +41,14 @@ _UNKNOWN = (
     'Owner startup/source/code observations do not establish a full Python execution closure',
     'Startup gaps, import/runtime dependencies and before/after ABA are not excluded',
 )
+_TARGET_UNKNOWN = (
+    'Primary targets cover only the original reviewed nondeleted Markdown scope',
+    'Deleted source paths do not establish prior URLs, aliases or redirect obligations',
+)
+_TARGET_TEXT_BYTES = 8192
+_TARGET_MAX_FILES = 10000
+_URL_UNRESERVED = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
+_URL_LITERAL_PATH = _URL_UNRESERVED + "/:@!$&'()*+,;="
 
 
 def _fail(code, reason):
@@ -229,8 +239,10 @@ def _loaded_code_sha():
 
 
 def _policy_sha():
-    return _json_sha(_frozen((CONTRACT, PROFILE, VERSION, _LIMITS, _IMPORTS,
+    return _json_sha(_frozen((CONTRACT, TARGET_CONTRACT, PROFILE, VERSION, _LIMITS, _IMPORTS,
                               _IMPORTED_CALLABLES, _NOT_CHECKED, _UNKNOWN,
+                              _TARGET_UNKNOWN, _TARGET_TEXT_BYTES, _TARGET_MAX_FILES,
+                              _URL_UNRESERVED, _URL_LITERAL_PATH,
                               str(_HERE), str(_OWNER_FILE), str(_PROFILE_FILE))))
 
 
@@ -372,20 +384,185 @@ def _page_summary(page, projection):
             'projectionPayloadSha256': projection['payloadSha256'], 'stats': projection['stats']}
 
 
+def _target_text(value):
+    if _utf8_size(value) > _TARGET_TEXT_BYTES:
+        _fail('limit_exceeded', 'target_identity_bytes')
+    return value
+
+
+def _target_url_key(url, policy):
+    """Collision-only identity: retain reserved token spelling and observed URL."""
+    _target_text(url)
+    if type(policy) is not dict or set(policy) != {'origin', 'basePath'}:
+        _fail('invalid', 'target_site_policy')
+    for value in policy.values():
+        _target_text(value)
+    capture.validate_site_url(url, policy)
+    parsed = urllib.parse.urlsplit(url)
+    origin = urllib.parse.urlsplit(policy['origin'])
+    port = parsed.port if parsed.port is not None else 443
+    origin_port = origin.port if origin.port is not None else 443
+    if (parsed.scheme.lower(), parsed.hostname.lower(), port) != (
+            origin.scheme.lower(), origin.hostname.lower(), origin_port):
+        _fail('invalid', 'target_origin')
+    hostname = parsed.hostname
+    if not hostname or not hostname.isascii():
+        _fail('unsupported', 'url_host')
+    path = _target_text(parsed.path)
+    # At most 8192 input bytes and 3x that many key bytes; no arbitrary URL input
+    # reaches decoding or per-token allocation before this reservation bound.
+    raw = path.encode('utf-8')
+    decoded = bytearray()
+    parts = []
+    index = 0
+    while index < len(raw):
+        value = raw[index]
+        if value == 37:
+            # The original site policy already rejected malformed escapes and
+            # encoded percent/dot/separators. Never interpret a second escape.
+            value = int(raw[index + 1:index + 3], 16)
+            decoded.append(value)
+            parts.append(chr(value) if value < 128 and chr(value) in _URL_UNRESERVED
+                         else '%' + format(value, '02X'))
+            index += 3
+        else:
+            decoded.append(value)
+            if value < 128:
+                if chr(value) not in _URL_LITERAL_PATH:
+                    _fail('unsupported', 'url_path_shape')
+                parts.append(chr(value))
+            else:
+                parts.append('%' + format(value, '02X'))
+            index += 1
+    text = decoded.decode('utf-8', errors='strict')
+    if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in text):
+        _fail('invalid', 'url_control')
+    return ('https', hostname.lower(), port, ''.join(parts))
+
+
+def _targets_metadata(expected, manifest, pages, *, result_limit):
+    """Bound mechanical facts after normal/ref validation, never grant scope."""
+    if type(result_limit) is not int or result_limit < 1:
+        _fail('invalid', 'target_result_limit')
+    used = 32768
+    def charge(size):
+        nonlocal used
+        if size > result_limit - used:
+            _fail('limit_exceeded', 'target_result_bytes')
+        used += size
+    charge(0)
+    # Include all new binding variables, even a valid but unusually long ISO
+    # timestamp. This check belongs exclusively to the new targets branch.
+    def reserve_variables(value):
+        if type(value) is str:
+            charge(8 + 6 * _utf8_size(_target_text(value)))
+        elif type(value) is dict:
+            for key, part in value.items():
+                _target_text(key)
+                reserve_variables(part)
+        elif type(value) in (list, tuple):
+            for part in value:
+                reserve_variables(part)
+    for key, value in expected.items():
+        if key != 'files':
+            reserve_variables(value)
+    files = expected['files']
+    if type(files) is not list or not files or len(files) > _TARGET_MAX_FILES:
+        _fail('limit_exceeded', 'target_reviewed_files')
+    if (sorted(manifest.get('reviewedFiles', []), key=lambda row: row['path'])
+            != sorted(files, key=lambda row: row['path'])
+            or sorted(manifest.get('pages', []), key=lambda row: row['sourcePath']) != pages):
+        _fail('invalid', 'target_manifest_binding')
+    policy = manifest.get('sitePolicy')
+    if type(policy) is not dict or set(policy) != {'origin', 'basePath'}:
+        _fail('invalid', 'target_site_policy')
+    reserve_variables(policy)
+    deleted = []
+    markdown = []
+    seen = set()
+    for row in files:
+        if type(row) is not dict or set(row) != {'path', 'deleted', 'sha256'} or type(row['deleted']) is not bool:
+            _fail('invalid', 'target_reviewed_file')
+        path = _target_text(row['path'])
+        if path in seen:
+            _fail('invalid', 'target_reviewed_file')
+        seen.add(path)
+        if row['deleted']:
+            if row['sha256'] is not None:
+                _fail('invalid', 'target_reviewed_file')
+            charge(16 + 6 * _utf8_size(path))
+            deleted.append(path)
+        elif path.endswith('.md'):
+            markdown.append({'path': path, 'sha256': row['sha256']})
+    deleted.sort()
+    markdown.sort(key=lambda row: row['path'])
+    if (not pages or [row['path'] for row in markdown] != [page['sourcePath'] for page in pages]
+            or [row['sha256'] for row in markdown] != [page['sourceSha256'] for page in pages]):
+        _fail('invalid', 'target_complete_markdown_set')
+    keys, sources, canonicals, outputs = set(), set(), set(), set()
+    extras = []
+    for page in pages:
+        for value in (page['sourcePath'], page['permalink'], page['relPermalink'], page['html']['actualOutputPath']):
+            _target_text(value)
+        key = _target_url_key(page['permalink'], policy)
+        if key in keys:
+            _fail('invalid', 'ambiguous_url')
+        keys.add(key)
+        for seen_set, value in ((sources, page['sourcePath']), (canonicals, page['permalink']),
+                                (outputs, page['html']['actualOutputPath'])):
+            if value in seen_set:
+                _fail('invalid', 'duplicate_page_identity')
+            seen_set.add(value)
+        if urllib.parse.urlsplit(page['permalink']).path != page['relPermalink']:
+            _fail('invalid', 'target_relative_permalink')
+        record = page['record']
+        if type(record['bytes']) is not int or record['bytes'] < 0:
+            _fail('invalid', 'target_map_bytes')
+        _target_text(record['sha256'])
+        charge(512 + 6 * _utf8_size(page['relPermalink']))
+        extras.append({'relPermalink': page['relPermalink'],
+                       'mapSha256': record['sha256'], 'mapBytes': record['bytes']})
+    return {'reviewedSitePolicy': dict(policy),
+            'reviewedFileSetSha256': _json_sha(sorted(files, key=lambda row: row['path'])),
+            'reviewedFileCount': len(files), 'primarySourceSetSha256': _json_sha(markdown),
+            'changes': {'deletedPaths': deleted, 'deletedPathSetSha256': _json_sha(deleted),
+                        'deletedUrls': None, 'deletionUrlCoverage': 'not_recorded', 'aliasCoverage': 'not_checked'},
+            'pageExtras': extras, 'reservation': used}
+
+
+def _targets_result(projected, metadata, reviewed_at):
+    result = {'contract': TARGET_CONTRACT, 'version': VERSION, 'status': 'reviewed_targets_observed',
+              'selector': projected['selector'], 'normalBinding': {**projected['normalBinding'], 'reviewedAt': reviewed_at},
+              'observationRef': projected['observationRef'], 'profile': projected['profile'],
+              'implementationObservation': projected['implementationObservation'],
+              'primaryPages': [dict(page, **extra) for page, extra in zip(projected['pages'], metadata['pageExtras'])],
+              **{key: metadata[key] for key in ('reviewedSitePolicy', 'reviewedFileSetSha256',
+                  'reviewedFileCount', 'primarySourceSetSha256', 'changes')},
+              'inputBinding': projected['inputBinding'], 'fullInputSnapshot': projected['fullInputSnapshot'],
+              'observationCoverage': projected['observationCoverage'],
+              'coverage': {**projected['coverage'], 'publicationGit': 'not_checked'},
+              'unknownInputs': projected['unknownInputs'] + list(_TARGET_UNKNOWN)}
+    target_keys = ('contract', 'version', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
+                   'reviewedFileCount', 'primarySourceSetSha256', 'primaryPages', 'changes', 'profile', 'coverage')
+    result['targetsSha256'] = _json_sha({key: result[key] for key in target_keys}, dict(_LIMITS)['result'])
+    result['recordSha256'] = _json_sha(result, dict(_LIMITS)['result'])
+    return _safe_result(result)
+
+
 def _safe_result(value):
     _json_size(value, dict(_LIMITS)['result'])
     return value
 
 
-def _issue(status, code, reason, source=None):
+def _issue(status, code, reason, source=None, *, contract=CONTRACT):
     issue = {'code': code, 'reason': reason}
     if source is not None:
         issue['sourcePath'] = source
-    return _safe_result({'contract': CONTRACT, 'version': VERSION, 'status': status, 'issues': [issue]})
+    return _safe_result({'contract': contract, 'version': VERSION, 'status': status, 'issues': [issue]})
 
 
-def _not_recorded():
-    return {'contract': CONTRACT, 'version': VERSION, 'status': 'not_recorded',
+def _not_recorded(*, contract=CONTRACT):
+    return {'contract': contract, 'version': VERSION, 'status': 'not_recorded',
             'normalQualification': 'not_checked'}
 
 
@@ -406,16 +583,17 @@ def _metadata_reservation(observed):
     return total
 
 
-def _read_locked(owner, date, include_id):
+def _read_locked(owner, date, include_id, *, targets=False):
+    contract = TARGET_CONTRACT if targets else CONTRACT
     receipt_path = owner.review_receipt_path(date)
     try:
         receipt_path.lstat()
     except FileNotFoundError:
-        return _not_recorded()
+        return _not_recorded(contract=contract)
     receipt_raw = _read(receipt_path)
     receipt = _object(receipt_raw)
     if 'renderObservation' not in receipt:
-        return _not_recorded()
+        return _not_recorded(contract=contract)
     generation_path = owner.generation_manifest_path(date)
     generation_raw = _read(generation_path)
     paths, actual_receipt_path = owner.load_verified_review_receipt(date)
@@ -449,6 +627,11 @@ def _read_locked(owner, date, include_id):
             _fail('invalid', 'duplicate_page_identity')
     if len({page['html']['actualOutputPath'] for page in pages}) != len(pages):
         _fail('invalid', 'duplicate_output_path')
+    target_metadata = None
+    if targets:
+        target_metadata = _targets_metadata(expected, _object(store_raw), pages,
+                                            result_limit=limits['result'] - result_used)
+        result_used += target_metadata['reservation']
     total = 0
     for page in pages:
         for field in (page['sourcePath'], page['permalink'], page['html']['actualOutputPath']):
@@ -481,7 +664,7 @@ def _read_locked(owner, date, include_id):
                                                   limits=module.ProjectionLimits(**kwargs))
         except module.ProjectionError as exc:
             return _issue('unsupported' if exc.code in ('unsupported_html', 'unsupported_math') else 'blocked',
-                          exc.code, exc.reason, page['sourcePath'])
+                          exc.code, exc.reason, page['sourcePath'], contract=contract)
         stats = projected['stats']
         for budget, stat in (('nodes', 'nodes'), ('events', 'events'), ('refs', 'refs'),
                              ('projection', 'outputBytes')):
@@ -530,26 +713,39 @@ def _read_locked(owner, date, include_id):
               'coverage': {'completeForReviewedGenerationMarkdown': True,
                            'staticProjection': 'observed', **dict.fromkeys(_NOT_CHECKED, 'not_checked')},
               'unknownInputs': observed['unknownInputs'] + list(_UNKNOWN)}
+    if targets:
+        return _targets_result(result, target_metadata, receipt['reviewedAt'])
     result['recordSha256'] = _json_sha(result, limits['result'])
     return _safe_result(result)
 
 
-def read_daily_observed_projection(date_str, *, include_id=None):
-    """Read one explicit normal scope; unavailable JSON never authorizes publication."""
+def _read_selected(date_str, include_id, *, targets):
+    contract = TARGET_CONTRACT if targets else CONTRACT
     try:
         owner = blog_entry_loader.load_publish_to_blog()
         date = owner.validate_publish_date(date_str)
         with owner.publication_scope(include_id) as normalized:
             with owner.blog_publication_lock(date):
-                return _read_locked(owner, date, normalized)
+                return _read_locked(owner, date, normalized, targets=targets)
     except ValueError as exc:
         if len(exc.args) == 2 and exc.args[0] in ('invalid', 'stale', 'limit_exceeded',
-                                                'unsupported_implementation'):
-            return _issue('blocked', exc.args[0], exc.args[1])
-        return _issue('blocked', 'normal_gate_failed', 'normal_or_argument_validation')
+                                                'unsupported_implementation', 'unsupported'):
+            status = 'unsupported' if targets and exc.args[0] == 'unsupported' else 'blocked'
+            return _issue(status, exc.args[0], exc.args[1], contract=contract)
+        return _issue('blocked', 'normal_gate_failed', 'normal_or_argument_validation', contract=contract)
     except Exception:
         # Normal owner exceptions may carry private source paths/content. Do not echo them.
-        return _issue('blocked', 'normal_gate_failed', 'normal_or_storage_validation')
+        return _issue('blocked', 'normal_gate_failed', 'normal_or_storage_validation', contract=contract)
+
+
+def read_daily_observed_projection(date_str, *, include_id=None):
+    """Read one explicit normal scope; unavailable JSON never authorizes publication."""
+    return _read_selected(date_str, include_id, targets=False)
+
+
+def read_daily_reviewed_targets(date_str, *, include_id=None):
+    """Observe original primary targets; returned JSON is never importable proof."""
+    return _read_selected(date_str, include_id, targets=True)
 
 
 _FUNCTIONS = _function_names()
