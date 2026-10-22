@@ -17,7 +17,7 @@ function main(argv = process.argv.slice(2)) {
         else if (value === '--file') file = path.resolve(argv[++index] || '');
         else if (value === '--json') json = true;
         else if (value === '--failure-file') failureFileOption = path.resolve(argv[++index] || '');
-        else if (value === '--help') { console.log('用法: node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json [--json]'); return 0; }
+        else if (value === '--help') { if (json) console.log(JSON.stringify({ usage: 'node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json [--json]' })); else console.log('用法: node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json [--json]'); return 0; }
         else throw new Error(`未知参数：${value}`);
     }
     if (!date || !file) throw new Error('需要 --date 与 --file');
@@ -33,11 +33,13 @@ function main(argv = process.argv.slice(2)) {
         ...(failure.files || []).flatMap(item => (item.issues || [])),
         ...(failure.issues || [])
     ].filter(issue => /error/i.test(String(issue.severity || issue.level || '')));
-    const report = { date, overrides: overrides.length, matched, remainingErrors: remaining.length, wouldPass: remaining.length === 0 };
+    // passed:false 的页面（pending/transient）也是真实阻断，override 不能把它们改成通过。
+    const pendingBlockedFiles = (failure.files || []).filter(file => file.passed !== true).length;
+    const report = { date, overrides: overrides.length, matched, remainingErrors: remaining.length, pendingBlockedFiles, wouldPass: remaining.length === 0 && pendingBlockedFiles === 0 };
     if (json) console.log(JSON.stringify(report, null, 2));
     else {
-        console.log(`误报记录：${overrides.length} 条，匹配 ${matched} 条，匹配后剩余 error ${remaining.length} 个。`);
-        console.log(report.wouldPass ? '若人工复核这些记录成立，则该批审查失败项可全部解释为误报。' : '仍有真实 error 未覆盖，不能仅凭 overrides 放行。');
+        console.log(`误报记录：${overrides.length} 条，匹配 ${matched} 条，匹配后剩余 error ${remaining.length} 个，pending/未通过页 ${pendingBlockedFiles} 个。`);
+        console.log(report.wouldPass ? '若人工复核这些记录成立，则该批审查失败项可全部解释为误报（不含 pending 页面）。' : '仍有真实 error 或 pending/未通过页未覆盖，不能仅凭 overrides 放行。');
         console.log('本命令只读；不会修改失败文件或审查凭证。');
     }
     // 仅在全部 error 都被严格记录覆盖时返回 0，可作为门禁的只读预检。
@@ -47,5 +49,5 @@ function main(argv = process.argv.slice(2)) {
 module.exports = { main };
 
 if (require.main === module) {
-    try { process.exitCode = main(); } catch (error) { console.error(`[review-overrides] ${error.message}`); process.exitCode = 1; }
+    try { process.exitCode = main(); } catch (error) { console.error(`[review-overrides] ${error.message}`); process.exitCode = 2; }
 }

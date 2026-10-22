@@ -420,7 +420,7 @@ npm run test:compat
 | `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
 | `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核验汇总页/单篇 HTTP 200 与标题，写 data/current/web-verification-<date>.json；`--deploy` 查 Pages workflow。 |
 | `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印推送后收尾清单（状态、网页核验、视觉准备/豁免），不调用图像 API、不自动豁免。 |
-| `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json` 只读核对误报记录（schema/页面 SHA/逐字 claim），报告匹配与剩余 error；仅全部 error 被严格记录覆盖时返回 0，不修改审查结果。 |
+| `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json` 只读核对误报记录（schema/页面 SHA/逐字 claim），报告匹配与剩余 error；仅全部 error 被严格记录覆盖且无 pending 页时返回 0，执行/参数错误返回 2；不修改审查结果。 |
 | `storage-report.js` | Node 入口：`npm run storage:report [--advice-only]` 打印“必须保留/可压缩/可删”建议，并只读运行 storage:status；不删除。 |
 | `locks.js` | Node 入口：`npm run locks` 只读列出目录/文件运行锁（含 `.analysis-runs`、`conference-processes` 嵌套锁）的持有者/时间/心跳，`--recover` 只预览疑似陈旧锁，不删除。 |
 | `docs-consistency.js` | Node 入口：`npm run docs:check` 检查文档中 `npm run <script>` 是否都在 package.json，防止文档漂移。 |

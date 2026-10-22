@@ -116,7 +116,6 @@ async function main(argv = process.argv.slice(2)) {
     if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--allow-degraded] [--json]'); return options.help ? 0 : 2; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) throw new Error('--date 必须是 YYYY-MM-DD');
     let deploy = options.deploy ? deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository }) : null;
-    const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs, deploy });
     if (options.deploy && options.wait) {
         const waited = await waitForDeploy(options.deploy, {
             spawnSync: options.spawnSync, repository: options.repository,
@@ -125,6 +124,7 @@ async function main(argv = process.argv.slice(2)) {
         deploy = waited.deploy;
         if (!options.json) for (const snapshot of waited.snapshots.slice(1)) console.log(`[verify-web] 部署状态：${snapshot.available ? `${snapshot.status} ${snapshot.conclusion || ''}` : snapshot.message}`);
     }
+    const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs, deploy });
     if (options.json) console.log(JSON.stringify({ ...summary, deploy }, null, 2));
     else {
         for (const result of summary.results) {

@@ -31,7 +31,7 @@ function applyOverrides(failure, overrides) {
     const applyToIssues = (issues, file) => (Array.isArray(issues) ? issues : []).map(issue => {
         const text = String(issue.description || issue.message || issue.issue || '').trim();
         const entry = entries.find(item => item.claim.trim() === text
-            && (!file || (item.path === file.path && item.pageSha256 === file.sha256)));
+            && (file ? (item.path === file.path && item.pageSha256 === file.sha256) : item.path === 'batch'));
         if (!entry) return issue;
         matched.add(entry);
         return { ...issue, severity: 'warn', overridden: true, overrideReviewer: entry.reviewer };

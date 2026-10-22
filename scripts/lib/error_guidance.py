@@ -750,6 +750,8 @@ def write_review_help(failure_path, help_path):
         payload = json.loads(source.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return None
+    if not isinstance(payload, dict):
+        return None
     entries = []
     for file in payload.get('files') or []:
         for issue in file.get('issues') or []:
@@ -780,12 +782,18 @@ def write_review_help(failure_path, help_path):
         })
     target = Path(help_path)
     if not entries:
+        try:
+            if target.is_file() and not target.is_symlink():
+                target.unlink()
+        except OSError:
+            pass
         return entries
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.is_symlink():
         raise OSError('blog review help 目标不能是符号链接')
     payload_text = json.dumps({'contract': 'blog-review-help-v1', 'entries': entries}, ensure_ascii=False, indent=2)
-    temp = target.with_name(f'{target.name}.tmp.{os.getpid()}')
+    import uuid
+    temp = target.with_name(f'{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}')
     try:
         temp.write_text(payload_text, encoding='utf-8')
         try:
