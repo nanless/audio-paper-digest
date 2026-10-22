@@ -374,6 +374,7 @@ npm run test:compat
 | `lib/prompt-rendering-contract.js` | Node 库：识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
 | `lib/prompt-text-versions.js` | Node 库：登记每个分析阶段当前使用的提示词正文路径和版本标识。导出当前 18 份正文名单；旧记录按自己声明的版本选择原路径，通过 Git 证据读取器重新核验，未声明版本时按 v1 身份读取，未知版本直接报错。 |
 | `prompt_evidence.py` | Python旧凭证严格读取本地Git原始Prompt物件，当前模板必须来自工作树。 |
+| `local_git_object.py` | Python 内部库：用固定 Git、参数和隔离环境有界读取一个本地 commit/tree/blob，核类型、尺寸、原始字节及 Git OID；禁止自动补抓和替换对象，不修改仓库对象、索引或引用。普通结果不证明完整树、删除、提交差异或发布资格。 |
 
 ### 页面生成、审查与发布
 
