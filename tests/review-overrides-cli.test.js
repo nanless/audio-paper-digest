@@ -22,10 +22,17 @@ test('review-overrides-cli 报告匹配与剩余 error', () => {
     const logs = [];
     const original = console.log;
     console.log = line => logs.push(String(line));
-    try { assert.strictEqual(cli.main(['--date', '2099-01-01', '--file', overrideFile, '--failure-file', failure, '--json']), 0); } finally { console.log = original; }
+    try { assert.strictEqual(cli.main(['--date', '2099-01-01', '--file', overrideFile, '--failure-file', failure, '--json']), 1); } finally { console.log = original; }
     const report = JSON.parse(logs.join('\n'));
     assert.strictEqual(report.matched, 1);
     assert.strictEqual(report.remainingErrors, 1);
     assert.strictEqual(report.wouldPass, false);
+    // 全部 error 被覆盖时返回 0
+    fs.writeFileSync(failure, JSON.stringify({ files: [{ path: 'content/posts/a.md', sha256: 'a'.repeat(64), issues: [
+        { severity: 'error', description: '某句 与像素冲突' }
+    ] }] }));
+    logs.length = 0;
+    console.log = line => logs.push(String(line));
+    try { assert.strictEqual(cli.main(['--date', '2099-01-01', '--file', overrideFile, '--failure-file', failure, '--json']), 0); } finally { console.log = original; }
     fs.rmSync(dir, { recursive: true, force: true });
 });

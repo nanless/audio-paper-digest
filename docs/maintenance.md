@@ -182,7 +182,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 - `npm run blog:push -- --date DATE --dry-run`：只列出审查凭证允许的精确文件清单，不 commit/push。
 - `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态/标题并写 `data/current/web-verification-<date>.json`；`--deploy` 查询对应提交的 Pages workflow；`--wait` 最多等待 120 秒直到 completed，无 gh/进行中默认判失败，`--allow-degraded` 可显式放宽。
-- `npm run review:overrides -- --date DATE --file OVERRIDES.json`：只读核对误报记录，验证 schema、页面 SHA 与逐字 claim，报告匹配数与剩余真实 error；不修改失败文件/审查凭证，也不自动放行。
+- `npm run review:overrides -- --date DATE --file OVERRIDES.json`：只读核对误报记录，验证 schema、页面 SHA 与逐字 claim，报告匹配数与剩余真实 error；不修改失败文件/审查凭证，也不自动放行；剩余真实 error>0 时命令返回非零，可作为只读门禁预检。
 - `npm run publish:finish -- --date DATE`：打印推送后收尾清单（digest:status、网页核验、视觉 prepare/豁免），不调用图像 API、不自动登记豁免。
 
 ## 锁视图与文档一致性

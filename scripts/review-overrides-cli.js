@@ -40,7 +40,8 @@ function main(argv = process.argv.slice(2)) {
         console.log(report.wouldPass ? '若人工复核这些记录成立，则该批审查失败项可全部解释为误报。' : '仍有真实 error 未覆盖，不能仅凭 overrides 放行。');
         console.log('本命令只读；不会修改失败文件或审查凭证。');
     }
-    return 0;
+    // 仅在全部 error 都被严格记录覆盖时返回 0，可作为门禁的只读预检。
+    return report.wouldPass ? 0 : 1;
 }
 
 module.exports = { main };
