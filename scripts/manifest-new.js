@@ -54,8 +54,9 @@ function findCandidate(attemptsDir, paperId, planRunId = null) {
             continue; // 无关/损坏旧候选只跳过，不中止整个清单生成。
         }
         const candidateId = utils.normalizedId({ arxivId: envelope?.envelope?.identity?.paperId || '' });
-        if (envelope && candidateId === target && envelope.envelope?.identity?.runId
-            && envelope.envelope?.identity?.runId === planRunId && envelope.envelope?.payload?.sourceOnly !== false) {
+        if (envelope && candidateId === target && envelope.envelope?.identity?.freshAnalysis?.runId
+            && envelope.envelope?.identity?.freshAnalysis?.runId === planRunId
+            && envelope.envelope?.identity?.freshAnalysis?.sourceOnly === true) {
             return { absolutePath: candidate.absolutePath, ...envelope };
         }
     }
@@ -135,6 +136,10 @@ function main(argv = process.argv.slice(2)) {
         const missing = failed.filter(id => !covered.includes(id));
         const extra = covered.filter(id => !failed.includes(id));
         throw new Error(`--write 必须覆盖当前完整失败集（缺少 ${missing.join(', ') || '无'}；多余 ${extra.join(', ') || '无'}）`);
+    }
+    if (covered.length > 10) {
+        const limit = correction.largeBatchCorrectionLimit(plan, papers);
+        if (covered.length > limit) throw new Error(`失败集 ${covered.length} 篇超过本批人工修正上限 ${limit} 篇`);
     }
     const outDir = path.join(ROOT, 'data', 'runtime', `operator-corrections-${plan.batchDate.replace(/-/g, '')}-${crypto.randomUUID()}`);
     fs.mkdirSync(outDir, { recursive: false, mode: 0o700 });

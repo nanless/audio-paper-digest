@@ -550,10 +550,14 @@ function evaluateCredentialIsolation(env) {
     const primary = credentialPoolValues(env, PRIMARY_POOL_ENV_KEYS);
     const secondary = new Set(credentialPoolValues(env, SECONDARY_POOL_ENV_KEYS));
     const shared = [...new Set(primary.filter(value => secondary.has(value)))];
+    const samePool = primary.length > 0 && primary.length === secondary.size && shared.length === primary.length;
+    if (samePool) {
+        return makeCheck('ok', '凭据隔离', '主/副模型使用同一组 key（同一服务单池，按等权轮转）');
+    }
     if (shared.length > 0) {
         return makeCheck('warn', '凭据隔离',
-            `生产池与副模型池有 ${shared.length} 个相同的 key 值，可能互相消耗额度`,
-            '为副模型单独配置 key；本检查只比较值，不显示 key');
+            `生产池与副模型池有 ${shared.length} 个部分重叠的 key 值，可能互相消耗额度`,
+            '建议为独立服务/工具配置不同 key；本检查只比较值，不显示 key');
     }
     return makeCheck('ok', '凭据隔离', '生产池与副模型池没有发现相同的 key 值');
 }

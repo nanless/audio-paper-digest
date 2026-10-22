@@ -237,12 +237,12 @@ test('副模型配置：缺失单模型 warn、不完整 warn、不符 fail、�
     assert.equal(doctor.evaluateSecondaryModel(envWith()).ok, 'ok');
 });
 
-test('凭据隔离：发现主池与副池共用同一 key 时 warn 且不输出 key/值', () => {
+test('凭据隔离：主副池部分重叠时 warn 且不输出 key/值', () => {
     const shared = doctor.evaluateCredentialIsolation(envWith({
         PAPER_ANALYZER_FALLBACK_API_KEYS: 'sk-test-secondary-5678,sk-other-9999'
     }));
     assert.equal(shared.ok, 'warn');
-    assert.match(shared.detail, /1 个相同的 key 值/);
+    assert.match(shared.detail, /1 个部分重叠的 key 值/);
     assert.match(shared.detail, /互相消耗额度/);
     assert.ok(!shared.detail.includes('sk-test-secondary-5678'), '不得输出共用值');
     assert.ok(!shared.hint.includes('sk-test-secondary-5678'));
@@ -1064,7 +1064,7 @@ test('runDoctor：仅在主副池共用 key 时增加凭据隔离 warn 行', asy
     const isolation = byLabel(shared.checks, '凭据隔离');
     assert.ok(isolation, '共用 key 时应出现凭据隔离行');
     assert.equal(isolation.ok, 'warn');
-    assert.match(isolation.detail, /相同的 key 值/);
+    assert.match(isolation.detail, /部分重叠的 key 值/);
     const serialized = JSON.stringify(shared.checks);
     assert.ok(!serialized.includes('sk-test-secondary-5678'), '不得输出共用值');
     assert.ok(!serialized.includes('sk-test-primary-1234'), '不得输出主 key 值');

@@ -48,6 +48,18 @@ function withEnv(contents, callback) {
     try { return callback(file, dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
+test('带凭据的 URL/代理不会回显原值', () => {
+    const { items } = require('../scripts/lib/env-schema').validateEntries({
+        PAPER_ANALYZER_API_KEY: 'k', PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
+        PAPER_ANALYZER_ENDPOINT: 'https://example.com/v1',
+        ALL_PROXY: 'socks5h://user:PROXYSECRET@127.0.0.1:7897',
+        PAPER_DIGEST_GITHUB_REMOTE: 'https://user:GITSECRET@github.com/o/r.git'
+    });
+    const serialized = JSON.stringify(items);
+    assert.ok(!serialized.includes('PROXYSECRET'));
+    assert.ok(!serialized.includes('GITSECRET'));
+});
+
 test('parseEnvText 与运行时 env-loader 语义一致（注释/export/引号/行内 #）', () => {
     const samples = [
         [

@@ -66,7 +66,7 @@ const SCHEMA = Object.freeze([
     { name: 'PD_ARXIV_MAX_RESULTS', required: false, type: 'int', min: 1 },
     { name: 'PD_ARXIV_PDF_MAX_BYTES', required: false, type: 'int', min: 1 },
     { name: 'PD_BLOG_REVIEW_CHUNK_CHARS', required: false, type: 'int', min: 1 },
-    { name: 'PD_OPENAI_RESPONSES_STREAM', required: false, type: 'bool' },
+    { name: 'PD_OPENAI_RESPONSES_STREAM', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
     { name: 'PD_OPENAI_RESPONSES_REASONING_EFFORT', required: false, type: 'string' },
     { name: 'PD_VISUAL_PLANNER_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 900 },
     { name: 'PD_WORKSPACE_ALLOW_CROSS_ROLE', required: false, type: 'bool' },
@@ -170,9 +170,11 @@ function validateValue(item, rawValue) {
         if (item.max !== undefined && number > item.max) return { ok: 'fail', detail: `大于上限 ${item.max}：${number}`, hint: item.hint };
         return { ok: 'ok', detail: `整数 ${number}` };
     }
-    case 'bool':
-        if (value !== '0' && value !== '1') return { ok: 'fail', detail: `不是布尔值：${value}`, hint: '运行时只认 1/0' };
+    case 'bool': {
+        const allowed = item.allowed || ['0', '1'];
+        if (!allowed.includes(String(value).toLowerCase())) return { ok: 'fail', detail: `不是布尔值：${value}`, hint: `允许值：${allowed.join('/')}` };
         return { ok: 'ok', detail: `布尔值 ${value}` };
+    }
     case 'url':
         try {
             const parsed = new URL(value);
@@ -196,7 +198,7 @@ function validateValue(item, rawValue) {
     case 'path':
     case 'string':
     default:
-        return { ok: 'ok', detail: secret(item.name) ? '已配置（值不显示）' : value };
+        return { ok: 'ok', detail: '已配置（值不显示）' };
     }
 }
 
