@@ -15,6 +15,7 @@ if __name__ == '__main__':
     raise SystemExit('此模块只供日更静态观察内部调用。')
 
 PROFILE = 'daily-static-html-projection-v1'
+PROFILE_V2 = 'daily-static-html-projection-v2'
 _WS = '\t\n\f\r '
 _VOID = frozenset('area base br col embed hr img input link meta param source track wbr'.split())
 _BLOCK = frozenset(('address article aside blockquote caption dd details div dl dt figcaption '
@@ -37,6 +38,8 @@ _COVERAGE = (('identity', 'observed'), ('staticTextStructure', 'observed'),
     ('opaqueContainers', 'not_checked'),
     ('browserExecution', 'not_checked'), ('mathRendering', 'not_checked'),
     ('productionArtifact', 'not_checked'))
+_COVERAGE_V2 = tuple((key, 'registered-delimiters-single-node-ascii-isolated-internal-space-exact'
+                     if key == 'math' else value) for key, value in _COVERAGE)
 
 
 @dataclass(frozen=True)
@@ -164,10 +167,10 @@ class _Budget:
         assert self.used >= 0
 
 
-def _shell(raw):
-    return {'contract': PROFILE, 'version': 1,
+def _shell(raw, version):
+    return {'contract': PROFILE if version == 1 else PROFILE_V2, 'version': version,
         'payload': {'identity': {'canonical': '', 'title': '', 'h1': ''},
-                    'bodyEvents': [], 'refs': [], 'coverage': dict(_COVERAGE)},
+                    'bodyEvents': [], 'refs': [], 'coverage': dict(_COVERAGE if version == 1 else _COVERAGE_V2)},
         'payloadSha256': '0' * 64,
         'evidence': {'rawHtmlSha256': hashlib.sha256(raw).hexdigest(), 'rawHtmlBytes': len(raw)},
         'stats': {'nodes': 0, 'maxDepth': 0, 'attrs': 0, 'textBytes': 0, 'events': 0,
@@ -175,10 +178,11 @@ def _shell(raw):
 
 
 class _Projection(HTMLParser):
-    def __init__(self, raw, expected, limits):
+    def __init__(self, raw, expected, limits, version):
         super().__init__(convert_charrefs=True)
         self.limits = limits
-        self.result = _shell(raw)
+        self.version = version
+        self.result = _shell(raw, version)
         self.payload = self.result['payload']
         self.stats = self.result['stats']
         # Reserve fixed envelope and maximum possible numeric widths up front.
@@ -336,10 +340,13 @@ class _Projection(HTMLParser):
                     inner_start = math_start + 2
                     if i == inner_start:
                         _fail('unsupported_math', 'empty')
-                    for char in text[inner_start:i]:
+                    for position in range(inner_start, i):
+                        char = text[position]
                         if char in _WS:
-                            _fail('unsupported_math', 'whitespace')
-                        if not 0x21 <= ord(char) <= 0x7E:
+                            if (self.version != 2 or char != ' ' or position == inner_start
+                                    or position + 1 == i or text[position - 1] == ' '):
+                                _fail('unsupported_math', 'whitespace')
+                        if not (0x21 <= ord(char) <= 0x7E or self.version == 2 and char == ' '):
                             _fail('unsupported_math', 'non_ascii')
                         if char in '<>&':
                             _fail('unsupported_math', 'html_sensitive')
@@ -677,8 +684,7 @@ class _Projection(HTMLParser):
         return self.result
 
 
-def project_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
-    """Project a strict static subset; arguments/results convey no qualification."""
+def _project_daily_html(html_bytes, expected_canonical, limits, version):
     if type(html_bytes) is not bytes:
         _fail('invalid_argument', 'input_type')
     if type(expected_canonical) is not str:
@@ -708,7 +714,7 @@ def project_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS)
     if text.startswith('\ufeff'):
         _fail('invalid_html_structure', 'control_character')
     _measure(text)
-    parser = _Projection(html_bytes, expected_canonical, limits)
+    parser = _Projection(html_bytes, expected_canonical, limits, version)
     try:
         parser.feed(text)
         return parser.finish()
@@ -716,3 +722,13 @@ def project_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS)
         if exc.line is None:
             exc.line, exc.column = parser.getpos()
         raise
+
+
+def project_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
+    """Retain the fixed v1 no-whitespace surface; results convey no qualification."""
+    return _project_daily_html(html_bytes, expected_canonical, limits, 1)
+
+
+def project_daily_html_v2(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
+    """Fixed v2 exact literals with isolated internal spaces, never TeX normalization."""
+    return _project_daily_html(html_bytes, expected_canonical, limits, 2)

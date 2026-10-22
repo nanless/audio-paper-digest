@@ -180,8 +180,10 @@ class DailyObservedProjectionIntegrationTest(unittest.TestCase):
 
     def available(self, result):
         self.assertEqual(result['status'], 'projection_available', (result, self.normal_calls))
-        self.assertEqual(result['contract'], 'daily-observed-static-page-set-v1')
-        self.assertEqual(result['version'], 1)
+        # Explicit owner v2 migration; the independent pure v1 API stays v1.
+        self.assertEqual(result['contract'], 'daily-observed-static-page-set-v2')
+        self.assertEqual(result['version'], 2)
+        self.assertEqual(result['profile']['contract'], 'daily-static-html-projection-v2')
         self.assertEqual(result['inputBinding'], 'observed_before_after')
         self.assertEqual(result['fullInputSnapshot'], 'not_established')
         self.assertEqual(result['observationCoverage']['bodyProjection'], 'not_checked')
@@ -205,6 +207,8 @@ class DailyObservedProjectionIntegrationTest(unittest.TestCase):
 
     def blocked(self, result):
         self.assertEqual(result['status'], 'blocked', result)
+        self.assertEqual(result['contract'], 'daily-observed-static-page-set-v2')
+        self.assertEqual(result['version'], 2)
         self.assertNotIn('pages', result)
         self.assertTrue(result['issues'])
 

@@ -20,10 +20,10 @@ import daily_hugo_capture as capture
 import blog_entry_loader
 
 
-CONTRACT = 'daily-observed-static-page-set-v1'
-TARGET_CONTRACT = 'daily-reviewed-primary-targets-v1'
-PROFILE = 'daily-static-html-projection-v1'
-VERSION = 1
+CONTRACT = 'daily-observed-static-page-set-v2'
+TARGET_CONTRACT = 'daily-reviewed-primary-targets-v2'
+PROFILE = 'daily-static-html-projection-v2'
+VERSION = 2
 _HERE = Path(__file__).resolve().parent
 _OWNER_FILE = _HERE / 'daily_observed_projection.py'
 _PROFILE_FILE = _HERE / 'daily_html_projection.py'
@@ -299,7 +299,9 @@ def _compile_profile(raw):
     module = ModuleType('_daily_static_projection_snapshot')
     exec(compile(raw, 'daily_html_projection.py', 'exec', dont_inherit=True, optimize=0),
          module.__dict__)
-    if module.PROFILE != PROFILE:
+    entry = getattr(module, 'project_daily_html_v2', None)
+    if (getattr(module, 'PROFILE_V2', None) != PROFILE or not isinstance(entry, FunctionType)
+            or entry.__globals__ is not module.__dict__):
         _fail('unsupported_implementation', 'profile_contract')
     return module
 
@@ -337,7 +339,7 @@ def _refs_sha(refs, domain):
         for part in _json_parts(ref, 32 * 1024 * 1024 - used):
             digest.update(part)
             used += len(part)
-    suffix = b'],"version":1}'
+    suffix = b'],"version":' + str(VERSION).encode('ascii') + b'}'
     if used + len(suffix) > 32 * 1024 * 1024:
         _fail('limit_exceeded', 'json_bytes')
     digest.update(suffix)
@@ -363,7 +365,7 @@ def _body_sha(payload):
         for part in _json_parts(ref, 32 * 1024 * 1024 - used):
             used += len(part)
             digest.update(part)
-    suffix = b'],"contract":"daily-static-html-projection-v1","version":1}'
+    suffix = b'],"contract":' + json.dumps(PROFILE).encode('ascii') + b',"version":' + str(VERSION).encode('ascii') + b'}'
     if used + len(suffix) > 32 * 1024 * 1024:
         _fail('limit_exceeded', 'json_bytes')
     digest.update(suffix)
@@ -660,11 +662,14 @@ def _read_locked(owner, date, include_id, *, targets=False):
         if min(kwargs.values()) < 1:
             _fail('limit_exceeded', 'aggregate_projection')
         try:
-            projected = module.project_daily_html(raw, expected_canonical=page['permalink'],
-                                                  limits=module.ProjectionLimits(**kwargs))
+            projected = module.project_daily_html_v2(raw, expected_canonical=page['permalink'],
+                                                     limits=module.ProjectionLimits(**kwargs))
         except module.ProjectionError as exc:
             return _issue('unsupported' if exc.code in ('unsupported_html', 'unsupported_math') else 'blocked',
                           exc.code, exc.reason, page['sourcePath'], contract=contract)
+        if (type(projected) is not dict or projected.get('contract') != PROFILE
+                or type(projected.get('version')) is not int or projected['version'] != VERSION):
+            _fail('invalid', 'profile_result_contract')
         stats = projected['stats']
         for budget, stat in (('nodes', 'nodes'), ('events', 'events'), ('refs', 'refs'),
                              ('projection', 'outputBytes')):

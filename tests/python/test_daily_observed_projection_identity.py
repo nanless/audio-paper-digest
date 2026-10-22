@@ -32,11 +32,11 @@ class ObservedProjectionIdentityTest(unittest.TestCase):
                 b'<link rel="canonical" href="https://example.test/post/">'
                 b'</head><body><h1>Mechanical heading</h1><div class="post-content">'
                 b'<p>Mechanical body.</p></div></body></html>')
-        projected = first.project_daily_html(html, expected_canonical='https://example.test/post/',
+        projected = first.project_daily_html_v2(html, expected_canonical='https://example.test/post/',
                                             limits=first.ProjectionLimits())
         self.assertEqual(projected['payload']['identity']['h1'], 'Mechanical heading')
         with self.assertRaises(first.ProjectionError):
-            first.project_daily_html(html, expected_canonical='https://example.test/post/',
+            first.project_daily_html_v2(html, expected_canonical='https://example.test/post/',
                                      limits=second.ProjectionLimits())
 
     def test_private_compile_rejects_new_project_imports_and_dynamic_execution(self):
@@ -50,7 +50,20 @@ class ObservedProjectionIdentityTest(unittest.TestCase):
         with mock.patch.object(runtime_guard, 'require_external_runtime',
                                side_effect=AssertionError('direct guard executed during private load')):
             module = owner._compile_profile(Path(owner._PROFILE_FILE).read_bytes())
-        self.assertEqual(module.PROFILE, owner.PROFILE)
+        self.assertEqual(module.PROFILE, 'daily-static-html-projection-v1')
+        self.assertEqual(module.PROFILE_V2, owner.PROFILE)
+
+    def test_internal_owner_is_explicitly_v2_without_a_v1_fallback_entry(self):
+        self.assertEqual(owner.PROFILE, 'daily-static-html-projection-v2')
+        self.assertEqual(owner.VERSION, 2)
+        self.assertEqual(owner.CONTRACT, 'daily-observed-static-page-set-v2')
+        self.assertEqual(owner.TARGET_CONTRACT, 'daily-reviewed-primary-targets-v2')
+        raw = Path(owner._PROFILE_FILE).read_bytes()
+        for changed in (raw.replace(b"PROFILE_V2 = 'daily-static-html-projection-v2'", b"PROFILE_V2 = 'wrong'"),
+                        raw.replace(b'def project_daily_html_v2(', b'def different_entry('),
+                        raw + b'\nproject_daily_html_v2 = 42\n'):
+            with self.subTest(variant=hashlib.sha256(changed).hexdigest()), self.assertRaises(ValueError):
+                owner._compile_profile(changed)
 
     def test_body_and_domain_hashes_use_exact_canonical_contract(self):
         post = ref(1, 'post_content', 0, '/paper.json')
@@ -58,9 +71,9 @@ class ObservedProjectionIdentityTest(unittest.TestCase):
         payload = {'bodyEvents': [['text', '正文 A B']], 'refs': [outside, post]}
         normalized = [{'domainIndex': 0, 'tag': 'a', 'attributes': post['attributes']}]
         self.assertEqual(owner._body_sha(payload), digest({'contract': owner.PROFILE,
-            'version': 1, 'bodyEvents': payload['bodyEvents'], 'bodyRefs': normalized}))
+            'version': 2, 'bodyEvents': payload['bodyEvents'], 'bodyRefs': normalized}))
         self.assertEqual(owner._refs_sha(payload['refs'], 'post_content'), digest({
-            'contract': owner.PROFILE, 'version': 1, 'domain': 'post_content', 'refs': normalized}))
+            'contract': owner.PROFILE, 'version': 2, 'domain': 'post_content', 'refs': normalized}))
 
     def test_external_navigation_indices_do_not_pollute_body(self):
         payload = {'bodyEvents': [['text', '正文']],

@@ -25,7 +25,7 @@ from project_env_isolation import project_env_scope
 
 DATE = observed_fixture.DATE
 publisher = observed_fixture.publisher
-TARGET_CONTRACT = 'daily-reviewed-primary-targets-v1'
+TARGET_CONTRACT = 'daily-reviewed-primary-targets-v2'
 
 
 def canonical(value):
@@ -144,7 +144,8 @@ class DailyReviewedTargetsIntegrationTest(unittest.TestCase):
     def target(self, result):
         self.assertEqual(result['status'], 'reviewed_targets_observed', (result, self.normal_calls))
         self.assertEqual(result['contract'], TARGET_CONTRACT)
-        self.assertEqual(result['version'], 1)
+        self.assertEqual(result['version'], 2)
+        self.assertEqual(result['profile']['contract'], 'daily-static-html-projection-v2')
         self.assertNotIn('pages', result)
         self.assertEqual(result['inputBinding'], 'observed_before_after')
         self.assertEqual(result['fullInputSnapshot'], 'not_established')
@@ -171,7 +172,7 @@ class DailyReviewedTargetsIntegrationTest(unittest.TestCase):
     def failure(self, result, status='blocked'):
         self.assertEqual(result['status'], status, result)
         self.assertEqual(result['contract'], TARGET_CONTRACT)
-        self.assertEqual(result['version'], 1)
+        self.assertEqual(result['version'], 2)
         for field in ('pages', 'primaryPages', 'targetsSha256', 'recordSha256'):
             self.assertNotIn(field, result)
         if status == 'not_recorded':
@@ -289,7 +290,7 @@ class DailyReviewedTargetsIntegrationTest(unittest.TestCase):
         self.assertIsNone(result['selector']['includeId'])
         self.assertTrue(all(call['scope'] is None for call in self.normal_calls))
 
-    def test_old_projection_schema_and_semantic_digests_stay_independent(self):
+    def test_projection_field_shape_and_semantic_digests_stay_independent(self):
         self.case.prepare(body='[正文链接](https://example.test/data?a=1&b=2)')
         old = self.read(projection=True)
         self.case.available(old)
@@ -328,7 +329,7 @@ class DailyReviewedTargetsIntegrationTest(unittest.TestCase):
         result = self.read()
         self.failure(result, 'not_recorded')
         old = self.read(projection=True)
-        self.assertEqual(old['contract'], 'daily-observed-static-page-set-v1')
+        self.assertEqual(old['contract'], 'daily-observed-static-page-set-v2')
         self.assertEqual(old['status'], 'not_recorded')
 
     def test_original_normal_ref_and_map_gates_are_not_replaced_by_targets(self):
@@ -422,7 +423,7 @@ class DailyReviewedTargetsIntegrationTest(unittest.TestCase):
         self.failure(result, 'unsupported')
         self.assertEqual(result['issues'][0]['sourcePath'], self.fixture.paths[1].relative_to(self.fixture.repo).as_posix())
         old = self.read(projection=True)
-        self.assertEqual(old['contract'], 'daily-observed-static-page-set-v1')
+        self.assertEqual(old['contract'], 'daily-observed-static-page-set-v2')
         self.assertEqual(old['status'], 'unsupported')
 
     def test_new_target_binding_budget_rejects_a_legal_long_cold_timestamp(self):

@@ -1,0 +1,507 @@
+{
+  "contract": "daily-math-profile-calibration-fixture-v1",
+  "version": 1,
+  "purpose": "synthetic retained actual HTML and pre-v2 mechanical v1 baseline only",
+  "baselinePureSourceSha256": "687680d9195c38736f869bc290aefb3e40315309f1e328b1be98f7f8aac1cde0",
+  "newBuildResultSha256": "ec3a1c6e39d276e504727ee34f1feab60d999fbe3c4e85737986011447c08e36",
+  "cases": [
+    {
+      "id": "old/normal/display-fixed",
+      "group": "old",
+      "variant": "normal",
+      "source": "display-fixed",
+      "canonical": "https://example.invalid/base/posts/display-fixed/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/display-fixed/\"><title>Fixed math display-fixed</title></head>\n<body><h1>Fixed math display-fixed</h1><div class=\"post-content\">\\[\\mathcal{L}=\\lVert y-\\hat{y}\\rVert_1\\]</div></body></html>\n",
+      "htmlSha256": "0e4f0ea00ee21bd4d977142744fb2bb24303feef4829cfa125bc82e8722396c1",
+      "htmlBytes": 302,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 3,
+        "column": 105
+      }
+    },
+    {
+      "id": "old/normal/display-spaced",
+      "group": "old",
+      "variant": "normal",
+      "source": "display-spaced",
+      "canonical": "https://example.invalid/base/posts/display-spaced/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/display-spaced/\"><title>Fixed math display-spaced</title></head>\n<body><h1>Fixed math display-spaced</h1><div class=\"post-content\">\\[\n  \\mathcal{L}  =  \\lVert y-\\hat{y}\\rVert_1\n\\]</div></body></html>\n",
+      "htmlSha256": "ae946412a2bc90e614d9583e4fe94b609a32602d0696606a791fae85f5565df6",
+      "htmlBytes": 313,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 5,
+        "column": 2
+      }
+    },
+    {
+      "id": "old/normal/inline-fixed",
+      "group": "old",
+      "variant": "normal",
+      "source": "inline-fixed",
+      "canonical": "https://example.invalid/base/posts/inline-fixed/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/inline-fixed/\"><title>Fixed math inline-fixed</title></head>\n<body><h1>Fixed math inline-fixed</h1><div class=\"post-content\"><p>Inline formula: \\(x+y\\).</p>\n</div></body></html>\n",
+      "htmlSha256": "d8fe43bb654517bac876a67e2e9be0f614e3cfdfb4a0e9c965ba8104d9616dbb",
+      "htmlBytes": 291,
+      "v1Baseline": {
+        "status": "projected",
+        "result": {
+          "contract": "daily-static-html-projection-v1",
+          "version": 1,
+          "payload": {
+            "identity": {
+              "canonical": "https://example.invalid/base/posts/inline-fixed/",
+              "title": "Fixed math inline-fixed",
+              "h1": "Fixed math inline-fixed"
+            },
+            "bodyEvents": [
+              [
+                "open",
+                "div",
+                {
+                  "global": {
+                    "id": {
+                      "present": false,
+                      "value": null
+                    },
+                    "title": {
+                      "present": false,
+                      "value": null
+                    },
+                    "lang": {
+                      "present": false,
+                      "value": null
+                    },
+                    "dir": {
+                      "present": false,
+                      "value": null
+                    }
+                  },
+                  "semantic": {},
+                  "refIndex": null
+                }
+              ],
+              [
+                "open",
+                "p",
+                {
+                  "global": {
+                    "id": {
+                      "present": false,
+                      "value": null
+                    },
+                    "title": {
+                      "present": false,
+                      "value": null
+                    },
+                    "lang": {
+                      "present": false,
+                      "value": null
+                    },
+                    "dir": {
+                      "present": false,
+                      "value": null
+                    }
+                  },
+                  "semantic": {},
+                  "refIndex": null
+                }
+              ],
+              [
+                "text",
+                "Inline formula: "
+              ],
+              [
+                "math",
+                "inline",
+                "\\(x+y\\)"
+              ],
+              [
+                "text",
+                "."
+              ],
+              [
+                "close",
+                "p"
+              ],
+              [
+                "close",
+                "div"
+              ]
+            ],
+            "refs": [],
+            "coverage": {
+              "identity": "observed",
+              "staticTextStructure": "observed",
+              "staticReferences": "observed",
+              "math": "registered-delimiters-single-node-ascii-no-whitespace-exact",
+              "presentationAttributes": "not_checked",
+              "dynamicDOM": "not_checked",
+              "assets": "not_checked",
+              "cssVisibility": "not_checked",
+              "opaqueContainers": "not_checked",
+              "browserExecution": "not_checked",
+              "mathRendering": "not_checked",
+              "productionArtifact": "not_checked"
+            }
+          },
+          "payloadSha256": "37922c7b14c2810b873278fd72c0b418bd90a82dbfba65dbf00d43b2b4bffa26",
+          "evidence": {
+            "rawHtmlSha256": "d8fe43bb654517bac876a67e2e9be0f614e3cfdfb4a0e9c965ba8104d9616dbb",
+            "rawHtmlBytes": 291
+          },
+          "stats": {
+            "nodes": 17,
+            "maxDepth": 4,
+            "attrs": 4,
+            "textBytes": 74,
+            "events": 7,
+            "refs": 0,
+            "tableCells": 0,
+            "formulas": 1,
+            "outputBytes": 1492
+          }
+        }
+      }
+    },
+    {
+      "id": "old/normal/inline-spaced",
+      "group": "old",
+      "variant": "normal",
+      "source": "inline-spaced",
+      "canonical": "https://example.invalid/base/posts/inline-spaced/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/inline-spaced/\"><title>Fixed math inline-spaced</title></head>\n<body><h1>Fixed math inline-spaced</h1><div class=\"post-content\"><p>Inline formula: \\(x  +  y\\).</p>\n</div></body></html>\n",
+      "htmlSha256": "c621b9b65e906dca0b7920cd494bb827207d4b262cc623163c831fb78a761e85",
+      "htmlBytes": 298,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 3,
+        "column": 96
+      }
+    },
+    {
+      "id": "old/production_flags/display-fixed",
+      "group": "old",
+      "variant": "production_flags",
+      "source": "display-fixed",
+      "canonical": "https://example.invalid/base/posts/display-fixed/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/display-fixed/><title>Fixed math display-fixed</title></head><body><h1>Fixed math display-fixed</h1><div class=post-content>\\[\\mathcal{L}=\\lVert y-\\hat{y}\\rVert_1\\]</div></body></html>",
+      "htmlSha256": "2def789091409dd5d5bfa44cd771082bc162cca7e32057e1dee87891bef9d1cc",
+      "htmlBytes": 291,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 1,
+        "column": 271
+      }
+    },
+    {
+      "id": "old/production_flags/display-spaced",
+      "group": "old",
+      "variant": "production_flags",
+      "source": "display-spaced",
+      "canonical": "https://example.invalid/base/posts/display-spaced/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/display-spaced/><title>Fixed math display-spaced</title></head><body><h1>Fixed math display-spaced</h1><div class=post-content>\\[\n\\mathcal{L} = \\lVert y-\\hat{y}\\rVert_1\n\\]</div></body></html>",
+      "htmlSha256": "aae6d33e925fa45afa5795018c3069d65e60efc40bffb35dd15e8e77c0b74f8a",
+      "htmlBytes": 298,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 3,
+        "column": 2
+      }
+    },
+    {
+      "id": "old/production_flags/inline-fixed",
+      "group": "old",
+      "variant": "production_flags",
+      "source": "inline-fixed",
+      "canonical": "https://example.invalid/base/posts/inline-fixed/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/inline-fixed/><title>Fixed math inline-fixed</title></head><body><h1>Fixed math inline-fixed</h1><div class=post-content><p>Inline formula: \\(x+y\\).</p></div></body></html>",
+      "htmlSha256": "2572fd70b6fc6f7de47e2b1c6915983fbb555d814a266a85139933e08cf0d933",
+      "htmlBytes": 279,
+      "v1Baseline": {
+        "status": "projected",
+        "result": {
+          "contract": "daily-static-html-projection-v1",
+          "version": 1,
+          "payload": {
+            "identity": {
+              "canonical": "https://example.invalid/base/posts/inline-fixed/",
+              "title": "Fixed math inline-fixed",
+              "h1": "Fixed math inline-fixed"
+            },
+            "bodyEvents": [
+              [
+                "open",
+                "div",
+                {
+                  "global": {
+                    "id": {
+                      "present": false,
+                      "value": null
+                    },
+                    "title": {
+                      "present": false,
+                      "value": null
+                    },
+                    "lang": {
+                      "present": false,
+                      "value": null
+                    },
+                    "dir": {
+                      "present": false,
+                      "value": null
+                    }
+                  },
+                  "semantic": {},
+                  "refIndex": null
+                }
+              ],
+              [
+                "open",
+                "p",
+                {
+                  "global": {
+                    "id": {
+                      "present": false,
+                      "value": null
+                    },
+                    "title": {
+                      "present": false,
+                      "value": null
+                    },
+                    "lang": {
+                      "present": false,
+                      "value": null
+                    },
+                    "dir": {
+                      "present": false,
+                      "value": null
+                    }
+                  },
+                  "semantic": {},
+                  "refIndex": null
+                }
+              ],
+              [
+                "text",
+                "Inline formula: "
+              ],
+              [
+                "math",
+                "inline",
+                "\\(x+y\\)"
+              ],
+              [
+                "text",
+                "."
+              ],
+              [
+                "close",
+                "p"
+              ],
+              [
+                "close",
+                "div"
+              ]
+            ],
+            "refs": [],
+            "coverage": {
+              "identity": "observed",
+              "staticTextStructure": "observed",
+              "staticReferences": "observed",
+              "math": "registered-delimiters-single-node-ascii-no-whitespace-exact",
+              "presentationAttributes": "not_checked",
+              "dynamicDOM": "not_checked",
+              "assets": "not_checked",
+              "cssVisibility": "not_checked",
+              "opaqueContainers": "not_checked",
+              "browserExecution": "not_checked",
+              "mathRendering": "not_checked",
+              "productionArtifact": "not_checked"
+            }
+          },
+          "payloadSha256": "37922c7b14c2810b873278fd72c0b418bd90a82dbfba65dbf00d43b2b4bffa26",
+          "evidence": {
+            "rawHtmlSha256": "2572fd70b6fc6f7de47e2b1c6915983fbb555d814a266a85139933e08cf0d933",
+            "rawHtmlBytes": 279
+          },
+          "stats": {
+            "nodes": 13,
+            "maxDepth": 4,
+            "attrs": 4,
+            "textBytes": 70,
+            "events": 7,
+            "refs": 0,
+            "tableCells": 0,
+            "formulas": 1,
+            "outputBytes": 1492
+          }
+        }
+      }
+    },
+    {
+      "id": "old/production_flags/inline-spaced",
+      "group": "old",
+      "variant": "production_flags",
+      "source": "inline-spaced",
+      "canonical": "https://example.invalid/base/posts/inline-spaced/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/inline-spaced/><title>Fixed math inline-spaced</title></head><body><h1>Fixed math inline-spaced</h1><div class=post-content><p>Inline formula: \\(x + y\\).</p></div></body></html>",
+      "htmlSha256": "286cac41928849a4bdfa8ea405f9a212c76c0e38e38a7654b3a3c8fa13d9c4fb",
+      "htmlBytes": 284,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 1,
+        "column": 260
+      }
+    },
+    {
+      "id": "new/normal/math-brace-escape",
+      "group": "new",
+      "variant": "normal",
+      "source": "math-brace-escape",
+      "canonical": "https://example.invalid/base/posts/math-brace-escape/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/math-brace-escape/\"><title>Generic math math-brace-escape</title></head>\n<body><h1>Generic math math-brace-escape</h1><div class=\"post-content\"><p>Brace and escape: \\(\\text{a b} + p\\ q\\).</p>\n</div></body></html>\n",
+      "htmlSha256": "1d80c7f49aac45a9e2a441d61ed4cc9c4e7caa9bbd012e335c3887f932b742a9",
+      "htmlBytes": 326,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 3,
+        "column": 114
+      }
+    },
+    {
+      "id": "new/normal/math-display-command",
+      "group": "new",
+      "variant": "normal",
+      "source": "math-display-command",
+      "canonical": "https://example.invalid/base/posts/math-display-command/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/math-display-command/\"><title>Generic math math-display-command</title></head>\n<body><h1>Generic math math-display-command</h1><div class=\"post-content\">\\[\\alpha + \\beta\\]</div></body></html>\n",
+      "htmlSha256": "aec699020c0a74a99bf2753bf3817eef3f2baccb0ccfb5387dc378f6d2045295",
+      "htmlBytes": 305,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 3,
+        "column": 92
+      }
+    },
+    {
+      "id": "new/normal/math-inline-isolated",
+      "group": "new",
+      "variant": "normal",
+      "source": "math-inline-isolated",
+      "canonical": "https://example.invalid/base/posts/math-inline-isolated/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/math-inline-isolated/\"><title>Generic math math-inline-isolated</title></head>\n<body><h1>Generic math math-inline-isolated</h1><div class=\"post-content\"><p>Inline generic: \\(u + v\\).</p>\n</div></body></html>\n",
+      "htmlSha256": "b21bb8c7994bcd08f5c052d305c0e184a99e44fab78976046dc0174b538e7e75",
+      "htmlBytes": 321,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 3,
+        "column": 103
+      }
+    },
+    {
+      "id": "new/normal/math-whitespace-controls",
+      "group": "new",
+      "variant": "normal",
+      "source": "math-whitespace-controls",
+      "canonical": "https://example.invalid/base/posts/math-whitespace-controls/",
+      "html": "<!doctype html>\n<html><head><meta charset=\"utf-8\"><link rel=\"canonical\" href=\"https://example.invalid/base/posts/math-whitespace-controls/\"><title>Generic math math-whitespace-controls</title></head>\n<body><h1>Generic math math-whitespace-controls</h1><div class=\"post-content\"><p>Double: \\(u  +  v\\).</p>\n\\[\n  \\alpha  +  \\beta\n\\]</div></body></html>\n",
+      "htmlSha256": "41626d878f5959f7201a1d1c8967da876f9c1dc2f3a335d221142cb505f57e13",
+      "htmlBytes": 351,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 3,
+        "column": 101
+      }
+    },
+    {
+      "id": "new/production_flags/math-brace-escape",
+      "group": "new",
+      "variant": "production_flags",
+      "source": "math-brace-escape",
+      "canonical": "https://example.invalid/base/posts/math-brace-escape/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/math-brace-escape/><title>Generic math math-brace-escape</title></head><body><h1>Generic math math-brace-escape</h1><div class=post-content><p>Brace and escape: \\(\\text{a b} + p\\ q\\).</p></div></body></html>",
+      "htmlSha256": "5c37bf7364c331403ac04e01cada58daea050f267e2b03644cca18689c3dcab4",
+      "htmlBytes": 314,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 1,
+        "column": 290
+      }
+    },
+    {
+      "id": "new/production_flags/math-display-command",
+      "group": "new",
+      "variant": "production_flags",
+      "source": "math-display-command",
+      "canonical": "https://example.invalid/base/posts/math-display-command/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/math-display-command/><title>Generic math math-display-command</title></head><body><h1>Generic math math-display-command</h1><div class=post-content>\\[\\alpha + \\beta\\]</div></body></html>",
+      "htmlSha256": "19d12b08f40583ba2d0b5bdbfb1a5939e86dc0fa4ce8114ef0d1ff978ad10224",
+      "htmlBytes": 294,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 1,
+        "column": 274
+      }
+    },
+    {
+      "id": "new/production_flags/math-inline-isolated",
+      "group": "new",
+      "variant": "production_flags",
+      "source": "math-inline-isolated",
+      "canonical": "https://example.invalid/base/posts/math-inline-isolated/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/math-inline-isolated/><title>Generic math math-inline-isolated</title></head><body><h1>Generic math math-inline-isolated</h1><div class=post-content><p>Inline generic: \\(u + v\\).</p></div></body></html>",
+      "htmlSha256": "7ea2fd2a20ddec44524d9bf5599e54f2a7447f6635d69c6f439e0f55e53dce85",
+      "htmlBytes": 309,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 1,
+        "column": 285
+      }
+    },
+    {
+      "id": "new/production_flags/math-whitespace-controls",
+      "group": "new",
+      "variant": "production_flags",
+      "source": "math-whitespace-controls",
+      "canonical": "https://example.invalid/base/posts/math-whitespace-controls/",
+      "html": "<!doctype html><html><head><meta charset=utf-8><link rel=canonical href=https://example.invalid/base/posts/math-whitespace-controls/><title>Generic math math-whitespace-controls</title></head><body><h1>Generic math math-whitespace-controls</h1><div class=post-content><p>Double: \\(u + v\\).</p>\\[\n\\alpha + \\beta\n\\]</div></body></html>",
+      "htmlSha256": "58bbd23dc80e552ae78c630664535cceab3821ba6875843614544a09f347c093",
+      "htmlBytes": 333,
+      "v1Baseline": {
+        "status": "error",
+        "code": "unsupported_math",
+        "reason": "whitespace",
+        "line": 1,
+        "column": 289
+      }
+    }
+  ]
+}

@@ -15,7 +15,7 @@ import daily_observed_projection as owner
 
 
 POLICY = {'origin': 'https://example.test', 'basePath': '/research/base/'}
-CONTRACT = 'daily-reviewed-primary-targets-v1'
+CONTRACT = 'daily-reviewed-primary-targets-v2'
 
 
 def digest(value):
@@ -173,7 +173,7 @@ class DailyReviewedTargetIdentityTest(unittest.TestCase):
             with mock.patch.object(owner.blog_entry_loader, 'load_publish_to_blog', return_value=normal):
                 result = owner.read_daily_reviewed_targets('2026-10-23')
                 legacy = owner.read_daily_observed_projection('2026-10-23')
-            self.assertEqual(result, {'contract': CONTRACT, 'version': 1,
+            self.assertEqual(result, {'contract': CONTRACT, 'version': 2,
                 'status': 'not_recorded', 'normalQualification': 'not_checked'})
             self.assertEqual(legacy['contract'], owner.CONTRACT)
         with mock.patch.object(owner.blog_entry_loader, 'load_publish_to_blog',
@@ -181,6 +181,7 @@ class DailyReviewedTargetIdentityTest(unittest.TestCase):
             result = owner.read_daily_reviewed_targets('2026-10-23')
             legacy = owner.read_daily_observed_projection('2026-10-23')
         self.assertEqual(result['contract'], CONTRACT)
+        self.assertEqual(result['version'], 2)
         self.assertEqual(result['status'], 'blocked')
         self.assertEqual(legacy['contract'], owner.CONTRACT)
         self.assertNotIn('private', json.dumps(result))
