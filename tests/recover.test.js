@@ -16,6 +16,7 @@ test('plan 按命令聚合失败项并保留可重试性', () => {
 test('buildExecutionArgs 保留建议命令的真实 flags 并替换日期', () => {
     const args = recover.buildExecutionArgs('npm run api:reader:refresh -- --all --date <DATE> --concurrency 5 --scoring-and-reader', '2026-10-21');
     assert.deepStrictEqual(args, ['run', 'api:reader:refresh', '--', '--all', '--date', '2026-10-21', '--concurrency', '5', '--scoring-and-reader']);
+    assert.deepStrictEqual(recover.buildExecutionArgs('npm run config:check', '2026-10-21'), ['run', 'config:check', '--']);
     assert.strictEqual(recover.buildExecutionArgs('npm run table:check -- --draft <FILE>', '2026-10-21'), null);
     assert.strictEqual(recover.buildExecutionArgs('npm run recover -- --date <DATE>', '2026-10-21'), null);
 });

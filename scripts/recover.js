@@ -33,6 +33,7 @@ function collectFailures(date) {
         const code = paper.latestAnalysisAttemptErrorCode || '';
         const statusHint = String(paper.digestStatus?.latestAttemptStatus || paper.analysisStatus || '');
         if (!message && !code && statusHint !== 'analysis_failed' && !paper.analysisFactReviewObligation) continue;
+        if (message || code || statusHint === 'analysis_failed') {
         const entry = errorCodes.classify(`${code} ${message}`);
         failures.push({
             source: 'analysis', paperId: (paper.arxivId || paper.paper_id || '').replace(/v\d+$/, ''),
@@ -40,6 +41,7 @@ function collectFailures(date) {
             command: entry.command.replace(/<DATE>/g, date), doc: entry.doc,
             message: redactSensitive(String(message)).slice(0, 200)
         });
+        }
         if (paper.analysisFactReviewObligation) {
             failures.push({ source: 'analysis', paperId: (paper.arxivId || paper.paper_id || '').replace(/v\d+$/, ''),
                 code: 'reader-repair-no-progress', label: '事实反馈义务未完成', retryable: false,
@@ -110,7 +112,7 @@ function buildExecutionArgs(command, date) {
     if (tokens[2] === 'recover' || String(command).includes('<FILE>') || String(command).includes('SPEC.json')) return null;
     const extras = tokens.slice(3).filter(token => token !== '--').map(token => token === '<DATE>' ? date : token);
     if (extras.some(token => token.startsWith('<') && token.endsWith('>'))) return null;
-    if (!extras.includes('--date')) extras.push('--date', date);
+    // 日期已由 collectFailures 把 <DATE> 替换；不要给不认 --date 的工具（config:check/validate:data）自动补参数。
     return ['run', tokens[2], '--', ...extras];
 }
 
