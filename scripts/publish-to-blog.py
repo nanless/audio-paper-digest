@@ -71,6 +71,7 @@ from path_config import (
     CURRENT_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
     DAILY_FRESH_SOURCE_RUNS_DIR,
+    DAILY_RENDER_OBSERVATIONS_DIR,
     resolve_deep_analysis_result_path,
     DIGEST_COVER_ASSET_DIR,
     DIGEST_COVER_MANIFEST_DIR,
@@ -84,6 +85,7 @@ from path_config import (
 from blog_repository_lock import shared_blog_repository_lock
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
+import daily_hugo_capture
 from manual_agent_policy import (
     CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY,
     review_model_policy, require_current_review_policy, review_subagent_identity_error,
@@ -11942,6 +11944,202 @@ def _mirror_hugo_assets(blog_repo, asset_dir):
         os.close(root_fd)
 
 
+def _render_observation_call(function, *args, **kwargs):
+    """观察失败进入原审查失败路径；已选择捕获后不降级签发无引用凭证。"""
+    try:
+        return function(*args, **kwargs)
+    except daily_hugo_capture.CaptureError as exc:
+        raise PublishDataValidationError(f'本次 Hugo 观察记录失败（{exc.code}）：{exc}') from exc
+
+
+def _daily_render_layout_profile(repo, page_artifacts):
+    """只识别已验证的单本地主题/baseof 路径；未知布局保留原审查合同。"""
+    unsupported = lambda reason: ({'status': 'unsupported', 'reason': reason},
+                                  {'origin': 'https://unsupported.invalid', 'basePath': '/'})
+    configs = [repo / name for name in daily_hugo_capture.CONFIG_NAMES if (repo / name).is_file()]
+    if not configs:
+        return unsupported('没有显式根配置')
+    config = configs[0]
+    raw = _render_observation_call(daily_hugo_capture.read_profile_file, config)
+    # 同一组原字节同时决定布局、站点边界和稍后核对的配置 SHA。
+    try:
+        if config.suffix in ('.yaml', '.yml'):
+            import yaml
+            class UniqueConfigLoader(yaml.SafeLoader):
+                pass
+
+            def unique_mapping(loader, node, deep=False):
+                result = {}
+                for key_node, value_node in node.value:
+                    key = loader.construct_object(key_node, deep=deep)
+                    if key in result:
+                        raise ValueError('根配置含重复字段')
+                    result[key] = loader.construct_object(value_node, deep=deep)
+                return result
+
+            UniqueConfigLoader.add_constructor(
+                yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, unique_mapping,
+            )
+            try:
+                value = yaml.load(raw, Loader=UniqueConfigLoader)
+            except yaml.YAMLError as exc:
+                raise ValueError('根配置 YAML 无效') from exc
+        elif config.suffix == '.toml':
+            import tomllib
+            value = tomllib.loads(raw.decode('utf-8'))
+        else:
+            value = json.loads(raw)
+    except (ValueError, TypeError, UnicodeError) as exc:
+        raise PublishDataValidationError('Hugo 根配置无法解析') from exc
+    if not isinstance(value, dict):
+        return unsupported('根配置不是对象')
+    cfg = {str(key).lower(): item for key, item in value.items()}
+    if len(cfg) != len(value):
+        return unsupported('根配置含大小写重复字段')
+    if (repo / 'config').exists() or (repo / 'go.mod').exists() or cfg.get('module'):
+        return unsupported('配置合并或模块挂载不在首版捕获范围')
+    if any(key in cfg for key in ('layoutdir', 'contentdir', 'themesdir', 'outputformats', 'mediatypes')):
+        return unsupported('自定义目录或输出格式不在首版捕获范围')
+    languages = cfg.get('languages', {})
+    if (not isinstance(languages, dict) or len(languages) > 1
+            or any(not isinstance(settings, dict) for settings in languages.values())):
+        return unsupported('多语言配置不在首版捕获范围')
+    if languages and any(set(str(k).lower() for k in settings) -
+                         {'languagecode', 'languagename', 'weight'}
+                         for settings in languages.values() if isinstance(settings, dict)):
+        return unsupported('语言专用配置不在首版捕获范围')
+    outputs = cfg.get('outputs', {})
+    if not isinstance(outputs, dict) or any(
+            str(kind).lower() != 'home' and formats != ['HTML']
+            for kind, formats in outputs.items()):
+        return unsupported('普通页面具有非唯一 HTML 输出')
+    theme = cfg.get('theme')
+    if theme is None:
+        themes = []
+    elif isinstance(theme, str) and re.fullmatch(r'[A-Za-z0-9_-]+', theme):
+        themes = [repo / 'themes' / theme / 'layouts']
+    else:
+        return unsupported('不是单个本地主题')
+    roots = [repo / 'layouts', *themes]
+    baseof = next((root / '_default' / 'baseof.html' for root in roots
+                   if (root / '_default' / 'baseof.html').is_file()), None)
+    if baseof is None:
+        return unsupported('没有标准 baseof 模板')
+    if any(any(
+            path != root / '_default' / 'baseof.html' for path in root.rglob('*baseof*.html'))
+           for root in roots if root.is_dir()):
+        return unsupported('存在专用 baseof 查找路径')
+    for artifact in page_artifacts.values():
+        frontmatter = artifact['frontmatter']
+        if any(key in frontmatter for key in ('layout', 'type', 'outputs', 'lang')):
+            return unsupported('页面使用专用布局、类型、语言或输出')
+    # standalone single 不会执行 baseof，必须在捕获开始前明确排除。
+    single = next((root / name for root in roots for name in
+                   ('posts/single.html', 'single.html', '_default/single.html')
+                   if (root / name).is_file()), None)
+    if single is None:
+        return unsupported('普通页模板未使用标准 main/baseof')
+    single_raw = _render_observation_call(daily_hugo_capture.read_profile_file, single)
+    # 仅承认可证明的标准开头；注释/字符串里的 define 不是 Go 模板块。
+    remaining = single_raw.lstrip()
+    while comment := re.match(rb'{{-?\s*/\*.*?\*/\s*-?}}', remaining, flags=re.S):
+        remaining = remaining[comment.end():].lstrip()
+    if not re.match(rb'{{-?\s*define\s+"main"\s*-?}}', remaining):
+        return unsupported('普通页模板未使用标准 main/baseof')
+    try:
+        url = urlsplit(cfg.get('baseurl', ''))
+        policy = {'origin': f'{url.scheme}://{url.netloc}', 'basePath': url.path or '/'}
+        daily_hugo_capture.validate_site_url(cfg.get('baseurl', ''), policy)
+    except (ValueError, TypeError, AttributeError):
+        return unsupported('没有受支持的 HTTPS 站点边界')
+    return ({'status': 'supported', 'profile': 'single-theme-baseof-layoutdir-v1',
+             'rootLayouts': str(roots[0]), 'themeLayouts': list(map(str, themes)),
+             'effectiveBaseof': str(baseof), 'configPath': str(config),
+             'configSha256': hashlib.sha256(raw).hexdigest()}, policy)
+
+
+@contextmanager
+def review_render_observation_scope(date_str, generation, manifest_path, paths,
+                                    page_artifacts, base_head, manifest_sha256):
+    """仅围绕同次正常日更审查，不为旧凭证重建或补签观察记录。"""
+    if (generation.get('schemaVersion') != 3 or generation.get('publicationMode') not in
+            {'llm_api_production', LEGACY_V5_MAINTENANCE_MODE}):
+        yield None
+        return
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    if _sha256_file(manifest_path) != manifest_sha256 or _load_json_object(manifest_path, '生成清单') != generation:
+        raise PublishDataValidationError('生成清单在本次观察开始前发生变化')
+    files = []
+    for path in paths:
+        target, relative = _manifest_record(path, repo)
+        deleted = not target.is_file()
+        artifact = page_artifacts.get(str(target.resolve()))
+        files.append({'path': relative, 'deleted': deleted,
+                      'sha256': None if deleted else (artifact['sha256'] if artifact else _sha256_file(target))})
+    files.sort(key=lambda row: row['path'])
+    layout, policy = _daily_render_layout_profile(repo, page_artifacts)
+    binding = {'date': date_str, 'publicationMode': generation['publicationMode'],
+        'publicationScope': _validate_active_publication_scope(generation), 'blogRoot': str(repo),
+        'generationManifestSha256': manifest_sha256, 'baseHead': base_head,
+        'reviewProtocolFingerprint': review_protocol_fingerprint(), 'files': files,
+        'pages': [{'path': row['path'], 'sha256': row['sha256']} for row in files
+                  if not row['deleted'] and row['path'].endswith('.md')],
+        'layoutPlan': layout, 'sitePolicy': policy}
+
+    def known_inputs():
+        return {'generationManifestSha256': _sha256_file(manifest_path),
+                'baseHead': validate_git_publish_branch(),
+                'reviewProtocolFingerprint': review_protocol_fingerprint(),
+                'runtimeFingerprint': blog_runtime_fingerprint(repo),
+                'unknownInputs': ['动态 readFile/资源全局池依赖未完整封存',
+                                  'GitInfo/Lastmod/时钟与生产构建等价未建立',
+                                  '前后观察不排除中间变化后恢复（ABA）']}
+    try:
+        with daily_hugo_capture.review_scope(binding=binding, known_input_reader=known_inputs,
+                                             observation_root=DAILY_RENDER_OBSERVATIONS_DIR) as session:
+            yield session
+    except daily_hugo_capture.CaptureError as exc:
+        raise PublishDataValidationError(f'本次 Hugo 观察记录失败（{exc.code}）：{exc}') from exc
+
+
+def _render_observation_final_binding(receipt):
+    return {**{key: receipt.get(key) for key in (
+        'date', 'publicationScope', 'generationManifestSha256', 'baseHead',
+        'reviewProtocolFingerprint', 'reviewedAt', 'publicationMode')},
+        'files': [{key: row.get(key) for key in ('path', 'deleted', 'sha256')}
+                  for row in receipt['files']]}
+
+
+def _validate_render_observation_ref(receipt):
+    if 'renderObservation' not in receipt:
+        return None
+    if not isinstance(receipt['renderObservation'], dict) or not receipt['renderObservation']:
+        raise PublishDataValidationError('凭证中的 Hugo 观察记录引用无效')
+    return _render_observation_call(daily_hugo_capture.validate_ref,
+        observation_root=DAILY_RENDER_OBSERVATIONS_DIR, ref=receipt['renderObservation'],
+        expected=_render_observation_final_binding(receipt))
+
+
+def read_daily_render_observation(date_str):
+    """固定日期/当前发布范围的内部只读查询；观察可用不表示当前科学资格通过。"""
+    date_str = validate_publish_date(date_str)
+    with blog_publication_lock(date_str):
+        path = review_receipt_path(date_str)
+        if not path.is_file():
+            return {'status': 'not_recorded'}
+        before = path.read_bytes()
+        receipt = _load_json_object(path, '审查凭证')
+        if 'renderObservation' not in receipt:
+            return {'status': 'not_recorded'}
+        generation = generation_manifest_path(date_str)
+        generation_before = generation.read_bytes()
+        load_verified_review_receipt(date_str)
+        validated = _validate_render_observation_ref(receipt)
+        if path.read_bytes() != before or generation.read_bytes() != generation_before:
+            raise PublishDataValidationError('读取 Hugo 观察记录期间凭证或生成清单变化')
+        return daily_hugo_capture.observation_summary(validated)
+
+
 def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None):
     """先用 Hugo 构建暂存内容，再对来源 Markdown 和渲染出的 HTML 做检查。"""
     hugo = shutil.which('hugo')
@@ -11975,17 +12173,26 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
         for directory in (cache_dir, static_dir, resource_dir, asset_dir):
             directory.mkdir()
         _mirror_hugo_assets(blog_repo, asset_dir)
-        seen_names = set()
-        for source in source_files:
-            if source.name in seen_names:
-                raise PublishDataValidationError(f'Hugo gate 当批次页面文件名重复: {source.name}')
-            seen_names.add(source.name)
-            shutil.copy2(source, isolated_posts / source.name)
+        capture = daily_hugo_capture.current_session()
+        layout_overlay = {}
+        if capture is not None and capture.supported:
+            layout_overlay = _render_observation_call(
+                daily_hugo_capture.prepare_workspace, capture,
+                workspace=workspace, source_files=tuple(source_files),
+            )
+        else:
+            seen_names = set()
+            for source in source_files:
+                if source.name in seen_names:
+                    raise PublishDataValidationError(f'Hugo gate 当批次页面文件名重复: {source.name}')
+                seen_names.add(source.name)
+                shutil.copy2(source, isolated_posts / source.name)
         overlay_config = workspace / 'hugo-isolated-gate.json'
         overlay_config.write_text(json.dumps({
             'staticDir': str(static_dir),
             'resourceDir': str(resource_dir),
             'assetDir': str(asset_dir),
+            **layout_overlay,
         }), encoding='utf-8')
         config_candidates = [
             Path(blog_repo) / name for name in (
@@ -11995,8 +12202,7 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
             if (Path(blog_repo) / name).is_file()
         ]
         config_files = [*config_candidates[:1], overlay_config]
-        result = _run_bounded_subprocess(
-            [
+        command = [
                 hugo,
                 '--config', ','.join(str(item) for item in config_files),
                 '--contentDir', str(workspace / 'content'),
@@ -12004,9 +12210,19 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
                 '--cacheDir', str(cache_dir),
                 '--cleanDestinationDir',
                 '--noBuildLock',
-            ],
+            ]
+        child_env = build_child_process_env()
+        ticket = None
+        if capture is not None and capture.supported:
+            ticket = _render_observation_call(
+                daily_hugo_capture.pin_invocation, capture, argv=tuple(command),
+                cwd=Path(blog_repo), config_files=tuple(config_files), overlay=overlay_config,
+                env_facts={key: child_env[key] for key in ('LANG', 'LC_ALL', 'TZ') if key in child_env},
+            )
+        result = _run_bounded_subprocess(
+            command,
             cwd=blog_repo,
-            env=build_child_process_env(),
+            env=child_env,
             timeout_seconds=timeout_seconds,
             max_output_bytes=HUGO_GATE_OUTPUT_TAIL_BYTES,
             combine_output=True,
@@ -12032,6 +12248,10 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
         if rendered_issues:
             raise PublishDataValidationError(
                 'Hugo 生成的 HTML 格式不符合要求：' + '; '.join(rendered_issues)
+            )
+        if capture is not None and capture.supported:
+            _render_observation_call(
+                daily_hugo_capture.collect_actual_render, capture, ticket, output_dir=output_dir,
             )
     print('  ✅ Hugo staging 构建通过')
     return 'hugo'
@@ -13843,7 +14063,7 @@ def blog_runtime_fingerprint(blog_repo=None):
     """
     repo = Path(blog_repo or BLOG_REPO).expanduser().resolve()
     config_names = (
-        'hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json', 'go.mod', 'go.sum',
+        *daily_hugo_capture.CONFIG_NAMES, 'go.mod', 'go.sum',
     )
     candidates = [repo / name for name in config_names if (repo / name).is_file()]
 
@@ -13924,6 +14144,7 @@ def review_protocol_fingerprint():
     script_dir = Path(__file__).resolve().parent
     dependency_paths = {
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
+        'daily_hugo_capture.py': script_dir / 'daily_hugo_capture.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
         'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'review-blog.py': script_dir / 'review-blog.py',
@@ -15341,6 +15562,7 @@ def reusable_verified_publication_generation(
             return None
         validate_git_commit_against_review_receipt(receipt, paths, publication_commit)
         validate_manifest_clean_against_head(paths)
+        _validate_render_observation_ref(receipt)
         return paths, manifest_path, receipt_path
     except (
         KeyError, TypeError, ValueError, OSError, UnicodeError,
@@ -15565,6 +15787,14 @@ def save_review_receipt(
         receipt['reviewProvenance'] = _validated_current_manual_review_record(
             manual_review_record, receipt, date_str,
         )
+    session = daily_hugo_capture.current_session()
+    if session is not None:
+        reference = _render_observation_call(
+            daily_hugo_capture.persist_review_observation, session,
+            final_binding=_render_observation_final_binding(receipt),
+        )
+        if reference is not None:
+            receipt['renderObservation'] = reference
     path = review_receipt_path(date_str)
     atomic_write_json(path, receipt, ensure_ascii=False, indent=2)
     return path
@@ -16294,6 +16524,7 @@ def load_verified_review_receipt(date_str):
             raise PublishDataValidationError('人工审查记录中的文件集合哈希与发布凭证不一致。')
         if manual_review_record.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
             raise PublishDataValidationError('人工审查记录中的审查协议指纹与发布凭证不一致。')
+    _validate_render_observation_ref(receipt)
     return paths, path
 
 

@@ -302,94 +302,101 @@ def _run_review(module, date_str):
             print(f'🔍 开始逐页严格审查: {len(paper_slugs)} 篇论文')
         combined_results = dict(plan['priorResults'])
         manifest_sha256 = module._sha256_file(manifest_path)
-        # 在第一次 LLM 调用之前先保存待审页面的记录。这样崩溃或 API 中断后，
-        # 下一次运行只会续跑未完成或暂时失败的页面。
-        module.save_review_failure_state(
-            date_str, paths, manifest_path, base_head, combined_results,
+        capture_scope = getattr(module, 'review_render_observation_scope', None)
+        observation_context = (
+            capture_scope(date_str, generation, manifest_path, paths, page_artifacts,
+                          base_head, manifest_sha256)
+            if callable(capture_scope) else nullcontext()
         )
-
-        try:
-            gate = preflight_generated_pages(
-                module, date_str, blog_repo, content_dir, paths, page_artifacts,
-                authoritative_by_filename, manifest_path,
-            )
-        except module.PublishDataValidationError as exc:
-            # 保存可操作的细节，但不把预检当作语义审查证据，也不覆盖已成功
-            # 的逐页检查点。
+        with observation_context:
+            # 在第一次 LLM 调用之前先保存待审页面的记录。这样崩溃或 API 中断后，
+            # 下一次运行只会续跑未完成或暂时失败的页面。
             module.save_review_failure_state(
                 date_str, paths, manifest_path, base_head, combined_results,
-                batch_issues=getattr(exc, 'review_issues', [{
-                    'severity': 'error', 'type': 'preflight', 'description': str(exc),
-                }]),
             )
-            raise
 
-        def checkpoint(path, result):
-            resolved = Path(path).resolve()
-            if hasattr(module, 'review_protocol_fingerprint'):
-                # 协议只是审计元数据。通过与否取决于确切的页面字节，协议变化后
-                # 仍然可以复用。
-                result['reviewProtocolFingerprint'] = module.review_protocol_fingerprint()
-            module.save_review_page_checkpoint(
-                date_str, resolved, result, manifest_path, base_head,
-                manifest_sha256=manifest_sha256,
-            )
-            combined_results[str(resolved)] = result
+            try:
+                gate = preflight_generated_pages(
+                    module, date_str, blog_repo, content_dir, paths, page_artifacts,
+                    authoritative_by_filename, manifest_path,
+                )
+            except module.PublishDataValidationError as exc:
+                # 保存可操作的细节，但不把预检当作语义审查证据，也不覆盖已成功
+                # 的逐页检查点。
+                module.save_review_failure_state(
+                    date_str, paths, manifest_path, base_head, combined_results,
+                    batch_issues=getattr(exc, 'review_issues', [{
+                        'severity': 'error', 'type': 'preflight', 'description': str(exc),
+                    }]),
+                )
+                raise
 
-        fixed, blocking, current_results = module.review_all_posts(
-            date_str,
-            paper_slugs,
-            scored_papers,
-            require_llm=True,
-            content_dir=str(content_dir),
-            review_paths=plan['paths'],
-            return_details=True,
-            result_callback=checkpoint,
-            page_artifacts=page_artifacts,
-        )
-        combined_results.update(current_results)
-        attest_assets = getattr(module, 'attest_api_reader_assets', None)
-        if attest_assets:
-            blocking += attest_assets(
-                date_str, paths, manifest_path, combined_results,
-            )
-        blocking += len(plan['unchangedFailed'])
-        if blocking:
-            failure_path = module.save_review_failure_state(
+            def checkpoint(path, result):
+                resolved = Path(path).resolve()
+                if hasattr(module, 'review_protocol_fingerprint'):
+                    # 协议只是审计元数据。通过与否取决于确切的页面字节，协议变化后
+                    # 仍然可以复用。
+                    result['reviewProtocolFingerprint'] = module.review_protocol_fingerprint()
+                module.save_review_page_checkpoint(
+                    date_str, resolved, result, manifest_path, base_head,
+                    manifest_sha256=manifest_sha256,
+                )
+                combined_results[str(resolved)] = result
+
+            fixed, blocking, current_results = module.review_all_posts(
                 date_str,
-                paths,
-                manifest_path,
-                base_head,
-                combined_results,
+                paper_slugs,
+                scored_papers,
+                require_llm=True,
+                content_dir=str(content_dir),
+                review_paths=plan['paths'],
+                return_details=True,
+                result_callback=checkpoint,
+                page_artifacts=page_artifacts,
             )
-            print(f'💾 已保存失败集续审状态: {failure_path}')
-            raise module.PublishDataValidationError(f'审查仍有 {blocking} 个未解决阻断问题')
-        if fixed:
-            print(f'✅ review 自动修复 {fixed} 个文件')
-        try:
-            module.validate_reviewed_file_hashes(
-                date_str, paths, manifest_path, combined_results,
+            combined_results.update(current_results)
+            attest_assets = getattr(module, 'attest_api_reader_assets', None)
+            if attest_assets:
+                blocking += attest_assets(
+                    date_str, paths, manifest_path, combined_results,
+                )
+            blocking += len(plan['unchangedFailed'])
+            if blocking:
+                failure_path = module.save_review_failure_state(
+                    date_str,
+                    paths,
+                    manifest_path,
+                    base_head,
+                    combined_results,
+                )
+                print(f'💾 已保存失败集续审状态: {failure_path}')
+                raise module.PublishDataValidationError(f'审查仍有 {blocking} 个未解决阻断问题')
+            if fixed:
+                print(f'✅ review 自动修复 {fixed} 个文件')
+            try:
+                module.validate_reviewed_file_hashes(
+                    date_str, paths, manifest_path, combined_results,
+                )
+                module.validate_staged_posts(
+                    Path(content_dir), date_str, date_only=True, publish_paths=paths,
+                    authoritative_papers=authoritative_by_filename,
+                )
+                module.validate_reviewed_file_hashes(
+                    date_str, paths, manifest_path, combined_results,
+                )
+            except Exception:
+                # 整站范围的确定性/Hugo 失败会让批次检查点作废，而逐文件的通过
+                # 结果依然可以持久复用。
+                module.review_failure_path(date_str).unlink(missing_ok=True)
+                raise
+            receipt = module.save_review_receipt(
+                date_str, paths, gate, expected_base_head=base_head,
+                generation_manifest=manifest_path,
+                reviewed_results=combined_results,
             )
-            module.validate_staged_posts(
-                Path(content_dir), date_str, date_only=True, publish_paths=paths,
-                authoritative_papers=authoritative_by_filename,
-            )
-            module.validate_reviewed_file_hashes(
-                date_str, paths, manifest_path, combined_results,
-            )
-        except Exception:
-            # 整站范围的确定性/Hugo 失败会让批次检查点作废，而逐文件的通过
-            # 结果依然可以持久复用。
+            module.clear_review_page_checkpoints(date_str)
             module.review_failure_path(date_str).unlink(missing_ok=True)
-            raise
-        receipt = module.save_review_receipt(
-            date_str, paths, gate, expected_base_head=base_head,
-            generation_manifest=manifest_path,
-            reviewed_results=combined_results,
-        )
-        module.clear_review_page_checkpoints(date_str)
-        module.review_failure_path(date_str).unlink(missing_ok=True)
-        return receipt
+            return receipt
 
 
 def _date_from_argv(argv):
