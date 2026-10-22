@@ -166,6 +166,12 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，支持 `--json`。
 - `npm run doctor` 与这三条命令都只读；抓取失败时 full-fetch 会追加 `[下一步]` 的限流/5xx/RSS 建议。
 
+## 恢复决策与清单生成
+
+- `npm run recover -- --date YYYY-MM-DD`：只读读取当前失败集（分析失败/事实义务/博客审查 error），按错误码汇总成唯一建议入口与可复制命令；默认只打印，`--execute --yes` 才调用既有入口，入口自身门禁仍然生效。
+- `npm run manifest:new -- --spec SPEC.json`：SPEC 只需写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点）；命令自动找到活动付费候选、计算 oldSha/draftSha 并做 schema 校验，默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`，不自动采纳。
+- 错误码字典 `scripts/lib/error-codes.js` 与 `error-guidance` 的规则 id 对齐，供 `recover`、状态报告和文档共用。
+
 ## 验证矩阵
 
 用户明确要求从原文重写既有日批次或全部历史页面时，使用 [当前历史计划流程](history-rewrite.md)：冻结页面范围，核验会议本地元数据/PDF，按明确获取序号封存 arXiv 官方文本/PDF。备用 `history:arxiv-batch` 仅接受本次官方获取失败保存的命名交接；普通 `reanalyze`、Reader 刷新或清除 analysis 字段不能替代完整历史范围与来源证明。
