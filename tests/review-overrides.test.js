@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const overrides = require('../scripts/lib/review-overrides');
 
 function validEntry() {
-    return { path: 'content/posts/a.md', pageSha256: 'a'.repeat(64), claim: '某句', evidence: '来源页 3 行明确写了...', reviewer: 'reviewer-a' };
+    return { path: 'content/posts/a.md', pageSha256: 'a'.repeat(64), claim: '某句 与像素冲突', evidence: '来源页 3 行明确写了...', reviewer: 'reviewer-a' };
 }
 
 test('schema 校验拒绝缺证据/错 SHA', () => {

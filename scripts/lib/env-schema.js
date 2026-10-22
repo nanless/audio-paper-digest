@@ -32,12 +32,12 @@ const SCHEMA = Object.freeze([
     { name: 'PAPER_DIGEST_BLOG_REPO', required: false, type: 'path', hint: '真实 Hugo 仓库根目录' },
     { name: 'PAPER_DIGEST_BLOG_URL', required: false, type: 'url' },
     { name: 'PAPER_DIGEST_BLOG_BASE_PATH', required: false, type: 'string' },
-    { name: 'PD_ANALYSIS_CONCURRENCY', required: false, type: 'int', min: 1, max: 60 },
+    { name: 'PD_ANALYSIS_CONCURRENCY', required: false, type: 'int', min: 1 },
     { name: 'PD_API_READER_CONCURRENCY', required: false, type: 'int', min: 1, max: 60 },
     { name: 'PD_BLOG_REVIEW_CONCURRENCY', required: false, type: 'int', min: 1, max: 5 },
     { name: 'PD_ANALYSIS_BATCH_MAX_ROUNDS', required: false, type: 'int', min: 1, max: 10 },
-    { name: 'PD_ANALYSIS_API_MAX_RETRIES', required: false, type: 'int', min: 1, max: 20 },
-    { name: 'PD_API_READER_OVERALL_TIMEOUT_MS', required: false, type: 'int', min: 60000, max: 7200000 },
+    { name: 'PD_ANALYSIS_API_MAX_RETRIES', required: false, type: 'int', min: 1 },
+    { name: 'PD_API_READER_OVERALL_TIMEOUT_MS', required: false, type: 'int', min: 1 },
     { name: 'PD_VISUAL_PLANNER_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 900 },
     { name: 'PD_WORKSPACE_ALLOW_CROSS_ROLE', required: false, type: 'bool' },
     { name: 'PD_STORAGE_RETENTION_DAYS', required: false, type: 'int', min: 1, max: 3650 }
@@ -77,19 +77,19 @@ function validateValue(item, rawValue) {
     if (!value) {
         return item.required
             ? { ok: 'fail', detail: '缺失（必填）', hint: item.hint }
-            : { ok: 'warn', detail: '未配置（可选）', hint: item.hint };
+            : { ok: 'ok', detail: '未配置（可选）', hint: item.hint };
     }
     switch (item.type) {
     case 'int': {
-        const number = Number(value);
-        if (!Number.isInteger(number)) return { ok: 'fail', detail: `不是整数：${value}`, hint: item.hint };
+        if (!/^\d+$/.test(value)) return { ok: 'fail', detail: `不是十进制整数：${value}`, hint: item.hint };
+        const number = Number.parseInt(value, 10);
         if (item.min !== undefined && number < item.min) return { ok: 'fail', detail: `小于下限 ${item.min}：${number}`, hint: item.hint };
         if (item.max !== undefined && number > item.max) return { ok: 'fail', detail: `大于上限 ${item.max}：${number}`, hint: item.hint };
         return { ok: 'ok', detail: `整数 ${number}` };
     }
     case 'bool':
-        if (!/^(?:0|1|true|false|yes|no)$/i.test(value)) return { ok: 'fail', detail: `不是布尔值：${value}`, hint: '用 1/0 或 true/false' };
-        return { ok: 'ok', detail: '布尔值合法' };
+        if (value !== '0' && value !== '1') return { ok: 'fail', detail: `不是布尔值：${value}`, hint: '运行时只认 1/0' };
+        return { ok: 'ok', detail: `布尔值 ${value}` };
     case 'url':
         try {
             const parsed = new URL(value);
@@ -126,7 +126,12 @@ function validateEntries(entries, options = {}) {
     const known = new Set(SCHEMA.map(item => item.name));
     const extraKnown = new Set(options.extraKnown || []);
     const unknown = Object.keys(source).filter(name => !known.has(name) && !extraKnown.has(name)).sort();
-    if (!source.HTTPS_PROXY && !source.HTTP_PROXY) {
+    for (const name of unknown) {
+        if (/^PAPER_ANALYZER_/.test(name)) {
+            items.push({ name, type: 'unknown', required: false, secret: secret(name), ok: 'fail', detail: '疑似拼写错误或未登记的 PAPER_ANALYZER_ 变量', hint: '核对变量名，或在 scripts/lib/env-schema.js 登记' });
+        }
+    }
+    if (!source.HTTPS_PROXY && !source.HTTP_PROXY && !source.https_proxy && !source.http_proxy) {
         const item = items.find(entry => entry.name === 'HTTPS_PROXY');
         if (item) { item.ok = 'fail'; item.detail = 'HTTPS_PROXY/HTTP_PROXY 都未配置'; item.hint = 'Muse 与 arXiv 必须走项目 HTTP CONNECT 代理'; }
     }

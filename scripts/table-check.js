@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const GLUED = /(\([^()]{1,40}\))\1/g;
+const normalizeParens = value => String(value).replace(/（/g, '(').replace(/）/g, ')');
 const UNIT_DECL = /\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)/i;
 
 function tablesOfText(text) {
@@ -23,7 +24,21 @@ function tablesOfText(text) {
 }
 
 function cellsOfRow(row) {
-    return row.replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
+    let value = row.trim();
+    if (value.startsWith('|')) value = value.slice(1);
+    if (value.endsWith('|') && !value.endsWith('\\|')) value = value.slice(0, -1);
+    const cells = [];
+    let current = '';
+    let inCode = false;
+    for (let index = 0; index < value.length; index += 1) {
+        const char = value[index];
+        if (char === '\\' && value[index + 1] === '|') { current += '|'; index += 1; continue; }
+        if (char === '`') inCode = !inCode;
+        if (char === '|' && !inCode) { cells.push(current.trim()); current = ''; continue; }
+        current += char;
+    }
+    cells.push(current.trim());
+    return cells;
 }
 
 function checkTable(lines, index) {
@@ -38,14 +53,18 @@ function checkTable(lines, index) {
         }
         cells.forEach((cell, column) => {
             GLUED.lastIndex = 0;
-            const match = GLUED.exec(cell);
+            const match = GLUED.exec(normalizeParens(cell));
             if (match) issues.push({ severity: 'error', code: 'table-glued-duplicate', message: `第 ${rowIndex + 1} 行第 ${column + 1} 格疑似粘连复写：${match[0]}`, howToFix: '核对封存原表的完整单元格值；不要只按重复形状删数字。' });
         });
     }
-    const unitHeader = header.find(cell => UNIT_DECL.test(cell));
-    if (!unitHeader && header.some(cell => /%|ms|dB|Hz/.test(cell))) {
-        issues.push({ severity: 'warn', code: 'table-unit-header', message: '指标单位出现在表头文字里但没有独立单位声明（如 (%) / (ms)），请确认与源表一致' });
-    }
+    header.forEach((cell, column) => {
+        const hasUnit = UNIT_DECL.test(cell);
+        const looksMetric = /wer|aas|accuracy|bleu|f1|mcc|latency|offset|score|%|ms|db|hz/i.test(cell);
+        const hasMetricPeer = header.some((peer, peerIndex) => peerIndex !== column && UNIT_DECL.test(peer));
+        if (looksMetric && !hasUnit && hasMetricPeer) {
+            issues.push({ severity: 'warn', code: 'table-unit-header', message: `第 ${column + 1} 列表头缺少单位声明（同表其它列有 (%)/(ms) 等），请确认与源表一致` });
+        }
+    });
     return issues;
 }
 

@@ -33,8 +33,8 @@ test('演练：账号池全冷却报最早恢复而不是静默切换', t => {
 test('演练：表格粘连与审查误报都有离线检查', () => {
     const issues = tableCheck.checkText('| A | B |\n| --- | --- |\n| (x)(x) | 1 |');
     assert.ok(issues.some(issue => issue.code === 'table-glued-duplicate'));
-    const entry = { path: 'content/posts/a.md', pageSha256: 'a'.repeat(64), claim: 'x', evidence: 'e', reviewer: 'r' };
-    const failure = { files: [{ path: entry.path, sha256: entry.pageSha256, issues: [{ severity: 'error', description: 'x 冲突' }] }] };
+    const entry = { path: 'content/posts/a.md', pageSha256: 'a'.repeat(64), claim: '这是具体的冲突句', evidence: 'e', reviewer: 'r' };
+    const failure = { files: [{ path: entry.path, sha256: entry.pageSha256, issues: [{ severity: 'error', description: '这是具体的冲突句' }] }] };
     const result = overrides.applyOverrides(failure, [entry]);
     assert.strictEqual(result.matched, 1);
     assert.strictEqual(failure.files[0].issues[0].severity, 'warn');

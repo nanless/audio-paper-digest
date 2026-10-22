@@ -50,3 +50,16 @@ test('secret 识别常见密钥变量名', () => {
     }
     assert.ok(!schema.secret('PAPER_ANALYZER_MODEL'));
 });
+
+test('可选缺失不再当警告，bool 只认 1/0，int 拒绝十六进制，支持小写代理', () => {
+    const { items } = schema.validateEntries({
+        PAPER_ANALYZER_API_KEY: 'k', PAPER_ANALYZER_MODEL: schema.EXPECTED_MODEL,
+        PAPER_ANALYZER_ENDPOINT: 'https://example.com/v1', https_proxy: 'http://127.0.0.1:7897',
+        PD_WORKSPACE_ALLOW_CROSS_ROLE: 'true', PD_ANALYSIS_CONCURRENCY: '0x10'
+    });
+    const byName = Object.fromEntries(items.map(item => [item.name, item]));
+    assert.strictEqual(byName.PD_BLOG_REVIEW_CONCURRENCY.ok, 'ok');
+    assert.strictEqual(byName.PD_WORKSPACE_ALLOW_CROSS_ROLE.ok, 'fail');
+    assert.strictEqual(byName.PD_ANALYSIS_CONCURRENCY.ok, 'fail');
+    assert.strictEqual(byName.HTTPS_PROXY.ok, 'ok');
+});

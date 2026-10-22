@@ -9,5 +9,6 @@ test('checkDocs 报告不存在的 npm 命令', () => {
     require('node:fs').writeFileSync(file, '运行 npm run exists 与 npm run missing-command\n');
     const missing = docs.checkDocs([file], { exists: 'node x' });
     assert.deepStrictEqual(missing, [{ file, command: 'missing-command' }]);
+    assert.throws(() => docs.checkDocs(['docs/does-not-exist.md'], {}), /文档不存在/);
     require('node:fs').rmSync(dir, { recursive: true, force: true });
 });

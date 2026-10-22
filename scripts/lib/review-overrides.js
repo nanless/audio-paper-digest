@@ -24,6 +24,12 @@ function validateOverrides(value) {
 
 function applyOverrides(failure, overrides) {
     const entries = Array.isArray(overrides) ? overrides : [];
+    if (entries.length) {
+        // 每条记录先过完整 schema（含 evidence/reviewer），避免空 claim 批量降级。
+        for (const entry of entries) {
+            if (typeof entry.claim !== 'string' || entry.claim.trim().length < 6) throw new Error('override.claim 太短或不精确');
+        }
+    }
     const matched = new Set();
     const files = Array.isArray(failure && failure.files) ? failure.files : [];
     for (const file of files) {
@@ -32,7 +38,7 @@ function applyOverrides(failure, overrides) {
         const issues = Array.isArray(file.issues) ? file.issues : [];
         file.issues = issues.map(issue => {
             const text = String(issue.description || issue.message || issue.issue || '');
-            if (!text.includes(entry.claim)) return issue;
+            if (text.trim() !== entry.claim.trim()) return issue;
             matched.add(entry);
             return { ...issue, severity: 'warn', overridden: true, overrideReviewer: entry.reviewer };
         });

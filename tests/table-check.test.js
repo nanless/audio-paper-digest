@@ -15,6 +15,13 @@ test('检测粘连复写与列数不一致', () => {
     assert.ok(issues.some(issue => issue.code === 'table-column-count'));
 });
 
+test('转义竖线/行内代码不误报，全角粘连能检出', () => {
+    const clean = '| A | B |\n| --- | --- |\n| x \\| y | `a|b` |';
+    assert.deepStrictEqual(tableCheck.checkText(clean), []);
+    const full = '| A | B |\n| --- | --- |\n| （x）（x） | 1 |';
+    assert.ok(tableCheck.checkText(full).some(issue => issue.code === 'table-glued-duplicate'));
+});
+
 test('干净表格通过', () => {
     const text = [
         '| 条件 | 数值 |',
