@@ -43,6 +43,8 @@ function render(result) {
 }
 
 async function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('source-probe.js'); } catch (error) { console.error(`[source-probe] ${error.message}`); return Promise.resolve(1); }
+
     const options = parseArgs(argv);
     if (options.help) { console.log('用法: node scripts/source-probe.js [--date YYYY-MM-DD] [--json] [--timeout-ms N]'); return 0; }
     const result = await probe(options);

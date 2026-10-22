@@ -22,6 +22,8 @@ function checkDocs(files, scripts) {
 }
 
 function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('docs-consistency.js'); } catch (error) { console.error(`[docs-consistency] ${error.message}`); return 1; }
+
     const json = argv.includes('--json');
     const scripts = require('../package.json').scripts || {};
     const missing = checkDocs(DEFAULT_FILES, scripts);

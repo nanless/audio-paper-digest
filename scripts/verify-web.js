@@ -76,6 +76,8 @@ function deployStatus(oid) {
 }
 
 async function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('verify-web.js'); } catch (error) { console.error(`[verify-web] ${error.message}`); return Promise.resolve(1); }
+
     const options = { date: null, limit: null, deploy: null, json: false, timeoutMs: 20000 };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];

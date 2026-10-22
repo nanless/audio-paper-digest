@@ -14,9 +14,10 @@ npm run digest:prepare -- YYYY-MM-DD
 
 | 文件/目录 | 谁写 | 说明 |
 |---|---|---|
-| `data/current/deep-analysis-result.json` | 分析/恢复入口 | 34 篇正式结果、失败与资格证明 |
+| `data/current/deep-analysis-result.json` | 分析/恢复入口 | 正式结果、失败与资格证明 |
 | `data/current/blog-generation-manifest-<date>.json` | blog:generate | 页面清单 |
-| `data/current/blog-review-passes/failure-<date>.json` | blog:review | 审查通过缓存与失败集 |
+| `data/current/blog-review-passes-<date>.json` | blog:review | 审查通过缓存 |
+| `data/current/blog-review-failure-<date>.json` | blog:review | 审查失败集（files[].issues / passed） |
 | `data/runtime/llm-account-pool.json` | Node/Python 账号池 | 轮转游标与冷却（0600） |
 | `data/runtime/llm-usage/` | 请求封装 | 逐事件用量，不推算未知费用 |
 | `logs/summaries/<date>-summary.log` | Node/Python 入口 | 人话阶段摘要 |

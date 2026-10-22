@@ -412,7 +412,7 @@ npm run test:compat
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |
 | `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
 | `source-probe.js` | Node 入口：`npm run source:probe -- --date YYYY-MM-DD` 只读探测 arXiv Atom/官方 OAI/RSS 三入口并判断公告是否目标日；支持 `--json`，不抓取、不写 data/current。 |
-| `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 只读展示账号池状态、冷却、最早恢复与活动分组；账号只显示 12 位指纹，支持 `--json`。 |
+| `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 只读展示账号池状态、冷却、最早恢复与活动分组；账号只显示本次运行序号，不显示密钥或稳定指纹，支持 `--json`。 |
 | `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥，支持 `--json`。 |
 | `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 只读汇总当前失败集，按错误码给出唯一建议入口与可复制命令；默认只打印计划，`--execute --yes` 才调用既有入口。 |
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 从 1–8 个节点替换生成 operator 修正记录与清单，自动计算 SHA/UUID；默认 dry-run，`--write` 才写 data/runtime。 |
@@ -438,7 +438,7 @@ npm run test:compat
 | `lib/llm-pending-request.js` | 模型请求发起前的持久记录，防止中断后退还已预留预算。 |
 | `lib/review-overrides.js` | Node 库：博客审查误报记录的严格 schema 与降级注释（必须绑定页面 SHA/发布提交/逐字证据/复核人），不放宽真实错误。 |
 | `lib/error-codes.js` | Node 库：稳定错误码字典（标签、可重试性、建议命令、文档锚点），供 recover 与报告复用。 |
-| `lib/env-schema.js` | Node 库：`.env` 的集中 schema（必填/类型/范围/密钥标记）与只读解析，供 config:check 与 doctor 复用。 |
+| `lib/env-schema.js` | Node 库：`.env` 的集中 schema（必填/类型/范围/密钥标记）与只读解析，供 config:check 等新工具复用（doctor 保留自己的检查）。 |
 | `lib/source-acquisition-policy.js` | Node 库：抓取前公告时段提示与 429/5xx/RSS 失败的“下一步”纯函数，不联网。 |
 | `lib/llm-usage.js` | Node 库：规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
 | `lib/llm-usage-summary.js` | Node 库：按日期聚合真实请求用量（成功/失败、阶段/模型/账号、可用费用字段），先按目录/文件 mtime 过滤再读取，提供缓存与文本/JSON 输出。 |

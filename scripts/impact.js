@@ -27,6 +27,8 @@ function impactOf(target) {
 }
 
 function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('impact.js'); } catch (error) { console.error(`[impact] ${error.message}`); return 1; }
+
     const target = argv.find(value => !value.startsWith('--'));
     const json = argv.includes('--json');
     if (!target || argv.includes('--help')) {

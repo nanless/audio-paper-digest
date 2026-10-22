@@ -34,11 +34,11 @@ function describe(state, atMs) {
             const blockedUntil = Number(record && record.blockedUntilMs);
             const blocked = Number.isFinite(blockedUntil) && blockedUntil > atMs;
             rows.push({
-                account: fingerprint(accountId),
+                account: `账号 ${rows.length + 1}`,
                 status: blocked ? 'quota_blocked' : (record && record.status) || 'eligible',
                 blockedUntil: blocked ? new Date(blockedUntil).toISOString() : null,
                 lastSelectedAt: record && Number.isFinite(Number(record.lastSelectedAtMs)) ? new Date(Number(record.lastSelectedAtMs)).toISOString() : null,
-                groups: [...activeByGroup.entries()].filter(([, group]) => group && group.activeAccountId === accountId).map(([id]) => id.slice(0, 10))
+                groups: [...activeByGroup.entries()].filter(([, group]) => group && group.activeAccountId === accountId).map(([, group], index) => `组 ${index + 1}`)
             });
         }
     }
@@ -47,6 +47,8 @@ function describe(state, atMs) {
 }
 
 function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('llm-accounts-report.js'); } catch (error) { console.error(`[llm-accounts-report] ${error.message}`); return 1; }
+
     const json = argv.includes('--json');
     const help = argv.includes('--help');
     if (help) { console.log('用法: node scripts/llm-accounts-report.js [--json] [--state PATH]'); return 0; }
@@ -66,7 +68,7 @@ function main(argv = process.argv.slice(2)) {
     return 0;
 }
 
-module.exports = { fingerprint, readState, describe, main };
+module.exports = { readState, describe, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[llm-accounts] ${error.message}`); process.exitCode = 1; }

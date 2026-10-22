@@ -58,6 +58,8 @@ function checkText(text) {
 }
 
 function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('table-check.js'); } catch (error) { console.error(`[table-check] ${error.message}`); return 1; }
+
     const options = { file: null, json: false };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];

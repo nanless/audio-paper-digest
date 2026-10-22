@@ -22,9 +22,9 @@ test('describe 显示账号、冷却、活动组且不泄露原始 id', () => {
     assert.strictEqual(result.accountCount, 2);
     assert.strictEqual(result.cooling, 1);
     assert.ok(result.earliest);
-    const rowA = result.rows.find(row => row.account === 'a'.repeat(12));
-    assert.ok(rowA, '应显示 12 位短指纹');
-    assert.deepStrictEqual(rowA.groups, ['group1']);
+    const rowA = result.rows.find(row => row.account === '账号 1');
+    assert.ok(rowA, '账号只显示序号，不显示指纹');
+    assert.deepStrictEqual(rowA.groups, ['组 1']);
     assert.ok(!JSON.stringify(result).includes(idA), '不得输出完整账号 id');
 });
 
@@ -32,5 +32,5 @@ test('readState 处理缺失与损坏', () => {
     const missing = report.readState('/tmp/definitely-missing-pool-state.json');
     assert.strictEqual(missing.state, null);
     assert.strictEqual(missing.error, null);
-    assert.strictEqual(report.fingerprint('short'), report.fingerprint('short'));
+    assert.strictEqual(missing.error, null);
 });

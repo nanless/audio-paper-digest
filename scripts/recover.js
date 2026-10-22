@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const errorCodes = require('./lib/error-codes.js');
+const { redactSensitive } = require('./lib/error-guidance.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
@@ -20,9 +21,13 @@ function readJson(file) {
 }
 
 function collectFailures(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw new Error('--date 必须是 YYYY-MM-DD');
     const failures = [];
     const analysis = readJson(path.join(CURRENT, 'deep-analysis-result.json'));
     const papers = analysis && Array.isArray(analysis.papers) ? analysis.papers : [];
+    if (analysis && analysis.batchDate && analysis.batchDate !== date) {
+        process.stderr.write(`[recover] 警告：分析结果 batchDate=${analysis.batchDate} 与请求日期 ${date} 不同，可能不是同一批次。\n`);
+    }
     for (const paper of papers) {
         const message = paper.latestAnalysisAttemptError || paper.error || '';
         const code = paper.latestAnalysisAttemptErrorCode || '';
@@ -32,12 +37,34 @@ function collectFailures(date) {
             source: 'analysis', paperId: (paper.arxivId || paper.paper_id || '').replace(/v\d+$/, ''),
             code: entry.id, label: entry.label, retryable: entry.retryable,
             command: entry.command.replace(/<DATE>/g, date), doc: entry.doc,
-            message: String(message).slice(0, 200)
+            message: redactSensitive(String(message)).slice(0, 200)
         });
+        if (paper.analysisFactReviewObligation) {
+            failures.push({ source: 'analysis', paperId: (paper.arxivId || paper.paper_id || '').replace(/v\d+$/, ''),
+                code: 'reader-repair-no-progress', label: '事实反馈义务未完成', retryable: false,
+                command: `npm run recover -- --date ${date}`, doc: 'docs/reader-explicit-retry.md', message: '存在 analysisFactReviewObligation，须先完成当前事实反馈。' });
+        }
     }
     const review = readJson(path.join(CURRENT, `blog-review-failure-${date}.json`));
-    const issues = review && Array.isArray(review.issues) ? review.issues : [];
-    for (const issue of issues) {
+    const files = review && Array.isArray(review.files) ? review.files : [];
+    for (const file of files) {
+        const issues = Array.isArray(file.issues) ? file.issues : [];
+        for (const issue of issues) {
+            if (!/error/i.test(String(issue.severity || issue.level || ''))) continue;
+            const description = String(issue.description || issue.message || issue.issue || '');
+            const entry = errorCodes.classify(description);
+            failures.push({ source: 'review', page: String(file.path || '').split('/').pop(),
+                code: entry.id, label: entry.label, retryable: entry.retryable,
+                command: entry.command.replace(/<DATE>/g, date), doc: entry.doc, message: redactSensitive(description).slice(0, 200) });
+        }
+        if (file.passed !== true && !issues.some(issue => /error/i.test(String(issue.severity || issue.level || '')))) {
+            failures.push({ source: 'review', page: String(file.path || '').split('/').pop(),
+                code: 'blog-push-guard', label: '页面未通过审查或未完成', retryable: false,
+                command: `npm run blog:review -- --date ${date}`, doc: 'docs/maintenance.md',
+                message: String(file.failureKind || 'passed=false').slice(0, 200) });
+        }
+    }
+    if (review && Array.isArray(review.issues) && !files.length) for (const issue of review.issues) {
         if (!/error/i.test(String(issue.severity || issue.level || ''))) continue;
         const description = String(issue.description || issue.message || issue.issue || '');
         const entry = errorCodes.classify(description);
@@ -77,6 +104,8 @@ function render(date, failures, groups) {
 }
 
 function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('recover.js'); } catch (error) { console.error(`[recover] ${error.message}`); return 1; }
+
     const options = { date: null, json: false, execute: false, yes: false, strict: false };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
@@ -97,10 +126,17 @@ function main(argv = process.argv.slice(2)) {
     if (!options.execute) return options.strict && failures.length ? 1 : 0;
     if (!options.yes) throw new Error('--execute 需要同时传 --yes（确认会调用真实入口）');
     for (const group of groups) {
-        if (!group.command.startsWith('npm run ')) continue;
+        if (!group.command.startsWith('npm run ')) { console.log(`\n跳过非 npm 命令（请手工执行）：${group.command}`); continue; }
         const script = group.command.slice('npm run '.length).split(/\s+/)[0];
-        console.log(`\n执行：npm run ${script}（来自 ${group.code}）`);
-        const result = spawnSync('npm', ['run', script], { stdio: 'inherit', cwd: ROOT });
+        if (script === 'recover' || group.command.includes('<DATE>') || group.command.includes('<FILE>') || group.command.includes('SPEC.json')) {
+            console.log(`\n需手工执行（含占位符或自指）：${group.command}`); continue;
+        }
+        const args = ['run', script];
+        if (['deep', 'batch', 'reanalyze', 'api:reader:refresh', 'blog:generate', 'blog:review', 'blog:push', 'digest:status', 'source:probe'].includes(script)) {
+            args.push('--', '--date', date);
+        }
+        console.log(`\n执行：npm ${args.join(' ')}（来自 ${group.code}）`);
+        const result = spawnSync('npm', args, { stdio: 'inherit', cwd: ROOT });
         if (result.status !== 0) return result.status || 1;
     }
     return 0;

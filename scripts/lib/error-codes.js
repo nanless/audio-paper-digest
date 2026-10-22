@@ -3,14 +3,14 @@
 
 const ENTRIES = Object.freeze([
     { id: 'arxiv-rate-limit', label: 'arXiv 限流（429）', retryable: true, command: 'npm run source:probe -- --date <DATE>', doc: 'docs/troubleshooting.md' },
-    { id: 'upstream-rate-limit', label: '上游/模型服务限流（429）', retryable: true, command: 'npm run recover -- --date <DATE>', doc: 'docs/troubleshooting.md' },
+    { id: 'upstream-rate-limit', label: '上游/模型服务限流（429）', retryable: true, command: 'npm run deep -- --date <DATE>', doc: 'docs/troubleshooting.md' },
     { id: 'official-oai-rss-stale', label: '官方 OAI/RSS 公告未生成', retryable: true, command: 'npm run source:probe -- --date <DATE>', doc: 'docs/daily-fetch-boundary.md' },
     { id: 'llm-account-pool', label: '模型账号池耗尽/余额不足', retryable: true, command: 'npm run llm:accounts', doc: 'docs/setup.md' },
-    { id: 'reader-repair-no-progress', label: 'Reader 同组问题无进展', retryable: false, command: 'npm run recover -- --date <DATE>', doc: 'docs/reader-explicit-retry.md' },
-    { id: 'reader-operator-correction-rejected', label: 'Reader 人工修正被拒', retryable: false, command: 'npm run recover -- --date <DATE>', doc: 'docs/reader-explicit-retry.md' },
+    { id: 'reader-repair-no-progress', label: 'Reader 同组问题无进展', retryable: false, command: 'npm run api:reader:refresh -- --all --date <DATE> --concurrency 5 --scoring-and-reader', doc: 'docs/reader-explicit-retry.md' },
+    { id: 'reader-operator-correction-rejected', label: 'Reader 人工修正被拒', retryable: false, command: 'npm run manifest:new -- --spec SPEC.json', doc: 'docs/reader-explicit-retry.md' },
     { id: 'reader-table-adhesion', label: '表格单元格粘连复写', retryable: false, command: 'npm run table:check -- --draft <FILE>', doc: 'docs/maintenance.md' },
     { id: 'reader-table-header-units', label: '表头单位缺少来源证据', retryable: false, command: 'npm run table:check -- --draft <FILE>', doc: 'docs/maintenance.md' },
-    { id: 'reader-ablation-missing', label: '缺少消融/组件对照', retryable: false, command: 'npm run recover -- --date <DATE>', doc: 'docs/reader-explicit-retry.md' },
+    { id: 'reader-ablation-missing', label: '缺少消融/组件对照', retryable: false, command: 'npm run deep -- --date <DATE>', doc: 'docs/reader-explicit-retry.md' },
     { id: 'blog-repository-dirty', label: '博客仓库有清单外改动', retryable: false, command: 'git -C "$PAPER_DIGEST_BLOG_REPO" status --porcelain', doc: 'docs/maintenance.md' },
     { id: 'paper-lock-busy', label: '论文/运行锁被占用', retryable: true, command: 'npm run locks', doc: 'docs/troubleshooting.md' },
     { id: 'source-sha-mismatch', label: '封存来源 SHA 不一致', retryable: false, command: 'npm run validate:data', doc: 'docs/data-format.md#日更来源的保存与核验' },

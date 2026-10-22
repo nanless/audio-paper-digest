@@ -75,53 +75,73 @@ function buildSpecPreview({ paper, draft, spec, found, sourceDescriptor }) {
 }
 
 function main(argv = process.argv.slice(2)) {
-    const options = { specFile: null, write: false, json: false };
+    const options = { specFiles: [], write: false, json: false };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
-        if (value === '--spec') options.specFile = path.resolve(argv[++index] || '');
+        if (value === '--spec') options.specFiles.push(path.resolve(argv[++index] || ''));
         else if (value === '--write') options.write = true;
         else if (value === '--dry-run') options.write = false;
         else if (value === '--json') options.json = true;
         else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
     }
-    if (options.help || !options.specFile) {
-        console.log('用法: node scripts/manifest-new.js --spec SPEC.json [--dry-run|--write] [--json]');
+    if (options.help || !options.specFiles.length) {
+        console.log('用法: node scripts/manifest-new.js --spec SPEC.json [--spec SPEC2.json ...] [--dry-run|--write] [--json]');
+        console.log('SPEC 可以是单个 {paperId,replacements}、其数组，或 {papers:[...]}；--write 必须覆盖当前完整失败集。');
         return options.help ? 0 : 2;
     }
-    const spec = JSON.parse(fs.readFileSync(options.specFile, 'utf8'));
-    validateSpec(spec);
+    const specs = options.specFiles.flatMap(file => {
+        const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+        return Array.isArray(value) ? value : (Array.isArray(value.papers) ? value.papers : [value]);
+    });
+    specs.forEach(validateSpec);
     const data = readJsonFileStrict(Config.FILES.deepAnalysisResult);
     const papers = Array.isArray(data) ? data : (data.papers || []);
     const plan = daily.requireDailyFreshSourceRecoveryPlan(data, { papers, label: 'manifest-new' });
-    const paper = papers.find(item => utils.normalizedId({ arxivId: item.arxivId || item.paper_id || item.paperId }) === utils.normalizedId({ arxivId: spec.paperId }));
-    if (!paper) throw new Error(`当前批次找不到论文：${spec.paperId}`);
-    const details = daily.readDailyFreshSource(plan, paper);
-    const found = findCandidate(plan.readerAttemptsDir, spec.paperId);
-    if (!found) throw new Error(`找不到 ${spec.paperId} 的活动付费候选`);
-    const preview = buildSpecPreview({ paper, draft: found.envelope.payload.draft, spec, found, sourceDescriptor: details.freshSourceDescriptor });
-    preview.record.runId = plan.runId;
-    preview.record.batchDate = plan.batchDate;
-    const summary = {
-        paperId: spec.paperId, replacements: preview.replacements.map(item => item.path),
-        baselineCandidate: found.absolutePath, baselineDraftSha256: preview.record.baselineDraftSha256,
-        draftSha256: hashDraft(preview.finalDraft), dryRun: !options.write
-    };
-    if (options.json) console.log(JSON.stringify(summary, null, 2));
-    else console.log(`论文 ${spec.paperId}：${preview.replacements.length} 个节点，候选 ${path.basename(found.absolutePath).slice(0, 10)}，draft ${summary.draftSha256.slice(0, 10)}${options.write ? '' : '（dry-run，不写文件）'}`);
+    const built = [];
+    for (const spec of specs) {
+        const paper = papers.find(item => utils.normalizedId({ arxivId: item.arxivId || item.paper_id || item.paperId }) === utils.normalizedId({ arxivId: spec.paperId }));
+        if (!paper) throw new Error(`当前批次找不到论文：${spec.paperId}`);
+        const details = daily.readDailyFreshSource(plan, paper);
+        const found = findCandidate(plan.readerAttemptsDir, spec.paperId);
+        if (!found) throw new Error(`找不到 ${spec.paperId} 的活动付费候选`);
+        const preview = buildSpecPreview({ paper, draft: found.envelope.payload.draft, spec, found, sourceDescriptor: details.freshSourceDescriptor });
+        preview.record.runId = plan.runId;
+        preview.record.batchDate = plan.batchDate;
+        built.push({ spec, paper, found, preview, paperId: utils.normalizedId({ arxivId: paper.arxivId || paper.paper_id || paper.paperId }) });
+    }
+    const summary = built.map(item => ({
+        paperId: item.paperId, replacements: item.preview.replacements.map(entry => entry.path),
+        baselineCandidate: item.found.absolutePath, baselineDraftSha256: item.preview.record.baselineDraftSha256,
+        draftSha256: hashDraft(item.preview.finalDraft)
+    }));
+    if (options.json) console.log(JSON.stringify({ records: summary, dryRun: !options.write }, null, 2));
+    else for (const item of summary) console.log(`论文 ${item.paperId}：${item.replacements.length} 个节点，draft ${item.draftSha256.slice(0, 10)}${options.write ? '' : '（dry-run，不写文件）'}`);
     if (!options.write) return 0;
+    const failed = papers.filter(paper => paper.latestAnalysisAttemptError || paper.analysisFactReviewObligation)
+        .map(paper => utils.normalizedId({ arxivId: paper.arxivId || paper.paper_id || paper.paperId })).sort();
+    const covered = built.map(item => item.paperId).sort();
+    if (JSON.stringify(failed) !== JSON.stringify(covered)) {
+        const missing = failed.filter(id => !covered.includes(id));
+        const extra = covered.filter(id => !failed.includes(id));
+        throw new Error(`--write 必须覆盖当前完整失败集（缺少 ${missing.join(', ') || '无'}；多余 ${extra.join(', ') || '无'}）`);
+    }
     const outDir = path.join(ROOT, 'data', 'runtime', `operator-corrections-${plan.batchDate.replace(/-/g, '')}-${crypto.randomUUID()}`);
     fs.mkdirSync(outDir, { recursive: false, mode: 0o700 });
-    const recordFile = path.join(outDir, `${spec.paperId}.json`);
-    fs.writeFileSync(recordFile, JSON.stringify(preview.record), { mode: 0o600 });
+    const correctionFiles = [];
+    for (const item of built) {
+        const recordFile = path.join(outDir, `${item.paperId}.json`);
+        fs.writeFileSync(recordFile, JSON.stringify(item.preview.record), { mode: 0o600 });
+        correctionFiles.push(recordFile);
+    }
     const manifest = {
         contract: 'daily-reader-operator-correction-batch-v1', runId: plan.runId, batchDate: plan.batchDate,
-        authorization: spec.authorization || '用户明确要求人工处理当前日更失败论文（零请求本地修正）',
-        correctionFiles: [recordFile]
+        authorization: built[0].spec.authorization || '用户明确要求人工处理当前日更失败论文（零请求本地修正）',
+        correctionFiles
     };
     const manifestFile = path.join(outDir, 'operator-manifest.json');
     fs.writeFileSync(manifestFile, JSON.stringify(manifest), { mode: 0o600 });
-    console.log(`已写入 ${manifestFile}`);
+    console.log(`已写入 ${manifestFile}（${correctionFiles.length} 篇，覆盖完整失败集）`);
     return 0;
 }
 

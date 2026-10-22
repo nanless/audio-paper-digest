@@ -8,6 +8,8 @@ const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
 
 function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('publish-finish.js'); } catch (error) { console.error(`[publish-finish] ${error.message}`); return 1; }
+
     const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : null;
     if (!date) { console.log('用法: node scripts/publish-finish.js --date YYYY-MM-DD'); return 2; }
     const waiver = path.join(CURRENT, 'post-publish-visual-waivers', `${date}.json`);

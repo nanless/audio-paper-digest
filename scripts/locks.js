@@ -57,6 +57,8 @@ function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
 }
 
 function main(argv = process.argv.slice(2)) {
+    try { require('./env-loader').requireExternalRuntime('locks.js'); } catch (error) { console.error(`[locks] ${error.message}`); return 1; }
+
     const json = argv.includes('--json');
     const recover = argv.includes('--recover');
     if (argv.includes('--help')) { console.log('用法: node scripts/locks.js [--json] [--recover]'); return 0; }
