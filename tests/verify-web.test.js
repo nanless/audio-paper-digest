@@ -348,3 +348,37 @@ test('mock HTTP 服务器：200/404/标题不符/超时（离线 localhost）', 
     assert.strictEqual(slow.status, null);
     assert.ok(slow.error);
 });
+
+test('重定向到其它页/站点标题单页/抽样/无部署均不能假通过', async t => {
+    const dir = tempDir(t);
+    writeManifest(dir, DATE, [`${DATE}`, `${DATE}-a`]);
+    const redirectFetch = async url => ({
+        status: 200,
+        url: 'https://example.com/posts/',
+        text: async () => '<title>语音/音乐/音频论文速递 2099-01-02 汇总</title>'
+    });
+    const lines = [];
+    const code = await verifyWeb.runVerifyWebCli(['--date', DATE, '--json', '--allow-partial'], {
+        currentDir: dir,
+        env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
+        fetchImpl: redirectFetch,
+        print: line => lines.push(line),
+        printError: () => {}
+    });
+    assert.strictEqual(code, 1, '重定向页面不得通过');
+    const summary = parseLines(lines).find(item => item.type === 'summary');
+    assert.strictEqual(summary.results.every(item => item.redirectOk === false), true);
+
+    const genericFetch = async () => ({ status: 200, text: async () => '<title>语音/音乐/音频论文速递</title>' });
+    const limited = await verifyWeb.runVerifyWebCli(['--date', DATE, '--limit', '1', '--json'], {
+        currentDir: dir,
+        env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
+        fetchImpl: genericFetch,
+        print: () => {},
+        printError: () => {}
+    });
+    assert.strictEqual(limited, 1, '抽样/无部署不能返回 0');
+    const artifact = assertArtifact(dir, DATE);
+    assert.strictEqual(artifact.partial, true);
+    assert.strictEqual(artifact.results[0].titleOk, false, '只有站点名的单页标题不算通过');
+});
