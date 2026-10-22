@@ -761,8 +761,8 @@ def write_review_help(failure_path, help_path):
                 'path': file.get('path'),
                 'pageSha256': file.get('sha256'),
                 'claim': description,
-                'howToFix': (guidance.get('nextSteps') or ['检查该页并回到生成/Reader 阶段修正'])[0],
-                'docRef': guidance.get('docRef')
+                'howToFix': ((guidance.get('next_steps') or guidance.get('nextSteps') or ['检查该页并回到生成/Reader 阶段修正']))[0],
+                'docRef': guidance.get('doc_ref') or guidance.get('docRef')
             })
     target = Path(help_path)
     target.parent.mkdir(parents=True, exist_ok=True)

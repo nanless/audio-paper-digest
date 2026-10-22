@@ -15,7 +15,7 @@ function validateOverrides(value) {
         if (!entry || typeof entry !== 'object') throw new Error(`${prefix} 必须是对象`);
         if (typeof entry.path !== 'string' || !entry.path.startsWith('content/posts/')) throw new Error(`${prefix}.path 非法`);
         if (!SHA256.test(entry.pageSha256 || '')) throw new Error(`${prefix}.pageSha256 非法`);
-        if (typeof entry.claim !== 'string' || !entry.claim.trim()) throw new Error(`${prefix}.claim 不能为空`);
+        if (typeof entry.claim !== 'string' || entry.claim.trim().length < 6) throw new Error(`${prefix}.claim 太短或不精确`);
         if (typeof entry.evidence !== 'string' || !entry.evidence.trim()) throw new Error(`${prefix}.evidence 不能为空`);
         if (typeof entry.reviewer !== 'string' || !entry.reviewer.trim()) throw new Error(`${prefix}.reviewer 不能为空`);
         return { path: entry.path, pageSha256: entry.pageSha256, claim: entry.claim, evidence: entry.evidence, reviewer: entry.reviewer };
@@ -24,25 +24,23 @@ function validateOverrides(value) {
 
 function applyOverrides(failure, overrides) {
     const entries = Array.isArray(overrides) ? overrides : [];
-    if (entries.length) {
-        // 每条记录先过完整 schema（含 evidence/reviewer），避免空 claim 批量降级。
-        for (const entry of entries) {
-            if (typeof entry.claim !== 'string' || entry.claim.trim().length < 6) throw new Error('override.claim 太短或不精确');
-        }
+    for (const entry of entries) {
+        if (typeof entry.claim !== 'string' || entry.claim.trim().length < 6) throw new Error('override.claim 太短或不精确');
     }
     const matched = new Set();
-    const files = Array.isArray(failure && failure.files) ? failure.files : [];
-    for (const file of files) {
-        const entry = entries.find(item => item.path === file.path && item.pageSha256 === file.sha256);
-        if (!entry) continue;
-        const issues = Array.isArray(file.issues) ? file.issues : [];
-        file.issues = issues.map(issue => {
-            const text = String(issue.description || issue.message || issue.issue || '');
-            if (text.trim() !== entry.claim.trim()) return issue;
-            matched.add(entry);
-            return { ...issue, severity: 'warn', overridden: true, overrideReviewer: entry.reviewer };
-        });
+    const applyToIssues = (issues, file) => (Array.isArray(issues) ? issues : []).map(issue => {
+        const text = String(issue.description || issue.message || issue.issue || '').trim();
+        const entry = entries.find(item => item.claim.trim() === text
+            && (!file || (item.path === file.path && item.pageSha256 === file.sha256)));
+        if (!entry) return issue;
+        matched.add(entry);
+        return { ...issue, severity: 'warn', overridden: true, overrideReviewer: entry.reviewer };
+    });
+    for (const file of Array.isArray(failure && failure.files) ? failure.files : []) {
+        file.issues = applyToIssues(file.issues, file);
     }
+    // 批次级 preflight/顶层 issues 同样可被严格记录解释，否则 wouldPass 会假放行。
+    failure.issues = applyToIssues(failure.issues, null);
     return { failure, matched: matched.size };
 }
 

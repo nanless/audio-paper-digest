@@ -22,12 +22,17 @@ function main(argv = process.argv.slice(2)) {
     }
     if (!date || !file) throw new Error('需要 --date 与 --file');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('--date 必须是 YYYY-MM-DD');
-    const overrides = validateOverrides(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (payload.batchDate && date && payload.batchDate !== date) throw new Error(`overrides.batchDate=${payload.batchDate} 与 --date ${date} 不一致`);
+    const overrides = validateOverrides(payload);
     const failureFile = failureFileOption || path.join(CURRENT, `blog-review-failure-${date}.json`);
     if (!fs.existsSync(failureFile)) throw new Error(`找不到审查失败文件：${failureFile}`);
     const failure = JSON.parse(fs.readFileSync(failureFile, 'utf8'));
     const { matched } = applyOverrides(failure, overrides);
-    const remaining = (failure.files || []).flatMap(item => (item.issues || []).filter(issue => /error/i.test(String(issue.severity || issue.level || ''))));
+    const remaining = [
+        ...(failure.files || []).flatMap(item => (item.issues || [])),
+        ...(failure.issues || [])
+    ].filter(issue => /error/i.test(String(issue.severity || issue.level || '')));
     const report = { date, overrides: overrides.length, matched, remainingErrors: remaining.length, wouldPass: remaining.length === 0 };
     if (json) console.log(JSON.stringify(report, null, 2));
     else {

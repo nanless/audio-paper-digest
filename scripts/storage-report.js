@@ -21,13 +21,14 @@ function main(argv = process.argv.slice(2)) {
         console.log('只读：默认运行 storage:status 概览并打印保留建议；--advice-only 只打印建议。');
         return 0;
     }
+    let statusFailed = false;
     if (!argv.includes('--advice-only')) {
-        try { storage.main(['status']); } catch (error) { console.error(`[storage-report] status 失败：${error.message}`); }
+        try { storage.main(['status']); if (process.exitCode === 1) statusFailed = true; } catch (error) { console.error(`[storage-report] status 失败：${error.message}`); statusFailed = true; }
     }
     console.log('\n保留建议：');
     for (const line of adviceLines()) console.log(line);
     console.log('\n清理必须先预览：npm run storage:prune（不加 --apply 只打印清单）；真正删除前停止全部抓取/分析/发布/视觉任务。');
-    return 0;
+    return statusFailed ? 1 : 0;
 }
 
 module.exports = { ADVICE, adviceLines, main };

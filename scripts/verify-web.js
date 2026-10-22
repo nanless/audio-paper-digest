@@ -88,7 +88,7 @@ async function waitForDeploy(oid, options = {}) {
     const deadline = Date.now() + waitMs;
     let deploy = deployStatus(oid, { spawnSync: spawnSyncImpl, repository: options.repository });
     const snapshots = [deploy];
-    while (Date.now() < deadline && !(deploy && deploy.available && deploy.status === 'completed')) {
+    while (Date.now() < deadline && deploy && deploy.available && deploy.status !== 'completed') {
         await sleep(intervalMs);
         deploy = deployStatus(oid, { spawnSync: spawnSyncImpl, repository: options.repository });
         snapshots.push(deploy);
@@ -115,15 +115,15 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--allow-degraded] [--json]'); return options.help ? 0 : 2; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) throw new Error('--date 必须是 YYYY-MM-DD');
-    const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
     let deploy = options.deploy ? deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository }) : null;
+    const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
     if (options.deploy && options.wait) {
         const waited = await waitForDeploy(options.deploy, {
             spawnSync: options.spawnSync, repository: options.repository,
             pollIntervalMs: options.pollIntervalMs, sleep: options.sleep, waitSeconds: options.waitSeconds
         });
         deploy = waited.deploy;
-        for (const snapshot of waited.snapshots.slice(1)) console.log(`[verify-web] 部署状态：${snapshot.available ? `${snapshot.status} ${snapshot.conclusion || ''}` : snapshot.message}`);
+        if (!options.json) for (const snapshot of waited.snapshots.slice(1)) console.log(`[verify-web] 部署状态：${snapshot.available ? `${snapshot.status} ${snapshot.conclusion || ''}` : snapshot.message}`);
     }
     if (options.json) console.log(JSON.stringify({ ...summary, deploy }, null, 2));
     else {

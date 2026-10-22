@@ -60,8 +60,9 @@ function checkTable(lines, index) {
         });
     }
     header.forEach((cell, column) => {
-        const hasUnit = UNIT_DECL.test(cell);
-        const looksMetric = /wer|aas|accuracy|bleu|f1|mcc|latency|offset|score|%|ms|db|hz/i.test(cell);
+        const normalizedCell = String(cell).normalize('NFKC');
+        const hasUnit = UNIT_DECL.test(normalizedCell);
+        const looksMetric = /wer|aas|accuracy|bleu|f1|mcc|latency|offset|score|%|ms|db|hz/i.test(normalizedCell);
         const hasMetricPeer = header.some((peer, peerIndex) => peerIndex !== column && UNIT_DECL.test(peer));
         if (looksMetric && !hasUnit && hasMetricPeer) {
             issues.push({ severity: 'warn', code: 'table-unit-header', message: `第 ${column + 1} 列表头缺少单位声明（同表其它列有 (%)/(ms) 等），请确认与源表一致` });
