@@ -21,9 +21,10 @@ function main(argv = process.argv.slice(2)) {
         try {
             const data = JSON.parse(fs.readFileSync(waiver, 'utf8'));
             const manifestFile = path.join(CURRENT, 'blog-generation-manifest-' + date + '.json');
-            const manifestSha = fs.existsSync(manifestFile) ? require('node:crypto').createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex') : null;
+            const manifestExists = fs.existsSync(manifestFile);
+            const manifestSha = manifestExists ? require('node:crypto').createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex') : null;
             const valid = data.status === 'waived' && data.batchDate === date
-                && (!manifestSha || data.generationManifestSha256 === manifestSha)
+                && Boolean(manifestSha) && data.generationManifestSha256 === manifestSha
                 && Boolean(data.publicationCommit || data.remoteVerifiedOid);
             if (valid) console.log(`3) 视觉：豁免有效且已绑定当前批次（${waiver}）；不要执行视觉:prepare 或生图。`);
             else console.log(`3) 视觉：豁免文件存在但与当前批次不匹配（${waiver}）；请核对 status/batchDate/清单 SHA/发布 OID，不要直接跳过。`);

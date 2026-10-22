@@ -83,7 +83,7 @@ test('titleOf 解码实体，fetchPage 记录状态与标题', async () => {
     const fetched = await verifyWeb.fetchPage('https://example.com/', {
         fetchImpl: async () => ({ status: 200, text: async () => '<title>ok</title>' })
     });
-    assert.deepStrictEqual(fetched, { status: 200, title: 'ok' });
+    assert.deepStrictEqual(fetched, { status: 200, title: 'ok', finalUrl: null });
     assert.strictEqual(verifyWeb.titleMatches('ok | 语音/音乐/音频论文速递'), true);
     assert.strictEqual(verifyWeb.titleMatches('别的标题'), false);
 });

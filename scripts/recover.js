@@ -31,7 +31,8 @@ function collectFailures(date) {
     for (const paper of papers) {
         const message = paper.latestAnalysisAttemptError || paper.error || '';
         const code = paper.latestAnalysisAttemptErrorCode || '';
-        if (!message && !code) continue;
+        const statusHint = String(paper.digestStatus?.latestAttemptStatus || paper.analysisStatus || '');
+        if (!message && !code && statusHint !== 'analysis_failed' && !paper.analysisFactReviewObligation) continue;
         const entry = errorCodes.classify(`${code} ${message}`);
         failures.push({
             source: 'analysis', paperId: (paper.arxivId || paper.paper_id || '').replace(/v\d+$/, ''),
@@ -103,6 +104,16 @@ function render(date, failures, groups) {
     return lines.join('\n');
 }
 
+function buildExecutionArgs(command, date) {
+    const tokens = String(command || '').trim().split(/\s+/);
+    if (tokens[0] !== 'npm' || tokens[1] !== 'run' || !tokens[2]) return null;
+    if (tokens[2] === 'recover' || String(command).includes('<FILE>') || String(command).includes('SPEC.json')) return null;
+    const extras = tokens.slice(3).filter(token => token !== '--').map(token => token === '<DATE>' ? date : token);
+    if (extras.some(token => token.startsWith('<') && token.endsWith('>'))) return null;
+    if (!extras.includes('--date')) extras.push('--date', date);
+    return ['run', tokens[2], '--', ...extras];
+}
+
 function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('recover.js'); } catch (error) { console.error(`[recover] ${error.message}`); return 1; }
 
@@ -127,14 +138,8 @@ function main(argv = process.argv.slice(2)) {
     if (!options.yes) throw new Error('--execute 需要同时传 --yes（确认会调用真实入口）');
     for (const group of groups) {
         if (!group.command.startsWith('npm run ')) { console.log(`\n跳过非 npm 命令（请手工执行）：${group.command}`); continue; }
-        const script = group.command.slice('npm run '.length).split(/\s+/)[0];
-        if (script === 'recover' || group.command.includes('<DATE>') || group.command.includes('<FILE>') || group.command.includes('SPEC.json')) {
-            console.log(`\n需手工执行（含占位符或自指）：${group.command}`); continue;
-        }
-        const args = ['run', script];
-        if (['deep', 'batch', 'reanalyze', 'api:reader:refresh', 'blog:generate', 'blog:review', 'blog:push', 'digest:status', 'source:probe'].includes(script)) {
-            args.push('--', '--date', date);
-        }
+        const args = buildExecutionArgs(group.command, date);
+        if (!args) { console.log(`\n需手工执行（含占位符或自指）：${group.command}`); continue; }
         console.log(`\n执行：npm ${args.join(' ')}（来自 ${group.code}）`);
         const result = spawnSync('npm', args, { stdio: 'inherit', cwd: ROOT });
         if (result.status !== 0) return result.status || 1;
@@ -142,7 +147,7 @@ function main(argv = process.argv.slice(2)) {
     return 0;
 }
 
-module.exports = { beijingDate, collectFailures, plan, render, main };
+module.exports = { beijingDate, buildExecutionArgs, collectFailures, plan, render, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[recover] ${error.message}`); process.exitCode = 1; }

@@ -65,7 +65,7 @@ async function fetchPage(url, options = {}) {
             ? AbortSignal.timeout(timeoutMs) : undefined);
     const response = await fetchImpl(url, { redirect: 'follow', signal });
     const html = await response.text();
-    return { status: response.status, title: titleOf(html) };
+    return { status: response.status, title: titleOf(html), finalUrl: response.url || null };
 }
 
 function atomicWriteJson(targetPath, value) {
@@ -204,6 +204,15 @@ function deployStatus(oid, options = {}) {
             message: `解析 gh 输出失败：${error.message}`
         };
     }
+}
+
+function validateReceiptBinding({ receipt, manifestSha256, deployOid } = {}) {
+    if (!receipt || typeof receipt !== 'object') throw new Error('审查凭证必须是对象');
+    const receiptManifest = receipt.generationManifestSha256 || receipt.manifestSha256;
+    if (receiptManifest && manifestSha256 && receiptManifest !== manifestSha256) throw new Error('审查凭证的生成清单 SHA 与当前清单不一致');
+    const receiptOid = receipt.publicationCommit || receipt.remoteVerifiedOid || receipt.reviewedCommit;
+    if (deployOid && receiptOid && receiptOid !== deployOid) throw new Error('--deploy OID 与审查凭证记录不一致');
+    return { receiptManifest: receiptManifest || null, receiptOid: receiptOid || null };
 }
 
 async function waitForDeploy(oid, options = {}) {

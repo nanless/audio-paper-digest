@@ -33,8 +33,9 @@ function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
             if (!entry.name.endsWith('.lock')) {
                 if (entry.isDirectory() && depth < 3) {
                     const base = path.basename(directory);
-                    const descend = depth === 0 && ['.analysis-runs', 'locks', 'conference-processes'].includes(entry.name)
-                        || base === 'conference-processes' && depth === 1;
+                    const descend = depth === 0 && ['.analysis-runs', 'locks', 'conference-processes', 'conference-executions', 'conference-filters', 'fresh-rewrites', 'conference-page-staging'].includes(entry.name)
+                        || (base === 'conference-processes' || base === 'conference-executions' || base === 'conference-filters' || base === 'fresh-rewrites' || base === 'conference-page-staging') && depth === 1
+                        || String(entry.name).includes('stage-locks') && depth < 2;
                     if (descend) visit(target, depth + 1);
                 }
                 continue;
