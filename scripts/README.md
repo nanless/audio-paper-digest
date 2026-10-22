@@ -416,6 +416,8 @@ npm run test:compat
 | `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥，支持 `--json`。 |
 | `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 只读汇总当前失败集，按错误码给出唯一建议入口与可复制命令；默认只打印计划，`--execute --yes` 才调用既有入口。 |
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 从 1–8 个节点替换生成 operator 修正记录与清单，自动计算 SHA/UUID；默认 dry-run，`--write` 才写 data/runtime。 |
+| `table-check.js` | Node 入口：`npm run table:check -- --draft DRAFT.json` 离线预检表格粘连复写/列数/单位声明，不写数据。 |
+| `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
 | `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥。 |
 | `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
@@ -430,6 +432,7 @@ npm run test:compat
 | `lib/immutable-file.js` | Node 库：先写临时文件并同步，再用硬链接保存正式文件，不覆盖已有内容；只回收同机已退出写者留下、且与正式文件指向同一文件的临时硬链接，拒绝清理其他文件。 |
 | `lib/legacy-manual-source.js` | 只读核验旧 Manual 官方来源的日期、版本、路径和 SHA。 |
 | `lib/llm-pending-request.js` | 模型请求发起前的持久记录，防止中断后退还已预留预算。 |
+| `lib/review-overrides.js` | Node 库：博客审查误报记录的严格 schema 与降级注释（必须绑定页面 SHA/发布提交/逐字证据/复核人），不放宽真实错误。 |
 | `lib/error-codes.js` | Node 库：稳定错误码字典（标签、可重试性、建议命令、文档锚点），供 recover 与报告复用。 |
 | `lib/env-schema.js` | Node 库：`.env` 的集中 schema（必填/类型/范围/密钥标记）与只读解析，供 config:check 与 doctor 复用。 |
 | `lib/source-acquisition-policy.js` | Node 库：抓取前公告时段提示与 429/5xx/RSS 失败的“下一步”纯函数，不联网。 |

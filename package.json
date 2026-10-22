@@ -98,7 +98,9 @@
     "llm:accounts": "node scripts/llm-accounts-report.js",
     "config:check": "node scripts/config-check.js",
     "recover": "node scripts/recover.js",
-    "manifest:new": "node scripts/manifest-new.js"
+    "manifest:new": "node scripts/manifest-new.js",
+    "table:check": "node scripts/table-check.js",
+    "impact": "node scripts/impact.js"
   },
   "keywords": [
     "arxiv",

@@ -172,6 +172,12 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run manifest:new -- --spec SPEC.json`：SPEC 只需写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点）；命令自动找到活动付费候选、计算 oldSha/draftSha 并做 schema 校验，默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`，不自动采纳。
 - 错误码字典 `scripts/lib/error-codes.js` 与 `error-guidance` 的规则 id 对齐，供 `recover`、状态报告和文档共用。
 
+## 表格与影响面预检
+
+- `npm run table:check -- --draft DRAFT.json`：离线检查草稿里的表格粘连复写、列数与单位声明，不写数据、不替代正式发布校验。
+- `npm run impact -- <file-or-dir>`：静态列出改动影响的入口、测试与重验范围，避免改一处规则却漏跑相关流程。
+- 审查误报记录使用 `scripts/lib/review-overrides.js` 的严格 schema（页面 SHA、发布提交、逐字证据、复核人），只把匹配的 error 注释为 warn，不放宽真实错误；是否采用由调用方显式决定。
+
 ## 验证矩阵
 
 用户明确要求从原文重写既有日批次或全部历史页面时，使用 [当前历史计划流程](history-rewrite.md)：冻结页面范围，核验会议本地元数据/PDF，按明确获取序号封存 arXiv 官方文本/PDF。备用 `history:arxiv-batch` 仅接受本次官方获取失败保存的命名交接；普通 `reanalyze`、Reader 刷新或清除 analysis 字段不能替代完整历史范围与来源证明。
