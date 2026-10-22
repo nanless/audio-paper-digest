@@ -37,7 +37,8 @@ const PATTERNS = [
     { id: 'arxiv-rate-limit', regex: /arxiv.*(?:429|rate|限流)|429.*arxiv/i },
     { id: 'upstream-rate-limit', regex: /429|rate.?limit|too many requests/i },
     { id: 'generation-snapshot-stale', regex: /快照|snapshot/i },
-    { id: 'blog-push-guard', regex: /推送|push|审查凭证|review receipt/i }
+    { id: 'generation-snapshot-stale', regex: /清单.*(?:删除|状态|不一致)|manifest.*(?:delete|stale|inconsistent)|生成快照|snapshot/i },
+    { id: 'blog-push-guard', regex: /推送|push|审查凭证|review receipt|hugo|preflight|渲染失败|视觉规划/i }
 ];
 
 function classify(text) {

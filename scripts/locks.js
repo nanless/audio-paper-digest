@@ -1,60 +1,69 @@
 #!/usr/bin/env node
 'use strict';
-// 只读查看运行锁：持有者、时间、心跳；--recover 只打印疑似可回收项，不删除。
+// 只读查看运行锁：支持 <target>.lock/owner.json 目录锁与普通 *.lock 文件。
+// --recover 只打印疑似可回收项，绝不删除。
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_DIRS = ['data/runtime', 'data/current'];
 
-function scanLocks(dirs, nowMs = Date.now()) {
-    const rows = [];
-    for (const dir of dirs || DEFAULT_DIRS) {
-        const absolute = path.resolve(ROOT, dir);
-        if (!fs.existsSync(absolute)) continue;
-        const stack = [absolute];
-        while (stack.length) {
-            const current = stack.pop();
-            let entries;
-            try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch (_) { continue; }
-            for (const entry of entries) {
-                const target = path.join(current, entry.name);
-                if (entry.isDirectory()) { stack.push(target); continue; }
-                if (!/\.lock(?:\.json)?$/.test(entry.name)) continue;
-                let record = null;
-                try { record = JSON.parse(fs.readFileSync(target, 'utf8')); } catch (_) { record = null; }
-                const pid = record && (record.pid || record.ownerPid);
-                const started = record && (record.startedAt || record.createdAt || record.acquiredAt);
-                const heartbeat = record && (record.heartbeatAt || record.updatedAt || started);
-                const ageSeconds = heartbeat ? Math.max(0, Math.round((nowMs - Date.parse(heartbeat)) / 1000)) : null;
-                rows.push({
-                    file: path.relative(ROOT, target), pid: pid || null, startedAt: started || null,
-                    heartbeatAt: heartbeat || null, ageSeconds,
-                    alive: Number.isInteger(pid) ? isAlive(pid) : null,
-                    stale: Number.isInteger(pid) ? !isAlive(pid) && (ageSeconds === null || ageSeconds > 120) : null
-                });
-            }
-        }
-    }
-    return rows.sort((left, right) => left.file.localeCompare(right.file));
-}
-
 function isAlive(pid) {
     try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+function readOwnerRecord(target, entry) {
+    if (entry.isDirectory()) {
+        const ownerFile = path.join(target, 'owner.json');
+        try { return JSON.parse(fs.readFileSync(ownerFile, 'utf8')); } catch (_) { return null; }
+    }
+    try { return JSON.parse(fs.readFileSync(target, 'utf8')); } catch (_) { return null; }
+}
+
+function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
+    const root = options.root || ROOT;
+    const rows = [];
+    const visit = (directory, depth) => {
+        let entries;
+        try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
+        for (const entry of entries) {
+            if (entry.name === '.hugo_build.lock' || entry.name === 'node_modules' || entry.name === '.git') continue;
+            const target = path.join(directory, entry.name);
+            if (!entry.name.endsWith('.lock')) {
+                // 只向下看一层（例如 .analysis-runs），避免遍历 data/runtime 的海量运行目录。
+                if (entry.isDirectory() && depth === 0 && (entry.name === '.analysis-runs' || entry.name === 'locks')) visit(target, depth + 1);
+                continue;
+            }
+            const record = readOwnerRecord(target, entry);
+            const rawPid = record && (record.pid ?? record.ownerPid);
+            const pid = Number.isInteger(Number(rawPid)) && Number(rawPid) > 0 ? Number(rawPid) : null;
+            const hostname = record && (record.hostname || record.host) || null;
+            const started = record && (record.acquiredAt || record.startedAt || record.createdAt) || null;
+            const heartbeat = record && (record.heartbeatAt || record.updatedAt || started) || null;
+            const ageSeconds = heartbeat && !Number.isNaN(Date.parse(heartbeat))
+                ? Math.max(0, Math.round((nowMs - Date.parse(heartbeat)) / 1000)) : null;
+            const local = !hostname || hostname === os.hostname();
+            const alive = local && pid !== null ? isAlive(pid) : null;
+            rows.push({
+                file: path.relative(root, target), kind: entry.isDirectory() ? 'directory' : 'file',
+                pid, hostname, startedAt: started, heartbeatAt: heartbeat, ageSeconds,
+                alive, stale: local && pid !== null ? (!alive && (ageSeconds === null || ageSeconds > 120)) : false
+            });
+        }
+    };
+    for (const dir of dirs || []) visit(path.resolve(root, dir), 0);
+    return rows.sort((left, right) => left.file.localeCompare(right.file));
 }
 
 function main(argv = process.argv.slice(2)) {
     const json = argv.includes('--json');
     const recover = argv.includes('--recover');
     if (argv.includes('--help')) { console.log('用法: node scripts/locks.js [--json] [--recover]'); return 0; }
-    const rows = scanLocks(DEFAULT_DIRS);
+    const rows = scanLocks();
     if (json) console.log(JSON.stringify({ locks: rows }, null, 2));
-    else if (!rows.length) console.log('未发现运行锁文件。');
-    else {
-        for (const row of rows) {
-            console.log(`- ${row.file}  pid=${row.pid || '?'}  ${row.alive === null ? '' : row.alive ? '存活' : '已退出'}  心跳=${row.heartbeatAt || '?'}${row.stale ? '  ⚠ 疑似陈旧' : ''}`);
-        }
-    }
+    else if (!rows.length) console.log('未发现运行锁。');
+    else for (const row of rows) console.log(`- ${row.file}  pid=${row.pid || '?'}  ${row.alive === null ? '远端/未知' : row.alive ? '存活' : '已退出'}  心跳=${row.heartbeatAt || '?'}${row.stale ? '  ⚠ 疑似陈旧' : ''}`);
     if (recover) {
         const stale = rows.filter(row => row.stale);
         console.log(stale.length ? `\n疑似可回收 ${stale.length} 个（仅预览，未删除）：\n${stale.map(row => `  ${row.file}`).join('\n')}` : '\n没有疑似陈旧锁。');

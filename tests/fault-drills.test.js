@@ -5,11 +5,11 @@ const assert = require('node:assert');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const errorCodes = require('../../scripts/lib/error-codes');
-const policy = require('../../scripts/lib/source-acquisition-policy');
-const tableCheck = require('../../scripts/table-check');
-const overrides = require('../../scripts/lib/review-overrides');
-const pool = require('../../scripts/llm-account-pool');
+const errorCodes = require('../scripts/lib/error-codes');
+const policy = require('../scripts/lib/source-acquisition-policy');
+const tableCheck = require('../scripts/table-check');
+const overrides = require('../scripts/lib/review-overrides');
+const pool = require('../scripts/llm-account-pool');
 
 test('演练：arXiv 429 与 RSS 未生成给出不同建议', () => {
     assert.strictEqual(errorCodes.classify('HTTP 429 arxiv rate limit').id, 'arxiv-rate-limit');
@@ -38,4 +38,25 @@ test('演练：表格粘连与审查误报都有离线检查', () => {
     const result = overrides.applyOverrides(failure, [entry]);
     assert.strictEqual(result.matched, 1);
     assert.strictEqual(failure.files[0].issues[0].severity, 'warn');
+});
+
+test('演练：今天真实出现过的发布失败都有可读分类', () => {
+    for (const [text, expected] of [
+        ['schema v1 推送失败', 'blog-push-guard'],
+        ['Hugo preflight render failed', 'blog-push-guard'],
+        ['v3 清单删除状态不一致', 'generation-snapshot-stale'],
+        ['发布后视觉规划失败', 'blog-push-guard']
+    ]) {
+        assert.strictEqual(errorCodes.classify(text).id, expected, text);
+    }
+});
+
+test('演练：文档中的 <script> 占位不会被误判成真实命令', () => {
+    const fs = require('node:fs');
+    const dir = fs.mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'drill-docs-'));
+    const file = require('node:path').join(dir, 'x.md');
+    fs.writeFileSync(file, '运行 npm run <script> 或 npm run exists\n');
+    const missing = require('../scripts/docs-consistency').checkDocs([file], { exists: 'x' });
+    assert.deepStrictEqual(missing, []);
+    fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -29,6 +29,8 @@ def parse_options(module, argv=None):
                         help='图片任务规划失败时以非零状态退出（默认日更流程使用）')
     parser.add_argument('--include-id', action='append', metavar='ARXIV_ID',
                         help='只推送指定单篇论文；ID 必须与生成和审查时一致')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='只列出审查凭证允许的精确文件，不 commit/push')
     args = parser.parse_args(argv)
     if args.date and len(args.date) > 1:
         parser.error('--date 只能指定一次')

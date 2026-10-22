@@ -18,9 +18,10 @@ function pageUrls(date, env, manifest) {
     const base = String(env.PAPER_DIGEST_BLOG_URL || 'https://nanless.github.io/audio-paper-digest-blog/posts').replace(/\/$/, '');
     const files = manifest && Array.isArray(manifest.files) ? manifest.files : [];
     return files
+        .filter(file => file && file.deleted !== true)
         .map(file => String(file.path || ''))
         .filter(file => file.startsWith('content/posts/') && file.endsWith('.md'))
-        .map(file => ({ file, url: `${base}/${path.basename(file, '.md')}/` }));
+        .map(file => ({ file, url: `${base}/${file.slice('content/posts/'.length, -'.md'.length)}/` }));
 }
 
 function titleOf(html) {
@@ -30,7 +31,8 @@ function titleOf(html) {
 
 async function fetchPage(url, options = {}) {
     const fetchImpl = options.fetchImpl || globalThis.fetch;
-    const response = await fetchImpl(url, { redirect: 'follow', signal: options.signal });
+    const signal = options.signal || (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(options.timeoutMs || 20000) : undefined);
+    const response = await fetchImpl(url, { redirect: 'follow', signal });
     const html = await response.text();
     return { status: response.status, title: titleOf(html) };
 }
@@ -46,12 +48,13 @@ async function verify(date, options = {}) {
     for (const page of pages) {
         try {
             const fetched = await fetchPage(page.url, options);
-            results.push({ ...page, ...fetched, ok: fetched.status === 200 && Boolean(fetched.title) });
+            const titleOk = fetched.status === 200 && Boolean(fetched.title) && fetched.title.includes('语音/音乐/音频论文速递');
+            results.push({ ...page, ...fetched, titleOk, ok: titleOk });
         } catch (error) {
             results.push({ ...page, status: null, title: null, ok: false, error: error.message });
         }
     }
-    const summary = { date, checked: results.length, ok: results.filter(item => item.ok).length, failed: results.filter(item => !item.ok).length, results };
+    const summary = { date, checked: results.length, ok: results.filter(item => item.ok).length, failed: results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0), results };
     if (!options.noWrite) {
         fs.mkdirSync(CURRENT, { recursive: true });
         fs.writeFileSync(path.join(CURRENT, `web-verification-${date}.json`), JSON.stringify(summary, null, 2));
@@ -73,18 +76,19 @@ function deployStatus(oid) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-    const options = { date: null, limit: null, deploy: null, json: false };
+    const options = { date: null, limit: null, deploy: null, json: false, timeoutMs: 20000 };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
         if (value === '--date') options.date = argv[++index] || null;
         else if (value === '--limit') options.limit = Number(argv[++index]);
         else if (value === '--deploy') options.deploy = argv[++index] || null;
         else if (value === '--json') options.json = true;
+        else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
         else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
     }
     if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--json]'); return options.help ? 0 : 2; }
-    const summary = await verify(options.date, { limit: options.limit });
+    const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
     const deploy = options.deploy ? deployStatus(options.deploy) : null;
     if (options.json) console.log(JSON.stringify({ ...summary, deploy }, null, 2));
     else {
@@ -94,7 +98,10 @@ async function main(argv = process.argv.slice(2)) {
         console.log(`合计：${summary.ok}/${summary.checked} 通过，${summary.failed} 失败；结果已写入 data/current/web-verification-${options.date}.json`);
         if (deploy) console.log(`部署：${deploy.available ? `${deploy.status || ''} ${deploy.conclusion || ''} ${deploy.url || deploy.message || ''}` : deploy.message}`);
     }
-    return summary.failed > 0 ? 1 : 0;
+    const deployFailed = Boolean(deploy && deploy.available && (deploy.conclusion && deploy.conclusion !== 'success'
+        || (!deploy.conclusion && deploy.message)));
+    if (!options.json && deployFailed) console.log('部署核验失败：目标提交没有成功完成 Pages build/deploy。');
+    return summary.failed > 0 || deployFailed ? 1 : 0;
 }
 
 module.exports = { pageUrls, titleOf, fetchPage, verify, deployStatus, main };

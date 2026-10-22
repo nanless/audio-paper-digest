@@ -8,9 +8,9 @@ const verifyWeb = require('../scripts/verify-web');
 
 test('pageUrls 把生成清单路径转成站点 URL', () => {
     const env = { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' };
-    const manifest = { files: [{ path: 'content/posts/2026-10-21.md' }, { path: 'content/posts/2026-10-21-a.md' }, { path: 'static/x.png' }] };
+    const manifest = { files: [{ path: 'content/posts/2026-10-21.md' }, { path: 'content/posts/2026-10-21-a.md' }, { path: 'content/posts/sub/b.md' }, { path: 'content/posts/deleted.md', deleted: true }, { path: 'static/x.png' }] };
     const pages = verifyWeb.pageUrls('2026-10-21', env, manifest);
-    assert.deepStrictEqual(pages.map(page => page.url), ['https://example.com/posts/2026-10-21/', 'https://example.com/posts/2026-10-21-a/']);
+    assert.deepStrictEqual(pages.map(page => page.url), ['https://example.com/posts/2026-10-21/', 'https://example.com/posts/2026-10-21-a/', 'https://example.com/posts/sub/b/']);
 });
 
 test('titleOf 提取标题，fetchPage 记录状态与标题', async () => {
@@ -19,6 +19,7 @@ test('titleOf 提取标题，fetchPage 记录状态与标题', async () => {
         fetchImpl: async () => ({ status: 200, text: async () => '<title>ok</title>' })
     });
     assert.deepStrictEqual(fetched, { status: 200, title: 'ok' });
+    assert.strictEqual(verifyWeb.titleOf('<title>语音/音乐/音频论文速递 2026-10-21</title>').includes('语音/音乐/音频论文速递'), true);
 });
 
 test('verify 汇总成功/失败并写结果', async t => {
