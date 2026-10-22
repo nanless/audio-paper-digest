@@ -67,8 +67,9 @@ function sharedBlogLocks(root = ROOT) {
     if (!fs.existsSync(envFile)) return [];
     let env = {};
     try { env = require('./lib/env-schema').parseEnvText(fs.readFileSync(envFile, 'utf8')); } catch (_) { return []; }
-    const repo = env.PAPER_DIGEST_BLOG_REPO;
+    let repo = env.PAPER_DIGEST_BLOG_REPO;
     if (!repo) return [];
+    if (repo === '~' || repo.startsWith('~/')) repo = path.join(require('node:os').homedir(), repo.slice(2));
     const dir = path.join(repo, '.git', '.paper-digest-locks');
     if (!fs.existsSync(dir)) return [];
     const rows = [];

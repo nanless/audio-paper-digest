@@ -168,7 +168,7 @@ def plan_dry_run(module, paths, receipt):
     }
 
 
-def run_dry_run(module, date_str, paths, receipt, *, print_fn=print):
+def run_dry_run(module, date_str, paths, receipt, *, include_id=None, print_fn=print):
     """只读预检并打印精确清单；绝不 git add/commit/push，也不规划视觉任务。"""
     plan = plan_dry_run(module, paths, receipt)
     if plan['unrelated']:
@@ -187,7 +187,8 @@ def run_dry_run(module, date_str, paths, receipt, *, print_fn=print):
         print_fn(f'  {(item["status"].strip() or "??"):>2} {item["path"]}')
     receipt_label = receipt if isinstance(receipt, str) else '<内存凭证>'
     print_fn(f'🧾 审查凭证: {receipt_label}')
-    print_fn(f'✅ 未发现审查清单外改动；确认后可运行: npm run blog:push -- --date {date_str}')
+    suffix = f' --include-id {include_id}' if include_id else ''
+    print_fn(f'✅ 未发现审查清单外改动；确认后可运行: npm run blog:push -- --date {date_str}{suffix}')
     return plan
 
 
@@ -218,7 +219,7 @@ def main():
                 print(f'🧾 已验证审查凭证: {receipt}')
                 print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
                 if dry_run:
-                    plan = run_dry_run(module, date_str, paths, receipt)
+                    plan = run_dry_run(module, date_str, paths, receipt, include_id=include_id)
                     write_stage_summary(
                         '推送', 'ok',
                         f'dry-run：列出 {plan["count"]} 个待提交文件；未执行 git add/commit/push',

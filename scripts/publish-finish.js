@@ -22,6 +22,9 @@ function validateWaiver(data, { date, manifestSha, receiptCommit, visualSha, cov
         && Boolean(coverSha) && data.coverManifestSha256 === coverSha;
 }
 
+function visualManifestPath(date, currentDir = CURRENT) { return path.join(currentDir, 'visual-summary-manifests', `${date}.json`); }
+function coverManifestPath(date, currentDir = CURRENT) { return path.join(currentDir, 'digest-cover-manifests', `${date}.json`); }
+
 function shaOf(file) { try { return require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch (_) { return null; } }
 
 function main(argv = process.argv.slice(2)) {
@@ -53,8 +56,8 @@ function main(argv = process.argv.slice(2)) {
                     webOk = web.partial !== true && web.deploy && web.deploy.status === 'completed' && web.deploy.conclusion === 'success';
                 } catch (_) { webOk = false; }
             }
-            const visualSha = shaOf(path.join(CURRENT, 'visual-summary-manifest-' + date + '.json'));
-            const coverSha = shaOf(path.join(CURRENT, 'digest-cover-manifest-' + date + '.json'));
+            const visualSha = shaOf(visualManifestPath(date));
+            const coverSha = shaOf(coverManifestPath(date));
             const valid = validateWaiver(data, { date, manifestSha, receiptCommit, visualSha, coverSha });
             if (valid) {
                 console.log(`3) 视觉：豁免有效且已绑定当前批次（${waiver}）；不要执行视觉:prepare 或生图。`);
@@ -75,7 +78,7 @@ function main(argv = process.argv.slice(2)) {
     return 0;
 }
 
-module.exports = { validateWaiver, main };
+module.exports = { validateWaiver, visualManifestPath, coverManifestPath, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[publish-finish] ${error.message}`); process.exitCode = 1; }

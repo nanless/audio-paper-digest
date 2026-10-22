@@ -3,6 +3,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 const finish = require('../scripts/publish-finish');
 
+test('视觉/封面清单使用复数目录路径', () => {
+    const finish = require('../scripts/publish-finish');
+    assert.strictEqual(finish.visualManifestPath('2099-01-02', '/tmp/x'), '/tmp/x/visual-summary-manifests/2099-01-02.json');
+    assert.strictEqual(finish.coverManifestPath('2099-01-02', '/tmp/x'), '/tmp/x/digest-cover-manifests/2099-01-02.json');
+});
+
 test('豁免必须严格绑定版本/清单/发布 OID/视觉清单', () => {
     const base = { status: 'waived', version: 1, batchDate: '2099-01-02', requestedBy: 'user', reason: '视觉任务已取消并确认', generationManifestSha256: 'a'.repeat(64), publicationCommit: 'b'.repeat(40), remoteVerifiedOid: 'b'.repeat(40), visualManifestSha256: 'c'.repeat(64), coverManifestSha256: 'd'.repeat(64) };
     const ctx = { date: '2099-01-02', manifestSha: 'a'.repeat(64), receiptCommit: 'b'.repeat(40), visualSha: 'c'.repeat(64), coverSha: 'd'.repeat(64) };
