@@ -1,0 +1,186 @@
+[
+  {
+    "message": "arxiv:2610.00429 parse failed",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "arxiv value 0.429 parse failed",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "arxiv value 429.0 parse failed",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "双429不符",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "arxiv x429 429x _429 429_ 4290",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "arxiv é429 429é ́429 429́",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "arxiv ि429 429ि",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "HTTP429 request failed",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "HTTP 429 request failed",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "(429) request failed",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "myarxiv HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxiv123 HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "fooarxiv HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "myarxiv.org HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxiv.org.evil.test HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxiv.org-fake.test HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxiv.org@evil.test HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "́arxiv HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxivि HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxiv HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "https://arxiv.org/html/2610.00429 HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "https://export.arxiv.org/api/query HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "https://rss.arxiv.org/rss/cs.SD HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "export.arxiv HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "rss.arxiv HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "oaipmh HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "not_oaipmh HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxiv rate limit",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "arxiv Too Many Requests",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "arxiv 限流",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "模型限流",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxİv HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxıv HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "arxiv rate lİmit",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "arxiv Too Many Requeſts",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "HTTP\u001c429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "HTTP429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "https://arxiv.org:443@evil.test HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "https://arxiv.org:443/html/paper HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "https://oaipmh.arxiv.org/oai HTTP 429",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "ARXIV_RATE_LIMITED",
+    "expected": "arxiv-rate-limit"
+  },
+  {
+    "message": "FAKE_ARXIV_RATE_LIMITED HTTP 429",
+    "expected": "upstream-rate-limit"
+  },
+  {
+    "message": "OAI responseDate is stale; previous HTTP429",
+    "expected": "official-oai-rss-stale"
+  },
+  {
+    "message": "arxiv rate\u001climit",
+    "expected": "generic-fallback"
+  },
+  {
+    "message": "arxiv ratelimit",
+    "expected": "generic-fallback"
+  }
+]

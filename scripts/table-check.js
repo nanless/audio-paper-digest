@@ -46,7 +46,16 @@ const GLUED_PATTERNS = [
     /(\d+\.\d+)\1/g
 ];
 
-const FENCE = /^\s{0,3}(?:```|~~~)/;
+function openingFence(line) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!match || (match[1][0] === '`' && match[2].includes('`'))) return null;
+    return { marker: match[1][0], length: match[1].length };
+}
+
+function closesFence(line, fence) {
+    const match = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+    return Boolean(match && match[1][0] === fence.marker && match[1].length >= fence.length);
+}
 const CAPTION = /^\s*(?:Table|表)\s*\d+(?:[.:：]|\s|$)/i;
 const SEPARATOR_CELL = /^:?-{1,}:?$/;
 const MEAN_DELTA_LABEL = /^Mean\s*[Δ∆]$/i;
@@ -130,11 +139,16 @@ function tablesOfText(text) {
     const lines = String(text || '').split(/\r?\n/);
     const tables = [];
     let index = 0;
-    let inFence = false;
+    let fence = null;
     while (index < lines.length) {
         const line = lines[index];
-        if (FENCE.test(line)) { inFence = !inFence; index += 1; continue; }
-        if (inFence) { index += 1; continue; }
+        if (fence) {
+            if (closesFence(line, fence)) fence = null;
+            index += 1;
+            continue;
+        }
+        const opening = openingFence(line);
+        if (opening) { fence = opening; index += 1; continue; }
         if (!isCaptionLine(line) && hasUnescapedPipe(line) && index + 1 < lines.length) {
             const delimiter = lines[index + 1];
             const headerCells = splitRowCells(line);
@@ -145,7 +159,7 @@ function tablesOfText(text) {
                 const block = [line.trim()];
                 let next = index + 2;
                 while (next < lines.length
-                    && !FENCE.test(lines[next])
+                    && !openingFence(lines[next])
                     && !isCaptionLine(lines[next])
                     && !isSeparatorRow(lines[next])
                     && hasUnescapedPipe(lines[next])) {
@@ -242,9 +256,25 @@ function checkText(text) {
 
 function draftText(raw) {
     if (typeof raw === 'string') return raw;
-    if (raw && Array.isArray(raw.sections)) return raw.sections.map(section => section.body || '').join('\n\n');
-    if (raw && typeof raw === 'object') return String(raw.markdown || raw.article || '');
-    return '';
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error('草稿 JSON 必须是正文字符串或含 sections/markdown/article 的对象');
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'sections')) {
+        if (!Array.isArray(raw.sections)) throw new Error('sections 必须是数组');
+        return raw.sections.map((section, index) => {
+            if (!section || typeof section !== 'object' || Array.isArray(section)) {
+                throw new Error(`sections[${index}] 必须是对象`);
+            }
+            // 兼容局部空段，只在合并后要求正文非空；不把错误类型强转成文本。
+            if (section.body === undefined || section.body === null) return '';
+            if (typeof section.body !== 'string') throw new Error(`sections[${index}].body 必须是字符串或空值`);
+            return section.body;
+        }).join('\n\n');
+    }
+    const value = raw.markdown === undefined || raw.markdown === null || raw.markdown === ''
+        ? raw.article : raw.markdown;
+    if (typeof value !== 'string') throw new Error('草稿 markdown/article 正文必须是字符串');
+    return value;
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -255,11 +285,20 @@ function main(argv = process.argv.slice(2)) {
         return 1;
     }
 
-    const options = { file: null, json: false };
+    const options = { file: null, json: false, format: null };
     try {
         for (let index = 0; index < argv.length; index += 1) {
             const value = argv[index];
-            if (value === '--draft' || value === '--file') options.file = path.resolve(argv[++index] || '');
+            if (value === '--draft' || value === '--file' || value === '--format') {
+                const next = argv[++index];
+                if (typeof next !== 'string' || !next.trim() || next.startsWith('--')) {
+                    throw new Error(`${value} 需要非空值${value === '--format' ? '' : '（文件路径）'}`);
+                }
+                if (value === '--format') {
+                    if (!['json', 'markdown'].includes(next)) throw new Error('--format 仅支持 json 或 markdown');
+                    options.format = next;
+                } else options.file = path.resolve(next);
+            }
             else if (value === '--json') options.json = true;
             else if (value === '--help') options.help = true;
             else throw new Error(`未知参数：${value}`);
@@ -269,21 +308,24 @@ function main(argv = process.argv.slice(2)) {
         return 2;
     }
     if (options.help) {
-        console.log('用法: node scripts/table-check.js --draft DRAFT.json [--json]');
+        console.log('用法: node scripts/table-check.js --draft FILE [--format json|markdown] [--json]');
+        console.log('未指定 --format 时，.md/.markdown 按 Markdown 读取，其余按 JSON 读取；解析失败不回退。');
         return 0;
     }
     if (!options.file) {
-        console.error('[table-check] 需要 --draft DRAFT.json');
+        console.error('[table-check] 需要 --draft FILE');
         return 2;
     }
     let text;
     try {
-        text = draftText(JSON.parse(fs.readFileSync(options.file, 'utf8')));
+        const format = options.format || (/^\.(?:md|markdown)$/i.test(path.extname(options.file)) ? 'markdown' : 'json');
+        const raw = fs.readFileSync(options.file, 'utf8');
+        text = format === 'markdown' ? raw : draftText(JSON.parse(raw));
     } catch (error) {
         console.error(`[table-check] 读取草稿失败：${error.message}`);
         return 2;
     }
-    if (!text) {
+    if (!text.trim()) {
         console.error('[table-check] 草稿里没有可检查的正文');
         return 2;
     }

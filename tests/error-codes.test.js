@@ -58,3 +58,11 @@ function idsIncludes(ruleId) {
     if (!ruleId) return true;
     return codes.ENTRIES.some(entry => entry.id === ruleId || (ruleId === 'llm-account-pool' && entry.id === 'llm-account-pool'));
 }
+
+test('错误字典与指引共用独立数字及来源边界的正反例', () => {
+    const cases = require('./fixtures/error-rate-boundary-cases.json');
+    for (const { message, expected } of cases) {
+        assert.strictEqual(codes.classify(message).id, expected, message);
+        assert.strictEqual(guidance.ruleIdFor(message), expected, `guidance: ${message}`);
+    }
+});

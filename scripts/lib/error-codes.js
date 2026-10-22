@@ -1,4 +1,5 @@
 'use strict';
+const { RATE_LIMIT_PATTERN, ARXIV_SIGNAL_PATTERN, OAI_RSS_STALE_PATTERN } = require('./error-guidance');
 // 稳定错误码字典：code/标签/可重试性/建议入口/文档锚点，与 error-guidance 的规则 id 对齐。
 
 const ENTRIES = Object.freeze([
@@ -34,12 +35,14 @@ const PATTERNS = [
     { id: 'reader-table-ablation-missing', regex: /消融|ablation/i },
     { id: 'reader-operator-correction-rejected', regex: /操作员|operator|人工修正.*拒绝/i },
     { id: 'reader-repair-no-progress', regex: /无进展|no.?progress/i },
+    // An explicit source rate limit must not be hidden by a URL's rss/oai token.
+    { id: 'official-oai-rss-stale', regex: OAI_RSS_STALE_PATTERN },
+    { id: 'arxiv-rate-limit', regex: new RegExp(`^(?=[\\s\\S]*(?:${ARXIV_SIGNAL_PATTERN.source}))(?=[\\s\\S]*(?:${RATE_LIMIT_PATTERN.source}))`, 'iu') },
+    { id: 'upstream-rate-limit', regex: RATE_LIMIT_PATTERN },
     { id: 'official-oai-rss-stale', regex: /oai|rss|公告未生成|pubdate/i },
     { id: 'blog-review-receipt-missing', regex: /审查凭证|review receipt|缺少凭证/i },
     { id: 'blog-lock-busy', regex: /共享博客.*锁|blog.*lock|博客仓库.*锁/i },
     { id: 'paper-lock-busy', regex: /\block\b|锁.*(?:占用|超时)|lock timeout|paper lock/i },
-    { id: 'arxiv-rate-limit', regex: /arxiv.*(?:429|rate|限流)|429.*arxiv/i },
-    { id: 'upstream-rate-limit', regex: /(?<![\p{L}\p{N}_])(?:HTTP\s*)?429(?:$|[^\p{L}\p{N}_])|rate.?limit|too many requests/i },
     { id: 'generation-snapshot-stale', regex: /清单.*(?:删除|状态|不一致)|manifest.*(?:delete|stale|inconsistent)|生成快照|snapshot/i },
     { id: 'blog-push-guard', regex: /推送|push|审查凭证|review receipt|hugo|preflight|渲染失败|视觉规划/i }
 ];

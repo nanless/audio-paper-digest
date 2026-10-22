@@ -172,11 +172,11 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 - `npm run recover -- --date YYYY-MM-DD`：只读采集已保存的分析失败、事实义务、页面审查问题及独立的批次审查问题，再按错误码汇总建议入口。日期须为真实日历日期。输出区分文件缺失、不可读、坏 JSON、形状错误、错批与无法确认日期的旧格式；存在坏资料时退出 2。文件缺失时仅提供 partial 预览，默认退出 0，`--strict` 退出 1，`--execute` 退出 2 且不派发。两份资料均可读时也只表示 `saved_records` 采集完成，`semanticCoverage: not_checked`、`scopeComplete: false`，不证明正式来源、完整失败集合或发布资格。`--execute --yes` 仍只调用既有入口并受原门禁约束。
 - `npm run manifest:new -- --spec SPEC.json [--fact-feedback-file FILE ...]`：SPEC 写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点），可多次传 `--spec`，或使用数组 / `{papers:[...]}` 覆盖完整当前失败集合。若本次恢复使用事实反馈，须传入同一组反馈文件；命令按正式入口的反馈验证及失败谓词核对集合、重复项与人数限制，dry-run 和 write 均先核对。候选须安全可读、唯一，并对应当前论文、来源运行及来源 SHA，不按修改时间挑稿，也不吞读取错误。输出明确 `candidateIdentity: not_checked`、`paidOrigin: not_checked`；本切片未完成完整当前输入身份比较及原付费链重放；正式采纳仍核真实当前来源、原材料与 patch，并执行正常 Reader 及整篇资格检查。默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`；材料准备成功不表示正式资格通过、不授模型请求权限，也不自动采纳。
-- 错误码字典 `scripts/lib/error-codes.js` 与 `error-guidance` 的规则 id 对齐，供 `recover`、状态报告和文档共用。
+- 错误码字典 `scripts/lib/error-codes.js` 与 `error-guidance` 的规则 id 对齐，供 `recover`、状态报告和文档共用。数字限流提示须为独立状态信号，不把论文编号、小数或相邻文字中的 429 当作状态；arXiv 文字信号按明确主机、独立词或已知代码识别，近似域名不作为官方来源提示。明确的 OAI/RSS 过期诊断保留优先级。文字匹配仅供辅助建议，不替代生产错误类型、来源验证或恢复权限。
 
 ## 表格与影响面预检
 
-- `npm run table:check -- --draft DRAFT.json`：离线检查草稿里的表格粘连复写、列数与单位声明，不写数据、不替代正式发布校验。
+- `npm run table:check -- --draft FILE [--format json|markdown]`：离线检查表格粘连复写、列数与单位声明，不写数据、不替代正式发布校验。显式格式优先；未指定时 `.md`/`.markdown` 按 Markdown，其余按 JSON，坏 JSON 不回退。JSON 支持正文字符串、Reader 的 `sections[].body`、`markdown` 或 `article`；局部空段可保留，错误正文类型或整正文空白退出 2。围栏按打开的字符与长度关闭，代码样例不因短围栏或混用字符被当作正文表格；这不是完整 Markdown 解析器。
 - `npm run impact -- <file-or-dir>`：静态列出改动影响的入口、测试与重验范围，避免改一处规则却漏跑相关流程。
 - 审查误报记录使用 `scripts/lib/review-overrides.js` 的严格 schema（页面 SHA、发布提交、逐字证据、复核人），只把匹配的 error 注释为 warn，不放宽真实错误；是否采用由调用方显式决定。
 
@@ -191,7 +191,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ## 锁视图与文档一致性
 
-- `npm run locks`：只读列出 `data/runtime`、`data/current` 下的目录锁/文件锁（含 `.analysis-runs`、`conference-processes/*/.operation.lock` 等嵌套位置）、持有者 PID、心跳与存活判断；`--recover` 只预览疑似陈旧锁，不删除。
+- `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或入口错误退出 2；这是对原总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
 - `npm run docs:check`：检查 README/AGENTS/maintenance/scripts README 里的 `npm run <script>` 是否都存在于 package.json，文档漂移时非零退出；新增命令时应同步文档。
 
 ## 存储保留建议

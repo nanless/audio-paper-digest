@@ -12,6 +12,7 @@ print_error_guidance() 追加 `[下一步] ...`，不得改变原退出码或吞
 import logging
 import re
 import sys
+import unicodedata
 from datetime import date as _date
 
 _DOC_TROUBLESHOOTING = 'docs/troubleshooting.md'
@@ -25,6 +26,40 @@ _DOC_THREE_WORKFLOWS = 'docs/three-workflows.md'
 _DATE_PLACEHOLDER = '<DATE>'
 _FALLBACK_DATE = _DATE_PLACEHOLDER
 _MAX_CHAIN_DEPTH = 8
+
+# Match JavaScript's whitespace set; Python \s also includes extra C0/NEL chars.
+_HINT_SPACE = r'[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]'
+_RATE_STATUS_PATTERN = re.compile(r'(?:HTTP' + _HINT_SPACE + r'*)?429', re.IGNORECASE)
+_RATE_WORD_PATTERN = re.compile(r'too many requests|rate(?:_|' + _HINT_SPACE + r'|-)?limit|限流', re.IGNORECASE)
+_ARXIV_SIGNAL_PATTERN = re.compile(r'(?:ARXIV_RATE_LIMITED|(?:export\.|rss\.|oaipmh\.)?arxiv\.org|export\.arxiv|rss\.arxiv|oaipmh|arxiv)', re.IGNORECASE)
+_PORT_USERINFO_PATTERN = re.compile(r':[^/' + _HINT_SPACE[1:-1] + r']*@')
+
+
+def _same_hint_case(match):
+    # Python IGNORECASE additionally folds dotted/dotless I to ASCII i;
+    # Node /iu does not. Keep Unicode whitespace and long-s compatibility.
+    return not any(char in '\u0130\u0131' for char in match.group())
+
+
+def _has_bounded_signal(text, pattern, punctuation):
+    """Unicode letters/numbers/marks continue a token, as in the Node hints."""
+    def continues(char):
+        return bool(char) and (char.isalnum() or unicodedata.category(char).startswith('M') or char in '_' + punctuation)
+    for match in pattern.finditer(text):
+        if not _same_hint_case(match):
+            continue
+        before = text[match.start() - 1] if match.start() else ''
+        after = text[match.end()] if match.end() < len(text) else ''
+        if punctuation == '.@-' and _PORT_USERINFO_PATTERN.match(text, match.end()):
+            continue
+        if not continues(before) and not continues(after):
+            return True
+    return False
+
+
+def _has_rate_limit_text(text):
+    return bool(any(_same_hint_case(match) for match in _RATE_WORD_PATTERN.finditer(text))
+                or _has_bounded_signal(text, _RATE_STATUS_PATTERN, '.'))
 
 _SECRET_PATTERNS = (
     re.compile(r'\bsk-[A-Za-z0-9_-]{6,}\b'),
@@ -319,13 +354,13 @@ def _match_arxiv_rate_limit(context):
     text = context['text']
     limited = (
         context['status'] == 429
-        or re.search(r'\b429\b|too many requests|rate[_\s-]?limit|限流', text, re.IGNORECASE)
+        or _has_rate_limit_text(text)
         or any('RATE_LIMIT' in code for code in context['codes'])
     )
     # 只认 arXiv 专属信号；泛词（来源/fetch/html/pdf/下载）留给通用 429 规则。
     arxiv_specific = (
         any(code.startswith('ARXIV') for code in context['codes'])
-        or re.search(r'arxiv\.org|export\.arxiv|oaipmh|rss\.arxiv|\barxiv\b', text, re.IGNORECASE)
+        or _has_bounded_signal(text, _ARXIV_SIGNAL_PATTERN, '.@-')
     )
     return bool(limited and arxiv_specific)
 
@@ -419,7 +454,7 @@ def _match_blog_review_receipt_missing(context):
 def _match_upstream_rate_limit(context):
     return bool(
         context['status'] == 429
-        or re.search(r'\b429\b|too many requests|rate[_\s-]?limit|限流', context['text'], re.IGNORECASE)
+        or _has_rate_limit_text(context['text'])
         or any('RATE_LIMIT' in code for code in context['codes'])
     )
 

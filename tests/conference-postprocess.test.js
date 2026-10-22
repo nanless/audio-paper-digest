@@ -1115,6 +1115,30 @@ test('会议实现身份实际包含 Python 解析器全文，单独变化使身
     } finally { pageApi.readRegular = originalRead; }
 });
 
+test('动态规则JSON字节进入真实会议postprocess依赖和总指纹，原直接source字段不变', () => {
+    const rulesPath = path.resolve(__dirname, '../scripts/lib/validation-rules.json');
+    const baseline = api.implementationFingerprint();
+    const originalRead = pageApi.readRegular;
+    let reads = 0;
+    try {
+        pageApi.readRegular = function(file, ...args) {
+            const result = originalRead(file, ...args);
+            if (path.resolve(file) !== rulesPath) return result;
+            reads++;
+            const bytes = Buffer.concat([result.bytes, Buffer.from('\nrule bytes changed only in this read fixture')]);
+            return { ...result, bytes, sha256: sha256(bytes) };
+        };
+        const changed = api.implementationFingerprint();
+        assert(reads > 0, 'the real closure and fingerprint must read the data leaf');
+        assert.notEqual(changed.implementationDependenciesSha256, baseline.implementationDependenciesSha256);
+        assert.notEqual(changed.implementationSha256, baseline.implementationSha256);
+        for (const key of Object.keys(baseline)) {
+            if (!['implementationDependenciesSha256', 'implementationSha256'].includes(key)) assert.equal(changed[key], baseline[key], key);
+        }
+    } finally { pageApi.readRegular = originalRead; }
+    assert.deepEqual(api.implementationFingerprint(), baseline);
+});
+
 test('会议页面实现身份包含标签词表及两端标签格式读取器的实际全文 SHA', () => {
     const baseline = api.implementationFingerprint();
     for (const [relative, field] of [

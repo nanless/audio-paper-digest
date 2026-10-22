@@ -18,6 +18,12 @@ const DATE_PLACEHOLDER = '<DATE>';
 const FALLBACK_DATE = DATE_PLACEHOLDER;
 const MAX_CHAIN_DEPTH = 8;
 
+// Text-only hints: an ID/decimal is not an HTTP status, and a lookalike host
+// is not an arXiv signal. Marks count as word continuations in both languages.
+const RATE_LIMIT_PATTERN = /(?<![\p{L}\p{N}\p{M}_.])(?:HTTP\s*)?429(?![\p{L}\p{N}\p{M}_.])|too many requests|rate[_\s-]?limit|限流/iu;
+const ARXIV_SIGNAL_PATTERN = /(?<![\p{L}\p{N}\p{M}_.@-])(?:(?:export\.|rss\.|oaipmh\.)?arxiv\.org|export\.arxiv|rss\.arxiv|oaipmh|arxiv|ARXIV_RATE_LIMITED)(?![\p{L}\p{N}\p{M}_.@-])(?!:[^/\s]*@)/iu;
+const OAI_RSS_STALE_PATTERN = /oai responseDate is stale|announcement.*(?:stale|future)|stale\/future announcement|官方.*(?:oai|rss).*(?:过期|陈旧|stale)|(?:oai|rss).*(?:边界|boundary).*(?:不一致|stale|过期)/i;
+
 const SECRET_PATTERNS = [
     /\bsk-[A-Za-z0-9_-]{6,}\b/g,
     /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi,
@@ -211,7 +217,7 @@ const RULES = [
     {
         id: 'official-oai-rss-stale',
         docRef: DOC_FETCH_BOUNDARY,
-        match: ({ text }) => /oai responseDate is stale|announcement.*(?:stale|future)|stale\/future announcement|官方.*(?:oai|rss).*(?:过期|陈旧|stale)|(?:oai|rss).*(?:边界|boundary).*(?:不一致|stale|过期)/i.test(text),
+        match: ({ text }) => OAI_RSS_STALE_PATTERN.test(text),
         cause: '官方 OAI/RSS 元数据与固定批次边界不一致：来源可能尚未刷新或已过期。',
         nextSteps: [
             '保留当前检查点、来源计数和原始响应，不要手改来源数量或凭证。',
@@ -228,11 +234,11 @@ const RULES = [
         id: 'arxiv-rate-limit',
         docRef: DOC_FETCH_BOUNDARY,
         match: ({ text, codes, status }) => {
-            const limited = status === 429 || /(?<![\p{L}\p{N}_])429(?![\p{L}\p{N}_])|too many requests|rate[_\s-]?limit|限流/iu.test(text)
+            const limited = status === 429 || RATE_LIMIT_PATTERN.test(text)
                 || codes.some(code => /RATE_LIMIT/.test(code));
             // 只认 arXiv 专属信号；泛词（来源/fetch/html/pdf/下载）留给通用 429 规则。
             const arxivSpecific = codes.some(code => /^ARXIV/.test(code))
-                || /arxiv\.org|export\.arxiv|oaipmh|rss\.arxiv|(?<![\p{L}\p{N}_])arxiv(?![\p{L}\p{N}_])/i.test(text);
+                || ARXIV_SIGNAL_PATTERN.test(text);
             return limited && arxivSpecific;
         },
         cause: 'arXiv 限流（HTTP 429），抓取请求被拒绝且当前批次已暂停。',
@@ -400,7 +406,7 @@ const RULES = [
     {
         id: 'upstream-rate-limit',
         docRef: DOC_TROUBLESHOOTING,
-        match: ({ text, codes, status }) => status === 429 || /(?<![\p{L}\p{N}_])429(?![\p{L}\p{N}_])|too many requests|rate[_\s-]?limit|限流/iu.test(text)
+        match: ({ text, codes, status }) => status === 429 || RATE_LIMIT_PATTERN.test(text)
             || codes.some(code => /RATE_LIMIT/.test(code)),
         cause: '上游服务限流（HTTP 429），请求被拒绝，当前阶段已暂停。',
         nextSteps: [
@@ -517,6 +523,9 @@ function printErrorGuidance(error, options = {}) {
 }
 
 module.exports = {
+    RATE_LIMIT_PATTERN,
+    ARXIV_SIGNAL_PATTERN,
+    OAI_RSS_STALE_PATTERN,
     guidanceFor,
     ruleIdFor,
     printErrorGuidance,

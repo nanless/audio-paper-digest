@@ -60,6 +60,12 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
     add('scripts/lib/workflow-implementation-files.js');
     while (pending.length) {
         const filename = pending.shift();
+        // This Python matcher reads rule data through a dynamic Path expression.
+        // Keep its stem separate from the extension: this collector scans its
+        // own literals, and a full code filename here would create a new root.
+        if (filename === 'scripts/reader_grouped_vector_column_units' + '.py') {
+            add('scripts/lib/validation-rules.json', true);
+        }
         if (['scripts/lib/prompt-evidence.js', 'scripts/prompt_evidence.py'].includes(filename)) {
             add('scripts/lib/git-prompt-evidence-index.json', true);
         }

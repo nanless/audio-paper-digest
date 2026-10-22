@@ -2,7 +2,8 @@
 'use strict';
 // 从简单 spec 生成账号池无关的 operator 修正清单/记录。
 // spec: { paperId, replacements: [{ path, value }], notes? }
-// dry/write 共核完整尾集和候选材料；当前输入/付费资格仍由正式采纳方独立核验。
+// dry/write 共核完整尾集和候选材料；完整当前输入/付费身份未核。
+// 正式采用仍另核来源、材料与正常 Reader 资格。
 // 默认 --dry-run，--write 才写入 data/runtime/operator-corrections-<uuid>/。
 const fs = require('node:fs');
 const path = require('node:path');
@@ -113,7 +114,7 @@ function main(argv = process.argv.slice(2)) {
     }
     if (options.help || !options.specFiles.length) {
         console.log('用法: node scripts/manifest-new.js --spec SPEC.json [--spec SPEC2.json ...] [--fact-feedback-file FILE ...] [--dry-run|--write] [--json]');
-        console.log('SPEC 可以是单个 {paperId,replacements}、其数组，或 {papers:[...]}；dry-run/write 均须覆盖当前完整失败集，仅准备材料，正式采纳仍完整重核。');
+        console.log('SPEC 可以是单个 {paperId,replacements}、其数组，或 {papers:[...]}；dry-run/write 均须覆盖当前完整失败集，仅准备材料，正式采用仍核来源、材料与正常Reader资格。');
         return options.help ? 0 : 2;
     }
     const specs = options.specFiles.flatMap(file => {
@@ -170,7 +171,7 @@ function main(argv = process.argv.slice(2)) {
     if (options.json) console.log(JSON.stringify(report, null, 2));
     else {
         for (const item of summary) console.log(`论文 ${item.paperId}：${item.replacements.length} 个节点，draft ${item.draftSha256.slice(0, 10)}${options.write ? '' : '（dry-run，不写材料）'}`);
-        console.log('完整失败集与候选材料已核对；当前输入身份和付费来源未核验，正式采纳仍须正常完整检查。');
+        console.log('完整失败集与候选材料已核对；完整当前输入身份和付费来源未核验，正式采用仍核来源、材料与正常Reader资格。');
         if (report.manifestFile) console.log(`已写入 ${report.manifestFile}（仅准备修正材料）`);
     }
     return 0;

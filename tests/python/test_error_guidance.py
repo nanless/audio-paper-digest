@@ -3,6 +3,7 @@
 
 import contextlib
 import io
+import json
 import logging
 import re
 import sys
@@ -22,6 +23,14 @@ from error_guidance import (  # noqa: E402
 )
 
 DOCS = 'docs/'
+
+
+class RateBoundaryParityTests(unittest.TestCase):
+    def test_shared_text_rate_boundary_cases(self):
+        cases = json.loads((ROOT / 'tests' / 'fixtures' / 'error-rate-boundary-cases.json').read_text(encoding='utf-8'))
+        for case in cases:
+            with self.subTest(message=case['message']):
+                self.assertEqual(rule_id_for(case['message']), case['expected'])
 
 # 表驱动：每个真实事故类型都必须命中专用指引，不能落到通用兜底。
 CASES = (

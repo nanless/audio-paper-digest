@@ -438,6 +438,26 @@ test('会议当前执行身份覆盖公共 Reader 来源守卫与共享展示的
     }
 });
 
+test('动态规则JSON真实进入会议process当前指纹，孤立数据变动不改v1冻结闭包', () => {
+    const rules = 'scripts/lib/validation-rules.json';
+    const files = processApi.currentImplementationFiles();
+    assert(files.includes('scripts/reader_grouped_vector_column_units.py'));
+    assert(files.includes(rules), 'the real closure must discover the Python data dependency');
+    const root = '/virtual/conference-dynamic-rules';
+    const sources = new Map([...new Set([...files, ...processApi.IMPLEMENTATION_FILES])]
+        .map(name => [name, Buffer.from(`source:${name}`)]));
+    const fingerprint = promptTextVersion => processApi.implementationSha256({ root, promptTextVersion,
+        readFileSync: filename => sources.get(path.relative(root, filename)) });
+    const current = fingerprint(), frozen = fingerprint('v1'), before = sources.get(rules);
+    assert.equal(processApi.IMPLEMENTATION_FILES.includes(rules), false);
+    for (const bytes of [Buffer.from('{"tableHeaderUnits":["changed"]}'), Buffer.concat([before, Buffer.from('\nmetadata-only byte change')])]) {
+        sources.set(rules, bytes);
+        assert.notEqual(fingerprint(), current);
+        assert.equal(fingerprint('v1'), frozen);
+    }
+    sources.set(rules, before); assert.equal(fingerprint(), current);
+});
+
 test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可复算', () => {
     const root = '/virtual/conference-prompt-versions';
     const files = [...new Set([...processApi.currentImplementationFiles(), ...processApi.IMPLEMENTATION_FILES, 'prompts/opensource-scan-v2.md'])];
