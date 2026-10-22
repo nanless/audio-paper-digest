@@ -36,8 +36,6 @@ const SCHEMA = Object.freeze([
     { name: 'PAPER_DIGEST_BLOG_URL', required: false, type: 'url', hint: '站点 posts 根地址（verify:web 拼页面 URL）' },
     { name: 'PAPER_DIGEST_BLOG_REPO_RUN', required: false, type: 'string', hint: 'Pages 部署 workflow 所属仓库 owner/repo（可选）' },
     { name: 'PAPER_DIGEST_BLOG_BASE_PATH', required: false, type: 'string', hint: '站点子路径（可选）' },
-    { name: 'PAPER_DIGEST_BLOG_URL', required: false, type: 'url' },
-    { name: 'PAPER_DIGEST_BLOG_BASE_PATH', required: false, type: 'string' },
     { name: 'PAPER_DIGEST_GITHUB_REMOTE', required: false, type: 'string' },
     { name: 'PAPER_DIGEST_REPO_URL', required: false, type: 'string' },
     { name: 'PAPER_DIGEST_IMAGE_BASE_URL', required: false, type: 'string' },

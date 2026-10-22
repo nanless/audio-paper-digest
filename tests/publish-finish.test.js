@@ -3,6 +3,17 @@ const test = require('node:test');
 const assert = require('node:assert');
 const finish = require('../scripts/publish-finish');
 
+test('豁免必须严格绑定版本/清单/发布 OID/视觉清单', () => {
+    const base = { status: 'waived', version: 1, batchDate: '2099-01-02', requestedBy: 'user', reason: '视觉任务已取消并确认', generationManifestSha256: 'a'.repeat(64), publicationCommit: 'b'.repeat(40), remoteVerifiedOid: 'b'.repeat(40), visualManifestSha256: 'c'.repeat(64), coverManifestSha256: 'd'.repeat(64) };
+    const ctx = { date: '2099-01-02', manifestSha: 'a'.repeat(64), receiptCommit: 'b'.repeat(40), visualSha: 'c'.repeat(64), coverSha: 'd'.repeat(64) };
+    const finish = require('../scripts/publish-finish');
+    assert.strictEqual(finish.validateWaiver(base, ctx), true);
+    assert.strictEqual(finish.validateWaiver({ ...base, version: 99 }, ctx), false);
+    assert.strictEqual(finish.validateWaiver({ ...base, remoteVerifiedOid: 'e'.repeat(40) }, ctx), false);
+    assert.strictEqual(finish.validateWaiver({ ...base, reason: '短' }, ctx), false);
+    assert.strictEqual(finish.validateWaiver({ ...base, visualManifestSha256: '' }, ctx), false);
+});
+
 test('收尾清单提示 digest:status、verify:web 与视觉步骤', () => {
     const lines = [];
     const original = console.log;

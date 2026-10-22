@@ -33,8 +33,8 @@ function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
             if (!entry.name.endsWith('.lock')) {
                 if (entry.isDirectory() && depth < 3) {
                     const base = path.basename(directory);
-                    const descend = depth === 0 && ['.analysis-runs', 'locks', 'conference-processes', 'conference-executions', 'conference-filters', 'fresh-rewrites', 'conference-page-staging'].includes(entry.name)
-                        || (base === 'conference-processes' || base === 'conference-executions' || base === 'conference-filters' || base === 'fresh-rewrites' || base === 'conference-page-staging') && depth === 1
+                    const descend = depth === 0 && ['.analysis-runs', 'locks', 'conference-processes', 'conference-queues', 'conference-filter-evidence-runs', 'page-source-crosswalks', 'conference-analysis-executions', 'conference-filters', 'fresh-rewrites', 'conference-page-staging'].includes(entry.name)
+                        || (base === 'conference-processes' || base === 'conference-queues' || base === 'conference-filter-evidence-runs' || base === 'page-source-crosswalks' || base === 'conference-analysis-executions' || base === 'conference-filters' || base === 'fresh-rewrites' || base === 'conference-page-staging') && depth === 1
                         || String(entry.name).includes('stage-locks') && depth < 2;
                     if (descend) visit(target, depth + 1);
                 }
@@ -48,7 +48,7 @@ function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
             const heartbeat = record && (record.heartbeatAt || record.updatedAt || started) || null;
             const ageSeconds = heartbeat && !Number.isNaN(Date.parse(heartbeat))
                 ? Math.max(0, Math.round((nowMs - Date.parse(heartbeat)) / 1000)) : null;
-            const local = !hostname || hostname === os.hostname();
+            const local = hostname === os.hostname();
             const alive = local && pid !== null ? isAlive(pid) : null;
             const needsReview = pid === null && ageSeconds !== null && ageSeconds > 86400;
             rows.push({

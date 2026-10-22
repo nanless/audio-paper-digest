@@ -35,6 +35,14 @@ function pageFetch(responses) {
     };
 }
 
+function writeReceipt(dir, date, oid = OID) {
+    const manifestFile = path.join(dir, `blog-generation-manifest-${date}.json`);
+    const sha = require('node:crypto').createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex');
+    fs.writeFileSync(path.join(dir, `blog-review-receipt-${date}.json`), JSON.stringify({
+        generationManifestSha256: sha, publicationCommit: oid, remoteVerifiedOid: oid
+    }));
+}
+
 function parseLines(lines) {
     return lines.map(line => JSON.parse(line));
 }
@@ -143,8 +151,10 @@ test('runVerifyWebCli --json 每行可解析且没有多余日志', async t => {
 test('--deploy --wait: in_progress→completed success，--json 每行可解析', async t => {
     const dir = tempDir(t);
     writeManifest(dir, DATE, [`${DATE}`]);
+    writeReceipt(dir, DATE);
     let calls = 0;
-    const spawnSync = () => {
+    const spawnSync = (command, args = []) => {
+        if (args.includes('view')) return { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'success' }] }) };
         calls += 1;
         const completed = calls >= 3;
         return {
@@ -153,6 +163,9 @@ test('--deploy --wait: in_progress→completed success，--json 每行可解析'
                 headSha: OID,
                 status: completed ? 'completed' : 'in_progress',
                 conclusion: completed ? 'success' : '',
+                workflowName: 'pages build and deployment',
+                event: 'push',
+                databaseId: 1,
                 url: 'https://github.com/nanless/blog/actions/runs/1'
             }])
         };
@@ -207,7 +220,7 @@ test('部署 completed+failure 返回非零；无 gh 默认非零，--allow-degr
     assert.strictEqual(await verifyWeb.runVerifyWebCli(
         ['--date', DATE, '--deploy', OID], { ...base, spawnSync: noGh }), 1);
     assert.strictEqual(await verifyWeb.runVerifyWebCli(
-        ['--date', DATE, '--deploy', OID, '--allow-degraded'], { ...base, spawnSync: noGh }), 0);
+        ['--date', DATE, '--deploy', OID, '--allow-degraded', '--allow-partial'], { ...base, spawnSync: noGh }), 0);
     const degraded = assertArtifact(dir, DATE);
     assert.strictEqual(degraded.deploy.available, false);
     assert.strictEqual(degraded.partial, true);
@@ -347,6 +360,27 @@ test('mock HTTP 服务器：200/404/标题不符/超时（离线 localhost）', 
     const slow = byPath[`content/posts/${date}-slow.md`];
     assert.strictEqual(slow.status, null);
     assert.ok(slow.error);
+});
+
+test('无凭证/空凭证不能假通过，publicationOid 必须是字符串', async t => {
+    const dir = tempDir(t);
+    writeManifest(dir, DATE, [`${DATE}`]);
+    const fetchImpl = async () => ({ status: 200, url: `https://example.com/posts/${DATE}/`, text: async () => `<title>语音/音乐/音频论文速递 ${DATE} 汇总</title>` });
+    const spawnSync = (command, args = []) => {
+        if (args.includes('view')) return { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'success' }] }) };
+        return { status: 0, stdout: JSON.stringify([{ headSha: OID, status: 'completed', conclusion: 'success', workflowName: 'pages', event: 'push', databaseId: 1 }]) };
+    };
+    const base = { currentDir: dir, env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' }, fetchImpl, spawnSync, print: () => {}, printError: () => {} };
+    const noReceipt = await verifyWeb.runVerifyWebCli(['--date', DATE, '--deploy', OID], base);
+    assert.strictEqual(noReceipt, 1, '无审查凭证不能通过');
+    const noReceiptArtifact = assertArtifact(dir, DATE);
+    assert.strictEqual(noReceiptArtifact.partial, true);
+    assert.strictEqual(noReceiptArtifact.publicationOid, OID);
+    assert.strictEqual(typeof noReceiptArtifact.publicationOid, 'string');
+
+    fs.writeFileSync(path.join(dir, `blog-review-receipt-${DATE}.json`), JSON.stringify({}));
+    const emptyReceipt = await verifyWeb.runVerifyWebCli(['--date', DATE, '--deploy', OID], base);
+    assert.strictEqual(emptyReceipt, 2, '空凭证必须 fail-closed');
 });
 
 test('重定向到其它页/站点标题单页/抽样/无部署均不能假通过', async t => {

@@ -7,6 +7,21 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
 
+function validateWaiver(data, { date, manifestSha, receiptCommit, visualSha, coverSha } = {}) {
+    if (!data || typeof data !== 'object') return false;
+    const oidPattern = /^[0-9a-f]{40}$/i;
+    return data.status === 'waived' && data.version === 1 && data.batchDate === date
+        && typeof data.requestedBy === 'string' && data.requestedBy.trim()
+        && typeof data.reason === 'string' && data.reason.trim().length >= 10
+        && Boolean(manifestSha) && data.generationManifestSha256 === manifestSha
+        && oidPattern.test(String(data.publicationCommit || ''))
+        && oidPattern.test(String(data.remoteVerifiedOid || ''))
+        && data.remoteVerifiedOid === data.publicationCommit
+        && Boolean(receiptCommit) && data.publicationCommit === receiptCommit
+        && Boolean(visualSha) && data.visualManifestSha256 === visualSha
+        && Boolean(coverSha) && data.coverManifestSha256 === coverSha;
+}
+
 function shaOf(file) { try { return require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch (_) { return null; } }
 
 function main(argv = process.argv.slice(2)) {
@@ -27,7 +42,7 @@ function main(argv = process.argv.slice(2)) {
             const manifestSha = manifestExists ? require('node:crypto').createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex') : null;
             const receiptFile = path.join(CURRENT, `blog-review-receipt-${date}.json`);
             const receipt = fs.existsSync(receiptFile) ? JSON.parse(fs.readFileSync(receiptFile, 'utf8')) : null;
-            const receiptCommit = receipt && (receipt.publicationCommit || receipt.remoteVerifiedOid || receipt.reviewedCommit) || null;
+            const receiptCommit = receipt && (receipt.publicationCommit || receipt.remoteVerifiedOid) || null;
             const oidPattern = /^[0-9a-f]{40}$/i;
             const oid = data.publicationCommit || data.remoteVerifiedOid || null;
             const webArtifact = path.join(CURRENT, `web-verification-${date}.json`);
@@ -38,21 +53,19 @@ function main(argv = process.argv.slice(2)) {
                     webOk = web.partial !== true && web.deploy && web.deploy.status === 'completed' && web.deploy.conclusion === 'success';
                 } catch (_) { webOk = false; }
             }
-            const valid = data.status === 'waived' && data.batchDate === date
-                && Boolean(manifestSha) && data.generationManifestSha256 === manifestSha
-                && oidPattern.test(String(oid || ''))
-                && Boolean(receiptCommit) && oid === receiptCommit
-                && (!data.visualManifestSha256 || data.visualManifestSha256 === shaOf(path.join(CURRENT, 'visual-summary-manifest-' + date + '.json')))
-                && (!data.coverManifestSha256 || data.coverManifestSha256 === shaOf(path.join(CURRENT, 'digest-cover-manifest-' + date + '.json')));
+            const visualSha = shaOf(path.join(CURRENT, 'visual-summary-manifest-' + date + '.json'));
+            const coverSha = shaOf(path.join(CURRENT, 'digest-cover-manifest-' + date + '.json'));
+            const valid = validateWaiver(data, { date, manifestSha, receiptCommit, visualSha, coverSha });
             if (valid) {
                 console.log(`3) 视觉：豁免有效且已绑定当前批次（${waiver}）；不要执行视觉:prepare 或生图。`);
                 if (!webOk) console.log('   注意：web-verification artifact 缺失或未证明部署成功，最终验收仍需 verify:web --deploy。');
             } else {
                 console.log(`3) 视觉：豁免文件存在但与当前批次不匹配（${waiver}）；请核对 status/batchDate/清单 SHA/发布 OID/审查凭证，不要直接跳过。`);
-                process.exitCode = 1;
+                return 1;
             }
         } catch (error) {
             console.log(`3) 视觉：豁免文件无法读取（${error.message}）；按未豁免处理。`);
+            return 1;
         }
     } else {
         console.log('3) 视觉：若上次 push 提示规划失败，先 npm run visual:post-publish -- --date ' + date + ' 重规划；成功后 npm run visual:prepare -- --date ' + date + '，把绝对 referencedImagePaths 交给生图工具；逐图 QA 后 record --qa-attested true。');
@@ -62,7 +75,7 @@ function main(argv = process.argv.slice(2)) {
     return 0;
 }
 
-module.exports = { main };
+module.exports = { validateWaiver, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[publish-finish] ${error.message}`); process.exitCode = 1; }

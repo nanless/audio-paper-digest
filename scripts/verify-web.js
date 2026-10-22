@@ -152,7 +152,7 @@ async function verify(date, options = {}) {
         date,
         partial: failed > 0 || results.length === 0 || results.length < expected,
         deploy: options.deploy || null,
-        publicationOid: options.deploy || null,
+        publicationOid: options.deployOid || null,
         generationManifestSha256,
         expected,
         checked: results.length,
@@ -224,12 +224,17 @@ function deployStatus(oid, options = {}) {
                 try {
                     const jobs = JSON.parse(jobsResult.stdout || '{}').jobs;
                     if (Array.isArray(jobs) && jobs.length) {
-                        const deployJob = jobs.find(job => /(pages|deploy|build|hugo)/i.test(String(job.name || job.workflowName || '')));
-                        if (deployJob && String(deployJob.conclusion || '').toLowerCase() !== 'success') {
-                            return { ...parsed, conclusion: 'failure', jobConclusion: deployJob.conclusion || null, message: `部署 job 未成功：${deployJob.name || 'deploy'}` };
+                        const deployJobs = jobs.filter(job => /(pages|deploy)/i.test(String(job.name || job.workflowName || '')));
+                        if (!deployJobs.length) {
+                            return { ...parsed, conclusion: 'failure', jobVerified: false, message: '未找到 Pages deploy job，不能证明部署完成。' };
                         }
-                        return { ...parsed, jobVerified: Boolean(deployJob), jobConclusion: deployJob ? deployJob.conclusion : null };
+                        const badJob = deployJobs.find(job => String(job.conclusion || '').toLowerCase() !== 'success');
+                        if (badJob) {
+                            return { ...parsed, conclusion: 'failure', jobVerified: false, jobConclusion: badJob.conclusion || null, message: `部署 job 未成功：${badJob.name || 'deploy'}` };
+                        }
+                        return { ...parsed, jobVerified: true, jobConclusion: 'success' };
                     }
+                    return { ...parsed, conclusion: 'failure', jobVerified: false, message: '无法读取部署 jobs，不能证明 Pages deploy 成功。' };
                 } catch (_error) { /* jobs 解析失败时保留 run 级结论 */ }
             }
         }
@@ -247,10 +252,15 @@ function deployStatus(oid, options = {}) {
 function validateReceiptBinding({ receipt, manifestSha256, deployOid } = {}) {
     if (!receipt || typeof receipt !== 'object') throw new Error('审查凭证必须是对象');
     const receiptManifest = receipt.generationManifestSha256 || receipt.manifestSha256;
-    if (receiptManifest && manifestSha256 && receiptManifest !== manifestSha256) throw new Error('审查凭证的生成清单 SHA 与当前清单不一致');
-    const receiptOid = receipt.publicationCommit || receipt.remoteVerifiedOid || receipt.reviewedCommit;
-    if (deployOid && receiptOid && receiptOid !== deployOid) throw new Error('--deploy OID 与审查凭证记录不一致');
-    return { receiptManifest: receiptManifest || null, receiptOid: receiptOid || null };
+    if (!/^[0-9a-f]{64}$/i.test(String(receiptManifest || ''))) throw new Error('审查凭证缺少合法的 generationManifestSha256');
+    if (!manifestSha256 || receiptManifest !== manifestSha256) throw new Error('审查凭证的生成清单 SHA 与当前清单不一致');
+    const publicationCommit = receipt.publicationCommit;
+    const remoteVerifiedOid = receipt.remoteVerifiedOid;
+    if (!/^[0-9a-f]{40}$/i.test(String(publicationCommit || ''))) throw new Error('审查凭证缺少合法的 publicationCommit');
+    if (!/^[0-9a-f]{40}$/i.test(String(remoteVerifiedOid || ''))) throw new Error('审查凭证缺少合法的 remoteVerifiedOid');
+    if (String(publicationCommit) !== String(remoteVerifiedOid)) throw new Error('审查凭证的 publicationCommit 与 remoteVerifiedOid 不一致');
+    if (deployOid && String(deployOid).toLowerCase() !== String(publicationCommit).toLowerCase()) throw new Error('--deploy OID 与审查凭证记录不一致');
+    return { receiptManifest, receiptOid: publicationCommit };
 }
 
 async function waitForDeploy(oid, options = {}) {
@@ -295,12 +305,12 @@ function parseVerifyArgs(argv = []) {
         const value = argv[index];
         if (value === '--date') options.date = argv[++index] || null;
         else if (value === '--limit') options.limit = Number(argv[++index]);
-        else if (value === '--deploy') options.deploy = argv[++index] || null;
+        else if (value === '--deploy') { const oid = argv[++index] || ''; if (!/^[0-9a-f]{40}$/i.test(oid)) throw new Error('--deploy 必须是 40 位十六进制 OID'); options.deploy = oid; }
         else if (value === '--json') options.json = true;
         else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
         else if (value === '--allow-degraded') options.allowDegraded = true;
         else if (value === '--allow-partial') options.allowPartial = true;
-        else if (value === '--receipt') options.receipt = argv[++index] || null;
+        else if (value === '--receipt') { const file = argv[++index] || ''; if (!file) throw new Error('--receipt 需要文件路径'); options.receipt = file; }
         else if (value === '--wait') options.wait = true;
         else if (value === '--wait-seconds') {
             const seconds = Number(argv[++index]);
@@ -383,7 +393,9 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             fetchImpl,
             timeoutMs: options.timeoutMs,
             limit: options.limit,
-            deploy
+            deploy,
+            deployOid: options.deploy,
+            noWrite: true
         });
         // 自动绑定当前批次的审查凭证（存在时强制），防止旧 OID/旧清单被当成验收证据。
         let receiptPath = options.receipt;
@@ -398,11 +410,14 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                 manifestSha256: summary.generationManifestSha256,
                 deployOid: options.deploy
             });
+        } else {
+            summary.partial = true; // 无审查凭证不能作为完整验收证据
         }
-        const deployOk = Boolean(deploy && deploy.available && deploy.status === 'completed' && deploy.conclusion === 'success');
+        const deployOk = Boolean(deploy && deploy.available && deploy.status === 'completed' && deploy.conclusion === 'success' && deploy.jobVerified !== false);
         if (options.limit && summary.checked < summary.expected) summary.partial = true;
         if (!deployOk) summary.partial = true;
-        if (summary.partial) writeVerificationArtifact(currentDir, options.date, summary);
+        // 所有校验完成后再写 artifact，避免绑定失败留下“通过”证据。
+        writeVerificationArtifact(currentDir, options.date, summary);
         if (options.json) {
             print(JSON.stringify({ type: 'summary', ...summary }));
             if (deploy) {
@@ -423,7 +438,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                     : deploy.message}`);
             }
         }
-        const partialFailed = summary.partial && !options.allowPartial && !options.allowDegraded;
+        const partialFailed = summary.partial && !options.allowPartial;
         return summary.failed > 0 || deployExitCode(deploy, options) !== 0 || partialFailed ? 1 : 0;
     } catch (error) {
         printError(`[verify-web] ${error.message}`);
