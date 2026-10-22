@@ -997,6 +997,26 @@ async function runWatchCli(targetDate, watchOptions) {
     }
 }
 
+function formatMarkdownDailyReport(targetDate, report, summaryText) {
+    return [
+        `# 论文速递日报 ${targetDate}`,
+        '',
+        String(summaryText || ''),
+        '',
+        '## 关键字段',
+        `- 状态：${report.overallStatus || '未知'}（问题数 ${report.issueCount ?? '?'}）`,
+        `- 远端 OID 已验证：${report.remoteOidVerified === true ? '是' : report.remoteOidVerified === false ? '否' : '未知'}`,
+        `- 视觉：${report.visuals?.status || (report.postPublishVisualWaiver ? '豁免' : '未知')}`,
+        '',
+        '> 本日报只读汇总当前状态，不替代部署/网页核验；最终以 verify:web 与 CI/部署结果为准。',
+        '',
+        '## 明细 JSON',
+        '```json',
+        JSON.stringify(report, null, 2),
+        '```'
+    ].join('\n');
+}
+
 function main(argv = process.argv.slice(2)) {
     const watchOptions = parseWatchOptions(argv);
     if (watchOptions.watch) {
@@ -1017,8 +1037,15 @@ function main(argv = process.argv.slice(2)) {
     const output = path.join(Config.FILES.digestRunReportDir, `${targetDate}.json`);
     fs.mkdirSync(path.dirname(output), { recursive: true });
     writeFileAtomic(output, JSON.stringify(report, null, 2));
-    console.log(formatDigestRunSummary(report));
+    const summaryText = formatDigestRunSummary(report);
+    console.log(summaryText);
     console.log(`[digest-status] 报告: ${output}`);
+    if (argv.includes('--markdown')) {
+        const markdownPath = output.replace(/\.json$/, '.md');
+        const markdown = formatMarkdownDailyReport(targetDate, report, summaryText);
+        writeFileAtomic(markdownPath, markdown);
+        console.log(`[digest-status] Markdown 日报: ${markdownPath}`);
+    }
     if (report.overallStatus !== 'complete') process.exitCode = 1;
 }
 
@@ -1058,5 +1085,6 @@ module.exports = {
     llmApiPaperComplete,
     buildDigestRunReport,
     formatDigestRunSummary,
+    formatMarkdownDailyReport,
     analysisFailureMessage
 };

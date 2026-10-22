@@ -83,7 +83,7 @@ function deployStatus(oid, options = {}) {
 async function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('verify-web.js'); } catch (error) { console.error(`[verify-web] ${error.message}`); return Promise.resolve(1); }
 
-    const options = { date: null, limit: null, deploy: null, json: false, timeoutMs: 20000, allowDegraded: false };
+    const options = { date: null, limit: null, deploy: null, json: false, timeoutMs: 20000, allowDegraded: false, wait: false, waitSeconds: 120 };
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
         if (value === '--date') options.date = argv[++index] || null;
@@ -92,13 +92,23 @@ async function main(argv = process.argv.slice(2)) {
         else if (value === '--json') options.json = true;
         else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
         else if (value === '--allow-degraded') options.allowDegraded = true;
+        else if (value === '--wait') options.wait = true;
+        else if (value === '--wait-seconds') options.waitSeconds = Number(argv[++index]) || 120;
         else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
     }
     if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--allow-degraded] [--json]'); return options.help ? 0 : 2; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) throw new Error('--date 必须是 YYYY-MM-DD');
     const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
-    const deploy = options.deploy ? deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository }) : null;
+    let deploy = options.deploy ? deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository }) : null;
+    if (options.deploy && options.wait) {
+        const deadline = Date.now() + options.waitSeconds * 1000;
+        while (Date.now() < deadline && !(deploy && deploy.available && deploy.status === 'completed')) {
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            deploy = deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository });
+            console.log(`[verify-web] 部署状态：${deploy.available ? `${deploy.status} ${deploy.conclusion || ''}` : deploy.message}`);
+        }
+    }
     if (options.json) console.log(JSON.stringify({ ...summary, deploy }, null, 2));
     else {
         for (const result of summary.results) {
