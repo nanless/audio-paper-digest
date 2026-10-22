@@ -7,7 +7,9 @@ const path = require('node:path');
 
 const GLUED = /(\([^()]{1,40}\))\1/g;
 const normalizeParens = value => String(value).replace(/（/g, '(').replace(/）/g, ')');
-const UNIT_DECL = /\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)/i;
+const VALIDATION_RULES = require('./lib/validation-rules.json');
+const HEADER_UNITS = Object.freeze(VALIDATION_RULES.tableHeaderUnits.slice());
+const UNIT_DECL = new RegExp(`\\(\\s*(${HEADER_UNITS.map(unit => unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\s*\\)`, 'i');
 
 function tablesOfText(text) {
     const lines = String(text || '').split(/\r?\n/);
@@ -101,7 +103,7 @@ function main(argv = process.argv.slice(2)) {
     return issues.some(issue => issue.severity === 'error') ? 1 : 0;
 }
 
-module.exports = { tablesOfText, cellsOfRow, checkTable, checkText, main };
+module.exports = { HEADER_UNITS, VALIDATION_RULES, tablesOfText, cellsOfRow, checkTable, checkText, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[table-check] ${error.message}`); process.exitCode = 2; }

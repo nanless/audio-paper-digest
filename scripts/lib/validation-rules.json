@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "tableHeaderUnits": ["%", "dB", "ms", "s", "h", "Hz", "kHz", "MHz", "GB", "MB", "KB", "pp"],
+  "notes": "Node table-check 与 Python reader_grouped_vector_column_units 共用的表头单位白名单；新增单位只改这里并跑双端一致性测试。"
+}

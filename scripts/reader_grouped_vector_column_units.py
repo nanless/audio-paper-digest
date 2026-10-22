@@ -8,7 +8,13 @@ if __name__ == '__main__':
     require_external_runtime('reader-grouped-vector-column-units')
 
 import re
+import json
 import unicodedata
+from pathlib import Path
+
+_RULES = json.loads((Path(__file__).with_name('lib') / 'validation-rules.json').read_text(encoding='utf-8'))
+UNITS = tuple(_RULES['tableHeaderUnits'])
+_UNITS_PATTERN = r'\(\s*(' + '|'.join(re.escape(unit) for unit in sorted(UNITS, key=len, reverse=True)) + r')\s*\)'
 
 
 def coverage(rendered, html_quotes, pdf_quotes, tables, display=str):
@@ -67,7 +73,7 @@ def coverage(rendered, html_quotes, pdf_quotes, tables, display=str):
                     grid[row][column] = cell
         return grid if all(all(cell is not None for cell in row) for row in grid) else None
 
-    units_pattern = r'\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)'
+    units_pattern = _UNITS_PATTERN
     directions = lambda value: ''.join(dict.fromkeys(re.findall('[↑↓→]', value)))
     caption_key = lambda value: re.sub(r'Table([0-9]+)[.:]', r'Table\1:', dense(value), flags=re.I)
     headers, rows = rendered.get('header', []), rendered.get('rows', [])
