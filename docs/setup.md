@@ -54,6 +54,8 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 只有 OpenCode Go 返回 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，才允许在同一逻辑请求内切换账号，且每个账号至多尝试一次。普通认证 401 会停止本次运行；普通 429、5xx、网络或代理故障、响应截断和内容校验失败都不触发切换。全部账号不可用时，程序停止派发并保存进度。
 
+生产任务与外部工具（如 Codex/其他 agent）建议使用不同账号池或至少不同 key 集合；共用同一池会互相消耗额度，`npm run llm:accounts` 可查看冷却与最早恢复。
+
 账号选择与冷却时间保存在 `data/runtime/llm-account-pool.json`，供 Node、Python 和后续日期的运行共同使用；两边共享同一轮转游标，配置顺序不同也不会改变选择序列。
 
 `PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的更多账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 与这份列表合并进同一等权账号池（顺序不代表优先级），也可填写第三、第四等账号。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。

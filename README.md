@@ -28,6 +28,8 @@
 |---|---|---|
 | 运行北京时间当天的论文速递 | `npm run digest:prepare -- YYYY-MM-DD` | [操作手册](SKILL.md#1-日更) |
 | 开跑前只读体检（环境、账号、来源、磁盘、博客仓库） | `npm run doctor -- --offline`；需要探测 arXiv 时加 `--network` | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
+| 锁与文档漂移检查 | `npm run locks`、`npm run docs:check` | [运行前体检运行中状态与错误指引](docs/maintenance.md#运行前体检运行中状态与错误指引) |
+| 新人上手 | [三张图与故障入口](docs/onboarding.md) | [onboarding](docs/onboarding.md) |
 | 发布后核验与收尾 | `npm run verify:web -- --date DATE --deploy OID`、`npm run publish:finish -- --date DATE` | [发布收尾](docs/maintenance.md#发布后网页核验与收尾) |
 | 表格/改动影响预检 | `npm run table:check -- --draft DRAFT.json`、`npm run impact -- scripts/x.js` | [恢复决策与清单生成](docs/maintenance.md#恢复决策与清单生成) |
 | 失败后不知道走哪个入口 | `npm run recover -- --date YYYY-MM-DD`（只读给出建议命令）；人工修正清单用 `npm run manifest:new -- --spec SPEC.json` | [恢复决策与清单生成](docs/maintenance.md#恢复决策与清单生成) |

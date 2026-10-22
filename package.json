@@ -102,7 +102,9 @@
     "table:check": "node scripts/table-check.js",
     "impact": "node scripts/impact.js",
     "verify:web": "node scripts/verify-web.js",
-    "publish:finish": "node scripts/publish-finish.js"
+    "publish:finish": "node scripts/publish-finish.js",
+    "locks": "node scripts/locks.js",
+    "docs:check": "node scripts/docs-consistency.js"
   },
   "keywords": [
     "arxiv",

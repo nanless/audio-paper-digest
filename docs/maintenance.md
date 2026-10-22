@@ -184,6 +184,11 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run verify:web -- --date DATE [--limit N] [--deploy OID]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态/标题并写 `data/current/web-verification-<date>.json`；`--deploy` 查询对应提交的 Pages workflow，无 gh 时明确降级。
 - `npm run publish:finish -- --date DATE`：打印推送后收尾清单（digest:status、网页核验、视觉 prepare/豁免），不调用图像 API、不自动登记豁免。
 
+## 锁视图与文档一致性
+
+- `npm run locks`：只读列出 `data/runtime`、`data/current` 下的锁文件、持有者 PID、心跳与存活判断；`--recover` 只预览疑似陈旧锁，不删除。
+- `npm run docs:check`：检查 README/AGENTS/maintenance/scripts README 里的 `npm run X` 是否都存在于 package.json，文档漂移时非零退出；新增命令时应同步文档。
+
 ## 验证矩阵
 
 用户明确要求从原文重写既有日批次或全部历史页面时，使用 [当前历史计划流程](history-rewrite.md)：冻结页面范围，核验会议本地元数据/PDF，按明确获取序号封存 arXiv 官方文本/PDF。备用 `history:arxiv-batch` 仅接受本次官方获取失败保存的命名交接；普通 `reanalyze`、Reader 刷新或清除 analysis 字段不能替代完整历史范围与来源证明。

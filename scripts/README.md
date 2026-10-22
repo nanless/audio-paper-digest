@@ -420,6 +420,8 @@ npm run test:compat
 | `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
 | `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核验汇总页/单篇 HTTP 200 与标题，写 data/current/web-verification-<date>.json；`--deploy` 查 Pages workflow。 |
 | `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印推送后收尾清单（状态、网页核验、视觉准备/豁免），不调用图像 API、不自动豁免。 |
+| `locks.js` | Node 入口：`npm run locks` 只读列出运行锁持有者/时间/心跳，`--recover` 只预览疑似陈旧锁，不删除。 |
+| `docs-consistency.js` | Node 入口：`npm run docs:check` 检查文档中 `npm run X` 是否都在 package.json，防止文档漂移。 |
 | `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥。 |
 | `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
