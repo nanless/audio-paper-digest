@@ -307,6 +307,43 @@ test('help+json与参数错误也是单JSON，退出分别0/2', t => {
     assert.equal(bad.scanComplete, false);
 });
 
+test('沙箱守卫真实CLI拒绝保留明确说明，JSON单对象且不回显标记秘密', t => {
+    const f = cliFixture(t);
+    const before = snapshot(f.root);
+    const plain = f.run([], { CODEX_SANDBOX: 'injected-secret' });
+    assert.equal(plain.status, 1);
+    assert.match(plain.stdout + plain.stderr, /必须在沙箱外运行/);
+    assert.doesNotMatch(plain.stdout + plain.stderr, /injected-secret/);
+    for (const args of [['--json'], ['--help', '--json', '--recover']]) {
+        const result = f.run(args, { CODEX_SANDBOX: 'injected-secret' });
+        const report = jsonResult(result, 1);
+        assert.equal(report.status, 'runtime_blocked');
+        assert.equal(report.scanComplete, false);
+        assert.equal(report.problems[0].reason, 'sandbox_required');
+        assert.match(report.problems[0].message, /必须在沙箱外运行/);
+        assert.match(result.stderr, /必须在沙箱外运行/);
+    }
+    assert.deepEqual(snapshot(f.root), before);
+});
+
+test('其他守卫异常只给固定说明，不把任意error文本伪装成可信诊断', t => {
+    const f = cliFixture(t);
+    const script = String.raw`
+        const path = require('node:path'); const root = process.argv[1];
+        require(path.join(root, 'scripts/env-loader.js')).requireExternalRuntime = () => { throw Error('injected-secret'); };
+        process.exitCode = require(path.join(root, 'scripts/locks.js')).main(['--json']);
+    `;
+    const before = snapshot(f.root);
+    const result = spawnSync(process.execPath, ['-e', script, f.root], {
+        encoding: 'utf8', timeout: 3000, env: { ...buildChildProcessEnv(), HOME: f.root }
+    });
+    const report = jsonResult(result, 1);
+    assert.equal(report.problems[0].reason, 'runtime_guard_rejected');
+    assert.match(report.problems[0].message, /运行环境检查未通过/);
+    assert.doesNotMatch(result.stdout + result.stderr, /必须在沙箱外运行/);
+    assert.deepEqual(snapshot(f.root), before);
+});
+
 test('详细收集显式记录IO/查询超时而旧数组API保留，Git子环境不含注入配置', t => {
     const f = cliFixture(t);
     assert.ok(Array.isArray(locks.scanLocks(['data/runtime'], Date.now(), { root: f.root })));

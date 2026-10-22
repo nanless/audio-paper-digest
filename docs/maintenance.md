@@ -191,7 +191,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ## 锁视图与文档一致性
 
-- `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或入口错误退出 2；这是对原总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
+- `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
 - `npm run docs:check`：检查 README/AGENTS/maintenance/scripts README 里的 `npm run <script>` 是否都存在于 package.json，文档漂移时非零退出；新增命令时应同步文档。
 
 ## 存储保留建议

@@ -219,7 +219,13 @@ function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('locks.js'); }
     catch (_) {
         const report = baseReport(recover); report.status = 'runtime_blocked';
-        report.problems.push({ scope: 'runtime-guard', operation: 'entry', code: 'RUNTIME_BLOCKED' });
+        // 固定可信说明保留守卫合同；不回显原异常或 CODEX_SANDBOX 的任意值。
+        const sandbox = Boolean(String(process.env.CODEX_SANDBOX || '').trim());
+        const message = sandbox ? 'locks.js 必须在沙箱外运行；请使用沙箱外环境，禁止绕过运行守卫。'
+            : 'locks.js 运行环境检查未通过；请检查工作区与外部运行环境。';
+        report.problems.push({ scope: 'runtime-guard', operation: 'entry', code: 'RUNTIME_BLOCKED',
+            reason: sandbox ? 'sandbox_required' : 'runtime_guard_rejected', message });
+        console.error(`[locks] ${message}`);
         output(report, json); return 1;
     }
     if (argv.some(arg => !['--json', '--recover', '--help'].includes(arg))) {

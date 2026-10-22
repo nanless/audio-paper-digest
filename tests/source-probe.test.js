@@ -8,13 +8,13 @@ const sourceProbe = require('../scripts/source-probe');
 
 const RSS_OK = '<rss><channel><pubDate>Wed, 21 Oct 2026 00:00:00 -0400</pubDate></channel></rss>';
 
-function withStubbedProbe(fixture, { today = '2026-10-22' } = {}, callback) {
+async function withStubbedProbe(fixture, { nowMs = Date.parse('2026-10-22T04:00:00Z') } = {}, callback) {
     const originalProbe = doctor.probeNetwork;
     const originalToday = doctor.beijingDateString;
     doctor.probeNetwork = async () => fixture;
-    doctor.beijingDateString = () => today;
+    doctor.beijingDateString = () => originalToday(nowMs);
     try {
-        return callback();
+        return await callback();
     } finally {
         doctor.probeNetwork = originalProbe;
         doctor.beijingDateString = originalToday;
@@ -72,7 +72,7 @@ test('probe：RSS 公告未生成时只是 warn，不阻断抓取判断', async 
         oai: { status: 200, body: '<OAI-PMH><Identify></Identify></OAI-PMH>', error: null },
         rss: { status: 200, body: RSS_OK, error: null }
     };
-    await withStubbedProbe(fixture, { today: '2026-10-22' }, async () => {
+    await withStubbedProbe(fixture, {}, async () => {
         // 目标日是今天，但 RSS 仍是前一天的公告 → 尚未生成。
         const result = await sourceProbe.probe({ date: '2026-10-22' });
         const rss = result.checks.find(check => check.label === 'arXiv RSS 公告');
@@ -89,13 +89,56 @@ test('probe：历史目标日提示使用受控历史入口', async () => {
         oai: { status: 200, body: '<OAI-PMH><Identify></Identify></OAI-PMH>', error: null },
         rss: { status: 200, body: RSS_OK, error: null }
     };
-    await withStubbedProbe(fixture, { today: '2026-10-22' }, async () => {
+    await withStubbedProbe(fixture, {}, async () => {
         const result = await sourceProbe.probe({ date: '2026-09-01' });
         const rss = result.checks.find(check => check.label === 'arXiv RSS 公告');
         assert.strictEqual(rss.ok, 'warn');
         assert.match(rss.detail, /历史日期/);
         assert.match(rss.hint, /历史入口/);
     });
+});
+
+test('probe：跨北京午夜后原今日成为历史日，不能仍提示公告未生成', async () => {
+    const fixture = {
+        proxyError: null,
+        atom: { status: 200, body: '<feed><entry></entry></feed>', error: null },
+        oai: { status: 200, body: '<OAI-PMH><Identify></Identify></OAI-PMH>', error: null },
+        rss: { status: 200, body: RSS_OK, error: null }
+    };
+    for (const [instant, today, expected] of [
+        ['2026-10-22T15:59:59.999Z', '2026-10-22', /尚未生成/],
+        ['2026-10-22T16:00:00.000Z', '2026-10-23', /历史日期/]
+    ]) {
+        await withStubbedProbe(fixture, { nowMs: Date.parse(instant) }, async () => {
+            // probe 内部 await 网络桩后仍须使用本用例固定的北京时间。
+            await Promise.resolve();
+            assert.strictEqual(doctor.beijingDateString(), today);
+            const result = await sourceProbe.probe({ date: '2026-10-22' });
+            const rss = result.checks.find(check => check.label === 'arXiv RSS 公告');
+            assert.strictEqual(rss.ok, 'warn');
+            assert.match(rss.detail, expected);
+            if (today === '2026-10-23') {
+                assert.doesNotMatch(rss.detail, /尚未生成/);
+                assert.match(rss.hint, /历史入口/);
+            }
+            const automaticDate = await sourceProbe.probe();
+            assert.strictEqual(automaticDate.date, today);
+        });
+    }
+});
+
+test('网络/时钟测试桩等待异步完成，回调失败后也恢复原函数', async () => {
+    const originalProbe = doctor.probeNetwork;
+    const originalToday = doctor.beijingDateString;
+    const sentinel = new Error('fixture callback failed');
+    await assert.rejects(withStubbedProbe({}, {}, async () => {
+        await Promise.resolve();
+        assert.notStrictEqual(doctor.probeNetwork, originalProbe);
+        assert.strictEqual(doctor.beijingDateString(), '2026-10-22');
+        throw sentinel;
+    }), error => error === sentinel);
+    assert.strictEqual(doctor.probeNetwork, originalProbe);
+    assert.strictEqual(doctor.beijingDateString, originalToday);
 });
 
 test('render：按状态输出图标与结论', () => {
