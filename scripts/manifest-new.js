@@ -126,8 +126,9 @@ function main(argv = process.argv.slice(2)) {
     if (options.json) console.log(JSON.stringify({ records: summary, dryRun: !options.write }, null, 2));
     else for (const item of summary) console.log(`论文 ${item.paperId}：${item.replacements.length} 个节点，draft ${item.draftSha256.slice(0, 10)}${options.write ? '' : '（dry-run，不写文件）'}`);
     if (!options.write) return 0;
-    const engine = require('./analysis-engine.js');
-    const failed = papers.filter(paper => !engine.isSuccessfulAnalysisRecord(paper) || !daily.isPaperReusableForAnalysis(paper, plan))
+    const correction = require('./lib/daily-reader-operator-correction.js');
+    // 与消费方共用同一失败集谓词，避免生成器与批处理漂移（fact feedback 场景由 batch 另行校验）。
+    const failed = papers.filter(paper => correction.isCurrentFailedPaper(paper, plan))
         .map(paper => utils.normalizedId({ arxivId: paper.arxivId || paper.paper_id || paper.paperId })).sort();
     const covered = built.map(item => item.paperId).sort();
     if (JSON.stringify(failed) !== JSON.stringify(covered)) {

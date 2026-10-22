@@ -62,13 +62,37 @@ function scanLocks(dirs = DEFAULT_DIRS, nowMs = Date.now(), options = {}) {
     return rows.sort((left, right) => left.file.localeCompare(right.file));
 }
 
+function sharedBlogLocks(root = ROOT) {
+    const envFile = path.join(root, '.env');
+    if (!fs.existsSync(envFile)) return [];
+    let env = {};
+    try { env = require('./lib/env-schema').parseEnvText(fs.readFileSync(envFile, 'utf8')); } catch (_) { return []; }
+    const repo = env.PAPER_DIGEST_BLOG_REPO;
+    if (!repo) return [];
+    const dir = path.join(repo, '.git', '.paper-digest-locks');
+    if (!fs.existsSync(dir)) return [];
+    const rows = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.name.endsWith('.lock') && !entry.isDirectory()) continue;
+        const target = path.join(dir, entry.name);
+        let record = null;
+        try {
+            record = entry.isDirectory() ? JSON.parse(fs.readFileSync(path.join(target, 'owner.json'), 'utf8')) : JSON.parse(fs.readFileSync(target, 'utf8'));
+        } catch (_) { record = null; }
+        rows.push({ file: path.relative(root, target), kind: 'shared-blog', pid: record && Number(record.pid) || null,
+            hostname: record && record.hostname || null, startedAt: record && record.acquiredAt || null,
+            heartbeatAt: record && (record.heartbeatAt || record.acquiredAt) || null, ageSeconds: null, alive: null, stale: false, needsReview: true });
+    }
+    return rows;
+}
+
 function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('locks.js'); } catch (error) { console.error(`[locks] ${error.message}`); return 1; }
 
     const json = argv.includes('--json');
     const recover = argv.includes('--recover');
     if (argv.includes('--help')) { console.log('用法: node scripts/locks.js [--json] [--recover]'); return 0; }
-    const rows = scanLocks();
+    const rows = [...scanLocks(), ...sharedBlogLocks()];
     if (json) console.log(JSON.stringify({ locks: rows }, null, 2));
     else if (!rows.length) console.log('未发现运行锁。');
     else for (const row of rows) console.log(`- ${row.file}  pid=${row.pid || '?'}  ${row.alive === null ? '远端/未知' : row.alive ? '存活' : '已退出'}  心跳=${row.heartbeatAt || '?'}${row.stale ? '  ⚠ 疑似陈旧/需复核' : ''}`);
@@ -79,7 +103,7 @@ function main(argv = process.argv.slice(2)) {
     return 0;
 }
 
-module.exports = { scanLocks, isAlive, main };
+module.exports = { scanLocks, sharedBlogLocks, isAlive, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[locks] ${error.message}`); process.exitCode = 2; }

@@ -19,6 +19,7 @@ const ARTIFACT_VERSION = 1;
 function readEnv() {
     const file = path.join(ROOT, '.env');
     if (!fs.existsSync(file)) return {};
+    try { require('./env-loader').loadProjectEnv(); } catch (_error) { /* 只读命令允许降级为直接解析 */ }
     return require('./lib/env-schema').parseEnvText(fs.readFileSync(file, 'utf8'));
 }
 
@@ -216,7 +217,23 @@ function deployStatus(oid, options = {}) {
     }
     try {
         const runs = JSON.parse(result.stdout || '[]');
-        return parseDeployRuns(runs, oid, { repository });
+        const parsed = parseDeployRuns(runs, oid, { repository });
+        if (parsed && parsed.available && parsed.runId && parsed.status === 'completed' && parsed.conclusion === 'success') {
+            const jobsResult = runGh('gh', ['run', 'view', String(parsed.runId), '-R', repository, '--json', 'jobs'], { encoding: 'utf8', timeout: 30000 });
+            if (jobsResult && jobsResult.status === 0) {
+                try {
+                    const jobs = JSON.parse(jobsResult.stdout || '{}').jobs;
+                    if (Array.isArray(jobs) && jobs.length) {
+                        const deployJob = jobs.find(job => /(pages|deploy|build|hugo)/i.test(String(job.name || job.workflowName || '')));
+                        if (deployJob && String(deployJob.conclusion || '').toLowerCase() !== 'success') {
+                            return { ...parsed, conclusion: 'failure', jobConclusion: deployJob.conclusion || null, message: `部署 job 未成功：${deployJob.name || 'deploy'}` };
+                        }
+                        return { ...parsed, jobVerified: Boolean(deployJob), jobConclusion: deployJob ? deployJob.conclusion : null };
+                    }
+                } catch (_error) { /* jobs 解析失败时保留 run 级结论 */ }
+            }
+        }
+        return parsed;
     } catch (error) {
         return {
             available: false,
@@ -244,7 +261,7 @@ async function waitForDeploy(oid, options = {}) {
     let deploy = deployStatus(oid, options);
     const snapshots = [deploy];
     while (Date.now() < deadline && deploy && deploy.available && deploy.status !== 'completed') {
-        await sleep(intervalMs);
+        await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
         deploy = deployStatus(oid, options);
         snapshots.push(deploy);
     }
