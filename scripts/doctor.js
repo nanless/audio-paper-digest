@@ -547,12 +547,12 @@ function credentialPoolValues(env, keys) {
 // 同一 key 值同时出现在生产池与副池时，两个模型路由会互相消耗额度；
 // 这里只比较值是否相同，绝不输出 key 或值，也不发请求。
 function evaluateCredentialIsolation(env) {
-    const primary = credentialPoolValues(env, PRIMARY_POOL_ENV_KEYS);
+    const primary = [...new Set(credentialPoolValues(env, PRIMARY_POOL_ENV_KEYS))];
     const secondary = new Set(credentialPoolValues(env, SECONDARY_POOL_ENV_KEYS));
     const shared = [...new Set(primary.filter(value => secondary.has(value)))];
     const samePool = primary.length > 0 && primary.length === secondary.size && shared.length === primary.length;
     if (samePool) {
-        return makeCheck('ok', '凭据隔离', '主/副模型使用同一组 key（同一服务单池，按等权轮转）');
+        return makeCheck('ok', '凭据隔离', '主/副模型配置的 key 值集合相同（服务关系与可用性须按实际端点核对）');
     }
     if (shared.length > 0) {
         return makeCheck('warn', '凭据隔离',

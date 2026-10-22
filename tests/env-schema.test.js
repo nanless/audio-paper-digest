@@ -189,10 +189,54 @@ test('summarize 计入 info 提示', () => {
     assert.deepStrictEqual(counts, { ok: 1, warn: 1, fail: 1, info: 2 });
 });
 
+test('大小写 HTTP 代理别名均按配置项校验，不把小写 SOCKS 当合法 CONNECT', () => {
+    for (const name of ['https_proxy', 'http_proxy', 'HTTPS_PROXY', 'HTTP_PROXY']) {
+        const entries = {
+            PAPER_ANALYZER_API_KEY: 'synthetic-key', PAPER_ANALYZER_MODEL: schema.EXPECTED_MODEL,
+            PAPER_ANALYZER_ENDPOINT: 'https://example.invalid/v1', [name]: 'socks5://127.0.0.1:7897'
+        };
+        const bad = schema.validateEntries(entries);
+        assert.strictEqual(bad.items.find(item => item.name === name).ok, 'fail', name);
+        assert.ok(!bad.unknown.includes(name), '受支持的代理别名应登记');
+        const valid = schema.validateEntries({ ...entries, [name]: 'http://127.0.0.1:7897' });
+        assert.strictEqual(valid.items.find(item => item.name === name).ok, 'ok');
+        assert.strictEqual(valid.items.filter(item => item.ok === 'fail').length, 0);
+    }
+    const mixed = schema.validateEntries({ HTTPS_PROXY: 'http://127.0.0.1:7897', https_proxy: 'not-a-url' });
+    assert.strictEqual(mixed.items.find(item => item.name === 'https_proxy').ok, 'fail');
+    const socksForCurl = schema.validateEntries({ ALL_PROXY: 'socks5://127.0.0.1:7898' });
+    assert.strictEqual(socksForCurl.items.find(item => item.name === 'ALL_PROXY').ok, 'ok');
+});
+
+test('整数配置必须在安全整数范围内，仍保留既有十进制和上下限规则', () => {
+    const item = schema.SCHEMA_BY_NAME.get('PD_ANALYSIS_CONCURRENCY');
+    for (const value of ['1', '0003', String(Number.MAX_SAFE_INTEGER)]) {
+        assert.strictEqual(schema.validateValue(item, value).ok, 'ok', value);
+    }
+    for (const value of ['9007199254740992', '9'.repeat(400), '1e3', '0x10', '1.5', '0']) {
+        assert.strictEqual(schema.validateValue(item, value).ok, 'fail', value);
+    }
+    assert.strictEqual(schema.validateValue(schema.SCHEMA_BY_NAME.get('PD_API_READER_CONCURRENCY'), '61').ok, 'fail');
+});
+
 test('项目真实 .env 的常用变量都已被 schema 覆盖（无未知变量）', t => {
     const envFile = path.join(ROOT, '.env');
     if (!fs.existsSync(envFile)) { t.skip('本机没有项目 .env'); return; }
     const entries = schema.parseEnvText(fs.readFileSync(envFile, 'utf8'));
     const { unknown } = schema.validateEntries(entries);
     assert.deepStrictEqual(unknown, [], `真实 .env 仍有未登记变量：${unknown.join(', ')}`);
+});
+
+
+test('大小写代理为空白或引号内空白时不能通过必需代理检查', () => {
+    const base = { PAPER_ANALYZER_API_KEY: 'fixture', PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
+        PAPER_ANALYZER_ENDPOINT: 'https://example.com/v1' };
+    for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy']) {
+        for (const blank of ['   ', '\t', '']) {
+            const parsed = schema.parseEnvText(`${name}="${blank}"`);
+            assert.ok(schema.validateEntries({ ...base, ...parsed }).items.some(item => item.ok === 'fail'), name);
+        }
+        assert.ok(!schema.validateEntries({ ...base, [name]: '   ', HTTP_PROXY: 'http://127.0.0.1:7890' })
+            .items.some(item => item.ok === 'fail'), '有效其他别名保留');
+    }
 });

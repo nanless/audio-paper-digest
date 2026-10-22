@@ -1,12 +1,12 @@
 'use strict';
-// 博客审查误报记录的严格 schema：必须绑定页面 SHA、发布提交、逐字证据与复核人。
-// 只提供校验与注释能力；review 是否采用由调用方显式决定，不放宽真实错误。
+// 误报解释记录的结构检查：页级比对页面 SHA，批次条目无页面 SHA。
+// 提交与人工证据为参考字段；本模块不认证正式审查凭证，不授发布资格。
 
 const SHA256 = /^[a-f0-9]{64}$/;
 // 审查凭证的提交字段在不同版本里叫法不同；只认这三个明确字段，不做模糊匹配。
 const RECEIPT_COMMIT_FIELDS = Object.freeze(['publicationCommit', 'reviewedCommit', 'commit']);
 
-/** 从真实审查凭证里取发布提交；找不到明确字段时返回 null（由调用方警告后降级）。 */
+/** 从输入 JSON 取首个明确提交字段，仅作参考比较；不验证其正式凭证合同。 */
 function receiptCommit(receipt) {
     if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return null;
     for (const field of RECEIPT_COMMIT_FIELDS) {
@@ -16,7 +16,7 @@ function receiptCommit(receipt) {
     return null;
 }
 
-/** 要求 overrides.publicationCommit 与凭证提交逐字相等；返回命中字段与提交。 */
+/** 旧导出名保留兼容；只要求参考提交字段逐字相等，不认证正式凭证。 */
 function assertReceiptBinding(publicationCommit, receipt) {
     const bound = receiptCommit(receipt);
     if (!bound) return null;
@@ -56,21 +56,24 @@ function applyOverrides(failure, overrides) {
         if (typeof entry.claim !== 'string' || entry.claim.trim().length < 6) throw new Error('override.claim 太短或不精确');
     }
     const matched = new Set();
-    const applyToIssues = (issues, file) => (Array.isArray(issues) ? issues : []).map(issue => {
+    const matches = [];
+    const applyToIssues = (issues, file, fileIndex) => (Array.isArray(issues) ? issues : []).map((issue, issueIndex) => {
         if (!/error/i.test(String(issue.severity || issue.level || ''))) return issue;
         const text = String(issue.description || issue.message || issue.issue || '').trim();
-        const entry = entries.find(item => item.claim.trim() === text
+        const overrideIndex = entries.findIndex(item => item.claim.trim() === text
             && (file ? (item.path === file.path && item.pageSha256 === file.sha256) : item.path === 'batch'));
-        if (!entry) return issue;
+        if (overrideIndex < 0) return issue;
+        const entry = entries[overrideIndex];
         matched.add(entry);
+        matches.push({ scope: file ? 'page' : 'batch', fileIndex, issueIndex, overrideIndex });
         return { ...issue, severity: 'warn', overridden: true, overrideReviewer: entry.reviewer };
     });
-    for (const file of Array.isArray(failure && failure.files) ? failure.files : []) {
-        file.issues = applyToIssues(file.issues, file);
+    for (const [fileIndex, file] of (Array.isArray(failure && failure.files) ? failure.files : []).entries()) {
+        file.issues = applyToIssues(file.issues, file, fileIndex);
     }
     // 批次级 preflight/顶层 issues 同样可被严格记录解释，否则 wouldPass 会假放行。
-    failure.issues = applyToIssues(failure.issues, null);
-    return { failure, matched: matched.size };
+    failure.issues = applyToIssues(failure.issues, null, null);
+    return { failure, matched: matched.size, matchedIssues: matches.length, matches };
 }
 
 module.exports = { validateOverrides, applyOverrides, receiptCommit, assertReceiptBinding };

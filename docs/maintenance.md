@@ -165,13 +165,13 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 - `npm run source:probe -- --date YYYY-MM-DD`：只读探测 arXiv Atom/官方 OAI/RSS 三入口，并判断 RSS 公告是否目标日；失败时给出等待/换入口/官方 OAI 的建议，不抓取、不写数据。
 - `npm run llm:accounts`：只读查看账号池每个账号的状态、冷却与最早恢复；账号只显示本次运行的序号，不显示任何密钥或稳定指纹。
-- `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，支持 `--json`。
-- `npm run doctor` 与这三条命令都只读；抓取失败时 full-fetch 会追加 `[下一步]` 的限流/5xx/RSS 建议。
+- `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，支持 `--json`。大小写 HTTP 代理变量均逐项校验，`ALL_PROXY` 仍允许 curl 使用 SOCKS；整数须在 JavaScript 安全整数范围内。检查失败标明具体配置项，不代表每条运行路由都会选择该项，也不改变运行时的代理选择或整数解析规则。
+- `npm run doctor` 与这三条命令都只读；抓取失败时 full-fetch 会追加 `[下一步]` 的限流/5xx/RSS 建议。doctor 比较主副配置的唯一密钥值集合，重复列出同一个值不会误报为部分重叠；集合相同只描述配置关系，不能证明端点属于同一服务或账号可用。
 
 ## 恢复决策与清单生成
 
-- `npm run recover -- --date YYYY-MM-DD`：只读读取当前失败集（分析失败/事实义务/博客审查 files[].issues 与 passed:false），按错误码汇总成唯一建议入口与可复制命令；默认只打印，`--execute --yes` 才调用既有入口，入口自身门禁仍然生效。
-- `npm run manifest:new -- --spec SPEC.json`：SPEC 只需写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点）；命令自动找到活动付费候选、计算 oldSha/draftSha 并做 schema 校验，默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`，不自动采纳。
+- `npm run recover -- --date YYYY-MM-DD`：只读采集已保存的分析失败、事实义务、页面审查问题及独立的批次审查问题，再按错误码汇总建议入口。日期须为真实日历日期。输出区分文件缺失、不可读、坏 JSON、形状错误、错批与无法确认日期的旧格式；存在坏资料时退出 2。文件缺失时仅提供 partial 预览，默认退出 0，`--strict` 退出 1，`--execute` 退出 2 且不派发。两份资料均可读时也只表示 `saved_records` 采集完成，`semanticCoverage: not_checked`、`scopeComplete: false`，不证明正式来源、完整失败集合或发布资格。`--execute --yes` 仍只调用既有入口并受原门禁约束。
+- `npm run manifest:new -- --spec SPEC.json [--fact-feedback-file FILE ...]`：SPEC 写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点），可多次传 `--spec`，或使用数组 / `{papers:[...]}` 覆盖完整当前失败集合。若本次恢复使用事实反馈，须传入同一组反馈文件；命令按正式入口的反馈验证及失败谓词核对集合、重复项与人数限制，dry-run 和 write 均先核对。候选须安全可读、唯一，并对应当前论文、来源运行及来源 SHA，不按修改时间挑稿，也不吞读取错误。输出明确 `candidateIdentity: not_checked`、`paidOrigin: not_checked`；本切片未完成完整当前输入身份比较及原付费链重放；正式采纳仍核真实当前来源、原材料与 patch，并执行正常 Reader 及整篇资格检查。默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`；材料准备成功不表示正式资格通过、不授模型请求权限，也不自动采纳。
 - 错误码字典 `scripts/lib/error-codes.js` 与 `error-guidance` 的规则 id 对齐，供 `recover`、状态报告和文档共用。
 
 ## 表格与影响面预检
@@ -184,7 +184,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 - `npm run blog:push -- --date DATE --dry-run`：只列出审查凭证允许的精确文件清单，不 commit/push。
 - `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态/标题并写 `data/current/web-verification-<date>.json`；`--deploy` 查询对应提交的 Pages workflow（仓库可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖，默认 `nanless/audio-paper-digest-blog`；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`）；`--wait` 最多等待 120 秒直到 completed，无 gh/进行中默认判失败，`--allow-degraded` 可显式放宽。`--json` 在等待时输出 JSONL（部署快照行 + summary + 最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy/generationManifestSha256/publicationOid；页面重定向必须回到期望 URL，标题须为具体页面（汇总页还需含日期）。默认要求部署证据：无 `--deploy`、`--limit` 抽样或部署未成功时 artifact 标记 partial 并返回非零，只有显式 `--allow-partial` 才放宽页面/抽样 partial；`--allow-degraded` 只放宽部署不可得/进行中，不降低页面与凭证证据要求。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
-- `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]`：只读核对误报记录，验证 schema、页面 SHA 与逐字 claim，报告匹配数与剩余真实 error；不修改失败文件/审查凭证，也不自动放行；剩余真实 error>0 或存在无法解释的 pending 页（passed:false 且无 error issue）时返回非零；页级 error 全部被严格记录解释但页仍 passed:false 时计入 overriddenFailedPages 并放行（需人工复核）；批次级 error 用 `path:'batch'` 的 override 解释；执行/参数错误退出码为 2。
+- `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]`：只读核对误报解释，按页面 SHA 与逐字 claim 匹配，不修改失败文件或凭证，也不授予正式审查或发布资格。诊断报告 v2 的 `matched` 统计实际命中的解释条目，`matchedIssues` 与 `matches` 记录本次问题位置；`inputDeclaredOverridden` 单列原输入的旧标记，`sourceFailureSha256` 绑定原文件字节。严格退出码由 `currentMatchVerdict` 决定：仍有 error 或未完整解释的失败页退出 1，诊断无阻断退出 0，执行或参数错误退出 2。旧 `pendingBlockedFiles`、`overriddenFailedPages`、`wouldPass` 及 `legacyProjection` 保留旧投影，不能作为新退出依据。此变化会使只靠输入旧 `overridden` 标记的旧调用返回非零。`receiptCheck` 仅报告参考提交字段是否相等，`receiptContractVerified` 始终为 false；字段冲突退出 2，缺字段明确告警。失败文件显式日期冲突同样退出 2；旧文件缺日期时 `failureDateCheck` 明确未比对，`formalScopeVerified` 始终为 false。同一失败页中原有的 `overridden` 位置也须由本次匹配覆盖，不能用另一条新解释掩盖。`--json` 的正常诊断输出为单份 JSON，告警写入 stderr。
 - `npm run publish:finish -- --date DATE`：打印推送后收尾清单（digest:status、网页核验、视觉 prepare/豁免），不调用图像 API、不自动登记豁免。
 
 `verify:web` 的完整部署结果还要求明确的 `jobVerified: true`。缺 runId、jobs 查询失败或超时、无法解析响应等均保留为未核验，不以 run 的成功结论替代 job 证据。此时结果仍为 `partial:true`；同时显式使用 `--allow-degraded --allow-partial` 只允许诊断命令退出成功，不会把证据升级为完整验收。实际 job 失败、取消或跳过继续返回失败。

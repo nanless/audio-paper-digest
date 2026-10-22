@@ -71,30 +71,53 @@ function largeBatchCorrectionLimit(plan, papers) {
         throw new Error('Large operator correction requires the complete original sealed batch');
     return Math.min(15, Math.max(10, Math.floor(expected.length / 10)));
 }
-async function withCorrections(filename, plan, papers, callback, { factFeedbacks = new Map() } = {}) {
-    require('../env-loader').requireExternalRuntime('daily-reader-operator-correction');
-    require('../workspace-role').requireWorkspaceRole('daily');
+// The normal entry must already have checked the complete actual plan/papers.
+// This shared observation does not authenticate a caller-supplied JSON plan
+// or grant source, Reader, request, or adoption capability.
+function inspectDailyOperatorTail(plan, papers, factFeedbacks = new Map()) {
+    if (!Array.isArray(papers) || papers.some(p => !p || typeof p !== 'object' || Array.isArray(p)))
+        throw new Error('Operator correction requires the actual batch papers');
+    const memberIds = papers.map(id);
+    if (memberIds.some(value => !value) || new Set(memberIds).size !== memberIds.length)
+        throw new Error('Operator correction batch contains missing or duplicate paper IDs');
     if (!(factFeedbacks instanceof Map)) throw new Error('Operator fact feedback must be a validated batch map');
     for (const [paperId, feedback] of factFeedbacks) {
         const paper = papers.find(p => id(p) === paperId);
         if (!paper || feedback?.paperId !== paperId) throw new Error('Operator fact feedback is outside the actual batch');
         require('./daily-fact-review').validateFeedback(feedback,plan,paper);
     }
+    const failedIds = papers.filter(p => isCurrentFailedPaper(p, plan, factFeedbacks)).map(id).sort();
+    const limit = failedIds.length > 10 ? largeBatchCorrectionLimit(plan, papers) : 10;
+    if (failedIds.length > limit) throw new Error(`Operator correction exceeds the bounded final failed-set limit：失败集 ${failedIds.length} 篇超过本批人工修正上限 ${limit} 篇`);
+    return { memberIds: memberIds.slice().sort(), failedIds, limit, feedbackCount: factFeedbacks.size };
+}
+function assertCompleteOperatorTail(tail, suppliedIds) {
+    if (!Array.isArray(suppliedIds) || new Set(suppliedIds).size !== suppliedIds.length)
+        throw new Error('修正清单包含重复论文（duplicate paper IDs）');
+    if (!isDeepStrictEqual(suppliedIds.slice().sort(), tail.failedIds)) {
+        const missing = tail.failedIds.filter(paperId => !suppliedIds.includes(paperId));
+        const extra = suppliedIds.filter(paperId => !tail.failedIds.includes(paperId));
+        throw new Error(`修正清单必须覆盖当前完整失败集（缺少 ${missing.join(', ') || '无'}；多余 ${extra.join(', ') || '无'}）`);
+    }
+}
+async function withCorrections(filename, plan, papers, callback, { factFeedbacks = new Map() } = {}) {
+    require('../env-loader').requireExternalRuntime('daily-reader-operator-correction');
+    require('../workspace-role').requireWorkspaceRole('daily');
+    const tail = inspectDailyOperatorTail(plan, papers, factFeedbacks);
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
     within(filename,root); const manifest = read(filename), m = manifest.value;
     if (m.contract !== CONTRACT || m.runId !== plan.runId || m.batchDate !== plan.batchDate
         || typeof m.authorization !== 'string' || !m.authorization.trim()
         || !Array.isArray(m.correctionFiles) || !m.correctionFiles.length)
         throw new Error('Explicit operator correction manifest is invalid');
-    if (m.correctionFiles.length > 10
-        && m.correctionFiles.length > largeBatchCorrectionLimit(plan, papers))
+    if (m.correctionFiles.length > tail.limit)
         throw new Error('Operator correction exceeds the bounded final failed-set limit');
     const records = new Map();
     for (const filename of m.correctionFiles) {
         within(filename,root); const file = read(filename), r = file.value, paperId = id(r);
         const paper = papers.find(p=>id(p)===paperId);
         if (!paper || records.has(paperId) || r.runId !== plan.runId || r.batchDate !== plan.batchDate
-            || !isCurrentFailedPaper(paper,plan,factFeedbacks))
+            || !tail.failedIds.includes(paperId))
             throw new Error('Operator correction must target a distinct failed paper in the actual batch');
         within(r.baselineCandidateFile,plan.readerAttemptsDir);
         if (path.dirname(path.resolve(r.baselineCandidateFile)) !== path.resolve(plan.readerAttemptsDir)
@@ -114,9 +137,8 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
         records.set(paperId,{file,baseline,record:r,sourceDescriptor:source.freshSourceDescriptor,
             original:env.envelope,draft});
     }
-    const failed = papers.filter(p=>isCurrentFailedPaper(p,plan,factFeedbacks)).map(id).sort();
-    if (!isDeepStrictEqual([...records.keys()].sort(),failed))
-        throw new Error('Operator correction manifest must cover the complete current failed set');
+    // Keep the original final fresh failed-set check after reading all files.
+    assertCompleteOperatorTail(inspectDailyOperatorTail(plan, papers, factFeedbacks), [...records.keys()]);
     return scope.run({manifest,records},callback);
 }
 function current(paper, identity) {
@@ -151,4 +173,5 @@ function execution(proof) {
     return proof ? {executionKind:'operator',operatorProvenance:proof,newReaderApiRequests:0,
         model:'operator-local',protocol:'local_operator'} : {};
 }
-module.exports={CONTRACT,withCorrections,current,execution,replay,isCurrentFailedPaper,largeBatchCorrectionLimit};
+module.exports={CONTRACT,withCorrections,current,execution,replay,isCurrentFailedPaper,largeBatchCorrectionLimit,
+    inspectDailyOperatorTail,assertCompleteOperatorTail};

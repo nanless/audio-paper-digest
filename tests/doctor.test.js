@@ -258,6 +258,34 @@ test('凭据隔离：主副池部分重叠时 warn 且不输出 key/值', () => 
     assert.equal(doctor.evaluateCredentialIsolation({}).ok, 'ok');
 });
 
+test('凭据隔离按唯一值集合判断，不因重复项误报或推断同一服务', () => {
+    const first = 'synthetic-primary-key-A';
+    const second = 'synthetic-secondary-key-B';
+    const third = 'synthetic-other-key-C';
+    const same = doctor.evaluateCredentialIsolation({
+        PAPER_ANALYZER_API_KEY: first,
+        PAPER_ANALYZER_FALLBACK_API_KEYS: `${first},${second}`,
+        PAPER_ANALYZER_SECONDARY_API_KEY: second,
+        PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS: `${first},${second}`,
+        PAPER_ANALYZER_ENDPOINT: 'https://one.invalid/v1',
+        PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://two.invalid/v1'
+    });
+    assert.equal(same.ok, 'ok');
+    assert.doesNotMatch(same.detail, /同一服务/);
+    const partial = doctor.evaluateCredentialIsolation({
+        PAPER_ANALYZER_API_KEY: first, PAPER_ANALYZER_FALLBACK_API_KEYS: second,
+        PAPER_ANALYZER_SECONDARY_API_KEY: second,
+        PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS: `${second},${third}`
+    });
+    assert.equal(partial.ok, 'warn');
+    assert.match(partial.detail, /1 个部分重叠/);
+    for (const result of [same, partial]) {
+        for (const value of [first, second, third]) assert.ok(!JSON.stringify(result).includes(value));
+    }
+    assert.equal(doctor.evaluateCredentialIsolation({ PAPER_ANALYZER_API_KEY: first }).ok, 'ok');
+    assert.equal(doctor.evaluateCredentialIsolation({ PAPER_ANALYZER_SECONDARY_API_KEY: second }).ok, 'ok');
+});
+
 test('代理检查：HTTP CONNECT 通过，SOCKS/缺失失败，凭据被掩码', () => {
     const ok = doctor.evaluateProxy(envWith());
     assert.equal(ok.ok, 'ok');

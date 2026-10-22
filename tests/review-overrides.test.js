@@ -37,6 +37,41 @@ test('applyOverrides 只把匹配页面+claim 的 error 降为 warn', () => {
     assert.strictEqual(failure.files[0].issues[1].severity, 'error');
 });
 
+test('v1 单条记录仍可解释同页多条同 claim，并分别记录本次 issue 位置', () => {
+    const entry = validEntry();
+    const failure = { files: [{ path: entry.path, sha256: entry.pageSha256, passed: false, issues: [
+        { severity: 'error', description: entry.claim },
+        { severity: 'error', description: entry.claim },
+        { severity: 'warn', description: entry.claim, overridden: true }
+    ] }] };
+    const result = overrides.applyOverrides(failure, [entry]);
+    assert.strictEqual(result.failure, failure, '保留原内存注释 API');
+    assert.strictEqual(result.matched, 1, 'matched 仍是不同 entry 数');
+    assert.strictEqual(result.matchedIssues, 2);
+    assert.deepStrictEqual(result.matches, [
+        { scope: 'page', fileIndex: 0, issueIndex: 0, overrideIndex: 0 },
+        { scope: 'page', fileIndex: 0, issueIndex: 1, overrideIndex: 0 }
+    ]);
+    assert.ok(failure.files[0].issues.every(issue => issue.severity === 'warn'));
+});
+
+test('本次匹配位置区分 page/batch，旧 warn/info 标记不算本次匹配', () => {
+    const page = validEntry();
+    const batch = { path: 'batch', pageSha256: null, claim: page.claim, evidence: 'batch ref', reviewer: 'r' };
+    const failure = { files: [{ path: page.path, sha256: page.pageSha256, issues: [
+        { severity: 'warn', description: page.claim, overridden: true },
+        { severity: 'info', description: page.claim },
+        { severity: 'error', description: page.claim }
+    ] }], issues: [{ severity: 'error', description: page.claim }] };
+    const result = overrides.applyOverrides(failure, [batch, page]);
+    assert.strictEqual(result.matched, 2);
+    assert.strictEqual(result.matchedIssues, 2);
+    assert.deepStrictEqual(result.matches, [
+        { scope: 'page', fileIndex: 0, issueIndex: 2, overrideIndex: 1 },
+        { scope: 'batch', fileIndex: null, issueIndex: 0, overrideIndex: 0 }
+    ]);
+});
+
 test('审查凭证提交字段从 publicationCommit/reviewedCommit/commit 中取，缺字段返回 null', () => {
     assert.deepStrictEqual(overrides.receiptCommit({ publicationCommit: 'a'.repeat(40) }),
         { field: 'publicationCommit', commit: 'a'.repeat(40) });

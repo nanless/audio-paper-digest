@@ -23,13 +23,15 @@ const SCHEMA = Object.freeze([
     { name: 'PAPER_ANALYZER_ENDPOINT', required: true, type: 'url', hint: 'Muse 端点，例如 https://opencode.ai/zen/go/v1' },
     { name: 'PAPER_ANALYZER_FALLBACK_API_KEYS', required: false, type: 'csv', secret: true, hint: '同池更多 key，逗号分隔，顺序不代表优先级' },
     { name: 'PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY', required: false, type: 'csv', secret: true, hint: '同池更多 key（与 fallback 列表合并）' },
-    { name: 'PAPER_ANALYZER_SECONDARY_MODEL', required: false, type: 'model', hint: `未配置时回退主模型；如配置应为 ${EXPECTED_MODEL}` },
+    { name: 'PAPER_ANALYZER_SECONDARY_MODEL', required: false, type: 'model', hint: `未设置型号时不启用副模型；如配置应为 ${EXPECTED_MODEL}` },
     { name: 'PAPER_ANALYZER_SECONDARY_ENDPOINT', required: false, type: 'url' },
     { name: 'PAPER_ANALYZER_SECONDARY_API_KEY', required: false, type: 'string', secret: true },
     { name: 'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS', required: false, type: 'csv', secret: true },
     { name: 'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY', required: false, type: 'csv', secret: true },
     { name: 'HTTPS_PROXY', required: false, type: 'proxy', hint: 'Muse/arXiv 必须走项目 HTTP CONNECT 代理' },
     { name: 'HTTP_PROXY', required: false, type: 'proxy' },
+    { name: 'https_proxy', required: false, type: 'proxy' },
+    { name: 'http_proxy', required: false, type: 'proxy' },
     { name: 'ALL_PROXY', required: false, type: 'string', hint: '可选的 SOCKS 代理（HuggingFace curl 使用）' },
     { name: 'NO_PROXY', required: false, type: 'string' },
     { name: 'PAPER_DIGEST_BLOG_REPO', required: false, type: 'path', hint: '真实 Hugo 仓库根目录' },
@@ -166,6 +168,7 @@ function validateValue(item, rawValue) {
     case 'int': {
         if (!/^\d+$/.test(value)) return { ok: 'fail', detail: `不是十进制整数：${value}`, hint: item.hint };
         const number = Number.parseInt(value, 10);
+        if (!Number.isSafeInteger(number)) return { ok: 'fail', detail: '超出安全整数范围', hint: item.hint };
         if (item.min !== undefined && number < item.min) return { ok: 'fail', detail: `小于下限 ${item.min}：${number}`, hint: item.hint };
         if (item.max !== undefined && number > item.max) return { ok: 'fail', detail: `大于上限 ${item.max}：${number}`, hint: item.hint };
         return { ok: 'ok', detail: `整数 ${number}` };
@@ -219,7 +222,7 @@ function validateEntries(entries, options = {}) {
         items.push({ name: classified.name, type: 'unknown', required: false, secret: secret(classified.name),
             ok: classified.ok, detail: classified.detail, hint: classified.hint });
     }
-    if (!source.HTTPS_PROXY && !source.HTTP_PROXY && !source.https_proxy && !source.http_proxy) {
+    if (!['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'].some(name => String(source[name] ?? '').trim())) {
         const item = items.find(entry => entry.name === 'HTTPS_PROXY');
         if (item) { item.ok = 'fail'; item.detail = 'HTTPS_PROXY/HTTP_PROXY 都未配置'; item.hint = 'Muse 与 arXiv 必须走项目 HTTP CONNECT 代理'; }
     }
