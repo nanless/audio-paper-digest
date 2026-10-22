@@ -3,33 +3,58 @@
 // 只读核对审查误报记录：校验 schema、匹配失败页 SHA 与逐字 claim，报告可降级数量；不修改审查结果。
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateOverrides, applyOverrides } = require('./lib/review-overrides');
+const { validateOverrides, applyOverrides, assertReceiptBinding } = require('./lib/review-overrides');
 
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
+const USAGE = 'node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json '
+    + '[--receipt REVIEW_RECEIPT.json] [--failure-file PATH] [--json]';
 
 function main(argv = process.argv.slice(2)) {
     try { require('./env-loader').requireExternalRuntime('review-overrides-cli.js'); } catch (error) { console.error(`[review-overrides] ${error.message}`); return 2; }
-    let date = null; let file = null; let json = false; let failureFileOption = null; const options = {};
+    // help 优先：后面跟未知参数也只看 help，不报未知参数错误。
+    if (argv.includes('--help')) {
+        const asJson = argv.includes('--json');
+        console.log(asJson ? JSON.stringify({ usage: USAGE }) : `用法: ${USAGE}`);
+        return 0;
+    }
+    let date = null; let file = null; let json = false; let failureFileOption = null; let receiptPath = null;
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
         if (value === '--date') date = argv[++index] || null;
         else if (value === '--file') file = path.resolve(argv[++index] || '');
         else if (value === '--json') json = true;
         else if (value === '--failure-file') failureFileOption = path.resolve(argv[++index] || '');
-        else if (value === '--help') options.help = true;
+        else if (value === '--receipt') receiptPath = path.resolve(argv[++index] || '');
         else throw new Error(`未知参数：${value}`);
-    }
-    if (options.help) {
-        const usage = 'node scripts/review-overrides-cli.js --date DATE --file OVERRIDES.json [--json]';
-        console.log(json ? JSON.stringify({ usage }) : `用法: ${usage}`);
-        return 0;
     }
     if (!date || !file) throw new Error('需要 --date 与 --file');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('--date 必须是 YYYY-MM-DD');
     const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (payload.batchDate && date && payload.batchDate !== date) throw new Error(`overrides.batchDate=${payload.batchDate} 与 --date ${date} 不一致`);
     const overrides = validateOverrides(payload);
+    if (receiptPath) {
+        let receipt;
+        try {
+            receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+        } catch (error) {
+            console.error(`[review-overrides] 无法读取审查凭证：${receiptPath}: ${error.message}`);
+            return 2;
+        }
+        let bound;
+        try {
+            bound = assertReceiptBinding(payload.publicationCommit, receipt);
+        } catch (error) {
+            console.error(`[review-overrides] ${error.message}`);
+            return 2;
+        }
+        if (!bound) {
+            console.warn('[review-overrides] 警告：审查凭证没有 publicationCommit/reviewedCommit/commit，'
+                + '无法绑定发布提交；继续只按 batchDate 校验');
+        } else {
+            console.log(`[review-overrides] 审查凭证绑定通过：${bound.field}=${bound.commit}`);
+        }
+    }
     const failureFile = failureFileOption || path.join(CURRENT, `blog-review-failure-${date}.json`);
     if (!fs.existsSync(failureFile)) throw new Error(`找不到审查失败文件：${failureFile}`);
     const failure = JSON.parse(fs.readFileSync(failureFile, 'utf8'));

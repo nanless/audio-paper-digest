@@ -517,6 +517,44 @@ function evaluateSecondaryModel(env) {
     return makeCheck('ok', '副模型配置', `副模型 ${model}（endpoint ${endpoint}；API Key 已配置，值不显示）`);
 }
 
+// 生产池与副模型池的 key 变量：只比较值是否相同，不打印 key 或值。
+const PRIMARY_POOL_ENV_KEYS = Object.freeze([
+    'PAPER_ANALYZER_API_KEY',
+    'PAPER_ANALYZER_FALLBACK_API_KEYS',
+    'PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY'
+]);
+const SECONDARY_POOL_ENV_KEYS = Object.freeze([
+    'PAPER_ANALYZER_SECONDARY_API_KEY',
+    'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS',
+    'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY'
+]);
+
+function credentialPoolValues(env, keys) {
+    const values = [];
+    for (const key of keys) {
+        if (!hasEnvValue(env, key)) continue;
+        for (const part of String(env[key]).split(',')) {
+            const value = part.trim();
+            if (value) values.push(value);
+        }
+    }
+    return values;
+}
+
+// 同一 key 值同时出现在生产池与副池时，两个模型路由会互相消耗额度；
+// 这里只比较值是否相同，绝不输出 key 或值，也不发请求。
+function evaluateCredentialIsolation(env) {
+    const primary = credentialPoolValues(env, PRIMARY_POOL_ENV_KEYS);
+    const secondary = new Set(credentialPoolValues(env, SECONDARY_POOL_ENV_KEYS));
+    const shared = [...new Set(primary.filter(value => secondary.has(value)))];
+    if (shared.length > 0) {
+        return makeCheck('warn', '凭据隔离',
+            `生产池与副模型池有 ${shared.length} 个相同的 key 值，可能互相消耗额度`,
+            '为副模型单独配置 key；本检查只比较值，不显示 key');
+    }
+    return makeCheck('ok', '凭据隔离', '生产池与副模型池没有发现相同的 key 值');
+}
+
 function resolveHttpConnectProxy(env) {
     const candidates = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY'];
     let invalid = null;
@@ -1475,6 +1513,13 @@ async function runDoctor(options = {}) {
 
     checks.push(...safeCollect('主模型配置', () => (envUsable ? evaluatePrimaryModel(env) : notEvaluated('主模型配置'))));
     checks.push(...safeCollect('副模型配置', () => (envUsable ? evaluateSecondaryModel(env) : notEvaluated('副模型配置'))));
+    // 只在发现共用 key 时增加一行；健康配置的体检项数量保持原样。
+    if (envUsable) {
+        checks.push(...safeCollect('凭据隔离', () => {
+            const isolation = evaluateCredentialIsolation(env);
+            return isolation.ok === 'ok' ? [] : [isolation];
+        }));
+    }
     checks.push(...safeCollect('HTTP 代理', () => (envUsable ? evaluateProxy(env) : notEvaluated('HTTP 代理'))));
     checks.push(...safeCollect('运行环境', () => evaluateSandbox(env)));
     checks.push(...safeCollect('工作区角色', () => evaluateWorkspaceRole(deps.readWorkspaceRole())));
@@ -1595,6 +1640,10 @@ module.exports = {
     evaluateEnvFile,
     evaluatePrimaryModel,
     evaluateSecondaryModel,
+    evaluateCredentialIsolation,
+    credentialPoolValues,
+    PRIMARY_POOL_ENV_KEYS,
+    SECONDARY_POOL_ENV_KEYS,
     resolveHttpConnectProxy,
     evaluateProxy,
     evaluateWorkspaceRole,

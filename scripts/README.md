@@ -418,13 +418,13 @@ npm run test:compat
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 从 1–8 个节点替换生成 operator 修正记录与清单，自动计算 SHA/UUID；默认 dry-run，`--write` 才写 data/runtime。 |
 | `table-check.js` | Node 入口：`npm run table:check -- --draft DRAFT.json` 离线预检表格粘连复写/列数/单位声明，不写数据。 |
 | `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
-| `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核验汇总页/单篇 HTTP 200 与标题，写 data/current/web-verification-<date>.json；`--deploy` 查 Pages workflow。 |
+| `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核验汇总页/单篇 HTTP 200 与标题，写 data/current/web-verification-<date>.json；`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy。 |
 | `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印推送后收尾清单（状态、网页核验、视觉准备/豁免），不调用图像 API、不自动豁免。 |
-| `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json` 只读核对误报记录（schema/页面 SHA/逐字 claim），报告匹配与剩余 error；仅全部 error 被严格记录覆盖且无未解释 pending 页时返回 0；页级已解释失败页计入 overriddenFailedPages，批次 error 用 path:'batch'；执行/参数错误返回 2，不修改审查结果。 |
+| `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` 只读核对误报记录（schema/页面 SHA/逐字 claim/可选审查凭证提交绑定），报告匹配、剩余 error、pending 与 overriddenFailedPages；仅全部 error 严格覆盖且无未解释 pending 页返回 0；批次 error 用 path:'batch'；执行/参数错误返回 2，不修改审查结果。 |
 | `storage-report.js` | Node 入口：`npm run storage:report [--advice-only]` 打印“必须保留/可压缩/可删”建议，并只读运行 storage:status；不删除。 |
 | `locks.js` | Node 入口：`npm run locks` 只读列出目录/文件运行锁（含 `.analysis-runs`、`conference-processes` 嵌套锁）的持有者/时间/心跳，`--recover` 只预览疑似陈旧锁，不删除。 |
 | `docs-consistency.js` | Node 入口：`npm run docs:check` 检查文档中 `npm run <script>` 是否都在 package.json，防止文档漂移。 |
-| `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥。 |
+| `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥；会警告主池与副模型池共用同一 key 值（只比较值）。 |
 | `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
 | `editorial-quality.js` | Node 共享：检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |

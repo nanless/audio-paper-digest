@@ -1,3 +1,5 @@
+import datetime
+import hashlib
 import importlib.util
 import json
 import sys
@@ -50,6 +52,40 @@ class ReviewHelpTests(unittest.TestCase):
 
     def test_missing_failure_returns_none(self):
         self.assertIsNone(write_review_help('/tmp/definitely-missing-failure.json', '/tmp/x.json'))
+
+
+    def test_help_file_binds_source_failure_sha_and_generated_at(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            failure = Path(tmp) / 'failure.json'
+            failure.write_text(json.dumps({'files': [{
+                'path': 'content/posts/a.md', 'sha256': 'a' * 64,
+                'issues': [{'severity': 'error', 'description': '表格 粘连复写'}]
+            }]}), encoding='utf-8')
+            before = failure.read_bytes()
+            target = Path(tmp) / 'help.json'
+            write_review_help(failure, target)
+            payload = json.loads(target.read_text(encoding='utf-8'))
+            self.assertEqual(payload['sourceFailureSha256'], hashlib.sha256(before).hexdigest())
+            self.assertIn('generatedAt', payload)
+            generated = datetime.datetime.fromisoformat(payload['generatedAt'])
+            self.assertIsNotNone(generated.tzinfo)
+            age = abs((datetime.datetime.now(datetime.timezone.utc)
+                       - generated.astimezone(datetime.timezone.utc)).total_seconds())
+            self.assertLess(age, 300)
+            self.assertEqual(failure.read_bytes(), before, '失败文件必须保持只读')
+
+    def test_corrupted_or_non_object_failure_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, content in (
+                ('broken.json', '{not json'),
+                ('array.json', '[1, 2]'),
+                ('string.json', '"x"'),
+                ('null.json', 'null'),
+            ):
+                with self.subTest(name=name):
+                    path = Path(tmp) / name
+                    path.write_text(content, encoding='utf-8')
+                    self.assertIsNone(write_review_help(path, Path(tmp) / 'help.json'))
 
 
 if __name__ == '__main__':

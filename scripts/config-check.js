@@ -34,8 +34,9 @@ function parseArgs(argv) {
 
 function render(items) {
     const lines = [];
+    const icons = { ok: '✅', warn: '⚠️', fail: '❌', info: 'ℹ️' };
     for (const item of items) {
-        const icon = item.ok === 'ok' ? '✅' : item.ok === 'warn' ? '⚠️' : '❌';
+        const icon = icons[item.ok] || '❓';
         lines.push(`${icon} ${item.name}：${item.detail}${item.hint ? `（${item.hint}）` : ''}`);
     }
     return lines.join('\n');
@@ -46,6 +47,7 @@ function main(argv = process.argv.slice(2)) {
     const options = parseArgs(argv);
     if (options.help) {
         console.log('用法: node scripts/config-check.js [--json] [--env PATH]');
+        console.log('  --json 输出含 items/unknown/spelling/counts 的机器可读 JSON（不包含任何密钥值）');
         return 0;
     }
     if (!fs.existsSync(options.envFile)) {
@@ -54,15 +56,27 @@ function main(argv = process.argv.slice(2)) {
     }
     const text = fs.readFileSync(options.envFile, 'utf8');
     const entries = parseLikeRuntime(text);
-    const { items, unknown } = validateEntries(entries);
-    const result = { envFile: options.envFile, items, unknown, counts: items.reduce((acc, item) => ({ ...acc, [item.ok]: (acc[item.ok] || 0) + 1 }), {}) };
+    const { items, unknown, spelling } = validateEntries(entries);
+    const counts = items.reduce((acc, item) => ({ ...acc, [item.ok]: (acc[item.ok] || 0) + 1 }), {});
+    const result = {
+        envFile: options.envFile,
+        items,
+        unknown,
+        spelling: spelling.map(item => ({ name: item.name, suggestion: item.suggestion, suggestions: item.suggestions })),
+        counts
+    };
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else {
-        console.log(render(items));
-        if (unknown.length) console.log(`ℹ️ 未在 schema 登记的变量（不一定是错误）：${unknown.join(', ')}`);
-        console.log(`合计：✅ ${result.counts.ok || 0} 项正常，⚠️ ${result.counts.warn || 0} 项提醒，❌ ${result.counts.fail || 0} 项失败`);
+        console.log(render(items.filter(item => item.type !== 'unknown')));
+        const spellingNames = new Set(spelling.map(item => item.name));
+        if (spelling.length > 0) {
+            console.log(`❌ 疑似拼写错误：${spelling.map(item => `${item.name} → ${item.suggestion}`).join('、')}`);
+        }
+        const harmless = unknown.filter(name => !spellingNames.has(name));
+        if (harmless.length > 0) console.log(`ℹ️ 未登记变量（不阻断，如属自定义可忽略）：${harmless.join(', ')}`);
+        console.log(`合计：✅ ${counts.ok || 0} 项正常，⚠️ ${counts.warn || 0} 项提醒，ℹ️ ${counts.info || 0} 项提示，❌ ${counts.fail || 0} 项失败`);
     }
-    return result.counts.fail > 0 ? 1 : 0;
+    return (counts.fail || 0) > 0 ? 1 : 0;
 }
 
 module.exports = { parseArgs, main, render, parseLikeRuntime };

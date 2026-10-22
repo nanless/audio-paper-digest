@@ -739,16 +739,23 @@ def print_error_guidance(error, stage=None, logger=None):
 
 
 def write_review_help(failure_path, help_path):
-    """从博客审查失败集生成只读的人话修复建议（不修改原失败文件）。"""
+    """从博客审查失败集生成只读的人话修复建议（不修改原失败文件）。
+
+    help 文件绑定生成时的失败文件内容 SHA 与生成时间，便于判断建议是否已过期。
+    """
+    import datetime
+    import hashlib
     import json
     import os
     from pathlib import Path
+    from zoneinfo import ZoneInfo
     source = Path(failure_path)
     if not source.exists():
         return None
     try:
-        payload = json.loads(source.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
+        source_bytes = source.read_bytes()
+        payload = json.loads(source_bytes.decode('utf-8'))
+    except (OSError, UnicodeError, ValueError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -791,7 +798,12 @@ def write_review_help(failure_path, help_path):
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.is_symlink():
         raise OSError('blog review help 目标不能是符号链接')
-    payload_text = json.dumps({'contract': 'blog-review-help-v1', 'entries': entries}, ensure_ascii=False, indent=2)
+    payload_text = json.dumps({
+        'contract': 'blog-review-help-v1',
+        'sourceFailureSha256': hashlib.sha256(source_bytes).hexdigest(),
+        'generatedAt': datetime.datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(timespec='seconds'),
+        'entries': entries,
+    }, ensure_ascii=False, indent=2)
     import uuid
     temp = target.with_name(f'{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}')
     try:

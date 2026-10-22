@@ -36,3 +36,26 @@ test('applyOverrides 只把匹配页面+claim 的 error 降为 warn', () => {
     assert.strictEqual(failure.files[0].issues[0].overridden, true);
     assert.strictEqual(failure.files[0].issues[1].severity, 'error');
 });
+
+test('审查凭证提交字段从 publicationCommit/reviewedCommit/commit 中取，缺字段返回 null', () => {
+    assert.deepStrictEqual(overrides.receiptCommit({ publicationCommit: 'a'.repeat(40) }),
+        { field: 'publicationCommit', commit: 'a'.repeat(40) });
+    assert.deepStrictEqual(overrides.receiptCommit({ reviewedCommit: 'b'.repeat(40) }),
+        { field: 'reviewedCommit', commit: 'b'.repeat(40) });
+    assert.deepStrictEqual(overrides.receiptCommit({ commit: 'c'.repeat(40) }),
+        { field: 'commit', commit: 'c'.repeat(40) });
+    assert.strictEqual(overrides.receiptCommit({}), null);
+    assert.strictEqual(overrides.receiptCommit(null), null);
+    assert.strictEqual(overrides.receiptCommit([]), null);
+    assert.strictEqual(overrides.receiptCommit({ publicationCommit: '   ' }), null);
+});
+
+test('assertReceiptBinding 要求 overrides.publicationCommit 与凭证提交逐字相等', () => {
+    const commit = 'a'.repeat(40);
+    assert.deepStrictEqual(overrides.assertReceiptBinding(commit, { publicationCommit: commit }),
+        { field: 'publicationCommit', commit });
+    assert.throws(() => overrides.assertReceiptBinding(commit, { commit: 'b'.repeat(40) }),
+        error => error.code === 'REVIEW_OVERRIDES_RECEIPT_MISMATCH' && /不一致/.test(error.message));
+    // 凭证没有明确提交字段时不强行绑定，交给调用方警告并只校验 batchDate。
+    assert.strictEqual(overrides.assertReceiptBinding(commit, { date: '2026-10-21' }), null);
+});

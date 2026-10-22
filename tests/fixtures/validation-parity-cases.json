@@ -1,0 +1,116 @@
+{
+  "contract": "validation-parity-cases-v1",
+  "description": "Node table-check 与 Python reader_grouped_vector_column_units 共用的正反例。headerUnits/metricKeywords/glued* 是独立于 scripts/lib/validation-rules.json 的测试向量：共享 JSON 删除或改写字段后，双端测试必须失败，避免重言式。",
+  "headerUnits": ["%", "dB", "ms", "s", "h", "Hz", "kHz", "MHz", "GB", "MB", "KB", "pp"],
+  "invalidHeaderUnits": ["fps", "point", "°C"],
+  "metricKeywords": [
+    "wer", "cer", "aas", "accuracy", "bleu", "f1", "mcc", "latency", "offset",
+    "score", "mos", "pitch", "miss", "extra", "onset", "staff", "duration",
+    "fps", "rtf", "pesq", "stoi", "si-sdr", "质量", "误差", "准确率", "延迟"
+  ],
+  "gluedPatternExamples": ["(.25,.75)(.25,.75)", "7.37.3", "1.5121.512"],
+  "gluedCleanExamples": ["(.25,.75)(.50,.50)", "7.3 7.3", "2020"],
+  "fullWidthUnitSample": "WER （%）",
+  "tableCases": [
+    {
+      "name": "framed-clean",
+      "markdown": "| 条件 | WER (%) | AAS (ms) |\n| --- | --- | --- |\n| A | 7.1 | 32.8 |",
+      "expectedCodes": []
+    },
+    {
+      "name": "borderless-clean",
+      "markdown": "条件 | WER (%) | AAS (ms)\n--- | --- | ---\nA | 7.1 | 32.8",
+      "expectedCodes": []
+    },
+    {
+      "name": "borderless-two-columns",
+      "markdown": "Model | Score (%)\n--- | ---\nA | 88.2\nB | 87.9",
+      "expectedCodes": []
+    },
+    {
+      "name": "fullwidth-unit-parens",
+      "markdown": "| 条件 | WER （%） | AAS（ms） |\n| --- | --- | --- |\n| A | 7.1 | 32.8 |",
+      "expectedCodes": []
+    },
+    {
+      "name": "missing-unit-warn",
+      "markdown": "| 条件 | WER | AAS (%) |\n| --- | --- | --- |\n| A | 7.1 | 32.8 |",
+      "expectedCodes": ["table-unit-header"]
+    },
+    {
+      "name": "borderless-missing-unit-warn",
+      "markdown": "条件 | WER | AAS (%)\n--- | --- | ---\nA | 7.1 | 32.8",
+      "expectedCodes": ["table-unit-header"]
+    },
+    {
+      "name": "escaped-pipe-and-code-span",
+      "markdown": "| A | B |\n| --- | --- |\n| x \\| y | `a|b` |",
+      "expectedCodes": []
+    },
+    {
+      "name": "prose-with-pipe-is-not-table",
+      "markdown": "我们比较了 A | B 两种设置，结论并不相同。\n后续只是普通说明，不是分隔行。",
+      "expectedCodes": []
+    },
+    {
+      "name": "prose-then-word-divider-is-not-table",
+      "markdown": "结果 | 说明\n---- 是分隔文本而不是 GFM 分隔行",
+      "expectedCodes": []
+    },
+    {
+      "name": "caption-is-not-header",
+      "markdown": "Table 1: WER (%) | AAS (ms)\n| --- | --- |\n| a | 1 |",
+      "expectedCodes": []
+    },
+    {
+      "name": "caption-above-borderless-table",
+      "markdown": "Table 1: WER (%) | AAS (ms)\n\nWER | AAS (%)\n--- | ---\n7.1 | 32.8",
+      "expectedCodes": ["table-unit-header"]
+    },
+    {
+      "name": "fenced-code-is-not-table",
+      "markdown": "```text\nA | B\n--- | ---\n```",
+      "expectedCodes": []
+    },
+    {
+      "name": "multi-level-header-with-empty-corner",
+      "markdown": "|  | WER (%) | AAS (ms) |\n| --- | --- | --- |\n| Method | Pitch | Miss |",
+      "expectedCodes": []
+    },
+    {
+      "name": "glued-parentheses-and-column-count",
+      "markdown": "| Preference | WER (%) | AAS (ms) |\n| --- | --- | --- |\n| (.25,.75)(.25,.75) | 7.37 | 32.8 |\n| (.50,.50) | 7.26 |",
+      "expectedCodes": ["table-column-count", "table-glued-duplicate"]
+    },
+    {
+      "name": "glued-numeric-borderless",
+      "markdown": "条件 | WER (%)\n--- | ---\nA | 7.37.3",
+      "expectedCodes": ["table-glued-duplicate"]
+    },
+    {
+      "name": "borderless-column-count",
+      "markdown": "A | B\n--- | ---\n1 | 2 | 3",
+      "expectedCodes": ["table-column-count"]
+    },
+    {
+      "name": "borderless-separator-count-mismatch-is-not-table",
+      "markdown": "A | B | C\n--- | ---\n1 | 2 | 3",
+      "expectedCodes": []
+    },
+    {
+      "name": "mean-delta-same-metric-same-unit",
+      "markdown": "| 条件 | WER (%) | WER (%) |\n| --- | --- | --- |\n| A | 7.1 | 7.3 |\n| Mean Δ | 7.3 | — |",
+      "expectedCodes": []
+    },
+    {
+      "name": "mean-delta-different-metric",
+      "markdown": "| 条件 | WER (%) | AAS (ms) |\n| --- | --- | --- |\n| A | 7.1 | 32.8 |\n| Mean Δ | 7.3 | — |",
+      "expectedCodes": ["table-mean-delta-merged-unit"]
+    },
+    {
+      "name": "mean-delta-same-metric-different-unit",
+      "markdown": "| 条件 | WER (%) | WER (ms) |\n| --- | --- | --- |\n| A | 7.1 | 7.3 |\n| Mean Δ | 7.3 | — |",
+      "expectedCodes": ["table-mean-delta-merged-unit"]
+    }
+  ]
+}

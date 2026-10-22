@@ -1,5 +1,12 @@
 {
-  "version": 1,
+  "version": 2,
   "tableHeaderUnits": ["%", "dB", "ms", "s", "h", "Hz", "kHz", "MHz", "GB", "MB", "KB", "pp"],
-  "notes": "Node table-check 与 Python reader_grouped_vector_column_units 共用的表头单位白名单；新增单位只改这里并跑双端一致性测试。"
+  "metricKeywords": [
+    "wer", "cer", "aas", "accuracy", "bleu", "f1", "mcc", "latency", "offset",
+    "score", "mos", "pitch", "miss", "extra", "onset", "staff", "duration",
+    "fps", "rtf", "pesq", "stoi", "si-sdr", "质量", "误差", "准确率", "延迟"
+  ],
+  "gluedPatternExamples": ["(.25,.75)(.25,.75)", "7.37.3", "1.5121.512"],
+  "gluedCleanExamples": ["(.25,.75)(.50,.50)", "7.3 7.3", "2020"],
+  "notes": "Node table-check 与 Python reader_grouped_vector_column_units 共用的表头单位白名单；新增单位只改 tableHeaderUnits 并跑双端一致性测试。metricKeywords 供 Node 判断指标列缺单位，Python 只消费 tableHeaderUnits。gluedPatternExamples/gluedCleanExamples 是粘连复写检测的共享测试向量。"
 }

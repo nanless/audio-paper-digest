@@ -237,6 +237,27 @@ test('副模型配置：缺失单模型 warn、不完整 warn、不符 fail、�
     assert.equal(doctor.evaluateSecondaryModel(envWith()).ok, 'ok');
 });
 
+test('凭据隔离：发现主池与副池共用同一 key 时 warn 且不输出 key/值', () => {
+    const shared = doctor.evaluateCredentialIsolation(envWith({
+        PAPER_ANALYZER_FALLBACK_API_KEYS: 'sk-test-secondary-5678,sk-other-9999'
+    }));
+    assert.equal(shared.ok, 'warn');
+    assert.match(shared.detail, /1 个相同的 key 值/);
+    assert.match(shared.detail, /互相消耗额度/);
+    assert.ok(!shared.detail.includes('sk-test-secondary-5678'), '不得输出共用值');
+    assert.ok(!shared.hint.includes('sk-test-secondary-5678'));
+    assert.match(shared.hint, /只比较值/);
+
+    const tertiary = doctor.evaluateCredentialIsolation(envWith({
+        PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS: 'sk-test-primary-1234'
+    }));
+    assert.equal(tertiary.ok, 'warn');
+
+    const distinct = doctor.evaluateCredentialIsolation(envWith());
+    assert.equal(distinct.ok, 'ok');
+    assert.equal(doctor.evaluateCredentialIsolation({}).ok, 'ok');
+});
+
 test('代理检查：HTTP CONNECT 通过，SOCKS/缺失失败，凭据被掩码', () => {
     const ok = doctor.evaluateProxy(envWith());
     assert.equal(ok.ok, 'ok');
@@ -1023,6 +1044,31 @@ test('runDoctor offline：不联网、不抛错、无 fail 时退出码 0', asyn
     const serialized = JSON.stringify(result.checks);
     assert.ok(!serialized.includes('sk-test-primary-1234'), '聚合结果不得包含 API Key');
     assert.ok(!serialized.includes('sk-test-secondary-5678'), '聚合结果不得包含副模型 API Key');
+});
+
+test('runDoctor：仅在主副池共用 key 时增加凭据隔离 warn 行', async () => {
+    const parsed = doctor.parseArgs(['--offline']);
+    const healthy = await doctor.runDoctor({ parsed, projectRoot: '/fake/project', deps: fakeDeps() });
+    assert.equal(healthy.checks.length, 15, '健康配置不新增体检行');
+    assert.equal(byLabel(healthy.checks, '凭据隔离'), undefined);
+    assert.equal(healthy.exitCode, 0);
+
+    const sharedEnv = envWith({ PAPER_ANALYZER_FALLBACK_API_KEYS: 'sk-test-secondary-5678' });
+    const shared = await doctor.runDoctor({
+        parsed,
+        projectRoot: '/fake/project',
+        deps: fakeDeps({
+            readEnvFile: () => ({ exists: true, mode: 0o600, entries: sharedEnv, readError: null, error: null })
+        })
+    });
+    const isolation = byLabel(shared.checks, '凭据隔离');
+    assert.ok(isolation, '共用 key 时应出现凭据隔离行');
+    assert.equal(isolation.ok, 'warn');
+    assert.match(isolation.detail, /相同的 key 值/);
+    const serialized = JSON.stringify(shared.checks);
+    assert.ok(!serialized.includes('sk-test-secondary-5678'), '不得输出共用值');
+    assert.ok(!serialized.includes('sk-test-primary-1234'), '不得输出主 key 值');
+    assert.equal(shared.exitCode, 0, 'warn 不改变退出码');
 });
 
 test('runDoctor：任一 fail 时退出码 1', async () => {

@@ -2,6 +2,7 @@
 """推送已审查的博客页面，核对远端 OID，再规划相互独立的视觉任务。"""
 
 import argparse
+import json
 import sys
 import time
 from contextlib import nullcontext
@@ -49,6 +50,12 @@ def parse_date(module, argv=None):
     return parse_options(module, argv)[0]
 
 
+def _dry_run_requested(argv=None):
+    """--dry-run 是只读开关；保持 parse_options 返回三元组的既有契约。"""
+    values = sys.argv[1:] if argv is None else list(argv)
+    return '--dry-run' in values
+
+
 def _date_from_argv(argv):
     """在 parse_options 之前从 argv 提取 --date，供阶段摘要按批次日期归档。"""
     for index, value in enumerate(argv):
@@ -57,6 +64,131 @@ def _date_from_argv(argv):
         if isinstance(value, str) and value.startswith('--date='):
             return value.split('=', 1)[1]
     return None
+
+
+def _as_text(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8', 'replace')
+    return str(value or '')
+
+
+def _relative_manifest(module, paths):
+    """绝对路径 -> 博客仓库相对路径。优先复用 publish-to-blog 的同一实现。"""
+    helper = getattr(module, '_git_relative_manifest', None)
+    if callable(helper):
+        return [str(item) for item in helper(paths)]
+    repo = Path(getattr(module, 'BLOG_REPO', '.')).expanduser().resolve()
+    relatives = set()
+    for item in paths:
+        relatives.add(str(Path(item).resolve().relative_to(repo)))
+    return sorted(relatives)
+
+
+def parse_git_status_porcelain_z(output):
+    """解析 `git status --porcelain=v1 -z`，含 rename/copy 的双路径记录。"""
+    tokens = [token for token in _as_text(output).split('\0') if token]
+    entries = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        if len(token) < 4 or token[2] != ' ':
+            continue
+        code, relative = token[:2], token[3:]
+        original = None
+        if 'R' in code or 'C' in code:
+            if index < len(tokens):
+                original = tokens[index]
+                index += 1
+        entries.append({'code': code, 'path': relative, 'originalPath': original})
+    return entries
+
+
+def _path_prefix(relative):
+    parts = [part for part in str(relative).split('/') if part]
+    if len(parts) >= 2:
+        return '/'.join(parts[:2]) + '/'
+    return (parts[0] + '/') if parts else ''
+
+
+def _load_receipt(receipt):
+    """接收凭证对象或路径；读不出时返回空对象（不阻断 dry-run 的路径清单）。"""
+    if isinstance(receipt, dict):
+        return receipt
+    try:
+        return json.loads(Path(receipt).read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+
+
+def plan_dry_run(module, paths, receipt):
+    """只读计算 dry-run 清单：精确文件、状态、路径前缀与清单外改动。"""
+    manifest = _relative_manifest(module, paths)
+    allowed = set(manifest)
+    status = module._run_git(
+        ['status', '--porcelain=v1', '-z', '--untracked-files=all'], check=True,
+    )
+    entries = parse_git_status_porcelain_z(getattr(status, 'stdout', b''))
+    by_path = {}
+    unrelated = []
+    for entry in entries:
+        touched = {entry['path']}
+        if entry['originalPath']:
+            touched.add(entry['originalPath'])
+        if not (touched & allowed):
+            unrelated.append(entry['path'])
+            continue
+        for relative in touched:
+            if relative in allowed:
+                by_path.setdefault(relative, entry['code'])
+    receipt_object = _load_receipt(receipt)
+    deleted = {
+        record.get('path')
+        for record in (receipt_object.get('files') or [])
+        if isinstance(record, dict) and record.get('deleted') is True
+    }
+    files = []
+    for relative in manifest:
+        if relative in by_path:
+            code = by_path[relative]
+        elif relative in deleted:
+            code = 'D '
+        else:
+            code = 'M '
+        files.append({'path': relative, 'status': code})
+    prefixes = {}
+    for item in files:
+        prefix = _path_prefix(item['path'])
+        prefixes[prefix] = prefixes.get(prefix, 0) + 1
+    return {
+        'files': files,
+        'unrelated': unrelated,
+        'prefixes': prefixes,
+        'count': len(files),
+    }
+
+
+def run_dry_run(module, date_str, paths, receipt, *, print_fn=print):
+    """只读预检并打印精确清单；绝不 git add/commit/push，也不规划视觉任务。"""
+    plan = plan_dry_run(module, paths, receipt)
+    if plan['unrelated']:
+        preview = ', '.join(plan['unrelated'][:10])
+        more = '' if len(plan['unrelated']) <= 10 else f' 等 {len(plan["unrelated"])} 项'
+        raise module.PublishDataValidationError(
+            'dry-run 检测到审查清单外改动，拒绝继续（不 stash、不清理；请先人工确认或提交/丢弃这些改动）：'
+            + preview + more
+        )
+    print_fn('🧪 [dry-run] 只读预检：不执行 git add/commit/push，也不规划视觉任务')
+    print_fn(f'📦 将提交 {plan["count"]} 个已审查文件')
+    for prefix, count in sorted(plan['prefixes'].items()):
+        print_fn(f'  前缀 {prefix}  {count} 个')
+    print_fn('📄 精确清单：')
+    for item in plan['files']:
+        print_fn(f'  {(item["status"].strip() or "??"):>2} {item["path"]}')
+    receipt_label = receipt if isinstance(receipt, str) else '<内存凭证>'
+    print_fn(f'🧾 审查凭证: {receipt_label}')
+    print_fn(f'✅ 未发现审查清单外改动；确认后可运行: npm run blog:push -- --date {date_str}')
+    return plan
 
 
 def main():
@@ -71,6 +203,7 @@ def main():
     try:
         module.validate_publish_target()
         date_str, require_visual_plan, include_id = parse_options(module)
+        dry_run = _dry_run_requested()
         scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
         with scope_context(include_id):
             with module.blog_publication_lock(date_str):
@@ -84,12 +217,13 @@ def main():
                 module.validate_git_index(paths)
                 print(f'🧾 已验证审查凭证: {receipt}')
                 print(f'📦 直接提交推送 {len(paths)} 个已审查路径（不生成、不 review）')
-                if '--dry-run' in sys.argv:
-                    print(f'[dry-run] 将提交 {len(paths)} 个已审查文件（不实际 commit/push）：')
-                    for item in paths:
-                        print(f'  - {item}')
-                    write_stage_summary('推送', 'ok', f'dry-run：列出 {len(paths)} 个待提交文件',
-                                        elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
+                if dry_run:
+                    plan = run_dry_run(module, date_str, paths, receipt)
+                    write_stage_summary(
+                        '推送', 'ok',
+                        f'dry-run：列出 {plan["count"]} 个待提交文件；未执行 git add/commit/push',
+                        elapsed_ms=(time.monotonic() - started) * 1000, date=date_str,
+                    )
                     return
                 if not module.git_push(date_str, paths):
                     raise module.PublishDataValidationError('Git 提交或推送未完成')

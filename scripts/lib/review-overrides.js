@@ -3,6 +3,32 @@
 // 只提供校验与注释能力；review 是否采用由调用方显式决定，不放宽真实错误。
 
 const SHA256 = /^[a-f0-9]{64}$/;
+// 审查凭证的提交字段在不同版本里叫法不同；只认这三个明确字段，不做模糊匹配。
+const RECEIPT_COMMIT_FIELDS = Object.freeze(['publicationCommit', 'reviewedCommit', 'commit']);
+
+/** 从真实审查凭证里取发布提交；找不到明确字段时返回 null（由调用方警告后降级）。 */
+function receiptCommit(receipt) {
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return null;
+    for (const field of RECEIPT_COMMIT_FIELDS) {
+        const value = receipt[field];
+        if (typeof value === 'string' && value.trim()) return { field, commit: value.trim() };
+    }
+    return null;
+}
+
+/** 要求 overrides.publicationCommit 与凭证提交逐字相等；返回命中字段与提交。 */
+function assertReceiptBinding(publicationCommit, receipt) {
+    const bound = receiptCommit(receipt);
+    if (!bound) return null;
+    if (bound.commit !== publicationCommit) {
+        const error = new Error(
+            `overrides.publicationCommit=${publicationCommit} 与审查凭证 ${bound.field}=${bound.commit} 不一致`
+        );
+        error.code = 'REVIEW_OVERRIDES_RECEIPT_MISMATCH';
+        throw error;
+    }
+    return bound;
+}
 
 function validateOverrides(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('overrides 必须是对象');
@@ -47,4 +73,4 @@ function applyOverrides(failure, overrides) {
     return { failure, matched: matched.size };
 }
 
-module.exports = { validateOverrides, applyOverrides };
+module.exports = { validateOverrides, applyOverrides, receiptCommit, assertReceiptBinding };
