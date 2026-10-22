@@ -22,6 +22,37 @@ test('titleOf 提取标题，fetchPage 记录状态与标题', async () => {
     assert.strictEqual(verifyWeb.titleOf('<title>语音/音乐/音频论文速递 2026-10-21</title>').includes('语音/音乐/音频论文速递'), true);
 });
 
+test('verify 聚合 200/404/空清单并写结果', async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-web-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(dir, 'blog-generation-manifest-2099-01-02.json'), JSON.stringify({
+        files: [{ path: 'content/posts/2099-01-02.md' }, { path: 'content/posts/2099-01-02-a.md' }]
+    }));
+    const summary = await verifyWeb.verify('2099-01-02', {
+        env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' }, currentDir: dir,
+        fetchImpl: async url => url.includes('-a') ? { status: 404, text: async () => '' } : { status: 200, text: async () => '<title>语音/音乐/音频论文速递</title>' }
+    });
+    assert.strictEqual(summary.checked, 2);
+    assert.strictEqual(summary.ok, 1);
+    assert.strictEqual(summary.failed, 1);
+    assert.ok(fs.existsSync(path.join(dir, 'web-verification-2099-01-02.json')));
+
+    const empty = await verifyWeb.verify('2099-01-03', { env: {}, currentDir: dir, fetchImpl: async () => ({ status: 200, text: async () => '' }) }).catch(error => error);
+    assert.ok(empty instanceof Error);
+});
+
+test('deployStatus 严格要求 completed+success', () => {
+    const makeSpawn = payload => () => ({ status: 0, stdout: JSON.stringify(payload) });
+    const inProgress = verifyWeb.deployStatus('a'.repeat(40), { spawnSync: makeSpawn([{ headSha: 'a'.repeat(40), status: 'in_progress', conclusion: '' }]) });
+    assert.strictEqual(inProgress.status, 'in_progress');
+    const failed = verifyWeb.deployStatus('a'.repeat(40), { spawnSync: makeSpawn([{ headSha: 'a'.repeat(40), status: 'completed', conclusion: 'failure' }]) });
+    assert.strictEqual(failed.conclusion, 'failure');
+    const missing = verifyWeb.deployStatus('b'.repeat(40), { spawnSync: makeSpawn([]) });
+    assert.ok(missing.message);
+    const noGh = verifyWeb.deployStatus('a'.repeat(40), { spawnSync: () => ({ status: 1, stdout: '' }) });
+    assert.strictEqual(noGh.available, false);
+});
+
 test('verify 汇总成功/失败并写结果', async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-web-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

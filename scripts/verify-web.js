@@ -39,7 +39,8 @@ async function fetchPage(url, options = {}) {
 
 async function verify(date, options = {}) {
     const env = options.env || readEnv();
-    const manifestFile = path.join(CURRENT, `blog-generation-manifest-${date}.json`);
+    const currentDir = options.currentDir || CURRENT;
+    const manifestFile = path.join(currentDir, `blog-generation-manifest-${date}.json`);
     if (!fs.existsSync(manifestFile)) throw new Error(`找不到生成清单：${manifestFile}`);
     const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
     let pages = pageUrls(date, env, manifest);
@@ -56,17 +57,18 @@ async function verify(date, options = {}) {
     }
     const summary = { date, checked: results.length, ok: results.filter(item => item.ok).length, failed: results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0), results };
     if (!options.noWrite) {
-        fs.mkdirSync(CURRENT, { recursive: true });
-        fs.writeFileSync(path.join(CURRENT, `web-verification-${date}.json`), JSON.stringify(summary, null, 2));
+        fs.mkdirSync(currentDir, { recursive: true });
+        fs.writeFileSync(path.join(currentDir, `web-verification-${date}.json`), JSON.stringify(summary, null, 2));
     }
     return summary;
 }
 
 function deployRepository() { return process.env.PAPER_DIGEST_BLOG_REPO_RUN || 'nanless/audio-paper-digest-blog'; }
 
-function deployStatus(oid) {
+function deployStatus(oid, options = {}) {
     const { spawnSync } = require('node:child_process');
-    const result = spawnSync('gh', ['run', 'list', '-R', deployRepository(), '-L', '20', '--json', 'headSha,status,conclusion,url'], { encoding: 'utf8', timeout: 30000 });
+    const runGh = options.spawnSync || spawnSync;
+    const result = runGh('gh', ['run', 'list', '-R', options.repository || deployRepository(), '-L', '20', '--json', 'headSha,status,conclusion,url'], { encoding: 'utf8', timeout: 30000 });
     if (result.status !== 0) return { available: false, message: 'gh CLI 不可用或未登录；请到 GitHub Actions 手动确认部署。' };
     try {
         const runs = JSON.parse(result.stdout || '[]');
@@ -96,7 +98,7 @@ async function main(argv = process.argv.slice(2)) {
     if (options.help || !options.date) { console.log('用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--allow-degraded] [--json]'); return options.help ? 0 : 2; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) throw new Error('--date 必须是 YYYY-MM-DD');
     const summary = await verify(options.date, { limit: options.limit, timeoutMs: options.timeoutMs });
-    const deploy = options.deploy ? deployStatus(options.deploy) : null;
+    const deploy = options.deploy ? deployStatus(options.deploy, { spawnSync: options.spawnSync, repository: options.repository }) : null;
     if (options.json) console.log(JSON.stringify({ ...summary, deploy }, null, 2));
     else {
         for (const result of summary.results) {
