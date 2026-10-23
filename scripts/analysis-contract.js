@@ -188,6 +188,10 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
 const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|CCC(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|一致性相关系数(?![ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+// These source-native names describe measured quantities, not similarly named models.
+const CORE_SUMMARY_ADDITIONAL_METRIC_NAME = /(?:Fmeter|MV2H[45]|OMR-NED|R(?:²|\^2)(?:_[VA])?|MSS|决定系数(?:[ \t]*R(?:²|\^2)(?:_[VA])?)?|(?:目标字|字符|音节|音素|单词)时长(?:均值|平均值)|自然度平均意见分)/iu;
+const CORE_SUMMARY_ADDITIONAL_MODEL_SUFFIX = String.raw`(?:模型|方法|系统|基线(?![ \t]*[-+]?[0-9])|算法|网络|model\b|method\b|system\b|baseline\b|network\b)`;
+const CORE_SUMMARY_ADDITIONAL_METRIC_PATTERN = new RegExp(String.raw`(?<![A-Za-z0-9_])${CORE_SUMMARY_ADDITIONAL_METRIC_NAME.source}(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?${CORE_SUMMARY_ADDITIONAL_MODEL_SUFFIX})`, 'iu');
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差|(?:对数似然比代价(?:[ \t]*[Cc][Ll][Ll][Rr](?![A-Za-z0-9_])|(?![ \t-]*[Cc][Ll][Ll][Rr]))|声对比度|声压级)(?=[ \t]*(?:指标|分数|得分)?(?:为|是|从|升至|降至)[ \t]*[-+]?[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))/;
@@ -1689,7 +1693,15 @@ function stripCoreSummaryNonResultNumerals(text) {
         .replace(/\b(?:throughout|during|in|since)\s+the\s+(?:19|20)\d{2}s\b/gi, ' ')
         .replace(/(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])/gi, ' ')
         .replace(/\b(?:19|20)\d{2}\b/g, ' ')
-        .replace(/\b\d+(?:\.\d+)?\s*[BbMmKk]\b/g, ' ')
+        .replace(/\b\d+(?:\.\d+)?\s*([BbMmKk])\b/g, (match, unit, offset, surface) => {
+            // Lowercase m is a length only in an explicit spatial error report.
+            // A later parameter-count label must not borrow an earlier MAE.
+            const before = surface.slice(0, offset).split(/[。！？!?；;\n]/u).pop();
+            const physicalError = /(?:房间尺寸|房间维度|位置|定位|距离|长度)[^。！？!?；;\n]{0,100}(?:平均绝对误差|均方根误差|MAE|RMSE)/iu.exec(before);
+            const count = [...before.matchAll(/参数(?:量|规模|个数)?|parameter(?:s)?|params?\b/giu)].pop();
+            return unit === 'm' && physicalError && (!count || count.index < physicalError.index)
+                && !/^\s*(?:参数|(?:parameters?|params?)\b)/iu.test(surface.slice(offset + match.length)) ? match : ' ';
+        })
         .replace(/\b(?:v|ver(?:sion)?\.?)[-_ ]?\d+(?:\.\d+)*\b/gi, ' ')
         .replace(/\b[A-Za-z][A-Za-z0-9_-]*[-_]\d+(?:\.\d+)+(?:[-_][A-Za-z0-9.]+)?\b/g, ' ')
         .replace(/\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX)\s*[-_ ]?\d+(?:\.\d+)*(?:\s*[BbMmKk])?\b/gi, ' ');
@@ -1802,6 +1814,16 @@ function hasCoreSummaryComparisonDirection(sentence, numbers, sourceText = '') {
             || (metricAtEnd.test(before.trim().replace(/计\s*$/, ''))
                 && /(?:模型|方法|系统|基线|对照|算法|方案|编码器|表示)\s*$/.test(after.trim().replace(/分别\s*$/, '')));
         if (boundMetric && !hasCrossMetricDirectionalComparison(clause.replace(/比(?!例|值|较|特|率|重)/g, '高于'))) return true;
+    }
+    // Duration means and descriptive opinion means are outcomes, unlike a
+    // runtime window. Bind both values to this same quantity and named arms.
+    if (!/(?:假设|如果|预计|未来|并未|没有|不是|引用|第三方|他人|相关工作)/u.test(sentence)) {
+        const mean = /((?:目标字|字符|音节|音素|单词)时长(?:均值|平均值)|自然度平均意见分)的基线\s*(\d+(?:\.\d+)?)\s*(ms)?(?:变为|对)本文方法\s*(\d+(?:\.\d+)?)\s*(ms)?[，,]\s*(?:增幅为\s*(\d+(?:\.\d+)?)%|本文方法略(低|高))/u.exec(sentence);
+        if (mean && (mean[1] === '自然度平均意见分' ? !mean[3] && !mean[5] : mean[3] === 'ms' && mean[5] === 'ms')) {
+            const a = Number(mean[2]), b = Number(mean[4]);
+            if (mean[6] ? a > 0 && b > a && Math.abs((b / a - 1) * 100 - Number(mean[6])) < 0.1
+                : mean[7] === '低' ? b < a : b > a) return true;
+        }
     }
     // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”，仍写明了起始值、终止值及各自对应的方法；
     // “相对基线 12.4% 升至 9.8%”仍没有独立命名终点，不能仅凭两个数字通过。
@@ -2319,6 +2341,18 @@ function hasConcreteCoreSummarySetting(sentence, sourceText = '') {
     if (/(?:假设|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做)/.test(sentence)) return false;
     const affirmedSetting = !/(?:讨论|提及|并非|不是|不能|假想|设想|计划|未来|无关|文件目录|否认|反驳|引用|引述)/u.test(sentence);
     const observedSetting = affirmedSetting && !/(?:他人|第三方|其他研究|先前研究|相关工作|转述|撤回|不成立|错误|有误)/u.test(sentence);
+    const source = String(sourceText || '').replace(/\s+/gu, ' ');
+    const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const simulation = /(?:在|于)(?:用|使用)([A-Z][A-Za-z0-9._-]{2,39})合成(?:矩形)?房间[^。！？!?\n]{0,100}(?:分开|分别)优化几何与吸收的([1-9][0-9]{0,4})次重复实验中/u.exec(sentence);
+    const simulationSetting = observedSetting && simulation
+        && hasOwnSourceStatement(sourceText, new RegExp(`All simulations were performed using synthetic RIRs generated using the ${escape(simulation[1])} library`, 'u'))
+        && hasOwnSourceStatement(sourceText, new RegExp(`The experiment is repeated ${simulation[2]} times, with the room dimensions and absorption coefficients`, 'u'))
+        && hasOwnSourceStatement(sourceText, /The present experiments optimize (?:absorption and geometry individually|geometry and absorption coefficients separately)/u);
+    const synthetic = /(?:在|于)基于([A-Z][A-Za-z0-9._-]{2,39})歌曲构建的([1-9][0-9]{0,5})个合成样本的[^。！？!?\n]{1,60}(?:排序|评估|评测)中/u.exec(sentence);
+    const sampleCount = synthetic && synthetic[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const syntheticEvidence = synthetic && new RegExp(`For evaluation, we construct (?:${synthetic[2]}|${sampleCount}) synthetic examples[^.!?]{0,200}\\b${escape(synthetic[1])}(?![A-Za-z0-9_])`, 'u').exec(source);
+    const countedSyntheticSetting = observedSetting && syntheticEvidence
+        && ownObservedSourceScope(source.slice(Math.max(0, source.lastIndexOf('. ', syntheticEvidence.index) + 2), syntheticEvidence.index) + syntheticEvidence[0]);
     const durationBenchmark = /(?:在|于)\s*([1-9][0-9]*(?:\.[0-9]+)?)小时\s*([A-Z][A-Za-z0-9._-]{1,39}-Bench)(?:上|中)[^。！？!?\n]{0,60}(?:评估|评测)/u.exec(sentence);
     const sourceHasDurationBenchmark = durationBenchmark && hasOwnSourceStatement(sourceText,
         new RegExp(`(?<![A-Za-z0-9_])${durationBenchmark[2].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_])\\s+is\\s+[^.!?\\n]{0,100}\\btotal duration of ${durationBenchmark[1].replace('.', '\\.')}\\s+hours?\\b`, 'iu'));
@@ -2379,7 +2413,7 @@ function hasConcreteCoreSummarySetting(sentence, sourceText = '') {
         }
         return false;
     });
-    return observedSetting && (sourceHasDurationBenchmark || keywordCorpus)
+    return simulationSetting || countedSyntheticSetting || observedSetting && (sourceHasDurationBenchmark || keywordCorpus)
         || parityHoldout || countedNamedSubset || languageNamedDataset || heldOutConversations
         || syntheticSetting || speakerSplit || timedHardware || namedRequestEvaluation || heldOutSpeakerComparison || measuredNaturalSetting;
 }
@@ -2449,14 +2483,21 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
         // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
         // 不能顶替缺失的结果指标。
         const metricText = sentence.replace(/(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))/giu, '');
-        // Only the newly admitted CCC aliases lose metric status in an
+        // Only this newly admitted metric family removes its attached generic
+        // label too: a hypothetical "Fmeter指标" cannot survive as bare 指标.
+        // Keep the pre-existing generic/other-metric acceptance domain intact.
+        const additionalDenied = /\b(?:if|suppose|assuming|hypothetical|(?:future|planned|proposed)\s+experiments?|not\s+(?:observed|reported)|(?:previous|prior|related|other)\s+(?:work|stud(?:y|ies)|research)|third[- ]party|quoted|retracted)\b|(?:假设|假想|假定|设想|如果|若(?:在|用|以)|可能|预计|预期|(?:未来|后续)(?:计划|实验|评测|测量)|计划(?:比较|评估|测量|报告)|讨论|提及|引用|引述|转述|他人|第三方|其他研究|先前(?:工作|研究)|旧(?:工作|研究)|既有(?:工作|研究)|相关(?:工作|研究)|并非|并未|不是|没有|不能|尚未|否认|撤回|不成立|未报告|未观察)/iu.test(sentence);
+        const additionalMention = new RegExp(String.raw`(?<![A-Za-z0-9_])${CORE_SUMMARY_ADDITIONAL_METRIC_NAME.source}(?![A-Za-z0-9_.-])(?:[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(${CORE_SUMMARY_ADDITIONAL_MODEL_SUFFIX}))?(?:[ \t]*(?:指标|分数|得分))?`, 'giu');
+        const measuredMetricText = metricText.replace(additionalMention, (match, model) => additionalDenied || model ? ' ' : match);
+        // The admitted CCC and source-native aliases lose metric status in an
         // explicitly hypothetical, denied, quoted or foreign result clause.
         // "未来表示" is an observed input type, not a future experiment.
         const admittedMetricText = /\b(?:if|suppose|assuming|hypothetical|(?:future|planned|proposed)\s+experiments?|not\s+(?:observed|reported)|third[- ]party|quoted|retracted)\b|(?:假设|假想|假定|设想|如果|若(?:在|用|以)|可能|预计|预期|(?:未来|后续)(?:计划|实验|评测|测量)|计划(?:比较|评估|测量|报告)|讨论|提及|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|不能|尚未|否认|撤回|不成立|未报告|未观察|(?:未|没有|不)(?:能|曾|实际|真正)?(?:测量|报告|观察到|观察|检验|比较))/iu.test(sentence)
-            ? metricText.replace(/(?<![A-Za-z0-9_])CCC(?![A-Za-z0-9_])|一致性相关系数/giu, ' ')
-            : metricText;
+            ? measuredMetricText.replace(/(?<![A-Za-z0-9_])CCC(?![A-Za-z0-9_])|一致性相关系数/giu, ' ')
+            : measuredMetricText;
         const hasRecognizedMetric = Boolean(sentence && (
             CORE_SUMMARY_METRIC_PATTERN.test(admittedMetricText)
+            || CORE_SUMMARY_ADDITIONAL_METRIC_PATTERN.test(admittedMetricText)
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(admittedMetricText)
             || !/(?:假设|假想|如果|预计|预期|可能|计划|未来|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|尚未|未报告|否认|撤回|不成立|错误说法)|\b(?:hypothetical|assuming|if|planned|quoted|third[- ]party|not reported)\b/iu.test(sentence)
                 && CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(sentence)
@@ -2537,6 +2578,12 @@ function nearestCoreSummaryMetricLabel(segment, fromRight) {
     }
     for (const match of String(segment || '').matchAll(/(?<![A-Za-z0-9_])(WER|CER|DER|MAE|RMSE|MOS|FGD|BC)(?![A-Za-z0-9_])(?=\s*(?:(?:指标|分数|得分))?(?:(?:为|是|=)\s*)?[-+]?\d)/giu)) {
         candidates.push({ index: match.index, value: match[1].toLowerCase() });
+    }
+    const local = fromRight ? String(segment || '') : String(segment || '').split(/[，,；;]/u)[0];
+    for (const match of local.matchAll(new RegExp(CORE_SUMMARY_ADDITIONAL_METRIC_PATTERN.source, 'giu'))) {
+        if (!fromRight && /(?<![A-Za-z0-9_.])\d+(?:\.\d+)?(?![A-Za-z0-9_.])/u.test(local.slice(0, match.index))) continue;
+        const key = match[0].replace(/决定系数\s*/u, '').replace(/\^2/u, '²').toLowerCase() || 'r²';
+        candidates.push({ index: match.index, value: key });
     }
     // PESQ 这样的裸词既可能是指标，也可能是基线方法。
     // Only an explicit "X分数/X得分/X指标" label is safe to compare here.
@@ -3118,8 +3165,8 @@ function hasConcreteAcousticSimulationPurpose(summary, sourceText = '') {
 }
 
 function coreSummarySentenceView(text, sourceText) {
-    // 方法名内的感叹号不是句末；只保护原文确有同名且后接中文属格的写法。
-    return String(text || '').replace(/(?<![A-Za-z0-9_])([A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3})!(?=的)/gu, (match, name) => {
+    // 方法名内的感叹号不是句末；只保护原文确有同名且后接中文衔接词的写法。
+    return String(text || '').replace(/(?<![A-Za-z0-9_])([A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3})!(?=的|切分|分割|进行|用于|作为|生成|输出)/gu, (match, name) => {
         const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         return new RegExp(`(?<![A-Za-z0-9_])${escaped}!(?![A-Za-z0-9_])`, 'u').test(String(sourceText || ''))
             ? match.slice(0, -1) + '\uE000' : match;
@@ -3240,6 +3287,10 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const conditionalMetricFailure = summary.split(/[，,；;。！？!?\n]/u).some(clause =>
         /^(?:若|如果|当)[^。！？!?\n]{1,100}(?:一致性|准确率|召回率|识别率|辨识率|性能|结果)[^。！？!?\n]{0,30}(?:回落|下降|退化|恶化|失效|受损)/u.test(clause.trim())
         && !/(?:不会|不再|不能|不曾|没有|不意味着|并非|不是|无法|不|未|无须)[^。！？!?\n]{0,20}(?:回落|下降|退化|恶化|失效|受损)/u.test(clause));
+    const singleReferenceBoundary = summary.split(/[。！？!?\n]/u).some(sentence =>
+        !/(?:假设|如果|预计|可能|并非|不是|否认|引用|第三方|他人)/u.test(sentence)
+        && /(?:结论|研究结果|研究发现)只在以单一(?:专业)?混音为目标的重建误差下成立/u.test(sentence)
+        && hasOwnSourceStatement(sourceText, /reconstruction error against one professional mix does not fully capture mixing quality/iu));
     const scopedConclusionBoundary = /(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)/.test(summary);
     const attentionScopeBoundary = summary.split(/[。！？!?\n]/u).some(sentence =>
         !/(?:并非|不是|不能认为|不可认为|不应认为|没有)|(?:并不|不|未|没有|不会|不能)(?:曾|实际|一直|始终|确实|能|会)*保持不变/u.test(sentence)
@@ -3253,7 +3304,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !conditionalMetricFailure && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary)) {
+        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary)) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (
