@@ -33,3 +33,11 @@ test('抓取失败建议覆盖 429/5xx/RSS', () => {
     assert.match(policy.fetchFailureAdvice(new Error('RSS 公告未生成'))[0], /公告/);
     assert.deepStrictEqual(policy.fetchFailureAdvice(new Error('其他错误')), []);
 });
+
+test('5xx和过期RSS建议不能把官方OAI恢复说成可任意切换', () => {
+    for (const message of ['HTTP 503 Service Unavailable', 'RSS stale pubDate']) {
+        const advice = policy.fetchFailureAdvice(new Error(message)).join('\n');
+        assert.doesNotMatch(advice, /可改用|必要时用 --official-oai-recovery/);
+        assert.match(advice, /Atom.*日期.*分类前缀.*429/);
+    }
+});

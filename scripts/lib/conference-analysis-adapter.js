@@ -114,8 +114,45 @@ function replaceJson(filename, value, expectedSha256 = null) {
         throw new Error(`conference analysis CAS failed for ${path.basename(filename)}`);
     }
     const temporary = `${filename}.${crypto.randomUUID()}.tmp`;
-    try { writeJson(temporary, value); fs.renameSync(temporary, filename); syncDirectory(path.dirname(filename)); }
-    finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+    const bytes = jsonBytes(value); safeRoot(path.dirname(filename), true);
+    let fd, owned = null;
+    try {
+        fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+        owned = fs.fstatSync(fd, { bigint: true });
+        let offset = 0;
+        while (offset < bytes.length) {
+            const written = fs.writeSync(fd, bytes, offset, bytes.length - offset, offset);
+            if (!Number.isSafeInteger(written) || written <= 0 || written > bytes.length - offset) {
+                throw new Error(`short conference analysis replacement: ${path.basename(filename)}`);
+            }
+            offset += written;
+        }
+        fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+        if (!readJsonRecord(temporary).bytes.equals(bytes)) {
+            throw new Error(`conference analysis replacement bytes drifted: ${path.basename(filename)}`);
+        }
+        const named = fs.lstatSync(temporary, { bigint: true });
+        if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1n
+            || named.dev !== owned.dev || named.ino !== owned.ino) {
+            throw new Error(`conference analysis replacement temporary identity drifted: ${path.basename(filename)}`);
+        }
+        fs.renameSync(temporary, filename); owned = null;
+        syncDirectory(path.dirname(filename));
+    } finally {
+        try { if (fd !== undefined) fs.closeSync(fd); }
+        finally {
+            if (owned) {
+                try {
+                    const named = fs.lstatSync(temporary, { bigint: true });
+                    if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1n
+                        || named.dev !== owned.dev || named.ino !== owned.ino) {
+                        throw new Error(`conference analysis replacement cleanup identity drifted: ${path.basename(filename)}`);
+                    }
+                    fs.unlinkSync(temporary);
+                } catch (error) { if (error.code !== 'ENOENT') throw error; }
+            }
+        }
+    }
 }
 function normalizedPaper(source) {
     const identity = identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'conference',

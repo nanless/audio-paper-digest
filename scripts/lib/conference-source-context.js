@@ -124,7 +124,15 @@ function readBoundBytes(sourceRoot, relativePath, expectedSha256, limit, label) 
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > limit) {
             integrity(`${label} 必须是只有一个硬链接、且大小不超过限制的普通文件，打开的文件还须与路径检查的文件相同`, 'unsafe_source_file');
         }
-        const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd), afterNamed = fs.lstatSync(filename);
+        let bytes;
+        try { bytes = require('./publication-file-primitives').readBoundedFd(fd, opened.size, limit); }
+        catch (error) {
+            if (error.code === 'BOUNDED_FILE_READ_EXCEEDED') {
+                integrity(`${label} 读取时超过原记录大小或字节限制`, 'source_changed_during_read');
+            }
+            throw error;
+        }
+        const after = fs.fstatSync(fd), afterNamed = fs.lstatSync(filename);
         if (bytes.length !== opened.size || !after.isFile() || !afterNamed.isFile() || afterNamed.isSymbolicLink()
             || ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'].some(key =>
                 opened[key] !== after[key] || after[key] !== afterNamed[key])) {

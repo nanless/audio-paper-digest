@@ -1566,9 +1566,11 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
     const binding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
     directContext.assertNoPersistentFigureFields(binding);
     const rendererImplementationSha256 = directPages.currentRendererImplementationSha256(dependencies);
-    const routeDirectory = path.join(persistenceOperation(() => safeDirectory(stagingRoot, true, 'staging root')), item.runId,
-        item.route.kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local',
-        `renderer-${rendererImplementationSha256}`);
+    const directories = directPages.stagingDirectories({
+        stagingRoot: persistenceOperation(() => safeDirectory(stagingRoot, true, 'staging root')),
+        item, sourceDescriptor, rendererImplementationSha256,
+        analysisRecordSha256: artifact.analysisRecordSha256 });
+    const routeDirectory = directories.rendererDirectory;
     const body = { contract: STAGING_CONTRACT, version: 1, paperId: item.paperId, runId: item.runId,
         analysisArtifact: artifact, publicationSource,
         stagingBinding: binding, stagingBindingSha256: stableHash(binding) };
@@ -1579,7 +1581,7 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
             `${JSON.stringify(canonical(body), null, 2)}\n`, 'utf8'
         ));
         if (readRegular(existingInput).sha256 !== expectedInputSha256) {
-            directory = `${routeDirectory}-analysis-${artifact.analysisRecordSha256}`;
+            directory = directories.analysisBoundDirectory;
         }
     }
     persistenceOperation(() => safeDirectory(directory, true, 'direct staging directory'));
@@ -1610,11 +1612,11 @@ function replayDirectPageStaging({ plan, item, active, stagingRoot, executionRoo
     if (!staging?.pageStaging || !staging.analysisArtifact || !active?.source || !active?.analysis) {
         fail(`${item.paperId} staged execution lacks a direct page staging receipt`);
     }
-    const routeDirectory = path.join(safeDirectory(stagingRoot, false, 'staging root'), item.runId,
-        item.route.kind === 'arxiv-fresh-fetch' ? active.source.sourceRunIdentitySha256 : 'conference-local');
-    const currentDirectory = path.join(routeDirectory,
-        `renderer-${staging.pageStaging.rendererImplementationSha256}`);
-    const analysisBoundDirectory = `${currentDirectory}-analysis-${staging.analysisArtifact.analysisRecordSha256}`;
+    const { routeDirectory, rendererDirectory: currentDirectory, analysisBoundDirectory } =
+        directPages.stagingDirectories({ stagingRoot: safeDirectory(stagingRoot, false, 'staging root'),
+            item, sourceDescriptor: active.source,
+            rendererImplementationSha256: staging.pageStaging.rendererImplementationSha256,
+            analysisRecordSha256: staging.analysisArtifact.analysisRecordSha256 });
     const directory = safeDirectory(staging.directory, false, 'direct staging directory');
     if (directory !== routeDirectory && directory !== currentDirectory
         && directory !== analysisBoundDirectory) {

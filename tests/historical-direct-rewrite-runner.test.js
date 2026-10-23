@@ -19,6 +19,7 @@ const directControl = require('../scripts/lib/historical-direct-control.js');
 const context = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
 const engine = require('../scripts/analysis-engine.js');
+const aggregateApi = require('../scripts/lib/historical-direct-aggregate.js');
 const { validAnalysisPaper, validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -1380,6 +1381,100 @@ test('analysis_complete 的 Reader 正文修复在无 LLM 的暂存复核之前�
         audit.recoveryStatus]), [[
         'analysis_complete', 'staged', 'completed-analysis-surface-resealed'
     ]]);
+});
+
+test('正常来源封存和分析重封后的暂存，单篇重放与汇总读取使用同一严格目录身份', async t => {
+    const f = fixture(t); const roots = files(f.root);
+    const item = f.plan.queue.find(entry => entry.paperId === 'arxiv:2601.00001');
+    const sourceText = ['Official title', 'Abstract', 'Exact source abstract. '.repeat(8),
+        'Keywords: speech', '1 Introduction', 'FRESH_SOURCE_ONLY '.repeat(100)].join('\n');
+    // Only transport/model/render leaves are mechanical fixtures. The four-file
+    // source writer, Atom sidecar writer, normal staging gates and both readers run.
+    await freshSource.captureFreshArxivRewriteSource({ rootDir: roots.freshArxivSourceRoot,
+        arxivId: item.route.arxivId, generation: 1, now: '2026-01-03T00:00:02.000Z' }, {
+        fetchText: async id => ({ text: sourceText, title: 'Official title', source: 'html', sourceId: id,
+            url: `https://arxiv.org/html/${id}`, fetchedAt: '2026-01-03T00:00:00.000Z' }),
+        fetchPdf: async id => ({ bytes: Buffer.from(`%PDF-1.4\n${id}\n%%EOF\n`), sourceId: id,
+            url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-01-03T00:00:01.000Z' })
+    });
+    const metadataApi = require('../scripts/lib/arxiv-metadata-source.js');
+    const sidecars = require('../scripts/lib/historical-arxiv-publication-metadata.js');
+    const atom = '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" '
+        + 'xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">'
+        + '<opensearch:totalResults>1</opensearch:totalResults><opensearch:startIndex>0</opensearch:startIndex>'
+        + '<opensearch:itemsPerPage>1</opensearch:itemsPerPage><entry>'
+        + '<id>http://arxiv.org/abs/2601.00001v1</id><updated>2026-01-02T00:00:00Z</updated>'
+        + '<published>2026-01-01T00:00:00Z</published><title>Official title</title>'
+        + '<summary>Exact official abstract for this mechanical source fixture.</summary>'
+        + '<author><name>Author One</name></author><category term="cs.SD"/></entry></feed>';
+    const officialResult = metadataApi.parseOfficialArxivMetadataResponse(item.route.arxivId, atom);
+    officialResult.proof.observedAt = '2026-01-04T00:00:00.000Z';
+    const publicationMetadataRoot = path.join(f.root, 'runtime', 'publication-metadata');
+    sidecars.sealPublicationMetadata({ rootDir: publicationMetadataRoot, sourceRoot: roots.freshArxivSourceRoot,
+        arxivId: item.route.arxivId, generation: 1, officialResult, now: '2026-01-04T00:00:00.000Z' });
+    const options = { apply: true, plan: f.plan, ...roots, publicationMetadataRoot,
+        queue: 'arxiv', arxivGeneration: 1 };
+    let analyses = 0;
+    const dependencies = { maxRounds: 1, renderDirectPage,
+        analyze: async ({ sourceDescriptor, sourceDetails }) => {
+            analyses++;
+            const analysis = sealedAnalysis(item, sourceDescriptor, sourceDetails);
+            analysis.title = 'Official title';
+            return analysis;
+        } };
+    const first = await runnerModule.runDirectRewrite(options, dependencies);
+    assert.equal(first.status, 'complete');
+    const firstRegistry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8'));
+    const original = firstRegistry.entries.find(entry => entry.paperId === item.paperId);
+    assert.equal(original.status, 'staged');
+    const load = entry => aggregateApi.loadStagedMember({ plan: f.plan, registryEntry: entry, item,
+        ...roots, publicationMetadataRoot,
+        currentRendererImplementationSha256: entry.staging.pageStaging.rendererImplementationSha256 });
+    assert.equal(load(original).item.paperId, item.paperId, 'original normal renderer directory is readable');
+    const originalInput = fs.readFileSync(path.join(original.staging.directory, 'staging-input.json'));
+    const interrupted = asInterruptedAnalysisComplete(firstRegistry, f.plan, item.paperId);
+    write(first.registryFile, `${JSON.stringify(interrupted, null, 2)}\n`);
+    const resumed = await runnerModule.runDirectRewrite(options, { ...dependencies,
+        analyze: async () => { throw new Error('must reuse saved analysis without a model request'); },
+        repairCompletedAnalysisSurface: analysis => {
+            analysis.warnings = [...(analysis.warnings || []), 'deterministic surface reseal fixture'];
+            return true;
+        } });
+    assert.equal(resumed.status, 'complete'); assert.equal(analyses, 1);
+    const entry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+        .find(value => value.paperId === item.paperId);
+    assert.equal(entry.status, 'staged');
+    assert.equal(entry.staging.directory,
+        `${original.staging.directory}-analysis-${entry.analysis.analysisRecordSha256}`);
+    assert.deepEqual(fs.readFileSync(path.join(original.staging.directory, 'staging-input.json')), originalInput);
+    const replay = active => runnerModule.replayDirectPageStaging({ plan: f.plan, item, active,
+        ...roots, publicationMetadataRoot });
+    const manifest = replay(entry);
+    assert.equal(load(entry).item.paperId, item.paperId, 'same legitimate resealed artifact must also reach aggregate');
+    for (const directory of [
+        `${original.staging.directory}-analysis-${sha('another analysis')}`,
+        entry.staging.directory.replace(`renderer-${entry.staging.pageStaging.rendererImplementationSha256}`,
+            `renderer-${sha('another renderer')}`),
+        `${entry.staging.directory}-extra`,
+        entry.staging.directory.replace(entry.source.sourceRunIdentitySha256, sha('another source'))
+    ]) {
+        // Existing, byte-identical materials cannot give an unrelated name the
+        // real artifact's authority; rejection must occur at the directory gate.
+        fs.cpSync(entry.staging.directory, directory, { recursive: true });
+        const wrong = structuredClone(entry); wrong.staging.directory = directory;
+        assert.throws(() => replay(wrong), /staged page directory drifted/);
+        assert.throws(() => load(wrong), /staging directory differs/);
+    }
+    assert.throws(() => aggregateApi.loadStagedMember({ plan: f.plan, registryEntry: entry, item,
+        ...roots, publicationMetadataRoot, currentRendererImplementationSha256: sha('stale renderer') }),
+    /staged renderer is not current/);
+    const pageFile = path.join(entry.staging.directory, manifest.pages[0].stagedPath);
+    const pageBytes = fs.readFileSync(pageFile);
+    fs.appendFileSync(pageFile, '\nUnexpected page drift.\n');
+    assert.throws(() => replay(entry), /页面/);
+    assert.throws(() => load(entry), /页面/);
+    fs.writeFileSync(pageFile, pageBytes);
+    assert.equal(load(entry).item.paperId, item.paperId, 'restored bytes still pass the original gates');
 });
 
 test('分析已完成但暂存失败时绝不回退到分析，下一轮只重试暂存', async t => {
