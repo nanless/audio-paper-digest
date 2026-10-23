@@ -99,6 +99,7 @@ npm run test:compat
 | `lib/primary-local-validation-replay.js` | Node 库：在真实日更来源与原主文反馈内重放旧局部验证的双输入链，核对原付费、快照及必要操作标记；原阶段、失败、费用与事实义务保留，不授予模型额度或整篇成功。正常冷核对无记录输入保留原有失败判断。 |
 | `lib/saved-fact-feedback.js` | Node 库：deep 与 batch 共用原反馈恢复，显式新反馈优先，核对各阶段证明；整篇和摘要采用不同说明时分别恢复。Reader 旧父恢复先核真实主检查点，保存前保护原对象与传入对象的所有非 Reader 上游，错误还原内存和回调；保留原稿、失败与费用。 |
 | `lib/scoring-third-party-resource-replay.js` | Node 库：精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
+| `lib/saved-scoring-audit-replay.js` | Node 库：持真实日更论文锁读取完整原包与唯一首评分费用，提供私有待验候选；正常资源重探、原完整评分指纹和请求体重放全通过后才恢复原检查点，不新增请求或额度。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
