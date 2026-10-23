@@ -1203,7 +1203,26 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
             onPaperCheckpointLocked: checkpoint => { persistRecovery(checkpoint); },
             onPaperResultLocked: async (_paper, event) => {
                 result = event.result || { ...paper, error: event.error || 'analysis failed' };
-                persistRecovery(result);
+                const persisted = persistRecovery(result);
+                if (event.success === true && require('./reader-candidate-transactions').hasDeferredReaderCandidate(_paper)) {
+                    const saved = readAnalysisRecovery({ executionDirectory, item, sourceDescriptor });
+                    if (saved.fileSha256 !== persisted.fileSha256
+                        || saved.recoverySha256 !== persisted.recoverySha256
+                        || saved.recordSha256 !== persisted.recordSha256
+                        || saved.recordSha256 !== stableHash(result)) {
+                        fail(`${item.paperId} saved Reader recovery differs from the completed analysis`);
+                    }
+                    // The recovery rename must survive before retiring its only
+                    // accepted candidate. Keep this within the original paper lock.
+                    persistenceOperation(() => {
+                        const fd = fs.openSync(safeDirectory(executionDirectory),
+                            fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+                        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+                    });
+                    if (!require('../deep-analyzer').commitDeferredReaderCandidateIfSaved(_paper, saved.record)) {
+                        fail(`${item.paperId} completed Reader differs from its saved recovery`);
+                    }
+                }
             }
         });
     };

@@ -2137,3 +2137,132 @@ test('已暂存稿来源冷核故障保留页面和付费指针，停止其它�
         assert.deepEqual(after[key], before[key]);
     }
 });
+
+// The model leaf returns an existing offline draft; the Reader parser, active
+// candidate/WeakMap, engine, paper lock, writer and recovery reader are real.
+async function deferredReaderSaveFixture(t, mode) {
+    const deep = require('../scripts/deep-analyzer');
+    const transactions = require('../scripts/lib/reader-candidate-transactions');
+    const signedFixture = require('./reader-signed-draft-fixture');
+    const signed = signedFixture.fixture({ noFigures: true });
+    const id = signed.paper.arxivId, paperId = `arxiv:${id}`;
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-reader-commit-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const attempts = path.join(directory, 'reader-attempts'); fs.mkdirSync(attempts);
+    const recoveryFile = path.join(directory, 'analysis-recovery.json');
+    const item = { paperId, runId: signedFixture.runId, route: { kind: 'arxiv-fresh-fetch', arxivId: id } };
+    const sourceDetails = { paperId, source: 'html', sourceId: id, text: signed.sourceDetails.text,
+        imageInfos: [], structuredArtifacts: signed.sourceDetails.structuredArtifacts };
+    const descriptor = { paperId, sourceSnapshotSha256: signed.sourceDetails.freshSourceDescriptor.sourceSnapshotSha256 };
+    let modelCalls = 0, callbackCalls = 0, lockedPaper, eventResult, saveReached = false, injected = 0;
+    const originals = Object.fromEntries(['renameSync', 'openSync', 'closeSync', 'fsyncSync'].map(key => [key, fs[key]]));
+    const directoryFds = new Set();
+    const invoke = () => runner.defaultAnalyze({ item, sourceDetails, sourceDescriptor: descriptor,
+        executionDirectory: directory, dependencies: { now: () => new Date().toISOString(), engine: { ...engine,
+            analyzeBatch: (papers, options) => engine.analyzeBatch(papers, { ...options,
+                analyzeFn: async paper => {
+                    const generated = await deep.generateApiReaderArticleDetailed({ ...paper,
+                        authors: signed.paper.authors, apiReaderResources: structuredClone(signed.paper.apiReaderResources) }, '',
+                    deep.buildApiReaderEvidenceContext('', sourceDetails.text, sourceDetails.structuredArtifacts, id), {
+                        sourceText: sourceDetails.text, structuredArtifacts: sourceDetails.structuredArtifacts,
+                        readerMaxAttempts: 1, readerRecordDisposition: () => {},
+                        readerCallModel: async () => { modelCalls++; return JSON.stringify(signed.draft); }
+                    });
+                    assert.equal(transactions.hasDeferredReaderCandidate(generated), true);
+                    const base = validAnalysisPaper(id, { title: 'Deferred Reader save fixture' });
+                    const record = { ...base, ...signed.paper, directPaperId: paperId, analysis: base.analysis,
+                        apiReaderArticle: generated.article, apiReaderPlan: generated.plan, apiReaderFigures: [] };
+                    record.analysisManifest = { ...base.analysisManifest, ...signed.paper.analysisManifest,
+                        contracts: { ...base.analysisManifest.contracts, ...signed.paper.analysisManifest.contracts },
+                        stages: Object.fromEntries([...new Set([...Object.keys(base.analysisManifest.stages),
+                            ...Object.keys(signed.paper.analysisManifest.stages)])].map(name => [name,
+                            { ...base.analysisManifest.stages[name], ...signed.paper.analysisManifest.stages[name] }])) };
+                    record.analysisManifest.stages.scoringAudit = { ...base.analysisManifest.stages.scoringAudit,
+                        scoringContract: 'api-scoring-audit-v2', outputAnalysisSha256: sha(record.analysis), stabilityWarning: false };
+                    signedFixture.sign(record);
+                    assert.equal(engine.isSuccessfulAnalysisRecord(record), true);
+                    if (mode === 'partial') record.analysisManifest.stages.apiReaderArticle.status = 'partial';
+                    return deep.transferDeferredReaderCandidate(generated, record);
+                },
+                onPaperResultLocked: async (paper, event) => {
+                    callbackCalls++; lockedPaper = paper; eventResult = event;
+                    assert.equal(engine.paperAnalysisLockHeld(paper), true);
+                    assert.equal(transactions.hasDeferredReaderCandidate(paper), true);
+                    assert.equal(transactions.hasDeferredReaderCandidate(event.result), false);
+                    return options.onPaperResultLocked(paper, event);
+                }
+            }) }
+        } });
+    fs.renameSync = (from, to) => {
+        if (to === recoveryFile && mode === 'save-eio') { injected++; throw Object.assign(new Error('fixture save EIO'), { code: 'EIO' }); }
+        const result = originals.renameSync(from, to);
+        if (to === recoveryFile) {
+            saveReached = true;
+            if (['old-body', 'wrong-member', 'wrong-source', 'read-drift'].includes(mode)) {
+                injected++;
+                const body = JSON.parse(fs.readFileSync(to, 'utf8'));
+                if (mode === 'old-body') body.record.analysis += '\nOld saved main body, identical Reader.';
+                if (mode === 'wrong-member') body.paperId = 'arxiv:2609.99999';
+                if (mode === 'wrong-source') body.sourceSnapshotSha256 = '0'.repeat(64);
+                body.recordSha256 = runner.stableHash(body.record);
+                const unsigned = { ...body }; delete unsigned.recoverySha256;
+                body.recoverySha256 = runner.stableHash(unsigned);
+                fs.writeFileSync(to, JSON.stringify(body) + (mode === 'read-drift' ? ' \n' : '\n'), { mode: 0o600 });
+            }
+        }
+        return result;
+    };
+    fs.openSync = (filename, ...args) => {
+        if (filename === recoveryFile && saveReached && mode === 'read-eio') {
+            injected++; throw Object.assign(new Error('fixture read EIO'), { code: 'EIO' });
+        }
+        const fd = originals.openSync(filename, ...args);
+        if (filename === directory) directoryFds.add(fd);
+        return fd;
+    };
+    fs.closeSync = fd => { directoryFds.delete(fd); return originals.closeSync(fd); };
+    fs.fsyncSync = fd => {
+        if (mode === 'directory-eio' && directoryFds.has(fd)) {
+            injected++; throw Object.assign(new Error('fixture directory fsync EIO'), { code: 'EIO' });
+        }
+        return originals.fsyncSync(fd);
+    };
+    let error, returned;
+    try { returned = await invoke(); } catch (caught) { error = caught; }
+    finally { Object.assign(fs, originals); }
+    assert.equal(modelCalls, 1); assert.equal(callbackCalls, 1);
+    const active = fs.readdirSync(attempts).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const resolved = fs.readdirSync(attempts).filter(name => /\.resolved\.json$/.test(name));
+    return { error, returned, event: eventResult, active, resolved, injected, lockedPaper, recoveryFile,
+        item, descriptor, hasTransaction: transactions.hasDeferredReaderCandidate(lockedPaper) };
+}
+
+test('历史正常保存实际Reader成功稿后在原论文锁内冷读退休唯一真实候选', async t => {
+    const result = await deferredReaderSaveFixture(t, 'normal');
+    assert.equal(result.error, undefined);
+    assert.equal(result.event.success, true);
+    const saved = runner.readAnalysisRecovery({ executionDirectory: path.dirname(result.recoveryFile),
+        item: result.item, sourceDescriptor: result.descriptor });
+    assert.equal(runner.stableHash(saved.record), runner.stableHash(result.returned));
+    assert.equal(result.active.length, 0); assert.equal(result.resolved.length, 1);
+    assert.equal(result.hasTransaction, false);
+});
+
+test('历史partial及保存或目录耐久失败不得退休已接受Reader候选', async t => {
+    for (const mode of ['partial', 'save-eio', 'directory-eio']) await t.test(mode, async child => {
+        const result = await deferredReaderSaveFixture(child, mode);
+        if (mode === 'partial') { assert.equal(result.event.success, false); assert.equal(result.error, undefined); }
+        else { assert.ok(result.error); assert.equal(result.injected, 1); }
+        assert.equal(result.active.length, 1); assert.equal(result.resolved.length, 0);
+        assert.equal(result.hasTransaction, true);
+    });
+});
+
+test('历史回读旧主文同Reader、错成员来源或读取漂移失败不得退休', async t => {
+    for (const mode of ['old-body', 'wrong-member', 'wrong-source', 'read-drift', 'read-eio']) await t.test(mode, async child => {
+        const result = await deferredReaderSaveFixture(child, mode);
+        assert.ok(result.error); assert.equal(result.injected, 1);
+        assert.equal(result.active.length, 1); assert.equal(result.resolved.length, 0);
+        assert.equal(result.hasTransaction, true);
+    });
+});
