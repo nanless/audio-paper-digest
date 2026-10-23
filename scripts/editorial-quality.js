@@ -1303,6 +1303,19 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // 已明确带频率单位的量是频段条件；逐量屏蔽，不跳过同句指标数。
+            // 区间两端都必须自带单位；未知单位、裸端点与指标直接赋值保持原检验。
+            .replace(
+                /(?<![A-Za-z0-9_.+−-])\d+(?:\.\d+)?[ \t]*(?:MHz|kHz|Hz)(?:[ \t]*(?:[-–—]|至|到)[ \t]*\d+(?:\.\d+)?[ \t]*(?:MHz|kHz|Hz))?(?=$|[^A-Za-z0-9_.])/giu,
+                (match, offset, whole) => {
+                    const prefix = whole.slice(0, offset).split(/[；;：:\n]/u).at(-1);
+                    // 尾单位共享区间交回旧完整范围规则，不能先消费其上端点。
+                    if (/(?<![A-Za-z0-9_.])\d+(?:\.\d+)?[ \t]*(?:[-–—]|至|到)[ \t]*$/u.test(prefix)) return match;
+                    const metricAssignment = new RegExp(`${PERCENT_METRICS_RE.source}[^。！？!?；;：:\\n]{0,160}?(?:从|由|为|是|=|达到|提高|提升|增加|改善|下降|降低|减少|升|降)(?:到|至)?(?:了)?[ \\t，,]*$`, 'iu');
+                    const frequencyTrend = /(?:随|随着)\s*频率\s*(?:提高|提升|增加|下降|降低|减少)[ \t，,]*$/u.test(prefix);
+                    return metricAssignment.test(prefix) && !frequencyTrend ? match : ' '.repeat(match.length);
+                }
+            )
             // UTMOS 是 MOS 预测得分，不是附近定性 WER 描述的百分数。
             // 只遮住直接绑定 UTMOS 的单个 1–5 分值；新指标、其它裸值与错误范围仍保留。
             .replace(/(?<![A-Za-z0-9_.-])UTMOS\s*(?:反而\s*)?(?:微升到|提升到|提高到|升至|降至|下降到|为|=)\s*(?:[1-4](?:\.\d+)?|5(?:\.0+)?)(?![A-Za-z0-9_.])(?=\s*(?:[，,。；;！？!?]|$))/giu,
