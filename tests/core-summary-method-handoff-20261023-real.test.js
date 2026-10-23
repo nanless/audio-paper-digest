@@ -96,3 +96,21 @@ test('同角色同产物语法不依赖论文名，逆序生产或纯模块配�
     ]) assert.equal(api.methodHandoff(text), true, text);
     assert.equal(api.methodHandoff('将切分后语音送入说话人嵌入余弦计算，并用相同切分构建配对交由听众评分，最后过滤模块把另一段录音按低通切分。'), false);
 }));
+
+test('紧邻前行的第三方或基线标题不能授予本文真实方法链', noModel(() => {
+    for (const row of fixture.papers) for (const owner of [
+        '第三方研究：', '基线方法：', '对照系统：', 'Previous work:',
+        'Prior research describes the following method:', 'Third-party research:',
+        'Baseline method:', 'Control system:', '### 第三方研究：', '**Previous work:**',
+        '## 基线方法：', '### **Previous work:**', '__对照系统：__',
+        '### 第三方研究： ###', '### **Previous work:** ###'
+    ]) assert.equal(api.methodHandoff(owner + '\n' + row.methodWindow, row.sourceText), false, row.paperId + owner);
+}));
+
+test('本文自己的标题与已结束的其他工作介绍不撤回当前真实链', noModel(() => {
+    for (const row of fixture.papers) {
+        for (const owner of ['当前工作：', '本文方法：', 'Our method:', '### 本文方法：', '**Our method:**', '## __当前工作：__', '### 本文方法： ###', '### **Our method:** ###'])
+            assert.equal(api.methodHandoff(owner + '\n' + row.methodWindow, row.sourceText), true, row.paperId + owner);
+        assert.equal(api.methodHandoff('第三方研究：\n这里介绍文献中的独立任务。\n本文方法：\n' + row.methodWindow, row.sourceText), true, row.paperId);
+    }
+}));
