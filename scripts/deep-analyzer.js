@@ -2472,7 +2472,7 @@ function replayPersistedArxivHtmlDomV4PayloadSha(structuredArtifacts, returnPayl
     return returnPayload ? payload : crypto.createHash('sha256').update(payload).digest('hex');
 }
 
-function replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts) {
+function replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts, returnPayload = false) {
     const artifact = exactObjectInOrder(structuredArtifacts, [
         'version', 'source', 'tables', 'formulas', 'figures',
         'flattenedTextSha256', 'payloadSha256'
@@ -2489,7 +2489,8 @@ function replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts) {
         figures: artifact.figures,
         flattenedTextSha256: artifact.flattenedTextSha256
     };
-    return crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    const payload = JSON.stringify(body);
+    return returnPayload ? payload : crypto.createHash('sha256').update(payload).digest('hex');
 }
 
 // 展示公式必须重核完整结构化来源，不能用输出自身的哈希代替原始 TeX。
@@ -2502,7 +2503,8 @@ function readerStructuredSourcePayload(artifacts) {
         : value && typeof value === 'object'
             ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
     const candidates = [JSON.stringify(ordered(body)), JSON.stringify(body),
-        replayPersistedArxivHtmlDomV4PayloadSha(artifacts, true)];
+        replayPersistedArxivHtmlDomV4PayloadSha(artifacts, true),
+        replayPersistedUnstructuredArxivPayloadSha(artifacts, true)];
     const payload = candidates.find(value => value && crypto.createHash('sha256').update(value).digest('hex') === payloadSha256);
     if (!payload) throw new Error('展示公式的完整结构化来源内容不能重放既有来源 SHA；请通过正常长文恢复入口重建');
     return payload;

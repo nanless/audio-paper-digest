@@ -453,6 +453,93 @@ describe('arXiv HTML 全文健康检查', () => {
 
     });
 
+
+    // Seven public artifact fields copied from the real layoutless daily source.
+    // The literal SHA binds the collector's schema order, not sorted persistence order.
+    // This fixture is pure input data; it grants no sealed source/PDF capability.
+    function persistedLayoutlessPayloadFixture() {
+        return {
+            figures: [],
+            flattenedTextSha256: 'f6f21f05cd1f105c37dee800f1a68ed4ae5d9c0bf6d984179000a7fe8c788a6d',
+            formulas: [],
+            payloadSha256: 'cff8e660ae26998b4065e170947522a501b631657b30c65f0898294d66500043',
+            source: 'fresh_arxiv_text_without_layout',
+            tables: [],
+            version: 1
+        };
+    }
+
+    it('Reader 无布局来源 payload 按原采集顺序重放，保留真实声明 SHA', () => {
+        const { readerStructuredSourcePayload, readerSourcePayloadArtifacts } =
+            require('../scripts/deep-analyzer.js');
+        const artifacts = persistedLayoutlessPayloadFixture();
+        const before = JSON.stringify(artifacts);
+        const originalBody = {
+            version: artifacts.version,
+            source: artifacts.source,
+            tables: artifacts.tables,
+            formulas: artifacts.formulas,
+            figures: artifacts.figures,
+            flattenedTextSha256: artifacts.flattenedTextSha256
+        };
+        const originalPayload = JSON.stringify(originalBody);
+        const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+        assert.strictEqual(hash(originalPayload), artifacts.payloadSha256);
+        const { payloadSha256, ...persistedBody } = artifacts;
+        assert.notStrictEqual(hash(JSON.stringify(persistedBody)), payloadSha256);
+        assert.strictEqual(readerStructuredSourcePayload(artifacts), originalPayload);
+        // Existing original-order input remains accepted unchanged.
+        assert.strictEqual(readerStructuredSourcePayload({ ...originalBody, payloadSha256 }), originalPayload);
+        assert.strictEqual(readerStructuredSourcePayload(JSON.parse(before)), originalPayload);
+        assert.strictEqual(JSON.stringify(artifacts), before);
+        const rebound = readerSourcePayloadArtifacts(originalPayload, payloadSha256,
+            artifacts.flattenedTextSha256);
+        assert.strictEqual(rebound.flattenedTextSha256, artifacts.flattenedTextSha256);
+        assert.deepStrictEqual(rebound.tables, []);
+        assert.deepStrictEqual(rebound.formulas, []);
+        assert.deepStrictEqual(rebound.figures, []);
+        assert.strictEqual(readerSourcePayloadArtifacts(originalPayload, '1'.repeat(64),
+            artifacts.flattenedTextSha256), null);
+        assert.strictEqual(readerSourcePayloadArtifacts(originalPayload, payloadSha256,
+            '0'.repeat(64)), null);
+    });
+
+    it('Reader 无布局来源 payload 不以旧 SHA 接受未知字段、非空结构或改写来源', () => {
+        const { readerStructuredSourcePayload } = require('../scripts/deep-analyzer.js');
+        // Keep the genuine declared SHA: do not manufacture a new self-signed source.
+        const cases = [
+            ['extra field', item => { item.extra = true; }],
+            ['nonempty tables', item => { item.tables = [{ ordinal: 1 }]; }],
+            ['nonempty formulas', item => { item.formulas = [{ ordinal: 1 }]; }],
+            ['nonempty figures', item => { item.figures = [{ ordinal: 1 }]; }],
+            ['wrong source', item => { item.source = 'other'; }],
+            ['missing field', item => { delete item.version; }],
+            ['wrong flattened text SHA', item => { item.flattenedTextSha256 = '0'.repeat(64); }],
+            ['wrong payload SHA', item => { item.payloadSha256 = '1'.repeat(64); }]
+        ];
+        for (const [label, mutate] of cases) {
+            const item = persistedLayoutlessPayloadFixture();
+            mutate(item);
+            assert.throws(() => readerStructuredSourcePayload(item), /不能重放既有来源 SHA/, label);
+        }
+        for (const key of ['__proto__', 'constructor', 'prototype', 'cachePath']) {
+            const original = JSON.stringify(persistedLayoutlessPayloadFixture());
+            const item = JSON.parse(original.slice(0, -1) + ',' + JSON.stringify(key) + ':"untrusted"}');
+            assert.ok(Object.prototype.hasOwnProperty.call(item, key));
+            assert.throws(() => readerStructuredSourcePayload(item), /不能重放既有来源 SHA/, key);
+        }
+    });
+
+    it('Reader 无布局来源 payload 通过重放也不能捏造展示公式', () => {
+        const { readerStructuredSourcePayload, readerFormulaSourcePayloadValid } =
+            require('../scripts/deep-analyzer.js');
+        const artifacts = persistedLayoutlessPayloadFixture();
+        const payload = readerStructuredSourcePayload(artifacts);
+        assert.strictEqual(readerFormulaSourcePayloadValid({
+            formulaOrdinal: 1, sourceDomSha256: '2'.repeat(64), latex: 'x=y'
+        }, payload, artifacts.payloadSha256, artifacts.flattenedTextSha256), false);
+    });
+
     it('Reader 数字证据把前导小数 .119 规范为 0.119，不误读为 119', () => {
         const { readerNumericTokens } = require('../scripts/deep-analyzer.js');
         assert.deepStrictEqual(readerNumericTokens('| score | .119 | -.222 |'), ['0.119', '-0.222']);
