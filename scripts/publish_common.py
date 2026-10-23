@@ -7840,10 +7840,11 @@ def escape_technical_notation_asterisks(text):
     literal_kern = re.compile(r'(?<![A-Za-z0-9_\\*])\*\*kern(?![A-Za-z0-9_*])')
     protected = markdown_inline_code_ranges(body)
     # Use the same closed **...** shape as the format gate, with nonblank
-    # content edges. Never skip an intervening star or borrow a later opener
-    # whose preceding whitespace makes it ineligible as a closing delimiter.
+    # content edges, permitting a soft line break and nested single emphasis.
+    # Never cross a blank paragraph or an intervening double-star delimiter;
+    # whitespace before a later independent opener cannot close this pair.
     protected.extend((match.start(), match.end()) for match in re.finditer(
-        r'(?<![\\*])\*\*(?=\S)[^*\r\n]+?(?<=\S)\*\*(?!\*)', body))
+        r'(?<![\\*])\*\*(?=\S)(?:(?!\r?\n[ \t]*\r?\n)[^*]|\*(?!\*))+?(?<=\S)\*\*(?!\*)', body))
     protected.extend((match.start(), match.end()) for match in re.finditer(
         r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|https?://[^\s<>]+', body))
     output = []
