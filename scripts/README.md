@@ -289,6 +289,7 @@ npm run test:compat
 | `lib/reader-resource-input-admission.js` | Node 库：真实资源状态变化须逐字重放原请求、已付响应、费用与失败稿，并核完整父阶段和封存来源；同来源 Reader 范围仅一次新输入，固定正常 6/2 预算，旧稿与旧计数不迁移。仅元数据变化拒绝再开。 |
 | `lib/reader-resource-prose.js` | 把已核验资源身份投影为自然语言输入，保留作者与第三方归属。 |
 | `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。保留上游时验证实际返回的原论文 Reader，假想的未保存主文投影不授予人工权限。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
+| `lib/reader-sealed-figure-alias.js` | Node 库：在真实日更封存来源的同步作用域内，核验未选图号引用同一图片资产的别名关系；保留全部原始图片证据，所选图片仍须去重。返回前重读四份来源并核对输入，不授予请求预算或整篇通过资格。 |
 | `lib/reader-sealed-pdf-column-units.js` | Reader 封存 PDF 表格列单位的精确绑定与重放。 |
 | `reader_sealed_pdf_literal_column_units.py` | 日更真实封存 PDF 完整表的独立列单位证明；保留完整方法、数据集合并条件、双层分组头与均值±区间及全部原格，不依赖 HTML 显示等价。 |
 | `reader_grouped_vector_column_units.py` | 发布端重放与 Reader 相同的完整偏好向量表列单位；调用方先核四份封存来源及真实 PDF 引文，保留两层列路径、全部行和均值差合并格。 |
