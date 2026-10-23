@@ -910,6 +910,9 @@ function getIncompleteAnalysisContentReason(paper) {
 }
 
 function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOptions = {}) {
+    if (Object.hasOwn(paper || {}, 'dailyScoringRefreshCheckpoint')
+        || require('./lib/daily-scoring-refresh-checkpoint').hasPreservedCheckpoint(paper))
+        return '日更新评分已保存但Reader反馈尚未完成，须使用原评分与Reader恢复入口。';
     const localValidationIssue = require('./lib/primary-local-validation-replay').validateColdOperation(paper);
     if (localValidationIssue) return localValidationIssue;
     const local = require('./lib/conference-source-resource-correction');
@@ -989,6 +992,8 @@ const CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS = Date.parse(
  * API 结果。生产分析、调度和跳过判断仍然必须用 isSuccessfulAnalysisRecord。
  */
 function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
+    if (Object.hasOwn(paper || {}, 'dailyScoringRefreshCheckpoint')
+        || require('./lib/daily-scoring-refresh-checkpoint').hasPreservedCheckpoint(paper)) return false;
     const manifest = paper?.analysisManifest;
     const stages = manifest?.stages;
     const contracts = manifest?.contracts;
@@ -1702,6 +1707,7 @@ function readConferenceFinalRejectionSource(paper) {
  * @returns {Promise<Object>} { success: boolean, result?: Object, error?: string, parsed?: Object }
  */
 async function analyzePaperWithRetry(paper, options = {}) {
+    require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
     const {
         maxRetries = DEFAULT_MAX_RETRIES,
         retryDelayMs = DEFAULT_RETRY_DELAY_MS,
@@ -2059,6 +2065,7 @@ async function analyzeBatchInternal(papers, options = {}) {
 
         const startTime = Date.now();
         const r = await withPaperAnalysisLock(paper, async () => {
+            require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
             const prepared = preparePaperLocked
                 ? await preparePaperLocked(paper)
                 : { paper, skip: false };

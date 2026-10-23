@@ -20,6 +20,7 @@ from path_config import (  # noqa: E402
     DIGEST_COVER_ASSET_DIR,
     DIGEST_COVER_MANIFEST_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
+    DAILY_SCORING_REFRESH_RECOVERY_DIR,
     FILTER_DECISIONS_FILE,
     PAPERS_FILE,
     PROJECT_ROOT,
@@ -47,6 +48,8 @@ class PathConfigTest(unittest.TestCase):
         self.assertEqual(PAPERS_FILE.name, 'papers.json')
         self.assertEqual(FILTER_DECISIONS_FILE.name, 'filter-decisions.json')
         self.assertEqual(DEEP_ANALYSIS_RESULT_FILE.name, 'deep-analysis-result.json')
+        self.assertEqual(DAILY_SCORING_REFRESH_RECOVERY_DIR,
+                         PROJECT_ROOT / 'data' / 'runtime' / 'daily-scoring-refresh-recovery')
         self.assertEqual(PAPERS_FILE.parent, CURRENT_DIR)
         self.assertEqual(DEEP_ANALYSIS_RESULT_FILE.parent, CURRENT_DIR)
         self.assertEqual(VISUAL_SUMMARY_MANIFEST_DIR, CURRENT_DIR / 'visual-summary-manifests')

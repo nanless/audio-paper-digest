@@ -74,6 +74,7 @@ from path_config import (
     CURRENT_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
     DAILY_FRESH_SOURCE_RUNS_DIR,
+    DAILY_SCORING_REFRESH_RECOVERY_DIR,
     DAILY_RENDER_OBSERVATIONS_DIR,
     resolve_deep_analysis_result_path,
     DIGEST_COVER_ASSET_DIR,
@@ -11430,6 +11431,47 @@ def _daily_publication_paper_bytes(value):
         raise PublishDataValidationError('daily table protected member JSON cannot be encoded') from exc
 
 
+def _assert_no_pending_daily_scoring_refresh(papers):
+    """Select possible pending work locally; only the shared Node helper judges it."""
+    if any('dailyScoringRefreshCheckpoint' in paper for paper in papers):
+        raise PublishDataValidationError('评分刷新后的 Reader 尚未完成，禁止发布待恢复稿')
+    directory = Path(DAILY_SCORING_REFRESH_RECOVERY_DIR)
+    try:
+        directory.lstat()
+    except FileNotFoundError:
+        return
+    _daily_fresh_safe_directory(directory, '日更评分恢复目录')
+    names = tuple(item.name for item in directory.iterdir())
+    selected = []
+    for paper in papers:
+        paper_id = _daily_fresh_normalized_paper_id(paper)
+        run_id = paper['freshRewriteProvenance']['runId']
+        prefix = f'{run_id}-{hashlib.sha256(paper_id.encode()).hexdigest()}-'
+        if any(name.startswith(prefix) for name in names):
+            selected.append(paper)
+    if not selected:
+        return
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('日更评分保存稿冷核需要 Node.js')
+    payload = _daily_fresh_compact_json_bytes({
+        'contract': 'daily-scoring-refresh-publication-check-v1', 'papers': selected,
+    })
+    if len(payload) > 128 * 1024 * 1024:
+        raise PublishDataValidationError('日更评分保存稿冷核输入超过上限')
+    with tempfile.TemporaryFile() as source_file:
+        source_file.write(payload); source_file.flush(); source_file.seek(0)
+        response = _run_bounded_subprocess(
+            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'daily-scoring-refresh-checkpoint-cli.js'), str(source_file.fileno())],
+            cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    if response.returncode != 0 or response.timed_out or response.output_truncated \
+            or response.stdout.strip() != '{"verified":true}':
+        raise PublishDataValidationError(
+            '日更评分私有保存稿尚未完成或未通过原件冷核，须从原评分与 Reader 恢复入口完成后再发布')
+
+
 def _mint_daily_publication_table_operation(source_path, source_bytes, run_file, run_bytes, records):
     # Called only after the complete daily run has passed its original source gate.
     operation = _DailyPublicationTableSourceOperation()
@@ -11451,6 +11493,8 @@ def _mint_daily_publication_table_operation(source_path, source_bytes, run_file,
             raise PublishDataValidationError('daily table source input file changed during publication')
         if _daily_fresh_read_private_file(run_file, 'daily table run', 4 * 1024 * 1024) != run_bytes:
             raise PublishDataValidationError('daily table source run changed during publication')
+        _assert_no_pending_daily_scoring_refresh(
+            [item['paper'] for item in ([record] if record is not None else records.values())])
         seen = {}
         for item in ([record] if record is not None else records.values()):
             for file, size, digest, maximum in item['source']['files']:

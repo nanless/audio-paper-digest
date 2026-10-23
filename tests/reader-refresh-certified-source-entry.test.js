@@ -46,6 +46,7 @@ function loadRefresh(f, mutateAtLock = () => {}, saveError = null) {
     const modules = {
         './log-setup': { writeStageSummary: () => null },
         './lib/error-guidance.js': require('../scripts/lib/error-guidance.js'),
+        './lib/daily-scoring-refresh-checkpoint': require('../scripts/lib/daily-scoring-refresh-checkpoint'),
         './config.js': { FILES: { deepAnalysisResult: 'no-file' } },
         './deep-analyzer.js': { stableFingerprint: value => JSON.stringify(value), hasReviewedCompletedPrimaryReaderSeed: () => false },
         './analysis-engine.js': {

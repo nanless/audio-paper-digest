@@ -595,5 +595,71 @@
       "stabilityResolution": "invalid"
     },
     "expected": false
+  },
+  {
+    "name": "multi-third-score-drift",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 8.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "multi-third-sha-drift",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 7.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
+  },
+  {
+    "name": "multi-third-score-and-sha-drift",
+    "stage": {
+      "stabilityWarning": true,
+      "stabilityResolution": {
+        "contract": "api-scoring-stability-resolution-v1",
+        "status": "resolved",
+        "method": "multi_pass_consensus",
+        "firstAuditScore": 7,
+        "secondAuditScore": 7.2,
+        "scoreDifference": 0.2,
+        "secondAuditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "thirdAuditScore": 8.2,
+        "thirdAttempts": 1,
+        "firstAuditSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "thirdAuditSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "finalScore": 7.2,
+      "auditSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "expected": false
   }
 ]

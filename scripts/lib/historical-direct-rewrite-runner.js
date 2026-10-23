@@ -1400,6 +1400,8 @@ function requiresHistoricalSourceScope(analysis) {
     // This only selects the real owner source replay. It cannot replace the
     // complete engine/Reader checks or accept caller-supplied source JSON.
     return requiresHistoricalPdfScope(analysis)
+        || analysis?.analysisManifest?.contracts?.readerResourceClaims !== undefined
+        || analysis?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsContractVersion !== undefined
         || require('../analysis-contract').validateCoreSummarySemanticContract(analysis?.analysis) !== null;
 }
 

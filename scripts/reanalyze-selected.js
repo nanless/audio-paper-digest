@@ -39,6 +39,10 @@ async function reanalyzeSelected(ids, options = {}) {
 
     if (!fs.existsSync(RESULT_FILE) && fs.existsSync(Config.FILES.deepAnalysisResultLegacy)) {
         const legacyData = readJsonFileStrict(Config.FILES.deepAnalysisResultLegacy);
+        for (const paper of (Array.isArray(legacyData) ? legacyData : legacyData?.papers || []))
+            if (ids.some(id => normalizedId(id) === normalizedId(paper)))
+                require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper,
+                    { dailyRunId: legacyData?.dailyFreshSourceRun?.runId });
         initializeJsonFileLocked(RESULT_FILE, Array.isArray(legacyData)
             ? { timestamp: getBeijingISOString(), source: Config.FILES.deepAnalysisResultLegacy, papers: legacyData }
             : legacyData);
@@ -49,6 +53,9 @@ async function reanalyzeSelected(ids, options = {}) {
 
     const papers = data.papers || [];
     const idSet = new Set(ids.map(id => normalizedId(id)).filter(Boolean));
+    for (const paper of papers) if (idSet.has(normalizedId(paper)))
+        require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper,
+            { dailyRunId: data.dailyFreshSourceRun?.runId });
     if (options.naturalResourceProse !== undefined && typeof options.naturalResourceProse !== 'boolean')
         throw new Error('naturalResourceProse 必须为布尔值');
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean')

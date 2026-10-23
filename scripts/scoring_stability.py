@@ -43,6 +43,9 @@ def scoring_stability_is_resolved(stage):
             and int(attempts) == attempts
             and _valid_sha(resolution.get('firstAuditSha256'))
             and _valid_sha(resolution.get('thirdAuditSha256'))
+            # A resolved third pass necessarily selects a pair ending in that pass.
+            and resolution['secondAuditScore'] == resolution['thirdAuditScore']
+            and resolution['secondAuditSha256'] == resolution['thirdAuditSha256']
             and stage.get('auditSha256') == resolution['secondAuditSha256']
             and _finite_number(stage.get('finalScore'))
             and abs(stage['finalScore'] - resolution['secondAuditScore']) < 1e-9

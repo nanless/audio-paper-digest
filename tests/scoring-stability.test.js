@@ -8,6 +8,63 @@ const { spawnSync } = require('node:child_process');
 const predicate = require('../scripts/lib/scoring-stability.js').scoringStabilityIsResolved;
 const vectors = require('./fixtures/scoring-stability-cases.json');
 
+// Synthetic audit leaves exercise the actual production selection rule; these
+// local proof objects are not full audits, source capabilities or paid records.
+for (const [name, scores] of [
+    ['second-pass-12', [7, 7.2]], ['multi-pass-13', [7, 8, 7.2]],
+    ['multi-pass-23', [7, 8, 8.2]]
+]) test(`当前生产共识规则的 ${name} 证明绑定被选中的真实审计`, async t => {
+    const { runScoringAuditConsensus } = require('../scripts/lib/scoring-audit-consensus');
+    const engine = require('../scripts/analysis-engine');
+    const hash = value => require('node:crypto').createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    const results = scores.map((score, index) => ({ score, audit: { score, ordinal: index + 1 }, attempts: 1 }));
+    let next = 1;
+    const selected = await runScoringAuditConsensus({ firstResult: results[0], firstScore: scores[0],
+        requiresConsensus: true, auditAgain: async () => results[next++],
+        scoreOfResult: result => result.score, fingerprintAudit: hash });
+    const stage = { stabilityWarning: true, finalScore: selected.result.score,
+        auditSha256: hash(selected.result.audit), stabilityResolution: selected.resolution };
+    assert.equal(next, results.length);
+    assert.equal(predicate(stage), true);
+    assert.equal(engine.scoringStabilityIsResolved(stage), true);
+    if (name === 'second-pass-12') {
+        assert.equal(Object.hasOwn(selected.resolution, 'thirdAuditScore'), false);
+        return; // Original second-pass proofs keep their established format.
+    }
+    assert.equal(selected.result, results[2]);
+    assert.equal(selected.resolution.secondAuditScore, selected.resolution.thirdAuditScore);
+    assert.equal(selected.resolution.secondAuditSha256, selected.resolution.thirdAuditSha256);
+    for (const [mutation, updates] of [
+        ['third-score', { thirdAuditScore: 9 }],
+        ['third-sha', { thirdAuditSha256: 'd'.repeat(64) }],
+        ['both', { thirdAuditScore: 9, thirdAuditSha256: 'd'.repeat(64) }]
+    ]) await t.test(mutation, () => {
+        const changed = structuredClone(stage);
+        Object.assign(changed.stabilityResolution, updates);
+        const before = structuredClone(changed);
+        assert.deepEqual([predicate(changed), engine.scoringStabilityIsResolved(changed)], [false, false]);
+        assert.deepStrictEqual(changed, before);
+    });
+});
+
+test('当前生产规则三次均不共识只产生拒绝证明', async () => {
+    const { runScoringAuditConsensus } = require('../scripts/lib/scoring-audit-consensus');
+    const engine = require('../scripts/analysis-engine');
+    const hash = value => require('node:crypto').createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    const results = [7, 8, 9].map(score => ({ score, audit: { score }, attempts: 1 }));
+    let next = 1;
+    await assert.rejects(runScoringAuditConsensus({ firstResult: results[0], firstScore: 7,
+        requiresConsensus: true, auditAgain: async () => results[next++],
+        scoreOfResult: result => result.score, fingerprintAudit: hash }), error => {
+        assert.equal(error.code, 'CONTRACT_REJECTED');
+        assert.equal(error.stabilityResolution.status, 'unresolved');
+        const stage = { stabilityWarning: true, stabilityResolution: error.stabilityResolution };
+        assert.deepEqual([predicate(stage), engine.scoringStabilityIsResolved(stage)], [false, false]);
+        return true;
+    });
+    assert.equal(next, 3);
+});
+
 test('共享评分判据逐项重放固定证明向量且不修改对象', () => {
     for (const { name, stage, expected } of vectors) {
         const before = JSON.stringify(stage);

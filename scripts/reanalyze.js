@@ -103,9 +103,13 @@ async function reanalyzeAll(options = {}) {
         process.exit(1);
     }
 
-    const data = updateJsonFileLocked(DATA_FILE, current =>
-        dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
-            readJsonFileStrict(Config.FILES.filteredPapers), { label: 'reanalyze recovery' }));
+    const data = updateJsonFileLocked(DATA_FILE, current => {
+        for (const paper of (Array.isArray(current) ? current : current?.papers || []))
+            require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper,
+                { dailyRunId: current?.dailyFreshSourceRun?.runId });
+        return dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
+            readJsonFileStrict(Config.FILES.filteredPapers), { label: 'reanalyze recovery' });
+    });
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {

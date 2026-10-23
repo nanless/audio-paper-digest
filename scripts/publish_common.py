@@ -5853,6 +5853,10 @@ def validate_papers_for_publish(papers, *, validate_manual_stage_records=True,
                 raise PublishDataValidationError(
                     f'{paper_label} 最新一次深度分析失败，禁止使用陈旧成功正文发布'
                 )
+            if 'dailyScoringRefreshCheckpoint' in paper:
+                raise PublishDataValidationError(
+                    f'{paper_label} 评分刷新后的 Reader 尚未完成，禁止发布待恢复稿'
+                )
             if 'analysisFactReviewObligation' in paper:
                 raise PublishDataValidationError(
                     f'{paper_label} 当前来源绑定的事实反馈尚未完成，禁止使用旧正文发布'

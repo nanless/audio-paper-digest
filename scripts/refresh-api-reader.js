@@ -43,6 +43,7 @@ const { writeAnalysisBatchReport } = require('./lib/analysis-batch-report.js');
 
 const MAX_REFRESH_CONCURRENCY = 60;
 const persistenceErrors = new WeakSet();
+const scoringRefresh = require('./lib/daily-scoring-refresh-checkpoint');
 function persistRefresh(write) {
     try { return write(); }
     catch (error) {
@@ -152,8 +153,9 @@ function paperRefreshInputIdentity(paper) {
     });
 }
 
-function hasCurrentReaderV3(paper) {
-    return hasValidApiReaderV3Records(paper)
+function hasCurrentReaderV3(paper, options) {
+    return !scoringRefresh.hasCheckpoint(paper) && !scoringRefresh.hasPreservedCheckpoint(paper, options)
+        && hasValidApiReaderV3Records(paper)
         && !paper?.latestAnalysisAttemptError;
 }
 
@@ -189,7 +191,8 @@ function resolveBatchRefreshIds(options) {
     const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReaderV3;
     const pending = options.surfaceBindingsOnly
         ? papers
-        : papers.filter(paper => !currentReaderCheck(paper));
+        : papers.filter(paper => !currentReaderCheck(paper,
+            { dailyRunId: payload.dailyFreshSourceRun?.runId }));
     console.log(
         `📋 读者文章全量刷新，批次日期为 ${options.date}`
         + ` | papers=${papers.length} | pending=${pending.length}`
@@ -494,8 +497,11 @@ async function refreshApiReaderInternal(targetId, options = {}) {
     const resultPath = Config.FILES.deepAnalysisResult;
     const { paper: existing, plan: initialDailySourcePlan } =
         readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore());
+    if (!options.scoringAndReader && (scoringRefresh.hasCheckpoint(existing) || scoringRefresh.hasPreservedCheckpoint(existing)))
+        scoringRefresh.assertNoPending(existing);
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
-        && !(options.scoringAndReader && canRepairScoringBinding(existing))
+        && !(options.scoringAndReader && (canRepairScoringBinding(existing) || scoringRefresh.hasCheckpoint(existing)
+            || scoringRefresh.hasPreservedCheckpoint(existing)))
         && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing))
         && !canRepairCompletedPrimaryReader(existing, initialDailySourcePlan, options))) {
         throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
@@ -505,8 +511,11 @@ async function refreshApiReaderInternal(targetId, options = {}) {
         return await withPaperAnalysisLock(existing, async () => {
         const { paper: storedAnalysisRecord, plan: lockedDailySourcePlan } =
             readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore() || initialDailySourcePlan);
+        if (!options.scoringAndReader && (scoringRefresh.hasCheckpoint(storedAnalysisRecord) || scoringRefresh.hasPreservedCheckpoint(storedAnalysisRecord)))
+            scoringRefresh.assertNoPending(storedAnalysisRecord);
         if (!storedAnalysisRecord || (!isSuccessfulAnalysisRecord(storedAnalysisRecord)
-            && !(options.scoringAndReader && canRepairScoringBinding(storedAnalysisRecord))
+            && !(options.scoringAndReader && (canRepairScoringBinding(storedAnalysisRecord) || scoringRefresh.hasCheckpoint(storedAnalysisRecord)
+                || scoringRefresh.hasPreservedCheckpoint(storedAnalysisRecord)))
             && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord))
             && !canRepairCompletedPrimaryReader(storedAnalysisRecord, lockedDailySourcePlan, options))) {
             throw new Error(`取得分析锁后，${requested} 的记录已不存在，或不再满足所选刷新模式的条件。`);
@@ -514,7 +523,36 @@ async function refreshApiReaderInternal(targetId, options = {}) {
         if (!dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, lockedDailySourcePlan)) {
             throw new Error(`${requested} 的分析结果与当前封存的日更来源不一致；请使用 npm run reanalyze 根据已封存来源重新分析。`);
         }
-        const inputIdentity = paperRefreshInputIdentity(storedAnalysisRecord);
+        let inputIdentity = stableFingerprint(storedAnalysisRecord);
+        const scoringParent = structuredClone(storedAnalysisRecord);
+        const saveCanonical = refreshed => {
+            const saved = persistRefresh(() => updateJsonFileLocked(resultPath, payload => {
+            const rows = Array.isArray(payload) ? payload : payload.papers;
+            if (!Array.isArray(rows)) throw new Error('分析结果中的论文列表 papers 不是数组。');
+            const matches = rows.map((paper, index) => normalizedId(paper) === requested ? index : -1)
+                .filter(index => index >= 0);
+            if (matches.length !== 1) throw new Error(`保存 ${requested} 时论文身份不唯一。`);
+            if (stableFingerprint(rows[matches[0]]) !== inputIdentity)
+                throw new Error(`${requested} canonical_changed_during_refresh`);
+            dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(payload, {
+                entryPlan: refreshRecoveryEntryScope.getStore() || initialDailySourcePlan,
+                paper: rows[matches[0]], label: '保存日更Reader刷新' });
+            if (normalizedId(refreshed) !== requested) throw new Error('刷新结果论文身份不同。');
+            require('./lib/reader-paid-resolved-render').assertPaidResolvedRenderSnapshot();
+            const updated = [...rows]; updated[matches[0]] = refreshed;
+            if (Array.isArray(payload)) return updated;
+            const summary = getAnalysisRunSummary(updated);
+            const next = { ...payload, papers: updated, status: summary.status,
+                stats: { ...(payload.stats || {}), analysisStatus: summary.status,
+                    remainingFailed: summary.remaining, analyzedSuccess: summary.success, analyzedFailed: summary.remaining },
+                lastUpdated: getBeijingISOString() };
+            if (summary.status === 'complete') next.deepAnalysisCompletedAt = next.lastUpdated;
+            else delete next.deepAnalysisCompletedAt;
+            return next;
+            }));
+            inputIdentity = stableFingerprint(refreshed);
+            return saved;
+        };
         const completedPrimaryRecoveryInput = canRepairCompletedPrimaryReader(
             storedAnalysisRecord, lockedDailySourcePlan, options) ? structuredClone(storedAnalysisRecord) : null;
         const refreshLabel = options.authorsOnly
@@ -528,14 +566,58 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                 : '读者文章';
         console.log(`📄 只刷新${refreshLabel}: ${storedAnalysisRecord.title || requested}`);
         const refreshOperations = options.operations || {};
+        const refreshScoringFromDailySource = async sourceDetails => {
+            if (!scoringRefresh.hasCheckpoint(storedAnalysisRecord)) {
+                const preserved = scoringRefresh.readPreservedCheckpoint(storedAnalysisRecord,
+                    lockedDailySourcePlan, sourceDetails, options.reviewFeedback);
+                if (preserved) {
+                    saveCanonical(preserved);
+                    for (const key of Object.keys(storedAnalysisRecord)) delete storedAnalysisRecord[key];
+                    Object.assign(storedAnalysisRecord, preserved);
+                }
+            }
+            const pending = scoringRefresh.readCheckpoint(storedAnalysisRecord,
+                lockedDailySourcePlan, sourceDetails, options.reviewFeedback);
+            let checkpointSaved = !!pending;
+            try {
+                const refreshed = pending
+                    ? scoringRefresh.hasCompletedReader(storedAnalysisRecord, pending) ? storedAnalysisRecord
+                        : await (refreshOperations.article || refreshApiReaderArticleFromSource)(storedAnalysisRecord, sourceDetails, {
+                            reviewFeedback: options.reviewFeedback, revisionSeed: pending.readerRevisionSeed,
+                            readerResources: storedAnalysisRecord.apiReaderResources, resumeSavedSourceReader: true })
+                    : await (refreshOperations.scoringAndReader || refreshApiScoringAndReaderFromSource)(
+                        storedAnalysisRecord, sourceDetails, { reviewFeedback: options.reviewFeedback,
+                            onScoringComplete: async (scored, metadata) => {
+                                try {
+                                    scoringRefresh.prepareCheckpoint(scored, scoringParent, lockedDailySourcePlan,
+                                        sourceDetails, options.reviewFeedback, metadata);
+                                    saveCanonical(scored);
+                                }
+                                catch (error) {
+                                    error.scope = 'run'; error.retryable = false;
+                                    scoringRefresh.preserveReturnedScoring(scored, scoringParent, error);
+                                    throw error;
+                                }
+                                checkpointSaved = true;
+                            } });
+                return scoringRefresh.hasCheckpoint(refreshed)
+                    ? scoringRefresh.finishCheckpoint(refreshed, lockedDailySourcePlan, sourceDetails, options.reviewFeedback)
+                    : refreshed;
+            } catch (error) {
+                if (checkpointSaved && !persistenceErrors.has(error)) {
+                    scoringRefresh.recordFailure(storedAnalysisRecord, lockedDailySourcePlan,
+                        sourceDetails, options.reviewFeedback, error);
+                    saveCanonical(storedAnalysisRecord);
+                }
+                throw error;
+            }
+        };
         const refreshFromDailySource = async sourceDetails => options.authorsOnly
             ? (refreshOperations.authors || refreshApiReaderAuthorsFromSource)(storedAnalysisRecord, sourceDetails)
             : options.figuresOnly
                 ? await (refreshOperations.figures || refreshApiReaderFiguresFromSource)(storedAnalysisRecord, sourceDetails)
                 : options.scoringAndReader
-                    ? await (refreshOperations.scoringAndReader || refreshApiScoringAndReaderFromSource)(
-                        storedAnalysisRecord, sourceDetails, { reviewFeedback: options.reviewFeedback }
-                    )
+                    ? await refreshScoringFromDailySource(sourceDetails)
                     : await (refreshOperations.article || refreshApiReaderArticleFromSource)(storedAnalysisRecord, sourceDetails, {
                         reviewFeedback: options.reviewFeedback,
                         readerFactLocalRevision: options.readerFactLocalRevision === true,
@@ -637,45 +719,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             refreshed = finishReviewedPrimaryReaderRefresh(completedPrimaryRecoveryInput,
                 refreshed, lockedDailySourcePlan, options);
         }
-        const savedPayload = persistRefresh(() => updateJsonFileLocked(resultPath, payload => {
-            const rows = Array.isArray(payload) ? payload : payload.papers;
-            if (!Array.isArray(rows)) throw new Error('分析结果中的论文列表 papers 不是数组。');
-            const matches = rows.map((paper, index) => (
-                normalizedId(paper) === requested ? index : -1
-            )).filter(index => index >= 0);
-            if (matches.length !== 1) {
-                throw new Error(`保存 ${requested} 的刷新结果时，发现 ${matches.length} 条对应记录，无法确定应更新哪一条。`);
-            }
-            const targetIndex = matches[0];
-            if (paperRefreshInputIdentity(rows[targetIndex]) !== inputIdentity) {
-                throw new Error(`${requested} canonical_changed_during_refresh`);
-            }
-            if (normalizedId(refreshed) !== requested) {
-                throw new Error(`${requested} 的刷新结果对应了另一个论文 ID，不能保存。`);
-            }
-            require('./lib/reader-paid-resolved-render').assertPaidResolvedRenderSnapshot();
-            const updated = [...rows];
-            updated[targetIndex] = refreshed;
-            if (Array.isArray(payload)) return updated;
-            const analysisRunSummary = getAnalysisRunSummary(updated);
-            const now = getBeijingISOString();
-            const next = {
-                ...payload,
-                papers: updated,
-                status: analysisRunSummary.status,
-                stats: {
-                    ...(payload.stats || {}),
-                    analysisStatus: analysisRunSummary.status,
-                    remainingFailed: analysisRunSummary.remaining,
-                    analyzedSuccess: analysisRunSummary.success,
-                    analyzedFailed: analysisRunSummary.remaining
-                },
-                lastUpdated: now
-            };
-            if (analysisRunSummary.status === 'complete') next.deepAnalysisCompletedAt = now;
-            else delete next.deepAnalysisCompletedAt;
-            return next;
-        }));
+        const savedPayload = saveCanonical(refreshed);
         persistRefresh(() => commitDeferredReaderCandidate(refreshed));
         const savedRows = Array.isArray(savedPayload) ? savedPayload : savedPayload.papers;
         const savedRecord = savedRows.find(paper => normalizedId(paper) === requested);

@@ -2421,3 +2421,128 @@ test('历史来源JSON和克隆句柄不能代替真实owner的冷资格作用�
     assert.throws(() => runner.assertDirectAnalysisReadyForStaging({ ...args, readerPdfSourceHandle: {} }), /real runner handle/);
     assert.equal(context.getDirectRewriteAnalysisContext(), null);
 }));
+
+// Public source/PDF bytes and actual source ownership are reused from the
+// existing offline fixture. The analysis/Reader remain mechanical fixtures;
+// this does not establish paper adoption or publication qualification.
+function historicalResourceClaimsPaper(input) {
+    const paper = sealedAnalysis(input.item, input.sourceDescriptor, input.sourceDetails);
+    paper.arxivId = input.item.route.arxivId;
+    paper.apiReaderPlan.readerTitle = '历史研究解读';
+    paper.apiReaderPlan.oneSentenceThesis = '这是只测试正常来源重放的机械正文。';
+    paper.apiReaderPlan.sections = [{ kind: 'reproduction', heading: '初学者读者文章' }];
+    paper.apiReaderPlan.conceptBridges = [];
+    paper.apiReaderPlanSha256 = runner.stableHash(paper.apiReaderPlan);
+    paper.analysisManifest.stages.apiReaderArticle.planSha256 = paper.apiReaderPlanSha256;
+    const contract = require('../scripts/deep-analyzer').API_READER_RESOURCE_CLAIMS_CONTRACT;
+    paper.analysisManifest.contracts.readerResourceClaims = contract;
+    paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = contract;
+    assert.equal(require('../scripts/analysis-contract').validateCoreSummarySemanticContract(paper.analysis), null);
+    assert.equal(paper.apiReaderPlan.tableBindings.length, 0);
+    assert.equal(paper.apiReaderResources.resources.length, 0);
+    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+    assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
+    return paper;
+}
+
+test('历史普通核心的新资源声明在初次暂存和两条冷重放保留原真实全文作用域', async t => offlineHistoricalCore(t, async () => {
+    const { f, roots, id, capture } = correctionRateHistoricalFixture(t);
+    let analyses = 0, saved;
+    const dependencies = { captureFreshArxivRewriteSource: capture, renderDirectPage,
+        analyze: input => {
+            analyses++;
+            const paper = historicalResourceClaimsPaper(input);
+            assert.ok(runner.readVerifiedHistoricalReaderPdfSource(context.getDirectRewriteAnalysisContext().readerPdfSourceHandle));
+            saved = { ...input, analysis: paper };
+            return paper;
+        } };
+    const options = { apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1,
+        paperIds: [`arxiv:${id}`] };
+    const initial = await runner.runDirectRewrite(options, dependencies);
+    assert.equal(analyses, 1);
+    assert.equal(context.getDirectRewriteAnalysisContext(), null);
+    assert.equal(initial.results[0].status, 'staged', 'new Reader claims must retain their source after normal analysis returns');
+    const before = JSON.stringify(saved.analysis);
+    const readerCheck = engine.hasValidApiReaderV3Records;
+    let textOnlyChecks = 0;
+    t.mock.method(engine, 'hasValidApiReaderV3Records', (...args) => {
+        const active = context.getDirectRewriteAnalysisContext();
+        assert.ok(active, 'normal cold qualification must have the actual direct source');
+        assert.equal(active.readerPdfSourceHandle, undefined, 'text-only replay must not attach PDF table/footnote authority');
+        textOnlyChecks++;
+        return readerCheck(...args);
+    });
+    const coldDependencies = { ...dependencies, analyze: () => assert.fail('saved source-bound Reader must not dispatch analysis') };
+    const staged = await runner.runDirectRewrite(options, coldDependencies);
+    assert.equal(staged.results[0].status, 'recovered');
+    const completed = asInterruptedAnalysisComplete(JSON.parse(fs.readFileSync(initial.registryFile, 'utf8')),
+        f.plan, `arxiv:${id}`);
+    write(initial.registryFile, JSON.stringify(completed));
+    const resumed = await runner.runDirectRewrite(options, coldDependencies);
+    assert.equal(resumed.results[0].status, 'staged');
+    assert.ok(textOnlyChecks >= 2);
+    assert.equal(analyses, 1);
+    assert.equal(JSON.stringify(saved.analysis), before, 'replay does not rewrite the signed analysis or its counters');
+    assert.equal(context.getDirectRewriteAnalysisContext(), null);
+}));
+
+test('历史资源声明重放不让坏合同取得完整资格或暂存成功', async t => {
+    for (const kind of ['manifest-only', 'stage-only', 'unknown', 'null']) await t.test(kind, child => offlineHistoricalCore(child, async () => {
+        const { f, roots, id, capture } = correctionRateHistoricalFixture(child);
+        let reached = false;
+        const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+            queue: 'arxiv', arxivGeneration: 1, paperIds: [`arxiv:${id}`] }, {
+            captureFreshArxivRewriteSource: capture, renderDirectPage,
+            analyze: input => {
+                const paper = historicalResourceClaimsPaper(input);
+                if (kind === 'manifest-only') delete paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion;
+                else if (kind === 'stage-only') delete paper.analysisManifest.contracts.readerResourceClaims;
+                else paper.analysisManifest.contracts.readerResourceClaims = kind === 'null' ? null : 'unknown';
+                reached = true;
+                assert.equal(engine.isSuccessfulAnalysisRecord(paper), false);
+                return paper;
+            }
+        });
+        assert.equal(reached, true);
+        assert.equal(result.results[0].status, 'failed');
+        assert.equal(allFiles(roots.executionRoot).filter(file => path.basename(file) === 'analysis.json').length, 0);
+        assert.equal(context.getDirectRewriteAnalysisContext(), null);
+    }));
+});
+
+test('历史新资源声明仍拒绝普通JSON、克隆owner、错成员、来源SHA及四源漂移', async t => offlineHistoricalCore(t, async () => {
+    const { f, roots, id, capture } = correctionRateHistoricalFixture(t);
+    let saved, handle;
+    const initial = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1, paperIds: [`arxiv:${id}`] }, {
+        captureFreshArxivRewriteSource: capture, renderDirectPage,
+        analyze: input => {
+            handle = context.getDirectRewriteAnalysisContext().readerPdfSourceHandle;
+            const analysis = historicalResourceClaimsPaper(input);
+            saved = { item: input.item, sourceDescriptor: input.sourceDescriptor,
+                sourceDetails: structuredClone(input.sourceDetails), analysis };
+            return analysis;
+        }
+    });
+    assert.equal(initial.results[0].status, 'staged');
+    assert.throws(() => runner.assertDirectAnalysisReadyForStaging(saved), /incomplete or failed/);
+    assert.throws(() => runner.assertDirectAnalysisReadyForStaging({ ...saved, readerPdfSourceHandle: structuredClone(handle) }), /real runner handle/);
+    const wrongMember = structuredClone(saved.analysis);
+    wrongMember.directPaperId = 'arxiv:2601.00002';
+    assert.throws(() => runner.assertDirectAnalysisReadyForStaging({ ...saved, readerPdfSourceHandle: handle,
+        analysis: wrongMember }), /identity|身份|同一篇/);
+    const wrongSource = structuredClone(saved.analysis);
+    wrongSource.sourceSha256 = 'f'.repeat(64);
+    assert.throws(() => runner.assertDirectAnalysisReadyForStaging({ ...saved, readerPdfSourceHandle: handle,
+        analysis: wrongSource }), /incomplete or failed/);
+    for (const name of ['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json']) {
+        const filename = path.join(freshSource.sourceDirectory(roots.freshArxivSourceRoot, id, 1), name);
+        const before = fs.readFileSync(filename);
+        try {
+            fs.appendFileSync(filename, '\n');
+            assert.throws(() => runner.assertDirectAnalysisReadyForStaging({ ...saved, readerPdfSourceHandle: handle }),
+                /来源|source|SHA|JSON|JSON|封存|不符|漂移/);
+        } finally { fs.writeFileSync(filename, before); }
+    }
+    assert.equal(context.getDirectRewriteAnalysisContext(), null);
+}));

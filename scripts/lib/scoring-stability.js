@@ -24,6 +24,9 @@ function scoringStabilityIsResolved(stage) {
     return Number.isFinite(resolution.thirdAuditScore)
         && Number.isSafeInteger(resolution.thirdAttempts) && resolution.thirdAttempts >= 1
         && validSha(resolution.firstAuditSha256) && validSha(resolution.thirdAuditSha256)
+        // A resolved third pass necessarily selects a pair ending in that pass.
+        && resolution.secondAuditScore === resolution.thirdAuditScore
+        && resolution.secondAuditSha256 === resolution.thirdAuditSha256
         && stage.auditSha256 === resolution.secondAuditSha256
         && Number.isFinite(stage.finalScore)
         && Math.abs(stage.finalScore - resolution.secondAuditScore) < 1e-9

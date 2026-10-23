@@ -1154,9 +1154,9 @@ const API_READER_MODEL_IMAGE_TOTAL_PIXELS = 16 * 1024 * 1024;
 const API_READER_MODEL_IMAGE_TRANSFORM = 'decoded-white-background-fit-jpeg-v1';
 const API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT = 'api-reader-provider-image-exclusion-v1';
 const { scoringStabilityIsResolved: scoringStabilityResolutionIsValid,
-    SCORING_STABILITY_RESOLUTION_CONTRACT, SCORING_STABILITY_CONSENSUS_TOLERANCE
+    SCORING_STABILITY_RESOLUTION_CONTRACT
 } = require('./lib/scoring-stability.js');
-const SCORING_STABILITY_THRESHOLD = 0.5;
+const { runScoringAuditConsensus, SCORING_STABILITY_THRESHOLD } = require('./lib/scoring-audit-consensus');
 const API_READER_FIGURE_LEAD_MIN_CHARS = READER_LIMITS.figureLeadChars;
 const API_READER_FIGURE_EXPLANATION_MIN_CHARS = READER_LIMITS.figureExplanationChars;
 const { READER_SECTION_KINDS: API_READER_KINDS, locateReaderDraftTables,
@@ -10680,6 +10680,7 @@ function reuseSignedApiReaderFigureAssets(figures, previous, arxivId) {
 }
 
 async function refreshApiScoringAndReaderFromSource(paper, sourceDetails, options = {}) {
+    require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
     const { withLlmUsageContext } = require('./lib/llm-usage.js');
     return withLlmUsageContext({ paperId: getPaperArxivId(paper) },
         () => refreshApiScoringAndReaderInternal(paper, sourceDetails, options));
@@ -10806,64 +10807,36 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         throw new Error(`评分复验后的分析未通过最终契约: ${invalidReason}`);
     }
     const previousScore = Number.parseFloat(paper?.parsed?.score);
-    let finalScore = Number.parseFloat(auditedParsed?.score);
-    let scoreDelta = Number.isFinite(previousScore) && Number.isFinite(finalScore)
-        ? Number((finalScore - previousScore).toFixed(1))
-        : null;
-    let stabilityResolution = {
-        contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
-        status: 'not_required',
-        threshold: SCORING_STABILITY_THRESHOLD
-    };
-    let totalAttempts = scoringResult.attempts;
-    if (scoreDelta !== null && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD) {
-        const firstAuditScore = finalScore;
-        const secondResult = await auditTypeAwareScoringDetailed(
-            analysis, sourceText, {
-                evidenceContext: scoringEvidenceContext,
-                verifiedResourceIdentity: readerResources,
-                declaredStage: scoringRequestDeclaration
-            }
-        );
-        const secondParsed = parseAnalysis(secondResult.analysis);
-        const secondInvalidReason = getInvalidAnalysisReason(secondResult.analysis, secondParsed, {
-            enforceExperimentTableContract: true,
-            experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
-            enforceMethodDetailContract: true,
-            sourceText
-        });
-        if (secondInvalidReason) {
-            throw new Error(`评分稳定性二次审计未通过最终契约: ${secondInvalidReason}`);
-        }
-        const secondAuditScore = Number.parseFloat(secondParsed?.score);
-        const scoreDifference = Math.abs(secondAuditScore - firstAuditScore);
-        stabilityResolution = {
-            contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
-            status: scoreDifference <= SCORING_STABILITY_CONSENSUS_TOLERANCE
-                ? 'resolved' : 'unresolved',
-            method: 'second_pass_consensus',
-            threshold: SCORING_STABILITY_THRESHOLD,
-            consensusTolerance: SCORING_STABILITY_CONSENSUS_TOLERANCE,
-            firstAuditScore,
-            secondAuditScore,
-            scoreDifference,
-            firstAuditSha256: stableFingerprint(scoringResult.audit),
-            secondAuditSha256: stableFingerprint(secondResult.audit),
-            secondAttempts: secondResult.attempts
-        };
-        if (stabilityResolution.status !== 'resolved') {
-            throw new Error(
-                `两次评分的差异超过允许范围: first=${firstAuditScore.toFixed(1)}, `
-                + `second=${secondAuditScore.toFixed(1)}`
-            );
-        }
-        scoringResult = secondResult;
-        auditedAnalysis = secondResult.analysis;
-        auditedParsed = secondParsed;
-        finalScore = secondAuditScore;
-        scoreDelta = Number((finalScore - previousScore).toFixed(1));
-        totalAttempts += secondResult.attempts;
-    }
+    let scoringDelta = calculateScoringDelta(previousScore, analysis, auditedParsed?.score);
+    let finalScore = scoringDelta.finalScore;
+    let scoreDelta = scoringDelta.scoreDelta;
+    const consensus = await runScoringAuditConsensus({
+        firstResult: scoringResult, firstScore: finalScore,
+        requiresConsensus: scoreDelta !== null && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD,
+        auditAgain: () => auditTypeAwareScoringDetailed(analysis, sourceText, {
+            evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: readerResources,
+            declaredStage: scoringRequestDeclaration
+        }),
+        scoreOfResult: candidate => {
+            const parsed = parseAnalysis(candidate.analysis);
+            const reason = getInvalidAnalysisReason(candidate.analysis, parsed, {
+                enforceExperimentTableContract: true,
+                experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                enforceMethodDetailContract: true, sourceText
+            });
+            if (reason) throw new Error(`评分稳定性审计未通过最终契约: ${reason}`);
+            return Number.parseFloat(parsed?.score);
+        },
+        fingerprintAudit: stableFingerprint
+    });
+    scoringResult = consensus.result;
+    auditedAnalysis = scoringResult.analysis;
+    auditedParsed = parseAnalysis(auditedAnalysis);
+    scoringDelta = calculateScoringDelta(previousScore, analysis, auditedParsed?.score);
+    finalScore = scoringDelta.finalScore;
+    scoreDelta = scoringDelta.scoreDelta;
+    const stabilityResolution = consensus.resolution;
+    const totalAttempts = consensus.totalAttempts;
     auditedAnalysis = applyApiReaderResourceAvailability(auditedAnalysis, readerResources);
     scoringFactReview.validateRepairedClaims('scoringAudit', auditedAnalysis, getPaperArxivId(paper));
     auditedParsed = parseAnalysis(auditedAnalysis);
@@ -10902,8 +10875,8 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         resourceNormalizationContract: SCORING_RESOURCE_NORMALIZATION_CONTRACT,
         requestFormatContract: SCORING_REQUEST_FORMAT_CONTRACT,
         capRulesVersion: SCORING_CAP_RULES_VERSION,
-        previousScore: Number.isFinite(previousScore) ? previousScore : null,
-        previousRunScore: Number.isFinite(previousScore) ? previousScore : null,
+        previousScore: scoringDelta.previousScore,
+        previousRunScore: scoringDelta.previousRunScore,
         finalScore: Number.isFinite(finalScore) ? finalScore : null,
         scoreDelta,
         stabilityWarning: scoreDelta !== null
@@ -10917,7 +10890,8 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     paper.analysis = auditedAnalysis;
     paper.parsed = auditedParsed;
     if (options.onScoringComplete !== undefined) {
-        await options.onScoringComplete(paper);
+        await options.onScoringComplete(paper, { scoringInputAnalysis: analysis,
+            scoringEvidenceContext, readerRevisionSeed });
     }
     if (existingReaderReusable
         && existingReaderResourceSha256 === readerResources.identitySha256) {
@@ -17167,6 +17141,7 @@ function validateSavedScoringAuditCandidate(paper, analysisManifest, handle, can
  * 深度分析单篇论文（全文 + 图片）
  */
 async function analyzePaperDeep(paper, options = {}) {
+    require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
     const { withLlmUsageContext } = require('./lib/llm-usage.js');
     const fresh = require('./lib/fresh-analysis-context.js');
     return fresh.withFreshPaperContext(paper, () => withLlmUsageContext(
@@ -17178,6 +17153,7 @@ async function analyzePaperDeep(paper, options = {}) {
 }
 
 async function analyzePaperDeepInternal(paper, options = {}) {
+    require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
     const finalCheckpoint = require('./lib/cancelled-reader-final-checkpoint').reusableFinalCheckpoint(paper);
     if (finalCheckpoint) return finalCheckpoint;
     const resolvedReaderCandidateParent = options.resolvedReaderCandidate !== undefined ? structuredClone(paper) : null;
@@ -18477,106 +18453,24 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             let scoringDelta = calculateScoringDelta(
                 previousScore, scoringInputAnalysis, auditedParsed?.score
             );
-            const firstAuditScore = scoringDelta.finalScore;
-            let stabilityResolution = {
-                contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
-                status: 'not_required',
-                threshold: SCORING_STABILITY_THRESHOLD
-            };
-            let totalScoringAttempts = scoringResult.attempts;
-            if (scoringDelta.scoreDelta !== null
-                && Math.abs(scoringDelta.scoreDelta) > SCORING_STABILITY_THRESHOLD) {
-                console.log(
-                    `    [deep] ⚠️  评分稳定性告警触发独立二次审计: previous=${scoringDelta.previousScore.toFixed(1)}`
-                    + ` | first=${firstAuditScore.toFixed(1)} | delta=${scoringDelta.scoreDelta > 0 ? '+' : ''}${scoringDelta.scoreDelta.toFixed(1)}`
-                );
-                const secondResult = await auditTypeAwareScoringDetailed(
-                    scoringInputAnalysis,
-                    rawTextForAnalysis,
-                    { evidenceContext: scoringEvidenceContext,
-                        verifiedResourceIdentity: paper.apiReaderResources, declaredStage: scoringRequestDeclaration }
-                );
-                const secondParsed = validateScoringOutput(secondResult.analysis);
-                const secondScore = Number(secondParsed?.score);
-                const scoreDifference = Math.abs(secondScore - firstAuditScore);
-                const resolution = {
-                    contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
-                    status: scoreDifference <= SCORING_STABILITY_CONSENSUS_TOLERANCE
-                        ? 'resolved' : 'unresolved',
-                    method: 'second_pass_consensus',
-                    threshold: SCORING_STABILITY_THRESHOLD,
-                    consensusTolerance: SCORING_STABILITY_CONSENSUS_TOLERANCE,
-                    firstAuditScore,
-                    secondAuditScore: secondScore,
-                    scoreDifference,
-                    firstAuditSha256: stableFingerprint(scoringResult.audit),
-                    secondAuditSha256: stableFingerprint(secondResult.audit),
-                    secondAttempts: secondResult.attempts
-                };
-                let selectedResult = secondResult;
-                if (resolution.status !== 'resolved') {
-                    // 单跑一次第二轮本身也可能有噪声。再独立审一次，只有在原始容差内
-                    // 有两者一致才接受；三次互不相同就维持严格的拒绝结论。
-                    console.log(
-                        `    [deep] ⚠️  前两次评分的差异超过允许范围，开始第三次独立评分检查: `
-                        + `first=${firstAuditScore.toFixed(1)} | second=${secondScore.toFixed(1)}`
-                    );
-                    const thirdResult = await auditTypeAwareScoringDetailed(
-                        scoringInputAnalysis,
-                        rawTextForAnalysis,
-                        { evidenceContext: scoringEvidenceContext,
-                            verifiedResourceIdentity: paper.apiReaderResources, declaredStage: scoringRequestDeclaration }
-                    );
-                    const thirdParsed = validateScoringOutput(thirdResult.analysis);
-                    const thirdScore = Number(thirdParsed?.score);
-                    const pairs = [
-                        { leftScore: firstAuditScore, rightScore: secondScore,
-                            leftResult: scoringResult, rightResult: secondResult,
-                            selectedResult: secondResult },
-                        { leftScore: firstAuditScore, rightScore: thirdScore,
-                            leftResult: scoringResult, rightResult: thirdResult,
-                            selectedResult: thirdResult },
-                        { leftScore: secondScore, rightScore: thirdScore,
-                            leftResult: secondResult, rightResult: thirdResult,
-                            selectedResult: thirdResult }
-                    ].map(pair => ({
-                        ...pair,
-                        difference: Math.abs(pair.rightScore - pair.leftScore)
-                    })).sort((left, right) => left.difference - right.difference);
-                    const consensus = pairs[0];
-                    resolution.method = 'multi_pass_consensus';
-                    resolution.status = consensus.difference <= SCORING_STABILITY_CONSENSUS_TOLERANCE
-                        ? 'resolved' : 'unresolved';
-                    resolution.firstAuditScore = consensus.leftScore;
-                    resolution.secondAuditScore = consensus.rightScore;
-                    resolution.scoreDifference = consensus.difference;
-                    resolution.firstAuditSha256 = stableFingerprint(consensus.leftResult.audit);
-                    resolution.secondAuditSha256 = stableFingerprint(consensus.rightResult.audit);
-                    resolution.thirdAuditScore = thirdScore;
-                    resolution.thirdAuditSha256 = stableFingerprint(thirdResult.audit);
-                    resolution.thirdAttempts = thirdResult.attempts;
-                    totalScoringAttempts += thirdResult.attempts;
-                    if (resolution.status !== 'resolved') {
-                        const error = new Error(
-                            `三次评分中最接近的两次仍超过允许差异: first=${firstAuditScore.toFixed(1)}, `
-                            + `second=${secondScore.toFixed(1)}, third=${thirdScore.toFixed(1)}, `
-                            + `bestDifference=${consensus.difference.toFixed(1)}`
-                        );
-                        error.code = 'CONTRACT_REJECTED';
-                        error.stabilityResolution = resolution;
-                        throw error;
-                    }
-                    selectedResult = consensus.selectedResult;
-                }
-                scoringResult = selectedResult;
-                analysis = selectedResult.analysis;
-                auditedParsed = validateScoringOutput(selectedResult.analysis);
-                scoringDelta = calculateScoringDelta(
-                    previousScore, scoringInputAnalysis, auditedParsed?.score
-                );
-                totalScoringAttempts += secondResult.attempts;
-                stabilityResolution = resolution;
-            }
+            const consensus = await runScoringAuditConsensus({
+                firstResult: scoringResult, firstScore: scoringDelta.finalScore,
+                requiresConsensus: scoringDelta.scoreDelta !== null
+                    && Math.abs(scoringDelta.scoreDelta) > SCORING_STABILITY_THRESHOLD,
+                auditAgain: () => auditTypeAwareScoringDetailed(scoringInputAnalysis, rawTextForAnalysis, {
+                    evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: paper.apiReaderResources,
+                    declaredStage: scoringRequestDeclaration
+                }),
+                scoreOfResult: candidate => Number(validateScoringOutput(candidate.analysis)?.score),
+                fingerprintAudit: stableFingerprint,
+                onPass: (pass, scores) => console.log(pass === 2
+                    ? `    [deep] ⚠️  评分稳定性告警触发独立二次审计: previous=${scoringDelta.previousScore.toFixed(1)} | first=${scores.firstScore.toFixed(1)}`
+                    : `    [deep] ⚠️  前两次评分不一致，开始第三次独立审计: first=${scores.firstScore.toFixed(1)} | second=${scores.secondScore.toFixed(1)}`)
+            });
+            scoringResult = consensus.result;
+            analysis = scoringResult.analysis;
+            const totalScoringAttempts = consensus.totalAttempts;
+            const stabilityResolution = consensus.resolution;
             analysis = applyApiReaderResourceAvailability(
                 analysis, verifiedReaderResources
             );

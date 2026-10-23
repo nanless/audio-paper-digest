@@ -192,6 +192,7 @@ const FILES = {
     // 放在 current/ 之外，归档轮转就不会丢掉某次日更分析实际用的那份封存包，
     // 也把它们和历史 fresh-rewrite 发布区分开。
     dailyFreshSourceRunsDir: path.join(DATA_DIR, 'runtime', 'daily-fresh-source-runs'),
+    dailyScoringRefreshRecoveryDir: path.join(DATA_DIR, 'runtime', 'daily-scoring-refresh-recovery'),
     // 每一代 arXiv 重写都重新取一套官方四文件：source.txt、source.pdf、
     // source-runtime.json 和 source-manifest.json。
     // 图片只属于当次运行的临时证据，从不做长期缓存。

@@ -102,6 +102,8 @@ npm run test:compat
 | `lib/saved-fact-feedback.js` | Node 库：deep 与 batch 共用原反馈恢复，显式新反馈优先，核对各阶段证明；整篇和摘要采用不同说明时分别恢复。Reader 旧父恢复先核真实主检查点，保存前保护原对象与传入对象的所有非 Reader 上游，错误还原内存和回调；保留原稿、失败与费用。 |
 | `lib/scoring-third-party-resource-replay.js` | Node 库：精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
 | `lib/saved-scoring-audit-replay.js` | Node 库：持真实日更论文锁读取完整原包与唯一首评分费用，提供私有待验候选；正常资源重探、原完整评分指纹和请求体重放全通过后才恢复原检查点，不新增请求或额度。 |
+| `lib/daily-scoring-refresh-checkpoint.js` | Node 库：日更评分刷新在Reader前持锁保存新评分，按原四源、完整评分指纹、反馈与父稿冷核后只续Reader；待完成记录阻发布，漂移不重付评分。 |
+| `lib/daily-scoring-refresh-checkpoint-cli.js` | Python 日更发布在有同来源运行的私有保存稿时，经私有文件描述符调用同一恢复 helper 冷核；仅判断待完成状态，硬禁网络，不采纳评分或授予模型额度。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
@@ -403,6 +405,7 @@ npm run test:compat
 | `paper_reader_presentation.py` | 日更、会议、历史的同一摘要/资源/评分展示解析器、八维评分规格及连续重复加粗标题投影；详细摘要仍真实冷核，原计划与保存身份须对应，各来源过滤及页面外框保持。 |
 | `lib/reader-aggregate-presentation.js` | 会议与历史汇总的有界 Reader 展示桥，每次最多 8 篇，通过既有 Python 桥调用同一摘要、资源、评分说明和八维格式；仅返回显示文本，来源、完整成员集合和发布凭证仍由原入口核验。 |
 | `lib/scoring-stability.js`、`scoring_stability.py` | Node 分析恢复、最终资格与 Python 会议页面共用的严格评分稳定性判据；固定向量跨语言核对，读取原证明，不授予请求或改写次数。 |
+| `lib/scoring-audit-consensus.js` | 日更、会议和历史正常分析及评分维护共用的审计调度：前两次分歧时仅追加一次独立审计，按原容差选最近一对，保留实际尝试与来源校验。 |
 | `publication_activation.py` | Python 入口/共享库：核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
 | `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；独立人工 v4 的文章语义与 `machineAssets` 机器核验分区，最终凭证仍覆盖完整清单。逐页通过记录永久按“相对路径 + 内容 SHA”复用，字节未变的通过页不重审；内容失败页仅在完整合法的旧、新审查协议确实不同时进入正常重审。 |
 | `publish_common.py` | Python 共享：提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |

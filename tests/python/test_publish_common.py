@@ -3261,6 +3261,16 @@ primary_method_tag: #基准测试
             del paper['analysisFactReviewObligation']
             self.assertEqual(len(validate_papers_for_publish([paper])), 1)
 
+    def test_publish_preflight_blocks_pending_scoring_reader_without_failure_marker(self):
+        for pending in (None, {}, {'contract': 'daily-scoring-refresh-checkpoint-v1'}):
+            paper = complete_paper()
+            self.assertEqual(len(validate_papers_for_publish([paper])), 1)
+            paper['dailyScoringRefreshCheckpoint'] = pending
+            self.assertNotIn('latestAnalysisAttemptError', paper)
+            with self.subTest(pending=pending), self.assertRaisesRegex(
+                    PublishDataValidationError, '评分刷新后的 Reader 尚未完成'):
+                validate_papers_for_publish([paper])
+
     def test_publish_preflight_rejects_present_but_incomplete_analysis_manifest(self):
         paper = complete_paper()
         complete_statuses = {
