@@ -2010,6 +2010,16 @@ function readerNumericTokens(value) {
     return readerNumericTokenMatches(value).map(match => normalizeReaderNumericToken(match[0]));
 }
 
+function readerScientificQuoteProjection(table, quotes) {
+    return require('./lib/reader-scientific-quote-coverage').projectScientificQuoteCoverage(
+        table, quotes.map(item => typeof item === 'string' ? item : item?.quote), readerNumericTokens);
+}
+
+function readerScientificQuoteFailure(projection) {
+    return projection.failures.map(item => `row=${item.row},column=${item.column}`
+        + ` text=${JSON.stringify(String(item.value || '').slice(0, 120))} ${item.reason}`).join('；');
+}
+
 function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
     const source = String(sourceText || '');
     const lower = Math.max(0, index - Math.floor(maxChars / 2));
@@ -2329,13 +2339,20 @@ function withReaderSourceQuoteEvidence(artifacts, paperId, callback) {
     return require('./lib/reader-sealed-pdf-quote-evidence').withArtifacts(artifacts, actualPaperId, callback);
 }
 
-function pruneUnsupportedSourceQuoteTable(rendered, quoteCorpus) {
+function pruneUnsupportedSourceQuoteTable(rendered, quoteCorpus, scientificQuotes) {
     const rows = [rendered?.header, ...(rendered?.rows || [])];
     if (!Array.isArray(rows[0]) || rows.length < 2) return null;
+    // Scientific atoms retain each original quote boundary. Ordinary scalars
+    // keep the existing HTML-joined/PDF-per-quote corpus and unit behavior.
+    const projection = readerScientificQuoteProjection(rendered, scientificQuotes);
+    // Bad scientific quantities must reach the normal source failure/repair
+    // path intact. Deleting that row cannot turn an invalid draft into success.
+    if (projection.failures.length) return null;
     const supported = new Set(Array.isArray(quoteCorpus)
         ? quoteCorpus.flatMap(quote => readerNumericTokens(quote)) : readerNumericTokens(quoteCorpus));
-    const missingByCell = rows.map(row => row.map(cell => (
-        [...new Set(readerNumericTokens(cell))].filter(token => !supported.has(token))
+    const missingByCell = rows.map((row, r) => row.map((_cell, c) => (
+        [...new Set(projection.cells.find(cell => cell.row === r && cell.column === c).tokens)]
+            .filter(token => !supported.has(token))
     )));
     if (!missingByCell.some(row => row.some(tokens => tokens.length > 0))) return null;
     const width = rows[0].length;
@@ -2624,12 +2641,14 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             binding, sourceText, options.allowDeterministicQuoteRepair === true
         );
         const pdfQuotes = pdfQuotesFor(binding);
+        const scientific = readerScientificQuoteProjection(rendered, [...validDeclaredQuotes, ...pdfQuotes]);
         // An extra exact substring can name another PDF table and make an
         // already complete column mapping ambiguous. Repair missing evidence
         // only after the original quotes pass the same numeric/unit gates.
         const completeDeclared = validDeclaredQuotes.length === binding.sourceQuotes.length
             && validDeclaredQuotes.length + pdfQuotes.length > 0
-            && readerNumericTokens(rendered.markdown).every(token =>
+            && scientific.failures.length === 0
+            && scientific.tokens.every(token =>
                 readerSourceQuotesCoverNumericToken(token, validDeclaredQuotes, pdfQuotes,
                     structuredArtifacts.sourceKind === 'conference_pdf'))
             && readerTableHeaderUnitEvidenceFailures(rendered,
@@ -2765,7 +2784,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             const htmlQuotes = selected.htmlQuotes;
             const pruned = pruneUnsupportedSourceQuoteTable(
                 renderedTables[index], pdfQuotes.length
-                    ? [htmlQuotes.join('\n'), ...pdfQuotes] : htmlQuotes.join('\n')
+                    ? [htmlQuotes.join('\n'), ...pdfQuotes] : htmlQuotes.join('\n'),
+                [...htmlQuotes, ...pdfQuotes]
             );
             if (!pruned || boundArticle.split(renderedTables[index].markdown).length !== 2) continue;
             const after = extractMarkdownTables(pruned)[0];
@@ -2825,7 +2845,11 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         const { htmlQuotes, pdfQuotes } = quotesForTable(binding, rendered);
         const exactQuotes = [...htmlQuotes, ...pdfQuotes];
         if (exactQuotes.length === 0) continue;
-        const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
+        const scientific = readerScientificQuoteProjection(rendered, exactQuotes);
+        if (scientific.failures.length) numericEvidenceFailures.push(
+            `tableBindings[${index}] 关键数字缺少 exact quote/cell 证据：科学量 `
+            + readerScientificQuoteFailure(scientific));
+        const missingNumbers = scientific.tokens.filter(token => (
             !readerSourceQuotesCoverNumericToken(
                 token, htmlQuotes, pdfQuotes, structuredArtifacts.sourceKind === 'conference_pdf'
             )
@@ -3015,7 +3039,11 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                     .map(reason => `PDF映射未通过：${reason}；`).join('')
                 + missingHeaderUnits.map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
         );
-        const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
+        const scientific = readerScientificQuoteProjection(rendered, allQuotes);
+        if (scientific.failures.length) throw new Error(
+            `读者文章 tableBindings[${index}] 关键数字缺少 exact quote/cell 证据：科学量 `
+            + readerScientificQuoteFailure(scientific));
+        const missingNumbers = scientific.tokens.filter(token => (
             !readerSourceQuotesCoverNumericToken(
                 token, sourceQuotes, sealedPdfQuoteEvidence, structuredArtifacts.sourceKind === 'conference_pdf'
             )
@@ -8735,6 +8763,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-unsent-empty-candidate.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-display.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-scientific-quote-coverage.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-metric-units.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-quote-evidence.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-column-units.js'), 'utf8'),
@@ -12062,6 +12091,7 @@ function buildApiReaderBaseFingerprint(
         // （修 bridge/引文数字豁免时正好撞上过这个死锁）。
         qualityEditorialImplementationSha256: promptTemplateSha256('scripts/editorial-quality.js'),
         qualityPipelineImplementationSha256: promptTemplateSha256('scripts/deep-analyzer.js'),
+        scientificQuoteImplementationSha256: promptTemplateSha256('scripts/lib/reader-scientific-quote-coverage.js'),
         tableSelectionContractVersion: READER_TABLE_SELECTION_CONTRACT,
         tableSelectionImplementationSha256: promptTemplateSha256('scripts/lib/reader-tables.js'),
         sectionQualityContractVersion: READER_SECTION_QUALITY_CONTRACT,
@@ -20856,6 +20886,7 @@ module.exports = {
     bindApiReaderSourceEvidence,
     deriveExactTableSourceQuotes,
     readerNumericTokens,
+    readerScientificQuoteProjection,
     bindApiReaderAuthorIdentity,
     extractApiReaderResourceCandidates,
     extractWeakConferenceSourceResourceCandidates,

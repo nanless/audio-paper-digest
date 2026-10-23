@@ -1346,8 +1346,13 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
                             && item.unit === failure.unit && item.value === failure.token
                         ))
                     ))
+                    && require('./deep-analyzer.js').readerScientificQuoteProjection(
+                        renderedTables[index], [...binding.sourceQuotes,
+                            ...(binding.sealedPdfQuoteEvidence || [])]).failures.length === 0
                     // 旧记录也重核数字对应关系；保留已有会议 PDF 拆单位的窄兼容。
-                    && require('./deep-analyzer.js').readerNumericTokens(renderedTables[index].markdown).every(token => (
+                    && require('./deep-analyzer.js').readerScientificQuoteProjection(
+                        renderedTables[index], [...binding.sourceQuotes,
+                            ...(binding.sealedPdfQuoteEvidence || [])]).tokens.every(token => (
                         (binding.sealedPdfQuoteEvidence
                             ? require('./deep-analyzer.js').readerSourceQuotesCoverNumericToken(token,
                                 binding.sourceQuotes, binding.sealedPdfQuoteEvidence, true)
