@@ -2666,6 +2666,61 @@ function hasExplicitArtifactHandoff(summary) {
         {names:/(?:utterance|输入)?嵌入/gu, same:'(?:utterance|输入)?嵌入'},
         {names:/(?:数值|定长|固定维数)?向量/gu, same:'(?:数值|定长|固定维数)?向量'}
     ];
+    // Typed signal/state products use the same local production/consumption
+    // rule. Parallel branches share an input; none implies a serial handoff.
+    const typedDenied = /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|讨论|提及|第三方|他人|相关工作|相关研究|先前工作|先前研究|既有研究|旧工作|引用|引述|转述|并非|并未|不是|没有|不能|尚未|未曾|独立方法|无关|丢弃|弃用|忽略)|\b(?:if|suppose|assuming|hypothetical|not\s+(?:implemented|executed|performed)|(?:future|planned)\s+(?:work|implementation))\b|\b(?:previous|prior|related|other)\s+(?:work|stud(?:y|ies)|research)\b|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:输出|生成|得到|形成|切分|转写|送入|接收|融合|映射|更新|移动|微调|执行|实现)/iu;
+    const revoked = /^(?:上述|以上|前述|该|此|这些)(?:方法|处理)?(?:链|流程|过程|交接)[^。]{0,60}(?:并未|没有|未曾|不成立|错误|撤回|未执行|不执行)/u;
+    const prefacedForeign = /(?:第三方|他人|相关工作|先前工作|先前研究|既有研究|旧工作|\b(?:previous|prior|related)\s+(?:work|research)\b)[^。]{0,60}(?:如下|所示|描述|流程|方法)[：:]?$/iu;
+    const typedSafe = (index, count = 1) => {
+        const parts = sentences.slice(index, index + count);
+        const foreignOwner = /^(?:(?:基线|对照)(?:方法|系统|模型|研究)(?:流程)?|(?:baseline|control)\s+(?:method|system|model))[：:]/iu;
+        return parts.length === count && parts.every(part => part.length <= 320 && !typedDenied.test(part) && !foreignOwner.test(part))
+            && !prefacedForeign.test(sentences[index - 1] || '')
+            && !revoked.test(sentences[index + count] || '');
+    };
+    for (let index = 0; index < sentences.length; index++) {
+        const first = sentences[index], second = sentences[index + 1] || '';
+        if (typedSafe(index)) {
+            // Filtering produces the same partitioned speech for two parallel
+            // measurement consumers. The listening arm is not fed SV scores.
+            const partition = /(?:过滤|滤波)[^。]{0,140}?(?:把|将)[^。]{0,100}?切分(?=[，,])/u.exec(first);
+            const measurement = /将切分后语音送入[^。]{1,100}(?:嵌入余弦计算|分类)/u.exec(first);
+            if (partition && measurement && partition.index + partition[0].length <= measurement.index
+                && /(?:并|同时)用相同切分构建配对交由听众评分/u.test(first)) return true;
+            // Immediate, typed ellipsis consumes precisely the just-produced
+            // spectrum/symbols, rather than an unrelated system's output. The
+            // symbol consumer is a closed sound-stage ellipsis: no intervening
+            // proposition or alternative input can hide inside its role name.
+            const products = [
+                { produced: /(?:生成器|风格化器|解码器|声学模型)[^。]{0,180}输出(?:当前块)?梅尔谱/u,
+                  consumed: /^[，,]\s*(?:再|随后)?由(?:因果)?声码器(?:变成|转成|合成|生成|输出)波形/u },
+                { produced: /(?:音频|语音)(?:转MIDI)?[^，,。]{0,70}转写为(?:音乐)?符号/u,
+                  consumed: /^[，,]\s*(?:再|随后)?经(?:简化|可微|实时|因果)?(?:[A-Za-z][A-Za-z0-9–-]{0,39})?(?:弦|波表|加法|减法|物理建模|FM)合成(?:与MIDI打击乐)?发声(?=[，,。]|$)/u }
+            ];
+            for (const product of products) {
+                const made = product.produced.exec(first);
+                if (made && product.consumed.test(first.slice(made.index + made[0].length))) return true;
+            }
+            // An initialization is an executed optimization product here,
+            // never a declaration of hyperparameters or an unused state.
+            const endpoint = /内层更新得到回合终点/u.exec(first);
+            const initialized = /(?:把|将)初始化向回合终点的平均方向外层(?:移动|更新)得到[^，,。]{0,20}初始化/u.exec(first);
+            if (endpoint && initialized && endpoint.index < initialized.index
+                && /^[，,]\s*该初始化(?:随即|随后|再)?用[^，,。]{1,100}真实目标语音微调/u.test(first.slice(initialized.index + initialized[0].length))) return true;
+        }
+        if (!typedSafe(index, 2)) continue;
+        // Distinct parallel monitoring arms each produce a local diagnostic;
+        // the adjacent coordinator consumes that diagnostic group and forwards
+        // its fused result to a separate communication stage.
+        if (!/^(?:未被阻断的|有效的|通过完整性检查的)[^，,。]{1,60}并行送入/u.test(first)) continue;
+        const actors = [...first.matchAll(/([\u3400-\u9fff]{1,10}层)(?:检验|检测|监测)/gu)];
+        if (actors.length !== 2 || actors[0][1] === actors[1][1]) continue;
+        const outputs = actors.every((actor, arm) => /(?:输出|生成|转入)[^，,。]{0,30}(?:标志|诊断|状态|弃权)/u.test(
+            first.slice(actor.index, actors[arm + 1]?.index || first.length)));
+        const joined = /^([\u3400-\u9fff]{1,10}层)接收(?:两|三|各)层局部诊断与分类结果[，,]\s*融合后经([\u3400-\u9fff]{1,10}层)映射为[^。]{1,60}(?:分类|状态)与灯号/u.exec(second);
+        if (outputs && joined && joined[1] !== joined[2]
+            && actors.every(actor => actor[1] !== joined[1] && actor[1] !== joined[2])) return true;
+    }
     for (let index = 0; index < sentences.length; index++) {
         const first = sentences[index], second = sentences[index + 1] || '';
         if (first.length > 320 || second.length > 320) continue;
