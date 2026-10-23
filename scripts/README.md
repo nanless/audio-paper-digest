@@ -376,6 +376,7 @@ npm run test:compat
 | `prompt_evidence.py` | Python旧凭证严格读取本地Git原始Prompt物件，当前模板必须来自工作树。 |
 | `local_git_object.py` | Python 内部库：用固定 Git、参数和隔离环境有界读取一个本地 commit/tree/blob，核类型、尺寸、原始字节及 Git OID；禁止自动补抓和替换对象，不修改仓库对象、索引或引用。普通结果不证明完整树、删除、提交差异或发布资格。 |
 | `local_git_commit_delta.py` | Python 内部库：核对显式基线与单父提交的完整目录树、必要文件内容、删除及精确路径差异；复用同次固定离线读取，未审文件正文和完整对象图仍未检查，普通结果不授予正常审查、当前工作区或发布资格。 |
+| `local_git_publication.py` | Python 内部库：以固定离线 Git 核对 HEAD 直接指向 main、实际提交、本地唯一有效推送地址身份及引用控制文件；组合检查在真实同一读取范围内核完整提交差异，不访问远端，不接受外传证明句柄或授予发布资格。 |
 
 ### 页面生成、审查与发布
 
@@ -384,7 +385,7 @@ npm run test:compat
 | `blog_entry_loader.py` | Python 桥：以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `daily_hugo_capture.py` | Python 内部库：保留正常日更审查中同次 Hugo 的输入观察、机器页面映射和主 HTML，以不可覆盖记录供新审查凭证引用及冷核；不授予完整输入快照、科学资格或部署通过，见[观察记录边界](../docs/three-workflows.md#日更审查的同次-html-观察记录)。 |
 | `daily_html_projection.py` | Python 纯库：固定 v1 保留公式无空白规则，固定 v2 另允许内部孤立单空格，共用有限静态 HTML 解析；保留词界、代码和公式原字面，不解释 TeX、执行 HTML 或请求资源。普通返回值不授予来源或出版资格。 |
-| `daily_observed_projection.py` | Python 内部读取器：按日期和显式单篇范围进入原正常凭证与同次 HTML 观察链，复核完整集合和返回前变化，以固定 v2 派生有界静态摘要或已审主页面目标；目标保留原站点、映射与删除范围，无版本回退，不重建或补签旧记录，不检查部署、网页或当前科学资格。 |
+| `daily_observed_projection.py` | Python 内部读取器：按日期和显式单篇范围进入原正常凭证与同次 HTML 观察链，以固定 v2 派生静态摘要或已审主页面目标；另有本地发布观察，在同一次正常范围内核完整文件、提交差异及主分支和远端配置，并保留全部目标。原两接口条件保持，不重建或补签旧记录，不检查远端现在、部署、网页或当前科学资格。 |
 | `blog_repository_lock.py` | 管理共享博客锁，以 Git common-dir 协调不同项目工作区；核对 PID、hostname、token、lease、inode 和 SHA 后才回收或释放，不污染博客 Git。 |
 | `generate-blog.py` | Python 入口：只生成并安装 Hugo Markdown。 |
 | `lib/paper-page-staging.js` | 三流程页面 worker 私有输入、超时、实现指纹和暂存文件校验。 |

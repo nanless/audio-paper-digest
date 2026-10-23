@@ -4,6 +4,9 @@ This internal reader does not build, review, publish, fetch, or grant Source
 qualification. Its returned JSON is diagnostic data, never an importable proof.
 """
 import ast
+import builtins
+import datetime
+import re
 import hashlib
 import json
 import sys
@@ -49,6 +52,39 @@ _TARGET_TEXT_BYTES = 8192
 _TARGET_MAX_FILES = 10000
 _URL_UNRESERVED = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
 _URL_LITERAL_PATH = _URL_UNRESERVED + "/:@!$&'()*+,;="
+
+_LOCAL_CONTRACT = 'daily-local-publication-observation-v1'
+_LOCAL_GIT_FILES = ('local_git_object.py', 'local_git_commit_delta.py', 'local_git_publication.py')
+_LOCAL_IMPORTS = ('dataclasses', 'hashlib', 'json', 'os', 'pathlib', 'posixpath', 're',
+                  'selectors', 'signal', 'stat', 'subprocess', 'sys', 'time', 'runtime_guard')
+_LOCAL_GIT_POLICIES = (
+    ('CONTRACT', '_GIT_CANDIDATES', '_FLAGS', '_OID', '_PACK', '_CORE_BOOL', '_UNKNOWN', 'DEFAULT_LIMITS'),
+    ('CONTRACT', '_VERSION', '_SHA256', '_HEX40', '_COVERAGE', '_UNKNOWN', 'DEFAULT_LIMITS'),
+    ('CONTRACT', 'VERSION', '_LIMITS', '_UNKNOWN'))
+_LOCAL_RAW_FIELDS = (('max_commit_bytes', 1048576), ('max_tree_bytes', 16777216),
+    ('max_blob_bytes', 16777216), ('max_metadata_file_bytes', 65536), ('max_metadata_bytes', 1048576),
+    ('max_layout_files', 10000), ('max_stderr_bytes', 65536), ('max_result_metadata_bytes', 65536),
+    ('command_timeout_seconds', 10), ('child_deadline_seconds', 30), ('max_git_binary_bytes', 536870912))
+_LOCAL_DELTA_FIELDS = (('max_expected_files', 10000), ('max_nodes_per_root', 100000),
+    ('max_depth', 128), ('max_path_bytes', 8192), ('max_total_path_bytes', 33554432),
+    ('max_commit_bytes', 1048576), ('max_tree_bytes', 16777216), ('max_total_tree_bytes', 33554432),
+    ('max_blob_bytes', 16777216), ('max_total_blob_bytes', 134217728), ('max_unique_objects', 100000),
+    ('max_result_bytes', 2097152), ('command_timeout_seconds', 10), ('child_deadline_seconds', 60))
+_LOCAL_CAPABILITIES = (('canPublish', False), ('canResumeAnalysis', False),
+                       ('canGrantSource', False), ('canExecuteBrowser', False))
+_LOCAL_COVERAGE = (('normalReviewScope', 'replayed_twice'), ('normalSourceObservation', 'checked_at_normal2'),
+    ('currentReviewedScopeFiles', 'byte_rechecked_after_context2'), ('localHeadMainCommit', 'observed'),
+    ('localSingleParentDelta', 'verified'), ('localRemoteConfigurationMatch', 'verified'), ('recordedRemote', 'recorded'),
+    *((name, 'not_checked') for name in ('index', 'wholeRepositoryClean', 'currentEligibility',
+        'sourceRecoveryEligibility', 'remoteNow', 'deployment', 'onlineGet', 'browserExecution',
+        'productionArtifact', 'publicAssets')))
+_LOCAL_UNKNOWN = (
+    'Normal/source qualification was observed at normal2; final file CAS is not another scientific review',
+    'Context, delta and file checks are ordered observations, not an atomic repository snapshot or ABA exclusion',
+    'Recorded remote OID is historical; remote now, deployment and public bytes are not checked',
+    'Unreviewed blob bodies, complete Git object graph, index and whole worktree cleanliness are not checked',
+    'Fresh compilation binds three fixed Git sources; full Python execution closure and stdlib generated closures are not established',
+    'Original environment loading and publication locks retain their existing local effects; this diagnostic grants no publication or Source capability')
 
 
 def _fail(code, reason):
@@ -243,7 +279,10 @@ def _policy_sha():
                               _IMPORTED_CALLABLES, _NOT_CHECKED, _UNKNOWN,
                               _TARGET_UNKNOWN, _TARGET_TEXT_BYTES, _TARGET_MAX_FILES,
                               _URL_UNRESERVED, _URL_LITERAL_PATH,
-                              str(_HERE), str(_OWNER_FILE), str(_PROFILE_FILE))))
+                              str(_HERE), str(_OWNER_FILE), str(_PROFILE_FILE),
+                              _LOCAL_CONTRACT, _LOCAL_GIT_FILES, _LOCAL_IMPORTS, _LOCAL_GIT_POLICIES,
+                              _LOCAL_RAW_FIELDS, _LOCAL_DELTA_FIELDS, _LOCAL_CAPABILITIES,
+                              _LOCAL_COVERAGE, _LOCAL_UNKNOWN)))
 
 
 def _implementation(profile_raw):
@@ -585,23 +624,536 @@ def _metadata_reservation(observed):
     return total
 
 
-def _read_locked(owner, date, include_id, *, targets=False):
+def _publication_issue(status, domain, code, reason):
+    return {'contract': _LOCAL_CONTRACT, 'version': 1, 'status': status,
+            'issues': [{'domain': domain, 'code': code, 'reason': reason}],
+            'capabilities': dict(_LOCAL_CAPABILITIES)}
+
+
+def _publication_fail(status, domain, code, reason):
+    raise ValueError('local_publication_result', (status, domain, code, reason))
+
+
+def _publication_normal(owner, date, phase):
+    try:
+        return owner.load_verified_review_receipt(date)
+    except Exception:
+        _publication_fail('blocked', 'normal', 'normal_rejected', phase)
+
+
+def _publication_fields(receipt, generation, owner):
+    names = ('publicationCommit', 'remoteVerifiedOid', 'remoteVerifiedAt', 'remoteName', 'remoteIdentitySha256')
+    if not any(name in receipt for name in names):
+        return None
+    if not all(name in receipt and type(receipt[name]) is str for name in names):
+        _publication_fail('blocked', 'publication', 'invalid', 'publication_fields')
+    for name in ('reviewedAt', 'remoteVerifiedAt'):
+        if _utf8_size(receipt[name]) > 8192:
+            _publication_fail('blocked', 'limits', 'limit_exceeded', 'input_bytes')
+    base, commit = receipt.get('baseHead'), receipt['publicationCommit']
+    if type(base) is not str or base != generation.get('baseHead'):
+        _publication_fail('blocked', 'publication', 'invalid', 'base_binding')
+    for oid in (base, commit, receipt['remoteVerifiedOid']):
+        if re.fullmatch('[0-9a-f]{64}', oid):
+            _publication_fail('unsupported', 'publication', 'unsupported_state', 'object_format')
+        if not re.fullmatch('[0-9a-f]{40}', oid):
+            _publication_fail('blocked', 'publication', 'invalid', 'commit_binding')
+    if commit != receipt['remoteVerifiedOid']:
+        _publication_fail('blocked', 'publication', 'invalid', 'commit_binding')
+    remote = receipt['remoteName']
+    if remote != owner.GITHUB_REMOTE or not re.fullmatch('[0-9a-f]{64}', receipt['remoteIdentitySha256']):
+        _publication_fail('blocked', 'publication', 'invalid', 'remote_binding')
+    if not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,127}', remote):
+        _publication_fail('unsupported', 'publication', 'unsupported_state', 'remote_name')
+    try:
+        instant = datetime.datetime.fromisoformat(receipt['remoteVerifiedAt'])
+    except ValueError:
+        _publication_fail('blocked', 'publication', 'invalid', 'recorded_time')
+    if instant.utcoffset() != datetime.timedelta(hours=8):
+        _publication_fail('unsupported', 'publication', 'unsupported_state', 'recorded_time')
+    return {'baseOid': base, 'commitOid': commit, 'headOid': commit, 'branch': 'refs/heads/main',
+            'recordedRemote': {'name': remote, 'oid': commit, 'verifiedAt': receipt['remoteVerifiedAt']},
+            'localRemoteConfigurationMatch': 'verified'}
+
+
+def _git_charge(budget, size):
+    if size > budget[0] or size > budget[1]:
+        _publication_fail('blocked', 'limits', 'limit_exceeded', 'code_observation')
+    budget[0] -= size
+    budget[1] -= size
+
+
+def _git_code_value(value, budget, depth):
+    if depth > 64:
+        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+    kind = type(value)
+    _git_charge(budget, 64)
+    if value is None or kind in (bool, str):
+        if kind is str:
+            _git_charge(budget, 6 * _utf8_size(value))
+        return {'type': kind.__name__, 'value': value}
+    if kind is int:
+        _git_charge(budget, 2 + value.bit_length())
+        return {'type': 'int', 'value': str(value)}
+    if kind is float:
+        _git_charge(budget, 64)
+        literal = value.hex()
+        if literal in ('inf', '-inf', 'nan'):
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+        return {'type': 'float', 'hex': literal}
+    if kind is bytes:
+        _git_charge(budget, 2 * len(value))
+        return {'type': 'bytes', 'hex': value.hex()}
+    if kind is CodeType:
+        return {'type': 'code', 'value': _git_code_fields(value, budget, depth + 1)}
+    if kind in (tuple, frozenset):
+        _git_charge(budget, 2 * len(value))
+        items = []
+        for part in value:
+            items.append(_git_code_value(part, budget, depth + 1))
+        if kind is frozenset:
+            # Account for finite canonical sort keys before creating them.
+            _git_charge(budget, _json_measure(items, 1024 * 1024))
+            items.sort(key=lambda part: json.dumps(part, sort_keys=True, ensure_ascii=False,
+                                                   separators=(',', ':'), allow_nan=False))
+        return {'type': kind.__name__, 'items': items}
+    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+
+
+def _git_code_fields(code, budget, depth=0):
+    _git_charge(budget, 1024)
+    names = ('co_argcount', 'co_posonlyargcount', 'co_kwonlyargcount', 'co_nlocals',
+             'co_stacksize', 'co_flags', 'co_code', 'co_consts', 'co_names',
+             'co_varnames', 'co_filename', 'co_name', 'co_qualname',
+             'co_firstlineno', 'co_linetable', 'co_exceptiontable', 'co_freevars', 'co_cellvars')
+    result = {}
+    for name in names:
+        result[name] = _git_code_value(getattr(code, name), budget, depth + 1)
+    return result
+
+
+def _git_default(value, module, budget, depth=0):
+    if depth > 8:
+        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+    _git_charge(budget, 64)
+    kind = type(value)
+    if value is None or kind is bool:
+        return value
+    if kind is str:
+        size = _utf8_size(value)
+        if size > 65536:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+        _git_charge(budget, 6 * size)
+        return value
+    if kind is int and -(2 ** 63) <= value < 2 ** 63:
+        _git_charge(budget, 24)
+        return value
+    if kind is tuple:
+        if len(value) > 256:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+        _git_charge(budget, 2 + len(value))
+        result = []
+        for part in value:
+            result.append(_git_default(part, module, budget, depth + 1))
+        return result
+    if isinstance(value, re.Pattern):
+        pattern = value.pattern
+        if type(pattern) is bytes:
+            if len(pattern) > 65536:
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+            _git_charge(budget, 2 * len(pattern))
+            pattern = {'bytesHex': pattern.hex()}
+        elif type(pattern) is str:
+            size = _utf8_size(pattern)
+            if size > 65536:
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+            _git_charge(budget, 6 * size)
+        else:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+        return {'pattern': pattern, 'flags': value.flags}
+    for class_name in ('LocalGitLimits', 'CommitDeltaLimits'):
+        cls = module.__dict__.get(class_name)
+        if cls is not None and type(value) is cls and cls.__dataclass_params__.frozen:
+            result = []
+            for name in cls.__dataclass_fields__:
+                _git_charge(budget, 32 + 6 * _utf8_size(name))
+                number = getattr(value, name)
+                if type(number) is not int:
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+                result.append([name, _git_default(number, module, budget, depth + 1)])
+            return result
+    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+
+
+def _git_function(function, module, cls, budget):
+    if type(function) is not FunctionType or function.__globals__ is not module.__dict__:
+        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+    closure = function.__closure__
+    if closure and (cls is None or function.__code__.co_freevars != ('__class__',)
+                    or len(closure) != 1 or closure[0].cell_contents is not cls):
+        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+    code = _git_code_fields(function.__code__, budget)
+    defaults = _git_default(function.__defaults__, module, budget)
+    keyword_defaults = None
+    if function.__kwdefaults__ is not None:
+        if type(function.__kwdefaults__) is not dict or len(function.__kwdefaults__) > 256:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+        _git_charge(budget, 2 + len(function.__kwdefaults__))
+        keyword_defaults = []
+        for name in sorted(function.__kwdefaults__):
+            if type(name) is not str:
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+            _git_charge(budget, 32 + 6 * _utf8_size(name))
+            keyword_defaults.append([name, _git_default(function.__kwdefaults__[name], module, budget)])
+    return {'codeSha256': _json_sha(code, 1024 * 1024),
+            'defaults': defaults, 'keywordDefaults': keyword_defaults}
+
+
+def _git_module_observation(module, source, filename, total_budget, expected_imports):
+    tree = ast.parse(source, filename=filename)
+    expected, rows, lifetime = set(), [], []
+    count = 0
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            continue
+        expected.add(node.name)
+        value = module.__dict__.get(node.name)
+        if isinstance(node, ast.FunctionDef):
+            entries = [(node.name, value, None)]
+        else:
+            if type(value) is not type or value.__module__ != module.__name__:
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+            lifetime.append((node.name, value))
+            methods = []
+            for child in node.body:
+                if isinstance(child, ast.FunctionDef):
+                    if count + len(methods) >= 512:
+                        _publication_fail('blocked', 'limits', 'limit_exceeded', 'code_observation')
+                    methods.append(child.name)
+            entries = [(node.name + '.' + name, value.__dict__.get(name), value) for name in methods]
+            generated = ()
+            if node.decorator_list:
+                if node.name not in ('LocalGitLimits', 'CommitDeltaLimits'):
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+                default = module.DEFAULT_LIMITS
+                expected_fields = _LOCAL_RAW_FIELDS if node.name == 'LocalGitLimits' else _LOCAL_DELTA_FIELDS
+                params = value.__dataclass_params__
+                if (type(default) is not value or not params.frozen or not params.init or not params.repr
+                        or not params.eq or params.order or params.unsafe_hash
+                        or tuple(value.__dataclass_fields__) != tuple(name for name, _number in expected_fields)):
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+                for name, number in expected_fields:
+                    field = value.__dataclass_fields__[name]
+                    if field.type is not int or type(field.default) is not int or field.default != number or getattr(default, name) != number:
+                        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'policy_profile')
+                generated = ('__init__', '__repr__', '__eq__', '__setattr__', '__delattr__', '__hash__')
+                if count + len(methods) + len(generated) > 512:
+                    _publication_fail('blocked', 'limits', 'limit_exceeded', 'code_observation')
+                count += len(generated)
+                for name in generated:
+                    function = value.__dict__.get(name)
+                    if type(function) is not FunctionType:
+                        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+                    lifetime.append((node.name + '.' + name, function, function.__code__, function.__defaults__, function.__kwdefaults__))
+            for name, part in value.__dict__.items():
+                if callable(part) and name not in methods and name not in generated:
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+        for name, function, cls in entries:
+            if count >= 512:
+                _publication_fail('blocked', 'limits', 'limit_exceeded', 'code_observation')
+            budget = [1024 * 1024, total_budget[0]]
+            _git_charge(budget, 128 + 6 * _utf8_size(name))
+            row = {'name': name, **_git_function(function, module, cls, budget)}
+            total_budget[0] = budget[1]
+            count += 1
+            rows.append(row)
+            lifetime.append((name, function, function.__code__, function.__defaults__, function.__kwdefaults__))
+    if any(callable(value) and name not in expected and name not in _git_import_names(tree)
+           for name, value in module.__dict__.items()):
+        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+    policies = _LOCAL_GIT_POLICIES[_LOCAL_GIT_FILES.index(filename)]
+    policy_budget = [1024 * 1024, total_budget[0]]
+    values = []
+    for name in policies:
+        _git_charge(policy_budget, 32 + 6 * _utf8_size(name))
+        values.append([name, _git_default(getattr(module, name), module, policy_budget)])
+    total_budget[0] = policy_budget[1]
+    # Imported object identities are lifetime checks, not a claim about stdlib's closure.
+    for name, original in expected_imports.items():
+        if module.__dict__.get(name) is not original:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
+        lifetime.append((name, original))
+    return ({'name': filename, 'sourceSha256': _sha(source), 'codeSha256': _json_sha(rows, 8 * 1024 * 1024),
+             'policySha256': _json_sha(values, 1024 * 1024)}, tuple(lifetime))
+
+
+def _git_import_names(tree):
+    result = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            result.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            result.update(alias.asname or alias.name for alias in node.names)
+    return result
+
+
+def _git_observe(bundle):
+    rows, identities, budget = [], [], [8 * 1024 * 1024]
+    if tuple(bundle['mapping']) != tuple(name[:-3] for name in _LOCAL_GIT_FILES) or any(
+            bundle['mapping'][name[:-3]] is not module
+            for (name, _source), module in zip(bundle['sources'], bundle['modules'])):
+        _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+    for index, ((name, source), module, context) in enumerate(zip(bundle['sources'], bundle['modules'], bundle['contexts'])):
+        dependencies = context['dependencies']
+        if tuple(dependencies) != tuple(part[:-3] for part in _LOCAL_GIT_FILES[:index]) or any(
+                dependencies[part[:-3]] is not other for part, other in zip(_LOCAL_GIT_FILES[:index], bundle['modules'][:index])):
+            _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+        if (module.__dict__['__builtins__'] is not context['builtins']
+                or module.__dict__['__builtins__']['__import__'] is not context['hook']):
+            _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+        row, lifetime = _git_module_observation(module, source, name, budget, context['expectedImports'])
+        rows.append(row)
+        hook = context['hook']
+        identities.append(lifetime + (('__import__', hook, hook.__code__),))
+    return rows, tuple(identities)
+
+
+def _git_source_read(name, *, final=False):
+    path = _HERE / name
+    try:
+        if path.lstat().st_size > 1024 * 1024:
+            if final:
+                _publication_fail('blocked', 'implementation', 'stale', 'source_changed')
+            _publication_fail('blocked', 'limits', 'limit_exceeded', 'input_bytes')
+        return capture.read_profile_file(path, limits=capture.CaptureLimits(file_bytes=1024 * 1024))
+    except (capture.CaptureError, OSError):
+        if final:
+            _publication_fail('blocked', 'implementation', 'stale', 'source_changed')
+        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+
+
+def _git_importer(dependencies):
+    allowed = dict(dependencies)
+    original_import = builtins.__import__
+    def fixed_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if level:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+        if name in allowed:
+            return allowed[name]
+        if name not in _LOCAL_IMPORTS:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+        return original_import(name, globals, locals, fromlist, level)
+    return fixed_import, allowed
+
+
+def _git_expected_imports(tree, importer):
+    expected = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                expected[alias.asname or alias.name] = importer(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            response = importer(node.module, fromlist=tuple(alias.name for alias in node.names))
+            for alias in node.names:
+                expected[alias.asname or alias.name] = getattr(response, alias.name)
+    return expected
+
+
+def _compile_git_modules():
+    sources = []
+    for name in _LOCAL_GIT_FILES:
+        source = _git_source_read(name)
+        sources.append((name, source))
+    modules, mapping, contexts = [], {}, []
+    for index, (filename, source) in enumerate(sources):
+        tree = ast.parse(source, filename=filename)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) or (isinstance(node, ast.FunctionDef) and node.decorator_list):
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+            if isinstance(node, ast.ClassDef) and node.decorator_list:
+                expected_class = ('LocalGitLimits', 'CommitDeltaLimits', None)[index]
+                decorator = node.decorator_list[0]
+                if (node.name != expected_class or len(node.decorator_list) != 1
+                        or not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Name)
+                        or decorator.func.id != 'dataclass' or decorator.args or len(decorator.keywords) != 1
+                        or decorator.keywords[0].arg != 'frozen'
+                        or not isinstance(decorator.keywords[0].value, ast.Constant)
+                        or decorator.keywords[0].value.value is not True):
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+                names = [node.module]
+            else:
+                continue
+            if any(name not in _LOCAL_IMPORTS and name not in mapping for name in names):
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+        fixed_import, allowed = _git_importer(mapping)
+        expected_imports = _git_expected_imports(tree, fixed_import)
+        module = ModuleType(('_daily_local_raw', '_daily_local_delta', '_daily_local_publication')[index])
+        module.__dict__['__builtins__'] = {**builtins.__dict__, '__import__': fixed_import}
+        exec(compile(source, filename, 'exec', dont_inherit=True, optimize=0), module.__dict__)
+        modules.append(module)
+        contexts.append({'dependencies': allowed, 'expectedImports': expected_imports,
+                         'hook': fixed_import, 'builtins': module.__dict__['__builtins__']})
+        mapping[filename[:-3]] = module
+    raw, delta, publication = modules
+    if (raw.CONTRACT != 'local-git-raw-object-observation-v1'
+            or delta.CONTRACT != 'local-git-commit-delta-observation-v1' or delta._VERSION != 1
+            or publication.CONTRACT != 'local-git-publication-observation-v1' or publication.VERSION != 1):
+        _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+    bundle = {'sources': sources, 'modules': modules, 'mapping': mapping, 'contexts': contexts}
+    rows, lifetime = _git_observe(bundle)
+    bundle.update(rows=rows, lifetime=lifetime)
+    return bundle
+
+
+def _git_final(bundle):
+    rows, lifetime = _git_observe(bundle)
+    if rows != bundle['rows']:
+        _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+    if len(lifetime) != len(bundle['lifetime']):
+        _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+    for before, after in zip(bundle['lifetime'], lifetime):
+        if len(before) != len(after) or any(len(left) != len(right) or any(
+                old is not new if index else old != new
+                for index, (old, new) in enumerate(zip(left, right)))
+                for left, right in zip(before, after)):
+            _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+    for name, source in bundle['sources']:
+        if _git_source_read(name, final=True) != source:
+            _publication_fail('blocked', 'implementation', 'stale', 'source_changed')
+
+
+def _git_call(bundle, name, owner, binding, expected):
+    leaf = bundle['modules'][2]
+    kwargs = {'commit_oid': binding['commitOid'], 'remote_name': binding['recordedRemote']['name'],
+              'expected_remote_identity_sha256': expected}
+    if name == 'read_local_publication_git':
+        kwargs.update(base_oid=binding['baseOid'], expected_files=binding['files'])
+    try:
+        return getattr(leaf, name)(owner.BLOG_REPO, **kwargs)
+    except leaf.LocalPublicationReadError as error:
+        code = error.code
+        if code.startswith('unsupported_'):
+            reason = {'unsupported_git': 'binary_profile', 'unsupported_repository': 'repository_profile',
+                      'unsupported_commit': 'commit_profile', 'unsupported_tree': 'tree_profile',
+                      'unsupported_state': 'ref_profile'}.get(code, 'ref_profile')
+            if error.reason.startswith('remote_'):
+                reason = 'remote_profile'
+            _publication_fail('unsupported', 'git', 'unsupported_git', reason)
+        if code == 'metadata_changed':
+            _publication_fail('blocked', 'git', 'stale', 'git_identity')
+        if code == 'size_exceeded':
+            _publication_fail('blocked', 'limits', 'limit_exceeded',
+                'ref_controls' if error.reason == 'ref_controls' else 'scope_bytes')
+        reason = {'state_mismatch': 'state_mismatch', 'object_unavailable': 'object_unavailable',
+                  'oid_mismatch': 'object_identity', 'type_mismatch': 'object_type',
+                  'parent_mismatch': 'parent', 'delta_mismatch': 'delta',
+                  'expected_content_mismatch': 'content', 'deletion_mismatch': 'deletion',
+                  'timeout': 'timeout', 'output_limit': 'output_limit'}.get(code, 'read_error')
+        _publication_fail('blocked', 'git', 'git_rejected', reason)
+
+
+def _scope_files_read(owner, files, raw_leaf):
+    root = Path(owner.BLOG_REPO)
+    raw_leaf._directory(root)
+    if root.resolve(strict=True) != root:
+        _publication_fail('blocked', 'local_io', 'stale', 'scope_files_changed')
+    used = 0
+    for row in files:
+        path = root
+        parts = row['path'].split('/')
+        for part in parts[:-1]:
+            path = path / part
+            try:
+                raw_leaf._directory(path)
+            except FileNotFoundError:
+                if row['deleted']:
+                    break
+                raise
+        else:
+            path = path / parts[-1]
+            if row['deleted']:
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    continue
+                _publication_fail('blocked', 'local_io', 'stale', 'scope_files_changed')
+            content = raw_leaf._read_regular(path, min(16 * 1024 * 1024, 128 * 1024 * 1024 - used))
+            used += len(content)
+            if _sha(content) != row['sha256']:
+                _publication_fail('blocked', 'local_io', 'stale', 'scope_files_changed')
+
+
+def _scope_files_cas(owner, files, raw_leaf):
+    try:
+        _scope_files_read(owner, files, raw_leaf)
+    except raw_leaf.LocalGitReadError as error:
+        if error.code == 'size_exceeded':
+            _publication_fail('blocked', 'limits', 'limit_exceeded', 'scope_bytes')
+        _publication_fail('blocked', 'local_io', 'stale', 'scope_files_changed')
+    except FileNotFoundError:
+        _publication_fail('blocked', 'local_io', 'stale', 'scope_files_changed')
+    except (OSError, UnicodeError, RuntimeError):
+        _publication_fail('blocked', 'local_io', 'read_error', 'local_io')
+
+
+def _local_result(targets, binding, combined, context2, bundle):
+    envelope = 256 * 1024
+    # Charge repeated old metadata before adding duplicate references to the envelope.
+    for value in (targets['normalBinding'], targets['observationCoverage'], targets['implementationObservation']):
+        envelope -= _json_measure(value, envelope)
+    if _json_measure(targets, dict(_LIMITS)['result']) > dict(_LIMITS)['result'] - 256 * 1024:
+        _publication_fail('blocked', 'limits', 'limit_exceeded', 'result_bytes')
+    implementation = {'contract': 'daily-local-publication-implementation-v1', 'version': 1,
+        'ownerObservation': targets['implementationObservation'], 'gitModules': bundle['rows'],
+        'compile': {'filenames': list(_LOCAL_GIT_FILES), 'dontInherit': True, 'optimize': 0,
+            'dependencyMapping': [{'module': 'local_git_commit_delta.py', 'imports': ['local_git_object.py']},
+                {'module': 'local_git_publication.py', 'imports': ['local_git_object.py', 'local_git_commit_delta.py']}]},
+        'binding': 'fresh_private_byte_compilation_and_before_after_observations', 'fullExecutionClosure': 'not_established'}
+    result = {'contract': _LOCAL_CONTRACT, 'version': 1, 'status': 'local_publication_observed',
+        'selector': targets['selector'], 'normalBinding': targets['normalBinding'], 'reviewedTargets': targets,
+        'publicationBinding': {key: value for key, value in binding.items() if key != 'files'},
+        'gitBinding': {'contract': combined['contract'], 'version': 1,
+            'context1ObservationSha256': combined['context']['observationSha256'],
+            'context2ObservationSha256': context2['observationSha256'],
+            'refPhysicalIdentitySha256': context2['refPhysicalIdentitySha256'],
+            **{key: combined[key] for key in ('deltaObservationSha256', 'reviewedFileSetSha256', 'reviewedFileFactsSha256')},
+            'scopeFileCount': targets['reviewedFileCount'], 'coverage': combined['coverage']},
+        'implementationBinding': implementation, 'inputBinding': targets['inputBinding'],
+        'fullInputSnapshot': targets['fullInputSnapshot'], 'observationCoverage': targets['observationCoverage'],
+        'coverage': dict(_LOCAL_COVERAGE), 'unknownInputs': list(_LOCAL_UNKNOWN),
+        'capabilities': dict(_LOCAL_CAPABILITIES)}
+    result['recordSha256'] = _json_sha(result, dict(_LIMITS)['result'])
+    return _safe_result(result)
+
+
+def _read_locked(owner, date, include_id, *, targets=False, local_publication=False):
     contract = TARGET_CONTRACT if targets else CONTRACT
     receipt_path = owner.review_receipt_path(date)
     try:
         receipt_path.lstat()
     except FileNotFoundError:
+        if local_publication:
+            return _publication_issue('not_recorded', 'selection', 'not_recorded', 'receipt_missing')
         return _not_recorded(contract=contract)
     receipt_raw = _read(receipt_path)
     receipt = _object(receipt_raw)
-    if 'renderObservation' not in receipt:
+    if 'renderObservation' not in receipt and not local_publication:
         return _not_recorded(contract=contract)
     generation_path = owner.generation_manifest_path(date)
     generation_raw = _read(generation_path)
-    paths, actual_receipt_path = owner.load_verified_review_receipt(date)
+    paths, actual_receipt_path = (_publication_normal(owner, date, 'initial') if local_publication
+                                  else owner.load_verified_review_receipt(date))
     if actual_receipt_path != receipt_path or _read(receipt_path) != receipt_raw:
         _fail('stale', 'normal_receipt_changed')
     expected = _expected(receipt)
+    if local_publication and 'renderObservation' not in receipt:
+        return _publication_issue('not_recorded', 'selection', 'not_recorded', 'render_observation_missing')
     ref = receipt['renderObservation']
     if type(ref) is not dict or not ref:
         _fail('invalid', 'present_invalid_reference')
@@ -615,6 +1167,8 @@ def _read_locked(owner, date, include_id, *, targets=False):
     if _sha(store_raw) != ref['sha256']:
         _fail('stale', 'observation_manifest_changed')
     limits = dict(_LIMITS)
+    if local_publication:
+        limits['result'] -= 256 * 1024
     observed_pages = observed['pages']
     if not observed_pages or len(observed_pages) > limits['pages']:
         _fail('limit_exceeded', 'pages')
@@ -650,6 +1204,18 @@ def _read_locked(owner, date, include_id, *, targets=False):
         if len(raw) != page['html']['bytes'] or _sha(raw) != page['html']['sha256']:
             _fail('stale', 'html_changed')
         snapshots.append((path, raw))
+    map_snapshots = []
+    if local_publication:
+        for page in pages:
+            record = page['record']
+            if record['bytes'] > dict(_LIMITS)['html'] - total:
+                _publication_fail('blocked', 'limits', 'limit_exceeded', 'input_bytes')
+            total += record['bytes']
+            path = store.parent / record['path']
+            raw = _read(path)
+            if len(raw) != record['bytes'] or _sha(raw) != record['sha256']:
+                _publication_fail('blocked', 'local_io', 'stale', 'render_changed')
+            map_snapshots.append((path, raw))
     profile_raw = _read(_PROFILE_FILE)
     implementation = _implementation(profile_raw)
     module = _compile_profile(profile_raw)
@@ -665,6 +1231,8 @@ def _read_locked(owner, date, include_id, *, targets=False):
             projected = module.project_daily_html_v2(raw, expected_canonical=page['permalink'],
                                                      limits=module.ProjectionLimits(**kwargs))
         except module.ProjectionError as exc:
+            if local_publication:
+                return _publication_issue('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
             return _issue('unsupported' if exc.code in ('unsupported_html', 'unsupported_math') else 'blocked',
                           exc.code, exc.reason, page['sourcePath'], contract=contract)
         if (type(projected) is not dict or projected.get('contract') != PROFILE
@@ -686,21 +1254,6 @@ def _read_locked(owner, date, include_id, *, targets=False):
         summary = _page_summary(page, projected)
         result_pages.append(summary)
         del projected
-    final_paths, final_receipt_path = owner.load_verified_review_receipt(date)
-    if (final_paths != paths or final_receipt_path != actual_receipt_path
-            or _read(receipt_path) != receipt_raw or _read(generation_path) != generation_raw
-            or _read(store) != store_raw):
-        _fail('stale', 'normal_inputs_changed')
-    final_validated = capture.validate_ref(observation_root=owner.DAILY_RENDER_OBSERVATIONS_DIR,
-                                          ref=ref, expected=expected)
-    if capture.observation_summary(final_validated) != observed:
-        _fail('stale', 'observation_changed')
-    for path, raw in snapshots:
-        if _read(path) != raw:
-            _fail('stale', 'html_changed')
-    final_profile = _read(_PROFILE_FILE)
-    if final_profile != profile_raw or _implementation(final_profile) != implementation:
-        _fail('stale', 'implementation_changed')
     result = {'contract': CONTRACT, 'version': VERSION, 'status': 'projection_available',
               'selector': {'workflow': 'daily', 'date': date, 'includeId': include_id},
               'profile': {'contract': PROFILE, 'fingerprint': _json_sha(implementation)},
@@ -718,27 +1271,94 @@ def _read_locked(owner, date, include_id, *, targets=False):
               'coverage': {'completeForReviewedGenerationMarkdown': True,
                            'staticProjection': 'observed', **dict.fromkeys(_NOT_CHECKED, 'not_checked')},
               'unknownInputs': observed['unknownInputs'] + list(_UNKNOWN)}
+    local_targets, local_binding, git_bundle, git_combined, context2 = None, None, None, None, None
+    if local_publication:
+        local_targets = _targets_result(result, target_metadata, receipt['reviewedAt'])
+        if _json_measure(local_targets, dict(_LIMITS)['result']) > limits['result']:
+            _publication_fail('blocked', 'limits', 'limit_exceeded', 'result_bytes')
+        local_binding = _publication_fields(receipt, _object(generation_raw), owner)
+        if local_binding is not None:
+            local_binding['files'] = expected['files']
+            git_bundle = _compile_git_modules()
+            git_combined = _git_call(git_bundle, 'read_local_publication_git', owner,
+                                     local_binding, receipt['remoteIdentitySha256'])
+    final_paths, final_receipt_path = (_publication_normal(owner, date, 'final') if local_publication
+                                      else owner.load_verified_review_receipt(date))
+    if git_bundle is not None:
+        context2 = _git_call(git_bundle, 'read_local_publication_context', owner,
+                             local_binding, receipt['remoteIdentitySha256'])
+        if context2 != git_combined['context']:
+            _publication_fail('blocked', 'git', 'stale', 'git_identity')
+        _scope_files_cas(owner, expected['files'], git_bundle['modules'][0])
+    if (final_paths != paths or final_receipt_path != actual_receipt_path
+            or _read(receipt_path) != receipt_raw or _read(generation_path) != generation_raw
+            or _read(store) != store_raw):
+        _fail('stale', 'normal_inputs_changed')
+    try:
+        final_validated = capture.validate_ref(observation_root=owner.DAILY_RENDER_OBSERVATIONS_DIR,
+                                              ref=ref, expected=expected)
+    except capture.CaptureError:
+        if local_publication:
+            _publication_fail('blocked', 'local_io', 'stale', 'render_changed')
+        raise
+    if capture.observation_summary(final_validated) != observed:
+        _fail('stale', 'observation_changed')
+    for path, raw in snapshots + map_snapshots:
+        if _read(path) != raw:
+            _fail('stale', 'html_changed')
+    final_profile = _read(_PROFILE_FILE)
+    if final_profile != profile_raw or _implementation(final_profile) != implementation:
+        _fail('stale', 'implementation_changed')
+
+    if local_publication:
+        if local_binding is None:
+            return _publication_issue('not_published', 'publication', 'not_published', 'publication_fields_absent')
+        _git_final(git_bundle)
+        return _local_result(local_targets, local_binding, git_combined, context2, git_bundle)
     if targets:
         return _targets_result(result, target_metadata, receipt['reviewedAt'])
     result['recordSha256'] = _json_sha(result, limits['result'])
     return _safe_result(result)
 
 
-def _read_selected(date_str, include_id, *, targets):
+def _read_selected(date_str, include_id, *, targets, local_publication=False):
     contract = TARGET_CONTRACT if targets else CONTRACT
+    phase = 'load'
     try:
         owner = blog_entry_loader.load_publish_to_blog()
+        phase = 'date'
         date = owner.validate_publish_date(date_str)
+        phase = 'include_id'
         with owner.publication_scope(include_id) as normalized:
+            phase = 'initial'
             with owner.blog_publication_lock(date):
-                return _read_locked(owner, date, normalized, targets=targets)
+                phase = 'read'
+                return _read_locked(owner, date, normalized, targets=targets, local_publication=local_publication)
     except ValueError as exc:
+        if local_publication:
+            if phase in ('date', 'include_id'):
+                return _publication_issue('blocked', 'selection', 'invalid_argument', phase)
+            if phase == 'initial':
+                return _publication_issue('blocked', 'normal', 'normal_rejected', 'initial')
+            if len(exc.args) == 2 and exc.args[0] == 'local_publication_result':
+                return _publication_issue(*exc.args[1])
+            if len(exc.args) == 2 and exc.args[0] == 'limit_exceeded':
+                return _publication_issue('blocked', 'limits', 'limit_exceeded', 'result_bytes')
+            if len(exc.args) == 2 and exc.args[0] == 'stale':
+                return _publication_issue('blocked', 'local_io', 'stale', 'render_changed')
+            return _publication_issue('blocked', 'selection', 'invalid', 'receipt_shape')
         if len(exc.args) == 2 and exc.args[0] in ('invalid', 'stale', 'limit_exceeded',
                                                 'unsupported_implementation', 'unsupported'):
             status = 'unsupported' if targets and exc.args[0] == 'unsupported' else 'blocked'
             return _issue(status, exc.args[0], exc.args[1], contract=contract)
         return _issue('blocked', 'normal_gate_failed', 'normal_or_argument_validation', contract=contract)
     except Exception:
+        if local_publication:
+            if phase in ('date', 'include_id'):
+                return _publication_issue('blocked', 'selection', 'invalid_argument', phase)
+            if phase == 'initial':
+                return _publication_issue('blocked', 'normal', 'normal_rejected', 'initial')
+            return _publication_issue('blocked', 'local_io', 'read_error', 'local_io')
         # Normal owner exceptions may carry private source paths/content. Do not echo them.
         return _issue('blocked', 'normal_gate_failed', 'normal_or_storage_validation', contract=contract)
 
@@ -751,6 +1371,11 @@ def read_daily_observed_projection(date_str, *, include_id=None):
 def read_daily_reviewed_targets(date_str, *, include_id=None):
     """Observe original primary targets; returned JSON is never importable proof."""
     return _read_selected(date_str, include_id, targets=True)
+
+
+def read_daily_local_publication(date_str, *, include_id=None):
+    """Observe one normally reviewed local publication; diagnostic data grants no ability."""
+    return _read_selected(date_str, include_id, targets=True, local_publication=True)
 
 
 _FUNCTIONS = _function_names()

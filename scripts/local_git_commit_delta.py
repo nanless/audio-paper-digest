@@ -255,13 +255,16 @@ class _Session:
         self.path_bytes = path_bytes
         self.result_bytes = 4096
 
+    def _enter_without_cleanup(self):
+        self.state = raw._prepare_repository(self.repo, self.raw_limits, self.deadline)
+        raw._complete_admission(self.state)
+        self.reserve_result(6 * sum(len(value.encode('utf-8')) for value in
+            (self.repo, self.state['binary']['resolved'], self.state['version'])))
+        return self
+
     def __enter__(self):
         try:
-            self.state = raw._prepare_repository(self.repo, self.raw_limits, self.deadline)
-            raw._complete_admission(self.state)
-            self.reserve_result(6 * sum(len(value.encode('utf-8')) for value in
-                (self.repo, self.state['binary']['resolved'], self.state['version'])))
-            return self
+            return self._enter_without_cleanup()
         except BaseException as error:
             self._finish(error)
             raise
@@ -415,6 +418,42 @@ def _compare(session, expected, base_nodes, base_leaves, candidate_nodes, candid
     return paths, facts_sha
 
 
+def _collect_delta_in_session(session, base_oid, commit_oid, expected):
+    """Collect only in this module's live, admitted synchronous scope."""
+    if (type(session) is not _Session or session.closed or session.state is None
+            or session.state.get('version') is None):
+        _fail('read_error', 'closed_scope')
+    limits = session.limits
+    base = session.load(base_oid, 'commit')['parsed']
+    candidate = session.load(commit_oid, 'commit')['parsed']
+    if candidate['parentOids'] != [base_oid]:
+        _fail('parent_mismatch', 'candidate_parent')
+    base_nodes, base_leaves, base_counts = session.expand(base['treeOid'])
+    candidate_nodes, candidate_leaves, candidate_counts = session.expand(candidate['treeOid'])
+    paths, facts_sha = _compare(session, expected, base_nodes, base_leaves, candidate_nodes, candidate_leaves)
+    expected_sha = _rows_sha({'path': path, 'deleted': deleted, 'sha256': digest}
+                             for path, _encoded, deleted, digest in expected)
+    session.reserve_result(64 * len(base['parentOids']))
+    result = {'contract': CONTRACT, 'version': _VERSION, 'status': 'commit_delta_observed',
+        **raw._observation_metadata(session.state),
+        'commits': {'base': {'oid': base_oid, **base},
+            'candidate': {'oid': commit_oid, 'treeOid': candidate['treeOid'], 'parentOid': base_oid}},
+        'expectedFilesSha256': expected_sha, 'reviewedFileFactsSha256': facts_sha,
+        'delta': {'paths': paths, 'count': len(paths), 'pathsSha256': _sha({
+            'contract': CONTRACT, 'version': _VERSION, 'baseOid': base_oid, 'commitOid': commit_oid, 'paths': paths})},
+        'trees': {'base': base_counts, 'candidate': candidate_counts,
+            'uniqueTreeObjectsRead': session.counts['uniqueTrees']},
+        'rawObjectsRead': dict(session.counts), 'coverage': dict(_COVERAGE),
+        'inputBinding': 'before_after_observation', 'unknownInputs': list(_UNKNOWN)}
+    encoded_size = 0
+    for piece in _encoded_parts(result):
+        encoded_size += len(piece.encode('utf-8'))
+        if encoded_size > limits.max_result_bytes - 96:
+            _fail('size_exceeded', 'result_metadata')
+    result['observationSha256'] = _sha(result)
+    return result
+
+
 def read_local_commit_delta(repo, *, base_oid, commit_oid, expected_files, limits=DEFAULT_LIMITS):
     """Observe a fixed local B/C comparison, without normal/source authority."""
     from runtime_guard import require_external_runtime
@@ -422,33 +461,7 @@ def read_local_commit_delta(repo, *, base_oid, commit_oid, expected_files, limit
     expected, path_bytes = _validate_inputs(repo, base_oid, commit_oid, expected_files, limits)
     try:
         with _Session(repo, limits, path_bytes) as session:
-            base = session.load(base_oid, 'commit')['parsed']
-            candidate = session.load(commit_oid, 'commit')['parsed']
-            if candidate['parentOids'] != [base_oid]:
-                _fail('parent_mismatch', 'candidate_parent')
-            base_nodes, base_leaves, base_counts = session.expand(base['treeOid'])
-            candidate_nodes, candidate_leaves, candidate_counts = session.expand(candidate['treeOid'])
-            paths, facts_sha = _compare(session, expected, base_nodes, base_leaves, candidate_nodes, candidate_leaves)
-            expected_sha = _rows_sha({'path': path, 'deleted': deleted, 'sha256': digest}
-                                     for path, _encoded, deleted, digest in expected)
-            session.reserve_result(64 * len(base['parentOids']))
-            result = {'contract': CONTRACT, 'version': _VERSION, 'status': 'commit_delta_observed',
-                **raw._observation_metadata(session.state),
-                'commits': {'base': {'oid': base_oid, **base},
-                    'candidate': {'oid': commit_oid, 'treeOid': candidate['treeOid'], 'parentOid': base_oid}},
-                'expectedFilesSha256': expected_sha, 'reviewedFileFactsSha256': facts_sha,
-                'delta': {'paths': paths, 'count': len(paths), 'pathsSha256': _sha({
-                    'contract': CONTRACT, 'version': _VERSION, 'baseOid': base_oid, 'commitOid': commit_oid, 'paths': paths})},
-                'trees': {'base': base_counts, 'candidate': candidate_counts,
-                    'uniqueTreeObjectsRead': session.counts['uniqueTrees']},
-                'rawObjectsRead': dict(session.counts), 'coverage': dict(_COVERAGE),
-                'inputBinding': 'before_after_observation', 'unknownInputs': list(_UNKNOWN)}
-            encoded_size = 0
-            for piece in _encoded_parts(result):
-                encoded_size += len(piece.encode('utf-8'))
-                if encoded_size > limits.max_result_bytes - 96:
-                    _fail('size_exceeded', 'result_metadata')
-            result['observationSha256'] = _sha(result)
+            result = _collect_delta_in_session(session, base_oid, commit_oid, expected)
         return result
     except CommitDeltaReadError:
         raise
