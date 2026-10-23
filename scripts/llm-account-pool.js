@@ -770,9 +770,10 @@ function classifyOpenCodeGoQuotaResponse(response, options = {}) {
     const types = [
         body?.type, body?.code, body?.error?.type, body?.error?.code,
         body?.error?.error?.type, body?.error?.error?.code
-    ].map(value => String(value || ''));
+    ].filter(value => typeof value === 'string');
     if (!types.includes('GoUsageLimitError')) return null;
-    const metadata = body?.metadata || body?.error?.metadata || body?.error?.error?.metadata || {};
+    const metadata = [body?.metadata, body?.error?.metadata, body?.error?.error?.metadata]
+        .find(value => value !== null && typeof value === 'object' && !Array.isArray(value)) || {};
     const limitName = sanitizeLimitName(metadata.limitName || body?.limitName || '');
     const limitClass = normalizeLimitClass(limitName);
     const message = String(body?.message || body?.error?.message || body?.error?.error?.message || '');
