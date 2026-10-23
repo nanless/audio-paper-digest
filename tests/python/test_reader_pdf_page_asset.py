@@ -141,6 +141,45 @@ class PdfPageAssetTests(unittest.TestCase):
         self.assertEqual(dependency_failure(svg(black_parent)['inlineSvg'].encode())['reason'],
                          'unmapped_latexml_white_text_on_dark_badge')
 
+    def test_default_black_html_text_requires_identical_black_opaque_geometry(self):
+        body = dark_badge('#000', text_style='', wrapper='matrix(1.0 0.0 0.0 1.0 6 2)').replace('style="stroke:none" ', '')
+        failure = dependency_failure(svg(body)['inlineSvg'].encode())
+        self.assertEqual(failure['reason'], 'default_html_black_text_on_black_badge')
+        self.assertIsNone(failure['witnesses'][0]['declaredForeground'])
+        self.assertEqual(failure['witnesses'][0]['background'], '#000000')
+        thin = body.replace('<g fill=', '<g stroke-width="0.4pt" fill=', 1)
+        self.assertEqual(dependency_failure(svg(thin)['inlineSvg'].encode())['reason'], failure['reason'])
+        minipage = body.replace('<foreignObject width=', '<foreignObject style="--ltx-fo-width:4em" width=')
+        minipage = minipage.replace('<span><span ', '<span class="ltx_minipage" style="width:4em"><span ')
+        self.assertEqual(dependency_failure(svg(minipage)['inlineSvg'].encode())['reason'], failure['reason'])
+        negatives = [body.replace('#000', '#111'),
+                     body.replace('style=""', 'style="color:white"'),
+                     body.replace('style=""', 'style="--ltx-fg-color:black"'),
+                     body.replace('style=""', 'style="color:black"'),
+                     body.replace('style=""', 'style="-webkit-text-stroke:1px white"'),
+                     body.replace('style=""', 'style="-webkit-text-stroke-color:white;-webkit-text-stroke-width:1px"'),
+                     body.replace('<g fill=', '<g stroke-width="2" fill=', 1),
+                     body.replace('<g fill=', '<g stroke-width="1pt" fill=', 1),
+                     body.replace('fill="#000"', 'fill="#000" opacity="0.5"'),
+                     body.replace('<g fill=', '<g style="display:none" fill=', 1),
+                     body.replace('<g fill=', '<g style="display:none!important" fill=', 1),
+                     body.replace('<g fill=', '<g style="visibility:hidden !important" fill=', 1),
+                     body.replace('<g fill=', '<g style="display:/*hidden*/none" fill=', 1),
+                     body.replace('<g fill=', '<g style="display/**/:none" fill=', 1),
+                     body.replace('<g fill=', '<g style="visibility/**/:hidden" fill=', 1),
+                     body.replace('style=""', 'style="text-indent:100px"'),
+                     body.replace('style=""', 'style="display:none!important"'),
+                     body.replace('<g fill=', '<g display="none" fill=', 1),
+                     body.replace('<path ', '<path style="visibility:hidden" ', 1),
+                     body.replace('matrix(1.0 0.0 0.0 1.0 6 2)', 'matrix(1 0 0 1 15 2)'),
+                     minipage.replace('style="width:4em"', 'style="width:40em"'),
+                     minipage.replace('style="width:4em"', 'style="width:4em;left:20px"')]
+        for changed in negatives:
+            with self.subTest(svg=changed):
+                self.assertIsNone(dependency_failure(svg(changed)['inlineSvg'].encode()))
+        with self.assertRaises(ValueError):
+            dependency_failure(svg(body.replace('<g fill=', '<g style="dis\\70 lay:none" fill=', 1))['inlineSvg'].encode())
+
     def test_full_caption_cdot_projection_keeps_original_proof_and_all_words(self):
         resource = svg(dark_badge())
         caption = r'Figure 9: Modalities T\,\cdot\,I\,\cdot\,A; text T.'
@@ -182,6 +221,28 @@ class PdfPageAssetTests(unittest.TestCase):
         bad = {**self.figure, 'label': 'Figure 8:'}
         with self.assertRaisesRegex(ValueError, 'number_or_caption'):
             self.derive(figure=bad)
+
+    def test_full_pdf_caption_only_typographic_label_ligatures_and_hyphen_wrap(self):
+        figure = {**self.figure, 'caption': 'Figure 9: Flow-matching prefix and cross-entropy; rate 0.33.'}
+        caption = 'Figure 9 Flow-matching prefix and cross-entropy; rate 0.33.'
+        raw, proof = self.derive(pdf([caption]), figure=figure)
+        self.assertTrue(raw.startswith(b'\x89PNG'))
+        self.assertTrue(proof['pdfCaptionTypography']['openingLabelColonOmitted'])
+        self.assertEqual(proof['caption'], figure['caption'])
+        from reader_pdf_page_asset import _pdf_caption_text
+        self.assertEqual(_pdf_caption_text('cross-\nentropy preﬁx ﬂow'), 'cross-entropy prefix flow')
+        self.assertEqual(_pdf_caption_text('cross\nentropy ０.３３'), 'cross entropy ０.３３')
+        for bad in [caption.replace('0.33', '0.34'), caption + ' Extra.',
+                    caption.replace('cross-entropy', 'crossentropy'),
+                    caption.replace('Figure 9 ', 'Figure 19 '),
+                    caption.replace('prefix', 'prefixes'),
+                    caption.replace('Figure 9 ', 'Figure 9; ')]:
+            if bad == caption:
+                continue
+            with self.subTest(caption=bad), self.assertRaisesRegex(ValueError, 'not_unique'):
+                self.derive(pdf([bad]), figure=figure)
+        with self.assertRaisesRegex(ValueError, 'not_unique'):
+            self.derive(pdf([caption, figure['caption']]), figure=figure)
 
     def test_pdf_sha_old_pixel_and_original_svg_identity_cannot_change(self):
         for changes in [{'old': b'\x89PNG\r\n\x1a\nchanged'},

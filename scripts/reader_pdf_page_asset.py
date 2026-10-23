@@ -45,6 +45,13 @@ def norm(value):
     return re.sub(r'\s+', ' ', value).strip()
 
 
+def _pdf_caption_text(value):
+    # Exact PDF typography only: preserve every hyphen, word and quantity.
+    value = value.translate(str.maketrans({'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl',
+                                         'ﬃ': 'ffi', 'ﬄ': 'ffl', 'ﬅ': 'st', 'ﬆ': 'st'}))
+    return norm(re.sub(r'(?<=[A-Za-z])-\r?\n(?=[A-Za-z])', '-', value))
+
+
 def _declarations(element):
     return {(key.strip() if key.strip().startswith('--') else key.strip().lower()): value.strip()
             for part in element.get('style', '').split(';')
@@ -71,13 +78,13 @@ def _inherited_property(node, parents, key):
     return None, None
 
 
-def _rounded_rectangle_core(element):
+def _rounded_rectangle_core(element, *, default_stroke=False):
     """Recognize one closed axis-aligned cubic rounded rectangle, not a bbox guess."""
     if element.tag.split('}')[-1] != 'g' or element.get('transform') or len(element) != 1:
         return None
     shape = element[0]
     if shape.tag.split('}')[-1] != 'path' or shape.get('transform') \
-            or _declarations(shape).get('stroke') != 'none':
+            or (not default_stroke and _declarations(shape).get('stroke') != 'none'):
         return None
     data = shape.get('d', '')
     tokens = re.findall(r'[A-Za-z]|[+-]?(?:\d+(?:\.\d*)?|\.\d+)', data)
@@ -125,12 +132,17 @@ def _white_on_dark_css_failure(root):
     """Prove unreadable black-on-dark badges without supplying missing CSS."""
     parents = {child: parent for parent in root.iter() for child in parent}
     witnesses = []
+    default_witnesses = []
     number = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)'
     for node in root.iter():
-        if node.tag.split('}')[-1] != 'span' or not (node.text or '').strip() \
-                or _hex_color(_declarations(node).get('--ltx-fg-color', '')) != '#ffffff':
+        if node.tag.split('}')[-1] != 'span' or not (node.text or '').strip():
+            continue
+        declared_white = _hex_color(_declarations(node).get('--ltx-fg-color', '')) == '#ffffff'
+        if not declared_white and _inherited_property(node, parents, '--ltx-fg-color')[0] is not None:
             continue
         color, owner = _inherited_property(node, parents, 'color')
+        if not declared_white and color is not None:
+            continue  # Only the exact initial HTML black, never guessed CSS.
         if color is None:
             effective = '#000000'  # Exact initial HTML foreground in the isolated renderer.
         elif re.fullmatch(r'var\(\s*--ltx-fg-color\s*\)', color):
@@ -174,16 +186,26 @@ def _white_on_dark_css_failure(root):
         index = list(plane).index(wrapper)
         if index == 0:
             continue
-        background = _rounded_rectangle_core(plane[index - 1])
+        background = _rounded_rectangle_core(plane[index - 1], default_stroke=not declared_white)
         if background is None or background[-1] is None:
             continue
         # Transparent, clipped, CSS-transformed, or otherwise hidden geometry
         # cannot prove an opaque shared badge. Leave these cases to old guards.
         controls = ancestors + [plane[index - 1], plane[index - 1][0]]
-        if any('transform' in _declarations(a)
+        def controls_style(a):
+            values = _declarations(a)
+            # A sealed minipage can specify exactly the foreign object's own
+            # TeX width. This cannot move its enclosing rectangle or text box.
+            if (not declared_white and a.tag.split('}')[-1] == 'span'
+                    and 'ltx_minipage' in a.get('class', '').split()
+                    and values.get('width') == _declarations(foreign).get('--ltx-fo-width')
+                    and re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)em', values.get('width', ''))):
+                values = {k: v for k, v in values.items() if k != 'width'}
+            return values
+        if any('transform' in controls_style(a)
                or any(key in _declarations(a) or a.get(key) is not None
                       for key in ('clip-path', 'mask', 'filter'))
-               or any(key in _declarations(a) for key in ('all', '-webkit-text-fill-color',
+               or any(key in controls_style(a) for key in ('all', '-webkit-text-fill-color',
                           'background', 'background-color', 'mix-blend-mode', 'text-shadow',
                           'translate', 'rotate', 'scale', 'transform-origin', 'offset', 'offset-path',
                           'offset-distance', 'offset-position', 'offset-rotate', 'offset-anchor', 'zoom', 'position',
@@ -191,13 +213,52 @@ def _white_on_dark_css_failure(root):
                           'inset-block-start', 'inset-block-end', 'left', 'right', 'top', 'bottom',
                           'margin', 'padding', 'width', 'height'))
                or any(key.startswith(('margin-', 'padding-', 'inset-'))
-                      for key in _declarations(a))
+                      for key in controls_style(a))
                for a in controls):
             continue
         if any(any(_declarations(a).get(key, a.get(key, '1')) not in {'1', '1.0'}
                    for key in ('opacity', 'fill-opacity')) for a in controls):
             continue
         left, bottom, right, top, inner_left, inner_right, inner_bottom, inner_top, paint = background
+        if not declared_white and paint != '#000000':
+            continue  # The new absence proof requires identical opaque black.
+        if not declared_white:
+            safe_css = {'--ltx-stroke-color', '--ltx-fill-color', '--ltx-fo-width',
+                        '--ltx-fo-height', '--ltx-fo-depth', 'font-size', 'width'}
+            if any('/*' in a.get('style', '') or '*/' in a.get('style', '')
+                   or '\\' in a.get('style', '')
+                   or any(key not in safe_css for key in _declarations(a)) for a in controls):
+                continue  # No inferred semantics for arbitrary or escaped CSS.
+            if any(any(re.search(r'!\s*important\b', value, re.I) for value in _declarations(a).values())
+                   or _declarations(a).get('display', 'inline') not in {'inline', 'block', 'inline-block'}
+                   or _declarations(a).get('visibility', 'visible') != 'visible'
+                   for a in controls):
+                continue  # Unknown CSS visibility cannot prove a black badge.
+            if any(any(key == '-webkit-text-stroke' or key.startswith('-webkit-text-stroke-')
+                       for key in _declarations(a)) for a in controls):
+                continue
+            background_ancestors, cursor = [], plane[index - 1][0]
+            while cursor is not None:
+                background_ancestors.append(cursor)
+                cursor = parents.get(cursor)
+            if any(_declarations(a).get('display', a.get('display', '')).lower() == 'none'
+                   or _declarations(a).get('visibility', '').lower() in {'hidden', 'collapse'}
+                   for a in background_ancestors):
+                continue
+            widths = [_declarations(a).get('stroke-width', a.get('stroke-width'))
+                      for a in background_ancestors]
+            def thin_outline(value):
+                if value is None:
+                    return True  # SVG initial one-unit outline.
+                match = re.fullmatch(r'(\d+(?:\.\d+)?|\.\d+)(px|pt)?', value.strip())
+                return bool(match and float(match[1]) <= (.75 if match[2] == 'pt' else 1))
+            if not all(thin_outline(value) for value in widths):
+                continue
+            if not (left + 1 <= box[0] <= box[2] <= right - 1
+                    and bottom + 1 <= box[1] <= box[3] <= top - 1
+                    and (inner_left + 1 <= box[0] <= box[2] <= inner_right - 1
+                         or inner_bottom + 1 <= box[1] <= box[3] <= inner_top - 1)):
+                continue
         if not (left <= box[0] <= box[2] <= right and bottom <= box[1] <= box[3] <= top
                 and (inner_left <= box[0] <= box[2] <= inner_right
                      or inner_bottom <= box[1] <= box[3] <= inner_top)):
@@ -207,11 +268,14 @@ def _white_on_dark_css_failure(root):
                     for weight, v in zip((.2126, .7152, .0722), channels))
         if (light + .05) / .05 >= 3 or 1.05 / (light + .05) <= 4.5:
             continue
-        witnesses.append({'textElementId': node.get('id'), 'declaredForeground': '#ffffff',
+        target = witnesses if declared_white else default_witnesses
+        target.append({'textElementId': node.get('id'), 'declaredForeground': '#ffffff' if declared_white else None,
                           'effectiveForeground': effective, 'background': paint,
                           'foreignObjectBox': box, 'backgroundBox': [left, bottom, right, top],
                           'backgroundPathSha256': sha(plane[index - 1][0].get('d', '').encode())})
-    return {'reason': 'unmapped_latexml_white_text_on_dark_badge', 'witnesses': witnesses} if witnesses else None
+    if witnesses:
+        return {'reason': 'unmapped_latexml_white_text_on_dark_badge', 'witnesses': witnesses}
+    return {'reason': 'default_html_black_text_on_black_badge', 'witnesses': default_witnesses} if default_witnesses else None
 
 
 def _caption_display_projection(caption):
@@ -296,6 +360,9 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
          and sha(pdf_bytes) == source_files['source.pdf'], 'pdf_page_pdf_sha_changed')
     caption = norm(figure.get('caption', ''))
     displayed_caption, caption_projection = _caption_display_projection(caption)
+    # LaTeXML inserts a colon after an otherwise identical printed PDF label.
+    # Accept its absence only at the complete caption's opening label.
+    colonless_caption = re.sub(r'^((?:Figure|Fig\.?)\s+\d+)\s*:\s*', r'\1 ', displayed_caption, flags=re.I)
     numbered = re.match(r'^(?:Figure|Fig\.?)\s+(\d+)\s*[:.]\s*\S', caption, re.I)
     label = re.fullmatch(r'(?:Figure|Fig\.?)\s+(\d+)\s*[:.]?', norm(figure.get('label', '')), re.I)
     need(numbered is not None and label is not None and numbered[1] == label[1]
@@ -326,10 +393,10 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
         matches, numbers = [], []
         for page in document:
             for block in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT):
-                text = norm(block[4])
-                if re.match(r'^(?:Figure|Fig\.?)\s+' + str(int(numbered[1])) + r'(?!\d)\s*[:.]', text, re.I):
+                text = _pdf_caption_text(block[4])
+                if re.match(r'^(?:Figure|Fig\.?)\s+' + str(int(numbered[1])) + r'(?!\d)(?:\s*[:.]|\s+\S)', text, re.I):
                     numbers.append(page.number + 1)
-                if text == displayed_caption:
+                if text in {displayed_caption, colonless_caption}:
                     matches.append((page.number, block[4]))
         need(len(matches) == 1 and numbers == [matches[0][0] + 1],
              'pdf_page_full_caption_or_figure_number_not_unique')
@@ -349,6 +416,9 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
         width, height = struct.unpack('>II', pixels[16:24])
         proof = {**identity, 'page': index + 1, 'mediaBox': media,
                  'rawCaptionSha256': sha(raw_caption.encode()),
+                 'pdfCaptionTypography': {'contract': 'pdf-caption-latin-ligature-line-wrap-v1',
+                    'text': _pdf_caption_text(raw_caption),
+                    'openingLabelColonOmitted': _pdf_caption_text(raw_caption) != displayed_caption},
                  'pageTextSha256': sha(page.get_text('text', flags=fitz.TEXTFLAGS_TEXT).encode()),
                  'assetSha256': sha(pixels), 'assetBytes': len(pixels),
                  'assetWidth': width, 'assetHeight': height,

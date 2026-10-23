@@ -173,6 +173,18 @@ class PublicationSourceDisplayTests(unittest.TestCase):
         missing = dict(figure, caption='Figure 1: Guidance scales without a math star.')
         self.assertEqual(blog._source_bound_figure_math_note(note, missing), note)
 
+    def test_legacy_caption_spacing_command_star_is_exact_source_bound(self):
+        figure = {'ordinal': 3, 'label': 'Figure 3:',
+                  'caption': r'Figure 3: Residual source-language LID mass at \lambda^{\!*}=0.33.'}
+        note = '*论文图 3。原论文 Figure 3:：“Residual source-language LID mass at \\lambda^\\!一个星号=0.33.”。*'
+        result = blog._source_bound_figure_math_note(note, figure)
+        self.assertIn(r'`\lambda^{\!*}`=0.33', result)
+        self.assertEqual(blog._source_bound_figure_math_note(result, figure), result)
+        self.assertEqual(blog._source_bound_figure_math_note(note.replace('0.33', '0.34'), figure),
+                         note.replace('0.33', '0.34'))
+        other = dict(figure, caption=figure['caption'].replace(r'\!', r'\quad'))
+        self.assertEqual(blog._source_bound_figure_math_note(note, other), note)
+
 
 if __name__ == '__main__':
     unittest.main()
