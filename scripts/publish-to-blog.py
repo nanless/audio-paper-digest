@@ -64,7 +64,7 @@ from publish_common import (
     is_publish_currency_literal,
     is_publish_currency_unit_literal, decode_publish_currency_unit_display,
     strict_source_cell_math_display, extract_markdown_tables,
-    _assert_hash_key_premises, _assert_ecmascript_number_premises,
+    _assert_hash_key_premises, _assert_ecmascript_number_premises, _manual_canonical_json,
     _verified_daily_publication_table_scope,
     validate_experiment_table_contract, EXPERIMENT_TABLE_CONTRACT_VERSIONS,
 )
@@ -7230,6 +7230,107 @@ def _reader_table_header_unit_evidence_failures(table, quotes):
     return failures
 
 
+def _api_reader_scientific_quote_projection(rendered, quote_corpus):
+    """Ephemeral whole-cell coverage only; never changes text, tokens or provenance.
+
+    A complete signed coefficient/exponent/unit must occur in one bound quote
+    line. An explicit LaTeXML visible+TeX pair grants nothing unless both copies
+    have the same coefficient and signed exponent. Unrelated scalar digits or
+    quantities cannot support a missing complete atom.
+    """
+    old_tokens = set(_api_reader_numeric_tokens(rendered['markdown']))
+    cells = [(0, column, str(value)) for column, value in enumerate(rendered['header'])]
+    cells.extend((row + 1, column, str(value)) for row, values in enumerate(rendered['rows'])
+                 for column, value in enumerate(values))
+    marker = re.compile(r'(?:×|\\times|\{\\times\})\s*10')
+    if not any(marker.search(value) for _, _, value in cells):
+        return {'tokens': old_tokens, 'failures': [], 'proofs': []}
+    # Preserve the existing whole-Markdown lexical meaning. Only equivalent
+    # cell boundaries can be projected; cross-cell token changes fail closed.
+    cell_tokens = {token for _, _, value in cells for token in _api_reader_numeric_tokens(value)}
+    if cell_tokens != old_tokens:
+        return {'tokens': old_tokens, 'failures': [{'reason': 'scientific_cell_lexical_boundaries_differ'}], 'proofs': []}
+    coefficient = r'[+−-]?[0-9]+(?:\.[0-9]+)?'
+    signed_exponent = r'[+−-]?[0-9]+'
+    superscripts = '⁰¹²³⁴⁵⁶⁷⁸⁹'
+    superscript_digits = str.maketrans(superscripts, '0123456789')
+    unit = r'(?:kHz|MHz|Hz|dB|GB|MB|KB|ms|pp|s|h|%)'
+    # No implicit powers, Unicode digit normalization, arbitrary TeX decoding,
+    # unit conversion, precision rounding or coefficient/exponent recombination.
+    atom = (r'(?P<coefficient>' + coefficient + r')\s*(?:'
+            r'×10(?P<sup>[⁺⁻]?[' + superscripts + r']+)'
+            r'|(?:\\times|\{\\times\}|×)\s*10\^\{(?P<tex>' + signed_exponent + r')\})'
+            r'(?P<unit>\s*' + unit + r')?')
+    line_atom = re.compile(r'\s*' + atom + r'\s*')
+    # Exact positive/negative coefficients must repeat literally in the two
+    # source copies. Their exponent signs and digits are checked separately.
+    dual = re.compile(r'\s*(?P<coefficient>' + coefficient + r')×10'
+                      r'(?P<visible_sign>[+−-]?)(?P<visible_exponent>[0-9]+)'
+                      r'(?P=coefficient)(?:\\times|\{\\times\})\s*10\^\{'
+                      r'(?P<tex_sign>[+−-]?)(?P<tex_exponent>[0-9]+)\}'
+                      r'(?P<unit>\s*' + unit + r')?\s*')
+    def exponent_key(value):
+        value = value.replace('−', '-').replace('⁻', '-').replace('⁺', '+').translate(superscript_digits)
+        return ('-' if value.startswith('-') else '+') + value.lstrip('+-')
+
+    def quantity_key(match, exponent):
+        return (match['coefficient'].replace('−', '-').lstrip('+'), exponent_key(exponent),
+                (match['unit'] or '').strip().lower())
+
+    source_atoms = {}
+    for quote_index, quote in enumerate(quote_corpus):
+        if not isinstance(quote, str):
+            continue
+        # No atom can span lines or quote objects. A partial pair never falls
+        # through to its valid-looking TeX suffix.
+        for line_index, line in enumerate(re.split(r'\r?\n', quote)):
+            duplicate = dual.fullmatch(line)
+            if duplicate:
+                if exponent_key((duplicate['visible_sign'] or '+') + duplicate['visible_exponent']) != exponent_key((duplicate['tex_sign'] or '+') + duplicate['tex_exponent']):
+                    continue
+                key = quantity_key(duplicate, (duplicate['tex_sign'] or '+') + duplicate['tex_exponent'])
+            else:
+                single = line_atom.fullmatch(line)
+                if not single:
+                    continue
+                key = quantity_key(single, single['sup'] or single['tex'])
+            source_atoms.setdefault(key, (quote_index, line_index))
+
+    failures, proofs, tokens = [], [], set()
+    for row, column, value in cells:
+        if not marker.search(value):
+            tokens.update(_api_reader_numeric_tokens(value))
+            continue
+        # Publication currently needs whole-cell quantities only. Requiring a
+        # complete cell prevents unknown/composite units, prose, model labels,
+        # footnotes, or additional scalars from being mistaken for a unitless
+        # prefix. No substring or fallback atom can grant coverage.
+        stripped = value.strip()
+        match = line_atom.fullmatch(stripped)
+        if not match:
+            failures.append({'row': row, 'column': column, 'value': value,
+                             'reason': 'scientific_quantity_not_complete_or_supported'})
+            tokens.update(_api_reader_numeric_tokens(value))
+            continue
+        key = quantity_key(match, match['sup'] or match['tex'])
+        if key not in source_atoms:
+            failures.append({'row': row, 'column': column, 'value': value,
+                             'reason': 'scientific_quantity_missing_exact_bound_quote'})
+            tokens.update(_api_reader_numeric_tokens(value))
+            continue
+        start = len(value) - len(value.lstrip())
+        end = start + len(stripped)
+        quote_index, line_index = source_atoms[key]
+        proofs.append({'row': row, 'column': column, 'start': start, 'end': end,
+                       'coefficient': key[0], 'signedExponent': key[1], 'unit': key[2],
+                       'quoteIndex': quote_index, 'lineIndex': line_index})
+        # Replace only the authenticated quantity range; other cells retain
+        # every legacy numeric token. Actual input text is never modified.
+        projected = value[:start] + ' ' * (end - start) + value[end:]
+        tokens.update(_api_reader_numeric_tokens(projected))
+    return {'tokens': tokens, 'failures': failures, 'proofs': proofs}
+
+
 def _api_reader_numeric_tokens(value):
     # 千位分组分支必须吃掉逗号之后的整段数字。
     # 否则 ``10^-4,2000`` 会被截成一个凭空造出的词元
@@ -8538,7 +8639,13 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                 *[set(_api_reader_numeric_tokens(quote)) for quote in pdf_quote_values[index]])
                 if index in pdf_quote_values
                 else set(_api_reader_numeric_tokens('\n'.join(quote_corpus))))
-            missing = set(_api_reader_numeric_tokens(rendered['markdown'])) - quote_tokens
+            scientific_projection = _api_reader_scientific_quote_projection(rendered, quote_corpus)
+            if scientific_projection['failures']:
+                raise PublishDataValidationError(
+                    f'第 {index} 个表格中的完整科学计数量未被本表来源引文精确覆盖：'
+                    f"{scientific_projection['failures']}"
+                )
+            missing = scientific_projection['tokens'] - quote_tokens
             if index in publication_tables:
                 missing -= set(publication_tables[index]['numericTokens'])
             if missing:
@@ -11295,6 +11402,28 @@ def _daily_publication_operation_state(operation):
     return state
 
 
+def _daily_publication_paper_bytes(value):
+    """JSON member identity: booleans differ from numbers; JS numbers stay equal."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if item is None or type(item) in (bool, str, int):
+            continue
+        if type(item) is float and math.isfinite(item):
+            continue
+        if type(item) is list:
+            pending.extend(item)
+        elif type(item) is dict and all(type(key) is str for key in item):
+            pending.extend(item.values())
+        else:
+            raise PublishDataValidationError('daily table protected member must remain finite JSON')
+    _assert_hash_key_premises(value, 'daily table protected member')
+    try:
+        return _manual_canonical_json(value).encode('utf-8')
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise PublishDataValidationError('daily table protected member JSON cannot be encoded') from exc
+
+
 def _mint_daily_publication_table_operation(source_path, source_bytes, run_file, run_bytes, records):
     # Called only after the complete daily run has passed its original source gate.
     operation = _DailyPublicationTableSourceOperation()
@@ -11336,18 +11465,18 @@ def _mint_daily_publication_table_operation(source_path, source_bytes, run_file,
             raise PublishDataValidationError('daily table paper is not a verified operation member')
         original = record['paper']
         expected = copy.deepcopy(original)
-        if paper.get('parsed') != original.get('parsed'):
+        if _daily_publication_paper_bytes(paper.get('parsed')) != _daily_publication_paper_bytes(original.get('parsed')):
             expected['parsed'] = resolve_publish_parsed(original)
         if 'normalizedArxivId' in paper:
             expected['normalizedArxivId'] = normalize_publish_arxiv_id(original.get('arxivId'))
-        if paper != expected:
+        if _daily_publication_paper_bytes(paper) != _daily_publication_paper_bytes(expected):
             # Recompute the existing complete image-exclusion view. All title,
             # author, source, stage and body fields remain protected by equality.
             exclusions = paper.get(PUBLISH_IMAGE_EXCLUSIONS_FIELD)
             if not isinstance(exclusions, list) or not exclusions:
                 raise PublishDataValidationError('daily table protected paper changed after run validation')
             expected = apply_publish_image_exclusions([expected], exclusions=exclusions)[0]
-            if paper != expected:
+            if _daily_publication_paper_bytes(paper) != _daily_publication_paper_bytes(expected):
                 raise PublishDataValidationError('daily table image-exclusion view is not the original normal projection')
         return assert_unchanged(paper_id)
 

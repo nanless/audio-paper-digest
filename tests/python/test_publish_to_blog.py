@@ -6995,7 +6995,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(content_dir)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
                     mock.patch.object(publish_to_blog, 'load_papers', return_value=[paper]), \
-                    mock.patch.object(publish_to_blog, 'validate_daily_fresh_sources_for_publish'), \
+                    mock.patch.object(publish_to_blog, 'validate_daily_fresh_sources_for_publish', return_value=None), \
                     mock.patch.object(publish_to_blog, 'validate_papers_for_publish', return_value=[paper]), \
                     mock.patch.object(publish_to_blog, 'score_and_sort', return_value=([(7.0, paper, paper['parsed'])], [])), \
                     mock.patch.object(publish_to_blog, 'review_all_posts') as review, \
