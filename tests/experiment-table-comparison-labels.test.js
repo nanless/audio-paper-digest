@@ -9,6 +9,19 @@ function article(header, values = ['12.4%', '10.8%', '9.7%']) {
 const options = { contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION, documentType: '方法研究' };
 const validate = text => validateExperimentTableContract(text, options);
 
+test('精确“对比”列标识比较对象，不扩大到指标或任意含词表头', () => {
+    assert.equal(validate(article('对比')), null);
+    for (const header of ['对比 WER ↓', '对比评分 ↑', '对比得分 ↑', '对比变化', '对比率', 'Contrast', 'Pair']) {
+        assert.match(validate(article(header)), /缺少方法、数据集或设置识别列/, header);
+    }
+});
+
+test('“对比”识别列仍保留方向、数值与列数检查', () => {
+    assert.match(validate(article('对比').replace('WER ↓', 'WER')), /缺少.*方向/);
+    assert.match(validate(article('对比', ['未报告', '未报告', '未报告'])), /可核对数字/);
+    assert.match(validate(article('对比').replace('| 丙 | 9.7% |', '| 丙 | 9.7% | 多余 |')), /数据行有 3 列，表头有 2 列/);
+});
+
 test('分割规则、领域和提示词等可以明确说明每行比较的对象', () => {
     for (const header of ['分割规则', '领域', '合并点', '提示词', '对比对象', '被试 ID', '预训练目标', '训练数据', '分词器', '家族', '词表大小 $\\|V\\|$', '声源', '音源', '乐器', '表示', '检测器']) {
         assert.equal(validate(article(header)), null, header);

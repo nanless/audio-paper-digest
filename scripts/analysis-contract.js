@@ -249,7 +249,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (/^推理窗长$/u.test(normalized)) return true;
@@ -853,11 +853,15 @@ function hasObservedStageSwitchTable(table, source, controls) {
     });
 }
 
+function isReportedExperimentPrefix(prefix) {
+    return !/(?:并非|不是|未能|没有|尚未|未曾|不能|不应|如果|假设|假如|倘若|若|未|不|计划|讨论|建议|拟|将|未来|有待|打算|设想)[^，,]{0,30}$/.test(prefix);
+}
+
 function hasReportedExperimentPhrase(text, pattern) {
     return [...String(text).matchAll(pattern)].some(match => {
         const prefix = String(text).slice(Math.max(0, match.index - 60), match.index)
             .split(/[。！？；\n]/).at(-1);
-        return !/(?:并非|不是|未能|没有|尚未|未曾|不能|不应|如果|假设|假如|倘若|若|未|不|计划|讨论|建议|拟|将|未来|有待|打算|设想)[^，,]{0,30}$/.test(prefix);
+        return isReportedExperimentPrefix(prefix);
     });
 }
 
@@ -1084,6 +1088,138 @@ function hasSourceBackedZeroCorrectionAblation(results, sourceText) {
         if (!/(?:如果|假设|计划|未来|可能|预计|并非|不是)[^。；\n]{0,50}$/.test(prefix)
             && /λcorr\s+Quality\s+Semantic\s+Total/i.test(sweep[0])
             && new RegExp(`(?:^| )0 +[0-9.]+ +[0-9.]+ +${value}(?![0-9.])`).test(sweep[0])) return true;
+    }
+    return false;
+}
+
+// A near-zero estimate is not itself an adverse result. This narrow profile
+// binds the reported natural-speech self-correction contrast to both original
+// intervals and to the same source table's net column, never another flow.
+function hasSourceBackedNetIntervalNegative(results, tables, sourceText) {
+    const raw = String(sourceText || '');
+    const owns = (text, index, body) => {
+        const previous = normalizeLocalEvidenceHeading(text.slice(0, index).trimEnd().split('\n').at(-1));
+        return ownObservedSourceScope(previous + '\n' + body)
+            && !/第三方|外部团队|假定|设想|撤回|不成立|并不|\b(?:withdrawn|revoked|not performed|not conducted|false statement)\b/iu.test(previous + '\n' + body);
+    };
+    const headings = [...raw.matchAll(/^[ \t]*[0-9]+(?:\.[0-9]+)*[ \t]+Net effect[ \t]*\r?\n/gimu)];
+    if (headings.length !== 1) return false;
+    const start = headings[0].index + headings[0][0].length;
+    const tail = raw.slice(start, start + 12000);
+    const boundary = tail.search(/^[ \t]*(?:[0-9]+(?:\.[0-9]+)*[ \t]+[A-Z]|#{1,6}[ \t])/mu);
+    const block = boundary < 0 ? tail : tail.slice(0, boundary);
+    if (!owns(raw, headings[0].index, '')) return false;
+    const selfStart = block.search(/Self-correction is less clear\./iu);
+    if (selfStart < 0) return false;
+    let scopeStart = 0;
+    for (const line of block.slice(0, selfStart).matchAll(/[^\n]+(?:\n|$)/gu)) {
+        if (/^Our measured results:$/iu.test(normalizeLocalEvidenceHeading(line[0]))) scopeStart = line.index + line[0].length;
+    }
+    const current = block.slice(scopeStart);
+    if (!owns('', 0, current)) return false;
+    const prose = current.replace(/−/gu, '-').replace(/\s+/gu, ' ');
+    const group = /Self-correction is less clear\. ([A-Z]) beats ([A-Z]) on the synthetic corpus/iu.exec(prose);
+    if (!group || group[1] === group[2]
+        || !/By net WER alone, the audio does nothing for self-correction on natural speech\./iu.test(prose)) return false;
+    const signed = '[+-]?[0-9]+(?:\\.[0-9]+)?';
+    const interval = name => `(?<${name}>\\[(?<${name}Low>${signed}),[ \\t]*(?<${name}High>${signed})\\])(?:\\k<${name}>)?`;
+    const claim = new RegExp('On the natural corpora we cannot detect a net difference[ \\t]*\\([ \\t]*'
+        + `(?<p1>${signed})(?:\\k<p1>)?[ \\t]*pt,[ \\t]*interval[ \\t]*${interval('i1')};[ \\t]*`
+        + `(?<p2>${signed})(?:\\k<p2>)?[ \\t]*pt,[ \\t]*(?:interval[ \\t]*)?${interval('i2')}[ \\t]*\\)`, 'iu').exec(prose);
+    if (!claim) return false;
+    const values = [claim.groups.p1, claim.groups.p2].map(Number);
+    if (!values.every(Number.isFinite)) return false;
+    for (const [index, key] of ['i1', 'i2'].entries()) {
+        const low = Number(claim.groups[key + 'Low']), high = Number(claim.groups[key + 'High']);
+        if (!Number.isFinite(low) || !Number.isFinite(high) || !(low < 0 && high > 0)
+            || values[index] < low || values[index] > high) return false;
+    }
+    const primary = /primary corrector is ([^\n\[.]{1,80}(?:\.[0-9]+)?[^\n\[]*)\s*\[[0-9, ]+\]/iu.exec(raw)?.[1].trim();
+    if (!primary || !String(results).includes(primary)) return false;
+    const captions = [...raw.matchAll(/^Table[ \t]+[0-9]+:[ \t]*Effect of the audio,[ \t]*([^:\n]{1,100}):[ \t]*grounded minus text-only\r?\n/gmu)];
+    const natural = [['RuLibri RU', '俄语音频书'], ['Medical EN', '医疗英语']];
+    const numberCell = value => {
+        // HTML math contributes the identical sign twice in these scalar cells.
+        const scalar = /^(?:\+\+|−-|--|\+|-|−)?[0-9]+(?:\.[0-9]+)?$/u.exec(String(value));
+        return scalar ? Number(scalar[0].replace(/^\+\+/u, '+').replace(/^(?:−-|--|−)/u, '-')) : NaN;
+    };
+    const bound = captions.filter(caption => {
+        if (caption[1].trim() !== primary) return false;
+        const tableTail = raw.slice(caption.index + caption[0].length, caption.index + 20000);
+        const end = tableTail.search(/^Table[ \t]+[0-9]+:/mu);
+        const body = end < 0 ? tableTail : tableTail.slice(0, end);
+        if (!owns(raw, caption.index, body)) return false;
+        const lines = body.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+        const header = lines.findIndex((line, index) => ['rep', 'dam', 'ins', 'net', 'break-rate'].every((key, offset) => lines[index + offset] === key));
+        const expectedGroup = `self-correction: ${group[1]} (audio) vs. ${group[2]} (no audio)`;
+        const groupIndex = lines.indexOf(expectedGroup);
+        if (header < 0 || groupIndex !== header + 5 || lines.filter(line => line === expectedGroup).length !== 1) return false;
+        const after = lines.slice(groupIndex + 1);
+        const groupEnd = after.findIndex(line => /^cross-system:/u.test(line));
+        const rows = groupEnd < 0 ? [] : after.slice(0, groupEnd);
+        if (rows.length !== 18 || rows[0] !== 'TTS RU') return false;
+        return natural.every(([label], index) => rows[(index + 1) * 6] === label
+            && numberCell(rows[(index + 1) * 6 + 4]) === values[index]);
+    });
+    if (bound.length !== 1) return false;
+    const matchingTables = tables.filter(table => {
+        const identity = table.header.findIndex(header => /^(?:对比|比较|对照)$/u.test(String(header).trim()));
+        const net = table.header.findIndex(header => /^净[ \t]+pt[ \t]*↑$/u.test(String(header).trim()));
+        if (identity < 0 || net < 0) return false;
+        return natural.every(([, label], index) => {
+            const rows = table.rows.filter(row => row[identity] === `自我 ${group[1]}-${group[2]} ${label}`);
+            return rows.length === 1 && numberCell(rows[0][net]) === values[index];
+        });
+    });
+    if (matchingTables.length !== 1) return false;
+    const model = primary.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const ownerCarrier = value => {
+        const text = normalizeLocalEvidenceHeading(value);
+        if (text.length > 160) return null;
+        for (const pattern of [/^在[ \t]*(.+?)[ \t]*上[，,]?$/u, /^(.+?)[ \t]*模型[：:]$/u,
+            /^(.+?)[ \t]*的结果如下[：:]$/u, /^(.+?)[ \t]*(?:模型)?的$/u]) {
+            const match = pattern.exec(text);
+            if (match && match[1].trim().length <= 120) return match[1].trim();
+        }
+        return null;
+    };
+    const reportedPattern = new RegExp('^[ \\t]*自我校正下'
+        + `(?:合成语料差距为[ \\t]*${signed}[ \\t]*pt[，,][ \\t]*)?`
+        + `(?:${model}[ \\t]*的[ \\t]*)?自然语料净差距为[ \\t]*(${signed})[ \\t]*pt[ \\t]*与[ \\t]*(${signed})[ \\t]*pt`
+        + '[，,][ \\t]*区间包含零(?:附近)?[，,][ \\t]*单看净[ \\t]*WER', 'iu');
+    for (const sentence of String(results || '').matchAll(/[^。；\n]+/gu)) {
+        const previous = normalizeLocalEvidenceHeading(String(results).slice(0, sentence.index)
+            .slice(-512).trimEnd().split('\n').at(-1).split(/[。；！？!?]/u).at(-1));
+        // The same typed attribution applies inline and when Markdown wraps
+        // it. Syntax never grants the name: only the actual source primary can.
+        const pendingOwner = ownerCarrier(previous);
+        if (pendingOwner && pendingOwner !== primary) continue;
+        const reportStart = sentence[0].indexOf('自我校正下');
+        if (reportStart < 0) continue;
+        const prefix = sentence[0].slice(0, reportStart).trim();
+        if (prefix && ownerCarrier(prefix) !== primary) continue;
+        const statement = sentence[0].slice(reportStart);
+        if (!hasOwnLocalReportedExperiment(results, sentence.index, sentence[0])
+            || !owns(results, sentence.index, sentence[0])) continue;
+        const nextLine = String(results).slice(sentence.index + sentence[0].length)
+            .replace(/^[。；\r\n \t]+/u, '').split(/\r?\n/u)[0].slice(0, 600);
+        // Closing emphasis/ATX delimiters may follow the sentence punctuation.
+        // Unwrap the complete adjacent line before selecting its first claim.
+        const line = normalizeLocalEvidenceHeading(nextLine);
+        const firstSpan = /^(\*\*|__)([^\n]+?)\1(?=[。； \t]|$)/u.exec(line);
+        const headingPrefix = /^#{1,6}[ \t]+/u.exec(nextLine)?.[0] || '';
+        const next = normalizeLocalEvidenceHeading(headingPrefix + (firstSpan ? firstSpan[2] : line).split('。')[0]);
+        const affirmative = /^(?:(?:已经|现已|已)?(?:被)?(?:正式)?撤回(?:了)?|(?:已经|现已|已)?被否认|(?:确实|已经|现已|已)?不成立|(?:确有|有|存在)错误|有误|(?:是)?错误(?:的)?)$/u;
+        const revoked = next.split(/[，,；;]/u).some(clause => [...clause.matchAll(
+            /(?<!的)(?:上述|该|这一|前述)(?:净效应|净差距|净[ \t]*WER)?(?:观察|结论|结果)/giu
+        )].some(subject => {
+            const prefix = clause.slice(0, subject.index).split(/但是|然而|不过|可是|但|却/u).at(-1);
+            return owns('', 0, prefix) && isReportedExperimentPrefix(prefix)
+                && affirmative.test(clause.slice(subject.index + subject[0].length).trim());
+        }));
+        if (revoked) continue;
+        const reported = reportedPattern.exec(statement);
+        if (reported && Number(reported[1]) === values[0] && Number(reported[2]) === values[1]) return true;
     }
     return false;
 }
@@ -1521,6 +1657,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
     const resultHasNegative = hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
+        || hasSourceBackedNetIntervalNegative(results, tables, options.sourceText)
         || sourceBoundLowerMetricIncrease(results, sourceText)
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceText, true)
         || sourceHasObservedReasoningFailure(options.sourceText)
