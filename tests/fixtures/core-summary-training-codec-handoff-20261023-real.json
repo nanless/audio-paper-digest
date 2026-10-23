@@ -1,0 +1,81 @@
+{
+  "contract": "actual-paid-core-handoff-excerpt-fixture-v1",
+  "notes": "Readable exact method/configuration excerpts only. Unit testing excerpts does not replace the separate runtime replay of full paid responses against complete sealed sources. Fixture supplies no production capability or adoption.",
+  "adoptionAuthorized": false,
+  "papers": [
+    {
+      "paperId": "2610.31415",
+      "diagnosticId": "47a76a15-46f3-4a53-aa74-24f85fc6e152",
+      "fullSealedSourceSha256": "33de2b570a4398d59839a3c08c34eb612df203d87e0defbf694936bcad9b945c",
+      "sourceExcerpts": [
+        {
+          "startLine": 115,
+          "endLine": 153,
+          "text": "For each pair p∈𝒫p\\in\\mathcal{P}, let SpS_{p} denote its\nsynthetic CS-FLEURS source set, ApA_{p} its one-hour real\nadaptation set, and EpE_{p} its held-out real evaluation set.\nFor each model a∈𝒜a\\in\\mathcal{A}, we learn a separate\ninitialization θa,pmeta\\theta_{a,p}^{\\mathrm{meta}} starting from\nthat model’s pretrained initialization θa,0\\theta_{a,0}.\nThe symbol θ\\theta denotes the parameters updated during\ntraining. At meta-iteration tt, each synthetic episode ii starts\nfrom\nθa,p,i(0)=θa,p,t\\theta_{a,p,i}^{(0)}=\\theta_{a,p,t}.\nIt performs kak_{a} inner updates using the model-specific\nloss from Section 3.1:\nθa,p,i(j+1)\\displaystyle\\theta_{a,p,i}^{(j+1)}\n=θa,p,i(j)−αa​∇θℒa​(θa,p,i(j),Bp,i(j)),\\displaystyle=\\theta_{a,p,i}^{(j)}-\\alpha_{a}\\nabla_{\\theta}\\mathcal{L}_{a}\\bigl(\\theta_{a,p,i}^{(j)};B_{p,i}^{(j)}\\bigr),\n(4)\nwhere Bp,i(j)⊂SpB_{p,i}^{(j)}\\subset S_{p} is a synthetic minibatch\nand j=0,…,ka−1j=0,\\ldots,k_{a}-1. This notation expresses a gradient\nstep; the optimizer used in each implementation is reported\nwith the experimental configuration.\nLet\nθ~a,p,i=θa,p,i(ka)\\widetilde{\\theta}_{a,p,i}=\\theta_{a,p,i}^{(k_{a})}.\nFor a meta-batch of mam_{a} episodes, the Reptile update is\nθa,p,t+1\\displaystyle\\theta_{a,p,t+1}\n=θa,p,t\\displaystyle=\\theta_{a,p,t}\n(5)\n+βa,tma∑i=1ma(θ~a,p,i−θa,p,t),\\displaystyle+\\frac{\\beta_{a,t}}{m_{a}}\\sum_{i=1}^{m_{a}}\\bigl(\\widetilde{\\theta}_{a,p,i}-\\theta_{a,p,t}\\bigr),\nwhere βa,t\\beta_{a,t} is the outer step size. The update uses\nparameter displacements without differentiating through\nthe inner optimization trajectory.\nAfter meta-training, the initialization is adapted to the\none-hour real subset:\nϕa,p(0)\\displaystyle\\phi_{a,p}^{(0)}\n=θa,pmeta,\\displaystyle=\\theta_{a,p}^{\\mathrm{meta}},\n(6)\nϕa,p(u+1)\\displaystyle\\phi_{a,p}^{(u+1)}\n=ϕa,p(u)−ηa​∇ϕℒa​(ϕa,p(u),Bp(u)),\\displaystyle=\\phi_{a,p}^{(u)}-\\eta_{a}\\nabla_{\\phi}\\mathcal{L}_{a}\\bigl(\\phi_{a,p}^{(u)};B_{p}^{(u)}\\bigr),\nwhere Bp(u)⊂ApB_{p}^{(u)}\\subset A_{p}.\nThe resulting model ϕa,p⋆\\phi_{a,p}^{\\star} is evaluated on\nEpE_{p}. Neither meta-training nor target adaptation uses",
+          "sha256": "f4b351bd544af281d1222c921ed034af1cff50bc8120f8b0e7c7e821b3571c4e"
+        },
+        {
+          "startLine": 188,
+          "endLine": 227,
+          "text": "Table 1 reports the Reptile configuration\nfor each model.\nSetting\nXLS-R 300M\nNemotron 3.5 /\nWhisper-small / Audex-2B\nArchitecture\nEncoder–CTC\nFastConformer–RNN-T /\nAED / Speech-LLM\nTrainable parameters\nFull model\nFull model\nMeta-iterations\n500\n500\nInner steps kak_{a}\n50\n50\nInner learning rate αa\\alpha_{a}\n3×10−43\\times 10^{-4}\n2×10−52\\times 10^{-5}\nOuter step size βa\\beta_{a}\n0.1\n0.1\nBatch size\n2\n2\nTarget fine-tuning epochs\n50\n50\nGPU\n1×1\\times RTX 4090\nRTX A4500\nSetting: model-specific, pair-specific Reptile\nPairs: ara-eng, fra-eng, deu-eng, hin-eng\nSource: corresponding CS-FLEURS subset\nTarget: 1h per pair; MUCS and SwitchLingua\nTable 1: Reptile configurations. The grouped column\nreports shared settings; architectures follow the",
+          "sha256": "461f80bbde05bb95e47110b1406439ad519a00edf2164fe7f62ade5ceda09240"
+        }
+      ],
+      "summary": "## 核心摘要\n读者需要理解的对象是同一句话混用两种语言的语码转换语音转写，难点是真实混语语音少，合成语音声学干净、说话人变化少，直接训练易记住合成规律而在真实语音上失效。SyRA-CS为每个语言对和每个预训练模型从同一预训练检查点出发单独学一个初始化，先在对应合成CS-FLEURS子集上取小批量做50步内循环梯度更新，得到临时适应参数。再以临时参数与当前初始化的差为方向做外循环移动，重复500次元迭代得到易适应的元初始化，该元初始化直接作为起点，用同一小时真实目标语音微调50轮并在留出的真实集上评分；而持续微调先在同一合成集常规训练再用同一小时真实集微调，故两者差距反映训练策略而非数据量。与持续微调在相同合成源、同一小时真实语音及MUCS与SwitchLingua留出集上相比，SyRA-CS在全部16组模型与语言对比较上降低词错误率，宏观词错误率相对降幅XLS-R为17.7%、其余三模型为5.3%-5.8%，字错误率16组中15组降低，唯一回升是Whisper阿拉伯语-英语字错误率从0.162升至0.181而词错误率仍从0.352降至0.348。结论只支持同语言对内的合成到真实适应，不支持跨语言对共享初始化，且在德语-英语104句、阿拉伯语-英语218句等小测试集、单一种子与单次一小时划分下小幅增益可能落入方差，未验证合成与真实数据量权衡及与MAML等其他元学习算法的差异。表1披露XLS-R用1张RTX 4090、其余三模型用RTX A4500，Reptile均为500次元迭代、每回合50次内步，Reptile一阶形式降低二阶MAML求导开销但仍需重复内循环训练，原文未报告训练墙钟耗时、推理延迟或部署开销。\n",
+      "summarySha256": "21f5927f26bd0400e4d70235d3b840a1d5e9d6e015232ecec0e31873ac137923",
+      "methodWindow": "SyRA-CS为每个语言对和每个预训练模型从同一预训练检查点出发单独学一个初始化，先在对应合成CS-FLEURS子集上取小批量做50步内循环梯度更新，得到临时适应参数。再以临时参数与当前初始化的差为方向做外循环移动，重复500次元迭代得到易适应的元初始化，该元初始化直接作为起点，用同一小时真实目标语音微调50轮并在留出的真实集上评分；",
+      "methodWindowSha256": "0fcb377ae8d781550dd5b88430b96ae8bde6709599452acb2443ca5a7c7094b9",
+      "originalDisposition": {
+        "status": "rejected",
+        "error": "核心摘要未达到 core-summary-detailed-v3: 缺少 2–4 步方法链的分工与衔接",
+        "outputTextSha256": "21f5927f26bd0400e4d70235d3b840a1d5e9d6e015232ecec0e31873ac137923",
+        "candidateSummarySha256": "e80ab686b0394905abefafda53231b982910421a3b62243f355544dacccd8aaa",
+        "contract": "core-summary-request-diagnostics-v1",
+        "id": "47a76a15-46f3-4a53-aa74-24f85fc6e152",
+        "requestSha256": "643ba6d0d7a8b71bd876e295d6091ff44691c07cf8aabdf2be811f8f51f7bdb0",
+        "at": "2026-10-23T05:11:05.832Z"
+      },
+      "adoptionAuthorized": false
+    },
+    {
+      "paperId": "2610.29434",
+      "diagnosticId": "afffe55d-47d8-45d3-b066-d92a50c3df08",
+      "fullSealedSourceSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+      "sourceExcerpts": [
+        {
+          "startLine": 42,
+          "endLine": 42,
+          "text": "RubatoCodec shares cumulative budget allocation but separates boundary placement from event representation: deterministic statistics set event boundaries, and an aggregator combines the onset feature, the mean of the enclosed frame features, and the duration for each event. Table 1 compares VFR codecs in terms of temporal allocation, event-count control, timing representation, and training procedure.",
+          "sha256": "ce0987897f995b0407104a423390dc53b5d3a52e7842bc0fc15be21aa3fa82cc"
+        },
+        {
+          "startLine": 141,
+          "endLine": 141,
+          "text": "Adaptive Firing uses a firing signal derived from latent dissimilarity and waveform spectral flux to partition the 50-Hz latent sequence into KK events. A separate aggregator combines the frame features within each event into one vector; unlike CIF [23], the firing signal determines only the boundaries and does not weight the pooled features.",
+          "sha256": "1d3672abfe8299508b07a7d09f44bce6fe31758e5e3c715b2742432044c538ea"
+        },
+        {
+          "startLine": 205,
+          "endLine": 210,
+          "text": "The decoder places each dequantized event vector at its starting grid position and uses a learned empty vector between starts. Let ErE_{r} denote the learned offset embedding. With offset r=t−pir=t-p_{i} inside event ii,\nzt={g^i(D)+Er​(0),r=0,eempty+Er​(min⁡(r,64)),r>0.z_{t}=\\begin{cases}\\hat{g}_{i}^{(D)}+E_{r}(0),&r=0,\\\\\ne_{\\mathrm{empty}}+E_{r}(\\min(r,64)),&r>0.\\end{cases}\n(15)\nDuration did_{i} sets the number of grid frames, and the offset embedding identifies their positions within the event. The causal decoder can attend to the onset feature to synthesize the audio for that event. Appendix A.3 compares this sparse input with repeating the event vector and supports the sparse design for signal fidelity.\nThe decoder retains the X-Codec-2 Transformer backbone [7], with causal attention and convolutional dependencies. A projection maps the 2,048-dimensional grid to this 1,024-dimensional backbone, which uses a causal embedding convolution, 12 Transformer layers, rotary positions, and 16 attention heads. A factor-three transposed-convolution upsampler, inspired by the super-resolution module in Inworld TTS [20], produces 150-Hz synthesis features. A Vocos-style spectral head predicts magnitude and phase, followed by forward-window ISTFT with a hop size of 294 samples for 44.1-kHz output [19]. Convolutions are left-padded, transposed convolutions are right-trimmed, and attention excludes future frames, so synthesis depends only on the current and preceding events.",
+          "sha256": "b068fe643d55ceb6f1b29bdeec9040da752d99320357f2802f5d7e9540a35ebb"
+        }
+      ],
+      "summary": "## 核心摘要\n\n语音生成用神经编解码器需在短序列与每位置信息量之间权衡，固定网格易把快速音素过渡并入同一记号，又在静音段浪费同样多记号，而阈值型可变帧率让内容决定总数，使同一设置下序列长度随语料漂移。RubatoCodec的自适应触发机制以X-Codec-2编码骨干输出的潜特征变化与波形频谱通量为输入做累计分配，按保留率定出整句固定的事件总数并切出时长可变的事件边界，边界划分结果决定后续聚合区间。区间聚合器以上一起始帧特征与区间均值为输入，再拼接显式时长合成为量化器输入，每个事件输出离散码与时长，该码—时长表示直接摆成稀疏网格送入因果变换器与频谱合成解码器增量合成波形。与已有方法的关键差异是整句事件预算固定而边界自适应，使生成器一次预测一个事件并学会预算内的长短事件搭配。在LibriSpeech test-clean上12.5事件/秒、8层量化条件下，自适应编码相对同训练固定码率对照的UTMOSv2为3.448高于对照的3.365，dWER为0.80%低于对照的0.84%，比特率为1.23kbit/s与对照1.20kbit/s相近。多语言模型在英日重建评测同比特率段比较中dWER最低，英语零样本语音合成在seed-tts-eval的1088句上自适应表示的WER为3.10%低于固定码率对照的3.20%，UTMOS为4.162高于对照的4.080且说话人相似度均为0.392相当。结论适用于读朗读与部分情感语音重建及英语零样本语音合成对比，25Hz下增益收窄，PESQ-WB/STOI与说话人相似度仍有差距，训练总时长原文未披露充分细节，吞吐在单张NVIDIA H200上实测。\n",
+      "summarySha256": "1d3e6c1377c918808d84cf0cefcc368a315f70cdbad7529cc261a3b324b68f73",
+      "methodWindow": "RubatoCodec的自适应触发机制以X-Codec-2编码骨干输出的潜特征变化与波形频谱通量为输入做累计分配，按保留率定出整句固定的事件总数并切出时长可变的事件边界，边界划分结果决定后续聚合区间。区间聚合器以上一起始帧特征与区间均值为输入，再拼接显式时长合成为量化器输入，每个事件输出离散码与时长，该码—时长表示直接摆成稀疏网格送入因果变换器与频谱合成解码器增量合成波形。",
+      "methodWindowSha256": "de8b829be8154a364ad7c44dad857ce6f3014810b3de30c4a1c51e2795d99239",
+      "originalDisposition": {
+        "status": "rejected",
+        "error": "核心摘要未达到 core-summary-detailed-v3: 缺少 2–4 步方法链的分工与衔接",
+        "outputTextSha256": "1d3e6c1377c918808d84cf0cefcc368a315f70cdbad7529cc261a3b324b68f73",
+        "candidateSummarySha256": "77082dbb47b7a232630090acfc8e78ad0cb168b0c9318eed959769191da4f449",
+        "contract": "core-summary-request-diagnostics-v1",
+        "id": "afffe55d-47d8-45d3-b066-d92a50c3df08",
+        "requestSha256": "166a86e5c8cc254cf614c0ad7d9e7bce5f0c77ed0612b27aaca2cde45aa6d3b8",
+        "at": "2026-10-23T05:17:33.175Z"
+      },
+      "adoptionAuthorized": false
+    }
+  ]
+}

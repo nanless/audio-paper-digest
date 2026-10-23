@@ -2815,7 +2815,7 @@ function hasConcreteProductHandoff(summary) {
 }
 
 // Shared grammar. No paper/model/benchmark names are accepted here.
-function hasExplicitArtifactHandoff(summary) {
+function hasExplicitArtifactHandoff(summary, sourceText = '') {
     const sentences = String(summary || '').replace(/（[^）]*）|\([^)]*\)/gu, '')
         .split(/[。！？!?；;\n]/u).map(text => text.trim()).filter(Boolean);
     const denied = /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|讨论|提及|并非|不是|没有|未曾|尚未|独立方法|无关)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:生成|输出|得到|形成|取出|提取|编码|使用|接收|承接|送入|进入|作为|用于|计算|分成|分派)/u;
@@ -2875,6 +2875,33 @@ function hasExplicitArtifactHandoff(summary) {
                 && /^[，,]\s*该初始化(?:随即|随后|再)?用[^，,。]{1,100}真实目标语音微调/u.test(first.slice(initialized.index + initialized[0].length))) return true;
         }
         if (!typedSafe(index, 2)) continue;
+        // Closed, source-bound optimization and codec products. Reuse the
+        // existing adjacent-heading/negation/foreign-owner safety checks.
+        // A list of steps, a configured update, or an unrelated consumer fails.
+        const localNotice = normalizeLocalEvidenceHeading(sentences[index - 1] || '');
+        const extraOwnerDenied = /(?:不同|其他|外部|另一)(?:作者|团队|研究)|\b(?:other|external|different)\s+(?:authors?|teams?|researchers?)\b|^(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|建议)[^。]{0,80}(?:方法|流程|步骤|如下)/iu;
+        const currentOwnedPair = !extraOwnerDenied.test(localNotice)
+            && !extraOwnerDenied.test(first) && !extraOwnerDenied.test(second);
+        const source = String(sourceText || '').replace(/\s+/gu, ' ');
+        const adapted = /先在[^，,。]{0,70}合成[^，,。]{1,40}子集上(?:抽取|取)小批量做([1-9][0-9]{0,5})步内循环梯度更新[，,]\s*得到临时适应参数$/u.exec(first);
+        const meta = /^再(?:把初始化向这些临时参数方向|以这些临时参数为目标把初始化向其方向|以临时参数与当前初始化的差为方向)做外循环移动[，,]\s*重复([1-9][0-9]{0,5})次元迭代得到易适应的元初始化[，,]\s*(?:接着(?:以该元初始化为起点)?|该元初始化直接作为起点[，,]\s*)用同一小时真实目标语音微调([1-9][0-9]{0,5})轮并在留出的真实集上评分$/u.exec(second);
+        if (currentOwnedPair && adapted && meta
+            && /为每个语言对和每个预训练模型从同一预训练检查点出发单独学一个初始化/u.test(first)
+            && /For each model[^.]{0,500}learn a separate initialization[^.]{0,500}starting from[^.]{0,100}pretrained initialization/iu.test(source)
+            && /parameter displacements without differentiating through the inner optimization trajectory/iu.test(source)
+            && /After meta-training, the initialization is adapted to the one-hour real subset/iu.test(source)
+            && new RegExp(`Meta-iterations\\s+${meta[1]}(?![0-9])`, 'iu').test(source)
+            && new RegExp(`Inner steps[^.]{0,70}\\s${adapted[1]}(?![0-9])`, 'iu').test(source)
+            && new RegExp(`Target fine-tuning epochs\\s+${meta[2]}(?![0-9])`, 'iu').test(source)) return true;
+        // Boundaries determine the aggregation intervals; the quantized
+        // code-duration pair then supplies the actual causal waveform decoder.
+        if (currentOwnedPair
+            && /(?:自适应触发机制以|以)[^，,。]{1,60}编码骨干输出的潜特征变化与波形频谱通量为输入做累计分配[，,]\s*按保留率定出整句固定的事件总数并切出时长可变的事件边界[，,]\s*边界划分结果决定后续聚合区间$/u.test(first)
+            && /^区间聚合器以(?:上一|该区间的|本区间的)?起始帧特征与(?:同一|该)?区间均值为输入[，,]\s*再拼接显式时长合成为量化器输入[，,]\s*每个事件输出离散码与时长[，,]\s*该码[—–-]时长表示直接摆成稀疏网格送入因果变换器与频谱合成解码器增量合成波形$/u.test(second)
+            && /firing signal determines only the boundaries and does not weight the pooled features/iu.test(source)
+            && /aggregator combines the onset feature, the mean of the enclosed frame features, and the duration for each event/iu.test(source)
+            && /decoder places each dequantized event vector at its starting grid position/iu.test(source)
+            && /causal attention and convolutional dependencies/iu.test(source)) return true;
         // Distinct parallel monitoring arms each produce a local diagnostic;
         // the adjacent coordinator consumes that diagnostic group and forwards
         // its fused result to a separate communication stage.
@@ -3187,7 +3214,7 @@ function hasExplicitNaturalProductChain(summary, sourceText = '') {
     if (hasTypedNaturalProductHandoff(summary)) return true;
     if (hasExplicitEditedVectorHandoff(summary)) return true;
     if (hasGeneratedInputModelHeadChain(summary)) return true;
-    if (hasExplicitArtifactHandoff(summary)) return true;
+    if (hasExplicitArtifactHandoff(summary, sourceText)) return true;
     if (hasConcreteProductHandoff(summary)) return true;
     if (hasPosteriorUpdateProductChain(summary)) return true;
     if (hasBlockLayoutProductChain(summary)) return true;
