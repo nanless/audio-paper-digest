@@ -1,7 +1,11 @@
 """Literal display projections bind exact escaped source, never scientific facts."""
 import html
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -45,6 +49,48 @@ class PublicationLiteralDisplayTest(unittest.TestCase):
         fixed = escape_technical_notation_asterisks(raw)
         self.assertEqual(fixed, raw.replace('**kern', r'\*\*kern'))
         self.assertEqual(escape_technical_notation_asterisks(fixed), fixed)
+
+    def test_terminal_nested_emphasis_closing_keeps_exact_text(self):
+        for raw in ['这是 **kern 的 *斜体***。', '**kern 的 *斜体***。',
+                    '这是 **kern 格式\n以及 *斜体***。']:
+            with self.subTest(raw=raw):
+                self.assertEqual(escape_technical_notation_asterisks(raw), raw)
+                self.assertEqual(escape_technical_notation_asterisks(
+                    escape_technical_notation_asterisks(raw)), raw)
+                self.assertEqual(sanitize_markdown_for_publish(raw), raw)
+                self.assertEqual(sanitize_markdown_for_publish(sanitize_markdown_for_publish(raw)), raw)
+
+    def test_terminal_emphasis_does_not_borrow_or_cross_paragraph(self):
+        for raw in ['这是裸 **kern，随后有 **真正的 *斜体***。',
+                    '这是 **kern 的\n\n*斜体***。', '这是 **kern 的 *未闭合。',
+                    '这是 **kern 的 *斜体*。']:
+            with self.subTest(raw=raw):
+                expected = raw.replace('**kern', r'\*\*kern')
+                self.assertEqual(escape_technical_notation_asterisks(raw), expected)
+                self.assertEqual(escape_technical_notation_asterisks(expected), expected)
+
+    def test_hugo_goldmark_terminal_emphasis_has_actual_strong_em(self):
+        hugo = shutil.which('hugo')
+        if not hugo:
+            if os.environ.get('REQUIRE_HUGO_INTEGRATION_TESTS') == '1' or os.environ.get('PD_REQUIRE_HUGO_TESTS') == '1':
+                self.fail('real Hugo is required')
+            self.skipTest('real Hugo is unavailable')
+        raw = '这是 **kern 的 *斜体***。'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'content').mkdir()
+            (root / 'layouts/_default').mkdir(parents=True)
+            (root / 'hugo.toml').write_text('baseURL = "https://example.test/"\n', encoding='utf-8')
+            (root / 'layouts/_default/single.html').write_text('{{ .Content }}', encoding='utf-8')
+            for name, body in [('before', raw), ('after', sanitize_markdown_for_publish(raw))]:
+                (root / f'content/{name}.md').write_text('---\ntitle: "Local emphasis fixture"\n---\n\n' + body, encoding='utf-8')
+            completed = subprocess.run([hugo, '--source', str(root), '--destination', str(root / 'public'),
+                                        '--cacheDir', str(root / 'cache'), '--quiet'],
+                                       capture_output=True, text=True, timeout=30)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            expected = '<p>这是 <strong>kern 的 <em>斜体</em></strong>。</p>'
+            for name in ['before', 'after']:
+                self.assertEqual((root / f'public/{name}/index.html').read_text(encoding='utf-8').strip(), expected)
 
     def test_actual_three_ci_cells_exact_values_and_idempotence(self):
         raw = self.fixture['ci']['excerpt']

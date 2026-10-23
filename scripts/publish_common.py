@@ -7845,6 +7845,13 @@ def escape_technical_notation_asterisks(text):
     # whitespace before a later independent opener cannot close this pair.
     protected.extend((match.start(), match.end()) for match in re.finditer(
         r'(?<![\\*])\*\*(?=\S)(?:(?!\r?\n[ \t]*\r?\n)[^*]|\*(?!\*))+?(?<=\S)\*\*(?!\*)', body))
+    # A terminal nested single-emphasis span closes with one star immediately
+    # before the outer strong pair. Recognize this exact three-star run only;
+    # neither segment can skip another star delimiter or a blank paragraph.
+    protected.extend((match.start(), match.end()) for match in re.finditer(
+        r'(?<![\\*])\*\*(?=\S)(?:(?!\r?\n[ \t]*\r?\n)[^*])+?'
+        r'(?<!\\)\*(?!\*)(?=\S)(?:(?!\r?\n[ \t]*\r?\n)[^*])+?'
+        r'(?<!\\)(?<=\S)\*{3}(?!\*)', body))
     protected.extend((match.start(), match.end()) for match in re.finditer(
         r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|https?://[^\s<>]+', body))
     output = []
