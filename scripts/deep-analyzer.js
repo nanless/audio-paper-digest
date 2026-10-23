@@ -1029,6 +1029,27 @@ function hasAffirmativeDemoEvidence(sourceText) {
     });
 }
 
+function renderScoringAuditPrompt(promptPath, preparedAnalysis, evidenceContext, validationFeedback, factFeedback = '') {
+    return loadPrompt(promptPath, { existingAnalysis: preparedAnalysis, sourceEvidence: evidenceContext, validationFeedback })
+        + (factFeedback ? `\n来源绑定的事实纠错（评分理由不得重新引入已证实错误）：\n${factFeedback}` : '');
+}
+
+// Only the first, uncorrected scoring response is replayable here. The paid input
+// hash must match the actual configured request body, rather than an invented raw audit JSON.
+function savedScoringAuditFirstRequestBody(stage, input, evidence) {
+    const promptPath = promptFilePathForContract('scoringAudit', stage.promptTextContract || '');
+    if (stage.attempts !== 1 || stage.factReview || stage.scoringFactReview
+        || stage.promptTemplateSha256 !== runtimePromptTemplateSha256(promptPath)) {
+        throw new Error('已付评分恢复仅支持当前真实提示词的无反馈首响应');
+    }
+    const prompt = renderScoringAuditPrompt(promptPath, prepareScoringAuditAnalysis(input), evidence,
+        '这是第一次输出，没有上一次校验错误。');
+    return buildConfiguredModelRequestBody(sanitizeModelMessages([{ role: 'user', content: [{ type: 'text', text: prompt }] }]),
+        16000, { ...DEEP_CONFIG, temperature: SCORING_AUDIT_TEMPERATURE,
+            usageContext: { stage: 'scoringAudit', contentAttempt: 1 } },
+        detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model));
+}
+
 async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', options = {}) {
     const scoringFactReview = require('./lib/daily-fact-review');
     scoringFactReview.assertScoringRequestAllowed(options.declaredStage);
@@ -1049,11 +1070,8 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
         [...evidenceContext.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1])
     );
     for (let attempt = 1; attempt <= 3; attempt++) {
-        const prompt = loadPrompt(scoringAuditPromptPath, {
-            existingAnalysis: auditInputAnalysis,
-            sourceEvidence: evidenceContext,
-            validationFeedback
-        }) + (factFeedback ? `\n来源绑定的事实纠错（评分理由不得重新引入已证实错误）：\n${factFeedback}` : '');
+        const prompt = renderScoringAuditPrompt(scoringAuditPromptPath, auditInputAnalysis,
+            evidenceContext, validationFeedback, factFeedback);
         const request = options.callModelFn || callModel;
         const raw = await request(
             [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
@@ -17074,6 +17092,93 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     };
 }
 
+// 已保存与待验候选共同使用的完整评分指纹；不授予完成状态。
+function savedScoringAuditFingerprintChanged(paper, analysisManifest, scoringStage, scoringInputAnalysis, scoringEvidenceContext, scoringOutputAnalysis, expectedScoringFactFields, activePrimaryClaims = [], activeScoringClaims = []) {
+    const scoringInputSha256 = crypto.createHash('sha256').update(scoringInputAnalysis).digest('hex');
+    // 已完成记录按它自己声明的提示词版本选文件重算：缺字段按 v1 冻结路径，
+    // 未知版本由 promptFilePathForContract 直接抛错，不静默退化成不校验。
+    // 声明的模板 SHA 对着 Git 对象里也确实存在的原始字节时按声明值算，
+    // 归档里没有就退回当前文件，跟改动前一样清掉阶段重跑。
+    const currentPromptTemplateSha256 = resolvedRuntimePromptTemplateSha256(
+        scoringStage.promptTemplateSha256,
+        promptFilePathForContract(
+            'scoringAudit',
+            typeof scoringStage.promptTextContract === 'string'
+                ? scoringStage.promptTextContract : ''
+        )
+    );
+    const currentEvidenceSha256 = crypto.createHash('sha256')
+        .update(scoringEvidenceContext)
+        .digest('hex');
+    return stableFingerprint(expectedScoringFactFields)
+            !== stableFingerprint({
+                ...(scoringStage.factReview ? { factReview: scoringStage.factReview } : {}),
+                ...(scoringStage.scoringFactReview ? { scoringFactReview: scoringStage.scoringFactReview } : {})
+            })
+        || [...activePrimaryClaims, ...activeScoringClaims].some(claim => String(scoringOutputAnalysis || '').includes(claim))
+        || !!auxiliaryRequestPolicyFields('scoringAudit', scoringStage).auxiliaryRequestPolicyMismatch
+        || scoringStage.modelTextSanitizationContract
+            !== modelTextFingerprintFields(scoringInputAnalysis, scoringEvidenceContext).modelTextSanitizationContract
+        || scoringStage.model !== DEEP_CONFIG.model
+        || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
+        || scoringStage.endpointSha256 !== crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex')
+        || scoringStage.maxTokens !== 16000
+        || scoringStage.maxResponseBytes !== API_MAX_RESPONSE_BYTES
+        || scoringStage.temperature !== SCORING_AUDIT_TEMPERATURE
+        || scoringStage.promptTemplateSha256 !== currentPromptTemplateSha256
+        || scoringStage.scoringInputSha256 !== scoringInputSha256
+        || scoringStage.coreSummaryInputAnalysisSha256
+            !== analysisManifest.stages.coreSummaryRepair?.outputAnalysisSha256
+        || scoringStage.inputCoreSummarySha256 !== crypto.createHash('sha256')
+            .update(extractSectionByTitle(scoringInputAnalysis, '核心摘要')).digest('hex')
+        || scoringStage.outputCoreSummarySha256 !== crypto.createHash('sha256')
+            .update(extractSectionByTitle(
+                String(scoringOutputAnalysis || ''), '核心摘要'
+            )).digest('hex')
+        || scoringStage.evidenceSelectionVersion !== EVIDENCE_SELECTION_VERSION
+        || scoringStage.evidenceMaxChars !== SCORING_EVIDENCE_MAX_CHARS
+        || scoringStage.evidenceSha256 !== currentEvidenceSha256
+        || scoringStage.scoringContract !== SCORING_AUDIT_CONTRACT
+        || scoringStage.resourceNormalizationContract !== SCORING_RESOURCE_NORMALIZATION_CONTRACT
+        || scoringStage.requestFormatContract !== SCORING_REQUEST_FORMAT_CONTRACT
+        || scoringStage.capRulesVersion !== SCORING_CAP_RULES_VERSION
+        || !scoringStage.audit?.evidenceProfile
+        || !scoringStabilityResolutionIsValid(scoringStage)
+        || scoringStage.auditSha256 !== stableFingerprint(scoringStage.audit)
+        || scoringStage.outputAnalysisSha256 !== crypto.createHash('sha256').update(
+            String(scoringOutputAnalysis || '')
+        ).digest('hex');
+}
+
+function validateSavedScoringAuditCandidate(paper, analysisManifest, handle, candidate,
+    scoringInputAnalysis, scoringEvidenceContext, scoringResources, sourceText,
+    expectedScoringFactFields, activePrimaryClaims = [], activeScoringClaims = []) {
+    const original = candidate.stage;
+    // A pending snapshot is never installed before the exact same normal
+    // fingerprint check has accepted its real source, model and complete input.
+    if (savedScoringAuditFingerprintChanged(paper, analysisManifest, original,
+        scoringInputAnalysis, scoringEvidenceContext, candidate.output,
+        expectedScoringFactFields, activePrimaryClaims, activeScoringClaims)) {
+        throw Object.assign(new Error('原已付评分与本次正常来源、资源或完整输入指纹不同'), {
+            code: 'SAVED_SCORING_AUDIT_REPLAY_REJECTED', retryable: false
+        });
+    }
+    const allowedEvidenceIds = new Set(
+        [...scoringEvidenceContext.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1]));
+    const audited = validateScoringAuditAgainstAnalysis(scoringInputAnalysis, original.audit,
+        scoringResources, sourceText);
+    const validated = { ...revalidateScoringAudit(audited, allowedEvidenceIds),
+        ...(Array.isArray(audited.capsApplied) ? { capsApplied: audited.capsApplied } : {}) };
+    if (stableFingerprint(validated) !== original.auditSha256
+        || applyScoringAuditResult(scoringInputAnalysis, validated) !== candidate.output) {
+        throw Object.assign(new Error('原评分审计不能重放为原完整输出'), {
+            code: 'SAVED_SCORING_AUDIT_REPLAY_REJECTED', retryable: false
+        });
+    }
+    return require('./lib/saved-scoring-audit-replay').verifyPaidScoringInput(handle, paper,
+        savedScoringAuditFirstRequestBody(original, scoringInputAnalysis, scoringEvidenceContext));
+}
+
 /**
  * 深度分析单篇论文（全文 + 图片）
  */
@@ -18268,14 +18373,17 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     const structuralAnalysis = typeof paper.analysisStageCheckpoints?.coreSummaryRepair === 'string'
         ? paper.analysisStageCheckpoints.coreSummaryRepair
         : analysis;
-    const previousReaderResources = paper.apiReaderResources;
+    const savedScoringRecovery = require('./lib/saved-scoring-audit-replay');
+    const savedScoringCandidate = savedScoringRecovery.readSavedScoringAudit(
+        options.savedScoringAudit, paper, rawTextForAnalysis, structuralAnalysis);
+    const previousReaderResources = savedScoringCandidate?.paper.apiReaderResources || paper.apiReaderResources;
     const verifiedReaderResources = await buildApiReaderResourceIdentity(
         structuralAnalysis, rawTextForAnalysis, analysisManifest.stages.demoLinkScan,
         { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
     );
     paper.apiReaderResources = verifiedReaderResources;
     const thirdPartyScoringReplay = require('./lib/scoring-third-party-resource-replay').prepareReplay(
-        paper, previousReaderResources, verifiedReaderResources, structuralAnalysis, rawTextForAnalysis, {
+        savedScoringCandidate?.paper || paper, previousReaderResources, verifiedReaderResources, structuralAnalysis, rawTextForAnalysis, {
             verify: replayVerifiedReaderResourceIdentity,
             apply: applyApiReaderResourceAvailability,
             evidence: (input, source) => buildStageEvidenceContext('scoringAudit', input, source)
@@ -18290,7 +18398,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         paper.apiReaderResources.identitySha256;
 
     // 主模型只审计文档类型和八维评分，避免长文审校时发生重复扣分。
-    const scoringStage = analysisManifest.stages.scoringAudit;
+    let scoringStage = analysisManifest.stages.scoringAudit;
     const scoringFactReview = require('./lib/daily-fact-review');
     // 完成主分析后的中断也不能丢失事实约束；仅核验旧证明，不给旧评分补签。
     const scoringRequestDeclaration = analysisManifest.stages.primaryAnalysis?.factReview
@@ -18308,60 +18416,22 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         scoringInputAnalysis,
         rawTextForAnalysis
     );
+    if (savedScoringCandidate && !isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        const receipt = validateSavedScoringAuditCandidate(paper, analysisManifest,
+            options.savedScoringAudit, savedScoringCandidate, scoringInputAnalysis, scoringEvidenceContext,
+            thirdPartyScoringReplay ? previousReaderResources : verifiedReaderResources,
+            rawTextForAnalysis, expectedScoringFactFields, activePrimaryClaims, activeScoringClaims);
+        analysis = savedScoringCandidate.output;
+        scoringStage = analysisManifest.stages.scoringAudit = structuredClone(savedScoringCandidate.stage);
+        analysisManifest.savedScoringAuditReplay = receipt;
+        if (thirdPartyScoringReplay) analysisManifest.scoringResourceInputReplay = thirdPartyScoringReplay.metadata;
+        saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        console.log('    [deep] ✅ 原已付评分通过当前完整输入和审计重验，保留原费用与失败历史');
+    }
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
-        // 已完成记录按它自己声明的提示词版本选文件重算：缺字段按 v1 冻结路径，
-        // 未知版本由 promptFilePathForContract 直接抛错，不静默退化成不校验。
-        // 声明的模板 SHA 对着 Git 对象里也确实存在的原始字节时按声明值算，
-        // 归档里没有就退回当前文件，跟改动前一样清掉阶段重跑。
-        const currentPromptTemplateSha256 = resolvedRuntimePromptTemplateSha256(
-            scoringStage.promptTemplateSha256,
-            promptFilePathForContract(
-                'scoringAudit',
-                typeof scoringStage.promptTextContract === 'string'
-                    ? scoringStage.promptTextContract : ''
-            )
-        );
-        const currentEvidenceSha256 = crypto.createHash('sha256')
-            .update(scoringEvidenceContext)
-            .digest('hex');
-        const fingerprintChanged = stableFingerprint(expectedScoringFactFields)
-                !== stableFingerprint({
-                    ...(scoringStage.factReview ? { factReview: scoringStage.factReview } : {}),
-                    ...(scoringStage.scoringFactReview ? { scoringFactReview: scoringStage.scoringFactReview } : {})
-                })
-            || [...activePrimaryClaims, ...activeScoringClaims].some(claim => String(paper.analysisStageCheckpoints?.scoringAudit || '').includes(claim))
-            || !!auxiliaryRequestPolicyFields('scoringAudit', scoringStage).auxiliaryRequestPolicyMismatch
-            || scoringStage.modelTextSanitizationContract
-                !== modelTextFingerprintFields(scoringInputAnalysis, scoringEvidenceContext).modelTextSanitizationContract
-            || scoringStage.model !== DEEP_CONFIG.model
-            || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
-            || scoringStage.endpointSha256 !== crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex')
-            || scoringStage.maxTokens !== 16000
-            || scoringStage.maxResponseBytes !== API_MAX_RESPONSE_BYTES
-            || scoringStage.temperature !== SCORING_AUDIT_TEMPERATURE
-            || scoringStage.promptTemplateSha256 !== currentPromptTemplateSha256
-            || scoringStage.scoringInputSha256 !== scoringInputSha256
-            || scoringStage.coreSummaryInputAnalysisSha256
-                !== analysisManifest.stages.coreSummaryRepair?.outputAnalysisSha256
-            || scoringStage.inputCoreSummarySha256 !== crypto.createHash('sha256')
-                .update(extractSectionByTitle(scoringInputAnalysis, '核心摘要')).digest('hex')
-            || scoringStage.outputCoreSummarySha256 !== crypto.createHash('sha256')
-                .update(extractSectionByTitle(
-                    String(paper.analysisStageCheckpoints?.scoringAudit || ''), '核心摘要'
-                )).digest('hex')
-            || scoringStage.evidenceSelectionVersion !== EVIDENCE_SELECTION_VERSION
-            || scoringStage.evidenceMaxChars !== SCORING_EVIDENCE_MAX_CHARS
-            || scoringStage.evidenceSha256 !== currentEvidenceSha256
-            || scoringStage.scoringContract !== SCORING_AUDIT_CONTRACT
-            || scoringStage.resourceNormalizationContract !== SCORING_RESOURCE_NORMALIZATION_CONTRACT
-            || scoringStage.requestFormatContract !== SCORING_REQUEST_FORMAT_CONTRACT
-            || scoringStage.capRulesVersion !== SCORING_CAP_RULES_VERSION
-            || !scoringStage.audit?.evidenceProfile
-            || !scoringStabilityResolutionIsValid(scoringStage)
-            || scoringStage.auditSha256 !== stableFingerprint(scoringStage.audit)
-            || scoringStage.outputAnalysisSha256 !== crypto.createHash('sha256').update(
-                String(paper.analysisStageCheckpoints?.scoringAudit || '')
-            ).digest('hex');
+        const fingerprintChanged = savedScoringAuditFingerprintChanged(paper, analysisManifest, scoringStage,
+            scoringInputAnalysis, scoringEvidenceContext, paper.analysisStageCheckpoints?.scoringAudit,
+            expectedScoringFactFields, activePrimaryClaims, activeScoringClaims);
         if (fingerprintChanged) {
             scoringFactReview.assertScoringRequestAllowed(scoringRequestDeclaration);
             if (scoringStage.factReview || scoringStage.scoringFactReview
@@ -20825,6 +20895,9 @@ module.exports = {
     API_READER_FIGURE_SELECTION_LIMIT,
     SCORING_STABILITY_RESOLUTION_CONTRACT,
     scoringStabilityResolutionIsValid,
+    savedScoringAuditFingerprintChanged,
+    savedScoringAuditFirstRequestBody,
+    validateSavedScoringAuditCandidate,
     buildApiReaderQualityMetrics,
     bindApiReaderSourceEvidence,
     deriveExactTableSourceQuotes,
