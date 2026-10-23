@@ -209,14 +209,14 @@ function page(root, relative, title, scope, hint = { status: 'none', candidates:
     return { pageId: pageKey(relative), path: relative, contentSha256: write(path.join(root, relative), content), primaryUrl: 'https://example.test/page',
         cohortDate: '2026-01-01', kind: 'paper', scope, identityHints: hint };
 }
-function fixture(t) {
+function fixture(t, arxivId = '2601.00001') {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-runner-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blog = path.join(root, 'blog'); const metadata = path.join(root, 'metadata.json'); const pdf = path.join(root, 'conference.pdf');
     const metadataSha256 = json(metadata, { papers: [{ arnumber: '100', title: 'POISON_METADATA_TITLE', authors: ['Author'] }] });
     write(pdf, '%PDF-1.4\nconference bytes\n%%EOF\n'); const pdfSha256 = sha(fs.readFileSync(pdf));
     const pages = [
-        page(blog, 'content/posts/arxiv.md', 'ArXiv page', { type: 'daily', key: '2026-01-01' }, { status: 'single', candidates: [{ scheme: 'arxiv', value: '2601.00001', sources: ['body:arxiv-link'] }] }),
+        page(blog, 'content/posts/arxiv.md', 'ArXiv page', { type: 'daily', key: '2026-01-01' }, { status: 'single', candidates: [{ scheme: 'arxiv', value: arxivId, sources: ['body:arxiv-link'] }] }),
         page(blog, 'content/posts/conference.md', 'POISON_METADATA_TITLE', { type: 'conference', key: 'icassp-2026' })
     ];
     const inventory = { counts: { pages: pages.length, papers: pages.length }, ledgerSha256: sha('ledger'), pageSetSha256: sha('pages'), pages };
@@ -252,7 +252,7 @@ function fixture(t) {
         dailyIcmlPosterBindings, dailyIcmlPosterBindingSetSha256: planner.stableHash(dailyIcmlPosterBindings),
         dailyIcmlPosterRoutableBindings: [], dailyIcmlPosterRoutableBindingSetSha256: planner.stableHash([]),
         icmlPosterAuthoritySha256: null, entries: [
-        { paperId: 'arxiv:2601.00001', sources: [] },
+        { paperId: `arxiv:${arxivId}`, sources: [] },
         { paperId, sources: [{ sourceSet, provenance,
             metadata: { absolutePath: metadata, sha256: metadataSha256, recordIndex,
                 metadataIdentityBindingSha256, posterBinding },
@@ -2266,3 +2266,158 @@ test('历史回读旧主文同Reader、错成员来源或读取漂移失败不�
         assert.equal(result.hasTransaction, true);
     });
 });
+
+
+// The real published source text/PDF are offline input fixtures. Test metadata,
+// analysis/Reader content and stage receipts remain formal synthetic fixtures;
+// they demonstrate current engine qualification mechanics, not paper adoption.
+function correctionRateHistoricalFixture(t) {
+    const id = '2610.30385', f = fixture(t, id), roots = files(f.root);
+    const record = JSON.parse(require('node:zlib').gunzipSync(fs.readFileSync(path.join(__dirname,
+        'fixtures/structure-checkpoint-20261023-real.json.gz')))).papers.find(row => row.paperId === id);
+    const summary = require('./fixtures/core-summary-correction-flow-20261023-real.json').responses[2].scientificSummary
+        .replace(/^## 核心摘要\s*/u, '').trim();
+    const pdf = fs.readFileSync(path.join(__dirname, 'fixtures/historical-core-source-2610.30385.pdf'));
+    assert.equal(sha(record.sourceText), '72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f');
+    assert.equal(sha(pdf), '13110c6983548d0c9882fe4e865e28b0002fc94042a62c6de4602f6e51b8932b');
+    const capture = input => freshSource.captureFreshArxivRewriteSource(input, {
+        fetchText: async () => {
+            const body = { version: 1, tables: [], formulas: [], figures: [], flattenedTextSha256: sha(record.sourceText) };
+            return { paperId: `arxiv:${id}`, source: 'html', sourceId: id, text: record.sourceText,
+                imageInfos: [], structuredArtifacts: { ...body, payloadSha256: sha(JSON.stringify(body)) },
+                htmlAvailability: 'available', htmlAttempts: 1, warnings: [],
+                url: `https://arxiv.org/html/${id}`, fetchedAt: '2026-09-07T00:00:01.000Z' };
+        },
+        fetchPdf: async () => ({ bytes: pdf, url: `https://arxiv.org/pdf/${id}`,
+            fetchedAt: '2026-09-07T00:00:02.000Z' })
+    });
+    const analyze = ({ item, sourceDescriptor, sourceDetails }) => {
+        const paper = sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        paper.arxivId = id;
+        bindCorrectionRateSummary(paper, id, summary);
+        assert.equal(engine.hasValidApiReaderV3Records(paper), true);
+        assert.equal(require('../scripts/analysis-contract').validateCoreSummaryStageBinding(paper), null);
+        assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, 'the actual direct source scope passes the full unmodified engine');
+        return paper;
+    };
+    return { f, roots, id, capture, analyze };
+}
+
+function bindCorrectionRateSummary(paper, id, summary) {
+    const analysis = paper.analysis.replace(/(## 核心摘要\n)[\s\S]*?(?=\n## )/u, '$1' + summary + '\n');
+    const current = validAnalysisPaper(id, {}, analysis);
+    paper.analysis = analysis; paper.parsed = require('../scripts/utils').parseAnalysis(analysis);
+    for (const name of ['structureRepair', 'taxonomySeal', 'coreSummaryRepair']) {
+        paper.analysisManifest.stages[name] = current.analysisManifest.stages[name];
+    }
+    paper.analysisStageCheckpoints.taxonomySeal = analysis;
+    for (const field of ['coreSummaryInputAnalysisSha256', 'inputCoreSummarySha256', 'outputCoreSummarySha256']) {
+        paper.analysisManifest.stages.scoringAudit[field] = current.analysisManifest.stages.scoringAudit[field];
+    }
+    paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = sha(analysis);
+    return paper;
+}
+
+function offlineHistoricalCore(t, operation) {
+    const deny = () => assert.fail('offline historical qualification must not issue network requests');
+    t.mock.method(require('node:net').Socket.prototype, 'connect', deny);
+    t.mock.method(require('node:http'), 'request', deny);
+    t.mock.method(require('node:https'), 'request', deny);
+    t.mock.method(globalThis, 'fetch', deny);
+    return require('../scripts/lib/analysis-stop-control').withModelRequestsForbidden(operation);
+}
+
+test('历史来源绑定核心摘要的完整资格在分析后和两条冷暂存入口保留同一真实来源', async t => {
+    return offlineHistoricalCore(t, async () => {
+        const { f, roots, id, capture, analyze } = correctionRateHistoricalFixture(t);
+        let analyses = 0, record;
+        const dependencies = { captureFreshArxivRewriteSource: capture, renderDirectPage,
+            analyze: input => { analyses++; record = analyze(input); return record; } };
+        const options = { apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1,
+            paperIds: [`arxiv:${id}`] };
+        const initial = await runner.runDirectRewrite(options, dependencies);
+        assert.equal(analyses, 1);
+        assert.equal(context.getDirectRewriteAnalysisContext(), null);
+        assert.equal(engine.isSuccessfulAnalysisRecord(record), false, 'no global source qualification survives scope exit');
+        assert.match(engine.getIncompleteAnalysisContentReason(record), /核心摘要语义的原封存来源未通过核验/);
+        assert.equal(initial.results[0].status, 'staged', 'source-bound core must not lose its real source before staging');
+        const replayed = await runner.runDirectRewrite(options, { ...dependencies,
+            analyze: () => assert.fail('staged cold replay must not analyze') });
+        assert.equal(replayed.results[0].status, 'recovered');
+        const completed = asInterruptedAnalysisComplete(JSON.parse(fs.readFileSync(initial.registryFile, 'utf8')),
+            f.plan, `arxiv:${id}`);
+        write(initial.registryFile, JSON.stringify(completed));
+        const resumed = await runner.runDirectRewrite(options, { ...dependencies,
+            analyze: () => assert.fail('completed analysis cold replay must not analyze') });
+        assert.equal(resumed.results[0].status, 'staged');
+        assert.equal(analyses, 1);
+    });
+});
+
+
+test('历史来源绑定核心的四份封存文件漂移在真实冷暂存门拒绝且不补分析', async t => {
+    for (const name of ['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json']) {
+        await t.test(name, child => offlineHistoricalCore(child, async () => {
+            const { f, roots, id, capture, analyze } = correctionRateHistoricalFixture(child);
+            let analyses = 0;
+            const dependencies = { captureFreshArxivRewriteSource: capture, renderDirectPage,
+                analyze: input => { analyses++; return analyze(input); } };
+            const options = { apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1,
+                paperIds: [`arxiv:${id}`] };
+            const initial = await runner.runDirectRewrite(options, dependencies);
+            assert.equal(initial.results[0].status, 'staged');
+            const file = path.join(freshSource.sourceDirectory(roots.freshArxivSourceRoot, id, 1), name);
+            fs.appendFileSync(file, '\n');
+            const replayed = await runner.runDirectRewrite(options, { ...dependencies,
+                analyze: () => assert.fail('source drift cannot dispatch new analysis') });
+            assert.equal(replayed.results[0].status, 'failed');
+            assert.equal(analyses, 1);
+            assert.equal(context.getDirectRewriteAnalysisContext(), null);
+        }));
+    }
+});
+
+test('历史真实来源作用域仍完整拒绝无效核心、评分、Reader及最新失败', async t => {
+    for (const kind of ['invalid-core', 'scoring', 'Reader', 'latest-failure']) {
+        await t.test(kind, child => offlineHistoricalCore(child, async () => {
+            const { f, roots, id, capture, analyze } = correctionRateHistoricalFixture(child);
+            let reached = false;
+            const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+                queue: 'arxiv', paperIds: [`arxiv:${id}`], arxivGeneration: 1 }, {
+                captureFreshArxivRewriteSource: capture, renderDirectPage,
+                analyze: input => {
+                    const paper = analyze(input);
+                    if (kind === 'invalid-core') {
+                        const summary = require('../scripts/analysis-contract').extractSection(paper.analysis, '核心摘要')
+                            .replace('12.8%', '12.9%').replace('2.06%', '2.07%');
+                        bindCorrectionRateSummary(paper, id, summary);
+                    } else if (kind === 'scoring') paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = 'f'.repeat(64);
+                    else if (kind === 'Reader') paper.analysisManifest.stages.apiReaderArticle.articleSha256 = 'f'.repeat(64);
+                    else paper.latestAnalysisAttemptError = 'a later analysis failed';
+                    reached = true;
+                    assert.equal(engine.isSuccessfulAnalysisRecord(paper), false, kind + ' remains rejected inside the actual source scope');
+                    return paper;
+                }
+            });
+            assert.equal(reached, true);
+            assert.equal(result.results[0].status, 'failed');
+            assert.equal(allFiles(roots.executionRoot).filter(file => path.basename(file) === 'analysis.json').length, 0);
+        }));
+    }
+});
+
+test('历史来源JSON和克隆句柄不能代替真实owner的冷资格作用域', async t => offlineHistoricalCore(t, async () => {
+    const { f, roots, id, capture, analyze } = correctionRateHistoricalFixture(t);
+    let saved;
+    const initial = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', paperIds: [`arxiv:${id}`], arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: capture, renderDirectPage,
+        analyze: input => { const paper = analyze(input); saved = { ...input, analysis: paper }; return paper; }
+    });
+    assert.equal(initial.results[0].status, 'staged');
+    const args = { item: saved.item, sourceDescriptor: saved.sourceDescriptor,
+        analysis: saved.analysis, sourceDetails: structuredClone(saved.sourceDetails) };
+    assert.throws(() => runner.assertDirectAnalysisReadyForStaging(args), /incomplete or failed/);
+    assert.throws(() => runner.assertDirectAnalysisReadyForStaging({ ...args, readerPdfSourceHandle: {} }), /real runner handle/);
+    assert.equal(context.getDirectRewriteAnalysisContext(), null);
+}));
