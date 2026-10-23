@@ -128,7 +128,7 @@ class ConferenceGitExecutionTest(unittest.TestCase):
             M.git('/repo', 'status', check=False)
 
     def test_actual_shared_executor_short_timeout_and_output_cap(self):
-        # 使用真实日更执行器；测试只缩短期限/输出cap，不产生网络或仓库写入。
+        # 使用真实日更执行器；仅超时分支缩短期限，输出cap分支保留正常本地预算。
         runtime = REAL_LOAD_PUBLISHER()
         timeout = [0.08]
         self.runtime._bounded_positive_seconds.side_effect = lambda *args: timeout[0]
@@ -142,13 +142,16 @@ class ConferenceGitExecutionTest(unittest.TestCase):
         self.runtime._run_bounded_subprocess.side_effect = run
         with tempfile.TemporaryDirectory(prefix='conference-fake-git-') as directory:
             executable = Path(directory) / 'git'
-            executable.write_text(f'#!{sys.executable}\nimport sys,time\nif "slow" in sys.argv: time.sleep(10)\nelse: sys.stdout.buffer.write(b"a"*4096)\n')
+            # 受控延迟只复现旧2s将输出cap检查混为超时；不代表原机器的启动耗时。
+            executable.write_text(f'#!{sys.executable}\nimport sys,time\n'
+                                  'if "slow" in sys.argv: time.sleep(10)\n'
+                                  'else:\n time.sleep(2.1)\n sys.stdout.buffer.write(b"a"*4096)\n')
             executable.chmod(0o700)
             env = dict(os.environ, PATH=directory)
             with mock.patch.object(M, 'build_child_process_env', return_value=env):
                 for operation in ('slow', 'large'):
                     with self.subTest(operation=operation), self.assertRaises(M.ConferencePublicationError):
-                        timeout[0] = 0.08 if operation == 'slow' else 2
+                        timeout[0] = 0.08 if operation == 'slow' else runtime.GIT_LOCAL_TIMEOUT_SECONDS
                         M.git(directory, operation, check=False)
         self.assertTrue(observations[0].timed_out)
         self.assertFalse(observations[0].output_truncated)
