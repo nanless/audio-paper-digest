@@ -1,0 +1,123 @@
+{
+  "contract": "real-frame-frequency-pdf-page-fixture-v1",
+  "notAuthorization": true,
+  "notes": "Exact physical page6 of real Perch paper, for source-grid regression only. It is not the complete official source or production authority; full sealed-source replay remains runtime evidence.",
+  "originalFullPdfSha256": "ee53e01488455ffa87fdbda5f08fa20aeaf3b5746e77a8cdcb4b2e5148025b44",
+  "originalPage": 6,
+  "excerptPdfSha256": "63238c367fad0844de782dbc59ef4493c451adb3ad2b2e213a65be6cd6ec14d7",
+  "view": [
+    [
+      "Frame length",
+      "Frequency Min (Hz)",
+      "Frequency Max (Hz)",
+      "AUC-ROC",
+      "AP"
+    ],
+    [
+      "640†",
+      "60",
+      "16000",
+      "0.636",
+      "0.146"
+    ],
+    [
+      "640",
+      "0",
+      "16000",
+      "0.647",
+      "0.146"
+    ],
+    [
+      "1024",
+      "0",
+      "16000",
+      "0.620",
+      "0.116"
+    ],
+    [
+      "2048",
+      "0",
+      "16000",
+      "0.534",
+      "0.035"
+    ],
+    [
+      "4096",
+      "0",
+      "16000",
+      "0.538",
+      "0.035"
+    ],
+    [
+      "8192",
+      "0",
+      "16000",
+      "0.558",
+      "0.064"
+    ],
+    [
+      "16384",
+      "0",
+      "16000",
+      "0.564",
+      "0.064"
+    ],
+    [
+      "32768",
+      "0",
+      "16000",
+      "0.569",
+      "0.065"
+    ],
+    [
+      "640",
+      "0",
+      "1000",
+      "0.618",
+      "0.082"
+    ],
+    [
+      "1024",
+      "0",
+      "1000",
+      "0.629",
+      "0.088"
+    ],
+    [
+      "2048",
+      "0",
+      "1000",
+      "0.664",
+      "0.106"
+    ],
+    [
+      "4096",
+      "0",
+      "1000",
+      "0.683",
+      "0.149"
+    ],
+    [
+      "8192",
+      "0",
+      "1000",
+      "0.690",
+      "0.162"
+    ],
+    [
+      "16384",
+      "0",
+      "1000",
+      "0.682",
+      "0.161"
+    ],
+    [
+      "32768",
+      "0",
+      "1000",
+      "0.688",
+      "0.150"
+    ]
+  ],
+  "quote": "TABLE III: Effect of the modification of the Perch front-end configuration on classification performance measured on the ATBFL dataset, using the multiclass configuration with k = 5. The frame length, the frequency range spanned by the mel filterbank, and the resulting macro-averaged AUC-ROC and AP are shown. Frame length Frequency (Hz) AUC-ROC AP Min Max 640† 60 16000 0.636 0.146 640 0 16000 0.647 0.146 1024 0 16000 0.620 0.116 2048 0 16000 0.534 0.035 4096 0 16000 0.538 0.035 8192 0 16000 0.558 0.064 16384 0 16000 0.564 0.064 32768 0 16000 0.569 0.065 640 0 1000 0.618 0.082 1024 0 1000 0.629 0.088 2048 0 1000 0.664 0.106 4096 0 1000 0.683 0.149 8192 0 1000 0.690 0.162 16384 0 1000 0.682 0.161 32768 0 1000 0.688 0.150 † Default input representation of Perch."
+}

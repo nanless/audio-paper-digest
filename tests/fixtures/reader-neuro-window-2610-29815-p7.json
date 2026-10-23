@@ -1,0 +1,87 @@
+{
+  "contract": "reader-neuro-window-actual-page-fixture-v1",
+  "notSourceCapability": true,
+  "paperId": "2610.29815",
+  "originalPage": 7,
+  "originalFullPdfSha256": "e75d0cf08373c6e6b55905914570095d5338f1056b74b619916c35ccac7dad55",
+  "excerptPdfSha256": "0edd24b5474d6670dcd3da0f376acb8d93045a8541a37ccd85a36226979116b5",
+  "table": "TABLE IV",
+  "view": [
+    [
+      "",
+      "w (s)",
+      "PESQ ↑",
+      "RTF ↓"
+    ],
+    [
+      "(a) Buffered context wb (wc=0.5 s)",
+      "",
+      "",
+      ""
+    ],
+    [
+      "wb=0.5 s",
+      "1.0",
+      "1.412",
+      "0.09"
+    ],
+    [
+      "wb=1.0 s",
+      "1.5",
+      "1.558",
+      "0.13"
+    ],
+    [
+      "wb=1.5 s",
+      "2.0",
+      "1.662",
+      "0.18"
+    ],
+    [
+      "wb=2.5 s",
+      "3.0",
+      "1.681",
+      "0.27"
+    ],
+    [
+      "wb=3.5 s",
+      "4.0",
+      "1.689",
+      "0.36"
+    ],
+    [
+      "(b) Hop wc (wb=1.5 s)",
+      "",
+      "",
+      ""
+    ],
+    [
+      "wc=0.10 s",
+      "1.6",
+      "1.674",
+      "0.71"
+    ],
+    [
+      "wc=0.25 s",
+      "1.75",
+      "1.669",
+      "0.31"
+    ],
+    [
+      "wc=0.50 s",
+      "2.0",
+      "1.662",
+      "0.18"
+    ],
+    [
+      "wc=1.00 s",
+      "2.5",
+      "1.594",
+      "0.11"
+    ]
+  ],
+  "quotes": [
+    "TABLE IV EFFECT OF THE BUFFERED CONTEXT SIZE wb AND THE HOP SIZE wc ON ONLINENEUROCODEC. w (s) PESQ ↑ RTF ↓ (a) Buffered context wb (wc = 0.5 s) wb = 0.5 s 1.0 1.412 0.09 wb = 1.0 s 1.5 1.558 0.13 wb = 1.5 s 2.0 1.662 0.18 wb = 2.5 s 3.0 1.681 0.27 wb = 3.5 s 4.0 1.689 0.36 (b) Hop wc (wb = 1.5 s) wc = 0.10 s 1.6 1.674 0.71 wc = 0.25 s 1.75 1.669 0.31 wc = 0.50 s 2.0 1.662 0.18 wc = 1.00 s 2.5 1.594 0.11 The model was evaluated on the KUL dataset with the auditory attractor enabled. The total window is w = wb + wc. Bold text denotes the operating point used in Table III. "
+  ],
+  "sourceSpecSha256": "ed0e0be487e5fd61521dc20a95951dbf2154ecf0705d4601e7a6116a086b3fee"
+}

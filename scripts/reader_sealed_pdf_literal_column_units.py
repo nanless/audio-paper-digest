@@ -245,6 +245,130 @@ def source_grid(page, caption, document, additional_captions=()):
     return next(iter(possibilities.values()))
 
 
+def window_condition_captions(page):
+    # Standalone Roman-number captions without ':' are accepted only for the
+    # explicit buffered-context/hop window profile, never by another parser.
+    result = []
+    for block in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT):
+        lines = [line.strip() for line in block[4].splitlines() if line.strip()]
+        if not (3 <= len(lines) <= 5 and re.fullmatch(r'TABLE [IVXLCDM]+', lines[0])
+                and lines[-1].endswith('.')
+                and re.fullmatch(r'EFFECT OF THE BUFFERED CONTEXT SIZE wb AND THE HOP SIZE wc ON', lines[1])
+                and all(re.fullmatch(r'[A-Z0-9 .-]+', line) for line in lines[2:])):
+            continue
+        result.append(block)
+    return result
+
+
+def window_condition_surface(value):
+    # Only literal wb/wc assignment whitespace; no unit, value or precision rewrite.
+    return re.sub(r'\b(w[bc])\s*=\s*([+−-]?\d+(?:\.\d+)?)\s+s\b',
+                  r'\1=\2 s', surface(value))
+
+
+def window_condition_source_grid(page, caption, document):
+    """Complete two-band buffered-context/hop window grid, with a blank label header.
+
+    This profile cannot identify arbitrary letter/numeric result axes. It requires
+    the physical w(s), PESQ-up and RTF-down headers, both explicit complementary
+    wb/wc condition bands, every literal parameter label, all cells and glyphs.
+    """
+    cap = caption[:4]
+    rules = sorted(set((float(d['rect'].x0), float(d['rect'].y0), float(d['rect'].x1))
+                       for d in page.get_drawings() if d['rect'].height < .1 and d['rect'].width > 40), key=lambda r: r[1])
+    tops = [r for r in rules if 0 <= r[1] - cap[3] <= 40 and r[0] <= (cap[0] + cap[2]) / 2 <= r[2]]
+    need(tops, 'window_table_top_missing')
+    top = min(tops, key=lambda r: r[1])
+    following = [b[1] for b in page.get_text('blocks') if NEXT_CAPTION.match(b[4])
+                 and b[1] > cap[3] and max(b[0], top[0]) < min(b[2], top[2])]
+    limit = min(following or [page.rect.height])
+    horizontal = sorted(r[1] for r in rules if abs(r[0] - top[0]) < .1 and abs(r[2] - top[2]) < .1
+                        and top[1] <= r[1] < limit)
+    need(len(horizontal) == 4, 'window_two_complete_bands_missing')
+    separator, middle, bottom = horizontal[1:]
+    words = [list(w[:5]) for w in page.get_text('words', sort=False, flags=fitz.TEXTFLAGS_TEXT)
+             if top[0] < cx(w) < top[2] and top[1] < cy(w) < bottom]
+    need(words and len(words) <= 8192, 'window_table_words_invalid')
+    groups = columns_from_header(page, words, top, separator)
+    need([surface(g['text']) for g in groups] == ['w (s)', 'PESQ ↑', 'RTF ↓'],
+         'window_exact_header_semantics_missing')
+    body = [w for w in words if cy(w) > separator]
+    label_words = [w for w in body if w[2] < groups[0]['left']]
+    numeric_words = [w for w in body if w not in label_words]
+    need(label_words and numeric_words and all(SCALAR.fullmatch(w[4]) for w in numeric_words),
+         'window_result_cells_not_scalar')
+    label_right = max(w[2] for w in label_words)
+    result_left = min(groups[0]['left'], min(w[0] for w in numeric_words))
+    need(label_right < result_left, 'window_label_numeric_columns_overlap')
+    label_edge = (label_right + result_left) / 2
+    lines = rows_of(body)
+    need(6 <= len(lines) <= 64 and all(b[0] - a[0] >= 4 for a, b in zip(lines, lines[1:])),
+         'window_body_rows_missing_or_overlap')
+    ys = [y for y, _ in lines]
+    row_edges = [separator, *[(a+b)/2 for a,b in zip(ys,ys[1:])], bottom]
+    possibilities = {}
+    for numeric_edges in column_edges(groups, [w for w in words if cx(w) > label_edge], label_edge, top[2]):
+        try:
+            edges = [top[0], *numeric_edges]
+            cells = [{'row': 0, 'column': c+1, 'words': g['words'], 'text': g['text']}
+                     for c,g in enumerate(groups)]
+            rows, band_records, active_band = [], [], None
+            group_sizes = [0, 0]
+            for r, (y, _) in enumerate(lines):
+                parts = [[w for w in body if row_edges[r] < cy(w) < row_edges[r+1]
+                          and edges[c] < cx(w) < edges[c+1]] for c in range(4)]
+                need(parts[0] and all(not values or len(rows_of(values)) == 1 for values in parts),
+                     'window_label_missing_or_cell_multiline')
+                text = literal(parts[0])
+                row = [text, *[literal(v) for v in parts[1:]]]
+                canonical = window_condition_surface(text)
+                if not any(parts[1:]):
+                    expected = (r'\(a\) Buffered context wb \(wc=[+−-]?\d+(?:\.\d+)? s\)' if not band_records
+                                else r'\(b\) Hop wc \(wb=[+−-]?\d+(?:\.\d+)? s\)')
+                    need(len(band_records) < 2 and re.fullmatch(expected, canonical), 'window_explicit_band_changed')
+                    band_index = len(band_records)
+                    need((band_index == 0 and separator < y < middle and r == 0)
+                         or (band_index == 1 and middle < y < bottom), 'window_physical_band_mismatch')
+                    active_band = band_index
+                    band_records.append({'text': text, 'row': r+1,
+                                         'top': separator if band_index == 0 else middle,
+                                         'bottom': middle if band_index == 0 else bottom})
+                else:
+                    need(active_band is not None and all(parts[c] for c in range(1,4))
+                         and all(SCALAR.fullmatch(value) for value in row[1:]), 'window_complete_data_row_missing')
+                    parameter = 'wb' if active_band == 0 else 'wc'
+                    need(re.fullmatch(parameter+r'=[+−-]?\d+(?:\.\d+)? s', canonical),
+                         'window_literal_parameter_identity_missing')
+                    band = band_records[active_band]
+                    need(band['top'] < y < band['bottom'], 'window_cross_band_parameter')
+                    group_sizes[active_band] += 1
+                rows.append(row)
+                cells.extend({'row': r+1, 'column': c, 'words': values, 'text': row[c]}
+                             for c,values in enumerate(parts))
+            need(len(band_records) == 2 and all(n >= 2 for n in group_sizes), 'window_two_full_parameter_groups_missing')
+            identities = [[window_condition_surface(row[0])] for row in rows]
+            need(len(set(tuple(v) for v in identities)) == len(rows), 'window_duplicate_parameter_identity')
+            owned = [tuple(w) for cell in cells for w in cell['words']]
+            need(len(owned) == len(words) and len(set(owned)) == len(words), 'window_unowned_or_repeated_word')
+            table_lines = [line_text(line) for line in pdf_lines(page)
+                           if top[0]-.1 <= line['bbox'][0] and line['bbox'][2] <= top[2]+.1
+                           and top[1] < (line['bbox'][1]+line['bbox'][3])/2 < bottom]
+            full_quote = quote_evidence(document, normalize_quote(caption[4]+' '+' '.join(table_lines)))
+            box = [top[0], top[1], top[2], bottom]
+            grid = {'page':page.number+1, 'bbox':box, 'headers':['',*[g['text'] for g in groups]],
+                    'rows':rows, 'identityColumns':[0], 'rowIdentities':identities,
+                    'columnBoundaries':edges, 'rowBoundaries':row_edges, 'horizontalRules':horizontal,
+                    'conditionBands':band_records, 'cells':cells, 'words':words,
+                    'glyphs':complete_glyphs(page,words,box), 'wordBoxCount':len(words),
+                    'fullTableQuoteEvidence':full_quote, 'axisProfile':'complete-literal-buffer-hop-window-axis-v1',
+                    'units':[{'column':1,'unit':'s','values':[row[1] for row in rows]}]}
+            possibilities.setdefault(stable({'headers':grid['headers'],'rows':rows,'cells':cells}),grid)
+        except ValueError:
+            continue
+    need(len(possibilities)==1,'window_complete_source_grid_not_unique:'+str(len(possibilities)))
+    return next(iter(possibilities.values()))
+
+
 def grouped_source_grid(page, caption, document):
     """A fully observed two-level header and complete literal mean±CI grid.
 
@@ -394,6 +518,106 @@ def grouped_source_grid(page, caption, document):
             'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()]}
 
 
+def numeric_frontend_source_grid(page, caption, document):
+    """Complete Frame-length/Frequency-parent input grids, never result-keyed rows."""
+    cap = caption[:4]
+    rules = sorted(set((float(d['rect'].x0), float(d['rect'].y0), float(d['rect'].x1))
+                       for d in page.get_drawings() if d['rect'].height < .1 and d['rect'].width > 40), key=lambda r: r[1])
+    tops = [r for r in rules if 0 <= r[1] - cap[3] <= 40 and r[0] <= (cap[0] + cap[2]) / 2 <= r[2]]
+    need(tops, 'frontend_table_top_missing')
+    top = min(tops, key=lambda r: r[1])
+    following = [b[1] for b in page.get_text('blocks') if NEXT_CAPTION.match(b[4])
+                 and b[1] > cap[3] and max(b[0], top[0]) < min(b[2], top[2])]
+    limit = min(following or [page.rect.height])
+    horizontal = sorted(r[1] for r in rules if abs(r[0] - top[0]) < .1 and abs(r[2] - top[2]) < .1
+                        and top[1] <= r[1] < limit)
+    need(3 <= len(horizontal) <= 16, 'frontend_complete_rules_missing')
+    separator, bottom = horizontal[1], horizontal[-1]
+    words = [list(w[:5]) for w in page.get_text('words', sort=False, flags=fitz.TEXTFLAGS_TEXT)
+             if top[0] < cx(w) < top[2] and top[1] < cy(w) < bottom]
+    need(words and len(words) <= 8192, 'frontend_words_invalid')
+    header_words = [w for w in words if cy(w) < separator]
+    items = raw_header_items(page, top[1], separator + 2, top[0] - .1, top[2] + .1)
+    required = ['Frame length', 'Frequency (Hz)', 'Min', 'Max', 'AUC-ROC', 'AP']
+    need(len(items) == 6 and sorted(i[4] for i in items) == sorted(required), 'frontend_literal_header_topology_missing')
+    by_name = {i[4]: i for i in items}
+    parent, low, high = (by_name[k] for k in ['Frequency (Hz)', 'Min', 'Max'])
+    need(cy(parent) < cy(low) and abs(cy(low) - cy(high)) <= 1.25
+         and low[2] < high[0] and cx(low) < cx(parent) < cx(high), 'frontend_parent_leaf_vertical_scope_changed')
+    groups, owned = [], []
+    for name in ['Frame length', 'Min', 'Max', 'AUC-ROC', 'AP']:
+        item = by_name[name]
+        values = [w for w in header_words if item[0] - .05 <= w[0] and w[2] <= item[2] + .05
+                  and item[1] - .05 <= w[1] and w[3] <= item[3] + .05]
+        need(values and literal(values) == name, 'frontend_header_word_changed')
+        groups.append({'left': item[0], 'right': item[2], 'text': name, 'words': values})
+        owned += [tuple(w) for w in values]
+    parent_words = [w for w in header_words if parent[0] - .05 <= w[0] and w[2] <= parent[2] + .05
+                    and parent[1] - .05 <= w[1] and w[3] <= parent[3] + .05]
+    need(literal(parent_words) == 'Frequency (Hz)', 'frontend_parent_unit_not_literal')
+    owned += [tuple(w) for w in parent_words]
+    need(len(owned) == len(header_words) and len(set(owned)) == len(header_words), 'frontend_unowned_header_word')
+    body = [w for w in words if cy(w) > separator]
+    boundary_words = body + [w for g in groups for w in g['words']]
+    possibilities = {}
+    for edges in column_edges(groups, boundary_words, top[0], top[2]):
+        try:
+            need(edges[1] < parent[0] and parent[2] < edges[3], 'frontend_parent_crosses_frequency_columns')
+            labels = [w for w in body if edges[0] < cx(w) < edges[1]]
+            lines = rows_of(labels)
+            need(2 <= len(lines) <= 64, 'frontend_rows_missing')
+            ys = [y for y, _ in lines]
+            need(all(b - a >= 4 for a, b in zip(ys, ys[1:])), 'frontend_rows_overlap')
+            need(all(any(a < y < b for y in ys) for a, b in zip(horizontal[1:], horizontal[2:])), 'frontend_empty_body_band')
+            row_edges = [separator, *[(a + b) / 2 for a, b in zip(ys, ys[1:])], bottom]
+            rows, cells, used = [], [], []
+            for c, g in enumerate(groups):
+                cells.append({'row': 0, 'column': c, 'words': g['words'], 'text': g['text']})
+            for r, (_, label_words) in enumerate(lines):
+                row = []
+                for c in range(5):
+                    values = [w for w in body if row_edges[r] < cy(w) < row_edges[r + 1] and edges[c] < cx(w) < edges[c + 1]]
+                    need(values and len(rows_of(values)) == 1, 'frontend_cell_missing_or_multiline')
+                    value = literal(values)
+                    need(re.fullmatch(r'[1-9]\d*†?', value) if c == 0 else SCALAR.fullmatch(value), 'frontend_cell_not_literal_scalar')
+                    row.append(value);used += [tuple(w) for w in values]
+                    cells.append({'row': r + 1, 'column': c, 'words': values, 'text': value})
+                rows.append(row)
+            need(len(used) == len(body) and len(set(used)) == len(body), 'frontend_unowned_or_repeated_body_word')
+            # All three printed input dimensions identify a row. AUC/AP never
+            # disambiguate a repeated frame length or select a source table.
+            identities = [row[:3] for row in rows]
+            need(len(set(tuple(row) for row in identities)) == len(rows), 'frontend_input_conditions_not_unique')
+            box = [top[0], top[1], top[2], bottom]
+            glyphs = complete_glyphs(page, words, box)
+            table_lines = [line_text(line) for line in pdf_lines(page) if top[0] - .1 <= line['bbox'][0]
+                           and line['bbox'][2] <= top[2] + .1 and top[1] < (line['bbox'][1] + line['bbox'][3]) / 2 < bottom]
+            footnote = []
+            if any('†' in row[0] for row in rows):
+                footnote = [line_text(line).strip() for line in pdf_lines(page) if top[0] - .1 <= line['bbox'][0]
+                            and line['bbox'][2] <= top[2] + .1 and bottom < (line['bbox'][1] + line['bbox'][3]) / 2 < bottom + 15
+                            and line_text(line).strip().startswith('† ')]
+                need(len(footnote) == 1, 'frontend_dagger_footnote_missing_or_ambiguous')
+            full_quote = quote_evidence(document, normalize_quote(caption[4] + ' ' + ' '.join(table_lines + footnote)))
+            grid = {'page': page.number + 1, 'bbox': box,
+                    'headers': ['Frame length', 'Frequency Min (Hz)', 'Frequency Max (Hz)', 'AUC-ROC', 'AP'],
+                    'rows': rows, 'identityColumns': [0, 1, 2], 'rowIdentities': identities,
+                    'headerProfile': 'complete-frame-frequency-parent-leaf-v1',
+                    'headerParents': [{'text': parent[4], 'bbox': list(parent[:4]), 'columns': [1, 2], 'unit': 'hz'}],
+                    'headerLeaves': [{'column': c, 'text': g['text'], 'words': g['words']} for c, g in enumerate(groups)],
+                    'columnBoundaries': edges, 'rowBoundaries': row_edges, 'horizontalRules': horizontal,
+                    'conditionBands': [], 'cells': cells, 'words': words, 'glyphs': glyphs,
+                    'wordBoxCount': len(words), 'daggerFootnote': footnote,
+                    'fullTableQuoteEvidence': full_quote,
+                    'units': [{'column': c, 'unit': 'hz', 'values': [row[c] for row in rows]} for c in [1, 2]]}
+            key = stable({'headers': grid['headers'], 'rows': rows, 'cells': cells})
+            possibilities.setdefault(key, grid)
+        except ValueError:
+            continue
+    need(len(possibilities) == 1, 'frontend_source_grid_not_unique:' + str(len(possibilities)))
+    return next(iter(possibilities.values()))
+
+
 def caption_uncertainty_source_grid(page, caption, document):
     """A complete ruled table with parent headers and vertically stacked mean/SD.
 
@@ -510,9 +734,12 @@ def prove_pdf_bytes(raw, view, quotes):
             additional = standalone_axis_captions(page)
             captions = [(caption, False) for caption in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT)
                         if TABLE_CAPTION.match(caption[4])] + [(caption, True) for caption in additional]
+            captions += [(caption, 'window') for caption in window_condition_captions(page)]
             for caption, axis_caption in captions:
                 try:
-                    if axis_caption:
+                    if axis_caption == 'window':
+                        grid = window_condition_source_grid(page, caption, document)
+                    elif axis_caption:
                         grid = source_grid(page, caption, document, additional)
                         need(grid.get('axisProfile') in ('complete-literal-background-axis-v1',
                                                         'complete-literal-snr-axis-v1'),
@@ -524,7 +751,10 @@ def prove_pdf_bytes(raw, view, quotes):
                             try:
                                 grid = grouped_source_grid(page, caption, document)
                             except ValueError:
-                                grid = caption_uncertainty_source_grid(page, caption, document)
+                                try:
+                                    grid = numeric_frontend_source_grid(page, caption, document)
+                                except ValueError:
+                                    grid = caption_uncertainty_source_grid(page, caption, document)
                     full = grid['fullTableQuoteEvidence']
                     if grid.get('headerProfile') == 'complete-caption-parent-leaf-stacked-uncertainty-v1':
                         complete_quote_coverage(document, full, quote_proofs)
@@ -538,7 +768,8 @@ def prove_pdf_bytes(raw, view, quotes):
                     if grid.get('headerProfile'):
                         need(all(not re.findall(r'[↑↓→]', rendered) or re.findall(r'[↑↓→]', rendered) == re.findall(r'[↑↓→]', original)
                                  for rendered, original in zip(view[0], grid['headers'])), 'literal_explicit_header_direction_changed')
-                    ids = [[surface(row[c]) for c in grid['identityColumns']] for row in view[1:]]
+                    identity_surface = window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else surface
+                    ids = [[identity_surface(row[c]) for c in grid['identityColumns']] for row in view[1:]]
                     need(ids == [[surface(v) for v in identity] for identity in grid['rowIdentities']],
                          'literal_complete_row_identity_changed')
                     grids.append(grid)
@@ -546,11 +777,16 @@ def prove_pdf_bytes(raw, view, quotes):
                     continue
     need(len(grids) == 1, 'literal_bound_table_not_unique:' + str(len(grids)))
     grid = grids[0]
-    cell_surface = uncertainty_surface if grid.get('headerProfile') else surface
+    cell_surface = (window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1'
+                    else uncertainty_surface if grid.get('headerProfile') else surface)
     need([[cell_surface(v) for v in row] for row in view[1:]] == [[cell_surface(v) for v in row] for row in grid['rows']],
          'literal_complete_cell_value_changed')
     proof = {'contract': CONTRACT, 'valueOrigin': 'sealed_pdf', 'sourceBasis': 'independent-complete-pdf-grid',
-             'projectionProfile': ('whitespace-same-delta-parent-leaf-direction-omission-and-mean-ci-spacing-v1'
+             'projectionProfile': ('whitespace-same-delta-and-literal-wb-wc-equals-spacing-v1'
+                                   if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else
+                                   'whitespace-same-delta-frame-frequency-parent-leaf-v1'
+                                   if grid.get('headerProfile') == 'complete-frame-frequency-parent-leaf-v1' else
+                                   'whitespace-same-delta-parent-leaf-direction-omission-and-mean-ci-spacing-v1'
                                    if grid.get('headerProfile') else 'whitespace-same-delta-and-explicit-merged-dataset-v1'),
              'pdfSha256': sha(raw),
              'rawFullTextSha256': document['rawFullTextSha256'], 'normalizedFullTextSha256': document['normalizedFullTextSha256'],
