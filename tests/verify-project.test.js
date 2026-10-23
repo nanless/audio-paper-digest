@@ -46,6 +46,46 @@ test('源码遍历在任意深度都排除 runtime/vendor 目录和符号链接'
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('源码遍历跳过调查与生成片段，仍覆盖其他源码且不跨外部符号链接', () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-local-artifacts-'));
+    const root = path.join(temporary, 'project');
+    try {
+        for (const directory of ['scripts', 'manual/scripts', 'tests', 'custom-source', 'nested/ordinary',
+            '.source', '_understanding-source', 'outputs',
+            '_understanding', 'output', 'nested/_understanding', 'nested/output']) {
+            fs.mkdirSync(path.join(root, directory), { recursive: true });
+        }
+        fs.writeFileSync(path.join(root, 'scripts/main.js'), 'const value = 1;');
+        fs.writeFileSync(path.join(root, 'scripts/output.js'), 'const output = 1;');
+        fs.writeFileSync(path.join(root, 'scripts/_understanding.js'), 'const notes = 1;');
+        fs.writeFileSync(path.join(root, 'manual/scripts/tool.cjs'), 'module.exports = 1;');
+        fs.writeFileSync(path.join(root, 'tests/check.test.js'), 'const check = 1;');
+        fs.writeFileSync(path.join(root, 'custom-source/check.py'), 'value = 1\n');
+        fs.writeFileSync(path.join(root, 'nested/ordinary/run.sh'), 'exit 0\n');
+        fs.writeFileSync(path.join(root, '.source/visible.js'), 'const visible = 1;');
+        fs.writeFileSync(path.join(root, '_understanding-source/retained.mjs'), 'export const value = 1;');
+        fs.writeFileSync(path.join(root, 'outputs/retained.py'), 'value = 1\n');
+        // A new gitignore rule must not silently remove formal source coverage.
+        fs.writeFileSync(path.join(root, '.gitignore'), 'custom-source/\n');
+        for (const directory of ['_understanding', 'output', 'nested/_understanding', 'nested/output']) {
+            for (const extension of ['js', 'py', 'sh']) {
+                fs.writeFileSync(path.join(root, directory, `conflict.${extension}`), '<<<<<<< original\n');
+            }
+        }
+        const external = path.join(temporary, 'external');
+        fs.mkdirSync(external);
+        fs.writeFileSync(path.join(external, 'outside.js'), '<<<<<<< external\n');
+        fs.symlinkSync(external, path.join(root, 'linked-directory'));
+        fs.symlinkSync(path.join(external, 'outside.js'), path.join(root, 'scripts/linked-file.js'));
+        assert.deepEqual(collectSourceFiles(root), {
+            javascript: ['.source/visible.js', '_understanding-source/retained.mjs', 'manual/scripts/tool.cjs',
+                'scripts/_understanding.js', 'scripts/main.js', 'scripts/output.js', 'tests/check.test.js'],
+            python: ['custom-source/check.py', 'outputs/retained.py'],
+            shell: ['nested/ordinary/run.sh']
+        });
+    } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
 test('普通、CommonJS 和 ESM 文件都纳入语法检查；模块语法错误会使检查失败', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-module-syntax-'));
     try {
