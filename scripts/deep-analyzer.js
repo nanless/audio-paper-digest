@@ -8929,6 +8929,15 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     // 只提供最近一次错误，可能使模型在修正一处时再次破坏此前正确的内容。
     // 本轮会累积所有尝试的错误，并在每次请求中保留外部审查反馈。
     const attemptErrorHistory = [];
+    // Prompt-only diagnostics survive issue recollection without granting repair targets.
+    const savedPatchRejectionFeedback = record => {
+        const message = record?.issues?.findLast(issue => typeof issue?.message === 'string'
+            && issue.message.startsWith('Reader patch rejected:'))?.message
+            || record?.patchRejectionFeedback;
+        return typeof message === 'string' && message.startsWith('Reader patch rejected:')
+            ? message.slice(0, 3000) : '';
+    };
+    let patchRejectionFeedback = '';
     const numericSpellingGuidance = require('./lib/reader-source-diagnostics.js').readerNumericSpellingGuidance();
     const buildAttemptFeedback = () => {
         const parts = [numericSpellingGuidance];
@@ -9105,6 +9114,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     candidate = recovered?.draft || start.signedRecoveryDraft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];
     currentIssues = recovered?.issues || [];
+    patchRejectionFeedback = savedPatchRejectionFeedback(recovered);
     if (!candidate && recovered?.rawDraft) {
         const rawIssues = collectReaderDraftIssues(null, null, { rawDraft: recovered.rawDraft });
         currentIssues = [...currentIssues, ...rawIssues.filter(issue => !currentIssues.some(existing =>
@@ -9226,6 +9236,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             candidate = recovered.draft || null;
             previousDraft = recovered.rawDraft || start.previousDraft;
             currentIssues = recovered.issues || [];
+            patchRejectionFeedback = savedPatchRejectionFeedback(recovered);
             draftOrderMappings = recovered.draftOrderMappings || [];
             readerRecoveryRevisions = recovered.readerRecoveryRevisions || [];
             useEscalatedRepairBudget = false;
@@ -9411,7 +9422,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const fullRegenerationEvidence = fullRegenerationTableFeedback
             ? repair.budgetReaderRepairSourceEvidence(sourceEvidence, fullRegenerationTableFeedback, repairOptions)
             : sourceEvidence;
-        const buildReaderPrompt = indexExamples => require('./lib/reader-resource-prose').renderPrompt(
+        const buildReaderPrompt = indexExamples => {
+            const rendered = require('./lib/reader-resource-prose').renderPrompt(
             conceptTermsContext
             ? loadPrompt(conceptTermsContext.promptPath, { title: paper.title || '', arxivId: getPaperArxivId(paper),
                 ...repair.conceptTermsPromptVariables(conceptTermsContext) })
@@ -9446,6 +9458,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             previousDraft,
             mechanicalContract
         }), naturalResourceProse);
+            return repairContext && patchRejectionFeedback
+                ? `${rendered}\n\n上一局部补丁拒绝诊断（仅用于修正响应格式）：\n${patchRejectionFeedback}\n`
+                    + '旧诊断中的路径、received 与 expected-current 仅解释上次拒绝，不授予修改目标。'
+                    + '本次请求的当前目标清单及 draftSha256、oldSha256 才是唯一有效依据；不得照抄旧 SHA 或新增目标。'
+                : rendered;
+        };
         let prompt = buildReaderPrompt('');
         const indexExamples = readerVerifiedTableIndexExamples(
             options.structuredArtifacts, repairContext ? repairContext.evidence : sourceEvidence,
@@ -9636,7 +9654,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, lastTransportError: String(error?.message || error),
                 ...(requestUsesEscalatedRepairBudget && recovered?.lastContentError
-                    ? { lastContentError: recovered.lastContentError } : {})
+                    ? { lastContentError: recovered.lastContentError } : {}),
+                ...(patchRejectionFeedback ? { patchRejectionFeedback } : {})
             });
             throw error;
         }
@@ -9693,6 +9712,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     terms: conceptTermsContext.targets.map(target => ({ path: target.path, oldSha256: target.oldSha256,
                         newSha256: repair.hashDraft(candidate.conceptBridges[Number(target.path.split('/')[2])].terms[Number(target.path.split('/')[4])]) })) });
                 patchApplied = true;
+                patchRejectionFeedback = '';
             } else {
                 candidate = repair.parseRepairableDraft(extractJsonObjectText(raw));
             }
@@ -9777,6 +9797,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 throw error;
             }
             lastError = error;
+            patchRejectionFeedback = repairContext && !patchApplied
+                ? `Reader patch rejected: ${error.message}`.slice(0, 3000) : '';
             previousDraft = candidate ? JSON.stringify(candidate)
                 : metadataOperation && !patchApplied ? previousDraft : raw;
             currentIssues = error.code === 'READER_PATCH_NO_PROGRESS' ? currentIssues
