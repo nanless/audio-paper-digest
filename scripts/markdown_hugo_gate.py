@@ -357,7 +357,10 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
         issues.append(
             f'{label} Markdown 加粗标记 ** 未配对: {bold_markers} 个'
         )
-    for match in re.finditer(r'\*\*[^*\n]+\*\*', clean):
+    # Consume backslash escapes as pairs, including literal stars inside a
+    # label. Otherwise adjacent labels can lend their closing/opening markers
+    # to a false whitespace-only match, while a real glued closing is missed.
+    for match in re.finditer(r'\*\*(?:\\[^\n]|[^\\*\n])+\*\*', clean):
         next_char = clean[match.end():match.end() + 1]
         if next_char and (
                 next_char.isalnum() or '\u3400' <= next_char <= '\u9fff'):
