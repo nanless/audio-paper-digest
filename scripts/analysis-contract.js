@@ -771,8 +771,32 @@ function sourceBackedIdentityColumns(table, sourceText) {
     });
     const stageSwitchColumns = table.header.flatMap((header, index) => /^S[1-9][0-9]?$/.test(String(header).trim()) ? [index] : []);
     const sourceBoundStageSwitches = hasObservedStageSwitchTable(table, rawSource, stageSwitchColumns);
+    // These two categorical axes are not generic "signal" identifiers.
+    // Each actual audiogram/signal pair must belong to one observed source table.
+    const audiogram = table.header.findIndex(header => /^(?:听力图|audiograms?)$/iu.test(String(header).trim()));
+    const signal = table.header.findIndex(header => /^(?:信号|signals?)$/iu.test(String(header).trim()));
+    const musicSignal = new Map([['紧凑', 'Tight'], ['常规', 'Normal'], ['动态', 'Dynamic']]);
+    const pairedAudiogramSignals = audiogram >= 0 && signal >= 0 && table.rows.length >= 2
+        && captions.some((match, captionIndex) => {
+            const caption = rawSource.slice(match.index).split('\n').find(line => line.trim()) || '';
+            const prefix = rawSource.slice(0, match.index).split('\n').filter(line => line.trim()).at(-1) || '';
+            if (!/Optimization results for profiles [^\n]{1,100}with limited residual DR/iu.test(caption)
+                || !ownObservedSourceScope(prefix + '\n' + caption)) return false;
+            const body = rawSource.slice(match.index, Math.min(captions[captionIndex + 1]?.index ?? rawSource.length, match.index + 20000));
+            return table.rows.every(row => {
+                const profile = /^([A-Z][0-9]{1,2})\s+有限范围$/u.exec(String(row[audiogram] || '').trim());
+                const music = musicSignal.get(String(row[signal] || '').trim());
+                if (!profile || !music) return false;
+                const begin = new RegExp('(?:^|\\n)' + profile[1] + ' with limited DR\\r?\\n', 'u').exec(body);
+                if (!begin) return false;
+                const tail = body.slice(begin.index + begin[0].length);
+                const end = tail.search(/(?:^|\n)(?:[A-Z][0-9]{1,2} with limited DR|Fig\.|Table\s+\d+:)/u);
+                return new RegExp('(?:^|\\n)' + music + '(?:\\r?\\n|$)', 'u').test(end < 0 ? tail : tail.slice(0, end));
+            });
+        });
     return new Set(table.header.flatMap((header, index) => {
         if (table.rows.length < 2) return [];
+        if (pairedAudiogramSignals && (index === audiogram || index === signal)) return [index];
         if (sourceBoundStageSwitches && stageSwitchColumns.includes(index)) return [index];
         const labels = table.rows.map(row => String(row[index] || '').trim());
         if (String(header).trim() === '来源') {
@@ -991,6 +1015,63 @@ function hasSourceBackedSettingVariantAblation(results, tables, sourceText) {
     });
 }
 
+// Only the immediately adjacent attribution/hypothesis heading scopes a
+// new result exception. An earlier independent paragraph is not a global veto.
+function normalizeLocalEvidenceHeading(line) {
+    let heading = String(line || '').trim();
+    const atx = /^#{1,6}[ \t]+([^\n]*)$/u.exec(heading);
+    if (atx) heading = atx[1].replace(/[ \t]+#+[ \t]*$/u, '').trim();
+    const bold = /^(\*\*|__)([^\n]+)\1$/u.exec(heading);
+    return bold ? bold[2].trim() : heading;
+}
+
+function hasOwnLocalReportedExperiment(text, index, sentence) {
+    if (!ownObservedSourceScope(sentence)) return false;
+    const before = String(text || '').slice(0, index);
+    const currentLine = before.slice(before.lastIndexOf('\n') + 1);
+    if (currentLine.trim()) return true; // same-sentence attribution was checked above
+    // Blank Markdown separator lines do not end a closed heading's scope.
+    // Inspect one bounded adjacent nonblank line, never a whole prior section.
+    const adjacent = before.slice(-512).replace(/[ \t\r\n]+$/u, '');
+    if (!adjacent && before.length) return false;
+    const previous = normalizeLocalEvidenceHeading(adjacent.split('\n').at(-1).split(/[。；！？!?]/u).at(-1));
+    const notice = /^(?:第三方|他人|外部团队|其他研究|相关工作|相关研究|先前研究|既有研究|旧工作|基线方法|对照系统|假设|假想|假定|设想|如果|预计|计划|未来|previous\s+work|prior\s+research|related\s+work)[^。；.!?\n]{0,140}[：:]$/iu;
+    return !notice.test(previous);
+}
+
+// A measured single-factor placement control can be reported in prose.
+// Bind the isolated factor, held-fixed processing and both depth/value pairs;
+// neither the word "adaptive" nor an arbitrary comparison supplies an ablation.
+function hasSourceBackedPlacementControl(results, sourceText) {
+    const rawSource = String(sourceText || '');
+    const headings = [...rawSource.matchAll(/^(?:(?:[0-9]+(?:\.[0-9]+)*|[IVXLCDM]+)\s+)?Uniform-stride versus adaptive event placement\s*\r?\n/gimu)];
+    if (headings.length !== 1) return false;
+    const start = headings[0].index + headings[0][0].length;
+    const tail = rawSource.slice(start, start + 16000);
+    const end = tail.search(/^[ \t]*(?:[0-9]+(?:\.[0-9]+)*|[IVXLCDM]+)[ \t]+[A-Z]/mu);
+    const source = end < 0 ? tail : tail.slice(0, end);
+    const prefix = rawSource.slice(0, headings[0].index).split('\n').filter(line => line.trim()).at(-1) || '';
+    if (!ownObservedSourceScope(prefix + '\n' + source)) return false;
+    const control = /To isolate event placement, we compare[^\n]{1,600}?Both models share the [^\n]{1,100}?latent grid, [^\n]{1,100}?interval aggregator, [^\n]{1,100}?quantizer, and causal decoder/iu.exec(source);
+    const observed = /Adaptive placement gives[^\n]{1,1400}?With aggregation and decoding held fixed[^\n]{1,500}/iu.exec(source);
+    const owns = match => match && ownObservedSourceScope(source.slice(
+        Math.max(0, source.lastIndexOf('\n', match.index - 1) + 1), match.index) + match[0]);
+    if (!owns(control) || !owns(observed)) return false;
+    const single = /\bdWER\b[^.!?]{0,180}with one codebook\s*\((\d+(?:\.\d+)?)%\s*(?:→\s*(?:\\rightarrow)?|\\rightarrow)\s*(\d+(?:\.\d+)?)%\)/iu.exec(observed[0]);
+    const depths = /at depths ([1-9][0-9]*) and ([1-9][0-9]*), dWER is close\s*\((\d+(?:\.\d+)?)% versus (\d+(?:\.\d+)?)% and (\d+(?:\.\d+)?)% versus (\d+(?:\.\d+)?)%\)/iu.exec(observed[0]);
+    if (!single || !depths || Number(single[2]) >= Number(single[1]) || depths[1] === depths[2]) return false;
+    const pairs = new Map([[depths[1], [depths[3], depths[4]]], [depths[2], [depths[5], depths[6]]]]);
+    for (const reported of String(results || '').matchAll(/[^。；\n]+/gu)) {
+        const sentence = reported[0];
+        if (!hasOwnLocalReportedExperiment(results, reported.index, sentence) || /假想|设想|第三方|旧工作|既有研究|先前工作|先前研究|相关工作|相关研究|文献|引用|转述|撤回|否认|不成立|\b(?:previous|prior|related)\s+(?:work|research)\b/iu.test(sentence)) continue;
+        const measured = /只改变放置的均匀步长对照中[^。]{1,150}单码本\s+dWER\s+从\s*(\d+(?:\.\d+)?)%\s+降到\s*(\d+(?:\.\d+)?)%[，,]\s*([1-9][0-9]*)\s*层时为\s*(\d+(?:\.\d+)?)%\s+对\s*(\d+(?:\.\d+)?)%/iu.exec(sentence);
+        const pair = measured && pairs.get(measured[3]);
+        if (measured && pair && Number(measured[1]) === Number(single[1]) && Number(measured[2]) === Number(single[2])
+            && Number(measured[4]) === Number(pair[0]) && Number(measured[5]) === Number(pair[1])) return true;
+    }
+    return false;
+}
+
 function hasSourceBackedZeroCorrectionAblation(results, sourceText) {
     const source = String(sourceText || '').replace(/\s+/g, ' ');
     // A measured correction sweep isolates this component; a zero weight in
@@ -1046,6 +1127,86 @@ function hasSourceBackedRewardSwitchAblation(results, tables, sourceText) {
                 && transitions.some(([from, to]) => from === Number(value(first[column])) && to === Number(value(second[column]))
                     || to === Number(value(first[column])) && from === Number(value(second[column]))))));
     });
+}
+
+// Finite flattened source-table profile: one GR column followed by paired
+// baseline/optimized columns for each declared compressor. Do not infer a
+// measured pair from a matching difference elsewhere in the document.
+function matchesSourceAudiogramMetricPairs(table, oldColumn, newColumn, method, metric, baseline, source) {
+    const captions = [...source.matchAll(/(?:^|\n)Table\s+[0-9]+:\s*Optimization results for profiles [^\n]{1,100}with limited residual DR[^\n]*/giu)];
+    if (captions.length !== 1) return false;
+    const tail = source.slice(captions[0].index + captions[0][0].length, captions[0].index + 20000);
+    const next = tail.search(/(?:^|\n)Table\s+[0-9]+:/iu);
+    const body = next < 0 ? tail : tail.slice(0, next);
+    const audiogram = table.header.findIndex(header => /^(?:听力图|audiograms?)$/iu.test(String(header).trim()));
+    const signal = table.header.findIndex(header => /^(?:信号|signals?)$/iu.test(String(header).trim()));
+    const family = /^([A-Za-z]+)-[1-9][0-9]*$/u.exec(method);
+    if (audiogram < 0 || signal < 0 || !family) return false;
+    const musicSignal = new Map([['紧凑', 'Tight'], ['常规', 'Normal'], ['动态', 'Dynamic']]);
+    return table.rows.every(row => {
+        const profile = /^([A-Z][0-9]{1,2})\s+有限范围$/u.exec(String(row[audiogram] || '').trim());
+        const music = musicSignal.get(String(row[signal] || '').trim());
+        if (!profile || !music) return false;
+        const begin = new RegExp('(?:^|\\n)' + profile[1] + ' with limited DR\\r?\\n', 'u').exec(body);
+        if (!begin) return false;
+        const rest = body.slice(begin.index + begin[0].length);
+        const end = rest.search(/(?:^|\n)(?:[A-Z][0-9]{1,2} with limited DR|Fig\.|Table\s+[0-9]+:)/u);
+        const lines = (end < 0 ? rest : rest.slice(0, end)).split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+        const metricRow = lines.findIndex(line => line.startsWith(metric + ' ') && line.includes('↑'));
+        if (metricRow < 0) return false;
+        const header = lines.slice(0, metricRow);
+        const methods = header.filter(line => new RegExp('^' + family[1] + '-[1-9][0-9]*$', 'u').test(line));
+        const index = methods.indexOf(method);
+        const labels = header.filter(line => line === baseline || line === 'Opt.');
+        if (header[0] !== 'GR' || index < 0 || new Set(methods).size !== methods.length
+            || labels.join('|') !== methods.map(() => baseline + '|Opt.').join('|')) return false;
+        const metricTail = lines.slice(metricRow + 1);
+        const nextMetric = metricTail.findIndex(line => /[↑↓]/u.test(line));
+        const cells = nextMetric < 0 ? metricTail : metricTail.slice(0, nextMetric);
+        const starts = cells.flatMap((line, i) => line === music ? [i] : []);
+        if (starts.length !== 1) return false;
+        const values = cells.slice(starts[0] + 1, starts[0] + 2 + 2 * methods.length);
+        return values.length === 1 + 2 * methods.length && values.every(value => /^\d+(?:\.\d+)?$/u.test(value))
+            && Number(row[oldColumn]) === Number(values[1 + 2 * index])
+            && Number(row[newColumn]) === Number(values[2 + 2 * index]);
+    });
+}
+
+// A quality/audibility tradeoff is negative evidence only when this source
+// reports the loss and the same higher-is-better table columns realize it.
+function hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText) {
+    const source = String(sourceText || '');
+    const pattern = /([A-Za-z][A-Za-z0-9-]{1,39}) optimization reduces ([A-Za-z][A-Za-z0-9-]{1,39}) compared to the single-channel ([A-Za-z][A-Za-z0-9-]{0,39}) baseline \(by up to (\d+(?:\.\d+)?)\), indicating that the single-channel optimizer sacrifices quality to improve audibility/gu;
+    const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const match of source.matchAll(pattern)) {
+        const lineStart = Math.max(0, source.lastIndexOf('\n', match.index - 1) + 1);
+        const previous = source.slice(0, lineStart).split('\n').filter(line => line.trim()).at(-1) || '';
+        const prefix = source.slice(lineStart, match.index);
+        if (!ownObservedSourceScope(previous.slice(-300) + '\n' + prefix + match[0])) continue;
+        const [, method, metric, baseline, delta] = match;
+        if (Number(delta) <= 0) continue;
+        const reported = new RegExp(`单通道[^。；\\n]{0,60}${escape(metric)}[^。；\\n]{0,80}[，,]\\s*优化反而为换可听度让出最多\\s*(\\d+(?:\\.\\d+)?)\\s*的质量`, 'u');
+        const proseMatches = [...String(results || '').matchAll(/[^。；\n]+/gu)].some(reportedSentence => {
+            const sentence = reportedSentence[0];
+            const loss = reported.exec(sentence);
+            return loss && Number(loss[1]) === Number(delta)
+                && hasOwnLocalReportedExperiment(results, reportedSentence.index, sentence)
+                && !/假想|设想|第三方|旧工作|既有研究|先前工作|先前研究|相关工作|相关研究|文献|引用|转述|撤回|否认|并未|没有|不成立/iu.test(sentence);
+        });
+        if (!proseMatches) continue;
+        for (const table of tables) {
+            const clean = header => String(header).replace(/[*_`]/gu, '').trim();
+            const oldColumn = table.header.findIndex(header => clean(header) === `${method} ${baseline} ${metric} ↑`);
+            const newColumn = table.header.findIndex(header => clean(header) === `${method} 优化 ${metric} ↑`);
+            if (oldColumn < 0 || newColumn < 0 || sourceBackedIdentityColumns(table, source).size < 2
+                || !matchesSourceAudiogramMetricPairs(table, oldColumn, newColumn, method, metric, baseline, source)) continue;
+            const values = table.rows.map(row => /^\d+(?:\.\d+)?$/u.test(String(row[oldColumn]))
+                && /^\d+(?:\.\d+)?$/u.test(String(row[newColumn])) ? Number(row[oldColumn]) - Number(row[newColumn]) : NaN);
+            if (values.length >= 2 && values.every(Number.isFinite)
+                && Math.abs(Math.max(...values) - Number(delta)) < 1e-9) return true;
+        }
+    }
+    return false;
 }
 
 function hasTableBoundHigherMetricRegression(results, tables, sourceText) {
@@ -1313,7 +1474,8 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         ' '
     );
     const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceAblationEvidence);
-    const resultHasAblation = hasSourceBackedPresenceComparison(results, tables, sourceAblationEvidence)
+    const resultHasAblation = hasSourceBackedPlacementControl(results, sourceAblationEvidence)
+        || hasSourceBackedPresenceComparison(results, tables, sourceAblationEvidence)
         || hasSourceBackedTrainingStageAblation(tables, sourceAblationEvidence)
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceAblationEvidence)
         || hasSourceBackedSettingVariantAblation(results, tables, sourceAblationEvidence)
@@ -1358,7 +1520,8 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && /(?:蒸馏|候选)检查点[^。；\n]{0,70}[0-9]+(?:\.[0-9]+)?%[^。；\n]{0,40}比原始模型更偏/u.test(sentence)
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
-    const resultHasNegative = sourceBoundLowerMetricIncrease(results, sourceText)
+    const resultHasNegative = hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
+        || sourceBoundLowerMetricIncrease(results, sourceText)
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceText, true)
         || sourceHasObservedReasoningFailure(options.sourceText)
             && String(results).split(/[。；\n]/u).some(sentence =>
