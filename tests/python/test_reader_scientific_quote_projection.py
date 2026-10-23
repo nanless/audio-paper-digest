@@ -64,6 +64,25 @@ class ReaderScientificQuoteProjectionTest(unittest.TestCase):
                           for p in projection['proofs']], [(5, 1, 0, 6, '3', '-4', ''), (5, 2, 0, 6, '2', '-5', '')])
         self.assertEqual(set(pub._api_reader_numeric_tokens(f['table']['markdown'])), original)
 
+    def test_ci_display_escapes_equal_original_cells_without_changing_values(self):
+        for raw in ['72.3% [67.2, 77.1]% ***', '63.7% [58.4, 68.9]% ***',
+                    '76.0% [71.1, 80.6]% ***']:
+            with self.subTest(raw=raw):
+                escaped = raw.replace('*', r'\*')
+                expected = pub._normalize_api_reader_source_cell(raw)
+                self.assertEqual(pub._normalize_api_reader_source_cell(escaped), expected)
+                self.assertNotEqual(pub._normalize_api_reader_source_cell(escaped.replace('7', '8', 1)), expected)
+        self.assertNotEqual(pub._normalize_api_reader_source_cell('L0 aligned'),
+                            pub._normalize_api_reader_source_cell('L0 orthogonal'))
+
+    def test_ci_display_decoder_does_not_remove_other_backslashes_or_tex(self):
+        for raw in [r'\alpha', r'a\*b', r'72.3% [67.2, 77.1]% \\*\\*\\*',
+                    r'72.3% [67.2, 77.1]% \*\*\*\*', r'72.3% [67.2, 77.1]% \* extra',
+                    r'72.3% [67.2, 77.1] \*\*\*', r'72.3% [67.2, 77.1]% \times']:
+            with self.subTest(raw=raw):
+                normalized = pub._normalize_api_reader_source_cell(raw)
+                self.assertIn('\\', normalized)
+
     def test_compatibility_base_digits_are_detected_but_never_authorized(self):
         for base in ['１０', '1０', '１0', '𝟙𝟘', '𝟏𝟎']:
             with self.subTest(base=base):

@@ -37,7 +37,8 @@ class PublicationLiteralDisplayTest(unittest.TestCase):
                 self.assertEqual(escape_technical_notation_asterisks(text), text)
 
     def test_complete_kern_emphasis_preserved_without_borrowing_later_opener(self):
-        for raw in ['这是 **kern 格式**。', '**kern 文件表示法**可用于乐谱。']:
+        for raw in ['这是 **kern 格式**。', '**kern 文件表示法**可用于乐谱。',
+                    '这是 **kern 格式\n跨行说明**。', '这是 **kern 的 *斜体* 格式**。']:
             with self.subTest(raw=raw):
                 self.assertEqual(escape_technical_notation_asterisks(raw), raw)
         raw = '这是裸 **kern，随后有 **真正加粗**。'
