@@ -862,6 +862,8 @@ def init_blog_repo(root, with_remote=False):
     git(repo, 'init', '-b', 'main')
     git(repo, 'config', 'user.name', 'Publish Test')
     git(repo, 'config', 'user.email', 'publish@example.com')
+    # 保持合成对象库符合只读 profile；普通 commit 不应启动后台重打包。
+    git(repo, 'config', 'gc.auto', '0')
     posts = repo / 'content' / 'posts'
     posts.mkdir(parents=True)
     readme = repo / 'README.md'
@@ -877,6 +879,7 @@ def init_blog_repo(root, with_remote=False):
     if with_remote:
         remote = Path(root) / 'remote.git'
         git(root, 'init', '--bare', str(remote))
+        git(remote, 'config', 'gc.auto', '0')
         git(repo, 'remote', 'add', 'origin', str(remote))
         git(repo, 'push', '-u', 'origin', 'main')
     return repo, posts, remote
