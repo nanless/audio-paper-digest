@@ -189,10 +189,13 @@ function resolveBatchRefreshIds(options) {
         throw new Error(`分析结果的批次日期为 ${savedBatchDate || '未知'}，不能按 ${options.date} 全量刷新。`);
     }
     const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReaderV3;
-    const pending = options.surfaceBindingsOnly
-        ? papers
-        : papers.filter(paper => !currentReaderCheck(paper,
-            { dailyRunId: payload.dailyFreshSourceRun?.runId }));
+    const selectPending = () => papers.filter(paper => !currentReaderCheck(paper));
+    const pending = options.surfaceBindingsOnly ? papers
+        : options.isCurrentReaderFn ? selectPending()
+            : dailyFreshSources.withDailyFreshAnalysisContext(
+                dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
+                    label: '读者文章全量选择来源'
+                }), selectPending);
     console.log(
         `📋 读者文章全量刷新，批次日期为 ${options.date}`
         + ` | papers=${papers.length} | pending=${pending.length}`

@@ -170,6 +170,13 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
             assert.ok(!result.analysis.includes('评分错误开源断言。'));
             assert.equal(result.analysisManifest.stages.scoringAudit.stabilityResolution
                 .status, 'resolved');
+            const feedbackAudit = result.analysisManifest.stages.scoringAudit;
+            assert.equal(feedbackAudit.attempts, 3, '一次反馈内容重试及一次独立共识审计均保留');
+            assert.equal(feedbackAudit.previousScore, 6.9, '审计以真实输入正文为基准');
+            assert.equal(feedbackAudit.previousRunScore, 0, '旧缓存仅保留为历史分数');
+            assert.equal(feedbackAudit.finalScore, 5.7);
+            assert.equal(feedbackAudit.scoreDelta, -1.2);
+            assert.equal(feedbackAudit.stabilityResolution.method, 'second_pass_consensus');
             const legacyPaper = structuredClone(result);
             delete legacyPaper.analysisManifest.stages.primaryAnalysis.factReview;
             delete legacyPaper.analysisManifest.stages.scoringAudit.scoringFactReview;
@@ -184,6 +191,13 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
                 undefined);
             assert.equal(legacyResult.analysisManifest.stages.primaryAnalysis
                 .factReview, undefined);
+            const legacyAudit = legacyResult.analysisManifest.stages.scoringAudit;
+            assert.equal(legacyAudit.attempts, 1, '真实输入5.7与本轮5.7一致，只审计一次');
+            assert.equal(legacyAudit.previousScore, 5.7);
+            assert.equal(legacyAudit.previousRunScore, 0);
+            assert.equal(legacyAudit.finalScore, 5.7);
+            assert.equal(legacyAudit.scoreDelta, 0);
+            assert.equal(legacyAudit.stabilityResolution.status, 'not_required');
             console.log('REFRESH_SCORING_PROOF_SUCCESS_BOUND_AND_LEGACY_COMPATIBLE');
         } finally {
             engine.hasValidApiReaderV3Records = previousEngine;
@@ -222,8 +236,8 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
     assert.match(result.stdout,
         /REFRESH_SCORING_PROOF_SUCCESS_BOUND_AND_LEGACY_COMPATIBLE/);
     for (const request of scoringRequests) assert.deepEqual(request.response_format, {type: 'json_object'});
-    assert.equal(scoringRequests.length, 5,
-        '无反馈及错证明均零请求；合法反馈错误重试+两次稳定审计3请求，普通记录2请求');
+    assert.equal(scoringRequests.length, 4,
+        '无反馈及错证明均零请求；合法反馈内容重试及两次审计共3请求，普通记录真实分数未变仅1请求');
     for (const request of scoringRequests.slice(0, 3)) assert.ok(JSON.stringify(
         request).includes('评分理由不得声称未核验'));
     for (const request of scoringRequests.slice(3)) assert.ok(!JSON.stringify(

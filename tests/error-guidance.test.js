@@ -444,6 +444,7 @@ test('入口 refresh-api-reader：失败保留原错误与退出码，摘要脱�
         './deep-analyzer.js': {},
         './analysis-engine.js': { readJsonFileStrict: () => { throw failure; } },
         './lib/daily-fresh-source-plan.js': {},
+        './lib/daily-scoring-refresh-checkpoint': require('../scripts/lib/daily-scoring-refresh-checkpoint'),
         './lib/reader-tables.js': {},
         './digest-status.js': {},
         './utils.js': { normalizedId: value => value, getBeijingISOString: () => '2026-10-21T00:00:00.000Z' },

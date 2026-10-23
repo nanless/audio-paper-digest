@@ -39,10 +39,17 @@ async function reanalyzeSelected(ids, options = {}) {
 
     if (!fs.existsSync(RESULT_FILE) && fs.existsSync(Config.FILES.deepAnalysisResultLegacy)) {
         const legacyData = readJsonFileStrict(Config.FILES.deepAnalysisResultLegacy);
-        for (const paper of (Array.isArray(legacyData) ? legacyData : legacyData?.papers || []))
-            if (ids.some(id => normalizedId(id) === normalizedId(paper)))
-                require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper,
-                    { dailyRunId: legacyData?.dailyFreshSourceRun?.runId });
+        const assertPending = () => {
+            for (const paper of (Array.isArray(legacyData) ? legacyData : legacyData?.papers || []))
+                if (ids.some(id => normalizedId(id) === normalizedId(paper)))
+                    require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
+        };
+        if (legacyData?.dailyFreshSourceRun) {
+            const legacyPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(legacyData, {
+                label: 'selected legacy reanalyze recovery'
+            });
+            dailyFreshSources.withDailyFreshAnalysisContext(legacyPlan, assertPending);
+        } else assertPending();
         initializeJsonFileLocked(RESULT_FILE, Array.isArray(legacyData)
             ? { timestamp: getBeijingISOString(), source: Config.FILES.deepAnalysisResultLegacy, papers: legacyData }
             : legacyData);
@@ -53,9 +60,13 @@ async function reanalyzeSelected(ids, options = {}) {
 
     const papers = data.papers || [];
     const idSet = new Set(ids.map(id => normalizedId(id)).filter(Boolean));
-    for (const paper of papers) if (idSet.has(normalizedId(paper)))
-        require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper,
-            { dailyRunId: data.dailyFreshSourceRun?.runId });
+    const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
+        papers, label: 'selected reanalyze recovery'
+    });
+    dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, () => {
+        for (const paper of papers) if (idSet.has(normalizedId(paper)))
+            require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
+    });
     if (options.naturalResourceProse !== undefined && typeof options.naturalResourceProse !== 'boolean')
         throw new Error('naturalResourceProse 必须为布尔值');
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean')
@@ -71,9 +82,6 @@ async function reanalyzeSelected(ids, options = {}) {
                 || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete';
         })) throw new Error('付费摘要仅可继续同轮已完成主分析，不能强制全新生成');
     }
-    const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
-        papers, label: 'selected reanalyze recovery'
-    });
     const fullStages = require('./lib/selected-full-stage-reanalysis');
     let fullStageOptions = options.fullStageReanalysis;
     if (fullStageOptions && (fullStageOptions.sourceRunId !== dailySourcePlan.runId

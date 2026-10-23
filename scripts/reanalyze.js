@@ -103,18 +103,21 @@ async function reanalyzeAll(options = {}) {
         process.exit(1);
     }
 
+    let dailySourcePlan;
     const data = updateJsonFileLocked(DATA_FILE, current => {
-        for (const paper of (Array.isArray(current) ? current : current?.papers || []))
-            require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper,
-                { dailyRunId: current?.dailyFreshSourceRun?.runId });
-        return dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
+        const prepared = dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
             readJsonFileStrict(Config.FILES.filteredPapers), { label: 'reanalyze recovery' });
+        dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(prepared, {
+            label: 'reanalyze recovery'
+        });
+        return dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, () => {
+            for (const paper of prepared.papers)
+                require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
+            return prepared;
+        });
     });
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
-    const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
-        papers, label: 'reanalyze recovery'
-    });
     let retiredReaderCandidates = 0;
     try {
         const names = fs.readdirSync(dailySourcePlan.readerAttemptsDir)

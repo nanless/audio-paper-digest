@@ -446,3 +446,153 @@ test('both ordinary reanalysis entries stop pending before retiring the saved Re
     }
     assert.equal(called, 0);
 });
+
+// Real independent daily source factories; only scoring/Reader leaves are synthetic.
+// A valid current source B must not inherit private recovery work from old source A.
+test('ordinary reanalysis scopes pending discovery to the current verified daily source instead of old successful owner projections', async t => {
+    const f = await setup(t), filename = Config.FILES.deepAnalysisResult;
+    const engine = require('../scripts/analysis-engine');
+    const fresh = require('../scripts/lib/fresh-analysis-context');
+    offlineDeep.offlineLeaves(async () => {
+        f.calls.score++;
+        return JSON.stringify(response);
+    }, async (paper, source) => {
+        f.calls.reader++;
+        return installSyntheticReader(paper, source);
+    });
+    const successfulA = await entry.refreshApiReader(f.id, f.options);
+    assert.equal(engine.isSuccessfulAnalysisRecord(successfulA), true);
+    assert.equal(checkpoint.hasCheckpoint(successfulA), false);
+    const payloadA = f.read(), planA = daily.requireDailyFreshSourceRecoveryPlan(payloadA);
+    const normal = f.options.operations.scoringAndReader, backup = filename + '.original';
+    f.options.operations.scoringAndReader = (paper, source, options) => normal(paper, source, {
+        ...options, onScoringComplete: async (...args) => {
+            fs.renameSync(filename, backup);
+            fs.mkdirSync(filename);
+            try { return await options.onScoringComplete(...args); }
+            finally { fs.rmdirSync(filename); fs.renameSync(backup, filename); }
+        }
+    });
+    let saveFailure;
+    try { await entry.refreshApiReader(f.id, f.options); }
+    catch (error) { saveFailure = error; }
+    assert(saveFailure?.scoringRefreshRecovery,
+        'actual storage failure must preserve a new scored paper');
+    const orphan = saveFailure.scoringRefreshRecovery.filename;
+    const orphanBytes = fs.readFileSync(orphan);
+    assert.deepEqual(f.read().papers, payloadA.papers,
+        'the canonical remains the old actual success A');
+
+    const planB = daily.createDailyFreshSourcePlan({
+        batchDate: planA.batchDate, batchId: planA.batchId + '-independent-B',
+        papers: payloadA.papers
+    });
+    await daily.captureDailyFreshSources(planB, {
+        concurrency: 1,
+        capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source')
+            .captureFreshArxivRewriteSource(options, {
+                fetchText: async id => {
+                    const text = `New independent official generation B ${id}; distinct method data result limitation. `.repeat(180);
+                    const structuredArtifacts = {
+                        version: 1, source: 'html', flattenedTextSha256: sha(text),
+                        tables: [], formulas: [], figures: []
+                    };
+                    structuredArtifacts.payloadSha256 = sha(JSON.stringify(structuredArtifacts));
+                    return {
+                        text, source: 'html', sourceId: `${id}v1`,
+                        url: `https://arxiv.org/html/${id}v1`,
+                        fetchedAt: `${planB.batchDate}T02:00:00.000Z`,
+                        imageInfos: [], structuredArtifacts, readerAuthors: { authors: [] },
+                        htmlAvailability: 'available', htmlAttempts: 1, warnings: []
+                    };
+                },
+                fetchPdf: async id => ({
+                    bytes: Buffer.from(`%PDF-1.7\nB distinct sealed input ${id}\n%%EOF\n`),
+                    url: `https://arxiv.org/pdf/${id}.pdf`,
+                    fetchedAt: `${planB.batchDate}T02:00:00.000Z`
+                })
+            })
+    });
+    assert.notEqual(planA.runId, planB.runId);
+    const sourceA = daily.readDailyFreshSource(planA, successfulA);
+    const sourceB = daily.readDailyFreshSource(planB, successfulA);
+    assert.notEqual(sourceA.freshSourceDescriptor.sourceSha256,
+        sourceB.freshSourceDescriptor.sourceSha256);
+    assert.notEqual(sourceA.freshSourceDescriptor.sourceSnapshotSha256,
+        sourceB.freshSourceDescriptor.sourceSnapshotSha256);
+    const mixed = {
+        ...payloadA, batchId: planB.batchId,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(planB)
+    };
+    const oldFiltered = Config.FILES.filteredPapers;
+    Config.FILES.filteredPapers = path.join(path.dirname(filename), 'filtered-b.json');
+    t.after(() => { Config.FILES.filteredPapers = oldFiltered; });
+    const filtered = plan => ({
+        batchDate: plan.batchDate, batchId: plan.batchId, status: 'complete',
+        papers: payloadA.papers.map(({ arxivId, title }) => ({ arxivId, title }))
+    });
+    fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify(filtered(planB)));
+    const mixedBytes = Buffer.from(JSON.stringify(mixed));
+    fs.writeFileSync(filename, mixedBytes);
+    const validPlan = daily.requireDailyFreshSourceRecoveryPlan(mixed);
+    assert.equal(validPlan.runId, planB.runId);
+    assert.equal(daily.isPaperBoundToPlan(successfulA, validPlan), false);
+    assert.equal(Object.hasOwn(daily.prepareDailyPaper(successfulA, validPlan), 'analysis'), false);
+    const reanalyze = compile(fs.readFileSync(path.join(ROOT, 'scripts/reanalyze.js'), 'utf8'),
+        path.join(ROOT, 'scripts/reanalyze.js'));
+    assert.throws(() => checkpoint.assertNoPending(successfulA, { dailyRunId: planB.runId }),
+        { code: 'DAILY_SCORING_REFRESH_REQUIRES_READER_RECOVERY' },
+        'a run hint alone cannot exempt the old owner A');
+
+    fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify(filtered(planA)));
+    const canonicalA = Buffer.from(JSON.stringify(payloadA));
+    fs.writeFileSync(filename, canonicalA);
+    let sameOwnerCalls = 0;
+    await assert.rejects(reanalyze.reanalyzeAll({ analyzeBatch: () => {
+        sameOwnerCalls++;
+        throw new Error('MODEL_BOUNDARY_SENTINEL');
+    } }), { code: 'DAILY_SCORING_REFRESH_REQUIRES_READER_RECOVERY' });
+    assert.equal(sameOwnerCalls, 0);
+    assert(fs.readFileSync(filename).equals(canonicalA));
+
+    fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify(filtered(planB)));
+    fs.writeFileSync(filename, mixedBytes);
+    const held = path.join(path.dirname(filename), 'held-original-a.json');
+    fs.renameSync(orphan, held);
+    let controlCalls = 0, controlRun;
+    await assert.rejects(reanalyze.reanalyzeAll({ analyzeBatch: () => {
+        controlCalls++;
+        controlRun = fresh.getFreshAnalysisContext()?.runId;
+        throw new Error('MODEL_BOUNDARY_SENTINEL');
+    } }), /MODEL_BOUNDARY_SENTINEL/);
+    assert.equal(controlCalls, 1);
+    assert.equal(controlRun, planB.runId);
+    fs.renameSync(held, orphan);
+    fs.writeFileSync(filename, mixedBytes);
+    let orphanCalls = 0;
+    await assert.rejects(reanalyze.reanalyzeAll({ analyzeBatch: () => {
+        orphanCalls++;
+        throw new Error('MODEL_BOUNDARY_SENTINEL');
+    } }), /MODEL_BOUNDARY_SENTINEL/);
+    assert.equal(orphanCalls, 1,
+        'current real source B must not inherit source A private score');
+
+    fs.writeFileSync(filename, mixedBytes);
+    const btxt = path.join(planB.sourcesDir, f.id, 'generation-000001', 'source.txt');
+    const bOriginal = fs.readFileSync(btxt);
+    fs.writeFileSync(btxt, Buffer.concat([bOriginal, Buffer.from('\nsource drift')]));
+    let invalidCalls = 0, invalidError;
+    try {
+        await reanalyze.reanalyzeAll({ analyzeBatch: () => {
+            invalidCalls++;
+            throw new Error('MODEL_BOUNDARY_SENTINEL');
+        } });
+    } catch (error) { invalidError = error; }
+    finally { fs.writeFileSync(btxt, bOriginal); }
+    assert(invalidError);
+    assert.notEqual(invalidError.code, 'DAILY_SCORING_REFRESH_REQUIRES_READER_RECOVERY');
+    assert.notEqual(invalidError.message, 'MODEL_BOUNDARY_SENTINEL');
+    assert.equal(invalidCalls, 0);
+    assert(fs.readFileSync(filename).equals(mixedBytes));
+    assert(fs.readFileSync(orphan).equals(orphanBytes));
+});
