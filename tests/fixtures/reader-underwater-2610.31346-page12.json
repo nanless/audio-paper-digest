@@ -1,0 +1,126 @@
+{
+  "contract": "real-pdf-page-excerpt-table-fixture-v1",
+  "notAuthorization": true,
+  "notes": "Exact page12 extracted from the real sealed 2610.31346 PDF. This excerpt tests literal table geometry only; it does not stand for the complete official source or production Reader qualification. The separate runtime full-sealed-PDF replay and normal full parser remain required.",
+  "originalFullPdfSha256": "979fea11022e418b10b92cab6ac11f84de78e6e85f8dd2e66d8e4155270a14da",
+  "originalPage": 12,
+  "excerptPdfSha256": "c114b4341d8aac31fecdbf0969183e73d316f36f01bbde5b671169c74144b333",
+  "papers": [
+    {
+      "tableNumber": 5,
+      "view": [
+        [
+          "Background",
+          "Pd (%)",
+          "False alarms NFP/N0",
+          "Bearing MAE (◦)",
+          "Precision",
+          "Recall",
+          "F1"
+        ],
+        [
+          "White noise",
+          "100.00",
+          "0/96",
+          "1.26",
+          "100.00",
+          "93.64",
+          "96.72"
+        ],
+        [
+          "Mixed background",
+          "98.96",
+          "0/96",
+          "0.22",
+          "81.75",
+          "81.83",
+          "81.79"
+        ]
+      ],
+      "quote": "TABLE 5 ENCODER VALIDATION PERFORMANCE AT −30 DB. Background Pd (%) False alarms NFP/N0 Bearing MAE (◦) Precision Recall F1 White noise 100.00 0/96 1.26 100.00 93.64 96.72 Mixed background 98.96 0/96 0.22 81.75 81.83 81.79"
+    },
+    {
+      "tableNumber": 6,
+      "view": [
+        [
+          "SNR (dB)",
+          "Pd (%)",
+          "Pfa (%)",
+          "Bearing MAE (◦)",
+          "Precision (%)",
+          "Recall (%)",
+          "F1 (%)",
+          "SNR MAE (dB)",
+          "Range MAE (km)"
+        ],
+        [
+          "0",
+          "100.00",
+          "–",
+          "0.000",
+          "77.54",
+          "35.74",
+          "48.93",
+          "0.000",
+          "8.410"
+        ],
+        [
+          "−10",
+          "100.00",
+          "–",
+          "0.000",
+          "65.74",
+          "38.25",
+          "48.36",
+          "1.979",
+          "8.222"
+        ],
+        [
+          "−20",
+          "100.00",
+          "–",
+          "0.260",
+          "65.76",
+          "45.34",
+          "53.68",
+          "0.451",
+          "9.174"
+        ],
+        [
+          "−25",
+          "100.00",
+          "–",
+          "0.260",
+          "64.81",
+          "51.84",
+          "57.61",
+          "0.625",
+          "9.462"
+        ],
+        [
+          "−30",
+          "100.00",
+          "–",
+          "0.521",
+          "63.20",
+          "56.78",
+          "59.82",
+          "0.105",
+          "8.749"
+        ],
+        [
+          "Overall",
+          "100.00",
+          "0.00",
+          "0.208",
+          "67.11",
+          "43.95",
+          "53.11",
+          "0.632",
+          "8.803"
+        ]
+      ],
+      "quote": "TABLE 6 SYSTEM TEST PERFORMANCE UNDER THE MIXED BACKGROUND. SNR (dB) Pd (%) Pfa (%) Bearing MAE (◦) Precision (%) Recall (%) F1 (%) SNR MAE (dB) Range MAE (km) 0 100.00 – 0.000 77.54 35.74 48.93 0.000 8.410 −10 100.00 – 0.000 65.74 38.25 48.36 1.979 8.222 −20 100.00 – 0.260 65.76 45.34 53.68 0.451 9.174 −25 100.00 – 0.260 64.81 51.84 57.61 0.625 9.462 −30 100.00 – 0.521 63.20 56.78 59.82 0.105 8.749 Overall 100.00 0.00 0.208 67.11 43.95 53.11 0.632 8.803"
+    }
+  ]
+}

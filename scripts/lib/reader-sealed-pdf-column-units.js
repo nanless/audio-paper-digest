@@ -14,6 +14,12 @@ const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])])) : value;
 const stable = value => sha(JSON.stringify(normalize(value)));
+function literalUnitColumnAllowed(proof, view, item) {
+    if (!Number.isSafeInteger(item?.column) || item.column < 0 || item.column >= view[0].length) return false;
+    return item.column > 0 || (proof.axisProfile === 'complete-literal-snr-axis-v1'
+        && view[0][0] === 'SNR (dB)' && item.unit === 'db'
+        && isDeepStrictEqual(proof.identityColumns, [0]));
+}
 function deriveBundle(expectation, view, quotes) {
     require('../env-loader').requireExternalRuntime('reader-sealed-pdf-column-units');
     require('../workspace-role').requireWorkspaceRole('daily', root);
@@ -43,8 +49,7 @@ function deriveBundle(expectation, view, quotes) {
                     || proof.pdfSha256 !== sha(before.pdf) || proof.viewSha256 !== stable(view)
                     || !isDeepStrictEqual(proof.renderedView, view) || proof.sourceTableOrdinal !== undefined
                     || !Array.isArray(proof.units) || !proof.units.length
-                    || proof.units.some(item => !Number.isSafeInteger(item.column) || item.column < 1
-                        || item.column >= view[0].length || !Array.isArray(item.values)
+                    || proof.units.some(item => !literalUnitColumnAllowed(proof, view, item) || !Array.isArray(item.values)
                         || !isDeepStrictEqual(item.values, view.slice(1).map(row => row[item.column]))
                         || !/^(?:%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)$/.test(item.unit))
                     || !Array.isArray(proof.rowIdentities) || proof.rowIdentities.length !== view.length - 1

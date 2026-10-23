@@ -99,7 +99,26 @@ def column_edges(groups, words, left, right):
     return [[left, *choice, right] for choice in itertools.product(*options)]
 
 
-def source_grid(page, caption, document):
+def standalone_axis_captions(page):
+    # Literal two-line PDF captions only: an observed TABLE number line,
+    # immediately followed by its uppercase title ending in a period. Page
+    # numbers sharing a text block are excluded by physical line boundaries.
+    result = []
+    for block in page.get_text('dict', flags=fitz.TEXTFLAGS_TEXT)['blocks']:
+        lines = block.get('lines', [])
+        for index, line in enumerate(lines[:-1]):
+            first, second = line_text(line).strip(), line_text(lines[index + 1]).strip()
+            if not re.fullmatch(r'TABLE [1-9]\d{0,3}', first) or not second.endswith('.') \
+                    or second != second.upper() or not re.search(r'[A-Z]', second):
+                continue
+            a, b = line['bbox'], lines[index + 1]['bbox']
+            if not (0 < b[1] - a[1] <= 24 and abs((a[0] + a[2]) - (b[0] + b[2])) < 8):
+                continue
+            result.append((min(a[0], b[0]), a[1], max(a[2], b[2]), b[3], first + '\n' + second + '\n'))
+    return result
+
+
+def source_grid(page, caption, document, additional_captions=()):
     cap = caption[:4]
     rules = sorted(set((float(d['rect'].x0), float(d['rect'].y0), float(d['rect'].x1))
                        for d in page.get_drawings() if d['rect'].height < .1 and d['rect'].width > 40), key=lambda r: r[1])
@@ -108,6 +127,8 @@ def source_grid(page, caption, document):
     top = min(tops, key=lambda r: r[1])
     following = [b[1] for b in page.get_text('blocks') if NEXT_CAPTION.match(b[4])
                  and b[1] > cap[3] and max(b[0], top[0]) < min(b[2], top[2])]
+    following += [b[1] for b in additional_captions if b != caption and b[1] > cap[3]
+                  and max(b[0], top[0]) < min(b[2], top[2])]
     limit = min(following or [page.rect.height])
     horizontal = sorted(r[1] for r in rules if abs(r[0] - top[0]) < .1 and abs(r[2] - top[2]) < .1
                         and top[1] <= r[1] < limit)
@@ -121,10 +142,16 @@ def source_grid(page, caption, document):
     # Only an explicit original label axis can identify rows. Numeric results
     # never become a label or an implicit dataset/condition dimension.
     merged = headers[:2] == ['Dataset', 'Method']
-    need(merged or headers[0] in ('Method', 'Generator'), 'literal_method_axis_not_explicit')
+    background_axis = headers[0] == 'Background'
+    snr_axis = headers[0] == 'SNR (dB)'
+    need(merged or headers[0] in ('Method', 'Generator') or background_axis or snr_axis,
+         'literal_method_axis_not_explicit')
     label_column = 1 if merged else 0
+    # Only this literal original SNR(dB) axis may own column zero's unit.
+    # Its exact row identities are checked before any measured result values.
     units = {c: (m.group(2) or m.group(3)).lower() for c, header in enumerate(headers)
-             if c > label_column and (m := UNIT.fullmatch(re.sub(r'\s*[↑↓]$', '', header)))}
+             if (c > label_column or (snr_axis and c == 0))
+             and (m := UNIT.fullmatch(re.sub(r'\s*[↑↓]$', '', header)))}
     need(units, 'literal_header_units_missing')
 
     # A bound quote must continuously cover the entire actual PDF caption and
@@ -144,6 +171,9 @@ def source_grid(page, caption, document):
             need(2 <= len(lines) <= 64, 'literal_method_rows_missing')
             ys = [y for y, _ in lines]
             need(all(b - a >= 4 for a, b in zip(ys, ys[1:])), 'literal_method_rows_overlap')
+            if snr_axis and len(horizontal) == 4:
+                need(literal(lines[-1][1]) == 'Overall' and len(ys) >= 3
+                     and ys[-2] < horizontal[-2] < ys[-1], 'literal_snr_aggregate_band_changed')
             row_edges = [separator, *[(a + b) / 2 for a, b in zip(ys, ys[1:])], bottom]
             condition_bands = []
             if merged:
@@ -157,7 +187,7 @@ def source_grid(page, caption, document):
                                             'sourceRows': [i + 1 for i in indices]})
                 need(len(condition_bands) >= 2, 'literal_dataset_conditions_missing')
             else:
-                need(len(horizontal) == 3, 'literal_unlabelled_body_bands')
+                need(len(horizontal) == 3 or (snr_axis and len(horizontal) == 4), 'literal_unlabelled_body_bands')
             cells, rows = [], []
             for c, g in enumerate(groups):
                 cells.append({'row': 0, 'column': c, 'words': g['words'], 'text': g['text']})
@@ -175,9 +205,14 @@ def source_grid(page, caption, document):
                     text = literal(values)
                     if c == label_column:
                         need(values == method_words or sorted(values) == sorted(method_words), 'literal_method_cell_changed')
-                        need(re.match(r'^[A-Za-z]', text) and len(text) <= 240, 'literal_method_not_label')
+                        if snr_axis:
+                            need(SCALAR.fullmatch(text) or (r == len(lines) - 1 and text == 'Overall'),
+                                 'literal_snr_axis_not_scalar_or_final_overall')
+                        else:
+                            need(re.match(r'^[A-Za-z]', text) and len(text) <= 240, 'literal_method_not_label')
                     else:
-                        need(SCALAR.fullmatch(text) or text in ('–', '—', '-') or COMPOUND.fullmatch(text),
+                        count_ratio = background_axis and re.fullmatch(r'\d+/[1-9]\d*', text)
+                        need(SCALAR.fullmatch(text) or text in ('–', '—', '-') or COMPOUND.fullmatch(text) or count_ratio,
                              'literal_data_cell_not_complete')
                         if c in units:
                             need(SCALAR.fullmatch(text) or text in ('–', '—', '-'), 'literal_unit_value_not_scalar')
@@ -196,7 +231,9 @@ def source_grid(page, caption, document):
                     'columnBoundaries': edges, 'rowBoundaries': row_edges, 'horizontalRules': horizontal,
                     'conditionBands': condition_bands, 'cells': cells, 'words': words, 'glyphs': glyphs,
                     'wordBoxCount': len(words), 'fullTableQuoteEvidence': full_quote,
-                    'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()]}
+                    'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()],
+                    **({'axisProfile': 'complete-literal-snr-axis-v1'} if snr_axis else
+                       {'axisProfile': 'complete-literal-background-axis-v1'} if background_axis else {})}
             # Different arbitrary cut points within the same empty gap prove
             # the same complete physical cells. Different cell ownership does
             # not: reject rather than select a grid using candidate results.
@@ -470,17 +507,24 @@ def prove_pdf_bytes(raw, view, quotes):
     with fitz.open(stream=raw, filetype='pdf') as doc:
         need(len(doc) <= 256, 'literal_pdf_page_limit')
         for page in doc:
-            for caption in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT):
-                if not TABLE_CAPTION.match(caption[4]):
-                    continue
+            additional = standalone_axis_captions(page)
+            captions = [(caption, False) for caption in page.get_text('blocks', flags=fitz.TEXTFLAGS_TEXT)
+                        if TABLE_CAPTION.match(caption[4])] + [(caption, True) for caption in additional]
+            for caption, axis_caption in captions:
                 try:
-                    try:
-                        grid = source_grid(page, caption, document)
-                    except ValueError:
+                    if axis_caption:
+                        grid = source_grid(page, caption, document, additional)
+                        need(grid.get('axisProfile') in ('complete-literal-background-axis-v1',
+                                                        'complete-literal-snr-axis-v1'),
+                             'standalone_caption_requires_literal_condition_axis')
+                    else:
                         try:
-                            grid = grouped_source_grid(page, caption, document)
+                            grid = source_grid(page, caption, document)
                         except ValueError:
-                            grid = caption_uncertainty_source_grid(page, caption, document)
+                            try:
+                                grid = grouped_source_grid(page, caption, document)
+                            except ValueError:
+                                grid = caption_uncertainty_source_grid(page, caption, document)
                     full = grid['fullTableQuoteEvidence']
                     if grid.get('headerProfile') == 'complete-caption-parent-leaf-stacked-uncertainty-v1':
                         complete_quote_coverage(document, full, quote_proofs)
