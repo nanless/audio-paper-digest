@@ -7829,6 +7829,7 @@ def escape_technical_notation_asterisks(text):
     """转义 ``H1*`` 这类紧凑技术记号里的字面星号。
 
     声学记号把星号当作名称的一部分（例如 ``H1*-H2*``），不是 Markdown 强调。
+    同时转义独立的 Humdrum 格式名 ``**kern``；代码、公式和真实加粗保持原样。
     只转义以星号结尾的字母/数字记号，既保留作者写的强调，也避免 CommonMark
     把这个记号与周围的粗体标记配成一对。YAML frontmatter 保持字节不变，
     因为双引号 YAML 标量里的反斜杠会改变含义。这个操作是幂等的。
@@ -7836,9 +7837,20 @@ def escape_technical_notation_asterisks(text):
     frontmatter_match = re.match(r'^---\n.*?\n---\n', str(text or ''), flags=re.DOTALL)
     prefix = frontmatter_match.group(0) if frontmatter_match else ''
     body = str(text or '')[len(prefix):]
+    literal_kern = re.compile(r'(?<![A-Za-z0-9_\\*])\*\*kern(?![A-Za-z0-9_*])')
+    protected = markdown_inline_code_ranges(body)
+    # Use the same closed **...** shape as the format gate, with nonblank
+    # content edges. Never skip an intervening star or borrow a later opener
+    # whose preceding whitespace makes it ineligible as a closing delimiter.
+    protected.extend((match.start(), match.end()) for match in re.finditer(
+        r'(?<![\\*])\*\*(?=\S)[^*\r\n]+?(?<=\S)\*\*(?!\*)', body))
+    protected.extend((match.start(), match.end()) for match in re.finditer(
+        r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|https?://[^\s<>]+', body))
     output = []
     fence = None
+    offset = 0
     for line in body.splitlines(keepends=True):
+        original_length = len(line)
         fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
         if fence_match:
             marker = fence_match.group(1)[0]
@@ -7847,10 +7859,15 @@ def escape_technical_notation_asterisks(text):
             elif fence == marker:
                 fence = None
             output.append(line)
+            offset += original_length
             continue
         if fence is None:
+            line = literal_kern.sub(
+                lambda match: match[0] if any(start <= offset + match.start() < end
+                                             for start, end in protected) else r'\*\*kern', line)
             line = _TECHNICAL_NOTATION_ASTERISK.sub(r'\g<token>\\\g<star>', line)
         output.append(line)
+        offset += original_length
     return prefix + ''.join(output)
 
 
@@ -7860,11 +7877,18 @@ def escape_statistical_significance_stars(text):
     表格常用 ``p = 0.00908**`` 或 ``p < 2.2e-16***`` 表示显著性水平。
     CommonMark 会把裸星号当作强调定界符，于是来源事实本身没问题，发布
     页面却过不了 Markdown 闸。修复只针对未转义的 p 值加上完整的星号串；
+    真实表格格值的“百分比估计 [区间]% 星号”也只转义完整尾注。
     普通强调和代码不动。这个操作是幂等的。
     """
+    data_lines = {line for table in extract_markdown_tables(text)
+                  for line in range(table['start_line'] + 2, table['end_line'] + 1)}
+    scalar = r'[+−-]?[0-9]+(?:\.[0-9]+)?'
+    interval_stars = re.compile(
+        r'(?<=\|)(?P<prefix>[ \t]*' + scalar + r'%[ \t]+\[' + scalar
+        + r',[ \t]*' + scalar + r'\]%[ \t]+)(?P<stars>\*{1,3})(?=[ \t]*\|)')
     output = []
     fence = None
-    for line in str(text or '').splitlines(keepends=True):
+    for line_index, line in enumerate(str(text or '').splitlines(keepends=True)):
         fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
         if fence_match:
             marker = fence_match.group(1)[0]
@@ -7880,6 +7904,9 @@ def escape_statistical_significance_stars(text):
                 + ''.join('\\' + char for char in match.group('stars')),
                 line,
             )
+            if line_index in data_lines:
+                line = interval_stars.sub(
+                    lambda match: match['prefix'] + ''.join('\\' + char for char in match['stars']), line)
         output.append(line)
     return ''.join(output)
 
@@ -7925,7 +7952,7 @@ def escape_literal_source_figure_caption_dollars(text, *, _literal_pairs=None):
         return text
     caption = re.compile(
         r'^(?P<prefix>\*论文图 [1-9][0-9]*。原论文 '
-        r'(?P<label>(?:Figure|Fig\.) [1-9][0-9]*)：“)'
+        r'(?P<label>(?:Figure|Fig\.) [1-9][0-9]*):?：“)'
         r'(?P<value>[^\r\n]*)(?P<suffix>”。\*)(?P<ending>\r?\n)?$')
     image = re.compile(
         r'^(?P<wrap>\[)?!\[(?P<alt>[^\r\n]*)\]\((?P<url>[^)\r\n]+)\)'

@@ -64,6 +64,14 @@ class ReaderScientificQuoteProjectionTest(unittest.TestCase):
                           for p in projection['proofs']], [(5, 1, 0, 6, '3', '-4', ''), (5, 2, 0, 6, '2', '-5', '')])
         self.assertEqual(set(pub._api_reader_numeric_tokens(f['table']['markdown'])), original)
 
+    def test_compatibility_base_digits_are_detected_but_never_authorized(self):
+        for base in ['１０', '1０', '１0', '𝟙𝟘', '𝟏𝟎']:
+            with self.subTest(base=base):
+                result, _ = self.project(self.table('3×' + base + '⁻⁹'),
+                                         ['3×10⁻⁴', 'Independent value: 9.'])
+                self.assertTrue(result['failures'])
+                self.assertFalse(result['proofs'])
+
     def test_wrong_complete_quantity_rejected_even_with_digits_elsewhere(self):
         quotes = self.fixture['sourceQuotes'] + ['Independent values: 4 and 5.']
         for wrong in ['3×10⁻⁵', '3×10⁴', '3×10⁺⁴', '-3×10⁻⁴', '4×10⁻⁴', '3×10⁻⁴ ms']:

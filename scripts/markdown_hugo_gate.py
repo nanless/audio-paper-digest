@@ -23,6 +23,7 @@ from publish_common import (
     escape_literal_source_figure_caption_dollars,
     markdown_inline_code_ranges,
     parse_markdown_images,
+    extract_markdown_tables,
 )
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
@@ -767,6 +768,114 @@ def mask_source_bound_author_dollars(rendered, artifact):
 
 
 
+
+def mask_source_bound_literal_asterisks(rendered, artifact):
+    """Mask only exact plain HTML text authorized by explicitly escaped source.
+
+    This is a diagnostic projection, never an HTML rewrite. Whole paragraphs
+    bind the technical format name; whole real table cells bind CI footnotes.
+    Each escaped source occurrence authorizes one matching visible occurrence.
+    """
+    source = str(artifact.get('body') or '')
+    protected = mask_protected_markdown_table_regions(source, protect_quotes=False)
+    expected = {}
+    kern = r'\*\*kern'
+    for paragraph in re.split(r'\n[ \t]*\n', protected):
+        paragraph = paragraph.strip()
+        if kern not in paragraph or '\n' in paragraph or paragraph.startswith(('#', '>', '|')):
+            continue
+        plain = paragraph.replace(kern, '**kern')
+        remainder = paragraph.replace(kern, '')
+        if re.search(r'[*_`<>\\\[\]]', remainder):
+            continue
+        key = ('p', html.unescape(plain))
+        expected[key] = expected.get(key, 0) + 1
+    scalar = r'[+−-]?[0-9]+(?:\.[0-9]+)?'
+    ci = re.compile(scalar + r'%[ \t]+\[' + scalar + r',[ \t]*' + scalar
+                    + r'\]%[ \t]+(?:\\\*){1,3}')
+    for table in extract_markdown_tables(source):
+        for row in table['rows']:
+            for cell in row:
+                cell = cell.strip()
+                if ci.fullmatch(cell):
+                    key = ('cell', html.unescape(cell.replace(r'\*', '*')))
+                    expected[key] = expected.get(key, 0) + 1
+    if not expected:
+        return rendered
+    offsets = _html_line_offsets(rendered)
+
+    class LiteralText(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.stack, self.item, self.positions = [], None, set()
+
+        def handle_starttag(self, tag, attrs):
+            if self.item is not None:
+                self.item['valid'] = False
+            attributes = dict(attrs)
+            hidden = (tag in {'script', 'style', 'pre', 'code', 'textarea', 'template', 'noscript', 'svg', 'math'}
+                      or 'hidden' in attributes or str(attributes.get('aria-hidden') or '').lower() == 'true'
+                      or bool(re.search(r'display\s*:\s*none|visibility\s*:\s*hidden',
+                                        str(attributes.get('style') or ''), re.I))
+                      or any(value for _tag, value in self.stack))
+            kind = ('p' if tag == 'p' and not any(t in {'table', 'tr', 'td', 'th'} for t, _h in self.stack)
+                    else 'cell' if tag in {'td', 'th'} and self.stack and self.stack[-1][0] == 'tr'
+                    and any(t == 'table' for t, _h in self.stack) else None)
+            if kind and self.item is None:
+                self.item = {'tag': tag, 'kind': kind, 'parts': [], 'stars': [],
+                             'valid': not hidden and not attrs}
+            if tag not in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
+                           'meta', 'param', 'source', 'track', 'wbr'}:
+                self.stack.append((tag, hidden))
+
+        def handle_startendtag(self, tag, attrs):
+            if self.item is not None:
+                self.item['valid'] = False
+
+        def handle_data(self, value):
+            if self.item is not None:
+                self.item['parts'].append(value)
+                line, column = self.getpos()
+                start = offsets[line - 1] + column
+                self.item['stars'].extend(start + match.start() for match in re.finditer(r'\*', value))
+
+        def handle_entityref(self, name):
+            if self.item is not None:
+                self.item['parts'].append(html.unescape('&' + name + ';'))
+
+        def handle_charref(self, name):
+            if self.item is not None:
+                self.item['parts'].append(html.unescape('&#' + name + ';'))
+
+        def handle_comment(self, _value):
+            if self.item is not None:
+                self.item['valid'] = False
+
+        def handle_decl(self, _value):
+            self.handle_comment(_value)
+
+        def handle_endtag(self, tag):
+            if self.item is not None:
+                if not self.stack or self.stack[-1][0] != tag:
+                    self.item['valid'] = False
+                if tag == self.item['tag']:
+                    item = self.item
+                    key = (item['kind'], ''.join(item['parts']).strip())
+                    if item['valid'] and expected.get(key, 0):
+                        expected[key] -= 1
+                        self.positions.update(item['stars'])
+                    self.item = None
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    del self.stack[index:]
+                    break
+
+    parser = LiteralText()
+    parser.feed(rendered)
+    parser.close()
+    return ''.join(' ' if index in parser.positions else char for index, char in enumerate(rendered))
+
+
 def mask_rendered_symbolic_table_cells(text):
     """在渲染后的 Markdown 扫描中隐藏已校验的序列字面字形。
 
@@ -953,8 +1062,9 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             continue
         rendered_path, rendered = candidates[0]
         reader_html = rendered_article_fragment(rendered)
-        gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_author_dollars(
-            mask_source_bound_title_dollars(mask_source_bound_figure_caption_dollars(reader_html, artifact), artifact), artifact))
+        gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_literal_asterisks(
+            mask_source_bound_author_dollars(mask_source_bound_title_dollars(
+                mask_source_bound_figure_caption_dollars(reader_html, artifact), artifact), artifact), artifact))
         rendered_label = f'{source_label} -> {rendered_path.name}'
         issues.extend(math_and_emphasis_issues(gate_html, rendered_label, rendered_html=True))
         if '**' in gate_html:
