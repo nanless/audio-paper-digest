@@ -32,6 +32,34 @@ function canonical(value) {
 const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const clone = value => structuredClone(value);
 
+// Both cold readers must accept exactly the paths the writer can produce.
+// This only derives names; source, analysis and page/asset qualification remain
+// the caller's normal checks. The first path retains the original v1 layout.
+function stagingDirectories({ stagingRoot, item, sourceDescriptor,
+    rendererImplementationSha256, analysisRecordSha256 }) {
+    if (typeof stagingRoot !== 'string' || !path.isAbsolute(stagingRoot)
+        || typeof item?.runId !== 'string'
+        || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(item.runId)
+        || typeof rendererImplementationSha256 !== 'string' || !SHA.test(rendererImplementationSha256)
+        || typeof analysisRecordSha256 !== 'string' || !SHA.test(analysisRecordSha256)
+        || !['arxiv-fresh-fetch', 'conference-local-pdf'].includes(item?.route?.kind)
+        || sourceDescriptor?.kind !== item.route.kind) {
+        fail('暂存目录必须绑定原运行、来源路线、渲染器和分析 SHA。');
+    }
+    let segment = 'conference-local';
+    if (item.route.kind === 'arxiv-fresh-fetch') {
+        if (typeof sourceDescriptor.sourceRunIdentitySha256 !== 'string'
+            || !SHA.test(sourceDescriptor.sourceRunIdentitySha256)) {
+            fail('arXiv 暂存目录缺少合法的封存来源运行 SHA。');
+        }
+        segment = sourceDescriptor.sourceRunIdentitySha256;
+    }
+    const routeDirectory = path.join(stagingRoot, item.runId, segment);
+    const rendererDirectory = path.join(routeDirectory, `renderer-${rendererImplementationSha256}`);
+    return { routeDirectory, rendererDirectory,
+        analysisBoundDirectory: `${rendererDirectory}-analysis-${analysisRecordSha256}` };
+}
+
 function exact(value, fields, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} 必须是对象。`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
@@ -514,7 +542,7 @@ function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact,
 }
 
 module.exports = { CONTRACT, VERSION, PUBLICATION_SOURCE_CONTRACT, HistoricalDirectPageStagingError,
-    stableHash, pageProjection, directPaper, publicationSourceProof,
+    stableHash, stagingDirectories, pageProjection, directPaper, publicationSourceProof,
     sourceProof, readerProof, priorPreprintDisclosureProof, priorPreprintPageDisclosure,
     arxivHistoricalVersionDisclosureProof, arxivHistoricalVersionPageDisclosure,
     sourceDisclosureProof, pageDisclosureFor, injectTopDisclosure, hasExactTopDisclosure,

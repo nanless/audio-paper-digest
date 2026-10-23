@@ -29,6 +29,44 @@ function isReplayRejection(error) {
     return ['pdf_source_invalid', 'source_sha_drift', 'source_read_failed'].includes(error?.reasonCode);
 }
 
+test('来源同一FD增长时最多读取原大小加一个哨兵再拒，原计划及正常来源仍可重放', t => {
+    const fixture = productionPlanFixture(t);
+    assert.equal(build(fixture).analysisReady, true);
+    const filename = artifactPath(fixture, 'metadataFile');
+    const original = fs.readFileSync(filename), identity = fs.statSync(filename);
+    const originals = { readFileSync: fs.readFileSync, readSync: fs.readSync };
+    let changed = false, bytesRead = 0;
+    function target(fd) {
+        if (typeof fd !== 'number' || !new Error().stack.includes('readBoundBytes')) return false;
+        const stat = fs.fstatSync(fd);
+        if (stat.dev !== identity.dev || stat.ino !== identity.ino) return false;
+        if (!changed) { fs.appendFileSync(filename, Buffer.alloc(4096, 0x20)); changed = true; }
+        return true;
+    }
+    fs.readFileSync = function (fd, ...args) {
+        const matches = target(fd), counted = bytesRead;
+        const bytes = originals.readFileSync.call(this, fd, ...args);
+        // Some Node versions implement readFileSync through exported readSync.
+        if (matches && bytesRead === counted) bytesRead += bytes.length;
+        return bytes;
+    };
+    fs.readSync = function (fd, ...args) {
+        const matches = target(fd), count = originals.readSync.call(this, fd, ...args);
+        if (matches) bytesRead += count;
+        return count;
+    };
+    try {
+        assert.throws(() => build(fixture), error => error.reasonCode === 'source_changed_during_read');
+        assert.equal(changed, true);
+        assert.ok(bytesRead <= original.length + 1,
+            `实际读取 ${bytesRead}，原记录 ${original.length}，最多允许一个哨兵字节`);
+    } finally {
+        Object.assign(fs, originals);
+        fs.writeFileSync(filename, original);
+    }
+    assert.equal(build(fixture).analysisReady, true);
+});
+
 test('生产来源上下文不公开跳过计划核验的测试辅助入口', () => {
     assert.equal(context.buildConferenceSourceContextForTesting, undefined);
     assert.equal(context.buildConferenceSourceContextFromLedger, undefined);

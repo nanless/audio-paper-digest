@@ -9,6 +9,34 @@ const { execFileSync } = require('node:child_process');
 const api = require('../scripts/lib/publication-file-primitives.js');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
+test('共享FD读取在追加缓冲前执行原大小和总限额，最多消费一个增长哨兵', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'publication-bounded-fd-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filename = path.join(root, 'bytes'); fs.writeFileSync(filename, 'original');
+    function read(expected, maximum) {
+        const fd = fs.openSync(filename, 'r');
+        try { return api.readBoundedFd(fd, expected, maximum); }
+        finally { fs.closeSync(fd); }
+    }
+    assert.deepEqual(read(8, 8), Buffer.from('original'));
+    const actualRead = fs.readSync; let consumed = 0;
+    const patched = t.mock.method(fs, 'readSync', (...args) => {
+        const count = actualRead(...args); consumed += count; return count;
+    });
+    assert.throws(() => read(2, 8), { code: 'BOUNDED_FILE_READ_EXCEEDED' });
+    assert.equal(consumed, 3);
+    consumed = 0;
+    assert.throws(() => read(8, 2), { code: 'BOUNDED_FILE_READ_EXCEEDED' });
+    assert.equal(consumed, 0, '已知原大小超过最大值时不得读取');
+    for (const [expected, maximum] of [[true, 8], [8, false], [-1, 8], [8, Infinity]]) {
+        assert.throws(() => read(expected, maximum), TypeError);
+    }
+    assert.equal(consumed, 0);
+    patched.mock.restore();
+    fs.writeFileSync(filename, ''); assert.deepEqual(read(0, 0), Buffer.alloc(0));
+    fs.writeFileSync(filename, 'o'); assert.deepEqual(read(8, 8), Buffer.from('o'));
+});
+
 test('共享读取保留旧父目录替换防护，严格 JSON 拒绝重复键及非法 UTF-8', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'publication-read-cas-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

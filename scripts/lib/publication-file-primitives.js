@@ -22,6 +22,25 @@ function directoryIdentity(directory) {
     return { absolute, dev: stat.dev, ino: stat.ino };
 }
 function sameDirectory(left, right) { return left.absolute === right.absolute && left.dev === right.dev && left.ino === right.ino; }
+function readBoundedFd(fd, expectedSize, maximum) {
+    if (!Number.isSafeInteger(expectedSize) || expectedSize < 0
+        || !Number.isSafeInteger(maximum) || maximum < 0) {
+        throw new TypeError('有界文件读取需要非负安全整数大小及上限');
+    }
+    const exceeded = () => Object.assign(new RangeError('文件实际读取超过已记录大小或上限'),
+        { code: 'BOUNDED_FILE_READ_EXCEEDED' });
+    if (expectedSize > maximum) throw exceeded();
+    const chunks = []; let size = 0;
+    while (true) {
+        // One sentinel is consumed only to detect growth; it is never retained.
+        const buffer = Buffer.alloc(Math.min(65536, expectedSize - size + 1));
+        const count = fs.readSync(fd, buffer, 0, buffer.length, null);
+        if (count === 0) break;
+        if (count > expectedSize - size) throw exceeded();
+        chunks.push(buffer.subarray(0, count)); size += count;
+    }
+    return Buffer.concat(chunks, size);
+}
 function readRegular(filename, maximum = 128 * 1024 * 1024, dependencies = {}) {
     let fd; const parentBefore = directoryIdentity(path.dirname(filename));
     try { const before = fs.lstatSync(filename, { bigint: true });
@@ -111,4 +130,4 @@ function strictJson(bytes, label) {
 }
 
 
-module.exports = { strictJson, readRegular, writeExact, defaultBlogState, defaultGitBlob };
+module.exports = { strictJson, readBoundedFd, readRegular, writeExact, defaultBlogState, defaultGitBlob };

@@ -75,6 +75,7 @@ npm run test:compat
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
+| `lib/analysis-text-profile.js` | 主分析、Reader-only 与评分＋Reader 共用全文档位；已登记短篇须重放当前真实会议 PDF 能力，保留原公式、表格及普通来源阈值。 |
 | `lib/analysis-failure-rounds.js` | Node共享：固定首轮范围、全批轮次屏障、可重试失败集合、运行级停止及人工接手建议；不操作来源文件、正文、费用或发布资格。 |
 | `lib/analysis-batch-report.js` | Node共享：将 Reader 刷新固定范围、来源引用、轮次和人工建议保存为私有诊断；不签来源、成功正文或发布凭证，不授权新请求。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
@@ -289,13 +290,13 @@ npm run test:compat
 | `lib/reader-resource-input-admission.js` | Node 库：真实资源状态变化须逐字重放原请求、已付响应、费用与失败稿，并核完整父阶段和封存来源；同来源 Reader 范围仅一次新输入，固定正常 6/2 预算，旧稿与旧计数不迁移。仅元数据变化拒绝再开。 |
 | `lib/reader-resource-prose.js` | 把已核验资源身份投影为自然语言输入，保留作者与第三方归属。 |
 | `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。保留上游时验证实际返回的原论文 Reader，假想的未保存主文投影不授予人工权限。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
-| `lib/reader-sealed-figure-alias.js` | Node 库：在真实日更封存来源的同步作用域内，核验未选图号引用同一图片资产的别名关系；保留全部原始图片证据，所选图片仍须去重。返回前重读四份来源并核对输入，不授予请求预算或整篇通过资格。 |
 | `lib/reader-sealed-pdf-column-units.js` | Reader 封存 PDF 表格列单位的精确绑定与重放。 |
 | `reader_sealed_pdf_literal_column_units.py` | 日更真实封存 PDF 完整表的独立列单位证明；保留完整方法、数据集合并条件、双层分组头与均值±区间及全部原格，不依赖 HTML 显示等价。 |
 | `reader_grouped_vector_column_units.py` | 发布端重放与 Reader 相同的完整偏好向量表列单位；调用方先核四份封存来源及真实 PDF 引文，保留两层列路径、全部行和均值差合并格。 |
 | `lib/reader-authenticated-pdf-table-evidence.js` | 共用会议及历史真实 PDF 的私有来源能力，为正常 `source_quotes` 表派生唯一原表引文与严格行列单位证明；解析、恢复及保存后冷核使用同一实现，不制造 DOM 或放宽旧完整稿出版准入。 |
 | `lib/reader-source-table-column-units.js` | 在已核验的封存来源作用域中，以原 DOM 表、行名及同列单元格核对百分比单位；合并表头另须完整跨度覆盖、唯一指标路径及明确原表注。不改数字、单位或来源，冷态恢复与发布端同步重放。 |
 | `lib/reader-sealed-pdf-quote-evidence.js` | Reader 封存 PDF 逐字引文证据的绑定与重放。 |
+| `lib/reader-sealed-figure-alias.js` | 公共图片绑定器的同步来源例外：仅同篇真实日更四文件与 direct 上下文中，允许未选中的不同 DOM 图号引用同一资产；全部原图像证据、像素身份和返回前来源 CAS 仍核验。普通 JSON、历史或会议的不同来源不能借用此日更能力，选中图片仍禁止 URL 或图号重复。 |
 | `lib/reader-sealed-pdf-table-evidence.js` | Reader 封存 PDF 原表结构与单元格证据的绑定与重放。 |
 | `lib/reader-source-blocked-normalization.js` | Node 库：对封存来源导致的完整表阻塞重跑唯一顺序调整，核对原稿与准备稿双 SHA，并保留真实绑定与承载正文的失败诊断；付费回放必须先逐字对应保存的原稿，不授予成功资格或新额度。 |
 | `lib/reader-source-diagnostics.js` | Node 库：把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
@@ -421,7 +422,7 @@ npm run test:compat
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |
 | `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
 | `source-probe.js` | Node 入口：`npm run source:probe -- --date YYYY-MM-DD` 只读探测 arXiv Atom/官方 OAI/RSS 三入口并判断公告是否目标日；支持 `--json`，不抓取、不写 data/current。 |
-| `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 只读展示账号池状态、冷却、最早恢复与活动分组；账号只显示本次运行序号，不显示密钥或稳定指纹，支持 `--json`。 |
+| `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 区分当前主副配置及历史观察记录，仅报告已有冷却，不探测余额或清理状态；只显示本次运行序号，不显示密钥或稳定指纹，支持 `--json`。 |
 | `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥，支持 `--json`。 |
 | `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 只读汇总当前失败集，按错误码给出唯一建议入口与可复制命令；默认只打印计划，`--execute --yes` 才调用既有入口。 |
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 从 1–8 个节点替换生成 operator 修正记录与清单，自动计算 SHA/UUID；默认 dry-run，`--write` 才写 data/runtime。 |

@@ -105,7 +105,8 @@ npm run digest:prepare -- YYYY-MM-DD
 | 整篇分析并发 | 3 | `PD_ANALYSIS_CONCURRENCY` |
 | 筛选配置批次 | 5；主模型同样使用配置值 | `PD_FILTER_BATCH_SIZE` |
 | 批次总轮数 | 3，范围 1–10；旧额外重试 2 对应 3 轮 | `PD_ANALYSIS_BATCH_MAX_ROUNDS`；兼容 `PD_ANALYSIS_MAX_RETRIES` |
-| 单阶段请求尝试 | 3 | `PD_ANALYSIS_API_MAX_RETRIES` |
+| 主分析及普通辅助阶段请求尝试 | 3；不是筛选或 Reader 的统一上限 | `PD_ANALYSIS_API_MAX_RETRIES` |
+| Reader 单次逻辑请求的传输尝试 | 2；与内容响应、完整长文及批次轮数分别计数 | 实现固定值 |
 | 人工建议的失败集合上限 | 5，范围 0–5；0关闭建议 | `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` |
 | 人工建议最低失败轮 / 无进展观察轮 | 3 / 3，各范围 3–10 | `PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS` / `PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS` |
 | 主分析输出 | 64000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` |
@@ -115,6 +116,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | 局部修复输出 | 16000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
 | 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |
 | API Reader 输出 | 48000 tokens | `PD_API_READER_MAX_TOKENS` |
+| Reader 局部补丁输出 | 8000 tokens；不等于主分析局部修复上限 | `PD_API_READER_REPAIR_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–60；积压批次可显式增加，运行中观察超时与限流 | `PD_API_READER_CONCURRENCY` |
 | 独立博客页审查并发 | 5，范围 1–5 | `PD_BLOG_REVIEW_CONCURRENCY` |
