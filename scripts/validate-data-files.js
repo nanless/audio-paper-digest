@@ -557,6 +557,9 @@ function validateAnalysisSourceRecordShape(filePath, source, prefix, issues) {
 }
 
 function validateDailyFreshSourceRun(filePath, data, papers, issues) {
+    // Per-call evidence only. Never return a partial batch's source text.
+    const sourceTexts = new Map();
+    const initialIssueCount = issues.length;
     const reference = data?.dailyFreshSourceRun;
     const hasSourceBundleFields = papers.some(paper => (
         paper?.freshRewriteProvenance?.sourceGeneration !== undefined
@@ -564,13 +567,13 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
     ));
     if (reference === undefined) {
         if (hasSourceBundleFields) addIssue(issues, filePath, 'sealed daily source provenance 缺少 dailyFreshSourceRun 顶层引用');
-        return;
+        return sourceTexts;
     }
     let plan;
     try { plan = dailyFreshSources.readDailyFreshSourcePlan(reference); }
     catch (error) {
         addIssue(issues, filePath, `dailyFreshSourceRun 对应的封存来源计划未通过读取或核验: ${error.message}`);
-        return;
+        return sourceTexts;
     }
     if (data.batchDate !== plan.batchDate) {
         addIssue(issues, filePath, `dailyFreshSourceRun.batchDate (${plan.batchDate}) 必须等于 deep batchDate (${data.batchDate})`);
@@ -584,7 +587,7 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
         || sortedPaperIds.length !== sourceRunPaperIds.length
         || !sortedPaperIds.every((id, index) => id === sourceRunPaperIds[index])) {
         addIssue(issues, filePath, 'dailyFreshSourceRun 中的论文集合与深度分析论文集合不完全一致，或论文标识为空、重复。');
-        return;
+        return sourceTexts;
     }
     for (const [index, paper] of papers.entries()) {
         const prefix = `papers[${index}].freshRewriteProvenance`;
@@ -607,10 +610,12 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
                 || paper.analysisManifest?.sourceAcquisition?.sourceSha256 !== descriptor.sourceSha256) {
                 addIssue(issues, filePath, `${prefix} 与封存的文本、PDF 或来源版本记录不一致。`);
             }
+            sourceTexts.set(paper, details.text);
         } catch (error) {
             addIssue(issues, filePath, `${prefix} 无法读取或核验封存的论文来源：${error.message}`);
         }
     }
+    return issues.length === initialIssueCount ? sourceTexts : new Map();
 }
 
 function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
@@ -953,6 +958,11 @@ function validatePaperListFile(filePath, options = {}) {
         return issues;
     }
 
+    let dailySourceTexts = new Map();
+    const declaresDailySource = (!Array.isArray(data) && data.dailyFreshSourceRun !== undefined)
+        || papers.some(paper => paper?.freshRewriteProvenance?.sourceGeneration !== undefined
+            || paper?.freshRewriteProvenance?.sourceManifestSha256 !== undefined);
+
     if (!Array.isArray(data)) {
         validateSourceHealth(filePath, data.sourceHealth || data.stats?.sourceHealth, issues);
         if (options.rawCandidates) {
@@ -963,9 +973,9 @@ function validatePaperListFile(filePath, options = {}) {
         }
         if (options.deepAnalysis) {
             validateDeepAnalysisMetadata(filePath, data, papers, issues, options);
-            validateDailyFreshSourceRun(filePath, data, papers, issues);
         }
     }
+    if (options.deepAnalysis) dailySourceTexts = validateDailyFreshSourceRun(filePath, data, papers, issues);
 
     const seenPaperIds = new Map();
     papers.forEach((paper, index) => {
@@ -988,14 +998,16 @@ function validatePaperListFile(filePath, options = {}) {
             const analysisWaived = Boolean(options.analysisWaiver?.paperIds?.has(paperId));
             const legacyReadOnly = options.allowLegacyCoreSummarySuccess === true
                 && isLegacyApiAnalysisSuccessForReadOnlyValidation(paper);
-            const manualSource = loadBoundManualV4SourceText(
+            // A declared daily bundle must pass its own complete source checks;
+            // a broken bundle cannot fall back to an older manual text.
+            const manualSource = declaresDailySource ? { sourceText: '' } : loadBoundManualV4SourceText(
                 filePath,
                 Array.isArray(data) ? undefined : data.batchDate,
                 paper,
                 index
             );
             if (manualSource.error) addIssue(issues, filePath, manualSource.error);
-            const sourceText = manualSource.sourceText || '';
+            const sourceText = dailySourceTexts.get(paper) || manualSource.sourceText || '';
             let reparsed = null;
             if (hasAnalysisBody) {
                 reparsed = parseAnalysis(paper.analysis, { legacyTags: legacyReadOnly });
