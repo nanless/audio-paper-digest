@@ -53,7 +53,7 @@ def _source_artifacts(text_sha):
     })
 
 
-def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_prefix='', html_urls=None):
+def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_prefix='', html_urls=None, source_texts=None):
     """按 Node 抓取路径的样式在来源库里造出字节。"""
     date = '2026-09-07'
     run_id = '11111111-1111-4111-8111-111111111111'
@@ -64,7 +64,8 @@ def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_pr
     for paper_id in sorted(paper_ids):
         source_id = f'{paper_id}v1' if paper_id in versioned_source_ids else paper_id
         source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
-        text = (text_prefix + f'Official fresh text for {paper_id}.\n' * 20).encode('utf-8')
+        text = ((source_texts or {}).get(paper_id) or
+                (text_prefix + f'Official fresh text for {paper_id}.\n' * 20)).encode('utf-8')
         pdf = f'%PDF-1.4\n{paper_id}\n%%EOF\n'.encode('ascii')
         text_sha = hashlib.sha256(text).hexdigest()
         pdf_sha = hashlib.sha256(pdf).hexdigest()

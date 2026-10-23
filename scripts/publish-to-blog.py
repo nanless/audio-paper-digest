@@ -22,6 +22,7 @@ load_project_env()
 """
 import argparse
 import copy
+import weakref
 import contextvars
 import difflib
 import functools
@@ -54,7 +55,7 @@ from publish_common import (
     classify_review_failure, unchanged_content_rejection_blocks_retry,
     interpret_readonly_text_unit,
     normalize_publish_arxiv_id, parse_publish_arxiv_identity, is_canonical_publish_arxiv_id, review_protocol_failure,
-    validate_papers_for_publish, validate_review_payload,
+    validate_papers_for_publish, validate_review_payload, resolve_publish_parsed,
     validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5, MANUAL_DEPTH_CONTRACT_VERSION_V6,
     MANUAL_LONGFORM_CONTRACT_VERSION_V2, validate_manual_v6_payload,
@@ -64,6 +65,8 @@ from publish_common import (
     is_publish_currency_unit_literal, decode_publish_currency_unit_display,
     strict_source_cell_math_display, extract_markdown_tables,
     _assert_hash_key_premises, _assert_ecmascript_number_premises,
+    _verified_daily_publication_table_scope,
+    validate_experiment_table_contract, EXPERIMENT_TABLE_CONTRACT_VERSIONS,
 )
 from path_config import (
     PROJECT_ROOT,
@@ -11075,6 +11078,14 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
         paper, {**details, 'title': runtime.get('title'), 'sourceVersion': runtime.get('sourceVersion')}, paper_id,
         sealed_bundle_root=run_dir / 'sources',
     )
+    return {'files': tuple(
+        (source_dir / name, len(raw), _daily_fresh_sha256(raw), maximum)
+        for name, raw, maximum in (
+            ('source.txt', text, 64 * 1024 * 1024),
+            ('source.pdf', pdf, 512 * 1024 * 1024),
+            ('source-runtime.json', runtime_bytes, 64 * 1024 * 1024),
+            ('source-manifest.json', manifest_bytes, 1024 * 1024),
+        ))}
 
 
 
@@ -11267,6 +11278,98 @@ def _reject_unbound_api_generation_input(papers):
             )
 
 
+_DAILY_PUBLICATION_SOURCE_OPERATIONS = weakref.WeakKeyDictionary()
+
+
+class _DailyPublicationTableSourceOperation:
+    """Opaque operation token; authenticated state stays in private closures."""
+    __slots__ = ('__weakref__',)
+
+
+def _daily_publication_operation_state(operation):
+    if type(operation) is not _DailyPublicationTableSourceOperation:
+        raise PublishDataValidationError('daily table source requires its actual verified run owner')
+    state = _DAILY_PUBLICATION_SOURCE_OPERATIONS.get(operation)
+    if state is None:
+        raise PublishDataValidationError('daily table source operation has ended or was never issued')
+    return state
+
+
+def _mint_daily_publication_table_operation(source_path, source_bytes, run_file, run_bytes, records):
+    # Called only after the complete daily run has passed its original source gate.
+    operation = _DailyPublicationTableSourceOperation()
+    operation_ref = weakref.ref(operation)
+
+    def require_active():
+        active = operation_ref()
+        if active is None or active not in _DAILY_PUBLICATION_SOURCE_OPERATIONS:
+            raise PublishDataValidationError('daily table source operation has ended')
+
+    def assert_unchanged(paper_id=None):
+        require_active()
+        record = None
+        if paper_id is not None:
+            if not isinstance(paper_id, str) or paper_id not in records:
+                raise PublishDataValidationError('daily table source assertion requires a verified member')
+            record = records[paper_id]
+        if source_path.read_bytes() != source_bytes:
+            raise PublishDataValidationError('daily table source input file changed during publication')
+        if _daily_fresh_read_private_file(run_file, 'daily table run', 4 * 1024 * 1024) != run_bytes:
+            raise PublishDataValidationError('daily table source run changed during publication')
+        seen = {}
+        for item in ([record] if record is not None else records.values()):
+            for file, size, digest, maximum in item['source']['files']:
+                if file in seen:
+                    continue
+                raw = _daily_fresh_read_private_file(file, 'daily table original source', maximum)
+                if len(raw) != size or _daily_fresh_sha256(raw) != digest:
+                    raise PublishDataValidationError('daily table sealed source bytes changed during publication')
+                seen[file] = raw
+        # Return the actual just-read TXT, rather than any saved/caller-supplied text.
+        return seen[record['source']['files'][0][0]].decode('utf-8') if record is not None else None
+
+    def source_text(paper):
+        require_active()
+        paper_id = _daily_fresh_normalized_paper_id(paper)
+        record = records.get(paper_id)
+        if record is None:
+            raise PublishDataValidationError('daily table paper is not a verified operation member')
+        original = record['paper']
+        expected = copy.deepcopy(original)
+        if paper.get('parsed') != original.get('parsed'):
+            expected['parsed'] = resolve_publish_parsed(original)
+        if 'normalizedArxivId' in paper:
+            expected['normalizedArxivId'] = normalize_publish_arxiv_id(original.get('arxivId'))
+        if paper != expected:
+            # Recompute the existing complete image-exclusion view. All title,
+            # author, source, stage and body fields remain protected by equality.
+            exclusions = paper.get(PUBLISH_IMAGE_EXCLUSIONS_FIELD)
+            if not isinstance(exclusions, list) or not exclusions:
+                raise PublishDataValidationError('daily table protected paper changed after run validation')
+            expected = apply_publish_image_exclusions([expected], exclusions=exclusions)[0]
+            if paper != expected:
+                raise PublishDataValidationError('daily table image-exclusion view is not the original normal projection')
+        return assert_unchanged(paper_id)
+
+    _DAILY_PUBLICATION_SOURCE_OPERATIONS[operation] = (assert_unchanged, source_text)
+    return operation
+
+
+@contextmanager
+def _daily_publication_table_source_scope(operation):
+    if operation is None:
+        yield None
+        return
+    assert_unchanged, source_text = _daily_publication_operation_state(operation)
+    try:
+        assert_unchanged()
+        with _verified_daily_publication_table_scope(source_text) as capability:
+            yield capability
+            assert_unchanged()
+    finally:
+        _DAILY_PUBLICATION_SOURCE_OPERATIONS.pop(operation, None)
+
+
 @_with_reader_author_replay_batch
 def validate_daily_fresh_sources_for_publish(data_file, target_date):
     """在生成、审查和推送之前，重放每一次声称的每日来源生成。
@@ -11281,7 +11384,8 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
     if not source_path.is_file():
         return
     try:
-        payload = json.loads(source_path.read_text(encoding='utf-8'))
+        source_bytes = source_path.read_bytes()
+        payload = json.loads(source_bytes.decode('utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError('无法读取 daily sealed source 输入') from exc
     if not isinstance(payload, dict):
@@ -11342,6 +11446,7 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
             or run.get('sourceSetSha256') != expected_set_sha
     ):
         raise PublishDataValidationError('daily sealed source run 未精确覆盖发布输入论文集合')
+    records = {}
     for paper, paper_id in zip(papers, [_daily_fresh_normalized_paper_id(p) for p in papers]):
         proof = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
         if (
@@ -11353,7 +11458,32 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
                 ))
         ):
             raise PublishDataValidationError(f'{paper_id} 缺少精确 daily sealed fresh provenance')
-        _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+        details = _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+        records[paper_id] = {'paper': copy.deepcopy(paper), 'source': details}
+    author_batch = _READER_AUTHOR_REPLAY_BATCH.get()
+    if author_batch is not None:
+        _flush_reader_author_replay_batch(author_batch)
+    operation = _mint_daily_publication_table_operation(
+        source_path, source_bytes, run_dir / 'run.json', run_bytes, records)
+    assert_unchanged, source_text = _daily_publication_operation_state(operation)
+    # Generation, review and push all enter this full-run gate. Scientific table
+    # checks use the same authenticated full text, before any filtering or publication.
+    try:
+        for paper in papers:
+            contracts = (paper.get('analysisManifest') or {}).get('contracts') or {}
+            table_contract = contracts.get('experimentTables')
+            if table_contract in EXPERIMENT_TABLE_CONTRACT_VERSIONS:
+                issue = validate_experiment_table_contract(paper.get('analysis'),
+                    contract_version=table_contract,
+                    document_type=(paper.get('parsed') or {}).get('documentType', ''),
+                    source_text=source_text(paper))
+                if issue:
+                    raise PublishDataValidationError(f'{paper.get("arxivId")} daily source-bound table contract: {issue}')
+        assert_unchanged()
+    except BaseException:
+        del _DAILY_PUBLICATION_SOURCE_OPERATIONS[operation]
+        raise
+    return operation
 
 
 def _review_single_paper(args):
@@ -16722,7 +16852,7 @@ def generate_main(options=None):
     # 这个前置检查有意放在论文筛选和 Markdown 生成之前：
     # 每日 API 记录如果声称使用最新来源，就必须
     # 证明已核验保存的完整入选集合，而不只是后面的某个子集。
-    validate_daily_fresh_sources_for_publish(data_file, today)
+    daily_table_sources = validate_daily_fresh_sources_for_publish(data_file, today)
     papers = load_papers(data_file)
     # 优先使用抓取器写入的不可变 fetchBatchDate，旧数据才回退严格北京 fetchedAt。
     if not publish_all:
@@ -16765,11 +16895,13 @@ def generate_main(options=None):
         )
 
     try:
-        papers = validate_papers_for_publish(papers)
-        papers = apply_publish_image_exclusions(papers)
-        papers = validate_papers_for_publish(
-            papers, validate_manual_stage_records=False,
-        )
+        with _daily_publication_table_source_scope(daily_table_sources) as capability:
+            papers = validate_papers_for_publish(papers, _daily_source_capability=capability)
+            papers = apply_publish_image_exclusions(papers)
+            papers = validate_papers_for_publish(
+                papers, validate_manual_stage_records=False,
+                _daily_source_capability=capability,
+            )
     except PublishDataValidationError as exc:
         print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
         sys.exit(1)

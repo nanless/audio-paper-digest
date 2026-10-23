@@ -23,6 +23,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import weakref
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -302,7 +304,7 @@ def _is_table_identifier_header(value):
     if re.fullmatch(r'(?:(?:检验|统计检验)?统计量|统计检验结果|(?:F|t|z|χ²)\s*统计量|(?:test\s+)?statistics?|[Ftzp][ -]?(?:values?|statistics?))', normalized, flags=re.IGNORECASE):
         return False
     # 与 Node 显式列出的训练条件识别符保持一致。
-    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
         return True
@@ -2561,6 +2563,44 @@ def _manual_result_claim_source_text(paper):
     )
 
 
+class _DailyPublicationTableCapability:
+    pass
+
+
+_DAILY_PUBLICATION_TABLE_READERS = weakref.WeakKeyDictionary()
+
+
+@contextmanager
+def _verified_daily_publication_table_scope(source_reader):
+    """Internal owner bridge: no JSON, path or paper field can enable it."""
+    if not callable(source_reader):
+        raise PublishDataValidationError('daily table source requires its verified operation owner')
+    capability = _DailyPublicationTableCapability()
+    _DAILY_PUBLICATION_TABLE_READERS[capability] = source_reader
+    try:
+        yield capability
+    finally:
+        del _DAILY_PUBLICATION_TABLE_READERS[capability]
+
+
+def _publication_table_source_text(paper, capability=None):
+    if capability is None:
+        manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
+        proofs = (paper.get('freshRewriteProvenance'),
+                  manifest.get('freshRewriteProvenance') if isinstance(manifest, dict) else None)
+        if any(isinstance(proof, dict) and proof.get('contract') == 'fresh-source-analysis-v1'
+               and ('sourceGeneration' in proof or 'sourceManifestSha256' in proof)
+               for proof in proofs):
+            raise PublishDataValidationError('daily sealed table source requires the current verified run capability')
+        return _manual_result_claim_source_text(paper)
+    if type(capability) is not _DailyPublicationTableCapability:
+        raise PublishDataValidationError('daily table source capability is not a verified owner handle')
+    reader = _DAILY_PUBLICATION_TABLE_READERS.get(capability)
+    if reader is None:
+        raise PublishDataValidationError('daily table source operation has ended')
+    return reader(paper)
+
+
 def _validate_manual_v4_result_claims(
         takeover, analysis, paper_label, *, reader_section='实验结果'):
     """在发布阶段复刻来源绑定的 Manual v4 结果主张结构。
@@ -3426,6 +3466,359 @@ def _source_experiment_evidence(source_text):
     return tail[:end.start()] if end and end.start() > 0 else tail
 
 
+def _source_scope_observed_experiment_claim(text):
+    # Same ASCII word boundaries as the JavaScript observedExperimentClaim.
+    return not re.search(
+        r'\b(?:if|suppos(?:e|ing)|hypothetical)\b|'
+        r'\b(?:future|planned|proposed)\s+(?:experiments?|work|evaluation|validation)\b|'
+        r'\b(?:should|must|needs?\s+to)\s+(?:compare|report|score|require|validate)\b|'
+        r'\b(?:previous|related|other)\s+(?:work|stud(?:y|ies)|models?|systems?)\b|'
+        r'\b(?:does|do|did)\s+not\s+(?:identify|explain)\s+why\b|'
+        r'\b(?:not|never)\s+(?:observed|reported|obtained)\b|'
+        r'(?:如果|假设|假想|计划|未来实验|后续实验|相关工作|先前研究|其他模型|他人|错误说法|'
+        r'并非|不是|未报告|尚未报告|未观察到|没有观察到|否认)', str(text), re.I | re.ASCII)
+
+
+def _own_observed_source_scope(text):
+    return _source_scope_observed_experiment_claim(text) and not re.search(
+        r'\b(?:hypothes(?:is|izes?|ized)|hypothetical|illustrative|proposed only|not our experiment|'
+        r'(?:previous|other|related)\s+(?:paper|work|study|method)|(?:did|do|does) not conduct|'
+        r'no ablation experiment|not performed|not conducted|withdrawn|revoked|false statement)\b|'
+        r'(?:^|\n)\s*[>“"]|(?:他人|其他研究|转述|撤回|不是本研究)', str(text), re.I | re.ASCII)
+
+
+def _normalize_local_evidence_heading(line):
+    heading = str(line or '').strip()
+    atx = re.fullmatch(r'#{1,6}[ \t]+([^\n]*)', heading)
+    if atx:
+        heading = re.sub(r'[ \t]+#+[ \t]*$', '', atx[1]).strip()
+    bold = re.fullmatch(r'(\*\*|__)([^\n]+)\1', heading)
+    return bold[2].strip() if bold else heading
+
+
+def _has_own_local_reported_experiment(text, index, sentence):
+    if not _own_observed_source_scope(sentence):
+        return False
+    before = str(text or '')[:index]
+    if before[before.rfind('\n') + 1:].strip():
+        return True
+    adjacent = before[-512:].rstrip(' \t\r\n')
+    if not adjacent and before:
+        return False
+    previous = _normalize_local_evidence_heading(re.split(r'[。；！？!?]', adjacent.split('\n')[-1])[-1])
+    notice = (r'^(?:第三方|他人|外部团队|其他研究|相关工作|相关研究|先前研究|既有研究|旧工作|'
+              r'基线方法|对照系统|假设|假想|假定|设想|如果|预计|计划|未来|'
+              r'previous\s+work|prior\s+research|related\s+work)[^。；.!?\n]{0,140}[：:]$')
+    return not re.search(notice, previous, re.I)
+
+
+def _has_source_backed_placement_control(results, source_text):
+    # Exact source-owned single-factor control, not a keyword or a paper allowlist.
+    raw_source = str(source_text or '')
+    headings = list(re.finditer(
+        r'^(?:(?:[0-9]+(?:\.[0-9]+)*|[IVXLCDM]+)\s+)?'
+        r'Uniform-stride versus adaptive event placement\s*\r?\n', raw_source, re.I | re.M))
+    if len(headings) != 1:
+        return False
+    tail = raw_source[headings[0].end():headings[0].end() + 16000]
+    end = re.search(r'^[ \t]*(?:[0-9]+(?:\.[0-9]+)*|[IVXLCDM]+)[ \t]+[A-Z]', tail, re.M)
+    source = tail[:end.start()] if end else tail
+    preceding = [line for line in raw_source[:headings[0].start()].split('\n') if line.strip()]
+    prefix = preceding[-1] if preceding else ''
+    if not _own_observed_source_scope(prefix + '\n' + source):
+        return False
+    control = re.search(
+        r'To isolate event placement, we compare[^\n]{1,600}?Both models share the '
+        r'[^\n]{1,100}?latent grid, [^\n]{1,100}?interval aggregator, '
+        r'[^\n]{1,100}?quantizer, and causal decoder', source, re.I)
+    observed = re.search(
+        r'Adaptive placement gives[^\n]{1,1400}?With aggregation and decoding held fixed[^\n]{1,500}', source, re.I)
+    def owns(match):
+        return match is not None and _own_observed_source_scope(
+            source[source.rfind('\n', 0, match.start()) + 1:match.start()] + match[0])
+    if not owns(control) or not owns(observed):
+        return False
+    single = re.search(
+        r'\bdWER\b[^.!?]{0,180}with one codebook\s*\(([0-9]+(?:\.[0-9]+)?)%\s*'
+        r'(?:→\s*(?:\\rightarrow)?|\\rightarrow)\s*([0-9]+(?:\.[0-9]+)?)%\)', observed[0], re.I | re.ASCII)
+    depths = re.search(
+        r'at depths ([1-9][0-9]*) and ([1-9][0-9]*), dWER is close\s*'
+        r'\(([0-9]+(?:\.[0-9]+)?)% versus ([0-9]+(?:\.[0-9]+)?)% and '
+        r'([0-9]+(?:\.[0-9]+)?)% versus ([0-9]+(?:\.[0-9]+)?)%\)', observed[0], re.I)
+    if not single or not depths or float(single[2]) >= float(single[1]) or depths[1] == depths[2]:
+        return False
+    pairs = {depths[1]: (depths[3], depths[4]), depths[2]: (depths[5], depths[6])}
+    for reported in re.finditer(r'[^。；\n]+', str(results or '')):
+        sentence = reported[0]
+        if (not _has_own_local_reported_experiment(results, reported.start(), sentence)
+                or re.search(r'假想|设想|第三方|旧工作|既有研究|先前工作|先前研究|相关工作|相关研究|'
+                             r'文献|引用|转述|撤回|否认|不成立|\b(?:previous|prior|related)\s+(?:work|research)\b',
+                             sentence, re.I | re.ASCII)):
+            continue
+        measured = re.search(
+            r'只改变放置的均匀步长对照中[^。]{1,150}单码本\s+dWER\s+从\s*'
+            r'([0-9]+(?:\.[0-9]+)?)%\s+降到\s*([0-9]+(?:\.[0-9]+)?)%[，,]\s*'
+            r'([1-9][0-9]*)\s*层时为\s*([0-9]+(?:\.[0-9]+)?)%\s+对\s*([0-9]+(?:\.[0-9]+)?)%', sentence, re.I)
+        pair = pairs.get(measured[3]) if measured else None
+        if (measured and pair and float(measured[1]) == float(single[1])
+                and float(measured[2]) == float(single[2])
+                and float(measured[4]) == float(pair[0]) and float(measured[5]) == float(pair[1])):
+            return True
+    return False
+
+
+def _is_reported_experiment_prefix(prefix):
+    return not re.search(r'(?:并非|不是|未能|没有|尚未|未曾|不能|不应|如果|假设|假如|倘若|若|未|不|'
+                         r'计划|讨论|建议|拟|将|未来|有待|打算|设想)[^，,]{0,30}$', prefix)
+
+
+def _has_adjacent_affirmative_evidence_withdrawal(text, end, subject_pattern):
+    next_line = re.sub(r'^[。；\r\n \t]+', '', str(text)[end:]).split('\n')[0].rstrip('\r')[:600]
+    line = _normalize_local_evidence_heading(next_line)
+    first_span = re.search(r'^(\*\*|__)([^\n]+?)\1(?=[。； \t]|$)', line)
+    heading = re.search(r'^#{1,6}[ \t]+', next_line)
+    heading_prefix = heading[0] if heading else ''
+    next_claim = _normalize_local_evidence_heading(heading_prefix + (first_span[2] if first_span else line).split('。')[0])
+    affirmative = (r'^(?:(?:已经|现已|已)?(?:被)?(?:正式)?撤回(?:了)?|(?:已经|现已|已)?被否认|'
+                   r'(?:确实|已经|现已|已)?不成立|(?:确有|有|存在)错误|有误|(?:是)?错误(?:的)?)$')
+    for clause in re.split(r'[，,；;]', next_claim):
+        for subject in re.finditer(subject_pattern, clause, re.I):
+            prefix = re.split(r'但是|然而|不过|可是|但|却', clause[:subject.start()])[-1]
+            if (_own_observed_source_scope(prefix)
+                    and not re.search(r'第三方|外部团队|假定|设想|撤回|不成立|并不|'
+                                      r'\b(?:withdrawn|revoked|not performed|not conducted|false statement)\b', prefix, re.I | re.ASCII)
+                    and _is_reported_experiment_prefix(prefix)
+                    and re.fullmatch(affirmative, clause[subject.end():].strip())):
+                return True
+    return False
+
+
+def _matches_source_audiogram_metric_pairs(table, old_column, new_column, method, metric, baseline, source):
+    captions = list(re.finditer(r'(?:^|\n)Table\s+[0-9]+:\s*Optimization results for profiles '
+                               r'[^\n]{1,100}with limited residual DR[^\n]*', source, re.I))
+    if len(captions) != 1:
+        return False
+    tail = source[captions[0].end():captions[0].start() + 20000]
+    following = re.search(r'(?:^|\n)Table\s+[0-9]+:', tail, re.I)
+    body = tail[:following.start()] if following else tail
+    audiogram = next((i for i, h in enumerate(table['header']) if re.fullmatch(r'(?:听力图|audiograms?)', str(h).strip(), re.I)), -1)
+    signal = next((i for i, h in enumerate(table['header']) if re.fullmatch(r'(?:信号|signals?)', str(h).strip(), re.I)), -1)
+    family = re.fullmatch(r'([A-Za-z]+)-[1-9][0-9]*', method)
+    if audiogram < 0 or signal < 0 or not family:
+        return False
+    music_signal = {'紧凑': 'Tight', '常规': 'Normal', '动态': 'Dynamic'}
+    for row in table['rows']:
+        profile = re.fullmatch(r'([A-Z][0-9]{1,2})\s+有限范围', str(row[audiogram] if audiogram < len(row) else '').strip())
+        music = music_signal.get(str(row[signal] if signal < len(row) else '').strip())
+        if not profile or not music:
+            return False
+        begin = re.search(r'(?:^|\n)' + re.escape(profile[1]) + r' with limited DR\r?\n', body)
+        if not begin:
+            return False
+        rest = body[begin.end():]
+        end = re.search(r'(?:^|\n)(?:[A-Z][0-9]{1,2} with limited DR|Fig\.|Table\s+[0-9]+:)', rest)
+        lines = [line.strip() for line in re.split(r'\r?\n', rest[:end.start()] if end else rest) if line.strip()]
+        metric_row = next((i for i, line in enumerate(lines) if line.startswith(metric + ' ') and '↑' in line), -1)
+        if metric_row < 0:
+            return False
+        header = lines[:metric_row]
+        methods = [line for line in header if re.fullmatch(re.escape(family[1]) + r'-[1-9][0-9]*', line)]
+        index = methods.index(method) if method in methods else -1
+        labels = [line for line in header if line == baseline or line == 'Opt.']
+        if (not header or header[0] != 'GR' or index < 0 or len(set(methods)) != len(methods)
+                or '|'.join(labels) != '|'.join(baseline + '|Opt.' for _ in methods)):
+            return False
+        metric_tail = lines[metric_row + 1:]
+        next_metric = next((i for i, line in enumerate(metric_tail) if re.search(r'[↑↓]', line)), -1)
+        cells = metric_tail[:next_metric] if next_metric >= 0 else metric_tail
+        starts = [i for i, line in enumerate(cells) if line == music]
+        if len(starts) != 1:
+            return False
+        values = cells[starts[0] + 1:starts[0] + 2 + 2 * len(methods)]
+        if (any(column >= len(row) for column in (old_column, new_column))
+                or not all(re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', str(row[column]))
+                           for column in (old_column, new_column))):
+            return False
+        if (len(values) != 1 + 2 * len(methods)
+                or not all(re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', value) for value in values)
+                or float(row[old_column]) != float(values[1 + 2 * index])
+                or float(row[new_column]) != float(values[2 + 2 * index])):
+            return False
+    return True
+
+
+def _has_source_backed_quality_audibility_tradeoff(results, tables, source_text):
+    source = str(source_text or '')
+    pattern = (r'([A-Za-z][A-Za-z0-9-]{1,39}) optimization reduces ([A-Za-z][A-Za-z0-9-]{1,39}) '
+               r'compared to the single-channel ([A-Za-z][A-Za-z0-9-]{0,39}) baseline '
+               r'\(by up to ([0-9]+(?:\.[0-9]+)?)\), indicating that the single-channel optimizer '
+               r'sacrifices quality to improve audibility')
+    for match in re.finditer(pattern, source):
+        line_start = source.rfind('\n', 0, match.start()) + 1
+        preceding = [line for line in source[:line_start].split('\n') if line.strip()]
+        previous = preceding[-1] if preceding else ''
+        if not _own_observed_source_scope(previous[-300:] + '\n' + source[line_start:match.start()] + match[0]):
+            continue
+        method, metric, baseline, delta = match.groups()
+        if float(delta) <= 0:
+            continue
+        reported = (r'单通道[^。；\n]{0,60}' + re.escape(metric)
+                    + r'[^。；\n]{0,80}[，,]\s*优化反而为换可听度让出最多\s*([0-9]+(?:\.[0-9]+)?)\s*的质量')
+        prose_matches = False
+        for sentence in re.finditer(r'[^。；\n]+', str(results or '')):
+            loss = re.search(reported, sentence[0])
+            if (loss and float(loss[1]) == float(delta)
+                    and _has_own_local_reported_experiment(results, sentence.start(), sentence[0])
+                    and not re.search(r'假想|设想|第三方|旧工作|既有研究|先前工作|先前研究|相关工作|相关研究|'
+                                      r'文献|引用|转述|撤回|否认|并未|没有|不成立', sentence[0], re.I)):
+                prose_matches = True
+                break
+        if not prose_matches:
+            continue
+        for table in tables:
+            clean = lambda header: re.sub(r'[*_`]', '', str(header)).strip()
+            old_column = next((i for i, h in enumerate(table['header']) if clean(h) == f'{method} {baseline} {metric} ↑'), -1)
+            new_column = next((i for i, h in enumerate(table['header']) if clean(h) == f'{method} 优化 {metric} ↑'), -1)
+            if (old_column < 0 or new_column < 0 or len(_source_backed_identity_columns(table, source)) < 2
+                    or not _matches_source_audiogram_metric_pairs(table, old_column, new_column, method, metric, baseline, source)):
+                continue
+            values = [float(row[old_column]) - float(row[new_column])
+                      if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', str(row[old_column]))
+                      and re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', str(row[new_column])) else math.nan for row in table['rows']]
+            if len(values) >= 2 and all(math.isfinite(v) for v in values) and abs(max(values) - float(delta)) < 1e-9:
+                return True
+    return False
+
+
+def _has_source_backed_net_interval_negative(results, tables, source_text):
+    raw = str(source_text or '')
+    def owns(text, index, body):
+        previous = _normalize_local_evidence_heading(text[:index].rstrip().split('\n')[-1])
+        joined = previous + '\n' + body
+        return _own_observed_source_scope(joined) and not re.search(
+            r'第三方|外部团队|假定|设想|撤回|不成立|并不|'
+            r'\b(?:withdrawn|revoked|not performed|not conducted|false statement)\b', joined, re.I | re.ASCII)
+    headings = list(re.finditer(r'^[ \t]*[0-9]+(?:\.[0-9]+)*[ \t]+Net effect[ \t]*\r?\n', raw, re.I | re.M))
+    if len(headings) != 1:
+        return False
+    tail = raw[headings[0].end():headings[0].end() + 12000]
+    boundary = re.search(r'^[ \t]*(?:[0-9]+(?:\.[0-9]+)*[ \t]+[A-Z]|#{1,6}[ \t])', tail, re.M)
+    block = tail[:boundary.start()] if boundary else tail
+    if not owns(raw, headings[0].start(), ''):
+        return False
+    self_start = re.search(r'Self-correction is less clear\.', block, re.I)
+    if not self_start:
+        return False
+    scope_start = 0
+    for line in re.finditer(r'[^\n]+(?:\n|$)', block[:self_start.start()]):
+        if re.fullmatch(r'Our measured results:', _normalize_local_evidence_heading(line[0]), re.I):
+            scope_start = line.end()
+    current = block[scope_start:]
+    if not owns('', 0, current):
+        return False
+    prose = re.sub(r'\s+', ' ', current.replace('−', '-'))
+    group = re.search(r'Self-correction is less clear\. ([A-Z]) beats ([A-Z]) on the synthetic corpus', prose, re.I)
+    if (not group or group[1] == group[2]
+            or not re.search(r'By net WER alone, the audio does nothing for self-correction on natural speech\.', prose, re.I)):
+        return False
+    signed = r'[+-]?[0-9]+(?:\.[0-9]+)?'
+    def interval(name):
+        return (r'(?P<' + name + r'>\[(?P<' + name + r'Low>' + signed + r'),[ \t]*(?P<' + name + r'High>'
+                + signed + r')\])(?P=' + name + r')?')
+    claim = re.search(r'On the natural corpora we cannot detect a net difference[ \t]*\([ \t]*'
+                      + r'(?P<p1>' + signed + r')(?P=p1)?[ \t]*pt,[ \t]*interval[ \t]*' + interval('i1') + r';[ \t]*'
+                      + r'(?P<p2>' + signed + r')(?P=p2)?[ \t]*pt,[ \t]*(?:interval[ \t]*)?' + interval('i2') + r'[ \t]*\)', prose, re.I)
+    if not claim:
+        return False
+    values = [float(claim['p1']), float(claim['p2'])]
+    if not all(math.isfinite(v) for v in values):
+        return False
+    for index, key in enumerate(['i1', 'i2']):
+        low, high = float(claim[key + 'Low']), float(claim[key + 'High'])
+        if not math.isfinite(low) or not math.isfinite(high) or not low < 0 < high or not low <= values[index] <= high:
+            return False
+    primary_match = re.search(r'primary corrector is ([^\n\[.]{1,80}(?:\.[0-9]+)?[^\n\[]*)\s*\[[0-9, ]+\]', raw, re.I)
+    primary = primary_match[1].strip() if primary_match else ''
+    if not primary or primary not in str(results):
+        return False
+    captions = list(re.finditer(r'^Table[ \t]+[0-9]+:[ \t]*Effect of the audio,[ \t]*([^:\n]{1,100}):[ \t]*grounded minus text-only\r?\n', raw, re.M))
+    natural = [('RuLibri RU', '俄语音频书'), ('Medical EN', '医疗英语')]
+    def number_cell(value):
+        scalar = re.fullmatch(r'(?:\+\+|−-|--|\+|-|−)?[0-9]+(?:\.[0-9]+)?', str(value))
+        return float(re.sub(r'^\+\+', '+', re.sub(r'^(?:−-|--|−)', '-', scalar[0]))) if scalar else math.nan
+    bound = []
+    for caption in captions:
+        if caption[1].strip() != primary:
+            continue
+        table_tail = raw[caption.end():caption.start() + 20000]
+        end = re.search(r'^Table[ \t]+[0-9]+:', table_tail, re.M)
+        body = table_tail[:end.start()] if end else table_tail
+        if not owns(raw, caption.start(), body):
+            continue
+        lines = [line.strip() for line in re.split(r'\r?\n', body) if line.strip()]
+        header = next((i for i in range(len(lines)) if lines[i:i + 5] == ['rep', 'dam', 'ins', 'net', 'break-rate']), -1)
+        expected_group = f'self-correction: {group[1]} (audio) vs. {group[2]} (no audio)'
+        group_index = lines.index(expected_group) if expected_group in lines else -1
+        if header < 0 or group_index != header + 5 or lines.count(expected_group) != 1:
+            continue
+        after = lines[group_index + 1:]
+        group_end = next((i for i, line in enumerate(after) if re.search(r'^cross-system:', line)), -1)
+        rows = after[:group_end] if group_end >= 0 else []
+        if (len(rows) == 18 and rows[0] == 'TTS RU'
+                and all(rows[(index + 1) * 6] == label and number_cell(rows[(index + 1) * 6 + 4]) == values[index]
+                        for index, (label, _) in enumerate(natural))):
+            bound.append(caption)
+    if len(bound) != 1:
+        return False
+    matching_tables = []
+    for table in tables:
+        identity = next((i for i, h in enumerate(table['header']) if re.fullmatch(r'(?:对比|比较|对照)', str(h).strip())), -1)
+        net = next((i for i, h in enumerate(table['header']) if re.fullmatch(r'净[ \t]+pt[ \t]*↑', str(h).strip())), -1)
+        if identity < 0 or net < 0:
+            continue
+        def matching_row(index, label):
+            rows = [row for row in table['rows'] if row[identity] == f'自我 {group[1]}-{group[2]} {label}']
+            return len(rows) == 1 and number_cell(rows[0][net]) == values[index]
+        if all(matching_row(index, label) for index, (_, label) in enumerate(natural)):
+            matching_tables.append(table)
+    if len(matching_tables) != 1:
+        return False
+    def owner_carrier(value):
+        text = _normalize_local_evidence_heading(value)
+        if len(text) > 160:
+            return None
+        for pattern in [r'在[ \t]*(.+?)[ \t]*上[，,]?', r'(.+?)[ \t]*模型[：:]', r'(.+?)[ \t]*的结果如下[：:]', r'(.+?)[ \t]*(?:模型)?的']:
+            match = re.fullmatch(pattern, text)
+            if match and len(match[1].strip()) <= 120:
+                return match[1].strip()
+        return None
+    reported_pattern = (r'^[ \t]*自我校正下(?:合成语料差距为[ \t]*' + signed + r'[ \t]*pt[，,][ \t]*)?'
+                        + r'(?:' + re.escape(primary) + r'[ \t]*的[ \t]*)?自然语料净差距为[ \t]*('
+                        + signed + r')[ \t]*pt[ \t]*与[ \t]*(' + signed
+                        + r')[ \t]*pt[，,][ \t]*区间包含零(?:附近)?[，,][ \t]*单看净[ \t]*WER')
+    for sentence in re.finditer(r'[^。；\n]+', str(results or '')):
+        previous = _normalize_local_evidence_heading(re.split(r'[。；！？!?]', str(results)[:sentence.start()][-512:].rstrip().split('\n')[-1])[-1])
+        pending_owner = owner_carrier(previous)
+        if pending_owner and pending_owner != primary:
+            continue
+        report_start = sentence[0].find('自我校正下')
+        if report_start < 0:
+            continue
+        prefix = sentence[0][:report_start].strip()
+        if prefix and owner_carrier(prefix) != primary:
+            continue
+        statement = sentence[0][report_start:]
+        if (not _has_own_local_reported_experiment(results, sentence.start(), sentence[0])
+                or not owns(results, sentence.start(), sentence[0])):
+            continue
+        if _has_adjacent_affirmative_evidence_withdrawal(results, sentence.end(), r'(?<!的)(?:上述|该|这一|前述)(?:净效应|净差距|净[ \t]*WER)?(?:观察|结论|结果)'):
+            continue
+        reported = re.search(reported_pattern, statement, re.I)
+        if reported and float(reported[1]) == values[0] and float(reported[2]) == values[1]:
+            return True
+    return False
+
+
 def _source_backed_identity_columns(table, source_text):
     raw_source = str(source_text or '')
     source = re.sub(r'\s+', '', raw_source)
@@ -3435,9 +3828,43 @@ def _source_backed_identity_columns(table, source_text):
         block = raw_source[match.start():min(captions[index + 1].start() if index + 1 < len(captions) else len(raw_source), match.start() + 20000)]
         heading = re.search(r'(?:^|\n)\s*(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+[A-Z][^\n]{0,100}|(?:conclusions?|discussion|references?|appendix)(?:[ :：][^\n]{0,80})?)(?:\n|$)', block, re.I)
         blocks.append(block[:heading.start()] if heading else block)
+    # Audiogram/signal are paired categorical axes only for this observed table.
+    audiogram = next((index for index, header in enumerate(table['header'])
+                      if re.fullmatch(r'(?:听力图|audiograms?)', str(header).strip(), re.I)), -1)
+    signal = next((index for index, header in enumerate(table['header'])
+                   if re.fullmatch(r'(?:信号|signals?)', str(header).strip(), re.I)), -1)
+    music_signal = {'紧凑': 'Tight', '常规': 'Normal', '动态': 'Dynamic'}
+    paired_audiogram_signals = False
+    if audiogram >= 0 and signal >= 0 and len(table['rows']) >= 2:
+        for caption_index, match in enumerate(captions):
+            caption = next((line for line in raw_source[match.start():].split('\n') if line.strip()), '')
+            preceding = [line for line in raw_source[:match.start()].split('\n') if line.strip()]
+            prefix = preceding[-1] if preceding else ''
+            if (not re.search(r'Optimization results for profiles [^\n]{1,100}with limited residual DR', caption, re.I)
+                    or not _own_observed_source_scope(prefix + '\n' + caption)):
+                continue
+            body = raw_source[match.start():min(captions[caption_index + 1].start()
+                if caption_index + 1 < len(captions) else len(raw_source), match.start() + 20000)]
+            def has_pair(row):
+                profile = re.fullmatch(r'([A-Z][0-9]{1,2})\s+有限范围', str(row[audiogram] if audiogram < len(row) else '').strip())
+                music = music_signal.get(str(row[signal] if signal < len(row) else '').strip())
+                if not profile or not music:
+                    return False
+                begin = re.search(r'(?:^|\n)' + re.escape(profile[1]) + r' with limited DR\r?\n', body)
+                if not begin:
+                    return False
+                tail = body[begin.end():]
+                end = re.search(r'(?:^|\n)(?:[A-Z][0-9]{1,2} with limited DR|Fig\.|Table\s+[0-9]+:)', tail)
+                return bool(re.search(r'(?:^|\n)' + music + r'(?:\r?\n|$)', tail[:end.start()] if end else tail))
+            if all(has_pair(row) for row in table['rows']):
+                paired_audiogram_signals = True
+                break
     columns = set()
     for index, header in enumerate(table['header']):
         if len(table['rows']) < 2:
+            continue
+        if paired_audiogram_signals and index in (audiogram, signal):
+            columns.add(index)
             continue
         labels = [str(row[index] if index < len(row) else '').strip() for row in table['rows']]
         if str(header).strip() == '来源':
@@ -3763,7 +4190,11 @@ def _validate_experiment_table_evidence_depth(
         source_text,
         re.I,
     )
-    result_has_ablation = _has_source_backed_presence_comparison(results, tables, source_text) or _has_source_backed_training_stage_ablation(tables, source_text) or _has_source_backed_zero_correction_ablation(results, source_text) or re.search(
+    source_placement_evidence = re.sub(
+        r'\bno\s+(?:component\s+)?ablations?\b(?:\s+[^.?!\n]{0,40})?|'
+        r'\b(?:controlled\s+)?ablations?\s+(?:were|was)\s+not\s+(?:conducted|performed)\b|'
+        r'\babsence\s+of\s+(?:component\s+)?ablations?\b', ' ', source_text, flags=re.I | re.ASCII)
+    result_has_ablation = _has_source_backed_placement_control(results, source_placement_evidence) or _has_source_backed_presence_comparison(results, tables, source_text) or _has_source_backed_training_stage_ablation(tables, source_text) or _has_source_backed_zero_correction_ablation(results, source_text) or re.search(
         r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
         r'消融|移除|去掉|不含|排除|无外推',
         results,
@@ -3828,7 +4259,7 @@ def _validate_experiment_table_evidence_depth(
         and all(re.search(r'distilled checkpoints[^\n]{0,140}(?<![0-9.])' + re.escape(number) + r'%[^\n]{0,140}scored worse on the bias benchmark than the original variants', source_text, re.I)
                 for number in re.findall(r'([0-9]+(?:\.[0-9]+)?)%', sentence))
         for sentence in re.split(r'[。；\n]', results))
-    result_has_negative = contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
+    result_has_negative = _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
@@ -5363,7 +5794,8 @@ def is_canonical_publish_arxiv_id(value):
     return identity['version'] is None and identity['baseId'] == value
 
 
-def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
+def validate_papers_for_publish(papers, *, validate_manual_stage_records=True,
+                               _daily_source_capability=None):
     """在生成任何发布文件之前校验每一篇论文。
 
     ``validate_manual_stage_records=False`` 只留给派生的发布图片排除视图。
@@ -5468,7 +5900,7 @@ def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
                         paper.get('analysis'),
                         contract_version=table_contract,
                         document_type=(paper.get('parsed') or {}).get('documentType', ''),
-                        source_text=_manual_result_claim_source_text(paper),
+                        source_text=_publication_table_source_text(paper, _daily_source_capability),
                     )
                     if table_issue:
                         raise PublishDataValidationError(

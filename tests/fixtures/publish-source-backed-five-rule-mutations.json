@@ -1,0 +1,2201 @@
+{
+  "contract": "publish-source-backed-five-rule-mutations-v1",
+  "purpose": "pure-validation-parity-regressions-only-not-source-capability",
+  "baseFixture": "structure-checkpoint-20261023-real.json.gz",
+  "baseFixtureSha256": "7d825e191c4b6f14795dfeed15c554fd67ecfdc6f1aaed05d2e19b34d0be41f7",
+  "cases": [
+    {
+      "kind": "hearing",
+      "name": "actual-complete-pairs",
+      "expected": [
+        0,
+        1
+      ],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 642,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "caption-missing",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13584,
+          "removedChars": 20,
+          "insert": "Unrelated illustration"
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 642,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "source-hypothetical",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13575,
+          "removedChars": 0,
+          "insert": "Hypothetical experiment:\n"
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 642,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13575,
+          "removedChars": 0,
+          "insert": "Previous work:\n"
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 642,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "source-quoted-caption",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13575,
+          "removedChars": 0,
+          "insert": "> "
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 642,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-local-signal-missing",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13864,
+          "removedChars": 495,
+          "insert": "Different-signal\n1.00\n0.99\n0.98\n0.79\n0.93\n0.78\n0.89\nNormal\n1.00\n0.99\n0.99\n0.76\n0.94\n0.72\n0.94\nDynamic\n1.00\n0.92\n0.87\n0.71\n0.82\n0.73\n0.83\nGLE ↑\\uparrow\nDifferent-signal\n0.90\n0.89\n0.95\n0.93\n0.96\n0.95\n0.93\nNormal\n0.92\n0.91\n0.95\n0.95\n0.96\n0.96\n0.95\nDynamic\n0.75\n0.66\n0.72\n0.79\n0.81\n0.80\n0.81\nS2 with limited DR\nGR\nWDRC-1\nWDRC-7\nWDRC-20\nG2\nOpt.\nG2\nOpt.\nG2\nOpt.\nHAAQI ↑\\uparrow\nDifferent-signal\n1.00\n0.98\n0.97\n0.79\n0.93\n0.79\n0.92\nNormal\n1.00\n0.98\n0.97\n0.83\n0.94\n0.84\n0.93\nDynamic\n1.00\n0.90\n0.86\n0.79\n0.82\n0.77\n0.81\nGLE ↑\\uparrow\nDifferent-signal"
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 642,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "unmapped-music-label",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 165,
+          "removedChars": 2,
+          "insert": "随意"
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "wrong-profile",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 156,
+          "removedChars": 1,
+          "insert": "8"
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "single-row-not-pair-capability",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 211,
+          "removedChars": 295,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "hearing",
+      "name": "signal-generic-not-identifier",
+      "expected": [],
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "table": {
+          "baseSha256": "416f20d223c8907914b3b08a13eb48ea412b813de7c3a6319a6bffba4489665b",
+          "prefixChars": 20,
+          "removedChars": 0,
+          "insert": "强度"
+        }
+      }
+    },
+    {
+      "kind": "identifier",
+      "name": "header-对比",
+      "header": "对比",
+      "expected": true
+    },
+    {
+      "kind": "identifier",
+      "name": "header- 对比 ",
+      "header": " 对比 ",
+      "expected": true
+    },
+    {
+      "kind": "identifier",
+      "name": "header-对比对象",
+      "header": "对比对象",
+      "expected": true
+    },
+    {
+      "kind": "identifier",
+      "name": "header-对比优势 ↑",
+      "header": "对比优势 ↑",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "header-任意对比",
+      "header": "任意对比",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "header-对比度 ↑",
+      "header": "对比度 ↑",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "actual-complete-placement",
+      "expected": true,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "source-duplicate-section",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": "\nUniform-stride versus adaptive event placement\n"
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "source-no-held-fixed-decoder",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 48019,
+          "removedChars": 10,
+          "insert": "with different"
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "source-no-held-fixed-outcome",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 49436,
+          "removedChars": 35,
+          "insert": "different aggregation and decoding"
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "source-foreign",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 47707,
+          "removedChars": 0,
+          "insert": "Previous work:\n"
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "source-hypothetical",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 47707,
+          "removedChars": 0,
+          "insert": "Hypothesis:\n"
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "source-withdrawn",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 49078,
+          "removedChars": 0,
+          "insert": "Withdrawn: "
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "source-missing-unique-heading",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 47707,
+          "removedChars": 46,
+          "insert": "Adaptive placement discussion"
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 2643,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "changed-single-codebook-value",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.01% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "changed-depth-pair",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.70% 对 0.76%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "wrong-depth",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，9 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "claim-hypothetical",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "假设只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "claim-revoked",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "撤回：只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "claim-other-study",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "第三方只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "local-heading-第三方：",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "第三方：\n\n只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "local-heading-### 第三方：",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "### 第三方：\n\n只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "local-heading-**第三方：**",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "**第三方：**\n\n只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "local-heading-### **第三方：**",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "### **第三方：**\n\n只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "local-heading-### **假设：**",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "### **假设：**\n\n只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "local-heading-**Previous work:**",
+      "expected": false,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "**Previous work:**\n\n只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "placement",
+      "name": "independent-prior-paragraph-not-global-veto",
+      "expected": true,
+      "paperId": "2610.29434",
+      "mutations": {
+        "source": {
+          "baseSha256": "49800992c613fbc0ca030638a5abe97de14da4b3af1bde3a40eca71edebbc7c4",
+          "prefixChars": 113910,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "7cd792d5ce594a98fa45bc25cfbb2a867f141c35cb257fd544cb46f0ce5220b8",
+          "prefixChars": 0,
+          "removedChars": 2643,
+          "insert": "第三方：\n\n这是独立旧结果。\n\n### 本研究结果：\n\n只改变放置的均匀步长对照中，自适应在除个别深度外 PESQ-WB 与 SIM 更高，单码本 dWER 从 17.00% 降到 11.64%，8 层时为 0.76% 对 0.70%，说明放置本身带来温和增益而非全部来自网格与聚合差异"
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "actual-source-table-tradeoff",
+      "expected": true,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-prose-假设单通道 NAL-NL2 基线的 HAAQI 本已达 ",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1277,
+          "removedChars": 0,
+          "insert": "假设"
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-prose-第三方研究：单通道 NAL-NL2 基线的 HAAQI ",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1277,
+          "removedChars": 0,
+          "insert": "第三方研究："
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-prose-相关工作：单通道 NAL-NL2 基线的 HAAQI 本",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1277,
+          "removedChars": 0,
+          "insert": "相关工作："
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-prose-单通道 NAL-NL2 基线的 HAAQI 本已达 0.",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1332,
+          "removedChars": 1,
+          "insert": "6"
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-prose-单通道 NAL-NL2 基线的 GLE 本已达 0.90",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1293,
+          "removedChars": 5,
+          "insert": "GLE"
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-prose-单通道 NAL-NL2 基线的 HAAQI 本已达 0.",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1317,
+          "removedChars": 2,
+          "insert": "并未"
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-source-44",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 15534,
+          "removedChars": 0,
+          "insert": "Related work reports: "
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-source-45",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 15534,
+          "removedChars": 0,
+          "insert": "Related work reports the following result.\n"
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-source-46",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 15563,
+          "removedChars": 7,
+          "insert": "does not reduce"
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-source-47",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 15633,
+          "removedChars": 1,
+          "insert": "6"
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "rejected-source-48",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13967,
+          "removedChars": 2,
+          "insert": "90"
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "equal-delta-different-source-cell-pair",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 292,
+          "removedChars": 8,
+          "insert": "5\",\"0.90"
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "local-heading-### **第三方研究：**",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1277,
+          "removedChars": 0,
+          "insert": "### **第三方研究：**\n\n"
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "local-heading-__Previous work:__",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1277,
+          "removedChars": 0,
+          "insert": "__Previous work:__\n\n"
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "local-heading-### __假设以下情况：__ ###",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1277,
+          "removedChars": 0,
+          "insert": "### __假设以下情况：__ ###\n\n"
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "actual-primary-same-table-two-intervals",
+      "expected": true,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-54",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 12187,
+          "removedChars": 14,
+          "insert": "+0.13,+1.05][+"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-55",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 12194,
+          "removedChars": 17,
+          "insert": "0.10][-0.13,+0.10"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-56",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 12166,
+          "removedChars": 6,
+          "insert": "6+0.46"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-57",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 12171,
+          "removedChars": 1,
+          "insert": "6"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-58",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 12420,
+          "removedChars": 7,
+          "insert": "repair"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-59",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 12111,
+          "removedChars": 15,
+          "insert": "synthetic corpus"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-60",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 12104,
+          "removedChars": 0,
+          "insert": "Related work reports: "
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-61",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 11850,
+          "removedChars": 0,
+          "insert": "__Previous work:__\n\n"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-62",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 10765,
+          "removedChars": 10396,
+          "insert": "F (audio) vs. T (no audio)\nTTS RU\n−-0.15\n−-2.83\n++0.24\n++2.92\n31.9 →\\to 2.6\nRuLibri RU\n−-0.50\n−-0.88\n++0.08\n++0.45\n16.3 →\\to 1.0\nMedical EN\n−-0.74\n−-1.72\n−-1.08\n−-0.09\n12.8 →\\to 2.3\ncross-system: F (audio) vs. T (no audio)\nTTS RU\n++0.09\n−-1.31\n++0.08\n++1.48\n18.1 →\\to 2.6\nRuLibri RU\n++0.95\n−-0.18\n++0.05\n++1.18\n04.0 →\\to 3.0\nMedical EN\n++1.25\n−-0.71\n−-0.40\n++1.57\n13.8 →\\to 6.9\nTable 3: Illustrative examples from the medical corpus (Gemini 2.5 Flash,\nnormalized text); italics mark tokens changed by the corrector. Rows 1–3:\nself-correction, the input is the draft; row 2 shows the first tokens of a\n32-token utterance. Rows 4–5: cross-system, the input is the Whisper output.\n#\nReference\nInput hypothesis\nOutput without audio\nOutput with audio\n1\nloss of hair\nloss of hair\nloss of hearing\nloss of hair\n2\npostoperative imaging …\npost operative imaging …\npostoperative imaging …\npost operative imaging …\n3\nforxiga 10mg tablet\nforxa 10 mg tablet\nforxiga 10 mg tablet\nforxa 10 mg tablet\n4\nseizure\nsee you soon\nsee you soon\nseizure\n5\noxiconazole\noxyconosol\noxycontin\noxiconazole\n4 Results\n4.1 Net effect\nTable 1 shows the five cells. In the cross-system setting\nthe grounded cell beats the text-only cell on every corpus (F >> T, all\nintervals excluding zero).\nSelf-correction is less clear. A beats C on the synthetic corpus\n(+2.92+2.92 pt). On the natural corpora we cannot detect a net difference\n(+0.45+0.45 pt, interval [−0.13,+1.05][-0.13,+1.05]; −0.09-0.09 pt, [−1.02,+0.82][-1.02,+0.82]); the\nintervals allow about one point either way. On medical speech the interval of\nA excludes zero and that of C does not, but the two estimates do not differ.\nBy net WER alone, the audio does nothing for self-correction on natural\nspeech. The components tell a different story.\n4.2 Repair, damage and break-rate\nTable 2 separates the flows. In self-correction the grounded\ncell has lower repair and lower damage on all three corpora, and all\nsix intervals exclude zero. Repair falls by 0.150.15–0.740.74 pt and damage by\n0.880.88–2.832.83 pt. With the audio the model simply changes fewer tokens. We\ncall this restraint, as a description and not as a mechanism.\nIn the cross-system setting damage also falls on all three corpora, with\nintervals excluding zero on two. But repair rises on all three\n(+0.09+0.09, +0.95+0.95, +1.25+1.25 pt). On medical dictation it goes from 2.062.06% to\n3.313.31% of reference tokens, a 61% relative increase. Part of this rise may\ncome from the prompts (Section 2.3).\nThe break-rate shows the restraint directly. In self-correction the text-only\ncell breaks 31.9%, 16.3% and 12.8% of the error-free drafts it receives,\nalthough its prompt is the stricter one. The grounded cell breaks 2.6%,\n1.0% and 2.3%. In the cross-system setting the text-only cell breaks 18.1%,\n4.0% and 13.8%, and the drop is smaller: to 2.6%, 3.0% and 6.9%.\nOn the natural corpora these rates rest on few error-free inputs, carry no\nintervals and include orthographic-only changes, so we read them\ndescriptively. None of this is visible in aggregate WER there.\nTable 3 shows illustrative cases. Without the audio the model\nturns the correct draft “loss of hair” into “loss of hearing”; with the\naudio it leaves it alone. In the cross-system setting the grounded cell turns\n“see you soon” into the correct “seizure”, an edit that the text-only\nprompt does not allow. In row 5 the text-only cell swaps one wrong drug name\nfor another, which the identity does not register.\n4.3 Insertions\nWhy does restraint not lower WER on medical dictation? Because of insertions.\nThe draft contains insertions worth 4.474.47% of reference tokens. The\ntext-only cell removes a quarter of them (to 3.293.29%). The grounded cell\nleaves the total almost unchanged (4.374.37%). The resulting −1.08-1.08 pt\n(interval excluding zero) cancels the +0.98+0.98 pt of the repair and damage\ncomponents and gives the net −0.09-0.09 pt.\nOn RuLibriSpeech the insertion component is small (+0.08+0.08 pt). There the\nlost repair offsets much of the reduced damage, and the interval is too wide\nto decide.\nWhat are these insertions? Of the 182 inserted tokens in the medical draft,\n77 are halves of compounds that the reference writes as one token (“post\noperative”, “10 mg”). After the text-only cell 40 such tokens remain. After\nthe grounded cell 80 remain, and it also adds fillers it hears (“uh”: 6 in\nthe draft, 14 after grounding).\nEach join of a split compound also counts as one repaired token. With no\ninverse text normalization, all three components on this corpus are therefore\nsensitive to the spelling conventions of the reference, and a compound- and\nfiller-insensitive scoring could flip the sign of the net A−-C contrast.\nRows 2 and 3 of Table 3 show both sides. The text-only cell\njoins “post operative” and corrects a drug name from its own knowledge. The\ngrounded cell does neither, and the second is a genuine repair that grounding\nloses.\n4.4 Robustness and the synthetic-corpus ceiling\nWe recomputed each contrast on the utterances complete for just its own two\ncells. No component of Table 2 crosses zero and no interval\nchanges side. We also scored every missing output as if the corrector had returned its\ninput unchanged. This sets repair and damage to zero on the imputed rows, so\nit is a bound and not a neutral check: the synthetic F−-T repair becomes\n+0.31+0.31 instead of +0.09+0.09 pt and damage −0.98-0.98 instead of −1.31-1.31 pt.\nSigns and intervals do not depend on the exclusion rule; levels do.\nThe synthetic corpus sits near its ceiling: 65% of ASR outputs and 79% of\ndrafts are already exactly correct, so damage is almost the only thing that\ncan happen. Three of its conclusions do not hold on natural speech.\nText-only self-correction looks very harmful there (−2.78-2.78 pt), while on\nthe natural corpora its interval includes zero. A second pass without a\nhypothesis looks useless or mildly harmful there (+0.01+0.01 pt on the common\nsubset, −0.38-0.38 pt over all outputs, Table 4) but is the\nlargest single gain on medical dictation (+2.53+2.53 pt). And the cross-system\nrepair effect is an order of magnitude smaller there (+0.09+0.09 against +0.95+0.95\nand +1.25+1.25 pt).\n4.5 Domain terminology, per-domain results and noise\nThe measurements of Table 4 exist for the synthetic corpus\nonly and carry the caveat above. Each cell is scored over its own complete\noutputs, so columns are not paired and levels differ slightly from\nTable 1.\nDomain-term recall (DTR) is the share of the corpus’s annotated domain terms\nthat appear in the output. Text-only self-correction lowers it from 69.069.0%\nto 66.166.1%, close to the recogniser (65.565.5%). The grounded cell keeps it\n(69.369.3%). In the cross-system setting both cells raise DTR, the grounded one\ntwice as much (+4.2+4.2 against +2.0+2.0 pt).\nT lowers the WER of the ASR output but raises its CER, and C almost quadruples\nthe CER of the draft. This is consistent with whole words being replaced, not\nrespelled: without the audio, damage lands on the rare domain words. C raises\nthe WER of its draft in each of the ten domains (by 1.71.7 to 4.04.0 pt), and A\nis better than C in each.\nThe last rows repeat cells C, A and B on 250 clips, in their original form and\nwith reverberation (RT60 0.50.5 s) plus pink-and-babble noise at 15 and 8 dB\nSNR. The WER of A almost triples. The absolute gap between C and A stays at\n2.842.84, 2.962.96 and 2.892.89 pt, while the relative gap narrows (C/A from 2.32.3\nto 1.51.5). We did not decompose the noisy runs, so this shows that the WER gap\npersists, not that the restraint does. The cost of withholding the hypothesis\n(B against A) grows from 0.570.57 to 1.431.43 pt.\nTable 4: Synthetic corpus, Gemini 2.5 Flash, raw rates in % (WER and CER:\nlower is better; not Δ\\DeltaWER). Top: each system over its own complete\noutputs (n=2,262n=2{,}262–3,0003{,}000); columns cover different utterance sets and\nare not paired. Bottom: WER on 250 clips, original and with reverberation and\nnoise. No intervals are available.\nASR\nT\nF\ndraft\nC\nA\nB\nWER\n3.79\n3.26\n1.74\n2.37\n5.12\n2.18\n2.75\nCER\n0.79\n1.23\n0.42\n0.67\n2.57\n0.67\n1.18\nDTR\n65.5\n67.5\n69.7\n69.0\n66.1\n69.3\n69.1\nWER, original\n–\n–\n–\n–\n5.03\n2.19\n2.76\nWER, 15 dB\n–\n–\n–\n–\n6.16\n3.20\n4.05\nWER, 8 dB\n–\n–\n–\n–\n8.91\n6.02\n7.45\n4.6 Other models\nTable 5 repeats all cells with Voxtral-Small-24B on a\n659-utterance subset of the same clips. Its text-only self-correction rarely\nedits: the fix-rate of cell C is 1.5–3.8%, against 24.2–27.8% for Gemini\n(not tabulated).\nHere the pattern of Gemini does not replicate. The grounded cell has\nhigher repair in all six contrasts (+0.24+0.24 to +4.64+4.64 pt), four with\nintervals excluding zero, and repair rises even against Voxtral’s own draft.\nDamage moves inconsistently: it falls on medical dictation in both settings\nand rises elsewhere. The insertion component, obtained by subtraction, is the\nlargest of the three in self-correction and makes the net A−-C contrast\nnegative on two of three corpora.\nIn our two models, then, restraint is not a property of the acoustic channel\nas such. It is consistent with what grounding does to a corrector that would\notherwise over-correct.\nGPT Audio calls for the same caution. In cell F it degrades two of three\ncorpora (by 8.828.82 and 8.548.54 pt) with break-rates of 21.3% and 31.4%. These\nfigures carry no intervals and cover only clips with a usable output.\nCell B suggests a second role of the hypothesis. On medical dictation Voxtral\nwithout a hypothesis goes from a WER of 43.8643.86% to 65.0165.01%, and 99.699.6% of\nthat degradation is the insertion component: it emits 0.500.50 inserted words\nper reference token. Here the hypothesis bounded the output length, but the interval\nincludes zero and the opposite holds on RuLibriSpeech (+6.09+6.09 pt).\nTable 5: Voxtral-Small-24B on subsets of the same clips; layout and units as\nin Tables 1 and 2. The ins rows are\nobtained by subtraction and have no intervals. Bold: 95% interval excludes\nzero.\nTTS RU\nRuLibri RU\nMedical EN\nn=467n{=}467\nn=96n{=}96\nn=96n{=}96\ninput systems (WER, %)\nASR output (recogniser)\n5.17\n8.02\n17.03\nDraft (audio LLM)\n7.90\n26.31\n43.86\ncells (Δ\\DeltaWER, pt)\nB audio, no hypothesis\n−-1.61\n++6.09\n−-21.15\nC draft, no audio\n−-0.38\n++0.06\n++0.62\nA draft ++ audio\n−-0.97\n++9.58\n−-2.41\nT ASR output, no audio\n−-1.55\n−-0.44\n−-0.86\nF ASR output ++ audio\n++2.14\n−-0.68\n++1.01\nself-correction: F (audio) vs. T"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-source-63",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 10878,
+          "removedChars": 1,
+          "insert": "6"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-64",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 4,
+          "insert": "跨系统"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-65",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 673,
+          "removedChars": 2,
+          "insert": "合成"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-66",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 712,
+          "removedChars": 5,
+          "insert": "修复率"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-67",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 686,
+          "removedChars": 1,
+          "insert": "6"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-68",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 704,
+          "removedChars": 5,
+          "insert": "位于零以上"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-69",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 702,
+          "removedChars": 4,
+          "insert": "观察值在"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-70",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "并非"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-71",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "假设"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-72",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "第三方研究："
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-73",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "Other-Model 的"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-74",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "在 Other-Model 上，"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-75",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "### 第三方研究： ###\n\n"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-76",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "__Previous work:__\n\n"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-77",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 729,
+          "removedChars": 0,
+          "insert": "，上述结论已撤回"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rejected-prose-78",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 730,
+          "removedChars": 0,
+          "insert": "\n上述净效应结论已撤回。"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "affirmed-own-not-withdrawn-79",
+      "expected": true,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "Gemini 2.5 Flash 的"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "affirmed-own-not-withdrawn-80",
+      "expected": true,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "在 Gemini 2.5 Flash 上，"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "affirmed-own-not-withdrawn-81",
+      "expected": true,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 651,
+          "removedChars": 0,
+          "insert": "### 本文独立实测： ###\n\n"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "affirmed-own-not-withdrawn-82",
+      "expected": true,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 730,
+          "removedChars": 0,
+          "insert": "\n\n**上述净效应结论并未撤回。**。"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "affirmed-own-not-withdrawn-83",
+      "expected": true,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 730,
+          "removedChars": 0,
+          "insert": "\n\n__上述净效应结论并无错误。__。"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "affirmed-own-not-withdrawn-84",
+      "expected": true,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 730,
+          "removedChars": 0,
+          "insert": "\n\n### 下一项独立实验另行讨论。。"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "independent-affirmative-withdrawal-85",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 730,
+          "removedChars": 0,
+          "insert": "\n\n**上述净效应结论并未撤回，但该结论已被否认。**。"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "independent-affirmative-withdrawal-86",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 730,
+          "removedChars": 0,
+          "insert": "\n\n**上述净效应结论没有撤回；然而该结论已经撤回。**。"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "independent-affirmative-withdrawal-87",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 730,
+          "removedChars": 0,
+          "insert": "\n\n**假设该结论已撤回，但该结论已被否认。**。"
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "rendered-table-changed-point",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 697,
+          "removedChars": 1,
+          "insert": "6"
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "wrong-result-column-owner",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 24015,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 568,
+          "removedChars": 1,
+          "insert": "修复"
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "non-js-newline-joins-values-8232",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13964,
+          "removedChars": 1,
+          "insert": " "
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "non-js-newline-joins-values-8232",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 10879,
+          "removedChars": 1,
+          "insert": " "
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "non-js-newline-joins-values-11",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 13964,
+          "removedChars": 1,
+          "insert": "\u000b"
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 1066,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "net",
+      "name": "non-js-newline-joins-values-11",
+      "expected": false,
+      "paperId": "2610.30385",
+      "mutations": {
+        "source": {
+          "baseSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+          "prefixChars": 10879,
+          "removedChars": 1,
+          "insert": "\u000b"
+        },
+        "results": {
+          "baseSha256": "6820cf1ad2054e28fff63237607777401d52c7a45f0f9a753dfb86b81c66f2ac",
+          "prefixChars": 2002,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "52307fa932874b5bd1b2819fc70082276ecae7c3e0b1ea7f2010bb81da334f05",
+          "prefixChars": 1088,
+          "removedChars": 0,
+          "insert": ""
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "non-scalar-rendered-cell-未报告",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 171,
+          "removedChars": 4,
+          "insert": "未报告"
+        }
+      }
+    },
+    {
+      "kind": "quality",
+      "name": "non-scalar-rendered-cell-0.99%",
+      "expected": false,
+      "paperId": "2610.29613",
+      "mutations": {
+        "source": {
+          "baseSha256": "91ebec0be1c36d9d066a76d5c10b893a88662b676d75ec5c2f7990813c62f5aa",
+          "prefixChars": 18265,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "results": {
+          "baseSha256": "ee31c24f759169c8f5f9b3fe52eeadac510caaa38db0fd7e8bbe0d24bbf5a1a5",
+          "prefixChars": 1458,
+          "removedChars": 0,
+          "insert": ""
+        },
+        "tables": {
+          "baseSha256": "9ef4d4c0be2e8c9e89eceafc59fe7556ad813d941d4dc2aa413b1e9375b95beb",
+          "prefixChars": 175,
+          "removedChars": 0,
+          "insert": "%"
+        }
+      }
+    }
+  ]
+}
