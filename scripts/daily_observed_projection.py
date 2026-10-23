@@ -1,7 +1,7 @@
 """Derive bounded static observations through the original daily review owner.
 
-This internal reader does not build, review, publish, fetch, or grant Source
-qualification. Its returned JSON is diagnostic data, never an importable proof.
+The explicit deployment observer additionally reads fixed public metadata and
+saves local historical records. No entry grants publication or Source authority.
 """
 import ast
 import builtins
@@ -10,6 +10,7 @@ import re
 import hashlib
 import json
 import sys
+import ssl
 import urllib.parse
 from pathlib import Path
 from types import CodeType, FunctionType, ModuleType
@@ -21,6 +22,7 @@ if __name__ == '__main__':
 
 import daily_hugo_capture as capture
 import blog_entry_loader
+import path_config
 
 
 CONTRACT = 'daily-observed-static-page-set-v2'
@@ -60,7 +62,7 @@ _LOCAL_IMPORTS = ('dataclasses', 'hashlib', 'json', 'os', 'pathlib', 'posixpath'
 _LOCAL_GIT_POLICIES = (
     ('CONTRACT', '_GIT_CANDIDATES', '_FLAGS', '_OID', '_PACK', '_CORE_BOOL', '_UNKNOWN', 'DEFAULT_LIMITS'),
     ('CONTRACT', '_VERSION', '_SHA256', '_HEX40', '_COVERAGE', '_UNKNOWN', 'DEFAULT_LIMITS'),
-    ('CONTRACT', 'VERSION', '_LIMITS', '_UNKNOWN'))
+    ('CONTRACT', 'VERSION', '_LIMITS', '_UNKNOWN', '_GITHUB_POLICY'))
 _LOCAL_RAW_FIELDS = (('max_commit_bytes', 1048576), ('max_tree_bytes', 16777216),
     ('max_blob_bytes', 16777216), ('max_metadata_file_bytes', 65536), ('max_metadata_bytes', 1048576),
     ('max_layout_files', 10000), ('max_stderr_bytes', 65536), ('max_result_metadata_bytes', 65536),
@@ -85,6 +87,20 @@ _LOCAL_UNKNOWN = (
     'Unreviewed blob bodies, complete Git object graph, index and whole worktree cleanliness are not checked',
     'Fresh compilation binds three fixed Git sources; full Python execution closure and stdlib generated closures are not established',
     'Original environment loading and publication locks retain their existing local effects; this diagnostic grants no publication or Source capability')
+
+_DEPLOYMENT_FILES = ('github_pages_deployment.py', 'daily_deployment_store.py')
+_DEPLOYMENT_IMPORTS = (
+    ('base64', 'datetime', 'hashlib', 'http.client', 'json', 're', 'socket', 'ssl',
+     'time', 'urllib.parse', 'runtime_guard'),
+    ('datetime', 'fcntl', 'hashlib', 'json', 'os', 'pathlib', 're', 'stat', 'time',
+     'uuid', 'runtime_guard'))
+_DEPLOYMENT_NOT_CHECKED = ('artifactContent', 'productionArtifact', 'publicPages',
+    'publicAssets', 'remoteNow', 'currentEligibility', 'sourceRecoveryEligibility',
+    'browserExecution', 'finalAcceptance')
+_DEPLOYMENT_METADATA_ISSUES = (
+    ('pending', 'pending', 'run_pending'), ('failed', 'failed', 'metadata_failure'),
+    ('unknown', 'unavailable', 'metadata_unknown'), ('unsupported', 'unsupported', 'metadata_profile'),
+    ('stale', 'stale', 'metadata_changed'), ('blocked', 'blocked', 'metadata_rejected'))
 
 
 def _fail(code, reason):
@@ -282,7 +298,9 @@ def _policy_sha():
                               str(_HERE), str(_OWNER_FILE), str(_PROFILE_FILE),
                               _LOCAL_CONTRACT, _LOCAL_GIT_FILES, _LOCAL_IMPORTS, _LOCAL_GIT_POLICIES,
                               _LOCAL_RAW_FIELDS, _LOCAL_DELTA_FIELDS, _LOCAL_CAPABILITIES,
-                              _LOCAL_COVERAGE, _LOCAL_UNKNOWN)))
+                              _LOCAL_COVERAGE, _LOCAL_UNKNOWN,
+                              _DEPLOYMENT_FILES, _DEPLOYMENT_IMPORTS,
+                              _DEPLOYMENT_NOT_CHECKED, _DEPLOYMENT_METADATA_ISSUES)))
 
 
 def _implementation(profile_raw):
@@ -809,7 +827,7 @@ def _git_function(function, module, cls, budget):
             'defaults': defaults, 'keywordDefaults': keyword_defaults}
 
 
-def _git_module_observation(module, source, filename, total_budget, expected_imports):
+def _fixed_module_observation(module, source, filename, total_budget, expected_imports, policies):
     tree = ast.parse(source, filename=filename)
     expected, rows, lifetime = set(), [], []
     count = 0
@@ -871,7 +889,6 @@ def _git_module_observation(module, source, filename, total_budget, expected_imp
     if any(callable(value) and name not in expected and name not in _git_import_names(tree)
            for name, value in module.__dict__.items()):
         _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'callable_profile')
-    policies = _LOCAL_GIT_POLICIES[_LOCAL_GIT_FILES.index(filename)]
     policy_budget = [1024 * 1024, total_budget[0]]
     values = []
     for name in policies:
@@ -885,6 +902,11 @@ def _git_module_observation(module, source, filename, total_budget, expected_imp
         lifetime.append((name, original))
     return ({'name': filename, 'sourceSha256': _sha(source), 'codeSha256': _json_sha(rows, 8 * 1024 * 1024),
              'policySha256': _json_sha(values, 1024 * 1024)}, tuple(lifetime))
+
+
+def _git_module_observation(module, source, filename, total_budget, expected_imports):
+    return _fixed_module_observation(module, source, filename, total_budget, expected_imports,
+                                     _LOCAL_GIT_POLICIES[_LOCAL_GIT_FILES.index(filename)])
 
 
 def _git_import_names(tree):
@@ -905,16 +927,22 @@ def _git_observe(bundle):
         _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
     for index, ((name, source), module, context) in enumerate(zip(bundle['sources'], bundle['modules'], bundle['contexts'])):
         dependencies = context['dependencies']
+        hook = context['hook']
         if tuple(dependencies) != tuple(part[:-3] for part in _LOCAL_GIT_FILES[:index]) or any(
                 dependencies[part[:-3]] is not other for part, other in zip(_LOCAL_GIT_FILES[:index], bundle['modules'][:index])):
             _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
         if (module.__dict__['__builtins__'] is not context['builtins']
-                or module.__dict__['__builtins__']['__import__'] is not context['hook']):
+                or module.__dict__['__builtins__']['__import__'] is not hook
+                or type(hook) is not FunctionType or hook.__globals__ is not globals()
+                or hook.__code__.co_freevars != ('allowed', 'original_import')
+                or hook.__closure__ is not context['hookClosure']
+                or hook.__closure__ is None or len(hook.__closure__) != 2
+                or hook.__closure__[0].cell_contents is not dependencies
+                or hook.__closure__[1].cell_contents is not context['originalImport']):
             _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
         row, lifetime = _git_module_observation(module, source, name, budget, context['expectedImports'])
         rows.append(row)
-        hook = context['hook']
-        identities.append(lifetime + (('__import__', hook, hook.__code__),))
+        identities.append(lifetime + (('__import__', hook, hook.__code__, hook.__defaults__, hook.__kwdefaults__),))
     return rows, tuple(identities)
 
 
@@ -993,11 +1021,14 @@ def _compile_git_modules():
                 _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
         fixed_import, allowed = _git_importer(mapping)
         expected_imports = _git_expected_imports(tree, fixed_import)
+        hook_closure = fixed_import.__closure__
+        original_import = hook_closure[1].cell_contents
         module = ModuleType(('_daily_local_raw', '_daily_local_delta', '_daily_local_publication')[index])
         module.__dict__['__builtins__'] = {**builtins.__dict__, '__import__': fixed_import}
         exec(compile(source, filename, 'exec', dont_inherit=True, optimize=0), module.__dict__)
         modules.append(module)
         contexts.append({'dependencies': allowed, 'expectedImports': expected_imports,
+                         'hookClosure': hook_closure, 'originalImport': original_import,
                          'hook': fixed_import, 'builtins': module.__dict__['__builtins__']})
         mapping[filename[:-3]] = module
     raw, delta, publication = modules
@@ -1028,16 +1059,166 @@ def _git_final(bundle):
             _publication_fail('blocked', 'implementation', 'stale', 'source_changed')
 
 
-def _git_call(bundle, name, owner, binding, expected):
+def _deployment_importer(names):
+    # Resolve only this fixed profile once. The hook never falls back to the
+    # process's changing module table during the observation.
+    responses = {name: (builtins.__import__(name),
+                       builtins.__import__(name, fromlist=('*',))) for name in names}
+    pinned = tuple((name, *pair) for name, pair in responses.items())
+    guard = responses['runtime_guard'][1].require_external_runtime
+
+    def fixed_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if level or name not in responses:
+            _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+        return responses[name][1 if fromlist else 0]
+    return fixed_import, responses, pinned, guard
+
+
+def _deployment_expected_imports(tree, importer):
+    expected = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if '.' in alias.name and alias.asname:
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+                expected[alias.asname or alias.name.split('.')[0]] = importer(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            response = importer(node.module, fromlist=tuple(alias.name for alias in node.names))
+            for alias in node.names:
+                if alias.name == '*':
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+                expected[alias.asname or alias.name] = getattr(response, alias.name)
+    return expected
+
+
+def _deployment_observe(bundle):
+    if (len(bundle['sources']) != 2 or len(bundle['modules']) != 2
+            or len(bundle['contexts']) != 2
+            or tuple(name for name, _source in bundle['sources']) != _DEPLOYMENT_FILES):
+        _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+    rows, identities, budget = [], [], [8 * 1024 * 1024]
+    for (filename, source), module, context in zip(bundle['sources'], bundle['modules'], bundle['contexts']):
+        hook = context['hook']
+        if (module is not context['module'] or module.__dict__.get('POLICY_NAMES') != ('POLICY',)
+                or type(module.__dict__.get('POLICY_NAMES')) is not tuple
+                or module.__dict__.get('__builtins__') is not context['builtins']
+                or tuple(context['builtins']) != tuple(name for name, _value in context['builtinPins'])
+                or any(context['builtins'][name] is not value for name, value in context['builtinPins'])
+                or tuple(context['responses']) != tuple(name for name, _a, _b in context['responsePins'])
+                or any(context['responses'][name][0] is not a or context['responses'][name][1] is not b
+                       for name, a, b in context['responsePins'])
+                or type(hook) is not FunctionType or hook.__globals__ is not globals()
+                or hook.__code__.co_freevars != ('responses',)
+                or hook.__closure__ is not context['hookClosure']
+                or hook.__closure__ is None or len(hook.__closure__) != 1
+                or hook.__closure__[0].cell_contents is not context['responses']
+                or context['responses']['runtime_guard'][1].require_external_runtime is not context['guard']):
+            _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+        row, lifetime = _fixed_module_observation(module, source, filename, budget,
+                                                  context['expectedImports'], ('POLICY',))
+        rows.append(row)
+        relations, relation_budget = [], [budget[0], budget[0]]
+        for node in ast.parse(source, filename=filename).body:
+            if isinstance(node, ast.ClassDef):
+                _git_charge(relation_budget, 128 + 6 * _utf8_size(node.name))
+                relations.append((node.name + '.__bases__', module.__dict__[node.name].__bases__))
+        budget[0] = relation_budget[1]
+        identities.append(lifetime + tuple(relations) + (('__import__', hook, hook.__code__, hook.__defaults__, hook.__kwdefaults__),
+                                      ('POLICY_NAMES', module.POLICY_NAMES),
+                                      ('POLICY', module.POLICY)))
+    return rows, tuple(identities)
+
+
+def _compile_deployment_modules():
+    sources = [(filename, _git_source_read(filename)) for filename in _DEPLOYMENT_FILES]
+    modules, contexts, functions, classes = [], [], 0, 0
+    for index, (filename, source) in enumerate(sources):
+        tree = ast.parse(source, filename=filename)
+        names = _DEPLOYMENT_IMPORTS[index]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                functions += 1
+            if isinstance(node, ast.ClassDef):
+                classes += 1
+            if functions > 512 or classes > 512:
+                _publication_fail('blocked', 'limits', 'limit_exceeded', 'code_observation')
+            if (isinstance(node, (ast.AsyncFunctionDef, ast.Yield, ast.YieldFrom))
+                    or isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.decorator_list
+                    or isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in ('exec', 'eval', 'compile', '__import__')):
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+            if isinstance(node, ast.Import):
+                imports = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if (node.level or node.module != 'runtime_guard' or len(node.names) != 1
+                        or node.names[0].name != 'require_external_runtime' or node.names[0].asname):
+                    _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+                imports = [node.module]
+            else:
+                continue
+            if any(name not in names for name in imports):
+                _publication_fail('unsupported', 'implementation', 'unsupported_implementation', 'source_profile')
+        hook, responses, pins, guard = _deployment_importer(names)
+        expected = _deployment_expected_imports(tree, hook)
+        module = ModuleType(('_daily_deployment_collector', '_daily_deployment_store')[index])
+        namespace_builtins = {**builtins.__dict__, '__import__': hook}
+        builtin_pins = tuple(namespace_builtins.items())
+        module.__dict__['__builtins__'] = namespace_builtins
+        exec(compile(source, filename, 'exec', dont_inherit=True, optimize=0), module.__dict__)
+        contexts.append({'module': module, 'hook': hook, 'builtins': namespace_builtins,
+            'hookClosure': hook.__closure__,
+            'builtinPins': builtin_pins, 'responses': responses, 'responsePins': pins,
+            'guard': guard, 'expectedImports': expected})
+        modules.append(module)
+    bundle = {'sources': sources, 'modules': modules, 'contexts': contexts}
+    rows, lifetime = _deployment_observe(bundle)
+    bundle.update(rows=rows, lifetime=lifetime)
+    return bundle
+
+
+def _deployment_final(bundle):
+    rows, lifetime = _deployment_observe(bundle)
+    if rows != bundle['rows'] or len(lifetime) != len(bundle['lifetime']):
+        _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+    for before, after in zip(bundle['lifetime'], lifetime):
+        if len(before) != len(after) or any(len(left) != len(right) or any(
+                old is not new if index else old != new
+                for index, (old, new) in enumerate(zip(left, right)))
+                for left, right in zip(before, after)):
+            _publication_fail('blocked', 'implementation', 'stale', 'code_changed')
+    for filename, source in bundle['sources']:
+        if _git_source_read(filename, final=True) != source:
+            _publication_fail('blocked', 'implementation', 'stale', 'source_changed')
+
+
+def _deployment_execution_binding(bundle):
+    return {'contract': 'daily-deployment-private-execution-v1', 'version': 1,
+        'modules': [{'file': row['name'], 'sourceSha256': row['sourceSha256'],
+                     'codeAndPolicySha256': _json_sha({key: row[key] for key in ('codeSha256', 'policySha256')})}
+                    for row in bundle['rows']],
+        'compiler': {'dontInherit': True, 'optimize': 0, 'dependencyMapping': []},
+        'objectBinding': 'actual_objects_before_after', 'fullExecutionClosure': 'not_established'}
+
+
+def _git_call(bundle, name, owner, binding, expected, *, github_repository=False):
     leaf = bundle['modules'][2]
     kwargs = {'commit_oid': binding['commitOid'], 'remote_name': binding['recordedRemote']['name'],
               'expected_remote_identity_sha256': expected}
     if name == 'read_local_publication_git':
         kwargs.update(base_oid=binding['baseOid'], expected_files=binding['files'])
+    if github_repository:
+        name = {'read_local_publication_git': '_read_local_github_publication_git',
+                'read_local_publication_context': '_read_local_github_publication_context'}[name]
     try:
         return getattr(leaf, name)(owner.BLOG_REPO, **kwargs)
     except leaf.LocalPublicationReadError as error:
         code = error.code
+        if github_repository:
+            if (error.reason in ('remote_identity', 'remote_url_shape', 'remote_url_count')
+                    or error.reason == 'remote_profile' and code == 'invalid_argument'):
+                _publication_fail('blocked', 'binding', 'invalid', 'repository_binding')
+            if error.reason in ('remote_profile', 'config_policy'):
+                _publication_fail('unsupported', 'binding', 'unsupported', 'repository_profile')
         if code.startswith('unsupported_'):
             reason = {'unsupported_git': 'binary_profile', 'unsupported_repository': 'repository_profile',
                       'unsupported_commit': 'commit_profile', 'unsupported_tree': 'tree_profile',
@@ -1132,7 +1313,8 @@ def _local_result(targets, binding, combined, context2, bundle):
     return _safe_result(result)
 
 
-def _read_locked(owner, date, include_id, *, targets=False, local_publication=False):
+def _read_locked(owner, date, include_id, *, targets=False, local_publication=False,
+                 github_repository=False):
     contract = TARGET_CONTRACT if targets else CONTRACT
     receipt_path = owner.review_receipt_path(date)
     try:
@@ -1281,12 +1463,14 @@ def _read_locked(owner, date, include_id, *, targets=False, local_publication=Fa
             local_binding['files'] = expected['files']
             git_bundle = _compile_git_modules()
             git_combined = _git_call(git_bundle, 'read_local_publication_git', owner,
-                                     local_binding, receipt['remoteIdentitySha256'])
+                                     local_binding, receipt['remoteIdentitySha256'],
+                                     github_repository=github_repository)
     final_paths, final_receipt_path = (_publication_normal(owner, date, 'final') if local_publication
                                       else owner.load_verified_review_receipt(date))
     if git_bundle is not None:
         context2 = _git_call(git_bundle, 'read_local_publication_context', owner,
-                             local_binding, receipt['remoteIdentitySha256'])
+                             local_binding, receipt['remoteIdentitySha256'],
+                             github_repository=github_repository)
         if context2 != git_combined['context']:
             _publication_fail('blocked', 'git', 'stale', 'git_identity')
         _scope_files_cas(owner, expected['files'], git_bundle['modules'][0])
@@ -1314,7 +1498,10 @@ def _read_locked(owner, date, include_id, *, targets=False, local_publication=Fa
         if local_binding is None:
             return _publication_issue('not_published', 'publication', 'not_published', 'publication_fields_absent')
         _git_final(git_bundle)
-        return _local_result(local_targets, local_binding, git_combined, context2, git_bundle)
+        local = _local_result(local_targets, local_binding, git_combined, context2, git_bundle)
+        if github_repository:
+            return local, context2['repositoryMapping']
+        return local
     if targets:
         return _targets_result(result, target_metadata, receipt['reviewedAt'])
     result['recordSha256'] = _json_sha(result, limits['result'])
@@ -1376,6 +1563,303 @@ def read_daily_reviewed_targets(date_str, *, include_id=None):
 def read_daily_local_publication(date_str, *, include_id=None):
     """Observe one normally reviewed local publication; diagnostic data grants no ability."""
     return _read_selected(date_str, include_id, targets=True, local_publication=True)
+
+
+def _deployment_guard():
+    from runtime_guard import require_external_runtime
+    require_external_runtime('daily_observed_projection.py')
+
+
+def _deployment_now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _deployment_select(date_str, include_id):
+    # Reject unbounded or nonliteral selectors before loading the original owner.
+    try:
+        if (type(date_str) is not str or re.fullmatch('[0-9]{4}-[0-9]{2}-[0-9]{2}', date_str) is None
+                or datetime.date.fromisoformat(date_str).isoformat() != date_str):
+            _fail('deployment_argument', 'date')
+    except ValueError:
+        _fail('deployment_argument', 'date')
+    if include_id is not None:
+        try:
+            if type(include_id) is not str or len(include_id) > 8192 or _utf8_size(include_id) > 8192:
+                _fail('deployment_argument', 'include_id')
+        except ValueError:
+            _fail('deployment_argument', 'include_id')
+    owner = blog_entry_loader.load_publish_to_blog()
+    try:
+        date = owner.validate_publish_date(date_str)
+    except Exception:
+        _fail('deployment_argument', 'date')
+    try:
+        with owner.publication_scope(include_id) as normalized:
+            selector = {'workflow': 'daily', 'date': date, 'includeId': normalized}
+    except Exception:
+        _fail('deployment_argument', 'include_id')
+    return selector, owner
+
+
+def _deployment_implementation(bundle):
+    _deployment_final(bundle)
+    execution = _deployment_execution_binding(bundle)
+    runtime = {'implementation': sys.implementation.name, 'version': list(sys.version_info[:5]),
+               'cacheTag': sys.implementation.cache_tag, 'openssl': ssl.OPENSSL_VERSION}
+    return {'contract': 'daily-deployment-implementation-observation-v1', 'version': 1,
+        'ownerObservationSha256': _json_sha(_implementation(_read(_PROFILE_FILE))),
+        'runtimeSha256': _json_sha(runtime), 'executionBinding': execution,
+        'executionBindingSha256': _json_sha(execution), 'fullExecutionClosure': 'not_established'}
+
+
+def _deployment_stable(bundle, implementation, root):
+    if (_deployment_implementation(bundle) != implementation
+            or str(path_config.DAILY_DEPLOYMENT_OBSERVATIONS_DIR) != root):
+        _fail('stale', 'deployment_implementation')
+
+
+def _deployment_take(selector, owner, stage):
+    try:
+        with owner.publication_scope(selector['includeId']) as normalized:
+            if normalized != selector['includeId'] or owner.validate_publish_date(selector['date']) != selector['date']:
+                _fail('invalid', 'deployment_selector')
+            with owner.blog_publication_lock(selector['date']):
+                value = _read_locked(owner, selector['date'], normalized, targets=True,
+                                     local_publication=True, github_repository=True)
+        if type(value) is not tuple or len(value) != 2:
+            if type(value) is dict and value.get('status') == 'not_recorded':
+                reason = 'receipt_missing' if value['issues'][0]['reason'] == 'receipt_missing' else 'render_not_recorded'
+                _fail('deployment_result', ('blocked', 'normal', 'not_recorded', reason))
+            if type(value) is dict and value.get('status') == 'not_published':
+                _fail('deployment_result', ('blocked', 'publication', 'not_published', 'publication_fields_absent'))
+            _fail('deployment_result', ('blocked', 'normal', 'normal_rejected', stage))
+        return value
+    except ValueError as error:
+        if len(error.args) == 2 and error.args[0] == 'deployment_result':
+            raise
+        if len(error.args) == 2 and error.args[0] == 'local_publication_result':
+            status, domain, code, reason = error.args[1]
+            if domain == 'binding':
+                _fail('deployment_result', error.args[1])
+            if domain == 'publication':
+                _fail('deployment_result', ('blocked', 'publication', 'invalid', 'publication_binding'))
+            if domain == 'implementation':
+                _fail('deployment_result', ('stale', 'implementation', 'stale', 'code_changed'))
+            if domain == 'limits':
+                _fail('deployment_result', ('blocked', 'limits', 'limit_exceeded', 'result_bytes'))
+            if code == 'stale':
+                _fail('deployment_result', ('stale', 'binding', 'stale', 'inputs_changed'))
+            _fail('deployment_result', ('blocked', 'normal', 'normal_rejected', stage))
+        if len(error.args) == 2 and error.args[0] == 'stale':
+            if error.args[1] in ('owner_source_changed', 'owner_code_or_policy_changed',
+                                  'owner_function_set', 'implementation_changed'):
+                _fail('deployment_result', ('stale', 'implementation', 'stale', 'code_changed'))
+            _fail('deployment_result', ('stale', 'binding', 'stale', 'inputs_changed'))
+        _fail('deployment_result', ('blocked', 'normal', 'normal_rejected', stage))
+    except Exception:
+        _fail('deployment_result', ('blocked', 'normal', 'normal_rejected', stage))
+
+
+def _deployment_binding(intent, snapshot, policy):
+    targets, git = snapshot['reviewedTargets'], snapshot['gitBinding']
+    try:
+        raw = b''.join(_json_parts(snapshot, 2 * 1024 * 1024))
+    except ValueError as error:
+        if len(error.args) == 2 and error.args[0] == 'limit_exceeded':
+            _fail('deployment_result', ('blocked', 'limits', 'limit_exceeded', 'snapshot_bytes'))
+        raise
+    binding = {'contract': 'daily-deployment-input-binding-v1', 'version': 1,
+        **{name: intent[name] for name in ('attemptId', 'sequence', 'selector')},
+        'normalBinding': snapshot['normalBinding'], 'publicationBinding': snapshot['publicationBinding'],
+        'targetBinding': {name: targets[name] for name in ('contract', 'version', 'targetsSha256',
+            'recordSha256', 'reviewedFileSetSha256', 'reviewedFileCount', 'primarySourceSetSha256',
+            'observationRef', 'profile')},
+        'localBinding': {'contextObservationSha256': git['context2ObservationSha256'],
+            **{name: git[name] for name in ('refPhysicalIdentitySha256', 'deltaObservationSha256',
+                'reviewedFileSetSha256', 'reviewedFileFactsSha256')},
+            'implementationBindingSha256': _json_sha(snapshot['implementationBinding'])},
+        'repositoryPolicy': policy,
+        'snapshot': {'path': 'local-snapshot.json', 'sha256': _sha(raw), 'bytes': len(raw)}}
+    try:
+        binding['bindingSha256'] = _json_sha(binding, 65536)
+    except ValueError as error:
+        if len(error.args) == 2 and error.args[0] == 'limit_exceeded':
+            _fail('deployment_result', ('blocked', 'limits', 'limit_exceeded', 'binding_bytes'))
+        raise
+    return binding
+
+
+def _deployment_compare(first, final):
+    names = ('selector', 'normalBinding', 'publicationBinding', 'targetBinding', 'localBinding', 'repositoryPolicy')
+    return all(first[name] == final[name] for name in names)
+
+
+def _deployment_record(intent, binding, metadata, implementation, status, verified, issues):
+    result = {'contract': 'daily-deployment-metadata-observation-v1', 'version': 1,
+        **{name: intent[name] for name in ('attemptId', 'sequence', 'selector', 'intentSha256')},
+        'bindingSha256': binding['bindingSha256'] if binding is not None else None,
+        'startedAt': intent['requestedAt'], 'finishedAt': _deployment_now(), 'status': status,
+        'bindingVerified': verified, 'metadata': metadata, 'partial': True, 'fullE05': False,
+        'implementationObservation': implementation,
+        'coverage': {'localPublication': 'observed_before_after' if verified else 'not_verified',
+            'deploymentMetadata': ('not_available' if metadata is None else
+                'observed' if metadata['status'] == 'metadata_observed' else 'partial'),
+            **dict.fromkeys(_DEPLOYMENT_NOT_CHECKED, 'not_checked')},
+        'issues': issues, 'capabilities': dict(_LOCAL_CAPABILITIES)}
+    result['recordSha256'] = _json_sha(result, 2 * 1024 * 1024)
+    return result
+
+
+def _deployment_outcome(selector, issue, *, error=None, intent=None, recording='not_saved', result_ref=None):
+    # Only private store exceptions supply bounded persistence facts; no raw error text.
+    return {'contract': 'daily-deployment-attempt-outcome-v1', 'version': 1, 'selector': selector,
+        'attemptId': (error.attempt_id if error is not None else intent['attemptId'] if intent else None),
+        'sequence': (error.sequence if error is not None else intent['sequence'] if intent else None),
+        'recording': error.recording if error is not None else recording,
+        'resultRef': error.result_ref if error is not None else result_ref,
+        'issues': [issue], 'partial': True, 'fullE05': False, 'capabilities': dict(_LOCAL_CAPABILITIES)}
+
+
+def _deployment_storage_issue(error):
+    code = ('invalid' if error.code in ('invalid_record', 'conflict', 'invalid_argument') else
+            'limit_exceeded' if error.code == 'limit_exceeded' else 'unavailable')
+    return {'domain': 'storage', 'code': code, 'reason': error.reason}
+
+
+def _deployment_work(bundle, selector, owner, implementation, root, intent, handle):
+    collector, store = bundle['modules']
+    binding, metadata, verified = None, None, False
+    phase = 'initial'
+    try:
+        snapshot, policy = _deployment_take(selector, owner, 'initial')
+        binding = _deployment_binding(intent, snapshot, policy)
+        _deployment_stable(bundle, implementation, root)
+        phase = 'bind'
+        store.bind(handle, binding, snapshot)
+        _deployment_stable(bundle, implementation, root)
+        phase = 'network'
+        metadata = collector.collect_github_pages_metadata(binding['publicationBinding']['commitOid'])
+        phase = 'final'
+        final_owner = blog_entry_loader.load_publish_to_blog()
+        final_snapshot, final_policy = _deployment_take(selector, final_owner, 'final')
+        final_binding = _deployment_binding(intent, final_snapshot, final_policy)
+        _deployment_stable(bundle, implementation, root)
+        if not _deployment_compare(binding, final_binding):
+            _fail('deployment_result', ('stale', 'binding', 'stale', 'inputs_changed'))
+        verified = True
+        status = 'unavailable' if metadata['status'] == 'unknown' else metadata['status']
+        issues = []
+        for state, code, reason in _DEPLOYMENT_METADATA_ISSUES:
+            if metadata['status'] == state:
+                issues = [{'domain': 'metadata', 'code': code, 'reason': reason}]
+    except (KeyboardInterrupt, SystemExit) as control:
+        # Preserve the exact original control object even if best-effort storage fails.
+        try:
+            _deployment_stable(bundle, implementation, root)
+            interrupted = _deployment_record(intent, binding, metadata, implementation,
+                'interrupted', False, [{'domain': 'operation', 'code': 'interrupted', 'reason': 'control_exception'}])
+            store.finish(handle, interrupted)
+        except BaseException:
+            pass
+        raise control
+    except store.DeploymentStoreError:
+        raise
+    except Exception as error:
+        _deployment_stable(bundle, implementation, root)
+        if len(error.args) == 2 and error.args[0] == 'deployment_result':
+            status, domain, code, reason = error.args[1]
+            status = status if status in ('blocked', 'stale', 'unsupported') else 'blocked'
+            issues = [{'domain': domain, 'code': code, 'reason': reason}]
+        else:
+            status = 'blocked'
+            issues = [{'domain': 'normal', 'code': 'normal_rejected',
+                       'reason': 'final' if phase == 'final' else 'initial'}]
+    result = _deployment_record(intent, binding, metadata, implementation, status, verified, issues)
+    outcome = None
+    try:
+        _deployment_stable(bundle, implementation, root)
+        outcome = store.finish(handle, result)
+        _deployment_stable(bundle, implementation, root)
+        return _safe_result(outcome)
+    except store.DeploymentStoreError:
+        raise
+    except Exception:
+        return _deployment_outcome(selector,
+            {'domain': 'implementation', 'code': 'stale', 'reason': 'code_changed'},
+            intent=intent, recording='durability_uncertain' if outcome is not None else 'partially_saved',
+            result_ref=outcome['resultRef'] if outcome is not None else None)
+
+
+def _deployment_attempt(bundle, selector, owner, implementation, root):
+    store = bundle['modules'][1]
+    intent, handle = store.reserve(root, selector)
+    try:
+        return _deployment_work(bundle, selector, owner, implementation, root, intent, handle)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except store.DeploymentStoreError:
+        raise
+    except Exception:
+        # Intent was already durable. Never describe this as an unsaved attempt.
+        return _deployment_outcome(selector,
+            {'domain': 'implementation', 'code': 'stale', 'reason': 'code_changed'},
+            intent=intent, recording='partially_saved')
+
+
+def observe_daily_deployment(date_str, *, include_id=None):
+    """Record a new bounded metadata observation; recorded is a persistence outcome."""
+    _deployment_guard()
+    selector, bundle = None, None
+    try:
+        selector, owner = _deployment_select(date_str, include_id)
+        bundle = _compile_deployment_modules()
+        implementation = _deployment_implementation(bundle)
+        root = str(path_config.DAILY_DEPLOYMENT_OBSERVATIONS_DIR)
+        return _deployment_attempt(bundle, selector, owner, implementation, root)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as error:
+        if bundle is not None and isinstance(error, bundle['modules'][1].DeploymentStoreError):
+            return _deployment_outcome(selector, _deployment_storage_issue(error), error=error)
+        if (type(error) is ValueError and len(error.args) == 2 and error.args[0] == 'deployment_argument'
+                and error.args[1] in ('date', 'include_id')):
+            return _deployment_outcome(None,
+                {'domain': 'selection', 'code': 'invalid_argument', 'reason': error.args[1]})
+        return _deployment_outcome(selector,
+            {'domain': 'normal' if selector is None else 'implementation',
+             'code': 'normal_rejected' if selector is None else 'stale',
+             'reason': 'initial' if selector is None else 'code_changed'})
+
+
+def read_daily_deployment_observation(date_str, *, include_id=None):
+    """Read only historical local records; no current qualification or network is obtained."""
+    _deployment_guard()
+    selector = None
+    try:
+        selector, _owner = _deployment_select(date_str, include_id)
+        bundle = _compile_deployment_modules()
+        implementation = _deployment_implementation(bundle)
+        root = str(path_config.DAILY_DEPLOYMENT_OBSERVATIONS_DIR)
+        result = bundle['modules'][1].read_status(root, selector)
+        _deployment_stable(bundle, implementation, root)
+        for issue in result['issues']:
+            if issue['domain'] == 'storage' and issue['code'] in ('invalid_record', 'conflict', 'invalid_argument'):
+                issue['code'] = 'invalid'
+        return _safe_result(result)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as error:
+        issue = {'domain': 'implementation', 'code': 'stale', 'reason': 'code_changed'}
+        if (type(error) is ValueError and len(error.args) == 2 and error.args[0] == 'deployment_argument'
+                and error.args[1] in ('date', 'include_id')):
+            issue = {'domain': 'selection', 'code': 'invalid_argument', 'reason': error.args[1]}
+        return {'contract': 'daily-deployment-local-status-v1', 'version': 1, 'status': 'unavailable',
+            'selector': selector, 'observedAt': _deployment_now(), 'latestAttempt': None, 'lastObserved': None,
+            'indexConsistent': False, 'partial': True, 'fullE05': False,
+            'coverage': {'recordIntegrity': 'not_available', 'currentInputs': 'not_checked',
+                'deploymentNow': 'not_checked', 'finalAcceptance': 'not_checked'},
+            'issues': [issue],
+            'capabilities': dict(_LOCAL_CAPABILITIES)}
 
 
 _FUNCTIONS = _function_names()

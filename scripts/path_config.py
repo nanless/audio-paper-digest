@@ -44,6 +44,7 @@ LLM_RESPONSE_RECOVERY_DIR = DATA_DIR / "runtime" / "llm-response-recovery"
 FRESH_REWRITE_RUNS_DIR = DATA_DIR / "runtime" / "fresh-rewrites"
 DAILY_FRESH_SOURCE_RUNS_DIR = DATA_DIR / "runtime" / "daily-fresh-source-runs"
 DAILY_RENDER_OBSERVATIONS_DIR = DATA_DIR / "runtime" / "daily-render-observations"
+DAILY_DEPLOYMENT_OBSERVATIONS_DIR = DATA_DIR / "runtime" / "daily-deployment-observations"
 DAILY_REPUBLICATION_RUNS_DIR = DATA_DIR / "runtime" / "daily-republications"
 DAILY_REPUBLICATION_MARKER_DIRNAME = 'blog-republications'
 HISTORICAL_PAGE_INVENTORY_DIR = DATA_DIR / "runtime" / "historical-page-inventories"

@@ -66,6 +66,27 @@ class LocalPublicationPolicyTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             importer('local_git_publication')
 
+    def test_git_importer_actual_closure_must_retain_its_pinned_dependencies_and_importer(self):
+        owner = self.module()
+        for variable in ('allowed', 'original_import'):
+            with self.subTest(variable=variable):
+                bundle = owner._compile_git_modules()
+                owner._git_final(bundle)
+                importer = bundle['modules'][0].__dict__['__builtins__']['__import__']
+                cells = dict(zip(importer.__code__.co_freevars, importer.__closure__))
+                if variable == 'allowed':
+                    original = cells[variable].cell_contents
+                    replacement = dict(original)
+                    replacement['local_git_publication'] = bundle['modules'][2]
+                    cells[variable].cell_contents = replacement
+                    self.assertIs(bundle['contexts'][0]['dependencies'], original)
+                    self.assertIs(importer('local_git_publication'), bundle['modules'][2])
+                else:
+                    cells[variable].cell_contents = lambda *_args, **_kwargs: None
+                    self.assertIsNone(importer('json'))
+                with self.assertRaises(ValueError):
+                    owner._git_final(bundle)
+
     def test_actual_temp_source_cannot_rebind_an_imported_callable_name(self):
         owner = self.module()
         with tempfile.TemporaryDirectory() as directory:

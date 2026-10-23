@@ -14,6 +14,14 @@ import local_git_commit_delta as delta
 
 CONTRACT = 'local-git-publication-observation-v1'
 VERSION = 1
+_GITHUB_POLICY = (
+    ('repositoryId', 1214235086), ('fullName', 'nanless/audio-paper-digest-blog'),
+    ('workflowId', 262722446), ('workflowPath', '.github/workflows/hugo.yaml'),
+    ('branch', 'main'), ('environment', 'github-pages'),
+    ('urlProfile', 'fixed-literal-github-remote-v1'), ('host', 'github.com'),
+    ('httpsPort', '443'), ('sshPort', '22'), ('sshUser', 'git'),
+    ('protocols', ('https', 'ssh', 'scp')), ('pathSuffixes', ('/', '.git')),
+)
 _LIMITS = (('head', 1024), ('loose', 1024), ('packed', 1024 * 1024),
            ('refBytes', 1024 * 1024 + 2048), ('entries', 10000), ('lines', 30000),
            ('refName', 1024), ('refNameBytes', 1024 * 1024),
@@ -264,10 +272,66 @@ def _parse_remote(content, remote_name, expected_digest):
     return 'verified'
 
 
-def _read_remote(state, remote_name, expected_digest):
+def _github_mapping(content):
+    # The exact same bytes have already passed the original bounded remote/digest gate.
+    url, policy = content[:-1].decode('utf-8', 'strict'), dict(_GITHUB_POLICY)
+    if any(char.isspace() or ord(char) < 32 or 127 <= ord(char) <= 159 for char in url):
+        _fail('invalid_argument', 'remote_profile')
+    if any(char in url for char in ('%', '?', '#', '\\')):
+        _fail('invalid_argument', 'remote_profile')
+    scheme_match = re.match(r'^([A-Za-z][A-Za-z0-9+.-]*)://', url)
+    if scheme_match is not None:
+        scheme = scheme_match.group(1).lower()
+        if scheme not in ('https', 'ssh'):
+            _fail('unsupported_state', 'remote_profile')
+        remaining = url[scheme_match.end():]
+        if '/' not in remaining:
+            _fail('invalid_argument', 'remote_profile')
+        authority, path = remaining.split('/', 1)
+        if scheme == 'ssh':
+            if authority.count('@') != 1:
+                _fail('invalid_argument', 'remote_profile')
+            user, authority = authority.split('@', 1)
+            if user != policy['sshUser']:
+                _fail('invalid_argument', 'remote_profile')
+        elif '@' in authority:
+            _fail('invalid_argument', 'remote_profile')
+        host_port = re.fullmatch(r'([A-Za-z0-9.-]+)(?::([0-9]+))?', authority)
+        if host_port is None:
+            _fail('invalid_argument', 'remote_profile')
+        host, port = host_port.groups()
+        if host.lower() != policy['host']:
+            _fail('unsupported_state', 'remote_profile')
+        if port is not None and port != policy['httpsPort' if scheme == 'https' else 'sshPort']:
+            _fail('invalid_argument', 'remote_profile')
+    else:
+        scp = re.fullmatch(r'([^@:/]+)@([A-Za-z0-9.-]+):(.*)', url)
+        if scp is None:
+            _fail('unsupported_state', 'remote_profile')
+        user, host, path = scp.groups()
+        if host.lower() != policy['host']:
+            _fail('unsupported_state', 'remote_profile')
+        if user != policy['sshUser']:
+            _fail('invalid_argument', 'remote_profile')
+    if not path or ':' in path or '//' in path or any(part in ('.', '..') for part in path.split('/')):
+        _fail('invalid_argument', 'remote_profile')
+    if path.endswith('/'):
+        path = path[:-1]
+    if path.endswith('.git'):
+        path = path[:-4]
+    if path != policy['fullName']:
+        _fail('unsupported_state', 'remote_profile')
+    result = {key: policy[key] for key in
+              ('repositoryId', 'fullName', 'workflowId', 'workflowPath', 'branch', 'environment')}
+    result.update(policySha256=_bounded_sha(_GITHUB_POLICY), localRepositoryMapping='verified')
+    return result
+
+
+def _read_remote(state, remote_name, expected_digest, github=False):
     content = _command(state, ['remote', 'get-url', '--push', '--all', remote_name],
                        dict(_LIMITS)['url'] + 1, 'remote_command')
-    return _parse_remote(content, remote_name, expected_digest)
+    matched = _parse_remote(content, remote_name, expected_digest)
+    return _github_mapping(content) if github else matched
 
 
 def _reserve_context(state):
@@ -295,7 +359,7 @@ def _bounded_sha(value):
     return digest.hexdigest()
 
 
-def _context(session, commit_oid, remote_name, expected_digest, ref_observation):
+def _context(session, commit_oid, remote_name, expected_digest, ref_observation, github=False):
     state = session.state
     _reserve_context(state)
     controls, actual_main = ref_observation
@@ -308,7 +372,7 @@ def _context(session, commit_oid, remote_name, expected_digest, ref_observation)
     oid = head[:-1].decode('ascii')
     if oid != actual_main or oid != commit_oid:
         _fail('state_mismatch', 'head_commit')
-    matched = _read_remote(state, remote_name, expected_digest)
+    matched = _read_remote(state, remote_name, expected_digest, github=github)
     before = state['before']
     result = {'contract': CONTRACT, 'version': VERSION, 'status': 'local_publication_context_observed',
         'repositoryIdentity': {key: {'path': state['repo'] + suffix, **before[key]}
@@ -317,7 +381,9 @@ def _context(session, commit_oid, remote_name, expected_digest, ref_observation)
             ('configSha256', 'controlFilesSha256', 'objectStoreMetadataSha256')},
         'gitIdentity': {**state['binary'], 'version': state['version']}, 'controls': controls,
         'branch': 'refs/heads/main', 'headOid': oid, 'remoteName': remote_name,
-        'localRemoteConfigurationMatch': matched, 'inputBinding': 'before_after_observation'}
+        'localRemoteConfigurationMatch': 'verified' if github else matched, 'inputBinding': 'before_after_observation'}
+    if github:
+        result['repositoryMapping'] = matched
     physical = {key: result[key] for key in ('repositoryIdentity', 'admissionIdentity',
                 'gitIdentity', 'controls', 'branch', 'headOid', 'remoteName')}
     result['refPhysicalIdentitySha256'] = _bounded_sha(
@@ -326,13 +392,13 @@ def _context(session, commit_oid, remote_name, expected_digest, ref_observation)
     return result
 
 
-def _repeat_context(session, ref_initial, initial, commit_oid, remote_name, expected_digest, primary):
+def _repeat_context(session, ref_initial, initial, commit_oid, remote_name, expected_digest, primary, github=False):
     try:
         ref_final = _ref_controls(session.state)
         if ref_final != ref_initial:
             _fail('metadata_changed', 'context_identity')
         if initial is not None:
-            final = _context(session, commit_oid, remote_name, expected_digest, ref_final)
+            final = _context(session, commit_oid, remote_name, expected_digest, ref_final, github=github)
             if final != initial:
                 _fail('metadata_changed', 'context_identity')
     except (raw.LocalGitReadError, delta.CommitDeltaReadError, LocalPublicationReadError) as error:
@@ -344,7 +410,7 @@ def _repeat_context(session, ref_initial, initial, commit_oid, remote_name, expe
         _fail('metadata_changed', 'final_observation')
 
 
-def _read(repo, commit_oid, remote_name, expected_digest, comparison):
+def _read(repo, commit_oid, remote_name, expected_digest, comparison, github=False):
     control = None
     try:
         _validate(repo, commit_oid, remote_name, expected_digest)
@@ -359,7 +425,7 @@ def _read(repo, commit_oid, remote_name, expected_digest, comparison):
             ref_initial, initial, ref_primary = None, None, None
             try:
                 ref_initial = _ref_controls(session.state)
-                initial = _context(session, commit_oid, remote_name, expected_digest, ref_initial)
+                initial = _context(session, commit_oid, remote_name, expected_digest, ref_initial, github=github)
                 if expected is not None:
                     observed = delta._collect_delta_in_session(session, base_oid, commit_oid, expected)
                     result = {'contract': CONTRACT, 'version': VERSION, 'status': 'local_publication_git_observed',
@@ -379,7 +445,7 @@ def _read(repo, commit_oid, remote_name, expected_digest, comparison):
                 raise
             finally:
                 if ref_initial is not None:
-                    _repeat_context(session, ref_initial, initial, commit_oid, remote_name, expected_digest, ref_primary)
+                    _repeat_context(session, ref_initial, initial, commit_oid, remote_name, expected_digest, ref_primary, github=github)
         except BaseException as error:
             primary = error
             if isinstance(error, (KeyboardInterrupt, SystemExit)) and control is None:
@@ -411,3 +477,17 @@ def read_local_publication_context(repo, *, commit_oid, remote_name, expected_re
     from runtime_guard import require_external_runtime
     require_external_runtime('local_git_publication.py')
     return _read(repo, commit_oid, remote_name, expected_remote_identity_sha256, None)
+
+
+def _read_local_github_publication_git(repo, *, base_oid, commit_oid, expected_files,
+                                       remote_name, expected_remote_identity_sha256):
+    from runtime_guard import require_external_runtime
+    require_external_runtime('local_git_publication.py')
+    return _read(repo, commit_oid, remote_name, expected_remote_identity_sha256,
+                 (base_oid, expected_files), github=True)
+
+
+def _read_local_github_publication_context(repo, *, commit_oid, remote_name, expected_remote_identity_sha256):
+    from runtime_guard import require_external_runtime
+    require_external_runtime('local_git_publication.py')
+    return _read(repo, commit_oid, remote_name, expected_remote_identity_sha256, None, github=True)

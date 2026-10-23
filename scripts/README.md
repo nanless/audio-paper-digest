@@ -385,7 +385,9 @@ npm run test:compat
 | `blog_entry_loader.py` | Python 桥：以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `daily_hugo_capture.py` | Python 内部库：保留正常日更审查中同次 Hugo 的输入观察、机器页面映射和主 HTML，以不可覆盖记录供新审查凭证引用及冷核；不授予完整输入快照、科学资格或部署通过，见[观察记录边界](../docs/three-workflows.md#日更审查的同次-html-观察记录)。 |
 | `daily_html_projection.py` | Python 纯库：固定 v1 保留公式无空白规则，固定 v2 另允许内部孤立单空格，共用有限静态 HTML 解析；保留词界、代码和公式原字面，不解释 TeX、执行 HTML 或请求资源。普通返回值不授予来源或出版资格。 |
-| `daily_observed_projection.py` | Python 内部读取器：按日期和显式单篇范围进入原正常凭证与同次 HTML 观察链，以固定 v2 派生静态摘要或已审主页面目标；另有本地发布观察，在同一次正常范围内核完整文件、提交差异及主分支和远端配置，并保留全部目标。原两接口条件保持，不重建或补签旧记录，不检查远端现在、部署、网页或当前科学资格。 |
+| `github_pages_deployment.py` | Python 机械观察库：用固定匿名 HTTPS 读取受控仓库的工作流、精确运行轮次、任务和部署状态元数据；有界分页并复核较新记录，始终保留网页、公开资源和产物消费链未核验的边界，不授予发布或来源资格。 |
+| `daily_deployment_store.py` | Python 机械保存库：不可覆盖地保存日更部署观察意图、输入绑定及结果，以短文件锁和完整记录扫描维护最新导航；较新的未完成或失败观察不会被旧成功遮盖，普通保存数据不授予正常审查资格。 |
+| `daily_observed_projection.py` | Python 日更观察入口：原三个读取接口按日期和显式单篇范围核正常凭证、HTML、主页面目标或完整本地发布。显式 `observe_daily_deployment()` 在两次完整本地观察之间读取固定公开部署元数据，共执行四次正常核验，再保存独立历史记录；`read_daily_deployment_observation()` 只读该历史记录。保存完成不代表部署或最终验收通过，不重建或补签旧凭证，不授予当前科学资格；新增固定保存路径会正常改变原审查协议指纹。 |
 | `blog_repository_lock.py` | 管理共享博客锁，以 Git common-dir 协调不同项目工作区；核对 PID、hostname、token、lease、inode 和 SHA 后才回收或释放，不污染博客 Git。 |
 | `generate-blog.py` | Python 入口：只生成并安装 Hugo Markdown。 |
 | `lib/paper-page-staging.js` | 三流程页面 worker 私有输入、超时、实现指纹和暂存文件校验。 |

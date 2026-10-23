@@ -5,6 +5,10 @@ node_modules/
 data/
 logs/
 
+# 本地调查原始记录与生成图片；正式流程说明和测试样本另存 docs/、tests/
+_understanding/
+output/
+
 # 环境配置和工作区角色
 .env
 .env.*
