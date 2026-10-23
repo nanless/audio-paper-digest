@@ -4977,6 +4977,48 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const resource = '(?:源代码|代码仓库|模型权重|数据集|语料库|代码|模型|权重|检查点|数据|资源)';
         const list = resource + '(?:(?:、|或|与|和|及)' + resource + '){0,4}';
         const release = '(?:已(?:经)?|当前)?(?:公开|开源|开放|可下载|可获取|可用)';
+        // A requirement to check a bare capability is not confirmation of it.
+        // Bind only those predicates, never an embedded completed release or
+        // another assertion later in the sentence. Quoted/revoked instructions
+        // retain the same conservative boundary as the other nonclaim spans.
+        const checkProperty = '(?:源代码|代码仓库|模型权重|数据集|语料库|复现材料|代码|模型|权重|检查点|数据|资源|系统)'
+            + '(?:是否)?可(?:访问|下载|获取|用|运行)';
+        const pendingCheck = new RegExp('(?:还|仍)?(?:需要?|应(?:当)?|要|必须)(?:先|再)?(?:分别|逐项)?'
+            + '(?:确认|核实|核验|验证|检查|核对)' + checkProperty
+            + '(?:[、与和及]' + checkProperty + '){0,3}(?=[、与和及，,。！？!?；;：:]|$)', 'gu');
+        const localReference = '(?:(?:(?:本文|本论文|本研究|本工作|作者(?:团队)?)的?)?' + resource
+            + '|它们|它|其|该资源|这些资源|上述资源)';
+        const localReferences = localReference + '(?:[、或与和及]' + localReference + '){0,3}';
+        // These qualifiers must govern this exact predicate. In particular no
+        // arbitrary intervening prose/coordination can carry a denial forward.
+        const closedQualifier = new RegExp('^\\s*(?:'
+            + '(?:不能|不应(?:当)?|不可|不得|不要|不)(?:写|说|声称|表示|说明|证明|确认|认为|断言)(?:' + localReferences + ')?'
+            + '|(?:本次|当前|目前)?(?:没有|尚未|并未|未|还未|未能|无法)(?:发现|找到|看到|确认|核实|核验|验证|证明|表明|提供|给出)(?:' + localReferences + ')?'
+            + '|(?:' + localReferences + ')?(?:没有|尚未|并未|未)'
+            + '|(?:若|如果|假设|是否|能否)' + localReferences
+            + ')(?:当前|目前)?\\s*$', 'u');
+        const pendingSpans = [...value.matchAll(pendingCheck)].filter(span => {
+            if (!safeRecoverySpan(span)) return false;
+            const before = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            return /^(?:\s*(?:复现(?:时|前)?|因此|后续|下一步))?\s*$/u.test(before);
+        });
+        for (const span of pendingSpans) {
+            if (!contains(span)) continue;
+            // An independent affirmative may omit its resource noun. Keep the
+            // original predicate live rather than infer pronouns/ownership.
+            const claims = new RegExp(`${affirmative.source}|${release}`,
+                `${affirmative.flags.replace('g', '')}g`);
+            let claim, hasOutsideClaim = false;
+            while ((claim = claims.exec(value)) !== null) {
+                if (pendingSpans.some(other => claim.index >= other.index
+                    && claim.index + claim[0].length <= other.index + other[0].length)) continue;
+                const prefix = value.slice(0, claim.index).split(/[。！？!?；;，,：:]/u).at(-1);
+                if (closedQualifier.test(prefix)) continue;
+                hasOutsideClaim = true; break;
+            }
+            if (hasOutsideClaim) continue;
+            return true;
+        }
         // 发布限定也可能在资源名前面；否定只覆盖以「证据」闭合的命题，
         // 不把同句后续真正的开放声明藏在整段豁免里。
         for (const span of value.matchAll(new RegExp('(?:没有|尚无|并无|不存在)'
