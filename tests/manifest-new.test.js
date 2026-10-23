@@ -204,3 +204,78 @@ test('CLI拒绝缺值参数，不能把flag解释成文件路径', () => {
     for (const argv of [['--spec'], ['--spec', '--write'], ['--fact-feedback-file'], ['--fact-feedback-file', '--json']])
         assert.throws(() => manifest.main(argv), /需要|须|路径|参数/);
 });
+
+
+test('typed spec：binding 对象经正常 dry/write 原样保存，正文 JSON 字样不解码', async t => {
+    const f = await fixture(t, 1);
+    const binding = { tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: ['Official methods report mean squared error against the frozen teacher.'] };
+    f.draft.tableBindings = [{ ...binding, sourceQuotes: ['Original exact source quotation.'] }];
+    f.payload.rawDraft = JSON.stringify(f.draft);
+    repair.saveFailedCandidate(f.plan.readerAttemptsDir, f.identities[0], f.payload);
+    const body = '  {"literal":"保留正文的 JSON 字样与原始空白"}\n第二行原样。  ';
+    const spec = { paperId: f.papers[0].arxivId, replacements: [
+        { path: '/tableBindings/0', value: binding }, { path: '/sections/0/body', value: body }
+    ] };
+    manifest.validateSpec(spec);
+    fs.writeFileSync(f.specFile, JSON.stringify(spec));
+    const beforeFormal = fs.readFileSync(Config.FILES.deepAnalysisResult);
+    const beforeCandidate = fs.readFileSync(f.candidateFiles[0]);
+    const dry = JSON.parse(capturedMain(t, ['--spec', f.specFile, '--dry-run', '--json']).lines.join('\n'));
+    assert.strictEqual(dry.tailCheck, 'passed');
+    const written = JSON.parse(capturedMain(t, ['--spec', f.specFile, '--write', '--json']).lines.join('\n'));
+    const recordFile = JSON.parse(fs.readFileSync(written.manifestFile)).correctionFiles[0];
+    const record = JSON.parse(fs.readFileSync(recordFile));
+    assert.deepStrictEqual(record.draft.tableBindings[0], binding);
+    assert.strictEqual(record.draft.sections[0].body, body);
+    assert.strictEqual(record.patch.replacements[0].oldSha256, repair.hashDraft(f.draft.tableBindings[0]));
+    assert.deepStrictEqual(record.patch.replacements[0].value, binding);
+    assert.strictEqual(record.patch.replacements[1].value, body);
+    assert.strictEqual(record.patch.replacements[1].oldSha256, repair.hashDraft(f.draft.sections[0].body));
+    const expected = structuredClone(f.draft); expected.tableBindings[0] = binding; expected.sections[0].body = body;
+    assert.deepStrictEqual(record.draft, expected, 'all non-target nodes must retain their original values');
+    assert.deepStrictEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), beforeFormal);
+    assert.deepStrictEqual(fs.readFileSync(f.candidateFiles[0]), beforeCandidate);
+});
+
+test('typed spec：文本字段仍须非空字符串，单节点拒绝字符串编码、null、array 与标量', () => {
+    const validate = (pointer, value) => manifest.validateSpec({ paperId: '2610.12345',
+        replacements: [{ path: pointer, value }] });
+    for (const pointer of ['/sections/0/body', '/conceptBridges/0/explanation']) {
+        for (const value of ['', ' \n ', null, [], {}, 0, true, undefined])
+            assert.throws(() => validate(pointer, value), /value/);
+        assert.doesNotThrow(() => validate(pointer, ' {"literal":"not decoded"} '));
+    }
+    for (const collection of ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']) {
+        const pointer = `/${collection}/0`;
+        assert.doesNotThrow(() => validate(pointer, { existingNode: 'typed value' }));
+        for (const value of ['', 'text', '{"tableIndex":1}', null, [], [1], 0, true, undefined])
+            assert.throws(() => validate(pointer, value), /value/);
+    }
+});
+
+test('typed spec：保持原 1–8 节点、根与路径边界，实际补丁继续拒绝越界重叠和危险节点', () => {
+    const replacement = { path: '/tableBindings/0', value: { tableIndex: 1 } };
+    for (const count of [0, 9]) assert.throws(() => manifest.validateSpec({ paperId: '2610.12345',
+        replacements: Array.from({ length: count }, () => replacement) }), /1–8/);
+    for (const pointer of ['/readerTitle', '/oneSentenceThesis', '/sections', '/tableBindings',
+        '/conceptBridges', '/figurePlacements', '/formulaBindings', '/unrelated/0', '/sections/00/body',
+        '/sections/-1/body', '/sections/0/heading', '/tableBindings/0/sourceQuotes', '/__proto__/0']) {
+        assert.throws(() => manifest.validateSpec({ paperId: '2610.12345',
+            replacements: [{ path: pointer, value: {} }] }), /path/);
+    }
+    const draft = { sections: [{ body: 'old body' }], tableBindings: [{ tableIndex: 1 }] };
+    const preview = replacements => {
+        const spec = { paperId: '2610.12345', replacements };
+        manifest.validateSpec(spec);
+        return manifest.buildSpecPreview({ paper: { arxivId: spec.paperId }, draft, spec,
+            found: { absolutePath: '/unused-candidate.json', envelopeSha256: 'a'.repeat(64) }, sourceDescriptor: {} });
+    };
+    assert.throws(() => preview([{ path: '/tableBindings/1', value: { tableIndex: 2 } }]), /节点不存在/);
+    assert.throws(() => preview([replacement, replacement]), /duplicate|overlap/i);
+    assert.throws(() => preview([{ path: '/sections/0', value: { body: 'new body' } },
+        { path: '/sections/0/body', value: 'new body' }]), /duplicate|overlap/i);
+    assert.throws(() => preview([{ path: '/tableBindings/0', value: JSON.parse('{"constructor":{}}') }]), /unsafe key/);
+    assert.throws(() => preview([{ path: '/tableBindings/0/body', value: 'not a permitted text field' }]),
+        /not allowed|节点|data.*argument|undefined/i);
+});

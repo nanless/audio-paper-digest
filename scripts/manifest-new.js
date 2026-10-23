@@ -38,7 +38,11 @@ function validateSpec(spec) {
         if (!replacement || typeof replacement.path !== 'string' || !/^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/(?:body|explanation))?$/.test(replacement.path)) {
             throw new Error(`replacement.path 非法：${replacement && replacement.path}`);
         }
-        if (typeof replacement.value !== 'string' || !replacement.value.trim()) throw new Error('replacement.value 不能为空');
+        if (replacement.path.endsWith('/body') || replacement.path.endsWith('/explanation')) {
+            if (typeof replacement.value !== 'string' || !replacement.value.trim()) throw new Error('replacement.value 须为非空字符串');
+        } else if (!replacement.value || typeof replacement.value !== 'object' || Array.isArray(replacement.value)) {
+            throw new Error('replacement.value 须为单个节点对象');
+        }
     }
 }
 
