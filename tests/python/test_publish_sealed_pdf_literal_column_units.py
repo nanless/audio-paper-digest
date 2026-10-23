@@ -93,8 +93,13 @@ class PublisherRealLiteralPdfUnitsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.data = json.loads(gzip.decompress((ROOT / 'tests/fixtures/reader-daily-real-unit-tables-20261020.json.gz').read_bytes()))
+        stacked = json.loads(gzip.decompress((ROOT / 'tests/fixtures/reader-geometry-caption-units-20261023-real.json.gz').read_bytes()))
+        cls.data['papers'].append({**stacked, 'sectionIndex': 0, 'bindingIndex': 0,
+                                   'fullTablePdfQuotes': stacked['pdfSourceQuotes'],
+                                   'draft': {'sections': [{'body': stacked['tableMarkdown']}],
+                                             'tableBindings': [{'pdfSourceQuotes': stacked['pdfSourceQuotes']}]}})
 
-    def test_actual_publisher_helper_matches_strict_units_for_three_complete_real_pages(self):
+    def test_actual_publisher_helper_matches_strict_units_for_complete_real_pages(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(publisher, 'DAILY_FRESH_SOURCE_RUNS_DIR', Path(tmp)):
             for item in self.data['papers']:
                 with self.subTest(paper=item['arxivId']):
