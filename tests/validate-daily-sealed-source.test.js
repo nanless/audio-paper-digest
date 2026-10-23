@@ -104,9 +104,16 @@ test('四源任意文件丢失或SHA漂移均拒绝整批，不使用先读成�
 test('sealed来源数组缺顶层引用仍明确拒绝，不落回旧manual路径；无来源旧数组保留',async t=>{
     const f=await fixture(t),paper=f.papers[0];
     paper.analysisManifest.contracts={manualDepth:MANUAL_DEPTH_CONTRACT_VERSION_V4};
-    f.write([paper]);let result=validator.validatePaperListFile(f.file,{deepAnalysis:true});
+    const manualDateError='无法绑定全文：deep analysis 缺少合法 batchDate';
+    const legacy=structuredClone(paper);
+    delete legacy.freshRewriteProvenance;
+    delete legacy.analysisManifest.freshRewriteProvenance;
+    f.write([legacy]);let result=validator.validatePaperListFile(f.file,{deepAnalysis:true});
+    assert(result.some(issue=>issue.includes(manualDateError)),'Legacy manual-v4 array must actually enter its original source loader');
+    assert(!result.some(issue=>issue.includes('dailyFreshSourceRun')),'Legacy manual-v4 control declares no sealed daily source');
+    f.write([paper]);result=validator.validatePaperListFile(f.file,{deepAnalysis:true});
     assert(result.some(issue=>issue.includes('缺少 dailyFreshSourceRun')));
-    assert(!result.some(issue=>issue.includes('同批次受控全文目录')),'Declared daily source must never read a manual cache');
+    assert(!result.some(issue=>issue.includes(manualDateError)),'Declared daily source must never fall back to the manual-v4 loader');
     f.write([{arxivId:'2610.87654'}]);result=validator.validatePaperListFile(f.file,{deepAnalysis:true});
     assert(!result.some(issue=>issue.includes('dailyFreshSourceRun')),'Legacy array has no daily-source requirement');
 });
