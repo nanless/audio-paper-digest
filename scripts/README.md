@@ -296,6 +296,7 @@ npm run test:compat
 | `lib/reader-authenticated-pdf-table-evidence.js` | 共用会议及历史真实 PDF 的私有来源能力，为正常 `source_quotes` 表派生唯一原表引文与严格行列单位证明；解析、恢复及保存后冷核使用同一实现，不制造 DOM 或放宽旧完整稿出版准入。 |
 | `lib/reader-source-table-column-units.js` | 在已核验的封存来源作用域中，以原 DOM 表、行名及同列单元格核对百分比单位；合并表头另须完整跨度覆盖、唯一指标路径及明确原表注。不改数字、单位或来源，冷态恢复与发布端同步重放。 |
 | `lib/reader-sealed-pdf-quote-evidence.js` | Reader 封存 PDF 逐字引文证据的绑定与重放。 |
+| `lib/reader-sealed-figure-alias.js` | 公共图片绑定器的同步来源例外：仅同篇真实日更四文件与 direct 上下文中，允许未选中的不同 DOM 图号引用同一资产；全部原图像证据、像素身份和返回前来源 CAS 仍核验。普通 JSON、历史或会议的不同来源不能借用此日更能力，选中图片仍禁止 URL 或图号重复。 |
 | `lib/reader-sealed-pdf-table-evidence.js` | Reader 封存 PDF 原表结构与单元格证据的绑定与重放。 |
 | `lib/reader-source-blocked-normalization.js` | Node 库：对封存来源导致的完整表阻塞重跑唯一顺序调整，核对原稿与准备稿双 SHA，并保留真实绑定与承载正文的失败诊断；付费回放必须先逐字对应保存的原稿，不授予成功资格或新额度。 |
 | `lib/reader-source-diagnostics.js` | Node 库：把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
