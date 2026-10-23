@@ -5972,6 +5972,11 @@ function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, mater
 }
 
 function bindDirectApiReaderFiguresToEvidence(figures, imageEvidence) {
+    return require('./lib/reader-sealed-figure-alias').withSourceAliases(figures, imageEvidence,
+        aliasTicket => bindDirectApiReaderFiguresWithAliasTicket(figures, imageEvidence, aliasTicket));
+}
+
+function bindDirectApiReaderFiguresWithAliasTicket(figures, imageEvidence, aliasTicket) {
     const planned = Array.isArray(figures) ? figures : null;
     const evidence = Array.isArray(imageEvidence) ? imageEvidence : null;
     const reject = message => {
@@ -5983,7 +5988,7 @@ function bindDirectApiReaderFiguresToEvidence(figures, imageEvidence) {
     if (!planned || !evidence) reject('figures and imageEvidence must be arrays');
     const byKey = new Map();
     const evidenceOrdinals = new Set();
-    const evidenceUrls = new Set();
+    const evidenceUrls = new Map();
     for (const item of evidence.filter(value => value?.kind === 'figure')) {
         const ordinal = item?.ordinal;
         const url = String(item?.url || '');
@@ -5995,12 +6000,15 @@ function bindDirectApiReaderFiguresToEvidence(figures, imageEvidence) {
             || item.inputId !== `figure:${ordinal}:${sourceSha256}`) {
             reject(`ordinal ${String(ordinal)} has incomplete or drifted ready evidence`);
         }
-        if (byKey.has(key) || evidenceOrdinals.has(ordinal) || evidenceUrls.has(url)) {
+        if (byKey.has(key) || evidenceOrdinals.has(ordinal)) {
             reject(`ordinal ${ordinal} or URL is duplicated`);
+        }
+        if (evidenceUrls.has(url)) {
+            require('./lib/reader-sealed-figure-alias').assertUnselectedDuplicate(aliasTicket, planned, evidence, evidenceUrls.get(url), item);
         }
         byKey.set(key, item);
         evidenceOrdinals.add(ordinal);
-        evidenceUrls.add(url);
+        evidenceUrls.set(url, item);
     }
     const seen = new Set();
     const plannedOrdinals = new Set();
@@ -8692,6 +8700,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/active-time-budget.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-figure-alias.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/signed-reader-recovery-draft.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-paid-response-replay.js'), 'utf8'),
@@ -10426,11 +10435,19 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const localSourceInput = options.localSourceCorrectionInput;
     const localSource = localSourceInput && require('./lib/conference-source-resource-correction');
     if (localSourceInput) localSource.assertFinalizerInput(localSourceInput, paper);
+    const aliasEvidenceUrls = new Set();
+    const hasDailyUnselectedAlias = directContext.getDirectRewriteAnalysisContext()
+        && require('./lib/fresh-analysis-context').isDailyFreshSourceScope()
+        && Array.isArray(generated.imageEvidence)
+        && generated.imageEvidence.some(image => image?.kind === 'figure'
+            && (aliasEvidenceUrls.has(image.url) || (aliasEvidenceUrls.add(image.url), false)));
+    const aliasFigures = hasDailyUnselectedAlias
+        ? bindDirectApiReaderFiguresToEvidence(injectedReaderResult.figures, generated.imageEvidence) : null;
     const materializedFigures = localSourceInput
         ? localSource.readVerifiedSignedFigures(localSourceInput, injectedReaderResult.figures)
         : paidFigures ?? (options.reuseSignedFigures
             ? reuseSignedApiReaderFigureAssets(injectedReaderResult.figures, options.reuseSignedFigures, arxivId)
-            : await (directMaterializer || materializeApiReaderFigures)(
+            : aliasFigures ?? await (directMaterializer || materializeApiReaderFigures)(
                 injectedReaderResult.figures, arxivId
             ));
     const signedFigures = directContext.getDirectRewriteAnalysisContext()
