@@ -97,6 +97,27 @@ class DailyPublicationTableSourceTest(unittest.TestCase):
         historical['freshRewriteProvenance'] = {'contract': 'fresh-source-analysis-v1', 'runId': 'legacy-manual'}
         self.assertEqual(_publication_table_source_text(historical), 'original manual evidence')
 
+    def test_boolean_number_proof_mutations_are_rejected_but_same_js_number_is_valid(self):
+        with verified_input() as (_, data, payload):
+            owner = publisher.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+            with publisher._daily_publication_table_source_scope(owner) as capability:
+                original = payload['papers'][0]
+                for location in ('top', 'manifest'):
+                    for field, value in (('sourceOnly', 1), ('sourceGeneration', True),
+                                         ('oldGeneratedTextIncluded', 0)):
+                        clone = copy.deepcopy(original)
+                        proof = clone['freshRewriteProvenance'] if location == 'top' else clone['analysisManifest']['freshRewriteProvenance']
+                        proof[field] = value
+                        with self.subTest(location=location, field=field), self.assertRaises(PublishDataValidationError):
+                            _publication_table_source_text(clone, capability)
+                clone = copy.deepcopy(original)
+                clone['freshRewriteProvenance']['sourceGeneration'] = 1.0
+                self.assertTrue(_publication_table_source_text(clone, capability))
+                for non_json in (float('nan'), float('inf'), (), {1: 'not a string key'}):
+                    clone = copy.deepcopy(original); clone['freshRewriteProvenance']['extra'] = non_json
+                    with self.subTest(non_json=type(non_json).__name__), self.assertRaises(PublishDataValidationError):
+                        _publication_table_source_text(clone, capability)
+
     def test_protected_entire_paper_not_just_analysis_and_source(self):
         def prepare(payload):
             payload['papers'][0].update(title='Original title', authors=['Original Author'], analysis='Original analysis', core='original')
@@ -139,7 +160,8 @@ class DailyPublicationTableSourceTest(unittest.TestCase):
             with publisher._daily_publication_table_source_scope(owner) as capability:
                 self.assertTrue(_publication_table_source_text(derived, capability))
                 for mutate in (lambda p: p.update(title='forged'), lambda p: p.update(authors=['Other']),
-                               lambda p: p.update(core='forged'), lambda p: p['publishImageExclusionView'].update(sourceAnalysisSha256='0' * 64),
+                               lambda p: p.update(core='forged'), lambda p: p['publishImageExclusionView'].update(version=True),
+                               lambda p: p['publishImageExclusionView'].update(sourceAnalysisSha256='0' * 64),
                                lambda p: p['analysisManifest']['sourceAcquisition'].update(sourceSha256='0' * 64)):
                     forged = copy.deepcopy(derived); mutate(forged)
                     with self.assertRaises(PublishDataValidationError):

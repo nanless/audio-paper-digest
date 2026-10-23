@@ -1,0 +1,106 @@
+{
+  "contract": "reader-scientific-quantity-actual-table-fixture-v1",
+  "pureCoverageProjectionOnly": true,
+  "notSourceCapability": true,
+  "paperId": "2610.31415v1",
+  "sourceSha256": "33de2b570a4398d59839a3c08c34eb612df203d87e0defbf694936bcad9b945c",
+  "articleSha256": "e4721604d7ebdc8b7217bb8a381abbe6939898f1f0c8abd9ba5f93d41d911c2d",
+  "planSha256": "0fbcd700c2cbf14a0f8fd918339e9715cfa1348c227ede640607ef60cc90b02f",
+  "tableSha256": "df9e3224979af90d4b371d20d462cd6a4697c0b4821e78de72afe614375b68b0",
+  "table": {
+    "header": [
+      "Setting",
+      "XLS-R 300M",
+      "Nemotron 3.5 / Whisper-small / Audex-2B"
+    ],
+    "rows": [
+      [
+        "Architecture",
+        "Encoder–CTC",
+        "FastConformer–RNN-T / AED / Speech-LLM"
+      ],
+      [
+        "Trainable parameters",
+        "Full model",
+        "Full model"
+      ],
+      [
+        "Meta-iterations",
+        "500",
+        "500"
+      ],
+      [
+        "Inner steps ka",
+        "50",
+        "50"
+      ],
+      [
+        "Inner learning rate αa",
+        "3×10⁻⁴",
+        "2×10⁻⁵"
+      ],
+      [
+        "Outer step size βa",
+        "0.1",
+        "0.1"
+      ],
+      [
+        "Batch size",
+        "2",
+        "2"
+      ],
+      [
+        "Target fine-tuning epochs",
+        "50",
+        "50"
+      ],
+      [
+        "GPU",
+        "1× RTX 4090",
+        "RTX A4500"
+      ],
+      [
+        "Setting",
+        "model-specific, pair-specific Reptile",
+        "model-specific, pair-specific Reptile"
+      ],
+      [
+        "Pairs",
+        "ara-eng, fra-eng, deu-eng, hin-eng",
+        "ara-eng, fra-eng, deu-eng, hin-eng"
+      ],
+      [
+        "Source",
+        "corresponding CS-FLEURS subset",
+        "corresponding CS-FLEURS subset"
+      ],
+      [
+        "Target",
+        "1h per pair; MUCS and SwitchLingua",
+        "1h per pair; MUCS and SwitchLingua"
+      ]
+    ],
+    "start_line": 92,
+    "end_line": 106,
+    "data_rows": 13,
+    "separator_columns": 3,
+    "invalid_column_counts": [],
+    "identifier_columns": 1,
+    "metric_columns": 2,
+    "markdown": "| Setting | XLS-R 300M | Nemotron 3.5 / Whisper-small / Audex-2B |\n| --- | --- | --- |\n| Architecture | Encoder–CTC | FastConformer–RNN-T / AED / Speech-LLM |\n| Trainable parameters | Full model | Full model |\n| Meta-iterations | 500 | 500 |\n| Inner steps ka | 50 | 50 |\n| Inner learning rate αa | 3×10⁻⁴ | 2×10⁻⁵ |\n| Outer step size βa | 0.1 | 0.1 |\n| Batch size | 2 | 2 |\n| Target fine-tuning epochs | 50 | 50 |\n| GPU | 1× RTX 4090 | RTX A4500 |\n| Setting | model-specific, pair-specific Reptile | model-specific, pair-specific Reptile |\n| Pairs | ara-eng, fra-eng, deu-eng, hin-eng | ara-eng, fra-eng, deu-eng, hin-eng |\n| Source | corresponding CS-FLEURS subset | corresponding CS-FLEURS subset |\n| Target | 1h per pair; MUCS and SwitchLingua | 1h per pair; MUCS and SwitchLingua |"
+  },
+  "sourceQuotes": [
+    "Setting\nXLS-R 300M\nNemotron 3.5 /\nWhisper-small / Audex-2B\nArchitecture\nEncoder–CTC\nFastConformer–RNN-T /\nAED / Speech-LLM\nTrainable parameters\nFull model\nFull model\nMeta-iterations\n500\n500\nInner steps kak_{a}\n50\n50\nInner learning rate αa\\alpha_{a}\n3×10−43\\times 10^{-4}\n2×10−52\\times 10^{-5}\nOuter step size βa\\beta_{a}\n0.1\n0.1\nBatch size\n2\n2\nTarget fine-tuning epochs\n50\n50\nGPU\n1×1\\times RTX 4090\nRTX A4500",
+    "Setting: model-specific, pair-specific Reptile\nPairs: ara-eng, fra-eng, deu-eng, hin-eng\nSource: corresponding CS-FLEURS subset\nTarget: 1h per pair; MUCS and SwitchLingua",
+    "Table 1: Reptile configurations. The grouped column\nreports shared settings; architectures follow the\nmodel order."
+  ],
+  "sourceQuoteSha256": [
+    "b0842327bfcb1316f52e4496c16926cd08f411954c6f95961dd85067952291bf",
+    "abb4b759dec18c1d67c7ba20a13fc2574ad60f606b756c1067794abb8f7224d6",
+    "0e124c6bdeb5d08573af3a8f5765e40823bcff60c136038b333bd88524373ba8"
+  ],
+  "oldMissingTokens": [
+    "4",
+    "5"
+  ]
+}

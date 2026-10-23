@@ -1,0 +1,416 @@
+{
+  "contract": "source-evidence-js-whitespace-expected-v1",
+  "referenceCommit": "ce7d471d66798e2e956738824989dc69d7581406",
+  "sourceFixtureSha256": "7d825e191c4b6f14795dfeed15c554fd67ecfdc6f1aaed05d2e19b34d0be41f7",
+  "referenceReportSha256": "2d4b12be4b040e8a26af869c628cbeb8f2507ff324d57a0af6cf5ad035cc510f",
+  "probes": [
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-SPACE",
+      "codePoint": "U+0020",
+      "expected": []
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-SPACE",
+      "codePoint": "U+0020",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-SPACE",
+      "codePoint": "U+0020",
+      "expected": false
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-SPACE",
+      "codePoint": "U+0020",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-SPACE",
+      "codePoint": "U+0020",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-SPACE",
+      "codePoint": "U+0020",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-SPACE",
+      "codePoint": "U+0020",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-SPACE",
+      "codePoint": "U+0020",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-NBSP",
+      "codePoint": "U+00A0",
+      "expected": []
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-NBSP",
+      "codePoint": "U+00A0",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-NBSP",
+      "codePoint": "U+00A0",
+      "expected": false
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-NBSP",
+      "codePoint": "U+00A0",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-NBSP",
+      "codePoint": "U+00A0",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-NBSP",
+      "codePoint": "U+00A0",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-NBSP",
+      "codePoint": "U+00A0",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-NBSP",
+      "codePoint": "U+00A0",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": []
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": false
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-FEFF",
+      "codePoint": "U+FEFF",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-NEL",
+      "codePoint": "U+0085",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-NEL",
+      "codePoint": "U+0085",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-NEL",
+      "codePoint": "U+0085",
+      "expected": true
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-NEL",
+      "codePoint": "U+0085",
+      "expected": true
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-NEL",
+      "codePoint": "U+0085",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-NEL",
+      "codePoint": "U+0085",
+      "expected": false
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-NEL",
+      "codePoint": "U+0085",
+      "expected": []
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-NEL",
+      "codePoint": "U+0085",
+      "expected": false
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": []
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": false
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-LINE_SEPARATOR",
+      "codePoint": "U+2028",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": []
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": false
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-PARAGRAPH_SEPARATOR",
+      "codePoint": "U+2029",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": true
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": true
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": false
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": []
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-FILE_SEPARATOR",
+      "codePoint": "U+001C",
+      "expected": false
+    },
+    {
+      "kind": "hearing",
+      "name": "source-previous-work-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": []
+    },
+    {
+      "kind": "quality",
+      "name": "source-previous-work-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": false
+    },
+    {
+      "kind": "placement",
+      "name": "source-previous-work-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": false
+    },
+    {
+      "kind": "net",
+      "name": "source-previous-work-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": false
+    },
+    {
+      "kind": "identifier",
+      "name": "surround-exact-comparison-header-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": true
+    },
+    {
+      "kind": "placement",
+      "name": "single-codebook-scalar-gap-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": true
+    },
+    {
+      "kind": "hearing",
+      "name": "profile-label-gap-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": [
+        0,
+        1
+      ]
+    },
+    {
+      "kind": "net",
+      "name": "interval-normalization-gap-MEDIUM_MATHEMATICAL_SPACE",
+      "codePoint": "U+205F",
+      "expected": true
+    }
+  ]
+}
