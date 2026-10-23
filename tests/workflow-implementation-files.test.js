@@ -91,7 +91,8 @@ test('real conference dependency closure includes current daily Reader source gu
     const root = path.resolve(__dirname, '..');
     const files = collectWorkflowImplementationFiles({ root, entryFiles: ['scripts/analysis-engine.js', 'scripts/publish-to-blog.py'] });
     for (const file of ['scripts/lib/reader-sealed-pdf-column-units.js', 'scripts/reader_sealed_pdf_column_units.py',
-        'scripts/lib/reader-source-display.js', 'scripts/lib/reader-resource-input-admission.js',
+        'scripts/lib/reader-source-display.js', 'scripts/lib/reader-scientific-quote-coverage.js',
+        'scripts/lib/reader-resource-input-admission.js',
         'scripts/lib/prompt-evidence.js', 'scripts/prompt_evidence.py',
         'scripts/lib/git-prompt-evidence-index.json']) assert(files.includes(file), file);
 });
