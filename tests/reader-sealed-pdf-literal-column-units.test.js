@@ -2,8 +2,12 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), zlib = require('node:zlib'), crypto = require('node:crypto');
 const fixture = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'fixtures/reader-daily-real-unit-tables-20261020.json.gz'))));
+const stacked = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname, 'fixtures/reader-geometry-caption-units-20261023-real.json.gz'))));
+fixture.papers.push({ ...stacked, sectionIndex: 0, bindingIndex: 0,
+    fullTablePdfQuotes: stacked.pdfSourceQuotes,
+    draft: { sections: [{ body: stacked.tableMarkdown }], tableBindings: [{ pdfSourceQuotes: stacked.pdfSourceQuotes }] } });
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-test('真实CASE/SynerGest/MOMO完整PDF表页经正常封存scope热解析、保存稿冷核同一单位guard且拒绝伪能力', async t => {
+test('真实CASE/SynerGest/MOMO/Geometry完整PDF表经正常封存scope热解析、保存稿冷核同一单位guard且拒绝伪能力', async t => {
     require('../scripts/env-loader').requireExternalRuntime('real-sealed-pdf-literal-column-test');
     await require('../scripts/lib/analysis-stop-control').withModelRequestsForbidden(async () => {
         const Config = require('../scripts/config'), daily = require('../scripts/lib/daily-fresh-source-plan');
@@ -43,6 +47,12 @@ test('真实CASE/SynerGest/MOMO完整PDF表页经正常封存scope热解析、�
                     assert.equal(proof.implementationFiles.find(v => v.file === 'reader_sealed_pdf_literal_column_units.py').sha256,
                         sha(fs.readFileSync(path.join(__dirname, '../scripts/reader_sealed_pdf_literal_column_units.py'))));
                     assert.deepEqual(deep.readerTableHeaderUnitEvidenceFailures(table, evidence), []);
+                    if (item.arxivId === '2610.29778') {
+                        assert.deepEqual(proof.units.map(v => [v.column, v.unit]), [[1, 'db'], [5, 'db']]);
+                        const crossed = structuredClone(table);
+                        crossed.header[1] = 'Circular SI-SDR (dB)';
+                        assert(deep.readerTableHeaderUnitEvidenceFailures(crossed, evidence).length > 0);
+                    }
                     for (const mutate of [v => v.rows.pop(), v => v.rows.reverse(), v => v.header.push('Extra (s)'),
                         v => { v.rows[1][v.header.length - (item.arxivId === '2610.25342' ? 2 : 1)] = '99'; },
                         v => { if (item.arxivId === '2610.24031') v.rows[1][0] = 'Seamless Interaction';

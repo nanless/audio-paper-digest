@@ -181,6 +181,20 @@ def partition_label_cells(words, headers):
     return solutions[0]
 
 
+def caption_metric_unit(metric, unit, origin, caption_text):
+    """Bind a literal leaf metric to its own unambiguous caption declaration."""
+    matches = list(re.finditer(r'(?<![A-Za-z0-9_])' + re.escape(metric) + r'\s*\(\s*(' + UNIT + r')\s*\)', caption_text, re.I))
+    if matches:
+        need(len(matches) == 1, 'caption_metric_unit_ambiguous')
+        need(not re.search(r'\b(?:not|without|unlike|previous|incorrect|hypothetical)\b', caption_text, re.I), 'caption_unit_qualification_ambiguous')
+        if unit:
+            need(unit == matches[0][1].lower(), 'caption_leaf_unit_conflict')
+        else:
+            unit = matches[0][1].lower()
+            origin = {'kind': 'caption_metric', 'start': matches[0].start(), 'end': matches[0].end(), 'text': matches[0][0]}
+    return unit, origin
+
+
 def table_grid(page, caption, document, flat_condition_bands=False, merged_condition_column=False, complete_flat=False):
     cap = caption[:4]
     rules = []
@@ -330,15 +344,7 @@ def table_grid(page, caption, document, flat_condition_bands=False, merged_condi
         metric = surface(decl[1] if decl else value)
         unit = (decl[2] or decl[3]).lower() if decl else None
         origin = {'kind': 'leaf', 'words': cell} if decl else None
-        matches = list(re.finditer(r'(?<![A-Za-z0-9_])' + re.escape(metric) + r'\s*\(\s*(' + UNIT + r')\s*\)', caption_text, re.I))
-        if matches:
-            need(len(matches) == 1, 'caption_metric_unit_ambiguous')
-            need(not re.search(r'\b(?:not|without|unlike|previous|incorrect|hypothetical)\b', caption_text, re.I), 'caption_unit_qualification_ambiguous')
-            if unit:
-                need(unit == matches[0][1].lower(), 'caption_leaf_unit_conflict')
-            else:
-                unit = matches[0][1].lower()
-                origin = {'kind': 'caption_metric', 'start': matches[0].start(), 'end': matches[0].end(), 'text': matches[0][0]}
+        unit, origin = caption_metric_unit(metric, unit, origin, caption_text)
         groups = [p['text'] for level in levels for p in level if p['startColumn'] <= c < p['endColumn']]
         if caption_axis:
             need(unit is None, 'caption_axis_leaf_unit_conflict')

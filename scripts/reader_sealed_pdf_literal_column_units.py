@@ -9,7 +9,8 @@ import re
 from pathlib import Path
 import fitz
 from reader_sealed_pdf_quote_evidence import extract_pdf_quote_document, quote_evidence, need, sha, stable, normalize_quote
-from reader_authenticated_pdf_hierarchical_table import complete_glyphs, rows_of, TABLE_CAPTION, NEXT_CAPTION
+from reader_authenticated_pdf_hierarchical_table import (complete_glyphs, rows_of, TABLE_CAPTION, NEXT_CAPTION,
+                                                       raw_header_items, assign_level, caption_metric_unit)
 
 CONTRACT = 'reader-sealed-pdf-literal-column-units-v1'
 UNIT = re.compile(r'(.+?)\s*(?:\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)|\[\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\])\Z', re.I)
@@ -356,6 +357,108 @@ def grouped_source_grid(page, caption, document):
             'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()]}
 
 
+def caption_uncertainty_source_grid(page, caption, document):
+    """A complete ruled table with parent headers and vertically stacked mean/SD.
+
+    Rows come from explicit textual labels; disjoint physical columns come from
+    all original numeric extents. Neither is selected from rendered values.
+    Every original word and glyph stays owned; parentheses and precision stay literal.
+    """
+    cap = caption[:4]
+    rules = sorted(set((float(d['rect'].x0), float(d['rect'].y0), float(d['rect'].x1))
+                       for d in page.get_drawings() if d['rect'].height < .1 and d['rect'].width > 40), key=lambda r: r[1])
+    tops = [r for r in rules if 0 <= r[1] - cap[3] <= 40 and r[0] <= (cap[0] + cap[2]) / 2 <= r[2]]
+    need(tops, 'stacked_table_top_missing')
+    top = min(tops, key=lambda r: r[1])
+    following = [b[1] for b in page.get_text('blocks') if NEXT_CAPTION.match(b[4])
+                 and b[1] > cap[3] and max(b[0], top[0]) < min(b[2], top[2])]
+    limit = min(following or [page.rect.height])
+    full = sorted(r[1] for r in rules if abs(r[0] - top[0]) < .1 and abs(r[2] - top[2]) < .1 and top[1] <= r[1] < limit)
+    need(3 <= len(full) <= 16, 'stacked_complete_rules_missing')
+    separator, bottom = full[1], full[-1]
+    words = [list(w[:5]) for w in page.get_text('words', flags=fitz.TEXTFLAGS_TEXT)
+             if top[0] < cx(w) < top[2] and top[1] < cy(w) < bottom]
+    need(words and len(words) <= 8192, 'stacked_words_invalid')
+    body = [w for w in words if separator < cy(w) < bottom]
+    numeric_words = [w for w in body if SCALAR.fullmatch(w[4]) or re.fullmatch(r'\(?±?\d+(?:\.\d+)?\)?|\(±', w[4])]
+    extents = []
+    for lo, hi in sorted((w[0], w[2]) for w in numeric_words):
+        if extents and lo <= extents[-1][1]:
+            extents[-1][1] = max(hi, extents[-1][1])
+        else:
+            extents.append([lo, hi])
+    need(2 <= len(extents) <= 15, 'stacked_numeric_columns_invalid')
+    label_words = [w for w in body if w[2] < extents[0][0]]
+    labels = rows_of(label_words)
+    need(2 <= len(labels) <= 64, 'stacked_explicit_rows_missing')
+    need(all(re.match(r'^[A-Za-z]', literal(ws)) for _, ws in labels), 'stacked_row_not_textual')
+    edges = [top[0], (max(w[2] for w in label_words) + extents[0][0]) / 2,
+             *[(a[1] + b[0]) / 2 for a, b in zip(extents, extents[1:])], top[2]]
+    need(all(a < b for a, b in zip(edges, edges[1:])), 'stacked_columns_overlap')
+    header = [w for w in words if cy(w) < separator]
+    leaf_rows = [(y, [[w for w in ws if edges[c + 1] < cx(w) < edges[c + 2]] for c in range(len(extents))])
+                 for y, ws in rows_of([w for w in header if cx(w) > edges[1]])]
+    leaf_rows = [(y, cells) for y, cells in leaf_rows if all(cells)]
+    need(len(leaf_rows) == 1, 'stacked_leaf_headers_not_unique')
+    leaf_y, leaves = leaf_rows[0]
+    levels = [assign_level(items, leaves) for _, items in rows_of(raw_header_items(page, top[1], leaf_y, edges[1], top[2]))]
+    need(len(levels) == 1 and any(p['endColumn'] - p['startColumn'] > 1 for p in levels[0]), 'stacked_parent_headers_missing')
+    label_header = [w for w in header if cx(w) < edges[1]]
+    need(surface(literal(label_header)) in ('System', 'Method'), 'stacked_label_header_invalid')
+    headers, units, columns = [surface(literal(label_header))], {}, []
+    for c, cell in enumerate(leaves):
+        metric = surface(literal(cell))
+        need(not SCALAR.fullmatch(metric), 'stacked_numeric_leaf')
+        unit, origin = caption_metric_unit(metric, None, None, normalize_quote(caption[4]))
+        groups = [p['text'] for p in levels[0] if p['startColumn'] <= c < p['endColumn']]
+        need(len(groups) == 1, 'stacked_parent_scope_ambiguous')
+        headers.append(' '.join([*groups, metric]) + (f' ({"dB" if unit == "db" else unit})' if unit else ''))
+        columns.append({'column': c + 1, 'groups': groups, 'metric': metric, 'unit': unit, 'unitOrigin': origin})
+        if unit:
+            units[c + 1] = unit
+    need(units and len(set(headers)) == len(headers), 'stacked_caption_units_missing_or_ambiguous')
+    boundaries = [separator, *[(a[0] + b[0]) / 2 for a, b in zip(labels, labels[1:])], bottom]
+    rows, owned = [], len(header)
+    for r, (label_y, ws) in enumerate(labels):
+        row = [surface(literal(ws))]
+        owned += len(ws)
+        for c in range(len(extents)):
+            values = [w for w in body if edges[c + 1] < cx(w) < edges[c + 2] and boundaries[r] < cy(w) < boundaries[r + 1]]
+            lines = rows_of(values)
+            need(len(lines) == 2 and lines[0][0] < label_y < lines[1][0], 'stacked_mean_sd_not_paired')
+            mean, sd = literal(lines[0][1]), literal(lines[1][1])
+            need(SCALAR.fullmatch(mean) and re.fullmatch(r'\(±\d+(?:\.\d+)?\)', re.sub(r'\s+', '', sd)), 'stacked_cell_not_literal_mean_sd')
+            row.append(mean + ' ' + sd)
+            owned += len(values)
+        rows.append(row)
+    need(owned == len(words), 'stacked_unowned_words')
+    need(len(set(row[0] for row in rows)) == len(rows), 'stacked_row_labels_duplicate')
+    box = [top[0], top[1], top[2], bottom]
+    table_lines = [line_text(line) for line in pdf_lines(page)
+                   if top[0] - .1 <= line['bbox'][0] and line['bbox'][2] <= top[2] + .1
+                   and top[1] < (line['bbox'][1] + line['bbox'][3]) / 2 < bottom]
+    full_quote = quote_evidence(document, normalize_quote(caption[4] + ' ' + ' '.join(table_lines)))
+    return {'page': page.number + 1, 'bbox': box, 'headers': headers, 'rows': rows,
+            'identityColumns': [0], 'rowIdentities': [[row[0]] for row in rows], 'conditionBands': [],
+            'headerProfile': 'complete-caption-parent-leaf-stacked-uncertainty-v1', 'headerParents': levels,
+            'sourceColumns': columns, 'words': words, 'wordBoxCount': len(words),
+            'glyphs': complete_glyphs(page, words, box), 'rawWordsSha256': stable(words),
+            'fullTableQuoteEvidence': full_quote,
+            'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()]}
+
+
+def complete_quote_coverage(document, full, quotes):
+    cursor = full['rawStartCodePoint']
+    end = full['rawEndCodePoint']
+    for quote in sorted(quotes, key=lambda q: q['rawStartCodePoint']):
+        lo, hi = max(cursor, quote['rawStartCodePoint']), min(end, quote['rawEndCodePoint'])
+        if hi <= cursor:
+            continue
+        need(not document['rawFullText'][cursor:lo].strip(), 'literal_complete_table_quote_gap')
+        cursor = hi
+    need(not document['rawFullText'][cursor:end].strip(), 'literal_complete_table_not_bound')
+
+
 def prove_pdf_bytes(raw, view, quotes):
     need(isinstance(view, list) and 3 <= len(view) <= 65 and all(isinstance(row, list) and 2 <= len(row) <= 16
          and all(isinstance(v, str) and len(v) <= 4000 for v in row) for row in view), 'literal_view_invalid')
@@ -374,10 +477,16 @@ def prove_pdf_bytes(raw, view, quotes):
                     try:
                         grid = source_grid(page, caption, document)
                     except ValueError:
-                        grid = grouped_source_grid(page, caption, document)
+                        try:
+                            grid = grouped_source_grid(page, caption, document)
+                        except ValueError:
+                            grid = caption_uncertainty_source_grid(page, caption, document)
                     full = grid['fullTableQuoteEvidence']
-                    need(any(q['rawStartCodePoint'] <= full['rawStartCodePoint'] and full['rawEndCodePoint'] <= q['rawEndCodePoint']
-                             for q in quote_proofs), 'literal_complete_table_not_bound')
+                    if grid.get('headerProfile') == 'complete-caption-parent-leaf-stacked-uncertainty-v1':
+                        complete_quote_coverage(document, full, quote_proofs)
+                    else:
+                        need(any(q['rawStartCodePoint'] <= full['rawStartCodePoint'] and full['rawEndCodePoint'] <= q['rawEndCodePoint']
+                                 for q in quote_proofs), 'literal_complete_table_not_bound')
                     # Header + complete textual conditions identify the source
                     # first. No result value participates in this selection.
                     header_surface = header_path if grid.get('headerProfile') else surface
