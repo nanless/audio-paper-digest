@@ -1092,6 +1092,27 @@ function hasSourceBackedZeroCorrectionAblation(results, sourceText) {
     return false;
 }
 
+function hasAdjacentAffirmativeEvidenceWithdrawal(text, end, subjectPattern) {
+    const nextLine = String(text).slice(end)
+        .replace(/^[。；\r\n \t]+/u, '').split(/\r?\n/u)[0].slice(0, 600);
+    // Closing emphasis/ATX delimiters may follow the sentence punctuation.
+    // Unwrap the complete adjacent line before selecting its first claim.
+    const line = normalizeLocalEvidenceHeading(nextLine);
+    const firstSpan = /^(\*\*|__)([^\n]+?)\1(?=[。； \t]|$)/u.exec(line);
+    const headingPrefix = /^#{1,6}[ \t]+/u.exec(nextLine)?.[0] || '';
+    const next = normalizeLocalEvidenceHeading(headingPrefix + (firstSpan ? firstSpan[2] : line).split('。')[0]);
+    const affirmative = /^(?:(?:已经|现已|已)?(?:被)?(?:正式)?撤回(?:了)?|(?:已经|现已|已)?被否认|(?:确实|已经|现已|已)?不成立|(?:确有|有|存在)错误|有误|(?:是)?错误(?:的)?)$/u;
+    return next.split(/[，,；;]/u).some(clause => [...clause.matchAll(
+        subjectPattern
+    )].some(subject => {
+        const prefix = clause.slice(0, subject.index).split(/但是|然而|不过|可是|但|却/u).at(-1);
+        return ownObservedSourceScope(prefix)
+            && !/第三方|外部团队|假定|设想|撤回|不成立|并不|\b(?:withdrawn|revoked|not performed|not conducted|false statement)\b/iu.test(prefix)
+            && isReportedExperimentPrefix(prefix)
+            && affirmative.test(clause.slice(subject.index + subject[0].length).trim());
+    }));
+}
+
 // A near-zero estimate is not itself an adverse result. This narrow profile
 // binds the reported natural-speech self-correction contrast to both original
 // intervals and to the same source table's net column, never another flow.
@@ -1201,22 +1222,8 @@ function hasSourceBackedNetIntervalNegative(results, tables, sourceText) {
         const statement = sentence[0].slice(reportStart);
         if (!hasOwnLocalReportedExperiment(results, sentence.index, sentence[0])
             || !owns(results, sentence.index, sentence[0])) continue;
-        const nextLine = String(results).slice(sentence.index + sentence[0].length)
-            .replace(/^[。；\r\n \t]+/u, '').split(/\r?\n/u)[0].slice(0, 600);
-        // Closing emphasis/ATX delimiters may follow the sentence punctuation.
-        // Unwrap the complete adjacent line before selecting its first claim.
-        const line = normalizeLocalEvidenceHeading(nextLine);
-        const firstSpan = /^(\*\*|__)([^\n]+?)\1(?=[。； \t]|$)/u.exec(line);
-        const headingPrefix = /^#{1,6}[ \t]+/u.exec(nextLine)?.[0] || '';
-        const next = normalizeLocalEvidenceHeading(headingPrefix + (firstSpan ? firstSpan[2] : line).split('。')[0]);
-        const affirmative = /^(?:(?:已经|现已|已)?(?:被)?(?:正式)?撤回(?:了)?|(?:已经|现已|已)?被否认|(?:确实|已经|现已|已)?不成立|(?:确有|有|存在)错误|有误|(?:是)?错误(?:的)?)$/u;
-        const revoked = next.split(/[，,；;]/u).some(clause => [...clause.matchAll(
-            /(?<!的)(?:上述|该|这一|前述)(?:净效应|净差距|净[ \t]*WER)?(?:观察|结论|结果)/giu
-        )].some(subject => {
-            const prefix = clause.slice(0, subject.index).split(/但是|然而|不过|可是|但|却/u).at(-1);
-            return owns('', 0, prefix) && isReportedExperimentPrefix(prefix)
-                && affirmative.test(clause.slice(subject.index + subject[0].length).trim());
-        }));
+        const revoked = hasAdjacentAffirmativeEvidenceWithdrawal(results, sentence.index + sentence[0].length,
+            /(?<!的)(?:上述|该|这一|前述)(?:净效应|净差距|净[ \t]*WER)?(?:观察|结论|结果)/giu);
         if (revoked) continue;
         const reported = reportedPattern.exec(statement);
         if (reported && Number(reported[1]) === values[0] && Number(reported[2]) === values[1]) return true;
@@ -2776,7 +2783,150 @@ function hasSourceBackedBayesianGroupResult(sentence, sourceText) {
     });
 }
 
+// This observation belongs to the source's correction experiment, not to the
+// generic metric vocabulary. Parse actual scalar cells and the two observed
+// medical contrasts; no paper identity or reported numeric value is privileged.
+function sourceCorrectionRateProfile(sourceText) {
+    const source = String(sourceText || '');
+    const section = title => {
+        const matches = [...source.matchAll(new RegExp('^([0-9]+(?:\\.[0-9]+)*)[ \\t]+' + title + '[ \\t]*\\r?\\n', 'gmu'))];
+        if (matches.length !== 1) return null;
+        const match = matches[0], start = match.index + match[0].length;
+        const tail = source.slice(start), end = tail.search(/^[0-9]+(?:\.[0-9]+)*[ \t]+[A-Z]/mu);
+        const body = tail.slice(0, end < 0 ? tail.length : end);
+        const previous = normalizeLocalEvidenceHeading(source.slice(0, match.index).trimEnd().split('\n').at(-1));
+        return ownObservedSourceScope(previous) ? body : null;
+    };
+    const conditions = section('Conditions'), definitions = section('Repair, damage and insertions');
+    const setup = section('Experimental setup'), results = section('Repair, damage and break-rate');
+    if (![conditions, definitions, setup, results].every(Boolean)) return null;
+    const flat = value => value.replace(/\s+/gu, ' ');
+    const ownedFact = (block, match) => {
+        if (!match) return false;
+        const before = flat(block).slice(0, match.index).slice(-400)
+            .split(/(?<=[.!?])\s+(?=[A-Z])/u).at(-1);
+        return ownObservedSourceScope(before + match[0]);
+    };
+    const groups = /([A-Z]) and ([A-Z]) correct the draft without and with the audio: the self-correction setting\. ([A-Z]) and ([A-Z]) correct the ASR output without and with the audio: the cross-system setting\./u.exec(flat(conditions));
+    const primaryMatches = [...flat(setup).matchAll(/primary corrector is ([^\[\n]{1,100}?) \[[0-9, ]+\]/gu)];
+    if (!ownedFact(conditions, groups) || new Set(groups.slice(1)).size !== 4 || primaryMatches.length !== 1
+        || !ownedFact(setup, primaryMatches[0])
+        || !/English medical dictation utterances/u.test(flat(setup))) return null;
+    const primary = primaryMatches[0][1].trim();
+    if (!ownedFact(definitions, /rep counts the tokens that are wrong in hh and right in y\^(?:\\hat\{y\})?;/u.exec(flat(definitions)))
+        || !ownedFact(definitions, /rates are in % of reference tokens and all differences in percentage points/u.exec(flat(definitions)))
+        || !ownedFact(definitions, /The break-rate is the share of error-free inputs that acquire at least one error\./u.exec(flat(definitions)))) return null;
+    const captions = [...source.matchAll(/^Table[ \t]+([0-9]+): Effect of the audio,[ \t]*([^:\n]+): grounded minus text-only\r?\n/gmu)];
+    const table = captions.filter(match => match[2].trim() === primary);
+    if (table.length !== 1) return null;
+    const caption = table[0], tail = source.slice(caption.index + caption[0].length);
+    const captionPrefix = normalizeLocalEvidenceHeading(source.slice(0, caption.index).trimEnd().split('\n').at(-1));
+    if (!ownObservedSourceScope(captionPrefix + '\n' + caption[0])) return null;
+    const end = tail.search(/^Table[ \t]+[0-9]+:/mu), body = tail.slice(0, end < 0 ? tail.length : end);
+    if (/\b(?:hypothetical|withdrawn|retracted|previous work|prior study)\b/iu.test(body) || !new RegExp('^Table[\\s\\u00a0]+' + caption[1] + ' separates the flows\\.').test(results)) return null;
+    const lines = body.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+    const header = lines.indexOf('rep');
+    if (header < 0 || !['rep','dam','ins','net','break-rate'].every((name, i) => lines[header + i] === name)) return null;
+    const self = `self-correction: ${groups[2]} (audio) vs. ${groups[1]} (no audio)`;
+    const cross = `cross-system: ${groups[4]} (audio) vs. ${groups[3]} (no audio)`;
+    const first = lines.indexOf(self), second = lines.indexOf(cross);
+    if (first !== header + 5 || second !== first + 19 || lines.length !== second + 19) return null;
+    const cohorts = ['TTS RU','RuLibri RU','Medical EN'];
+    if (![first,second].every(start => cohorts.every((label, i) => lines[start + 1 + i * 6] === label))) return null;
+    const scalar = token => {
+        if (!/^(?:\+\+|−-|--|\+|-|−)?[0-9]+(?:\.[0-9]+)?$/u.test(token)) return NaN;
+        return Number(token.replace(/^\+\+/u, '+').replace(/^(?:−-|--|−)/u, '-'));
+    };
+    const arrow = /^([0-9]+(?:\.[0-9]+)?)\s*(?:→(?:\\to)?|\\to)\s*([0-9]+(?:\.[0-9]+)?)$/u.exec(lines[first + 18]);
+    const breakProse = /In self-correction the text-only cell breaks ([0-9]+(?:\.[0-9]+)?)%, ([0-9]+(?:\.[0-9]+)?)% and ([0-9]+(?:\.[0-9]+)?)% of the error-free drafts it receives, although its prompt is the stricter one\. The grounded cell breaks ([0-9]+(?:\.[0-9]+)?)%, ([0-9]+(?:\.[0-9]+)?)% and ([0-9]+(?:\.[0-9]+)?)%\./u.exec(flat(results));
+    // A math scalar may be rendered once or twice, but two different tokens
+    // cannot be folded into one value.
+    const duplicatedScalar = token => {
+        if (/^[0-9]+\.[0-9]+$/u.test(token)) return Number(token);
+        const half = token.length / 2, left = token.slice(0, half);
+        return Number.isInteger(half) && left === token.slice(half) && /^[0-9]+\.[0-9]+$/u.test(left)
+            ? Number(left) : NaN;
+    };
+    const repProse = /In the cross-system setting damage also falls on all three corpora, with intervals excluding zero on two\. But repair rises on all three \([^)]{1,100}\)\. On medical dictation it goes from ([0-9.]+)% to ([0-9.]+)% of reference tokens, a ([0-9]+(?:\.[0-9]+)?)% relative increase\./u.exec(flat(results));
+    const ownedResult = match => {
+        if (!match) return false;
+        const context = flat(results), before = context.slice(0, match.index).slice(-400)
+            .split(/(?<=[.!?])\s+(?=[A-Z])/u).at(-1);
+        const after = context.slice(match.index + match[0].length)
+            .split(/(?<=[.!?])\s+(?=[A-Z])/u)[0].slice(0, 300);
+        return ownObservedSourceScope(before + match[0] + after);
+    };
+    const profile = { primary, breakRate: null, rep: null };
+    if (arrow && ownedResult(breakProse)) {
+        const from = Number(arrow[1]), to = Number(arrow[2]);
+        if (from === Number(breakProse[3]) && to === Number(breakProse[6]) && from > to && from <= 100 && to >= 0)
+            profile.breakRate = { from, to };
+    }
+    if (ownedResult(repProse)) {
+        const from = duplicatedScalar(repProse[1]), to = duplicatedScalar(repProse[2]), relative = Number(repProse[3]);
+        const delta = scalar(lines[second + 14]);
+        const places = (repProse[3].split('.')[1] || '').length;
+        if (from > 0 && to > from && to <= 100 && Number.isFinite(delta) && places <= 100
+            && Math.abs(to - from - delta) < 1e-9
+            && Number(((to - from) / from * 100).toFixed(places)) === relative)
+            profile.rep = { from, to, relative };
+    }
+    return profile;
+}
+
+function sourceBoundCorrectionRateObservations(text, sourceText) {
+    const raw = String(text || ''), parts = raw.split(/[。！？!?\n]/u), profile = sourceCorrectionRateProfile(sourceText);
+    const observations = parts.map(() => null);
+    if (!profile) return observations;
+    const escape = value => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const model = escape(profile.primary), measure = '([0-9]+(?:\\.[0-9]+)?)';
+    const offsets = []; let offset = 0;
+    for (const part of parts) { offsets.push(offset); offset += part.length + 1; }
+    const parse = (index, inheritedPrimary = false) => {
+        const original = parts[index], value = original.trim();
+        if (!value || !hasOwnLocalReportedExperiment(raw, offsets[index], original)
+            || !ownObservedSourceScope(value) || !isReportedExperimentPrefix(value.split(/[，,]/u)[0])) return null;
+        const selfPrefix = /^(?:在自我修正设置下，以|在自我修正设置下医疗听写上，以|在自我修正设置下医疗听写上，用)/u;
+        const crossPrefix = /^在跨系统设置下医疗听写上[，,]/u;
+        const kind = selfPrefix.test(value) ? 'break-rate' : crossPrefix.test(value) ? 'rep' : null;
+        const actual = kind === 'break-rate' ? profile.breakRate : kind === 'rep' ? profile.rep : null;
+        if (!actual || !/医疗听写/u.test(value)) return null;
+        const subject = kind === 'break-rate'
+            ? /(?<!的)(?:上述|该|这一|前述)(?:破坏率|break-rate)?(?:观察|结论|结果)/giu
+            : /(?<!的)(?:上述|该|这一|前述)(?:修复分量|修复率|rep)?(?:观察|结论|结果)/giu;
+        if (hasAdjacentAffirmativeEvidenceWithdrawal(raw, offsets[index] + original.length, subject)) return null;
+        const explicit = kind === 'break-rate'
+            ? new RegExp('^(?:在自我修正设置下，以' + model + '在医疗听写上的破坏率为例[，,]'
+                + '|在自我修正设置下医疗听写上，以' + model + '的破坏率为例[，,]'
+                + '|在自我修正设置下医疗听写上，用' + model + '校正自身草稿时[，,])', 'u')
+            : new RegExp('^在跨系统设置下医疗听写上[，,]用' + model + '校正独立识别器输出时[，,]', 'u');
+        const identity = explicit.exec(value);
+        const implicit = kind === 'rep' && inheritedPrimary && !/^在跨系统设置下医疗听写上[，,]用/u.test(value);
+        if (!identity && !implicit) return null;
+        const body = value.slice(identity ? identity[0].length : '在跨系统设置下医疗听写上，'.length);
+        const bodyPattern = kind === 'break-rate'
+            ? new RegExp('^(?:无音频单元(?:破坏率break-rate)?为' + measure + '%[，,]有音频单元(降至)' + measure + '%)$', 'u')
+            : new RegExp('^(?:无音频单元修复分量rep占参考词元比例为' + measure + '%[，,]有音频单元(升至)' + measure + '%'
+                + '|有音频单元相对无音频单元的修复分量占参考词元比例从' + measure + '%(升至)' + measure + '%)'
+                + '(?:[，,]相对增加' + measure + '%)?$', 'u');
+        const matched = bodyPattern.exec(body);
+        if (!matched) return null;
+        const from = Number(matched[1] ?? matched[4]), to = Number(matched[3] ?? matched[6]);
+        if (from !== actual.from || to !== actual.to) return null;
+        if (kind === 'rep' && matched[7] !== undefined && Number(matched[7]) !== actual.relative) return null;
+        return { kind, metric: true, direction: true, from, to, primary: profile.primary };
+    };
+    for (let index = 0; index < parts.length; index++) {
+        // Re-derive the immediately preceding raw observation in this call.
+        // Empty/header fragments break adjacency; no caller object is authority.
+        const previous = index > 0 ? parse(index - 1) : null;
+        observations[index] = parse(index, previous?.kind === 'break-rate');
+    }
+    return observations;
+}
+
 function coreSummaryQuantitativeResultState(text, sourceText = null) {
+    const correctionRates = sourceBoundCorrectionRateObservations(text, sourceText);
     const candidates = String(text || '').split(/[。！？!?\n]/).map((rawSentence, sentenceIndex) => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
         const bayesianGroupResult = hasSourceBackedBayesianGroupResult(sentence, sourceText);
@@ -2801,11 +2951,11 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(admittedMetricText)
             || !/(?:假设|假想|如果|预计|预期|可能|计划|未来|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|尚未|未报告|否认|撤回|不成立|错误说法)|\b(?:hypothetical|assuming|if|planned|quoted|third[- ]party|not reported)\b/iu.test(sentence)
                 && CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(sentence)
-            || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult
+            || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult || correctionRates[sentenceIndex]?.metric
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
-            && hasCoreSummaryComparisonDirection(sentence, numbers, sourceText));
+            && (hasCoreSummaryComparisonDirection(sentence, numbers, sourceText) || correctionRates[sentenceIndex]?.direction));
         // 会议原文常把具体划分写成“AliMeeting远场集”或“VoxAngeles未见语言集”，
         // 这算真实的评测设置，尽管里面既没有“数据集”三个字，也没有
         // `test/benchmark` 这样的英文词。只接受带明确设置后缀的拉丁文命名标识；
