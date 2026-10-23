@@ -9185,7 +9185,7 @@ def _source_bound_figure_math_note(paragraph, figure):
     caption = figure.get('caption')
     if not isinstance(caption, str):
         return paragraph
-    atoms = re.findall(r'\\[A-Za-z]+(?:[_^]\{\\?\*+\}|[_^]\\?\*+)', caption)
+    atoms = re.findall(r'\\[A-Za-z]+(?:[_^]\{(?:\\!)?\\?\*+\}|[_^]\\?\*+)', caption)
     if not atoms:
         return paragraph
     normalized = unicodedata.normalize('NFKC', caption)
