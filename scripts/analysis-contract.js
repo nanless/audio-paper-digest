@@ -2834,11 +2834,14 @@ function hasExplicitArtifactHandoff(summary) {
     const typedDenied = /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|讨论|提及|第三方|他人|相关工作|相关研究|先前工作|先前研究|既有研究|旧工作|引用|引述|转述|并非|并未|不是|没有|不能|尚未|未曾|独立方法|无关|丢弃|弃用|忽略)|\b(?:if|suppose|assuming|hypothetical|not\s+(?:implemented|executed|performed)|(?:future|planned)\s+(?:work|implementation))\b|\b(?:previous|prior|related|other)\s+(?:work|stud(?:y|ies)|research)\b|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:输出|生成|得到|形成|切分|转写|送入|接收|融合|映射|更新|移动|微调|执行|实现)/iu;
     const revoked = /^(?:上述|以上|前述|该|此|这些)(?:方法|处理)?(?:链|流程|过程|交接)[^。]{0,60}(?:并未|没有|未曾|不成立|错误|撤回|未执行|不执行)/u;
     const prefacedForeign = /(?:第三方|他人|相关工作|先前工作|先前研究|既有研究|旧工作|\b(?:previous|prior|related)\s+(?:work|research)\b)[^。]{0,60}(?:如下|所示|描述|流程|方法)[：:]?$/iu;
+    const precedingOwnerTitle = /^(?:(?:第三方|他人|先前|此前|既有|旧|相关|基线|对照)(?:研究|工作|方法|系统|模型)|(?:previous|prior|related|third[- ]party|baseline|control)\s+(?:work|research|method|system|model)(?:\s+describes?\s+the\s+following\s+(?:method|process))?)\s*[：:]$/iu;
     const typedSafe = (index, count = 1) => {
+        const previousTitle = normalizeLocalEvidenceHeading(sentences[index - 1] || '');
         const parts = sentences.slice(index, index + count);
         const foreignOwner = /^(?:(?:基线|对照)(?:方法|系统|模型|研究)(?:流程)?|(?:baseline|control)\s+(?:method|system|model))[：:]/iu;
         return parts.length === count && parts.every(part => part.length <= 320 && !typedDenied.test(part) && !foreignOwner.test(part))
             && !prefacedForeign.test(sentences[index - 1] || '')
+            && !precedingOwnerTitle.test(previousTitle)
             && !revoked.test(sentences[index + count] || '');
     };
     for (let index = 0; index < sentences.length; index++) {
