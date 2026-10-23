@@ -1,0 +1,11 @@
+{
+  "purpose": "offline historical cold-qualification fixture only; not production adoption or a paid response",
+  "arxivId": "2610.30385",
+  "sourcePdfSha256": "13110c6983548d0c9882fe4e865e28b0002fc94042a62c6de4602f6e51b8932b",
+  "sourcePdfBytes": 201122,
+  "sourceTextFixture": "structure-checkpoint-20261023-real.json.gz",
+  "sourceTextSha256": "72b3da3c439d8a39210d6388180a1b856e2cc025b6fe6730367647defb3dd61f",
+  "originalRunId": "4e159659-166b-4599-8008-9906a73be2fd",
+  "originalGeneration": 1,
+  "runtimeMetadataAndManifest": "Regenerated in temporary test directory by real capture owner with offline callbacks; not copied original production files."
+}

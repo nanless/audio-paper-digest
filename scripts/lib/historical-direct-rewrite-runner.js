@@ -102,11 +102,12 @@ function readVerifiedHistoricalReaderPdfSource(handle) {
     const { scopeIdentity, ...publicValue } = value;
     return { ...publicValue, pdf: Buffer.from(value.pdf), sourceIdentity: clone(value.sourceIdentity) };
 }
-function withHistoricalReaderPdfSource(handle, callback) {
+function withHistoricalAnalysisSource(handle, analysis, callback) {
     const value = handle && historicalReaderPdfSources.get(handle);
     if (!value) fail('historical PDF source scope requires the real runner handle');
     value.assertUnchanged();
-    return directContext.withDirectRewriteAnalysisSource({ ...value.scopeIdentity, readerPdfSourceHandle: handle }, callback);
+    return directContext.withDirectRewriteAnalysisSource({ ...value.scopeIdentity,
+        ...(requiresHistoricalPdfScope(analysis) ? { readerPdfSourceHandle: handle } : {}) }, callback);
 }
 
 async function replayHistoricalReaderPdfSource(paper, sourceIdentity) {
@@ -1376,6 +1377,13 @@ function requiresHistoricalPdfScope(analysis) {
         || (analysis?.apiReaderResources?.resources || []).some(resource => resource?.authenticatedPdfFootnoteEvidence !== undefined);
 }
 
+function requiresHistoricalSourceScope(analysis) {
+    // This only selects the real owner source replay. It cannot replace the
+    // complete engine/Reader checks or accept caller-supplied source JSON.
+    return requiresHistoricalPdfScope(analysis)
+        || require('../analysis-contract').validateCoreSummarySemanticContract(analysis?.analysis) !== null;
+}
+
 function completedSourceReplayError(cause) {
     const error = new Error(`Completed historical source replay failed: ${safeErrorText(cause, 1200)}`, { cause });
     error.code = 'HISTORICAL_DIRECT_SOURCE_REPLAY_FAILED';
@@ -1444,7 +1452,7 @@ async function replayCompletedAnalysisForStaging({ plan, item, active, generatio
         }
     }
     let readerPdfSourceHandle = null;
-    if (requiresHistoricalPdfScope(analysis)) {
+    if (requiresHistoricalSourceScope(analysis)) {
         readerPdfSourceHandle = await replayCompletedSource(async () => {
             const source = item.route.kind === 'arxiv-fresh-fetch'
                 ? await freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
@@ -1499,8 +1507,8 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
 }
 
 function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails = null, readerPdfSourceHandle = null }) {
-    if (readerPdfSourceHandle && requiresHistoricalPdfScope(analysis)) {
-        return withHistoricalReaderPdfSource(readerPdfSourceHandle,
+    if (readerPdfSourceHandle && requiresHistoricalSourceScope(analysis)) {
+        return withHistoricalAnalysisSource(readerPdfSourceHandle, analysis,
             () => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails }));
     }
     if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)
@@ -1648,7 +1656,7 @@ function replayDirectPageStaging({ plan, item, active, stagingRoot, executionRoo
             }
             sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
         }
-        if (requiresHistoricalPdfScope(analysis)) {
+        if (requiresHistoricalSourceScope(analysis)) {
             if (!plan || plan.queue?.find(value => value.paperId === item.paperId)?.runId !== item.runId) fail('historical PDF staged replay lacks the real original plan');
             const replayed = replayHistoricalReaderPdfSourceForStaging({ plan, item, sourceDescriptor: active.source,
                 executionRoot, freshArxivSourceRoot });
