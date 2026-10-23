@@ -1,0 +1,17 @@
+{
+  "kern": {
+    "path": "posts/2026-10-23-a-learned-musical-time-coordinate-for-piano-audio-2610-29928.md",
+    "pageSha256": "9191162584033d2f087b4475e0b6b4df12037f688299ffdc3e05aea227c7f343",
+    "excerpt": "从钢琴录音恢复记谱符号的音频到记谱转录输入是含速度变化和演奏处理的音频，输出是用**kern衍生词表表示的音高、时值、拍号、调号和小节结构，难点是音符在小节中的节拍位置难以从绝对时间直接推断，而整曲转录还需在未知小节边界处切分拼接。系统先用冻结的hFT-Transformer提取每帧每音高特征，再经跨注意力压缩为每帧向量后分两路并行处理，一路由Conformer建模音乐内容，另一路由相位模型估计下拍相位，即每帧在一个记谱小节内的相对位置。音频侧和乐谱侧共用同一傅里叶特征映射把该相位变为向量，分别加入解码器交叉注意力键值和输入端，解码器据此自回归生成记谱词元。推理时由相位后验的过零点得到下拍边界并按多小节拼接整曲，与已有用外部节拍跟踪器提供节拍相位的爵士萨克斯转录方法不同，本文坐标与记谱联合训练且可反过来提供切分。在Syn整曲转录中，本文系统Fmeter为0.667、MV2H5为0.829，均高于用Beat This!切分的Piano-A2S对照的0.236和0.614，OMR-NED为61.8，低于对照的75.4，转录覆盖率100%高于对照的98%。结论适用于训练所覆盖的拍号和钢琴音色，在真实人演ASAP上的增益变小，原文未披露训练、推理或部署成本。\n\n推理时先用滑窗扫描整首录音得到平均后的相位 1 阶矩，找相位过零点得到下拍，再按五小节摘录固定拍号调号、逐窗解码并只保留可重建为 **kern 的完整小节前缀，最后拼接成整首。下图展示了上述编码器双分支与解码器融合的连接关系，阅读时重点看相位信息进入解码器的两条路径。\n\n数据采用 HumSyn、MuseSyn 与 ASAP。HumSyn 是来自 Humdrum 数据库的古典与拉格泰姆钢琴 **kern 乐谱，MuseSyn 是来自 MuseScore 的流行钢琴改编 MusicXML，两者合称 Syn，用于训练与验证；评测用 Syn 与 ASAP，ASAP 提供带下拍与拍标注的人类演奏录音。Syn 按 Zeng 等划分并排除与 ASAP 评测重叠及与其他被评系统训练验证重叠的作品，最终训练 546 首、验证 46 首、测试 45 首；ASAP 用 Liu 等发布的 102 段录音测试划分中排除前端训练用过的录音，保留 74 段录音共 39 首作品。\n\n其次，整首结果依赖特定的推理流程：1280 帧窗、640 帧步长、平均 1 阶矩找相位过零点、下拍最小间隔 400 ms、五小节摘录上用 1 阶马尔可夫模型经维特比固定拍号调号、每窗按前半窗内下拍决定解码小节数并只保留可重建为 **kern 的完整小节前缀。这些超参数与文法约束贪心策略是结果的一部分，换流程可能改变覆盖与分数。\n\n复现应从作者公开的代码仓库开始，本文脚注给出实现地址，且经核验该代码链接当前可用。第一步是按 hFT-Transformer 的预处理设置准备 16 kHz、256 梅尔带、每帧 16 ms 的频谱，并用冻结前端提取特征；同时准备 **kern 记号化流程，注意本文改变了序列化顺序，在记谱 onset 处输出音高、在 offset 处输出时长。"
+  },
+  "ci": {
+    "path": "posts/2026-10-23-decodability-is-not-controllability-local-and-2610-29345.md",
+    "pageSha256": "51be7c5648a404c6f6944f83a3e53ece79821553256273c867809343181f2cb5",
+    "excerpt": "| Comparison (first vs. second) | First-condition preference [95% CI] |\n| --- | --- |\n| L0 aligned vs. L0 orthogonal | 72.3% [67.2, 77.1]% *** |\n| L3 aligned vs. L3 orthogonal | 63.7% [58.4, 68.9]% *** |\n| L0 aligned vs. L7 aligned | 76.0% [71.1, 80.6]% *** |"
+  },
+  "caption": {
+    "path": "posts/2026-10-23-a-perch-out-of-water-few-shot-detection-of-brydes-2610-29572.md",
+    "pageSha256": "d17282baa5ec7720c38e2c08bce18481a907475ea71b8aaf4ad6b8441dd163e9",
+    "excerpt": "[![原论文 Fig. 3：Per-class ROCcurves for the casey2017 and kerguelen2015 subsets, comparing the best few-shot system…](https://arxiv.org/html/2610.29572v1/atbfl_roc_curves.svg)](https://arxiv.org/html/2610.29572v1/atbfl_roc_curves.svg)\n\n*论文图 3。原论文 Fig. 3:：“Per-class ROCcurves for the casey2017 and kerguelen2015 subsets, comparing the best few-shot system at k=$10 with the fully supervised WhaleVADmodel.”。*\n\n[![原论文 Fig. 5：Precision-recall curves for each Bryde’s whale call type at k=$10, comparing Perch(solid) and…](https://arxiv.org/html/2610.29572v1/false_bay_pr_curves.svg)](https://arxiv.org/html/2610.29572v1/false_bay_pr_curves.svg)\n\n*论文图 5。原论文 Fig. 5:：“Precision-recall curves for each Bryde’s whale call type at k=$10, comparing Perch(solid) and WhaleVAD(dashed).”。*"
+  }
+}

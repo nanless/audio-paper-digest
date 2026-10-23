@@ -7243,7 +7243,7 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus):
     cells.extend((row + 1, column, str(value)) for row, values in enumerate(rendered['rows'])
                  for column, value in enumerate(values))
     marker = re.compile(r'(?:×|\\times|\{\\times\})\s*10')
-    if not any(marker.search(value) for _, _, value in cells):
+    if not any(marker.search(unicodedata.normalize('NFKC', value)) for _, _, value in cells):
         return {'tokens': old_tokens, 'failures': [], 'proofs': []}
     # Preserve the existing whole-Markdown lexical meaning. Only equivalent
     # cell boundaries can be projected; cross-cell token changes fail closed.
@@ -7298,7 +7298,7 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus):
 
     failures, proofs, tokens = [], [], set()
     for row, column, value in cells:
-        if not marker.search(value):
+        if not marker.search(unicodedata.normalize('NFKC', value)):
             tokens.update(_api_reader_numeric_tokens(value))
             continue
         # Publication currently needs whole-cell quantities only. Requiring a
