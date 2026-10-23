@@ -58,6 +58,28 @@ def _declarations(element):
             if ':' in part for key, value in [part.split(':', 1)]}
 
 
+def _known_visible_controls(element):
+    # This is a proof precondition, not CSS evaluation. Unknown spellings must
+    # not make hidden text or its background evidence for a page replacement.
+    allowed = {'display': {'inline', 'block', 'inline-block'}, 'visibility': {'visible'},
+               'opacity': {'1', '1.0'}, 'fill-opacity': {'1', '1.0'}}
+    for key, values in allowed.items():
+        if key in element.attrib and element.get(key).strip().lower() not in values:
+            return False
+    style = element.get('style', '')
+    if any(token in style for token in ('/*', '*/', '\\')):
+        return False
+    # Inspect every declaration: a later inline value cannot erase an earlier
+    # hidden !important declaration through the ordinary last-value dictionary.
+    for part in style.split(';'):
+        if ':' in part:
+            key, value = part.split(':', 1)
+            key = key.strip().lower()
+            if key in allowed and value.strip().lower() not in allowed[key]:
+                return False
+    return True
+
+
 def _hex_color(value):
     value = value.strip().lower()
     if value in {'black', 'white'}:
@@ -156,9 +178,6 @@ def _white_on_dark_css_failure(root):
         while cursor is not None:
             ancestors.append(cursor)
             cursor = parents.get(cursor)
-        if any(_declarations(a).get('display', '').lower() == 'none'
-               or _declarations(a).get('visibility', '').lower() in {'hidden', 'collapse'} for a in ancestors):
-            continue
         foreign = next((a for a in ancestors if a.tag.split('}')[-1] == 'foreignObject'), None)
         wrapper = parents.get(foreign)
         if foreign is None or wrapper is None or wrapper.tag.split('}')[-1] != 'g' \
@@ -192,6 +211,8 @@ def _white_on_dark_css_failure(root):
         # Transparent, clipped, CSS-transformed, or otherwise hidden geometry
         # cannot prove an opaque shared badge. Leave these cases to old guards.
         controls = ancestors + [plane[index - 1], plane[index - 1][0]]
+        if not all(_known_visible_controls(a) for a in controls):
+            continue
         def controls_style(a):
             values = _declarations(a)
             # A sealed minipage can specify exactly the foreign object's own

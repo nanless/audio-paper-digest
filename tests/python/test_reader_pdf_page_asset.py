@@ -180,6 +180,101 @@ class PdfPageAssetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             dependency_failure(svg(body.replace('<g fill=', '<g style="dis\\70 lay:none" fill=', 1))['inlineSvg'].encode())
 
+    def test_hidden_presentation_display_never_proves_either_badge_failure(self):
+        default = dark_badge('#000', text_style='', wrapper='matrix(1.0 0.0 0.0 1.0 6 2)').replace('style="stroke:none" ', '')
+        for name, body in [('default-black', default), ('declared-white', dark_badge())]:
+            mutations = {
+                'foreignObject': body.replace('<foreignObject ', '<foreignObject display="none" ', 1),
+                'text-wrapper': body.replace('<g transform=', '<g display="none" transform=', 1),
+                'text-span': body.replace('<span><span ', '<span display="none"><span ', 1),
+                'higher-ancestor': '<g display="none">' + body + '</g>',
+                'background': body.replace('<g fill=', '<g display="none" fill=', 1),
+                'background-path': body.replace('<path ', '<path display="none" ', 1),
+            }
+            for location, changed in mutations.items():
+                with self.subTest(branch=name, location=location):
+                    self.assertIsNone(dependency_failure(svg(changed)['inlineSvg'].encode()))
+
+    def test_unknown_display_and_visibility_are_not_unreadable_text_proofs(self):
+        default = dark_badge('#000', text_style='', wrapper='matrix(1.0 0.0 0.0 1.0 6 2)').replace('style="stroke:none" ', '')
+        for name, body in [('default-black', default), ('declared-white', dark_badge())]:
+            for value in ['', 'inherit', 'var(--mode)', '/*hidden*/none', 'none!important',
+                          r'n\6f ne', 'inline /*note*/', 'block!important', 'inline block']:
+                for location, changed in [
+                    ('foreignObject', body.replace('<foreignObject ', f'<foreignObject display="{value}" ', 1)),
+                    ('background', body.replace('<g fill=', f'<g display="{value}" fill=', 1)),
+                    ('background-path', body.replace('<path ', f'<path display="{value}" ', 1)),
+                ]:
+                    with self.subTest(branch=name, location=location, display=value):
+                        self.assertIsNone(dependency_failure(svg(changed)['inlineSvg'].encode()))
+            for value in ['display:/*hidden*/none', 'dis/**/play:none',
+                          'display:none!important', 'display:none!important;display:inline',
+                          'display:inherit', 'visibility:hidden!important',
+                          'visibility:/*hidden*/hidden', 'visibility:inherit']:
+                for location, changed in [
+                    ('foreignObject', body.replace('<foreignObject ', f'<foreignObject style="{value}" ', 1)),
+                    ('background', body.replace('<g fill=', f'<g style="{value}" fill=', 1)),
+                    ('background-path', body.replace('style="stroke:none" ', '', 1).replace(
+                        '<path ', f'<path style="{value};stroke:none" ', 1)),
+                ]:
+                    with self.subTest(branch=name, location=location, style=value):
+                        self.assertIsNone(dependency_failure(svg(changed)['inlineSvg'].encode()))
+
+    def test_known_visible_display_preserves_both_normal_badge_proofs(self):
+        default = dark_badge('#000', text_style='', wrapper='matrix(1.0 0.0 0.0 1.0 6 2)').replace('style="stroke:none" ', '')
+        for body, reason in [(default, 'default_html_black_text_on_black_badge'),
+                             (dark_badge(), 'unmapped_latexml_white_text_on_dark_badge')]:
+            for value in ['inline', 'block', 'inline-block']:
+                changed = body.replace('<foreignObject ', f'<foreignObject display="{value}" ', 1)
+                changed = changed.replace('<g transform=', f'<g display="{value}" transform=', 1)
+                changed = changed.replace('<g fill=', f'<g display="{value}" fill=', 1)
+                with self.subTest(reason=reason, display=value):
+                    self.assertEqual(dependency_failure(svg(changed)['inlineSvg'].encode())['reason'], reason)
+            math = body.replace('X · Y', 'X · Y<math display="inline"><mi>x</mi></math>')
+            self.assertEqual(dependency_failure(svg(math)['inlineSvg'].encode())['reason'], reason)
+
+    def test_hidden_badge_does_not_suppress_another_visible_witness(self):
+        default = dark_badge('#000', text_style='', wrapper='matrix(1.0 0.0 0.0 1.0 6 2)').replace('style="stroke:none" ', '')
+        for body, reason in [(default, 'default_html_black_text_on_black_badge'),
+                             (dark_badge(), 'unmapped_latexml_white_text_on_dark_badge')]:
+            hidden = body.replace('<foreignObject ', '<foreignObject display="none" ', 1)
+            for combined in [hidden + body, body + hidden]:
+                with self.subTest(reason=reason, hidden_first=combined.startswith(hidden)):
+                    failure = dependency_failure(svg(combined)['inlineSvg'].encode())
+                    self.assertEqual(failure['reason'], reason)
+                    self.assertEqual(len(failure['witnesses']), 1)
+
+    def test_every_opacity_declaration_must_preserve_the_opaque_proof(self):
+        default = dark_badge('#000', text_style='', wrapper='matrix(1.0 0.0 0.0 1.0 6 2)').replace('style="stroke:none" ', '')
+        for name, body, reason in [
+            ('default-black', default, 'default_html_black_text_on_black_badge'),
+            ('declared-white', dark_badge(), 'unmapped_latexml_white_text_on_dark_badge'),
+        ]:
+            for key in ['opacity', 'fill-opacity']:
+                for value in ['1', '1.0']:
+                    attr = body.replace('<foreignObject ', f'<foreignObject {key}="{value}" ', 1)
+                    self.assertEqual(dependency_failure(svg(attr)['inlineSvg'].encode())['reason'], reason)
+                    styled = body.replace('<foreignObject ', f'<foreignObject style="{key}:{value}" ', 1)
+                    if name == 'declared-white':
+                        self.assertEqual(dependency_failure(svg(styled)['inlineSvg'].encode())['reason'], reason)
+                    else:
+                        # Default-black's existing safe CSS does not grant opacity styles.
+                        self.assertIsNone(dependency_failure(svg(styled)['inlineSvg'].encode()))
+                for value in ['0!important', 'var(--alpha)', 'inherit', '.5']:
+                    style = f'{key}:{value};{key}:1'
+                    mutations = {
+                        'foreignObject': body.replace('<foreignObject ', f'<foreignObject style="{style}" ', 1),
+                        'text-wrapper': body.replace('<g transform=', f'<g style="{style}" transform=', 1),
+                        'text-span': body.replace('<span><span ', f'<span style="{style}"><span ', 1),
+                        'higher-ancestor': f'<g style="{style}">' + body + '</g>',
+                        'background': body.replace('<g fill=', f'<g style="{style}" fill=', 1),
+                        'background-path': body.replace('style="stroke:none" ', '', 1).replace(
+                            '<path ', f'<path style="{style};stroke:none" ', 1),
+                    }
+                    for location, changed in mutations.items():
+                        with self.subTest(branch=name, property=key, value=value, location=location):
+                            self.assertIsNone(dependency_failure(svg(changed)['inlineSvg'].encode()))
+
     def test_full_caption_cdot_projection_keeps_original_proof_and_all_words(self):
         resource = svg(dark_badge())
         caption = r'Figure 9: Modalities T\,\cdot\,I\,\cdot\,A; text T.'
