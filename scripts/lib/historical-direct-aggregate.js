@@ -571,10 +571,11 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
     }
     const source = expectedSource(entry, item); const artifact = expectedArtifact(entry, item, source);
     const directory = inside(stagingRoot, entry.staging.directory, `${item.paperId} staging directory`);
-    const segment = item.route.kind === 'arxiv-fresh-fetch' ? source.sourceRunIdentitySha256 : 'conference-local';
-    const routeDirectory = path.join(stagingRoot, item.runId, segment);
-    const rendererDirectory = path.join(routeDirectory, `renderer-${currentRendererImplementationSha256}`);
-    if (directory !== routeDirectory && directory !== rendererDirectory) {
+    const { routeDirectory, rendererDirectory, analysisBoundDirectory } = directPages.stagingDirectories({
+        stagingRoot, item, sourceDescriptor: source,
+        rendererImplementationSha256: currentRendererImplementationSha256,
+        analysisRecordSha256: artifact.analysisRecordSha256 });
+    if (directory !== routeDirectory && directory !== rendererDirectory && directory !== analysisBoundDirectory) {
         fail(`${item.paperId} staging directory differs from direct route/renderer`);
     }
     const loaded = readJson(path.join(directory, 'staging-input.json'), `${item.paperId} staging input`);

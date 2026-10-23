@@ -48,6 +48,69 @@ function selectionFor(keys, apiKey) {
     return { apiKey, accountId: getAccountId(apiKey), ...getPoolIdentity(keys, ENDPOINT) };
 }
 
+function quotaTypeShapeVectors() {
+    const rows = [];
+    const fields = ['type', 'code', 'error.type', 'error.code', 'error.error.type', 'error.error.code'];
+    const values = ['GoUsageLimitError', ['GoUsageLimitError'], [['GoUsageLimitError']],
+        { type: 'GoUsageLimitError' }, true, false, 429, null, [], 'gousagelimiterror'];
+    for (const field of fields) for (const value of values) {
+        const body = {}, parts = field.split('.'); let target = body;
+        for (const part of parts.slice(0, -1)) target = target[part] = {};
+        target[parts.at(-1)] = value;
+        rows.push({ statusCode: 429, body, expected: value === 'GoUsageLimitError' ? 'GoUsageLimitError' : null });
+    }
+    for (const body of [{ error: [{ type: 'GoUsageLimitError' }] },
+        { error: { error: [{ code: 'GoUsageLimitError' }] } },
+        { type: 'rate_limit_error' }, { message: 'GoUsageLimitError' }]) {
+        rows.push({ statusCode: 429, body, expected: null });
+    }
+    rows.push({ statusCode: 500, body: { type: 'GoUsageLimitError' }, expected: null });
+    rows.push({ statusCode: 401, body: { message: 'Invalid API key' }, expected: null });
+    rows.push({ statusCode: 401, body: { error: { message: 'Insufficient balance' } }, expected: 'InsufficientBalanceError' });
+    return rows;
+}
+
+function quotaMetadataShapeVectors() {
+    const rows = [], wrong = [[], ['weekly'], 'weekly', true, false, 7, 0, null];
+    const row = (body, limitClass, blockedUntilMs, headers = {}) => rows.push({ statusCode: 429,
+        body, headers, expected: { type: 'GoUsageLimitError', limitClass, blockedUntilMs } });
+    for (const metadata of wrong) {
+        row({ type: 'GoUsageLimitError', metadata, error: { metadata: { limitName: 'weekly' } } }, 'weekly', 604801000);
+        row({ type: 'GoUsageLimitError', metadata, error: { metadata,
+            error: { metadata: { limitName: 'monthly' } } } }, 'monthly', 2678401000);
+        row({ type: 'GoUsageLimitError', metadata, error: { metadata } }, 'unknown', 1801000);
+    }
+    row({ type: 'GoUsageLimitError', metadata: {}, error: { metadata: { limitName: 'weekly' } } }, 'unknown', 1801000);
+    row({ type: 'GoUsageLimitError', metadata: { limitName: '5-hour rolling' },
+        error: { metadata: { limitName: 'weekly' } } }, 'rolling_5h', 18001000);
+    row({ type: 'GoUsageLimitError', metadata: [], error: { metadata: { limitName: 'weekly' } },
+        message: 'Resets in 2 minutes' }, 'weekly', 3601000, { 'retry-after': '3600' });
+    row({ type: 'GoUsageLimitError', metadata: 'bad', error: { metadata: { limitName: 'weekly' } } },
+        'weekly', 31968001000, { 'retry-after': '999999999999' });
+    rows.push({ statusCode: 429, body: { type: ['GoUsageLimitError'], metadata: { limitName: 'weekly' } },
+        headers: {}, expected: null });
+    return rows;
+}
+
+function pythonQuotaClassifications(rows) {
+    const script = [
+        'import json,sys',
+        `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
+        'from llm_account_pool import classify_opencode_go_quota_response',
+        'rows=json.load(sys.stdin)',
+        `values=[classify_opencode_go_quota_response(r['statusCode'],r.get('headers',{}),r['body'],endpoint=${JSON.stringify(ENDPOINT)},now_ms=1000) for r in rows]`,
+        "print(json.dumps([None if q is None else {'type':q['type'],'limitClass':q['limit_class'],'blockedUntilMs':q['blocked_until_ms']} for q in values]))"
+    ].join('\n');
+    const result = spawnSync(PYTHON_BIN, ['-c', script], { input: JSON.stringify(rows), encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+}
+
+function quotaClassification(row) {
+    const quota = classifyOpenCodeGoQuotaResponse(row, { endpoint: ENDPOINT, nowMs: 1000 });
+    return quota && { type: quota.type, limitClass: quota.limitClass, blockedUntilMs: quota.blockedUntilMs };
+}
+
 function readGroup(file, keys) {
     const identity = getPoolIdentity(keys, ENDPOINT);
     return readStateStrict(file).services[identity.serviceId].groups[identity.groupId];
@@ -614,6 +677,36 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
         assert.strictEqual(conflicting.limitClass, 'rolling_5h');
     });
 
+    it('JSON 类型向量只接受六条已登记路径的精确字符串，不强转数组或对象', () => {
+        for (const row of quotaTypeShapeVectors()) {
+            const quota = classifyOpenCodeGoQuotaResponse(row, { endpoint: ENDPOINT, nowMs: 1000 });
+            assert.strictEqual(quota?.type ?? null, row.expected, JSON.stringify(row));
+        }
+    });
+
+    it('JSON 类型向量与实际 Python classifier 保持相同分类', { skip: !HAS_PYTHON }, () => {
+        const rows = quotaTypeShapeVectors();
+        const python = pythonQuotaClassifications(rows);
+        rows.forEach((row, index) => {
+            assert.deepStrictEqual(quotaClassification(row), python[index], JSON.stringify(row));
+            assert.strictEqual(python[index]?.type ?? null, row.expected);
+        });
+    });
+
+    it('JSON metadata非对象不遮蔽后续合法对象，保留首对象和冷却上限', () => {
+        for (const row of quotaMetadataShapeVectors()) {
+            assert.deepStrictEqual(quotaClassification(row), row.expected, JSON.stringify(row));
+        }
+    });
+
+    it('JSON metadata回退及冷却向量与实际Python一致', { skip: !HAS_PYTHON }, () => {
+        const rows = quotaMetadataShapeVectors(), python = pythonQuotaClassifications(rows);
+        rows.forEach((row, index) => {
+            assert.deepStrictEqual(python[index], row.expected, JSON.stringify(row));
+            assert.deepStrictEqual(quotaClassification(row), python[index], JSON.stringify(row));
+        });
+    });
+
     it('用上每个有限的重置提示，取保守上限，并只截断一次', () => {
         const nowMs = 1000;
         const quota = classifyOpenCodeGoQuotaResponse({
@@ -915,6 +1008,22 @@ describe('OpenCode Go 账号池的等权轮转状态', () => {
 });
 
 describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
+    it('畸形数组类型的普通429不切号或写冷却', async () => {
+        const { file } = tempState();
+        let calls = 0;
+        const response = await requestLlmJson(`${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {}, {
+            apiKeys: ['synthetic-a', 'synthetic-b'], accountPoolStateFile: file, recordUsage: false,
+            transportRequestFn: async () => {
+                calls += 1;
+                return { statusCode: 429, body: { type: ['GoUsageLimitError'] } };
+            }
+        });
+        assert.strictEqual(response.statusCode, 429);
+        assert.strictEqual(calls, 1);
+        const service = readStateStrict(file).services[getPoolIdentity(['synthetic-a', 'synthetic-b'], ENDPOINT).serviceId];
+        assert.deepStrictEqual(service.accounts, {});
+    });
+
     it('四次余额失败后以带类型的运行错误停止，不保存计费 URL', async () => {
         const { file } = tempState();
         const keys = ['a', 'b', 'c', 'd'];

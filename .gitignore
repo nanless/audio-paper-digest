@@ -1,5 +1,7 @@
 # 项目依赖
 node_modules/
+# 隔离工作树可链接同机只读依赖，根目录链接也不提交
+/node_modules
 
 # 运行数据和日志，禁止提交
 data/
@@ -30,6 +32,7 @@ Thumbs.db
 
 # Python 环境和缓存
 .venv/
+/.venv
 __pycache__/
 *.pyc
 *.pyo

@@ -9,6 +9,7 @@
 | 你想了解什么 | 阅读位置 |
 |---|---|
 | 三条流程如何共用分析、Reader 和发布能力 | [三流程与共享核心](three-workflows.md) |
+| 当前流程逐步跟踪、已复现问题及改进顺序 | [三流程核读与改进计划](workflow-sharing-plan.md) |
 | Reader、SHA、CAS、检查点和凭证是什么 | [常见术语](writing-guide.md#术语先解释再统一称呼) |
 | 文档与论文讲解怎样写得清楚 | [写作约定](writing-guide.md) |
 

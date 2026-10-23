@@ -127,6 +127,59 @@ function resolvePrimaryApiKeyPool(primaryKey, fallbackValue, tertiaryFallbackVal
     ]);
 }
 
+function resolveSecondaryApiKeys(options = {}) {
+    const primaryEndpoint = String(options.primaryEndpoint || '');
+    const secondaryEndpoint = String(options.secondaryEndpoint || primaryEndpoint);
+    const primaryKey = String(options.primaryKey || '').trim();
+    const secondaryKey = String(options.secondaryKey || '').trim();
+    const secondaryModel = String(options.secondaryModel || '').trim();
+    const primaryApiKeys = Array.isArray(options.primaryApiKeys)
+        ? options.primaryApiKeys.map(value => String(value || '').trim()).filter(Boolean)
+        : [primaryKey].filter(Boolean);
+    const secondaryFallbackApiKeys = options.secondaryFallbackApiKeys || '';
+    if (!secondaryModel) return [secondaryKey || primaryKey].filter(Boolean);
+
+    const primaryService = normalizeOpenCodeGoService(primaryEndpoint);
+    const secondaryService = normalizeOpenCodeGoService(secondaryEndpoint);
+    const sameOpenCodeGoService = Boolean(
+        primaryService && secondaryService && primaryService === secondaryService
+    );
+    const canonicalRoute = endpoint => {
+        const goService = normalizeOpenCodeGoService(endpoint);
+        if (goService) return goService;
+        try {
+            const parsed = new URL(String(endpoint || ''));
+            const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+            return `${parsed.protocol}//${parsed.host}${pathname}`;
+        } catch (_) {
+            return String(endpoint || '').trim().replace(/\/+$/, '');
+        }
+    };
+
+    if (!secondaryKey && canonicalRoute(primaryEndpoint) !== canonicalRoute(secondaryEndpoint)) {
+        throw new LlmAccountPoolConfigError(
+            '副模型 endpoint 与主模型不属于同一 canonical 服务时，必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
+        );
+    }
+
+    if (secondaryFallbackApiKeys) {
+        if (!secondaryKey && !sameOpenCodeGoService) {
+            throw new LlmAccountPoolConfigError(
+                '副模型显式配置 fallback API keys 时，非同一 OpenCode Go 服务必须同时显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
+            );
+        }
+        return resolveApiKeyPool(secondaryKey || primaryKey, secondaryFallbackApiKeys);
+    }
+    if (secondaryKey) return [secondaryKey];
+
+    // 只有当两条路由指向同一个 OpenCode Go 服务时，副模型才可以继承主账号池。跨服务的
+    // 路由在上面已经被拒，除非它显式提供了副模型密钥。
+    if (sameOpenCodeGoService) {
+        return primaryApiKeys;
+    }
+    return [primaryKey].filter(Boolean);
+}
+
 function normalizeOpenCodeGoService(endpoint) {
     const rawEndpoint = String(endpoint || '');
     // WHATWG URL 解析会去掉字面写法和百分号编码的点段。先检查调用方传来的路径，
@@ -717,9 +770,10 @@ function classifyOpenCodeGoQuotaResponse(response, options = {}) {
     const types = [
         body?.type, body?.code, body?.error?.type, body?.error?.code,
         body?.error?.error?.type, body?.error?.error?.code
-    ].map(value => String(value || ''));
+    ].filter(value => typeof value === 'string');
     if (!types.includes('GoUsageLimitError')) return null;
-    const metadata = body?.metadata || body?.error?.metadata || body?.error?.error?.metadata || {};
+    const metadata = [body?.metadata, body?.error?.metadata, body?.error?.error?.metadata]
+        .find(value => value !== null && typeof value === 'object' && !Array.isArray(value)) || {};
     const limitName = sanitizeLimitName(metadata.limitName || body?.limitName || '');
     const limitClass = normalizeLimitClass(limitName);
     const message = String(body?.message || body?.error?.message || body?.error?.error?.message || '');
@@ -765,6 +819,7 @@ module.exports = {
     parseFallbackApiKeys,
     resolveApiKeyPool,
     resolvePrimaryApiKeyPool,
+    resolveSecondaryApiKeys,
     normalizeOpenCodeGoService,
     isOpenCodeGoEndpoint,
     getAccountId,

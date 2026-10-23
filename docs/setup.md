@@ -114,7 +114,7 @@ npm run validate:data -- --allow-empty
 | `PD_ANALYSIS_CONCURRENCY` | 3 篇论文 |
 | `PD_ANALYSIS_BATCH_MAX_ROUNDS` | 最多 3 轮，范围 1–10；每轮结束后只续可重试失败集合 |
 | `PD_ANALYSIS_MAX_RETRIES` | 旧兼容值 2，映射为总共3轮；新配置优先用上项 |
-| `PD_ANALYSIS_API_MAX_RETRIES` | 单阶段请求最多3次，独立于批次总轮数 |
+| `PD_ANALYSIS_API_MAX_RETRIES` | 主分析及普通辅助阶段请求默认最多3次；不覆盖筛选和 Reader 的独立计数 |
 | `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` | 人工建议最多5篇，范围0–5；0关闭建议 |
 | `PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS` | 每项至少失败3轮，范围3–10 |
 | `PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS` | 无语义进展观察3轮，范围3–10；更多总轮时可提前结束自动轮 |
@@ -155,7 +155,9 @@ npm run validate:data -- --allow-empty
 
 日更开始时的原文和 PDF 封存下载保留独立的八路上限。未显式指定下载并发时，使用整篇分析并发与 8 中较小的值；因此把模型分析设为 10 路不会阻止来源下载，也不会把模型分析自动降为 8 路。程序显式传入下载并发时仍须为 1–8 的整数。
 
-解读正文的局部修复通常最多输出 8000 tokens。如果一次局部修复恰好在该上限截断，且候选尚可获得一次额外恢复机会，程序会保存失败草稿并停止；下次显式续跑可提高修复上限，默认最多 16000 tokens。这次机会与实现升级提供的额外尝试共用，不能叠加。自定义预算下，上限按正文预算和基础修复预算计算，最高为 16000，且不超过 `PD_API_READER_MAX_TOKENS`；不能据此无限追加尝试。模型返回任何内容后即消耗这次机会，纯网络故障不消耗。截断的 JSON 仍不能作为有效候选，也不能绕过内容检查。
+Reader 的一次逻辑请求最多进行2次传输尝试；筛选默认最多5次尝试，分别由 Reader 固定实现及 `FILTER_CONFIG.maxRetries` 控制，不继承主分析的3次上限。传输尝试、收到的内容响应、完整长文次数与批次轮数各自记账，不能相互补额度。
+
+解读正文的局部修复默认最多输出 8000 tokens，实际可由 `PD_API_READER_REPAIR_MAX_TOKENS` 覆写。如果一次局部修复恰好在基础上限截断，程序保留失败稿；正常显式续跑还须通过原候选、原窗口和剩余请求额度检查，才可能提升局部输出上限。提升后的默认上限为 16000，按正文预算和基础修复预算计算，最高为 16000，且不超过 `PD_API_READER_MAX_TOKENS`。这项容量策略不安装新的实现升级许可，不增加内容响应、全文或批次额度，也不能叠加已消费的旧恢复机会。模型返回内容即正常记账，纯网络失败也保留传输记录。截断的 JSON 仍不能作为有效候选，也不能绕过内容检查；旧许可只按原证明和历史核验，见[Reader 恢复](reader-explicit-retry.md)。
 
 ## 可选副模型
 

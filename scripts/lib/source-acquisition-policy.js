@@ -34,10 +34,10 @@ function fetchFailureAdvice(error) {
         return ['arXiv 限流：等待 10–30 分钟或降低并发后重试；先运行 npm run source:probe -- --date <DATE> 确认三个入口。'];
     }
     if (/(?<![\d])5\d\d(?![\d])|HTTP\s*5\d{2}|status\s*5\d{2}|bad gateway|service unavailable/i.test(text)) {
-        return ['arXiv 服务暂时 5xx：先探测 Atom/OAI/RSS；若仅某入口失败可改用官方 OAI 恢复，仍失败则等待后重试。'];
+        return ['arXiv 服务暂时 5xx：先探测 Atom/OAI/RSS，等待服务恢复后重试。官方 OAI 恢复仅接受 Atom 日期查询及分类前缀查询均为 HTTP 429 的已核验失败链，或原 OAI 失败的受控延续；5xx 本身不满足触发条件。'];
     }
     if (/rss|pubdate|公告|stale/i.test(text)) {
-        return ['RSS 公告可能未生成：确认目标日期与当前公告日；必要时用 --official-oai-recovery 走官方 OAI，失败就等待。'];
+        return ['RSS 公告可能未生成：确认目标日期与当前公告日，探测后等待公告更新。官方 OAI 恢复须有 Atom 日期查询及分类前缀查询均为 HTTP 429 的已核验失败链，或原 OAI 失败的受控延续；过期 RSS 本身不满足触发条件。'];
     }
     return [];
 }

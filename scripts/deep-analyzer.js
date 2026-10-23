@@ -82,7 +82,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const pdfLayout = require('./lib/pdf-layout.js');
-const { isShortProceedingsConference, SHORT_PROCEEDINGS_OPTIONS } = require('./lib/conference-extraction-receipt.js');
+const { resolveAnalysisTextProfile } = require('./lib/analysis-text-profile.js');
 const dns = require('dns').promises;
 const net = require('net');
 const https = require('https');
@@ -91,6 +91,7 @@ const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = r
 const {
     resolveApiKeyPool,
     resolvePrimaryApiKeyPool,
+    resolveSecondaryApiKeys,
     normalizeOpenCodeGoService,
     LlmAccountPoolConfigError
 } = require('./llm-account-pool.js');
@@ -9854,7 +9855,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     }
     const arxivId = getPaperArxivId(paper);
     const sourceText = String(sourceDetails?.text || '');
-    if (sourceText.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
+    if (!resolveConferenceTextProfile(paper, sourceDetails, sourceText).hasFullText) {
         throw new Error('刷新读者文章需要可验证全文');
     }
     const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
@@ -10648,7 +10649,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
             || (requestedReviewFeedback && paper.analysisManifest?.stages?.apiReaderArticle?.reviewFeedbackSha256
                 === crypto.createHash('sha256').update(rawRequestedReviewFeedback).digest('hex')));
     const existingReaderResourceSha256 = paper.apiReaderResources?.identitySha256 || '';
-    if (!analysis || sourceText.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
+    if (!analysis || !resolveConferenceTextProfile(paper, sourceDetails, sourceText).hasFullText) {
         throw new Error('评分复验需要已完成 analysis 与可验证全文');
     }
     if (sourceSha256 !== paper.sourceSha256
@@ -12275,24 +12276,7 @@ function hasActualAnalysisInputChanged(previousSource, currentSource) {
 // 3000 字会议档位。通用的全文阈值不动，但只允许这些可复现的官方 PDF 包使用完整 PDF
 // 文本，而不是悄悄退回元数据摘要。
 function resolveConferenceTextProfile(paper, sourceDetails, fullText) {
-    const text = String(fullText || '');
-    if (text.length > FULL_TEXT_MIN_CHARS_FOR_FULL) {
-        return { hasFullText: true, analysisConfidence: 'full_text', shortProceedings: false };
-    }
-    const conferenceId = paper?.conference?.id;
-    const replayablePdf = sourceDetails?.source === 'conference_pdf_text'
-        && sourceDetails?.conferenceCapabilities?.fullText === 'full'
-        && sourceDetails?.conferenceCapabilities?.tables === 'available'
-        && sourceDetails?.conferenceCapabilities?.formulas === 'available'
-        && sourceDetails?.conferenceCapabilities?.figures === 'available'
-        && sourceDetails?.structuredArtifacts?.sourceKind === 'conference_pdf'
-        && sourceDetails?.structuredArtifacts?.health?.status === 'ready';
-    const minimum = Number(SHORT_PROCEEDINGS_OPTIONS.minimumTextCharacters);
-    if (replayablePdf && isShortProceedingsConference(conferenceId)
-        && Number.isSafeInteger(minimum) && text.length >= minimum) {
-        return { hasFullText: true, analysisConfidence: 'short_proceedings', shortProceedings: true };
-    }
-    return { hasFullText: false, analysisConfidence: 'degraded_abstract', shortProceedings: false };
+    return resolveAnalysisTextProfile(paper, sourceDetails, fullText, FULL_TEXT_MIN_CHARS_FOR_FULL);
 }
 
 function shouldRetainFullTextCheckpoint(paper, previousSource, hasFullText, sourceFetchError) {
@@ -13486,58 +13470,6 @@ const DEEP_CONFIG = {
     headers: {}
 };
 
-function resolveSecondaryApiKeys(options = {}) {
-    const primaryEndpoint = String(options.primaryEndpoint || '');
-    const secondaryEndpoint = String(options.secondaryEndpoint || primaryEndpoint);
-    const primaryKey = String(options.primaryKey || '').trim();
-    const secondaryKey = String(options.secondaryKey || '').trim();
-    const secondaryModel = String(options.secondaryModel || '').trim();
-    const primaryApiKeys = Array.isArray(options.primaryApiKeys)
-        ? options.primaryApiKeys.map(value => String(value || '').trim()).filter(Boolean)
-        : [primaryKey].filter(Boolean);
-    const secondaryFallbackApiKeys = options.secondaryFallbackApiKeys || '';
-    if (!secondaryModel) return [secondaryKey || primaryKey].filter(Boolean);
-
-    const primaryService = normalizeOpenCodeGoService(primaryEndpoint);
-    const secondaryService = normalizeOpenCodeGoService(secondaryEndpoint);
-    const sameOpenCodeGoService = Boolean(
-        primaryService && secondaryService && primaryService === secondaryService
-    );
-    const canonicalRoute = endpoint => {
-        const goService = normalizeOpenCodeGoService(endpoint);
-        if (goService) return goService;
-        try {
-            const parsed = new URL(String(endpoint || ''));
-            const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
-            return `${parsed.protocol}//${parsed.host}${pathname}`;
-        } catch (_) {
-            return String(endpoint || '').trim().replace(/\/+$/, '');
-        }
-    };
-
-    if (!secondaryKey && canonicalRoute(primaryEndpoint) !== canonicalRoute(secondaryEndpoint)) {
-        throw new LlmAccountPoolConfigError(
-            '副模型 endpoint 与主模型不属于同一 canonical 服务时，必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
-        );
-    }
-
-    if (secondaryFallbackApiKeys) {
-        if (!secondaryKey && !sameOpenCodeGoService) {
-            throw new LlmAccountPoolConfigError(
-                '副模型显式配置 fallback API keys 时，非同一 OpenCode Go 服务必须同时显式配置 PAPER_ANALYZER_SECONDARY_API_KEY'
-            );
-        }
-        return resolveApiKeyPool(secondaryKey || primaryKey, secondaryFallbackApiKeys);
-    }
-    if (secondaryKey) return [secondaryKey];
-
-    // 只有当两条路由指向同一个 OpenCode Go 服务时，副模型才可以继承主账号池。跨服务的
-    // 路由在上面已经被拒，除非它显式提供了副模型密钥。
-    if (sameOpenCodeGoService) {
-        return primaryApiKeys;
-    }
-    return [primaryKey].filter(Boolean);
-}
 
 // 副模型配置（多模态图像分析，双模型模式）
 // endpoint 未设置时回退主端点；key 只在同一 canonical 服务内复用

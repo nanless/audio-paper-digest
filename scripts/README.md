@@ -75,6 +75,7 @@ npm run test:compat
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
+| `lib/analysis-text-profile.js` | 主分析、Reader-only 与评分＋Reader 共用全文档位；已登记短篇须重放当前真实会议 PDF 能力，保留原公式、表格及普通来源阈值。 |
 | `lib/analysis-failure-rounds.js` | Node共享：固定首轮范围、全批轮次屏障、可重试失败集合、运行级停止及人工接手建议；不操作来源文件、正文、费用或发布资格。 |
 | `lib/analysis-batch-report.js` | Node共享：将 Reader 刷新固定范围、来源引用、轮次和人工建议保存为私有诊断；不签来源、成功正文或发布凭证，不授权新请求。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
@@ -421,7 +422,7 @@ npm run test:compat
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |
 | `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
 | `source-probe.js` | Node 入口：`npm run source:probe -- --date YYYY-MM-DD` 只读探测 arXiv Atom/官方 OAI/RSS 三入口并判断公告是否目标日；支持 `--json`，不抓取、不写 data/current。 |
-| `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 只读展示账号池状态、冷却、最早恢复与活动分组；账号只显示本次运行序号，不显示密钥或稳定指纹，支持 `--json`。 |
+| `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 区分当前主副配置及历史观察记录，仅报告已有冷却，不探测余额或清理状态；只显示本次运行序号，不显示密钥或稳定指纹，支持 `--json`。 |
 | `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥，支持 `--json`。 |
 | `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 只读汇总当前失败集，按错误码给出唯一建议入口与可复制命令；默认只打印计划，`--execute --yes` 才调用既有入口。 |
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 从 1–8 个节点替换生成 operator 修正记录与清单，自动计算 SHA/UUID；默认 dry-run，`--write` 才写 data/runtime。 |

@@ -12,6 +12,38 @@ const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const pageKey = value => `page:${sha(value)}`;
+
+test('暂存目录派生保留旧路线与渲染器路径，并精确绑定分析 SHA', () => {
+    const stagingRoot = path.join(fs.realpathSync(os.tmpdir()), 'strict-staging-names');
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const rendererImplementationSha256 = sha('renderer'); const analysisRecordSha256 = sha('analysis');
+    for (const kind of ['arxiv-fresh-fetch', 'conference-local-pdf']) {
+        const item = { runId, route: { kind } };
+        const sourceDescriptor = { kind, sourceRunIdentitySha256: sha('sealed source run') };
+        const result = api.stagingDirectories({ stagingRoot, item, sourceDescriptor,
+            rendererImplementationSha256, analysisRecordSha256 });
+        const segment = kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local';
+        assert.deepEqual(result, {
+            routeDirectory: path.join(stagingRoot, runId, segment),
+            rendererDirectory: path.join(stagingRoot, runId, segment, `renderer-${rendererImplementationSha256}`),
+            analysisBoundDirectory: path.join(stagingRoot, runId, segment,
+                `renderer-${rendererImplementationSha256}-analysis-${analysisRecordSha256}`)
+        });
+        for (const patch of [
+            { stagingRoot: 'relative' },
+            { item: { ...item, runId: '../another-run' } },
+            { item: { ...item, route: { kind: 'unknown' } } },
+            { sourceDescriptor: { ...sourceDescriptor, kind: 'unknown' } },
+            { rendererImplementationSha256: `${rendererImplementationSha256}-extra` },
+            { analysisRecordSha256: `${analysisRecordSha256}/extra` },
+            ...(kind === 'arxiv-fresh-fetch' ? [{ sourceDescriptor: { ...sourceDescriptor,
+                sourceRunIdentitySha256: '../source' } }] : [])
+        ]) assert.throws(() => api.stagingDirectories({ stagingRoot, item, sourceDescriptor,
+            rendererImplementationSha256, analysisRecordSha256, ...patch }),
+        error => error.code === 'HISTORICAL_DIRECT_PAGE_STAGING_INTEGRITY');
+    }
+});
+
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-page-staging-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

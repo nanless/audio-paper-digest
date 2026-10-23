@@ -13,6 +13,80 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 
 const EXECUTION = '77777777-7777-4777-8777-777777777777';
 
+test('CAS临时名独占创建失败不得清理另一操作原有临时文件', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-cas-owned-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const target = path.join(root, 'analysis.json');
+    fs.writeFileSync(target, '{"generation":0}\n', { mode: 0o600 });
+    const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+    adapter.replaceJson(target, { generation: 1 }, sha(fs.readFileSync(target)));
+    const original = fs.readFileSync(target);
+    const uuid = '12345678-1234-4234-8234-123456789abc';
+    const foreign = `${target}.${uuid}.tmp`;
+    const nested = path.join(root, `.${path.basename(foreign)}.${uuid}.tmp`);
+    const raw = Buffer.from('another operation retains this temporary file\n');
+    for (const filename of [foreign, nested]) fs.writeFileSync(filename, raw, { mode: 0o600 });
+    const identities = [foreign, nested].map(filename => fs.statSync(filename));
+    const randomUUID = crypto.randomUUID;
+    crypto.randomUUID = () => uuid;
+    try { assert.throws(() => adapter.replaceJson(target, { generation: 2 }, sha(original)), { code: 'EEXIST' }); }
+    finally { crypto.randomUUID = randomUUID; }
+    assert.deepEqual(fs.readFileSync(target), original);
+    for (const [index, filename] of [foreign, nested].entries()) {
+        assert.deepEqual(fs.readFileSync(filename), raw);
+        const current = fs.statSync(filename);
+        assert.equal(current.dev, identities[index].dev); assert.equal(current.ino, identities[index].ino);
+    }
+    adapter.replaceJson(target, { generation: 3 }, sha(original));
+    assert.equal(JSON.parse(fs.readFileSync(target)).generation, 3);
+});
+
+test('CAS替换保持完整短写与原字节核验，失败只清本次文件并保护退休后同名新对象', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-cas-lifecycle-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const target = path.join(root, 'analysis.json');
+    fs.writeFileSync(target, '{"generation":0}\n', { mode: 0o600 });
+    const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+    const original = fs.readFileSync(target), write = fs.writeSync;
+    let writes = 0;
+    const partial = t.mock.method(fs, 'writeSync', (fd, buffer, offset, length, position) => {
+        writes++; return write(fd, buffer, offset, Math.min(3, length), position);
+    });
+    adapter.replaceJson(target, { generation: 1 }, sha(original));
+    assert.ok(writes > 1); partial.mock.restore();
+    const saved = fs.readFileSync(target);
+    const failed = t.mock.method(fs, 'writeSync', () => { throw Object.assign(new Error('bounded write failure'), { code: 'EIO' }); });
+    assert.throws(() => adapter.replaceJson(target, { generation: 2 }, sha(saved)), { code: 'EIO' });
+    failed.mock.restore();
+    assert.deepEqual(fs.readFileSync(target), saved); assert.deepEqual(fs.readdirSync(root), ['analysis.json']);
+    const read = adapter.readJsonRecord;
+    // Same-inode modification after successful writes must fail the real readback.
+    const fsync = fs.fsyncSync;
+    let modified = false;
+    const drift = t.mock.method(fs, 'fsyncSync', fd => {
+        fsync(fd);
+        if (!modified) {
+            const temporary = fs.readdirSync(root).find(name => name.endsWith('.tmp'));
+            fs.writeFileSync(path.join(root, temporary), '{"changed":true}\n'); modified = true;
+        }
+    });
+    assert.throws(() => adapter.replaceJson(target, { generation: 3 }, sha(saved)), /replacement bytes drifted/);
+    drift.mock.restore(); assert.equal(modified, true);
+    assert.deepEqual(fs.readFileSync(target), saved); assert.deepEqual(fs.readdirSync(root), ['analysis.json']);
+    assert.equal(adapter.readJsonRecord, read);
+    const rename = fs.renameSync; let retired;
+    const successor = Buffer.from('new owner after successful rename\n');
+    const retire = t.mock.method(fs, 'renameSync', (source, destination) => {
+        rename(source, destination); retired = source; fs.writeFileSync(source, successor, { mode: 0o600 });
+    });
+    adapter.replaceJson(target, { generation: 4 }, sha(saved));
+    retire.mock.restore();
+    assert.equal(JSON.parse(fs.readFileSync(target)).generation, 4);
+    assert.deepEqual(fs.readFileSync(retired), successor);
+    assert.throws(() => adapter.replaceJson(target, { generation: 5 }, sha(saved)), /CAS failed/);
+    assert.equal(JSON.parse(fs.readFileSync(target)).generation, 4);
+});
+
 test('活动付费候选在预算前零请求恢复，失败义务及原凭证变化不得洗成完成', async t => {
     const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'active-paid-revision');
     const input = { analysisRoot, parentExecutionId: EXECUTION, planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot };
