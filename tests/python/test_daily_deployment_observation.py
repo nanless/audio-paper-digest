@@ -234,7 +234,8 @@ class DailyDeploymentObservationIntegrationTest(unittest.TestCase):
 
     def observe(self, *, include_id=None, unchanged=True):
         before = self.protected()
-        with self.observation_scope():
+        self.gate_diagnostics = []
+        with publication_fixture._capture_publication_gate_diagnostics(self.gate_diagnostics), self.observation_scope():
             outcome = self.owner().observe_daily_deployment(DATE, include_id=include_id)
             count = len(self.normal_calls)
             requests = list(self.http_requests)
@@ -263,7 +264,7 @@ class DailyDeploymentObservationIntegrationTest(unittest.TestCase):
         self.assertEqual(outcome['recording'], 'recorded', (outcome, self.events))
         self.assertEqual(outcome['issues'], [])
         result, directory = self.stored_result(outcome)
-        self.assertEqual(status['latestAttempt']['state'], state, (status, result, self.events))
+        self.assertEqual(status['latestAttempt']['state'], state, (status, result, self.events, self.gate_diagnostics))
         self.assertTrue(outcome['partial'])
         self.assertFalse(outcome['fullE05'])
         self.assertTrue(all(value is False for value in outcome['capabilities'].values()))

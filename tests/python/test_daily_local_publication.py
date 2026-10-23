@@ -27,6 +27,64 @@ DATE = targets_fixture.DATE
 publisher = targets_fixture.publisher
 
 
+_RAW_FILES = {'local_git_object.py', 'local_git_publication.py'}
+_TEST_FILES = {'test_daily_local_publication.py', 'test_daily_deployment_observation.py'}
+_CODES = {'unsupported_repository', 'unsupported_git', 'metadata_changed', 'state_mismatch',
+          'unsupported_state', 'read_error', 'timeout', 'output_limit', 'size_exceeded',
+          'invalid_argument', 'object_unavailable', 'type_mismatch'}
+_REASONS = {'config_parse', 'config_policy', 'config_required', 'repository_identity',
+            'repository_redirection', 'repository_symlink', 'control_directory_type',
+            'directory_type', 'metadata_read', 'object_store_info', 'object_pack_layout',
+            'object_loose_layout', 'object_store_layout', 'object_store_type', 'regular_file',
+            'child_deadline', 'binary_permissions', 'binary_resolution', 'binary_type',
+            'binary_unavailable', 'version_header', 'stderr_bytes', 'stdout_bytes',
+            'remote_profile', 'remote_identity', 'remote_url_shape', 'remote_url_count',
+            'final_observation', 'local_io', 'process_io', 'process_start'}
+_NORMAL_TYPES = {'PublishDataValidationError', 'ValueError', 'OSError', 'AssertionError',
+                 'RuntimeError', 'CalledProcessError', 'FileNotFoundError', 'PermissionError'}
+
+@contextlib.contextmanager
+def _capture_publication_gate_diagnostics(records):
+    """Record fixed exception categories only; preserve previous trace and semantics."""
+    previous = sys.gettrace()
+    if previous is not None:
+        try:
+            if len(records) < 64:
+                records.append({'kind': 'diagnostic_unavailable', 'reason': 'preexisting_trace'})
+        except Exception:
+            pass
+        yield
+        return
+
+    def trace(frame, event, argument):
+        filename = frame.f_code.co_filename.rsplit('/', 1)[-1]
+        name = frame.f_code.co_name
+        raw = filename in _RAW_FILES and name == '_fail'
+        normal = filename in _TEST_FILES and name == 'gate'
+        if event == 'call':
+            return trace if raw or normal else None
+        try:
+            if event == 'exception' and len(records) < 64:
+                error_type, error, _traceback = argument
+                if raw and error_type.__name__ in {'LocalGitReadError', 'LocalPublicationReadError'}:
+                    code, reason = getattr(error, 'code', None), getattr(error, 'reason', None)
+                    records.append({'kind': 'raw_git',
+                                    'code': code if type(code) is str and code in _CODES else 'other',
+                                    'reason': reason if type(reason) is str and reason in _REASONS else 'other'})
+                elif normal:
+                    records.append({'kind': 'normal', 'type': error_type.__name__
+                                    if error_type.__name__ in _NORMAL_TYPES else 'other'})
+        except Exception:
+            pass
+        return trace
+
+    sys.settrace(trace)
+    try:
+        yield
+    finally:
+        sys.settrace(previous)
+
+
 class DailyLocalPublicationIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.case = targets_fixture.DailyReviewedTargetsIntegrationTest('runTest')
@@ -144,7 +202,9 @@ class DailyLocalPublicationIntegrationTest(unittest.TestCase):
         function = {'publication': 'read_daily_local_publication',
                     'targets': 'read_daily_reviewed_targets',
                     'projection': 'read_daily_observed_projection'}[kind]
-        with mock.patch.object(blog_entry_loader, 'load_publish_to_blog', side_effect=load), \
+        self.gate_diagnostics = []
+        with _capture_publication_gate_diagnostics(self.gate_diagnostics), \
+                mock.patch.object(blog_entry_loader, 'load_publish_to_blog', side_effect=load), \
                 mock.patch.object(subprocess, 'Popen', side_effect=popen), \
                 mock.patch.object(socket, 'socket', side_effect=AssertionError('No Python network')):
             result = getattr(module, function)(date_str, include_id=include_id)
@@ -154,7 +214,7 @@ class DailyLocalPublicationIntegrationTest(unittest.TestCase):
         return result
 
     def available(self, result, *, include_id=None):
-        self.assertEqual(result['status'], 'local_publication_observed', (result, self.events))
+        self.assertEqual(result['status'], 'local_publication_observed', (result, self.events, self.gate_diagnostics))
         self.assertEqual(result['contract'], 'daily-local-publication-observation-v1')
         self.assertEqual(result['version'], 1)
         self.assertEqual(set(result), {'contract', 'version', 'status', 'selector', 'normalBinding',
@@ -429,6 +489,11 @@ class DailyLocalPublicationIntegrationTest(unittest.TestCase):
             self.assertEqual(len(self.normal_calls), 2)
             self.assertTrue(self.normal_calls[0]['returned'])
             self.assertFalse(self.normal_calls[1]['returned'])
+            self.assertTrue(
+                {'kind': 'normal', 'type': 'PublishDataValidationError'} in self.gate_diagnostics
+                or {'kind': 'diagnostic_unavailable', 'reason': 'preexisting_trace'} in self.gate_diagnostics,
+                self.gate_diagnostics,
+            )
         finally:
             source.write_bytes(original)
         self.available(self.read())
@@ -543,6 +608,77 @@ class DailyLocalPublicationIntegrationTest(unittest.TestCase):
                 issue = self.failure(self.read(**changes), domain='selection')
                 self.assertEqual((issue['code'], issue['reason']), ('invalid_argument', reason))
                 self.assertEqual(self.normal_calls, [])
+
+
+class PublicationGateDiagnosticTest(unittest.TestCase):
+    def private_raw(self):
+        # The actual fixed source compiler, not a replacement public raw module.
+        owner = importlib.import_module('daily_observed_projection')
+        bundle = owner._compile_git_modules()
+        self.addCleanup(owner._git_final, bundle)
+        return bundle['modules'][0]
+
+    def test_real_private_error_is_observed_without_replacing_objects_or_swallowing(self):
+        raw = self.private_raw()
+        before = sys.gettrace()
+        records = []
+        with self.assertRaises(raw.LocalGitReadError) as caught:
+            with _capture_publication_gate_diagnostics(records):
+                raw._parse_config(b'core.repositoryformatversion\n0\0core.bare\nfalse\0credential.helper\nnever-print-me\0')
+        self.assertIs(sys.gettrace(), before)
+        self.assertEqual((caught.exception.code, caught.exception.reason),
+                         ('unsupported_repository', 'config_policy'))
+        if before is None:
+            self.assertEqual(records, [{'kind': 'raw_git', 'code': 'unsupported_repository',
+                                        'reason': 'config_policy'}])
+        else:
+            self.assertEqual(records, [{'kind': 'diagnostic_unavailable', 'reason': 'preexisting_trace'}])
+
+    def test_bounded_fixed_categories_and_existing_trace_are_preserved(self):
+        raw = self.private_raw()
+        previous = sys.gettrace()
+        records = []
+        sensitive = 'never_print_diagnostic_value'
+        with _capture_publication_gate_diagnostics(records):
+            for number in range(80):
+                try:
+                    raw._fail(sensitive if number == 0 else 'unsupported_repository',
+                              sensitive if number == 0 else 'config_policy')
+                except raw.LocalGitReadError:
+                    pass
+        self.assertIs(sys.gettrace(), previous)
+        self.assertLessEqual(len(records), 64)
+        self.assertNotIn(sensitive, json.dumps(records))
+        if previous is None:
+            self.assertEqual(len(records), 64)
+            self.assertEqual(records[0], {'kind': 'raw_git', 'code': 'other', 'reason': 'other'})
+
+        def existing_trace(_frame, _event, _argument):
+            return None
+        try:
+            sys.settrace(existing_trace)
+            records = []
+            with self.assertRaisesRegex(RuntimeError, 'unchanged exception'):
+                with _capture_publication_gate_diagnostics(records):
+                    self.assertIs(sys.gettrace(), existing_trace)
+                    raise RuntimeError('unchanged exception')
+            self.assertIs(sys.gettrace(), existing_trace)
+            self.assertEqual(records, [{'kind': 'diagnostic_unavailable', 'reason': 'preexisting_trace'}])
+        finally:
+            sys.settrace(previous)
+
+    def test_diagnostic_append_failure_cannot_mask_the_real_error(self):
+        raw = self.private_raw()
+        before = sys.gettrace()
+        class BrokenRecords(list):
+            def append(self, _value):
+                raise RuntimeError('diagnostic-only failure')
+        with self.assertRaises(raw.LocalGitReadError) as caught:
+            with _capture_publication_gate_diagnostics(BrokenRecords()):
+                raw._fail('unsupported_repository', 'config_policy')
+        self.assertEqual((caught.exception.code, caught.exception.reason),
+                         ('unsupported_repository', 'config_policy'))
+        self.assertIs(sys.gettrace(), before)
 
 
 if __name__ == '__main__':
