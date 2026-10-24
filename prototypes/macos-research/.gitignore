@@ -1,0 +1,5 @@
+/assets/*
+!/assets/README.md
+/.qa/
+/node_modules/
+__pycache__/

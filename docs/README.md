@@ -10,7 +10,9 @@
 |---|---|
 | 三条流程如何共用分析、Reader 和发布能力 | [三流程与共享核心](three-workflows.md) |
 | 当前流程逐步跟踪、已复现问题及改进顺序 | [三流程核读与改进计划](workflow-sharing-plan.md) |
-| 基于现有网站成果的桌面双栏精读、个人 LLM 与 Zotero 存档方案 | [桌面研究工作台规划](desktop-research-workbench-plan.md)（拟议功能，尚未实现） |
+| 基于现有成果的 Mac 单栏阅读、按需双栏、个人 LLM 与 Zotero 存档 | [桌面研究工作台规划](desktop-research-workbench-plan.md)（正式应用规划，附真实样稿交互原型） |
+| Mac 如何读取已发布成果、增量离线、版本和撤稿信息 | [客户端静态数据合同](desktop-data-contract.md)（拟新增 `desktop/v1`，尚未实现） |
+| Mac 界面参考、单栏与 PDF 双栏、逐屏尺寸及视觉验收 | [界面设计研究](macos-interface-design-research.md) |
 | Reader、SHA、CAS、检查点和凭证是什么 | [常见术语](writing-guide.md#术语先解释再统一称呼) |
 | 文档与论文讲解怎样写得清楚 | [写作约定](writing-guide.md) |
 
