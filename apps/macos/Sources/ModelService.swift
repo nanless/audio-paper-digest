@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import CryptoKit
 import Darwin
 
@@ -44,8 +45,13 @@ import Darwin
         let sourceJSON=String(data:try JSONSerialization.data(withJSONObject:source,options:[.sortedKeys]),encoding:.utf8) ?? "{}"
         let messages:[[String:Any]]=[["role":"system","content":instructions],["role":"user","content":"研究问题：\n\(question)\n\n来源身份：\n\(sourceJSON)\n\n实际证据：\n\(evidence)"]]
         // Fingerprint the actual worker budget and request purpose, including paper ownership.
-        config["maxTokens"]=check ? 1024:max(256,min(32768,config["maxTokens"] as? Int ?? 8192))
-        let fingerprintObject:[String:Any]=["contract":"desktop-study-v3","extractor":"pdfkit-physical-pages-v1","kind":check ? "connection-check":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","question":question,"evidence":evidence,"source":source,"maxTokens":config["maxTokens"] ?? 8192]
+        config["maxTokens"]=check ? 4096:max(256,min(32768,config["maxTokens"] as? Int ?? 8192))
+        if let value=config["responsesStream"],CFGetTypeID(value as CFTypeRef) != CFBooleanGetTypeID(){throw DesktopError.message("Responses 流式设置必须为布尔值")}
+        config["responsesStream"]=config["responsesStream"] ?? false
+        let effort=config["reasoningEffort"] as? String ?? "default"
+        guard ["default","low","medium","high"].contains(effort),config["reasoningEffort"] == nil || config["reasoningEffort"] is String else{throw DesktopError.message("推理强度设置无效")}
+        config["reasoningEffort"]=effort
+        let fingerprintObject:[String:Any]=["contract":"desktop-study-v4","extractor":"pdfkit-physical-pages-v1","kind":check ? "connection-check":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","responsesStream":config["responsesStream"]!,"reasoningEffort":effort,"question":question,"evidence":evidence,"source":source,"maxTokens":config["maxTokens"] ?? 8192]
         let fingerprint=sha256(try JSONSerialization.data(withJSONObject:fingerprintObject,options:[.sortedKeys]))
         let sessions=store.value["sessions"] as? [[String:Any]] ?? []
         guard !sessions.contains(where:{$0["id"] as? String==id}) else{throw DesktopError.message("任务身份已经存在，请创建新的研究任务")}
@@ -102,6 +108,8 @@ import Darwin
         pending["endedAt"]=ISO8601DateFormatter().string(from:Date()); pending["status"]=(result["okay"] as? Bool==true) ? "complete":"failed"
         pending["response"]=result["text"] ?? ""; pending["text"]=result["text"] ?? ""; pending["usage"]=result["usage"] ?? NSNull(); pending["charge"]="amount_unknown"
         pending["actualModel"]=result["model"] ?? NSNull(); pending["protocol"]=result["protocol"] ?? "unknown"
+        pending["finishStatus"]=result["finishStatus"] ?? "unknown"
+        pending["responsesStream"]=config["responsesStream"];pending["reasoningEffort"]=effort;pending["maxTokens"]=config["maxTokens"]
         pending["error"]=result["error"] ?? NSNull(); pending["reused"]=false
         let recovery=usage.appendingPathComponent(id+"-response.json")
         var envelope:[String:Any]=["contract":"desktop-model-response-recovery-v1","session":pending]
@@ -111,7 +119,9 @@ import Darwin
         try store.appendSession(pending)
         if result["okay"] as? Bool != true {
             let error=result["error"] as? [String:Any] ?? [:]
-            throw DesktopError.message(error["message"] as? String ?? "模型返回未完成；已保留响应和真实消费记录")
+            let detail=error["message"] as? String ?? "模型返回未完成"
+            let usageText=(result["usage"] as? [String:Any]).flatMap{try? JSONSerialization.data(withJSONObject:$0,options:.sortedKeys)}.flatMap{String(data:$0,encoding:.utf8)}
+            throw DesktopError.message(detail + " · 实际模型：" + (result["model"] as? String ?? "未知") + " · " + (result["protocol"] as? String ?? "协议未知") + (usageText.map{" · 用量 " + $0} ?? " · 用量未知") + " · 费用金额未知；不会自动重发")
         }
         return pending
     }

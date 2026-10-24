@@ -4,6 +4,14 @@ import PDFKit
 import UniformTypeIdentifiers
 
 @MainActor extension PaperDigestApp {
+    static func archiveIdentity(paperID:String,sourceVersion:String?) throws -> String {
+        guard paperID.hasPrefix("arxiv:") else{return paperID}
+        let base=String(paperID.dropFirst("arxiv:".count))
+        guard DesktopArxivIdentifier.isBase(base) else{throw DesktopError.message("论文 arXiv 身份格式无效，未准备归档")}
+        guard let version=sourceVersion,!version.isEmpty,version != base else{return paperID}
+        guard DesktopArxivIdentifier.base(of:version)==base else{throw DesktopError.message("原文版本与论文身份不一致或格式无效，未准备归档")}
+        return "arxiv:"+version
+    }
     func verifyArticleBinding(_ article:[String:Any],paper:[String:Any]) throws {
         guard article["paperID"] as? String==paper["id"] as? String,
               article["sourceURL"] as? String==(paper["sourceURL"] as? String ?? paper["blogURL"] as? String),
@@ -20,7 +28,8 @@ import UniformTypeIdentifiers
     }
     func validateSettings(_ value:[String:Any]) throws {
         for key in ["appearance","endpoint","model","protocol","httpProxy"]{if let item=value[key],!(item is String){throw DesktopError.message("设置字段类型无效："+key)}}
-        if let flag=value["reduceMotion"],!(flag is NSNumber) || CFGetTypeID(flag as CFTypeRef) != CFBooleanGetTypeID(){throw DesktopError.message("动态效果设置无效")}
+        for key in ["reduceMotion","responsesStream"]{if let flag=value[key],!(flag is NSNumber) || CFGetTypeID(flag as CFTypeRef) != CFBooleanGetTypeID(){throw DesktopError.message("布尔设置无效："+key)}}
+        if let effort=value["reasoningEffort"]{guard let text=effort as? String,["default","low","medium","high"].contains(text) else{throw DesktopError.message("Responses 推理强度设置无效")}}
         if let item=value["protocol"] as? String,!["auto","responses","chat"].contains(item){throw DesktopError.message("请求协议选项无效")}
         for key in ["endpoint","httpProxy"] {if let raw=value[key] as? String,!raw.isEmpty {guard let url=URL(string:raw),url.user==nil,url.password==nil,url.query==nil,url.fragment==nil,url.host != nil else{throw DesktopError.message("端点和代理不得携带凭据、查询参数或片段")};if key=="httpProxy" {guard url.scheme=="http",url.port != nil else{throw DesktopError.message("代理须为带端口的 HTTP CONNECT 地址")}}else{guard url.scheme=="https" || (url.scheme=="http" && ["127.0.0.1","localhost","::1"].contains(url.host!)) else{throw DesktopError.message("模型端点须为 HTTPS，本机服务可用 HTTP")}}}}
         let ranges=["font":16...24,"syncHours":1...168,"maxTokens":256...32768,"dailyRequests":1...1000]
@@ -88,8 +97,7 @@ import UniformTypeIdentifiers
         bibliography["fields"]=fields
         if captured.hasPrefix("page:"){bibliography["url"]=paper["blogURL"] ?? ""}
         if let doi=citation["doi"] as? String,!doi.isEmpty{bibliography["doi"]=doi}
-        var result:[String:Any]=["identity":captured,"bibliography":bibliography]
-        if let version=paper["sourceVersion"] as? String,captured.hasPrefix("arxiv:"),version.range(of:"^\\d{4}\\.\\d{4,5}v\\d+$",options:.regularExpression) != nil{result["identity"]="arxiv:"+version}
+        var result:[String:Any]=["identity":try Self.archiveIdentity(paperID:captured,sourceVersion:paper["sourceVersion"] as? String),"bibliography":bibliography]
         do {let pdf:[String:Any];if article["offlineMode"] as? Bool==true{guard let identifier=paper["offlinePackageID"] as? String else{throw DesktopError.message("离线包身份缺失")};let checked=try await storage.openPackage(id:identifier);guard let saved=checked["pdf"] as? [String:Any],saved["sha256"] as? String==offlinePDF?["sha256"] as? String else{throw DesktopError.message("离线包不含已核验的原始 PDF")};pdf=saved}else{pdf=try await library.handle(command:"library.downloadPDF",payload:["paperID":captured])};try verifyPDFBinding(pdf,paper:paper,article:article);guard pdf["isStale"] as? Bool != true else{throw DesktopError.message("原文复验失败，旧缓存未作为当前来源归档")};result["pdfPath"]=pdf["filePath"]}catch{if Task.isCancelled || error is CancellationError{throw CancellationError()};result["pdfNotice"]=error.localizedDescription}
         try Task.checkCancellation()
         let exports=directory.appendingPathComponent("Exports",isDirectory:true);try FileManager.default.createDirectory(at:exports,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
@@ -112,7 +120,7 @@ import UniformTypeIdentifiers
             var parts=["<div><h2>个人模型解析</h2>"]
             for entry in sessions {
                 let question=htmlEscape(entry["question"] as? String ?? ""),model=htmlEscape(entry["actualModel"] as? String ?? ("请求模型："+(entry["model"] as? String ?? "未指定")+"；服务未返回实际模型")),time=htmlEscape(entry["startedAt"] as? String ?? ""),text=htmlEscape(entry["text"] as? String ?? "")
-                let provenance:[String:Any]=["source":entry["source"] ?? [:],"usage":entry["usage"] ?? NSNull(),"fingerprint":entry["fingerprint"] ?? "","requestedModel":entry["model"] ?? "","actualModel":entry["actualModel"] ?? "","protocol":entry["protocol"] ?? "","endedAt":entry["endedAt"] ?? ""]
+                let provenance:[String:Any]=["source":entry["source"] ?? [:],"usage":entry["usage"] ?? NSNull(),"fingerprint":entry["fingerprint"] ?? "","requestedModel":entry["model"] ?? "","actualModel":entry["actualModel"] ?? NSNull(),"protocol":entry["protocol"] ?? "","endedAt":entry["endedAt"] ?? "","responsesStream":entry["responsesStream"] ?? NSNull(),"reasoningEffort":entry["reasoningEffort"] ?? NSNull(),"maxTokens":entry["maxTokens"] ?? NSNull(),"finishStatus":entry["finishStatus"] ?? NSNull()]
                 let detail=htmlEscape(String(data:try JSONSerialization.data(withJSONObject:provenance,options:[.prettyPrinted,.sortedKeys]),encoding:.utf8) ?? "")
                 parts.append("<h3>"+question+"</h3><p>"+model+" · "+time+"</p><pre>"+text+"</pre><pre>"+detail+"</pre>")
             }
@@ -132,7 +140,7 @@ import UniformTypeIdentifiers
         var data:Data,ext:String
         let notes=(store.value["notes"] as? [String:[String:Any]])?[id]?["text"] as? String ?? ""
         let sessions=(store.value["sessions"] as? [[String:Any]] ?? []).filter{$0["paperID"] as? String==id && $0["kind"] as? String != "connection-check"}
-        let provenance=try JSONSerialization.data(withJSONObject:sessions.map{entry in entry.filter{["id","kind","question","source","model","actualModel","protocol","startedAt","endedAt","usage","status","fingerprint","inputSHA256","charge"].contains($0.key)}},options:[.prettyPrinted,.sortedKeys])
+        let provenance=try JSONSerialization.data(withJSONObject:sessions.map{entry in entry.filter{["id","kind","question","source","model","actualModel","protocol","startedAt","endedAt","usage","status","fingerprint","inputSHA256","charge","responsesStream","reasoningEffort","maxTokens","finishStatus"].contains($0.key)}},options:[.prettyPrinted,.sortedKeys])
         let provenanceText=String(data:provenance,encoding:.utf8) ?? ""
         let annotations=store.annotations(id:id)
         let annotationText=annotations.map{mark in "### 原文摘录 · 物理页 \(mark["page"] as? Int ?? 0)\n\n"+(mark["text"] as? String ?? "")+"\n\n我的批注："+(mark["comment"] as? String ?? "")+"\n\nPDF SHA256："+(mark["pdfSHA"] as? String ?? "")+"\n"}.joined(separator:"\n")

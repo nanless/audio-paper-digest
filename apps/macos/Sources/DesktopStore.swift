@@ -70,7 +70,7 @@ enum DesktopKeychain {
     func snapshot()->[String:Any] { value }
     func setting(_ key:String)->Any? { (value["settings"] as? [String:Any])?[key] }
     func updateSettings(_ changes:[String:Any]) throws {
-        let allowed:Set<String>=["appearance","font","reduceMotion","syncHours","httpProxy","endpoint","model","protocol","maxTokens","timeoutMs","dailyRequests","lastSettingPane"]
+        let allowed:Set<String>=["appearance","font","reduceMotion","syncHours","httpProxy","endpoint","model","protocol","responsesStream","reasoningEffort","maxTokens","timeoutMs","dailyRequests","lastSettingPane"]
         var settings=value["settings"] as? [String:Any] ?? [:]
         for (key,item) in changes where allowed.contains(key) { settings[key]=item }
         let old=value; value["settings"]=settings

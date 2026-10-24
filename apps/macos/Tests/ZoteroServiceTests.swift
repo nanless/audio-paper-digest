@@ -331,6 +331,52 @@ private final class MockZotero: @unchecked Sendable {
         try require(!ZoteroService.matchesIdentity("arxiv:2610.27491v1",data:["url":"https://example.com/paper/2610.27491"]),"foreign URL is not arxiv identity")
         try require(ZoteroService.matchesIdentity("arxiv:2610.27491v1",data:["extra":"arXiv: 2610.27491v2 [cs.SD]"]),"explicit arxiv extra field")
         passed += 6
+        for identifier in ["math/0101001", "math/0101001v1", "hep-th/9901001v12", "math.GT/0301001v2", "cs.SE/0601001v1"] {
+            try require(ZoteroService.validIdentity("arxiv:"+identifier,sourceURL:"https://arxiv.org/abs/"+identifier),"canonical legacy identifier: "+identifier)
+            passed += 1
+        }
+        for identifier in ["Math/0101001v1", "math.gt/0301001", "mAth.GT/0301001", "math/0101001V1", "math/0101001v0", "math/0101001v01", "math/0101001v1/extra", "math/0101001v1.pdf", "math/0101001?x=1", "math/0101001#x", "math//0101001", "math/../0101001", "../math/0101001", "math%2F0101001", "math\\0101001", "math/01010011", "math/0101001\n", "math/0113001", "math..GT/0101001"] {
+            let (service,backend,_) = try fixture()
+            var invalid = input; invalid.identity = "arxiv:"+identifier
+            try require(!ZoteroService.validIdentity(invalid.identity,sourceURL:invalid.bibliography.url),"reject unsafe legacy identity: "+identifier)
+            do { _=try await service.archive(invalid); throw NSError(domain:"expected legacy identity rejection",code:1) } catch ZoteroService.ServiceError.invalid {}
+            try require(backend.requests.allSatisfy{$0.0 == "GET"} && backend.objects.isEmpty && backend.collections.isEmpty,"legacy invalid input cannot create collection/items or upload")
+            passed += 1
+        }
+        try require(ZoteroService.matchesIdentity("arxiv:math/0101001v1",data:["url":"https://arxiv.org/pdf/math/0101001v2.pdf"]),"old versions match exact official PDF URL")
+        try require(ZoteroService.matchesIdentity("arxiv:math.GT/0301001v1",data:["extra":"arXiv: math.GT/0301001v2 [math.GT]"]),"canonical class case matches exact Extra")
+        for data: [String:Any] in [["archiveID":"Math/0101001v1"], ["archiveID":"math/01010011"], ["extra":"arXiv: Math/0101001v1"], ["url":"https://arxiv.org/abs/math/0101001v1/extra"], ["url":"https://arxiv.org/abs/math%2F0101001v1"], ["url":"https://arxiv.org/abs/math/0101001v1?different=paper"], ["url":"https://arxiv.org@example.com/abs/math/0101001v1"]] {
+            try require(!ZoteroService.matchesIdentity("arxiv:math/0101001v1",data:data),"legacy dedup refuses near identifier/unsafe URL")
+            passed += 1
+        }
+        passed += 2
+        do {
+            let (service,backend,_) = try fixture()
+            let oldPDF = root.appendingPathComponent("legacy-version-two.pdf")
+            try Data("%PDF-1.7\nlegacy version two mock bytes, not scientific source".utf8).write(to:oldPDF)
+            var old = input; old.identity = "arxiv:math/0101001v1"; old.bibliography.title = "Legacy identity mock fixture"
+            old.bibliography.url = "https://arxiv.org/abs/math/0101001v1"
+            let first = try await service.archive(old)
+            var newer = old; newer.identity = "arxiv:math/0101001v2"; newer.bibliography.url = "https://arxiv.org/abs/math/0101001v2"; newer.pdfPath = oldPDF.path
+            let second = try await service.archive(newer)
+            try require(first.status == "complete" && second.status == "complete" && first.parentKey == second.parentKey && backend.objects.count == 8,"legacy versions reuse one parent while preserving distinct PDF and complete original metadata")
+            let parent = backend.objects[first.parentKey!]!["data"] as! [String:Any]
+            try require(parent["archiveID"] as? String == "math/0101001v1" && parent["url"] as? String == old.bibliography.url,"legacy new version preserves original parent/user bibliography")
+            let firstPDF = first.steps.first{$0.role == "pdf"}!.key!, secondPDF = second.steps.first{$0.role == "pdf"}!.key!
+            let firstSource = first.steps.first{$0.role == "source-metadata"}!.key!, secondSource = second.steps.first{$0.role == "source-metadata"}!.key!
+            try require(firstPDF != secondPDF && backend.files[firstPDF] == (try Data(contentsOf:pdf)) && backend.files[secondPDF] == (try Data(contentsOf:oldPDF)),"legacy versions keep distinct original PDF bytes")
+            for key in [firstPDF,secondPDF] {
+                let attachment = backend.objects[key]!["data"] as! [String:Any]
+                try require(attachment["filename"] as? String == "paper.pdf" && attachment["parentItem"] as? String == first.parentKey,"legacy slash never becomes local upload filename/path")
+            }
+            let firstMetadata = try JSONSerialization.jsonObject(with:backend.files[firstSource]!) as! [String:Any]
+            let secondMetadata = try JSONSerialization.jsonObject(with:backend.files[secondSource]!) as! [String:Any]
+            try require(firstSource != secondSource && firstMetadata["identity"] as? String == old.identity && secondMetadata["identity"] as? String == newer.identity,"legacy versioned scientific identity stays complete in separate metadata attachments")
+            let writes = backend.requests.filter{$0.0 != "GET"}.count
+            let duplicate = try await service.archive(newer), resumed = try await service.archive(old,resumeID:first.archiveID)
+            try require(duplicate.parentKey == first.parentKey && resumed.status == "complete" && backend.objects.count == 8 && backend.requests.filter{$0.0 != "GET"}.count == writes,"legacy repeat and original-version resume add no duplicate or upload")
+            passed += 6
+        }
         do {
             let old = root.appendingPathComponent("support-old",isDirectory:true)
             try FileManager.default.createDirectory(at:old,withIntermediateDirectories:false)

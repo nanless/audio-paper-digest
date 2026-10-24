@@ -200,7 +200,7 @@ actor LibraryService {
                 let source = row["absUrl"] as? String, pdf = row["pdfUrl"] as? String
                 let version = source.flatMap(URL.init(string:))?.lastPathComponent
                 let citation: [String: Any] = ["contract": "paper-citation-source-v1", "paperKey": "arxiv:" + identifier, "identityStatus": "verified", "verified": true, "complete": false, "title": title, "authors": authors, "arxivId": version ?? identifier, "sourceUrl": source ?? "", "pdfUrl": pdf ?? "", "date": "", "doi": "", "venue": "", "sourceKind": "arxiv"]
-                return Paper(id: "arxiv:" + identifier, title: title, titleZh: row["titleZh"] as? String ?? title, authors: authors, date: row["date"] as? String ?? "", score: (row["score"] as? NSNumber)?.doubleValue, task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [], sourceKind: "arxiv", identityStatus: "verified", pageType: "paper", blogURL: blog, sourceURL: source, pdfURL: pdf, sourceVersion: version, appearances: [blog], citation: (try? JSONValue.from(citation)) ?? .null)
+                return Paper(id: "arxiv:" + identifier, title: title, titleZh: row["titleZh"] as? String ?? title, authors: authors, date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]), task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [], sourceKind: "arxiv", identityStatus: "verified", pageType: "paper", blogURL: blog, sourceURL: source, pdfURL: pdf, sourceVersion: version, appearances: [blog], citation: (try? JSONValue.from(citation)) ?? .null)
             }
             snapshot = StoredSnapshot(summary: Summary(paperCount: papers.count, recordCount: rows.count, shardCount: 0, snapshotID: Self.sha256(bytes), syncedAt: nil, source: "应用内已发布样稿（尚未全站同步）", syncing: false, missingFromLatest: []), papers: papers)
         }
@@ -331,19 +331,34 @@ actor LibraryService {
         let kind = row["sourceKind"] as? String ?? citation["sourceKind"] as? String ?? "unknown"
         let explicit = row["paperId"] as? String ?? citation["paperId"] as? String ?? ""
         let arxiv = row["arxivId"] as? String ?? citation["arxivId"] as? String ?? ""
-        let base = arxiv.replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
-        let validArxiv = base.range(of: #"^(?:[0-9]{4}\.[0-9]{4,5}|[a-z][a-z0-9.-]*/[0-9]{7})$"#, options: .regularExpression) != nil
-        let id = status == "verified" && kind == "arxiv" && validArxiv ? "arxiv:\(base)" : status == "verified" && !explicit.isEmpty ? explicit : "page:\(blog.path)"
+        let parsedBase = DesktopArxivIdentifier.base(of: arxiv)
+        let base = parsedBase ?? arxiv
+        let validArxiv = parsedBase != nil
+        let id = status == "verified" && kind == "arxiv" && validArxiv ? "arxiv:\(base)" : status == "verified" && kind != "arxiv" && !explicit.isEmpty ? explicit : "page:\(blog.path)"
         let title = row["originalTitle"] as? String ?? citation["title"] as? String ?? row["title"] as? String ?? ""
         guard !title.isEmpty else { throw ServiceError.invalid("论文目录缺少题名。") }
         let source = cleanHTTPS(citation["sourceUrl"] as? String ?? citation["url"] as? String)
         let pdf = status == "verified" ? cleanHTTPS(citation["pdfUrl"] as? String) : nil
         let version = citation["arxivId"] as? String
         return Paper(id: id, title: title, titleZh: row["titleZh"] as? String ?? row["title"] as? String ?? title,
-                     authors: citation["authors"] as? [String] ?? [], date: row["date"] as? String ?? "", score: (row["score"] as? NSNumber)?.doubleValue,
+                     authors: citation["authors"] as? [String] ?? [], date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]),
                      task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [],
                      sourceKind: kind, identityStatus: status, pageType: pageType, blogURL: blog.absoluteString, sourceURL: source, pdfURL: pdf,
                      sourceVersion: version?.isEmpty == false ? version : nil, appearances: [blog.absoluteString], citation: try JSONValue.from(citation), pdfSHA256: try Self.publishedPDFHash(row, citation: citation))
+    }
+
+    /// Hugo publishes the structured score as a decimal string; older indexes may use a JSON number.
+    /// Only this declared field is read. Body prose, dimension totals and citation numbers are not scores.
+    private static func publishedScore(_ value:Any?) -> Double? {
+        let score:Double?
+        if let number=value as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID() else{return nil}
+            score=number.doubleValue
+        }else if let text=value as? String {
+            score=Double(text.trimmingCharacters(in:.whitespacesAndNewlines))
+        }else{return nil}
+        guard let score,score.isFinite,(0...10).contains(score) else{return nil}
+        return score
     }
 
     func article(for paperID: String, refresh: Bool = false, downloadImages: Bool = true, progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Article {

@@ -1,19 +1,20 @@
 import {mountZotero} from './zotero-ui.js';
-import {installDialogs} from './dialogs.js';
+import {installDialogs,revealAccessiblePane} from './dialogs.js';
 installDialogs();
 const $=id=>document.getElementById(id);
 const state={settings:{},paper:null,personal:{}};
 const dirty=new Set(); let saveTimer, savePromise=null, discardPromise=null, discarding=false, reloadGeneration=0;
-const textKeys=['appearance','endpoint','model','protocol','httpProxy'];
+const textKeys=['appearance','endpoint','model','protocol','httpProxy','reasoningEffort'];
+const booleanKeys=['reduceMotion','responsesStream'];
 const numericKeys=['font','maxTokens','dailyRequests','syncHours'];
-const defaults={appearance:'system',endpoint:'',model:'',protocol:'auto',httpProxy:'',font:18,maxTokens:8192,dailyRequests:50,syncHours:12};
+const defaults={appearance:'system',endpoint:'',model:'',protocol:'auto',reasoningEffort:'default',httpProxy:'',font:18,maxTokens:8192,dailyRequests:50,syncHours:12};
 const call=(command,payload={})=>window.webkit.messageHandlers.desktop.postMessage({command,payload});
 const toast=text=>{$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,5000);};
 const error=e=>toast(e.message||String(e));
 const app={call,state,toast,error,emit:(name,detail)=>window.dispatchEvent(new CustomEvent(name,{detail})),exportArchiveMaterials:()=>call('archive.materials')};
 function appearance(){document.documentElement.style.colorScheme=state.settings.appearance==='system'?'light dark':state.settings.appearance||'light dark';}
-function value(id){if(id==='reduceMotion')return $(id).checked;return numericKeys.includes(id)?Number($(id).value):$(id).value;}
-function fill(){for(const id of [...textKeys,...numericKeys])if(!dirty.has(id))$(id).value=state.settings[id]??defaults[id];if(!dirty.has('reduceMotion'))$('reduceMotion').checked=!!state.settings.reduceMotion;$('font-label').value=$('font').value;$('key-status').textContent=state.settings.hasKey?'密钥已安全保存在 macOS 钥匙串':'尚未保存 API 密钥';appearance();}
+function value(id){if(booleanKeys.includes(id))return $(id).checked;return numericKeys.includes(id)?Number($(id).value):$(id).value;}
+function fill(){for(const id of [...textKeys,...numericKeys])if(!dirty.has(id))$(id).value=state.settings[id]??defaults[id];for(const id of booleanKeys)if(!dirty.has(id))$(id).checked=!!state.settings[id];$('font-label').value=$('font').value;$('key-status').textContent=state.settings.hasKey?'密钥已安全保存在 macOS 钥匙串':'尚未保存 API 密钥';appearance();}
 function save(){
  if(discarding)return discardPromise.then(()=>save());
  if(savePromise)return savePromise;
@@ -43,15 +44,15 @@ for(const el of document.querySelectorAll('input,select')){
  const changed=()=>{if(discarding)return;dirty.add(el.id);$('save-status').textContent='正在保存…';clearTimeout(saveTimer);saveTimer=setTimeout(()=>save().catch(error),250);};el.addEventListener('input',changed);el.addEventListener('change',changed);
 }
 $('font').addEventListener('input',()=>$('font-label').value=$('font').value);
-document.querySelectorAll('[data-pane]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-current',b===button?'page':'false'));document.querySelectorAll('[data-setting-pane]').forEach(p=>p.hidden=p.dataset.settingPane!==button.dataset.pane);});
+document.querySelectorAll('[data-pane]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-current',b===button?'page':'false'));document.querySelectorAll('[data-setting-pane]').forEach(p=>{if(p.dataset.settingPane===button.dataset.pane)revealAccessiblePane(p);else p.hidden=true;});});
 $('set-key').onclick=async()=>{try{state.settings=await call('model.setKey');fill();}catch(e){error(e);}};
 $('delete-key').onclick=async()=>{try{state.settings=await call('model.deleteKey');fill();}catch(e){error(e);}};
-$('check-model').onclick=async()=>{try{await save();if(dirty.size)throw new Error('请先完成并保存模型配置');$('check-model').disabled=true;$('model-result').textContent='真实请求执行中…';const r=await call('model.check');$('model-result').textContent=(r.text||r.response||'响应已保存')+' · token 用量 '+JSON.stringify(r.usage||null)+' · 金额未知';}catch(e){$('model-result').textContent=e.message;}finally{$('check-model').disabled=false;}};
+$('check-model').onclick=async()=>{try{await save();if(dirty.size)throw new Error('请先完成并保存模型配置');$('check-model').disabled=true;$('model-result').textContent='真实请求执行中…';const r=await call('model.check');$('model-result').textContent=(r.text||r.response||'响应已保存')+' · 实际模型 '+(r.actualModel||'未知')+' · '+(r.protocol||'协议未知')+' · token 用量 '+JSON.stringify(r.usage||null)+' · 金额未知';}catch(e){$('model-result').textContent=e.message;}finally{$('check-model').disabled=false;}};
 for(const [id,command]of [['sync-all','library.sync'],['backup','app.backup'],['restore','app.restore'],['reveal','app.revealData'],['diagnostics','app.diagnostics']])$(id).onclick=async()=>{try{$(id).disabled=true;await save();await call(command);$('storage-result').textContent='操作已完成';}catch(e){$('storage-result').textContent=e.message;}finally{$(id).disabled=false;}};
 $('discard-settings').onclick=()=>{
  if(discardPromise)return discardPromise;
  clearTimeout(saveTimer);discarding=true;
- const controls=[...textKeys,...numericKeys,'reduceMotion','discard-settings'].map(id=>[$(id),$(id).disabled]);
+ const controls=[...textKeys,...numericKeys,...booleanKeys,'discard-settings'].map(id=>[$(id),$(id).disabled]);
  controls.forEach(([el])=>el.disabled=true);
  // An issued native write cannot be recalled. Let it settle, then discard only
  // the remaining draft against an authoritative read of what really committed.

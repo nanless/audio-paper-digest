@@ -349,6 +349,43 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(await library.status().snapshotID==retained,"malformed PDF SHA preserves previous complete catalog")
         print("PDF LOOPBACK: mutable URL nil-version, changed real PDF pages, epoch/TTL/refresh/offline/SHA/immutable checks passed")
     }
+    static func testStrictLegacyIdentifiers() async throws {
+        let folder=try temporary();defer{try? FileManager.default.removeItem(at:folder)}
+        let pdf=try Data(contentsOf:URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("prototypes/macos-research/assets/micla-2610.27491v1.pdf"))
+        let legal=["math/0101001","hep-th/9901001","math.GT/0301001","cs.SE/0601001","nlin.CD/0201001"]
+        let bad=["Math/0101001","hep-TH/9901001","math.gt/0101001","math.Gt/0101001","math/0113001","math/0101001/extra","math/0101001\n","../math/0101001","math%2F0101001","math/0101001v0","math/0101001v01","math/0101001v1tail"]
+        var rows:[[String:Any]]=[]
+        for(index,id) in (legal+bad).enumerated(){var value=row(id,slug:"strict-\(index)",title:"Strict identifier fixture \(index)",date:"2026-10-24");value["paperId"]="arxiv:"+id;rows.append(value)}
+        var files=try fixture([rows]);for id in legal{files["/pdf/"+id+"v1.pdf"]=pdf}
+        let transport=LibraryFixtureTransport(files),library=try service(folder,transport);_=try await library.sync()
+        let papers=await library.list(limit:10000)
+        for id in legal {
+            let paper=papers.first{$0.id=="arxiv:"+id}
+            try expect(paper?.sourceVersion==id+"v1","canonical legacy casing stays exact in catalog: "+id)
+            try expect(try await library.downloadPDF(for:"arxiv:"+id).version==id+"v1","canonical legacy subject archive downloads exact version: "+id)
+        }
+        for index in bad.indices {
+            let blog=base.appendingPathComponent("posts/strict-\(index+legal.count)/").absoluteString
+            let paper=papers.first{$0.blogURL==blog}
+            try expect(paper?.id.hasPrefix("page:")==true,"invalid legacy identity cannot bypass validation through explicit paperId: "+bad[index].debugDescription)
+        }
+        print("ROUND 10 strict legacy catalog/archive grammar: PASS")
+    }
+    static func testPublishedScoreScalar() async throws {
+        let folder=try temporary();defer{try? FileManager.default.removeItem(at:folder)}
+        let accepted:[(Any,Double)]=[(0,0),("0",0),(7.5,7.5),("7.5",7.5),(10,10),("10.0",10),(" 7.5 ",7.5)]
+        let invalid:[Any]=[true,false,"","评分7.5/10","7.5/10","NaN","Infinity","11","-0.1",-1,11,NSNull(),[7.5],["score":7.5]]
+        var rows:[[String:Any]]=[]
+        for(index,value) in (accepted.map{$0.0}+invalid).enumerated(){var item=row("2501."+String(format:"%05d",index+1),slug:"score-\(index)",title:"Published scalar score fixture \(index)",date:"2026-10-24");item["score"]=value;rows.append(item)}
+        var missing=row("2501.99999",slug:"score-missing",title:"No declared score fixture",date:"2026-10-24");missing["score"]=nil;missing["summary"]="A sentence that mentions 7.5/10 is not the structured score.";rows.append(missing)
+        let transport=LibraryFixtureTransport(try fixture([rows])),library=try service(folder,transport);_=try await library.sync()
+        let papers=await library.list(limit:10000)
+        for(index,pair) in accepted.enumerated(){let paper=papers.first{$0.id=="arxiv:2501."+String(format:"%05d",index+1)};try expect(paper?.score==pair.1,"published declared string/number score retained exactly: \(pair.0)")}
+        for index in invalid.indices {let paper=papers.first{$0.id=="arxiv:2501."+String(format:"%05d",index+accepted.count+1)};try expect(paper?.score==nil,"invalid/out-of-range/boolean score stays missing rather than inferred")}
+        try expect(papers.first{$0.id=="arxiv:2501.99999"}?.score==nil,"missing structured score never scraped from prose")
+        try expect(await library.list(minimumScore:7.5).count==5,"score filters use published decimal strings and numeric values consistently")
+        print("ROUND 11 published score scalar: PASS")
+    }
     static func liveArticle() async throws {
         let folder=try temporary();defer{try? FileManager.default.removeItem(at:folder)}
         let seed=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("prototypes/macos-research")
@@ -397,6 +434,8 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
                 try await testFreshnessAndIsolation()
                 try await testSeedVersionMismatch()
                 try await testPDFVersionContract()
+                try await testStrictLegacyIdentifiers()
+                try await testPublishedScoreScalar()
             }
             print("PASS \(assertions) assertions")
         } catch { fputs("FAIL: \(error.localizedDescription)\n", stderr); exit(1) }

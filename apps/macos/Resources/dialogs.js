@@ -1,8 +1,75 @@
-// WebKit's native HTML top layer currently omits dialog children from the macOS
-// accessibility tree. Use explicit modal semantics and inert background instead.
+// Give newly revealed content a fresh visible accessibility container. Preserve
+// the actual input nodes and handlers; never recreate the guide/PDF iframe.
+export function revealAccessiblePane(pane,{focus=true}={}){
+ if(!pane)return null;
+ let visible=pane;
+ if(pane.hidden){
+  visible=pane.cloneNode(false);visible.hidden=false;
+  visible.append(...pane.childNodes);pane.replaceWith(visible);
+ }
+ if(focus)requestAnimationFrame(()=>{
+  if(!visible.isConnected||visible.hidden||visible.closest('[hidden],[inert]'))return;
+  const heading=visible.querySelector('h1,h2,h3');
+  if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}
+  else visible.querySelector('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled)')?.focus({preventScroll:true});
+ });
+ return visible;
+}
+
+// A closed HTMLDialogElement can retain an ignored WebKit AX subtree after it is
+// shown. Keep it as the stable API facade, but mount the actual, original controls
+// in a fresh generic modal region outside the inert app shell on every opening.
 export function installDialogs(){
- const bound=new WeakSet();let previousFocus=null;
- const reconcile=()=>{const open=!!document.querySelector('dialog[open]');document.body.classList.toggle('has-dialog',open);const shell=document.getElementById('app-window')||document.querySelector('.settings-body');if(shell)shell.inert=open;};
- function bind(dialog){if(bound.has(dialog))return;bound.add(dialog);dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label',dialog.id==='archive-dialog'?'存入 Zotero':'研究详情');dialog.showModal=()=>{if(dialog.hasAttribute('open'))return;previousFocus=document.activeElement;const heading=dialog.querySelector('h1,h2');if(heading)dialog.setAttribute('aria-label',heading.textContent);dialog.setAttribute('open','');reconcile();requestAnimationFrame(()=>dialog.querySelector('button:not(:disabled),input:not(:disabled),select:not(:disabled)')?.focus());};dialog.close=(value='')=>{dialog.returnValue=value;dialog.removeAttribute('open');reconcile();dialog.dispatchEvent(new Event('close'));previousFocus?.focus();};dialog.addEventListener('submit',event=>{if(event.submitter?.value==='cancel'){event.preventDefault();dialog.close('cancel');}});}
- const scan=()=>{document.querySelectorAll('dialog').forEach(bind);reconcile();};new MutationObserver(scan).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['open']});document.addEventListener('keydown',event=>{if(event.key==='Escape'){const open=[...document.querySelectorAll('dialog[open]')].at(-1);if(open){event.preventDefault();open.close('cancel');}}});scan();
+ const bound=new WeakSet(),opened=[];
+ const shell=()=>document.getElementById('app-window')||document.querySelector('.settings-body');
+ const reconcile=()=>{const open=opened.length>0;document.body.classList.toggle('has-dialog',open);const root=shell();if(root)root.inert=open;for(const entry of opened)entry.surface.inert=entry!==opened.at(-1);};
+ const focusable=surface=>[...surface.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),select:not(:disabled),[tabindex="0"]')].filter(el=>!el.closest('[hidden],[inert]')&&el.getClientRects().length);
+ function bind(dialog){
+  if(bound.has(dialog))return;bound.add(dialog);
+  const id=dialog.id,classes=dialog.className,originalQuery=dialog.querySelector.bind(dialog),originalQueryAll=dialog.querySelectorAll.bind(dialog);
+  let entry=null;
+  dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label',id==='archive-dialog'?'存入 Zotero':'研究详情');
+  dialog.querySelector=selector=>entry?entry.surface.querySelector(selector):originalQuery(selector);
+  dialog.querySelectorAll=selector=>entry?entry.surface.querySelectorAll(selector):originalQueryAll(selector);
+  dialog.showModal=()=>{
+   if(entry){const heading=entry.surface.querySelector('h1,h2');if(heading)entry.surface.setAttribute('aria-label',heading.textContent);return;}
+   const previousFocus=document.activeElement,surface=document.createElement('section');
+   surface.id=id;surface.className=classes;surface.dataset.dialogSurface='';surface.setAttribute('role','dialog');surface.setAttribute('aria-modal','true');surface.setAttribute('open','');
+   const heading=originalQuery('h1,h2');surface.setAttribute('aria-label',heading?.textContent||dialog.getAttribute('aria-label'));
+   surface.style.cssText='display:block;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);margin:0;z-index:200;overflow:auto;max-height:calc(100vh - 48px)';
+   // Keep the existing facade reference valid for Zotero/storage async callbacks,
+   // while global ID lookups and CSS resolve to the actual visible region.
+   dialog.id=id+'-facade';dialog.className='';dialog.setAttribute('aria-hidden','true');dialog.style.display='none';dialog.setAttribute('open','');
+   surface.append(...dialog.childNodes);document.body.append(surface);
+   entry={dialog,surface,previousFocus};opened.push(entry);
+   surface.showModal=dialog.showModal;surface.close=value=>dialog.close(value);
+   Object.defineProperty(surface,'open',{get:()=>!!entry});
+   surface.addEventListener('submit',event=>{
+    if(event.target.getAttribute('method')==='dialog'){
+     event.preventDefault();event.stopImmediatePropagation();
+     if(event.submitter?.value==='cancel')dialog.close('cancel');
+    }
+   },true);
+   reconcile();requestAnimationFrame(()=>{if(entry?.surface===surface)focusable(surface)[0]?.focus({preventScroll:true});});
+  };
+  dialog.close=(value='')=>{
+   if(!entry)return;
+   const closing=entry;entry=null;opened.splice(opened.indexOf(closing),1);
+   dialog.returnValue=value;dialog.append(...closing.surface.childNodes);closing.surface.remove();dialog.removeAttribute('open');dialog.removeAttribute('aria-hidden');dialog.style.removeProperty('display');dialog.id=id;dialog.className=classes;
+   reconcile();dialog.dispatchEvent(new Event('close'));
+   if(closing.previousFocus?.isConnected&&!closing.previousFocus.closest('[inert],[hidden]'))closing.previousFocus.focus({preventScroll:true});
+  };
+ }
+ const scan=()=>{document.querySelectorAll('dialog').forEach(bind);};
+ new MutationObserver(scan).observe(document.body,{childList:true,subtree:true});
+ document.addEventListener('keydown',event=>{
+  const top=opened.at(-1);if(!top)return;
+  if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();top.dialog.close('cancel');}
+  if(event.key==='Tab'){
+   const fields=focusable(top.surface);if(!fields.length){event.preventDefault();return;}
+   const index=fields.indexOf(document.activeElement);
+   if(event.shiftKey&&(index<=0)){event.preventDefault();fields.at(-1).focus();}
+   else if(!event.shiftKey&&(index<0||index===fields.length-1)){event.preventDefault();fields[0].focus();}
+  }
+ });scan();
 }

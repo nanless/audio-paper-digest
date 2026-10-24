@@ -31,9 +31,47 @@ import Darwin
             try expect((input["messages"] as? [[String:Any]])?.first?["role"] as? String=="system","full actual system prompt sealed")
             try expect(!String(decoding:bytes,as:UTF8.self).contains("test-only-not-a-real-key"),"sealed input excludes API key")
             try expect(first["inputSHA256"] as? String==sha256(bytes),"saved input bytes bound by SHA")
+            let defaultConfig=input["config"] as! [String:Any]
+            try expect(defaultConfig["responsesStream"] as? Bool==false && defaultConfig["reasoningEffort"] as? String=="default","absent settings seal explicit app defaults without production environment")
+            for invalid:[String:Any] in [["responsesStream":"true"],["reasoningEffort":"minimal"]] {
+                try store.updateSettings(invalid);let before=(store.value["sessions"] as? [[String:Any]] ?? []).count;var rejected=false
+                do{_=try await service.run(id:UUID().uuidString,paperID:"test:invalid-config",question:"不能发送非法配置",evidence:"本机材料",source:source)}catch{rejected=true}
+                try expect(rejected && (store.value["sessions"] as? [[String:Any]] ?? []).count==before,"invalid Responses parameter rejects before request ledger or HTTP")
+                try store.updateSettings(["responsesStream":false,"reasoningEffort":"default"])
+            }
             try store.updateSettings(["endpoint":server+"/responses/v1","protocol":"responses"])
             let responses=try await service.run(id:UUID().uuidString,paperID:"test:paper",question:"Responses兼容",evidence:"本地材料",source:source)
             try expect(responses["status"] as? String=="complete" && responses["protocol"] as? String=="openai_responses","actual worker Responses route")
+            try store.updateSettings(["endpoint":server+"/configured/v1","responsesStream":true,"reasoningEffort":"low"])
+            let streaming=try await service.run(id:UUID().uuidString,paperID:"test:config",question:"显式配置",evidence:"本机材料",source:source)
+            try expect(streaming["status"] as? String=="complete" && streaming["responsesStream"] as? Bool==true && streaming["reasoningEffort"] as? String=="low","actual SSE terminal result preserves explicit app parameters")
+            let streamingReuse=try await service.run(id:UUID().uuidString,paperID:"test:config",question:"显式配置",evidence:"本机材料",source:source)
+            try expect(streamingReuse["reused"] as? Bool==true,"same explicit stream/effort result reused without HTTP")
+            try store.updateSettings(["reasoningEffort":"medium"])
+            let effortChanged=try await service.run(id:UUID().uuidString,paperID:"test:config",question:"显式配置",evidence:"本机材料",source:source)
+            try expect(effortChanged["fingerprint"] as? String != streaming["fingerprint"] as? String,"reasoning effort belongs to paid request fingerprint")
+            try store.updateSettings(["responsesStream":false])
+            let streamChanged=try await service.run(id:UUID().uuidString,paperID:"test:config",question:"显式配置",evidence:"本机材料",source:source)
+            try expect(streamChanged["fingerprint"] as? String != effortChanged["fingerprint"] as? String,"stream setting belongs to request fingerprint")
+            for route in ["reasoning-only","empty-only"] {
+                try store.updateSettings(["endpoint":server+"/"+route+"/v1","responsesStream":route=="reasoning-only","reasoningEffort":"low"])
+                let id=UUID().uuidString;var failure=""
+                do{_=try await service.run(id:id,paperID:"test:reasoning",question:"短连接验证",evidence:"只要求简短确认",source:source,check:true)}catch{failure=error.localizedDescription}
+                let saved=store.session(id)!,usage=saved["usage"] as? [String:Any] ?? [:],error=saved["error"] as? [String:Any] ?? [:]
+                try expect(!failure.isEmpty && saved["status"] as? String=="failed" && saved["text"] as? String=="","no visible text never becomes success")
+                try expect(saved["actualModel"] as? String=="reported-reasoning-fixture" && saved["protocol"] as? String=="openai_responses" && usage["input_tokens"] as? Int==155,"no-text response retains actual model, protocol and real raw token usage")
+                try expect((usage["output_tokens_details"] as? [String:Any])?["reasoning_tokens"] as? Int==(route=="reasoning-only" ? 4094:5),"reasoning token detail survives incomplete/empty response")
+                try expect(error["code"] as? String==(route=="reasoning-only" ? "MODEL_OUTPUT_TRUNCATED":"MODEL_EMPTY_OUTPUT") && saved["finishStatus"] as? String==(route=="reasoning-only" ? "incomplete":"completed"),"accurate reason precedes empty output classification")
+                try expect(failure.contains("155") && failure.contains("reported-reasoning-fixture") && failure.contains("不会自动重发"),"native error exposes retained usage rather than generic empty body")
+                let recovered=try JSONSerialization.jsonObject(with:Data(contentsOf:directory.appendingPathComponent("ModelUsage/"+id+"-response.json"))) as! [String:Any]
+                try expect((recovered["session"] as? [String:Any])?["usage"] as? NSDictionary==usage as NSDictionary,"signed recovery preserves same failed response usage")
+            }
+            try store.updateSettings(["responsesStream":false,"reasoningEffort":"default"])
+            try store.updateSettings(["endpoint":server+"/incomplete-other/v1"])
+            let otherIncomplete=UUID().uuidString;var incompleteRejected=false
+            do{_=try await service.run(id:otherIncomplete,paperID:"test:partial",question:"保留部分响应",evidence:"本机夹具",source:source)}catch{incompleteRejected=true}
+            let incomplete=store.session(otherIncomplete)!
+            try expect(incompleteRejected && incomplete["status"] as? String=="failed" && incomplete["text"] as? String=="真实返回但未完成的部分正文" && (incomplete["error"] as? [String:Any])?["code"] as? String=="MODEL_RESPONSE_INCOMPLETE","other incomplete reason preserves actual partial text without granting completion")
             try store.updateSettings(["endpoint":server+"/coding/v1","model":"mimo-desktop-test","protocol":"chat"])
             let explicitChat=try await service.run(id:UUID().uuidString,paperID:"test:protocol-chat",question:"显式Chat协议",evidence:"只发本机测试材料",source:source)
             try expect(explicitChat["status"] as? String=="complete" && explicitChat["protocol"] as? String=="openai","explicit chat overrides endpoint/model auto inference")
@@ -96,7 +134,7 @@ import Darwin
             try expect(checked["kind"] as? String=="connection-check" && studied["kind"] as? String=="study" && studied["reused"] as? Bool==false,"connection checks cannot become reused research results")
             try expect(checked["fingerprint"] as? String != studied["fingerprint"] as? String,"request purpose and actual check budget have distinct fingerprint")
             let checkedInput=try JSONSerialization.jsonObject(with:Data(contentsOf:directory.appendingPathComponent("ModelUsage/"+(checked["id"] as! String)+"-input.json"))) as! [String:Any]
-            try expect((checkedInput["config"] as? [String:Any])?["maxTokens"] as? Int==1024,"sealed connection input records actual 1024 budget")
+            try expect((checkedInput["config"] as? [String:Any])?["maxTokens"] as? Int==4096,"sealed connection input records actual 4096 budget")
             let otherPaper=try await service.run(id:UUID().uuidString,paperID:"test:other-paper",question:"解释这个实际片段",evidence:"这是一段本地测试材料",source:source)
             try expect(otherPaper["reused"] as? Bool==false && otherPaper["paperID"] as? String=="test:other-paper" && otherPaper["fingerprint"] as? String != first["fingerprint"] as? String,"identical evidence from another paper cannot reuse a different paper session")
             // Recreate the crash boundary after a valid response was sealed but before personal.json adopted it.
@@ -163,7 +201,7 @@ import Darwin
             try expect(!journal.isEmpty,"actual transport journal exists")
             try expect(journal.allSatisfy{($0["runId"] as? String)?.count==36 && ($0["unitId"] as? String)?.count==64},"actual journal keeps normalized session and unit identities")
             let starts=journal.filter{$0["kind"] as? String=="request_started"},terminals=journal.filter{$0["kind"] as? String=="request"}
-            try expect(starts.count==18 && terminals.count==17 && terminals.allSatisfy{terminal in starts.contains{$0["eventId"] as? String==terminal["eventId"] as? String}},"actual usage start and terminal share eventID, cancelled request remains honestly unresolved")
+            try expect(starts.count==24 && terminals.count==23 && terminals.allSatisfy{terminal in starts.contains{$0["eventId"] as? String==terminal["eventId"] as? String}},"actual usage start and terminal share eventID, cancelled request remains honestly unresolved")
             var orphan=pendingFirst;orphan["id"]=UUID().uuidString;try store.appendSession(orphan)
             _=ModelService(directory:directory,store:store,keyProvider:{nil},resourcesDirectory:resources)
             try expect(store.session(orphan["id"] as! String)?["status"] as? String=="interrupted" && store.session(orphan["id"] as! String)?["charge"] as? String=="unknown","restart marks unrecovered pending sessions interrupted without resending")

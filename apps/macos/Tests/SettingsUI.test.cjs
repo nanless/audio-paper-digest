@@ -34,6 +34,10 @@ let browser,passed=0;
           window.dispatchEvent(new CustomEvent('settings.changed'));
           return clone(f.settings);
         }
+        if(command==='model.check'){
+          if(f.failCheck)throw Error('输出被 max_output_tokens=4096 截断 · 实际模型 reported-reasoning-fixture · openai_responses · 用量 {"input_tokens":155,"output_tokens":4096} · 费用金额未知；不会自动重发');
+          return {text:'真实本机夹具确认',actualModel:'reported-fixture',protocol:'openai_responses',usage:{input_tokens:12,output_tokens:7}};
+        }
         throw Error('Unexpected native fixture command: '+command);
       }}}};
     },settings);
@@ -50,6 +54,16 @@ let browser,passed=0;
     const {page,errors}=await fixture(settings);
     try{await action(page);assert.deepEqual(errors,[]);passed++;console.log('PASS '+name);}finally{await page.close();}
   }
+  await check('explicit Responses parameters persist as boolean and enum before check',async page=>{
+    await page.locator('[data-pane=model]').click();assert.equal(await page.locator('#responsesStream').isChecked(),false);assert.equal(await page.locator('#reasoningEffort').inputValue(),'default');
+    await page.locator('#responsesStream').check();await page.locator('#reasoningEffort').selectOption('low');await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('reported-fixture'));
+    assert.equal(await page.evaluate(()=>fixture.settings.responsesStream),true);assert.equal(await page.evaluate(()=>fixture.settings.reasoningEffort),'low');
+    const calls=await page.evaluate(()=>fixture.calls);assert(calls.find(c=>c.command==='settings.save'&&c.payload.responsesStream===true));assert.equal(calls.filter(c=>c.command==='model.check').length,1);assert((await page.locator('#model-result').textContent()).includes('12'));
+  });
+  await check('incomplete connection error shows actual usage and does not retry',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>fixture.failCheck=true);await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('不会自动重发'));
+    const result=await page.locator('#model-result').textContent();assert(result.includes('4096')&&result.includes('155')&&result.includes('reported-reasoning-fixture'));await page.waitForTimeout(350);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);assert.equal(await page.locator('#check-model').isDisabled(),false);
+  });
   await check('unchanged flush issues no write',async page=>{
     assert.deepEqual(await page.evaluate(()=>window.paperDigestFlushSettings()),{saved:true});assert.equal((await writes(page)).length,0);
   });

@@ -465,7 +465,8 @@ actor ZoteroService {
         return key!
     }
     static func validIdentity(_ identity: String, sourceURL: String) -> Bool {
-        if identity.range(of: #"^(arxiv:[0-9]{4}\.[0-9]{4,5}(v[0-9]+)?|doi:10\.[0-9]{4,9}/[^\s]+|conference:[A-Za-z0-9][A-Za-z0-9._:-]{2,500})$"#, options: .regularExpression) != nil { return true }
+        if identity.hasPrefix("arxiv:") { return validArxivIdentifier(String(identity.dropFirst(6))) }
+        if identity.range(of: #"^(doi:10\.[0-9]{4,9}/[^\s]+|conference:[A-Za-z0-9][A-Za-z0-9._:-]{2,500})$"#, options: .regularExpression) != nil { return true }
         guard identity.hasPrefix("page:"), let url = URL(string: sourceURL),
               url.scheme == "https", url.host == "nanless.github.io", url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil else { return false }
@@ -473,6 +474,11 @@ actor ZoteroService {
         return path.hasPrefix("/audio-paper-digest-blog/posts/") && !path.contains("..") &&
             path.hasSuffix("/") && URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath == path &&
             !(path.removingPercentEncoding ?? path).split(separator: "/").contains("..") && !path.contains("\n") && !path.contains("\r")
+    }
+    // Legacy archive names are lowercase, with an optional canonical uppercase
+    // subject class (math.GT, cs.SE). The slash is identifier syntax, never a path.
+    private static func validArxivIdentifier(_ value: String) -> Bool {
+        DesktopArxivIdentifier.base(of:value) != nil
     }
     static func identityTag(_ identity: String) -> String { "paper-digest:identity:" + sha256(Data(identity.utf8)) }
     static func matchesIdentity(_ identity: String, data: [String: Any]) -> Bool {
@@ -483,16 +489,19 @@ actor ZoteroService {
         if identity.hasPrefix("doi:") {
             return normalizedDOI(data["DOI"] as? String ?? "") == normalizedDOI(String(identity.dropFirst(4)))
         }
-        let expected = String(identity.dropFirst(6)).replacingOccurrences(of: #"v\d+$"#, with: "", options: .regularExpression)
-        let idPattern = NSRegularExpression.escapedPattern(for: expected) + #"(?:v[0-9]+)?"#
+        guard identity.hasPrefix("arxiv:"), validArxivIdentifier(String(identity.dropFirst(6))) else { return false }
+        let expected = String(identity.dropFirst(6)).replacingOccurrences(of: #"v[1-9][0-9]*$"#, with: "", options: .regularExpression)
+        let idPattern = NSRegularExpression.escapedPattern(for: expected) + #"(?:v[1-9][0-9]*)?"#
         let archiveID = (data["archiveID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if archiveID.range(of: "^" + idPattern + "$", options: .regularExpression) != nil { return true }
+        if archiveID.range(of: #"\A"# + idPattern + #"\z"#, options: .regularExpression) != nil { return true }
         if let raw = data["url"] as? String, let url = URL(string: raw),
            ["arxiv.org", "export.arxiv.org"].contains(url.host?.lowercased() ?? ""),
            ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-           url.path.range(of: "^/(?:abs|pdf)/" + idPattern + #"(?:\.pdf)?$"#, options: .regularExpression) != nil { return true }
+           url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+           URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath == url.path,
+           url.path.range(of: #"\A/(?:abs|pdf)/"# + idPattern + #"(?:\.pdf)?\z"#, options: .regularExpression) != nil { return true }
         let extra = data["extra"] as? String ?? ""
-        return extra.range(of: #"(?im)^\s*(?:PaperDigest-ID:\s*arxiv:|arXiv:\s*)"# + idPattern + #"(?:\s+\[[^\]\r\n]+\])?\s*$"#, options: .regularExpression) != nil
+        return extra.range(of: #"(?m)^[\t ]*(?i:PaperDigest-ID:[\t ]*arxiv:|arXiv:[\t ]*)"# + idPattern + #"(?:[\t ]+\[[^\]\r\n]+\])?[\t ]*$"#, options: .regularExpression) != nil
     }
     private static func normalizedDOI(_ text: String) -> String {
         text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
