@@ -299,7 +299,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
                 if (store.value["personalPapers"] as? [String:[String:Any]])?[base] != nil{row["paperID"]=base}
             }
             row["status"]=(result["status"] as? String=="partial" || result["isStale"] as? Bool==true) ? "partial":"complete";row["message"]=result["isStale"] as? Bool==true ? "当前来源复验失败，保留可读旧缓存，请核对提示":"操作已结束，请查看实际结果";row["result"]=result.filter{["status","archiveID","parentKey","retryable","reused","sha256","paperCount","recordCount","identity","title"].contains($0.key)};row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");return result
-        } catch {jobs[identifier]=nil;row=(store.value["jobs"] as? [[String:Any]])?.first{$0["id"] as? String==identifier} ?? row;row["status"]=(task.isCancelled || error is CancellationError) ? "cancelled":"failed";row["message"]=error.localizedDescription;row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");throw error}
+        } catch {jobs[identifier]=nil;row=(store.value["jobs"] as? [[String:Any]])?.first{$0["id"] as? String==identifier} ?? row;row["status"]=(task.isCancelled || error is CancellationError || error is DesktopOperationCancelled) ? "cancelled":"failed";row["message"]=error.localizedDescription;row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");throw error}
     }
     func recordProgress(id:String,update:[String:Any]) {
         guard var row=(store.value["jobs"] as? [[String:Any]])?.first(where:{$0["id"] as? String==id}) else{return}
@@ -379,7 +379,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     }
     func setModelKey() throws {
         let alert=NSAlert();alert.messageText="保存模型 API 密钥";alert.informativeText="密钥只进入 macOS 钥匙串，不返回网页内容、日志或备份。";let field=NSSecureTextField(frame:NSRect(x:0,y:0,width:360,height:26));field.placeholderString="输入你自己的 API 密钥";alert.accessoryView=field;alert.addButton(withTitle:"保存到钥匙串");alert.addButton(withTitle:"取消")
-        guard alert.runModal() == .alertFirstButtonReturn else{throw DesktopError.message("已取消，原配置保留")};guard !field.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw DesktopError.message("密钥不能为空")};try DesktopKeychain.save(field.stringValue,account:"primary");field.stringValue=""
+        guard alert.runModal() == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消，原配置保留")};guard !field.stringValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw DesktopError.message("密钥不能为空")};try DesktopKeychain.save(field.stringValue,account:"primary");field.stringValue=""
     }
     func configureSchedule(){schedule?.invalidate();let hours=max(1,min(168,store.setting("syncHours") as? Int ?? 12));schedule=Timer.scheduledTimer(withTimeInterval:Double(hours)*3600,repeats:true){[weak self]_ in Task{@MainActor in self?.syncNow()}}}
     @objc func didWake(){if Date().timeIntervalSince(lastSyncAttempt)>300{syncNow()}}
@@ -404,5 +404,5 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func restore(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try await restoreData();emit("personal.changed")}catch{showError(error)}}}
     @objc func exportDiagnostics(){guard mainContextMenuAvailable() else{return};Task{do{try await diagnostics()}catch{showError(error)}}}
     @objc func printPDF(){guard mainContextMenuAvailable() else{return};guard let doc=pdfView.document else{showError(DesktopError.message("请先打开原文 PDF"));return};doc.printOperation(for:NSPrintInfo.shared,scalingMode:.pageScaleToFit,autoRotate:true)?.runModal(for:window,delegate:nil,didRun:nil,contextInfo:nil)}
-    func showError(_ error:Error){let alert=NSAlert();alert.messageText="操作未能完成";alert.informativeText=error.localizedDescription;alert.runModal()}
+    func showError(_ error:Error){guard !(error is DesktopOperationCancelled) else{return};let alert=NSAlert();alert.messageText="操作未能完成";alert.informativeText=error.localizedDescription;alert.runModal()}
 }

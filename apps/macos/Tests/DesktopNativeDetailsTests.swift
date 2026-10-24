@@ -16,6 +16,8 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
  func remove(serverID:String)throws{throw DesktopError.message("Fixture forbids credential removal")}
 }
 
+@MainActor private final class NativeErrorPresentationProbe {var shown=0}
+
 @main struct DesktopNativeDetailsTests {
  static func main() {
     _=NSApplication.shared
@@ -52,6 +54,19 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     }
     func wait(_ action:()async throws->Bool)async throws{for _ in 0..<400{if try await action(){return};try await Task.sleep(nanoseconds:10_000_000)};throw DesktopError.message("Timed out waiting for own isolated detail")}
     func show(_ kind:NativeDetailKind)async throws->(WKWebView,String){try await app.showNativeDetails(kind);guard let view=app.storageDetailWeb,let id=app.storageDetailSession?.id else{throw DesktopError.message("Missing actual detail")};try await wait{(try? await view.evaluateJavaScript("!!document.querySelector('#detail-content h1,#detail-content h2')")) as? Bool==true};return(view,id)}
+    // Own modal windows only. The watchdog also makes a regression fail rather
+    // than hanging this isolated harness inside NSAlert.runModal().
+    func errorPresentation(_ error:Error,expected:Bool)throws {
+        let probe=NativeErrorPresentationProbe()
+        let timer=Timer(timeInterval:0.04,repeats:true){_ in MainActor.assumeIsolated {
+            if let modal=NSApp.modalWindow {probe.shown+=1;modal.alphaValue=0;NSApp.abortModal()}
+        }}
+        RunLoop.main.add(timer,forMode:.modalPanel);RunLoop.main.add(timer,forMode:.common)
+        app.showError(error);timer.invalidate()
+        try check(expected ? probe.shown>0:probe.shown==0,expected ? "ordinary cancellation-looking failure still presents its real native error":"explicit user cancellation does not open an operation-failed alert")
+    }
+    try errorPresentation(DesktopOperationCancelled("已取消导出"),expected:false)
+    try errorPresentation(DesktopError.message("已取消导出"),expected:true)
     let (help,id)=try await show(.help)
     try await wait{(try? await help.evaluateJavaScript("!!document.querySelector('[data-detail-command=\"app.backup\"]')")) as? Bool==true}
     try check(app.storageDetailWindow?.title=="使用说明" && app.storageDetailWindow?.sheetParent===app.window,"help is real direct native sheet with its own title")
@@ -81,18 +96,38 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     (attached as? NSSavePanel)?.cancel(nil)
     try await rejects("cancelled actual save cannot report saved"){_=try await save.value}
     try check(!app.storageDetailBusy && !app.storageDetailSystemPanel && app.currentPaperID.hasPrefix("local:"),"actual save cancellation releases busy flags and keeps original source")
+    let exportJob=(app.store.value["jobs"] as? [[String:Any]] ?? []).last{$0["command"] as? String=="app.export"}
+    try check(exportJob?["status"] as? String=="cancelled" && exportJob?["message"] as? String=="已取消导出","real save-panel cancellation persists a cancelled job with original Chinese reason")
+    let ended=ISO8601DateFormatter().date(from:exportJob?["endedAt"] as? String ?? ""),started=ISO8601DateFormatter().date(from:exportJob?["startedAt"] as? String ?? "")
+    try check(ended != nil && started != nil && ended! >= started! && exportJob?["result"]==nil && app.jobs.isEmpty,"cancelled export has valid terminal time, no saved result and no active task")
+
     _=app.closeStorageDetails()
     for command in ["app.backup","app.restore","app.diagnostics"] {
         let (view,owner)=try await show(.help)
+        let originalStore=try JSONSerialization.data(withJSONObject:app.store.snapshot(),options:.sortedKeys)
         let operation=Task{@MainActor in try await app.storageDetailCommand(command,payload:["presentationID":owner],source:view)}
         try await wait{app.storageDetailWindow?.attachedSheet != nil}
         let panel=app.storageDetailWindow!.attachedSheet
         try check(panel is NSSavePanel && panel?.sheetParent===app.storageDetailWindow,"actual "+command+" system panel is parented to help leaf")
         (panel as? NSSavePanel)?.cancel(nil)
-        try await rejects("actual "+command+" cancellation never reports completion"){_=try await operation.value}
+        var cancelled:DesktopOperationCancelled?
+        do{_=try await operation.value}catch{cancelled=error as? DesktopOperationCancelled}
+        let expected=command=="app.backup" ? "已取消备份":command=="app.restore" ? "已取消恢复":"已取消导出"
+        try check(cancelled?.localizedDescription==expected,"actual "+command+" cancellation has a structured type and preserves Chinese reason")
         try check(!app.storageDetailBusy && !app.maintenanceBusy && !app.storageDetailSystemPanel,"actual "+command+" cancellation releases all operation flags")
+        try check(originalStore == (try JSONSerialization.data(withJSONObject:app.store.snapshot(),options:.sortedKeys)),"actual "+command+" cancellation leaves personal store exactly unchanged")
         _=app.closeStorageDetails()
     }
+    // Exercise the actual persistent job closure, not a label-only fixture.
+    // Cancellation-looking ordinary failures must remain failures.
+    for (name,issue) in [("message",DesktopError.message("已取消导出") as Error),("io",CocoaError(.fileWriteOutOfSpace) as Error),("source",DesktopError.message("来源核验失败，未写入") as Error)] {
+        let identifier="ordinary-failure-"+name
+        do{_=try await app.runJob("app.export",payload:[:],identifier:identifier){_ in throw issue}}catch{}
+        let row=(app.store.value["jobs"] as? [[String:Any]] ?? []).first{$0["id"] as? String==identifier}
+        try check(row?["status"] as? String=="failed" && row?["message"] as? String==issue.localizedDescription && row?["result"]==nil,"actual job keeps ordinary "+name+" error failed without parsing cancellation words")
+    }
+    do{_=try await app.runJob("app.export",payload:[:],identifier:"genuine-task-cancel"){_ in throw CancellationError()}}catch{}
+    try check((app.store.value["jobs"] as? [[String:Any]] ?? []).first{$0["id"] as? String=="genuine-task-cancel"}?["status"] as? String=="cancelled","genuine Swift task cancellation still records cancelled")
     let (zotero,zoteroID)=try await show(.zotero)
     try await wait{(try? await zotero.evaluateJavaScript("document.querySelector('#zotero-result')?.textContent.includes('本地 PDF 缺少已核验书目')")) as? Bool==true}
     try await blockedModel("Zotero")

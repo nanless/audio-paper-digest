@@ -189,7 +189,7 @@ import UniformTypeIdentifiers
         try requireDocumentContext(access,kinds:[.export])
         let (data,ext,title)=built
         let panel=NSSavePanel();panel.nameFieldStringValue=String(title.prefix(70)).replacingOccurrences(of:"/",with:"-")+"."+ext
-        guard try await documentPanel(panel,access:access,kinds:[.export]) == .OK,let url=panel.url else{throw DesktopError.message("已取消导出")};try Task.checkCancellation()
+        guard try await documentPanel(panel,access:access,kinds:[.export]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消导出")};try Task.checkCancellation()
         guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，导出未写入")}
         try requireDocumentContext(access,kinds:[.export])
         try data.write(to:url,options:.atomic)
@@ -201,7 +201,7 @@ import UniformTypeIdentifiers
         guard jobs.isEmpty else{throw DesktopError.message("请待当前任务结束再备份，保证资料和任务检查点属于同一快照")}
         let payload=try BackupCodec.collect(sourceDirectory:directory)
         let panel=NSSavePanel();panel.nameFieldStringValue="论文速递-"+ISO8601DateFormatter().string(from:Date()).replacingOccurrences(of:":",with:"-")+".paperdigest"
-        guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopError.message("已取消备份")}
+        guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消备份")}
         try requireDocumentContext(access,kinds:[.help])
         try Task.checkCancellation()
         try BackupCodec.encode(payload).write(to:url,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)
@@ -211,14 +211,14 @@ import UniformTypeIdentifiers
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未开始恢复")}
         maintenanceBusy=true;defer{maintenanceBusy=false}
         guard jobs.isEmpty else{throw DesktopError.message("请先结束任务再恢复资料")}
-        let panel=NSOpenPanel();panel.allowsMultipleSelection=false;guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopError.message("已取消恢复")}
+        let panel=NSOpenPanel();panel.allowsMultipleSelection=false;guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消恢复")}
         guard let count=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,count<=750*1024*1024 else{throw DesktopError.message("备份大小超过限制")}
         let payload=try BackupCodec.parse(Data(contentsOf:url))
         let fm=FileManager.default,parent=directory.deletingLastPathComponent(),old=parent.appendingPathComponent("PaperDigest-before-restore-"+UUID().uuidString)
         let staged=try BackupCodec.stage(payload,parentDirectory:parent),stage=staged.stageDirectory
         defer{try? fm.removeItem(at:stage)}
         let stagedStore=try DesktopStore(directory:stage);try validateSettings(stagedStore.value["settings"] as? [String:Any] ?? [:]);_=try LibraryService(dataDirectory:stage)
-        let alert=NSAlert();alert.messageText="恢复个人研究空间？";alert.informativeText="全部文件已通过 SHA 校验。当前资料将保存在同目录旁的恢复前副本中；API 与 Zotero 钥匙串授权不随备份迁移。";alert.addButton(withTitle:"恢复并重新载入");alert.addButton(withTitle:"取消");guard try await documentConfirmation(alert,access:access,kinds:[.help]) == .alertFirstButtonReturn else{throw DesktopError.message("已取消恢复")}
+        let alert=NSAlert();alert.messageText="恢复个人研究空间？";alert.informativeText="全部文件已通过 SHA 校验。当前资料将保存在同目录旁的恢复前副本中；API 与 Zotero 钥匙串授权不随备份迁移。";alert.addButton(withTitle:"恢复并重新载入");alert.addButton(withTitle:"取消");guard try await documentConfirmation(alert,access:access,kinds:[.help]) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消恢复")}
         try requireDocumentContext(access,kinds:[.help])
         try Task.checkCancellation()
         try fm.moveItem(at:directory,to:old)
@@ -321,6 +321,6 @@ import UniformTypeIdentifiers
         let report=await diagnosticsReport()
         try Task.checkCancellation()
         try requireDocumentContext(access,kinds:[.help])
-        let panel=NSSavePanel();panel.nameFieldStringValue="论文速递诊断.json";guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopError.message("已取消导出")};try requireDocumentContext(access,kinds:[.help]);try Task.checkCancellation();try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)
+        let panel=NSSavePanel();panel.nameFieldStringValue="论文速递诊断.json";guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消导出")};try requireDocumentContext(access,kinds:[.help]);try Task.checkCancellation();try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)
     }
 }

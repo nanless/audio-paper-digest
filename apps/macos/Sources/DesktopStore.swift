@@ -7,6 +7,14 @@ enum DesktopError: LocalizedError {
     var errorDescription: String? { switch self { case .message(let text): return text } }
 }
 
+// A user dismissed an application-owned operation. Keep its localized message
+// while recording cancellation independently of ordinary failure wording.
+struct DesktopOperationCancelled:LocalizedError {
+    let message:String
+    init(_ message:String){self.message=message}
+    var errorDescription:String?{message}
+}
+
 enum DesktopKeychain {
     static let service = "com.nanless.PaperDigest.models"
     static func load(_ account: String) throws -> String? {

@@ -47,7 +47,7 @@ extension PaperDigestApp {
         maintenanceBusy=true;defer{maintenanceBusy=false}
         guard let plan=payload["planID"] as? String else{throw DesktopError.message("请先生成真实清理计划")}
         let alert=NSAlert();alert.messageText="将未引用的缓存移到废纸篓？";alert.informativeText="确认后会重新核验文件和引用。个人笔记、PDF 原文、离线包、模型响应和 Zotero 检查点均保留。可在 Finder 的废纸篓中恢复。";alert.addButton(withTitle:"移到废纸篓");alert.addButton(withTitle:"取消")
-        guard await confirmStorageCleanup(alert) == .alertFirstButtonReturn else{throw DesktopError.message("已取消整理")}
+        guard await confirmStorageCleanup(alert) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消整理")}
         let checked=try await storage.validateCleanupPlan(planID:plan)
         let rows=checked["files"] as? [[String:Any]] ?? []
         let files=rows.compactMap{$0["filePath"] as? String}.map{URL(fileURLWithPath:$0)}
