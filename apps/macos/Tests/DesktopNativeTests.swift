@@ -198,6 +198,16 @@ private struct NoNativeCredentials: ZoteroCredentialStore {
             try app.unlockPDF(locked,passwordProvider:{requested=true;return nil})
             try require(!requested,"already unlocked document never asks for password")
         }
+        await checkAsync("bootstrap settings and non-model actions do not read any secret") {
+            var secretReads=0
+            app.model=ModelService(directory:root,store:app.store,keyProvider:{secretReads+=1;throw NativeTestFailure(message:"Non-model path must never access secret")})
+            let bootstrap=try await app.dispatch("app.bootstrap",payload:[:]),settings=bootstrap["settings"] as? [String:Any] ?? [:]
+            try require(settings["credentialState"] as? String=="unknown" && settings["hasKey"] is NSNull,"bootstrap reports uninspected state honestly")
+            _=try await app.dispatch("settings.save",payload:["appearance":"dark"])
+            _=try await app.dispatch("personal.snapshot",payload:[:]);_=try await app.dispatch("pdf.frame",payload:["visible":false])
+            for _ in 0..<5{_=app.model.configuration()}
+            try require(secretReads==0,"bootstrap/settings/personal/PDF/config paths perform zero secret reads")
+        }
         try require(app.jobs.isEmpty && (app.store.value["sessions"] as? [[String:Any]] ?? []).isEmpty,"No paid jobs or sessions created")
         print("Native AppKit/PDFKit regression: \(passed) passed; \(failures.count) failed. Real PDF, isolated temporary state, no application launch or external service calls.")
         if !failures.isEmpty{FileHandle.standardError.write(Data((failures.joined(separator:"\n")+"\n").utf8));fflush(stdout);exit(1)}

@@ -34,19 +34,24 @@ export function mountZotero(app) {
   const footer = dialog.querySelector('footer');
   $('archive-connect').remove();
   const grantButton = document.createElement('button'); grantButton.id = 'zotero-dialog-authorize'; grantButton.type = 'button'; grantButton.className = 'secondary-button'; grantButton.textContent = '请求授权…';
+  const checkButton = document.createElement('button'); checkButton.id = 'zotero-check-saved'; checkButton.type = 'button'; checkButton.className = 'secondary-button'; checkButton.textContent = '检查已保存许可…';
+  const settingsCheck = checkButton.cloneNode(true); settingsCheck.id = 'zotero-settings-check-saved'; $('zotero-authorize').before(settingsCheck);
   const start = document.createElement('button'); start.id = 'zotero-archive-start'; start.type = 'button'; start.className = 'primary-button'; start.textContent = '存入所选分类';
   const retry = document.createElement('button'); retry.id = 'zotero-archive-retry'; retry.type = 'button'; retry.className = 'secondary-button'; retry.textContent = '重试未完成部分'; retry.hidden = true;
   const open = document.createElement('button'); open.id = 'zotero-open-item'; open.type = 'button'; open.className = 'secondary-button'; open.textContent = '在 Zotero 中查看'; open.hidden = true;
-  footer.append(grantButton, retry, open, start);
+  footer.append(checkButton, grantButton, retry, open, start);
   const roleNames = {bibliography:'书目与目标分类','source-metadata':'完整来源元数据',pdf:'原始 PDF 附件',guide:'自包含图文导读',analysis:'个人解析',note:'研究笔记'};
 
   function updateControls() {
     const writable = !!status?.authorized && !!status?.remember && !!status?.writesSupported;
+    const unchecked = !status?.authorizationState || status.authorizationState === 'unknown';
     $('zotero-version-status').textContent = status?.running ? `Zotero ${status.version || '版本未知'}` : '尚未连接';
-    $('zotero-auth-status').textContent = status?.denied ? '已拒绝，未写入' : !status?.authorized ? '尚未授权' : status.remember ? '已获持续授权' : '仅单次授权，不能开始多步归档';
-    $('zotero-connection-message').textContent = writable ? '已获本机写入许可。将逐项保存并回读验证，失败项目可以续传。' : status?.authorized ? '单次许可不足以完成多步附件归档。请在 Zotero 的原生窗口中自行决定是否持续允许。' : '需要在 Zotero 的原生窗口中明确授权后才能写入。';
+    $('zotero-auth-status').textContent = status?.denied ? '已拒绝，未写入' : status?.authorizationState==='unavailable' ? '已保存许可未能读取' : !status?.authorized && unchecked ? '已保存许可尚未检查' : !status?.authorized ? '尚未授权' : status.remember ? '已获持续授权' : '仅单次授权，不能开始多步归档';
+    $('zotero-connection-message').textContent = writable ? '已获本机写入许可。将逐项保存并回读验证，失败项目可以续传。' : !status?.authorized && unchecked ? '连接与分类查询不读取密钥。可主动检查已保存许可；系统可能请你确认钥匙串访问。' : status?.authorized ? '单次许可不足以完成多步附件归档。请在 Zotero 的原生窗口中自行决定是否持续允许。' : '可检查已保存许可，或在 Zotero 原生窗口中明确请求新的写入授权。';
     $('zotero-authorize').disabled = busy; grantButton.disabled = busy;
     $('zotero-refresh').disabled = busy;
+    checkButton.disabled = busy || !status?.writesSupported; settingsCheck.disabled = checkButton.disabled;
+    checkButton.hidden = writable; settingsCheck.hidden = writable;
     start.disabled = busy || !writable || !materials || (!collectionKey() && !collectionName());
     retry.disabled = busy || !writable;
     grantButton.hidden = writable;
@@ -84,6 +89,14 @@ export function mountZotero(app) {
       notice(status.denied ? '已拒绝写入授权，没有开始归档' : status.remember ? 'Zotero 持续授权已就绪' : '获得一次写入许可；完整附件归档需要持续许可');
       await refresh();
     } catch (error) { failure(error); }
+    finally { busy = false; updateControls(); }
+  }
+  async function checkSavedAuthorization() {
+    if (busy) return;
+    busy = true; updateControls();
+    $('zotero-settings-result').textContent = '正在读取此文库的已保存许可；如系统询问，请自行决定是否允许。不会请求新的 Zotero 许可。';
+    try { status = await app.call('zotero.checkAuthorization', {}); await refresh(); }
+    catch (error) { failure(error); await refresh(); }
     finally { busy = false; updateControls(); }
   }
   function showResult(value) {
@@ -147,6 +160,7 @@ export function mountZotero(app) {
   $('zotero-open-archive').onclick = openArchive;
   $('zotero-refresh').onclick = refresh;
   $('zotero-authorize').onclick = authorize; grantButton.onclick = authorize;
+  checkButton.onclick = checkSavedAuthorization; settingsCheck.onclick = checkSavedAuthorization;
   $('zotero-collection').onchange = updateControls; $('zotero-new-collection').oninput = updateControls;
   start.onclick = archive; retry.onclick = () => resume();
   open.onclick = () => { if (lastResult?.parentKey) app.call('zotero.open',{key:lastResult.parentKey}).catch(failure); };

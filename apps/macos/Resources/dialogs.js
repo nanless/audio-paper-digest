@@ -22,24 +22,27 @@ export function revealAccessiblePane(pane,{focus=true}={}){
 export function installDialogs(){
  const bound=new WeakSet(),opened=[];
  const shell=()=>document.getElementById('app-window')||document.querySelector('.settings-body');
- const reconcile=()=>{const open=opened.length>0;document.body.classList.toggle('has-dialog',open);const root=shell();if(root)root.inert=open;for(const entry of opened)entry.surface.inert=entry!==opened.at(-1);};
+ const reconcile=()=>{const open=opened.length>0;document.body.classList.toggle('has-dialog',open);const root=shell();if(root)root.inert=open;for(const entry of opened)entry.surface.inert=entry!==opened.at(-1);window.dispatchEvent(new CustomEvent('modal.changed',{detail:{open}}));};
  const focusable=surface=>[...surface.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),select:not(:disabled),[tabindex="0"]')].filter(el=>!el.closest('[hidden],[inert]')&&el.getClientRects().length);
  function bind(dialog){
   if(bound.has(dialog))return;bound.add(dialog);
   const id=dialog.id,classes=dialog.className,originalQuery=dialog.querySelector.bind(dialog),originalQueryAll=dialog.querySelectorAll.bind(dialog);
   let entry=null;
-  dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.setAttribute('aria-label',id==='archive-dialog'?'存入 Zotero':'研究详情');
+  // The facade must never participate in WebKit's native modal AX selection.
+  // Only the visible generic surface owns dialog semantics.
+  dialog.removeAttribute('open');dialog.removeAttribute('role');dialog.removeAttribute('aria-modal');
+  Object.defineProperty(dialog,'open',{configurable:true,get:()=>!!entry});
   dialog.querySelector=selector=>entry?entry.surface.querySelector(selector):originalQuery(selector);
   dialog.querySelectorAll=selector=>entry?entry.surface.querySelectorAll(selector):originalQueryAll(selector);
   dialog.showModal=()=>{
    if(entry){const heading=entry.surface.querySelector('h1,h2');if(heading)entry.surface.setAttribute('aria-label',heading.textContent);return;}
    const previousFocus=document.activeElement,surface=document.createElement('section');
    surface.id=id;surface.className=classes;surface.dataset.dialogSurface='';surface.setAttribute('role','dialog');surface.setAttribute('aria-modal','true');surface.setAttribute('open','');
-   const heading=originalQuery('h1,h2');surface.setAttribute('aria-label',heading?.textContent||dialog.getAttribute('aria-label'));
+   const heading=originalQuery('h1,h2');surface.setAttribute('aria-label',heading?.textContent||(id==='archive-dialog'?'存入 Zotero':'研究详情'));
    surface.style.cssText='display:block;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);margin:0;z-index:200;overflow:auto;max-height:calc(100vh - 48px)';
    // Keep the existing facade reference valid for Zotero/storage async callbacks,
    // while global ID lookups and CSS resolve to the actual visible region.
-   dialog.id=id+'-facade';dialog.className='';dialog.setAttribute('aria-hidden','true');dialog.style.display='none';dialog.setAttribute('open','');
+   dialog.id=id+'-facade';dialog.className='';dialog.setAttribute('aria-hidden','true');dialog.style.display='none';
    surface.append(...dialog.childNodes);document.body.append(surface);
    entry={dialog,surface,previousFocus};opened.push(entry);
    surface.showModal=dialog.showModal;surface.close=value=>dialog.close(value);
@@ -55,7 +58,7 @@ export function installDialogs(){
   dialog.close=(value='')=>{
    if(!entry)return;
    const closing=entry;entry=null;opened.splice(opened.indexOf(closing),1);
-   dialog.returnValue=value;dialog.append(...closing.surface.childNodes);closing.surface.remove();dialog.removeAttribute('open');dialog.removeAttribute('aria-hidden');dialog.style.removeProperty('display');dialog.id=id;dialog.className=classes;
+   dialog.returnValue=value;dialog.append(...closing.surface.childNodes);closing.surface.remove();dialog.removeAttribute('aria-hidden');dialog.style.removeProperty('display');dialog.id=id;dialog.className=classes;
    reconcile();dialog.dispatchEvent(new Event('close'));
    if(closing.previousFocus?.isConnected&&!closing.previousFocus.closest('[inert],[hidden]'))closing.previousFocus.focus({preventScroll:true});
   };
@@ -71,5 +74,7 @@ export function installDialogs(){
    if(event.shiftKey&&(index<=0)){event.preventDefault();fields.at(-1).focus();}
    else if(!event.shiftKey&&(index<0||index===fields.length-1)){event.preventDefault();fields[0].focus();}
   }
- });scan();
+ });
+ window.addEventListener('personal.changed',()=>{for(const entry of [...opened].reverse())entry.dialog.close('cancel');});
+ scan();
 }

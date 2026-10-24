@@ -14,7 +14,7 @@ const error=e=>toast(e.message||String(e));
 const app={call,state,toast,error,emit:(name,detail)=>window.dispatchEvent(new CustomEvent(name,{detail})),exportArchiveMaterials:()=>call('archive.materials')};
 function appearance(){document.documentElement.style.colorScheme=state.settings.appearance==='system'?'light dark':state.settings.appearance||'light dark';}
 function value(id){if(booleanKeys.includes(id))return $(id).checked;return numericKeys.includes(id)?Number($(id).value):$(id).value;}
-function fill(){for(const id of [...textKeys,...numericKeys])if(!dirty.has(id))$(id).value=state.settings[id]??defaults[id];for(const id of booleanKeys)if(!dirty.has(id))$(id).checked=!!state.settings[id];$('font-label').value=$('font').value;$('key-status').textContent=state.settings.hasKey?'密钥已安全保存在 macOS 钥匙串':'尚未保存 API 密钥';appearance();}
+function fill(){for(const id of [...textKeys,...numericKeys])if(!dirty.has(id))$(id).value=state.settings[id]??defaults[id];for(const id of booleanKeys)if(!dirty.has(id))$(id).checked=!!state.settings[id];$('font-label').value=$('font').value;$('key-status').textContent=state.settings.credentialState==='unavailable'?'未能读取钥匙串；可再次主动发送请求并在系统窗口决定是否允许':state.settings.credentialState==='unknown'||state.settings.hasKey==null?'密钥状态未检查；仅在发送新模型请求时访问钥匙串':state.settings.hasKey?'本次已确认密钥存在于 macOS 钥匙串；发送时仍遵循系统访问许可':'尚未保存 API 密钥';appearance();}
 function save(){
  if(discarding)return discardPromise.then(()=>save());
  if(savePromise)return savePromise;
@@ -72,5 +72,5 @@ async function reload(){const generation=++reloadGeneration,result=await call('a
 window.paperDigestFlushSettings=async()=>{clearTimeout(saveTimer);await save();if(dirty.size)throw new Error('设置尚未保存，请先修正后再关闭');return {saved:true};};
 window.addEventListener('settings.changed',()=>reload().catch(error));
 for(const event of ['paper.changed','local.opened'])window.addEventListener(event,()=>reload().catch(error));
-window.addEventListener('personal.changed',()=>{dirty.clear();document.querySelectorAll('dialog[open]').forEach(d=>d.close());reload().catch(error);});
+window.addEventListener('personal.changed',()=>{dirty.clear();[...document.querySelectorAll('[data-dialog-surface][open]')].reverse().forEach(d=>d.close());reload().catch(error);});
 reload().then(()=>{const zotero=mountZotero(app);window.addEventListener('job.progress',e=>zotero.handleProgress(e.detail.progress||{}));}).catch(error);

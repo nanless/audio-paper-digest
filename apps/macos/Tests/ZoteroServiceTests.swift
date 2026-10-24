@@ -4,9 +4,16 @@ import CryptoKit
 private final class MemoryCredentialStore: ZoteroCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: Data] = [:]
-    func load(serverID: String) throws -> Data? { lock.withLock { values[serverID] } }
-    func save(_ data: Data, serverID: String) throws { lock.withLock { values[serverID] = data } }
-    func remove(serverID: String) throws { _ = lock.withLock { values.removeValue(forKey: serverID) } }
+    private var readCount=0
+    private var saveCount=0,removeCount=0
+    var failLoads=false
+    var loads:Int { lock.withLock{readCount} }
+    var saves:Int { lock.withLock{saveCount} }
+    var removes:Int { lock.withLock{removeCount} }
+    func snapshot()->[String:Data]{lock.withLock{values}}
+    func load(serverID: String) throws -> Data? { try lock.withLock { readCount+=1;if failLoads{throw NSError(domain:"FixtureCredentialPermissionDenied",code:1)};return values[serverID] } }
+    func save(_ data: Data, serverID: String) throws { lock.withLock { saveCount+=1;values[serverID] = data } }
+    func remove(serverID: String) throws { lock.withLock { removeCount+=1;values[serverID]=nil } }
     func seed() throws { try save(JSONSerialization.data(withJSONObject: ["key": String(repeating: "x", count: 32), "remember": true]), serverID: "test-instance") }
 }
 private final class ZoteroMockProtocol: URLProtocol, @unchecked Sendable {
@@ -30,9 +37,13 @@ private final class MockZotero: @unchecked Sendable {
     var denied = false
     var oneTime = false
     var unauthorized = false
+    var publicUnauthorizedPath:String?
     var failPDFUploadOnce = false
     var foreignUploadURL = false
     var notesCorrupt = false
+    var omitEmptyParentScalars=false
+    var parentScalarOverrides:[String:Any]=[:]
+    var parentCreations=0
     var objects: [String: [String: Any]] = [:]
     var collections: [String: [String: Any]] = [:]
     var files: [String: Data] = [:]
@@ -57,6 +68,7 @@ private final class MockZotero: @unchecked Sendable {
         requests.append((method, path))
         let headers = ["X-Zotero-Version": version, "Zotero-API-Version": "3", "Zotero-Server-ID": serverID, "Content-Type": "application/json"]
         func ok(_ object: Any, _ status: Int = 200) throws -> (Int, [String: String], Data) { (status, headers, try data(object)) }
+        if method == "GET", path == publicUnauthorizedPath || path + "/" == publicUnauthorizedPath { return try ok([:],401) }
         if path == "/api/" || path == "/api" { return (200, headers, Data("ready".utf8)) }
         if let requested = request.value(forHTTPHeaderField: "Zotero-Server-ID"), requested != serverID { return try ok([:], 412) }
         if method != "GET" && !path.hasPrefix("/api/local/uploads/") && path != "/api/local/authorize" {
@@ -82,6 +94,11 @@ private final class MockZotero: @unchecked Sendable {
             if method == "GET" { return try ok(objects.values.filter { ($0["data"] as? [String: Any])?["parentItem"] == nil }) }
             let entries = try JSONSerialization.jsonObject(with: body(request)) as! [[String: Any]]
             let k = key(); var object = entries[0]
+            if object["parentItem"] == nil {
+                parentCreations+=1
+                if omitEmptyParentScalars { object=object.filter{!($0.value is String && ($0.value as? String)=="")} }
+                object.merge(parentScalarOverrides){_,new in new}
+            }
             if notesCorrupt && object["itemType"] as? String == "note" { object["note"] = (object["note"] as! String).replacingOccurrences(of: "验收笔记正文", with: "已被改变") }
             objects[k] = ["key": k, "version": 1, "data": object]
             return try ok(["success": ["0": k], "failed": [:]])
@@ -150,9 +167,14 @@ private final class MockZotero: @unchecked Sendable {
             return (ZoteroService(dataDirectory:root,session:URLSession(configuration:config),credentialStore:store),backend,store)
         }
         do {
-            let (service,backend,_) = try fixture()
-            let status = try await service.status(); try require(status.writesSupported && status.authorized,"status")
+            let (service,backend,credentials) = try fixture()
+            let status = try await service.status(); try require(status.writesSupported && !status.authorized && status.authorizationState=="unknown" && credentials.loads==0,"status reports unknown without reading saved credential")
+            _=try await service.collections();_=try await service.status()
+            try require(credentials.loads==0,"ordinary collection/status refresh never loads Keychain")
+            passed += 2
             let first = try await service.archive(input)
+            try require(credentials.loads==1 && !backend.requests.contains{$0.1=="/api/local/authorize"},"explicit archive restores existing persistent grant once without requesting replacement")
+            passed += 1
             try require(first.status=="complete" && first.steps.count==6 && backend.collections.count==1 && backend.objects.count==6,"complete archive")
             // Consume the ACTUAL journal+summary pair emitted by this service, rather
             // than hand-crafting a projection that could miss cross-service schema bugs.
@@ -171,6 +193,66 @@ private final class MockZotero: @unchecked Sendable {
             let second = try await service.archive(input)
             try require(second.parentKey==first.parentKey && backend.objects.count==6,"global exact identity and child dedup")
             passed += 3
+        }
+        do {
+            let (service,backend,credentials)=try fixture()
+            let checked=try await service.handle(command:"zotero.checkAuthorization",payload:[:],progress:{_ in})
+            try require(checked["authorized"] as? Bool==true && checked["authorizationState"] as? String=="authorized" && credentials.loads==1,"explicit check restores saved grant without returning secret")
+            try require(checked["key"]==nil && backend.objects.isEmpty && backend.requests.allSatisfy{$0.0=="GET"},"permission inspection creates no credential or library item")
+            _=try await service.status();_=try await service.collections();_=try await service.authorize()
+            try require(credentials.loads==1 && !backend.requests.contains{$0.1=="/api/local/authorize"},"known persistent grant survives refresh and authorize button without another grant")
+            passed += 3
+        }
+        do {
+            let (service,backend,credentials)=try fixture();credentials.failLoads=true
+            _=try await service.status();try require(credentials.loads==0,"Keychain-denied status still never invokes provider")
+            do{_=try await service.authorize();throw NSError(domain:"expected key permission refusal",code:1)}catch ZoteroService.ServiceError.verification{}
+            let denied=try await service.status()
+            try require(credentials.loads==1 && denied.authorizationState=="unavailable" && !backend.requests.contains{$0.1=="/api/local/authorize"} && backend.objects.isEmpty,"Keychain refusal does not mint new Zotero key or mutate library")
+            credentials.failLoads=false;let restored=try await service.checkAuthorization()
+            try require(restored.authorized && credentials.loads==2,"later explicit check recovers original saved key after denial")
+            passed += 3
+        }
+        for route in ["/api/","/api/users/0/collections"] {
+            let (service,backend,credentials)=try fixture();let original=credentials.snapshot(),saves=credentials.saves
+            backend.publicUnauthorizedPath=route
+            do{if route=="/api/"{_=try await service.status()}else{_=try await service.collections()};throw NSError(domain:"expected unauthenticated HTTP401",code:1)}catch ZoteroService.ServiceError.http(401){}
+            try require(credentials.loads==0 && credentials.saves==saves && credentials.removes==0 && credentials.snapshot()==original,"public status/collections401 never reads, saves, deletes or alters persisted grant")
+            backend.publicUnauthorizedPath=nil
+            let status=try await service.status();try require(status.authorizationState=="unknown" && credentials.loads==0,"public401 does not falsely invalidate uninspected grant")
+            passed += 2
+        }
+        do {
+            let (service,backend,_)=try fixture();backend.omitEmptyParentScalars=true;backend.parentScalarOverrides=["date":NSNull()]
+            var empty=input;empty.bibliography.date="";empty.bibliography.abstract="";empty.bibliography.fields=["language":"","shortTitle":"","rights":""]
+            let first=try await service.archive(empty)
+            try require(first.status=="partial" && first.steps.first{$0.role=="bibliography"}?.verified==false && backend.parentCreations==1 && backend.objects.count==1,"null date is not accepted as empty even when provider omits other empty scalars")
+            let file=root.appendingPathComponent("zotero-archives/"+first.archiveID+".json"),before=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as! [String:Any]
+            let parent=first.parentKey!;var object=backend.objects[parent]!,data=object["data"] as! [String:Any];data["date"]=nil;object["data"]=data;backend.objects[parent]=object
+            let resumed=try await service.archive(empty,resumeID:first.archiveID)
+            let after=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as! [String:Any]
+            try require(resumed.status=="complete" && resumed.archiveID==first.archiveID && resumed.parentKey==parent && backend.parentCreations==1,"original failed journal resumes same parent once actual empty date is omitted")
+            try require((before["request"] as! NSDictionary)==(after["request"] as! NSDictionary) && before["createdParentPayload"] as? String==after["createdParentPayload"] as? String && before["fingerprint"] as? String==after["fingerprint"] as? String,"normal resume preserves original request, exact parent payload and source fingerprint")
+            let payload=try JSONSerialization.jsonObject(with:Data(base64Encoded:before["createdParentPayload"] as! String)!) as! [String:Any]
+            try require(payload["date"] as? String=="" && payload["abstractNote"] as? String=="" && payload["language"] as? String=="" && data["date"]==nil && data["abstractNote"]==nil,"only readback normalizes absence; original expected scientific metadata remains unchanged")
+            passed += 4
+        }
+        for (field,actual): (String,Any) in [("date",NSNull()),("date",2026),("date",false),("date","user nonempty date"),("abstractNote",["not":"a string"]),("date",["invalid"])] {
+            let (service,backend,_)=try fixture();backend.omitEmptyParentScalars=true;backend.parentScalarOverrides=[field:actual]
+            var empty=input;empty.bibliography.date="";empty.bibliography.abstract=""
+            let result=try await service.archive(empty)
+            try require(result.status=="partial" && result.steps.first{$0.role=="bibliography"}?.verified==false && backend.files.isEmpty && backend.parentCreations==1,"empty scalar must reject explicit null, wrong type or user nonempty edit")
+            passed += 1
+        }
+        for actual:Any? in [nil,"different date",NSNull(),2026] {
+            let (service,backend,_)=try fixture();backend.parentScalarOverrides=actual.map{["date":$0]} ?? [:]
+            let result=try await service.archive(input)
+            if actual == nil {
+                let parent=result.parentKey!;var item=backend.objects[parent]!,data=item["data"] as! [String:Any];data["date"]=nil;item["data"]=data;backend.objects[parent]=item
+                let retry=try await service.archive(input,resumeID:result.archiveID)
+                try require(retry.status=="partial" && retry.steps.first{$0.role=="bibliography"}?.verified==false && backend.parentCreations==1,"nonempty expected date may not disappear on original journal resume")
+            } else {try require(result.status=="partial" && backend.files.isEmpty,"nonempty expected scalar stays exact across changed value or wrong type")}
+            passed += 1
         }
         do {
             let (service,backend,_) = try fixture(); backend.failPDFUploadOnce=true
@@ -438,8 +520,9 @@ private final class MockZotero: @unchecked Sendable {
             passed += 2
             backend.serverID="other-server"
             let foreign=ZoteroService(dataDirectory:staged.stageDirectory,session:URLSession(configuration:config),credentialStore:credentials)
-            do { _=try await foreign.archive(request,resumeID:first.archiveID);throw NSError(domain:"expected changed server authorization refusal",code:1) } catch ZoteroService.ServiceError.authorizationRequired {}
-            try require(backend.requests.filter{$0.0 != "GET"}.count==writesBeforeLegacy,"restore does not grant another server authorization")
+            let readsBeforeForeign=credentials.loads
+            do { _=try await foreign.archive(request,resumeID:first.archiveID);throw NSError(domain:"expected changed server source refusal",code:1) } catch ZoteroService.ServiceError.serverChanged {}
+            try require(backend.requests.filter{$0.0 != "GET"}.count==writesBeforeLegacy && credentials.loads==readsBeforeForeign,"restore refuses foreign journal before reading another server credential")
             passed += 1
         }
         print("Zotero mock assertions passed: \(passed). No live library writes, no native authorization requested, no real Keychain mutation.")

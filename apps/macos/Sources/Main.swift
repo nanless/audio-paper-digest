@@ -179,8 +179,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             do{try store.updateSettings(payload)}catch{_=try? await library.handle(command:"library.network",payload:["httpProxy":store.setting("httpProxy") ?? ""]);throw error}
             configureSchedule();emit("settings.changed");return model.configuration()
         case "settings.open":openSettings();return [:]
-        case "model.setKey":try setModelKey();return model.configuration()
-        case "model.deleteKey":try DesktopKeychain.remove("primary");return model.configuration()
+        case "model.setKey":try setModelKey();model.credentialDidChange(present:true);return model.configuration()
+        case "model.deleteKey":try DesktopKeychain.remove("primary");model.credentialDidChange(present:false);return model.configuration()
         case "model.preview":let source=try modelSource(payload);var result=source.filter{$0.key != "text"};result["characters"]=(source["text"] as? String ?? "").count;return result
         case "model.run","model.check":
             let id=UUID().uuidString,check=command=="model.check",owner=currentPaperID,generation=contextGeneration

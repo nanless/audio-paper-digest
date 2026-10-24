@@ -14,13 +14,25 @@ import Darwin
             let server=CommandLine.arguments[1],resources=URL(fileURLWithPath:CommandLine.arguments[2])
             let store=try DesktopStore(directory:directory)
             try store.updateSettings(["endpoint":server+"/good/v1","model":"desktop-local-test","protocol":"auto","maxTokens":2048,"dailyRequests":50])
-            let service=ModelService(directory:directory,store:store,keyProvider:{"test-only-not-a-real-key"},resourcesDirectory:resources)
+            var keyLoads=0,denyKeyRead=false
+            let service=ModelService(directory:directory,store:store,keyProvider:{keyLoads+=1;if denyKeyRead{throw DesktopError.message("Explicit fixture Keychain access denied")};return "test-only-not-a-real-key"},resourcesDirectory:resources)
+            for _ in 0..<5{_=service.configuration()}
+            try expect(keyLoads==0 && service.configuration()["credentialState"] as? String=="unknown" && service.configuration()["hasKey"] is NSNull,"startup/settings configuration never reads secret or claims missing credential")
+            service.credentialDidChange(present:true);try expect(service.configuration()["hasKey"] as? Bool==true && keyLoads==0,"successful explicit save notification never reloads secret")
+            service.credentialDidChange(present:false);try expect(service.configuration()["hasKey"] as? Bool==false && keyLoads==0,"successful explicit delete notification never reloads secret")
             let source:[String:Any]=["pdfSHA":String(repeating:"a",count:64),"pages":[1,5]]
             let firstID=UUID().uuidString
             let first=try await service.run(id:firstID,paperID:"test:paper",question:"解释这个实际片段",evidence:"这是一段本地测试材料",source:source)
             try expect(first["status"] as? String=="complete" && (first["text"] as? String ?? "").contains("本地"),"actual worker Chat result saved")
+            try expect(keyLoads==1,"new model request loads secret exactly once")
+            denyKeyRead=true
             let repeated=try await service.run(id:UUID().uuidString,paperID:"test:paper",question:"解释这个实际片段",evidence:"这是一段本地测试材料",source:["pages":[1,5],"pdfSHA":String(repeating:"a",count:64)])
             try expect(repeated["reused"] as? Bool==true && repeated["id"] as? String==firstID,"same canonical complete prompt reused without another request")
+            try expect(keyLoads==1,"exact saved response reuse works without Keychain permission or reading secret")
+            let beforeDenied=(store.value["sessions"] as? [[String:Any]] ?? []).count;var keyDenied=false
+            do{_=try await service.run(id:UUID().uuidString,paperID:"test:keychain-denied",question:"明确新请求",evidence:"本机材料",source:source)}catch{keyDenied=true}
+            try expect(keyDenied && keyLoads==2 && (store.value["sessions"] as? [[String:Any]] ?? []).count==beforeDenied && service.configuration()["credentialState"] as? String=="unavailable","denied explicit key read creates no model session or HTTP and configuration does not retry")
+            denyKeyRead=false
             let changed=try await service.run(id:UUID().uuidString,paperID:"test:paper",question:"解释这个实际片段",evidence:"改变了证据，必须重新请求",source:source)
             try expect(changed["reused"] as? Bool==false && changed["fingerprint"] as? String != first["fingerprint"] as? String,"changed evidence never reuses old result")
             try store.updateSettings(["maxTokens":4096])

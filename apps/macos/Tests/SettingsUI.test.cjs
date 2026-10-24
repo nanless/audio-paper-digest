@@ -38,11 +38,14 @@ let browser,passed=0;
           if(f.failCheck)throw Error('输出被 max_output_tokens=4096 截断 · 实际模型 reported-reasoning-fixture · openai_responses · 用量 {"input_tokens":155,"output_tokens":4096} · 费用金额未知；不会自动重发');
           return {text:'真实本机夹具确认',actualModel:'reported-fixture',protocol:'openai_responses',usage:{input_tokens:12,output_tokens:7}};
         }
+        if(command==='zotero.status')return {running:true,version:'10.0.6',writesSupported:true,authorized:!!f.zoteroChecked,remember:!!f.zoteroChecked,authorizationState:f.zoteroChecked?'authorized':'unknown',archives:[]};
+        if(command==='zotero.collections')return {collections:[]};
+        if(command==='zotero.checkAuthorization'){f.zoteroChecked=true;return {running:true,version:'10.0.6',writesSupported:true,authorized:true,remember:true,authorizationState:'authorized'};}
         throw Error('Unexpected native fixture command: '+command);
       }}}};
     },settings);
     await page.goto(`http://127.0.0.1:${server.address().port}/settings.html`);
-    await page.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('尚未保存'));
+    await page.waitForFunction(()=>!document.querySelector('#key-status').textContent.includes('待载入'));
     return {page,errors};
   }
   const writes=page=>page.evaluate(()=>fixture.calls.filter(c=>c.command==='settings.save'));
@@ -54,6 +57,12 @@ let browser,passed=0;
     const {page,errors}=await fixture(settings);
     try{await action(page);assert.deepEqual(errors,[]);passed++;console.log('PASS '+name);}finally{await page.close();}
   }
+  await check('unknown model credential is honest and bootstrap/pane/save never reads secret',async page=>{
+    await page.locator('[data-pane=model]').click();assert.match(await page.locator('#key-status').textContent(),/状态未检查/);assert.doesNotMatch(await page.locator('#key-status').textContent(),/尚未保存|已安全保存/);await edit(page,'model','ordinary-settings-change');await page.evaluate(()=>window.paperDigestFlushSettings());assert.match(await page.locator('#key-status').textContent(),/状态未检查/);assert.deepEqual(await page.evaluate(()=>fixture.calls.filter(c=>c.command.startsWith('model.'))),[]);
+  },{...initial,credentialState:'unknown',hasKey:null});
+  await check('Zotero ordinary refresh stays unknown; explicit saved grant check does not request new authorization',async page=>{
+    await page.locator('[data-pane=zotero]').click();await page.locator('#zotero-refresh').click();await page.waitForFunction(()=>document.querySelector('#zotero-auth-status').textContent.includes('尚未检查'));assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='zotero.checkAuthorization').length),0);await page.locator('#zotero-settings-check-saved').click();await page.waitForFunction(()=>document.querySelector('#zotero-auth-status').textContent.includes('已获持续授权'));assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='zotero.checkAuthorization').length),1);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='zotero.authorize').length),0);
+  });
   await check('explicit Responses parameters persist as boolean and enum before check',async page=>{
     await page.locator('[data-pane=model]').click();assert.equal(await page.locator('#responsesStream').isChecked(),false);assert.equal(await page.locator('#reasoningEffort').inputValue(),'default');
     await page.locator('#responsesStream').check();await page.locator('#reasoningEffort').selectOption('low');await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('reported-fixture'));

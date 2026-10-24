@@ -21,6 +21,10 @@
 
 授权与检查点必须绑定当前 Zotero Server ID。更换文库实例后，旧集合、条目Key、版本及归档检查点不能直接复用。
 
+启动、读取设置、检查 Zotero 连接和列出分类不会读取钥匙串密钥。首次显示“已保存许可尚未检查”，不将未知状态当作未保存或已授权。用户点击“检查已保存许可”时，应用才读取当前文库实例下自己的凭据；系统可能要求用户确认。已有持续许可会直接复用，不请求新的 Zotero 密钥；钥匙串读取被拒绝时保留原凭据，不自动创建替代许可。用户明确归档、继续归档或请求授权时也可恢复原许可。
+
+模型设置同样只显示本次会话已确认的状态。完整来源及配置指纹相同的既有成功解析可直接复用，不读取密钥、不新增请求；真正新请求才读取一次密钥。保存或删除密钥成功后直接更新状态，不为刷新界面再次读取。服务名、钥匙串域、ACL和可访问性策略保持原样。
+
 ## 归档合同
 
 一次完整归档至少区分以下内容，不将一个RIS导入成功称为整套归档完成：
@@ -53,7 +57,8 @@
 
 支持命令：
 
-- `zotero.status`：真实客户端版本、API、实例身份、实际授权状态及该实例下的未完成归档摘要。
+- `zotero.status`：真实客户端版本、API、实例身份、内存中的授权状态（未检查时明确为 unknown）及该实例下的未完成归档摘要；不读取凭据。
+- `zotero.checkAuthorization`：用户明确检查当前实例的已保存许可，不请求新许可或写入条目。
 - `zotero.collections`：真实个人文库集合，支持分页与父级关系。
 - `zotero.authorize`：请求Zotero原生授权。拒绝返回真实denied状态；单次允许如实返回remember=false，不自动连弹或偷换成持续许可。
 - `zotero.archive`：归档明确选择的书目与材料，返回逐步回读结果。
@@ -81,6 +86,7 @@
 
 ```sh
 swiftc -parse-as-library \
+  apps/macos/Sources/DesktopArxivIdentifier.swift \
   apps/macos/Sources/BackupCodec.swift apps/macos/Sources/DesktopStore.swift \
   apps/macos/Sources/LibraryService.swift apps/macos/Sources/DesktopStorage.swift \
   apps/macos/Sources/ZoteroService.swift apps/macos/Tests/ZoteroServiceTests.swift \

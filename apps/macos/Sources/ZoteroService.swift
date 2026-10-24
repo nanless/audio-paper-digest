@@ -13,6 +13,7 @@ actor ZoteroService {
         let authorized: Bool
         let remember: Bool
         let denied: Bool
+        let authorizationState: String
     }
     struct Collection: Codable, Sendable {
         let key: String
@@ -110,6 +111,7 @@ actor ZoteroService {
     private var serverID: String?
     private var authorization: Authorization?
     private var authorizationDenied = false
+    private var authorizationState = "unknown"
     private var operationInProgress = false
     private static let keychainService = "com.nanless.PaperDigest.zotero"
 
@@ -132,17 +134,37 @@ actor ZoteroService {
         let (_, response) = try await request("/api/", requireServer: false)
         let currentID = response.value(forHTTPHeaderField: "Zotero-Server-ID") ?? ""
         if let previous = serverID, previous != currentID {
-            authorization = nil; serverID = currentID
+            authorization = nil; authorizationDenied = false; authorizationState = "unknown"; serverID = currentID
             throw ServiceError.serverChanged
         }
         serverID = currentID
-        if authorization == nil, !authorizationDenied, !currentID.isEmpty { authorization = try? loadAuthorization(currentID) }
         let version = response.value(forHTTPHeaderField: "X-Zotero-Version") ?? response.value(forHTTPHeaderField: "Zotero-Version") ?? ""
         return Status(running: true, version: version,
                       apiVersion: response.value(forHTTPHeaderField: "Zotero-API-Version") ?? "",
                       serverID: currentID,
                       writesSupported: (Int(version.split(separator: ".").first ?? "0") ?? 0) >= 10 && !currentID.isEmpty,
-                      authorized: authorization != nil, remember: authorization?.remember ?? false, denied: authorizationDenied)
+                      authorized: authorization != nil, remember: authorization?.remember ?? false, denied: authorizationDenied,
+                      authorizationState: authorizationState)
+    }
+
+    /// Explicit user action only: inspect this instance's saved permission without
+    /// requesting a new Zotero API key or changing its library permissions.
+    func checkAuthorization() async throws -> Status {
+        guard !operationInProgress else { throw ServiceError.invalid("归档进行中，请完成后再检查许可") }
+        let current = try await status()
+        guard current.writesSupported else { throw ServiceError.unsupported }
+        try restoreAuthorization(serverID: current.serverID)
+        return try await status()
+    }
+    private func restoreAuthorization(serverID: String) throws {
+        guard authorization == nil, !authorizationDenied else { return }
+        do {
+            authorization = try loadAuthorization(serverID)
+            authorizationState = authorization == nil ? "missing" : "authorized"
+        } catch {
+            authorizationState = "unavailable"
+            throw ServiceError.verification("已保存许可无法读取；请在系统钥匙串窗口自行决定是否允许，然后主动重试")
+        }
     }
 
     /// Call only after the user's explicit Connect action. Zotero itself displays the approval dialog.
@@ -150,19 +172,23 @@ actor ZoteroService {
         guard !operationInProgress else { throw ServiceError.invalid("归档进行中，请完成后再变更授权") }
         let current = try await status()
         guard current.writesSupported else { throw ServiceError.unsupported }
+        // Reuse an existing persistent grant after a deliberate user action. A
+        // Keychain denial must not mint a replacement Zotero credential.
+        try restoreAuthorization(serverID: current.serverID)
+        if authorization?.remember == true { return try await status() }
         let data: Data
         do {
             (data, _) = try await request("/api/local/authorize", method: "POST",
                                           body: try json(["appName": appName]), authenticated: false,
                                           contentType: "application/json")
         } catch ServiceError.denied {
-            authorization = nil; authorizationDenied = true
+            authorization = nil; authorizationDenied = true; authorizationState = "denied"
             try? credentialStore.remove(serverID: current.serverID)
             return try await status()
         }
         let granted = try JSONDecoder().decode(Authorization.self, from: data)
         guard granted.key.count == 32 else { throw ServiceError.verification("授权响应格式") }
-        authorization = granted; authorizationDenied = false
+        authorization = granted; authorizationDenied = false; authorizationState = "authorized"
         if granted.remember { try saveAuthorization(granted, serverID: current.serverID) }
         else { try? credentialStore.remove(serverID: current.serverID) }
         return try await status()
@@ -186,8 +212,6 @@ actor ZoteroService {
         defer { operationInProgress = false }
         let current = try await status()
         guard current.writesSupported else { throw ServiceError.unsupported }
-        guard let auth = authorization else { throw ServiceError.authorizationRequired }
-        guard auth.remember else { throw ServiceError.persistentAuthorizationRequired }
         try validate(input)
         // Read the original checkpoint before resolving old paths. The optional hashes
         // are captured only when the job was created; a root map cannot mint them.
@@ -196,6 +220,10 @@ actor ZoteroService {
         let parentPayload = try await bibliographyPayload(input)
         let materials = try [sourceMetadataMaterial(input)] + materialsFor(input, expectedSHA256: previous?.materialSHA256)
         let fingerprint = try requestFingerprint(input, materials: materials)
+        if let previous, previous.fingerprint != fingerprint { throw ServiceError.invalid("重试材料已变化，请新建归档") }
+        try restoreAuthorization(serverID: current.serverID)
+        guard let auth = authorization else { throw ServiceError.authorizationRequired }
+        guard auth.remember else { throw ServiceError.persistentAuthorizationRequired }
         var journal: Journal
         if let previous {
             journal = previous
@@ -254,6 +282,7 @@ actor ZoteroService {
             return value
         case "zotero.collections": return ["collections": try await collections().map { try dictionary($0) }]
         case "zotero.authorize": return try dictionary(await authorize())
+        case "zotero.checkAuthorization": return try dictionary(await checkAuthorization())
         case "zotero.archive", "zotero.resume":
             let resumeID = payload["resumeID"] as? String
             if command == "zotero.resume", let resumeID {
@@ -443,7 +472,13 @@ actor ZoteroService {
         }
         if let expected = createdData {
             for (field, value) in expected {
-                if let text = value as? String, data[field] as? String != text { throw ServiceError.verification("新书目字段回读：" + field) }
+                if let text = value as? String {
+                    // Zotero omits empty scalar fields in real item responses.
+                    // Only absence equals an expected empty string: null, other
+                    // primitive types, and nonempty edits remain strict failures.
+                    if text.isEmpty, data[field] == nil { continue }
+                    guard data[field] as? String == text else { throw ServiceError.verification("新书目字段回读：" + field) }
+                }
             }
             let expectedCreators = expected["creators"] as? [[String: String]] ?? []
             let actualCreators = data["creators"] as? [[String: String]] ?? []
@@ -645,14 +680,17 @@ actor ZoteroService {
         guard let http = response as? HTTPURLResponse else { throw ServiceError.unavailable }
         if requireServer && !upload {
             guard let received = http.value(forHTTPHeaderField: "Zotero-Server-ID"), received == serverID else {
-                authorization = nil; throw ServiceError.serverChanged
+                authorization = nil; authorizationState = "unknown"; throw ServiceError.serverChanged
             }
         }
-        if authenticated, authorization?.remember == false { authorization = nil }
+        if authenticated, authorization?.remember == false { authorization = nil; authorizationState = "unknown" }
         switch http.statusCode {
         case 200..<300: return (data, http)
         case 401:
-            authorization = nil
+            guard authenticated, request.value(forHTTPHeaderField: "Zotero-API-Key") != nil else {
+                throw ServiceError.http(401)
+            }
+            authorization = nil; authorizationState = "missing"
             if let serverID { try? credentialStore.remove(serverID: serverID) }
             throw ServiceError.authorizationRequired
         case 403 where path == "/api/local/authorize": throw ServiceError.denied

@@ -22,5 +22,6 @@ node "$app_root/Tests/SettingsUI.test.cjs"
 node "$app_root/Tests/DesktopUI.test.cjs"
 node "$app_root/Tests/DesktopGuideReview.test.cjs"
 node "$app_root/Tests/DesktopContentAXReview.test.cjs"
+node "$app_root/Tests/DesktopModalFacade.test.cjs"
 node "$app_root/Tests/DesktopContextUI.test.cjs"
 echo '隔离自动测试完成；真实窗口、模型服务与 Zotero 归档仍须按验收矩阵分别核验。'
