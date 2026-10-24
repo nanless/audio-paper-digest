@@ -41,6 +41,7 @@ private final class MockZotero: @unchecked Sendable {
     var failPDFUploadOnce = false
     var foreignUploadURL = false
     var notesCorrupt = false
+    var emptyFileReturns404 = false
     var omitEmptyParentScalars=false
     var parentScalarOverrides:[String:Any]=[:]
     var parentCreations=0
@@ -131,6 +132,7 @@ private final class MockZotero: @unchecked Sendable {
                 // The installed Zotero API exposes the intended storage URL for
                 // an empty imported-file slot, before a file exists on disk.
                 guard (objects[k]?["data"] as? [String:Any])?["itemType"] as? String == "attachment" else { return try ok([:],404) }
+                if emptyFileReturns404 { return try ok([:],404) }
                 return (200,headers,Data(url.absoluteString.utf8))
             }
             try file.write(to: url)
@@ -295,6 +297,42 @@ private final class MockZotero: @unchecked Sendable {
                 try require(!backend.requests.dropFirst(before).contains{$0.0=="POST" && ($0.1.contains("/uploads/") || $0.1=="/api/users/0/items/\(key)/file")},"repeated resume never overwrites a formerly verified deleted file")
                 passed += 2
             }
+        }
+        for missingVia404 in [false,true] {
+            let (service,backend,_) = try fixture()
+            let complete=try await service.archive(input),key=complete.steps.first{$0.role=="pdf"}!.key!
+            backend.files.removeValue(forKey:key);try FileManager.default.removeItem(at:backend.storage.appendingPathComponent(key))
+            backend.emptyFileReturns404=missingVia404
+            var object=backend.objects[key]!,fields=object["data"] as! [String:Any]
+            fields.removeValue(forKey:"md5");object["data"]=fields;backend.objects[key]=object
+            let journal=root.appendingPathComponent("zotero-archives/"+complete.archiveID+".json")
+            var legacy=try JSONSerialization.jsonObject(with:Data(contentsOf:journal)) as! [String:Any]
+            var steps=legacy["steps"] as! [[String:Any]]
+            for index in steps.indices {steps[index].removeValue(forKey:"everVerified");if steps[index]["role"] as? String=="pdf"{steps[index]["verified"]=false}}
+            legacy["steps"]=steps;try JSONSerialization.data(withJSONObject:legacy).write(to:journal)
+            for _ in 0..<2 {
+                let before=backend.requests.count,resumed=try await service.archive(input,resumeID:complete.archiveID)
+                try require(resumed.status=="partial" && resumed.steps.first{$0.role=="pdf"}?.verified==false,"legacy unknown verification history stays protected on repeated resume")
+                try require(!backend.requests.dropFirst(before).contains{$0.0=="POST" && ($0.1.contains("/uploads/") || $0.1=="/api/users/0/items/\(key)/file")},"legacy unknown slot never receives replacement bytes")
+                passed += 2
+            }
+            let beforeNew=backend.requests.count,newArchive=try await service.archive(input)
+            try require(newArchive.status=="partial" && newArchive.parentKey==complete.parentKey && newArchive.archiveID != complete.archiveID,"new journal cannot turn adopted missing attachment into a fresh slot")
+            try require(!backend.requests.dropFirst(beforeNew).contains{$0.0=="POST" && ($0.1.contains("/uploads/") || $0.1=="/api/users/0/items/\(key)/file")},"adopting existing missing file never uploads replacement bytes")
+            passed += 2
+        }
+        do {
+            let (service,backend,_) = try fixture();backend.failPDFUploadOnce=true
+            let first=try await service.archive(input),oldKey=first.steps.first{$0.role=="pdf"}!.key!
+            backend.objects.removeValue(forKey:oldKey)
+            let journal=root.appendingPathComponent("zotero-archives/"+first.archiveID+".json")
+            var legacy=try JSONSerialization.jsonObject(with:Data(contentsOf:journal)) as! [String:Any]
+            var steps=legacy["steps"] as! [[String:Any]]
+            for index in steps.indices {steps[index].removeValue(forKey:"everVerified");if steps[index]["role"] as? String=="pdf"{steps[index].removeValue(forKey:"key");steps[index]["verified"]=false}}
+            legacy["steps"]=steps;try JSONSerialization.data(withJSONObject:legacy).write(to:journal)
+            let resumed=try await service.archive(input,resumeID:first.archiveID)
+            try require(resumed.status=="complete" && resumed.parentKey==first.parentKey && resumed.steps.first{$0.role=="pdf"}?.key != oldKey,"legacy truly keyless slot can create and upload a fresh object without replacing a prior attachment")
+            passed += 1
         }
         do {
             let (service,backend,_) = try fixture(seed:false);backend.denied=true

@@ -16,6 +16,18 @@ export function revealAccessiblePane(pane,{focus=true}={}){
  return visible;
 }
 
+// The shared detail panel starts inside a closed native dialog. WebKit can keep
+// that original wrapper ignored even after its children enter a visible surface.
+// Refresh only this wrapper, preserving live child nodes and their handlers.
+// Zotero owns a different dialog and retains all of its original control nodes.
+export function refreshDetailContainer(){
+ const previous=document.getElementById('detail-content');
+ if(!previous)throw new Error('研究详情容器不可用');
+ const content=previous.cloneNode(false);
+ content.append(...previous.childNodes);previous.replaceWith(content);
+ return content;
+}
+
 // A closed HTMLDialogElement can retain an ignored WebKit AX subtree after it is
 // shown. Keep it as the stable API facade, but mount the actual, original controls
 // in a fresh generic modal region outside the inert app shell on every opening.

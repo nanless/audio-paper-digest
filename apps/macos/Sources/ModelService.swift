@@ -38,6 +38,67 @@ import Darwin
     }
     func credentialDidChange(present:Bool) { credentialState=present ? "present":"missing" }
     func cancel(_ id:String) { if let process=processes[id],process.isRunning{process.terminate()} }
+    /// Export only the exact evidence sealed for this paper's saved study.
+    /// Configuration and transport/credential material never leave this method.
+    func exportEvidence(sessionID:String,paperID:String) throws -> [String:Any] {
+        guard let uuid=UUID(uuidString:sessionID),uuid.uuidString.lowercased()==sessionID.lowercased(),
+              !paperID.isEmpty,let session=store.session(sessionID),
+              session["id"] as? String==sessionID,session["paperID"] as? String==paperID,
+              session["kind"] as? String=="study" else{throw DesktopError.message("研究会话与当前论文身份不符，未导出材料")}
+        guard let rawSHA=session["inputSHA256"] else {
+            return ["available":false,"notice":"此旧研究没有绑定封存输入；保留原回答，但不能导出或补造当时的实际材料。"]
+        }
+        func validSHA(_ value:String)->Bool {value.range(of:#"\A[a-f0-9]{64}\z"#,options:.regularExpression) != nil}
+        guard let inputSHA=rawSHA as? String,validSHA(inputSHA),
+              let fingerprint=session["fingerprint"] as? String,validSHA(fingerprint),
+              let question=session["question"] as? String,
+              let originalSource=session["source"] as? [String:Any] else{throw DesktopError.message("原研究输入身份字段无效，未导出材料")}
+        let file=try PrivateStoragePaths.checkedFile(relative:"ModelUsage/"+sessionID+"-input.json",directory:directory)
+        let bytes=try PrivateStoragePaths.boundedData(file,limit:8*1024*1024)
+        guard sha256(bytes)==inputSHA,
+              let input=try JSONSerialization.jsonObject(with:bytes) as? [String:Any],
+              Set(input.keys)==Set(["config","messages","source","fingerprint"]),
+              input["fingerprint"] as? String==fingerprint,
+              let config=input["config"] as? [String:Any],config["key"]==nil,
+              let source=input["source"] as? [String:Any],
+              try JSONSerialization.data(withJSONObject:source,options:.sortedKeys)==JSONSerialization.data(withJSONObject:originalSource,options:.sortedKeys),
+              let messages=input["messages"] as? [[String:Any]],messages.count==2,
+              Set(messages[0].keys)==Set(["role","content"]),Set(messages[1].keys)==Set(["role","content"]),
+              messages[0]["role"] as? String=="system",messages[0]["content"] is String,
+              messages[1]["role"] as? String=="user",let user=messages[1]["content"] as? String,
+              let model=config["model"] as? String,session["model"] as? String==model,
+              let endpoint=config["endpoint"] as? String,let budget=config["maxTokens"] as? Int,
+              CFGetTypeID(config["maxTokens"]! as CFTypeRef) != CFBooleanGetTypeID() else{throw DesktopError.message("封存输入与原研究会话不一致，未导出材料")}
+        if let owner=source["paperID"] {guard owner as? String==paperID else{throw DesktopError.message("封存材料属于其他论文，未导出")}}
+        // Match the complete generated header at byte zero. Splitting on a loose
+        // delimiter would misread a question or quoted paper containing it.
+        let sourceJSON=String(decoding:try JSONSerialization.data(withJSONObject:source,options:.sortedKeys),as:UTF8.self)
+        let prefix=Data(("研究问题：\n"+question+"\n\n来源身份：\n"+sourceJSON+"\n\n实际证据：\n").utf8)
+        let userBytes=Data(user.utf8)
+        guard userBytes.starts(with:prefix),userBytes.count-prefix.count<=1024*1024,
+              let evidence=String(data:userBytes.dropFirst(prefix.count),encoding:.utf8) else{throw DesktopError.message("封存研究材料的边界无效，未猜测或扩大范围")}
+        var identity:[String:Any]=["contract":"desktop-study-v3","extractor":"pdfkit-physical-pages-v1","kind":"study","paperID":paperID,"messages":messages,"model":model,"endpoint":endpoint,"protocol":config["protocol"] ?? "auto","question":question,"evidence":evidence,"source":source,"maxTokens":budget]
+        let oldFingerprint=sha256(try JSONSerialization.data(withJSONObject:identity,options:.sortedKeys))
+        identity["contract"]="desktop-study-v4";identity["responsesStream"]=config["responsesStream"] ?? false;identity["reasoningEffort"]=config["reasoningEffort"] ?? "default"
+        let currentFingerprint=sha256(try JSONSerialization.data(withJSONObject:identity,options:.sortedKeys))
+        guard fingerprint==oldFingerprint || fingerprint==currentFingerprint else{throw DesktopError.message("原研究完整输入指纹不匹配，未导出材料")}
+        let strings:Set<String>=["kind","paperID","sourceVersion","pdfSHA","sourceURL","revision","currentness","cacheStatus","validatedAt","fetchedAt"]
+        let booleans:Set<String>=["truncated","isStale","offlineMode","completeTextCoverage"]
+        let numbers:Set<String>=["characters","page"]
+        let arrays:Set<String>=["pages","missingTextPages"]
+        guard Set(source.keys).isSubset(of:strings.union(booleans).union(numbers).union(arrays).union(["notices"])) else{throw DesktopError.message("原研究来源含不支持的内部字段，未导出材料")}
+        for (key,value) in source {
+            if strings.contains(key) {guard value is String else{throw DesktopError.message("原研究来源元数据类型无效")}}
+            if booleans.contains(key) {guard CFGetTypeID(value as CFTypeRef)==CFBooleanGetTypeID() else{throw DesktopError.message("原研究来源元数据类型无效")}}
+            if numbers.contains(key) {guard let number=value as? Int,number>=0,CFGetTypeID(value as CFTypeRef) != CFBooleanGetTypeID() else{throw DesktopError.message("原研究来源元数据类型无效")}}
+            if arrays.contains(key) {guard let values=value as? [Any],values.allSatisfy({value in guard let number=value as? Int else{return false};return number>0 && CFGetTypeID(value as CFTypeRef) != CFBooleanGetTypeID()}) else{throw DesktopError.message("原研究来源页码无效")}}
+            if key=="notices" {guard value is [String] else{throw DesktopError.message("原研究来源提示类型无效")}}
+        }
+        if let raw=source["sourceURL"] as? String,!raw.isEmpty {
+            guard let url=URL(string:raw),url.scheme=="https",url.host != nil,url.user==nil,url.password==nil else{throw DesktopError.message("原研究来源地址不适合可携带导出")}
+        }
+        return ["available":true,"inputSHA256":inputSHA,"source":source,"evidence":evidence]
+    }
     func run(id:String,paperID:String,question:String,evidence:String,source:[String:Any],force:Bool=false,check:Bool=false) async throws -> [String:Any] {
         try Task.checkCancellation()
         guard UUID(uuidString:id) != nil else{throw DesktopError.message("模型任务身份无效")}

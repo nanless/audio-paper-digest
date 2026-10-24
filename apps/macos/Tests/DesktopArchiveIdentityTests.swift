@@ -31,6 +31,8 @@ import Darwin
   let root=FileManager.default.temporaryDirectory.appendingPathComponent("DesktopArchiveIdentity-"+UUID().uuidString)
   defer{try? FileManager.default.removeItem(at:root)}
   app.directory=root;app.store=try DesktopStore(directory:root)
+  var keyReads=0
+  app.model=ModelService(directory:root,store:app.store,keyProvider:{keyReads+=1;throw DesktopError.message("Isolated test refuses all credential reads")})
   let seed=root.appendingPathComponent("empty-seed");try FileManager.default.createDirectory(at:seed,withIntermediateDirectories:true)
   app.library=try LibraryService(dataDirectory:root,seedDirectory:seed,transport:{_,_ in throw URLError(.notConnectedToInternet)})
   let web=WKWebView(frame:NSRect(x:0,y:0,width:700,height:500));app.web=web
@@ -40,13 +42,16 @@ import Darwin
    let id="arxiv:"+base,version=base+"v1",source="https://arxiv.org/abs/"+version,pdf="https://arxiv.org/pdf/"+version+".pdf"
    app.currentPaperID=id;app.currentPaper=["id":id,"title":"Explicit archive contract fixture","sourceKind":"arxiv","sourceURL":source,"pdfURL":pdf,"sourceVersion":version]
    app.currentArticle=["paperID":id,"sourceURL":source,"pdfURL":pdf,"sourceVersion":version,"citation":["title":"Explicit archive contract fixture","authors":["Fixture Author"],"sourceUrl":source],"revisionSHA256":String(repeating:"a",count:64),"completeOffline":false]
-   try app.store.appendSession(["id":UUID().uuidString,"paperID":id,"kind":"study","status":"complete","question":"Explicit fixture provenance, no model invocation","text":"Explicit fixture only","responsesStream":true,"reasoningEffort":"low","maxTokens":4096,"finishStatus":"completed"])
+   let sessionID=UUID().uuidString
+   try app.store.appendSession(["id":sessionID,"paperID":id,"kind":"study","status":"complete","question":"Explicit fixture provenance, no model invocation","text":"Explicit fixture only","responsesStream":true,"reasoningEffort":"low","maxTokens":4096,"finishStatus":"completed"])
    let result=try await app.archiveMaterials([:])
    try expect(result["identity"] as? String=="arxiv:"+version,"actual archive preparation retains canonical legacy v1: "+base)
    try expect(result["pdfPath"]==nil && result["pdfNotice"] is String,"missing unpublished fixture PDF stays explicit rather than fabricating attachment")
    let analysis=result["analysisHTML"] as? String ?? ""
    try expect(analysis.contains("responsesStream") && analysis.contains("reasoningEffort") && analysis.contains("4096") && analysis.contains("completed"),"archive keeps actual stored request policy and finish state")
+   try expect(analysis.contains("此旧研究没有绑定封存输入") && app.store.session(sessionID)?["inputSHA256"]==nil && result["analysisNotice"]==nil,"legacy saved answer honestly reports unavailable material and never fabricates a bound input")
   }
+  try expect(keyReads==0,"legacy archive assembly never invokes injected credential provider")
   print("DesktopArchiveIdentity PASS \(checks) checks; real WK archive assembly, temporary store, no Keychain/model/Zotero/production calls")
  }
 }

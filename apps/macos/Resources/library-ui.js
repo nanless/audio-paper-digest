@@ -33,7 +33,7 @@ export function mountLibrary(app) {
   const filterBar = document.createElement('div'); filterBar.className = 'library-filters';
   filterBar.innerHTML = `<label>任务<select id="library-task"><option value="">全部任务</option></select></label><label>方法<select id="library-method"><option value="">全部方法</option></select></label><label>来源<select id="library-source"><option value="">全部来源</option><option value="arxiv">arXiv</option><option value="conference">正式会议</option><option value="unknown">待核验来源</option></select></label><label>评分<select id="library-min-score"><option value="">不限</option>${[5,6,7,8,9].map(n=>`<option value="${n}">≥ ${n}</option>`).join('')}</select></label><label>网站日期<input id="library-date-from" type="date" aria-label="网站发布日期起点"></label><label>至<input id="library-date-until" type="date" aria-label="网站发布日期终点"></label><button id="library-clear-filters" type="button">清除筛选</button>`;
   $('library-view').querySelector('.library-controls').after(filterBar);
-  const scope = document.createElement('p'); scope.className = 'library-query-scope'; scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。未下载的 PDF 不在全文范围内。';
+  const scope = document.createElement('p'); scope.className = 'library-query-scope'; scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
   filterBar.after(scope);
   const bar = document.createElement('div'); bar.className = 'library-selection-bar';
   bar.innerHTML = '<span id="library-selection-count">可多选论文，或右键打开操作菜单</span><button id="library-selection-favorite" type="button" disabled>收藏选中</button><button id="library-selection-reading" type="button" disabled>加入待读</button><button id="library-selection-clear" type="button" disabled>取消选择</button>';
@@ -96,9 +96,9 @@ export function mountLibrary(app) {
       for (const item of settled) if (item.status === 'fulfilled') {
         const result = item.value; for (const id of Array.isArray(result) ? result : result.ids || result.paperIDs || []) extraIDs.add(id);
       }
-      if (settled.some(item=>item.status==='rejected')) scope.textContent = '部分本机全文或笔记索引暂不可读，当前仍搜索论文元数据；未下载的 PDF 不在全文范围内。';
-      else scope.textContent = '已同时搜索论文元数据、本机缓存导读与自己的笔记。未下载的 PDF 不在全文范围内。';
-    } else scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。未下载的 PDF 不在全文范围内。';
+      if (settled.some(item=>item.status==='rejected')) scope.textContent = '部分本机全文或笔记索引暂不可读，当前仍搜索论文元数据；PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
+      else scope.textContent = '已同时搜索论文元数据、本机缓存导读与自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
+    } else scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
     if (sequence !== renderSequence) return;
     const today = new Date(Date.now()+8*3600*1000).toISOString().slice(0,10);
     const papers = catalog().filter(p => {

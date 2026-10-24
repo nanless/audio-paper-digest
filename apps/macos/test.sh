@@ -9,10 +9,14 @@ trap 'rm -rf "$test_work"' EXIT
 mkdir "$test_work/Sources"
 cp "$app_root"/Sources/*.swift "$test_work/Sources/"
 sources=("$test_work"/Sources/*.swift)
-for suite in DesktopStore BackupCodec DesktopStorage DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity LibraryService ZoteroService; do
+for suite in DesktopStore BackupCodec DesktopStorage DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence LibraryService ZoteroService; do
   echo "正在核验 ${suite}（隔离临时资料，不访问用户文库或付费服务）"
   xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS "${sources[@]}" "$app_root/Tests/${suite}Tests.swift" -o "$test_work/$suite"
-  "$test_work/$suite"
+  if [[ "$suite" == "ModelEvidenceExport" || "$suite" == "DesktopAppDocsEvidence" ]]; then
+    "$test_work/$suite" "$(command -v node)"
+  else
+    "$test_work/$suite"
+  fi
 done
 node --test "$app_root/Tests/DesktopProtocolReview.test.cjs" "$repo_root/tests/llm-declared-protocol.test.js"
 node "$app_root/Tests/LibraryPDFRevalidation.test.cjs"
@@ -24,4 +28,10 @@ node "$app_root/Tests/DesktopGuideReview.test.cjs"
 node "$app_root/Tests/DesktopContentAXReview.test.cjs"
 node "$app_root/Tests/DesktopModalFacade.test.cjs"
 node "$app_root/Tests/DesktopContextUI.test.cjs"
+node "$app_root/Tests/StorageUIAsync.test.cjs"
+node "$app_root/Tests/DesktopReaderLink.test.cjs"
+node "$app_root/Tests/DesktopReaderSecurityReview.test.cjs"
+node "$app_root/Tests/DesktopPresentationReview.test.cjs"
+node "$app_root/Tests/DesktopFontIndependent.test.cjs"
+node "$app_root/Tests/DesktopDetailContainer.test.cjs"
 echo '隔离自动测试完成；真实窗口、模型服务与 Zotero 归档仍须按验收矩阵分别核验。'

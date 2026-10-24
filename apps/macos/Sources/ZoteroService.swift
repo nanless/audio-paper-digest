@@ -545,9 +545,9 @@ actor ZoteroService {
     }
 
     private func archiveMaterial(_ material: Material, parent: String, journal: inout Journal) async throws {
-        let priorStep = journal.steps.first { $0.role == material.role }
         var key = journal.steps.first { $0.role == material.role }?.key
         if key == nil {
+            var createdNow=false
             let children = try await readArray("/api/users/0/items/\(parent)/children")
             let marker = "PaperDigest-Asset: \(material.role):\(material.sha256)"
             let matches = children.filter { (($0["data"] as? [String: Any])?["note"] as? String ?? "").contains(marker) }
@@ -558,8 +558,9 @@ actor ZoteroService {
                                               "title": material.role == "pdf" ? "原始论文 PDF" : material.role == "guide" ? "论文速递 · 图文导读" : "论文速递 · 原始书目与网站评估",
                                               "contentType": material.contentType, "filename": material.filename,
                                               "note": marker, "tags": [["tag": "论文速递"]]])
+                createdNow=true
             }
-            setStep(material.role, key: key, verified: false, journal: &journal); try saveJournal(journal)
+            setStep(material.role, key: key, verified: false, journal: &journal, unverifiedCreation:createdNow); try saveJournal(journal)
         }
         let item = try await readObject("/api/users/0/items/\(key!)")
         guard let data = item["data"] as? [String: Any], data["parentItem"] as? String == parent,
@@ -568,7 +569,8 @@ actor ZoteroService {
         if !storedMD5.isEmpty && storedMD5 != material.md5 { throw ServiceError.conflict }
         if storedMD5.isEmpty {
             let marker = "PaperDigest-Asset: \(material.role):\(material.sha256)"
-            let unfinishedOwnedSlot = priorStep?.verified != true && priorStep?.everVerified != true && data["note"] as? String == marker
+            let step=journal.steps.first { $0.role == material.role }
+            let unfinishedOwnedSlot = step?.verified != true && step?.everVerified == false && data["note"] as? String == marker
             // A missing synced hash does not grant permission to replace a real user-edited file.
             do {
                 let (pathData, _) = try await request("/api/users/0/items/\(key!)/file/view/url")
@@ -727,10 +729,15 @@ actor ZoteroService {
         url.scheme == "http" && url.host == base.host && url.port == base.port && url.user == nil && url.password == nil &&
         url.query == nil && url.fragment == nil && url.path.hasPrefix("/api/local/uploads/")
     }
-    private func setStep(_ role: String, key: String?, verified: Bool, journal: inout Journal) {
+    private func setStep(_ role: String, key: String?, verified: Bool, journal: inout Journal, unverifiedCreation:Bool=false) {
         if let index = journal.steps.firstIndex(where: { $0.role == role }) {
-            let ever = journal.steps[index].everVerified == true || journal.steps[index].verified || verified
-            journal.steps[index] = Step(role: role, key: key, verified: verified, error: nil, everVerified: ever ? true : nil)
+            let old=journal.steps[index]
+            // A newly adopted existing attachment has unknown history even in a
+            // brand-new journal. Only an acknowledged creation proves an empty
+            // slot has never held verified bytes.
+            let knownUnverified:Bool? = unverifiedCreation ? false : old.key == nil ? nil : old.everVerified
+            let ever:Bool? = old.everVerified == true || old.verified || verified ? true : knownUnverified
+            journal.steps[index] = Step(role: role, key: key, verified: verified, error: nil, everVerified: ever)
         }
     }
     private func markFailure(_ role: String, error: Error, journal: inout Journal) {

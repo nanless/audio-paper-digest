@@ -123,7 +123,7 @@ export function mountZotero(app) {
       }
       $('archive-pdf-detail').textContent = prepared.pdfPath ? '指定原文版本，归档后核对真实存储文件' : '没有可核对的本地 PDF，不会归档空附件';
       $('archive-guide-detail').textContent = prepared.guideHTMLPath ? '完整 HTML，图片内嵌并保留表格与公式' : '自包含导读尚未准备好';
-      $('archive-analysis-detail').textContent = prepared.analysisHTML ? '已保存的个人解析' : '当前没有已保存个人解析';
+      $('archive-analysis-detail').textContent = prepared.analysisHTML ? '已保存的个人解析与实际研究材料' : prepared.analysisNotice || '当前没有已保存个人解析';
       $('archive-note-detail').textContent = prepared.noteHTML ? '当前已保存研究笔记' : '当前没有研究笔记';
       $('zotero-result').textContent = '核对内容和目标分类后开始。书目成功不代表附件已经完成。';
       await refresh();

@@ -136,7 +136,7 @@ if(require.main===module)(async()=>{
   });
   await page.locator('#tab-analysis').click();await page.locator('#question').fill('Show failure honestly');await page.locator('#analyze').click();await page.waitForFunction(()=>__fixture.personal.sessions.length===1&&!document.querySelector('#analyze').disabled);
   await check('model object-shaped failure shows actual error, actual model, no fabricated result or cost',async()=>{
-    const text=await page.locator('#analysis-result').innerText();assert.match(text,/请求 requested-fixture-model/);assert.match(text,/实际模型未知/);assert.match(text,/failed/);assert.match(text,/金额未知/);
+    const text=await page.locator('#analysis-result').innerText();assert.match(text,/请求 requested-fixture-model/);assert.match(text,/实际模型未知/);assert.match(text,/失败/);assert.match(text,/金额未知/);
     const result=page.frameLocator('#analysis-result iframe').first();assert.match(await result.locator('main').innerText(),/Fixture upstream quota failure/);assert.doesNotMatch(await result.locator('main').innerText(),/\[object Object\]/);
     assert.ok(!(await page.locator('#toast').innerText()).includes('解析已保存'));
   });

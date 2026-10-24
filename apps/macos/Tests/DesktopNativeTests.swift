@@ -55,6 +55,16 @@ private struct NoNativeCredentials: ZoteroCredentialStore {
             try require(value["pages"] as? [Int]==pages,"physical source page range")
             try require(value["truncated"] as? Bool != true,"source not silently truncated")
         }
+        check("restored store schedule replaces and invalidates the previous timer") {
+            try app.store.updateSettings(["syncHours":2]);app.configureSchedule()
+            let previous=app.schedule!
+            let restoredRoot=root.appendingPathComponent("restored-schedule",isDirectory:true)
+            let restored=try DesktopStore(directory:restoredRoot)
+            try restored.updateSettings(["syncHours":37]);app.store=restored
+            app.configureSchedule()
+            try require(!previous.isValid && app.schedule?.isValid==true && app.schedule?.timeInterval==37*3600,"schedule reads the newly restored store immediately")
+            app.schedule?.invalidate();app.store=try DesktopStore(directory:root)
+        }
         check("real PDF current physical page, identity and extracted text") {
             app.pdfView.go(to:document.page(at:4)!)
             let value=try source("page");try assertIdentity(value,[5])

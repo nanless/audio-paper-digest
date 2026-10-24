@@ -69,13 +69,13 @@ import UniformTypeIdentifiers
         }
         guard let password,document.unlock(withPassword:password),!document.isLocked else{throw DesktopError.message("PDF 未解锁；没有替换当前阅读资料")}
     }
-    func archiveMaterials(_ payload:[String:Any]) async throws->[String:Any] {
+    func archiveMaterials(_ payload:[String:Any],includeAnalysis:Bool=true) async throws->[String:Any] {
         let captured=currentPaperID,paper=currentPaper,generation=contextGeneration
         try await flushEdits()
         try Task.checkCancellation()
         guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("保存期间论文已切换，未准备其他论文的材料")}
         guard !currentPaperID.isEmpty,!currentPaperID.hasPrefix("local:") else{throw DesktopError.message("请先选取已发布论文；本地 PDF 缺少已核验书目，仍可解析及导出个人研究")}
-        if currentArticle["paperID"] as? String != captured {let loaded=try await library.handle(command:"library.article",payload:["paperID":captured]);guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")};try Task.checkCancellation();currentArticle=loaded}
+        if currentArticle["paperID"] as? String != captured {let loaded=try await library.handle(command:"library.article",payload:["paperID":captured]);guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")};try Task.checkCancellation();try verifyArticleBinding(loaded,paper:paper);currentArticle=loaded}
         let article=currentArticle
         try verifyArticleBinding(article,paper:paper)
         if article["isStale"] as? Bool==true, (article["sourceVersion"] as? String != paper["sourceVersion"] as? String || article["sourceURL"] as? String != paper["sourceURL"] as? String){throw DesktopError.message("当前离线导读属于旧来源版本；请完成新版本读取后归档，旧稿仍可阅读") }
@@ -116,21 +116,27 @@ import UniformTypeIdentifiers
             for mark in marks {let page=mark["page"] as? Int ?? 0,quote=htmlEscape(mark["text"] as? String ?? ""),comment=htmlEscape(mark["comment"] as? String ?? ""),hash=htmlEscape(mark["pdfSHA"] as? String ?? "");note.append("<h3>原文摘录 · 物理页 \(page)</h3><blockquote>"+quote+"</blockquote><p>我的批注："+comment+"</p><p>PDF SHA256："+hash+"</p>")};note.append("</div>");result["noteHTML"]=note.joined()
         }
         let sessions=(personal["sessions"] as? [[String:Any]] ?? []).filter{$0["paperID"] as? String==captured && $0["status"] as? String=="complete" && $0["kind"] as? String != "connection-check"}
-        if !sessions.isEmpty {
+        if includeAnalysis && !sessions.isEmpty {
+            do {
             var parts=["<div><h2>个人模型解析</h2>"]
             for entry in sessions {
                 let question=htmlEscape(entry["question"] as? String ?? ""),model=htmlEscape(entry["actualModel"] as? String ?? ("请求模型："+(entry["model"] as? String ?? "未指定")+"；服务未返回实际模型")),time=htmlEscape(entry["startedAt"] as? String ?? ""),text=htmlEscape(entry["text"] as? String ?? "")
-                let provenance:[String:Any]=["source":entry["source"] ?? [:],"usage":entry["usage"] ?? NSNull(),"fingerprint":entry["fingerprint"] ?? "","requestedModel":entry["model"] ?? "","actualModel":entry["actualModel"] ?? NSNull(),"protocol":entry["protocol"] ?? "","endedAt":entry["endedAt"] ?? "","responsesStream":entry["responsesStream"] ?? NSNull(),"reasoningEffort":entry["reasoningEffort"] ?? NSNull(),"maxTokens":entry["maxTokens"] ?? NSNull(),"finishStatus":entry["finishStatus"] ?? NSNull()]
+                let evidence=try self.model.exportEvidence(sessionID:entry["id"] as? String ?? "",paperID:captured)
+                let provenance:[String:Any]=["source":evidence["source"] ?? NSNull(),"evidenceAvailable":evidence["available"] ?? false,"evidenceNotice":evidence["notice"] ?? "","inputSHA256":entry["inputSHA256"] ?? NSNull(),"usage":entry["usage"] ?? NSNull(),"fingerprint":entry["fingerprint"] ?? "","requestedModel":entry["model"] ?? "","actualModel":entry["actualModel"] ?? NSNull(),"protocol":entry["protocol"] ?? "","endedAt":entry["endedAt"] ?? "","responsesStream":entry["responsesStream"] ?? NSNull(),"reasoningEffort":entry["reasoningEffort"] ?? NSNull(),"maxTokens":entry["maxTokens"] ?? NSNull(),"finishStatus":entry["finishStatus"] ?? NSNull()]
                 let detail=htmlEscape(String(data:try JSONSerialization.data(withJSONObject:provenance,options:[.prettyPrinted,.sortedKeys]),encoding:.utf8) ?? "")
                 parts.append("<h3>"+question+"</h3><p>"+model+" · "+time+"</p><pre>"+text+"</pre><pre>"+detail+"</pre>")
+                parts.append("<h4>本次实际研究材料</h4><pre>"+htmlEscape(evidence["evidence"] as? String ?? evidence["notice"] as? String ?? "原材料未保存")+"</pre>")
             }
             parts.append("</div>");result["analysisHTML"]=parts.joined()
+            } catch {
+                result["analysisNotice"]="个人解析的原材料校验未通过，未准备此项："+error.localizedDescription
+            }
         }
 
         try Task.checkCancellation()
         guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，归档材料没有提交")};return result
     }
-    func exportCurrent(_ payload:[String:Any]) async throws {
+    func buildCurrentExport(_ payload:[String:Any]) async throws -> (data:Data,ext:String,title:String) {
         let id=currentPaperID,generation=contextGeneration,paper=currentPaper,article=currentArticle
         guard !id.isEmpty else{throw DesktopError.message("请先选择论文")}
         try await flushEdits()
@@ -139,22 +145,42 @@ import UniformTypeIdentifiers
         let kind=payload["format"] as? String ?? "markdown",title=paper["title"] as? String ?? "个人研究"
         var data:Data,ext:String
         let notes=(store.value["notes"] as? [String:[String:Any]])?[id]?["text"] as? String ?? ""
-        let sessions=(store.value["sessions"] as? [[String:Any]] ?? []).filter{$0["paperID"] as? String==id && $0["kind"] as? String != "connection-check"}
+        let sessions=try (store.value["sessions"] as? [[String:Any]] ?? []).filter{$0["paperID"] as? String==id && $0["kind"] as? String != "connection-check"}.map { entry in
+            var exported=entry.filter { ["id","kind","paperID","question","text","response","error","source","model","actualModel","protocol","startedAt","endedAt","usage","status","fingerprint","inputSHA256","charge","responsesStream","reasoningEffort","maxTokens","finishStatus","requestIssued","parentSessionID","reused"].contains($0.key) }
+            if !["bib","ris","citation","guide","pdf"].contains(kind) {
+                let evidence=try model.exportEvidence(sessionID:entry["id"] as? String ?? "",paperID:id)
+                exported["sealedEvidence"]=evidence
+                exported["source"]=evidence["source"] ?? NSNull()
+            }
+            return exported
+        }
         let provenance=try JSONSerialization.data(withJSONObject:sessions.map{entry in entry.filter{["id","kind","question","source","model","actualModel","protocol","startedAt","endedAt","usage","status","fingerprint","inputSHA256","charge","responsesStream","reasoningEffort","maxTokens","finishStatus"].contains($0.key)}},options:[.prettyPrinted,.sortedKeys])
         let provenanceText=String(data:provenance,encoding:.utf8) ?? ""
         let annotations=store.annotations(id:id)
         let annotationText=annotations.map{mark in "### 原文摘录 · 物理页 \(mark["page"] as? Int ?? 0)\n\n"+(mark["text"] as? String ?? "")+"\n\n我的批注："+(mark["comment"] as? String ?? "")+"\n\nPDF SHA256："+(mark["pdfSHA"] as? String ?? "")+"\n"}.joined(separator:"\n")
-        let text="# \(title)\n\n身份：\(id)\n\n## 个人笔记\n\n\(notes)\n\n"+sessions.map{"## "+($0["question"] as? String ?? "")+"\n\n"+($0["text"] as? String ?? "[请求未完成]")+"\n\n"}.joined(separator:"\n")+"\n## 原文摘录与我的批注\n\n"+annotationText+"\n## 来源与实际请求记录\n\n```json\n"+provenanceText+"\n```\n"
+        let text="# \(title)\n\n身份：\(id)\n\n## 个人笔记\n\n\(notes)\n\n"+sessions.map { entry in
+            let evidence=entry["sealedEvidence"] as? [String:Any] ?? [:]
+            return "## "+(entry["question"] as? String ?? "")+"\n\n"+(entry["text"] as? String ?? "[请求未完成]")+"\n\n### 本次实际研究材料\n\n"+(evidence["evidence"] as? String ?? evidence["notice"] as? String ?? "原材料未保存")+"\n\n"
+        }.joined(separator:"\n")+"\n## 原文摘录与我的批注\n\n"+annotationText+"\n## 来源与实际请求记录\n\n```json\n"+provenanceText+"\n```\n"
         if ["bib","ris","citation"].contains(kind){let source=try await library.handle(command:"library.citationFile",payload:["paperID":id,"format":kind=="citation" ? "json":kind]);guard let content=source["text"] as? String else{throw DesktopError.message("真实引用文件不可读")};data=Data(content.utf8);ext=kind=="citation" ? "json":kind}
-        else if kind=="guide"{let materials=try await archiveMaterials([:]);guard let path=materials["guideHTMLPath"] as? String else{throw DesktopError.message("请先等待完整图文导读缓存，无法导出缺图副本")};data=try Data(contentsOf:URL(fileURLWithPath:path));ext="html"}
+        else if kind=="guide"{let materials=try await archiveMaterials([:],includeAnalysis:false);guard let path=materials["guideHTMLPath"] as? String else{throw DesktopError.message("请先等待完整图文导读缓存，无法导出缺图副本")};data=try Data(contentsOf:URL(fileURLWithPath:path));ext="html"}
         else if kind=="pdf"{guard pdfOwner==id,let path=currentPDFPath else{throw DesktopError.message("请先打开当前原文 PDF")};data=try Data(contentsOf:path);guard sha256(data)==currentPDFSHA else{throw DesktopError.message("原始 PDF 在打开后被修改，未将改变的文件导出为原版本")};ext="pdf"}
         else if kind=="html"{data=Data(("<!doctype html><html><meta charset=\"utf-8\"><title>个人研究</title><body><pre>"+htmlEscape(text)+"</pre></body></html>").utf8);ext="html"}
         else if kind=="json"{data=try JSONSerialization.data(withJSONObject:["paper":paper,"article":article,"notes":notes,"sessions":sessions,"annotations":store.annotations(id:id)],options:[.prettyPrinted,.sortedKeys]);ext="json"}
         else {data=Data(text.utf8);ext="md"}
         guard id==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，导出未写入")}
         try Task.checkCancellation()
+        return (data:data,ext:ext,title:title)
+    }
+    func exportCurrent(_ payload:[String:Any]) async throws {
+        let owner=currentPaperID,generation=contextGeneration
+        let built=try await buildCurrentExport(payload)
+        guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，未保存其他论文的导出")}
+        let (data,ext,title)=built
         let panel=NSSavePanel();panel.nameFieldStringValue=String(title.prefix(70)).replacingOccurrences(of:"/",with:"-")+"."+ext
-        guard panel.runModal() == .OK,let url=panel.url else{throw DesktopError.message("已取消导出")};try Task.checkCancellation();try data.write(to:url,options:.atomic)
+        guard panel.runModal() == .OK,let url=panel.url else{throw DesktopError.message("已取消导出")};try Task.checkCancellation()
+        guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，导出未写入")}
+        try data.write(to:url,options:.atomic)
     }
     func backupData() throws {
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未开始备份")}
@@ -186,6 +212,7 @@ import UniformTypeIdentifiers
             let failed=parent.appendingPathComponent("PaperDigest-failed-restore-"+UUID().uuidString)
             try fm.moveItem(at:directory,to:failed);try fm.moveItem(at:old,to:directory);throw error
         }
+        configureSchedule()
         contextGeneration+=1;pdfView.document=nil;pdfView.isHidden=true;currentPaper=[:];currentPaperID="";pdfOwner="";pdfVersion="";currentPDFSHA="";currentPDFPath=nil;annotationsByID=[:];currentArticle=[:];selectionSource=[:];offlinePDF=nil;currentPDFReceipt=[:];emit("personal.changed")
     }
     func diagnostics() throws {

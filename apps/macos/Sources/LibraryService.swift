@@ -745,7 +745,7 @@ actor LibraryService {
                 var result = try Self.dictionary(p); result["paperID"] = p.id; result["blogURL"] = p.blogURL; result["pdfURL"] = p.pdfURL ?? NSNull(); return result
             }
             return ["papers": rows, "count": rows.count, "total": matches.count, "totalInLibrary": snapshot.papers.count, "offset": max(0, payload["offset"] as? Int ?? 0)]
-        case "library.search": return ["ids": searchCachedText(payload["query"] as? String ?? ""), "scope": "仅本机已读取导读正文，不含未下载PDF"]
+        case "library.search": return ["ids": searchCachedText(payload["query"] as? String ?? ""), "scope": "仅本机已读取导读正文，不检索PDF原文"]
         case "library.citationFile":
             guard let id = payload["paperID"] as? String ?? payload["id"] as? String else { throw ServiceError.invalid("未选择论文。") }
             return try await citationFile(for: id, format: payload["format"] as? String ?? "json")

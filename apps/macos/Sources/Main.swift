@@ -121,10 +121,23 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     }
     func webView(_ webView:WKWebView,decidePolicyFor action:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void){
         guard let url=action.request.url else{decisionHandler(.cancel);return}
-        if url.scheme=="paperapp",url.host=="app"{decisionHandler(.allow);return}
+        if url.scheme=="paperapp",url.host=="app",url.path.hasPrefix("/reader-link/") {
+            decisionHandler(.cancel)
+            if let message=Self.readerLinkMessage(url,sourceIsMainFrame:action.sourceFrame.isMainFrame,linkActivated:action.navigationType == .linkActivated){emit("reader.link",message)}
+            return
+        }
+        if url.scheme=="paperapp",url.host=="app"{decisionHandler(action.sourceFrame.isMainFrame && action.targetFrame?.isMainFrame != false ? .allow:.cancel);return}
         if action.targetFrame?.isMainFrame==false, url.scheme=="about"{decisionHandler(.allow);return}
         if action.navigationType == .linkActivated, ["https","zotero"].contains(url.scheme ?? ""){NSWorkspace.shared.open(url)}
         decisionHandler(.cancel)
+    }
+    static func readerLinkMessage(_ url:URL,sourceIsMainFrame:Bool,linkActivated:Bool)->[String:Any]? {
+        guard !sourceIsMainFrame,linkActivated,url.scheme=="paperapp",url.host=="app",url.user==nil,url.password==nil,url.port==nil,url.query==nil,url.fragment==nil,
+              URLComponents(url:url,resolvingAgainstBaseURL:false)?.percentEncodedPath==url.path else{return nil}
+        let pieces=url.path.split(separator:"/",omittingEmptySubsequences:false)
+        guard pieces.count==4,pieces[0].isEmpty,pieces[1]=="reader-link",UUID(uuidString:String(pieces[2])) != nil,
+              String(pieces[3]).range(of:#"\A(?:0|[1-9][0-9]{0,5})\z"#,options:.regularExpression) != nil else{return nil}
+        return ["token":String(pieces[2]).lowercased(),"linkID":String(pieces[3])]
     }
     func userContentController(_ controller:WKUserContentController,didReceive message:WKScriptMessage,replyHandler:@escaping(Any?,String?)->Void){
         guard message.frameInfo.isMainFrame,message.frameInfo.securityOrigin.protocol=="paperapp",message.frameInfo.securityOrigin.host=="app",let body=message.body as? [String:Any],let command=body["command"] as? String else{replyHandler(nil,"已拒绝非应用主界面的操作");return}
