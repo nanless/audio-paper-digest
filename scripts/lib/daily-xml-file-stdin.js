@@ -1,6 +1,6 @@
 'use strict';
 
-// Private transport for the two daily XML validators. A finite regular-file fd
+// Private transport for the daily XML validators. A finite regular-file fd
 // avoids the synchronous stdin pipe/EOF stall without changing their budgets.
 const fs = require('node:fs');
 const os = require('node:os');
@@ -27,6 +27,18 @@ function isDailyXmlOperationalError(error) { return Boolean(error && operational
 
 function validOutput(value, kind) {
     const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+    if (kind === 'atom' || kind === 'atom-feed') {
+        const records = kind === 'atom' ? value : value?.entries;
+        const fields = ['arxivId', 'title', 'abstract', 'authors', 'published', 'categories'];
+        const strings = x => Array.isArray(x) && x.every(item => typeof item === 'string');
+        if (!Array.isArray(records) || !records.every(record => object(record)
+            && JSON.stringify(Object.keys(record).sort()) === JSON.stringify([...fields].sort())
+            && ['arxivId', 'title', 'abstract', 'published'].every(key => typeof record[key] === 'string')
+            && strings(record.authors) && strings(record.categories))) return false;
+        return kind === 'atom' || (object(value)
+            && JSON.stringify(Object.keys(value).sort()) === JSON.stringify(['entries', 'itemsPerPage', 'startIndex', 'totalResults'])
+            && ['itemsPerPage', 'startIndex', 'totalResults'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0));
+    }
     if (!object(value)) return false;
     if (kind === undefined) return true;
     const fields = kind === 'oai' ? ['responseDate', 'request', 'requestBase', 'records', 'token', 'tokenAttributes']
@@ -46,7 +58,7 @@ function runDailyXmlPython(parserSource, input, options = {}) {
         || Object.keys(options).some(key => !['argv', 'cwd', 'outputKind'].includes(key))
         || (options.argv !== undefined && (!Array.isArray(options.argv) || !options.argv.every(arg => typeof arg === 'string')))
         || (options.cwd !== undefined && (typeof options.cwd !== 'string' || !path.isAbsolute(options.cwd)))
-        || (options.outputKind !== undefined && !['oai', 'announcement'].includes(options.outputKind))) {
+        || (options.outputKind !== undefined && !['oai', 'announcement', 'atom', 'atom-feed'].includes(options.outputKind))) {
         throw operational('Invalid private daily XML parser invocation');
     }
     // Guard execution is deliberately outside the semantic exception handler.

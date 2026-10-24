@@ -41,6 +41,7 @@ const {
 } = require('./utils.js');
 const Config = require('./config.js');
 const { createHostTaskScheduler } = require('./lib/fetch-scheduler.js');
+const { runDailyXmlPython, isDailyXmlOperationalError } = require('./lib/daily-xml-file-stdin');
 const { resolvePrimaryApiKeyPool } = require('./llm-account-pool.js');
 
 loadEnvFile();
@@ -1628,6 +1629,7 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
     } catch (error) {
         health.failures.push({ error: error.message });
         finishHealth();
+        if (isDailyXmlOperationalError(error)) { error.sourceHealth = health; throw error; }
         throw makeSourceFetchError(`arXiv ${categoryId} 补抓未完成：${error.message}`, health);
     }
 }
@@ -1638,14 +1640,12 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
 function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
     const { stopAtConsecutiveExisting = true } = options;
     const papers = [];
-    const { spawnSync } = require('node:child_process');
     const input = Buffer.from(String(xml || ''), 'utf8');
     const maxBytes = 16 * 1024 * 1024;
     if (input.length > maxBytes) throw new Error(`Atom 响应超过 ${maxBytes} 字节上限`);
-    const parsed = spawnSync('bash', [path.join(__dirname, 'python-runtime.sh'),
-        path.join(__dirname, 'parse-arxiv-atom.py'), ...(options.feedPage ? ['--feed-page'] : [])], {
-        input, cwd: path.join(__dirname, '..'), encoding: 'utf8',
-        timeout: 30000, maxBuffer: maxBytes
+    const parsed = runDailyXmlPython(require('node:fs').readFileSync(path.join(__dirname, 'parse-arxiv-atom.py'), 'utf8'), input, {
+        argv: options.feedPage ? ['--feed-page'] : [], cwd: path.join(__dirname, '..'),
+        outputKind: options.feedPage ? 'atom-feed' : 'atom'
     });
     if (parsed.error || parsed.status !== 0) {
         throw new Error(`Atom XML 解析失败：${parsed.error?.message || parsed.stderr?.trim() || `退出码 ${parsed.status}`}`,

@@ -182,6 +182,7 @@ async function fetchCategoryPrefix(categoryId, boundary, existingIds, options = 
     } catch (cause) {
         health.failures.push({ error: cause.message });
         health.allFailed = health.successfulRequests === 0;
+        if (require('./daily-xml-file-stdin').isDailyXmlOperationalError(cause)) { cause.sourceHealth = health; throw cause; }
         throw Object.assign(new Error(`arXiv ${categoryId} category prefix incomplete: ${cause.message}`, { cause }),
             { code: 'SOURCE_FETCH_FAILED', sourceHealth: health });
     }
@@ -377,6 +378,7 @@ async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options
     if (!state.categoryPrefix) {
         try { return await windowFetch(categoryId, boundary, existingIds, options); }
         catch (error) {
+            if (require('./daily-xml-file-stdin').isDailyXmlOperationalError(error)) throw error;
             if (!error.sourceHealth?.failures?.some(item => item.error === 'HTTP 429')) throw error;
             failure = { message: error.message, health: error.sourceHealth };
         }
