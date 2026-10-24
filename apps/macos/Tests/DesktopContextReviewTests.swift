@@ -64,7 +64,9 @@ actor ContextPublishedFixture {
   for maintenance in [false,true] {
    app.terminationPending = !maintenance;app.maintenanceBusy=maintenance
    var blocked=0
-   for action in [{try app.importLocalPDF()},{try app.backupData()},{try app.restoreData()}] {do{try action()}catch{blocked+=1}}
+   do{try app.importLocalPDF()}catch{blocked+=1}
+   do{try await app.backupData()}catch{blocked+=1}
+   do{try await app.restoreData()}catch{blocked+=1}
    do{_=try await app.dispatch("app.setPaper",payload:["id":a])}catch{blocked+=1}
    do{_=try await app.runJob("model.run",payload:[:]){_ in operations+=1;return [:]}}catch{blocked+=1}
    check(blocked==5,"\(maintenance ? "maintenance":"termination") gates final import/backup/restore, context switch and new job before panel/operation")

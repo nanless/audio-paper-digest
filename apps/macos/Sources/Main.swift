@@ -50,6 +50,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var settingsWeb:WKWebView?
     var storageDetailWindow:NSWindow?,storageDetailWeb:WKWebView?,storageDetailSession:StorageDetailSession?
     var storageDetailBusy=false,storageDetailSystemPanel=false
+    var storageDetailDocumentAccess:DetailDocumentAccess?
+    var storageDetailArchiveMaterials:[String:Any]?
     var storageCleanupConfirmation:((NSAlert,NSWindow?) async ->NSApplication.ModalResponse)?
     func applicationDidFinishLaunching(_ notification:Notification) {
         do {
@@ -158,7 +160,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     }
     func emit(_ name:String,_ object:[String:Any]=[:],to targets:[WKWebView]?=nil) {
         guard JSONSerialization.isValidJSONObject(object),let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8),let event=try? JSONSerialization.data(withJSONObject:[name]),let json=String(data:event,encoding:.utf8) else{return}
-        for target in (targets ?? [web,settingsWeb].compactMap({$0})) {target.evaluateJavaScript("window.dispatchEvent(new CustomEvent(\(json).at(0),{detail:\(text)}));",completionHandler:nil)}
+        for target in (targets ?? [web,settingsWeb,storageDetailWeb].compactMap({$0})) {target.evaluateJavaScript("window.dispatchEvent(new CustomEvent(\(json).at(0),{detail:\(text)}));",completionHandler:nil)}
     }
     func dispatch(_ command:String,payload:[String:Any]) async throws->[String:Any] {
         let readingCommands:Set<String>=["app.setPaper","library.article","pdf.open","pdf.close","pdf.page","pdf.fit","pdf.zoom","pdf.locate","pdf.highlight","pdf.removeAnnotation","storage.open","storage.prepare","model.run","archive.materials","zotero.archive","storage.cleanupPlan","storage.cleanup","app.openLocal","app.restore","app.export","app.backup","app.diagnostics","app.findQuery","model.preview","pdf.selection","pdf.outline","pdf.find","pdf.openExternal"]
@@ -260,11 +262,14 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             guard let raw=payload["url"] as? String,let url=URL(string:raw),url.scheme=="https",url.user==nil,url.password==nil else{throw DesktopError.message("链接无效")};NSWorkspace.shared.open(url);return [:]
         case "app.openLocal":openLocal();return [:]
         case "app.export":return try await runJob(command,payload:payload){_ in try await self.exportCurrent(payload);return ["saved":true]}
-        case "app.backup":try await flushEdits();try backupData();return ["saved":true]
-        case "app.restore":try await flushEdits();try restoreData();return ["restored":true]
+        case "app.backup":try await flushEdits();try await backupData();return ["saved":true]
+        case "app.restore":try await flushEdits();try await restoreData();return ["restored":true]
         case "app.diagnostics":try await diagnostics();return ["saved":true]
         case "app.revealData":revealData();return [:]
         case "storage.show":try await showStorageDetails();return [:]
+        case "details.show":
+            guard let raw=payload["kind"] as? String,let kind=NativeDetailKind(rawValue:raw),kind != .storage else{throw DesktopError.message("未知详情窗口")}
+            try await showNativeDetails(kind);return [:]
         case "storage.status":return try await storage.capacity()
         case "storage.packages":return ["packages":try await storage.listPackages()]
         case "storage.prepare":return try await runJob(command,payload:payload){notify in try await self.prepareOffline(progress:notify)}
@@ -395,8 +400,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func revealData(){NSWorkspace.shared.activateFileViewerSelecting([directory])}
     @objc func openLocal(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try importLocalPDF()}catch{showError(error)}}}
     @objc func exportResearch(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"export"])}
-    @objc func backup(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try backupData()}catch{showError(error)}}}
-    @objc func restore(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try restoreData();emit("personal.changed")}catch{showError(error)}}}
+    @objc func backup(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try await backupData()}catch{showError(error)}}}
+    @objc func restore(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try await restoreData();emit("personal.changed")}catch{showError(error)}}}
     @objc func exportDiagnostics(){guard mainContextMenuAvailable() else{return};Task{do{try await diagnostics()}catch{showError(error)}}}
     @objc func printPDF(){guard mainContextMenuAvailable() else{return};guard let doc=pdfView.document else{showError(DesktopError.message("请先打开原文 PDF"));return};doc.printOperation(for:NSPrintInfo.shared,scalingMode:.pageScaleToFit,autoRotate:true)?.runModal(for:window,delegate:nil,didRun:nil,contextInfo:nil)}
     func showError(_ error:Error){let alert=NSAlert();alert.messageText="操作未能完成";alert.informativeText=error.localizedDescription;alert.runModal()}

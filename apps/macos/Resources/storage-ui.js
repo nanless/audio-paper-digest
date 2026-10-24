@@ -1,6 +1,7 @@
 import {refreshDetailContainer} from './dialogs.js';
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const bytes=n=>new Intl.NumberFormat('zh-CN',{maximumFractionDigits:1}).format(n/1024/1024)+' MB';
+const bytes=value=>{const n=Number(value);if(!Number.isFinite(n)||n<0)return '容量未知';const unit=n>=1024**3?'GB':n>=1024**2?'MB':n>=1024?'KB':'B',size=n/(unit==='GB'?1024**3:unit==='MB'?1024**2:unit==='KB'?1024:1);return new Intl.NumberFormat('zh-CN',{maximumFractionDigits:unit==='B'?0:1}).format(size)+' '+unit;};
+const packageStatus=value=>value==='verified'?'已逐文件核验':value==='corrupt'?'未通过完整性检查':String(value??'状态未知');
 export function mountStorage(app,options={}){
  const {call,toast,error}=app,$=id=>document.getElementById(id);
  let generation=0;
@@ -13,7 +14,7 @@ export function mountStorage(app,options={}){
   try{
    const [capacity,result]=await Promise.all([call('storage.status'),call('storage.packages')]);
    if(!current())return;
-   view.innerHTML=`<div class="storage-heading"><div class="eyebrow">你的研究，留在本机</div><h2>本机资料</h2><p class="settings-help">共 ${bytes(capacity.totalBytes)} · ${capacity.files} 个文件。容量按文件字节统计，废纸篓清空前不会释放磁盘空间。</p></div><div class="storage-metrics">${capacity.categories.filter(c=>c.bytes).map(c=>`<div><span>${esc(c.label)}</span><strong>${bytes(c.bytes)}</strong></div>`).join('')}</div><div class="native-tools"><button id="storage-plan">检查可整理的缓存</button><button id="storage-reveal">在 Finder 查看</button></div><div id="cleanup-result" role="status"></div><h3>离线快照</h3><p class="settings-help">保留当时的导读、原图和 PDF；打开时逐文件核验。这里的版本不会自动替换为网站新版本。</p><div>${result.packages.length?result.packages.map(p=>`<section class="offline-row"><div><strong>${esc(p.title)}</strong><p>${esc(p.sourceVersion||'来源未提供版本')} · ${bytes(p.bytes)} · ${esc((p.createdAt||'').slice(0,10))}</p><small>${p.hasPDF?'含原始 PDF':'只含图文导读'} · ${esc(p.status)}</small></div><button data-offline="${esc(p.id)}">打开快照</button></section>`).join(''):'<p class="settings-help">尚无离线快照。打开论文后，点击工具栏的“保存离线”，即可保存完整资料。</p>'}</div>`;
+   view.innerHTML=`<div class="storage-heading"><div class="eyebrow">你的研究，留在本机</div><h2>本机资料</h2><p class="settings-help">共 ${bytes(capacity.totalBytes)} · ${capacity.files} 个文件。容量按文件字节统计，废纸篓清空前不会释放磁盘空间。</p></div><div class="storage-metrics">${capacity.categories.filter(c=>c.bytes).map(c=>`<div><span>${esc(c.label)}</span><strong>${bytes(c.bytes)}</strong></div>`).join('')}</div><div class="native-tools"><button id="storage-plan">检查可整理的缓存</button><button id="storage-reveal">在 Finder 查看</button></div><div id="cleanup-result" role="status"></div><h3>离线快照</h3><p class="settings-help">保留当时的导读、原图和 PDF；打开时逐文件核验。这里的版本不会自动替换为网站新版本。</p><div>${result.packages.length?result.packages.map(p=>`<section class="offline-row"><div><strong>${esc(p.title)}</strong><p>${esc(p.sourceVersion||'来源未提供版本')} · ${bytes(p.bytes)} · ${esc((p.createdAt||'').slice(0,10))}</p><small>${p.hasPDF?'含原始 PDF':'只含图文导读'} · ${esc(packageStatus(p.status))}</small></div><button data-offline="${esc(p.id)}">打开快照</button></section>`).join(''):'<p class="settings-help">尚无离线快照。打开论文后，点击工具栏的“保存离线”，即可保存完整资料。</p>'}</div>`;
    dialog.showModal();
    view.querySelectorAll('[data-offline]').forEach(b=>b.onclick=async()=>{if(!current())return;if(options.openOffline)await options.openOffline(b.dataset.offline);else{dialog.close();await app.openOffline(b.dataset.offline);}});
    view.querySelector('#storage-reveal').onclick=()=>{if(current())call('app.revealData').catch(error);};

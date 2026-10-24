@@ -1,29 +1,39 @@
-/* Detail accessibility remediation: real production modules/DOM and Chromium AX,
- * explicit native fixtures only. Native WebKit AX acceptance remains separate. */
-'use strict';
-const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
-const {chromium}=require('playwright');
-const {server,installFixture,repo}=require('./DesktopUI.test.cjs');
-const output=path.join(repo,'apps/macos/.qa/detail-container');fs.mkdirSync(output,{recursive:true});
-const results=[];let browser;
-const menu=(page,action)=>page.evaluate(action=>window.dispatchEvent(new CustomEvent('menu.command',{detail:{action}})),action);
-async function one(name,action){const page=await browser.newPage({viewport:{width:1080,height:700}}),errors=[];page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));try{
- await installFixture(page);await page.addInitScript(()=>{if(window.top!==window)return;window.detailCalls=[];const original=webkit.messageHandlers.desktop.postMessage;webkit.messageHandlers.desktop.postMessage=async input=>{if(['app.export','app.backup','app.restore','app.diagnostics'].includes(input.command)){detailCalls.push(structuredClone(input));return {};}return original(input);};});await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForSelector('#storage-button');await action(page);assert.deepEqual(errors,[]);assert.deepEqual(await page.evaluate(()=>__unimplemented),[]);results.push({name,passed:true});console.log('PASS '+name);
-}catch(e){results.push({name,passed:false,error:e.message});console.error('FAIL '+name+': '+e.message);await page.screenshot({path:path.join(output,'failure-'+results.length+'.png')});}finally{await page.close();}}
-(async()=>{try{await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
- await one('fresh wrapper preserves actual child nodes and handlers without touching Zotero-owned controls',async page=>{
-  const result=await page.evaluate(async()=>{const {refreshDetailContainer}=await import('./dialogs.js');const original=document.getElementById('detail-content'),archive=document.getElementById('archive-dialog'),checkbox=document.getElementById('archive-guide');const button=document.createElement('button');let clicks=0;button.onclick=()=>clicks++;original.append(button);const fresh=refreshDetailContainer();button.click();return {different:fresh!==original,oldDisconnected:!original.isConnected,sameChild:fresh.firstChild===button,clicks,idCount:document.querySelectorAll('#detail-content').length,archiveSame:document.getElementById('archive-dialog')===archive,checkboxSame:document.getElementById('archive-guide')===checkbox};});assert.deepEqual(result,{different:true,oldDisconnected:true,sameChild:true,clicks:1,idCount:1,archiveSame:true,checkboxSame:true});
- });
- await one('help, export and storage refresh every opening while one visible surface owns the unique detail ID',async page=>{
-  await page.evaluate(()=>{window.previousDetail=document.getElementById('detail-content');window.originalClose=document.getElementById('detail-close');});
-  for(const action of ['help','export','storage','export','help','storage']){await menu(page,action);if(action==='storage')await page.waitForSelector('#storage-plan');const s=await page.evaluate(()=>{const content=document.getElementById('detail-content');const result={fresh:content!==previousDetail,oldDisconnected:!previousDetail.isConnected,insideSurface:!!content.closest('[data-dialog-surface][open]'),count:document.querySelectorAll('#detail-content').length,closeSame:document.getElementById('detail-close')===originalClose};previousDetail=content;return result;});assert.deepEqual(s,{fresh:true,oldDisconnected:true,insideSurface:true,count:1,closeSame:true});assert.equal(await page.locator('[data-dialog-surface][open]').count(),1);}
-  await page.locator('#detail-close').click();assert.equal(await page.locator('[data-dialog-surface]').count(),0);await menu(page,'export');assert.equal(await page.locator('[data-format]').count(),8);await page.locator('#detail-close').click();assert.equal(await page.locator('[data-dialog-surface]').count(),0);
- });
- await one('fresh export/help controls retain correct command payloads and visible accessibility content',async page=>{
-  await menu(page,'export');for(const button of await page.locator('[data-format]').all())await button.click();assert.deepEqual(await page.evaluate(()=>detailCalls.map(c=>c.payload.format)),['markdown','html','json','guide','pdf','bib','ris','citation']);await menu(page,'help');for(const id of ['help-backup','help-restore','help-diagnostic'])await page.locator('#'+id).click();assert.deepEqual(await page.evaluate(()=>detailCalls.slice(-3).map(c=>c.command)),['app.backup','app.restore','app.diagnostics']);
-  const cdp=await page.context().newCDPSession(page),tree=await cdp.send('Accessibility.getFullAXTree');assert(tree.nodes.some(n=>!n.ignored&&n.role?.value==='heading'&&n.name?.value==='论文速递 · 研究工作台'));assert(tree.nodes.some(n=>!n.ignored&&n.role?.value==='button'&&n.name?.value==='恢复备份'));assert.equal(tree.nodes.filter(n=>!n.ignored&&n.role?.value==='dialog').length,1);await cdp.detach();
- });
- await one('fresh nested detail panel preserves pending archive controls and returns to the original Zotero dialog',async page=>{
-  await page.locator('[data-library-open]').first().click();await page.waitForSelector('#archive-open');await page.evaluate(()=>{window.originalArchive=document.getElementById('archive-dialog');window.originalGuideCheckbox=document.getElementById('archive-guide');const original=webkit.messageHandlers.desktop.postMessage;webkit.messageHandlers.desktop.postMessage=async input=>{if(input.command==='archive.materials')await new Promise(r=>window.releaseArchiveMaterials=r);return original(input);};});await page.locator('#archive-open').click();await page.waitForFunction(()=>typeof releaseArchiveMaterials==='function');await menu(page,'export');await menu(page,'help');await page.evaluate(()=>releaseArchiveMaterials());await page.waitForFunction(()=>document.getElementById('zotero-result').textContent.includes('核对内容'));assert.equal(await page.locator('[data-dialog-surface]').count(),2);assert.equal(await page.evaluate(()=>originalArchive.querySelector('#archive-guide')===originalGuideCheckbox),true);await page.keyboard.press('Escape');assert.equal(await page.locator('[data-dialog-surface]').count(),1);assert.equal(await page.evaluate(()=>originalArchive.open&&document.getElementById('archive-guide')===originalGuideCheckbox),true);await page.locator('#archive-dialog button[value=cancel]').first().click();assert.equal(await page.locator('[data-dialog-surface]').count(),0);
- });
-}finally{if(browser)await browser.close();await new Promise(r=>server.close(r));const sources=Object.fromEntries(['dialogs.js','native.js','storage-ui.js'].map(name=>[name,crypto.createHash('sha256').update(fs.readFileSync(path.join(repo,'apps/macos/Resources',name))).digest('hex')]));const failed=results.filter(r=>!r.passed).length;fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({scope:'author isolated DOM/ChromiumAX, not actual Mac WebKit AX acceptance',sources,results,passed:results.length-failed,failed},null,2)+'\n');console.log('Detail container: '+(results.length-failed)+' passed; '+failed+' failed');if(failed)process.exitCode=1;}})().catch(e=>{console.error(e);process.exitCode=1;});
+// Native detail leaf production content; bridge is a local explicit fixture.
+const assert=require('node:assert/strict'),{chromium}=require('playwright');
+const {server,leaf,primary}=require('./NativeDetailsFixture.cjs');
+(async()=>{let browser,count=0;try{
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+ for(const kind of ['help','export','zotero','storage']){
+  const p=await leaf(browser,kind);try{
+   assert.equal(await p.locator('dialog,[data-dialog-surface]').count(),0);
+   assert.equal(await p.locator('#details-close').innerText(),'完成');
+   assert.equal(await p.locator('[data-detail-close]').count(),0);
+   assert.equal(await p.locator('#details-refresh').isVisible(),kind==='storage');
+   assert.deepEqual(p.leafErrors,[]);count++;console.log('PASS actual ordinary leaf structure and one owner close '+kind);
+  }finally{await p.close();}
+ }
+ const p=await leaf(browser,'export');try{
+  assert.ok((await p.locator('#detail-content').innerText()).includes(primary.title));
+  for(const format of ['markdown','html','json','guide','pdf','bib','ris','citation']){
+   await p.locator('[data-format="'+format+'"]').click();await p.waitForFunction(()=>document.querySelector('[data-detail-status]').textContent.includes('已保存'));
+  }
+  const calls=await p.evaluate(()=>leafFixture.calls.filter(c=>c.command==='app.export'));
+  assert.deepEqual(calls.map(c=>c.payload.format),['markdown','html','json','guide','pdf','bib','ris','citation']);
+  assert(calls.every(c=>Object.keys(c.payload).sort().join(',')==='format,presentationID'));
+  count++;console.log('PASS all eight actual leaf export controls only request format and native session');
+ }finally{await p.close();}
+ const h=await leaf(browser,'help');try{
+  for(const command of ['app.backup','app.restore','app.diagnostics']){await h.locator('[data-detail-command="'+command+'"]').click();await h.waitForFunction(()=>document.querySelectorAll('[data-detail-command]:disabled').length===0);}
+  const commands=await h.evaluate(()=>leafFixture.calls.filter(c=>c.command.startsWith('app.')).map(c=>c.command));assert.deepEqual(commands,['app.backup','app.restore','app.diagnostics']);count++;console.log('PASS help content uses the three explicit native document operations');
+ }finally{await h.close();}
+ const z=await leaf(browser,'zotero',{archives:[{archiveID:'explicit-original-checkpoint',title:'原归档 A',identity:'arxiv:2601.00001v1',updatedAt:1790000000,status:'complete'}]});try{
+  await z.locator('[data-zotero-resume]').waitFor({state:'visible'});
+  assert.equal(await z.locator('#zotero-recent').evaluate(e=>!!e.closest('.native-archive-history')&&!e.closest('[hidden]')),true);
+  await z.locator('[data-zotero-resume]').click();await z.waitForFunction(()=>document.querySelector('#zotero-result').textContent.includes('原归档已完成本次回读核验'));
+  const calls=await z.evaluate(()=>leafFixture.calls);assert.deepEqual(calls.filter(c=>c.command==='zotero.resume').map(c=>c.payload),[{resumeID:'explicit-original-checkpoint',presentationID:'native-fixture-owner'}]);
+  assert.equal(calls.filter(c=>c.command==='zotero.archive'||c.command==='zotero.authorize').length,0);
+  assert.equal(await z.locator('#archive-title').innerText(),'原归档 A');
+  count++;console.log('PASS visible original checkpoint resumes independently of current preview with no new archive');
+ }finally{await z.close();}
+ console.log('Native detail content: '+count+' passed; 0 failed');
+}finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}})().catch(e=>{console.error(e);process.exitCode=1;});

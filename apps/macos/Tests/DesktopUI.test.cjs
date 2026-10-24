@@ -68,6 +68,7 @@ async function installFixture(page, initial={}) {
         case 'zotero.status':return {running:true,version:'10.0.6',writesSupported:true,authorized:false,remember:false,archives:[]};
         case 'zotero.collections':return [];
         case 'jobs.list':return copy({jobs:b.jobs||[]});
+        case 'details.show':return {presented:true,kind:payload.kind,scope:'explicit browser native-window routing fixture; not actual AppKit'};
         case 'storage.show':if(b.nativeStorageWindow)return {presented:true,scope:'explicit browser native-window fixture; not actual AppKit'};if(!window.__legacyStorageFixture)throw Error('Missing explicit legacy storage host fixture');return await window.__legacyStorageFixture.show();
         case 'storage.status':return {totalBytes:800000,files:12,categories:[{label:'网站导读',bytes:50000},{label:'科学图',bytes:260467},{label:'网站原文 PDF',bytes:489533}]};
         case 'storage.packages':return {packages:[{id:'fixture-offline',title:b.primary.titleZh+'｜离线界面夹具',sourceVersion:'2610.27491v1',bytes:800000,createdAt:'2026-10-24T10:00:00Z',hasPDF:true,status:'隔离测试夹具'}]};
@@ -119,12 +120,15 @@ if(require.main===module)(async()=>{
     const closes=await page.evaluate(()=>__calls.filter(c=>c.command==='pdf.close').length);await page.locator('#source-page').click();await page.waitForFunction(()=>!document.querySelector('#pdf-toggle').disabled);
     await page.waitForFunction(()=>__calls.some(c=>c.command==='pdf.locate'));assert.deepEqual(await page.evaluate(()=>__calls.filter(c=>c.command==='pdf.locate').at(-1).payload),{pdfSHA:'01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c',page:5});assert.equal(await page.locator('#pdf-toggle').getAttribute('aria-pressed'),'true');assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='pdf.close').length),closes);await page.evaluate(()=>{__fixture.selection={};window.dispatchEvent(new CustomEvent('pdf.selection',{detail:{cleared:true,pages:[]}}));document.querySelector('#source-page').click();});await page.waitForFunction(()=>__calls.filter(c=>c.command==='pdf.selection').length===2);assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='pdf.locate').length),1);await page.locator('#tab-guide').click();
   });
-  await check('PDF opens only on explicit click and native PDF hides under modal dialogs',async()=>{
+  await check('PDF opens only on explicit click and Help routes to the real native host',async()=>{
     assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='pdf.open').length),1);
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('menu.command',{detail:{action:'help'}})));
-    await page.waitForFunction(()=>__calls.filter(c=>c.command==='pdf.frame').at(-1)?.payload.visible===false);
-    assert.equal(await page.locator('#detail-dialog').getAttribute('open'),'');assert.equal(await page.locator('#detail-dialog').getAttribute('role'),'dialog');assert.equal(await page.locator('#detail-dialog').getAttribute('aria-modal'),'true');assert.equal(await page.locator('#app-window').evaluate(el=>el.inert),true);await page.screenshot({path:path.join(artifacts,'desktop-ui-modal.png')});await page.locator('#detail-close').click();assert.equal(await page.locator('#app-window').evaluate(el=>el.inert),false);await page.waitForFunction(()=>__calls.filter(c=>c.command==='pdf.frame').at(-1)?.payload.visible===true);
+    await page.waitForFunction(()=>__calls.some(c=>c.command==='details.show'&&c.payload.kind==='help'));
+    assert.equal(await page.locator('[data-dialog-surface],dialog[open]').count(),0);
+    assert.equal(await page.locator('#pdf-toggle').getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('#app-window').evaluate(el=>el.inert),false);
   });
+
   await check('PDF close preserves guide DOM, scroll and question',async()=>{
     await page.evaluate(()=>{window.__guideBefore=document.querySelector('#guide-frame');__guideBefore.contentWindow.scrollTo(0,1000);document.querySelector('#question').value='保留提问';});
     await page.locator('#pdf-close').click();await page.waitForFunction(()=>__calls.some(c=>c.command==='pdf.close'));
@@ -209,7 +213,7 @@ if(require.main===module)(async()=>{
         await p.locator('#tab-note').click();await p.waitForSelector('[data-annotation-comment]');await shot('note');await p.locator('#tab-analysis').click();await p.waitForSelector('#analysis-result iframe');await shot('analysis-failure-fixture');
         await p.locator('[data-view="notes"]').click();await p.waitForSelector('[data-note-open]');await shot('notes-index');
         await p.evaluate(()=>__fixture.jobs=[{id:'fixture-task',title:'隔离任务夹具：读取公开目录',command:'library.sync',status:'running',startedAt:'2026-10-24T10:00:00Z',message:'仅用于任务布局回归，无真实同步或消费',progress:{completed:7,total:15}}]);await p.locator('[data-view="tasks"]').click();await p.waitForSelector('#task-list progress');await shot('tasks-explicit-fixture');
-        await p.locator('#storage-button').click();await p.waitForSelector('[data-offline]');await shot('storage-explicit-fixture');await p.keyboard.press('Escape');await p.locator('[data-view="reader"]').first().click();await p.locator('#archive-open').click();await p.waitForFunction(()=>document.querySelector('#archive-title').textContent.includes('MiCLA')&&document.querySelector('#zotero-result').textContent.includes('核对内容'));await shot('zotero-preview-no-authorization');await p.keyboard.press('Escape');
+        await p.locator('#storage-button').click();await p.waitForSelector('[data-offline]');await shot('storage-explicit-fixture');await p.keyboard.press('Escape');await p.locator('[data-view="reader"]').first().click();await p.locator('#archive-open').click();await p.waitForFunction(()=>__calls.some(c=>c.command==='details.show'&&c.payload.kind==='zotero'));assert.equal(await p.locator('[data-dialog-surface]').count(),0);await shot('zotero-native-host-routing-only');
         assert.deepEqual(await p.evaluate(()=>__unimplemented),[]);assert.equal(await p.evaluate(()=>__calls.filter(c=>/^zotero\.(authorize|archive|resume)$/.test(c.command)).length),0);
       }finally{await p.close();}
       const sp=await browser.newPage({viewport:{width,height}});sp.setDefaultTimeout(10000);await installFixture(sp,{settings:{...settings,appearance:theme}});await sp.goto(base+'/settings.html');await sp.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('尚未保存'));for(const pane of ['reading','model','zotero']){await sp.locator('[data-pane="'+pane+'"]').click();const file=`${theme}-${width}x${height}-settings-${pane}.png`;await sp.screenshot({path:path.join(artifacts,file),animations:'disabled'});manifest.screens.push({file,width,height,theme,view:'settings-'+pane});}await sp.close();

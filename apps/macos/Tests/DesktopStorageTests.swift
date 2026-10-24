@@ -32,6 +32,9 @@ import Darwin
             let beforeRepeat=try snapshot(),repeated=try await storage.register(paper:paper,article:article,pdf:pdf)
             try expect(repeated["reused"] as? Bool==true && repeated["id"] as? String==identifier && (try snapshot())==beforeRepeat,"same package registration is idempotent without extra files")
             try expect(try await storage.listPackages().count==1,"verified offline package listed")
+            let beforeLegacyOpen=try snapshot(),legacyOpen=try await storage.openPackage(id:identifier),legacyArticle=legacyOpen["article"] as! [String:Any]
+            try expect((legacyArticle["notices"] as? [String] ?? []).contains(where:{$0.contains("旧离线HTML快照")}),"legacy HTML snapshot discloses unverified formula structure")
+            try expect(try snapshot()==beforeLegacyOpen,"legacy formula warning is a read-only projection preserving every original byte")
             var invalid=article;invalid["isStale"]=true
             try await rejects("stale guide never grants current offline package"){_=try await storage.register(paper:paper,article:invalid,pdf:pdf)}
             invalid=article;invalid["plainText"]="伪造的普通JSON正文"
@@ -47,6 +50,17 @@ import Darwin
             try expect(metadataPackage["id"] as? String != next["id"] as? String,"paper-only title score and taxonomy changes create a distinct snapshot")
             let metadataOpened=try await storage.openPackage(id:metadataPackage["id"] as! String)
             try expect((metadataOpened["paper"] as? [String:Any])?["titleZh"] as? String=="仅目录译题更正","metadata-only snapshot reads its own corrected paper fields")
+            var formulaVerified=article;formulaVerified["mathMLContract"]="published-html-mathml-v1";try put(cachePath,json(formulaVerified))
+            let verifiedPackage=try await storage.register(paper:paper,article:formulaVerified,pdf:pdf)
+            let verifiedOpen=try await storage.openPackage(id:verifiedPackage["id"] as! String),verifiedArticle=verifiedOpen["article"] as! [String:Any]
+            try expect(!(verifiedArticle["notices"] as? [String] ?? []).contains(where:{$0.contains("旧离线HTML快照")}),"formula-verified HTML snapshot does not receive legacy warning")
+            for emptyMarkdown:Any in ["",NSNull()] {
+                var legacyFallback=article;legacyFallback["markdown"]=emptyMarkdown;try put(cachePath,json(legacyFallback))
+                let fallbackPackage=try await storage.register(paper:paper,article:legacyFallback,pdf:pdf)
+                let fallbackOpen=try await storage.openPackage(id:fallbackPackage["id"] as! String),fallbackArticle=fallbackOpen["article"] as! [String:Any]
+                try expect((fallbackArticle["notices"] as? [String] ?? []).contains(where:{$0.contains("旧离线HTML快照")}),"empty or null Markdown follows actual legacy HTML render branch")
+            }
+            try expect(try Data(contentsOf:root.appendingPathComponent("Offline/"+identifier+"/article.json"))==beforeLegacyOpen["Offline/"+identifier+"/article.json"],"new formula snapshot retains original legacy package bytes")
             let orphan=Data("orphan disposable image".utf8),orphanSHA=hash(orphan),orphanPath="PublishedLibrary/assets/"+orphanSHA+".png"
             try put(orphanPath,orphan)
             let usedImage=Data("referenced by prior study".utf8),usedSHA=hash(usedImage),usedPath="PublishedLibrary/assets/"+usedSHA+".png"
@@ -117,6 +131,7 @@ import Darwin
             try expect(opened["offlineMode"] as? Bool==true && openedPaper["id"] as? String==owner && opened["websiteFreshness"] as? String=="not-checked","removed website record still opens actual package with explicit offline identity")
             try expect(openedArticle["plainText"] as? String==seedArticle["plainText"] as? String && openedArticle["revisionSHA256"] as? String==seedArticle["revisionSHA256"] as? String && openedArticle["fetchedAt"] as? String==seedArticle["fetchedAt"] as? String,"offline open retains original scientific text revision and retrieval time")
             try expect((openedArticle["markdown"] as? String ?? "").contains("data:image/png;base64,") && (openedArticle["notices"] as? [String] ?? []).contains(where:{$0.contains("不代表当前网站最新")}),"self-contained real MiCLA graphics remain readable with truthful freshness notice")
+            try expect(!(openedArticle["notices"] as? [String] ?? []).contains(where:{$0.contains("旧离线HTML快照")}),"Markdown snapshot does not receive HTML parser warning")
             try expect(openedPDF["sha256"] as? String==pdfSHA && openedPDF["version"] as? String=="2610.27491v1" && (openedPDF["filePath"] as? String ?? "").contains("/Offline/"+actualID+"/"),"offline PDF returns actual package path precise source version and SHA")
             for resource in openedArticle["resources"] as! [[String:Any]] {let path=resource["localPath"] as! String;try expect(path.contains("/Offline/"+actualID+"/resources/") && (try PrivateStoragePaths.sha256File(URL(fileURLWithPath:path)))==resource["sha256"] as? String,"detached package resource points to actual verified package bytes")}
             let afterOfflineOpen=try snapshot()

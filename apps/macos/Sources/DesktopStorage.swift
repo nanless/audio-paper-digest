@@ -124,6 +124,9 @@ actor DesktopStorage {
         article["offlineMode"]=true;article["offlinePackageID"]=id;article["cacheStatus"]="offline";article["websiteFreshness"]="not-checked"
         var notices=article["notices"] as? [String] ?? []
         notices.append("正在阅读离线包原始快照，来源版本\(manifest.sourceVersion ?? "未提供版本")；未联网核对网站后续修订、移除或撤稿状态，不代表当前网站最新内容。")
+        if (article["markdown"] as? String)?.isEmpty != false,article["html"] is String,article["mathMLContract"] as? String != "published-html-mathml-v1" {
+            notices.append("这份旧离线HTML快照未经过公式结构保真读取，部分MathML可能缺失。原包保持不变；如需核对，请对照包内原始PDF，或联网读取网站当前导读。")
+        }
         article["notices"]=Array(Set(notices)).sorted()
         paper["offlineMode"]=true;paper["offlinePackageID"]=id
         var result:[String:Any]=["paper":paper,"article":article,"offlineMode":true,"packageID":id,"sourceVersion":manifest.sourceVersion ?? NSNull(),"createdAt":manifest.createdAt,"websiteFreshness":"not-checked","articleFileSHA256":Self.sha(articleBytes)]

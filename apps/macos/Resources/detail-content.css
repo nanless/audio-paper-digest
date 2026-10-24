@@ -1,0 +1,18 @@
+/* Scoped ordinary-document content. The native host supplies the window, its
+   toolbar and scrolling; this never styles a dialog or changes window width. */
+.detail-actions-content{min-width:0;color:var(--ink)}
+.detail-actions-content h1{font-size:26px;line-height:1.4;letter-spacing:-.5px;margin:0 0 14px}
+.detail-actions-content .settings-help{font-size:13px;line-height:1.8;color:var(--muted);margin:0 0 15px;overflow-wrap:anywhere}
+.detail-actions-content .native-tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:24px 0}
+.detail-actions-content .native-tools>button{justify-content:flex-start;align-items:flex-start;min-width:0;min-height:84px;padding:17px 18px;border:1px solid var(--line);border-radius:10px;background:var(--surface);text-align:left;white-space:normal}
+.detail-actions-content .native-tools>button:hover:not(:disabled){background:var(--accent-soft);border-color:var(--accent)}
+.detail-actions-content .native-tools strong{display:block;font-size:14px;line-height:1.5}
+.detail-actions-content .native-tools br{display:none}
+.detail-actions-content .native-tools small{display:block;margin-top:6px;font-size:12px;line-height:1.6;color:var(--muted)}
+.detail-actions-content details{margin:12px 0;font-size:12px;color:var(--muted)}
+.detail-actions-content summary{cursor:pointer;line-height:1.8}
+.detail-actions-content details p{margin:8px 0}
+.detail-actions-content [data-detail-status]{min-height:24px;margin:20px 0 12px}
+.detail-actions-content .error-banner{color:var(--red);padding:12px;border:1px solid var(--line);background:var(--soft);border-radius:8px}
+.detail-actions-content .detail-actions{display:flex;justify-content:flex-end;gap:10px;padding-top:16px;border-top:1px solid var(--line)}
+.detail-actions-content button:focus-visible,.detail-actions-content summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
