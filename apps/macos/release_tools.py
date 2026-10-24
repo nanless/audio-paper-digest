@@ -76,6 +76,13 @@ def git(repo, *args):
 def docs_only(paths):
     return all(p.startswith('docs/') and p.endswith('.md') for p in paths)
 
+def outside_mac_runtime(paths):
+    # Android has an independent build. The two verifier files are not bundled
+    # inputs; audit_app still compares every mapped Mac input with its old Git
+    # byte and the current checkout, and rejects any extra bundle file.
+    verification = {'apps/macos/release_tools.py', 'apps/macos/Tests/ReleasePackaging.test.py'}
+    return all(docs_only([p]) or p.startswith('apps/android/') or p in verification for p in paths)
+
 def source_state(repo, source_commit):
     require(re.fullmatch(r'[a-f0-9]{40}', source_commit or ''), '构建来源提交无效')
     require(git(repo, 'rev-parse', '--show-toplevel').decode().strip() == str(repo), '仓库根目录不匹配')
@@ -83,7 +90,7 @@ def source_state(repo, source_commit):
     git(repo, 'merge-base', '--is-ancestor', source_commit, head)
     changed = git(repo, 'diff', '--name-only', '-z', source_commit, head).decode().strip('\0').split('\0')
     changed = [x for x in changed if x]
-    require(docs_only(changed), '当前HEAD与构建提交存在非文档变更；必须重新构建并验收')
+    require(outside_mac_runtime(changed), '当前HEAD与构建提交存在影响Mac来源的非文档变更；必须重新构建并验收')
     dirty = git(repo, 'status', '--porcelain=v1', '-z', '--untracked-files=all').decode().split('\0')
     # Reject all dirt, including documentation: qualification must bind a saved commit.
     require(not any(dirty), '工作区尚有未提交修改或未忽略文件，未准备发行产物')
@@ -118,7 +125,7 @@ def audit_app(app, repo, record, version=None):
     require(metadata.get('contract') == 'paper-digest-mac-build-v1', '不支持的构建清单')
     require(isinstance(metadata.get('builtAt'), str), '构建时间无效')
     datetime.datetime.fromisoformat(metadata['builtAt'].replace('Z', '+00:00'))
-    head, doc_changes = source_state(repo, metadata.get('sourceCommit'))
+    head, source_changes = source_state(repo, metadata.get('sourceCommit'))
     require(record.get('contract') == 'paper-digest-mac-signed-build-v1' and record.get('sourceCommit') == metadata['sourceCommit'] and record.get('builtAt') == metadata.get('builtAt'), '签名构建记录不是同一次候选')
     require(record.get('buildMetadataSHA256') == digest(metadata_raw), '构建清单SHA与审定记录不符')
     binary_record = record.get('binary') or {}
@@ -174,7 +181,7 @@ def audit_app(app, repo, record, version=None):
     permitted = physical | {'Contents/MacOS/PaperDigest', 'Contents/Resources/build-metadata.json', 'Contents/_CodeSignature/CodeResources'}
     require(set(by_path) == permitted, '应用包含未列明的额外文件或缺少签名文件')
     require('Contents/Resources/Runtime/NODE-LICENSE' in by_path, '未包含Node许可')
-    return {'sourceCommit': metadata['sourceCommit'], 'releaseHead': head, 'documentationOnlyChanges': doc_changes, 'builtAt': metadata['builtAt'], 'version': actual_version, 'bundleVersion': plist['CFBundleVersion'], 'architecture': arch, 'minimumMacOS': '15.0', 'signing': 'ad-hoc; not notarized', 'metadataSHA256': digest(metadata_raw), 'binary': binary_record, 'bundleInventorySHA256': digest(canonical(rows)), 'fileCount': len(by_path), 'record': {k: record[k] for k in ['contract', 'builtAt', 'sourceCommit', 'architecture', 'signing', 'buildMetadataSHA256', 'binary']}}
+    return {'sourceCommit': metadata['sourceCommit'], 'releaseHead': head, 'documentationOnlyChanges': [p for p in source_changes if docs_only([p])], 'otherNonRuntimeChanges': [p for p in source_changes if not docs_only([p])], 'builtAt': metadata['builtAt'], 'version': actual_version, 'bundleVersion': plist['CFBundleVersion'], 'architecture': arch, 'minimumMacOS': '15.0', 'signing': 'ad-hoc; not notarized', 'metadataSHA256': digest(metadata_raw), 'binary': binary_record, 'bundleInventorySHA256': digest(canonical(rows)), 'fileCount': len(by_path), 'record': {k: record[k] for k in ['contract', 'builtAt', 'sourceCommit', 'architecture', 'signing', 'buildMetadataSHA256', 'binary']}}
 
 def fixed_public_inputs(repo,commit):
     sample=json.loads(git(repo,'show',commit+':prototypes/macos-research/sample.json'))

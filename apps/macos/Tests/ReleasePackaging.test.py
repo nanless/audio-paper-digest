@@ -120,6 +120,31 @@ class Packaging(unittest.TestCase):
         write(self.repo/'apps/macos/Resources/index.html',b'changed');success(['git','add','.'],self.repo);success(['git','commit','-qm','Changed runtime'],self.repo)
         self.assertIn('非文档变更',self.call(expected=1))
 
+    def test_android_only_change_preserves_exact_mac_candidate(self):
+        write(self.repo/'apps/android/app/src/main/java/Fixture.kt',b'// Independent Android fixture, no Mac input.\n')
+        success(['git','add','.'],self.repo);success(['git','commit','-qm','Independent Android fixture'],self.repo)
+        r=self.call();self.assertEqual(r['documentationOnlyChanges'],[])
+        self.assertEqual(r['otherNonRuntimeChanges'],['apps/android/app/src/main/java/Fixture.kt'])
+        self.assertEqual(r['sourceCommit'],self.commit);self.assertNotEqual(r['sourceCommit'],r['releaseHead'])
+        self.assertFalse(r['publicationEligible'])
+
+    def test_android_change_cannot_hide_changed_shared_mac_input(self):
+        write(self.repo/'apps/android/Fixture.kt',b'// Independent Android fixture.\n')
+        write(self.repo/'prototypes/macos-research/sample.json',b'{}')
+        success(['git','add','.'],self.repo);success(['git','commit','-qm','Changed shared sample'],self.repo)
+        self.assertIn('非文档变更',self.call(expected=1))
+
+    def test_verifier_only_change_is_separate_from_documentation(self):
+        write(self.repo/'apps/macos/release_tools.py',b'# Isolated verifier fixture, not bundled.\n')
+        success(['git','add','.'],self.repo);success(['git','commit','-qm','Verifier fixture'],self.repo)
+        r=self.call();self.assertEqual(r['documentationOnlyChanges'],[])
+        self.assertEqual(r['otherNonRuntimeChanges'],['apps/macos/release_tools.py'])
+
+    def test_other_mac_tool_change_is_not_assumed_outside_build(self):
+        write(self.repo/'apps/macos/package-lock.json',b'{}')
+        success(['git','add','.'],self.repo);success(['git','commit','-qm','Changed dependency lock'],self.repo)
+        self.assertIn('非文档变更',self.call(expected=1))
+
     def test_10_production_environment_file_is_refused(self):write(self.app/'Contents/Resources/.env',b'EXPLICIT_PRIVATE_TEST_VALUE');self.assertIn('私人',self.call(expected=1))
     def test_11_private_qa_data_is_refused(self):write(self.app/'Contents/Resources/.qa/private.json',b'{}');self.assertIn('私人',self.call(expected=1))
     def test_12_bundle_symlink_is_refused(self):os.symlink('/tmp',self.app/'Contents/Resources/link');self.assertIn('符号链接',self.call(expected=1))
