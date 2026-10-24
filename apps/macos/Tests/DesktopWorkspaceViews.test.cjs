@@ -93,6 +93,44 @@ async function visibleAX(page){const session=await page.context().newCDPSession(
  await one('late older personal snapshot cannot replace newly opened notes state',async page=>{
   await page.evaluate(()=>window.__workspaceHoldPersonal=true);await page.locator('[data-view=notes]').click();await page.waitForFunction(()=>__workspacePersonalPending.length===1);await show(page,'tasks');await page.evaluate(()=>{__fixture.personal.notes[__fixture.primary.id]={text:'最新笔记可见，旧快照不可覆盖',revision:4,updatedAt:'2026-10-24T23:40:00Z'};});await show(page,'notes');await page.waitForFunction(()=>document.querySelector('#all-notes').textContent.includes('最新笔记可见'));await page.evaluate(()=>__workspacePersonalPending.shift()());await page.waitForTimeout(80);assert((await page.locator('#all-notes').innerText()).includes('最新笔记可见'));await page.locator('[data-note-open="'+primary.id+'"]').click();await page.waitForSelector('#note-pane:not([hidden])');assert.equal(await page.locator('#note-editor').inputValue(),'最新笔记可见，旧快照不可覆盖');
  });
+
+ // These are explicit pagination fixtures, never actual user task/usage records.
+ const history=n=>Array.from({length:n},(_,i)=>({id:'pagination-job-'+String(i).padStart(4,'0'),paperID:primary.id,title:'分页隔离夹具 '+String(i).padStart(4,'0'),command:'library.article',status:i%3===0?'running':i%3===1?'failed':'complete',startedAt:stamp,message:'Explicit pagination fixture; no native task executed'}));
+ async function showTasks(page){await page.locator('[data-view=tasks]').click();await page.waitForSelector('#tasks-view:not([hidden])');await page.waitForFunction(()=>document.querySelector('#task-page-summary').textContent.includes('条任务'));}
+ async function pageTitles(page){return page.locator('#task-list .task-row strong').allTextContents();}
+ async function expectPage(page,n,index){const count=Math.max(1,Math.ceil(n/20)),start=index*20,end=Math.min(start+20,n),summary=n?`${n} 条任务 · ${start+1}–${end} · 第 ${index+1} / ${count} 页`:'0 条任务';await page.waitForFunction(summary=>document.querySelector('#task-page-summary').textContent===summary,summary);assert.equal(await page.locator('#task-list .task-row').count(),end-start);assert.equal(await page.locator('#task-prev').isDisabled(),index===0);assert.equal(await page.locator('#task-next').isDisabled(),index+1>=count);}
+ for(const n of [0,1,20,21,148,1000])await one('bounded task pages retain all '+n+' original fixture records with no gaps or writes',async page=>{
+  const expected=history(n);await page.evaluate(jobs=>__fixture.jobs=jobs,expected);const before=await page.evaluate(()=>JSON.stringify(__fixture.jobs));await showTasks(page);const seen=[];
+  for(let index=0;index<Math.max(1,Math.ceil(n/20));index++){await expectPage(page,n,index);seen.push(...await pageTitles(page));assert.ok(await page.locator('#task-list .task-row').count()<=20);if(index+1<Math.ceil(n/20))await page.locator('#task-next').click();}
+  assert.deepEqual(seen,expected.map(j=>j.title));assert.equal(new Set(seen).size,n);assert.equal(await page.evaluate(()=>JSON.stringify(__fixture.jobs)),before);
+  if(n>20){await page.locator('#task-prev').click();await expectPage(page,n,Math.ceil(n/20)-2);}
+  assert.equal(await page.evaluate(()=>__calls.filter(c=>['model.run','zotero.archive','zotero.resume','jobs.cancel','storage.prepare'].includes(c.command)).length),0);
+ });
+ await one('task filters reset to first matching page while retaining every filtered record',async page=>{
+  await page.evaluate(jobs=>__fixture.jobs=jobs,history(61));await showTasks(page);await page.locator('#task-next').click();await expectPage(page,61,1);await page.locator('#task-next').click();await expectPage(page,61,2);
+  await page.locator('[data-task-filter=attention]').click();await expectPage(page,20,0);assert.deepEqual(await pageTitles(page),history(61).filter(j=>j.status==='failed').map(j=>j.title));
+  await page.locator('[data-task-filter=active]').click();await expectPage(page,21,0);await page.locator('#task-next').click();await expectPage(page,21,1);
+  await page.locator('[data-task-filter=all]').click();await expectPage(page,61,0);
+ });
+ await one('jobs hot updates preserve current page and clamp only when history shrinks',async page=>{
+  await page.evaluate(jobs=>__fixture.jobs=jobs,history(81));await showTasks(page);for(let i=0;i<2;i++){await page.locator('#task-next').click();await expectPage(page,81,i+1);}
+  await page.evaluate(jobs=>{__fixture.jobs=jobs;dispatchEvent(new Event('jobs.changed'));},history(87));await expectPage(page,87,2);assert.deepEqual(await pageTitles(page),history(87).slice(40,60).map(j=>j.title));
+  await page.evaluate(jobs=>{__fixture.jobs=jobs;dispatchEvent(new Event('jobs.changed'));},history(21));await expectPage(page,21,1);assert.deepEqual(await pageTitles(page),[history(21)[20].title]);
+  await page.evaluate(()=>{__fixture.jobs=[];dispatchEvent(new Event('jobs.changed'));});await expectPage(page,0,0);assert.match(await page.locator('#task-list').innerText(),/没有此类任务/);
+ });
+ await one('held older page response cannot overwrite newer filtered history or page state',async page=>{
+  await page.evaluate(jobs=>__fixture.jobs=jobs,history(61));await showTasks(page);await page.evaluate(()=>__workspaceHold=true);await page.locator('#task-next').click();await page.waitForFunction(()=>__workspacePending.length===1);
+  const latest=history(5).map((j,i)=>({...j,status:'failed',title:'最新分页终态 '+i}));await page.evaluate(jobs=>__fixture.jobs=jobs,latest);await page.locator('[data-task-filter=attention]').click();await expectPage(page,5,0);await page.evaluate(()=>__workspacePending.shift()());await page.waitForTimeout(70);await expectPage(page,5,0);assert.deepEqual(await pageTitles(page),latest.map(j=>j.title));
+ });
+ await one('current page cancel and open controls call only their exact IDs once',async page=>{
+  const jobs=history(45).map((j,i)=>({...j,status:i===20?'running':'complete',paperID:i===21?other.id:primary.id}));await page.evaluate(jobs=>__fixture.jobs=jobs,jobs);await showTasks(page);await page.locator('#task-next').click();await expectPage(page,45,1);
+  await page.locator('[data-cancel="pagination-job-0020"]').click();assert.deepEqual(await page.evaluate(()=>__workspaceCancelled),['pagination-job-0020']);
+  const before=await page.evaluate(()=>__calls.filter(c=>c.command==='app.setPaper').length);await page.locator('#task-list .task-row').nth(1).locator('[data-job-paper]').click();await page.waitForFunction(id=>__fixture.selected?.id===id,other.id);assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='app.setPaper').length),before+1);assert.equal(await page.evaluate(()=>__calls.filter(c=>['model.run','zotero.archive','zotero.resume'].includes(c.command)).length),0);
+ });
+ await one('1080 task pagination shares 30px gutter and its buttons do not overflow',async page=>{
+  await page.evaluate(jobs=>__fixture.jobs=jobs,history(21));await showTasks(page);const g=await page.evaluate(()=>{const h=document.querySelector('#tasks-view .page-heading'),n=document.querySelector('.task-pagination'),b=n.getBoundingClientRect();return {heading:h.getBoundingClientRect().left+parseFloat(getComputedStyle(h).paddingLeft),left:b.left,right:b.right,width:innerWidth,buttons:[...n.querySelectorAll('button')].map(b=>({left:b.getBoundingClientRect().left,right:b.getBoundingClientRect().right})),overflow:document.documentElement.scrollWidth>innerWidth};});assert.ok(Math.abs(g.heading-g.left)<1,JSON.stringify(g));assert.equal(g.overflow,false);assert.ok(g.right<=g.width&&g.buttons.every(b=>b.left>=g.left&&b.right<=g.right),JSON.stringify(g));
+ },{width:1080});
+
 }finally{
  if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));const failed=results.filter(r=>!r.passed).length;
  fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({contract:'workspace-view-production-dom-v1',scope:'frozen production DOM plus explicit headless/native fixtures; not real Mac AX acceptance',macAXValidated:false,knownRealMacFailures:['tasks-offline-complete-4f994c87.ax.txt','notes-4f994c87.ax.txt'],sourceSHA256:Object.fromEntries([...snapshot].map(([name,bytes])=>[name,hash(bytes)])),results,passed:results.length-failed,failed},null,2)+'\n');console.log('Workspace views: '+(results.length-failed)+' passed; '+failed+' failed; real Mac AX pending');if(failed)process.exitCode=1;
