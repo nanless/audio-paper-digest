@@ -4,6 +4,21 @@ import AppKit
 import WebKit
 import Foundation
 
+@MainActor final class DiagnosticAXFixture:NSAccessibilityElement {
+ var children:[Any]=[],role=NSAccessibility.Role.group,isElement=true,forbiddenReads=0,structuralReads=0
+ override func accessibilityChildren()->[Any]? {structuralReads+=1;return children}
+ override func accessibilityRole()->NSAccessibility.Role? {structuralReads+=1;return role}
+ override func isAccessibilityElement()->Bool {structuralReads+=1;return isElement}
+ override func accessibilityLabel()->String? {forbiddenReads+=1;return "PRIVATE_AX_LABEL_DO_NOT_EXPORT"}
+ override func accessibilityTitle()->String? {forbiddenReads+=1;return "PRIVATE_AX_TITLE_DO_NOT_EXPORT"}
+ override func accessibilityValue()->Any? {forbiddenReads+=1;return "PRIVATE_AX_VALUE_DO_NOT_EXPORT"}
+ override var description:String {forbiddenReads+=1;return "PRIVATE_AX_DESCRIPTION_DO_NOT_EXPORT"}
+}
+final class DiagnosticOpaqueFixture:NSObject {
+ var descriptionReads=0
+ override var description:String {descriptionReads+=1;return "PRIVATE_OPAQUE_DESCRIPTION_DO_NOT_EXPORT"}
+}
+
 @main struct DesktopDiagnosticsTests {
  @MainActor static func main() async throws {
   _=NSApplication.shared
@@ -50,6 +65,11 @@ import Foundation
   try expect(jobs.contains(["command":"other","status":"other"]),"untrusted job labels never exported as arbitrary strings")
   try expect(jobs.contains(["command":"model.run","status":"complete"]),"known real job command and terminal status preserved")
   let ui=report["uiStructure"] as! [String:Any],main=ui["main"] as! [String:Any],dom=main["dom"] as! [String:Any],native=main["native"] as! [String:Any]
+  let ax=main["nativeAccessibility"] as! [String:Any]
+  try expect(ax["contract"] as? String=="paperdigest-own-wk-ax-structure-v1","actual WK public AX structure is included in existing diagnosis")
+  try expect(ax["rootLegacyIsIgnored"] is Bool && ax["rootIsAccessibilityElement"] is Bool,"actual WK exposes separate public ignored and element booleans")
+  try expect(ax["remoteCoverageGuaranteed"] as? Bool==false && ax["singleGetterHardTimeout"] as? Bool==false && ax["samplingMayInitializeLazyAX"] as? Bool==true,"AX report states remote coverage, lazy initialization and synchronous getter limitations")
+  try expect((ax["visitedNodes"] as? Int ?? 0)<=256 && ax["truncation"] is [String:Bool],"actual WK observation has bounded structure with explicit truncation")
   try expect(dom["contract"] as? String=="paperdigest-ui-structure-v1","actual WK returns structured DOM contract")
   try expect(dom["documentHasFocus"] is Bool,"document focus is a boolean observation only")
   let active=dom["activeElement"] as! [String:Any];try expect(active["tag"] as? String=="BUTTON" && active["id"] as? String=="detail-close","active element only reports safe static identity")
@@ -72,6 +92,33 @@ import Foundation
   let both=await app.diagnosticsReport(),bothUI=both["uiStructure"] as! [String:Any]
   try expect(bothUI["main"] != nil && bothUI["settings"] != nil,"existing settings WK captured separately without creating a new window")
   try expect(!String(decoding:try JSONSerialization.data(withJSONObject:both),as:UTF8.self).contains(personal),"settings DOM text excluded too")
+  try expect((bothUI["settings"] as? [String:Any])?["nativeAccessibility"] is [String:Any],"only already-existing settings WK is observed separately")
+  // Public native elements exercise boundaries deterministically without enabling
+  // remote accessibility or touching another process/desktop accessibility API.
+  let tree=DiagnosticAXFixture(),leaf=DiagnosticAXFixture(),opaque=DiagnosticOpaqueFixture()
+  tree.role=NSAccessibility.Role(rawValue:"AXWebArea");leaf.role=NSAccessibility.Role(rawValue:secret);tree.children=[leaf,opaque,tree,leaf]
+  let structured=PaperDigestApp.diagnosticAccessibilityStructure(tree),roles=structured["roleCounts"] as! [String:Int]
+  try expect(roles==["AXWebArea":1,"other":1],"native role values are exact whitelist entries, unknown values never escape")
+  try expect(structured["opaqueNodes"] as? Int==1 && structured["supportedNodes"] as? Int==2,"unsupported public remote/proxy boundary is counted instead of called empty")
+  try expect(structured["repeatedReferences"] as? Int==2 && structured["visitedNodes"] as? Int==3,"identity tracking terminates cycles and shared child references")
+  try expect(structured["rootChildCount"] as? Int==4 && structured["rootChildrenReturned"] as? Bool==true,"native child count retains observations without serializing nodes")
+  let graphJSON=String(decoding:try JSONSerialization.data(withJSONObject:structured),as:UTF8.self)
+  try expect(!graphJSON.contains(secret) && !graphJSON.contains("PRIVATE_"),"secret role and all private native text absent from serialization")
+  try expect(tree.forbiddenReads==0 && leaf.forbiddenReads==0 && opaque.descriptionReads==0,"label title value and object description getters are never read")
+  let wide=DiagnosticAXFixture();wide.children=(0..<20).map{_ in DiagnosticAXFixture()}
+  let childBound=PaperDigestApp.diagnosticAccessibilityStructure(wide,maxChildren:3),childTruncation=childBound["truncation"] as! [String:Bool]
+  try expect(childBound["visitedNodes"] as? Int==4 && childTruncation["children"]==true,"child breadth cap reports omitted native nodes")
+  let nodeBound=PaperDigestApp.diagnosticAccessibilityStructure(wide,maxNodes:4),nodeTruncation=nodeBound["truncation"] as! [String:Bool]
+  try expect(nodeBound["visitedNodes"] as? Int==4 && nodeTruncation["nodes"]==true,"overall node cap bounds processing and retained references")
+  let chain=DiagnosticAXFixture(),second=DiagnosticAXFixture(),third=DiagnosticAXFixture();chain.children=[second];second.children=[third]
+  let depthBound=PaperDigestApp.diagnosticAccessibilityStructure(chain,maxDepth:1),depthTruncation=depthBound["truncation"] as! [String:Bool]
+  try expect(depthBound["visitedNodes"] as? Int==2 && depthBound["maximumObservedDepth"] as? Int==1 && depthTruncation["depth"]==true,"depth cap reports unread descendants")
+  let idle=DiagnosticAXFixture(),timeBound=PaperDigestApp.diagnosticAccessibilityStructure(idle,timeBudget:0)
+  try expect(idle.structuralReads==0 && (timeBound["truncation"] as? [String:Bool])?["loopTime"]==true,"expired traversal budget stops before calling any native getter")
+  let opaqueRoot=PaperDigestApp.diagnosticAccessibilityStructure(opaque)
+  try expect(opaqueRoot["opaqueNodes"] as? Int==1 && opaqueRoot["rootChildCount"] is NSNull,"unreadable root cannot be represented as zero readable children")
+  let empty=DiagnosticAXFixture(),emptyReport=PaperDigestApp.diagnosticAccessibilityStructure(empty)
+  try expect(emptyReport["rootChildCount"] as? Int==0 && emptyReport["rootChildrenReturned"] as? Bool==true,"supported root empty child array is distinct from opaque boundary")
   // A private, never-ordered NSWindow exercises native responder ancestry too.
   let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1080,height:700),styleMask:.borderless,backing:.buffered,defer:false)
   window.isReleasedWhenClosed=false;let container=NSView(frame:web.bounds);window.contentView=container;container.addSubview(web);app.window=window

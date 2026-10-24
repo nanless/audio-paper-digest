@@ -698,3 +698,16 @@ D 重新以已审 83e4 为唯一基线，只在 Main.positionPDF 的 visible:fal
 Root 实际启动 D，并以运行路径确认其身份；打开本机资料后仍只有空 HTML AX 容器。证据为 `.qa/live-e2e/storage-hide-d-actual.ax.txt` 与同名 PNG。非作者只读核对封存 native SHA `41ffc9e40b715b4ed627c5ca02d95d3b9bd9615766ecd551fec60a622627dff3` 及 AX 记录，未将编译/签名或隔离行为通过冒作实际 AX 修复。D 已由 Root 正常 Escape、退出；正式安装和工作区 Main 均未改变。
 
 B、C、D 均未解决实际主窗 AX；停止继续准备猜测性变量包。下一步仅扩展现有只读诊断，以受限角色和结构计数区分应用自己的原生 WK 树是否同样为空，以及外部提取的差异。不得收集 label、value、URL、description、正文、原始控制台或凭据，不因添加诊断改变 AX 可见性或焦点。该诊断与后续修复须另经独立审查及实际验证，当前 AX 失败保持未关闭。
+
+
+## 2026-10-24：仅观察 own WK 的原生 AX 结构
+
+B、C、D 均真实失败后，没有再改变窗口、ARIA、inert、焦点、持久数据、PDF 可见性或导航。现有「导出诊断」为已经存在的主窗与设置 WK 增加 `nativeAccessibility`：仅通过公开 `NSAccessibilityProtocol` 读取角色、子节点和 element 布尔，并单独记录 WK 公开但已弃用的 `accessibilityIsIgnored` 布尔。角色严格映射到固定白名单，其余为 `other`；不读取 label、title、value、description、URL、正文、输入、配置或凭据，不遍历其他应用或桌面，不调用 setter、AX notification 或私有 WebKit API。
+
+节点以对象身份去重，最多 256 个节点、10 层、每节点 128 个子引用，并在每次 getter 前检查 250ms 循环预算。输出各项截断原因。同步 getter 本身没有硬超时，读取可使 WebKit 惰性初始化内部 AX 状态；不能声称它不会发生任何内部计算。
+
+该观察只证明公开接口当时返回的结构。未实现现代协议的远程代理明确记为 `opaqueNodes`，不能将不可读代理冒称为 WebContent 空树；`remoteCoverageGuaranteed` 固定为 false。可对比主窗与设置的 rootChildCount、rootChildrenReturned、roleCounts 和 opaqueNodes；仍须结合真正失败窗口的诊断与系统 AX 结果解释。WebKit 的 remote token/PID 调试能力位于私有头文件，未使用。现代方法的公开范围见 [Apple NSAccessibilityProtocol](https://developer.apple.com/documentation/AppKit/NSAccessibilityProtocol)，旧接口弃用说明见 [Apple NSAccessibility](https://developer.apple.com/documentation/AppKit/nsaccessibility)。
+
+实际全 Sources 编译和离屏 WK 隔离回归 48/48 通过，日志 `.qa/diagnostics-native-ax-privacy.log`：秘密正文、角色、原生 label/title/value/description 均不导出；实际 DOM、焦点及私有临时资料字节不变；循环、宽度、深度、节点和零时间预算分别覆盖；不可读边界与明确返回空数组分开表示。没有启动用户应用、读取用户资料或访问 Keychain/模型/Zotero。此处只记作者隔离证据，非作者审查和真实诊断结果另记；实际主窗 AX 故障仍未关闭。
+
+非作者随后以同一 AppDocuments SHA `a47e776394033af1688a6a8480e3ba4c515fcfcbaa8f4ed2877a2a77a3be7976` 与测试 SHA `333d234155693eb18565e23da8067b4c1ddee8445871ce0507c1b5607a3aa893` 独立快照编译、实际执行 48/48，通过隐私、只读性及边界审查；仅有已声明的公开弃用接口警告。准许进入诊断包，不授予真实主窗 AX 修复或远程完整覆盖结论。

@@ -239,6 +239,45 @@ import UniformTypeIdentifiers
         func geometry(_ rect:NSRect)->[String:Double]{["x":rect.origin.x,"y":rect.origin.y,"width":rect.width,"height":rect.height]}
         return ["appActive":NSApp.isActive,"windowKey":window?.isKeyWindow ?? false,"firstResponderClass":responder.map{NSStringFromClass(type(of:$0))} ?? "none","firstResponderIsWebDescendant":respondingView.map{candidate in view.map{candidate === $0 || candidate.isDescendant(of:$0)} ?? false} ?? false,"firstResponderIsPDFDescendant":respondingView.map{$0 === pdfView || $0.isDescendant(of:pdfView)} ?? false,"webAttached":view?.window != nil,"webHidden":view?.isHidden ?? true,"webBounds":geometry(view?.bounds ?? .zero),"webFrame":geometry(view?.frame ?? .zero)]
     }
+    // Downward observation of our own WK only. Modern public AX getters can
+    // initialize lazy WebKit accessibility state; no setter/notification is used.
+    // A remote proxy need not conform to the modern protocol. Report that opaque
+    // boundary, rather than interpreting it as an empty WebContent AX tree.
+    static func diagnosticAccessibilityStructure(_ root:AnyObject,maxNodes:Int=256,maxDepth:Int=10,maxChildren:Int=128,timeBudget:TimeInterval=0.25)->[String:Any] {
+        let nodeLimit=max(1,min(256,maxNodes)),depthLimit=max(0,min(10,maxDepth)),childLimit=max(1,min(128,maxChildren)),budget=max(0,min(0.25,timeBudget))
+        let roles:Set<String>=["AXApplication","AXWindow","AXSheet","AXDrawer","AXPopover","AXDialog","AXAlert","AXWebArea","AXGroup","AXScrollArea","AXSplitGroup","AXToolbar","AXTabGroup","AXRadioGroup","AXButton","AXCheckBox","AXRadioButton","AXSwitch","AXPopUpButton","AXMenuButton","AXMenu","AXMenuBar","AXMenuItem","AXTextField","AXTextArea","AXStaticText","AXHeading","AXLink","AXImage","AXTable","AXRow","AXColumn","AXCell","AXOutline","AXList","AXSlider","AXIncrementor","AXProgressIndicator","AXBusyIndicator","AXScrollBar","AXSeparator","AXUnknown"]
+        let start=ProcessInfo.processInfo.systemUptime
+        var queue:[(AnyObject,Int)]=[(root,0)],offset=0,seen=Set<ObjectIdentifier>(),roleCounts:[String:Int]=[:]
+        var supported=0,opaque=0,repeated=0,elementCount=0,observedDepth=0,childReferences=0
+        var nodesTruncated=false,depthTruncated=false,childrenTruncated=false,timeTruncated=false
+        var rootElement:Any=NSNull(),rootChildCount:Any=NSNull(),rootChildrenReturned:Any=NSNull()
+        while offset<queue.count {
+            if ProcessInfo.processInfo.systemUptime-start>=budget {timeTruncated=true;break}
+            if seen.count>=nodeLimit {nodesTruncated=true;break}
+            let (object,depth)=queue[offset];offset+=1
+            guard seen.insert(ObjectIdentifier(object)).inserted else{repeated+=1;continue}
+            observedDepth=max(observedDepth,depth)
+            guard let node=object as? any NSAccessibilityProtocol else{opaque+=1;continue}
+            supported+=1
+            let rawRole=node.accessibilityRole()?.rawValue,role=rawRole.map{roles.contains($0) ? $0:"other"} ?? "unset"
+            roleCounts[role,default:0]+=1
+            if ProcessInfo.processInfo.systemUptime-start>=budget {timeTruncated=true;break}
+            let isElement=node.isAccessibilityElement();if isElement{elementCount+=1};if depth==0{rootElement=isElement}
+            if ProcessInfo.processInfo.systemUptime-start>=budget {timeTruncated=true;break}
+            let children=node.accessibilityChildren()
+            if depth==0{rootChildrenReturned=children != nil;rootChildCount=children?.count ?? 0}
+            childReferences+=children?.count ?? 0
+            guard let children,!children.isEmpty else{continue}
+            if depth>=depthLimit {depthTruncated=true;continue}
+            if children.count>childLimit{childrenTruncated=true}
+            // Bound retained objects too, not just the number of processed nodes.
+            for child in children.prefix(childLimit) {
+                if queue.count>=nodeLimit {nodesTruncated=true;break}
+                queue.append((child as AnyObject,depth+1))
+            }
+        }
+        return ["contract":"paperdigest-own-wk-ax-structure-v1","scope":"own-WK-public-methods-only","remoteCoverageGuaranteed":false,"opaqueBoundaryMeans":"not-readable-through-modern-protocol","samplingMayInitializeLazyAX":true,"singleGetterHardTimeout":false,"limits":["nodes":nodeLimit,"depth":depthLimit,"childrenPerNode":childLimit,"loopBudgetMilliseconds":Int(budget*1000)],"visitedNodes":seen.count,"supportedNodes":supported,"opaqueNodes":opaque,"repeatedReferences":repeated,"maximumObservedDepth":observedDepth,"observedChildReferences":childReferences,"roleCounts":roleCounts,"elementNodes":elementCount,"rootIsAccessibilityElement":rootElement,"rootChildrenReturned":rootChildrenReturned,"rootChildCount":rootChildCount,"truncated":nodesTruncated || depthTruncated || childrenTruncated || timeTruncated,"truncation":["nodes":nodesTruncated,"depth":depthTruncated,"children":childrenTruncated,"loopTime":timeTruncated]]
+    }
     func diagnosticsReport() async->[String:Any] {
         let value=store?.value ?? [:],jobs=value["jobs"] as? [[String:Any]] ?? []
         let commands:Set<String>=["library.sync","library.article","library.downloadPDF","model.check","model.run","archive.materials","zotero.archive","zotero.resume","zotero.authorize","zotero.collections","zotero.status","storage.prepare","storage.openPackage","storage.cleanup","app.export","pdf.open"]
@@ -247,7 +286,11 @@ import UniformTypeIdentifiers
         var ui:[String:Any]=[:]
         for (name,view,owner) in [("main",web,window),("settings",settingsWeb,settingsWindow)] {
             guard let view else{continue}
-            var snapshot:[String:Any]=["native":diagnosticNativeState(view,window:owner)]
+            var accessibility=Self.diagnosticAccessibilityStructure(view)
+            // This deprecated getter remains public AppKit API. Its value is
+            // separate from isAccessibilityElement, not an inferred remote state.
+            accessibility["rootLegacyIsIgnored"]=view.accessibilityIsIgnored()
+            var snapshot:[String:Any]=["native":diagnosticNativeState(view,window:owner),"nativeAccessibility":accessibility]
             do {if let dom=try await view.evaluateJavaScript(Self.diagnosticDOMScript) as? [String:Any]{snapshot["dom"]=dom}else{snapshot["domUnavailable"]=true}}catch{snapshot["domUnavailable"]=true}
             ui[name]=snapshot
         }
