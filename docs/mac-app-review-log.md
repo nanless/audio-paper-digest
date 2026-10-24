@@ -468,3 +468,57 @@ Final tested source identities:
 - apps/macos/Tests/ModelServiceTests.swift 994612084b67c294796d9412d1ecc5475dd1bc304a743854f68846cf7ae31fb2
 - apps/macos/Tests/ModelWorker.test.cjs 4359971d9f65f82f5ce77f0335e4d623cf41f60729ebb78e844c07cc824ba187
 - apps/macos/Tests/ZoteroServiceTests.swift ac645547b05746d859a5d4235a1bfc6a3bb92523058aecd0963e55f02869738b
+
+
+---
+
+## Packaging boundary review before final rebuild
+
+# Mac 打包与安装边界独立审查
+
+2026-10-24。只读取 build.sh、Info.plist、README、test.sh、实际候选包和安装包；修复只写 build.sh 与 README。没有操作用户界面、关闭应用、运行生产任务、构建或安装新应用。
+
+独立性边界：本审查者亲自实施了下述build脚本修复，不能再自行给这些改动授予独立review通过，已请Root交另一位执行者复核差异和最终候选包。原生Sources全程未修改。
+
+## 实际包状态
+
+| 项目 | `.build/论文速递.app` | `~/Applications/论文速递.app` |
+|---|---|---|
+| builtAt UTC | 2026-10-24T05:26:05.977866Z | 2026-10-24T04:33:27.721744Z |
+| Native SHA-256 | `a73c42abe4156264bb5793f0f5e770b4805616e7d0c6533e75f807985bf0dd2a` | `fa6aaf66a8eb48783983b34ffd2197d35c6b91e54a9947e7595e61155e626c02` |
+| 最低 OS | 15.0 | 14.0 |
+| Native/Node 架构 | arm64/arm64 | arm64/arm64 |
+| 实际严格签名核验 | 通过 | 通过 |
+| metadata所列包资源重核 | 全部一致 | 全部一致 |
+| CFBundleVersion | 1 | 1 |
+
+安装版进程 PID69225 的实际执行路径仍是 `~/Applications/论文速递.app/Contents/MacOS/PaperDigest`。安装版没有因候选包存在而自动升级。`.build` 的元数据可匹配 `.qa/builds/2026-10-24T05-26-05.977866_00-00/` 历史记录，但对比当前工作树有14份源码/界面/worker/transport文件不同，因此这份包也不能充当最终修复版本的执行证据。上述数字是本次检查时快照，后续构建应另记新的 builtAt 和 SHA。
+
+## 已关闭的问题及验证
+
+1. 原 `--install` 会移动并删除仍在运行的旧应用包，使旧进程继续执行旧代码，却可能找不到 Web/Runtime 资源。现在在安装开始、复制后和最终替换前拒绝存活的 `PaperDigest`，不强制退出进程。实际执行 `build.sh --install` 在 PID69225 存活时立即拒绝；旧安装 SHA 和进程执行路径均未改变。
+2. 普通 build 仍允许在安装版运行时生成候选包，但如果当前运行的是 `.build` 中的应用，就不覆盖它的资源。
+3. 原资产 SHA 只在编译前核对。现在复制到 bundle 后，直接读取包内 sample.json 和 PDF/3图实际字节再核 SHA。实际复制真实资产的正例通过；仅改变临时副本的 PDF 后，包内校验明确拒绝。
+4. 自定义 Node 运行时现在按 lipo 真正架构列表匹配，不从含路径的 file 文本猜架构；同时执行公共实现的版本门槛检查。拒绝未复制的外部动态库、最低系统高于15的 Node。当前真实 Node 检查通过；外部 dylib 与更高 OS 的两个隔离模拟负例被拒绝。
+5. `bash -n`、帮助入口和改动空白检查通过。当前 Node 的 Mach-O minos 为13.5，原生候选包为15.0；Node仅链接 Apple系统库，不依赖 Homebrew路径。
+
+build.sh冻结SHA：`463f75e358b1685a63d2fb8fff777520c1727081277ea7a7def3878449857162`。
+
+README冻结SHA：`f89ba19e75dbecef6de5e7f894e72ce49de27fee65473a898e22965e2bedf55c`。
+
+## 干净检出、许可与私有边界
+
+PDF和三张裁图被Git忽略；README明确要求从给定原始PDF按固定版本工具准备，构建缺失或SHA不符即失败，不能把不存在的资产当作干净检出可直接启动。Marked、Lucide、KaTeX和Node许可证实际在候选包中，Node许可157606字节。包路径检查未发现.env、data/runtime、personal.json或响应完整性密钥；常见长密钥文本模式扫描无命中。Shared输入来自Git已跟踪scripts/config，而不是生产数据。这里不把有限文本模式扫描称为对任意形式秘密的数学证明。
+
+## 安装方案与限制
+
+锁屏期间先普通build，核验新候选包的签名、actual metadata与当前源码SHA、Native/Node架构和最低OS，登记新的已签名二进制SHA。解锁后先在旧应用内保存并正常退出，等待任务停止，再运行安装；安装后另验实际新进程路径、包SHA和窗口。不能在旧进程运行时声称新版本已经启动。
+
+当前为ad-hoc开发签名，没有Apple公证；只验证本机arm64/macOS26.6.1，没有把macOS15或Intel机器记作已实机通过。两包CFBundleVersion目前都为1，人工辨识需使用build-metadata和二进制SHA，不能只看1.0.0关于页。
+
+另已向Root报告：默认test.sh尚未列入LibraryPDFRevalidation.test.cjs与DesktopProtocolReview.test.cjs两份专项，虽本次已另行运行，但未来npm test需补入或明确专项覆盖边界。当前权限未修改test.sh。新脚本还需由最终普通构建取得完整正例证据；本审查没有冒称已完成新包安装或启动。
+
+
+### Independent verification after final rebuild
+
+Candidate builtAt: 2026-10-24T05:54:21.918615Z. Signed binary SHA256: eea09589a421badfd5b8ad8051ef824f6912864053b9c79b7f822eb4b58ab6cd. A different reviewer checked 501 input entries against current Sources, Web, worker, Shared and Seed: 0 mismatches. Strict app and Node signatures, arm64, macOS minimum 15 / Node minimum 13.5 and system-only dynamic libraries passed. No environment credentials, production runtime, personal profile or private keys were found. Full local evidence: apps/macos/.qa/final-frozen-independent-audit.json. This validates the candidate package only; the older installed process remains running. No new install, launch, real model or Zotero authorization/write is claimed.
