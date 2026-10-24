@@ -51,6 +51,7 @@ actor ZoteroService {
         var key: String?
         var verified: Bool
         var error: String?
+        var everVerified: Bool? = nil
     }
     struct ArchiveResult: Codable, Sendable {
         let archiveID: String
@@ -544,6 +545,7 @@ actor ZoteroService {
     }
 
     private func archiveMaterial(_ material: Material, parent: String, journal: inout Journal) async throws {
+        let priorStep = journal.steps.first { $0.role == material.role }
         var key = journal.steps.first { $0.role == material.role }?.key
         if key == nil {
             let children = try await readArray("/api/users/0/items/\(parent)/children")
@@ -565,6 +567,8 @@ actor ZoteroService {
         let storedMD5 = data["md5"] as? String ?? ""
         if !storedMD5.isEmpty && storedMD5 != material.md5 { throw ServiceError.conflict }
         if storedMD5.isEmpty {
+            let marker = "PaperDigest-Asset: \(material.role):\(material.sha256)"
+            let unfinishedOwnedSlot = priorStep?.verified != true && priorStep?.everVerified != true && data["note"] as? String == marker
             // A missing synced hash does not grant permission to replace a real user-edited file.
             do {
                 let (pathData, _) = try await request("/api/users/0/items/\(key!)/file/view/url")
@@ -573,7 +577,16 @@ actor ZoteroService {
                 let values = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
                 guard values.isRegularFile == true, values.fileSize == material.data.count,
                       Self.sha256(try Data(contentsOf: file)) == material.sha256 else { throw ServiceError.conflict }
-            } catch ServiceError.http(404) { /* Empty newly created attachment: upload is allowed. */ }
+            } catch ServiceError.http(404) {
+                guard unfinishedOwnedSlot else { throw ServiceError.conflict }
+            }
+            catch let error as NSError where error.domain == NSCocoaErrorDomain &&
+                [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code) {
+                // Zotero 10 can return a file URL before the first upload even
+                // though that path does not exist yet. Only an unfinished,
+                // application-owned slot may receive its original bytes.
+                guard unfinishedOwnedSlot else { throw ServiceError.conflict }
+            }
             let precondition = ["If-None-Match": "*"]
             let form = ["md5": material.md5, "filename": material.filename, "filesize": String(material.data.count),
                         "mtime": String(Int64(Date().timeIntervalSince1970 * 1000))]
@@ -631,7 +644,19 @@ actor ZoteroService {
         setStep(role, key: key, verified: true, journal: &journal); try saveJournal(journal)
     }
     private func createObject(_ object: [String: Any], endpoint: String = "items") async throws -> String {
-        let (data, _) = try await request("/api/users/0/\(endpoint)", method: "POST", body: try json([object]),
+        let body: Data
+        if endpoint == "items", object["itemType"] as? String == "attachment", let mode = object["linkMode"] as? String {
+            // Zotero 10 applies JSON fields in wire order. Its filename setter
+            // requires linkMode first, while ordinary sorted JSON puts filename
+            // first. Encode both pieces normally, joining only object delimiters.
+            var remaining = object; remaining.removeValue(forKey: "linkMode")
+            let leading = try json(["linkMode": mode]), trailing = try json(remaining)
+            var ordered = Data("[".utf8)
+            ordered.append(leading.dropLast()); ordered.append(Data(",".utf8))
+            ordered.append(trailing.dropFirst()); ordered.append(Data("]".utf8))
+            body = ordered
+        } else { body = try json([object]) }
+        let (data, _) = try await request("/api/users/0/\(endpoint)", method: "POST", body: body,
                                          authenticated: true, contentType: "application/json", headers: ["Zotero-Write-Token": UUID().uuidString.replacingOccurrences(of: "-", with: "")])
         let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         if let failures = result["failed"] as? [String: Any], !failures.isEmpty { throw ServiceError.verification("Zotero 拒绝保存对象") }
@@ -703,10 +728,16 @@ actor ZoteroService {
         url.query == nil && url.fragment == nil && url.path.hasPrefix("/api/local/uploads/")
     }
     private func setStep(_ role: String, key: String?, verified: Bool, journal: inout Journal) {
-        if let index = journal.steps.firstIndex(where: { $0.role == role }) { journal.steps[index] = Step(role: role, key: key, verified: verified, error: nil) }
+        if let index = journal.steps.firstIndex(where: { $0.role == role }) {
+            let ever = journal.steps[index].everVerified == true || journal.steps[index].verified || verified
+            journal.steps[index] = Step(role: role, key: key, verified: verified, error: nil, everVerified: ever ? true : nil)
+        }
     }
     private func markFailure(_ role: String, error: Error, journal: inout Journal) {
-        if let index = journal.steps.firstIndex(where: { $0.role == role }) { journal.steps[index].verified = false; journal.steps[index].error = safe(error) }
+        if let index = journal.steps.firstIndex(where: { $0.role == role }) {
+            if journal.steps[index].verified { journal.steps[index].everVerified = true }
+            journal.steps[index].verified = false; journal.steps[index].error = safe(error)
+        }
     }
     private func result(_ journal: Journal) -> ArchiveResult {
         let complete = journal.steps.allSatisfy(\.verified)

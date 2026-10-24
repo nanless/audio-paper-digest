@@ -49,6 +49,7 @@ private final class MockZotero: @unchecked Sendable {
     var files: [String: Data] = [:]
     var uploads: [String: String] = [:]
     var hashes: [String: String] = [:]
+    var filenames: [String: String] = [:]
     var requests: [(String, String)] = []
     let storage: URL
     private var counter = 100
@@ -92,7 +93,16 @@ private final class MockZotero: @unchecked Sendable {
         if components.count == 5 && components[3] == "collections", let object = collections[components[4]] { return try ok(object) }
         if path == "/api/users/0/items" {
             if method == "GET" { return try ok(objects.values.filter { ($0["data"] as? [String: Any])?["parentItem"] == nil }) }
-            let entries = try JSONSerialization.jsonObject(with: body(request)) as! [[String: Any]]
+            let wire = try body(request)
+            let entries = try JSONSerialization.jsonObject(with: wire) as! [[String: Any]]
+            // Native Zotero 10 fromJSON processes wire fields in order: the
+            // filename setter requires linkMode to have already been applied.
+            if entries[0]["itemType"] as? String == "attachment",
+               let text = String(data:wire,encoding:.utf8),
+               let filename = text.range(of:"\"filename\":"), let mode = text.range(of:"\"linkMode\":"),
+               filename.lowerBound < mode.lowerBound {
+                return try ok(["failed":["0":["code":400,"message":"Link mode must be set before setting attachment path"]]])
+            }
             let k = key(); var object = entries[0]
             if object["parentItem"] == nil {
                 parentCreations+=1
@@ -116,8 +126,13 @@ private final class MockZotero: @unchecked Sendable {
             return try ok(objects.values.filter { ($0["data"] as? [String: Any])?["parentItem"] as? String == k })
         }
         if path.hasSuffix("/file/view/url") {
-            guard let file = files[k] else { return try ok([:],404) }
             let url = storage.appendingPathComponent(k)
+            guard let file = files[k] else {
+                // The installed Zotero API exposes the intended storage URL for
+                // an empty imported-file slot, before a file exists on disk.
+                guard (objects[k]?["data"] as? [String:Any])?["itemType"] as? String == "attachment" else { return try ok([:],404) }
+                return (200,headers,Data(url.absoluteString.utf8))
+            }
             try file.write(to: url)
             return (200,headers,Data(url.absoluteString.utf8))
         }
@@ -130,10 +145,10 @@ private final class MockZotero: @unchecked Sendable {
                 let actual = Insecure.MD5.hash(data:file).map { String(format:"%02x",$0) }.joined()
                 guard actual == hashes[k] else { return try ok([:],400) }
                 var object = objects[k]!, objectData = object["data"] as! [String: Any]
-                objectData["md5"] = actual; object["data"] = objectData; objects[k] = object
+                objectData["md5"] = actual; objectData["filename"] = filenames[k]; object["data"] = objectData; objects[k] = object
                 return (204,headers,Data())
             }
-            let upload = UUID().uuidString; uploads[upload] = k; hashes[k] = fields["md5"]
+            let upload = UUID().uuidString; uploads[upload] = k; hashes[k] = fields["md5"]; filenames[k] = fields["filename"]
             let host = foreignUploadURL ? "https://example.invalid/steal" : "http://127.0.0.1:23119/api/local/uploads/" + upload
             return try ok(["url": host, "uploadKey": upload, "prefix":"", "suffix":"", "contentType": "application/octet-stream"])
         }
@@ -161,7 +176,9 @@ private final class MockZotero: @unchecked Sendable {
         var passed = 0
         func fixture(seed: Bool = true) throws -> (ZoteroService,MockZotero,MemoryCredentialStore) {
             let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ZoteroMockProtocol.self]
-            let backend = MockZotero(storage:root), store = MemoryCredentialStore()
+            let backendRoot=root.appendingPathComponent("mock-storage-"+UUID().uuidString)
+            try FileManager.default.createDirectory(at:backendRoot,withIntermediateDirectories:true)
+            let backend = MockZotero(storage:backendRoot), store = MemoryCredentialStore()
             if seed { try store.seed() }
             ZoteroMockProtocol.handler = { try backend.response($0) }
             return (ZoteroService(dataDirectory:root,session:URLSession(configuration:config),credentialStore:store),backend,store)
@@ -262,6 +279,22 @@ private final class MockZotero: @unchecked Sendable {
             let resumed=try await service.archive(input,resumeID:partial.archiveID)
             try require(resumed.status=="complete" && backend.objects.count==count,"partial resume only missing file")
             passed += 2
+        }
+        do {
+            let (service,backend,_) = try fixture()
+            let complete=try await service.archive(input)
+            let key=complete.steps.first{$0.role=="pdf"}!.key!
+            backend.files.removeValue(forKey:key)
+            try FileManager.default.removeItem(at:backend.storage.appendingPathComponent(key))
+            var object=backend.objects[key]!, fields=object["data"] as! [String:Any]
+            fields.removeValue(forKey:"md5");object["data"]=fields;backend.objects[key]=object
+            for _ in 0..<2 {
+                let before=backend.requests.count
+                let result=try await service.archive(input,resumeID:complete.archiveID)
+                try require(result.status=="partial" && result.steps.first{$0.role=="pdf"}?.verified==false,"deleted formerly verified file remains partial on repeated resume")
+                try require(!backend.requests.dropFirst(before).contains{$0.0=="POST" && ($0.1.contains("/uploads/") || $0.1=="/api/users/0/items/\(key)/file")},"repeated resume never overwrites a formerly verified deleted file")
+                passed += 2
+            }
         }
         do {
             let (service,backend,_) = try fixture(seed:false);backend.denied=true
