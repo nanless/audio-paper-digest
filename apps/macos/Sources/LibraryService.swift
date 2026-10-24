@@ -67,6 +67,7 @@ actor LibraryService {
         var cacheStatus: String? = nil
         var validationAttemptedAt: String? = nil
         var expectedSourceVersion: String? = nil
+        var mathMLContract: String? = nil
     }
     struct PDFDownload: Codable, Sendable {
         var filePath: String
@@ -397,9 +398,11 @@ actor LibraryService {
         var previous: Article?
         if let data = try? Data(contentsOf: cache), let cached = try? JSONDecoder().decode(Article.self, from: data), cached.paperID == paperID { previous = cached }
         if !refresh, var cached = previous {
+            if cached.markdown==nil,cached.mathMLContract != "published-html-mathml-v1"{cached.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
             let missing = !resourcesVerified(cached)
             if missing { cached.completeOffline = false }
-            let current = Self.sourceMatches(cached, paper: paper) && cached.catalogEpoch == snapshot.validationEpoch && Self.age(cached.fetchedAt) <= 6 * 3600
+            let parserCurrent=cached.markdown != nil || cached.mathMLContract=="published-html-mathml-v1"
+            let current = parserCurrent && Self.sourceMatches(cached, paper: paper) && cached.catalogEpoch == snapshot.validationEpoch && Self.age(cached.fetchedAt) <= 6 * 3600
             if current && (!downloadImages || !missing), cached.isStale != true { return cached }
             if cached.isStale == true, cached.catalogEpoch == snapshot.validationEpoch, cached.expectedSourceVersion == paper.sourceVersion, Self.age(cached.validationAttemptedAt) < 300 { return cached }
         }
@@ -414,6 +417,7 @@ actor LibraryService {
             guard var old = previous ?? (try? seedArticle(paper)) else { throw error }
             old.isStale = true; old.cacheStatus = "stale"; old.validationAttemptedAt = Self.now(); old.expectedSourceVersion = paper.sourceVersion; old.catalogEpoch = snapshot.validationEpoch
             old.completeOffline = old.completeOffline && resourcesVerified(old)
+            if old.markdown==nil,old.mathMLContract != "published-html-mathml-v1"{old.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
             old.notices = Array(Set(old.notices + ["网站当前修订复验失败，正在读取先前保存的旧导读；获取于\(old.fetchedAt)，旧来源版本\(old.sourceVersion ?? "未标版本")，目录期待版本\(paper.sourceVersion ?? "未标版本")。\(error.localizedDescription)"])).sorted()
             if previous != nil { try atomicWrite(try JSONEncoder().encode(old), to: cache) }
             return old
@@ -553,9 +557,156 @@ actor LibraryService {
         return result
     }
 
+    // Foundation HTML tidy removes unknown HTML5/MathML tags, including their
+    // TeX annotation. Protect only complete, independently validated MathML;
+    // the surrounding HTML still passes through the original HTML sanitizer.
+    private static func htmlDocumentPreservingMath(_ raw:String)throws->XMLDocument {
+        let bytes=Array(raw.utf8)
+        guard bytes.count<=16*1024*1024 else{throw ServiceError.invalid("公式保真读取的页面超过16 MiB。")}
+        guard !raw.localizedCaseInsensitiveContains("<!ENTITY") else{throw ServiceError.invalid("文章包含不允许的实体声明。")}
+        struct Tag {let end:Int;let name:String;let closing:Bool;let empty:Bool}
+        func starts(_ text:String,at index:Int)->Bool {
+            let expected=Array(text.utf8);guard index+expected.count<=bytes.count else{return false}
+            return expected.indices.allSatisfy{offset in let value=bytes[index+offset];return (65...90).contains(value) ? value+32==expected[offset]:value==expected[offset]}
+        }
+        func endOf(_ delimiter:String,from start:Int)throws->Int {
+            let expected=Array(delimiter.utf8);var index=start
+            while index+expected.count<=bytes.count {if bytes[index..<(index+expected.count)].elementsEqual(expected){return index+expected.count};index+=1}
+            throw ServiceError.invalid("文章中的注释或CDATA没有完整闭合，未猜测公式边界。")
+        }
+        func tag(at start:Int)throws->Tag? {
+            guard bytes[start]==60 else{return nil}
+            var index=start+1,closing=false
+            if index<bytes.count,bytes[index]==47{closing=true;index+=1}
+            let nameStart=index
+            while index<bytes.count,((65...90).contains(bytes[index]) || (97...122).contains(bytes[index]) || (48...57).contains(bytes[index]) || bytes[index]==45 || bytes[index]==58){index+=1}
+            guard index>nameStart else{return nil}
+            let name=String(decoding:bytes[nameStart..<index],as:UTF8.self).lowercased()
+            var quote:UInt8?=nil
+            while index<bytes.count,index-start<=65536 {
+                let value=bytes[index]
+                if let active=quote {if value==active{quote=nil}}
+                else if value==34 || value==39{quote=value}
+                else if value==62 {var previous=index-1;while previous>start,[9,10,13,32].contains(bytes[previous]){previous-=1};return Tag(end:index+1,name:name,closing:closing,empty:bytes[previous]==47)}
+                index+=1
+            }
+            throw ServiceError.invalid("文章标签不完整或超过64 KiB，未猜测公式边界。")
+        }
+        func declarationEnd(at start:Int)throws->Int {
+            var index=start+2,quote:UInt8?=nil
+            while index<bytes.count,index-start<=65536 {
+                let value=bytes[index]
+                if let active=quote{if value==active{quote=nil}}
+                else if value==34 || value==39{quote=value}
+                else if value==62{return index+1}
+                index+=1
+            }
+            throw ServiceError.invalid("文章声明不完整，未交给外部实体解析器。")
+        }
+        let nonce="paperdigest-math-"+UUID().uuidString.lowercased()+"-"
+        guard !raw.contains(nonce) else{throw ServiceError.invalid("公式保真标记发生冲突。")}
+        var position=0,last=0,output=Data(),rawText:String?=nil,formulas:[(String,XMLElement)]=[],formulaBytes=0
+        while position<bytes.count {
+            if let rawName=rawText {
+                // Raw text follows HTML closing-tag rules, not JavaScript/string
+                // quoting. Do not tokenize apparent formulas inside this text.
+                if bytes[position]==60,starts("</"+rawName,at:position),let token=try tag(at:position),token.closing,token.name==rawName{rawText=nil;position=token.end}else{position+=1}
+                continue
+            }
+            guard bytes[position]==60 else{position+=1;continue}
+            if starts("<!--",at:position){position=try endOf("-->",from:position+4);continue}
+            if starts("<![cdata[",at:position){position=try endOf("]]>",from:position+9);continue}
+            if starts("<!",at:position){
+                let end=try declarationEnd(at:position),declaration=String(decoding:bytes[position..<end],as:UTF8.self)
+                guard declaration.range(of:#"\A<!DOCTYPE[\t\r\n ]+html[\t\r\n ]*>\z"#,options:[.regularExpression,.caseInsensitive]) != nil else{throw ServiceError.invalid("文章包含不支持的DOCTYPE或实体声明。")}
+                position=end;continue
+            }
+            guard let token=try tag(at:position) else{position+=1;continue}
+            if token.name.hasSuffix(":math"){throw ServiceError.invalid("暂不支持带前缀的MathML根节点，未静默丢弃公式。")}
+            if !token.closing,token.name=="plaintext"{position=bytes.count;continue}
+            if !token.closing,["script","style","textarea","title","xmp","iframe","noembed","noframes"].contains(token.name){rawText=token.name;position=token.end;continue}
+            if token.name=="math",token.closing{throw ServiceError.invalid("文章包含没有对应起点的MathML结束标签。")}
+            guard token.name=="math" else{position=token.end;continue}
+            let beginning=position;var end=token.end,depth=token.empty ? 0:1
+            while depth>0 {
+                guard end<bytes.count,end-beginning<=256*1024 else{throw ServiceError.invalid("单个MathML超过256 KiB或未完整闭合。")}
+                if bytes[end] != 60 {end+=1;continue}
+                if starts("<!--",at:end){end=try endOf("-->",from:end+4);continue}
+                if starts("<![cdata[",at:end){end=try endOf("]]>",from:end+9);continue}
+                guard !starts("<!",at:end) else{throw ServiceError.invalid("MathML中不允许DOCTYPE或实体声明。")}
+                if let child=try tag(at:end){if child.name=="math"{if child.closing{depth-=1}else if !child.empty{depth+=1}};end=child.end}else{end+=1}
+            }
+            guard end-beginning<=256*1024,formulas.count<512,formulaBytes+end-beginning<=2*1024*1024 else{throw ServiceError.invalid("MathML数量或总大小超过保真读取上限。")}
+            let source=String(decoding:bytes[beginning..<end],as:UTF8.self)
+            let parsed=try XMLDocument(xmlString:source,options:[.nodePreserveWhitespace,.nodeLoadExternalEntitiesNever])
+            guard let math=parsed.rootElement(),math.name?.lowercased()=="math" else{throw ServiceError.invalid("MathML必须是独立且完整的math节点。")}
+            var count=0;try sanitizeMathML(math,depth:0,count:&count)
+            // In HTML, an unqualified <math> enters the MathML namespace even
+            // without an explicit xmlns. Pin it before inserting into XHTML.
+            if math.uri==nil{math.addNamespace(XMLNode.namespace(withName:"",stringValue:"http://www.w3.org/1998/Math/MathML") as! XMLNode)}
+            let marker=nonce+String(formulas.count)
+            output.append(contentsOf:bytes[last..<beginning]);output.append(contentsOf:"<span id=\"\(marker)\"></span>".utf8)
+            formulas.append((marker,math.copy() as! XMLElement));formulaBytes+=end-beginning;last=end;position=end
+        }
+        output.append(contentsOf:bytes[last..<bytes.count])
+        let doc=try XMLDocument(xmlString:String(decoding:output,as:UTF8.self),options:[.documentTidyHTML,.nodeLoadExternalEntitiesNever])
+        for (marker,math) in formulas {
+            let matches=try doc.nodes(forXPath:"//*[@id='\(marker)']")
+            guard matches.count==1,let slot=matches.first as? XMLElement,slot.name?.lowercased()=="span",slot.childCount==0,let parent=slot.parent as? XMLElement else{throw ServiceError.invalid("HTML解析改变了公式占位，未静默丢弃或异位恢复公式。")}
+            parent.replaceChild(at:slot.index,with:math)
+        }
+        guard !doc.xmlString.contains(nonce) else{throw ServiceError.invalid("公式保真占位没有完全恢复。")}
+        return doc
+    }
+    private static func sanitizeMathML(_ element:XMLElement,depth:Int,count:inout Int)throws {
+        count+=1;guard depth<=64,count<=8192 else{throw ServiceError.invalid("MathML层级或节点数量超过保真上限。")}
+        let tags:Set<String>=["math","semantics","annotation","mrow","mi","mn","mo","mtext","ms","mspace","mfrac","msqrt","mroot","msup","msub","msubsup","mover","munder","munderover","mtable","mtr","mlabeledtr","mtd","mstyle","mpadded","mphantom","menclose","mmultiscripts","mprescripts","none","merror"]
+        let attributes:Set<String>=["display","mathvariant","encoding","stretchy","fence","separator","accent","accentunder","symmetric","movablelimits","largeop","lspace","rspace","width","height","depth","voffset","minsize","maxsize","mathsize","mathcolor","mathbackground","displaystyle","scriptlevel","columnalign","rowalign","columnspacing","rowspacing","columnlines","rowlines","columnspan","rowspan","equalrows","equalcolumns","frame","framespacing","notation","linethickness","numalign","denomalign","bevelled","form","dir","id","class","title"]
+        guard let rawName=element.name,!rawName.contains(":"),tags.contains(rawName.lowercased()),element.uri==nil || element.uri=="http://www.w3.org/1998/Math/MathML" else{throw ServiceError.invalid("MathML包含不支持的外来或活动节点。")}
+        element.name=rawName.lowercased()
+        for namespace in element.namespaces ?? [] {guard namespace.stringValue=="http://www.w3.org/1998/Math/MathML" else{throw ServiceError.invalid("MathML包含不支持的命名空间。")}}
+        for attribute in element.attributes ?? [] {
+            let rawName=attribute.name ?? "",name=rawName.lowercased(),value=attribute.stringValue ?? ""
+            if name.hasPrefix("on") || ["href","src","xlink:href","style"].contains(name){element.removeAttribute(forName:rawName);continue}
+            guard attributes.contains(name),!rawName.contains(":"),value.utf8.count<=4096,!value.localizedCaseInsensitiveContains("url("),!value.localizedCaseInsensitiveContains("javascript:") else{throw ServiceError.invalid("MathML包含不支持的属性，未猜测公式结构。")}
+            attribute.name=name
+        }
+        if element.name=="annotation" {
+            guard ["application/x-tex","application/x-latex","text/plain"].contains(element.attribute(forName:"encoding")?.stringValue ?? ""),!(element.children ?? []).contains(where:{$0 is XMLElement}) else{throw ServiceError.invalid("MathML annotation必须是受支持编码的纯文本，未将嵌套结构猜为TeX。")}
+        }
+        for child in element.children ?? [] {
+            if let nested=child as? XMLElement {try sanitizeMathML(nested,depth:depth+1,count:&count)}
+            else {
+                count+=1;guard count<=8192 else{throw ServiceError.invalid("MathML节点数量超过保真上限。")}
+                if child.kind == .text {element.replaceChild(at:child.index,with:XMLNode.text(withStringValue:child.stringValue ?? "") as! XMLNode)}else{child.detach()}
+            }
+        }
+    }
+    private static func articlePlainText(_ body:XMLElement)throws->String {
+        let copy=body.copy() as! XMLElement
+        let roots=try copy.nodes(forXPath:".//*[local-name()='math' and not(ancestor::*[local-name()='math'])]")
+        for case let math as XMLElement in roots {
+            let annotations=try math.nodes(forXPath:"./*[local-name()='semantics']/*[local-name()='annotation' and @encoding='application/x-tex']")
+            guard annotations.count<=1 else{throw ServiceError.invalid("同一公式有多个TeX annotation，未猜测应采用哪个。")}
+            let annotation=annotations.first?.stringValue
+            let block=math.attribute(forName:"display")?.stringValue=="block"
+            let text:String
+            if let annotation,!annotation.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
+                text=block ? "\n\\["+annotation+"\\]\n":"\\("+annotation+"\\)"
+            } else {
+                // Annotation is not visible MathML content. Empty/missing TeX
+                // does not authorize synthesizing a replacement formula.
+                let visible=math.copy() as! XMLElement
+                for node in try visible.nodes(forXPath:".//*[local-name()='annotation']"){node.detach()}
+                let value=visible.stringValue ?? "";text=block ? "\n"+value+"\n":value
+            }
+            guard let parent=math.parent as? XMLElement else{throw ServiceError.invalid("公式文本投影失去原文位置。")}
+            parent.replaceChild(at:math.index,with:XMLNode.text(withStringValue:text) as! XMLNode)
+        }
+        return copy.stringValue ?? ""
+    }
     static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {
-        guard !raw.localizedCaseInsensitiveContains("<!ENTITY"), !raw.localizedCaseInsensitiveContains("SYSTEM \"") else { throw ServiceError.invalid("文章包含不允许的外部实体。") }
-        let doc = try XMLDocument(xmlString: raw, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
+        let doc = try htmlDocumentPreservingMath(raw)
         // Foundation's HTML tidy removes HTML5 <article>/<section> wrappers on macOS;
         // the published body's exact id + class survive and must match uniquely.
         let nodes = try doc.nodes(forXPath: "//div[@id='article-body' and contains(concat(' ', normalize-space(@class), ' '), ' post-content ')]")
@@ -584,10 +735,10 @@ actor LibraryService {
         }
         guard images.count <= 32 else { throw ServiceError.invalid("单篇图片超过32张，未开始批量下载。") }
         let html = (body.children ?? []).map { $0.xmlString(options: [.nodePreserveWhitespace]) }.joined()
-        return Article(paperID: paper.id, html: html, markdown: nil, plainText: body.stringValue ?? "", citation: citation,
+        return Article(paperID: paper.id, html: html, markdown: nil, plainText: try articlePlainText(body), citation: citation,
                        resources: images, sourceURL: paper.sourceURL ?? paper.blogURL, pdfURL: paper.pdfURL, sourceVersion: paper.sourceVersion,
                        fetchedAt: now(), revisionSHA256: sha256(Data(html.utf8)), completeOffline: false,
-                       notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"])
+                       notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"],mathMLContract:"published-html-mathml-v1")
     }
 
     private static func sanitize(_ root: XMLElement, pageURL: URL) throws {
@@ -597,6 +748,7 @@ actor LibraryService {
             guard let element = child as? XMLElement else { if child.kind != .text { child.detach() }; continue }
             let tag = (element.name ?? "").lowercased()
             guard allowed.contains(tag) else { element.detach(); continue }
+            if tag=="math"{var count=0;try sanitizeMathML(element,depth:0,count:&count);continue}
             for attr in element.attributes ?? [] {
                 let name = (attr.name ?? "").lowercased()
                 if name == "href" && tag == "a" {
@@ -615,7 +767,7 @@ actor LibraryService {
         }
     }
     private static func localizeImages(_ fragment: String, replacements: [String: String]) throws -> String {
-        let doc = try XMLDocument(xmlString: "<html><body>\(fragment)</body></html>", options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever])
+        let doc = try htmlDocumentPreservingMath("<html><body>\(fragment)</body></html>")
         for node in try doc.nodes(forXPath: "//img") {
             guard let image = node as? XMLElement, let source = image.attribute(forName: "src")?.stringValue else { continue }
             if let local = replacements[source] { image.attribute(forName: "src")?.stringValue = local }
