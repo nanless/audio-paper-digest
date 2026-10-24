@@ -36,6 +36,17 @@ export function installDialogs(){
  const shell=()=>document.getElementById('app-window')||document.querySelector('.settings-body');
  const reconcile=()=>{const open=opened.length>0;document.body.classList.toggle('has-dialog',open);const root=shell();if(root)root.inert=open;for(const entry of opened)entry.surface.inert=entry!==opened.at(-1);window.dispatchEvent(new CustomEvent('modal.changed',{detail:{open}}));};
  const focusable=surface=>[...surface.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),select:not(:disabled),[tabindex="0"]')].filter(el=>!el.closest('[hidden],[inert]')&&el.getClientRects().length);
+ const focusModal=entry=>requestAnimationFrame(()=>setTimeout(()=>{
+  if(opened.at(-1)!==entry||!entry.surface.isConnected||entry.surface.closest('[hidden],[inert]'))return;
+  // Do not take focus back after the user has already entered a modal control.
+  if(entry.surface.contains(document.activeElement))return;
+  const heading=entry.surface.querySelector('h1,h2');
+  // Focus the visible title rather than an old control moved out of the initially
+  // closed native dialog. A separate task after rendering lets WebKit publish
+  // the new AX subtree before delivering its focused-element notification.
+  if(heading&&!heading.closest('[hidden],[inert]')&&heading.getClientRects().length){heading.tabIndex=-1;heading.focus({preventScroll:true});}
+  else focusable(entry.surface)[0]?.focus({preventScroll:true});
+ },0));
  function bind(dialog){
   if(bound.has(dialog))return;bound.add(dialog);
   const id=dialog.id,classes=dialog.className,originalQuery=dialog.querySelector.bind(dialog),originalQueryAll=dialog.querySelectorAll.bind(dialog);
@@ -47,7 +58,7 @@ export function installDialogs(){
   dialog.querySelector=selector=>entry?entry.surface.querySelector(selector):originalQuery(selector);
   dialog.querySelectorAll=selector=>entry?entry.surface.querySelectorAll(selector):originalQueryAll(selector);
   dialog.showModal=()=>{
-   if(entry){const heading=entry.surface.querySelector('h1,h2');if(heading)entry.surface.setAttribute('aria-label',heading.textContent);return;}
+   if(entry){const heading=entry.surface.querySelector('h1,h2');if(heading)entry.surface.setAttribute('aria-label',heading.textContent);focusModal(entry);return;}
    const previousFocus=document.activeElement,surface=document.createElement('section');
    surface.id=id;surface.className=classes;surface.dataset.dialogSurface='';surface.setAttribute('role','dialog');surface.setAttribute('aria-modal','true');surface.setAttribute('open','');
    const heading=originalQuery('h1,h2');surface.setAttribute('aria-label',heading?.textContent||(id==='archive-dialog'?'存入 Zotero':'研究详情'));
@@ -65,14 +76,17 @@ export function installDialogs(){
      if(event.submitter?.value==='cancel')dialog.close('cancel');
     }
    },true);
-   reconcile();requestAnimationFrame(()=>{if(entry?.surface===surface)focusable(surface)[0]?.focus({preventScroll:true});});
+   reconcile();focusModal(entry);
   };
   dialog.close=(value='')=>{
    if(!entry)return;
    const closing=entry;entry=null;opened.splice(opened.indexOf(closing),1);
    dialog.returnValue=value;dialog.append(...closing.surface.childNodes);closing.surface.remove();dialog.removeAttribute('aria-hidden');dialog.style.removeProperty('display');dialog.id=id;dialog.className=classes;
    reconcile();dialog.dispatchEvent(new Event('close'));
-   if(closing.previousFocus?.isConnected&&!closing.previousFocus.closest('[inert],[hidden]'))closing.previousFocus.focus({preventScroll:true});
+   const remaining=opened.at(-1);
+   if(remaining&&!remaining.surface.contains(closing.previousFocus))focusModal(remaining);
+   else if(closing.previousFocus?.isConnected&&!closing.previousFocus.closest('[inert],[hidden]'))closing.previousFocus.focus({preventScroll:true});
+   else if(remaining)focusModal(remaining);
   };
  }
  const scan=()=>{document.querySelectorAll('dialog').forEach(bind);};

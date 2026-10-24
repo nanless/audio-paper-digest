@@ -590,3 +590,36 @@ PDF和三张裁图被Git忽略；README明确要求从给定原始PDF按固定�
 ### Independent verification after final rebuild
 
 Candidate builtAt: 2026-10-24T05:54:21.918615Z. Signed binary SHA256: eea09589a421badfd5b8ad8051ef824f6912864053b9c79b7f822eb4b58ab6cd. A different reviewer checked 501 input entries against current Sources, Web, worker, Shared and Seed: 0 mismatches. Strict app and Node signatures, arm64, macOS minimum 15 / Node minimum 13.5 and system-only dynamic libraries passed. No environment credentials, production runtime, personal profile or private keys were found. Full local evidence: apps/macos/.qa/final-frozen-independent-audit.json. This validates the candidate package only; the older installed process remains running. No new install, launch, real model or Zotero authorization/write is claimed.
+
+## 2026-10-24：主窗模态焦点候选，实机无障碍待验
+
+Root 在标记为 09:25 的实际安装包中，从干净资料库打开“本机资料”后，截图正常，但系统无障碍树仍只显示 HTML 内容容器。此前刷新 `detail-content` 外层的改动没有解决这次实机问题。失败证据保留在本机 `apps/macos/.qa/live-e2e/storage-0925.ax.txt` 和同名 PNG；不能用浏览器行为测试替代这个失败结果。
+
+本轮只修改 `dialogs.js` 和 `storage-ui.js`。模态插入后，先等渲染帧，再在独立定时任务中聚焦可见标题，避免把初始焦点放到从静态隐藏对话框搬出的旧关闭按钮。只有仍然连通、可见且位于栈顶的模态可以获取焦点；用户已经移入控件时，不再抢回焦点。Storage 加载完成替换标题后，再通过同一入口安排焦点。关闭嵌套模态时，若旧焦点已不属于剩余模态，则回到剩余模态的标题。原关闭按钮、事件、Tab 循环和 Escape 关闭合同保留。
+
+[WebKit 官方修复说明](https://github.com/WebKit/WebKit/pull/65010)记录了新子树尚未进入无障碍树时，焦点通知可能先抵达 AppKit 的问题。这为本轮延后焦点提供候选依据，尚不能证明当前机器上的无障碍空树已经修复。
+
+隔离行为回归实际通过 35 组：
+
+- 新增 `DesktopModalFocus.test.cjs`：6/6。覆盖独立任务聚焦标题、同面板内容替换、Storage 延迟结果替换标题、保留用户主动焦点、嵌套栈顶与关闭恢复、关闭后重开拒绝旧焦点任务。
+- `DesktopModalFacade.test.cjs`：6/6。
+- `DesktopDetailContainer.test.cjs`：4/4。
+- `StorageUIAsync.test.cjs`：7/7。
+- `DesktopContentAXReview.test.cjs`：12/12。
+
+这些测试使用真实界面模块和浏览器 DOM，原生调用为明确夹具；没有操作真实窗口、凭据、模型服务、Zotero 或用户资料。新增焦点测试已纳入 `apps/macos/test.sh`。记录与对应源码 SHA 保存在本机 `apps/macos/.qa/modal-focus/result.json`。
+
+本轮冻结身份：
+
+- `apps/macos/Resources/dialogs.js`：`86eb17d35cf684fdd4a8a40db1c44b47d8d1802c5709dccb39d6fb5eb782cd19`。
+- `apps/macos/Resources/storage-ui.js`：`448f5dd79881f630b12cca8360623fa57083c608700b000f58e26231feae3456`。
+
+剩余验收是新包中的实际 macOS 无障碍树、键盘焦点和控件操作。通过前，此项继续记为实机待验，不记为问题已经关闭。
+
+### 行内科学公式、代码与转义符独立复验
+
+真实个人解析的142字回答中，两处行内公式被二次渲染成块级公式，造成空白。最初修复保留显示模式后，独立审查又复现Markdown代码被替换成占位HTML、公式内转义美元符号被截断、重复渲染增加嵌套三个问题。原失败记录保留在本机QA目录。
+
+改为局部Marked行内扩展，让Markdown词法分析器先保护代码；共用转义感知的数学分隔规则。旧HTML的TeX注释直接渲染，保留原行内或独立模式，替换为干净根节点；Markdown结果不再进入旧HTML二次处理。真实原回答、四种分隔符、旧KaTeX、原生MathML、重复调用、代码、双货币文本和安全负例均通过独立13项DOM检查，测试纳入完整入口。独立冻结native.js SHA为 `aa96003ef0175809ac40ab51842528aa32b72dc75b0f767d3cada5fe2237d3d0`。
+
+完整隔离测试v4已通过；随后修改仅影响界面，所有15个相关界面套件v5再次全部通过，未重复调用付费模型或真实文库。公式实机显示和主窗弹窗AX仍须在安装新候选后核验，不能用浏览器测试代替。
