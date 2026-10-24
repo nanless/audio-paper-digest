@@ -246,7 +246,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "app.export":return try await runJob(command,payload:payload){_ in try await self.exportCurrent(payload);return ["saved":true]}
         case "app.backup":try await flushEdits();try backupData();return ["saved":true]
         case "app.restore":try await flushEdits();try restoreData();return ["restored":true]
-        case "app.diagnostics":try diagnostics();return ["saved":true]
+        case "app.diagnostics":try await diagnostics();return ["saved":true]
         case "app.revealData":revealData();return [:]
         case "storage.show":window.makeKeyAndOrderFront(nil);emit("menu.command",["action":"storage"]);return [:]
         case "storage.status":return try await storage.capacity()
@@ -380,7 +380,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func exportResearch(){emit("menu.command",["action":"export"])}
     @objc func backup(){Task{do{try await flushEdits();try backupData()}catch{showError(error)}}}
     @objc func restore(){Task{do{try await flushEdits();try restoreData();emit("personal.changed")}catch{showError(error)}}}
-    @objc func exportDiagnostics(){do{try diagnostics()}catch{showError(error)}}
+    @objc func exportDiagnostics(){Task{do{try await diagnostics()}catch{showError(error)}}}
     @objc func printPDF(){guard let doc=pdfView.document else{showError(DesktopError.message("请先打开原文 PDF"));return};doc.printOperation(for:NSPrintInfo.shared,scalingMode:.pageScaleToFit,autoRotate:true)?.runModal(for:window,delegate:nil,didRun:nil,contextInfo:nil)}
     func showError(_ error:Error){let alert=NSAlert();alert.messageText="操作未能完成";alert.informativeText=error.localizedDescription;alert.runModal()}
 }

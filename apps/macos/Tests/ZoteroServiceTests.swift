@@ -39,6 +39,7 @@ private final class MockZotero: @unchecked Sendable {
     var unauthorized = false
     var publicUnauthorizedPath:String?
     var failPDFUploadOnce = false
+    var failJSONUploadOnce = false
     var foreignUploadURL = false
     var notesCorrupt = false
     var emptyFileReturns404 = false
@@ -51,6 +52,7 @@ private final class MockZotero: @unchecked Sendable {
     var uploads: [String: String] = [:]
     var hashes: [String: String] = [:]
     var filenames: [String: String] = [:]
+    var rawUploadContentTypes: [String: String] = [:]
     var requests: [(String, String)] = []
     let storage: URL
     private var counter = 100
@@ -116,10 +118,21 @@ private final class MockZotero: @unchecked Sendable {
         }
         if path.hasPrefix("/api/local/uploads/") {
             let uploadKey = components.last!, k = uploads[uploadKey]!
+            if failJSONUploadOnce && ((objects[k]!["data"] as! [String: Any])["contentType"] as? String)=="application/json" {
+                failJSONUploadOnce=false;return (400,headers,Data("No file content provided".utf8))
+            }
             if failPDFUploadOnce && ((objects[k]!["data"] as! [String: Any])["contentType"] as? String) == "application/pdf" {
                 failPDFUploadOnce = false; return try ok([:],503)
             }
-            files[k] = try body(request); return (201, headers, Data())
+            let wire=try body(request)
+            let contentType=request.value(forHTTPHeaderField:"Content-Type") ?? ""
+            rawUploadContentTypes[k]=contentType
+            // Installed Zotero server.js pre-parses application/json before
+            // UploadReceiver, which rejects JSON objects as non-file input.
+            if contentType=="application/json", (try? JSONSerialization.jsonObject(with:wire)) is [String:Any] {
+                return (400,headers,Data("No file content provided".utf8))
+            }
+            files[k] = wire; return (201, headers, Data())
         }
         guard components.count >= 5, components[3] == "items" else { return try ok([:],404) }
         let k = components[4]
@@ -152,7 +165,7 @@ private final class MockZotero: @unchecked Sendable {
             }
             let upload = UUID().uuidString; uploads[upload] = k; hashes[k] = fields["md5"]; filenames[k] = fields["filename"]
             let host = foreignUploadURL ? "https://example.invalid/steal" : "http://127.0.0.1:23119/api/local/uploads/" + upload
-            return try ok(["url": host, "uploadKey": upload, "prefix":"", "suffix":"", "contentType": "application/octet-stream"])
+            return try ok(["url": host, "uploadKey": upload, "prefix":"", "suffix":"", "contentType": (objects[k]!["data"] as! [String:Any])["contentType"] ?? "application/octet-stream"])
         }
         guard var object = objects[k] else { return try ok([:],404) }
         if method == "PATCH" {
@@ -195,6 +208,12 @@ private final class MockZotero: @unchecked Sendable {
             try require(credentials.loads==1 && !backend.requests.contains{$0.1=="/api/local/authorize"},"explicit archive restores existing persistent grant once without requesting replacement")
             passed += 1
             try require(first.status=="complete" && first.steps.count==6 && backend.collections.count==1 && backend.objects.count==6,"complete archive")
+            try require(backend.rawUploadContentTypes.count==3 && backend.rawUploadContentTypes.values.allSatisfy{$0=="application/octet-stream"},"all original file bytes use binary transport even when authorize returns actual JSON/PDF/HTML MIME")
+            let metadataKey=first.steps.first{$0.role=="source-metadata"}!.key!,metadataData=backend.objects[metadataKey]!["data"] as! [String:Any]
+            let metadata=try JSONSerialization.jsonObject(with:backend.files[metadataKey]!) as! [String:Any]
+            try require(metadataData["contentType"] as? String=="application/json" && metadataData["filename"] as? String=="source-metadata.json","binary transport never changes persisted JSON attachment MIME or filename")
+            try require(metadata["identity"] as? String==input.identity && (metadata["bibliography"] as? [String:Any])?["title"] as? String==input.bibliography.title,"JSON metadata arrives as exact parseable original bytes rather than a reencoded server object")
+            passed += 3
             // Consume the ACTUAL journal+summary pair emitted by this service, rather
             // than hand-crafting a projection that could miss cross-service schema bugs.
             let personal=try DesktopStore(directory:root)
@@ -211,6 +230,18 @@ private final class MockZotero: @unchecked Sendable {
             try require(resumed.status=="complete" && backend.requests.filter{$0.0=="POST"}.count==writes,"idempotent resume")
             let second = try await service.archive(input)
             try require(second.parentKey==first.parentKey && backend.objects.count==6,"global exact identity and child dedup")
+            passed += 3
+        }
+        do {
+            let (service,backend,_)=try fixture();backend.failJSONUploadOnce=true
+            let first=try await service.archive(input)
+            let pending=first.steps.first{$0.role=="source-metadata"}!
+            try require(first.status=="partial" && pending.verified==false && pending.everVerified==false && pending.key != nil,"JSON upload400 preserves original owned unfinished metadata slot")
+            let originalKey=pending.key!,count=backend.objects.count,parentCreations=backend.parentCreations
+            let resumed=try await service.archive(input,resumeID:first.archiveID)
+            let finished=resumed.steps.first{$0.role=="source-metadata"}!
+            try require(resumed.status=="complete" && finished.verified && finished.everVerified==true && finished.key==originalKey && resumed.parentKey==first.parentKey,"resume JSON400 completes same parent and metadata key without rewriting journal identity")
+            try require(backend.objects.count==count && backend.parentCreations==parentCreations && backend.rawUploadContentTypes[originalKey]=="application/octet-stream","resume JSON400 creates no duplicate parent/child and sends unchanged binary source bytes")
             passed += 3
         }
         do {

@@ -215,8 +215,48 @@ import UniformTypeIdentifiers
         configureSchedule()
         contextGeneration+=1;pdfView.document=nil;pdfView.isHidden=true;currentPaper=[:];currentPaperID="";pdfOwner="";pdfVersion="";currentPDFSHA="";currentPDFPath=nil;annotationsByID=[:];currentArticle=[:];selectionSource=[:];offlinePDF=nil;currentPDFReceipt=[:];emit("personal.changed")
     }
-    func diagnostics() throws {
-        let jobs=store.value["jobs"] as? [[String:Any]] ?? [],report:[String:Any]=["app":"论文速递","version":"1.0.0","system":ProcessInfo.processInfo.operatingSystemVersionString,"counts":["jobs":jobs.count,"notes":(store.value["notes"] as? [String:Any])?.count ?? 0,"sessions":(store.value["sessions"] as? [Any])?.count ?? 0],"jobStates":jobs.map{["command":$0["command"] ?? "","status":$0["status"] ?? ""]},"credentialsIncluded":false,"personalTextIncluded":false]
+    // Structural diagnostics only: never read document text, values, href/src,
+    // titles, data attributes, configuration, credentials or model material.
+    static let diagnosticDOMScript = #"""
+    (()=>{
+      const knownIDs=new Set(["all-notes","analysis-pane","analysis-result","analyze","annotation-list","app-window","appearance","archive-connect","archive-dialog","archive-dialog-facade","archive-guide","archive-guide-detail","archive-identity","archive-note","archive-note-detail","archive-open","archive-pdf","archive-pdf-detail","archive-title","article","back","backup","check-model","choose-collection","context-label","dailyRequests","delete-key","detail-close","detail-content","detail-dialog","detail-dialog-facade","diagnostics","discard-settings","endpoint","evidence-scope","favorite","favorite-count","font","font-label","force-request","global-search","guide-frame","guide-pane","highlight-selection","httpProxy","insert-citation","key-status","library-count","library-empty","library-subtitle","library-title","library-view","maxTokens","model","model-result","model-settings","note-context","note-count","note-editor","note-pane","note-status","notes-view","outline","paper-rows","pdf-canvas","pdf-chapter","pdf-close","pdf-fit","pdf-loading","pdf-minus","pdf-name","pdf-next","pdf-original","pdf-page","pdf-page-wrap","pdf-pane","pdf-plus","pdf-prev","pdf-scroll","pdf-text-layer","pdf-toggle","pdf-total","pdf-version","pdf-zoom","protocol","question","range-from","range-to","reader-tabs","reader-view","reading-area","reading-count","reasoningEffort","reduceMotion","refresh-reader","reset-search","responsesStream","restore","result-count","reveal","save-offline","save-status","search-input","set-key","settings-button","sidebar-outline","sidebar-paper","sort","source-abstract","source-page","splitter","storage-button","storage-result","sync","sync-all","syncHours","tab-analysis","tab-guide","tab-note","task-list","tasks-view","toast","toolbar-context","zotero-dialog","zotero-dialog-facade"]);
+      const tags=new Set('HTML BODY DIV MAIN ASIDE NAV SECTION ARTICLE HEADER FOOTER DIALOG FORM H1 H2 H3 H4 H5 H6 P SPAN BUTTON A INPUT TEXTAREA SELECT OPTION LABEL TABLE THEAD TBODY TR TD TH UL OL LI I SVG PATH MATH IFRAME CANVAS SCRIPT STYLE LINK META NOSCRIPT'.split(' '));
+      const flag=(element,name)=>{const value=element.getAttribute(name);return value===null?'unset':value==='true'?'true':value==='false'?'false':'other';};
+      const number=value=>Number.isFinite(value)?Math.round(Math.max(-10000000,Math.min(10000000,value))*100)/100:0;
+      const rect=value=>({x:number(value.x),y:number(value.y),width:number(value.width),height:number(value.height)});
+      const keyword=(value,allowed)=>allowed.includes(value)?value:'other';
+      function element(node){
+        if(!(node instanceof Element))return null;
+        const style=getComputedStyle(node),rectangles=[...node.getClientRects()];
+        return {tag:tags.has(node.tagName)?node.tagName:'OTHER',id:knownIDs.has(node.id)?node.id:node.id?'other':'',hidden:node.hidden===true,inert:node.inert===true,ariaHidden:flag(node,'aria-hidden'),ariaModal:flag(node,'aria-modal'),role:keyword(node.getAttribute('role'),[null,'dialog','alertdialog','tabpanel','tablist','tab','button','navigation','status']),display:keyword(style.display,['none','block','inline','inline-block','flex','inline-flex','grid','inline-grid','contents','table','table-row','table-cell','list-item','flow-root']),visibility:keyword(style.visibility,['visible','hidden','collapse']),pointerEvents:keyword(style.pointerEvents,['auto','none','all','visible','visiblePainted','visibleFill','visibleStroke','painted','fill','stroke']),bounds:rect(node.getBoundingClientRect()),clientRectsCount:Math.min(rectangles.length,1000),clientRects:rectangles.slice(0,4).map(rect)};
+      }
+      const surfaces=[...document.querySelectorAll('[data-dialog-surface][open]')].slice(-8);
+      return {contract:'paperdigest-ui-structure-v1',documentHasFocus:document.hasFocus(),activeElement:element(document.activeElement),bodyChildren:[...document.body?.children||[]].slice(0,64).map(element),surfaces:surfaces.map(surface=>{const ancestors=[];for(let parent=surface.parentElement;parent&&ancestors.length<12;parent=parent.parentElement)ancestors.push(element(parent));return {element:element(surface),ancestors};})};
+    })()
+    """#
+    func diagnosticNativeState(_ view:WKWebView?,window:NSWindow?)->[String:Any] {
+        let responder=window?.firstResponder,respondingView=responder as? NSView
+        func geometry(_ rect:NSRect)->[String:Double]{["x":rect.origin.x,"y":rect.origin.y,"width":rect.width,"height":rect.height]}
+        return ["appActive":NSApp.isActive,"windowKey":window?.isKeyWindow ?? false,"firstResponderClass":responder.map{NSStringFromClass(type(of:$0))} ?? "none","firstResponderIsWebDescendant":respondingView.map{candidate in view.map{candidate === $0 || candidate.isDescendant(of:$0)} ?? false} ?? false,"firstResponderIsPDFDescendant":respondingView.map{$0 === pdfView || $0.isDescendant(of:pdfView)} ?? false,"webAttached":view?.window != nil,"webHidden":view?.isHidden ?? true,"webBounds":geometry(view?.bounds ?? .zero),"webFrame":geometry(view?.frame ?? .zero)]
+    }
+    func diagnosticsReport() async->[String:Any] {
+        let value=store?.value ?? [:],jobs=value["jobs"] as? [[String:Any]] ?? []
+        let commands:Set<String>=["library.sync","library.article","library.downloadPDF","model.check","model.run","archive.materials","zotero.archive","zotero.resume","zotero.authorize","zotero.collections","zotero.status","storage.prepare","storage.openPackage","storage.cleanup","app.export","pdf.open"]
+        let statuses:Set<String>=["queued","running","complete","completed","failed","cancelled","partial","pending","interrupted"]
+        var report:[String:Any]=["contract":"paperdigest-diagnostics-v2","app":"论文速递","version":"1.0.0","system":ProcessInfo.processInfo.operatingSystemVersionString,"counts":["jobs":jobs.count,"notes":(value["notes"] as? [String:Any])?.count ?? 0,"sessions":(value["sessions"] as? [Any])?.count ?? 0],"jobStates":jobs.map{row->[String:String] in let command=row["command"] as? String ?? "",status=row["status"] as? String ?? "";return ["command":commands.contains(command) ? command:"other","status":statuses.contains(status) ? status:"other"]},"credentialsIncluded":false,"personalTextIncluded":false]
+        var ui:[String:Any]=[:]
+        for (name,view,owner) in [("main",web,window),("settings",settingsWeb,settingsWindow)] {
+            guard let view else{continue}
+            var snapshot:[String:Any]=["native":diagnosticNativeState(view,window:owner)]
+            do {if let dom=try await view.evaluateJavaScript(Self.diagnosticDOMScript) as? [String:Any]{snapshot["dom"]=dom}else{snapshot["domUnavailable"]=true}}catch{snapshot["domUnavailable"]=true}
+            ui[name]=snapshot
+        }
+        report["uiStructure"]=ui
+        return report
+    }
+    func diagnostics() async throws {
+        // Capture before showing the save panel so it cannot replace the first responder.
+        let report=await diagnosticsReport()
         let panel=NSSavePanel();panel.nameFieldStringValue="论文速递诊断.json";guard panel.runModal() == .OK,let url=panel.url else{throw DesktopError.message("已取消导出")};try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)
     }
 }

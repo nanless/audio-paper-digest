@@ -599,8 +599,12 @@ actor ZoteroService {
                 guard let raw = upload["url"] as? String, let url = URL(string: raw), isLocalUpload(url),
                       let uploadKey = upload["uploadKey"] as? String,
                       upload["prefix"] as? String == "", upload["suffix"] as? String == "" else { throw ServiceError.verification("上传地址不属于本机 Zotero") }
+                // The local server decodes application/json before UploadReceiver,
+                // which accepts raw streams, not parsed JSON objects. Keep the
+                // attachment's real MIME in its metadata; transfer exact bytes
+                // as binary regardless of the authorize response's MIME hint.
                 _ = try await request(url.path, method: "POST", body: material.data,
-                                      contentType: upload["contentType"] as? String ?? material.contentType, upload: true)
+                                      contentType: "application/octet-stream", upload: true)
                 _ = try await request("/api/users/0/items/\(key!)/file", method: "POST", body: formData(["upload": uploadKey]), authenticated: true,
                                       contentType: "application/x-www-form-urlencoded", headers: precondition)
             }
