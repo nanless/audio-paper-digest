@@ -29,8 +29,9 @@ async function pageFor({width=1440,zone='Asia/Shanghai',changes={}}={}){
  await installFixture(page,{nativeStorageWindow:true,initialPersonal,jobs,...changes});
  await page.addInitScript(()=>{
   const original=window.webkit.messageHandlers.desktop.postMessage;
-  window.__workspacePending=[];window.__workspacePersonalPending=[];window.__workspaceCancelled=[];
+  window.__workspacePending=[];window.__workspacePersonalPending=[];window.__workspaceCancelled=[];window.__workspaceSettingsWrites=[];
   window.webkit.messageHandlers.desktop.postMessage=async message=>{
+   if(message.command==='settings.save'&&window.__workspaceHoldSettingsSave){window.__workspaceHoldSettingsSave=false;return await new Promise(resolve=>__workspaceSettingsWrites.push(async()=>resolve(await original(message))));}
    if(message.command==='settings.open'){window.__calls.push(structuredClone(message));return {presented:true};}
    if(message.command==='jobs.cancel'){window.__calls.push(structuredClone(message));window.__workspaceCancelled.push(message.payload.id);return {};}
    if(message.command==='jobs.list'&&window.__workspaceHold){window.__workspaceHold=false;const captured=structuredClone(__fixture.jobs);return await new Promise(resolve=>__workspacePending.push(()=>resolve({jobs:captured})));}
@@ -144,6 +145,17 @@ async function visibleAX(page){const session=await page.context().newCDPSession(
   const result=await page.evaluate(()=>{window.originalModelInput=document.querySelector('#model');const input=originalModelInput;input.value='isolated-unsaved-model';input.dispatchEvent(new Event('input',{bubbles:true}));return {opened:paperDigestShowSettingsPane('cloud'),same:document.querySelector('#model')===input,value:input.value,visible:!document.querySelector('[data-setting-pane=cloud]').hidden,selected:document.querySelector('[data-pane=cloud]').getAttribute('aria-current')};});assert.deepEqual(result,{opened:true,same:true,value:'isolated-unsaved-model',visible:true,selected:'page'});
   assert.deepEqual(await page.evaluate(()=>[undefined,null,17,'unknown','Cloud','cloud]','cloud,model'].map(p=>paperDigestShowSettingsPane(p))),Array(7).fill(false));assert.equal(await page.locator('[data-pane=cloud]').getAttribute('aria-current'),'page');assert.equal(await page.evaluate(()=>paperDigestShowSettingsPane('model')),true);assert.equal(await page.evaluate(()=>document.querySelector('#model')===originalModelInput),true);assert.equal(await page.locator('#model').inputValue(),'isolated-unsaved-model');
   await page.evaluate(()=>paperDigestFlushSettings());assert.equal(await page.evaluate(()=>__fixture.settings.model),'isolated-unsaved-model');assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='settings.save').length),1);assert.equal(await page.evaluate(()=>__calls.filter(c=>/^(cloud\.(?!state)|model\.)/.test(c.command)).length),0);
+ });
+
+ await one('real Cloud settings hides only global discard while preserving both draft owners and original controls',async page=>{
+  await page.goto('http://127.0.0.1:'+server.address().port+'/settings.html');await page.waitForFunction(()=>document.querySelector('#cloud-account'));
+  await page.evaluate(()=>{window.originalScopeControls={model:document.querySelector('#model'),global:document.querySelector('#discard-settings'),cloud:document.querySelector('#cloud-account')};__workspaceHoldSettingsSave=true;paperDigestShowSettingsPane('model');const model=originalScopeControls.model;model.value='isolated-pending-model';model.dispatchEvent(new Event('input',{bubbles:true}));paperDigestShowSettingsPane('cloud');});
+  assert.equal(await page.locator('#discard-settings').isHidden(),true,'Cloud must not offer the global model-settings discard');assert.equal(await page.locator('#cloud-discard').isVisible(),true);
+  await page.locator('#cloud-account').fill('isolated-cloud-draft@example.test');await page.waitForFunction(()=>__workspaceSettingsWrites.length===1);await page.locator('#cloud-discard').click();await page.waitForFunction(()=>document.querySelector('#cloud-account').value==='');
+  assert.equal(await page.locator('#model').inputValue(),'isolated-pending-model');assert.equal(await page.evaluate(()=>document.querySelector('#model')===originalScopeControls.model&&document.querySelector('#cloud-account')===originalScopeControls.cloud&&document.querySelector('#discard-settings')===originalScopeControls.global),true);
+  for(const pane of ['reading','model','zotero','storage','cloud']){assert.equal(await page.evaluate(p=>paperDigestShowSettingsPane(p),pane),true);assert.equal(await page.locator('#discard-settings').isHidden(),pane==='cloud');}
+  await page.evaluate(()=>__workspaceSettingsWrites.shift()());await page.evaluate(()=>paperDigestFlushSettings());assert.equal(await page.evaluate(()=>__fixture.settings.model),'isolated-pending-model');assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='settings.save').length),1);
+  await page.evaluate(()=>{paperDigestShowSettingsPane('model');__fixture.failSettings=true;const model=document.querySelector('#model');model.value='isolated-unsaved-discard';model.dispatchEvent(new Event('input',{bubbles:true}));});await page.waitForFunction(()=>document.querySelector('#save-status').textContent.startsWith('未保存：'));await page.locator('#discard-settings').click();await page.waitForFunction(()=>document.querySelector('#save-status').textContent==='已恢复最近保存的设置');assert.equal(await page.locator('#model').inputValue(),'isolated-pending-model');assert.equal(await page.evaluate(()=>document.querySelector('#model')===originalScopeControls.model),true);assert.equal(await page.evaluate(()=>__calls.filter(c=>/^(cloud\.(?!state)|model\.)/.test(c.command)).length),0);
  });
 
 }finally{

@@ -18,6 +18,11 @@ private struct IntegrationNoCredentials:ZoteroCredentialStore {
 @MainActor private final class IntegrationMetadataCapture {
     var pending:[UUID:CloudLocalStore.Pending]=[:]
 }
+private actor IntegrationCredentialWait {
+    private var started=false
+    func enter(){started=true}
+    func entered()->Bool{started}
+}
 
 private actor IntegrationDAV {
     var files:[String:Data]=[:]
@@ -99,6 +104,54 @@ private actor IntegrationDAV {
             .init(contract:"paperdigest-cloud-transfer-v1",destinationID:local.profile.destinationID,folder:local.profile.folder,
                   reference:reference ?? .init(month:"2026-10",id:UUID()),createdAt:Date(timeIntervalSince1970:1792800000),encodedBytes:pending.encodedBytes,sha256:pending.sha256,
                   chunks:[.init(index:0,bytes:pending.encodedBytes,sha256:pending.sha256)],verifiedChunkIndices:verified,manifestVerified:manifest,retryAfter:nil)
+        }
+
+        // Credential-only mode has no NSWindow, WK, NSAlert, actual credential
+        // store or network. It can run while the user handles their own system
+        // security window; the default run still retains every original case.
+        func credentialApp(_ name:String)throws->PaperDigestApp {
+            let d=try folder(name),app=PaperDigestApp();app.directory=d;app.store=try DesktopStore(directory:d)
+            app.model=ModelService(directory:d,store:app.store,keyProvider:{throw DesktopError.message("Credential fixture forbids model keys")})
+            apps.append(app);return app
+        }
+        for kind in ["missing-local-permission","private-provider-error"] {
+            let app=try credentialApp(kind),local=try app.cloudLocalStore(),dav=IntegrationDAV()
+            try local.save(account:"credential-fixture@example.invalid",folder:"CredentialFixture",automatic:true,intervalHours:24)
+            let bait="ISOLATED_PROVIDER_PRIVATE_DETAIL_MUST_NOT_ESCAPE_"+kind
+            app.cloudArchive=try CloudArchiveService(folder:local.profile.folder,destinationID:local.profile.destinationID,
+                credentials:{throw DesktopError.message(bait)},checkpointSink:{_ in throw DesktopError.message("No upload checkpoint expected")},
+                transport:{request,limit in try await dav.request(request,limit)},minimumRequestInterval:0)
+            var localCause:CloudArchiveService.CloudError?,safeError=""
+            do{_=try await app.dispatch("cloud.upload",payload:[:])}catch{localCause=error as? CloudArchiveService.CloudError;safeError=error.localizedDescription}
+            try check(localCause == .credentialsUnavailable,kind+" actual dispatch identifies local credential access failure instead of remote HTTP authentication")
+            let row=(app.store.snapshot()["jobs"] as! [[String:Any]]).first{$0["command"] as? String=="cloud.check"}!
+            try check(!safeError.contains(bait) && !(app.cloudLastError ?? "").contains(bait) && !(row["message"] as? String ?? "").contains(bait),kind+" hides provider private detail in returned state and persisted task error")
+            try check(app.cloudAutomaticPausedInMemory && local.profile.automaticPaused==true && (try CloudLocalStore(dataDirectory:app.directory)).profile.automaticPaused==true,kind+" pauses automatic retries both in memory and in device profile")
+            let transports=await dav.count()
+            try check(transports==0 && (try local.pending())==nil && !app.cloudBusy && app.jobs.isEmpty,kind+" fails before transport or snapshot creation and releases job/busy locks")
+            try check(row["status"] as? String=="failed" && app.window==nil && app.settingsWindow==nil,kind+" persists failure without creating any window or panel")
+        }
+        let cancelledApp=try credentialApp("cancelled-provider"),cancelledLocal=try cancelledApp.cloudLocalStore(),cancelledDAV=IntegrationDAV(),providerWait=IntegrationCredentialWait()
+        try cancelledLocal.save(account:"cancel-fixture@example.invalid",folder:"CancelFixture",automatic:true,intervalHours:24)
+        cancelledApp.cloudArchive=try CloudArchiveService(folder:cancelledLocal.profile.folder,destinationID:cancelledLocal.profile.destinationID,
+            credentials:{await providerWait.enter();try await Task.sleep(nanoseconds:60_000_000_000);return .init(username:"fixture",password:"never-issued")},
+            checkpointSink:{_ in throw DesktopError.message("No checkpoint expected")},transport:{request,limit in try await cancelledDAV.request(request,limit)},minimumRequestInterval:0)
+        let cancelOperation=Task{@MainActor in try await cancelledApp.dispatch("cloud.upload",payload:[:])}
+        try await wait("actual credential provider awaiting cancellation"){await providerWait.entered()}
+        guard let cancelJob=cancelledApp.cloudActiveJobID else{throw DesktopError.message("Actual cancellable cloud job missing")}
+        _=try await cancelledApp.dispatch("jobs.cancel",payload:["id":cancelJob])
+        var nativeCancellation=false
+        do{_=try await cancelOperation.value}catch{nativeCancellation=error is CancellationError}
+        try check(nativeCancellation,"actual jobs.cancel during credential await preserves CancellationError rather than authentication")
+        let cancelledRow=(cancelledApp.store.snapshot()["jobs"] as! [[String:Any]]).first{$0["id"] as? String==cancelJob}!
+        try check(cancelledRow["status"] as? String=="cancelled" && cancelledRow["endedAt"] != nil,"provider cancellation reaches real persisted cancelled job terminal state")
+        try check(!cancelledApp.cloudAutomaticPausedInMemory && cancelledLocal.profile.automaticPaused != true && (try CloudLocalStore(dataDirectory:cancelledApp.directory)).profile.automaticPaused != true,"user cancellation is not treated as authentication fault or persistent automatic pause")
+        let cancelledTransports=await cancelledDAV.count()
+        try check(cancelledTransports==0 && (try cancelledLocal.pending())==nil && cancelledApp.jobs.isEmpty && !cancelledApp.cloudBusy,"provider cancellation sends no request and leaves no snapshot or busy lock")
+        try check(cancelledApp.window==nil && cancelledApp.settingsWindow==nil,"credential integration does not create any native window or security prompt")
+        if CommandLine.arguments.contains("--credentials-only") {
+            print("Cloud credential native integration: \(passed) passed; 0 failed; no windows/panels, real credentials or network")
+            return
         }
 
         // Pure continuity is a set of historical issued request identities, not

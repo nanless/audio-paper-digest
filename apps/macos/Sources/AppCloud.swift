@@ -177,7 +177,7 @@ private actor CloudCredentialSession {
             }
         } catch {
             cloudLastError = error.localizedDescription
-            if case CloudArchiveService.CloudError.authentication = error {
+            if let cause = error as? CloudArchiveService.CloudError, cause == .authentication || cause == .credentialsUnavailable {
                 cloudAutomaticPausedInMemory = true; cloudCredentialState = "unknown"
                 try local.pauseAutomatic(true)
             }

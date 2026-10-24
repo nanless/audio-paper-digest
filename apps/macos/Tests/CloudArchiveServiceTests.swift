@@ -11,6 +11,28 @@ private final class CloudTestClock: @unchecked Sendable {
     func advance(_ seconds: TimeInterval) { lock.lock(); date.addTimeInterval(seconds); pauses.append(seconds); lock.unlock() }
     func slept() -> [TimeInterval] { lock.lock(); defer { lock.unlock() }; return pauses }
 }
+private actor CloudCredentialFixture {
+    enum Mode: Sendable { case ready, unavailable, empty, cancelled, held }
+    private var mode: Mode
+    private var continuation: CheckedContinuation<CloudArchiveService.Credentials,Error>?
+    init(_ mode: Mode) { self.mode=mode }
+    func set(_ mode: Mode) { self.mode=mode }
+    func isWaiting() -> Bool { continuation != nil }
+    func credentials() async throws -> CloudArchiveService.Credentials {
+        switch mode {
+        case .ready: return .init(username:"fixture@example.invalid",password:"synthetic-app-password")
+        case .empty: return .init(username:"fixture@example.invalid",password:"")
+        case .cancelled: throw CancellationError()
+        case .unavailable: throw CloudTestError(message:"LOCAL_PROVIDER_DECOY_SECRET_MUST_NOT_ESCAPE")
+        case .held: return try await withCheckedThrowingContinuation { continuation=$0 }
+        }
+    }
+    func release(genericError: Bool) {
+        let pending=continuation;continuation=nil;mode = .ready
+        if genericError { pending?.resume(throwing:CloudTestError(message:"LOCAL_PROVIDER_DECOY_SECRET_MUST_NOT_ESCAPE")) }
+        else { pending?.resume(returning:.init(username:"fixture@example.invalid",password:"synthetic-app-password")) }
+    }
+}
 private actor CloudCheckpointLog {
     var values: [CloudArchiveService.UploadCheckpoint] = []
     var failureAt: Int?
@@ -43,6 +65,7 @@ private actor CloudTestDAV {
     var overrideListing: Data?
     var responseURL: URL?
     var block = false
+    var cancelledRequestOnce = false
     var blockedContinuation: CheckedContinuation<Void,Never>?
     func add(_ fault: Fault) { faults.append(fault) }
     func setFile(_ path: String, _ data: Data) { files[path]=data }
@@ -52,6 +75,7 @@ private actor CloudTestDAV {
     func addDirectory(_ path: String) { directories.insert(path) }
     func listing(_ data: Data?) { overrideListing=data }
     func redirectResponse(_ url: URL?) { responseURL=url }
+    func cancelNextRequest() { cancelledRequestOnce=true }
     func hold() { block=true }
     func release() { block=false; blockedContinuation?.resume(); blockedContinuation=nil }
     func records() -> [Recorded] { requests }
@@ -61,6 +85,7 @@ private actor CloudTestDAV {
               components.password==nil, request.value(forHTTPHeaderField:"Authorization")?.hasPrefix("Basic ")==true else { throw CloudTestError(message:"unsafe destination or missing authentication") }
         let path=components.path, method=request.httpMethod ?? "GET"
         requests.append(.init(method:method,path:path,bytes:request.httpBody?.count ?? 0,createOnly:request.value(forHTTPHeaderField:"If-None-Match")=="*"))
+        if cancelledRequestOnce { cancelledRequestOnce=false; throw CancellationError() }
         if block { await withCheckedContinuation { blockedContinuation=$0 } }
         var fault: Fault?
         if let index=faults.firstIndex(where:{$0.method==method && path.hasSuffix($0.suffix)}) { fault=faults.remove(at:index) }
@@ -145,6 +170,25 @@ private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
             catch let error as CloudArchiveService.CloudError { if let expected { try require(error==expected,"wrong safe error") }; return }
             catch { throw CloudTestError(message:"unexpected unsanitized error") }
             throw CloudTestError(message:"expected rejection")
+        }
+        func rejectsCancellation(_ action: () async throws -> Void) async throws {
+            do { try await action() }
+            catch is CancellationError { return }
+            catch { throw CloudTestError(message:"cancellation was changed into a different failure") }
+            throw CloudTestError(message:"expected cancellation")
+        }
+        let localCredentialHint="未能取得本机保存的坚果云应用密码；请在原生窗口处理 macOS 钥匙串许可或保存应用专用密码后重试"
+        func rejectsLocalCredentials(_ action: () async throws -> Void) async throws {
+            do { try await action() }
+            catch let error as CloudArchiveService.CloudError {
+                try require(error != .authentication,"local credential failure must not claim remote authentication rejection")
+                try require(error.errorDescription==localCredentialHint,"local credential failure must use the fixed local permission hint")
+                try require(error == .credentialsUnavailable,"typed local credential case must remain distinct from HTTP authentication")
+                try require(!error.localizedDescription.contains("LOCAL_PROVIDER_DECOY_SECRET_MUST_NOT_ESCAPE"),"provider error text leaked")
+                return
+            }
+            catch { throw CloudTestError(message:"local provider failure escaped the safe error contract") }
+            throw CloudTestError(message:"expected local credential failure")
         }
         func hash(_ data: Data) -> String { SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined() }
         func backup(extraBytes: Int=0) throws -> Data {
@@ -282,6 +326,67 @@ private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
             try await rejects(.incompleteListing) { try await s.probe() }
             await dav.listing(nil);try await s.probe()
             try require(await dav.records().count==3,"each probe used actual response")
+        }
+        await check("local credential provider error and empty password are safe, zero transport, and preserve the original frozen upload") {
+            for mode in [CloudCredentialFixture.Mode.unavailable,.empty] {
+                let dav=CloudTestDAV(),log=CloudCheckpointLog(),provider=CloudCredentialFixture(mode),destination=UUID()
+                let s=try CloudArchiveService(destinationID:destination,credentials:{try await provider.credentials()},checkpointSink:{try await log.save($0)},transport:{try await dav.request($0,limit:$1)},minimumRequestInterval:0)
+                try await rejectsLocalCredentials { _=try await s.upload(encodedBackup:small) }
+                try require(await dav.records().isEmpty,"local failure must send zero HTTP requests")
+                guard let state=await log.latest() else { throw CloudTestError(message:"original upload checkpoint missing") }
+                try require(!state.manifestVerified && state.verifiedChunkIndices.isEmpty && state.retryAfter==nil,"local permission failure is neither upload success nor remote rate limit")
+                await provider.set(.ready)
+                let completed=try await s.upload(encodedBackup:small,resuming:state)
+                try require(completed.reference==state.reference,"local permission retry retains original snapshot identity")
+            }
+        }
+        await check("credential provider CancellationError remains cancellation and the actor can be reused") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),provider=CloudCredentialFixture(.cancelled)
+            let s=try CloudArchiveService(destinationID:UUID(),credentials:{try await provider.credentials()},checkpointSink:{try await log.save($0)},transport:{try await dav.request($0,limit:$1)},minimumRequestInterval:0)
+            try await rejectsCancellation { try await s.probe() }
+            try require(await dav.records().isEmpty,"provider cancellation sends zero HTTP requests")
+            await provider.set(.ready);try await s.probe()
+            try require(await dav.records().count==1,"cancelled actor releases its operation gate")
+        }
+        await check("real task cancellation while waiting for credentials wins over late success or generic provider error") {
+            for genericError in [false,true] {
+                let dav=CloudTestDAV(),log=CloudCheckpointLog(),provider=CloudCredentialFixture(.held)
+                let s=try CloudArchiveService(destinationID:UUID(),credentials:{try await provider.credentials()},checkpointSink:{try await log.save($0)},transport:{try await dav.request($0,limit:$1)},minimumRequestInterval:0)
+                let task=Task { try await s.probe() }
+                while !(await provider.isWaiting()) { await Task.yield() }
+                task.cancel();await provider.release(genericError:genericError)
+                try await rejectsCancellation { try await task.value }
+                try require(await dav.records().isEmpty,"cancelled local permission wait sends zero HTTP requests")
+                try await s.probe();try require(await dav.records().count==1,"operation gate released after late provider completion")
+            }
+        }
+        await check("request pacing preserves real cancellation and keeps other sleep errors as safe transport failure") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),clock=CloudTestClock()
+            let s=try CloudArchiveService(destinationID:UUID(),credentials:{.init(username:"fixture",password:"fixture")},checkpointSink:{try await log.save($0)},transport:{try await dav.request($0,limit:$1)},now:{clock.now()},sleep:{_ in throw CancellationError()},minimumRequestInterval:3.1)
+            try await s.probe();try await rejectsCancellation { try await s.probe() }
+            try require(await dav.records().count==1,"cancelled pacing cannot send next request")
+            clock.advance(4);try await s.probe();try require(await dav.records().count==2,"pacing cancellation releases operation gate")
+            let failing=try CloudArchiveService(destinationID:UUID(),credentials:{.init(username:"fixture",password:"fixture")},checkpointSink:{try await log.save($0)},transport:{try await dav.request($0,limit:$1)},now:{clock.now()},sleep:{_ in throw CloudTestError(message:"LOCAL_PROVIDER_DECOY_SECRET_MUST_NOT_ESCAPE")},minimumRequestInterval:3.1)
+            try await failing.probe();try await rejects(.transport) { try await failing.probe() }
+        }
+        await check("transport CancellationError remains cancellation and later operations still work") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
+            await dav.cancelNextRequest();try await rejectsCancellation { try await s.probe() }
+            try require(await dav.records().count==1,"exactly the cancelled transport was called")
+            try await s.probe();try require(await dav.records().count==2,"transport cancellation releases actor gate")
+        }
+        await check("real task cancellation while transport waits cannot turn a late HTTP401 into authentication failure") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
+            await dav.add(.init("PROPFIND","/dav/",status:401));await dav.hold()
+            let task=Task { try await s.probe() }
+            while await dav.records().isEmpty { await Task.yield() }
+            task.cancel();await dav.release();try await rejectsCancellation { try await task.value }
+            try await s.probe();try require(await dav.records().count==2,"late HTTP401 cancellation did not leave a busy gate")
+        }
+        await check("genuine HTTP403 remains forbidden and is not a local credential error") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
+            await dav.add(.init("PROPFIND","/dav/",status:403));try await rejects(.forbidden) { try await s.probe() }
+            try require(await dav.records().count==1,"one actual HTTP403 response")
         }
         await check("401 stops immediately and does not switch credentials or auto retry") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)

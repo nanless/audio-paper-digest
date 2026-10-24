@@ -57,7 +57,7 @@ public actor CloudArchiveService {
     }
     public enum CloudError: Error, LocalizedError, Sendable, Equatable {
         case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing
-        case authentication, forbidden, transport, redirect, oversizedResponse, busy, checkpointStore
+        case credentialsUnavailable, authentication, forbidden, transport, redirect, oversizedResponse, busy, checkpointStore
         case httpStatus(Int), throttled(Date)
         public var errorDescription: String? {
             switch self {
@@ -66,6 +66,7 @@ public actor CloudArchiveService {
             case .invalidCheckpoint: return "续传记录与当前云目标或原备份不一致"
             case .integrity: return "云端快照内容校验失败；原本地资料未改变"
             case .incompleteListing: return "云端月份列表不完整，不能据此判断备份是否存在"
+            case .credentialsUnavailable: return "未能取得本机保存的坚果云应用密码；请在原生窗口处理 macOS 钥匙串许可或保存应用专用密码后重试"
             case .authentication: return "坚果云认证失败；请检查账号与应用专用密码"
             case .forbidden: return "坚果云拒绝访问此目录"
             case .transport: return "云端传输未完成；请保留原续传记录后重试"
@@ -264,15 +265,18 @@ public actor CloudArchiveService {
         if let last = requestTimes.last {
             let delay = minimumRequestInterval - now().timeIntervalSince(last)
             if delay > 0 {
-                do { try await sleep(delay) } catch { throw CloudError.transport }
+                do { try await sleep(delay) } catch { try Self.preserveCancellation(error); throw CloudError.transport }
                 try Task.checkCancellation()
             }
         }
         guard let url = URL(string: path, relativeTo: Self.endpoint)?.absoluteURL,
               Self.validURL(url), URLComponents(url:url,resolvingAgainstBaseURL:false)?.path == path else { throw CloudError.invalidConfiguration }
         let access: Credentials
-        do { access = try await credentials() } catch { throw CloudError.authentication }
-        guard !access.username.isEmpty, !access.password.isEmpty, !access.username.contains(":"),
+        do { access = try await credentials() }
+        catch { try Self.preserveCancellation(error); throw CloudError.credentialsUnavailable }
+        try Task.checkCancellation()
+        guard !access.password.isEmpty else { throw CloudError.credentialsUnavailable }
+        guard !access.username.isEmpty, !access.username.contains(":"),
               !access.username.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }),
               !access.password.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else { throw CloudError.invalidConfiguration }
         try Task.checkCancellation()
@@ -284,8 +288,12 @@ public actor CloudArchiveService {
         requestTimes.append(now())
         let result: Response
         do { result = try await transport(request, limit) }
-        catch let error as CloudError { throw error }
-        catch { throw CloudError.transport }
+        catch {
+            try Self.preserveCancellation(error)
+            if let cloudError = error as? CloudError { throw cloudError }
+            throw CloudError.transport
+        }
+        try Task.checkCancellation()
         guard let responseURL = result.response.url, Self.validURL(responseURL), responseURL.absoluteString == url.absoluteString else { throw CloudError.redirect }
         guard result.data.count <= limit else { throw CloudError.oversizedResponse }
         let status = result.response.statusCode
@@ -298,6 +306,12 @@ public actor CloudArchiveService {
         }
         guard accepted.contains(status) else { throw CloudError.httpStatus(status) }
         return result
+    }
+    /// A local permission failure is not a provider rejection. Likewise an
+    /// explicit cancellation must not become authentication or transport error.
+    private static func preserveCancellation(_ error: Error) throws {
+        if error is CancellationError { throw CancellationError() }
+        try Task.checkCancellation()
     }
     private func recordCooldown(_ until: Date) async throws {
         retryAfter = until
