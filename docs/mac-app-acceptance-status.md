@@ -2,11 +2,13 @@
 
 本页逐项记录[正式验收矩阵](mac-app-acceptance.md)的实际结果，不改变原69项要求。当前为 **43项通过、26项待验**；没有据此宣布全部功能和全部系统条件通过。只有原要求的全部适用条件已有对应证据才记为“通过”；任一必测条件未覆盖仍记为“待验”，并另列已完成范围。隔离测试、原生实机和文件回读分别标明。“待验”包含缺少实际条件或证据的项目，不一概表示功能已经失败。
 
-3880的系统确认现已由用户处理，原生六角色回读完成：新增99项实际回读、10项前后比较和33项非作者回读均通过，原journal、8子项、3文件及模型账保持。下文早期等待段落保留其历史时刻，以[较新验收记录](mac-app-validation.md)为准。用户新增坚果云和Release需求另有[17项专项验收](mac-app-cloud.md)，包含云功能的新包尚未安装实测。
+3880的系统确认现已由用户处理，原生六角色回读完成：新增99项实际回读、10项前后比较和33项非作者回读均通过，原journal、8子项、3文件及模型账保持。下文早期等待段落保留其历史时刻，以[较新验收记录](mac-app-validation.md)为准。用户新增坚果云和Release需求另有[17项专项验收](mac-app-cloud.md)，当前包含云功能的ac7包已安装并完成候选/安装字节独审，真实云端与新签名下Zotero回读仍待完成。
 
 ## 当前安装与证据复用
 
-记录日期为2026-10-25，时区Asia/Shanghai。当前安装于`~/Applications/论文速递.app`，来源提交`3880de596800b08654b7136e2ea664a61145a05c`，builtAt为`2026-10-24T18:15:23.755225+00:00`。原生SHA-256为`08285de6ff110684a0418c6accbc0adb615626f1dab6e9b061b0b4b7536e3a6a`，构建清单SHA-256为`c871c4e12bbde5127c8bb7bf504a344429a0b7fe5c8cdfda68dc43393e316062`。独立审查逐项核对502个候选/安装实物文件、420项Git输入、88项锁定依赖及样稿，严格签名与C图标字节均通过；仍为本机开发签名，未Apple公证。
+记录日期为2026-10-25，时区Asia/Shanghai。当前安装于`~/Applications/论文速递.app`，来源`ac7f8099be23e82d0e17cf23172bdf3f7af63e07`，builtAt为`2026-10-24T21:24:25.806883+00:00`；原生SHA为`de5dac8b025dca0010ef17a5dd6536a1e4b8fb2a0c3cbb7f545b449197b51065`，metadata SHA为`402180ff190ee0fd3d1f630595aa46ebcc6d26bd061f0cf451209d494acdad0e`。非作者核候选及实际安装503文件、19目录、516输入（425Git、88固定公开、3派生）、权限/扩展属性、主程序/Node严格签名与原C图标。仍为本机ad-hoc开发签名，未Apple公证。
+
+ac7完整31套JS及41项发行v7通过，491输入无变化；原生20套沿用未变实现的完整v6，最终设置资源另实际隔离WK144项复验通过。700×520设置窗的五组及Cloud顶部/底部已真实查看。用户现有凭据通过原生框保存后，真实Cloud检查分别记录本机不可用与服务认证失败，未有云端快照；原模型资料及用量不增加。当前原602F归档回读正在等待系统读取旧Zotero许可，不能继承3880终态为本次新签名通过。
 
 9b1422f3已完成的真实网站读取、模型材料、八格式导出和Zotero回读，仅复用于未变化的材料及实现链。878取消结果及任务状态保护已实际复验。3880进一步加入20行任务分页和依据/用量展示；完整30套JS v16通过，79个冻结输入无变化，未变Swift链复用完整v14结果。878任务页曾截图正常而系统辅助功能树只读到工具栏；真实隔离WK复现大列表条件并验证分页后，3880正式App143条真实任务已逐8页实际打开，系统AX、分页和精确原会话关联独立44项回读通过。本次任务页缺失已关闭；另一路32项真实任务元数据独审与3会话/6事件不变核验通过，纯键盘等其他条件仍按APP-06记录；隔离QA与真实用户任务分开。各轮实施、测试和原失败记录见[验收记录](mac-app-validation.md)和[独立审查记录](mac-app-review-log.md)。
 
@@ -14,19 +16,19 @@
 
 严格网络隔离并重启后读取离线包、从Zotero自身存储离线打开资料，仍缺实际记录。已检查的原生尺寸为1280×800、最小1080×700，以及全屏单/双栏和38–62%分隔极限；其他精确尺寸和系统全局辅助外观没有扩大授予通过。核心键盘编辑链、部分库检索/定时/目标变化和困难PDF条件继续逐项待验。
 
-真实模型研究与复用已有原426字选区、142字回答和3124tokens账本，未为重复验收追加付费。878与3880分别实际重启后完成六角色原生回读，各自新增99项实际回读和10项重复比较均通过；3880另由非作者回读33项通过。原journal、8子项、3文件、3会话及6条模型事件保持，旧legacy缺口单独保留。3880早期系统钥匙串等待已经关闭；随后新增坚果云候选尚未安装验收。本机Zotero成功不表示云端文件同步完成，也不授予真实坚果云功能通过。
+真实模型研究与复用已有原426字选区、142字回答和3124tokens账本，未为重复验收追加付费。878与3880分别实际重启后完成六角色原生回读，各自新增99项实际回读和10项重复比较均通过；3880另由非作者回读33项通过。原journal、8子项、3文件、3会话及6条模型事件保持，旧legacy缺口单独保留。3880早期系统钥匙串等待已经关闭；随后ac7已安装，当前新签名下读取旧Zotero许可仍等待系统确认，真实坚果云传输及恢复尚待验。本机Zotero成功不表示云端文件同步完成，也不授予真实坚果云功能通过。
 
 ## 安装与原生桌面
 
 | ID | 状态 | 已有证据 | 未关闭条件或适用范围 | 证据组 |
 |---|---|---|---|---|
-| APP-01 | 通过 | 3880真实.app已安装；502文件与审定候选相同，随包Node/资源。9b/878真实网站读取和PDF证据仅复用于未变化链。 | 限本机arm64/macOS26.6.1；不声称跨Mac发行、公证或自动更新。 | PKG, FINALGUI |
+| APP-01 | 通过 | ac7真实.app已安装；503文件与审定候选一致并独审，随包Node/资源。较早真实网站读取和PDF仅复用于未变化链。 | 限本机arm64/macOS26.6.1；不声称跨Mac发行、公证或自动更新。 | PKG, FINALGUI |
 | APP-02 | 待验 | 真实系统窗口、菜单、激活、退出与9b原生全屏单/双栏已有实机证据；878通过正常退出旧版、安装及再次启动。 | 最小化→恢复、关闭主窗→Dock重开后的完整上下文记录仍未齐全。 | FINALGUI, SIZES, HISTORY |
-| APP-03 | 待验 | 独立设置四组及⌘,、模型/网络/阅读/Zotero真实可读；51分类及持续授权已确认。 | 设置窗口缩小/拖动、关闭后重开的四组可达性及主阅读位置保留尚未完整记录。 | SETTINGS, HISTORY |
+| APP-03 | 待验 | ac7独立设置五组及⌘,可达，700×520最小窗实际阅读/模型/网络/Cloud顶部与底部已查看；Zotero10.0.6及51分类已读。 | 最小窗已补验；标题栏移动、关闭后重开的五组可达性及主阅读位置综合保留仍待完整记录。 | SETTINGS, HISTORY |
 | APP-04 | 待验 | 9b实机1280×800、最小1080×700、全屏单/双栏、侧栏及38–62%分隔极限已检查，无主要动作裁切。 | 精确1440×900、1728×1117、1920×1080原生窗口条件尚未记录；已有浏览器截图及Retina像素不能作为这些点数的实机结果。 | SIZES |
 | APP-05 | 待验 | ⌘,、原生导出/确认的Escape、真实⌘F章节居中和常用编辑入口已有证据。 | 真实Return换行、复制粘贴、撤销/重做与Tab/方向键作用域的完整编辑链尚未记录；输入法发送保护已有隔离检查。 | FINALGUI, TESTS |
 | APP-06 | 待验 | 3880正式App的143条真实任务已逐8页操作，系统AX每页均读出任务及动作；第6页原研究材料/用量、第7页未知值和复用记录独立回读44/44通过。9b其他主窗、设置及原生详情AX证据保留。 | 本次任务页AX缺失已经关闭；核心纯键盘贯通尚未完整验证，因此APP-06整体仍待验。 | AX, TASK3880, FINALGUI |
-| APP-07 | 待验 | 9b浅/深色、放大字号、原图/PDF原色已有实机画面。 | 系统级高对比度、减少透明度/动态和失焦状态尚未全覆盖；应用内配色设置不等同全部系统条件。 | APPEARANCE |
+| APP-07 | 待验 | 9b浅/深色、放大字号、原图/PDF原色已有实机画面；ac7最小设置窗含失焦灰态与活动态截图。 | 系统级高对比度、减少透明度/动态和失焦状态尚未全覆盖；应用内配色设置不等同全部系统条件。 | APPEARANCE |
 | APP-08 | 待验 | 多次正常退出/升级、旧83e4重启后资料及归档不丢；878安装/启动与重启后Zotero99项、重复比较10项通过。 | 878退出重开后的阅读/问题/笔记综合恢复及崩溃/睡眠条件尚未全部记录；普通退出和锁屏不能代替后两者。 | PKG, HISTORY |
 | APP-09 | 通过 | 3880候选与安装副本独审：arm64、最低macOS15、主应用/Node严格签名、C图标不变，无私有运行目录/凭据模式命中；明确ad-hoc未公证。 | 只覆盖本机发行声明；未承诺的跨机、公证和自动更新不授予通过。 | PKG |
 
@@ -134,12 +136,12 @@
 
 日志、系统辅助功能树、截图、逐项回读和私人导出保存在本机忽略的`apps/macos/.qa/`，不随公开Git提交。以下路径用于本机查证；正式文档只记录结论与范围。外部独审产物保存在本聊天的本机产物目录，文件名对应构建身份。
 
-- **PKG**：`apps/macos/.qa/live-e2e/installed-final-v17.json`；`外部独审产物 mac-final-3880de59-candidate-independent-audit.json`；`外部独审产物 mac-final-3880de59-installed-independent-audit.json`。
+- **PKG**：`apps/macos/.qa/live-e2e/installed-cloud-ac7f8099.json`；`外部独审产物 mac-cloud-ac7f8099-candidate-independent-audit.json`；`外部独审产物 mac-cloud-ac7f8099-installed-independent-audit.json`；`apps/macos/.qa/live-e2e/installed-final-v17.json`；`外部独审产物 mac-final-3880de59-candidate-independent-audit.json`；`外部独审产物 mac-final-3880de59-installed-independent-audit.json`。
 - **FINALGUI**：`apps/macos/.qa/live-e2e/guide-single-final9b.png`；`apps/macos/.qa/live-e2e/guide-split-final9b.ax.txt`；`apps/macos/.qa/live-e2e/analysis-pdf-final9b.ax.txt`；`apps/macos/.qa/live-e2e/export-native-final9b-saved.ax.txt`；`apps/macos/.qa/live-e2e/zotero-native-final9b-complete.ax.txt`；`apps/macos/.qa/live-e2e/help-native-final9b.ax.txt`。
 - **TASK3880**：`apps/macos/.qa/final3880-task-metadata-review/result.json`（32项）；`apps/macos/.qa/live-e2e/tasks-final3880-independent-readback.json`；`apps/macos/.qa/live-e2e/tasks-final3880-page1-bottom.ax.txt`至`tasks-final3880-page8-bottom.ax.txt`及同名截图，另有第一页标题与筛选的顶部记录。
 - **AX**：`apps/macos/.qa/live-e2e/tasks-native-final9b.ax.txt`；`apps/macos/.qa/live-e2e/notes-native-final9b.ax.txt`；`apps/macos/.qa/live-e2e/storage-native-final9b-ready.ax.txt`；`apps/macos/.qa/live-e2e/export-native-final9b.ax.txt`；`apps/macos/.qa/live-e2e/zotero-native-final9b-complete.ax.txt`。
 - **SIZES**：`apps/macos/.qa/live-e2e/window-1280x800-split-final9b.ax.txt`；`apps/macos/.qa/live-e2e/window-min-single-final9b.png`；`apps/macos/.qa/live-e2e/window-min-split-final9b.ax.txt`；`apps/macos/.qa/live-e2e/window-min-divider-left-final9b.png`；`apps/macos/.qa/live-e2e/window-min-divider-right-final9b.png`；`apps/macos/.qa/live-e2e/fullscreen-single-final9b.ax.txt`；`apps/macos/.qa/live-e2e/fullscreen-split-final9b.ax.txt`；`apps/macos/.qa/live-e2e/find-native-final9b.ax.txt`。
-- **SETTINGS**：`apps/macos/.qa/live-e2e/settings-model-final9b.ax.txt`；`apps/macos/.qa/live-e2e/settings-sync-final9b.ax.txt`；`apps/macos/.qa/live-e2e/settings-zotero-connected-final9b.ax.txt`。
+- **SETTINGS**：`apps/macos/.qa/live-e2e/settings-ac7-min-reading.*`；`settings-ac7-min-model-{top,bottom}.*`；`settings-ac7-min-storage-{top,bottom}.*`；`settings-ac7-min-cloud-top.*`；`cloud-ac7-settings-min.*`与`cloud-ac7-settings-bottom.*`（均位于同一live-e2e目录）；`apps/macos/.qa/live-e2e/settings-model-final9b.ax.txt`；`apps/macos/.qa/live-e2e/settings-sync-final9b.ax.txt`；`apps/macos/.qa/live-e2e/settings-zotero-connected-final9b.ax.txt`。
 - **APPEARANCE**：`apps/macos/.qa/live-e2e/guide-dark-final9b.png`；`apps/macos/.qa/live-e2e/guide-fontlarger-final9b.png`；`apps/macos/.qa/live-e2e/settings-dark-final9b.png`。
 - **DATA**：`docs/mac-app-validation.md:公开网站全库/22分片8720记录8005论文`；`apps/macos/.qa/live-e2e/guide-single-final9b.ax.txt`；`apps/macos/.qa/live-e2e/turnguide-offline-native-e2742f10.ax.txt`。
 - **OFFLINE**：`/Users/francis7999/.codex/visualizations/2026/10/22/01a162ed-db18-7000-8840-f9262fd79e83/turnguide-offline-package-readback.md`；`apps/macos/.qa/live-e2e/storage-native-final9b-ready.ax.txt`；`apps/macos/.qa/live-e2e/turnguide-offline-native-e2742f10.ax.txt`。
@@ -149,7 +151,7 @@
 - **ZOT**：`apps/macos/.qa/live-e2e/zotero-602F6E60-A78B-491D-8B0D-D3E07C95DD3C/readback-20261024T182412.048051Z/readback-result.json`（只读GET及文件，非新原生回读完成）；`apps/macos/.qa/live-e2e/zotero-602F6E60-A78B-491D-8B0D-D3E07C95DD3C/readback-20261024T174741.116180Z/readback-result.json`；`apps/macos/.qa/live-e2e/zotero-repeat-comparison-20261024T174744.854274Z.json`；`apps/macos/.qa/live-e2e/zotero-restart-final878-current.ax.txt`；`apps/macos/.qa/live-e2e/zotero-602F6E60-A78B-491D-8B0D-D3E07C95DD3C/readback-20261024T171751.075453Z/readback-result.json`；`apps/macos/.qa/live-e2e/zotero-repeat-comparison-20261024T171908.006176Z.json`；`apps/macos/.qa/live-e2e/final9b-independent-evidence-review.json`；`apps/macos/.qa/live-e2e/zotero-native-final9b-complete.ax.txt`。
 - **DIAGNOSTICS**：`apps/macos/.qa/live-e2e/exports/final9b-diagnostics.json`；`apps/macos/.qa/live-e2e/help-native-final9b-diagnostics.ax.txt`。
 - **HISTORY**：`docs/mac-app-validation.md`；`docs/mac-app-review-log.md`；`/Users/francis7999/.codex/visualizations/2026/10/22/01a162ed-db18-7000-8840-f9262fd79e83/mac-zotero-real-edit-protection-and-client-open.md`；`/Users/francis7999/.codex/visualizations/2026/10/22/01a162ed-db18-7000-8840-f9262fd79e83/mac-zotero-real-restart-repeat-83e4-success.md`。
-- **TESTS**：`apps/macos/.qa/live-final-js-regression-v16.log`；`apps/macos/.qa/live-final-js-regression-v16-result.json`；`apps/macos/.qa/workspace-pagination-independent-final.log`；`apps/macos/.qa/live-final-source-regression-v11.log（保留旧DesktopUI19/20失败；原生/服务段已完成）`；`apps/macos/.qa/desktopui-final-find-fix.log`；`apps/macos/.qa/navigation-final-find-fix.log`；`apps/macos/.qa/reader-preamble/result.json`；`docs/mac-app-review-log.md（各轮独审、冻结SHA与适用范围）`；`apps/macos/.qa/live-final-source-regression-v14.log`；`apps/macos/.qa/live-final-source-regression-v14-result.json`；`完整取消保护独审记录见 docs/mac-app-validation.md`。
+- **TESTS**：`apps/macos/.qa/cloud-full-v6-result.json`；`cloud-js-v7-result.json`；`cloud-settings-v11-144-independent-result.json`；`settings-recovery-v11-final-independent-result.json`（均在同一.qa目录）；`apps/macos/.qa/live-final-js-regression-v16.log`；`apps/macos/.qa/live-final-js-regression-v16-result.json`；`apps/macos/.qa/workspace-pagination-independent-final.log`；`apps/macos/.qa/live-final-source-regression-v11.log（保留旧DesktopUI19/20失败；原生/服务段已完成）`；`apps/macos/.qa/desktopui-final-find-fix.log`；`apps/macos/.qa/navigation-final-find-fix.log`；`apps/macos/.qa/reader-preamble/result.json`；`docs/mac-app-review-log.md（各轮独审、冻结SHA与适用范围）`；`apps/macos/.qa/live-final-source-regression-v14.log`；`apps/macos/.qa/live-final-source-regression-v14-result.json`；`完整取消保护独审记录见 docs/mac-app-validation.md`。
 - **CANCEL878**：`apps/macos/.qa/live-e2e/export-cancel-final878.ax.txt`；`apps/macos/.qa/live-e2e/tasks-cancel-final878.png`；`apps/macos/.qa/live-e2e/tasks-cancel-final878.ax.txt`；`apps/macos/.qa/live-e2e/exports/final878-research.md`；`apps/macos/.qa/live-e2e/menu-backup-cancel-final878.ax.txt`。
 
 本页没有修改旧失败、原费用、归档journal或来源身份。后续只在取得对应构建、条件及实际结果后更新该项状态；源要求仍以正式矩阵为准。
