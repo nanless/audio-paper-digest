@@ -46,6 +46,7 @@ import UniformTypeIdentifiers
         view.load(URLRequest(url:URL(string:"paperapp://app/settings.html")!));sheet.center();sheet.makeKeyAndOrderFront(nil)
     }
     func importLocalPDF() throws {
+        try requireMainContextAvailable()
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未打开其他来源")}
         maintenanceBusy=true;defer{maintenanceBusy=false}
         let panel=NSOpenPanel();panel.allowedContentTypes=[.pdf];panel.allowsMultipleSelection=false;panel.message="原件复制到个人研究空间，不修改源文件"
@@ -70,12 +71,14 @@ import UniformTypeIdentifiers
         guard let password,document.unlock(withPassword:password),!document.isLocked else{throw DesktopError.message("PDF 未解锁；没有替换当前阅读资料")}
     }
     func archiveMaterials(_ payload:[String:Any],includeAnalysis:Bool=true) async throws->[String:Any] {
+        try requireMainContextAvailable()
         let captured=currentPaperID,paper=currentPaper,generation=contextGeneration
         try await flushEdits()
         try Task.checkCancellation()
+        try requireMainContextAvailable()
         guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("保存期间论文已切换，未准备其他论文的材料")}
         guard !currentPaperID.isEmpty,!currentPaperID.hasPrefix("local:") else{throw DesktopError.message("请先选取已发布论文；本地 PDF 缺少已核验书目，仍可解析及导出个人研究")}
-        if currentArticle["paperID"] as? String != captured {let loaded=try await library.handle(command:"library.article",payload:["paperID":captured]);guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")};try Task.checkCancellation();try verifyArticleBinding(loaded,paper:paper);currentArticle=loaded}
+        if currentArticle["paperID"] as? String != captured {let loaded=try await library.handle(command:"library.article",payload:["paperID":captured]);guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")};try Task.checkCancellation();try requireMainContextAvailable();try verifyArticleBinding(loaded,paper:paper);currentArticle=loaded}
         let article=currentArticle
         try verifyArticleBinding(article,paper:paper)
         if article["isStale"] as? Bool==true, (article["sourceVersion"] as? String != paper["sourceVersion"] as? String || article["sourceURL"] as? String != paper["sourceURL"] as? String){throw DesktopError.message("当前离线导读属于旧来源版本；请完成新版本读取后归档，旧稿仍可阅读") }
@@ -100,10 +103,12 @@ import UniformTypeIdentifiers
         var result:[String:Any]=["identity":try Self.archiveIdentity(paperID:captured,sourceVersion:paper["sourceVersion"] as? String),"bibliography":bibliography]
         do {let pdf:[String:Any];if article["offlineMode"] as? Bool==true{guard let identifier=paper["offlinePackageID"] as? String else{throw DesktopError.message("离线包身份缺失")};let checked=try await storage.openPackage(id:identifier);guard let saved=checked["pdf"] as? [String:Any],saved["sha256"] as? String==offlinePDF?["sha256"] as? String else{throw DesktopError.message("离线包不含已核验的原始 PDF")};pdf=saved}else{pdf=try await library.handle(command:"library.downloadPDF",payload:["paperID":captured])};try verifyPDFBinding(pdf,paper:paper,article:article);guard pdf["isStale"] as? Bool != true else{throw DesktopError.message("原文复验失败，旧缓存未作为当前来源归档")};result["pdfPath"]=pdf["filePath"]}catch{if Task.isCancelled || error is CancellationError{throw CancellationError()};result["pdfNotice"]=error.localizedDescription}
         try Task.checkCancellation()
+        try requireMainContextAvailable()
         let exports=directory.appendingPathComponent("Exports",isDirectory:true);try FileManager.default.createDirectory(at:exports,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
         // Only the sandbox-rendered, script-free article may be supplied here; native service
         // validates every resource again before any Zotero write.
         let rendered=try await web.evaluateJavaScript("window.paperDigestArchiveHTML ? window.paperDigestArchiveHTML() : null") as? [String:Any]
+        try requireMainContextAvailable()
         guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换")}
         if let rendered=rendered,rendered["paperID"] as? String==captured,rendered["revision"] as? String==article["revisionSHA256"] as? String,let body=rendered["html"] as? String,!body.isEmpty,article["completeOffline"] as? Bool==true {
             let html="<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>"+htmlEscape(bibliography["title"] as? String ?? "")+"</title><style>body{font:18px/1.85 -apple-system,sans-serif;max-width:850px;margin:60px auto;padding:0 32px;color:#252b30}img{max-width:100%;height:auto}table{border-collapse:collapse;display:block;overflow:auto}td,th{padding:8px;border:1px solid #ccd1d5}pre{white-space:pre-wrap}math{font-size:1.1em}a{color:#256d73}</style></head><body>"+body+"</body></html>"
@@ -134,13 +139,16 @@ import UniformTypeIdentifiers
         }
 
         try Task.checkCancellation()
+        try requireMainContextAvailable()
         guard captured==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，归档材料没有提交")};return result
     }
     func buildCurrentExport(_ payload:[String:Any]) async throws -> (data:Data,ext:String,title:String) {
+        try requireMainContextAvailable()
         let id=currentPaperID,generation=contextGeneration,paper=currentPaper,article=currentArticle
         guard !id.isEmpty else{throw DesktopError.message("请先选择论文")}
         try await flushEdits()
         try Task.checkCancellation()
+        try requireMainContextAvailable()
         guard id==currentPaperID,generation==contextGeneration else{throw DesktopError.message("保存期间论文已切换，未导出其他论文")}
         let kind=payload["format"] as? String ?? "markdown",title=paper["title"] as? String ?? "个人研究"
         var data:Data,ext:String
@@ -170,12 +178,15 @@ import UniformTypeIdentifiers
         else {data=Data(text.utf8);ext="md"}
         guard id==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，导出未写入")}
         try Task.checkCancellation()
+        try requireMainContextAvailable()
         return (data:data,ext:ext,title:title)
     }
     func exportCurrent(_ payload:[String:Any]) async throws {
+        try requireMainContextAvailable()
         let owner=currentPaperID,generation=contextGeneration
         let built=try await buildCurrentExport(payload)
         guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，未保存其他论文的导出")}
+        try requireMainContextAvailable()
         let (data,ext,title)=built
         let panel=NSSavePanel();panel.nameFieldStringValue=String(title.prefix(70)).replacingOccurrences(of:"/",with:"-")+"."+ext
         guard panel.runModal() == .OK,let url=panel.url else{throw DesktopError.message("已取消导出")};try Task.checkCancellation()
@@ -183,6 +194,7 @@ import UniformTypeIdentifiers
         try data.write(to:url,options:.atomic)
     }
     func backupData() throws {
+        try requireMainContextAvailable()
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未开始备份")}
         maintenanceBusy=true;defer{maintenanceBusy=false}
         guard jobs.isEmpty else{throw DesktopError.message("请待当前任务结束再备份，保证资料和任务检查点属于同一快照")}
@@ -192,6 +204,7 @@ import UniformTypeIdentifiers
         try BackupCodec.encode(payload).write(to:url,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:url.path)
     }
     func restoreData() throws {
+        try requireMainContextAvailable()
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未开始恢复")}
         maintenanceBusy=true;defer{maintenanceBusy=false}
         guard jobs.isEmpty else{throw DesktopError.message("请先结束任务再恢复资料")}
@@ -298,8 +311,11 @@ import UniformTypeIdentifiers
         return report
     }
     func diagnostics() async throws {
+        try requireMainContextAvailable()
         // Capture before showing the save panel so it cannot replace the first responder.
         let report=await diagnosticsReport()
+        try Task.checkCancellation()
+        try requireMainContextAvailable()
         let panel=NSSavePanel();panel.nameFieldStringValue="论文速递诊断.json";guard panel.runModal() == .OK,let url=panel.url else{throw DesktopError.message("已取消导出")};try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)
     }
 }

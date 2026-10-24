@@ -9,7 +9,7 @@ trap 'rm -rf "$test_work"' EXIT
 mkdir "$test_work/Sources"
 cp "$app_root"/Sources/*.swift "$test_work/Sources/"
 sources=("$test_work"/Sources/*.swift)
-for suite in DesktopStore BackupCodec DesktopStorage DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService LibraryImageSources LibraryMathML ZoteroService; do
+for suite in DesktopStore BackupCodec DesktopStorage DesktopStorageDetail DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService LibraryImageSources LibraryMathML ZoteroService; do
   echo "正在核验 ${suite}（隔离临时资料，不访问用户文库或付费服务）"
   xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS "${sources[@]}" "$app_root/Tests/${suite}Tests.swift" -o "$test_work/$suite"
   if [[ "$suite" == "ModelEvidenceExport" || "$suite" == "DesktopAppDocsEvidence" ]]; then
@@ -27,6 +27,7 @@ node "$app_root/Tests/ZoteroUI.test.cjs"
 node "$app_root/Tests/ZoteroSettingsIntegration.test.cjs"
 node "$app_root/Tests/ZoteroResumePresentation.test.cjs"
 node "$app_root/Tests/DesktopUI.test.cjs"
+node "$app_root/Tests/DesktopWorkspaceViews.test.cjs"
 node "$app_root/Tests/ReadingContinuity.test.cjs"
 node "$app_root/Tests/DesktopGuideReview.test.cjs"
 node "$app_root/Tests/MathReview.test.cjs"
@@ -35,6 +36,7 @@ node "$app_root/Tests/DesktopModalFacade.test.cjs"
 node "$app_root/Tests/DesktopModalFocus.test.cjs"
 node "$app_root/Tests/DesktopContextUI.test.cjs"
 node "$app_root/Tests/StorageUIAsync.test.cjs"
+node "$app_root/Tests/DesktopStorageWindow.test.cjs"
 node "$app_root/Tests/DesktopReaderLink.test.cjs"
 node "$app_root/Tests/DesktopReaderSecurityReview.test.cjs"
 node "$app_root/Tests/DesktopPresentationReview.test.cjs"

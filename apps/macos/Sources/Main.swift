@@ -33,7 +33,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func webView(_ webView:WKWebView,stop task:WKURLSchemeTask) {}
 }
 
-@MainActor final class PaperDigestApp:NSObject,NSApplicationDelegate,WKScriptMessageHandlerWithReply,WKNavigationDelegate,NSWindowDelegate {
+@MainActor final class PaperDigestApp:NSObject,NSApplicationDelegate,WKScriptMessageHandlerWithReply,WKNavigationDelegate,NSWindowDelegate,NSMenuItemValidation {
     var window:NSWindow!, web:WKWebView!, toolbar:NSToolbar!, settingsWindow:NSWindow?
     var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!
     var terminationPending=false
@@ -48,6 +48,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var schedule:Timer?, lastSyncAttempt=Date.distantPast
     var scheme:BundleScheme!
     var settingsWeb:WKWebView?
+    var storageDetailWindow:NSWindow?,storageDetailWeb:WKWebView?,storageDetailSession:StorageDetailSession?
+    var storageDetailBusy=false,storageDetailSystemPanel=false
+    var storageCleanupConfirmation:((NSAlert,NSWindow?) async ->NSApplication.ModalResponse)?
     func applicationDidFinishLaunching(_ notification:Notification) {
         do {
             directory=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("PaperDigest",isDirectory:true)
@@ -64,7 +67,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool{false}
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {window.makeKeyAndOrderFront(nil);return true}
     func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
-        guard !terminationPending,!maintenanceBusy else{return .terminateCancel}
+        guard !terminationPending,!maintenanceBusy,!storageDetailBusy,!storageDetailSystemPanel else{return .terminateCancel}
         if !jobs.isEmpty {
             let alert=NSAlert();alert.messageText="仍有任务在进行";alert.informativeText="退出会中断传输。已经完成的步骤会保留，模型消费可能仍然发生。";alert.addButton(withTitle:"继续运行");alert.addButton(withTitle:"保存状态并退出")
             if alert.runModal() == .alertFirstButtonReturn{return .terminateCancel}
@@ -82,9 +85,12 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func flushEdits() async throws {
         guard let web=web else{return}
         _=try await web.callAsyncJavaScript("return window.paperDigestFlushPendingNote ? await window.paperDigestFlushPendingNote() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)
+        if let detail=storageDetailWeb{_=try await detail.callAsyncJavaScript("return window.paperDigestFlushDetails ? await window.paperDigestFlushDetails() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)}
         if let settings=settingsWeb{_=try await settings.callAsyncJavaScript("return window.paperDigestFlushSettings ? await window.paperDigestFlushSettings() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)}
     }
     func windowShouldClose(_ sender:NSWindow)->Bool {
+        if sender===storageDetailWindow {_=closeStorageDetails();return false}
+        if sender===window,storageDetailsActive {_=mainContextMenuAvailable();return false}
         guard sender===window || sender===settingsWindow else{return true}
         Task{do{try await flushEdits();sender.orderOut(nil)}catch{showError(error)}};return false
     }
@@ -142,13 +148,21 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func userContentController(_ controller:WKUserContentController,didReceive message:WKScriptMessage,replyHandler:@escaping(Any?,String?)->Void){
         guard message.frameInfo.isMainFrame,message.frameInfo.securityOrigin.protocol=="paperapp",message.frameInfo.securityOrigin.host=="app",let body=message.body as? [String:Any],let command=body["command"] as? String else{replyHandler(nil,"已拒绝非应用主界面的操作");return}
         let payload=body["payload"] as? [String:Any] ?? [:]
+        guard let source=message.webView else{replyHandler(nil,"操作来源窗口不可用");return}
+        if source===storageDetailWeb {
+            Task{do{replyHandler(try await storageDetailCommand(command,payload:payload,source:source),nil)}catch{replyHandler(nil,error.localizedDescription)}}
+            return
+        }
+        guard source===web || source===settingsWeb else{replyHandler(nil,"已拒绝过期或未知窗口的操作");return}
         Task{do{replyHandler(try await dispatch(command,payload:payload),nil)}catch{replyHandler(nil,error.localizedDescription)}}
     }
-    func emit(_ name:String,_ object:[String:Any]=[:]) {
+    func emit(_ name:String,_ object:[String:Any]=[:],to targets:[WKWebView]?=nil) {
         guard JSONSerialization.isValidJSONObject(object),let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8),let event=try? JSONSerialization.data(withJSONObject:[name]),let json=String(data:event,encoding:.utf8) else{return}
-        for target in [web,settingsWeb].compactMap({$0}) {target.evaluateJavaScript("window.dispatchEvent(new CustomEvent(\(json).at(0),{detail:\(text)}));",completionHandler:nil)}
+        for target in (targets ?? [web,settingsWeb].compactMap({$0})) {target.evaluateJavaScript("window.dispatchEvent(new CustomEvent(\(json).at(0),{detail:\(text)}));",completionHandler:nil)}
     }
     func dispatch(_ command:String,payload:[String:Any]) async throws->[String:Any] {
+        let readingCommands:Set<String>=["app.setPaper","library.article","pdf.open","pdf.close","pdf.page","pdf.fit","pdf.zoom","pdf.locate","pdf.highlight","pdf.removeAnnotation","storage.open","storage.prepare","model.run","archive.materials","zotero.archive","storage.cleanupPlan","storage.cleanup","app.openLocal","app.restore","app.export","app.backup","app.diagnostics","app.findQuery","model.preview","pdf.selection","pdf.outline","pdf.find","pdf.openExternal"]
+        if readingCommands.contains(command){try requireMainContextAvailable()}
         let savingCommands:Set<String>=["personal.note","personal.reading","personal.annotationNote","settings.save","pdf.frame","personal.snapshot"]
         if maintenanceBusy {guard command=="pdf.frame" else{throw DesktopError.message("正在整理资料，请稍后再操作")}}
         if terminationPending {
@@ -165,6 +179,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
                 let generation=contextGeneration,paper=currentPaper
                 let result=try await runJob(command,payload:payload){notify in try await self.library.handle(command:command,payload:payload,progress:notify)}
                 guard currentPaperID==id,contextGeneration==generation else{throw DesktopError.message("论文已切换，旧正文未覆盖当前论文")}
+                try requireMainContextAvailable()
                 try verifyArticleBinding(result,paper:paper);currentArticle=result;return result
             }
             if ["library.sync","library.downloadPDF"].contains(command){return try await runJob(command,payload:payload){notify in try await self.library.handle(command:command,payload:payload,progress:notify)}}
@@ -201,6 +216,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             let source=check ? ["kind":"connection-check"] : try modelSource(payload)
             try await flushEdits()
             guard check || (owner==currentPaperID && generation==contextGeneration) else{throw DesktopError.message("论文在保存期间已切换，未发送模型请求")}
+            if !check{try requireMainContextAvailable()}
             guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未发送模型请求")}
             if let expected=payload["expectedPDFSHA"] as? String,expected != source["pdfSHA"] as? String{throw DesktopError.message("原始解析使用了不同 PDF 版本，请打开对应原文后重做")}
             if let expected=payload["expectedRevision"] as? String,expected != source["revision"] as? String{throw DesktopError.message("导读修订已变化，请基于当前导读重新提问")}
@@ -248,7 +264,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "app.restore":try await flushEdits();try restoreData();return ["restored":true]
         case "app.diagnostics":try await diagnostics();return ["saved":true]
         case "app.revealData":revealData();return [:]
-        case "storage.show":window.makeKeyAndOrderFront(nil);emit("menu.command",["action":"storage"]);return [:]
+        case "storage.show":try await showStorageDetails();return [:]
         case "storage.status":return try await storage.capacity()
         case "storage.packages":return ["packages":try await storage.listPackages()]
         case "storage.prepare":return try await runJob(command,payload:payload){notify in try await self.prepareOffline(progress:notify)}
@@ -300,6 +316,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         else if currentArticle["offlineMode"] as? Bool==true {guard let identifier=currentPaper["offlinePackageID"] as? String,let saved=try await storage.openPackage(id:identifier)["pdf"] as? [String:Any] else{throw DesktopError.message("这个离线包没有已核验原文 PDF；读取网站当前版本后可下载")};result=saved}
         else {result=try await library.handle(command:"library.downloadPDF",payload:["paperID":owner])}
         guard owner==currentPaperID,generation==contextGeneration else{throw DesktopError.message("论文已切换，旧 PDF 未安装到当前文献")}
+        try requireMainContextAvailable()
         if !owner.hasPrefix("local:"){try verifyPDFBinding(result,paper:paper,article:article)}
         guard let path=result["filePath"] as? String else{throw DesktopError.message("原文文件未准备好")}
         let url=URL(fileURLWithPath:path).resolvingSymlinksInPath()
@@ -363,24 +380,24 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func didWake(){if Date().timeIntervalSince(lastSyncAttempt)>300{syncNow()}}
     @objc func syncNow(){lastSyncAttempt=Date();Task{do{_=try await dispatch("library.sync",payload:[:]);emit("library.changed")}catch{emit("app.error",["message":error.localizedDescription])}}}
     @objc func openSettings(){showSettingsWindow()}
-    @objc func toggleSidebar(){emit("menu.command",["action":"sidebar"])}
-    @objc func togglePDF(){emit("menu.command",["action":"pdf"])}
-    @objc func findCurrent(){let focused=(window.firstResponder as? NSView).map{$0 === pdfView || $0.isDescendant(of:pdfView)} ?? false;emit("menu.command",["action":"find","pdfFocused":focused])}
-    @objc func findLibrary(){emit("menu.command",["action":"search"])}
-    @objc func fontLarger(){emit("menu.command",["action":"font","delta":1])}
-    @objc func fontSmaller(){emit("menu.command",["action":"font","delta":-1])}
-    @objc func fullScreen(){window.toggleFullScreen(nil)}
+    @objc func toggleSidebar(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"sidebar"])}
+    @objc func togglePDF(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"pdf"])}
+    @objc func findCurrent(){guard mainContextMenuAvailable() else{return};let focused=(window.firstResponder as? NSView).map{$0 === pdfView || $0.isDescendant(of:pdfView)} ?? false;emit("menu.command",["action":"find","pdfFocused":focused])}
+    @objc func findLibrary(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"search"])}
+    @objc func fontLarger(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"font","delta":1])}
+    @objc func fontSmaller(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"font","delta":-1])}
+    @objc func fullScreen(){guard mainContextMenuAvailable() else{return};window.toggleFullScreen(nil)}
     @objc func hideApp(){NSApp.hide(nil)}
     @objc func quit(){NSApp.terminate(nil)}
     @objc func closeWindow(){NSApp.keyWindow?.performClose(nil)}
     @objc func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"论文速递",.version:"1.0.0",.credits:NSAttributedString(string:"阅读已发布成果 · 原文研究 · Zotero 完整归档\n本机 arm64 构建；使用系统窗口与 PDFKit。")])}
-    @objc func helpPage(){emit("menu.command",["action":"help"])}
+    @objc func helpPage(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"help"])}
     @objc func revealData(){NSWorkspace.shared.activateFileViewerSelecting([directory])}
-    @objc func openLocal(){Task{do{try await flushEdits();try importLocalPDF()}catch{showError(error)}}}
-    @objc func exportResearch(){emit("menu.command",["action":"export"])}
-    @objc func backup(){Task{do{try await flushEdits();try backupData()}catch{showError(error)}}}
-    @objc func restore(){Task{do{try await flushEdits();try restoreData();emit("personal.changed")}catch{showError(error)}}}
-    @objc func exportDiagnostics(){Task{do{try await diagnostics()}catch{showError(error)}}}
-    @objc func printPDF(){guard let doc=pdfView.document else{showError(DesktopError.message("请先打开原文 PDF"));return};doc.printOperation(for:NSPrintInfo.shared,scalingMode:.pageScaleToFit,autoRotate:true)?.runModal(for:window,delegate:nil,didRun:nil,contextInfo:nil)}
+    @objc func openLocal(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try importLocalPDF()}catch{showError(error)}}}
+    @objc func exportResearch(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"export"])}
+    @objc func backup(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try backupData()}catch{showError(error)}}}
+    @objc func restore(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try restoreData();emit("personal.changed")}catch{showError(error)}}}
+    @objc func exportDiagnostics(){guard mainContextMenuAvailable() else{return};Task{do{try await diagnostics()}catch{showError(error)}}}
+    @objc func printPDF(){guard mainContextMenuAvailable() else{return};guard let doc=pdfView.document else{showError(DesktopError.message("请先打开原文 PDF"));return};doc.printOperation(for:NSPrintInfo.shared,scalingMode:.pageScaleToFit,autoRotate:true)?.runModal(for:window,delegate:nil,didRun:nil,contextInfo:nil)}
     func showError(_ error:Error){let alert=NSAlert();alert.messageText="操作未能完成";alert.informativeText=error.localizedDescription;alert.runModal()}
 }

@@ -25,10 +25,18 @@ const server = http.createServer((req,res)=>{
   else if (name.startsWith('/vendor/')) {base=path.join(repo,'prototypes/macos-research/vendor');relative=name.slice('/vendor/'.length);}
   const file = path.resolve(base,relative);
   if (!file.startsWith(base+path.sep)) {res.writeHead(403);return res.end();}
-  try {res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.woff2')?'font/woff2':'text/html');res.end(fs.readFileSync(file));}
+  try {res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':file.endsWith('.woff2')?'font/woff2':'text/html');// Explicit native-window fixture adapter for old inline-host module tests.
+    // Dedicated native/detail-window suites omit this header and use unchanged production JS.
+    let bytes=fs.readFileSync(file);
+    if(file===path.join(resources,'native.js')&&req.headers['x-pd-storage-host']==='inline-native-fixture'){
+      bytes=Buffer.from(bytes.toString('utf8')+'\nlet legacyStorageFixture;window.__legacyStorageFixture={show:()=>{legacyStorageFixture??=mountStorage(app);return legacyStorageFixture.show();}};\n');
+      res.setHeader('X-PD-Test-Storage-Adapter','explicit-inline-host');
+    }
+    res.end(bytes);}
   catch {res.writeHead(404);res.end();}
 });
 async function installFixture(page, initial={}) {
+  await page.setExtraHTTPHeaders({'X-PD-Storage-Host':initial.nativeStorageWindow?'native-window-contract':'inline-native-fixture'});
   await page.addInitScript(f=>{
     if (window.top!==window) return;
     const copy=x=>structuredClone(x);
@@ -60,6 +68,7 @@ async function installFixture(page, initial={}) {
         case 'zotero.status':return {running:true,version:'10.0.6',writesSupported:true,authorized:false,remember:false,archives:[]};
         case 'zotero.collections':return [];
         case 'jobs.list':return copy({jobs:b.jobs||[]});
+        case 'storage.show':if(b.nativeStorageWindow)return {presented:true,scope:'explicit browser native-window fixture; not actual AppKit'};if(!window.__legacyStorageFixture)throw Error('Missing explicit legacy storage host fixture');return await window.__legacyStorageFixture.show();
         case 'storage.status':return {totalBytes:800000,files:12,categories:[{label:'网站导读',bytes:50000},{label:'科学图',bytes:260467},{label:'网站原文 PDF',bytes:489533}]};
         case 'storage.packages':return {packages:[{id:'fixture-offline',title:b.primary.titleZh+'｜离线界面夹具',sourceVersion:'2610.27491v1',bytes:800000,createdAt:'2026-10-24T10:00:00Z',hasPDF:true,status:'隔离测试夹具'}]};
         case 'storage.cleanupPlan':return {planID:'fixture-plan',scope:'仅隔离界面测试，不会删除文件',count:0,bytes:0,requiresConfirmation:true};

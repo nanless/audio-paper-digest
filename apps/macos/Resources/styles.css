@@ -1267,7 +1267,8 @@ kbd {
   background: var(--soft);
   font-weight: 550;
 }
-#task-list {
+#task-list,
+#all-notes {
   margin: 0 40px;
 }
 .task-row {
@@ -1717,6 +1718,13 @@ kbd {
   .page-heading {
     padding-left: 30px;
     padding-right: 30px;
+  }
+  #all-notes,
+  #task-list,
+  .task-tabs,
+  .task-disclaimer {
+    margin-left: 30px;
+    margin-right: 30px;
   }
   .library-controls {
     padding-left: 30px;
