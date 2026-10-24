@@ -16,7 +16,7 @@ async function check(name,action){await action();results.push({name,passed:true}
   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('menu.command',{detail:{action:'help'}})));await page.waitForSelector('[data-dialog-surface] #detail-close');
   const state=await page.evaluate(()=>({jsOpen:originalDetail.open,domOpen:originalDetail.hasAttribute('open'),role:originalDetail.getAttribute('role'),modal:originalDetail.getAttribute('aria-modal'),surface:document.querySelector('#detail-dialog').tagName,openNative:document.querySelectorAll('dialog[open]').length}));
   assert.deepEqual(state,{jsOpen:true,domOpen:false,role:null,modal:null,surface:'SECTION',openNative:0});
-  assert.equal(await page.locator('#detail-dialog').getAttribute('role'),'dialog');assert.equal(await page.locator('#detail-dialog').getAttribute('aria-modal'),'true');
+  assert.equal(await page.locator('#detail-dialog').getAttribute('role'),'dialog');assert.equal(await page.locator('#app-window').evaluate(el=>el.inert),true,'background remains excluded from interaction and AX');assert.equal(await page.locator('#detail-dialog').getAttribute('aria-modal'),null,'experimental WK compatibility omits ARIA modal filter while keeping actual modal interaction isolation');
   const cdp=await page.context().newCDPSession(page),tree=await cdp.send('Accessibility.getFullAXTree');assert.equal(tree.nodes.filter(n=>!n.ignored&&n.role?.value==='dialog').length,1);await cdp.detach();
   await page.locator('#detail-close').click();assert.equal(await page.evaluate(()=>originalDetail.open),false);
  });
@@ -34,7 +34,9 @@ async function check(name,action){await action();results.push({name,passed:true}
   await page.evaluate(()=>window.originalArchive=document.querySelector('#archive-dialog'));await page.locator('#archive-open').click();await page.waitForFunction(()=>document.querySelector('#zotero-result').textContent.includes('核对内容'));
   assert.equal(await page.evaluate(()=>originalArchive.open&&!originalArchive.hasAttribute('open')&&originalArchive.querySelector('#archive-guide')===document.querySelector('#archive-guide')),true);
   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('menu.command',{detail:{action:'help'}})));assert.equal(await page.locator('[data-dialog-surface]').count(),2);
-  await page.keyboard.press('Escape');assert.equal(await page.locator('[data-dialog-surface]').count(),1);assert.equal(await page.locator('#app-window').evaluate(el=>el.inert),true);assert.equal(await page.evaluate(()=>originalArchive.open),true);
+  assert.equal(await page.evaluate(()=>[...document.querySelectorAll('[data-dialog-surface]')].every(e=>e.getAttribute('role')==='dialog'&&!e.hasAttribute('aria-modal'))),true,'all surfaces keep dialog role without the experimental ARIA filter');
+  assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('[data-dialog-surface]')].map(e=>e.inert)),[true,false],'only top surface remains interactive');
+  await page.keyboard.press('Escape');assert.equal(await page.locator('[data-dialog-surface]').count(),1);assert.equal(await page.locator('#app-window').evaluate(el=>el.inert),true);assert.equal(await page.evaluate(()=>originalArchive.open),true);assert.equal(await page.locator('#archive-dialog').evaluate(el=>el.inert),false);
   await page.locator('#archive-dialog button[value=cancel]').first().click();assert.equal(await page.locator('[data-dialog-surface]').count(),0);assert.equal(await page.evaluate(()=>originalArchive.open),false);
  });
  await check('personal restore event closes nested surfaces, restores shell and clears stale dialog controls',async()=>{

@@ -14,7 +14,7 @@ export function mountZotero(app) {
     dialog.innerHTML = `<form method="dialog"><header><span class="zotero-z">Z</span><button value="cancel" class="icon-button" aria-label="关闭归档">×</button></header><h1>存入 Zotero</h1><p class="dialog-subtitle">保存原文、网站导读与自己的研究。</p><div class="archive-paper"><div><h2 id="archive-title">当前论文</h2><p id="archive-identity"></p></div></div><label class="archive-option"><input type="checkbox" checked disabled><span>书目与原始元数据<small>保留用户条目字段，另存完整来源记录</small></span></label><label class="archive-option"><input id="archive-pdf" type="checkbox"><span>原始 PDF<small id="archive-pdf-detail"></small></span></label><label class="archive-option"><input id="archive-guide" type="checkbox"><span>图文导读<small id="archive-guide-detail"></small></span></label><label class="archive-option"><input id="archive-note" type="checkbox"><span>个人研究笔记<small id="archive-note-detail"></small></span></label><div class="archive-destination"></div><div class="archive-connection"></div><footer><button value="cancel" class="secondary-button">关闭</button><button id="archive-connect" type="button"></button></footer></form>`;
     document.body.append(dialog);
   }
-  settingsPane.innerHTML = `<h1>Zotero</h1><p>保存论文、真实附件与自己的研究记录。</p><div class="settings-group"><div><span>本机客户端</span><span id="zotero-version-status">尚未检查</span></div><div><span>写入权限</span><span id="zotero-auth-status">尚未授权</span></div></div><p class="settings-help">读取分类不需要写入许可。连接时，Zotero 会显示原生授权窗口。持续允许授予此应用对全部可编辑文库的写入权限；每次归档仍只处理你选择的论文和分类。</p><div class="zotero-buttons"><button id="zotero-refresh" class="secondary-button">检查本机连接</button><button id="zotero-authorize" class="primary-button">请求写入授权…</button><button id="zotero-open-archive" class="secondary-button">归档当前论文</button></div><p id="zotero-settings-result" role="status"></p><div id="zotero-pending"></div>`;
+  settingsPane.innerHTML = `<h1>Zotero</h1><p>保存论文、真实附件与自己的研究记录。</p><div class="settings-group"><div><span>本机客户端</span><span id="zotero-version-status">尚未检查</span></div><div><span>写入权限</span><span id="zotero-auth-status">尚未授权</span></div></div><p class="settings-help">读取分类不需要写入许可。连接时，Zotero 会显示原生授权窗口。持续允许授予此应用对全部可编辑文库的写入权限；每次归档仍只处理你选择的论文和分类。</p><div class="zotero-buttons"><button id="zotero-refresh" class="secondary-button">检查本机连接</button><button id="zotero-authorize" class="primary-button">请求写入授权…</button><button id="zotero-open-archive" class="secondary-button">归档当前论文</button></div><p id="zotero-settings-result" role="status"></p><div id="zotero-pending"></div><div id="zotero-recent"></div>`;
   if (!$('zotero-ui-style')) {
     const style = document.createElement('style'); style.id = 'zotero-ui-style';
     style.textContent = '.zotero-buttons{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.zotero-destination{display:grid;gap:8px;margin:16px 0;font-size:12px}.zotero-destination select,.zotero-destination input{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}.zotero-destination label{display:grid;gap:5px}.zotero-step-list{list-style:none;padding:0;margin:12px 0;font-size:12px}.zotero-step-list li{padding:6px 0;border-bottom:1px solid var(--line)}.zotero-step-list small{display:block;color:var(--muted);margin-top:3px}.zotero-step-list .failed{color:var(--red)}.zotero-pending-row{padding:10px 0;border-top:1px solid var(--line);font-size:12px}.zotero-pending-row p{margin-bottom:6px}.zotero-status-text{font-size:12px;line-height:1.7;margin:12px 0}';
@@ -50,6 +50,7 @@ export function mountZotero(app) {
     $('zotero-connection-message').textContent = writable ? '已获本机写入许可。将逐项保存并回读验证，失败项目可以续传。' : !status?.authorized && unchecked ? '连接与分类查询不读取密钥。可主动检查已保存许可；系统可能请你确认钥匙串访问。' : status?.authorized ? '单次许可不足以完成多步附件归档。请在 Zotero 的原生窗口中自行决定是否持续允许。' : '可检查已保存许可，或在 Zotero 原生窗口中明确请求新的写入授权。';
     $('zotero-authorize').disabled = busy; grantButton.disabled = busy;
     $('zotero-refresh').disabled = busy;
+    settingsPane.querySelectorAll('[data-zotero-resume]').forEach(button => { button.disabled = busy; });
     checkButton.disabled = busy || !status?.writesSupported; settingsCheck.disabled = checkButton.disabled;
     checkButton.hidden = writable; settingsCheck.hidden = writable;
     start.disabled = busy || !writable || !materials || (!collectionKey() && !collectionName());
@@ -68,7 +69,9 @@ export function mountZotero(app) {
   function renderPending() {
     const pending = (status?.archives || []).filter(a => a.status === 'partial');
     $('zotero-pending').innerHTML = pending.length ? '<h2>未完成归档</h2>' + pending.map(a => `<div class="zotero-pending-row"><p>${escape(a.title)}</p><button class="secondary-button" data-zotero-resume="${escape(a.archiveID)}">从已保存步骤继续</button></div>`).join('') : '';
-    $('zotero-pending').querySelectorAll('[data-zotero-resume]').forEach(button => { button.onclick = () => resume(button.dataset.zoteroResume); });
+    const recent = (status?.archives || []).filter(a => a.status === 'complete').slice(0,8);
+    $('zotero-recent').innerHTML = recent.length ? '<h2>最近归档</h2>' + recent.map(a => `<div class="zotero-pending-row"><p>${escape(a.title)}</p><button type="button" class="secondary-button" data-zotero-resume="${escape(a.archiveID)}">重新回读核验</button></div>`).join('') : '';
+    settingsPane.querySelectorAll('[data-zotero-resume]').forEach(button => { button.onclick = () => resume(button.dataset.zoteroResume); });
   }
   async function refresh() {
     try {
@@ -142,7 +145,8 @@ export function mountZotero(app) {
   async function resume(id = lastResult?.archiveID) {
     if (busy || !id) return;
     const context = (status?.archives || []).find(item => item.archiveID === id);
-    materials = null;
+    materials = null; lastResult = null;
+    $('zotero-steps').replaceChildren(); retry.hidden = true; open.hidden = true;
     if (context) { $('archive-title').textContent = context.title; $('archive-identity').textContent = context.identity; }
     for (const option of ['archive-pdf','archive-guide','archive-analysis','archive-note']) { $(option).disabled = true; $(option).checked = false; }
     busy = true; updateControls();

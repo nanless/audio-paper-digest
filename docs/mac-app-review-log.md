@@ -633,3 +633,15 @@ Root 在标记为 09:25 的实际安装包中，从干净资料库打开“本�
 正式主窗AX问题尚未关闭。最小WK、完整生产资源、Main原生层级、以及不改DOM/焦点的被动探针在本机均可读出，不能据此把正式应用的空AX失败洗成通过。为定位实际差异，现有导出诊断增加无正文、无输入值、无URL或凭据的窗口/响应者/DOM结构快照；在保存窗口前只读采样，未知ID、ARIA、样式和任务文字均严格归为other。作者31项及非作者33项真实隔离WK隐私检查通过，未改变用户资料或焦点。
 
 用户最终明确要求保留当前第三个C石墨图标；不执行先前B方向的候选替换。
+
+## 2026-10-24：主窗 aria-modal 单变量兼容实验，待真实 Mac 对照
+
+835c 正式应用中，本机资料、帮助和导出继续出现“截图正常，系统 AX 只剩 HTML 容器”的失败；搜索精确论文只显示一行后也未恢复。实际只读诊断确认 appActive/windowKey/documentHasFocus 全为 true，第一响应者为 WKWebView，活动 H2 可见；唯一 surface 的 role=dialog、aria-modal=true、inert=false，BODY/HTML 祖先均没有隐藏或 inert，矩形与样式正常。此前最小、完整生产资源、精确 Main 构造及无 DOM 写入的被动探针通过，均不能代替正式应用的失败。
+
+按 Root 指令，本候选仅取消 generic surface 的 `aria-modal=true`。保留 `role=dialog`、背景与下层 surface 的 inert、仅栈顶焦点、Tab 循环、Escape 栈顶关闭、原关闭控件和原生 PDF 遮挡。它偏离 [WAI-ARIA APG 模态模式](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/)建议的 aria-modal=true，是针对当前 WK 真机空树的单变量兼容实验。WebKit 的[动态 aria-modal 隔离树问题](https://bugs.webkit.org/show_bug.cgi?id=280643)和[模态过滤缓存实现](https://github.com/WebKit/WebKit/commit/b5639a26a2d81b24b253095bfaba536f2255987e)仅支持验证方向，尚未证明命中本机原因。
+
+实机未恢复前，不宣称修复，不改变此前失败记录；Root 安装后立即对照实际 AX、键盘与控件。若无恢复，将撤销本实验。隔离回归与非作者结果随后按实际补记，不把 Chromium AX 结果计为 Mac AX 通过。
+
+作者相关隔离回归实际 49/49 通过：Facade 6、Focus 6、Detail 4、Storage 异步 7、内容/AX 12、当前设置界面 14。原估 47 基于旧设置套件的 12 组，当前套件实际已有 14 组。新增断言在原用例中核对没有 aria-modal 时仍保留 role、背景 inert、下层 inert/仅栈顶交互和关闭后回退；完整 DesktopUI 的旧 aria-modal=true 期望也同步为本实验的明确缺省合同。日志在本机 `.qa/no-aria-*.log`，dialogs.js 冻结 SHA 为 `223f66528502360084ec4dcc2c9cfdbf0b5ccb40425323fd9bf88971589a9fc6`。非作者审查与新包真实验收仍分别记录。
+
+非作者已按相同 SHA 完成精确源码差异审查，并独立实际复跑 Facade 6/6；未发现 role、inert、键盘栈或原生 PDF 遮挡守卫漂移。允许纳入实验候选包，不代表 macOS AX 问题已关闭。
