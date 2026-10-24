@@ -459,6 +459,20 @@ function detectApiType(endpoint, model) {
     return 'openai';
 }
 
+// An explicitly configured client protocol still passes the same endpoint/URL
+// credential boundary. Callers without this option retain the production route.
+function resolveRequestProtocol(endpoint, model, options = {}) {
+    if (options.declaredProtocol === undefined) return detectApiType(endpoint, model);
+    const protocol = options.declaredProtocol;
+    if (!['openai', 'openai_responses', 'anthropic'].includes(protocol)) {
+        throw new Error('显式 LLM 协议无效');
+    }
+    if (String(model || '').toLowerCase().startsWith('muse-spark-') && protocol !== 'openai_responses') {
+        throw new Error('Muse Spark 必须使用 Responses 协议');
+    }
+    return protocol;
+}
+
 /**
  * 将 OpenAI 端点转换为 Anthropic 端点
  * 例如：https://token-plan-cn.xiaomimimo.com/v1 → https://token-plan-cn.xiaomimimo.com/anthropic
@@ -1083,7 +1097,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                     require('./lib/analysis-stop-control').assertMayStartRequest();
                     require('./lib/explicit-reader-retry-round').consumePhysicalRequest(bodyObj, options);
                     pendingRequest = require('./lib/llm-pending-request').beginPendingLlmRequest({
-                        protocol: detectApiType(endpoint, model), model, request: bodyObj,
+                        protocol: resolveRequestProtocol(endpoint, model, options), model, request: bodyObj,
                         context: options.usageContext
                     }, { enabled: options.recordUsage !== false, directory: options.usageDirectory });
                     transportStarted = true;
@@ -1102,7 +1116,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
             if (failure?.code === 'LLM_REQUEST_START_NOT_PERSISTED') throw failure;
             let usageEvent = null;
             try {
-                const protocol = detectApiType(endpoint, model);
+                const protocol = resolveRequestProtocol(endpoint, model, options);
                 const { recordLlmUsage, buildLlmUsageEvent } = require('./lib/llm-usage.js');
                 let outputText = null;
                 try { outputText = response?.body ? parseResponseText(protocol, response.body) : null; }
@@ -1127,7 +1141,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                 // default ledger. Never turn a storage failure into API retry.
                 const event = usageEvent || require('./lib/llm-usage').buildLlmUsageEvent({
                     ...(pendingRequest ? { eventId: pendingRequest.eventId } : {}),
-                    protocol: detectApiType(endpoint, model), model, request: bodyObj,
+                    protocol: resolveRequestProtocol(endpoint, model, options), model, request: bodyObj,
                     response: response?.body, statusCode: response?.statusCode,
                     durationMs: Date.now() - started, transportStarted,
                     errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null), context: options.usageContext
@@ -1151,7 +1165,9 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     require('./lib/analysis-stage-request-guard').assertStageModelRequestAllowed(options.usageContext?.stage);
     let expectedApiUrl;
     try {
-        expectedApiUrl = buildApiUrl(detectApiType(endpoint, model), endpoint);
+        const protocol = resolveRequestProtocol(endpoint, model, options);
+        expectedApiUrl = buildApiUrl(protocol, endpoint);
+        options = { ...options, declaredProtocol: protocol };
     } catch (error) {
         error.code = error.code || 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
         error.scope = 'run';

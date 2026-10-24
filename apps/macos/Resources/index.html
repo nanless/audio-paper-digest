@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'"
+    />
+    <title>论文速递 · Mac 研究阅读器</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="vendor/lucide.min.js" defer></script>
+    <script src="vendor/katex/katex.min.js" defer></script><link rel="stylesheet" href="vendor/katex/katex.min.css"><script src="native.js" type="module"></script>
+  </head>
+  <body>
+    <div class="app-window" id="app-window">
+      <aside class="sidebar" aria-label="资料导航">
+        <div class="sidebar-top">
+          <div hidden class="traffic-lights" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <button
+            class="icon-button"
+            data-action="sidebar"
+            aria-label="收起侧栏"
+          >
+            <i data-lucide="panel-left"></i>
+          </button>
+        </div>
+        <div class="sidebar-content">
+          <h2>资料库</h2>
+          <nav>
+            <button class="nav-item" data-view="library">
+              <i data-lucide="library"></i><span>全部论文</span
+              ><small id="library-count"></small></button
+            ><button class="nav-item" data-view="reading-list">
+              <i data-lucide="bookmark"></i><span>待读</span
+              ><small id="reading-count"></small></button
+            ><button class="nav-item" data-view="favorites">
+              <i data-lucide="star"></i><span>已收藏</span
+              ><small id="favorite-count"></small>
+            </button>
+          </nav>
+          <nav><button class="nav-item" data-view="today"><i data-lucide="sun"></i><span>今日更新</span></button><button class="nav-item" data-view="conference"><i data-lucide="presentation"></i><span>会议整理</span></button></nav><h2 class="spaced">研究</h2>
+          <nav>
+            <button class="nav-item" data-view="reader">
+              <i data-lucide="book-open"></i><span>继续阅读</span></button
+            ><button class="nav-item" data-view="notes">
+              <i data-lucide="notebook-pen"></i><span>我的笔记</span></button
+            ><button class="nav-item" data-view="tasks">
+              <i data-lucide="activity"></i><span>后台任务</span>
+            </button>
+          </nav>
+          <button class="nav-item" id="storage-button"><i data-lucide="hard-drive"></i><span>本机资料</span></button><div class="current-document">
+            <span class="sidebar-caption">当前文献</span
+            ><button data-view="reader">
+              <i data-lucide="file-text"></i
+              ><span id="sidebar-paper">尚未选择论文</span>
+            </button>
+          </div>
+          <div class="sidebar-outline" id="sidebar-outline">
+            <span class="sidebar-caption">文章目录</span>
+            <div id="outline"></div>
+          </div>
+        </div>
+        <div class="sidebar-bottom">
+          <i data-lucide="hard-drive"></i>
+          <button id="settings-button">设置与同步<small>本机个人研究空间</small></button>
+        </div>
+      </aside>
+      <main class="main-pane">
+        <header class="toolbar">
+          <div class="toolbar-leading">
+            <div hidden class="traffic-lights collapsed-lights" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <button
+              class="icon-button sidebar-show"
+              data-action="sidebar"
+              aria-label="显示侧栏"
+            >
+              <i data-lucide="panel-left"></i></button
+            ><button class="icon-button" id="back" aria-label="返回论文库">
+              <i data-lucide="chevron-left"></i></button
+            ><span class="toolbar-context" id="toolbar-context">继续阅读</span>
+          </div>
+          <div
+            class="reader-tabs"
+            id="reader-tabs"
+            role="tablist"
+            aria-label="研究内容"
+          >
+            <button
+              role="tab"
+              id="tab-guide"
+              aria-controls="guide-pane"
+              aria-selected="true"
+              data-mode="guide"
+            >
+              网站导读</button
+            ><button
+              role="tab"
+              id="tab-analysis"
+              aria-controls="analysis-pane"
+              aria-selected="false"
+              data-mode="analysis"
+            >
+              个人解析</button
+            ><button
+              role="tab"
+              id="tab-note"
+              aria-controls="note-pane"
+              aria-selected="false"
+              data-mode="note"
+            >
+              研究笔记
+            </button>
+          </div>
+          <div class="toolbar-actions">
+            <button
+              class="icon-button"
+              id="global-search"
+              aria-label="搜索论文"
+            >
+              <i data-lucide="search"></i></button
+            ><button class="icon-button document-action" id="save-offline" aria-label="保存完整离线资料" title="保存离线"><i data-lucide="download"></i></button><button class="icon-button document-action" id="refresh-reader" aria-label="重新读取网站当前导读"><i data-lucide="refresh-cw"></i></button><button
+              class="icon-button document-action"
+              id="favorite"
+              aria-label="收藏当前论文"
+              aria-pressed="false"
+            >
+              <i data-lucide="star"></i></button
+            ><button
+              class="toolbar-button document-action"
+              id="pdf-toggle"
+              aria-pressed="false"
+            >
+              <i data-lucide="panel-right"></i><span>打开 PDF</span></button
+            ><button class="toolbar-button document-action" id="archive-open">
+              <span class="zotero-z">Z</span><span>存入 Zotero</span>
+            </button>
+          </div>
+        </header>
+        <section
+          id="reader-view"
+          class="view reader-view"
+          aria-label="论文阅读"
+        >
+          <div class="reading-area" id="reading-area">
+            <section class="left-pane">
+              <div
+                id="guide-pane"
+                role="tabpanel"
+                aria-labelledby="tab-guide"
+                class="document-scroll"
+              >
+                <article class="article" id="article">
+                  <div class="loading-state">选择一篇论文开始阅读</div>
+                </article>
+              </div>
+              <div
+                id="analysis-pane"
+                role="tabpanel"
+                aria-labelledby="tab-analysis"
+                class="analysis-pane"
+                hidden
+              >
+                <div class="analysis-scroll">
+                  <div class="analysis-heading">
+                    <span class="eyebrow">个人研究</span>
+                    <h1>从一个具体问题开始</h1>
+                    <p>与原文对照，把理解留在自己的研究空间。</p>
+                  </div>
+                  <div class="source-excerpt">
+                    <div>
+                      <i data-lucide="quote"></i><span>原文材料</span
+                      ><button id="source-page">打开 PDF · 第 1 页</button>
+                    </div>
+                    <blockquote id="source-abstract"></blockquote>
+                    <small>来源：论文摘要摘录 · 保留原文语言</small>
+                  </div>
+                  <div class="question-suggestions">
+                    <button
+                      data-question="请结合论文方法图，解释多层对比对齐的作用。"
+                    >
+                      理解方法图 <i data-lucide="arrow-up-right"></i></button
+                    ><button
+                      data-question="请核对论文的实验条件和结论适用范围。"
+                    >
+                      核对实验条件 <i data-lucide="arrow-up-right"></i>
+                    </button>
+                  </div>
+                  <div id="analysis-result" aria-live="polite"></div>
+                </div>
+                <div class="composer-area">
+                  <div class="composer-source"><select id="evidence-scope" aria-label="模型材料范围"><option value="guide">网站导读</option><option value="selection">PDF 选区</option><option value="page">PDF 当前页</option><option value="full">PDF 全文</option><option value="range">PDF 页范围</option><option value="chapter">PDF 章节</option></select><select id="pdf-chapter" hidden aria-label="原文目录章节"></select><label class="page-range" hidden>页 <input id="range-from" type="number" min="1" value="1" aria-label="范围起始物理页">—<input id="range-to" type="number" min="1" value="3" aria-label="范围终止物理页"></label>
+                    <span
+                      ><i data-lucide="file-text"></i
+                      ><span id="context-label"
+                        >当前论文 · 摘要与问题</span
+                      ></span
+                    ><button id="model-settings">
+                      配置模型 <i data-lucide="chevron-right"></i>
+                    </button>
+                  </div>
+                  <label class="sr-only" for="question">研究问题</label
+                  ><textarea
+                    id="question"
+                    rows="3"
+                    placeholder="想进一步理解什么？写下问题…"
+                  ></textarea>
+                  <div class="composer-footer">
+                    <span>⌘ ↵ 开始解析 · 明确选择材料范围</span
+                    ><label class="force-request"><input id="force-request" type="checkbox">重新生成，保留旧稿</label><button class="primary-button" id="analyze">
+                      开始解析 <i data-lucide="arrow-up"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div
+                id="note-pane"
+                role="tabpanel"
+                aria-labelledby="tab-note"
+                class="note-pane"
+                hidden
+              >
+                <div class="note-heading">
+                  <div>
+                    <span class="eyebrow">我的研究</span>
+                    <h1>研究笔记</h1>
+                  </div>
+                  <span id="note-status" role="status">尚未编辑</span>
+                </div>
+                <p class="note-context" id="note-context"></p>
+                <div class="note-format">
+                  <span>自动保存 · Markdown 文本</span
+                  ><button id="highlight-selection">标注 PDF 选区</button><button id="insert-citation">
+                    <i data-lucide="quote"></i>插入论文引用
+                  </button>
+                </div>
+                <label for="note-editor" class="sr-only">研究笔记正文</label
+                ><textarea
+                  id="note-editor"
+                  placeholder="记录你的判断、问题和下一步实验。&#10;&#10;笔记保存在本机个人资料库，不会改写网站导读。"
+                ></textarea>
+                <div id="annotation-list" class="annotation-list" aria-label="原文标注"></div><footer class="note-footer">
+                  <span id="note-count">0 字</span
+                  ><span>支持系统选择、输入法和撤销</span>
+                </footer>
+              </div>
+            </section>
+            <div
+              class="splitter"
+              id="splitter"
+              role="separator"
+              aria-label="调整导读与 PDF 宽度"
+              aria-orientation="vertical"
+              aria-valuemin="35"
+              aria-valuemax="60"
+              aria-valuenow="46"
+              tabindex="0"
+              hidden
+            ></div>
+            <section
+              class="pdf-pane"
+              id="pdf-pane"
+              aria-label="原始论文 PDF"
+              hidden
+            >
+              <header class="pdf-toolbar">
+                <span class="pdf-document-name" id="pdf-name">原文 PDF</span>
+                <div class="page-control">
+                  <button class="icon-button" id="pdf-prev" aria-label="上一页">
+                    <i data-lucide="chevron-up"></i></button
+                  ><label class="sr-only" for="pdf-page">PDF 页码</label
+                  ><input id="pdf-page" type="number" min="1" value="1" /><span
+                    id="pdf-total"
+                    >/ —</span
+                  ><button
+                    class="icon-button"
+                    id="pdf-next"
+                    aria-label="下一页"
+                  >
+                    <i data-lucide="chevron-down"></i>
+                  </button>
+                </div>
+                <button
+                  class="icon-button"
+                  id="pdf-close"
+                  aria-label="关闭 PDF"
+                >
+                  <i data-lucide="x"></i>
+                </button>
+              </header>
+              <div class="pdf-controls">
+                <button id="pdf-fit">适合宽度</button>
+                <div>
+                  <button id="pdf-minus" aria-label="缩小 PDF">−</button
+                  ><span id="pdf-zoom">100%</span
+                  ><button id="pdf-plus" aria-label="放大 PDF">＋</button>
+                </div>
+                <a id="pdf-original" href="#" target="_blank" rel="noopener"
+                  >打开原件 <i data-lucide="arrow-up-right"></i
+                ></a>
+              </div>
+              <div class="pdf-scroll" id="pdf-scroll" aria-label="原生 PDF 阅读区域">
+                <div id="pdf-loading" class="loading-state">
+                  正在渲染原始 PDF…
+                </div>
+                <div class="pdf-page-wrap" id="pdf-page-wrap">
+                  <canvas id="pdf-canvas" aria-label="真实 PDF 页面"></canvas>
+                  <div class="textLayer" id="pdf-text-layer"></div>
+                </div>
+              </div>
+              <footer class="pdf-footnote">
+                <span id="pdf-version"></span><span>原始 PDF · 可选择文字</span>
+              </footer>
+            </section>
+          </div>
+        </section>
+        <section id="library-view" class="view library-view" hidden>
+          <header class="page-heading">
+            <div>
+              <span class="eyebrow">从已有成果开始</span>
+              <h1 id="library-title">全部论文</h1>
+              <p id="library-subtitle">读取已发布成果 · 保留网站评分与分类</p>
+            </div>
+            <button class="secondary-button" id="sync">
+              <i data-lucide="refresh-cw"></i>同步来源
+            </button>
+          </header>
+          <div class="library-controls">
+            <label class="search-field"
+              ><i data-lucide="search"></i
+              ><input
+                id="search-input"
+                placeholder="搜索标题、作者或论文编号"
+                aria-label="搜索论文"
+              /><kbd>⌘ ⇧ F</kbd></label
+            ><label class="sort-label"
+              >排序<select id="sort">
+                <option value="date">发布日期</option>
+                <option value="score">网站评分</option>
+                <option value="title">论文标题</option>
+              </select></label
+            >
+          </div>
+          <div class="library-table-wrap">
+            <table class="library-table">
+              <thead>
+                <tr>
+                  <th>论文</th>
+                  <th>任务</th>
+                  <th>发布</th>
+                  <th class="numeric">网站评分</th>
+                  <th>阅读状态</th>
+                </tr>
+              </thead>
+              <tbody id="paper-rows"></tbody>
+            </table>
+            <div class="empty-state" id="library-empty" hidden>
+              <i data-lucide="search"></i>
+              <h2>没有匹配的论文</h2>
+              <p>换一个关键词，或返回全部论文。</p>
+              <button id="reset-search">清除搜索</button>
+            </div>
+          </div>
+          <footer class="library-footer">
+            <span id="result-count"></span><span>已发布目录 · 无需重新分析</span>
+          </footer>
+        </section>
+        <section id="notes-view" class="view tasks-view" hidden><header class="page-heading"><div><span class="eyebrow">个人研究</span><h1>我的笔记</h1><p>从读过的论文中，找回自己的问题和判断。</p></div></header><div id="all-notes"></div></section><section id="tasks-view" class="view tasks-view" hidden>
+          <header class="page-heading">
+            <div>
+              <span class="eyebrow">工作空间</span>
+              <h1>后台任务</h1>
+              <p>阅读继续进行，任务在这里留下清楚的状态。</p>
+            </div>
+            <span class="subtle-badge">真实执行记录</span>
+          </header>
+          <div class="task-tabs" aria-label="任务筛选">
+            <button data-task-filter="all" aria-pressed="true">全部</button
+            ><button data-task-filter="active" aria-pressed="false">
+              进行中</button
+            ><button data-task-filter="attention" aria-pressed="false">
+              需处理
+            </button>
+          </div>
+          <div id="task-list"></div>
+          <p class="task-disclaimer">
+            同步只读取已发布成果；模型请求与归档均记录实际状态，失败不会冒充完成。
+          </p>
+        </section>
+      </main>
+      <div class="toast" id="toast" role="status" hidden></div>
+    </div>
+    <div hidden><section data-setting-pane="zotero"></section></div>
+    <dialog id="archive-dialog" class="archive-dialog">
+      <form method="dialog">
+        <header>
+          <span class="zotero-z">Z</span
+          ><button value="cancel" class="icon-button" aria-label="关闭归档窗口">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+        <h1>存入 Zotero</h1>
+        <p class="dialog-subtitle">让原文、导读和你的思考保持关联。</p>
+        <div class="archive-paper">
+          <i data-lucide="file-text"></i>
+          <div>
+            <h2 id="archive-title"></h2>
+            <p id="archive-identity"></p>
+          </div>
+        </div>
+        <label class="archive-option"
+          ><input type="checkbox" checked disabled /><span
+            >论文信息与引用<small>原题、作者、日期与来源标识</small></span
+          ></label
+        ><label class="archive-option"
+          ><input id="archive-pdf" type="checkbox" checked /><span
+            >原始 PDF<small id="archive-pdf-detail"></small></span></label
+        ><label class="archive-option"
+          ><input id="archive-guide" type="checkbox" checked /><span
+            >图文导读<small id="archive-guide-detail"
+              >保留真实图片、表格、公式和来源</small
+            ></span
+          ></label
+        ><label class="archive-option"
+          ><input id="archive-note" type="checkbox" checked /><span
+            >个人研究笔记<small id="archive-note-detail"
+              >仅保存自己的内容</small
+            ></span
+          ></label
+        >
+        <div class="archive-destination">
+          <i data-lucide="folder"></i><span>目标分类</span
+          ><button type="button" id="choose-collection">
+            连接后选择 <i data-lucide="chevron-down"></i>
+          </button>
+        </div>
+        <div class="archive-connection">
+          <i data-lucide="circle-alert"></i
+          ><span>尚未检查 Zotero 连接。授权并开始后才会写入文库。</span>
+        </div>
+        <footer>
+          <button value="cancel" class="secondary-button">取消</button
+          ><button id="archive-connect" type="button" class="primary-button">
+            前往连接设置
+          </button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="detail-dialog" class="detail-dialog">
+      <header>
+        <button id="detail-close" class="icon-button" aria-label="关闭当前面板">
+          <i data-lucide="x"></i>
+        </button>
+      </header>
+      <div id="detail-content"></div>
+    </dialog>
+  </body>
+</html>

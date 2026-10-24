@@ -1,0 +1,5 @@
+/.build/
+/node_modules/
+/Resources/Seed/
+/Resources/vendor/
+/.qa/

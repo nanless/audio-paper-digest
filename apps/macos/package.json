@@ -1,0 +1,17 @@
+{
+  "name": "paper-digest-macos",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "katex": "0.19.1"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  },
+  "scripts": {
+    "build": "bash build.sh",
+    "install:app": "bash build.sh --install",
+    "test": "bash test.sh",
+    "test:ui": "node Tests/LibraryUI.test.cjs && node Tests/SettingsUI.test.cjs && node Tests/DesktopUI.test.cjs"
+  }
+}
