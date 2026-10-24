@@ -4,6 +4,18 @@ import AppKit
 import WebKit
 import PDFKit
 
+private final class NativeDetailOfflineProtocol:URLProtocol,@unchecked Sendable {
+ override class func canInit(with request:URLRequest)->Bool{true}
+ override class func canonicalRequest(for request:URLRequest)->URLRequest{request}
+ override func startLoading(){client?.urlProtocol(self,didFailWithError:URLError(.notConnectedToInternet))}
+ override func stopLoading(){}
+}
+private struct NativeDetailNoCredentials:ZoteroCredentialStore {
+ func load(serverID:String)throws->Data?{throw DesktopError.message("Fixture forbids credential reads")}
+ func save(_ data:Data,serverID:String)throws{throw DesktopError.message("Fixture forbids credential writes")}
+ func remove(serverID:String)throws{throw DesktopError.message("Fixture forbids credential removal")}
+}
+
 @main struct DesktopNativeDetailsTests {
  static func main() {
     _=NSApplication.shared
@@ -20,6 +32,8 @@ import PDFKit
     var credentialReads=0
     app.model=ModelService(directory:root,store:app.store,keyProvider:{credentialReads+=1;throw DesktopError.message("No credentials in native detail fixture")})
     app.library=try LibraryService(dataDirectory:root,seedDirectory:root)
+    let offline=URLSessionConfiguration.ephemeral;offline.protocolClasses=[NativeDetailOfflineProtocol.self]
+    app.zotero=ZoteroService(dataDirectory:root,session:URLSession(configuration:offline),credentialStore:NativeDetailNoCredentials())
     app.scheme=BundleScheme(root:URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("apps/macos/Resources"))
     app.window=NSWindow(contentRect:NSRect(x:0,y:0,width:1200,height:800),styleMask:[.titled,.closable],backing:.buffered,defer:false);app.window.alphaValue=0
     app.web=WKWebView(frame:app.window.contentView!.bounds);app.window.contentView=app.web;app.window.delegate=app

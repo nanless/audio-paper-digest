@@ -15,7 +15,10 @@ async function leaf(browser,kind='help',options={}){
    if(f.hold===command)await new Promise((resolve,reject)=>f.pending.push({resolve,reject}));
    if(command==='app.export'||command==='app.backup'||command==='app.diagnostics')return f.response||{saved:true};
    if(command==='app.restore')return f.response||{restored:true};
+   if(command==='archive.materials'&&f.failMaterials)throw Error('Explicit current preview materials unavailable');
    if(command==='archive.materials')return {identity:'arxiv:2610.27491v1',bibliography:{title:primary.title,creators:[]},pdfPath:'/explicit-fixture-only.pdf',guideHTMLPath:'/explicit-fixture-only.html'};
+   if(command==='zotero.status'&&f.failStatus)throw Error('Explicit passive status failure');
+   if(command==='zotero.collections'&&f.failCollections)throw Error('Explicit passive collections failure');
    if(command==='zotero.status')return {running:true,version:'10.0.6',writesSupported:true,authorized:false,archives:f.archives||[]};
    if(command==='zotero.resume')return {status:'complete',archiveID:payload.resumeID,title:'原归档 A',identity:'arxiv:2601.00001v1',steps:[{role:'bibliography',verified:true}],parentKey:'ABCD1234'};
    if(command==='zotero.collections')return {collections:[]};

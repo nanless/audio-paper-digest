@@ -187,7 +187,7 @@ function queueGuideReflow(){
 }
 function cancelGuideReflow(){if(guideReflow)cancelAnimationFrame(guideReflow);guideReflow=0;guideAnchor=null;}
 function resetGuideAnchor(){cancelGuideReflow();guideResize?.disconnect();guideResize=null;}
-function navigateGuideTo(node){cancelGuideReflow();node.scrollIntoView({behavior:'auto',block:'start'});captureGuideScroll();}
+function navigateGuideTo(node,block='start'){cancelGuideReflow();node.scrollIntoView({behavior:'auto',block});captureGuideScroll();}
 function captureGuideScroll(){if(visibleGuide()&&guideFrame.dataset.scrollReady==='true'){guideFrame.dataset.scrollTarget=String(guideFrame.contentWindow?.scrollY||0);rememberGuideAnchor();}}
 function restoreGuidePosition(){if(guideFrame?.dataset.scrollReady==='false'&&visibleGuide()&&guideFrame.contentDocument?.querySelector('main')){guideFrame.contentWindow.scrollTo({top:Number(guideFrame.dataset.scrollTarget)||0,behavior:'instant'});guideFrame.dataset.scrollReady='true';rememberGuideAnchor();}queueGuideReflow();}
 function hasPreambleEnglishTitle(body,title){
@@ -351,7 +351,7 @@ function command(action,detail={}){if(action==='storage')storageUI.show().catch(
   if(state.mode==='note'){const editor=$('note-editor'),start=editor.value.toLocaleLowerCase().indexOf(q.toLocaleLowerCase());if(start<0){toast('当前笔记未找到该文字');return;}editor.focus();editor.setSelectionRange(start,start+q.length);return;}
   const frame=state.mode==='analysis'?$('analysis-result').querySelector('iframe'):guideFrame;const doc=frame?.contentDocument;if(!doc)return;
   const walker=doc.createTreeWalker(doc.querySelector('main'),NodeFilter.SHOW_TEXT),nodes=[];let text='';while(walker.nextNode()){const n=walker.currentNode;nodes.push({node:n,start:text.length,end:text.length+n.textContent.length});text+=n.textContent;}
-  const start=text.toLocaleLowerCase().indexOf(q.toLocaleLowerCase());if(start<0){toast('当前内容未找到该文字');return;}const from=nodes.find(n=>n.end>start),to=nodes.find(n=>n.end>=start+q.length);if(!from||!to)return;const range=doc.createRange();range.setStart(from.node,start-from.start);range.setEnd(to.node,start+q.length-to.start);const selection=doc.defaultView.getSelection();selection.removeAllRanges();selection.addRange(range);from.node.parentElement.scrollIntoView({block:'center'});toast('已定位当前内容中的匹配文字');
+  const start=text.toLocaleLowerCase().indexOf(q.toLocaleLowerCase());if(start<0){toast('当前内容未找到该文字');return;}const from=nodes.find(n=>n.end>start),to=nodes.find(n=>n.end>=start+q.length);if(!from||!to)return;const range=doc.createRange();range.setStart(from.node,start-from.start);range.setEnd(to.node,start+q.length-to.start);const selection=doc.defaultView.getSelection();selection.removeAllRanges();selection.addRange(range);if(frame===guideFrame)navigateGuideTo(from.node.parentElement,'center');else from.node.parentElement.scrollIntoView({block:'center'});toast('已定位当前内容中的匹配文字');
  }).catch(error);
 }}
 

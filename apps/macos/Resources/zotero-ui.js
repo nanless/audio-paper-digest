@@ -149,10 +149,15 @@ export function mountZotero(app) {
     resumeID = null; resumeContext = null; setMode('new');
     $('archive-title').textContent = app.state?.paper?.title || '当前论文（正在准备）';
     $('archive-identity').textContent = identity || '来源标识正在准备';
-    $('zotero-result').textContent = '正在准备当前论文的真实归档材料…'; $('zotero-steps').replaceChildren(); retry.hidden = true; open.hidden = true;
+    $('zotero-result').textContent = '正在读取归档记录并准备当前论文材料…'; $('zotero-steps').replaceChildren(); retry.hidden = true; open.hidden = true;
     dialog.showModal();
     updateControls();
     try {
+      // Saved checkpoints belong to their own paper/materials. Read them before
+      // preparing this preview, so a local PDF or failed article cannot hide
+      // an existing archive. Keep native operations sequential in the leaf host.
+      await refresh();
+      if (token !== generation || identity !== paperIdentity()) return;
       const prepared = await app.exportArchiveMaterials();
       if (token !== generation || identity !== paperIdentity()) return;
       materials = prepared;
@@ -166,7 +171,6 @@ export function mountZotero(app) {
       $('archive-analysis-detail').textContent = prepared.analysisHTML ? '已保存的个人解析与实际研究材料' : prepared.analysisNotice || '当前没有已保存个人解析';
       $('archive-note-detail').textContent = prepared.noteHTML ? '当前已保存研究笔记' : '当前没有研究笔记';
       $('zotero-result').textContent = '核对内容和目标分类后开始。书目成功不代表附件已经完成。';
-      await refresh();
     } catch (error) { if (token === generation && identity === paperIdentity()) failure(error); }
     finally { updateControls(); }
   }

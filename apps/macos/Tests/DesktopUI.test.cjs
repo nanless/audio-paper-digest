@@ -129,10 +129,14 @@ if(require.main===module)(async()=>{
     assert.equal(await page.locator('#app-window').evaluate(el=>el.inert),false);
   });
 
-  await check('PDF close preserves guide DOM, scroll and question',async()=>{
-    await page.evaluate(()=>{window.__guideBefore=document.querySelector('#guide-frame');__guideBefore.contentWindow.scrollTo(0,1000);document.querySelector('#question').value='保留提问';});
-    await page.locator('#pdf-close').click();await page.waitForFunction(()=>__calls.some(c=>c.command==='pdf.close'));
-    assert.equal(await page.evaluate(()=>document.querySelector('#guide-frame')===__guideBefore),true);assert.ok(await page.evaluate(()=>__guideBefore.contentWindow.scrollY)>0);assert.equal(await page.locator('#question').inputValue(),'保留提问');
+  await check('PDF close preserves actual outline location, original guide DOM and question',async()=>{
+    await page.locator('#outline button').filter({hasText:'块级硬残差与类级软残差如何分工'}).click();
+    const before=await page.evaluate(()=>{window.__guideBefore=document.querySelector('#guide-frame');window.__guideDocument=__guideBefore.contentDocument;window.__guideHeading=[...__guideDocument.querySelectorAll('h3')].find(h=>h.textContent==='块级硬残差与类级软残差如何分工');if(!__guideHeading)throw Error('Real scientific outline target absent');window.__guideScience=__guideDocument.querySelector('main').innerHTML;document.querySelector('#question').value='保留提问';const r=__guideHeading.getBoundingClientRect();return {top:r.top,bottom:r.bottom,scroll:__guideBefore.contentWindow.scrollY};});
+    assert.ok(before.scroll>0&&before.bottom>0&&before.top<80,JSON.stringify(before));
+    await page.locator('#pdf-close').click();await page.waitForFunction(()=>__calls.some(c=>c.command==='pdf.close'));await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>requestAnimationFrame(r)))));
+    const after=await page.evaluate(()=>{const r=__guideHeading.getBoundingClientRect();return {sameFrame:document.querySelector('#guide-frame')===__guideBefore,sameDocument:__guideBefore.contentDocument===__guideDocument,connected:__guideHeading.isConnected,sameScience:__guideDocument.querySelector('main').innerHTML===__guideScience,top:r.top,bottom:r.bottom,scroll:__guideBefore.contentWindow.scrollY};});
+    fs.writeFileSync(path.join(artifacts,'pdf-close-outline-geometry.json'),JSON.stringify({scope:'real published outline action with explicit native/PDF fixture',before,after},null,2)+'\n');
+    assert.ok(after.sameFrame&&after.sameDocument&&after.connected&&after.sameScience,JSON.stringify(after));assert.ok(after.scroll>0&&after.bottom>0&&Math.abs(after.top-before.top)<1,JSON.stringify({before,after}));assert.equal(await page.locator('#question').inputValue(),'保留提问');
   });
   await page.locator('#tab-note').click();await page.locator('#note-editor').fill('Isolated fixture persisted note; no personal profile touched.');await page.waitForFunction(()=>__fixture.personal.notes['arxiv:2610.27491']?.revision===1);
   await check('note persists only after native success and survives reopening',async()=>{

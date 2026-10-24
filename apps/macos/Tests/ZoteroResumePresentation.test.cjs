@@ -79,6 +79,30 @@ async function check(name,fn){const{page,errors}=await fresh();try{await fn(page
  await check('missing timestamp is explicitly unknown, not substituted with current time',async page=>{
   await reveal(page);await page.evaluate(()=>{delete fixture.archives[0].updatedAt;fixture.archives[1].updatedAt='2026-10-24T00:00:00Z';});await page.locator('#zotero-refresh').click();await page.waitForFunction(()=>[...document.querySelectorAll('#zotero-recent small')].every(e=>e.textContent.includes('时间未记录')));assert.equal(await page.locator('#zotero-recent small').count(),2);
  });
+ const broken=await leaf(browser,'zotero',{failMaterials:true,archives:[{archiveID:ids[0],status:'complete',title:'原归档独立于坏预览',identity:'arxiv:2601.00001v1',updatedAt:1790000000}]});
+ try{
+  await broken.waitForFunction(()=>document.querySelector('#zotero-result').textContent.includes('Explicit current preview materials unavailable'));
+  assert.equal(await broken.locator('#zotero-recent [data-zotero-resume]').isVisible(),true);
+  assert.equal(await broken.locator('#zotero-archive-start').isDisabled(),true);
+  await broken.evaluate(()=>document.querySelector('#zotero-archive-start').click());
+  assert.equal(await broken.evaluate(()=>leafFixture.calls.filter(c=>c.command==='zotero.archive').length),0);
+  await broken.locator('#zotero-recent [data-zotero-resume]').click();await broken.waitForFunction(()=>document.querySelector('#zotero-result').textContent.includes('原归档已完成本次回读核验'));
+  const calls=await broken.evaluate(()=>leafFixture.calls);
+  assert.deepEqual(calls.filter(c=>c.command==='zotero.resume').map(c=>c.payload),[{resumeID:ids[0],presentationID:'native-fixture-owner'}]);
+  assert.equal(calls.filter(c=>c.command==='archive.materials').length,1);
+  assert.equal(calls.filter(c=>c.command==='zotero.archive'||c.command==='zotero.authorize').length,0);
+  assert(calls.findIndex(c=>c.command==='zotero.status')<calls.findIndex(c=>c.command==='archive.materials'));
+  results.push({name:'actual native leaf keeps failed preview error and disabled new archive while old checkpoint remains resumable',passed:true});console.log('PASS actual native leaf keeps failed preview error and disabled new archive while old checkpoint remains resumable');
+ }catch(e){results.push({name:'actual native leaf keeps failed preview error and disabled new archive while old checkpoint remains resumable',passed:false,error:e.message});console.error(e);}finally{await broken.close();}
+ for(const flag of ['failStatus','failCollections']){
+  const unavailable=await leaf(browser,'zotero',{[flag]:true});try{
+   await unavailable.waitForFunction(()=>document.querySelector('#zotero-result').textContent.includes('核对内容'));
+   assert.equal(await unavailable.locator('#zotero-archive-start').isDisabled(),true);
+   await unavailable.evaluate(()=>document.querySelector('#zotero-archive-start').click());
+   assert.equal(await unavailable.evaluate(()=>leafFixture.calls.filter(c=>c.command==='zotero.archive'||c.command==='zotero.authorize').length),0);
+   results.push({name:'passive '+flag+' cannot grant new archive despite available preview materials',passed:true});console.log('PASS passive '+flag+' cannot grant new archive despite available preview materials');
+  }catch(e){results.push({name:'passive '+flag+' cannot grant new archive despite available preview materials',passed:false,error:e.message});console.error(e);}finally{await unavailable.close();}
+ }
  const archive={archiveID:ids[0],status:'complete',title:'主窗原归档夹具',identity:'arxiv:2610.27491v1',updatedAt:Date.UTC(2026,9,24)/1000};
  let main=await leaf(browser,'zotero',{archives:[archive]});
  try{
