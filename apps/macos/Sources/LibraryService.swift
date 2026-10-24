@@ -162,6 +162,36 @@ actor LibraryService {
     private let seedDirectory: URL?
     private static let maxTotal = 64 * 1024 * 1024
     private static let approvedHosts: Set<String> = ["arxiv.org", "export.arxiv.org", "www.isca-archive.org", "isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org"]
+    // These are published image layouts, not a grant to arbitrary GitHub content.
+    // Keep owner/repository/branch and every path component exact; each redirect
+    // passes the same policy again before DNS validation and fixed-IP transfer.
+    static func isOwnedPublishedImage(_ url:URL)->Bool {
+        guard url.scheme=="https",url.user==nil,url.password==nil,url.query==nil,url.fragment==nil,
+              url.port==nil || url.port==443,let components=URLComponents(url:url,resolvingAgainstBaseURL:false),
+              !components.percentEncodedPath.contains("%"),!components.percentEncodedPath.contains("\\"),!components.percentEncodedPath.contains("//") else{return false}
+        let path=components.percentEncodedPath
+        if url.host?.lowercased()=="raw.githubusercontent.com" {
+            let parts=path.split(separator:"/",omittingEmptySubsequences:false)
+            let conferences:Set<String>=["interspeech-2026","dafx-2026","acl-2026","eusipco-2026","cvpr-2026","nime-2026","speechprosody-2026","aaai-2026","odyssey-2026","icmc-2026","jep-2026","eacl-2026","iwslt-2026","chime-2026","uai-2026","aistats-2026"]
+            guard parts.count==7,parts[0].isEmpty,parts[1]=="nanless",parts[2]=="audio-paper-digest-images",parts[3]=="main",conferences.contains(String(parts[4])) else{return false}
+            return parts[5].range(of:#"\A[a-f0-9]{12}\z"#,options:.regularExpression) != nil && parts[6].range(of:#"\Afigure-[1-9][0-9]*\.png\z"#,options:.regularExpression) != nil
+        }
+        if url.host?.lowercased()=="nanless.github.io" {
+            let parts=path.split(separator:"/",omittingEmptySubsequences:false)
+            guard parts.count==5,parts[0].isEmpty,parts[1]=="audio-paper-digest-images",["icassp-2026","iclr-2026"].contains(parts[2]),parts[3].range(of:#"\A2026-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])\z"#,options:.regularExpression) != nil else{return false}
+            let pattern=parts[2]=="icassp-2026" ? #"\A[0-9]{8}-[0-9]+\.(?:png|jpg)\z"# : #"\A[A-Za-z0-9]{10}-[0-9]+\.(?:png|jpg)\z"#
+            return parts[4].range(of:pattern,options:.regularExpression) != nil
+        }
+        return false
+    }
+    static func isApprovedExternalResource(_ url:URL)->Bool {
+        guard url.scheme=="https",let host=url.host?.lowercased(),url.user==nil,url.password==nil,url.port==nil || url.port==443 else{return false}
+        return approvedHosts.contains(host) || isOwnedPublishedImage(url)
+    }
+    static func externalResourceProxy(_ url:URL,configured:URL?)->URL? {
+        let host=url.host?.lowercased()
+        return host=="arxiv.org" || host=="export.arxiv.org" || isOwnedPublishedImage(url) ? configured:nil
+    }
 
     init(dataDirectory: URL, siteBaseURL: URL = URL(string: "https://nanless.github.io/audio-paper-digest-blog/")!, seedDirectory: URL? = nil, transport: Transport? = nil, sessionConfiguration: URLSessionConfiguration? = nil) throws {
         guard siteBaseURL.scheme == "https", siteBaseURL.host != nil, siteBaseURL.user == nil,
@@ -780,7 +810,7 @@ actor LibraryService {
             guard bytes.count <= limit else { throw ServiceError.invalid("资料响应超过大小上限。") }
             return bytes
         }
-        if url.host?.lowercased() == siteBaseURL.host?.lowercased() {
+        if url.host?.lowercased() == siteBaseURL.host?.lowercased(),!Self.isOwnedPublishedImage(url) {
             _ = try sameSite(url.absoluteString)
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -808,7 +838,7 @@ actor LibraryService {
         var url = initial
         for _ in 0..<6 {
             try Task.checkCancellation()
-            guard url.scheme == "https", let host = url.host?.lowercased(), Self.approvedHosts.contains(host), url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { throw ServiceError.invalid("外部资源不在已支持的官方HTTPS来源中。") }
+            guard Self.isApprovedExternalResource(url),let host=url.host?.lowercased() else { throw ServiceError.invalid("外部资源不在已支持的官方HTTPS来源中。") }
             let arxiv = host == "arxiv.org" || host == "export.arxiv.org"
             if arxiv && httpProxy == nil { throw ServiceError.unavailable("arXiv 原文与图片需要配置HTTP CONNECT代理；已有导读仍可阅读。") }
             let address = try Self.publicAddress(host)
@@ -823,7 +853,7 @@ actor LibraryService {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
             let target = address.contains(":") ? "[\(address)]" : address
-            process.arguments = ["-q", "--globoff", "--silent", "--show-error", "--max-time", "120", "--connect-timeout", "30", "--max-filesize", String(limit), "--proto", "=https", "--max-redirs", "0", "--connect-to", "\(host):443:\(target):443", "--proxy", arxiv ? httpProxy!.absoluteString : "", "--noproxy", "", "--dump-header", headers.path, "--output", output.path, "--write-out", "%{http_code}", "--url", url.absoluteString]
+            process.arguments = ["-q", "--globoff", "--silent", "--show-error", "--max-time", "120", "--connect-timeout", "30", "--max-filesize", String(limit), "--proto", "=https", "--max-redirs", "0", "--connect-to", "\(host):443:\(target):443", "--proxy", Self.externalResourceProxy(url,configured:httpProxy)?.absoluteString ?? "", "--noproxy", "", "--dump-header", headers.path, "--output", output.path, "--write-out", "%{http_code}", "--url", url.absoluteString]
             process.environment = ["PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"]
             process.standardOutput = stdout; process.standardError = stderr
             let transferID = UUID()
