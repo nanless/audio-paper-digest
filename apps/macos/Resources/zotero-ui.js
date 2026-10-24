@@ -50,7 +50,7 @@ export function mountZotero(app) {
     $('zotero-connection-message').textContent = writable ? '已获本机写入许可。将逐项保存并回读验证，失败项目可以续传。' : !status?.authorized && unchecked ? '连接与分类查询不读取密钥。可主动检查已保存许可；系统可能请你确认钥匙串访问。' : status?.authorized ? '单次许可不足以完成多步附件归档。请在 Zotero 的原生窗口中自行决定是否持续允许。' : '可检查已保存许可，或在 Zotero 原生窗口中明确请求新的写入授权。';
     $('zotero-authorize').disabled = busy; grantButton.disabled = busy;
     $('zotero-refresh').disabled = busy;
-    settingsPane.querySelectorAll('[data-zotero-resume]').forEach(button => { button.disabled = busy; });
+    document.querySelectorAll('#zotero-pending [data-zotero-resume],#zotero-recent [data-zotero-resume]').forEach(button => { button.disabled = busy; });
     checkButton.disabled = busy || !status?.writesSupported; settingsCheck.disabled = checkButton.disabled;
     checkButton.hidden = writable; settingsCheck.hidden = writable;
     start.disabled = busy || !writable || !materials || (!collectionKey() && !collectionName());
@@ -71,7 +71,7 @@ export function mountZotero(app) {
     $('zotero-pending').innerHTML = pending.length ? '<h2>未完成归档</h2>' + pending.map(a => `<div class="zotero-pending-row"><p>${escape(a.title)}</p><button class="secondary-button" data-zotero-resume="${escape(a.archiveID)}">从已保存步骤继续</button></div>`).join('') : '';
     const recent = (status?.archives || []).filter(a => a.status === 'complete').slice(0,8);
     $('zotero-recent').innerHTML = recent.length ? '<h2>最近归档</h2>' + recent.map(a => `<div class="zotero-pending-row"><p>${escape(a.title)}</p><button type="button" class="secondary-button" data-zotero-resume="${escape(a.archiveID)}">重新回读核验</button></div>`).join('') : '';
-    settingsPane.querySelectorAll('[data-zotero-resume]').forEach(button => { button.onclick = () => resume(button.dataset.zoteroResume); });
+    document.querySelectorAll('#zotero-pending [data-zotero-resume],#zotero-recent [data-zotero-resume]').forEach(button => { button.onclick = () => resume(button.dataset.zoteroResume); });
   }
   async function refresh() {
     try {

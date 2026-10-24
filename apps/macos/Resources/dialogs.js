@@ -60,11 +60,7 @@ export function installDialogs(){
   dialog.showModal=()=>{
    if(entry){const heading=entry.surface.querySelector('h1,h2');if(heading)entry.surface.setAttribute('aria-label',heading.textContent);focusModal(entry);return;}
    const previousFocus=document.activeElement,surface=document.createElement('section');
-   surface.id=id;surface.className=classes;surface.dataset.dialogSurface='';surface.setAttribute('role','dialog');surface.setAttribute('open','');
-   // Experimental WK compatibility: omit aria-modal while retaining role, inert
-   // background, top-surface focus and Tab/Escape isolation. The real app's
-   // correctly focused/visible modal still had an empty native AX tree; this
-   // single-variable candidate requires actual Mac verification, not DOM proof.
+   surface.id=id;surface.className=classes;surface.dataset.dialogSurface='';surface.setAttribute('role','dialog');surface.setAttribute('aria-modal','true');surface.setAttribute('open','');
    const heading=originalQuery('h1,h2');surface.setAttribute('aria-label',heading?.textContent||(id==='archive-dialog'?'存入 Zotero':'研究详情'));
    surface.style.cssText='display:block;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);margin:0;z-index:200;overflow:auto;max-height:calc(100vh - 48px)';
    // Keep the existing facade reference valid for Zotero/storage async callbacks,

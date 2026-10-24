@@ -645,3 +645,23 @@ Root 在标记为 09:25 的实际安装包中，从干净资料库打开“本�
 作者相关隔离回归实际 49/49 通过：Facade 6、Focus 6、Detail 4、Storage 异步 7、内容/AX 12、当前设置界面 14。原估 47 基于旧设置套件的 12 组，当前套件实际已有 14 组。新增断言在原用例中核对没有 aria-modal 时仍保留 role、背景 inert、下层 inert/仅栈顶交互和关闭后回退；完整 DesktopUI 的旧 aria-modal=true 期望也同步为本实验的明确缺省合同。日志在本机 `.qa/no-aria-*.log`，dialogs.js 冻结 SHA 为 `223f66528502360084ec4dcc2c9cfdbf0b5ccb40425323fd9bf88971589a9fc6`。非作者审查与新包真实验收仍分别记录。
 
 非作者已按相同 SHA 完成精确源码差异审查，并独立实际复跑 Facade 6/6；未发现 role、inert、键盘栈或原生 PDF 遮挡守卫漂移。允许纳入实验候选包，不代表 macOS AX 问题已关闭。
+
+### 真实结果与撤回：9f296220 的无 aria-modal 实验无效
+
+Root 安装该候选后，本机资料仍只有空 HTML AX 容器。该实验未修复问题，现已恢复 `aria-modal=true` 及相应语义测试。此前实际失败、49 组行为通过及非作者通过均保留为各自范围的历史证据；不能把隔离测试通过解释成真实问题解决。
+
+### 下一单变量：只取消主窗背景 root 的 inert，待实机
+
+在恢复完整 aria 基线后，仅令主窗 `#app-window.inert=false`。已真实可访问的独立设置页继续使用 `.settings-body.inert=open`，动态 Zotero 对话框作为同包基线对照。两边均保留 `role=dialog`、`aria-modal=true`、下层 surface inert、仅栈顶焦点、Tab 循环、Escape 栈顶关闭，以及现有背景付费快捷键阻断与原生 PDF 遮挡。主窗背景仍有原遮罩；本实验不新增菜单、不改变用户资料和授权。
+
+主窗与设置页还有以下已知差别：主窗初始 HTML 含静态 archive/detail dialog，设置页的 Zotero dialog 为模块动态创建；主窗有最多 100 行目录与阅读 iframe/原生 PDF sibling，设置页直接使用独立 WK；正式包的持久 WK 上下文与所有隔离 probe 也不相同。835c 的真实结构诊断已排除可见性、祖先隐藏、窗口激活和 DOM 焦点错误，本候选只验证主窗 inert 与引擎 AX 过滤之间的关系，不宣称任何上述差别已被证实为原因。
+
+B 候选隔离回归 49/49；Facade 原用例还增加实际 settings.html 动态 Zotero 弹窗的对照，确认其 root inert=true、aria-modal=true，Escape 后恢复 root inert=false。非作者按 `54af2b6b181a03f4f2b438534591d568aa7b6e5b9c91333d6283379e883f6ce7` 核对源码并独立复跑 Facade 6/6，通过范围仅为单变量实现及隔离交互，不授予真实 AX 通过。未提交或安装该候选。
+
+非作者随后补查原生菜单对应的事件，发现模态期间搜索命令可把焦点移到背景输入框，实际输入会触发资料库搜索。背景鼠标遮挡和付费快捷键保护仍通过，但不足以维持完整模态隔离。Root已将B构建及精确实验源码保留在忽略的 `.qa/modal-inert-b/`，生产源码与测试恢复背景 inert；没有推送或安装此候选。若后续实机AX对照证明有效，须先修复焦点与命令隔离再独立复验。
+
+## 2026-10-24：真实设置切换导致历史归档按钮未绑定
+
+9f296220实机“最近归档”点击无反应。非作者使用真实settings.html、settings.js、dialogs.js与Zotero生产模块独立复现：`revealAccessiblePane`浅克隆外层并迁移原孩子，初始化保存的settingsPane已脱离DOM且为空，renderPending/updateControls在旧容器查询0个按钮，故没有onclick，实际resume请求0。此前单独可见section的8组回归漏掉该集成。
+
+修复仅将两处查询限定到当前document里的实际pending/recent列表。新增真实设置集成先在旧实现复现2组失败，再验证首次reading→Zotero、3轮往返与刷新、精确resumeID、busy禁用与防重复，作者2/2及原模块8/8通过；非作者以自己的真实页面集成连续两轮独立复验通过，未发新归档、授权或准备当前论文材料请求。新套件已加入完整测试入口。实际新包GUI重复回读与重启续传仍须在解锁后执行。
