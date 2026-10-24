@@ -14,6 +14,8 @@
 | Mac 应用需求历史、现有结论和实现范围 | [完整需求整理](mac-app-requirements.md)与[应用构建及使用说明](../apps/macos/README.md) |
 | Mac 应用当前做到哪一步、哪些真实验收仍受阻 | [实施与测试记录](mac-app-validation.md)、[69项验收矩阵](mac-app-acceptance.md)、[五轮独立审查记录](mac-app-review-log.md) |
 | 当前 Mac 数据接入与 Zotero 完整归档的实际合同 | [已发布数据适配](mac-app-data.md)与[Zotero本机接口](mac-app-zotero.md) |
+| Mac完整研究资料保存到坚果云、版本续传与恢复 | [坚果云资料合同及新增17项验收](mac-app-cloud.md) |
+| 仓库Mac应用Release的ZIP/DMG、校验和与发布门槛 | [发行产物准备](mac-app-release.md) |
 | Mac 如何读取已发布成果、增量离线、版本和撤稿信息 | [客户端静态数据合同](desktop-data-contract.md)（拟新增 `desktop/v1`，尚未实现） |
 | Mac 界面参考、单栏与 PDF 双栏、逐屏尺寸及视觉验收 | [界面设计研究](macos-interface-design-research.md) |
 | Reader、SHA、CAS、检查点和凭证是什么 | [常见术语](writing-guide.md#术语先解释再统一称呼) |

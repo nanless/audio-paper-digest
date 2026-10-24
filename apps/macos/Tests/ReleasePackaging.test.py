@@ -1,0 +1,218 @@
+"""Temporary public-fixture repositories and real local Mach-O/codesign/ditto.
+No personal app/profile/Keychain access, network, tag push or GitHub mutation.
+"""
+import base64, copy, hashlib, io, json, os, pathlib, platform, plistlib, shutil, subprocess, tarfile
+import sys, tempfile, unittest
+sys.dont_write_bytecode=True
+
+SCRIPT=pathlib.Path(__file__).resolve().parents[1]/'release.sh'
+HELPER=SCRIPT.with_name('release_tools.py')
+sha=lambda raw:hashlib.sha256(raw).hexdigest()
+
+def execute(args,cwd=None,env=None):
+    return subprocess.run([str(x) for x in args],cwd=cwd,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+
+def success(args,cwd=None):
+    r=execute(args,cwd);assert r.returncode==0,r.stderr.decode();return r.stdout
+
+def write(path,raw):
+    path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+
+def save(path,value):
+    write(path,(json.dumps(value,ensure_ascii=False,indent=2)+'\n').encode())
+
+class Packaging(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if os.environ.get('CODEX_SANDBOX'):raise RuntimeError('请在本机正常开发环境执行测试')
+        if platform.system()!='Darwin':raise unittest.SkipTest('真实codesign/ditto/DMG验收需要macOS，不伪造通过')
+        cls.base=tempfile.TemporaryDirectory(prefix='paperdigest-release-test-template-');cls.template=pathlib.Path(cls.base.name)
+        repo=cls.template/'repo';repo.mkdir();app=cls.template/'论文速递.app';resources=app/'Contents/Resources'
+        cls.arch=platform.machine()
+        cls.fixed={'Seed/assets/fixture.pdf':b'Explicit public fixture PDF bytes.','Seed/assets/fixture.png':b'Explicit public fixture image bytes.','Web/vendor/katex/katex.min.js':b'// Explicit pinned public fixture math library.','Web/vendor/katex/fonts/fixture.woff2':b'Explicit fixture font bytes.','Web/vendor/katex/LICENSE':b'Explicit public fixture MIT license.'}
+        sample={'pdf':{'src':'fixture.pdf','sha256':sha(cls.fixed['Seed/assets/fixture.pdf'])},'figures':[{'src':'fixture.png','sha256':sha(cls.fixed['Seed/assets/fixture.png'])}]}
+        packed=io.BytesIO()
+        with tarfile.open(fileobj=packed,mode='w:gz') as tar:
+            for name,data in {'package/dist/katex.min.js':cls.fixed['Web/vendor/katex/katex.min.js'],'package/dist/fonts/fixture.woff2':cls.fixed['Web/vendor/katex/fonts/fixture.woff2'],'package/LICENSE':cls.fixed['Web/vendor/katex/LICENSE'],'package/package.json':b'{"name":"katex","version":"0.19.1"}'}.items():
+                entry=tarfile.TarInfo(name);entry.size=len(data);tar.addfile(entry,io.BytesIO(data))
+        archive=packed.getvalue();integrity=hashlib.sha512(archive).digest();key=integrity.hex();cache=cls.template/'cache/_cacache/content-v2/sha512'/key[:2]/key[2:4]/key[4:];write(cache,archive)
+        lock={'packages':{'node_modules/katex':{'version':'0.19.1','resolved':'https://registry.npmjs.org/katex/-/katex-0.19.1.tgz','integrity':'sha512-'+base64.b64encode(integrity).decode()}}}
+        files={'apps/macos/Sources/Main.swift':b'// Explicit isolated public-source fixture, never user app.\n', 'apps/macos/build.sh':b'#!/bin/bash\n# Explicit isolated build fixture.\n', 'apps/macos/Resources/index.html':b'<html><body>Isolated release fixture</body></html>\n','apps/macos/llm-worker.cjs':b'// Explicit isolated fixture; no model service.\n','prototypes/macos-research/sample.json':json.dumps(sample).encode(),'.gitignore':b'prototypes/macos-research/assets/\n','apps/macos/package.json':b'{"dependencies":{"katex":"0.19.1"}}','apps/macos/package-lock.json':json.dumps(lock).encode()}
+        plist={'CFBundleIdentifier':'com.nanless.PaperDigest','CFBundleName':'论文速递','CFBundleExecutable':'PaperDigest','CFBundlePackageType':'APPL','CFBundleShortVersionString':'1.0.0','CFBundleVersion':'1','LSMinimumSystemVersion':'15.0'}
+        files['apps/macos/Info.plist']=plistlib.dumps(plist)
+        for name,raw in files.items():write(repo/name,raw)
+        success(['git','init','-q',repo]);success(['git','config','user.name','Isolated Release Fixture'],repo);success(['git','config','user.email','fixture@example.invalid'],repo);success(['git','add','.'],repo);success(['git','commit','-qm','Isolated public fixture'],repo)
+        cls.commit=success(['git','rev-parse','HEAD'],repo).decode().strip()
+        mapping={'Sources/Main.swift':'apps/macos/Sources/Main.swift','Build/build.sh':'apps/macos/build.sh','Web/index.html':'apps/macos/Resources/index.html','Seed/sample.json':'prototypes/macos-research/sample.json','Contents/Info.plist':'apps/macos/Info.plist','Contents/Resources/llm-worker.cjs':'apps/macos/llm-worker.cjs'}
+        entries=[]
+        for relative,source in mapping.items():
+            raw=files[source];entries.append({'path':relative,'bytes':len(raw),'sha256':sha(raw)})
+            if not relative.startswith(('Sources/','Build/')):write(app/(relative if relative.startswith('Contents/') else 'Contents/Resources/'+relative),raw)
+        for relative,raw in cls.fixed.items():
+            write(resources/relative,raw);entries.append({'path':relative,'bytes':len(raw),'sha256':sha(raw)})
+            if relative.startswith('Seed/assets/'):write(repo/('prototypes/macos-research/assets/'+relative[len('Seed/assets/'):]),raw)
+        source=cls.template/'main.c';source.write_text('int main(void) { return 0; }\n')
+        main=app/'Contents/MacOS/PaperDigest';main.parent.mkdir(parents=True)
+        success(['/usr/bin/clang','-target',cls.arch+'-apple-macos15.0',source,'-o',main])
+        node=resources/'Runtime/node';node.parent.mkdir(parents=True);shutil.copy2(main,node)
+        success(['/usr/bin/codesign','--force','--sign','-','--timestamp=none',node])
+        write(resources/'Runtime/NODE-LICENSE',b'Isolated placeholder license for explicit fixture binary; not a Node distribution.\n')
+        for relative in ['Contents/Resources/Runtime/node','Contents/Resources/Runtime/NODE-LICENSE']:
+            raw=(app/relative).read_bytes();entries.append({'path':relative,'bytes':len(raw),'sha256':sha(raw)})
+        save(resources/'build-metadata.json',{'contract':'paper-digest-mac-build-v1','builtAt':'2026-10-24T18:15:23.755225+00:00','sourceCommit':cls.commit,'architecture':cls.arch,'signing':'ad-hoc; not notarized','files':entries})
+        cls.sign(app)
+        cls.make_record(app,cls.template/'record.json')
+
+    @classmethod
+    def tearDownClass(cls):
+        if hasattr(cls,'base'):cls.base.cleanup()
+
+    @staticmethod
+    def sign(app):success(['/usr/bin/codesign','--force','--sign','-','--timestamp=none','--identifier','com.nanless.PaperDigest',app])
+
+    @staticmethod
+    def make_record(app,path):
+        metadata=app/'Contents/Resources/build-metadata.json';m=json.loads(metadata.read_bytes());binary=app/'Contents/MacOS/PaperDigest';raw=binary.read_bytes()
+        save(path,{'contract':'paper-digest-mac-signed-build-v1','builtAt':m['builtAt'],'sourceCommit':m['sourceCommit'],'architecture':m['architecture'],'signing':m['signing'],'bundlePath':'/explicit/private/fixture/path/not-for-public-output','buildMetadataSHA256':sha(metadata.read_bytes()),'binary':{'path':'Contents/MacOS/PaperDigest','bytes':len(raw),'sha256':sha(raw)}})
+
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='paperdigest-release-test-');self.root=pathlib.Path(self.temp.name)
+        self.repo=self.root/'repo';shutil.copytree(self.template/'repo',self.repo)
+        self.app=self.root/'论文速递.app';success(['/usr/bin/ditto',self.template/'论文速递.app',self.app])
+        self.record=self.root/'record.json';shutil.copy2(self.template/'record.json',self.record);self.output=self.root/'out'
+        self.cache=self.root/'cache';shutil.copytree(self.template/'cache',self.cache)
+
+    def tearDown(self):self.temp.cleanup()
+
+    def call(self,command='inspect',*options,expected=0,env=None):
+        if command in ['inspect','prepare']:args=['--app',self.app,'--build-record',self.record,'--repo',self.repo,*options]
+        else:args=['--prepared',self.output,'--repo',self.repo,*options]
+        env=dict(os.environ if env is None else env,PD_RELEASE_NPM_CACHE=str(self.cache));r=execute(['/bin/bash',SCRIPT,command,*args],env=env)
+        if expected==0:self.assertEqual(r.returncode,0,r.stderr.decode());return json.loads(r.stdout)
+        self.assertNotEqual(r.returncode,0,'negative case must not succeed');return r.stderr.decode()
+
+    def change_metadata(self,action):
+        p=self.app/'Contents/Resources/build-metadata.json';m=json.loads(p.read_bytes());action(m);save(p,m);self.sign(self.app);self.make_record(self.app,self.record)
+
+    def prepare(self,dmg=False):return self.call('prepare','--output',self.output,*(['--dmg'] if dmg else []))
+
+    def test_01_real_signed_fixture_inspects_without_launching(self):
+        r=self.call();self.assertEqual(r['architecture'],self.arch);self.assertFalse(r['publicationEligible']);self.assertEqual(r['sourceCommit'],self.commit)
+
+    def test_02_zip_real_decode_signature_and_privacy(self):
+        before=sha((self.app/'Contents/MacOS/PaperDigest').read_bytes());r=self.prepare();self.assertFalse(r['publicationEligible']);self.assertTrue(self.call('verify')['verified'])
+        self.assertEqual(sha((self.app/'Contents/MacOS/PaperDigest').read_bytes()),before)
+        public=(self.output/'build-info.json').read_text();self.assertNotIn(str(self.root),public);self.assertNotIn('/explicit/private',public);self.assertNotIn('bundlePath',public);self.assertNotIn('.qa/',public)
+
+    def test_03_dmg_actual_readonly_mount_and_applications_link(self):
+        r=self.prepare(True);self.assertTrue(any(p.endswith('.dmg') for p in r['artifacts']));self.assertTrue(self.call('verify')['verified'])
+
+    def test_04_mismatched_bundle_version_refused(self):self.assertIn('版本',self.call('inspect','--version','0.1.0',expected=1))
+    def test_05_dirty_source_refused(self):write(self.repo/'apps/macos/Sources/Main.swift',b'changed');self.assertIn('未提交',self.call(expected=1))
+    def test_06_dirty_documentation_also_refused(self):write(self.repo/'docs/changed.md',b'doc');self.assertIn('未提交',self.call(expected=1))
+    def test_07_untracked_file_refused(self):write(self.repo/'untracked-file',b'not committed');self.assertIn('未提交',self.call(expected=1))
+
+    def test_08_committed_documentation_only_head_is_explicit(self):
+        write(self.repo/'docs/release.md',b'Public documentation only.');success(['git','add','.'],self.repo);success(['git','commit','-qm','Documentation only'],self.repo)
+        r=self.call();self.assertEqual(r['documentationOnlyChanges'],['docs/release.md']);self.assertNotEqual(r['sourceCommit'],r['releaseHead'])
+
+    def test_09_committed_runtime_change_requires_new_build(self):
+        write(self.repo/'apps/macos/Resources/index.html',b'changed');success(['git','add','.'],self.repo);success(['git','commit','-qm','Changed runtime'],self.repo)
+        self.assertIn('非文档变更',self.call(expected=1))
+
+    def test_10_production_environment_file_is_refused(self):write(self.app/'Contents/Resources/.env',b'EXPLICIT_PRIVATE_TEST_VALUE');self.assertIn('私人',self.call(expected=1))
+    def test_11_private_qa_data_is_refused(self):write(self.app/'Contents/Resources/.qa/private.json',b'{}');self.assertIn('私人',self.call(expected=1))
+    def test_12_bundle_symlink_is_refused(self):os.symlink('/tmp',self.app/'Contents/Resources/link');self.assertIn('符号链接',self.call(expected=1))
+
+    def test_13_unknown_bundle_file_is_not_hidden_by_resigning(self):
+        write(self.app/'Contents/Resources/extra.json',b'{}');self.sign(self.app);self.make_record(self.app,self.record);self.assertIn('额外',self.call(expected=1))
+
+    def test_14_broken_real_signature_is_refused(self):
+        p=self.app/'Contents/MacOS/PaperDigest';raw=bytearray(p.read_bytes());raw[1024]^=1;p.write_bytes(raw);self.make_record(self.app,self.record);self.call(expected=1)
+
+    def test_15_signed_binary_must_match_review_record(self):
+        r=json.loads(self.record.read_bytes());r['binary']['sha256']='0'*64;save(self.record,r);self.assertIn('审定候选',self.call(expected=1))
+
+    def test_16_metadata_must_match_review_record(self):
+        r=json.loads(self.record.read_bytes());r['buildMetadataSHA256']='0'*64;save(self.record,r);self.assertIn('清单SHA',self.call(expected=1))
+
+    def test_17_false_notarization_claim_is_refused(self):self.change_metadata(lambda m:m.update(signing='Developer ID; notarized'));self.assertIn('ad-hoc',self.call(expected=1))
+    def test_18_wrong_architecture_is_refused(self):self.change_metadata(lambda m:m.update(architecture='x86_64' if self.arch=='arm64' else 'arm64'));self.assertIn('架构',self.call(expected=1))
+    def test_19_parent_path_in_manifest_is_refused(self):self.change_metadata(lambda m:m['files'][0].update(path='../escape'));self.assertIn('越界',self.call(expected=1))
+    def test_20_duplicate_manifest_path_is_refused(self):self.change_metadata(lambda m:m['files'].append(copy.deepcopy(m['files'][0])));self.assertIn('重复',self.call(expected=1))
+    def test_21_omitted_native_source_is_refused(self):self.change_metadata(lambda m:m.update(files=[x for x in m['files'] if not x['path'].startswith('Sources/')]));self.assertIn('遗漏原生',self.call(expected=1))
+    def test_22_fake_source_digest_is_refused(self):self.change_metadata(lambda m:m['files'][0].update(sha256='0'*64));self.assertIn('Git字节',self.call(expected=1))
+
+    def test_23_existing_output_is_never_overwritten(self):
+        self.output.mkdir();write(self.output/'preserve',b'keep');self.assertIn('已存在',self.call('prepare','--output',self.output,expected=1));self.assertEqual((self.output/'preserve').read_bytes(),b'keep')
+
+    def test_24_archive_tampering_is_refused(self):
+        self.prepare();p=next(self.output.glob('*.zip'));p.write_bytes(p.read_bytes()+b'tamper');self.assertIn('SHA',self.call('verify',expected=1))
+
+    def test_25_extra_output_file_is_refused(self):self.prepare();write(self.output/'private.json',b'{}');self.assertIn('额外',self.call('verify',expected=1))
+
+    def test_26_unknown_candidate_cannot_be_promoted(self):
+        self.prepare();p=self.output/'build-info.json';r=json.loads(p.read_bytes());r['publicationEligible']=True;save(p,r);self.assertIn('正式',self.call('verify',expected=1))
+
+    def test_27_pending_acceptance_cannot_even_generate_a_gh_command(self):
+        self.prepare();status=self.root/'status.md';status.write_text(self.status('待验'));self.assertIn('尚未全部通过',self.call('publish-plan','--acceptance-status',status,expected=1))
+
+    @staticmethod
+    def status(state):
+        return '\n'.join('| '+prefix+'-'+str(i).zfill(2)+' | '+state+' | explicit fixture |' for prefix,count in [('APP',9),('DATA',13),('READ',9),('LIB',3),('NOTE',3),('EXP',3),('LLM',10),('JOB',5),('ZOT',14)] for i in range(1,count+1))
+
+    def test_28_complete_fixture_only_produces_nonexecuted_verify_tag_draft_plan(self):
+        self.prepare();status=self.root/'status.md';status.write_text(self.status('通过'));cloud=self.root/'cloud.md';cloud.write_text(self.cloud_status('通过'));r=self.call('publish-plan','--acceptance-status',status,'--cloud-acceptance',cloud,'--prerelease')
+        self.assertFalse(r['executed']);self.assertFalse(r['automaticTagCreation']);self.assertFalse(r['publicPublication']);self.assertIn('--verify-tag',r['argv']);self.assertIn('--draft',r['argv']);self.assertIn('--prerelease',r['argv']);self.assertEqual(r['argv'][3],'v1.0.0')
+        self.assertEqual(success(['git','tag'],self.repo),b'')
+
+    def test_29_duplicate_or_missing_acceptance_ids_refused(self):
+        self.prepare();status=self.root/'status.md';text=self.status('通过');status.write_text(text.replace('ZOT-14','ZOT-13'));self.assertIn('尚未全部通过',self.call('publish-plan','--acceptance-status',status,expected=1))
+
+    def test_30_external_guard_cannot_be_bypassed_by_direct_python(self):
+        env=dict(os.environ,CODEX_SANDBOX='1');self.assertIn('正常开发环境',self.call(expected=1,env=env))
+        r=execute(['/usr/bin/python3',HELPER,'--help'],env=env);self.assertNotEqual(r.returncode,0);self.assertIn('正常开发环境',r.stderr.decode())
+
+    @staticmethod
+    def cloud_status(state):return '\n'.join('| '+p+'-'+str(i).zfill(2)+' | '+state+' | fixture |' for p,n in [('CLOUD',12),('REL',5)] for i in range(1,n+1))
+
+    def test_31_original69_pass_but_cloud17_pending_refuses_plan(self):
+        self.prepare();status=self.root/'status.md';status.write_text(self.status('通过'));cloud=self.root/'cloud.md';cloud.write_text(self.cloud_status('待验'));self.assertIn('17项尚未',self.call('publish-plan','--acceptance-status',status,'--cloud-acceptance',cloud,expected=1))
+
+    def test_32_cloud_duplicate_id_refuses_plan(self):
+        self.prepare();status=self.root/'status.md';status.write_text(self.status('通过'));cloud=self.root/'cloud.md';cloud.write_text(self.cloud_status('通过').replace('REL-05','REL-04'));self.assertIn('17项尚未',self.call('publish-plan','--acceptance-status',status,'--cloud-acceptance',cloud,expected=1))
+
+    def test_33_ignored_seed_is_genuinely_not_git_tracked(self):
+        self.assertEqual(success(['git','ls-files','prototypes/macos-research/assets'],self.repo),b'');self.call();self.prepare()
+
+    def test_34_extra_seed_cannot_be_authorized_by_self_reported_metadata(self):
+        raw=b'explicit private fixture not approved';write(self.app/'Contents/Resources/Seed/assets/private.json',raw);self.change_metadata(lambda m:m['files'].append({'path':'Seed/assets/private.json','bytes':len(raw),'sha256':sha(raw)}));self.assertIn('未知非Git',self.call(expected=1))
+
+    def test_35_extra_katex_cannot_be_authorized_by_self_reported_metadata(self):
+        raw=b'explicit private fixture not approved';write(self.app/'Contents/Resources/Web/vendor/katex/private.json',raw);self.change_metadata(lambda m:m['files'].append({'path':'Web/vendor/katex/private.json','bytes':len(raw),'sha256':sha(raw)}));self.assertIn('未知非Git',self.call(expected=1))
+
+    def test_36_katex_same_name_modified_bytes_rejected(self):
+        raw=b'changed library';write(self.app/'Contents/Resources/Web/vendor/katex/katex.min.js',raw);self.change_metadata(lambda m:next(x for x in m['files'] if x['path']=='Web/vendor/katex/katex.min.js').update(bytes=len(raw),sha256=sha(raw)));self.assertIn('锁定字节',self.call(expected=1))
+
+    def test_37_cache_tamper_rejected_before_vendor_trust(self):
+        file=next(p for p in self.cache.rglob('*') if p.is_file());file.write_bytes(file.read_bytes()+b'tampered');self.assertIn('SHA512',self.call(expected=1))
+
+    def test_38_app_root_private_finder_comment_rejected(self):
+        success(['/usr/bin/xattr','-w','com.apple.metadata:kMDItemFinderComment','Explicit synthetic private fixture',self.app]);self.assertIn('私人',self.call(expected=1))
+
+    def test_39_contents_directory_private_download_location_rejected(self):
+        success(['/usr/bin/xattr','-w','com.apple.metadata:kMDItemWhereFroms','Explicit synthetic private fixture',self.app/'Contents']);self.assertIn('私人',self.call(expected=1))
+
+    def test_40_real_public_seed_and_locked_katex_topology_readonly(self):
+        import runpy
+        module=runpy.run_path(str(HELPER));repo=SCRIPT.parents[2];commit=success(['git','rev-parse','HEAD'],repo).decode().strip();fixed=module['fixed_public_inputs'](repo,commit)
+        for relative,entry in fixed.items():
+            if relative.startswith('Seed/assets/'):file=repo/'prototypes/macos-research/assets'/relative[len('Seed/assets/'):]
+            else:
+                tail=relative[len('Web/vendor/katex/'):];file=repo/'apps/macos/node_modules/katex'/('LICENSE' if tail=='LICENSE' else 'dist/'+tail)
+            self.assertEqual(sha(file.read_bytes()),entry['sha256'])
+
+    def test_41_app_root_symlink_not_silently_resolved(self):
+        alias=self.root/'linked.app';os.symlink(self.app,alias);r=execute(['/bin/bash',SCRIPT,'inspect','--app',alias,'--repo',self.repo,'--build-record',self.record]);self.assertNotEqual(r.returncode,0);self.assertIn('根不能是符号链接',r.stderr.decode())
+
+if __name__=='__main__':unittest.main(verbosity=2)

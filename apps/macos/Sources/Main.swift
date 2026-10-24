@@ -38,6 +38,11 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!
     var terminationPending=false
     var maintenanceBusy=false
+    var cloudLocal:CloudLocalStore?,cloudArchive:CloudArchiveService?
+    var cloudBusy=false,cloudCredentialState="unknown"
+    var cloudAutomaticPausedInMemory=false
+    var cloudActiveJobID:String?,cloudLastError:String?
+    var cloudSchedule:Timer?
     var offlinePDF:[String:Any]?
     var currentPDFReceipt:[String:Any]=[:]
     var pendingPDFPage:Int?
@@ -48,6 +53,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var schedule:Timer?, lastSyncAttempt=Date.distantPast
     var scheme:BundleScheme!
     var settingsWeb:WKWebView?
+    var settingsPaneRequest:String?
+    var settingsPaneRequestID=UUID()
     var storageDetailWindow:NSWindow?,storageDetailWeb:WKWebView?,storageDetailSession:StorageDetailSession?
     var storageDetailBusy=false,storageDetailSystemPanel=false
     var storageDetailDocumentAccess:DetailDocumentAccess?
@@ -61,7 +68,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             zotero=ZoteroService(dataDirectory:directory)
             model=ModelService(directory:directory,store:store)
             storage=DesktopStorage(directory:directory,store:store)
-            buildMenu(); buildWindow(); configureSchedule()
+            buildMenu(); buildWindow(); configureSchedule(); configureCloudSchedule()
             NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(didWake),name:NSWorkspace.didWakeNotification,object:nil)
             NSApp.activate(ignoringOtherApps:true)
         } catch { showError(error); NSApp.terminate(nil) }
@@ -156,7 +163,14 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             return
         }
         guard source===web || source===settingsWeb else{replyHandler(nil,"已拒绝过期或未知窗口的操作");return}
-        Task{do{replyHandler(try await dispatch(command,payload:payload),nil)}catch{replyHandler(nil,error.localizedDescription)}}
+        Task{do{
+            let result=try await dispatch(command,payload:payload)
+            replyHandler(result,nil)
+            // settings.js installs its pane hook before its first bootstrap.
+            // This authenticated same-view round trip is the readiness signal;
+            // didFinish alone may precede module initialization in WKWebView.
+            if source===settingsWeb,command=="app.bootstrap"{applySettingsPaneRequest(documentReady:true)}
+        }catch{replyHandler(nil,error.localizedDescription)}}
     }
     func emit(_ name:String,_ object:[String:Any]=[:],to targets:[WKWebView]?=nil) {
         guard JSONSerialization.isValidJSONObject(object),let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8),let event=try? JSONSerialization.data(withJSONObject:[name]),let json=String(data:event,encoding:.utf8) else{return}
@@ -166,10 +180,11 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         let readingCommands:Set<String>=["app.setPaper","library.article","pdf.open","pdf.close","pdf.page","pdf.fit","pdf.zoom","pdf.locate","pdf.highlight","pdf.removeAnnotation","storage.open","storage.prepare","model.run","archive.materials","zotero.archive","storage.cleanupPlan","storage.cleanup","app.openLocal","app.restore","app.export","app.backup","app.diagnostics","app.findQuery","model.preview","pdf.selection","pdf.outline","pdf.find","pdf.openExternal"]
         if readingCommands.contains(command){try requireMainContextAvailable()}
         let savingCommands:Set<String>=["personal.note","personal.reading","personal.annotationNote","settings.save","pdf.frame","personal.snapshot"]
-        if maintenanceBusy {guard command=="pdf.frame" else{throw DesktopError.message("正在整理资料，请稍后再操作")}}
+        if maintenanceBusy {guard ["pdf.frame","cloud.state","cloud.revealTransfers"].contains(command) else{throw DesktopError.message("正在整理资料，请稍后再操作")}}
         if terminationPending {
             guard savingCommands.contains(command) else{throw DesktopError.message("正在保存并退出或整理资料，请稍后再操作")}
         }
+        if command.hasPrefix("cloud."){return try await dispatchCloud(command,payload:payload)}
         if command=="app.bootstrap" {
             let settings=model.configuration()
             _=try? await library.handle(command:"library.network",payload:["httpProxy":settings["httpProxy"] ?? ""])
@@ -208,7 +223,12 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             _=try await library.handle(command:"library.network",payload:["httpProxy":payload["httpProxy"] ?? store.setting("httpProxy") ?? ""])
             do{try store.updateSettings(payload)}catch{_=try? await library.handle(command:"library.network",payload:["httpProxy":store.setting("httpProxy") ?? ""]);throw error}
             configureSchedule();emit("settings.changed");return model.configuration()
-        case "settings.open":openSettings();return [:]
+        case "settings.open":
+            if let requested=payload["pane"] {
+                guard let pane=requested as? String,["reading","model","zotero","storage","cloud"].contains(pane) else{throw DesktopError.message("设置分类无效")}
+                showSettingsWindow(initialPane:pane)
+            }else{openSettings()}
+            return [:]
         case "model.setKey":try setModelKey();model.credentialDidChange(present:true);return model.configuration()
         case "model.deleteKey":try DesktopKeychain.remove("primary");model.credentialDidChange(present:false);return model.configuration()
         case "model.preview":let source=try modelSource(payload);var result=source.filter{$0.key != "text"};result["characters"]=(source["text"] as? String ?? "").count;return result
@@ -283,10 +303,17 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             throw DesktopError.message("应用不支持此操作")
         }
     }
-    func runJob(_ command:String,payload:[String:Any],identifier:String=UUID().uuidString,operation:@escaping(@escaping @Sendable([String:Any])->Void) async throws->[String:Any]) async throws->[String:Any] {
+    func runJob(_ command:String,payload:[String:Any],identifier:String=UUID().uuidString,material:[String:Any]?=nil,operation:@escaping(@escaping @Sendable([String:Any])->Void) async throws->[String:Any]) async throws->[String:Any] {
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未启动新任务")}
-        let isZotero=command.hasPrefix("zotero.")
-        var row:[String:Any]=["id":identifier,"command":command,"paperID":isZotero ? "":currentPaperID,"title":isZotero ? (command=="zotero.resume" ? "继续 Zotero 归档":"Zotero 操作"):(currentPaper["titleZh"] ?? currentPaper["title"] ?? command),"status":"running","startedAt":ISO8601DateFormatter().string(from:Date()),"message":"正在执行"]
+        let isZotero=command.hasPrefix("zotero."),isCloud=command.hasPrefix("cloud.")
+        let cloudTitle=["cloud.check":"检查坚果云连接","cloud.upload":"备份完整研究空间","cloud.list":"读取云端备份版本","cloud.restore":"恢复云端研究空间"][command] ?? "坚果云资料"
+        var row:[String:Any]=["id":identifier,"command":command,"paperID":(isZotero || isCloud) ? "":currentPaperID,"title":isCloud ? cloudTitle:isZotero ? (command=="zotero.resume" ? "继续 Zotero 归档":"Zotero 操作"):(currentPaper["titleZh"] ?? currentPaper["title"] ?? command),"status":"running","startedAt":ISO8601DateFormatter().string(from:Date()),"message":"正在执行"]
+        if isCloud {
+            let profile=try cloudLocalStore().profile
+            row["identity"]="坚果云 · "+profile.account+" / "+profile.folder
+            row["cloudDestinationID"]=profile.destinationID.uuidString
+            if let material{row["material"]=material}
+        }
         try store.upsertJob(row);emit("jobs.changed")
         let owner=currentPaperID,generation=contextGeneration
         let task=Task{try Task.checkCancellation();guard !self.terminationPending,!self.maintenanceBusy else{throw DesktopError.message("任务启动前已退出或整理资料，未派发请求")};if ["archive.materials","app.export","storage.prepare","pdf.open"].contains(command){guard owner==self.currentPaperID,generation==self.contextGeneration else{throw DesktopError.message("任务开始前论文已切换，未使用其他材料")}};return try await operation{update in Task{@MainActor in self.recordProgress(id:identifier,update:update)}}}

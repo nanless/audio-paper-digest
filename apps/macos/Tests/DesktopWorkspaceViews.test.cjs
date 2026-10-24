@@ -31,6 +31,7 @@ async function pageFor({width=1440,zone='Asia/Shanghai',changes={}}={}){
   const original=window.webkit.messageHandlers.desktop.postMessage;
   window.__workspacePending=[];window.__workspacePersonalPending=[];window.__workspaceCancelled=[];
   window.webkit.messageHandlers.desktop.postMessage=async message=>{
+   if(message.command==='settings.open'){window.__calls.push(structuredClone(message));return {presented:true};}
    if(message.command==='jobs.cancel'){window.__calls.push(structuredClone(message));window.__workspaceCancelled.push(message.payload.id);return {};}
    if(message.command==='jobs.list'&&window.__workspaceHold){window.__workspaceHold=false;const captured=structuredClone(__fixture.jobs);return await new Promise(resolve=>__workspacePending.push(()=>resolve({jobs:captured})));}
    if(message.command==='personal.snapshot'&&window.__workspaceHoldPersonal){window.__workspaceHoldPersonal=false;const captured=structuredClone(__fixture.personal);return await new Promise(resolve=>__workspacePersonalPending.push(()=>resolve(captured)));}
@@ -130,6 +131,20 @@ async function visibleAX(page){const session=await page.context().newCDPSession(
  await one('1080 task pagination shares 30px gutter and its buttons do not overflow',async page=>{
   await page.evaluate(jobs=>__fixture.jobs=jobs,history(21));await showTasks(page);const g=await page.evaluate(()=>{const h=document.querySelector('#tasks-view .page-heading'),n=document.querySelector('.task-pagination'),b=n.getBoundingClientRect();return {heading:h.getBoundingClientRect().left+parseFloat(getComputedStyle(h).paddingLeft),left:b.left,right:b.right,width:innerWidth,buttons:[...n.querySelectorAll('button')].map(b=>({left:b.getBoundingClientRect().left,right:b.getBoundingClientRect().right})),overflow:document.documentElement.scrollWidth>innerWidth};});assert.ok(Math.abs(g.heading-g.left)<1,JSON.stringify(g));assert.equal(g.overflow,false);assert.ok(g.right<=g.width&&g.buttons.every(b=>b.left>=g.left&&b.right<=g.right),JSON.stringify(g));
  },{width:1080});
+
+ await one('terminal cloud task opens only the exact cloud settings pane while running retains cancel',async page=>{
+  const terminal=['complete','partial','failed','cancelled','interrupted'];await page.evaluate(statuses=>__fixture.jobs=[...statuses.map(status=>({id:'cloud-'+status,title:'隔离云任务 '+status,command:'cloud.upload',status,paperID:''})),{id:'cloud-running',title:'隔离运行云任务',command:'cloud.upload',status:'running',paperID:''}],terminal);await show(page,'tasks');
+  assert.equal(await page.locator('[data-job-cloud]').count(),terminal.length);assert.equal(await page.locator('[data-cancel="cloud-running"]').count(),1);
+  for(const status of terminal){await page.locator('#task-list .task-row').filter({hasText:'隔离云任务 '+status}).getByRole('button',{name:'查看坚果云资料',exact:true}).click();}
+  assert.deepEqual(await page.evaluate(()=>__calls.filter(c=>c.command==='settings.open')),terminal.map(()=>({command:'settings.open',payload:{pane:'cloud'}})));await page.locator('[data-cancel="cloud-running"]').click();assert.deepEqual(await page.evaluate(()=>__workspaceCancelled),['cloud-running']);assert.equal(await page.evaluate(()=>__calls.filter(c=>/^(cloud\.|model\.)/.test(c.command)).length),0);
+ });
+ await one('settings exact native pane deep link preserves model draft input and subsequent save',async page=>{
+  await page.goto('http://127.0.0.1:'+server.address().port+'/settings.html');await page.waitForFunction(()=>document.querySelector('#key-status').textContent.length>0&&document.querySelector('#cloud-account'));
+  assert.equal(await page.evaluate(()=>typeof window.paperDigestShowSettingsPane),'function');
+  const result=await page.evaluate(()=>{window.originalModelInput=document.querySelector('#model');const input=originalModelInput;input.value='isolated-unsaved-model';input.dispatchEvent(new Event('input',{bubbles:true}));return {opened:paperDigestShowSettingsPane('cloud'),same:document.querySelector('#model')===input,value:input.value,visible:!document.querySelector('[data-setting-pane=cloud]').hidden,selected:document.querySelector('[data-pane=cloud]').getAttribute('aria-current')};});assert.deepEqual(result,{opened:true,same:true,value:'isolated-unsaved-model',visible:true,selected:'page'});
+  assert.deepEqual(await page.evaluate(()=>[undefined,null,17,'unknown','Cloud','cloud]','cloud,model'].map(p=>paperDigestShowSettingsPane(p))),Array(7).fill(false));assert.equal(await page.locator('[data-pane=cloud]').getAttribute('aria-current'),'page');assert.equal(await page.evaluate(()=>paperDigestShowSettingsPane('model')),true);assert.equal(await page.evaluate(()=>document.querySelector('#model')===originalModelInput),true);assert.equal(await page.locator('#model').inputValue(),'isolated-unsaved-model');
+  await page.evaluate(()=>paperDigestFlushSettings());assert.equal(await page.evaluate(()=>__fixture.settings.model),'isolated-unsaved-model');assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='settings.save').length),1);assert.equal(await page.evaluate(()=>__calls.filter(c=>/^(cloud\.(?!state)|model\.)/.test(c.command)).length),0);
+ });
 
 }finally{
  if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));const failed=results.filter(r=>!r.passed).length;

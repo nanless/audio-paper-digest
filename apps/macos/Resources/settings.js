@@ -1,8 +1,10 @@
+import {mountCloud} from './cloud-ui.js';
 import {mountZotero} from './zotero-ui.js';
 import {installDialogs,revealAccessiblePane} from './dialogs.js';
 installDialogs();
 const $=id=>document.getElementById(id);
 const state={settings:{},paper:null,personal:{}};
+let cloudUI;
 const dirty=new Set(); let saveTimer, savePromise=null, discardPromise=null, discarding=false, reloadGeneration=0;
 const textKeys=['appearance','endpoint','model','protocol','httpProxy','reasoningEffort'];
 const booleanKeys=['reduceMotion','responsesStream'];
@@ -44,7 +46,8 @@ for(const el of document.querySelectorAll('input,select')){
  const changed=()=>{if(discarding)return;dirty.add(el.id);$('save-status').textContent='正在保存…';clearTimeout(saveTimer);saveTimer=setTimeout(()=>save().catch(error),250);};el.addEventListener('input',changed);el.addEventListener('change',changed);
 }
 $('font').addEventListener('input',()=>$('font-label').value=$('font').value);
-document.querySelectorAll('[data-pane]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-current',b===button?'page':'false'));document.querySelectorAll('[data-setting-pane]').forEach(p=>{if(p.dataset.settingPane===button.dataset.pane)revealAccessiblePane(p);else p.hidden=true;});});
+document.querySelectorAll('[data-pane]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-current',b===button?'page':'false'));document.querySelectorAll('[data-setting-pane]').forEach(p=>{if(p.dataset.settingPane===button.dataset.pane)revealAccessiblePane(p);else p.hidden=true;});if(button.dataset.pane==='cloud')cloudUI?.refresh().catch(error);});
+window.paperDigestShowSettingsPane=pane=>{if(typeof pane!=='string')return false;const button=[...document.querySelectorAll('[data-pane]')].find(button=>button.dataset.pane===pane);if(!button)return false;button.click();return true;};
 $('set-key').onclick=async()=>{try{state.settings=await call('model.setKey');fill();}catch(e){error(e);}};
 $('delete-key').onclick=async()=>{try{state.settings=await call('model.deleteKey');fill();}catch(e){error(e);}};
 $('check-model').onclick=async()=>{try{await save();if(dirty.size)throw new Error('请先完成并保存模型配置');$('check-model').disabled=true;$('model-result').textContent='真实请求执行中…';const r=await call('model.check');$('model-result').textContent=(r.text||r.response||'响应已保存')+' · 实际模型 '+(r.actualModel||'未知')+' · '+(r.protocol||'协议未知')+' · token 用量 '+JSON.stringify(r.usage||null)+' · 金额未知';}catch(e){$('model-result').textContent=e.message;}finally{$('check-model').disabled=false;}};
@@ -73,4 +76,4 @@ window.paperDigestFlushSettings=async()=>{clearTimeout(saveTimer);await save();i
 window.addEventListener('settings.changed',()=>reload().catch(error));
 for(const event of ['paper.changed','local.opened'])window.addEventListener(event,()=>reload().catch(error));
 window.addEventListener('personal.changed',()=>{dirty.clear();[...document.querySelectorAll('[data-dialog-surface][open]')].reverse().forEach(d=>d.close());reload().catch(error);});
-reload().then(()=>{const zotero=mountZotero(app);window.addEventListener('job.progress',e=>zotero.handleProgress(e.detail.progress||{}));}).catch(error);
+reload().then(()=>{cloudUI=mountCloud(app);const zotero=mountZotero(app);window.addEventListener('job.progress',e=>zotero.handleProgress(e.detail.progress||{}));}).catch(error);

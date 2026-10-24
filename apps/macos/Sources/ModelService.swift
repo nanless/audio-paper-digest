@@ -125,7 +125,7 @@ import Darwin
             var copy=previous; copy["reused"]=true; return copy
         }
         let today=String(ISO8601DateFormatter().string(from:Date()).prefix(10))
-        let todayCount=sessions.filter{($0["startedAt"] as? String ?? "").hasPrefix(today) && $0["requestIssued"] as? Bool==true}.count
+        let todayCount=try RequestBudgetContinuity.count(on:today,directory:directory,sessions:sessions)
         let limit=max(1,min(1000,config["dailyRequests"] as? Int ?? 50))
         guard todayCount<limit else { throw DesktopError.message("已达到你设置的每日个人请求上限，已有结果保留") }
         guard processes.count<2 else { throw DesktopError.message("已有两项模型任务在进行，请稍后再试") }

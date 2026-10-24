@@ -12,6 +12,9 @@
     "build": "bash build.sh",
     "install:app": "bash build.sh --install",
     "test": "bash test.sh",
-    "test:ui": "node Tests/LibraryUI.test.cjs && node Tests/SettingsUI.test.cjs && node Tests/DesktopUI.test.cjs"
+    "test:ui": "node Tests/LibraryUI.test.cjs && node Tests/SettingsUI.test.cjs && node Tests/DesktopUI.test.cjs",
+    "release:inspect": "bash release.sh inspect",
+    "release:prepare": "bash release.sh prepare",
+    "release:verify": "bash release.sh verify"
   }
 }

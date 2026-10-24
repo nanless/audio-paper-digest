@@ -331,7 +331,14 @@ function renderNotes(){
 function jobMetadata(job,sessions,sessionReadFailed=false){
  const recorded=typeof job.identity==='string'&&job.identity.trim()?job.identity:typeof job.paperID==='string'&&job.paperID.trim()?job.paperID:'未记录';
  const lines=['对象身份：'+recorded];
- if(!['model.run','model.check'].includes(job.command)){lines.push('材料依据：本任务未单独记录版本或范围','模型费用：本任务无需本地模型请求');return lines;}
+ if(!['model.run','model.check'].includes(job.command)){
+  const cloud=typeof job.command==='string'&&job.command.startsWith('cloud.'),material=job.material;
+  const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+  const snapshot=cloud&&material?.kind==='workspace-snapshot'&&typeof material.createdAt==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(material.createdAt)&&Number.isFinite(new Date(material.createdAt).getTime())&&Number.isSafeInteger(material.fileCount)&&material.fileCount>0&&material.fileCount<=100000&&sha(material.sha256);
+  lines.push(snapshot?'材料依据：完整研究空间快照 · 采集时间 '+sessionTime(material.createdAt)+' · 实际文件数 '+material.fileCount+' · 原编码 SHA-256 '+material.sha256:'材料依据：本任务未单独记录版本或范围');
+  if(job.command==='cloud.restore'&&sha(job.result?.sha256))lines.push('原恢复材料 SHA-256 '+job.result.sha256);
+  lines.push('模型费用：本任务无需本地模型请求');return lines;
+ }
  const matches=Array.isArray(sessions)?sessions.filter(s=>s&&s.id===job.id):[];
  const session=typeof job.id==='string'&&job.id.length&&matches.length===1&&typeof job.paperID==='string'&&(job.command==='model.check'||job.paperID.length>0)&&matches[0].paperID===job.paperID&&matches[0].kind===(job.command==='model.check'?'connection-check':'study')?matches[0]:null;
  if(!session){lines.push('材料依据：'+(sessionReadFailed?'研究记录读取失败，原依据未能核对':'没有唯一匹配的原研究记录，版本与范围未知'));lines.push(job.result?.reused===true?'模型费用：已复用既有结果，本任务未新增模型请求；原用量未在本任务绑定':'模型费用：用量与实际金额未知，不视作零费用');return lines;}
@@ -358,11 +365,12 @@ async function renderJobs(){
  const start=taskPage*taskPageSize,pageJobs=visible.slice(start,start+taskPageSize);
  $('task-page-summary').textContent=visible.length?`${visible.length} 条任务 · ${start+1}–${Math.min(start+taskPageSize,visible.length)} · 第 ${taskPage+1} / ${pageCount} 页`:'0 条任务';
  $('task-prev').disabled=taskPage===0;$('task-next').disabled=taskPage+1>=pageCount;
- const names={'library.sync':'同步网站目录','library.article':'读取图文导读','library.downloadPDF':'下载原文','pdf.open':'打开原文','model.run':'个人解析','model.check':'模型连接测试','archive.materials':'准备归档材料','zotero.archive':'存入 Zotero','zotero.resume':'继续 Zotero 归档','storage.prepare':'保存离线快照','app.export':'导出研究'};
+ const names={'cloud.check':'检查坚果云连接','cloud.upload':'云端完整备份','cloud.list':'读取云端备份版本','cloud.restore':'恢复云端研究空间','library.sync':'同步网站目录','library.article':'读取图文导读','library.downloadPDF':'下载原文','pdf.open':'打开原文','model.run':'个人解析','model.check':'模型连接测试','archive.materials':'准备归档材料','zotero.archive':'存入 Zotero','zotero.resume':'继续 Zotero 归档','storage.prepare':'保存离线快照','app.export':'导出研究'};
  const statuses={running:'进行中',queued:'等待中',complete:'已完成',partial:'部分完成',failed:'失败',interrupted:'上次运行中断',cancelled:'已取消'};
- $('task-list').innerHTML=visible.length?pageJobs.map(j=>`<section class="task-row"><div><strong>${esc(j.title)}</strong><p>${esc(names[j.command]||j.command)} · ${esc(statuses[j.status]||j.status)} · ${esc(sessionTime(j.startedAt))}</p><p>${esc(j.message)}</p>${jobMetadata(j,research.sessions,research.failed).map(line=>`<p class="settings-help" style="overflow-wrap:anywhere">${esc(line)}</p>`).join('')}${j.status==='running'?`<progress ${j.progress?.total>0?`value="${Number(j.progress?.completed)||0}" max="${Number(j.progress?.total)}"`:''} aria-label="实际任务进度"></progress>${j.progress?.total>0?`<small>${Number(j.progress?.completed)||0} / ${Number(j.progress?.total)}</small>`:''}`:''}</div>${j.status==='running'?`<button data-cancel="${esc(j.id)}">取消</button>`:j.command==='library.sync'?'<button data-resync>重新同步</button>':j.paperID?`<button data-job-paper="${esc(j.paperID)}">查看论文与保存结果</button>`:''}</section>`).join(''):'<div class="empty-state"><h2>没有此类任务</h2><p>同步、原文下载、个人解析与存档的实际记录会出现在这里。</p></div>';
+ $('task-list').innerHTML=visible.length?pageJobs.map(j=>`<section class="task-row"><div><strong>${esc(j.title)}</strong><p>${esc(names[j.command]||j.command)} · ${esc(statuses[j.status]||j.status)} · ${esc(sessionTime(j.startedAt))}</p><p>${esc(j.message)}</p>${jobMetadata(j,research.sessions,research.failed).map(line=>`<p class="settings-help" style="overflow-wrap:anywhere">${esc(line)}</p>`).join('')}${j.status==='running'?`<progress ${j.progress?.total>0?`value="${Number(j.progress?.completed)||0}" max="${Number(j.progress?.total)}"`:''} aria-label="实际任务进度"></progress>${j.progress?.total>0?`<small>${Number(j.progress?.completed)||0} / ${Number(j.progress?.total)}</small>`:''}`:''}</div>${j.status==='running'?`<button data-cancel="${esc(j.id)}">取消</button>`:typeof j.command==='string'&&j.command.startsWith('cloud.')&&['complete','partial','failed','interrupted','cancelled'].includes(j.status)?'<button data-job-cloud>查看坚果云资料</button>':j.command==='library.sync'?'<button data-resync>重新同步</button>':j.paperID?`<button data-job-paper="${esc(j.paperID)}">查看论文与保存结果</button>`:''}</section>`).join(''):'<div class="empty-state"><h2>没有此类任务</h2><p>同步、原文下载、个人解析与存档的实际记录会出现在这里。</p></div>';
  $('task-list').querySelectorAll('[data-cancel]').forEach(b=>b.onclick=()=>call('jobs.cancel',{id:b.dataset.cancel}).catch(error));
  $('task-list').querySelectorAll('[data-resync]').forEach(b=>b.onclick=sync);
+ $('task-list').querySelectorAll('[data-job-cloud]').forEach(b=>b.onclick=()=>call('settings.open',{pane:'cloud'}).catch(error));
  $('task-list').querySelectorAll('[data-job-paper]').forEach(b=>b.onclick=()=>{const p=state.catalog.find(p=>p.id===b.dataset.jobPaper)||state.personal.personalPapers?.[b.dataset.jobPaper];if(p)openPaper(p,{resume:true});else toast('原论文已不在当前目录，已保存的请求与费用仍完整保留在备份中');});
 }
 async function sync(){$('sync').disabled=true;try{await call('library.sync');await library.refresh();toast('已核验并更新全部已发布论文目录');}catch(e){error(e);}finally{$('sync').disabled=false;}}

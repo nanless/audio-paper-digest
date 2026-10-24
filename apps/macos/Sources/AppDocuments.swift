@@ -37,13 +37,29 @@ import UniformTypeIdentifiers
         if let appearance=value["appearance"] as? String,!["system","light","dark"].contains(appearance){throw DesktopError.message("外观选项无效")}
         if let model=value["model"] as? String,model.count>200{throw DesktopError.message("模型名称过长")}
     }
-    func showSettingsWindow() {
-        if let existing=settingsWindow {existing.makeKeyAndOrderFront(nil);return}
+    func showSettingsWindow(initialPane:String?=nil) {
+        if let initialPane{settingsPaneRequestID=UUID();settingsPaneRequest=initialPane}
+        if let existing=settingsWindow {existing.makeKeyAndOrderFront(nil);applySettingsPaneRequest();return}
         let sheet=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:610),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
         sheet.title="论文速递设置";sheet.minSize=NSSize(width:700,height:520);sheet.isReleasedWhenClosed=false;sheet.delegate=self
         let config=WKWebViewConfiguration();config.setURLSchemeHandler(scheme,forURLScheme:"paperapp");config.userContentController.addScriptMessageHandler(self,contentWorld:.page,name:"desktop")
         let view=WKWebView(frame:sheet.contentView!.bounds,configuration:config);view.autoresizingMask=[.width,.height];view.navigationDelegate=self;sheet.contentView=view;settingsWeb=view;settingsWindow=sheet
         view.load(URLRequest(url:URL(string:"paperapp://app/settings.html")!));sheet.center();sheet.makeKeyAndOrderFront(nil)
+    }
+    func webView(_ webView:WKWebView,didFinish navigation:WKNavigation!) {
+        if webView===settingsWeb{applySettingsPaneRequest()}
+    }
+    func applySettingsPaneRequest(documentReady:Bool=false) {
+        guard let pane=settingsPaneRequest,let view=settingsWeb,(documentReady || !view.isLoading),
+              view.url?.scheme=="paperapp",view.url?.host=="app",view.url?.path=="/settings.html" else{return}
+        let requestID=settingsPaneRequestID
+        Task{@MainActor [weak self,weak view] in
+            guard let self,let view,self.settingsWeb===view,self.settingsPaneRequestID==requestID,self.settingsPaneRequest==pane,(documentReady || !view.isLoading) else{return}
+            do{
+                let applied=try await view.callAsyncJavaScript("return typeof window.paperDigestShowSettingsPane === 'function' ? window.paperDigestShowSettingsPane(pane) : false",arguments:["pane":pane],in:nil,contentWorld:.page)
+                if self.settingsWeb===view,self.settingsPaneRequestID==requestID,self.settingsPaneRequest==pane,applied as? Bool==true{self.settingsPaneRequest=nil}
+            }catch{if self.settingsWeb===view,self.settingsPaneRequestID==requestID,self.settingsPaneRequest==pane{self.emit("app.error",["message":"未能定位设置分类，请在设置窗口中选择"]);self.settingsPaneRequest=nil}}
+        }
     }
     func importLocalPDF() throws {
         try requireMainContextAvailable()
@@ -214,11 +230,17 @@ import UniformTypeIdentifiers
         let panel=NSOpenPanel();panel.allowsMultipleSelection=false;guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消恢复")}
         guard let count=try url.resourceValues(forKeys:[.fileSizeKey]).fileSize,count<=750*1024*1024 else{throw DesktopError.message("备份大小超过限制")}
         let payload=try BackupCodec.parse(Data(contentsOf:url))
+        try await applyRestorePayload(payload,access:access)
+    }
+    func applyRestorePayload(_ payload:BackupCodec.Payload,access:DetailDocumentAccess?=nil,activeCloudJob:String?=nil) async throws {
+        try requireDocumentContext(access,kinds:[.help])
+        guard maintenanceBusy,jobs.keys.allSatisfy({$0==activeCloudJob}),!terminationPending else{throw DesktopError.message("请先结束任务再恢复完整资料")}
         let fm=FileManager.default,parent=directory.deletingLastPathComponent(),old=parent.appendingPathComponent("PaperDigest-before-restore-"+UUID().uuidString)
         let staged=try BackupCodec.stage(payload,parentDirectory:parent),stage=staged.stageDirectory
         defer{try? fm.removeItem(at:stage)}
+        try RestoreLocalPolicy.apply(stage:stage,current:directory)
         let stagedStore=try DesktopStore(directory:stage);try validateSettings(stagedStore.value["settings"] as? [String:Any] ?? [:]);_=try LibraryService(dataDirectory:stage)
-        let alert=NSAlert();alert.messageText="恢复个人研究空间？";alert.informativeText="全部文件已通过 SHA 校验。当前资料将保存在同目录旁的恢复前副本中；API 与 Zotero 钥匙串授权不随备份迁移。";alert.addButton(withTitle:"恢复并重新载入");alert.addButton(withTitle:"取消");guard try await documentConfirmation(alert,access:access,kinds:[.help]) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消恢复")}
+        let alert=NSAlert();alert.messageText="恢复个人研究空间？";alert.informativeText="原备份全部文件已通过 SHA 校验。研究资料回到所选快照时点；本机模型、网络、预算配置及已派发请求计数保留。快照之后的笔记、解析和费用原始记录仍保存在恢复前副本：\(old.lastPathComponent)。API、网盘与 Zotero 许可由本机钥匙串保护。";alert.addButton(withTitle:"恢复并重新载入");alert.addButton(withTitle:"取消");guard try await documentConfirmation(alert,access:access,kinds:[.help]) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消恢复")}
         try requireDocumentContext(access,kinds:[.help])
         try Task.checkCancellation()
         try fm.moveItem(at:directory,to:old)

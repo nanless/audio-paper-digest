@@ -9,7 +9,7 @@ trap 'rm -rf "$test_work"' EXIT
 mkdir "$test_work/Sources"
 cp "$app_root"/Sources/*.swift "$test_work/Sources/"
 sources=("$test_work"/Sources/*.swift)
-for suite in DesktopStore BackupCodec DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService LibraryImageSources LibraryMathML ZoteroService; do
+for suite in DesktopStore BackupCodec CloudArchiveService CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService LibraryImageSources LibraryMathML ZoteroService; do
   echo "正在核验 ${suite}（隔离临时资料，不访问用户文库或付费服务）"
   xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS "${sources[@]}" "$app_root/Tests/${suite}Tests.swift" -o "$test_work/$suite"
   if [[ "$suite" == "ModelEvidenceExport" || "$suite" == "DesktopAppDocsEvidence" ]]; then
@@ -23,6 +23,7 @@ node "$app_root/Tests/LibraryPDFRevalidation.test.cjs"
 node "$app_root/Tests/ModelWorker.test.cjs"
 node "$app_root/Tests/LibraryUI.test.cjs"
 node "$app_root/Tests/SettingsUI.test.cjs"
+node "$app_root/Tests/CloudUI.test.cjs"
 node "$app_root/Tests/ZoteroUI.test.cjs"
 node "$app_root/Tests/ZoteroSettingsIntegration.test.cjs"
 node "$app_root/Tests/ZoteroResumePresentation.test.cjs"
@@ -48,4 +49,5 @@ node "$app_root/Tests/DesktopReaderSecurityReview.test.cjs"
 node "$app_root/Tests/DesktopPresentationReview.test.cjs"
 node "$app_root/Tests/DesktopFontIndependent.test.cjs"
 node "$app_root/Tests/DesktopDetailContainer.test.cjs"
+bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"
 echo '隔离自动测试完成；真实窗口、模型服务与 Zotero 归档仍须按验收矩阵分别核验。'
