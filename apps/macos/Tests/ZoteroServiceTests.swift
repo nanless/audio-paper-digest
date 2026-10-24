@@ -189,6 +189,11 @@ private final class MockZotero: @unchecked Sendable {
         let b = ZoteroService.Bibliography(title:"MiCLA unit fixture",creators:[.init(firstName:"Kohei",lastName:"Yamamoto",name:nil)],abstract:"Fixture only",date:"2026-10-20",doi:nil,url:"https://arxiv.org/abs/2610.27491v1",extra:"fixture",tags:["音频分类"])
         let input = ZoteroService.ArchiveRequest(identity:"arxiv:2610.27491v1",bibliography:b,collectionKey:nil,collectionName:"论文速递｜应用验收",pdfPath:pdf.path,guideHTMLPath:html.path,analysisHTML:"<p>明确测试解析，非论文事实。</p>",noteHTML:"<p>验收笔记正文</p>")
         var passed = 0
+        var noteTitleFixtures: [[String:Any]] = []
+        func noteMarker(_ role:String,_ html:String)->String { "PaperDigest-Note: "+role+":"+SHA256.hash(data:Data(html.utf8)).map{String(format:"%02x",$0)}.joined() }
+        func captureTitle(_ name:String,_ note:String,_ html:String,_ role:String,_ expected:String,legacy:Bool=false) {
+            noteTitleFixtures.append(["name":name,"note":note,"originalHTML":html,"marker":noteMarker(role,html),"expectedTitle":expected,"legacy":legacy])
+        }
         func fixture(seed: Bool = true) throws -> (ZoteroService,MockZotero,MemoryCredentialStore) {
             let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ZoteroMockProtocol.self]
             let backendRoot=root.appendingPathComponent("mock-storage-"+UUID().uuidString)
@@ -214,6 +219,12 @@ private final class MockZotero: @unchecked Sendable {
             try require(metadataData["contentType"] as? String=="application/json" && metadataData["filename"] as? String=="source-metadata.json","binary transport never changes persisted JSON attachment MIME or filename")
             try require(metadata["identity"] as? String==input.identity && (metadata["bibliography"] as? [String:Any])?["title"] as? String==input.bibliography.title,"JSON metadata arrives as exact parseable original bytes rather than a reencoded server object")
             passed += 3
+            for (role,original,label) in [("analysis",input.analysisHTML!,"个人解析"),("note",input.noteHTML!,"研究笔记")] {
+                let key=first.steps.first{$0.role==role}!.key!,actual=(backend.objects[key]!["data"] as! [String:Any])["note"] as! String
+                try require(actual.hasPrefix("<div><p>论文速递 · "+label+" · "+input.bibliography.title+"</p>") && actual.hasSuffix("<p>"+noteMarker(role,original)+"</p></div>") && actual.contains(original),"new note has human first line and original unchanged HTML/marker footer")
+                captureTitle("actual-new-"+role,actual,original,role,"论文速递 · "+label+" · "+input.bibliography.title)
+                passed += 1
+            }
             // Consume the ACTUAL journal+summary pair emitted by this service, rather
             // than hand-crafting a projection that could miss cross-service schema bugs.
             let personal=try DesktopStore(directory:root)
@@ -384,6 +395,53 @@ private final class MockZotero: @unchecked Sendable {
             let (service,backend,_) = try fixture();backend.foreignUploadURL=true
             let result=try await service.archive(input)
             try require(result.status=="partial" && backend.files.isEmpty && !backend.requests.contains{$0.1.contains("steal")},"foreign upload refused")
+            passed += 1
+        }
+        do {
+            let (service,backend,_)=try fixture();let first=try await service.archive(input)
+            var originals:[String:String]=[:]
+            for (role,html) in [("analysis",input.analysisHTML!),("note",input.noteHTML!)] {
+                let key=first.steps.first{$0.role==role}!.key!,legacy="<div><p>"+noteMarker(role,html)+"</p>"+html+"</div>"
+                var object=backend.objects[key]!,data=object["data"] as! [String:Any];data["note"]=legacy;object["data"]=data;backend.objects[key]=object;originals[key]=legacy
+                captureTitle("legacy-"+role,legacy,html,role,noteMarker(role,html),legacy:true)
+            }
+            let writes=backend.requests.filter{$0.0 != "GET"}.count,count=backend.objects.count
+            let journalFile=root.appendingPathComponent("zotero-archives/"+first.archiveID+".json"),journalBytes=try Data(contentsOf:journalFile)
+            let resumed=try await service.archive(input,resumeID:first.archiveID),same=try await service.archive(input)
+            try require(resumed.status=="complete" && same.status=="complete" && resumed.steps.first{$0.role=="analysis"}?.key==first.steps.first{$0.role=="analysis"}?.key && same.steps.first{$0.role=="analysis"}?.key==first.steps.first{$0.role=="analysis"}?.key,"known legacy journal and same content new archive reuse original note key")
+            try require(backend.objects.count==count && backend.requests.filter{$0.0 != "GET"}.count==writes && (try Data(contentsOf:journalFile))==journalBytes,"beautification never POSTs/PATCHes or rewrites original journal bytes")
+            try require(originals.allSatisfy{key,value in (backend.objects[key]!["data"] as! [String:Any])["note"] as? String==value},"both legacy note original bytes remain unchanged")
+            var changed=input;changed.analysisHTML=input.analysisHTML!+"<p>New actual evidence.</p>"
+            let updated=try await service.archive(changed),newKey=updated.steps.first{$0.role=="analysis"}!.key!
+            try require(updated.status=="complete" && backend.objects.count==count+1 && originals[newKey]==nil && originals.allSatisfy{key,value in (backend.objects[key]!["data"] as! [String:Any])["note"] as? String==value},"genuinely changed HTML creates exactly one new readable note while retaining old notes")
+            let note=(backend.objects[newKey]!["data"] as! [String:Any])["note"] as! String
+            captureTitle("changed-content",note,changed.analysisHTML!,"analysis","论文速递 · 个人解析 · "+input.bibliography.title)
+            passed += 4
+        }
+        for mutation in ["body","marker","heading"] {
+            let (service,backend,_)=try fixture();let first=try await service.archive(input)
+            let key=first.steps.first{$0.role=="analysis"}!.key!,original=(backend.objects[key]!["data"] as! [String:Any])["note"] as! String
+            let edited=mutation=="body" ? original.replacingOccurrences(of:input.analysisHTML!,with:"<p>User-edited original analysis</p>") : mutation=="marker" ? original.replacingOccurrences(of:noteMarker("analysis",input.analysisHTML!),with:"") : original.replacingOccurrences(of:"论文速递 · 个人解析 · "+input.bibliography.title,with:"My personal readable title")
+            var object=backend.objects[key]!,data=object["data"] as! [String:Any];data["note"]=edited;object["data"]=data;backend.objects[key]=object
+            let writes=backend.requests.filter{$0.0 != "GET"}.count,count=backend.objects.count,result=try await service.archive(input,resumeID:first.archiveID)
+            try require((result.status=="complete") == (mutation=="heading"),"original HTML or missing marker fails; user wrapper-title edit stays permitted")
+            try require((backend.objects[key]!["data"] as! [String:Any])["note"] as? String==edited && backend.objects.count==count && backend.requests.filter{$0.0 != "GET"}.count==writes,"user-edited note bytes never overwritten, repaired or replaced")
+            passed += 2
+        }
+        do {
+            let (service,backend,_)=try fixture();let first=try await service.archive(input)
+            let key=first.steps.first{$0.role=="analysis"}!.key!,duplicate="ZZZZ9999"
+            var object=backend.objects[key]!;object["key"]=duplicate;backend.objects[duplicate]=object
+            let writes=backend.requests.filter{$0.0 != "GET"}.count,count=backend.objects.count,result=try await service.archive(input)
+            try require(result.status=="partial" && result.steps.first{$0.role=="analysis"}?.verified==false,"duplicate matching original marker remains ambiguous")
+            try require(backend.objects.count==count && backend.requests.filter{$0.0 != "GET"}.count==writes,"ambiguous notes are not merged, overwritten or multiplied")
+            passed += 2
+        }
+        do {
+            let (service,backend,_)=try fixture();var unicode=input;unicode.bibliography.title="研究 & <script>alert(1)</script> \"MiCLA\" 'α' 😀\n第二行"
+            let result=try await service.archive(unicode),key=result.steps.first{$0.role=="analysis"}!.key!,note=(backend.objects[key]!["data"] as! [String:Any])["note"] as! String
+            try require(result.status=="complete" && note.contains("研究 &amp; &lt;script&gt;alert(1)&lt;/script&gt; &quot;MiCLA&quot; &#39;α&#39; 😀 第二行") && !note.contains("<script>"),"Unicode human title is escaped and whitespace normalized outside original HTML")
+            captureTitle("unicode-escape",note,input.analysisHTML!,"analysis","论文速递 · 个人解析 · 研究 & <script>alert(1)</script> \"MiCLA\" 'α' 😀 第二行")
             passed += 1
         }
         do {
@@ -627,6 +685,15 @@ private final class MockZotero: @unchecked Sendable {
             try require(backend.requests.filter{$0.0 != "GET"}.count==writesBeforeLegacy && credentials.loads==readsBeforeForeign,"restore refuses foreign journal before reading another server credential")
             passed += 1
         }
+        if FileManager.default.fileExists(atPath:"/Applications/Zotero.app/Contents/Resources/app/omni.ja") {
+            let script=URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("ZoteroNoteTitleContract.test.cjs")
+            let process=Process(),stdin=Pipe(),output=Pipe();process.executableURL=URL(fileURLWithPath:"/usr/bin/env");process.arguments=["node",script.path];process.standardInput=stdin;process.standardOutput=output;process.standardError=output
+            try process.run();try stdin.fileHandleForWriting.write(contentsOf:JSONSerialization.data(withJSONObject:noteTitleFixtures));try stdin.fileHandleForWriting.close()
+            let response=output.fileHandleForReading.readDataToEndOfFile();process.waitUntilExit()
+            let text=String(decoding:response,as:UTF8.self);print(text)
+            try require(process.terminationStatus==0,"actual installed Zotero noteToTitle rejects no emitted note fixture: "+text)
+            passed += noteTitleFixtures.count
+        } else { print("Installed Zotero note title contract skipped: application not installed; isolated service assertions still ran.") }
         print("Zotero mock assertions passed: \(passed). No live library writes, no native authorization requested, no real Keychain mutation.")
     }
 }

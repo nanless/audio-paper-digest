@@ -634,7 +634,15 @@ actor ZoteroService {
     }
     private func archiveNote(_ html: String, role: String, parent: String, journal: inout Journal) async throws {
         let marker = "PaperDigest-Note: \(role):\(Self.sha256(Data(html.utf8)))"
-        let content = "<div><p>\(marker)</p>\(html)</div>"
+        // Zotero derives a note title from its first visible line. This
+        // create-only wrapper stays outside the original, hash-bound HTML.
+        let label = role == "analysis" ? "个人解析" : "研究笔记"
+        let heading = ("论文速递 · " + label + " · " + journal.request.bibliography.title)
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            .replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+        let content = "<div><p>\(heading)</p>\(html)<p>\(marker)</p></div>"
         var key = journal.steps.first { $0.role == role }?.key
         if key == nil {
             let children = try await readArray("/api/users/0/items/\(parent)/children")

@@ -658,6 +658,16 @@ Root 安装该候选后，本机资料仍只有空 HTML AX 容器。该实验未
 
 B 候选隔离回归 49/49；Facade 原用例还增加实际 settings.html 动态 Zotero 弹窗的对照，确认其 root inert=true、aria-modal=true，Escape 后恢复 root inert=false。非作者按 `54af2b6b181a03f4f2b438534591d568aa7b6e5b9c91333d6283379e883f6ce7` 核对源码并独立复跑 Facade 6/6，通过范围仅为单变量实现及隔离交互，不授予真实 AX 通过。未提交或安装该候选。
 
+## 2026-10-24：原归档核验的界面语义
+
+真实重复回读验收发现，resume 完全沿原 journal.request 执行，界面却仍显示不生效的材料勾选和可编辑分类，容易误以为能改变原归档。本轮仅修改 Zotero 前端模块：原归档模式显示“核验原归档”、原论文身份、原检查点保存时间及实际结果，隐藏材料、目标分类、新建和授权表单；新建入口恢复原有标题、说明与全部可用材料、分类编辑。失败后只允许用户显式按原 ID 重试；打开 Zotero 原项仍仅采用实际结果返回的 parentKey，不使用失败前的旧结果或未复验 summary key。
+
+最近归档使用服务已有的 updatedAt 秒时间戳按本机时区显示“上次保存/核验”，保留真实来源身份和版本，行号区分同名记录；无时间则明确“时间未记录”，不填当前时间。按钮的无障碍名称包含标题、来源、时间及归档 ID，以区分同名和同版本记录，普通可见界面不展示内部归档 UUID。未改 Swift、归档服务、请求结构、模型、原 journal 或真实材料。
+
+新增回归使用生产 settings.html/main index.html、真实界面模块及明确原生夹具，覆盖设置反复切换、原归档/新建来回切换、忙碌关闭不复活、A 成功后 B 失败不串项、明确原 ID 重试、未知被动许可态、迟到准备失败和缺时间，截图只属于隔离界面示例，不是实际 Zotero 回读证据。新套件为 `ZoteroResumePresentation.test.cjs`，已加入完整测试入口。
+
+最终相关回归 39/39（原 Zotero UI 8、实际设置集成 2、新模式 9、设置 14、Facade 6）；非作者独立复跑新模式 9/9，并按 `6e851a89bccdf4ecbeaecb833e507fcb61fc9fff8aff68d2d7829333ff8edc12` 核对源码与 780×610 截图，未发现新增阻断。此结论限定于隔离界面；尚未提交、安装或授予新界面的真实 Mac/Zotero 验收。
+
 非作者随后补查原生菜单对应的事件，发现模态期间搜索命令可把焦点移到背景输入框，实际输入会触发资料库搜索。背景鼠标遮挡和付费快捷键保护仍通过，但不足以维持完整模态隔离。Root已将B构建及精确实验源码保留在忽略的 `.qa/modal-inert-b/`，生产源码与测试恢复背景 inert；没有推送或安装此候选。若后续实机AX对照证明有效，须先修复焦点与命令隔离再独立复验。
 
 ## 2026-10-24：真实设置切换导致历史归档按钮未绑定
@@ -665,3 +675,26 @@ B 候选隔离回归 49/49；Facade 原用例还增加实际 settings.html 动�
 9f296220实机“最近归档”点击无反应。非作者使用真实settings.html、settings.js、dialogs.js与Zotero生产模块独立复现：`revealAccessiblePane`浅克隆外层并迁移原孩子，初始化保存的settingsPane已脱离DOM且为空，renderPending/updateControls在旧容器查询0个按钮，故没有onclick，实际resume请求0。此前单独可见section的8组回归漏掉该集成。
 
 修复仅将两处查询限定到当前document里的实际pending/recent列表。新增真实设置集成先在旧实现复现2组失败，再验证首次reading→Zotero、3轮往返与刷新、精确resumeID、busy禁用与防重复，作者2/2及原模块8/8通过；非作者以自己的真实页面集成连续两轮独立复验通过，未发新归档、授权或准备当前论文材料请求。新套件已加入完整测试入口。实际新包GUI重复回读与重启续传仍须在解锁后执行。
+
+
+## 2026-10-24：B 的真实主窗对照仍失败
+
+Root 正常退出正式 83e4 后，直接运行忽略目录中封存的 B 实验应用，以实际进程路径及封存签名核定实验身份。打开本机资料后仍只有空 HTML AX 容器；可见弹窗并未恢复系统子控件。证据为本机 `.qa/live-e2e/storage-inert-b-actual.ax.txt` 与同名 PNG。非作者只读核对封存 dialogs SHA `54af2b6b181a03f4f2b438534591d568aa7b6e5b9c91333d6283379e883f6ce7`，并对照实际 AX 文本和截图确认此失败；没有把先前隔离回归通过计作真实 Mac AX 成功，也未自行操作 GUI。
+
+B 已由 Root 正常关闭退出，正式安装的 83e4 和生产 dialogs 完整 ARIA/inert 基线均保留。结合此前已复现的背景搜索焦点泄漏，B 不作为交付修复。后续只改变主窗 WK websiteDataStore 的 C 对照另建独立 QA 包，不与本轮 Zotero 界面或笔记标题增量混合，也不提前记为通过。
+
+
+## 2026-10-24：C 主窗非持久 WK 对照仍失败
+
+C 从已审 83e4 精确快照构建，只将主窗 WK websiteDataStore 设为 nonPersistent，Settings 和所有网页资源保持原基线；候选有独立实验 metadata、源码差异和签名回执，未安装。另一名非作者核定 10 个 Swift 仅 Main 一项变化、505 条来源对应、497 个实体文件仅 native/metadata/CodeResources 三项不同。
+
+Root 实际启动 C 并以进程路径确认运行忽略目录中的实验包，打开本机资料后 AX 仍只有 HTML 容器。证据为 `.qa/live-e2e/storage-store-c-actual.ax.txt` 与同名 PNG。非作者只读核对封存 native SHA `a2284500ec6b590eedb7324a6302eb929396038d5d91da10cb117d5d43eeed14` 和该 AX 失败记录。C 已由 Root 正常 Escape、退出，正式安装与工作区 Main 均未改变。该实验没有修复实际主窗 AX。后续 D 重新从 83e4 基线只避免对已隐藏 PDFView 重复设置 isHidden，不继承 C 的非持久设置；结果须另行实测。
+
+
+## 2026-10-24：D 避免重复隐藏 PDFView 的对照仍失败
+
+D 重新以已审 83e4 为唯一基线，只在 Main.positionPDF 的 visible:false 分支中，对原本已经隐藏的 PDFView 跳过同值 isHidden setter；原返回、几何处理、其他分支、持久 WK 设置及全部网页资源不变。独立 QA metadata 与回执明确标记实验和实际 Main SHA，包没有安装，未将 C 的 nonPersistent 改动混入。
+
+Root 实际启动 D，并以运行路径确认其身份；打开本机资料后仍只有空 HTML AX 容器。证据为 `.qa/live-e2e/storage-hide-d-actual.ax.txt` 与同名 PNG。非作者只读核对封存 native SHA `41ffc9e40b715b4ed627c5ca02d95d3b9bd9615766ecd551fec60a622627dff3` 及 AX 记录，未将编译/签名或隔离行为通过冒作实际 AX 修复。D 已由 Root 正常 Escape、退出；正式安装和工作区 Main 均未改变。
+
+B、C、D 均未解决实际主窗 AX；停止继续准备猜测性变量包。下一步仅扩展现有只读诊断，以受限角色和结构计数区分应用自己的原生 WK 树是否同样为空，以及外部提取的差异。不得收集 label、value、URL、description、正文、原始控制台或凭据，不因添加诊断改变 AX 可见性或焦点。该诊断与后续修复须另经独立审查及实际验证，当前 AX 失败保持未关闭。

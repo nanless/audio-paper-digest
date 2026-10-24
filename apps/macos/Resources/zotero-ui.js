@@ -5,6 +5,7 @@ export function mountZotero(app) {
   let dialog = $('archive-dialog');
   const settingsPane = document.querySelector('[data-setting-pane="zotero"]');
   let status = null, collections = [], materials = null, lastResult = null, busy = false, generation = 0;
+  let mode = 'new', resumeID = null, resumeContext = null;
   const paperIdentity = () => app.state?.paper?.identity || app.state?.paper?.id || '';
   const notice = text => app.toast?.(text);
   const failure = error => { const message = error?.message || String(error); if ($('zotero-result')) $('zotero-result').textContent = message; app.error?.(error); };
@@ -41,6 +42,32 @@ export function mountZotero(app) {
   const open = document.createElement('button'); open.id = 'zotero-open-item'; open.type = 'button'; open.className = 'secondary-button'; open.textContent = '在 Zotero 中查看'; open.hidden = true;
   footer.append(checkButton, grantButton, retry, open, start);
   const roleNames = {bibliography:'书目与目标分类','source-metadata':'完整来源元数据',pdf:'原始 PDF 附件',guide:'自包含图文导读',analysis:'个人解析',note:'研究笔记'};
+  const heading = dialog.querySelector('h1'), subtitle = dialog.querySelector('.dialog-subtitle');
+  const originalHeading = heading.textContent, originalSubtitle = subtitle.textContent;
+  const materialOptions = [...dialog.querySelectorAll('.archive-option')];
+  const checkpoint = document.createElement('small'); checkpoint.id = 'zotero-checkpoint'; checkpoint.hidden = true;
+  $('archive-identity').after(checkpoint);
+
+  function archiveTime(record) {
+    const value = record?.updatedAt;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '时间未记录';
+    const date = new Date(value * 1000);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}) : '时间未记录';
+  }
+  function archiveSource(record) {
+    const identity = typeof record?.identity === 'string' ? record.identity : '';
+    return identity.startsWith('arxiv:') ? 'arXiv ' + identity.slice(6) : identity.startsWith('doi:') ? 'DOI ' + identity.slice(4) : identity || '来源标识未记录';
+  }
+  function setMode(next) {
+    mode = next;
+    const saved = mode === 'resume';
+    heading.textContent = saved ? '核验原归档' : originalHeading;
+    subtitle.textContent = saved ? '沿原归档保存的论文、材料和目标分类核验；未完成项目继续使用原检查点。' : originalSubtitle;
+    materialOptions.forEach(option => { option.hidden = saved; });
+    destination.hidden = saved; connection.hidden = saved; start.hidden = saved;
+    checkpoint.hidden = !saved;
+    checkpoint.textContent = saved ? '原检查点保存：' + archiveTime(resumeContext) : '';
+  }
 
   function updateControls() {
     const writable = !!status?.authorized && !!status?.remember && !!status?.writesSupported;
@@ -52,10 +79,12 @@ export function mountZotero(app) {
     $('zotero-refresh').disabled = busy;
     document.querySelectorAll('#zotero-pending [data-zotero-resume],#zotero-recent [data-zotero-resume]').forEach(button => { button.disabled = busy; });
     checkButton.disabled = busy || !status?.writesSupported; settingsCheck.disabled = checkButton.disabled;
-    checkButton.hidden = writable; settingsCheck.hidden = writable;
+    checkButton.hidden = mode === 'resume' || writable; settingsCheck.hidden = writable;
     start.disabled = busy || !writable || !materials || (!collectionKey() && !collectionName());
-    retry.disabled = busy || !writable;
-    grantButton.hidden = writable;
+    // Saved resume is already an explicit credential-loading action, just like
+    // the history buttons; a passive status query can legitimately be unknown.
+    retry.disabled = busy || (mode !== 'resume' && !writable);
+    grantButton.hidden = mode === 'resume' || writable;
   }
   function collectionKey() { return $('zotero-new-collection').value.trim() ? '' : $('zotero-collection').value; }
   function collectionName() { return $('zotero-new-collection').value.trim(); }
@@ -67,10 +96,11 @@ export function mountZotero(app) {
     if (collections.some(c => c.key === previous)) $('zotero-collection').value = previous;
   }
   function renderPending() {
+    const row = (record,index,action) => `<div class="zotero-pending-row"><p>${escape(record.title)}</p><small>归档记录 ${index+1} · ${escape(archiveSource(record))}<br>上次保存/核验：${escape(archiveTime(record))}</small><button type="button" class="secondary-button" data-zotero-resume="${escape(record.archiveID)}" aria-label="${escape(action+'，'+record.title+'，'+archiveSource(record)+'，'+archiveTime(record)+'，归档 '+record.archiveID)}">${action}</button></div>`;
     const pending = (status?.archives || []).filter(a => a.status === 'partial');
-    $('zotero-pending').innerHTML = pending.length ? '<h2>未完成归档</h2>' + pending.map(a => `<div class="zotero-pending-row"><p>${escape(a.title)}</p><button class="secondary-button" data-zotero-resume="${escape(a.archiveID)}">从已保存步骤继续</button></div>`).join('') : '';
+    $('zotero-pending').innerHTML = pending.length ? '<h2>未完成归档</h2>' + pending.map((a,i) => row(a,i,'从已保存步骤继续')).join('') : '';
     const recent = (status?.archives || []).filter(a => a.status === 'complete').slice(0,8);
-    $('zotero-recent').innerHTML = recent.length ? '<h2>最近归档</h2>' + recent.map(a => `<div class="zotero-pending-row"><p>${escape(a.title)}</p><button type="button" class="secondary-button" data-zotero-resume="${escape(a.archiveID)}">重新回读核验</button></div>`).join('') : '';
+    $('zotero-recent').innerHTML = recent.length ? '<h2>最近归档</h2>' + recent.map((a,i) => row(a,i,'重新回读核验')).join('') : '';
     document.querySelectorAll('#zotero-pending [data-zotero-resume],#zotero-recent [data-zotero-resume]').forEach(button => { button.onclick = () => resume(button.dataset.zoteroResume); });
   }
   async function refresh() {
@@ -104,7 +134,11 @@ export function mountZotero(app) {
   }
   function showResult(value) {
     lastResult = value;
-    $('zotero-result').textContent = value.status === 'complete' ? '所选内容均已保存，并完成回读核验。' : '部分内容未完成。已保存的结果保留，只重试缺失或未通过核验的部分。';
+    $('zotero-result').textContent = value.status === 'complete' ? mode === 'resume' ? '原归档已完成本次回读核验。' : '所选内容均已保存，并完成回读核验。' : '部分内容未完成。已保存的结果保留，只重试缺失或未通过核验的部分。';
+    if (mode === 'resume') {
+      if (value.title) $('archive-title').textContent = value.title;
+      if (value.identity) $('archive-identity').textContent = value.identity;
+    }
     $('zotero-steps').innerHTML = (value.steps || []).map(step => `<li class="${step.verified ? '' : 'failed'}">${escape(roleNames[step.role] || step.role)} · ${step.verified ? '已保存并核验' : '尚未完成'}${step.error ? `<small>${escape(step.error)}</small>` : ''}</li>`).join('');
     retry.hidden = value.status === 'complete'; open.hidden = !value.parentKey;
     app.emit?.('zotero.archive.result',value);
@@ -112,8 +146,11 @@ export function mountZotero(app) {
   async function openArchive() {
     if (busy) { notice('归档正在执行，完成状态会保留在此窗口'); return; }
     const token = ++generation, identity = paperIdentity(); materials = null; lastResult = null;
+    resumeID = null; resumeContext = null; setMode('new');
+    $('archive-title').textContent = app.state?.paper?.title || '当前论文（正在准备）';
+    $('archive-identity').textContent = identity || '来源标识正在准备';
     $('zotero-result').textContent = '正在准备当前论文的真实归档材料…'; $('zotero-steps').replaceChildren(); retry.hidden = true; open.hidden = true;
-    if (!dialog.open) dialog.showModal();
+    dialog.showModal();
     updateControls();
     try {
       const prepared = await app.exportArchiveMaterials();
@@ -130,7 +167,7 @@ export function mountZotero(app) {
       $('archive-note-detail').textContent = prepared.noteHTML ? '当前已保存研究笔记' : '当前没有研究笔记';
       $('zotero-result').textContent = '核对内容和目标分类后开始。书目成功不代表附件已经完成。';
       await refresh();
-    } catch (error) { failure(error); }
+    } catch (error) { if (token === generation && identity === paperIdentity()) failure(error); }
     finally { updateControls(); }
   }
   async function archive() {
@@ -142,18 +179,21 @@ export function mountZotero(app) {
     catch (error) { failure(error); }
     finally { busy = false; updateControls(); }
   }
-  async function resume(id = lastResult?.archiveID) {
+  async function resume(id = resumeID || lastResult?.archiveID) {
     if (busy || !id) return;
-    const context = (status?.archives || []).find(item => item.archiveID === id);
+    ++generation;
+    const context = (status?.archives || []).find(item => item.archiveID === id) || (resumeContext?.archiveID === id ? resumeContext : null);
+    resumeID = id; resumeContext = context;
     materials = null; lastResult = null;
+    setMode('resume');
     $('zotero-steps').replaceChildren(); retry.hidden = true; open.hidden = true;
-    if (context) { $('archive-title').textContent = context.title; $('archive-identity').textContent = context.identity; }
+    $('archive-title').textContent = context?.title || '原归档论文（等待读取）'; $('archive-identity').textContent = context?.identity || '来源标识等待读取';
     for (const option of ['archive-pdf','archive-guide','archive-analysis','archive-note']) { $(option).disabled = true; $(option).checked = false; }
     busy = true; updateControls();
-    if (!dialog.open) dialog.showModal();
+    dialog.showModal();
     $('zotero-result').textContent = '正在重读原检查点和真实存储结果，只续未完成内容…';
     try { showResult(await app.call('zotero.resume',{resumeID:id})); await refresh(); }
-    catch (error) { failure(error); }
+    catch (error) { failure(error); retry.hidden = false; open.hidden = true; }
     finally { busy = false; updateControls(); }
   }
   function handleProgress(progress) {
