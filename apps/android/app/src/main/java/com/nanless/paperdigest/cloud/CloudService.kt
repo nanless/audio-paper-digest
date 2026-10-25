@@ -86,21 +86,22 @@ class CloudService(
         // operation mutex is held, before obtaining credentials or a snapshot.
         if (destinationID != expectedDestinationID) throw CloudFailure("targetChanged")
         if (automatic) require(profile.optBoolean("automatic") && !profile.optBoolean("automaticPaused") && !memoryPaused) { "自动备份已暂停" }
+        val capturedContext=coroutineContext;val check={capturedContext.ensureActive()}
         val archive = archive(); var pendingRecord = pending()
         if (pendingRecord == null) {
             require(!hasPending()) { "原待传材料损坏，须先原样保留退出" }
             archive.probe(); coroutineContext.ensureActive()
             val folder = targetFolder(); require(folder.exists() || folder.mkdir()); BackupCodec.privateDirectory(folder)
             val snapshot = workspace.capture(File(folder, "snapshot.paperdigest"))
-            require(snapshot.file.canonicalPath == File(folder, "snapshot.paperdigest").canonicalPath && snapshot.encodedBytes == snapshot.file.length() && snapshot.sha256 == BackupCodec.hash(snapshot.file)) { "快照材料未绑定本机原文件" }
+            require(snapshot.file.canonicalPath == File(folder, "snapshot.paperdigest").canonicalPath && snapshot.encodedBytes == snapshot.file.length()) { "快照材料未绑定本机原文件" }
             pendingRecord = JSONObject().put("contract", "paperdigest-android-cloud-pending-v1").put("destinationID", destinationID).put("createdAt", Instant.ofEpochMilli(now()).toString()).put("fileCount", snapshot.fileCount).put("encodedBytes", snapshot.encodedBytes).put("sha256", snapshot.sha256)
             BackupCodec.atomicJSON(File(folder, "pending.json"), pendingRecord)
         }
-        val original = pendingRecord ?: error("未找到待传材料"); val file = validateSnapshot(original)
+        val original = pendingRecord ?: error("未找到待传材料"); val file = validateSnapshot(original,check)
         val next = copyProfile().put("lastAttemptAt", Instant.ofEpochMilli(now()).toString()); persistProfile(next)
         val old = original.optJSONObject("checkpoint")?.let(CloudCheckpoint::parse)
         val info = archive.upload(file, old)
-        val final = pending() ?: error("续传记录未保存"); validateSnapshot(final)
+        val final = pending() ?: error("续传记录未保存"); validateSnapshot(final,check)
         val checkpoint = CloudCheckpoint.parse(final.getJSONObject("checkpoint"))
         require(checkpoint.manifest == info && checkpoint.manifestVerified && checkpoint.verified == info.chunks.indices.toSet()) { "完整回执未逐项绑定原快照" }
         val completedProfile = copyProfile().put("lastBackup", info.info()).put("automaticPaused", false)
@@ -109,14 +110,23 @@ class CloudService(
         retained.deleteRecursively(); scheduleChanged(state()); info.info()
     }
     data class PreparedRestore(val id: String, val staged: BackupCodec.Staged, val manifest: CloudManifest)
-    suspend fun prepareRestore(reference: CloudReference): PreparedRestore = operation {
-        val file = File(controlRoot, "download-${UUID.randomUUID()}.paperdigest")
-        try {
-            val manifest = archive().download(reference, file)
-            val staged = BackupCodec.stage(file.inputStream(), researchRoot.parentFile!!)
-            if (staged.encodedSHA256 != manifest.sha256 || staged.encodedBytes != manifest.encodedBytes) { staged.directory.deleteRecursively(); throw CloudFailure("integrity") }
-            PreparedRestore(UUID.randomUUID().toString(), staged, manifest)
-        } finally { file.delete() }
+    suspend fun prepareRestore(reference: CloudReference, check: () -> Unit = {}): PreparedRestore {
+        var preparedStage:BackupCodec.Staged?=null
+        try { return operation {
+            val capturedContext=coroutineContext;val stageCheck={capturedContext.ensureActive();check()}
+            val file = File(controlRoot, "download-${UUID.randomUUID()}.paperdigest")
+            try {
+                val manifest = archive().download(reference, file)
+                val staged = BackupCodec.stage(file.inputStream(), researchRoot.parentFile!!,stageCheck)
+                preparedStage=staged
+                if (staged.encodedSHA256 != manifest.sha256 || staged.encodedBytes != manifest.encodedBytes) throw CloudFailure("integrity")
+                stageCheck();PreparedRestore(UUID.randomUUID().toString(), staged, manifest)
+            } finally { file.delete() }
+        }} catch(failure:Throwable) {
+            // Includes cancellation while returning from operation's IO dispatcher.
+            preparedStage?.directory?.let{if(it.exists())it.deleteRecursively()}
+            throw failure
+        }
     }
     suspend fun retainedList(): JSONArray = operation {
         val rows = controlRoot.listFiles().orEmpty().filter { it.name.matches(Regex("archived-[a-fA-F0-9-]{36}")) }.sortedBy { it.name }.map { folder ->
@@ -137,7 +147,8 @@ class CloudService(
         var staged: BackupCodec.Staged? = null
         try {
             val manifest = archive().download(reference, file)
-            staged = BackupCodec.stage(file.inputStream(), researchRoot.parentFile!!)
+            val capturedContext=coroutineContext
+            staged = BackupCodec.stage(file.inputStream(), researchRoot.parentFile!!){capturedContext.ensureActive()}
             require(staged.encodedSHA256 == manifest.sha256 && staged.encodedBytes == manifest.encodedBytes)
             workspace.restore(staged)
             JSONObject().put("sha256", manifest.sha256).put("reference", reference.json()).put("status", "complete")
@@ -157,10 +168,10 @@ class CloudService(
         require(CloudManifest.number(o, "encodedBytes") in 1..BackupCodec.MAX_ENCODED && CloudManifest.number(o, "fileCount") in 1..BackupCodec.MAX_ENTRIES.toLong() && BackupCodec.validSHA(o.getString("sha256")))
         return o
     }
-    private fun validateSnapshot(pending: JSONObject): File {
+    private fun validateSnapshot(pending: JSONObject, check: () -> Unit): File {
         val file = BackupCodec.checkedFile(targetFolder(), "snapshot.paperdigest")
-        require(file.length() == pending.getLong("encodedBytes") && BackupCodec.hash(file) == pending.getString("sha256")) { "原待传快照字节已变化" }
-        val stage = BackupCodec.stage(file.inputStream(), controlRoot)
+        require(file.length() == pending.getLong("encodedBytes") && BackupCodec.hash(file,check) == pending.getString("sha256")) { "原待传快照字节已变化" }
+        val stage = BackupCodec.stage(file.inputStream(), controlRoot,check)
         try { require(stage.entries.size == pending.getInt("fileCount")) { "原快照文件数变化" } } finally { stage.directory.deleteRecursively() }
         return file
     }

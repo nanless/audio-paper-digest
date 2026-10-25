@@ -1,0 +1,57 @@
+{
+  "scope": "Only two actual published pages and directly linked public citation sidecars; HTTPS GET only; no accounts/models/production workspace or remote writes",
+  "fetchedAtUTC": "2026-10-25T05:11:05.393579+00:00",
+  "records": [
+    {
+      "kind": "conference-turnguide",
+      "archivedShard": "ad8dd4f304ecb5a2214cb24607eadb96e646da3ecf1d9e40b4fab250d6e9aed8.json",
+      "archivedShardSHA256": "ad8dd4f304ecb5a2214cb24607eadb96e646da3ecf1d9e40b4fab250d6e9aed8",
+      "rowFile": "conference-turnguide-catalog-row.json",
+      "page": {
+        "url": "https://nanless.github.io/audio-paper-digest-blog/posts/conference-interspeech-2026-conference-paper-id-cui26-interspeech-6f6c9b504d/",
+        "name": "conference-turnguide-published.html",
+        "bytes": 68187,
+        "sha256": "8cb764b4b7440dcfbbfcdc450330f18f8acc0b8e0db35465800d621ae5a7526c"
+      },
+      "sidecars": [],
+      "missingSidecarLinks": [
+        "citation.json",
+        "citation.bib",
+        "citation.ris"
+      ]
+    },
+    {
+      "kind": "arxiv-micla",
+      "archivedShard": "0d7e5c1de70e9341eda1e7e7a121d13d9149d6c318e515d7ef4a1919dd25d2c5.json",
+      "archivedShardSHA256": "0d7e5c1de70e9341eda1e7e7a121d13d9149d6c318e515d7ef4a1919dd25d2c5",
+      "rowFile": "arxiv-micla-catalog-row.json",
+      "page": {
+        "url": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-21-micla-mixture-to-constituent-latent-alignment-for-2610-27491/",
+        "name": "arxiv-micla-published.html",
+        "bytes": 65855,
+        "sha256": "9d05e173ff760c1e3a49bc414142cac68e8ae7f19b0683d1384ed9b3c28ada22"
+      },
+      "sidecars": [
+        {
+          "url": "https://nanless.github.io/audio-paper-digest-blog/data/papers/2026-10-21/2610-27491/citation.json",
+          "name": "arxiv-micla-citation.json",
+          "bytes": 771,
+          "sha256": "f34c2eff3abc87d9f1a3191e96b0eb50c24a926653f318177ad1c166d1af557c"
+        },
+        {
+          "url": "https://nanless.github.io/audio-paper-digest-blog/data/papers/2026-10-21/2610-27491/citation.bib",
+          "name": "arxiv-micla-citation.bib",
+          "bytes": 282,
+          "sha256": "7d0d4bc18116a01854e93f5eef06c8556407692d3a6432d0198dd47e6800f632"
+        },
+        {
+          "url": "https://nanless.github.io/audio-paper-digest-blog/data/papers/2026-10-21/2610-27491/citation.ris",
+          "name": "arxiv-micla-citation.ris",
+          "bytes": 261,
+          "sha256": "6c2974c9ffd6f11654c138c2272a1536d9705c411059d9d8ec1759f65f35e21d"
+        }
+      ],
+      "missingSidecarLinks": []
+    }
+  ]
+}

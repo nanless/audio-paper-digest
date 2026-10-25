@@ -24,12 +24,13 @@ import java.time.ZoneOffset
 
 @Composable internal fun SettingsPane(state:UiState,controller:AppController,action:Action,restore:()->Unit,requestedPane:String?=null,requestID:Int=0){
  val savedPanes=rememberSaveableStateHolder()
+ var showLicenses by rememberSaveable{mutableStateOf(false)}
  var pane by rememberSaveable{mutableStateOf("阅读")};var secret by remember{mutableStateOf<SecretKind?>(null)}
  var handledRequest by rememberSaveable{mutableIntStateOf(-1)}
- LaunchedEffect(requestID,requestedPane){if(handledRequest!=requestID&&requestedPane in listOf("阅读","模型","资料","坚果云","Zotero")){pane=requestedPane!!;handledRequest=requestID}}
+ LaunchedEffect(requestID,requestedPane){if(handledRequest!=requestID&&requestedPane in listOf("阅读","模型","资料","坚果云","Zotero","关于")){pane=requestedPane!!;handledRequest=requestID}}
  Column(Modifier.fillMaxSize()){
  SectionTitle("设置","连接、研究资料与阅读偏好")
- ScrollableTabRow(listOf("阅读","模型","资料","坚果云","Zotero").indexOf(pane)){listOf("阅读","模型","资料","坚果云","Zotero").forEach{Tab(pane==it,{pane=it},text={Text(it)})}}
+ ScrollableTabRow(listOf("阅读","模型","资料","坚果云","Zotero","关于").indexOf(pane)){listOf("阅读","模型","资料","坚果云","Zotero","关于").forEach{Tab(pane==it,{pane=it},text={Text(it)})}}
  Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(16.dp)){
  savedPanes.SaveableStateProvider(pane){when(pane){
  "阅读"->{Text("按你的节奏阅读",style=MaterialTheme.typography.titleLarge);listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(v,l)->FilterChip(state.settings.optString("appearance","system")==v,{action("settings.save",obj("changes" to obj("appearance" to v)))},label={Text(l)})};Text("正文字号");Slider(state.settings.optInt("font",18).coerceIn(14,30).toFloat(),{action("settings.save",obj("changes" to obj("font" to it.toInt())))},valueRange=14f..30f,steps=15);Row{Text("离线模式",Modifier.weight(1f));Switch(state.settings.optBoolean("offlineMode"),{action("settings.save",obj("changes" to obj("offlineMode" to it)))})};Text("离线模式读取已保存的导读与 PDF；未保存的资料会明确提示。");Row{Text("减少界面动画",Modifier.weight(1f));Switch(state.settings.optBoolean("reduceMotion"),{action("settings.save",obj("changes" to obj("reduceMotion" to it)))},modifier=Modifier.semantics{contentDescription="减少界面动画"})}
@@ -52,10 +53,12 @@ import java.time.ZoneOffset
  TextButton({scope.launch{try{retained=controller.execute("retained.list").rows("transfers")}catch(e:Exception){message=e.message}}}){Text("查看保留快照")};message?.let{Text(it)};retained.forEach{r->OutlinedButton({action("retained.export.prepare",obj("transferID" to r.optString("id")))}){Text("导出 ${r.optString("createdAt",r.optString("id"))}")}}}
  "坚果云"->CloudSettings(state,controller,action,{secret=SecretKind.CLOUD})
  "Zotero"->ZoteroSettings(state,controller,action,{secret=SecretKind.ZOTERO})
+ "关于"->AboutContent({showLicenses=true})
  }}
  }
  }
  secret?.let{kind->SecretDialog(kind,controller,{secret=null})}
+ if(showLicenses)OfflineLicensesDialog{showLicenses=false}
 }
 
 @Composable private fun SecretDialog(kind:SecretKind,controller:AppController,close:()->Unit){
@@ -66,7 +69,7 @@ import java.time.ZoneOffset
 
 
 /** The opt-out belongs only to this dialog host and is restored when the credential UI leaves composition. */
-@Composable private fun CredentialPasswordField(value:String,change:(String)->Unit){
+@Composable internal fun CredentialPasswordField(value:String,change:(String)->Unit,label:String="新的密钥",enabled:Boolean=true){
  val dialogView=LocalView.current
  DisposableEffect(dialogView){
   var root:android.view.View?=null;var original:Int?=null;var disposed=false
@@ -83,7 +86,9 @@ import java.time.ZoneOffset
   dialogView.addOnAttachStateChangeListener(attachment);applyDialogPolicy();dialogView.post{applyDialogPolicy()}
   onDispose{disposed=true;dialogView.removeOnAttachStateChangeListener(attachment);root?.let{view->original?.let{view.importantForAutofill=it}}}
  }
- OutlinedTextField(value,change,visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password,autoCorrectEnabled=false),singleLine=true,label={Text("新的密钥")})
+ CompositionLocalProvider(androidx.compose.runtime.saveable.LocalSaveableStateRegistry provides null) {
+  OutlinedTextField(value,change,visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password,autoCorrectEnabled=false),singleLine=true,label={Text(label)},enabled=enabled)
+ }
 }
 
 @Composable private fun CloudSettings(state:UiState,controller:AppController,action:Action,password:()->Unit){

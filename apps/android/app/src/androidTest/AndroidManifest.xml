@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- ProviderTestRule delegates through the platform's isolated test resolver. Test APK only. -->
+    <application>
+        <uses-library android:name="android.test.mock" android:required="true" />
+        <uses-library android:name="android.test.base" android:required="true" />
+    </application>
+</manifest>

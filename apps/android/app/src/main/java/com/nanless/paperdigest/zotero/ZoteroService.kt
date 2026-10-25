@@ -48,7 +48,7 @@ class ZoteroService(
     private fun connection():JSONObject=if(profile.isFile)JSONObject(JsonFiles.read(profile).toString(Charsets.UTF_8)) else JSONObject().put("destinationID",UUID.randomUUID().toString()).also{JsonFiles.write(profile,it)}
     fun state():JSONObject {
         val c=connection()
-        return JSONObject().put("libraryType",c.optString("libraryType","users")).put("libraryID",c.optString("libraryID")).put("collection",c.optString("collection"))
+        return JSONObject().put("macHistory", LegacyMacArchiveHistory.read(researchRoot)).put("libraryType",c.optString("libraryType","users")).put("libraryID",c.optString("libraryID")).put("collection",c.optString("collection"))
             .put("prepared",prepared ?: JSONObject.NULL).put("credentialState",if(permissions==null)"unknown" else "confirmed").put("busy",busy).put("permissions",permissions ?: JSONObject.NULL)
             .put("journals",JSONArray(records.listFiles()?.filter{it.isDirectory}?.mapNotNull{dir->runCatching{readJournal(dir.name).apply{remove("bibliography");remove("roles")}}.getOrNull()}?.sortedByDescending{it.optString("createdAt")}?:emptyList<JSONObject>()))
     }

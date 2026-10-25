@@ -57,6 +57,27 @@ import kotlinx.coroutines.launch
   j.optString("error").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
   OutlinedButton({action("zotero.resume",obj("journalID" to j.optString("id")))},enabled=!busy&&!dirty){Text(if(j.optString("status")=="completed")"重新逐项回读" else "沿原断点继续")}
  }}}
+ z.optJSONObject("macHistory")?.let{history->
+  val oldRecords=history.rows("records")
+  if(oldRecords.isNotEmpty()||history.optInt("unreadableCount")>0){
+   Text("来自 Mac 的存档记录",style=MaterialTheme.typography.titleLarge)
+   Text("这是备份保留的原 Mac 本地归档记录，只读展示。原来的核验结果不代表安卓刚刚回读了远端；如需核验或续传，请回到原 Mac。",style=MaterialTheme.typography.bodySmall)
+   oldRecords.forEach{record->OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+    Text(record.optString("title"),style=MaterialTheme.typography.titleMedium)
+    Text("Mac 本地归档 · 只读历史",color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.labelMedium)
+    Text(record.optString("identity"),style=MaterialTheme.typography.bodySmall)
+    record.optString("originalCollectionKey").takeUnless{it=="null"||it.isBlank()}?.let{Text("原 Mac 分类 key：$it",style=MaterialTheme.typography.bodySmall)}
+    val oldSteps=record.rows("steps");val checked=oldSteps.count{it.optBoolean("reportedVerified")}
+    Text("原记录核验：$checked / ${oldSteps.size} 项；当前远端状态尚未核验。",style=MaterialTheme.typography.bodySmall)
+    oldSteps.forEach{step->
+     val label=when(step.optString("role")){"bibliography"->"书目";"source-metadata"->"来源元数据";"pdf"->"原文 PDF";"guide"->"图文导读";"analysis"->"研究解析";"note"->"私人笔记";else->"原材料"}
+     Text("$label · ${step.optString("originalKey").takeUnless{it=="null"||it.isBlank()}?:"尚无条目 key"} · ${if(step.optBoolean("reportedVerified"))"原记录已核验" else "原记录未完成"}",style=MaterialTheme.typography.bodySmall)
+    }
+    if(record.optBoolean("summaryUnavailable"))Text("原汇总信息不匹配或不可读，未采用其时间或状态；原检查点已保留。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
+   }}}
+   if(history.optInt("unreadableCount")>0)Text("${history.optInt("unreadableCount")} 份原 Mac 检查点暂不可读，原文件完整保留，未将它们显示为已完成。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
+  }
+ }
  Text("引用、来源元数据、原文 PDF、图文导读、研究与笔记分别封存。全部所选材料实际回读相符才完成；失败或取消保留原条目 key。",style=MaterialTheme.typography.bodySmall)
  if(showCollections)AlertDialog(onDismissRequest={showCollections=false},title={Text("选择实际存档分类")},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(4.dp)){
   TextButton({collection="";dirty=true;showCollections=false}){Text("不指定分类")}

@@ -24,7 +24,22 @@ object BackupCodec {
     data class Captured(val file: File, val sha256: String, val encodedBytes: Long, val fileCount: Int)
     data class Staged(val directory: File, val sourceDirectory: String, val entries: List<Entry>, val encodedSHA256: String, val encodedBytes: Long)
 
+    // Captured stays a portable data DTO, while normal producer return is an
+    // in-process identity capability. Weak identity keys do not retain periodic
+    // cloud snapshots indefinitely and never authorize a copied/constructed DTO.
+    private val completedCaptureQueue = java.lang.ref.ReferenceQueue<Captured>()
+    private class CaptureIdentity(value:Captured,queue:java.lang.ref.ReferenceQueue<Captured>?=null):java.lang.ref.WeakReference<Captured>(value,queue) {
+        private val identityHash=System.identityHashCode(value)
+        override fun hashCode()=identityHash
+        override fun equals(other:Any?):Boolean = this===other || other is CaptureIdentity && get()!=null && get()===other.get()
+    }
+    private val completedCaptureIdentities=HashSet<CaptureIdentity>()
+    private fun removeExpiredCaptures(){while(true){val expired=completedCaptureQueue.poll()?:break;completedCaptureIdentities.remove(expired)}}
+    private fun recordNormalCapture(result:Captured):Captured=synchronized(completedCaptureIdentities){removeExpiredCaptures();completedCaptureIdentities.add(CaptureIdentity(result,completedCaptureQueue));result}
+    fun requireNormalCapture(result:Captured)=synchronized(completedCaptureIdentities){removeExpiredCaptures();require(completedCaptureIdentities.contains(CaptureIdentity(result))){"本次生产回执缺少实际正常采集返回凭证，原文件保留且未授予就绪"}}
+
     fun hash(file: File): String = checkedHash(file) {}
+    fun hash(file: File, check: () -> Unit): String = checkedHash(file, check)
     private fun checkedHash(file: File, check: () -> Unit): String = file.inputStream().buffered().use { input ->
         val digest = MessageDigest.getInstance("SHA-256"); val b = ByteArray(64 * 1024)
         while (true) { check(); val n = input.read(b); if (n < 0) break; digest.update(b, 0, n) }; hex(digest.digest())
@@ -122,7 +137,7 @@ object BackupCodec {
             require(currentPaths == entries.map { it.first }.toSet()) { "采集期间研究目录已变化" }
             check()
             require(!output.exists()) { "不会覆盖已有快照" }; Files.move(temporary.toPath(), output.toPath(), ATOMIC_MOVE)
-            return Captured(output, encodedSHA, encodedBytes, entries.size)
+            return recordNormalCapture(Captured(output, encodedSHA, encodedBytes, entries.size))
         } finally { temporary.delete() }
     }
     /** Input is decoded one Base64 buffer at a time into a newly owned private stage. */

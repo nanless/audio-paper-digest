@@ -15,30 +15,49 @@ import java.util.UUID
 
 /** One materials builder feeds exports and Zotero; original sealed records remain immutable. */
 class ExportService(private val context: Context, private val store: PersonalStore, private val study: StudyService,
-    private val publishedRecords: suspend (Paper) -> JSONObject = { PublishedRecordArchive.unavailable("尚未绑定原始目录读取器") }) {
-    private val directory = File(context.noBackupFilesDir, "PaperDigestTransfers/Exports").canonicalFile.also { it.mkdirs() }
+    private val publishedRecords: suspend (Paper) -> JSONObject = { PublishedRecordArchive.unavailable("尚未绑定原始目录读取器") },
+    private val citationOriginal: suspend (Paper, Article, PublishedCitationRepository.Format, () -> Unit) -> PublishedCitationRepository.Original = { _, _, _, _ -> throw AppFailure("citationUnavailable", "尚未绑定真实已发布引用读取器；未生成替代引用") }) {
+    private val directory by lazy { ExportArtifactWriter.directory(File(context.noBackupFilesDir.canonicalFile, "PaperDigestTransfers/Exports")) }
     data class Prepared(val id: String, val file: File, val mime: String, val name: String, val sha256: String) {
         fun json() = JSONObject().put("documentID", id).put("mime", mime).put("suggestedName", name).put("bytes", file.length()).put("sha256", sha256)
     }
-    fun register(file: File, mime: String, name: String): Prepared {
-        val id = UUID.randomUUID().toString(); val target = File(directory, "$id.bin")
-        file.inputStream().use { input -> target.outputStream().use { output -> input.copyTo(output) } }
-        val result = Prepared(id, target, mime, name.replace(Regex("[\\/:*?\"<>|]"), "-").take(160), BackupCodec.hash(target))
-        JsonFiles.write(File(directory, "$id.json"), result.json()); return result
+    private val artifactWriter by lazy { ExportArtifactWriter(directory) }
+    fun register(file:File,mime:String,name:String,documentID:String=UUID.randomUUID().toString(),check:()->Unit={}):Prepared {
+        val item=artifactWriter.register(file,mime,name,documentID,check)
+        return Prepared(item.id,item.file,item.mime,item.name,item.sha256)
     }
-    private fun bytes(data: ByteArray, mime: String, name: String): Prepared {
-        val id = UUID.randomUUID().toString(); val file = File(directory, "$id.bin"); JsonFiles.write(file, data)
-        return Prepared(id, file, mime, name.take(160).replace(Regex("[\\/:*?\"<>|]"), "-"), sha256(data)).also { JsonFiles.write(File(directory, "$id.json"), it.json()) }
+    fun registerCompleted(captured:ExportProducerReceipt.CompletedCapture,documentID:String,check:()->Unit={}):Prepared {
+        val item=artifactWriter.completed(captured.file,captured.mime,captured.name,documentID,captured.sha256,captured.bytes,check)
+        return Prepared(item.id,item.file,item.mime,item.name,item.sha256)
     }
-    suspend fun prepare(format: String, paper: Paper?, article: Article?, pdf: File?, sessionID: String? = null): Prepared {
+    private fun bytes(data:ByteArray,mime:String,name:String,documentID:String=UUID.randomUUID().toString(),check:()->Unit={}):Prepared {
+        val item=artifactWriter.bytes(data,mime,name,documentID,check)
+        return Prepared(item.id,item.file,item.mime,item.name,item.sha256)
+    }
+    suspend fun prepare(format:String,paper:Paper?,article:Article?,pdf:File?,sessionID:String?=null,
+        documentID:String=UUID.randomUUID().toString(),captureFile:File?=null,check:()->Unit={},
+        phase:(String)->Unit={},producer:ExportProducerReceipt?=null):Prepared {
+        check()
+        fun outBytes(data:ByteArray,mime:String,name:String)=bytes(data,mime,name,documentID,check)
+        fun outFile(file:File,mime:String,name:String)=register(file,mime,name,documentID,check)
         if (format == "backup") {
-            val file = File(directory, ".backup-${UUID.randomUUID()}")
-            return try { BackupCodec.capture(store.directory, file); register(file, "application/octet-stream", "论文速递-${now().replace(':', '-')}.paperdigest") } finally { file.delete() }
+            require(captureFile==null||producer!=null){"本次完整快照必须绑定原生产回执"}
+            val file=captureFile?:File(directory,".backup-${UUID.randomUUID()}")
+            try {
+                val completed=if(producer?.hasCompletionMaterials()==true)producer.verifiedCapture(check)else{
+                    require(!java.nio.file.Files.exists(file.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){"原准备材料未有完成回执，保留原件且未重新采集"}
+                    phase("capturing");val result=BackupCodec.capture(store.directory,file,check)
+                    if(producer!=null)producer.recordVerifiedCapture(result,"application/octet-stream","论文速递-${now().replace(':','-')}.paperdigest",check)
+                    else ExportProducerReceipt.CompletedCapture(result.file,"application/octet-stream","论文速递-${now().replace(':','-')}.paperdigest",result.encodedBytes,result.sha256,result.fileCount)
+                }
+                check();phase("encoding");return registerCompleted(completed,documentID,check)
+            }finally{if(producer==null)file.delete()}
         }
+        phase("encoding")
         if (format == "diagnostics") {
             // No account, endpoint, paper text, file paths, credentials or stable secret fingerprints.
             val s = store.snapshot()
-            return bytes(JSONObject().put("contract", "paperdigest-android-diagnostics-v1").put("generatedAt", now()).put("platform", "android")
+            return outBytes(JSONObject().put("contract", "paperdigest-android-diagnostics-v1").put("generatedAt", now()).put("platform", "android")
                 .put("sdk", android.os.Build.VERSION.SDK_INT).put("sessionCount", s.getJSONArray("sessions").length()).put("jobCount", s.getJSONArray("jobs").length())
                 .put("noteCount", s.getJSONObject("notes").length()).toString(2).toByteArray(), "application/json", "论文速递-诊断.json")
         }
@@ -47,30 +66,30 @@ class ExportService(private val context: Context, private val store: PersonalSto
             val owner = original.getJSONObject("historicalReference").getString("paperID")
             val name = "历史研究-${owner.replace(Regex("[^A-Za-z0-9_-]"), "-").take(60)}"
             return when (format) {
-                "research-json" -> bytes(original.toString(2).toByteArray(), "application/json", "$name.json")
-                "research-md" -> bytes(historicalMarkdown(original).toByteArray(), "text/markdown", "$name.md")
-                else -> bytes(htmlDocument("历史研究", ResearchRenderer.render(context, historicalMarkdown(original))).toByteArray(), "text/html", "$name.html")
+                "research-json" -> outBytes(original.toString(2).toByteArray(), "application/json", "$name.json")
+                "research-md" -> outBytes(historicalMarkdown(original).toByteArray(), "text/markdown", "$name.md")
+                else -> outBytes(htmlDocument("历史研究", ResearchRenderer.render(context, historicalMarkdown(original))).toByteArray(), "text/html", "$name.html")
             }
         }
         require(paper != null) { "请先选择论文" }
         if (format != "paper-pdf") ReadingSourceBinding.requireArticle(paper, article)
         val name = paper.titleZh.take(70)
-        val cited by lazy { citationPaper(paper, article) }
         return when (format) {
-            "paper-pdf" -> register(pdf ?: error("原文尚未保存"), "application/pdf", "$name.pdf")
-            "citation-json" -> bytes(cited.citation.toString(2).toByteArray(), "application/json", "$name-citation.json")
-            "bibtex" -> bytes(bibtex(cited).toByteArray(), "application/x-bibtex", "$name.bib")
-            "ris" -> bytes(ris(cited).toByteArray(), "application/x-research-info-systems", "$name.ris")
+            "paper-pdf" -> outFile(pdf ?: error("原文尚未保存"), "application/pdf", "$name.pdf")
+            "citation-json", "bibtex", "ris" -> {
+                val original=citationOriginal(paper,requireNotNull(article),PublishedCitationRepository.Format.fromRoute(format),check)
+                check();outBytes(original.bytes,original.mime,original.filename)
+            }
             "guide-html" -> {
                 require(article != null && article.paperID == paper.id)
-                bytes(htmlDocument(paper.titleZh, articleBody(article), article.notices).toByteArray(), "text/html", "$name-导读.html")
+                outBytes(htmlDocument(paper.titleZh, articleBody(article), article.notices).toByteArray(), "text/html", "$name-导读.html")
             }
             "research-json", "research-md", "research-html" -> {
                 val research = research(paper, article, sessionID)
                 when (format) {
-                    "research-json" -> bytes(research.toString(2).toByteArray(), "application/json", "$name-研究.json")
-                    "research-md" -> bytes(researchMarkdown(paper, research).toByteArray(), "text/markdown", "$name-研究.md")
-                    else -> bytes(htmlDocument(paper.titleZh, ResearchRenderer.render(context, researchMarkdown(paper, research))).toByteArray(), "text/html", "$name-研究.html")
+                    "research-json" -> outBytes(research.toString(2).toByteArray(), "application/json", "$name-研究.json")
+                    "research-md" -> outBytes(researchMarkdown(paper, research).toByteArray(), "text/markdown", "$name-研究.md")
+                    else -> outBytes(htmlDocument(paper.titleZh, ResearchRenderer.render(context, researchMarkdown(paper, research))).toByteArray(), "text/html", "$name-研究.html")
                 }
             }
             else -> throw AppFailure("unsupported", "导出格式尚不支持")
@@ -206,11 +225,8 @@ class ExportService(private val context: Context, private val store: PersonalSto
             val paletteCSS = if (background == null) "" else "body{background:${css(background)}!important;color:${css(foreground!!)}!important}a{color:${css(link!!)}!important}blockquote{border-color:${css(link)}}"
             return "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='Content-Security-Policy' content=\"default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\"><title>${escape(title)}</title><style>body{max-width:76ch;margin:32px auto;padding:0 22px;font:18px/1.8 system-ui,sans-serif;color:#20272c}img{max-width:100%;height:auto}table{display:block;overflow-x:auto;border-collapse:collapse}td,th{padding:8px;border:1px solid #ccd2d5}pre{overflow-x:auto;white-space:pre-wrap}math[display=block]{display:block;overflow-x:auto;margin:1.2em 0}blockquote{border-left:3px solid #547a73;padding-left:18px}h1,h2,h3{line-height:1.4;overflow-wrap:anywhere}h1{font-size:1.5em;letter-spacing:-.02em;margin:0 0 1.1em}h2{font-size:1.3em;margin:1.8em 0 .7em}h3{font-size:1.12em;margin:1.4em 0 .6em}p{margin:.85em 0}blockquote{margin:1.2em 0;padding-right:.4em}body{word-wrap:break-word}pre,table,math[display=block]{max-width:100%}@media(max-width:480px){body{margin:24px auto;padding:0 20px}h1{font-size:1.45em}}@media print{body{color:#20272c!important;background:white!important}img,figure{break-inside:avoid}tr{break-inside:avoid}}a{color:#29645a}@media(prefers-color-scheme:dark){body{color:#e3e8e6;background:#171c1c}}${paletteCSS}</style></head><body>"
         }
-        fun htmlDocument(title: String, body: String, notices: List<String> = emptyList()): String {
-            val hasTitle = title.isNotBlank() && org.jsoup.Jsoup.parseBodyFragment(body).body().select("h1").any { it.text().isNotBlank() }
-            val heading = if (title.isBlank() || hasTitle) "" else "<h1>${escape(title)}</h1>"
-            return htmlDocumentHead(title) + heading + notices.joinToString("") { "<p role='note'>${escape(it)}</p>" } + body + "</body></html>"
-        }
+        fun htmlDocument(title: String, body: String, notices: List<String> = emptyList()): String =
+            HtmlDocumentSegments.create(title, body, notices).joinForExport()
         fun researchMarkdown(paper: Paper, research: JSONObject): String = buildString {
             append("# ${paper.titleZh}\n\n来源：${paper.sourceURL ?: paper.blogURL}\n\n")
             research.getJSONArray("sessions").objects().forEach { s ->
@@ -220,10 +236,6 @@ class ExportService(private val context: Context, private val store: PersonalSto
             }
             append("## 阅读笔记\n\n${research.getJSONObject("note").getString("text")}\n")
         }
-        fun bibtex(p: Paper): String {
-            fun b(s: String) = s.replace("\\", "\\textbackslash{}").replace("{", "\\{").replace("}", "\\}").replace("\n", " ")
-            return "@misc{${p.id.replace(Regex("[^A-Za-z0-9]"), "")},\n  title = {${b(p.title)}},\n  author = {${p.authors.joinToString(" and ") { b(it) }}},\n  year = {${b(p.date.take(4))}},\n  url = {${b(p.sourceURL ?: p.blogURL)}},\n  eprint = {${b(p.sourceVersion ?: p.id.removePrefix("arxiv:"))}}\n}\n"
-        }
-        fun ris(p: Paper): String = buildString { append("TY  - ${if (p.sourceKind == "arxiv") "UNPB" else "CONF"}\nTI  - ${p.title.replace('\n', ' ')}\n"); p.authors.forEach { append("AU  - ${it.replace('\n', ' ')}\n") }; append("PY  - ${p.date.take(4)}\nUR  - ${p.sourceURL ?: p.blogURL}\nER  - \n") }
+
     }
 }

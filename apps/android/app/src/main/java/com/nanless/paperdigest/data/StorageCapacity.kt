@@ -32,13 +32,14 @@ class StorageCapacity(researchRoot: File, exportsRoot: File, cloudControlRoot: F
     private val removeFile: (File) -> Boolean = { it.delete() }) {
     private val research = checkedRoot(researchRoot)
     private val exports = checkedRoot(exportsRoot)
+    private val pendingExports = checkedRoot(File(requireNotNull(exports.parentFile) { "导出目录缺少受控父目录" }, "PendingExports"))
     private val cloud = checkedRoot(cloudControlRoot)
     private val device = checkedRoot(deviceControlRoot)
     private val mutex = Mutex()
     private val plans = LinkedHashMap<String, Plan>()
     @Volatile private var lastCleanup: JSONObject? = null
     init {
-        val roots = listOf(research, exports, cloud, device)
+        val roots = listOf(research, exports, pendingExports, cloud, device)
         require(roots.indices.all { a -> roots.indices.all { b -> a == b || !overlaps(roots[a], roots[b]) } }) { "容量目录必须彼此独立，设备证明不得进入研究备份" }
     }
     private data class Count(val files: Long = 0, val bytes: Long = 0) { fun json() = JSONObject().put("fileCount", files).put("bytes", bytes) }
@@ -47,7 +48,7 @@ class StorageCapacity(researchRoot: File, exportsRoot: File, cloudControlRoot: F
     private data class Plan(val id: String, val expiresAt: Long, val candidates: List<Candidate>)
 
     fun summary(): JSONObject {
-        val rows = listOf(Triple("research", "研究资料", research), Triple("exports", "导出临时副本", exports), Triple("cloudTransfers", "云端传输材料", cloud), Triple("deviceControl", "本机派发与导出证明", device)).map { (id, label, root) -> count(root).json().put("id", id).put("label", label).put("exists", root.exists()) }
+        val rows = listOf(Triple("research", "研究资料", research), Triple("exports", "导出临时副本", exports), Triple("pendingExports", "待保存准备材料", pendingExports), Triple("cloudTransfers", "云端传输材料", cloud), Triple("deviceControl", "本机派发与导出证明", device)).map { (id, label, root) -> count(root).json().put("id", id).put("label", label).put("exists", root.exists()) }
         var retained = Count()
         if (cloud.exists()) children(cloud).filter { it.name.matches(Regex("archived-[a-fA-F0-9-]{36}")) }.forEach { folder ->
             val value = count(folder); retained = Count(Math.addExact(retained.files, value.files), Math.addExact(retained.bytes, value.bytes))

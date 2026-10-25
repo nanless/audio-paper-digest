@@ -19,6 +19,12 @@ class PdfOriginalSnapshot private constructor(
     private val repository:PdfRepository,private val requireCurrent:()->Unit,private val originalFile:File
 ) {
     private val discarded=AtomicBoolean()
+    @Volatile private var handedOff=false
+    /** Only the real system handoff path marks this; UI cancellation cannot retract it. */
+    internal fun markHandedOff()=synchronized(lifetimeLock){check(!discarded.get() && file.isFile){"原文输出副本已关闭"};handedOff=true}
+    val hasBeenHandedOff:Boolean get()=handedOff
+    fun discardIfUnhanded():Boolean=synchronized(lifetimeLock){if(handedOff)false else{discard();true}}
+    internal fun copySessionPassword():CharArray?{requireActiveOwner();return repository.copySessionPassword(document)}
     internal fun requireActiveOwner(){check(!discarded.get()){ "原文输出副本已关闭" };requireCurrent()}
     internal fun pin()=synchronized(lifetimeLock){requireActiveOwner();check(file.parentFile!!.name !in purging){"输出副本正在到期清理，请重新准备"};require(file.isFile&&!Files.isSymbolicLink(file.toPath())&&file.absoluteFile==file.canonicalFile){"输出副本已到期，请重新准备"};check(active.add(file.parentFile!!.name)){"此原文输出副本已有进行中的打印，请重新准备"}}
     suspend fun validate()=withContext(Dispatchers.IO) {
@@ -58,7 +64,10 @@ class PdfOriginalSnapshot private constructor(
             }
         }
 
-        suspend fun prepare(context:Context,repository:PdfRepository,document:PdfDocumentRef,ownerID:String,requireCurrent:()->Unit):PdfOriginalSnapshot=withContext(Dispatchers.IO) {
+        suspend fun prepare(context:Context,repository:PdfRepository,document:PdfDocumentRef,ownerID:String,requireCurrent:()->Unit):PdfOriginalSnapshot {
+            val delivery=java.util.concurrent.atomic.AtomicReference<PdfOriginalSnapshot?>()
+            try {
+                val prepared=withContext(Dispatchers.IO) {
             require(ownerID.isNotBlank()&&ownerID.length<=2048) { "原文没有所属论文身份" };requireCurrent()
             val source=repository.verify(document)
             val root=File(context.cacheDir.canonicalFile,"PdfOutbound")
@@ -72,8 +81,15 @@ class PdfOriginalSnapshot private constructor(
                 require(output.setReadable(false,false)&&output.setReadable(true,true)&&output.setWritable(false,false)&&output.setWritable(true,true)) { "原文分享暂存权限设置失败" }
                 require(digest(output)==document.sha256) { "原文输出副本校验失败" }
                 requireCurrent();repository.verify(document);call.ensureActive()
-                PdfOriginalSnapshot(ownerID,document,output,repository,requireCurrent,source)
+                PdfOriginalSnapshot(ownerID,document,output,repository,requireCurrent,source).also(delivery::set)
             }catch(t:Throwable){output.delete();dir.delete();throw t}
+                }
+                delivery.set(null)
+                return prepared
+            } catch(failure:Throwable) {
+                try{delivery.getAndSet(null)?.discardIfUnhanded()}catch(cleanup:Throwable){failure.addSuppressed(cleanup)}
+                throw failure
+            }
         }
         internal fun digest(file:File,check:()->Unit={}):String {
             val d=MessageDigest.getInstance("SHA-256")

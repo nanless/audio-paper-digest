@@ -33,6 +33,10 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     private data class CatalogState(val published: List<Paper>, val retired: List<Paper>, val summary: JSONObject, val epoch: String) {
         val all = (published + retired).distinctBy { it.id }
     }
+    @Volatile private var citationCache: PublishedCitationRepository? = null
+    private fun citationRepo(): PublishedCitationRepository = citationCache ?: synchronized(this) { citationCache ?: PublishedCitationRepository(File(directory, "citation-originals"), ::read).also { citationCache = it } }
+    suspend fun citationOriginal(paper: Paper, article: Article, format: PublishedCitationRepository.Format, requireCurrent: () -> Unit = {}): PublishedCitationRepository.Original =
+        personal.settings().optBoolean("offlineMode").let { offline -> citationRepo().original(paper, article, format, offline, verifyRemote = !offline, requireCurrent = requireCurrent) }
     @Volatile private var snapshot = loadCatalog()
     fun papers(): List<Paper> {
         val catalog = snapshot
@@ -46,7 +50,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     init { reindexOffline() }
     fun offlinePaperIDs(): Set<String> = offlineIds.toSet()
     fun prepareOfflineArticle(article: Article): Article = hydrate(article)
-    fun reload() { snapshot = loadCatalog(); reindexOffline() }
+    fun reload() { citationCache = null; snapshot = loadCatalog(); reindexOffline() }
 
     /** The catalog stays as one owned typed tree; startup never makes a whole-library string plus deep copies. */
     private fun loadCatalog(): CatalogState {
@@ -204,8 +208,18 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         if (!refresh && previous == null && epoch() == "bundled-sample") seedArticle(paper)?.let { JsonFiles.write(file, it.json()); offlineIds += paper.id; return@withContext hydrate(it) }
         try {
             require(!personal.settings().optBoolean("offlineMode")) { "当前为离线模式" }
-            val bytes = read(sameSite(paper.blogURL), 8 * 1024 * 1024)
-            var result = extractArticle(bytes.toString(Charsets.UTF_8), paper, epoch())
+            val citationRepository = citationRepo()
+            val page = citationRepository.fetchPage(paper)
+            var result: Article
+            try {
+                result = extractArticle(page.html, paper, epoch())
+                try { result = citationRepository.bindPage(paper, result, page) }
+                catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    coroutineContext.ensureActive()
+                    result = result.copy(notices = result.notices + "引用原件下载页面尚未封存；其他导读内容保持原样。")
+                }
+            } finally { citationRepository.releasePage(page) }
             val images = mutableListOf<ArticleResource>(); val notices = result.notices.toMutableList()
             val doc = Jsoup.parseBodyFragment(result.html)
             var total = 0
@@ -227,21 +241,19 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                     notices += "部分图片未能下载，已保留图题与原网址"
                 }
             }
-            val sourceDoc = Jsoup.parse(bytes.toString(Charsets.UTF_8), paper.blogURL)
-            val citationLink = sourceDoc.select("a[href]").firstOrNull { it.attr("href").endsWith("/citation.json") }?.absUrl("href")
+            val citationFiles = try { citationRepository.declaredFiles(paper, result) }
+            catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error; coroutineContext.ensureActive(); emptyMap() }
             var context: JSONObject? = null
             var sidecar: JSONObject? = null
-            var citationFiles: JSONObject? = null
-            if (!citationLink.isNullOrEmpty()) {
-                val root = sameSite(citationLink).removeSuffix("citation.json")
-                citationFiles = JSONObject(listOf("citation.json", "citation.bib", "citation.ris", "rethink-context.json").associateWith { root + it })
-                try { sidecar = validatedSidecar(JSONObject(read(root + "citation.json", 1024 * 1024).toString(Charsets.UTF_8)), paper, false) }
-                catch (e: Exception) { coroutineContext.ensureActive(); notices += "引用附加文件尚未核验，保留页面已核验字段" }
+            citationFiles["citation.json"]?.let { address ->
+                try { sidecar = validatedSidecar(JSONObject(PublishedUtf8.decode(read(address, 1024 * 1024))), paper, false) }
+                catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error; coroutineContext.ensureActive(); notices += "引用附加文件尚未核验，保留页面已核验字段" }
             }
-            if (!citationLink.isNullOrEmpty()) try {
-                context = validatedSidecar(JSONObject(read(sameSite(citationLink.removeSuffix("citation.json") + "rethink-context.json"), 1024 * 1024).toString(Charsets.UTF_8)), paper, true)
-            } catch (e: Exception) { coroutineContext.ensureActive(); context = null; notices += "研究上下文附加文件尚未读取" }
-            val original = result.json().put("citationSidecar", sidecar ?: JSONObject.NULL).put("citationFiles", citationFiles ?: JSONObject.NULL)
+            citationFiles["rethink-context.json"]?.let { address ->
+                try { context = validatedSidecar(JSONObject(PublishedUtf8.decode(read(address, 1024 * 1024))), paper, true) }
+                catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error; coroutineContext.ensureActive(); notices += "研究上下文附加文件尚未读取" }
+            }
+            val original = result.json().put("citationSidecar", sidecar ?: JSONObject.NULL).put("citationFiles", JSONObject(citationFiles))
             result = result.copy(html = doc.body().html(), resources = images, completeOffline = images.all { it.localPath != null }, notices = notices.distinct(), researchContext = context, original = original)
             if (result.catalogEpoch != epoch()) result = result.copy(isStale = true, notices = result.notices + "读取期间目录发生更新，请刷新核验当前修订")
             previous?.let { preserve(it) }; preserve(result)
@@ -432,7 +444,10 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     }
     private fun seedCatalog(): JSONObject {
         val seed = runCatching { JSONObject(context.assets.open("published/sample.json").use { it.readBytes().toString(Charsets.UTF_8) }) }.getOrNull()
-        val rows = seed?.optJSONArray("librarySample")?.objects() ?: emptyList()
+        if (seed == null) return JSONObject().put("format", "mac-published-library-v1").put("validationEpoch", "unsynced")
+            .put("summary", JSONObject().put("paperCount", 0).put("recordCount", 0).put("shardCount", 0).put("source", "尚未同步网站论文").put("snapshotID", "unsynced").put("syncedAt", JSONObject.NULL))
+            .put("papers", JSONArray())
+        val rows = seed.optJSONArray("librarySample")?.objects() ?: emptyList()
         val papers = rows.map { row ->
             val id = row.getString("id"); val source = row.getString("absUrl"); val version = URI(source).path.substringAfterLast('/')
             Paper("arxiv:$id", row.getString("title"), row.optString("titleZh", row.getString("title")), row.optJSONArray("authors")?.objects()?.map { it.getString("name") } ?: emptyList(),

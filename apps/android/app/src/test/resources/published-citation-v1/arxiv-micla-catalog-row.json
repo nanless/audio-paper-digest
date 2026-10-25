@@ -1,0 +1,72 @@
+{
+  "arxivId": "2610.27491",
+  "categories": [
+    "论文速递"
+  ],
+  "citation": {
+    "arxivId": "2610.27491v1",
+    "authors": [
+      "Kohei Yamamoto",
+      "Kosuke Okusa"
+    ],
+    "complete": false,
+    "contract": "paper-citation-source-v1",
+    "date": "",
+    "doi": "",
+    "identityStatus": "verified",
+    "pageType": "paper",
+    "pageUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-21-micla-mixture-to-constituent-latent-alignment-for-2610-27491/",
+    "paperId": "",
+    "paperKey": "arxiv:2610.27491",
+    "pdfUrl": "https://arxiv.org/pdf/2610.27491v1.pdf",
+    "sourceKind": "arxiv",
+    "sourceUrl": "https://arxiv.org/abs/2610.27491v1",
+    "title": "MiCLA: Mixture-to-Constituent Latent Alignment for Polyphonic Audio Representation Learning",
+    "url": "https://arxiv.org/abs/2610.27491v1",
+    "venue": "",
+    "verified": true
+  },
+  "date": "2026-10-21",
+  "identityStatus": "verified",
+  "method": "自监督学习",
+  "pageType": "paper",
+  "permalink": "/audio-paper-digest-blog/posts/2026-10-21-micla-mixture-to-constituent-latent-alignment-for-2610-27491/",
+  "primaryMethodId": "method.self-supervised",
+  "primaryTaskId": "task.audio-classification",
+  "score": "7.5",
+  "sourceKind": "arxiv",
+  "summary": "针对复调音频中混合表示与成分表示关系未被显式约束的问题，MiCLA 用对数梅尔谱凸插值构造合成混合并做双向残差对齐，在 AS-20K 微调取得 43.2% mAP 且冻结探测下保持可检索的双成分信息，但结论只在 AudioSet 类分布与两源合成混合条件下成立。",
+  "tagCatalogSha256": "cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8",
+  "tagConcepts": [
+    {
+      "facet": "task",
+      "id": "task.audio-classification",
+      "label": "音频分类"
+    },
+    {
+      "facet": "method",
+      "id": "method.self-supervised",
+      "label": "自监督学习"
+    },
+    {
+      "facet": "method",
+      "id": "method.contrastive",
+      "label": "对比学习"
+    },
+    {
+      "facet": "task",
+      "id": "task.audio-retrieval",
+      "label": "音频检索"
+    }
+  ],
+  "tagContract": "paper-tag-flat-tags-v2",
+  "tags": [
+    "音频分类",
+    "自监督学习",
+    "对比学习",
+    "音频检索"
+  ],
+  "task": "音频分类",
+  "title": "MiCLA: Mixture-to-Constituent Latent Alignment for Polyphonic Audio Representation Learning",
+  "titleZh": "MiCLA：用混合到成分的残差对齐学习复调音频表示"
+}

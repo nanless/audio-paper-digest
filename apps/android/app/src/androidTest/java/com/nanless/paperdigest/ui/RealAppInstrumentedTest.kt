@@ -42,11 +42,33 @@ class RealAppInstrumentedTest {
   assertTrue("The actual system control must be enabled",control.isEnabled);assertFalse("The actual system control must have a visible touch region",control.visibleBounds.isEmpty)
   control.click();compose.waitForIdle()
  }
+ private fun selectReadingMode(mode:String){
+  if(compose.onAllNodesWithContentDescription("选择阅读模式").fetchSemanticsNodes().isNotEmpty()){
+   compose.onNodeWithContentDescription("选择阅读模式").assertIsDisplayed().performClick();waitText(mode);click(mode)
+   compose.onNodeWithText("$mode ·",substring=true).assertIsDisplayed()
+  }else{compose.onNodeWithText(mode).performScrollTo().assertIsDisplayed().performClick();compose.onNodeWithText(mode).assertIsSelected()}
+  compose.waitForIdle()
+ }
+ private fun waitReadingControls(){compose.waitUntil(30000){compose.onAllNodesWithContentDescription("论文操作与导出").fetchSemanticsNodes().isNotEmpty()};compose.onNodeWithContentDescription("论文操作与导出").assertIsDisplayed()}
+ private fun pdfTool(label:String){
+  if(compose.onAllNodesWithContentDescription("原文工具").fetchSemanticsNodes().isNotEmpty()){
+   compose.onNodeWithContentDescription("原文工具").assertIsDisplayed().assertIsEnabled().performClick();waitText(label)
+  }
+  click(label)
+ }
+ private fun gotoPDFPage(page:Int){
+  compose.onNodeWithContentDescription("跳转页码").assertIsDisplayed().assertIsEnabled().performClick();waitText("跳转到原文物理页")
+  compose.onNodeWithText("页码（1–13）").performTextReplacement(page.toString());click("跳转")
+  compose.onNodeWithText("跳转到原文物理页").assertDoesNotExist()
+ }
+ private fun nextPDFPage(){
+  if(compose.onAllNodesWithContentDescription("下一页").fetchSemanticsNodes().isNotEmpty())compose.onNodeWithContentDescription("下一页").assertIsEnabled().performClick()else click("下一页")
+ }
  private fun capture(label:String){
   compose.waitForIdle();Thread.sleep(600)
   val instrument=InstrumentationRegistry.getInstrumentation()
   val qualifier=InstrumentationRegistry.getArguments().getString("screenLabel")?:"phone"
-  val titleBounds=if(label=="guide-top")controller.state.value.let{state->val current=state.viewedPaper?.takeIf{it.id==state.selectedPaperId}?:state.papers.find{it.id==state.selectedPaperId};compose.onNodeWithText(requireNotNull(current).titleZh).fetchSemanticsNode().boundsInRoot} else null
+  val titleBounds=if(label=="guide-top")controller.state.value.let{state->val current=state.viewedPaper?.takeIf{it.id==state.selectedPaperId}?:state.papers.find{it.id==state.selectedPaperId};val title=requireNotNull(current).titleZh;if(compose.onAllNodesWithContentDescription("选择阅读模式").fetchSemanticsNodes().isNotEmpty())compose.onNode(hasText(title,substring=true) and hasContentDescription("选择阅读模式")).fetchSemanticsNode().boundsInRoot else compose.onNodeWithText(title).fetchSemanticsNode().boundsInRoot} else null
   val out=File(compose.activity.getExternalFilesDir("qa"),"api${android.os.Build.VERSION.SDK_INT}-$qualifier-$label.png")
   out.parentFile!!.mkdirs();val bitmap=requireNotNull(instrument.uiAutomation.takeScreenshot())
   try{out.outputStream().use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)};titleBounds?.let{bounds->
@@ -120,7 +142,7 @@ class RealAppInstrumentedTest {
   }
   if(forcePublishedRefresh){
    val previousFetch=controller.state.value.article!!.fetchedAt
-   waitText("刷新");click("刷新")
+   waitReadingControls();compose.onNodeWithContentDescription("论文操作与导出").performClick();waitText("刷新已发布导读");click("刷新已发布导读")
    compose.waitUntil(120000){controller.state.value.article?.let{it.paperID==paper.id&&it.fetchedAt!=previousFetch}==true}
    val live=controller.state.value.article!!
    assertTrue("An online run must use downloaded original scientific images, never seed replacements",live.completeOffline)
@@ -136,8 +158,7 @@ class RealAppInstrumentedTest {
   }
   val restoredMode=controller.state.value.personal.optJSONObject("readingState")?.optJSONObject(paper.id)?.optString("mode").orEmpty()
   File(compose.activity.getExternalFilesDir("qa"),"guide-tab-diagnostic-${android.os.Build.VERSION.SDK_INT}.json").writeText(JSONObject().put("restoredModeBeforeExplicitGuide",restoredMode).put("paperID",paper.id).toString())
-  waitText("导读");compose.onNodeWithText("导读").performScrollTo().performClick();compose.waitForIdle()
-  compose.onNodeWithText("导读").assertIsSelected()
+  waitReadingControls();selectReadingMode("导读")
   val web=readyGuide()
   val geometry=org.json.JSONArray();compose.runOnUiThread{views(compose.activity.window.decorView).forEach{view->val rect=android.graphics.Rect();val visible=view.getGlobalVisibleRect(rect);val xy=IntArray(2);view.getLocationOnScreen(xy);geometry.put(JSONObject().put("class",view.javaClass.name).put("width",view.width).put("height",view.height).put("left",view.left).put("top",view.top).put("screenX",xy[0]).put("screenY",xy[1]).put("globalVisible",visible).put("globalRect",rect.toShortString()).put("clipBounds",view.clipBounds?.toShortString()).put("clipChildren",(view as? android.view.ViewGroup)?.clipChildren).put("clipToPadding",(view as? android.view.ViewGroup)?.clipToPadding))}}
   val guideQa=compose.activity.getExternalFilesDir("qa")!!;File(guideQa,"guide-layout-${android.os.Build.VERSION.SDK_INT}-${arguments.getString("screenLabel")}.json").writeText(geometry.toString(2));File(guideQa,"guide-layout-${android.os.Build.VERSION.SDK_INT}-${arguments.getString("screenLabel")}.semantics.txt").writeText(compose.onRoot(useUnmergedTree=true).printToString())
@@ -158,9 +179,9 @@ class RealAppInstrumentedTest {
   for((index,anchor) in imageAnchors.withIndex()){seekGuide(web,anchor);capture("guide-figure-${index+1}")}
   for((index,anchor) in tableAnchors.withIndex()){seekGuide(web,anchor);capture("guide-table-${index+1}")}
   compose.runOnUiThread{web.scrollTo(0,0)}
-  click("研究");waitText("向这篇论文提问");compose.onNodeWithText("发送").assertIsNotEnabled();capture("research")
-  click("笔记");waitText("阅读笔记");capture("notes")
-  click("导读")
+  selectReadingMode("研究");waitText("向这篇论文提问");compose.onNodeWithText("发送").assertIsNotEnabled();capture("research")
+  selectReadingMode("笔记");waitText("阅读笔记");capture("notes")
+  selectReadingMode("导读")
   compose.onNodeWithContentDescription("打开 PDF").performClick()
   compose.waitUntil(40000){controller.state.value.pdfDocument?.pageCount==13&&controller.state.value.pdfMode}
   waitText("原文已载入",substring=true);capture("pdf")
@@ -169,23 +190,23 @@ class RealAppInstrumentedTest {
   val restoredPage=controller.state.value.pdfPage
   File(compose.activity.getExternalFilesDir("qa"),"restored-page-${android.os.Build.VERSION.SDK_INT}-${InstrumentationRegistry.getArguments().getString("screenLabel")?:"phone"}.json").writeText(JSONObject().put("restoredPage",restoredPage).put("paperID",paper.id).put("pdfSHA",controller.state.value.pdfDocument!!.sha256).toString())
   // An upgrade preserves the user's reading position. Navigate through the real control before expecting 1 -> 2.
-  compose.onNodeWithText("页码").performTextReplacement("1");click("跳转")
+  gotoPDFPage(1)
   compose.waitUntil(10000){controller.state.value.pdfPage==1}
   compose.waitUntil(10000){var hidden=false;compose.runOnUiThread{hidden=androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())==false};hidden}
   waitText("原文已载入 · 物理页 1 / 13")
-  compose.onNodeWithText("下一页").performClick()
+  nextPDFPage()
   compose.waitUntil(10000){controller.state.value.pdfPage==2};capture("pdf-page2")
   val marksBefore=controller.state.value.personal.optJSONObject("annotations")?.optJSONArray(paper.id)?.length()?:0
   val legacy=File(compose.activity.noBackupFilesDir,"PaperDigest/PdfAnnotations/${controller.state.value.pdfDocument!!.sha256}.json")
   val legacyBefore=legacy.takeIf{it.exists()}?.readBytes()
-  click("选取本页文字");waitText("选取物理页 2 的原文")
+  pdfTool("选取本页文字");waitText("选取物理页 2 的原文")
   val text=compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetSelection) and hasText("MiCLA",substring=true))
   val originalText=text.fetchSemanticsNode().config[SemanticsProperties.EditableText].text
   val start=originalText.indexOf("MiCLA");assertTrue(start>=0)
   text.performTextInputSelection(TextRange(start,start+5))
   compose.onNodeWithText("采用选区").assertIsEnabled().performClick()
   compose.waitUntil(10000){controller.state.value.pdfSelection?.text=="MiCLA"}
-  click("保存标注");waitText("保存原文标注")
+  pdfTool("保存标注");waitText("保存原文标注")
   compose.onNodeWithText("我的批注（可留空）").performTextInput("专用 QA 设备的真实公开原文批注")
   click("保存在本机")
   compose.waitUntil(10000){(controller.state.value.personal.optJSONObject("annotations")?.optJSONArray(paper.id)?.length()?:0)>marksBefore}
@@ -193,9 +214,9 @@ class RealAppInstrumentedTest {
   for(i in marksBefore until central.length()){assertEquals(controller.state.value.pdfDocument!!.sha256,central.getJSONObject(i).getString("pdfSHA"));assertEquals("MiCLA",central.getJSONObject(i).getString("text"));assertTrue(central.getJSONObject(i).getString("rect").startsWith("{{"))}
   if(legacyBefore==null)assertFalse("product annotation must not create a second authority",legacy.exists())else assertArrayEquals(legacyBefore,legacy.readBytes())
   capture("pdf-central-annotation")
-  click("导读");readyGuide();capture("reader-guide-with-pdf-open")
-  compose.onNodeWithContentDescription("导出").performClick();waitText("存档到 Zotero…");capture("export-menu")
-  click("存档到 Zotero…");waitText("存档到 Zotero");compose.onNodeWithText("核验并准备材料").assertIsNotEnabled();capture("zotero-archive-dialog");click("关闭")
+  selectReadingMode("导读");readyGuide();capture("reader-guide-with-pdf-open")
+  compose.onNodeWithContentDescription("论文操作与导出").performClick();waitText("存档到 Zotero…");capture("export-menu")
+  PhysicalUiTestActions.popupItem(device,"存档到 Zotero…",compose.activity.resources.displayMetrics.density);compose.waitForIdle();waitText("存档到 Zotero");compose.onNodeWithText("核验并准备材料").assertIsNotEnabled();capture("zotero-archive-dialog");click("关闭")
   compose.onNodeWithContentDescription("关闭 PDF").performClick();compose.waitUntil(10000){!controller.state.value.pdfMode}
   click("设置");waitText("按你的节奏阅读");capture("settings-reading")
   click("模型");waitText("本机模型连接");capture("settings-model")

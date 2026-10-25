@@ -56,7 +56,13 @@ class DiskSpaceProbeTest {
         try {
             val report = StorageCapacity(f.research, f.exports, f.cloud, f.device).summary()
             assertTrue(report.getLong("availableBytes") in 1 until Long.MAX_VALUE)
-            assertEquals(4, report.getJSONArray("rows").length()); f.originalOnly()
+            val rows=report.getJSONArray("rows")
+            assertEquals(5,rows.length())
+            assertEquals(setOf("research","exports","pendingExports","cloudTransfers","deviceControl"),rows.objects().map{it.getString("id")}.toSet())
+            val pending=rows.objects().single{it.getString("id")=="pendingExports"}
+            assertEquals("待保存准备材料",pending.getString("label"));assertEquals(0L,pending.getLong("fileCount"));assertEquals(0L,pending.getLong("bytes"));assertFalse(pending.getBoolean("exists"))
+            assertFalse(File(f.exports.parentFile,"PendingExports").exists())
+            f.originalOnly()
         } finally { f.close() }
     }
     @Test fun captureZeroNegativeAndProviderErrorsFailBeforeCaptureOrSigning() {

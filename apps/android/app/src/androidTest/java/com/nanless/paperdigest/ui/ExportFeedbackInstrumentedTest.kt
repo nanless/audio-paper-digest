@@ -23,11 +23,21 @@ import org.junit.Test
 class ExportFeedbackInstrumentedTest {
  @get:Rule val compose=createComposeRule()
  private class Controller(private val receipt:JSONObject):AppController {
-  override val state=MutableStateFlow(UiState(papers=listOf(Paper("export-fixture","Synthetic export feedback","合成导出反馈论文")),selectedPaperId="export-fixture"))
+  override val state=MutableStateFlow(UiState(papers=listOf(Paper("export-fixture","Synthetic export feedback","合成导出反馈论文")),selectedPaperId="export-fixture",pendingExportsLoading=false))
+  val prepared=JSONObject().put("operationID","00000000-0000-4000-8000-000000000001").put("documentID","original-prepared-document").put("jobID","00000000-0000-4000-8000-000000000002")
+   .put("preparation","ready").put("ready",true).put("delivery","none").put("mime","application/json").put("suggestedName","synthetic-citation.json")
+   .put("createdAt","2026-10-25T00:00:00Z").put("sourceIdentity",JSONObject().put("paperID","export-fixture"))
   val calls=mutableListOf<Pair<String,JSONObject>>()
   override suspend fun execute(command:String,payload:JSONObject):JSONObject {
    calls+=command to JSONObject(payload.toString())
-   return when(command){"paper.open","personal.reading"->JSONObject().put("saved",true);"export.prepare"->JSONObject().put("documentID","original-prepared-document").put("mime","application/json").put("suggestedName","synthetic-citation.json");"export.save"->JSONObject(receipt.toString());else->error("Unexpected operation")}
+   return when(command){
+    "paper.open","personal.reading"->JSONObject().put("saved",true)
+    "export.prepare"->{state.value=state.value.copy(pendingExports=listOf(JSONObject(prepared.toString())));JSONObject(prepared.toString())}
+    "export.delivery.prepare"->{assertEquals(prepared.getString("operationID"),payload.getString("operationID"));JSONObject(prepared.toString()).put("attemptID","00000000-0000-4000-8000-000000000003").put("delivery","choosing")}
+    "export.delivery.validate"->{assertEquals(prepared.getString("operationID"),payload.getString("operationID"));assertEquals("00000000-0000-4000-8000-000000000003",payload.getString("attemptID"));JSONObject().put("valid",true)}
+    "export.save"->JSONObject(receipt.toString())
+    else->error("Unexpected operation")
+   }
   }
   override suspend fun updateSecret(kind:SecretKind,value:String?){error("No credentials")}
   override suspend fun updatePdfSelection(selection:PdfSelection){error("No PDF")}
@@ -45,10 +55,13 @@ class ExportFeedbackInstrumentedTest {
   compose.setContent{CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner){PaperDigestApp(controller)}}
   compose.onNodeWithText("合成导出反馈论文").performClick();compose.waitForIdle()
   compose.onNodeWithContentDescription("导出").performClick();compose.onNodeWithText("引用 JSON").performClick();compose.waitForIdle()
+  compose.waitUntil(5000){controller.calls.any{it.first=="export.prepare"}}
+  compose.onNodeWithText("任务",useUnmergedTree=true).performClick()
+  compose.onNodeWithText("继续保存原件").performScrollTo().performClick()
   compose.waitUntil(5000){controller.calls.any{it.first=="export.save"}}
   compose.onNode(hasText(expected,substring=true)).assertExists()
   val saved=controller.calls.single{it.first=="export.save"}.second
-  assertEquals("original-prepared-document",saved.getString("documentID"));assertEquals("content://synthetic-documents/selected-output",saved.getString("uri"));assertEquals(1,launches)
+  assertFalse("UI cannot select a file by documentID",saved.has("documentID"));assertEquals(controller.prepared.getString("operationID"),saved.getString("operationID"));assertEquals("00000000-0000-4000-8000-000000000003",saved.getString("attemptID"));assertEquals("content://synthetic-documents/selected-output",saved.getString("uri"));assertEquals(1,launches)
   assertTrue(controller.calls.none{it.first.startsWith("model.")||it.first=="storage.cleanup.commit"})
  }
  @Test fun writeWithoutFullReadbackShowsNativeWarningAndDoesNotClaimCompleteOriginal(){

@@ -9,9 +9,17 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -42,16 +50,21 @@ internal val LocalPdfSearchOverride = staticCompositionLocalOf<(suspend (PdfDocu
 @OptIn(ExperimentalPdfApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun PdfReaderPane(document: PdfDocumentRef, page: Int, onPageChanged: (Int)->Unit,
-                  onSelection: (PdfSelection)->Unit, modifier: Modifier=Modifier, onError: (String)->Unit={}, onSaveAnnotation: suspend (PdfSelection,String)->Unit, annotationRevision:String="", portableAnnotations:List<org.json.JSONObject> = emptyList()) {
-    key(document.sha256) {
+                  onSelection: (PdfSelection)->Unit, modifier: Modifier=Modifier, onError: (String)->Unit={}, onSaveAnnotation: suspend (PdfSelection,String)->Unit, annotationRevision:String="", portableAnnotations:List<org.json.JSONObject> = emptyList(), repository:PdfRepository?=null) {
+    key(document.id,document.sha256,document.localPath) {
     val context=LocalContext.current
     val focus=LocalFocusManager.current
     val keyboard=LocalSoftwareKeyboardController.current
-    val repo=remember(context){PdfRepository(context)}
+    val repo=remember(context,repository){repository?:PdfRepository(context)}
     val searchOverride=LocalPdfSearchOverride.current
     val scope=rememberCoroutineScope()
+    val activeDocument=remember{java.util.concurrent.atomic.AtomicBoolean(true)}
+    DisposableEffect(Unit){onDispose{activeDocument.set(false)}}
+    var access by remember(document.sha256){mutableStateOf<PdfDocumentAccess?>(null)}
+    var encryptedReady by remember(document.sha256,page){mutableStateOf(false)}
+    var compatibilityZoom by remember(document.sha256){mutableFloatStateOf(1f)}
     var native by remember(document.sha256){mutableStateOf<DigestPdfFragment?>(null)}
-    var pageInput by remember(document.sha256,page){mutableStateOf(page.toString())}
+    var pageInput by remember(document.sha256){mutableStateOf(page.toString())}
     var failure by remember(document.sha256){mutableStateOf<String?>(null)}
     var selection by remember(document.sha256){mutableStateOf<PdfSelection?>(null)}
     var textPage by remember(document.sha256){mutableStateOf<PdfPageText?>(null)}
@@ -66,43 +79,79 @@ fun PdfReaderPane(document: PdfDocumentRef, page: Int, onPageChanged: (Int)->Uni
     val selectedCallback by rememberUpdatedState(onSelection)
     val pageCallback by rememberUpdatedState(onPageChanged)
     fun finishTextEntry(){focus.clearFocus();keyboard?.hide()}
-    fun navigate(target:Int){finishTextEntry();pageCallback(target)}
+    fun navigate(target:Int){if(!activeDocument.get())return;finishTextEntry();pageCallback(target)}
     fun showResult(index:Int){if(index in searchResults.indices){searchIndex=index;val match=searchResults[index];native?.showCompatibilityMatch(match);pageCallback(match.page)}}
     val errorCallback by rememberUpdatedState(onError)
     val saveAnnotationCallback by rememberUpdatedState(onSaveAnnotation)
+    val documentReady=encryptedReady || native?.documentReady==true
+    fun zoom(){if(access?.encrypted==true)compatibilityZoom=(compatibilityZoom*1.15f).coerceAtMost(4f)else native?.zoomBy(1.15f)}
     fun fail(e:Throwable){if(e is CancellationException)throw e;if(!scope.isActive)return;failure=e.message ?: "PDF 操作未完成";errorCallback(failure!!)}
+    LaunchedEffect(document.sha256){try{access=repo.access(document)}catch(e:Throwable){fail(e)}}
     LaunchedEffect(document.sha256,annotationRevision){try{repo.verify(document);marks=repo.projectPortableAnnotations(document,portableAnnotations)}catch(e:Throwable){fail(e)}}
-    Column(modifier){
-        FlowRow(Modifier.fillMaxWidth().padding(horizontal=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)){
-            TextButton(onClick={navigate((page-1).coerceAtLeast(1))},enabled=page>1){Text("上一页")}
-            OutlinedTextField(value=pageInput,onValueChange={pageInput=it.filter(Char::isDigit).take(5)},modifier=Modifier.width(70.dp),singleLine=true,label={Text("页码")})
-            TextButton(onClick={val target=pageInput.toIntOrNull();if(target!=null && target in 1..document.pageCount)navigate(target) else failure="页码须为1–${document.pageCount}"}){Text("跳转")}
-            TextButton(onClick={navigate((page+1).coerceAtMost(document.pageCount))},enabled=page<document.pageCount){Text("下一页")}
-            TextButton(onClick={if(searchOverride!=null || native?.search()!=true)compatibilitySearch=true},enabled=native?.documentReady==true){Text("查找")}
-        }
-        FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
-            TextButton(onClick={scope.launch{try{val p=repo.readPages(document,page,page).single();textPage=p;textValue=TextFieldValue(p.text)}catch(e:Throwable){fail(e)}}}){Text("选取本页文字")}
-            TextButton(onClick={annotationNote=""},enabled=selection!=null){Text("保存标注")}
-            TextButton(onClick={native?.zoomBy(1.15f)},enabled=native?.documentReady==true){Text("放大")}
-        }
-        if(compatibilitySearch){
+    BoxWithConstraints(modifier){
+        val compactControls=maxHeight<480.dp||maxWidth<360.dp||LocalDensity.current.fontScale>=1.5f
+        var toolsOpen by remember{mutableStateOf(false)}
+        var jumpOpen by remember{mutableStateOf(false)}
+        var jumpError by remember{mutableStateOf<String?>(null)}
+        var showFailure by remember{mutableStateOf(false)}
+        fun closeSearch(){if(!searching){compatibilitySearch=false;searchResults=emptyList();searchIndex=-1;native?.clearCompatibilitySearch()}}
+        val searchControls: @Composable() (Boolean) -> Unit = { showClose ->
             OutlinedTextField(searchQuery,{searchQuery=it.take(1000);searchResults=emptyList();searchIndex=-1;native?.clearCompatibilitySearch()},Modifier.fillMaxWidth().padding(horizontal=8.dp),singleLine=true,label={Text("查找 PDF 原文")})
             FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(2.dp)){
                 TextButton(onClick={finishTextEntry();val query=searchQuery;searching=true;scope.launch{try{val result=searchOverride?.invoke(document,query) ?: repo.search(document,query);currentCoroutineContext().ensureActive();if(searchQuery==query){searchResults=result;searchIndex=-1;if(result.isNotEmpty())showResult(0);failure=null}}catch(e:Throwable){fail(e)}finally{searching=false}}},enabled=searchQuery.isNotBlank()&&!searching){Text(if(searching)"查找中…" else "查找原文")}
                 TextButton(onClick={showResult((searchIndex-1+searchResults.size)%searchResults.size)},enabled=searchResults.isNotEmpty()&&!searching){Text("上一个结果")}
                 TextButton(onClick={showResult((searchIndex+1)%searchResults.size)},enabled=searchResults.isNotEmpty()&&!searching){Text("下一个结果")}
-                TextButton(onClick={compatibilitySearch=false;searchResults=emptyList();searchIndex=-1;native?.clearCompatibilitySearch()},enabled=!searching){Text("关闭查找")}
+                if(showClose)TextButton(onClick={compatibilitySearch=false;searchResults=emptyList();searchIndex=-1;native?.clearCompatibilitySearch()},enabled=!searching){Text("关闭查找")}
             }
             Text(if(searching)"正在读取原件文字" else if(searchIndex>=0)"原文匹配 ${searchIndex+1} / ${searchResults.size} · 物理页 ${searchResults[searchIndex].page}" else "原文匹配 0 / ${searchResults.size}",Modifier.padding(horizontal=12.dp),style=MaterialTheme.typography.labelSmall)
         }
-        failure?.let{Text(it,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(8.dp))}
-        Text((if(native?.documentReady==true) "原文已载入 · " else "原文载入中 · ")+"物理页 $page / ${document.pageCount}",style=MaterialTheme.typography.labelSmall,modifier=Modifier.padding(horizontal=12.dp))
-        key(document.sha256){
+        Column(Modifier.fillMaxSize()){
+        if(compactControls){
+            Row(Modifier.fillMaxWidth().heightIn(min=48.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                IconButton(onClick={navigate((page-1).coerceAtLeast(1))},enabled=page>1){Icon(Icons.AutoMirrored.Outlined.ArrowBack,contentDescription="上一页")}
+                TextButton(onClick={pageInput=page.toString();jumpError=null;jumpOpen=true},modifier=Modifier.weight(1f)){Text("$page / ${document.pageCount}",maxLines=1,overflow=TextOverflow.Ellipsis)}
+                IconButton(onClick={navigate((page+1).coerceAtMost(document.pageCount))},enabled=page<document.pageCount){Icon(Icons.AutoMirrored.Outlined.ArrowForward,contentDescription="下一页")}
+                Box{
+                    IconButton(onClick={toolsOpen=true}){Icon(Icons.Outlined.MoreVert,contentDescription="原文工具")}
+                    DropdownMenu(expanded=toolsOpen,onDismissRequest={toolsOpen=false}){
+                        DropdownMenuItem(text={Text("跳转页码")},onClick={toolsOpen=false;pageInput=page.toString();jumpError=null;jumpOpen=true})
+                        DropdownMenuItem(text={Text("查找")},enabled=documentReady,onClick={toolsOpen=false;compatibilitySearch=true})
+                        DropdownMenuItem(text={Text("选取本页文字")},onClick={toolsOpen=false;scope.launch{try{val p=repo.readPages(document,page,page).single();textPage=p;textValue=TextFieldValue(p.text)}catch(e:Throwable){fail(e)}}})
+                        DropdownMenuItem(text={Text("保存标注")},enabled=selection!=null,onClick={toolsOpen=false;annotationNote=""})
+                        DropdownMenuItem(text={Text("放大")},enabled=documentReady,onClick={toolsOpen=false;zoom()})
+                    }
+                }
+            }
+        }else{
+        FlowRow(Modifier.fillMaxWidth().padding(horizontal=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)){
+            TextButton(onClick={navigate((page-1).coerceAtLeast(1))},enabled=page>1){Text("上一页")}
+            TextButton(onClick={pageInput=page.toString();jumpError=null;jumpOpen=true},modifier=Modifier.semantics{contentDescription="跳转页码"}){Text("$page / ${document.pageCount}")}
+            TextButton(onClick={navigate((page+1).coerceAtMost(document.pageCount))},enabled=page<document.pageCount){Text("下一页")}
+            TextButton(onClick={if(access?.encrypted==true || searchOverride!=null || native?.search()!=true)compatibilitySearch=true},enabled=documentReady){Text("查找")}
+        }
+        FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){
+            TextButton(onClick={scope.launch{try{val p=repo.readPages(document,page,page).single();textPage=p;textValue=TextFieldValue(p.text)}catch(e:Throwable){fail(e)}}}){Text("选取本页文字")}
+            TextButton(onClick={annotationNote=""},enabled=selection!=null){Text("保存标注")}
+            TextButton(onClick={zoom()},enabled=documentReady){Text("放大")}
+        }
+        }
+        if(compatibilitySearch&&!compactControls)searchControls(true)
+        failure?.let{if(compactControls)TextButton(onClick={showFailure=true}){Text("原文操作提示：查看详情",maxLines=1,overflow=TextOverflow.Ellipsis)}else Text(it,color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(8.dp))}
+        Text((if(documentReady) "原文已载入 · " else "原文载入中 · ")+"物理页 $page / ${document.pageCount}",style=MaterialTheme.typography.labelSmall,modifier=Modifier.padding(horizontal=12.dp))
+        when {
+        access==null -> Box(Modifier.weight(1f).fillMaxWidth()){if(failure==null)LinearProgressIndicator(Modifier.fillMaxWidth())}
+        access?.encrypted==true -> PdfEncryptedPagePane(repo,document,page,marks,searchResults.getOrNull(searchIndex),compatibilityZoom,Modifier.weight(1f).fillMaxWidth(),{encryptedReady=it},::fail)
+        else -> key(document.sha256){
             AndroidFragment<DigestPdfFragment>(modifier=Modifier.weight(1f).fillMaxWidth(),arguments=bundleOf("id" to document.id,"file" to document.localPath,"sha" to document.sha256,"count" to document.pageCount,"name" to document.displayName),onUpdate={fragment->
                 native=fragment
                 fragment.bind(document,page,marks,pageChanged={pageCallback(it)},selected={value->selection=value.takeIf{it.text.isNotBlank()};selectedCallback(value)},failed={message->failure=message;errorCallback(message)})
             })
         }
+        }
+    }
+        if(compactControls&&compatibilitySearch)AlertDialog(onDismissRequest={closeSearch()},title={Text("查找 PDF 原文")},text={Column(Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState())){searchControls(false)}},confirmButton={TextButton(enabled=!searching,onClick={closeSearch()}){Text("关闭查找")}})
+        if(jumpOpen)AlertDialog(onDismissRequest={jumpOpen=false},title={Text("跳转到原文物理页")},text={Column(Modifier.heightIn(max=240.dp).verticalScroll(rememberScrollState())){OutlinedTextField(pageInput,{pageInput=it.filter(Char::isDigit).take(5);jumpError=null},singleLine=true,label={Text("页码（1–${document.pageCount}）")},isError=jumpError!=null);jumpError?.let{Text(it,color=MaterialTheme.colorScheme.error)}}},confirmButton={TextButton(onClick={val target=pageInput.toIntOrNull();if(target!=null&&target in 1..document.pageCount){navigate(target);jumpOpen=false}else jumpError="页码须为1–${document.pageCount}"}){Text("跳转")}},dismissButton={TextButton(onClick={jumpOpen=false}){Text("取消")}})
+        if(showFailure&&failure!=null)AlertDialog(onDismissRequest={showFailure=false},title={Text("原文操作提示")},text={Column(Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState())){Text(failure.orEmpty())}},confirmButton={TextButton(onClick={showFailure=false}){Text("关闭")}})
     }
     textPage?.let{p->
         AlertDialog(onDismissRequest={textPage=null},title={Text("选取物理页 ${p.page} 的原文")},text={

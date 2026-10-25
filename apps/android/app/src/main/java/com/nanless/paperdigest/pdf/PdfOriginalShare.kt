@@ -24,6 +24,7 @@ object PdfOriginalShare {
             require(!activity.isFinishing&&!activity.isDestroyed){"当前窗口已关闭，未打开旧原件分享"}
             snapshot.requireActiveOwner()
             activity.startActivity(Intent.createChooser(send,"分享原始 PDF").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            snapshot.markHandedOff()
             "已打开系统分享；是否保存由接收应用决定，尚未核验存档。"
         }
     }

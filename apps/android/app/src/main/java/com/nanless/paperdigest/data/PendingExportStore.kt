@@ -32,7 +32,7 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
             .put("preparation", preparation).put("phase", phase).put("delivery", delivery)
             .put("attemptID", attemptID ?: JSONObject.NULL).put("sourceIdentity", sourceIdentity.copy())
             .put("createdAt", createdAt).put("updatedAt", updatedAt).put("message", message ?: JSONObject.NULL)
-            .put("ready", artifact != null && preparation == "ready")
+            .put("retained", preparation == "retained").put("ready", artifact != null && preparation == "ready")
             .also { out -> artifact?.let { out.put("mime", it.mime).put("suggestedName", it.name).put("bytes", it.bytes).put("sha256", it.sha256).put("manifestSHA256", it.manifestSHA256) } }
     }
 
@@ -183,6 +183,30 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         write(record); return view(record, null)
     }
 
+    /** Root first cancel+joins the actual producer/writer outside its maintenance lock.
+     * This commit retains every material byte and does not revise the old job, failure or paid history. */
+    @Synchronized fun preparationRevision(operationID: String): String { record(operationID); return operationRevision(operationID) }
+    @Synchronized fun retainPreparation(operationID: String, expectedRevision: String): PendingExport {
+        val record = record(operationID)
+        require(BackupCodec.validSHA(expectedRevision) && operationRevision(operationID) == expectedRevision) { "原准备状态在确认期间已经变化，请重新核对本次材料" }
+        require(record.getString("preparation") in setOf("interrupted", "unavailable")) { "请先停止并等待原准备任务结束" }
+        require(record.getString("delivery") !in setOf("choosing", "writing")) { "请先停止并等待原文件保存操作结束" }
+        record.put("preparation", "retained").put("phase", "retained")
+            .put("message", "本次准备已保留并结束；原快照、生产回执和冲突文件均未删除或覆盖。仅通过原完整快照核验后才可另存。")
+        write(record, saveAttempt = false)
+        return view(record, null)
+    }
+    /** Read only: unlike reconcile, this does not retire any active ordinary preparation. */
+    @Synchronized fun retainedPreparations(): List<PendingExport> {
+        requireControlDirectory()
+        return children(controls).filter { UUID_PATTERN.matches(it.name) }.sortedBy { it.name }
+            .map { record(it.name) }.filter { it.getString("preparation") == "retained" }.map { view(it, null) }
+    }
+    @Synchronized internal fun retainedRevision(operationID: String): String {
+        require(record(operationID).getString("preparation") == "retained") { "本次准备尚未保留并结束" }
+        return operationRevision(operationID)
+    }
+
     private fun inspect(record: JSONObject, check: () -> Unit): PendingExport {
         if (record.getString("preparation") != "ready") return view(record, null)
         return try { view(record, verify(record, check)) }
@@ -225,16 +249,16 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         val value = JSONObject(PublishedUtf8.decode(JsonFiles.read(file, META_LIMIT)))
         require(value.getString("contract") == CONTRACT && value.getString("operationID") == id)
         uuid(value.getString("jobID")); uuid(value.getString("documentID"))
-        require(value.getString("preparation") in setOf("preparing", "interrupted", "ready", "unavailable", "cancelled"))
+        require(value.getString("preparation") in setOf("preparing", "interrupted", "ready", "unavailable", "cancelled", "retained"))
         require(value.getString("delivery") in setOf("none", "choosing", "cancelled", "writing", "written-unverified", "failed", "verified"))
         value.nullableString("attemptID")?.let(::uuid); return value
     }
     private fun attempt(id: String, attempt: String): JSONObject {
-        uuid(attempt); return record(id).also { require(it.nullableString("attemptID") == attempt) { "系统保存回调属于先前的文件操作，未改写当前结果" } }
+        uuid(attempt); return record(id).also { require(it.getString("preparation") != "retained") { "本次准备已保留并结束，旧保存回调不能修改它" }; require(it.nullableString("attemptID") == attempt) { "系统保存回调属于先前的文件操作，未改写当前结果" } }
     }
-    private fun write(value: JSONObject) {
+    private fun write(value: JSONObject, saveAttempt: Boolean = true) {
         value.put("updatedAt", time()); val file = checked(operationDirectory(value.getString("operationID")), "operation.json", true)
-        writeAttempt(value)
+        if (saveAttempt) writeAttempt(value)
         val raw = value.toString().toByteArray(Charsets.UTF_8)
         require(raw.size <= META_LIMIT)
         JsonFiles.write(file, raw); require(JsonFiles.read(file, META_LIMIT).contentEquals(raw))

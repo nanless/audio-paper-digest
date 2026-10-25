@@ -3,6 +3,7 @@ package com.nanless.paperdigest.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.rememberScrollState
@@ -22,44 +23,175 @@ import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 
+@OptIn(ExperimentalMaterial3Api::class,ExperimentalLayoutApi::class)
 @Composable internal fun ReaderPane(state:UiState,controller:AppController,action:Action){
  val paper=state.viewedPaper?.takeIf{it.id==state.selectedPaperId}?:state.papers.find{it.id==state.selectedPaperId}
  if(paper==null){EmptyPane("从一篇论文开始","打开文献后，导读、PDF、研究与笔记会保留在同一处。");return}
  val latestCatalog=state.papers.firstOrNull{it.id==paper.id}
- var showPaperInfo by remember{mutableStateOf(false)}
- val readerContext=LocalContext.current;var pdfError by remember{mutableStateOf<String?>(null)}
+ var showPaperInfo by rememberSaveable(paper.id){mutableStateOf(false)}
+ var showLayout by rememberSaveable(paper.id){mutableStateOf(false)}
+ var modeMenu by remember(paper.id){mutableStateOf(false)}
+ val readerContext=LocalContext.current;var pdfError by remember(paper.id){mutableStateOf<String?>(null)}
  val paperReading=state.personal.optJSONObject("readingState")?.optJSONObject(paper.id)?:JSONObject()
- var tab by rememberSaveable(paper.id){mutableStateOf(when(paperReading.optString("mode")){"analysis"->"研究";"note"->"笔记";else->"导读"})};var phonePDF by rememberSaveable{mutableStateOf(false)};var export by remember{mutableStateOf(false)};var zotero by remember{mutableStateOf(false)}
+ var tab by rememberSaveable(paper.id){mutableStateOf(when(paperReading.optString("mode")){"analysis"->"研究";"note"->"笔记";else->"导读"})}
+ var phonePDF by rememberSaveable(paper.id){mutableStateOf(false)}
+ var focus by rememberSaveable(paper.id){mutableStateOf("both")}
+ var splitPercent by rememberSaveable(paper.id){mutableFloatStateOf(paperReading.optDouble("split",46.0).toFloat().takeIf{it.isFinite()}?.coerceIn(38f,62f)?:46f)}
+ var export by remember(paper.id){mutableStateOf(false)};var zotero by remember(paper.id){mutableStateOf(false)}
  LaunchedEffect(state.pdfMode){phonePDF=state.pdfMode}
- LaunchedEffect(tab){action("personal.reading",obj("paperID" to paper.id,"mode" to when(tab){"研究"->"analysis";"笔记"->"note";else->"guide"}))}
- val scope=rememberCoroutineScope();val tabStates=rememberSaveableStateHolder();var guideScroll by rememberSaveable(paper.id){mutableIntStateOf(state.personal.optJSONObject("readingState")?.optJSONObject(paper.id)?.let{it.optInt("guideScroll",it.optInt("scroll",0))}?:0)}
- LaunchedEffect(guideScroll){delay(600);action("personal.reading",obj("paperID" to paper.id,"guideScroll" to guideScroll))}
- Column(Modifier.fillMaxSize()){
- Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=10.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)){
- Column(Modifier.weight(1f)){Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis,modifier=Modifier.clickable(onClickLabel="查看完整论文信息"){showPaperInfo=true});Text("打开时来源："+(paper.sourceVersion?:paper.sourceKind)+(latestCatalog?.sourceVersion?.takeIf{it!=paper.sourceVersion}?.let{" · 当前目录：$it"}?:""),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
- IconButton({val ids=state.personal.ids("favorites").toMutableList();if(!ids.remove(paper.id))ids+=paper.id;action("personal.setList",obj("key" to "favorites","ids" to JSONArray(ids)))}){Icon(if(paper.id in state.personal.ids("favorites"))Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,"收藏")}
- IconButton({val ids=state.personal.ids("reading").toMutableList();if(!ids.remove(paper.id))ids+=paper.id;action("personal.setList",obj("key" to "reading","ids" to JSONArray(ids)))}){Icon(Icons.Outlined.BookmarkAdd,"待读")}
- IconButton({action(if(state.pdfMode)"pdf.close" else "pdf.open",JSONObject());phonePDF=!state.pdfMode}){Icon(Icons.Outlined.PictureAsPdf,if(state.pdfMode)"关闭 PDF" else "打开 PDF")}
- Box{IconButton({export=true}){Icon(Icons.Outlined.IosShare,"导出")};DropdownMenu(export,{export=false}){listOf("guide-html" to "图文导读 HTML","paper-pdf" to "PDF 原件","bibtex" to "BibTeX","ris" to "RIS","citation-json" to "引用 JSON","research-md" to "研究 Markdown","research-html" to "研究 HTML","research-json" to "完整研究 JSON").forEach{(format,label)->DropdownMenuItem({Text(label)},{export=false;action("export.prepare",obj("format" to format))})};paper.sourceURL?.takeIf{publicShareURL(it)}?.let{url->DropdownMenuItem({Text("分享论文来源…")},{export=false;try{readerContext.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_SUBJECT,paper.title).putExtra(android.content.Intent.EXTRA_TEXT,publicShareText(paper.title,url)),"分享论文来源"))}catch(e:Exception){pdfError="此设备没有可处理文本分享的应用"}})}
- DropdownMenuItem({Text("保存完整离线研究包")},{export=false;action("storage.prepare",JSONObject())});if(state.article!=null)DropdownMenuItem({Text("打印图文导读…")},{export=false;scope.launch{try{printPaper(readerContext,paper.titleZh,ResearchRenderer.renderArticle(readerContext,state.article))}catch(e:Exception){pdfError=e.message}}});DropdownMenuItem({Text("存档到 Zotero…")},{export=false;zotero=true})}}
+ LaunchedEffect(paper.id,tab){action("personal.reading",obj("paperID" to paper.id,"mode" to when(tab){"研究"->"analysis";"笔记"->"note";else->"guide"}))}
+ LaunchedEffect(paper.id,splitPercent){delay(600);action("personal.reading",obj("paperID" to paper.id,"split" to splitPercent))}
+ val scope=rememberCoroutineScope();val tabStates=rememberSaveableStateHolder()
+ var guideScroll by rememberSaveable(paper.id){mutableIntStateOf(paperReading.optInt("guideScroll",paperReading.optInt("scroll",0)))}
+ LaunchedEffect(paper.id,guideScroll){delay(600);action("personal.reading",obj("paperID" to paper.id,"guideScroll" to guideScroll))}
+ val document=state.pdfDocument
+ val pdfOutput=remember(paper.id,state.readingMaterialID,document?.sha256){PdfOriginalOutputSession(controller,readerContext,scope,paper.id,state.readingMaterialID,document?.sha256.orEmpty())}
+ DisposableEffect(pdfOutput){onDispose{pdfOutput.dispose()}}
+ val pdfOutputEnabled=canOutputCurrentPdf(state)
+ val pdfAvailable=state.pdfMode&&document!=null
+ val sourceNotices=readerSourceNotices(state,paper.id,pdfError)
+ val sourceTone=when{sourceNotices.any{it.tone=="error"}->"error";sourceNotices.any{it.tone=="warning"}->"warning";else->"info"}
+ val sourceColor=when(sourceTone){"error"->MaterialTheme.colorScheme.error;"warning"->MaterialTheme.colorScheme.tertiary;else->MaterialTheme.colorScheme.onSurfaceVariant}
+ val sourceLabel=when(sourceTone){"error"->"来源存在问题";"warning"->"来源尚待核对";else->"来源与版本"}
+ val density=androidx.compose.ui.platform.LocalDensity.current
+ val modes=if(pdfAvailable)listOf("导读","研究","笔记","PDF")else listOf("导读","研究","笔记")
+ fun chooseMode(value:String){if(value=="PDF"){phonePDF=true;focus="pdf"}else{tab=value;phonePDF=false;focus="both"};modeMenu=false}
+ fun togglePDF(){action(if(state.pdfMode)"pdf.close" else "pdf.open",JSONObject());phonePDF=!state.pdfMode;focus="both"}
+ fun toggleList(key:String){val ids=state.personal.ids(key).toMutableList();if(!ids.remove(paper.id))ids+=paper.id;action("personal.setList",obj("key" to key,"ids" to JSONArray(ids)))}
+ NonOccludingViewport(allowHingePair=pdfAvailable,preferHingePair=focus=="both",preferRightRegion=focus=="pdf"){
+  val readerViewportWidth=maxWidth
+  val readerViewportHeight=maxHeight
+  val hingePair=LocalReadingHingePair.current
+  val hingePairAvailable=LocalReadingHingePairAvailable.current
+  val geometry=readerGeometry(readerViewportWidth.value,readerViewportHeight.value,density.fontScale,pdfAvailable,splitPercent)
+  val canSplit=hingePairAvailable||geometry.canSplit
+  val split=canSplit&&focus=="both"
+  val showPDF=pdfAvailable&&(split||if(canSplit)focus=="pdf" else phonePDF)
+  val showText=!pdfAvailable||split||!showPDF
+  Column(Modifier.fillMaxSize()){
+   Box(Modifier.fillMaxWidth()){
+   Column(if(hingePair!=null)Modifier.width(hingePair.left.width.dp)else Modifier.fillMaxWidth()){
+   Row(Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+    if(geometry.compactChrome){
+     Box(Modifier.weight(1f)){
+      TextButton({modeMenu=true},Modifier.fillMaxWidth()){
+       Text((if(showPDF&&!split)"PDF" else tab)+" · "+paper.titleZh,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis)
+       Icon(Icons.Outlined.ArrowDropDown,"选择阅读模式")
+      }
+      DropdownMenu(modeMenu,{modeMenu=false}){modes.forEach{value->DropdownMenuItem({Text(value)},{chooseMode(value)})}}
+     }
+    }else Column(Modifier.weight(1f).clickable(onClickLabel="查看完整论文信息"){showPaperInfo=true}.padding(horizontal=8.dp)){
+     Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
+     Text("打开时来源："+(paper.sourceVersion?:paper.sourceKind),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+    }
+    IconButton({showPaperInfo=true}){BadgedBox(badge={if(sourceNotices.isNotEmpty())Badge{Text(sourceNotices.size.toString())}}){Icon(if(sourceTone=="info")Icons.Outlined.Info else Icons.Outlined.Warning,"$sourceLabel，查看完整信息与 ${sourceNotices.size} 项提示",tint=sourceColor)}}
+    IconButton({togglePDF()}){Icon(Icons.Outlined.PictureAsPdf,if(state.pdfMode)"关闭 PDF" else "打开 PDF")}
+    Box{
+     IconButton({export=true}){Icon(Icons.Outlined.MoreVert,"论文操作与导出")}
+     DropdownMenu(export,{export=false}){
+      DropdownMenuItem({Text("论文完整信息与来源…")},{export=false;showPaperInfo=true})
+      DropdownMenuItem({Text(if(paper.id in state.personal.ids("favorites"))"取消收藏" else "收藏这篇论文")},{export=false;toggleList("favorites")})
+      DropdownMenuItem({Text(if(paper.id in state.personal.ids("reading"))"移出待读" else "加入待读")},{export=false;toggleList("reading")})
+      DropdownMenuItem({Text("打开原来源页面")},{export=false;val u=android.net.Uri.parse(paper.sourceURL?:paper.blogURL);if(u.scheme=="https"&&u.host!=null&&u.userInfo==null)runCatching{readerContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,u))}})
+      DropdownMenuItem({Text("刷新已发布导读")},{export=false;action("paper.open",obj("paperID" to paper.id,"refresh" to true))})
+      if(canSplit)DropdownMenuItem({Text("阅读布局与分栏…")},{export=false;showLayout=true})
+      HorizontalDivider()
+      listOf("guide-html" to "图文导读 HTML","paper-pdf" to "PDF 原件","bibtex" to "BibTeX","ris" to "RIS","citation-json" to "引用 JSON","research-md" to "研究 Markdown","research-html" to "研究 HTML","research-json" to "完整研究 JSON").forEach{(format,label)->DropdownMenuItem({Text(label)},{export=false;action("export.prepare",obj("format" to format))})}
+      PdfOriginalOutputMenuItems(pdfOutputEnabled,pdfOutput){export=false}
+      paper.sourceURL?.takeIf{publicShareURL(it)}?.let{url->DropdownMenuItem({Text("分享论文来源…")},{export=false;try{readerContext.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain").putExtra(android.content.Intent.EXTRA_SUBJECT,paper.title).putExtra(android.content.Intent.EXTRA_TEXT,publicShareText(paper.title,url)),"分享论文来源"))}catch(e:Exception){pdfError="此设备没有可处理文本分享的应用"}})}
+      DropdownMenuItem({Text("保存完整离线研究包")},{export=false;action("storage.prepare",JSONObject())})
+      if(state.article!=null)DropdownMenuItem({Text("打印图文导读…")},{export=false;scope.launch{try{run {
+          val article = requireNotNull(state.article) { "请先载入当前图文导读" }
+          val binding = com.nanless.paperdigest.data.GuidePrintBinding(paper, article, state.readingMaterialID) {
+            val now = controller.state.value
+            com.nanless.paperdigest.data.GuidePrintReading(now.readingMaterialID, now.viewedPaper, now.article)
+          }
+          binding.requireCurrent()
+          val rendered = ResearchRenderer.renderArticle(readerContext, article)
+          binding.requireCurrent()
+          printPaper(readerContext, paper.titleZh, rendered, article.notices, binding::requireCurrent)
+        }}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;pdfError=e.message}}})
+      DropdownMenuItem({Text("存档到 Zotero…")},{export=false;zotero=true})
+     }
+    }
+   }
+   if(!geometry.compactChrome)Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+    listOf("导读","研究","笔记").forEach{value->FilterChip(tab==value&&(!showPDF||split),{chooseMode(value)},label={Text(value)})}
+    if(pdfAvailable)FilterChip(showPDF,{chooseMode("PDF")},label={Text("PDF")})
+    TextButton({showPaperInfo=true}){Text(if(sourceNotices.isEmpty())"来源与版本" else "$sourceLabel · ${sourceNotices.size}",color=sourceColor)}
+    if(canSplit)TextButton({showLayout=true}){Text("阅读布局")}
+   }
+   }
+   if(hingePair!=null&&document!=null)Column(Modifier.offset(x=(hingePair.left.width+hingePair.gap).dp).width(hingePair.right.width.dp).padding(horizontal=12.dp,vertical=8.dp)){
+    Text("PDF 原件",style=MaterialTheme.typography.titleSmall)
+    Text(document.displayName,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelSmall)
+    Text(state.pdfReceipt.optString("version").ifBlank{"原版本未标注"},style=MaterialTheme.typography.labelSmall)
+   }
+   }
+   // Sheets are siblings of this bounded viewport. Opening them does not rebuild
+   // the actual scientific WebView, note editor, question editor or PDF fragment.
+   Row(Modifier.weight(1f).fillMaxWidth()){
+    if(showText)key(paper.id,"reading-text"){
+     Box((if(split&&hingePair!=null)Modifier.width(hingePair.left.width.dp)else Modifier.weight(if(split)geometry.leftPercent else 1f)).fillMaxHeight()){
+      tabStates.SaveableStateProvider(tab){when(tab){"导读"->if(state.article!=null)ArticleDocument(state.article,state.settings.optInt("font",18),guideScroll,{guideScroll=it})else EmptyPane("导读尚未载入","本地 PDF 可直接开始研究；公开导读可在联网后同步。");"研究"->ResearchPane(state,controller,action);else->NotesPane(state,controller,action)}}
+     }
+    }
+    if(split&&hingePair!=null)Spacer(Modifier.width(hingePair.gap.dp).fillMaxHeight())
+    else if(split){
+     val availablePx=with(density){(readerViewportWidth-12.dp).toPx()}.coerceAtLeast(1f)
+     val drag=androidx.compose.foundation.gestures.rememberDraggableState{delta->splitPercent=(splitPercent.coerceIn(geometry.minPercent,geometry.maxPercent)+delta/availablePx*100f).coerceIn(geometry.minPercent,geometry.maxPercent)}
+     Box(Modifier.width(12.dp).fillMaxHeight().draggable(drag,androidx.compose.foundation.gestures.Orientation.Horizontal).clickable(onClickLabel="调整阅读分栏"){showLayout=true},contentAlignment=androidx.compose.ui.Alignment.Center){VerticalDivider()}
+    }
+    if(showPDF&&document!=null)key(paper.id,document.sha256,"reading-pdf"){
+     PdfReaderPane(document,state.pdfPage,{action("pdf.page",obj("page" to it,"paperID" to paper.id,"pdfSHA" to document.sha256))},{selection->scope.launch{try{controller.updatePdfSelection(selection)}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;pdfError=e.message}}},(if(split&&hingePair!=null)Modifier.width(hingePair.right.width.dp)else Modifier.weight(if(split)100f-geometry.leftPercent else 1f)).fillMaxHeight(),{pdfError=it},onSaveAnnotation={selection,note->controller.updatePdfSelection(selection);controller.execute("pdf.highlight",obj("comment" to note));Unit},annotationRevision=state.personal.optJSONObject("annotations")?.optJSONArray(paper.id)?.toString().orEmpty(),portableAnnotations=(state.personal.optJSONObject("annotations")?.rows(paper.id)?:emptyList()).filter{it.optString("pdfSHA")==document.sha256})
+    }
+   }
+  }
+  if(showLayout)AlertDialog(onDismissRequest={showLayout=false},title={Text("阅读布局")},text={Column(Modifier.heightIn(max=readerViewportHeight).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+   if(LocalHingeConstrained.current)Text("布局按避开分隔或遮挡折痕后的实际安全宽度计算；折痕位置不放置正文或操作。")
+   Text(if(canSplit)"只在 PDF 已打开且两栏均有足够宽度时并排。收窄窗口会改为一次显示一份内容；原页码、问题和笔记保留。" else "当前可用宽度或大字设置不适合并排，请从阅读模式切换导读、研究、笔记与 PDF。")
+   FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("both" to "并排阅读","reading" to "专注导读与研究","pdf" to "专注 PDF").forEach{(value,label)->FilterChip(focus==value,{focus=value;if(value=="reading")phonePDF=false;if(value=="pdf")phonePDF=true},enabled=canSplit,label={Text(label)})}}
+   if(hingePair!=null)Text("导读与 PDF 分别使用左右安全区域；物理中缝位置不能拖动。")
+   else if(geometry.canSplit){Text("左侧 ${geometry.leftPercent.toInt()}% · 两栏至少各 ${geometry.minimumPaneDp.toInt()} dp")
+    if(geometry.maxPercent>geometry.minPercent)Slider(value=geometry.leftPercent,onValueChange={splitPercent=it},valueRange=geometry.minPercent..geometry.maxPercent)
+   }
+  }},confirmButton={TextButton({showLayout=false}){Text("关闭")}})
+  if(showPaperInfo)AlertDialog(onDismissRequest={showPaperInfo=false},title={Text("论文信息与来源")},text={SelectionContainer{
+   Column(Modifier.heightIn(max=readerViewportHeight).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    Text(paper.titleZh,style=MaterialTheme.typography.titleMedium);if(paper.title!=paper.titleZh)Text(paper.title)
+    Text(paper.authors.joinToString(" · "))
+    Text("目录日期：${paper.date.ifBlank{"未标注"}}\n打开时目录版本：${paper.sourceVersion?:"未标注"}\n当前目录版本：${latestCatalog?.sourceVersion?:"未标注"}\n来源编号：${paper.id}")
+    paper.score?.let{Text("目录原评分：$it / 10（完整量表见原导读）")};paper.citation.optString("doi").takeIf{it.isNotBlank()}?.let{Text("DOI：$it")}
+    Text("当前导读版本：${state.article?.sourceVersion?:"未标注"}\n导读修订 SHA：${state.article?.revisionSHA256?:"未标注"}")
+    if(state.pdfMode)Text("当前PDF原版本：${state.pdfReceipt.optString("version").ifBlank{"未标注"}}\nPDF SHA：${document?.sha256?:"原件尚未载入"}")
+    sourceNotices.forEach{notice->Surface(color=when(notice.tone){"error"->MaterialTheme.colorScheme.errorContainer;"warning"->MaterialTheme.colorScheme.tertiaryContainer;else->MaterialTheme.colorScheme.primaryContainer},modifier=Modifier.fillMaxWidth()){
+     Column(Modifier.padding(12.dp)){Text(notice.title,style=MaterialTheme.typography.labelLarge);Text(notice.text)}
+    }}
+   }
+  }},confirmButton={TextButton({showPaperInfo=false}){Text("关闭")}})
  }
- if(state.pdfMode){Text("已打开 PDF：${state.pdfReceipt.optString("version").ifBlank{"原版本未标注"}} · ${state.pdfDocument?.sha256?.take(12).orEmpty()}",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.labelSmall);if(state.pdfReceipt.optBoolean("isStale"))Text("此 PDF 为已保存的旧版本，未核对当前版本。",Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error);state.pdfReceipt.optJSONArray("notices")?.let{a->for(i in 0 until a.length())Text(a.optString(i),Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.labelSmall)}}
- pdfError?.let{Text(it,Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error)}
- if(paper.id in state.catalogSummary.ids("missingFromLatest"))Surface(color=MaterialTheme.colorScheme.primaryContainer,modifier=Modifier.fillMaxWidth()){Text("本机保留的先前资料，未列入最新网站快照；这不等于论文撤稿。",Modifier.padding(horizontal=16.dp,vertical=8.dp),style=MaterialTheme.typography.labelSmall)}
- state.article?.let{a->val tone=noticeTone(a);val color=when(tone){"error"->MaterialTheme.colorScheme.errorContainer;"warning"->MaterialTheme.colorScheme.tertiaryContainer;else->MaterialTheme.colorScheme.primaryContainer};if(a.isStale)Surface(color=color,modifier=Modifier.fillMaxWidth()){Text("正在读取先前保存的版本；尚未核对当前发布。",Modifier.padding(horizontal=16.dp,vertical=8.dp),style=MaterialTheme.typography.labelSmall)};a.notices.forEach{Surface(color=color,modifier=Modifier.fillMaxWidth()){Text(it,Modifier.padding(horizontal=16.dp,vertical=8.dp),style=MaterialTheme.typography.labelSmall)}}}
- Row(Modifier.padding(horizontal=16.dp).horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("导读","研究","笔记").forEach{FilterChip(tab==it,{tab=it;phonePDF=false},label={Text(it)})};if(state.pdfMode)FilterChip(phonePDF,{phonePDF=!phonePDF},label={Text("PDF")});TextButton({val u=android.net.Uri.parse(paper.sourceURL?:paper.blogURL);if(u.scheme=="https"&&u.host!=null&&u.userInfo==null)runCatching{readerContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,u))}}){Text("来源")};TextButton({action("paper.open",obj("paperID" to paper.id,"refresh" to true))}){Text("刷新")}}
- BoxWithConstraints(Modifier.weight(1f)){
- val split=state.pdfMode&&state.pdfDocument!=null&&maxWidth>=840.dp
- Row(Modifier.fillMaxSize()){
- if(!state.pdfMode||split||!phonePDF)Box(Modifier.weight(1f).fillMaxHeight()){tabStates.SaveableStateProvider(tab){when(tab){"导读"->if(state.article!=null)ArticleDocument(state.article,state.settings.optInt("font",18),guideScroll,{guideScroll=it})else EmptyPane("导读尚未载入","本地 PDF 可直接开始研究；公开导读可在联网后同步。");"研究"->ResearchPane(state,controller,action);else->NotesPane(state,controller,action)}}}
- if(state.pdfMode&&state.pdfDocument!=null&&(split||phonePDF)){if(split)VerticalDivider();PdfReaderPane(state.pdfDocument,state.pdfPage,{action("pdf.page",obj("page" to it,"paperID" to paper.id,"pdfSHA" to state.pdfDocument.sha256))},{selection->scope.launch{try{controller.updatePdfSelection(selection)}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;pdfError=e.message}}},Modifier.weight(1f).fillMaxHeight(),{pdfError=it},onSaveAnnotation={selection,note->controller.updatePdfSelection(selection);controller.execute("pdf.highlight",obj("comment" to note));Unit},annotationRevision=state.personal.optJSONObject("annotations")?.optJSONArray(paper.id)?.toString().orEmpty(),portableAnnotations=(state.personal.optJSONObject("annotations")?.rows(paper.id)?:emptyList()).filter{it.optString("pdfSHA")==state.pdfDocument.sha256})}
- }
- }
- }
- if(showPaperInfo)AlertDialog(onDismissRequest={showPaperInfo=false},title={Text("论文信息")},text={SelectionContainer{Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)){Text(paper.titleZh,style=MaterialTheme.typography.titleMedium);if(paper.title!=paper.titleZh)Text(paper.title);Text(paper.authors.joinToString(" · "));Text("目录日期：${paper.date.ifBlank{"未标注"}}\n打开时目录版本：${paper.sourceVersion?:"未标注"}\n当前目录版本：${latestCatalog?.sourceVersion?:"未标注"}\n来源编号：${paper.id}");paper.score?.let{Text("目录原评分：$it / 10（完整量表见原导读）")};paper.citation.optString("doi").takeIf{it.isNotBlank()}?.let{Text("DOI：$it")};Text("当前导读版本：${state.article?.sourceVersion?:"未标注"}");if(state.pdfMode)Text("当前PDF原版本：${state.pdfReceipt.optString("version").ifBlank{"未标注"}}")}}},confirmButton={TextButton({showPaperInfo=false}){Text("关闭")}})
+ PdfOriginalOutputDialogs(pdfOutput)
  if(zotero)ZoteroArchiveDialog(state,action,{zotero=false})
 }
 
+internal data class ReaderSourceNotice(val title:String,val text:String,val tone:String)
+internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):List<ReaderSourceNotice> = buildList {
+ if(pdfError!=null)add(ReaderSourceNotice("操作未完成",pdfError,"error"))
+ if(paperID in state.catalogSummary.ids("missingFromLatest"))add(ReaderSourceNotice("目录范围","本机保留的先前资料，未列入最新网站快照；这不等于论文撤稿。","info"))
+ if(state.pdfMode){
+  if(state.pdfReceipt.optBoolean("isStale"))add(ReaderSourceNotice("原件尚待核对","此 PDF 为已保存的旧版本，未核对当前版本。","warning"))
+  state.pdfReceipt.optJSONArray("notices")?.let{a->for(i in 0 until a.length())add(ReaderSourceNotice("PDF 来源",a.optString(i),if(state.pdfReceipt.optBoolean("isStale"))"warning" else "info"))}
+ }
+ state.article?.let{a->
+  val tone=noticeTone(a)
+  if(!a.completeOffline)add(ReaderSourceNotice("离线范围","导读资源尚未全部保存为完整离线材料；联网阅读与完整离线状态分别核验。",if(tone=="error")"error" else "warning"))
+  a.resources.filter{!it.missingReason.isNullOrBlank()}.forEach{resource->add(ReaderSourceNotice("科学图资源",resource.sourceURL+"\n"+resource.missingReason,"error"))}
+  if(a.isStale)add(ReaderSourceNotice("导读尚待核对","正在读取先前保存的版本；尚未核对当前发布。",tone))
+  a.notices.forEach{add(ReaderSourceNotice("导读来源",it,tone))}
+ }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable private fun ResearchPane(state:UiState,controller:AppController,action:Action){
  val context=LocalContext.current;val id=state.selectedPaperId.orEmpty()
  val reading=state.personal.optJSONObject("readingState")?.optJSONObject(id)?:JSONObject()
@@ -77,7 +209,7 @@ import org.json.JSONObject
  Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)){listOf("guide" to "导读","selection" to "选区","page" to "当前页","chapter" to "章节","range" to "页段","full" to "全文").forEach{(v,l)->FilterChip(evidence==v,{evidence=v},label={Text(l)})}}
  Text(if(evidence=="guide")"导读证据：${state.article?.sourceVersion?:"版本未标注"} · ${state.article?.revisionSHA256?.take(12).orEmpty()}" else "PDF 证据：${state.pdfReceipt.optString("version").ifBlank{"原版本未标注"}} · ${state.pdfDocument?.sha256?.take(12).orEmpty()} · 物理页",style=MaterialTheme.typography.labelSmall)
  if(evidence=="chapter"){
-  Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+  FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
    OutlinedButton({val sha=state.pdfDocument?.sha256;if(sha!=null){chapterLoading=true;chapterError=null;chapterScope.launch{try{val result=controller.execute("pdf.outline");require(result.optString("pdfSHA")==sha&&controller.state.value.selectedPaperId==id&&controller.state.value.pdfDocument?.sha256==sha){"原文已切换，未采用旧目录"};chapters=result.rows("chapters");if(chapters.isEmpty())chapterError="此原件没有可用目录；请选择明确页段，不按博客标题推断章节。"}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;chapterError=e.message}finally{chapterLoading=false}}}},enabled=state.pdfDocument!=null&&!chapterLoading&&!state.busy){Text(if(chapterLoading)"正在读取目录…" else "读取原 PDF 目录")}
    Box{TextButton({chapterMenu=true},enabled=chapters.isNotEmpty()){Text(chapters.firstOrNull{it.optInt("index")==chapter}?.optString("title")?:"选择真实章节")};DropdownMenu(chapterMenu,{chapterMenu=false}){chapters.forEach{entry->DropdownMenuItem({Text("${entry.optString("title")} · 物理页 ${entry.optInt("page")}–${entry.optInt("endPage")}")},{chapter=entry.optInt("index");chapterMenu=false})}}}
   }
@@ -93,6 +225,7 @@ import org.json.JSONObject
  }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable private fun NotesPane(state:UiState,controller:AppController,action:Action){
  val id=state.selectedPaperId.orEmpty();val note=state.personal.optJSONObject("notes")?.optJSONObject(id)?:JSONObject()
  var draft by rememberSaveable(id){mutableStateOf(note.optString("text"))};var revision by rememberSaveable(id){mutableIntStateOf(note.optInt("revision"))};var dirty by rememberSaveable(id){mutableStateOf(false)}
@@ -104,7 +237,7 @@ import org.json.JSONObject
  Button({val submitted=draft;val base=revision;saving=true;saveScope.launch{try{val result=controller.execute("personal.note",obj("paperID" to id,"text" to submitted,"baseRevision" to base));revision=result.optInt("revision",base+1);if(draft==submitted)dirty=false;error=null}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=dirty&&!saving&&!state.busy){Text(if(saving)"正在保存…" else "保存笔记")};error?.let{Text(it,color=MaterialTheme.colorScheme.error);TextButton({reloadNote=true}){Text("查看并重新读取已保存版本…")}}
  state.pdfSelection?.takeIf{it.text.isNotBlank()}?.let{selection->Text("原文选区 · 物理页 ${selection.pages.joinToString()}",style=MaterialTheme.typography.titleSmall);Text(selection.text);Button({action("pdf.highlight",obj("comment" to "","color" to "yellow"))}){Text("保存高亮标注")}}
  Text("PDF 标注",style=MaterialTheme.typography.titleLarge)
- annotationGroups(state.personal.optJSONObject("annotations")?.rows(id)?:emptyList()).forEach{group->val a=group.first();OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text(group.map{it.optString("text")}.filter{it.isNotBlank()}.distinct().joinToString("\n"));Text(group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n"));Text("${group.size} 个原页位置",style=MaterialTheme.typography.labelSmall);Row{TextButton({action("pdf.annotation.open",obj("id" to a.optString("id")))}){Text("回到原文")};TextButton({edit=a;editText=group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n")}){Text("编辑批注…")};TextButton({removeCount=group.size;remove=a}){Text("删除标注…")}}}}}
+ annotationGroups(state.personal.optJSONObject("annotations")?.rows(id)?:emptyList()).forEach{group->val a=group.first();OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text(group.map{it.optString("text")}.filter{it.isNotBlank()}.distinct().joinToString("\n"));Text(group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n"));Text("${group.size} 个原页位置",style=MaterialTheme.typography.labelSmall);FlowRow(horizontalArrangement=Arrangement.spacedBy(4.dp)){TextButton({action("pdf.annotation.open",obj("id" to a.optString("id")))}){Text("回到原文")};TextButton({edit=a;editText=group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n")}){Text("编辑批注…")};TextButton({removeCount=group.size;remove=a}){Text("删除标注…")}}}}}
  }
  if(reloadNote)AlertDialog(onDismissRequest={reloadNote=false},title={Text("读取已保存笔记？")},text={Column{Text("当前草稿将被以下已保存版本替换。取消会保留草稿。");Text(note.optString("text"))}},confirmButton={TextButton({draft=note.optString("text");revision=note.optInt("revision");dirty=false;error=null;reloadNote=false}){Text("替换当前草稿")}},dismissButton={TextButton({reloadNote=false}){Text("保留草稿")}})
  edit?.let{a->AlertDialog(onDismissRequest={edit=null},title={Text("编辑标注批注")},text={OutlinedTextField(editText,{editText=it},label={Text("批注")})},confirmButton={TextButton({saving=true;saveScope.launch{try{controller.execute("personal.annotationNote",obj("paperID" to id,"id" to a.optString("id"),"comment" to editText));edit=null;error=null}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=!saving){Text("保存")}},dismissButton={TextButton({edit=null},enabled=!saving){Text("取消")}})}

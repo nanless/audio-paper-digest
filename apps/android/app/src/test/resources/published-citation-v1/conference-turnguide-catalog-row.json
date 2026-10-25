@@ -1,0 +1,76 @@
+{
+  "arxivId": "",
+  "categories": [
+    "interspeech-2026 论文"
+  ],
+  "citation": {
+    "arxivId": "",
+    "authors": [],
+    "complete": false,
+    "contract": "paper-citation-source-v1",
+    "date": "",
+    "doi": "",
+    "identityStatus": "verified",
+    "pageType": "paper",
+    "pageUrl": "https://nanless.github.io/audio-paper-digest-blog/posts/conference-interspeech-2026-conference-paper-id-cui26-interspeech-6f6c9b504d/",
+    "paperId": "conference:interspeech:2026:conference-paper-id:cui26_interspeech",
+    "paperKey": "conference:interspeech:2026:conference-paper-id:cui26_interspeech",
+    "pdfUrl": "https://www.isca-archive.org/interspeech_2026/cui26_interspeech.pdf",
+    "sourceKind": "conference",
+    "sourceUrl": "https://www.isca-archive.org/interspeech_2026/cui26_interspeech.html",
+    "title": "TurnGuide: Enhancing Meaningful Full Duplex Spoken Interactions via Dynamic Turn-Level Text-Speech Interleaving",
+    "url": "https://www.isca-archive.org/interspeech_2026/cui26_interspeech.html",
+    "venue": "",
+    "verified": true
+  },
+  "date": "2026-09-29",
+  "identityStatus": "verified",
+  "method": "多模态学习",
+  "pageType": "paper",
+  "paperId": "conference:interspeech:2026:conference-paper-id:cui26_interspeech",
+  "permalink": "/audio-paper-digest-blog/posts/conference-interspeech-2026-conference-paper-id-cui26-interspeech-6f6c9b504d/",
+  "primaryMethodId": "method.multimodal-learning",
+  "primaryTaskId": "task.full-duplex",
+  "score": "7",
+  "sourceKind": "conference",
+  "summary": "针对端到端全双工语音模型语义弱而双通道对齐易被打断的问题，TurnGuide 用语音活动检测加停顿合并做轮次切分并在轮内交错生成文本与语音，在 Fisher 上显著提升语义连贯性与轮次转换行为，代价是块级交错带来约 0.69 秒量级的理论首包延迟与对码本和声码器的依赖。",
+  "tagCatalogSha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+  "tagConcepts": [
+    {
+      "facet": "method",
+      "id": "method.multimodal-learning",
+      "label": "多模态学习"
+    },
+    {
+      "facet": "setting",
+      "id": "setting.multichannel",
+      "label": "多通道"
+    },
+    {
+      "facet": "signal",
+      "id": "signal.speech",
+      "label": "语音"
+    },
+    {
+      "facet": "task",
+      "id": "task.full-duplex",
+      "label": "全双工语音交互"
+    },
+    {
+      "facet": "task",
+      "id": "task.turn-taking",
+      "label": "轮次切换"
+    }
+  ],
+  "tagContract": "paper-taxonomy-flat-tags-compat-v1",
+  "tags": [
+    "多模态学习",
+    "多通道",
+    "语音",
+    "全双工语音交互",
+    "轮次切换"
+  ],
+  "task": "全双工语音交互",
+  "title": "TurnGuide: Enhancing Meaningful Full Duplex Spoken Interactions via Dynamic Turn-Level Text-Speech Interleaving",
+  "titleZh": "TurnGuide：按轮次先写文本再说语音的全双工对话建模"
+}

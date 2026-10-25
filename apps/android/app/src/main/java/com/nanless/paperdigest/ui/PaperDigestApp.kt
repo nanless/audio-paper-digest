@@ -56,8 +56,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     var settingsPaneRequest by rememberSaveable{mutableStateOf<String?>(null)}
     var settingsRequestID by rememberSaveable{mutableIntStateOf(0)}
     var localError by remember { mutableStateOf<String?>(null) }
-    var exportID by rememberSaveable { mutableStateOf<String?>(null) }
-    var exportMime by remember { mutableStateOf("application/octet-stream") }
+    var exportDeliveryJSON by rememberSaveable { mutableStateOf<String?>(null) }
     var preparedRestoreJSON by rememberSaveable { mutableStateOf<String?>(null) }
     val preparedRestore=preparedRestoreJSON?.let{JSONObject(it)}
     var restoreBusy by remember{mutableStateOf(false)}
@@ -65,14 +64,9 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     val pendingActions=remember{mutableStateMapOf<String,Boolean>()}
     var restoreCommand by rememberSaveable { mutableStateOf("app.restore.commit") }
     val snackbar = remember { SnackbarHostState() }
-    val save = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val uri = if(result.resultCode == android.app.Activity.RESULT_OK) result.data?.data else null
-        val id = exportID; exportID = null
-        if (uri != null && id != null) scope.launch { try { val receipt=controller.execute("export.save",obj("uri" to uri.toString(),"documentID" to id)); snackbar.showSnackbar(exportSaveFeedback(receipt)) } catch(e:CancellationException){throw e} catch(e:Exception){localError=e.message} }
-    }
     val action: Action = action@{ command,payload ->
         if(command.endsWith("restore.prepare")&&preparedRestoreJSON!=null){localError="请先确认或取消已校验的恢复材料";return@action}
-        val guarded=command in setOf("pdf.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check")
+        val guarded=command.startsWith("export.retained.") || command in setOf("pdf.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","export.delivery.prepare","export.pending.list","export.reconcile","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check")
         if(guarded&&pendingActions[command]==true)return@action
         if(guarded)pendingActions[command]=true
         scope.launch {
@@ -86,7 +80,18 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                     val result=controller.execute(command,payload)
                     if(command=="paper.open" || command=="pdf.import" || command=="storage.openPackage") route="reader"
                     if(command=="export.prepare" || command=="retained.export.prepare") {
-                        exportID=result.getString("documentID"); exportMime=result.getString("mime"); save.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(exportMime).putExtra(Intent.EXTRA_TITLE,result.getString("suggestedName")))
+                        require(result.optString("preparation")=="ready" && result.optBoolean("ready")) {"原件尚未就绪，请到任务查看真实进度"}
+                        if(snackbar.showSnackbar("原件已准备，尚未保存到所选位置。",actionLabel="查看待保存") == SnackbarResult.ActionPerformed) route="tasks"
+                    }
+                    if(command=="export.delivery.cancel" || command=="export.retained.delivery.cancel") {
+                        exportDeliveryJSON?.let{old->val claim=JSONObject(old);if(claim.optString("operationID")==payload.optString("operationID")&&claim.optString("attemptID")==payload.optString("attemptID"))exportDeliveryJSON=null}
+                    }
+                    if(command=="export.delivery.prepare" || command=="export.retained.prepare") {
+                        require(exportDeliveryJSON==null) {"请先结束当前系统保存"}
+                        require(result.optString("preparation")==if(command=="export.retained.prepare")"retained" else "ready") {"原件尚未取得本次保存许可"}
+                        require(result.optString("delivery")=="choosing") {"原件尚未取得本次保存许可"}
+                        result.getString("operationID");result.getString("attemptID")
+                        exportDeliveryJSON=result.toString()
                     }
                     if(command.endsWith("restore.prepare")) { preparedRestoreJSON=result.toString();restoreError=null; restoreCommand=if(command.startsWith("cloud")) "cloud.restore.commit" else "app.restore.commit" }
                 }
@@ -137,6 +142,37 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                 }
             }
         }
+        state.pdfUnlockPrompt?.let { prompt -> key(prompt.requestID) { PdfUnlockDialog(prompt, controller) } }
+        exportDeliveryJSON?.let { frozenRequest ->
+            key(frozenRequest) {
+                PendingExportChooser(controller,frozenRequest) { originalRequest,uri,error ->
+                    // Every launcher instance captures its original lease; a late callback never selects a newer op.
+                    if(exportDeliveryJSON==originalRequest) {
+                        exportDeliveryJSON=null
+                        if(error!=null) localError=error
+                        else scope.launch {
+                            try {
+                                val original=JSONObject(originalRequest)
+                                val claim=obj("operationID" to original.getString("operationID"),"attemptID" to original.getString("attemptID"))
+                                val namespace=exportDeliveryNamespace(original)
+                                val receipt=if(uri==null)controller.execute("$namespace.delivery.cancel",claim)
+                                  else controller.execute("$namespace.save",claim.put("uri",uri.toString()))
+                                snackbar.currentSnackbarData?.dismiss()
+                                snackbar.showSnackbar(if(uri==null)receipt.optString("message","已取消选择位置；原件保留，可继续保存。") else exportSaveFeedback(receipt))
+                            } catch(cancelled:CancellationException){throw cancelled}
+                            catch(failure:Exception){localError=failure.message?:"保存尚未确认；原件保留。"}
+                        }
+                    }
+                }
+            }
+        }
+        state.retainedExportConfirmation?.let { confirmation ->
+            val id=confirmation.getString("confirmationID")
+            AlertDialog(onDismissRequest={if(pendingActions["export.retained.confirm"]!=true)action("export.retained.confirm.discard",obj("confirmationID" to id))},
+                title={Text("结束本次准备并保留材料？")},text={Text(confirmation.getString("message"))},
+                confirmButton={TextButton({action("export.retained.confirm",obj("confirmationID" to id))},enabled=pendingActions["export.retained.confirm"]!=true&&!state.busy){Text("确认保留材料并结束准备")}},
+                dismissButton={TextButton({action("export.retained.confirm.discard",obj("confirmationID" to id))},enabled=pendingActions["export.retained.confirm"]!=true){Text("取消确认")}})
+        }
         preparedRestore?.let { prepared ->
             fun cancelRestore(){if(!restoreBusy){action("restore.discard",obj("restoreID" to prepared.optString("restoreID")));preparedRestoreJSON=null;restoreError=null}}
             AlertDialog(onDismissRequest={cancelRestore()},title={Text("恢复完整研究资料？")},text={Column(verticalArrangement=Arrangement.spacedBy(10.dp)){
@@ -152,11 +188,47 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     }
 }
 
+
+internal fun exportDeliveryNamespace(original:JSONObject):String = when(original.optString("exportRoute")) {
+    "" -> "export"
+    "retained" -> "export.retained"
+    else -> error("未识别的原保存许可，未打开另一份材料")
+}
+
+@Composable private fun PendingExportChooser(controller:AppController,requestJSON:String,onResult:(String,Uri?,String?)->Unit) {
+    val original=remember(requestJSON){JSONObject(requestJSON)}
+    val frozenRequest=remember(requestJSON){requestJSON}
+    var launched by rememberSaveable(requestJSON){mutableStateOf(false)}
+    val currentResult by rememberUpdatedState(onResult)
+    val launcher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
+        currentResult(frozenRequest,if(result.resultCode==android.app.Activity.RESULT_OK)result.data?.data else null,null)
+    }
+    LaunchedEffect(frozenRequest) {
+        try {
+            controller.execute("${exportDeliveryNamespace(original)}.delivery.validate",obj("operationID" to original.getString("operationID"),"attemptID" to original.getString("attemptID")))
+            if(!launched) {
+                launched=true
+                launcher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(original.getString("mime")).putExtra(Intent.EXTRA_TITLE,original.getString("suggestedName")))
+            }
+        } catch(cancelled:CancellationException){throw cancelled}
+        catch(failure:Exception){
+            // A failed chooser launch must not leave a live permission that blocks later explicit saves.
+            try { controller.execute("${exportDeliveryNamespace(original)}.delivery.cancel",obj("operationID" to original.getString("operationID"),"attemptID" to original.getString("attemptID"))) }
+            catch(cancelled:CancellationException){throw cancelled}
+            catch(_:Exception) { /* Root may already have retired this exact lease. */ }
+            currentResult(frozenRequest,null,failure.message?:"系统保存许可已结束；请从待保存清单重新选择位置。")
+        }
+    }
+}
+
 @Composable internal fun SectionTitle(title:String,subtitle:String?=null,actions:@Composable RowScope.()->Unit={}) { Row(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=18.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)){Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.SemiBold);subtitle?.let{Text(it,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}};actions()} }
 @Composable internal fun EmptyPane(title:String,text:String){Column(Modifier.fillMaxWidth().padding(32.dp)){Icon(Icons.Outlined.AutoStories,null,Modifier.size(44.dp),MaterialTheme.colorScheme.primary);Spacer(Modifier.height(20.dp));Text(title,style=MaterialTheme.typography.titleLarge);Text(text,Modifier.padding(top=8.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)}}
+@OptIn(ExperimentalMaterial3Api::class,ExperimentalLayoutApi::class)
 @Composable internal fun LibraryPane(state:UiState,controller:AppController,action:Action,importPDF:()->Unit){
  var source by rememberSaveable{mutableStateOf("")};var task by rememberSaveable{mutableStateOf("")};var method by rememberSaveable{mutableStateOf("")};var minimum by rememberSaveable{mutableStateOf("")};var choosing by rememberSaveable{mutableStateOf(false)};var picked by rememberSaveable{mutableStateOf(listOf<String>())}
  var query by rememberSaveable{mutableStateOf("")};var filter by rememberSaveable{mutableStateOf("全部")};var sort by rememberSaveable{mutableStateOf("最新")}
+ var showFilters by rememberSaveable{mutableStateOf(false)};var showSearchInfo by rememberSaveable{mutableStateOf(false)}
  val selected=remember(state.personal,filter){when(filter){"收藏"->state.personal.ids("favorites").toSet();"待读"->state.personal.ids("reading").toSet();else->emptySet<String>()}}
  val notes=if(query.isBlank())null else state.personal.optJSONObject("notes")
  var searchRetry by remember{mutableIntStateOf(0)}
@@ -172,38 +244,89 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
  val options=remember(state.papers){Triple(state.papers.map{it.sourceKind}.distinct().sorted(),state.papers.map{it.task}.filter{it.isNotBlank()}.distinct().sorted(),state.papers.map{it.method}.filter{it.isNotBlank()}.distinct().sorted())}
  val localCount=remember(state.papers){state.papers.count{it.sourceKind=="local"}}
  val missingFromLatest=remember(state.catalogSummary){state.catalogSummary.ids("missingFromLatest").toSet()}
- Column(Modifier.fillMaxSize()){
- SectionTitle("文献资料库","每天的新论文，和你的长期研究"){IconButton(importPDF){Icon(Icons.Outlined.FileOpen,"导入 PDF")};IconButton({action("library.sync",JSONObject())},enabled=!state.loading){Icon(Icons.Outlined.Sync,"同步已发布内容")}}
- Text(catalogMessage(state.catalogSummary,localCount),Modifier.padding(horizontal=24.dp,vertical=6.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
- OutlinedTextField(query,{query=it},Modifier.fillMaxWidth().padding(horizontal=24.dp),singleLine=true,placeholder={Text("搜索论文信息、笔记与本机已缓存导读")},leadingIcon={Icon(Icons.Outlined.Search,null)})
- if(query.isNotBlank())Column(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=6.dp)){
-  val searchMessage=when{
-   cachedSearch.loading->"正在补充检索本机已缓存导读；论文信息与笔记结果先显示。"
-   cachedSearch.error!=null->"缓存检索未完成：${cachedSearch.error}"
-   cachedSearch.result!=null->{val result=cachedSearch.result;buildString{
-    append(if(result.scanned==0)"尚无可检索的已保存导读；当前只匹配论文信息与笔记。" else "已检查 ${result.scanned} 份本机缓存导读，命中 ${result.paperIDs.size} 篇；不包含未下载正文或 PDF 全文。")
-    if(result.unavailable>0)append(" 另有 ${result.unavailable} 份缓存暂不可读或身份不匹配，尚未确认其中是否命中。")
-    if(unknownCached>0)append(" 其中 $unknownCached 个命中缺少当前论文目录信息，原缓存仍保留。")
+ val keyboard=androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+ val activeFilters=listOf(source,task,method,minimum).count{it.isNotEmpty()}+if(filter=="全部")0 else 1
+ val searchMessage=when{
+  query.isBlank()->"搜索论文信息、作者、分类及私人笔记；输入后会补查本机已保存导读。不搜索未下载正文或 PDF 全文。"
+  cachedSearch.loading->"正在补充检索本机已缓存导读；论文信息与笔记结果先显示。"
+  cachedSearch.error!=null->"缓存检索未完成：${cachedSearch.error}"
+  cachedSearch.result!=null->{val result=cachedSearch.result;buildString{
+   append(if(result.scanned==0)"尚无可检索的已保存导读；当前只匹配论文信息与笔记。" else "已检查 ${result.scanned} 份本机缓存导读，命中 ${result.paperIDs.size} 篇；不包含未下载正文或 PDF 全文。")
+   if(result.unavailable>0)append(" 另有 ${result.unavailable} 份缓存暂不可读或身份不匹配，尚未确认其中是否命中。")
+   if(unknownCached>0)append(" 其中 $unknownCached 个命中缺少当前论文目录信息，原缓存仍保留。")
+  }}
+  else->"当前匹配论文信息与笔记。"
+ }
+ NonOccludingViewport{
+  val libraryViewportHeight=maxHeight
+  // Search, notices, filters and results all share ONE scroll viewport. When IME
+  // leaves little height, the header can scroll away while actual results remain clickable.
+  LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(horizontal=16.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+   item(key="library-heading"){
+    FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
+     Text("文献资料库",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.SemiBold)
+     IconButton(importPDF){Icon(Icons.Outlined.FileOpen,"导入 PDF")}
+     IconButton({action("library.sync",JSONObject())},enabled=!state.loading){Icon(Icons.Outlined.Sync,"同步已发布内容")}
+    }
+   }
+   item(key="library-catalog"){Text(catalogMessage(state.catalogSummary,localCount),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+   item(key="library-search"){
+    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,placeholder={Text("搜索论文信息、笔记与本机已缓存导读",maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)},leadingIcon={Icon(Icons.Outlined.Search,null)},
+     keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(imeAction=androidx.compose.ui.text.input.ImeAction.Search),
+     keyboardActions=androidx.compose.foundation.text.KeyboardActions(onSearch={keyboard?.hide()}))
+   }
+   item(key="library-status"){
+    FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
+     Text("${papers.size} 篇匹配",style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(vertical=12.dp))
+     OutlinedButton({showFilters=true}){Icon(Icons.Outlined.Tune,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text(if(activeFilters==0)"筛选与排序 · $sort" else "筛选 $activeFilters 项 · $sort")}
+     TextButton({showSearchInfo=true}){Icon(if(cachedSearch.error!=null)Icons.Outlined.ErrorOutline else Icons.Outlined.Info,null,Modifier.size(18.dp));Spacer(Modifier.width(4.dp));Text(when{cachedSearch.error!=null->"检索未完成 · 查看";cachedSearch.loading->"正在检查导读…";(cachedSearch.result?.unavailable?:0)>0||unknownCached>0->"部分缓存未核 · 查看";query.isBlank()->"目录与检索范围";else->"检索范围与状态"})}
+     TextButton({choosing=!choosing;if(!choosing)picked=emptyList()}){Text(if(choosing)"完成多选" else "多选")}
+    }
+    if(activeFilters>0)Text(listOf(filter.takeUnless{it=="全部"},source.takeIf{it.isNotEmpty()}?.let{"来源：$it"},task.takeIf{it.isNotEmpty()}?.let{"任务：$it"},method.takeIf{it.isNotEmpty()}?.let{"方法：$it"},minimum.takeIf{it.isNotEmpty()}?.let{"最低 $it 分"}).filterNotNull().joinToString(" · "),style=MaterialTheme.typography.labelSmall)
+    if(cachedSearch.error!=null)Text("缓存检查未完成，当前结果不包含未确认的导读命中。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
+   }
+   if(choosing)item(key="library-selection"){
+    FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+     TextButton({picked=papers.map{it.id}}){Text("选择匹配 ${papers.size} 篇")}
+     TextButton({action("personal.setList",obj("key" to "favorites","ids" to JSONArray((state.personal.ids("favorites")+picked).distinct())))},enabled=picked.isNotEmpty()){Text("收藏 ${picked.size} 篇")}
+     TextButton({action("personal.setList",obj("key" to "reading","ids" to JSONArray((state.personal.ids("reading")+picked).distinct())))},enabled=picked.isNotEmpty()){Text("加入待读")}
+    }
+   }
+   if(papers.isEmpty())item(key="library-empty"){EmptyPane(if(cachedSearch.loading)"正在查找本机导读" else if(cachedSearch.error!=null)"论文信息与笔记暂未匹配" else "这里还没有匹配的论文",if(query.isNotBlank())"当前筛选下未显示论文；缓存检查范围与未完成项可在“检索范围与状态”查看。" else "同步已发布资料，或导入本地 PDF。同步读取已有分析，不会重复请求模型。")}
+   items(papers,key={it.id}){paper->ElevatedCard(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else action("paper.open",obj("paperID" to paper.id))},modifier=Modifier.fillMaxWidth()){
+    Column(Modifier.padding(16.dp)){
+     FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(2.dp)){
+      if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id})
+      Text(paper.date,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
+      paper.score?.let{Text("$it 分",style=MaterialTheme.typography.labelLarge)}
+     }
+     if(paper.id in missingFromLatest)Text("未列入最新网站快照，保留本机资料（不表示撤稿）",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
+     Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=3,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.padding(vertical=8.dp))
+     if(paper.titleZh!=paper.title)Text(paper.title,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+     Text(paper.authors.take(3).joinToString(" · "),style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.padding(top=8.dp))
+     Text(listOf(paper.task,paper.method,paper.sourceVersion?:paper.sourceKind).filter{it.isNotBlank()}.joinToString("  ·  "),style=MaterialTheme.typography.labelSmall,modifier=Modifier.padding(top=8.dp))
+    }
    }}
-   else->"当前匹配论文信息与笔记。"
   }
-  Text(searchMessage,style=MaterialTheme.typography.bodySmall,color=if(cachedSearch.error!=null)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-  if(cachedSearch.error!=null&&query.length<=256)TextButton({searchRetry++}){Text("重试本机导读检索")}
- }
- Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=20.dp,vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("全部","收藏","待读","离线").forEach{FilterChip(filter==it,{filter=it},label={Text(it)})};TextButton({sort=if(sort=="最新")"评分" else "最新"}){Text(sort)};TextButton({choosing=!choosing;if(!choosing)picked=emptyList()}){Text(if(choosing)"完成多选" else "多选")}}
- Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=20.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){
- FilterChoice("来源",options.first,source,{source=it})
- FilterChoice("任务",options.second,task,{task=it})
- FilterChoice("方法",options.third,method,{method=it})
- FilterChoice("最低评分",listOf("7","8","9"),minimum,{minimum=it})
- }
- if(choosing)Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal=20.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){
- TextButton({picked=papers.map{it.id}}){Text("选择匹配 ${papers.size} 篇")}
- TextButton({action("personal.setList",obj("key" to "favorites","ids" to JSONArray((state.personal.ids("favorites")+picked).distinct())))},enabled=picked.isNotEmpty()){Text("收藏 ${picked.size} 篇")}
- TextButton({action("personal.setList",obj("key" to "reading","ids" to JSONArray((state.personal.ids("reading")+picked).distinct())))},enabled=picked.isNotEmpty()){Text("加入待读")}
- }
- if(papers.isEmpty())EmptyPane(if(cachedSearch.loading)"正在查找本机导读" else if(cachedSearch.error!=null)"论文信息与笔记暂未匹配" else "这里还没有匹配的论文",if(query.isNotBlank())"当前筛选下未显示论文；缓存检查范围与未完成项见上方说明。" else "同步已发布资料，或导入本地 PDF。同步读取已有分析，不会重复请求模型。")
- LazyColumn(contentPadding=PaddingValues(start=20.dp,end=20.dp,bottom=24.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){items(papers,key={it.id}){paper->ElevatedCard(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else action("paper.open",obj("paperID" to paper.id))},Modifier.fillMaxWidth()){Column(Modifier.padding(18.dp)){Row{if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id});Text(paper.date,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary);Spacer(Modifier.weight(1f));paper.score?.let{Text("$it 分",style=MaterialTheme.typography.labelLarge)}};if(paper.id in missingFromLatest)Text("未列入最新网站快照，保留本机资料（不表示撤稿）",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary);Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,modifier=Modifier.padding(vertical=8.dp));if(paper.titleZh!=paper.title)Text(paper.title,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant);Text(paper.authors.take(3).joinToString(" · "),style=MaterialTheme.typography.bodySmall,modifier=Modifier.padding(top=8.dp));Text(listOf(paper.task,paper.method,paper.sourceVersion?:paper.sourceKind).filter{it.isNotBlank()}.joinToString("  ·  "),style=MaterialTheme.typography.labelSmall,modifier=Modifier.padding(top=8.dp))}}}}
+  if(showFilters)ModalBottomSheet(onDismissRequest={showFilters=false},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)){
+   Column(Modifier.fillMaxWidth().heightIn(max=libraryViewportHeight).verticalScroll(rememberScrollState()).padding(start=20.dp,end=20.dp,bottom=24.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    Text("筛选与排序",style=MaterialTheme.typography.titleLarge)
+    Text("${papers.size} 篇匹配 · 当前筛选 $activeFilters 项。关闭此面板不会清除搜索或多选。",style=MaterialTheme.typography.bodySmall)
+    FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("全部","收藏","待读","离线").forEach{FilterChip(filter==it,{filter=it},label={Text(it)})}}
+    Text("排序",style=MaterialTheme.typography.titleSmall)
+    FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("最新","评分").forEach{choice->FilterChip(sort==choice,{sort=choice},label={Text(choice)})}}
+    FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+     FilterChoice("来源",options.first,source,{source=it});FilterChoice("任务",options.second,task,{task=it});FilterChoice("方法",options.third,method,{method=it});FilterChoice("最低评分",listOf("7","8","9"),minimum,{minimum=it})
+    }
+    TextButton({source="";task="";method="";minimum="";filter="全部"},enabled=activeFilters>0){Text("清除筛选（保留搜索和排序）")}
+    Button({showFilters=false},Modifier.fillMaxWidth()){Text("查看 ${papers.size} 篇结果")}
+   }
+  }
+  if(showSearchInfo)AlertDialog(onDismissRequest={showSearchInfo=false},title={Text("目录与检索范围")},text={Column(Modifier.heightIn(max=libraryViewportHeight).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+   Text(catalogMessage(state.catalogSummary,localCount));Text(searchMessage,color=if(cachedSearch.error!=null)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+   Text("论文信息与笔记匹配，以及本次已核验的缓存导读命中，合并后继续应用全部筛选与排序。未下载的正文和 PDF 全文不在检索范围内。")
+   if(cachedSearch.error!=null&&query.length<=256)TextButton({searchRetry++}){Text("重试本机导读检索")}
+  }},confirmButton={TextButton({showSearchInfo=false}){Text("关闭")}})
  }
 }
 

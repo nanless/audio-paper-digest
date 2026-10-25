@@ -24,40 +24,63 @@ import java.util.UUID
 /** Android-private original PDFs and coordinate sidecars, never overwrites the picked document. */
 class PdfRepository(context: Context, researchRoot: File = File(context.noBackupFilesDir.canonicalFile, "PaperDigest")) {
     private val app = context.applicationContext
+    private val resolver = context.contentResolver
     private val root = researchRoot.also { require(!java.nio.file.Files.isSymbolicLink(it.toPath())) { "研究根不能是链接" };check(it.isDirectory || it.mkdirs()) }.canonicalFile
     private fun privateFolder(name:String):File { val f=File(root,name);require(!java.nio.file.Files.isSymbolicLink(f.toPath())) { "PDF 资料目录不能是链接" };check(f.isDirectory || f.mkdirs());return f.canonicalFile }
     private val imports = privateFolder("Imports")
     private val annotations = privateFolder("PdfAnnotations")
     init { PDFBoxResourceLoader.init(app) }
 
-    suspend fun importPdf(uri: Uri, password: String? = null): PdfDocumentRef = withContext(Dispatchers.IO) {
-        require(uri.scheme == "content") { "请通过系统文件选择器选择 PDF" }
-        val name = app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        } ?: "本地论文.pdf"
-        app.contentResolver.openInputStream(uri)?.use { store(it, name, password) } ?: error("原始 PDF 无法读取")
+    private val importSessions by lazy { PdfImportSessions(resolver,root,imports,File(root.parentFile,root.name+"Transfers/PdfImports")) }
+    suspend fun prepareImport(uri:Uri,check:()->Unit={}):PdfImportSession=importSessions.prepare(uri,check)
+    suspend fun prepareFileImport(file:File,displayName:String=file.name,expectedSHA:String?=null,check:()->Unit={}):PdfImportSession=importSessions.prepareFile(file,displayName,expectedSHA,check)
+    suspend fun finishImport(session:PdfImportSession,password:CharArray?=null,check:()->Unit={}):PdfImportedOriginal=importSessions.finish(session,password,check)
+    suspend fun cancelImport(session:PdfImportSession)=importSessions.cancel(session)
+    fun acceptImport(result:PdfImportedOriginal)=importSessions.accept(result)
+    suspend fun verifyImport(result:PdfImportedOriginal,check:()->Unit={})=importSessions.verify(result,check)
+    suspend fun finalizeImport(result:PdfImportedOriginal,keep:Boolean)=importSessions.finalize(result,keep)
+    fun clearSessionPasswords()=PdfSessionSecrets.clear(root)
+    internal fun copySessionPassword(document:PdfDocumentRef):CharArray?=PdfSessionSecrets.copy(root,document.sha256)
+    suspend fun importPdf(uri: Uri, password: String? = null): PdfDocumentRef = completeLegacyImport(prepareImport(uri),password)
+    suspend fun importFile(file: File, displayName: String = file.name, password: String? = null): PdfDocumentRef = completeLegacyImport(prepareFileImport(file,displayName),password)
+    private suspend fun completeLegacyImport(session:PdfImportSession,password:String?):PdfDocumentRef {
+        var result:PdfImportedOriginal?=null
+        var accepted=false
+        try { result=finishImport(session,password?.toCharArray());verifyImport(result);currentCoroutineContext().ensureActive();acceptImport(result);accepted=true;return result.document }
+        finally { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable){ if(result!=null)finalizeImport(result,accepted)else cancelImport(session) } }
     }
-    suspend fun importFile(file: File, displayName: String = file.name, password: String? = null): PdfDocumentRef = withContext(Dispatchers.IO) {
-        file.inputStream().use { store(it, displayName, password) }
+    suspend fun access(document:PdfDocumentRef):PdfDocumentAccess=withContext(Dispatchers.IO){loadDocument(document).use{pdf->require(pdf.numberOfPages==document.pageCount);PdfDocumentAccess(pdf.isEncrypted,pdf.currentAccessPermission.canExtractContent(),pdf.currentAccessPermission.canPrint())}}
+    private fun loadDocument(document:PdfDocumentRef,password:String?=null):PDDocument {
+        val file=checked(document)
+        val secret=if(password==null)copySessionPassword(document) else null
+        try { return load(file,password ?: secret?.let{String(it)} ?: "") }
+        catch(_:com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException){throw PdfPasswordRequiredException()}
+        finally {secret?.fill('\u0000')}
     }
-    private suspend fun store(input: InputStream, name: String, password: String?): PdfDocumentRef {
-        val staging = File(imports, ".incoming-" + UUID.randomUUID())
+    /** One bounded screen bitmap, rendered from the unchanged original ciphertext. */
+    suspend fun renderPage(document:PdfDocumentRef,page:Int):PdfRenderedPage {
+        val delivered=java.util.concurrent.atomic.AtomicReference<android.graphics.Bitmap?>()
         try {
-            var count = 0L
-            staging.outputStream().use { out ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) { currentCoroutineContext().ensureActive();val n = input.read(buffer); if (n < 0) break; count += n; require(count <= MAX_PDF_BYTES) { "PDF 超过200 MiB，原文件未修改" }; out.write(buffer, 0, n) }
+            val result=withContext(Dispatchers.IO) {
+                require(page in 1..document.pageCount) { "原文物理页无效" }
+                loadDocument(document).use { pdf ->
+                    currentCoroutineContext().ensureActive();require(pdf.numberOfPages==document.pageCount)
+                    val p=pdf.getPage(page-1);val box=p.cropBox
+                    val rotation=((p.rotation%360)+360)%360
+                    val w=if(rotation%180==0)box.width else box.height
+                    val h=if(rotation%180==0)box.height else box.width
+                    require(w.isFinite()&&h.isFinite()&&w>0&&h>0) { "PDF 页面尺寸无效" }
+                    val scale=minOf(kotlin.math.sqrt(1000000.0/(w.toDouble()*h)),2048.0/w,2048.0/h,2.0).toFloat()
+                    val renderer=com.tom_roush.pdfbox.rendering.PDFRenderer(pdf)
+                    renderer.isSubsamplingAllowed=true
+                    val bitmap=renderer.renderImage(page-1,scale,com.tom_roush.pdfbox.rendering.ImageType.RGB)
+                    delivered.set(bitmap);require(bitmap.width.toLong()*bitmap.height<=1010000L) { "原文预览超出屏幕预算" }
+                    currentCoroutineContext().ensureActive()
+                    PdfRenderedPage(document.sha256,page,bitmap,w,h)
+                }
             }
-            require(count > 0) { "PDF 文件为空" }
-            val pageCount = load(staging, password ?: "").use { it.numberOfPages }
-            require(pageCount > 0) { "PDF 没有页面" }
-            currentCoroutineContext().ensureActive()
-            val sha = digest(staging)
-            val destination = File(imports, "$sha.pdf")
-            if (destination.exists()) require(digest(destination) == sha) { "同名原文内容损坏，未覆盖" }
-            else check(staging.renameTo(destination)) { "原文保存失败" }
-            return PdfDocumentRef("local:$sha", destination.absolutePath, sha, pageCount, name.take(500))
-        } finally { staging.delete() }
+            delivered.set(null);return result
+        }catch(failure:Throwable){delivered.getAndSet(null)?.recycle();throw failure}
     }
     private fun checked(document: PdfDocumentRef): File {
         require(Regex("[a-f0-9]{64}").matches(document.sha256)) { "PDF 来源校验无效" }
@@ -69,7 +92,8 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
     suspend fun verify(document: PdfDocumentRef): File = withContext(Dispatchers.IO) { checked(document) }
     suspend fun readPages(document: PdfDocumentRef, from: Int = 1, to: Int = document.pageCount, password: String? = null): List<PdfPageText> = withContext(Dispatchers.IO) {
         require(from >= 1 && to >= from && to <= document.pageCount) { "原文物理页范围无效" }
-        load(checked(document), password ?: "").use { pdf ->
+        loadDocument(document,password).use { pdf ->
+            if(!pdf.currentAccessPermission.canExtractContent())throw PdfTextPermissionException()
             require(pdf.numberOfPages == document.pageCount) { "原文页数与封存记录不符" }
             var totalCharacters=0
             (from..to).map { page ->
@@ -88,8 +112,9 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
     }
     /** Reads actual PDF outline destinations only. Never derives chapter authority from guide headings. */
     suspend fun outline(document:PdfDocumentRef):List<PdfChapter> = withContext(Dispatchers.IO) {
-        load(checked(document)).use { pdf ->
+        loadDocument(document).use { pdf ->
             require(pdf.numberOfPages==document.pageCount) { "PDF 实际页数与原件记录不符" }
+            if(!pdf.currentAccessPermission.canExtractContent())throw PdfTextPermissionException()
             val outline=pdf.documentCatalog.documentOutline ?: return@withContext emptyList()
             val pageNumbers=java.util.IdentityHashMap<com.tom_roush.pdfbox.cos.COSDictionary,Int>()
             for((index,page) in pdf.pages.withIndex()){currentCoroutineContext().ensureActive();pageNumbers[page.cosObject]=index+1}
@@ -157,7 +182,7 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
         val current=marks.filter { it.optString("pdfSHA")==document.sha256 }
         require(current.size<=100000) { "标注数量超过可核验上限" }
         require(current.map{it.getString("id")}.distinct().size==current.size) { "中央标注身份重复，未显示不明确的覆盖层" }
-        load(checked(document)).use { pdf ->
+        loadDocument(document).use { pdf ->
             require(pdf.numberOfPages==document.pageCount) { "原文页数与封存记录不符" }
             val projected=current.map { mark ->
                 val rawPage=mark.get("page");require(rawPage is Number && rawPage.toDouble().isFinite() && rawPage.toDouble()==rawPage.toInt().toDouble()) { "中央标注物理页无效" }
@@ -192,7 +217,7 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
     /** One PDFKit-compatible entry per actual rectangle; preserves the Android group sidecar. */
     suspend fun portableMarks(document: PdfDocumentRef, annotation: PdfAnnotation): List<JSONObject> = withContext(Dispatchers.IO) {
         require(annotation.selection.documentSHA256==document.sha256 && annotation.selection.coordinateSystem=="rotated-crop-top-left-points-v1")
-        load(checked(document)).use { pdf ->
+        loadDocument(document).use { pdf ->
             annotation.selection.bounds.mapIndexed { index,b ->
                 require(b.page in 1..document.pageCount)
                 val p=pdf.getPage(b.page-1);val crop=p.cropBox
@@ -240,7 +265,7 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
         }
         return result
     }
-    private fun load(file:File,password:String=""):PDDocument=PDDocument.load(file,password,MemoryUsageSetting.setupMixed(32L*1024*1024,512L*1024*1024))
+    private fun load(file:File,password:String=""):PDDocument=PDDocument.load(file,password,MemoryUsageSetting.setupMixed(4L*1024*1024,512L*1024*1024))
     companion object { const val MAX_TEXT_CHARACTERS=1000000;const val MAX_PDF_BYTES=200L*1024*1024;private val annotationLock=Any();fun digest(file:File):String { val md=MessageDigest.getInstance("SHA-256");file.inputStream().use{input->val buffer=ByteArray(65536);while(true){val n=input.read(buffer);if(n<0)break;md.update(buffer,0,n)}};return md.digest().joinToString(""){"%02x".format(it)} } }
 }
 
