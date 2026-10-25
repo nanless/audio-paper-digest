@@ -7,7 +7,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const ROOT = path.resolve(__dirname, '..');
-const PACKAGE = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
+// App documentation runs in its own package (for example, after `cd apps/macos`).
+// Resolve one owning manifest, rather than combining unrelated packages' scripts.
+function scriptsForDocument(filePath, root = ROOT) {
+    let directory = path.dirname(path.resolve(filePath));
+    root = path.resolve(root);
+    assert.ok(directory === root || directory.startsWith(root + path.sep));
+    while (true) {
+        const manifest = path.join(directory, 'package.json');
+        if (fs.existsSync(manifest)) return JSON.parse(fs.readFileSync(manifest, 'utf8')).scripts || {};
+        if (directory === root) return {};
+        directory = path.dirname(directory);
+    }
+}
 
 function markdownFiles() {
     const output = execFileSync('git', [
@@ -34,6 +47,7 @@ test('所有文档的相对链接与 npm 命令都指向当前仓库权威入口
     for (const relative of markdownFiles()) {
         const filePath = path.join(ROOT, relative);
         const source = fs.readFileSync(filePath, 'utf8');
+        const scripts = scriptsForDocument(filePath);
         for (const rawTarget of relativeMarkdownLinks(source)) {
             const targetWithoutAnchor = rawTarget.split('#')[0];
             if (!targetWithoutAnchor) continue;
@@ -44,11 +58,37 @@ test('所有文档的相对链接与 npm 命令都指向当前仓库权威入口
             }
         }
         for (const match of source.matchAll(/npm run ([a-zA-Z0-9:_-]+)/g)) {
-            if (!PACKAGE.scripts[match[1]]) unknownCommands.push(`${relative} -> ${match[1]}`);
+            if (!Object.hasOwn(scripts, match[1])) unknownCommands.push(`${relative} -> ${match[1]}`);
         }
     }
     assert.deepEqual(brokenLinks, []);
     assert.deepEqual(unknownCommands, []);
+});
+
+test('文档命令按最近的真实包核验，不能借根包或相邻应用的命令放行', () => {
+    const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paperdigest-doc-scope-'));
+    try {
+        fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'apps', 'macos', 'docs'), { recursive: true });
+        fs.mkdirSync(path.join(root, 'apps', 'other'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { 'digest:prepare': 'root' } }));
+        fs.writeFileSync(path.join(root, 'apps', 'macos', 'package.json'), JSON.stringify({ scripts: { build: 'mac', 'install:app': 'mac' } }));
+        fs.writeFileSync(path.join(root, 'apps', 'other', 'package.json'), JSON.stringify({ scripts: { 'other-only': 'other' } }));
+        const mac = scriptsForDocument(path.join(root, 'apps', 'macos', 'docs', 'guide.md'), root);
+        const main = scriptsForDocument(path.join(root, 'docs', 'guide.md'), root);
+        assert.equal(Object.hasOwn(mac, 'build'), true);
+        assert.equal(Object.hasOwn(mac, 'install:app'), true);
+        for (const unknown of ['missing', 'digest:prepare', 'other-only', 'toString']) assert.equal(Object.hasOwn(mac, unknown), false);
+        assert.equal(Object.hasOwn(main, 'digest:prepare'), true);
+        assert.equal(Object.hasOwn(main, 'install:app'), false);
+        fs.writeFileSync(path.join(root, 'apps', 'macos', 'package.json'), '{}');
+        assert.deepEqual(scriptsForDocument(path.join(root, 'apps', 'macos', 'README.md'), root), {});
+        fs.writeFileSync(path.join(root, 'apps', 'macos', 'package.json'), '{broken');
+        assert.throws(() => scriptsForDocument(path.join(root, 'apps', 'macos', 'README.md'), root), SyntaxError);
+        assert.throws(() => scriptsForDocument(path.join(root, '..', 'outside.md'), root));
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });
 
 test('首页保持任务导向且三流程与旧记录兼容边界清楚', () => {
