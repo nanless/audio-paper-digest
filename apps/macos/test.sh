@@ -22,6 +22,8 @@ node --test "$app_root/Tests/DesktopProtocolReview.test.cjs" "$repo_root/tests/l
 node "$app_root/Tests/LibraryPDFRevalidation.test.cjs"
 node "$app_root/Tests/ModelWorker.test.cjs"
 node "$app_root/Tests/LibraryUI.test.cjs"
+node "$app_root/Tests/LibraryMetadata.test.cjs"
+node "$app_root/Tests/LibraryReadingContinuity.test.cjs"
 node "$app_root/Tests/SettingsUI.test.cjs"
 node "$app_root/Tests/CloudUI.test.cjs"
 node "$app_root/Tests/ZoteroUI.test.cjs"
