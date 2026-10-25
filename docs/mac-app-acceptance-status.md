@@ -1,16 +1,18 @@
 # Mac应用69项实际验收状态
 
-本页逐项记录[正式验收矩阵](mac-app-acceptance.md)的实际结果，不改变原69项要求。当前为 **44项通过、25项待验**；没有据此宣布全部功能和全部系统条件通过。只有原要求的全部适用条件已有对应证据才记为“通过”；任一必测条件未覆盖仍记为“待验”，并另列已完成范围。隔离测试、原生实机和文件回读分别标明。“待验”包含缺少实际条件或证据的项目，不一概表示功能已经失败。
+本页逐项记录[正式验收矩阵](mac-app-acceptance.md)的实际结果，不改变原69项要求。当前为 **45项通过、24项待验**；没有据此宣布全部功能和全部系统条件通过。只有原要求的全部适用条件已有对应证据才记为“通过”；任一必测条件未覆盖仍记为“待验”，并另列已完成范围。隔离测试、原生实机和文件回读分别标明。“待验”包含缺少实际条件或证据的项目，不一概表示功能已经失败。
 
-当前安装为a081正式资源通道。此前8dd已沿原83文件快照完成真实坚果云取消、重启、续传、九块及最终清单回读，并完成原生确认取消和实际恢复；这部分按未变化的实际服务实现和原材料复用，不冒称a081重新执行了云恢复。恢复后同一既有Zotero归档只读99项通过、0失败；ac7于11:45完成的原生六角色回读仍保留其原包身份，不冒称8dd重新执行了许可读取或写入。用户新增的[17项专项验收](mac-app-cloud.md)按本次实际范围逐项更新，原69项计数不因云传输成功而自动改变。
+当前安装为129da86d正式资源通道。此前8dd已沿原83文件快照完成真实坚果云取消、重启、续传、九块及最终清单回读，并完成原生确认取消和实际恢复；这部分按未变化的实际服务实现和原材料复用，不冒称新包重新执行了云恢复。恢复后同一既有Zotero归档只读99项通过、0失败；ac7于11:45完成的原生六角色回读仍保留其原包身份，不冒称新包重新执行了许可读取或写入。用户新增的[17项专项验收](mac-app-cloud.md)按本次实际范围逐项更新，原69项计数不因云传输成功而自动改变。
 
 2026-10-26新增a081原生资料库检索补验及非作者复核，仅将LIB-02改为通过。中文单字/双字、标题缩写、作者、编号、标点、标签、无结果、缓存导读和私人笔记均有实际界面记录；两种正文特有短语另与全部22份目录文件核对。操作结束返回原导读及PDF第5页，九组个人字段与同一原基准逐值相同；不扩展其他资料库、键盘、离线或冷启动条件。
 
+同日129新增库内完整文献信息展开，并修复库条目和右键入口没有恢复原阅读页签/PDF的问题。真实编号、来源、完整作者、方法和标签可读，Space展开及多选保持通过，结合前次真库组合筛选、排序、批量和分页结果，仅再将LIB-01改为通过。实际跨论文返回保导读位置5168、PDF第5页与50%比例；右键返回亦恢复原笔记页签，主动关闭PDF后再进仍单栏。原185项任务完整保留，只新增10项正常读取任务，三个会话与原笔记等不变；READ-08整体仍待验。
+
 ## 当前安装与证据复用
 
-记录日期为2026-10-25，时区Asia/Shanghai。实际安装于`~/Applications/论文速递.app`，来源`a0814f2d3a35169b2212da8bcebce7b8259c1961`，builtAt为`2026-10-25T13:04:57.562932+00:00`；原生SHA为`5a250ae97edf86bace1c5ee5934782548fa3cd64ca6d88930a2dbbb483beed72`，metadata SHA为`accf49eed786541e1358ee2bf57452c97c2e3a3dc1ea038e69e6565fa042df92`。非作者分别核最终候选和实际安装506文件、522输入、签名及原C图标，严格发行检查退出0。release通道不内嵌Seed，七组完整离线许可保留；仍是本机ad-hoc签名，未Apple公证或公开Release。
+记录日期为2026-10-26，时区Asia/Shanghai。实际安装于`~/Applications/论文速递.app`，来源`129da86dafdc913ffa66ce23657f47147e3ee571`，builtAt为`2026-10-25T20:37:54.496855+00:00`；原生SHA为`a7797adcc8955418b10946f08856fa5f8a39a4f3ac172a8af5b7d029e5778f15`，metadata SHA为`cb79b94bd76f9d9881d42cbdfc09edd0a86f8e639515df8c35422608bbca40e1`。非作者分别核候选和实际安装506文件、522输入、权限/属性、签名及原C图标，严格检查退出0。release通道不内嵌Seed，七组完整离线许可保留；仍是本机ad-hoc签名，未Apple公证或公开Release。
 
-a081完整runner的23套原生、31组Node命令及59项打包测试全部通过，阅读恢复27项另经作者和非作者复验。89的ZIP/DMG往返回核仍保留原版本身份，a081尚未生成公开发行产物。实际启动仍读到原8005篇/8720条、收藏1及待读0；本轮已撤销原验收加入的待读标记，原笔记和研究目录保持。
+129覆盖当前33组Node回归和59项打包检查，原23套原生结果按17份Swift、测试与依赖逐字节相同复用，未虚称重新编译执行。Node首次在旧笔记重开测试前提失败，改为等待新frame及已恢复笔记页签后该组20项通过，其余已通过11组与后21组分别保留精确来源。阅读恢复原27项继续保留其实际版本身份。89的ZIP/DMG往返回核仍保留原版本身份，129尚未生成公开发行产物。实际启动仍读到原8005篇/8720条、收藏1及待读0；原个人资料保持。
 
 以下8dd云操作及较早模型、Zotero结果保留其真实包身份。最终取消修复的完整回归为21套原生、31套Node测试命令及45项发行工具测试，退出0、五个冻结变更文件不变，远端CI通过。本应用原生安全框仅本次使用现有坚果云应用密码，不读写钥匙串；实际正常退出重启后内存密码消失、自动保存继续暂停，原快照及两个已核验块保留。8dd实际取消提示已正确显示，随后原九块及完成清单全部成功，独立核验器仅10次GET完成83项解码和原编码全字节比对。
 
@@ -28,7 +30,7 @@ a081完整runner的23套原生、31组Node命令及59项打包测试全部通过
 
 | ID | 状态 | 已有证据 | 未关闭条件或适用范围 | 证据组 |
 |---|---|---|---|---|
-| APP-01 | 通过 | a081真实.app已安装；506文件与审定候选一致并独审，随包Node/完整许可，release无Seed，原8005篇与个人资料保留。较早真实网站读取和PDF仅复用于未变化链。 | 限本机arm64/macOS26.6.1；不声称跨Mac发行、公证或自动更新。 | PKG, FINALGUI |
+| APP-01 | 通过 | 129真实.app已安装；506文件与审定候选一致并独审，随包Node/完整许可，release无Seed，原8005篇与个人资料保留。较早真实网站读取和PDF仅复用于未变化链。 | 限本机arm64/macOS26.6.1；不声称跨Mac发行、公证或自动更新。 | PKG129, FINALGUI |
 | APP-02 | 待验 | 真实系统窗口、菜单、激活、退出与9b原生全屏单/双栏已有实机证据；878通过正常退出旧版、安装及再次启动。 | 最小化→恢复、关闭主窗→Dock重开后的完整上下文记录仍未齐全。 | FINALGUI, SIZES, HISTORY |
 | APP-03 | 待验 | ac7独立设置五组及⌘,可达，700×520最小窗实际阅读/模型/网络/Cloud顶部与底部已查看；Zotero10.0.6及51分类已读。 | 最小窗已补验；标题栏移动、关闭后重开的五组可达性及主阅读位置综合保留仍待完整记录。 | SETTINGS, HISTORY |
 | APP-04 | 待验 | 9b实机1280×800、最小1080×700、全屏单/双栏、侧栏及38–62%分隔极限已检查，无主要动作裁切。 | 精确1440×900、1728×1117、1920×1080原生窗口条件尚未记录；已有浏览器截图及Retina像素不能作为这些点数的实机结果。 | SIZES |
@@ -67,14 +69,14 @@ a081完整runner的23套原生、31组Node命令及59项打包测试全部通过
 | READ-05 | 通过 | 3880真实PDFKit原件：输入页码5、下一页6、上一页5，98%放大112%再适宽98%；原文查找MiCLA实际78处匹配，选择复制后粘贴MiCLA，再撤销恢复原问题。 | 原13/9页材料及SHA保持；扫描件/OCR和其他困难PDF条件仍按READ-09待验。 | FINALGUI, HISTORY, TESTS |
 | READ-06 | 通过 | 426字原选区绑定PDF SHA与物理5页，真实回答引用/笔记摘录回跳及原图对应，错版本/越界有反例。 | 只证明实际材料页与选区，不宣称未提供内容或句级定位。 | MODEL, FINALGUI, ZOT, TESTS |
 | READ-07 | 通过 | 真实PDFKit选区来源与封存输入核验；原生/DOM交错反例覆盖跨篇、ABA、旧PDF/预览迟到及引用版本。 | 核心路径用实际PDFKit，不把浏览器占位当原生证据。 | MODEL, TESTS |
-| READ-08 | 待验 | a081已修首次双栏恢复和等待PDF时保存意图，27项双人复验及完整回归通过；实际正常冷启动导读4796→4796、PDF5/13、比例50%及问题等保持，单／双栏均已检查。 | 此次正常冷启动不替代快速布局、来源切换、选区与编辑的全部组合条件；旧版失败及首次非最终落盘像素比对不等记录均保留。 | SIZES, APPEARANCE, TESTS, HISTORY |
+| READ-08 | 待验 | a081原27项及正常冷启结果保持；129真实库条目跨论文返回保5168/第5页/50%，右键重开恢复原笔记页签与PDF，主动关闭后重开仍单栏；原两入口失败及修复测试保留。 | 不替代快速布局、来源切换、选区与编辑的全部组合条件；原历史失败及不同布局像素差异不清零。 | LIBRARY21, SIZES, APPEARANCE, TESTS, HISTORY |
 | READ-09 | 待验 | 真实双栏论文及附录、PDFKit密码/长选区等隔离文件检查已覆盖；帮助明确无OCR/无图像模型输入。 | 扫描、旋转、密码及超长原件的实际GUI组合尚未全记录；未支持OCR和图像模型输入，不能声称图像内容已分析。 | FINALGUI, TESTS |
 
 ## 论文库
 
 | ID | 状态 | 已有证据 | 未关闭条件或适用范围 | 证据组 |
 |---|---|---|---|---|
-| LIB-01 | 待验 | 真实8005篇列表、ID定位，分页/多选/组合筛选/排序有1227项输入的隔离UI检查。 | 真库组合筛选、排序、清除条件、批量及上下文动作尚缺完整实机记录。 | DATA, TESTS |
+| LIB-01 | 通过 | 真实8005篇组合375→22→13→4、评分排序、清除、多选批量待读2→1→0与分页已验；129库内可展开原编号/来源/全部作者/方法/标签，Space及多选保持通过，右键动作真实有效。原筛选/排序/清单函数未变，当前1227项组件回归通过，非作者复核。 | 限已测真实条件与未变逻辑，不声称每个日期值及每种排序都逐项实机穷举。 | LIBRARY21, DATA, TESTS |
 | LIB-02 | 通过 | a081实际单字1569项、双字3016项、任务标签469项；MiCLA缩写、含标点名称、作者和arXiv编号各命中原论文1项，无结果0项。仅在私人笔记中的短语命中原arXiv论文，仅在缓存导读中的短语命中原会议身份；22份目录及其他文本来源均排除。清除后回到8005项，原个人字段及阅读位置保持，非作者复核通过。 | 限当次目录、既有缓存及笔记；PDF原文仍在阅读器内查找，不参与资料库全文索引。 | SEARCH18, DATA, TESTS |
 | LIB-03 | 待验 | a081真实右键加入MiCLA待读，列表和计数均1；正常退出旧进程后，新进程仍为原论文1项，再正常移出还原0项。最终保存→冷启动的阅读状态一致，原收藏、会话、笔记等保持，原179项任务未变，仅新增两项正常读取任务；非作者复核待读持久子条件通过。 | 切论文及网站同步、更名、删除的整组关联条件仍须精确证据；不据本轮单篇持久结果扩大通过。 | WANTED18, HISTORY, MODEL, TESTS |
 
@@ -143,6 +145,8 @@ a081完整runner的23套原生、31组Node命令及59项打包测试全部通过
 日志、系统辅助功能树、截图、逐项回读和私人导出保存在本机忽略的`apps/macos/.qa/`，不随公开Git提交。以下路径用于本机查证；正式文档只记录结论与范围。外部独审产物保存在本聊天的本机产物目录，文件名对应构建身份。
 
 - **PKG**：`apps/macos/.qa/live-e2e/installed-cloud-ac7f8099.json`；`外部独审产物 mac-cloud-ac7f8099-candidate-independent-audit.json`；`外部独审产物 mac-cloud-ac7f8099-installed-independent-audit.json`；`apps/macos/.qa/live-e2e/installed-final-v17.json`；`外部独审产物 mac-final-3880de59-candidate-independent-audit.json`；`外部独审产物 mac-final-3880de59-installed-independent-audit.json`。
+- **PKG129**：`apps/macos/.qa/mac129-candidate-independent/result.json`、`installed-result.json`及`source-reuse-and-tests.json`；`apps/macos/.qa/library-metadata21/root-precommit-v5.json`、候选和实际安装回执。
+- **LIBRARY21**：`apps/macos/.qa/library-metadata21/native-installed21/result-v1.json`及原生AX/截图/各阶段私人对照，独审`apps/macos/.qa/library-metadata21-independent/native-installed21/review-v1.json`；`apps/macos/.qa/library-combination18/result-v1.json`保前次真实组合、批量与分页范围。私人正文不随公开提交。
 - **FINALGUI**：`apps/macos/.qa/live-e2e/guide-single-final9b.png`；`apps/macos/.qa/live-e2e/guide-split-final9b.ax.txt`；`apps/macos/.qa/live-e2e/analysis-pdf-final9b.ax.txt`；`apps/macos/.qa/live-e2e/export-native-final9b-saved.ax.txt`；`apps/macos/.qa/live-e2e/zotero-native-final9b-complete.ax.txt`；`apps/macos/.qa/live-e2e/help-native-final9b.ax.txt`。
 - **TASK3880**：`apps/macos/.qa/final3880-task-metadata-review/result.json`（32项）；`apps/macos/.qa/live-e2e/tasks-final3880-independent-readback.json`；`apps/macos/.qa/live-e2e/tasks-final3880-page1-bottom.ax.txt`至`tasks-final3880-page8-bottom.ax.txt`及同名截图，另有第一页标题与筛选的顶部记录。
 - **AX**：`apps/macos/.qa/live-e2e/tasks-native-final9b.ax.txt`；`apps/macos/.qa/live-e2e/notes-native-final9b.ax.txt`；`apps/macos/.qa/live-e2e/storage-native-final9b-ready.ax.txt`；`apps/macos/.qa/live-e2e/export-native-final9b.ax.txt`；`apps/macos/.qa/live-e2e/zotero-native-final9b-complete.ax.txt`。
