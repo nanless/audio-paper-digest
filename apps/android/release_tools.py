@@ -169,6 +169,18 @@ def audit_packaged_asset_sources(assets,repo,materials):
  for name in expected:(assets/name).unlink()
  return {'contract':'android-packaged-asset-sources-v1','libraryArtifact':PDFBOX_ASSET_SOURCE,'libraryFiles':112,'profileFiles':2,'files':expected}
 
+def signature_facts(apk,sdk,certificate):
+ require(re.fullmatch('[0-9a-f]{64}',certificate),'certificate_pin_format')
+ def verify_range(low,high):
+  output=sdk.call('apksigner','verify','--verbose','--print-certs','--min-sdk-version',str(low),'--max-sdk-version',str(high),apk)
+  certs=re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)$',output,re.M)
+  require([value.lower() for value in certs]==[certificate] and 'CN=Android Debug' not in output,'release_certificate_mismatch')
+  return output
+ # apksigner reports the scheme USED for the requested range, not every block in the APK.
+ app=verify_range(28,37);require('Verified using v3 scheme (APK Signature Scheme v3): true' in app,'signature_schemes')
+ block=verify_range(24,27);require('Verified using v2 scheme (APK Signature Scheme v2): true' in block,'signature_schemes')
+ return {'certificateSHA256':certificate,'v2':True,'v3':True,'verifiedMinSDK':28,'verifiedMaxSDK':37,'v2BlockProofMinSDK':24,'v2BlockProofMaxSDK':27,'applicationMinSDK':28}
+
 NODE_AUDIT="""import {pathToFileURL} from 'node:url';import fs from 'node:fs/promises';import {execFileSync} from 'node:child_process';
 const [helper,assets,materials,python,tool,repo]=process.argv.slice(2),m=await import(pathToFileURL(helper));
 const runtime=m.verifyRuntimeMaterials(JSON.parse(await fs.readFile(materials,'utf8')));
@@ -205,12 +217,7 @@ def inspect(apk,repo,sdk,version,code,materials,certificate=None):
   asset_info=json.loads(run(['node','--input-type=module','-e',NODE_AUDIT,'paperdigest-release-audit',repo/'apps/android/prepare-assets.mjs',assets,materials,sys.executable,P(__file__).resolve(),repo],'release_assets_failed'))
  signature=None
  if certificate:
-  require(re.fullmatch('[0-9a-f]{64}',certificate),'certificate_pin_format')
-  output=sdk.call('apksigner','verify','--verbose','--print-certs','--min-sdk-version','28','--max-sdk-version','37',apk)
-  certs=re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)$',output,re.M)
-  require([value.lower() for value in certs]==[certificate] and 'CN=Android Debug' not in output,'release_certificate_mismatch')
-  require('Verified using v2 scheme (APK Signature Scheme v2): true' in output and 'Verified using v3 scheme (APK Signature Scheme v3): true' in output,'signature_schemes')
-  signature={'certificateSHA256':certificate,'v2':True,'v3':True,'verifiedMinSDK':28,'verifiedMaxSDK':37}
+  signature=signature_facts(apk,sdk,certificate)
  require(file_sha(apk)==before,'audit_changed_apk')
  return {'sha256':before,'bytes':apk.stat().st_size,'manifest':facts,'assets':asset_info,'icon':{**icon[0],**icon_binding,'originalSourceSHA256':ICON_SHA},'nativeLibraries':natives,'signature':signature,'formalDeviceTested':False,'publicationEligible':False}
 
@@ -238,6 +245,24 @@ def private_keystore(path,repo):
 def key_identity(path):
  value=path.stat();return (value.st_dev,value.st_ino,value.st_uid,value.st_mode,value.st_nlink,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
 
+def _write_verified_signed_records(args,source,info,inputs,sdk,unsigned_payload,target,origin):
+ # Internal continuation of the two checked entry points, never a JSON/CLI authority endpoint.
+ require(origin['kind'] in {'apksigner-sign','provided-signed-apk'},'signing_origin')
+ require(canonical(load(source/'android-build-info.json'))==canonical(info),'build_record_changed')
+ require(file_sha(source/'android-source-inputs.json')==info['sourceInputsSHA256'] and file_sha(source/'android-runtime-materials.json')==info['runtimeMaterialsSHA256'],'build_record_changed')
+ require(canonical(payload_inventory(target))==canonical(unsigned_payload),'signer_payload_changed')
+ require(file_sha(source/'unsigned.apk')==info['unsigned']['sha256'],'unsigned_changed')
+ audited=inspect(target,args.repo,sdk,info['versionName'],info['versionCode'],source/'android-runtime-materials.json',args.certificate);check_source(args.repo,inputs)
+ if origin['kind']=='provided-signed-apk':require(audited['sha256']==origin['providedAPK_SHA256'] and file_sha(target)==origin['providedAPK_SHA256'] and target.stat().st_size==origin['providedAPKBytes'],'provided_apk_changed')
+ for name in ['android-source-inputs.json','android-runtime-materials.json']:shutil.copyfile(source/name,args.output/name)
+ signed={**info,'contract':'paperdigest-android-signed-v1','signed':audited,'unsignedPayload':unsigned_payload,'unsignedPayloadInventorySHA256':sha(canonical(unsigned_payload)),'signingOrigin':origin}
+ if origin['kind']=='provided-signed-apk':signed.pop('signingTools',None)
+ signed['signingTools' if origin['kind']=='apksigner-sign' else 'verificationTools']=sdk.identities();write(args.output/'android-build-info.json',signed)
+ apkname=target.name;names=[apkname,'android-build-info.json','android-source-inputs.json','android-runtime-materials.json'];assets={n:{'sha256':file_sha(args.output/n),'bytes':(args.output/n).stat().st_size} for n in names}
+ write(args.output/'android-release-manifest.json',{'contract':'paperdigest-android-release-v1','publicationEligible':False,'assets':assets})
+ with open(args.output/'ANDROID-SHA256SUMS','x') as f:f.write(''.join(f"{item['sha256']}  {name}\n" for name,item in sorted(assets.items())))
+ return verify(args.output,args.repo,sdk,args.certificate)
+
 def sign(args):
  repo=args.repo.resolve();require(re.fullmatch('[0-9a-f]{64}',args.certificate),'certificate_pin_format');require(args.alias and not any(ord(c)<32 for c in args.alias),'signing_alias');source=args.prepared.resolve();info=load(source/'android-build-info.json');require(info['contract']=='paperdigest-android-unsigned-v1','unsigned_record')
  require(file_sha(source/'android-source-inputs.json')==info['sourceInputsSHA256'] and file_sha(source/'android-runtime-materials.json')==info['runtimeMaterialsSHA256'],'build_record_changed')
@@ -256,15 +281,30 @@ def sign(args):
  finally:
   env.pop('PD_RELEASE_STORE_PASSWORD',None);env.pop('PD_RELEASE_KEY_PASSWORD',None)
  require(private_keystore(args.keystore,repo)==key and key_identity(key)==key_before,'keystore_changed')
- require(canonical(payload_inventory(target))==canonical(unsigned_payload),'signer_payload_changed')
+ return _write_verified_signed_records(args,source,info,inputs,sdk,unsigned_payload,target,{'kind':'apksigner-sign'})
+
+def finalize_signed(args):
+ repo=args.repo.resolve();require(re.fullmatch('[0-9a-f]{64}',args.certificate),'certificate_pin_format');source=args.prepared.resolve();provided=regular(args.signed_apk)
+ require(not os.path.samefile(provided,regular(source/'unsigned.apk')),'provided_is_unsigned')
+ output=args.output.absolute();require('..' not in output.parts,'output_path')
+ for parent in output.parents:require(not parent.is_symlink(),'symlink_path')
+ require(not output.exists() and not output.is_symlink(),'output_exists');require(output.parent.is_dir(),'output_parent_missing')
+ require(not provided.is_relative_to(output),'provided_inside_output');args.output=output
+ info=load(source/'android-build-info.json');require(info['contract']=='paperdigest-android-unsigned-v1','unsigned_record')
+ require(file_sha(source/'android-source-inputs.json')==info['sourceInputsSHA256'] and file_sha(source/'android-runtime-materials.json')==info['runtimeMaterialsSHA256'],'build_record_changed')
+ inputs=load(source/'android-source-inputs.json');check_source(repo,inputs);require(inputs['sourceCommit']==info['sourceCommit'],'source_record_oid')
  require(file_sha(source/'unsigned.apk')==info['unsigned']['sha256'],'unsigned_changed')
- audited=inspect(target,repo,sdk,info['versionName'],info['versionCode'],source/'android-runtime-materials.json',args.certificate);check_source(repo,inputs)
- for name in ['android-source-inputs.json','android-runtime-materials.json']:shutil.copyfile(source/name,args.output/name)
- signed={**info,'contract':'paperdigest-android-signed-v1','signed':audited,'unsignedPayload':unsigned_payload,'unsignedPayloadInventorySHA256':sha(canonical(unsigned_payload)),'signingTools':sdk.identities()};write(args.output/'android-build-info.json',signed)
- names=[apkname,'android-build-info.json','android-source-inputs.json','android-runtime-materials.json'];assets={n:{'sha256':file_sha(args.output/n),'bytes':(args.output/n).stat().st_size} for n in names}
- write(args.output/'android-release-manifest.json',{'contract':'paperdigest-android-release-v1','publicationEligible':False,'assets':assets})
- with open(args.output/'ANDROID-SHA256SUMS','x') as f:f.write(''.join(f"{item['sha256']}  {name}\n" for name,item in sorted(assets.items())))
- return verify(args.output,repo,sdk,args.certificate)
+ identity=key_identity(provided);provided_sha=file_sha(provided);require(provided_sha!=info['unsigned']['sha256'],'provided_is_unsigned');unsigned_payload=payload_inventory(source/'unsigned.apk');sdk=SDK(args.sdk)
+ before=inspect(source/'unsigned.apk',repo,sdk,info['versionName'],info['versionCode'],source/'android-runtime-materials.json');require(before==info['unsigned'],'unsigned_audit_changed')
+ require(canonical(payload_inventory(provided))==canonical(unsigned_payload),'signer_payload_changed')
+ actual=inspect(provided,repo,sdk,info['versionName'],info['versionCode'],source/'android-runtime-materials.json',args.certificate);check_source(repo,inputs)
+ require(actual['sha256']==provided_sha and key_identity(regular(provided))==identity and file_sha(provided)==provided_sha,'provided_apk_changed')
+ # No output or completed metadata exists until all original-source and signature checks pass.
+ output.mkdir(mode=0o700);target=output/f"paperdigest-android-{info['versionName']}-{info['versionCode']}-universal.apk"
+ with open(provided,'rb') as reader,open(target,'xb') as writer:shutil.copyfileobj(reader,writer,65536);writer.flush();os.fsync(writer.fileno())
+ require(file_sha(target)==provided_sha and key_identity(regular(provided))==identity and file_sha(provided)==provided_sha,'provided_apk_changed')
+ result=_write_verified_signed_records(args,source,info,inputs,sdk,unsigned_payload,target,{'kind':'provided-signed-apk','providedAPK_SHA256':provided_sha,'providedAPKBytes':provided.stat().st_size,'signerInvokedByThisCommand':False})
+ require(key_identity(regular(provided))==identity and file_sha(provided)==provided_sha,'provided_apk_changed');return result
 
 def verify(folder,repo,sdk,certificate):
  folder=P(folder).resolve();manifest=load(regular(folder/'android-release-manifest.json'));require(manifest['contract']=='paperdigest-android-release-v1','release_record');assets=manifest['assets']
@@ -314,6 +354,7 @@ def main():
  parser=SafeParser(description=__doc__);parser.add_argument('--repo',type=P,required=True);parser.add_argument('--sdk',type=P,default=P('/opt/homebrew/share/android-commandlinetools'));sub=parser.add_subparsers(dest='command',required=True)
  p=sub.add_parser('prepare');p.add_argument('--output',type=P,required=True);p.add_argument('--version',required=True);p.add_argument('--code',type=int,required=True)
  p=sub.add_parser('sign');p.add_argument('--prepared',type=P,required=True);p.add_argument('--output',type=P,required=True);p.add_argument('--keystore',type=P,required=True);p.add_argument('--alias',required=True);p.add_argument('--certificate',required=True)
+ p=sub.add_parser('finalize-signed');p.add_argument('--prepared',type=P,required=True);p.add_argument('--signed-apk',type=P,required=True);p.add_argument('--output',type=P,required=True);p.add_argument('--certificate',required=True)
  for name in ['verify','joint-plan','verify-downloaded']:
   p=sub.add_parser(name);p.add_argument('--prepared',type=P,required=True);p.add_argument('--certificate',required=True)
   if name!='verify':p.add_argument('--mac',type=P,required=True)
@@ -323,6 +364,7 @@ def main():
  args=parser.parse_args();args.repo=args.repo.resolve()
  if args.command=='prepare':result=prepare(args)
  elif args.command=='sign':result=sign(args)
+ elif args.command=='finalize-signed':result=finalize_signed(args)
  elif args.command=='verify':result=verify(args.prepared,args.repo,SDK(args.sdk),args.certificate)
  elif args.command=='joint-plan':result=joint_plan(args)
  else:result=verify_downloaded(args)

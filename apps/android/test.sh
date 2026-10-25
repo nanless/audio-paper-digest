@@ -30,4 +30,6 @@ bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseBoundar
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseKeystoreCanonical.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseCompiledIcon.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleasePackagedAssets.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseSignatureSchemes.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseFinalizeSigned.test.py"
 exec "$app_root/build.sh" :app:testDebugUnitTest :app:lintDebug "$@"
