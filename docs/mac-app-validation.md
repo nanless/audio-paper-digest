@@ -16,7 +16,7 @@
 
 旧8dd已正常退出，按明确metadata/主程序SHA精确复制审定候选，原安装回滚副本保留。新包实际启动后仍读到原8005篇、8720条页面、收藏1及本轮检验加入的待读1，没有重新分析论文或删除研究空间。但任务和笔记正文的系统AX在实际89窗口仍缺失：包内两个命名区域属性确实存在且与Git一致，私有只读副本成功不足以关闭真实应用差异。APP-06及原69项43通过/26待验保持，继续定位；新关于入口点击、单/双栏最终实机复验也尚未完成。五小时临时唤醒到期后工具明确报告锁屏，后台验证继续，不代操作系统安全窗口。
 
-私有证据为`apps/macos/.qa/formal-release15/root-full-result.json`、构建记录`builds/2026-10-25T09-41-28.389996_00-00/`、`live-e2e/installed-formal89.json`、`formal-release15-independent/final89-{candidate-review,installed-identity}.json`及实际89任务/笔记AX记录。远端CI按89提交单独运行，最终结论另记；本地通过不代替其结果，也不授予全部真实服务或发行条件通过。
+私有证据为`apps/macos/.qa/formal-release15/root-full-result.json`、构建记录`builds/2026-10-25T09-41-28.389996_00-00/`、`live-e2e/installed-formal89.json`、`formal-release15-independent/final89-{candidate-review,installed-identity}.json`及实际89任务/笔记AX记录。89提交的[远端CI第40183057800次运行](https://github.com/nanless/audio-paper-digest/actions/runs/40183057800)已完成，12个任务全部成功；原始提交身份与最终观察另存`formal-release15/ci89-final.json`。这些结果不授予全部真实服务、原生界面或发行条件通过。
 
 ## 2026-10-25：任务和笔记列表读出修复候选
 
