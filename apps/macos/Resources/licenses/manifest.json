@@ -1,0 +1,70 @@
+{
+  "contract": "paper-digest-offline-licenses-v1",
+  "components": [
+    {
+      "id": "paper-digest",
+      "title": "论文速递",
+      "version": "1.0.0",
+      "sourceURL": "https://github.com/nanless/audio-paper-digest",
+      "path": "PaperDigest-MIT.txt",
+      "bytes": 1056,
+      "sha256": "1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685"
+    },
+    {
+      "id": "marked",
+      "title": "Marked",
+      "version": "17.0.5",
+      "sourceURL": "https://github.com/markedjs/marked",
+      "path": "Marked-LICENSE.txt",
+      "bytes": 2942,
+      "sha256": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+    },
+    {
+      "id": "lucide",
+      "title": "Lucide / Feather",
+      "version": "1.8.0",
+      "sourceURL": "https://github.com/lucide-icons/lucide",
+      "path": "Lucide-LICENSE.txt",
+      "bytes": 3208,
+      "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+    },
+    {
+      "id": "katex",
+      "title": "KaTeX",
+      "version": "0.19.1",
+      "sourceURL": "https://github.com/KaTeX/KaTeX",
+      "path": "KaTeX-MIT.txt",
+      "bytes": 1107,
+      "sha256": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3"
+    },
+    {
+      "id": "katex-fonts",
+      "title": "KaTeX 字体版权与保留字体名",
+      "version": "0.19.1",
+      "sourceURL": "https://github.com/KaTeX/KaTeX",
+      "path": "KaTeX-fonts-COPYRIGHT-RFN.txt",
+      "bytes": 3721,
+      "sha256": "e7d24a12c9e15769dc7c65365f1482a11414c7ffd90fa61d403dad951d10013b"
+    },
+    {
+      "id": "font-ofl",
+      "title": "SIL Open Font License",
+      "version": "1.1",
+      "sourceURL": "https://openfontlicense.org/documents/OFL.txt",
+      "path": "SIL-OFL-1.1.txt",
+      "bytes": 4128,
+      "sha256": "ebc109078c06f79af74cf2b27454c262830d12a65749f0e2bf25d1ac1db7a02a"
+    },
+    {
+      "id": "node",
+      "title": "Node.js 及内含第三方通知",
+      "version": "24.19.0",
+      "sourceURL": "https://raw.githubusercontent.com/nodejs/node/v24.19.0/LICENSE",
+      "path": "Node-v24.19.0-LICENSE.txt",
+      "bytes": 157606,
+      "sha256": "148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5"
+    }
+  ],
+  "nodeVersion": "v24.19.0",
+  "distribution": "release-empty-bootstrap; private-qa-scientific-seed-not-for-public-release"
+}

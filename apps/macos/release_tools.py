@@ -2,6 +2,8 @@
 import argparse, base64, ctypes, datetime, hashlib, json, os, pathlib, plistlib, re, shutil, stat, tarfile
 import subprocess, sys, tempfile
 
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
+from build_resources import check_licenses, assert_no_scientific_seed
 CONTRACT = 'paper-digest-mac-release-v1'
 REPO = pathlib.Path(__file__).resolve().parents[2]
 FORBIDDEN = {'.git', '.env', '.qa', 'ModelUsage', 'personal.json', 'zotero-archives', 'backups'}
@@ -152,7 +154,9 @@ def audit_app(app, repo, record, version=None):
         require(minimums and all((tuple(map(int, x.split('.'))) + (0, 0))[:3] <= (15, 0, 0) for x in minimums), '可执行文件最低系统高于macOS15')
     run(['/usr/bin/codesign', '--verify', '--deep', '--strict', app])
     entries = metadata.get('files'); require(isinstance(entries, list) and entries, '构建输入为空')
-    fixed_inputs=fixed_public_inputs(repo,metadata['sourceCommit'])
+    channel=metadata.get('distributionChannel','legacy-private-qa')
+    require(channel in ['release','private-qa','legacy-private-qa'] and (channel!='legacy-private-qa' or 'distributionChannel'not in metadata),'构建通道字段无效')
+    fixed_inputs=fixed_public_inputs(repo,metadata['sourceCommit'],channel)
     seen = set(); physical = set(); source_files = set()
     for entry in entries:
         relative = entry.get('path'); safe_relative(relative)
@@ -177,21 +181,31 @@ def audit_app(app, repo, record, version=None):
     tracked_sources = {x for x in git(repo, 'ls-tree', '-r', '--name-only', metadata['sourceCommit'], 'apps/macos/Sources').decode().splitlines() if x.endswith('.swift')}
     require(tracked_sources and tracked_sources.issubset(source_files), '构建清单遗漏原生源码')
     tracked_build = {'apps/macos/build.sh', 'apps/macos/Info.plist', 'apps/macos/llm-worker.cjs'}
+    if channel!='legacy-private-qa':tracked_build.add('apps/macos/build_resources.py')
     require(tracked_build.issubset(source_files), '构建清单遗漏构建、配置或模型组件')
     permitted = physical | {'Contents/MacOS/PaperDigest', 'Contents/Resources/build-metadata.json', 'Contents/_CodeSignature/CodeResources'}
     require(set(by_path) == permitted, '应用包含未列明的额外文件或缺少签名文件')
     require('Contents/Resources/Runtime/NODE-LICENSE' in by_path, '未包含Node许可')
-    return {'sourceCommit': metadata['sourceCommit'], 'releaseHead': head, 'documentationOnlyChanges': [p for p in source_changes if docs_only([p])], 'otherNonRuntimeChanges': [p for p in source_changes if not docs_only([p])], 'builtAt': metadata['builtAt'], 'version': actual_version, 'bundleVersion': plist['CFBundleVersion'], 'architecture': arch, 'minimumMacOS': '15.0', 'signing': 'ad-hoc; not notarized', 'metadataSHA256': digest(metadata_raw), 'binary': binary_record, 'bundleInventorySHA256': digest(canonical(rows)), 'fileCount': len(by_path), 'record': {k: record[k] for k in ['contract', 'builtAt', 'sourceCommit', 'architecture', 'signing', 'buildMetadataSHA256', 'binary']}}
+    if channel!='legacy-private-qa':
+        license_manifest=check_licenses(app/'Contents/Resources/Web')
+        node_version=run(['/usr/bin/env','-i','PATH=/usr/bin:/bin',app/'Contents/Resources/Runtime/node','--version']).decode('ascii').strip()
+        require(node_version==license_manifest.get('nodeVersion'),'Node实际版本没有绑定离线许可')
+        node_notice=next(x for x in license_manifest['components']if x['id']=='node')
+        require((app/'Contents/Resources/Runtime/NODE-LICENSE').read_bytes()==(app/'Contents/Resources/Web/licenses'/node_notice['path']).read_bytes(),'Node运行组件许可与固定全文不一致')
+    if channel=='release':assert_no_scientific_seed(app/'Contents/Resources',repo)
 
-def fixed_public_inputs(repo,commit):
-    sample=json.loads(git(repo,'show',commit+':prototypes/macos-research/sample.json'))
-    require(isinstance(sample.get('pdf'),dict) and isinstance(sample.get('figures'),list),'公开样稿缺少固定PDF/图片清单')
+    return {'distributionChannel':channel,'sourceCommit': metadata['sourceCommit'], 'releaseHead': head, 'documentationOnlyChanges': [p for p in source_changes if docs_only([p])], 'otherNonRuntimeChanges': [p for p in source_changes if not docs_only([p])], 'builtAt': metadata['builtAt'], 'version': actual_version, 'bundleVersion': plist['CFBundleVersion'], 'architecture': arch, 'minimumMacOS': '15.0', 'signing': 'ad-hoc; not notarized', 'metadataSHA256': digest(metadata_raw), 'binary': binary_record, 'bundleInventorySHA256': digest(canonical(rows)), 'fileCount': len(by_path), 'record': {k: record[k] for k in ['contract', 'builtAt', 'sourceCommit', 'architecture', 'signing', 'buildMetadataSHA256', 'binary']}}
+
+def fixed_public_inputs(repo,commit,channel="private-qa"):
     result={}
-    for asset in [sample['pdf'],*sample['figures']]:
-        src=asset.get('src');safe_relative(src)
-        require(re.fullmatch(r'[a-f0-9]{64}',asset.get('sha256','')) is not None,'公开样稿资产SHA无效')
-        relative='Seed/assets/'+src;require(relative not in result,'公开样稿资产路径重复')
-        result[relative]={'sha256':asset['sha256']}
+    if channel in ['private-qa','legacy-private-qa']:
+        sample=json.loads(git(repo,'show',commit+':prototypes/macos-research/sample.json'))
+        require(isinstance(sample.get('pdf'),dict) and isinstance(sample.get('figures'),list),'公开样稿缺少固定PDF/图片清单')
+        for asset in [sample['pdf'],*sample['figures']]:
+            src=asset.get('src');safe_relative(src)
+            require(re.fullmatch(r'[a-f0-9]{64}',asset.get('sha256','')) is not None,'公开样稿资产SHA无效')
+            relative='Seed/assets/'+src;require(relative not in result,'公开样稿资产路径重复')
+            result[relative]={'sha256':asset['sha256']}
     package=json.loads(git(repo,'show',commit+':apps/macos/package.json'))
     lock=json.loads(git(repo,'show',commit+':apps/macos/package-lock.json'))
     pinned=lock.get('packages',{}).get('node_modules/katex',{});version=pinned.get('version','')
@@ -228,6 +242,7 @@ def prepare(args):
     require(not output.exists(), '输出目录已存在；不会覆盖任何既有产物')
     require(output != app and app not in output.parents, '输出目录不能位于应用包内')
     info=audit_app(app, repo, load(args.build_record), args.version)
+    require(info['distributionChannel']!='legacy-private-qa','历史缺通道构建仅可inspect，不能准备新发行产物')
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary=pathlib.Path(tempfile.mkdtemp(prefix='.release-prepare-', dir=output.parent))
     try:
@@ -235,7 +250,7 @@ def prepare(args):
             stage=pathlib.Path(tmp); copy=stage/app.name
             run(['/usr/bin/ditto', app, copy]); require(inventory(copy)==inventory(app), '打包副本改变了原应用字节、模式或资源fork')
             run(['/usr/bin/codesign', '--verify', '--deep', '--strict', copy])
-            prefix=f'PaperDigest-macOS-{info["version"]}-{info["architecture"]}'
+            prefix=f'PaperDigest-'+('private-qa-' if info['distributionChannel']=='private-qa' else '')+f'macOS-{info["version"]}-{info["architecture"]}'
             archive=temporary/(prefix+'.zip')
             run(['/usr/bin/ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', copy, archive])
             if args.dmg:
@@ -293,6 +308,8 @@ def verify_zip(archive, repo, info, name):
         copied=pathlib.Path(tmp)/name
         checked=audit_app(copied, repo, info['record'], info['version'])
         require(checked['bundleInventorySHA256']==info['bundleInventorySHA256'], 'ZIP回读与原审定应用不一致')
+        require(checked['distributionChannel']==info.get('distributionChannel'),'外层通道声明与签名包不一致')
+        require(all(checked[k]==info.get(k) for k in ['sourceCommit','metadataSHA256','version','bundleVersion','architecture','minimumMacOS','signing','binary']),'外层发行身份与签名包不一致')
 
 def verify(output, repo):
     require(output.is_dir() and not output.is_symlink(), '产物目录无效')
@@ -343,6 +360,7 @@ def publish_plan(args):
     extra=re.findall(r'^\| ((?:CLOUD|REL)-\d+) \| ([^|]+) \|',cloud_file.read_text(),re.M)
     require(len(extra)==17 and {row[0] for row in extra}==CLOUD_IDS and all(row[1].strip()=='通过' for row in extra),'新增云端与发行17项尚未全部通过；不能生成公开发行命令')
     info=load(args.prepared/'build-info.json')
+    require(info.get('distributionChannel')=='release','私有QA或历史构建不能用于正式发行')
     head,_=source_state(args.repo.resolve(),info['sourceCommit'])
     require(head==info['releaseHead'],'HEAD已变化，需基于最终提交重新准备产物')
     require(args.repository=='nanless/audio-paper-digest','必须明确使用当前仓库')

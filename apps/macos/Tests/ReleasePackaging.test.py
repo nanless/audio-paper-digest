@@ -7,6 +7,8 @@ sys.dont_write_bytecode=True
 
 SCRIPT=pathlib.Path(__file__).resolve().parents[1]/'release.sh'
 HELPER=SCRIPT.with_name('release_tools.py')
+def real_repo():
+    return pathlib.Path(subprocess.check_output(['git','-C',str(SCRIPT.parent),'rev-parse','--show-toplevel'],text=True).strip())
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
 
 def execute(args,cwd=None,env=None):
@@ -38,12 +40,19 @@ class Packaging(unittest.TestCase):
         archive=packed.getvalue();integrity=hashlib.sha512(archive).digest();key=integrity.hex();cache=cls.template/'cache/_cacache/content-v2/sha512'/key[:2]/key[2:4]/key[4:];write(cache,archive)
         lock={'packages':{'node_modules/katex':{'version':'0.19.1','resolved':'https://registry.npmjs.org/katex/-/katex-0.19.1.tgz','integrity':'sha512-'+base64.b64encode(integrity).decode()}}}
         files={'apps/macos/Sources/Main.swift':b'// Explicit isolated public-source fixture, never user app.\n', 'apps/macos/build.sh':b'#!/bin/bash\n# Explicit isolated build fixture.\n', 'apps/macos/Resources/index.html':b'<html><body>Isolated release fixture</body></html>\n','apps/macos/llm-worker.cjs':b'// Explicit isolated fixture; no model service.\n','prototypes/macos-research/sample.json':json.dumps(sample).encode(),'.gitignore':b'prototypes/macos-research/assets/\n','apps/macos/package.json':b'{"dependencies":{"katex":"0.19.1"}}','apps/macos/package-lock.json':json.dumps(lock).encode()}
+        # Explicit private-QA fixtures preserve all historical sample assertions.
+        files['apps/macos/build_resources.py']=SCRIPT.with_name('build_resources.py').read_bytes()
+        for notice in (SCRIPT.parent/'Resources').rglob('*'):
+            if notice.is_file():files['apps/macos/Resources/'+notice.relative_to(SCRIPT.parent/'Resources').as_posix()]=notice.read_bytes()
         plist={'CFBundleIdentifier':'com.nanless.PaperDigest','CFBundleName':'论文速递','CFBundleExecutable':'PaperDigest','CFBundlePackageType':'APPL','CFBundleShortVersionString':'1.0.0','CFBundleVersion':'1','LSMinimumSystemVersion':'15.0'}
         files['apps/macos/Info.plist']=plistlib.dumps(plist)
         for name,raw in files.items():write(repo/name,raw)
         success(['git','init','-q',repo]);success(['git','config','user.name','Isolated Release Fixture'],repo);success(['git','config','user.email','fixture@example.invalid'],repo);success(['git','add','.'],repo);success(['git','commit','-qm','Isolated public fixture'],repo)
         cls.commit=success(['git','rev-parse','HEAD'],repo).decode().strip()
         mapping={'Sources/Main.swift':'apps/macos/Sources/Main.swift','Build/build.sh':'apps/macos/build.sh','Web/index.html':'apps/macos/Resources/index.html','Seed/sample.json':'prototypes/macos-research/sample.json','Contents/Info.plist':'apps/macos/Info.plist','Contents/Resources/llm-worker.cjs':'apps/macos/llm-worker.cjs'}
+        for source in files:
+            if source.startswith('apps/macos/Resources/') and source!='apps/macos/Resources/index.html':mapping['Web/'+source[len('apps/macos/Resources/'):]]=source
+        mapping['Build/build_resources.py']='apps/macos/build_resources.py'
         entries=[]
         for relative,source in mapping.items():
             raw=files[source];entries.append({'path':relative,'bytes':len(raw),'sha256':sha(raw)})
@@ -51,15 +60,15 @@ class Packaging(unittest.TestCase):
         for relative,raw in cls.fixed.items():
             write(resources/relative,raw);entries.append({'path':relative,'bytes':len(raw),'sha256':sha(raw)})
             if relative.startswith('Seed/assets/'):write(repo/('prototypes/macos-research/assets/'+relative[len('Seed/assets/'):]),raw)
-        source=cls.template/'main.c';source.write_text('int main(void) { return 0; }\n')
+        source=cls.template/'main.c';source.write_text('#include <stdio.h>\n#include <stdlib.h>\nint main(void) { if(getenv("NODE_OPTIONS")) return 9; puts("v24.19.0"); return 0; }\n')
         main=app/'Contents/MacOS/PaperDigest';main.parent.mkdir(parents=True)
         success(['/usr/bin/clang','-target',cls.arch+'-apple-macos15.0',source,'-o',main])
         node=resources/'Runtime/node';node.parent.mkdir(parents=True);shutil.copy2(main,node)
         success(['/usr/bin/codesign','--force','--sign','-','--timestamp=none',node])
-        write(resources/'Runtime/NODE-LICENSE',b'Isolated placeholder license for explicit fixture binary; not a Node distribution.\n')
+        write(resources/'Runtime/NODE-LICENSE',files['apps/macos/Resources/licenses/Node-v24.19.0-LICENSE.txt'])
         for relative in ['Contents/Resources/Runtime/node','Contents/Resources/Runtime/NODE-LICENSE']:
             raw=(app/relative).read_bytes();entries.append({'path':relative,'bytes':len(raw),'sha256':sha(raw)})
-        save(resources/'build-metadata.json',{'contract':'paper-digest-mac-build-v1','builtAt':'2026-10-24T18:15:23.755225+00:00','sourceCommit':cls.commit,'architecture':cls.arch,'signing':'ad-hoc; not notarized','files':entries})
+        save(resources/'build-metadata.json',{'contract':'paper-digest-mac-build-v1','distributionChannel':'private-qa','builtAt':'2026-10-24T18:15:23.755225+00:00','sourceCommit':cls.commit,'architecture':cls.arch,'signing':'ad-hoc; not notarized','files':entries})
         cls.sign(app)
         cls.make_record(app,cls.template/'record.json')
 
@@ -95,6 +104,13 @@ class Packaging(unittest.TestCase):
         p=self.app/'Contents/Resources/build-metadata.json';m=json.loads(p.read_bytes());action(m);save(p,m);self.sign(self.app);self.make_record(self.app,self.record)
 
     def prepare(self,dmg=False):return self.call('prepare','--output',self.output,*(['--dmg'] if dmg else []))
+
+    def make_formal(self):
+        # Resign only this unsigned-fixture rebuild: never delete a real signed candidate.
+        unsigned=self.root/'unsigned-formal.app';success(['/usr/bin/ditto',self.app,unsigned])
+        shutil.rmtree(unsigned/'Contents/_CodeSignature');shutil.rmtree(unsigned/'Contents/Resources/Seed')
+        metadata=unsigned/'Contents/Resources/build-metadata.json';value=json.loads(metadata.read_bytes());value['distributionChannel']='release';value['files']=[row for row in value['files']if not row['path'].startswith('Seed/')];save(metadata,value)
+        self.sign(unsigned);self.make_record(unsigned,self.record);shutil.rmtree(self.app);unsigned.rename(self.app)
 
     def test_01_real_signed_fixture_inspects_without_launching(self):
         r=self.call();self.assertEqual(r['architecture'],self.arch);self.assertFalse(r['publicationEligible']);self.assertEqual(r['sourceCommit'],self.commit)
@@ -187,7 +203,7 @@ class Packaging(unittest.TestCase):
         return '\n'.join('| '+prefix+'-'+str(i).zfill(2)+' | '+state+' | explicit fixture |' for prefix,count in [('APP',9),('DATA',13),('READ',9),('LIB',3),('NOTE',3),('EXP',3),('LLM',10),('JOB',5),('ZOT',14)] for i in range(1,count+1))
 
     def test_28_complete_fixture_only_produces_nonexecuted_verify_tag_draft_plan(self):
-        self.prepare();status=self.root/'status.md';status.write_text(self.status('通过'));cloud=self.root/'cloud.md';cloud.write_text(self.cloud_status('通过'));r=self.call('publish-plan','--acceptance-status',status,'--cloud-acceptance',cloud,'--prerelease')
+        self.make_formal();self.prepare();status=self.root/'status.md';status.write_text(self.status('通过'));cloud=self.root/'cloud.md';cloud.write_text(self.cloud_status('通过'));r=self.call('publish-plan','--acceptance-status',status,'--cloud-acceptance',cloud,'--prerelease')
         self.assertFalse(r['executed']);self.assertFalse(r['automaticTagCreation']);self.assertFalse(r['publicPublication']);self.assertIn('--verify-tag',r['argv']);self.assertIn('--draft',r['argv']);self.assertIn('--prerelease',r['argv']);self.assertEqual(r['argv'][3],'v1.0.0')
         self.assertEqual(success(['git','tag'],self.repo),b'')
 
@@ -230,7 +246,7 @@ class Packaging(unittest.TestCase):
 
     def test_40_real_public_seed_and_locked_katex_topology_readonly(self):
         import runpy
-        module=runpy.run_path(str(HELPER));repo=SCRIPT.parents[2];commit=success(['git','rev-parse','HEAD'],repo).decode().strip();fixed=module['fixed_public_inputs'](repo,commit)
+        module=runpy.run_path(str(HELPER));repo=real_repo();commit=success(['git','rev-parse','HEAD'],repo).decode().strip();fixed=module['fixed_public_inputs'](repo,commit)
         for relative,entry in fixed.items():
             if relative.startswith('Seed/assets/'):file=repo/'prototypes/macos-research/assets'/relative[len('Seed/assets/'):]
             else:
@@ -239,5 +255,79 @@ class Packaging(unittest.TestCase):
 
     def test_41_app_root_symlink_not_silently_resolved(self):
         alias=self.root/'linked.app';os.symlink(self.app,alias);r=execute(['/bin/bash',SCRIPT,'inspect','--app',alias,'--repo',self.repo,'--build-record',self.record]);self.assertNotEqual(r.returncode,0);self.assertIn('根不能是符号链接',r.stderr.decode())
+
+    def add_formal_resource(self,name,raw):
+        write(self.repo/('apps/macos/Resources/'+name),raw)
+        success(['git','add','.'],self.repo);success(['git','commit','-qm','Explicit formal resource negative fixture'],self.repo)
+        commit=success(['git','rev-parse','HEAD'],self.repo).decode().strip();write(self.app/('Contents/Resources/Web/'+name),raw)
+        self.change_metadata(lambda m:(m.update(sourceCommit=commit),m['files'].append({'path':'Web/'+name,'bytes':len(raw),'sha256':sha(raw)})))
+
+    def test_46_formal_empty_bootstrap_has_no_scientific_seed_and_keeps_licenses(self):
+        self.make_formal();r=self.call();self.assertEqual('release',r['distributionChannel']);self.assertFalse((self.app/'Contents/Resources/Seed').exists());self.assertTrue((self.app/'Contents/Resources/Web/third-party-notices.html').is_file());self.prepare();self.assertTrue(self.call('verify')['verified'])
+
+    def test_47_private_qa_cannot_publish_even_with_all86_fixture_checks(self):
+        self.prepare();status=self.root/'status.md';status.write_text(self.status('通过'));cloud=self.root/'cloud.md';cloud.write_text(self.cloud_status('通过'));self.assertIn('私有QA',self.call('publish-plan','--acceptance-status',status,'--cloud-acceptance',cloud,expected=1))
+
+    def test_48_legacy_missing_channel_is_inspect_only_not_formal(self):
+        self.change_metadata(lambda m:m.pop('distributionChannel'));self.assertEqual('legacy-private-qa',self.call()['distributionChannel']);self.assertIn('仅可inspect',self.call('prepare','--output',self.output,expected=1))
+
+    def test_49_unknown_channel_or_empty_seed_in_formal_is_rejected(self):
+        self.change_metadata(lambda m:m.update(distributionChannel='invented'));self.assertIn('通道',self.call(expected=1))
+        self.change_metadata(lambda m:m.update(distributionChannel='private-qa'));self.make_formal();(self.app/'Contents/Resources/Seed').mkdir();self.sign(self.app);self.make_record(self.app,self.record);self.assertIn('Seed',self.call(expected=1))
+
+    def test_50_renamed_known_scientific_original_cannot_hide_in_git_mapped_resource(self):
+        self.make_formal();self.add_formal_resource('innocent.dat',self.fixed['Seed/assets/fixture.pdf']);self.assertIn('样稿',self.call(expected=1))
+
+    def test_51_embedded_data_uri_scientific_figure_is_refused(self):
+        self.make_formal();raw=b'<img src="data:image/png;base64,'+base64.b64encode(self.fixed['Seed/assets/fixture.png'])+b'">';self.add_formal_resource('innocent.html',raw);self.assertIn('原图',self.call(expected=1))
+
+    def test_52_renamed_entire_sample_and_omitted_full_license_are_refused(self):
+        self.make_formal();self.add_formal_resource('renamed.json',(self.repo/'prototypes/macos-research/sample.json').read_bytes());self.assertIn('样稿',self.call(expected=1))
+
+    def test_53_missing_offline_license_never_becomes_formal(self):
+        self.make_formal();(self.app/'Contents/Resources/Web/licenses/SIL-OFL-1.1.txt').unlink();self.sign(self.app);self.make_record(self.app,self.record);self.call(expected=1)
+
+    def test_54_qa_then_release_unsigned_staging_without_clean_cannot_leak_old_seed(self):
+        import runpy
+        module=runpy.run_path(str(SCRIPT.with_name('build_resources.py')))
+        app=self.repo/'apps/macos';vendor=self.repo/'prototypes/macos-research/vendor'
+        for name in ['marked.esm.js','lucide.min.js','MARKED-LICENSE.md','LUCIDE-LICENSE']:write(vendor/name,b'Explicit synthetic staging fixture '+name.encode())
+        write(app/'node_modules/katex/dist/katex.min.js',self.fixed['Web/vendor/katex/katex.min.js']);write(app/'node_modules/katex/LICENSE',self.fixed['Web/vendor/katex/LICENSE'])
+        qa=self.root/'unsigned-first.app/Contents/Resources';qa.mkdir(parents=True);formal=self.root/'unsigned-next.app/Contents/Resources';formal.mkdir(parents=True)
+        module['stage'](self.repo,app,qa,'private-qa','v24.19.0');before={p.relative_to(qa).as_posix():sha(p.read_bytes())for p in qa.rglob('*')if p.is_file()}
+        with self.assertRaises(ValueError):module['stage'](self.repo,app,qa,'release','v24.19.0')
+        module['stage'](self.repo,app,formal,'release','v24.19.0');self.assertFalse((formal/'Seed').exists());self.assertTrue(module['assert_no_scientific_seed'](formal,self.repo));self.assertEqual(before,{p.relative_to(qa).as_posix():sha(p.read_bytes())for p in qa.rglob('*')if p.is_file()});self.assertTrue((qa/'Seed/assets/fixture.pdf').is_file())
+
+    def reseal_outer_fixture(self):
+        manifest=self.output/'release-manifest.json';m=json.loads(manifest.read_bytes())
+        for name in m['assets']:
+            p=self.output/name;m['assets'][name]={'bytes':p.stat().st_size,'sha256':sha(p.read_bytes())}
+        save(manifest,m);(self.output/'SHA256SUMS').write_text(''.join(sha(p.read_bytes())+'  '+p.name+'\n'for p in sorted(self.output.iterdir())if p.is_file()and p.name!='SHA256SUMS'))
+
+    def test_55_outer_qa_channel_cannot_be_laundered_to_formal_by_resealing_checksums(self):
+        self.prepare();p=self.output/'build-info.json';m=json.loads(p.read_bytes());m['distributionChannel']='release';save(p,m);self.reseal_outer_fixture();self.assertIn('通道',self.call('verify',expected=1))
+
+    def test_56_outer_source_version_cannot_override_signed_application_identity(self):
+        self.make_formal();self.prepare();p=self.output/'build-info.json';m=json.loads(p.read_bytes());m['version']='2.0.0';save(p,m);self.reseal_outer_fixture();self.call('verify',expected=1)
+
+    def test_57_node_version_probe_never_inherits_user_node_options(self):
+        env=dict(os.environ,NODE_OPTIONS='--require /explicit-synthetic-nonexistent-should-not-execute')
+        self.assertEqual('private-qa',self.call(env=env)['distributionChannel'])
+
+    def test_58_case_parameters_and_percent_encoded_data_urls_cannot_embed_scientific_figure(self):
+        self.make_formal();data=self.fixed['Seed/assets/fixture.png'];plain=base64.b64encode(data).decode();escaped=''.join('%'+format(v,'02X')for v in plain.encode())
+        variants=['DATA:image/png;BASE64,'+plain,'data:image/png;charset=UTF-8; base64,'+plain,'data:application/octet-stream;BASE64,'+escaped]
+        for i,uri in enumerate(variants):
+            self.add_formal_resource('case-'+str(i)+'.css',('body{background:url("'+uri+'")}').encode());self.assertIn('原图',self.call(expected=1))
+            # Clear only the fixture's injected preceding case, preserving the original app/source files.
+            file='case-'+str(i)+'.css';(self.app/('Contents/Resources/Web/'+file)).unlink();(self.repo/('apps/macos/Resources/'+file)).unlink();success(['git','add','.'],self.repo);success(['git','commit','-qm','Remove explicit case negative fixture'],self.repo);commit=success(['git','rev-parse','HEAD'],self.repo).decode().strip();self.change_metadata(lambda m:(m.update(sourceCommit=commit),m.update(files=[x for x in m['files']if x['path']!='Web/'+file])))
+
+
+    def test_59_non_base64_percent_encoded_data_url_cannot_embed_scientific_figure(self):
+        from urllib.parse import quote_from_bytes
+        self.make_formal();data=self.fixed['Seed/assets/fixture.png']
+        encoded=quote_from_bytes(data,safe='')
+        self.add_formal_resource('raw-data-uri.css',('body{background:url("DATA:image/png;charset=UTF-8,'+encoded+'")}').encode())
+        self.assertIn('原图',self.call(expected=1))
 
 if __name__=='__main__':unittest.main(verbosity=2)

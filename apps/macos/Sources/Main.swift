@@ -437,7 +437,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func hideApp(){NSApp.hide(nil)}
     @objc func quit(){NSApp.terminate(nil)}
     @objc func closeWindow(){NSApp.keyWindow?.performClose(nil)}
-    @objc func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"论文速递",.version:"1.0.0",.credits:NSAttributedString(string:"阅读已发布成果 · 原文研究 · Zotero 完整归档\n本机 arm64 构建；使用系统窗口与 PDFKit。")])}
+    @objc func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"论文速递",.version:"1.0.0",.credits:AboutLicenses.credits()])}
     @objc func helpPage(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"help"])}
     @objc func revealData(){NSWorkspace.shared.activateFileViewerSelecting([directory])}
     @objc func openLocal(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try importLocalPDF()}catch{showError(error)}}}

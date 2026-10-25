@@ -8,13 +8,17 @@ fi
 app_root="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$app_root/../.." && pwd)"
 install_requested=0
-for option in "$@"; do
-  case "$option" in
+channel=release
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --install) install_requested=1 ;;
-    --help) echo "用法：apps/macos/build.sh [--install]（安装到 ~/Applications）"; exit 0 ;;
-    *) echo "未知选项：$option" >&2; exit 2 ;;
+    --channel) shift; [[ $# -gt 0 ]] || { echo "缺少构建通道。" >&2; exit 2; }; channel="$1" ;;
+    --help) echo "用法：apps/macos/build.sh [--channel release|private-qa] [--install]；默认无科学样稿正式通道"; exit 0 ;;
+    *) echo "未知选项：$1" >&2; exit 2 ;;
   esac
+  shift
 done
+[[ "$channel" == release || "$channel" == private-qa ]] || { echo "构建通道无效。" >&2; exit 2; }
 # Replacing a live bundle can leave the existing process executing old code
 # against moved/deleted Web/Runtime resources. Never terminate it implicitly.
 assert_app_not_running() {
@@ -57,15 +61,6 @@ PYNODE
 for required in index.html native.js styles.css library-ui.js zotero-ui.js; do
   [[ -f "$app_root/Resources/$required" ]] || { echo "界面源文件尚未准备好：$required" >&2; exit 1; }
 done
-/usr/bin/python3 - "$repo_root/prototypes/macos-research" <<'PYASSETS'
-import hashlib,json,pathlib,sys
-root=pathlib.Path(sys.argv[1]);sample=json.loads((root/'sample.json').read_text())
-for item in [sample['pdf'],*sample['figures']]:
- file=root/'assets'/item['src']
- if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest()!=item['sha256']:
-  raise SystemExit('真实样稿资产缺失或SHA不符：'+item['src']+'；请按 prototypes/macos-research/README.md 准备。')
-print('原始 PDF 与全部科学图 SHA 校验通过。')
-PYASSETS
 icon_source="$app_root/Assets/AppIcon.png"
 [[ -f "$icon_source" && ! -L "$icon_source" ]] || { echo "缺少可追溯的应用图标 Assets/AppIcon.png。" >&2; exit 1; }
 build_root="$app_root/.build"
@@ -73,48 +68,21 @@ mkdir -p "$build_root"
 work="$(mktemp -d "$build_root/package.XXXXXX")"
 bundle="$work/论文速递.app"
 resources="$bundle/Contents/Resources"
-mkdir -p "$bundle/Contents/MacOS" "$resources/Web/vendor/katex" "$resources/Runtime" "$resources/Shared" "$resources/Assets" "$work/Sources" "$work/Build"
+mkdir -p "$bundle/Contents/MacOS" "$resources/Runtime" "$resources/Shared" "$resources/Assets" "$work/Sources" "$work/Build"
 cp "$icon_source" "$resources/Assets/AppIcon.png"
 cp "$app_root/build.sh" "$work/Build/build.sh"
+cp "$app_root/build_resources.py" "$work/Build/build_resources.py"
 echo "正在快照本次构建源码并编译原生 Mac 应用…"
 for source in "$app_root"/Sources/*.swift; do cp "$source" "$work/Sources/"; done
 sources=("$work"/Sources/*.swift)
 xcrun swiftc -O -parse-as-library -target "$architecture-apple-macos15.0" "${sources[@]}" -o "$bundle/Contents/MacOS/PaperDigest"
 
 cp "$app_root/Info.plist" "$bundle/Contents/Info.plist"
-cp -R "$app_root/Resources/." "$resources/Web/"
-cp "$repo_root/prototypes/macos-research/vendor/marked.esm.js" "$resources/Web/vendor/"
-cp "$repo_root/prototypes/macos-research/vendor/lucide.min.js" "$resources/Web/vendor/"
-cp "$repo_root/prototypes/macos-research/vendor/MARKED-LICENSE.md" "$resources/Web/vendor/"
-cp "$repo_root/prototypes/macos-research/vendor/LUCIDE-LICENSE" "$resources/Web/vendor/"
-cp -R "$app_root/node_modules/katex/dist/." "$resources/Web/vendor/katex/"
-cp "$app_root/node_modules/katex/LICENSE" "$resources/Web/vendor/katex/LICENSE"
-mkdir -p "$resources/Seed"
-cp "$repo_root/prototypes/macos-research/sample.json" "$resources/Seed/"
-cp -R "$repo_root/prototypes/macos-research/assets" "$resources/Seed/"
 cp "$node_runtime" "$resources/Runtime/node"
 chmod 755 "$resources/Runtime/node"
 node_version="$(env -i PATH=/usr/bin:/bin "$node_runtime" --version)"
 [[ "$node_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Node版本无法对应官方许可文件。" >&2; exit 1; }
-node_license=""
-for candidate in "$(dirname "$node_runtime")/../LICENSE" "$(dirname "$node_runtime")/LICENSE"; do
-  if [[ -f "$candidate" ]]; then node_license="$candidate"; break; fi
-done
-if [[ -z "$node_license" ]]; then
-  license_cache="$build_root/licenses"
-  mkdir -p "$license_cache"
-  node_license="$license_cache/node-$node_version-LICENSE"
-  if [[ ! -f "$node_license" ]]; then
-    /usr/bin/curl -q --fail --silent --show-error --proto '=https' --max-time 60 --max-filesize 2000000 \
-      "https://raw.githubusercontent.com/nodejs/node/$node_version/LICENSE" --output "$node_license.tmp"
-    [[ -s "$node_license.tmp" ]] || { echo "官方Node许可文件为空。" >&2; exit 1; }
-    mv "$node_license.tmp" "$node_license"
-    (cd "$license_cache" && shasum -a 256 "node-$node_version-LICENSE" > "node-$node_version-LICENSE.sha256")
-  fi
-  [[ -f "$node_license.sha256" ]] || { echo "Node许可缓存缺少SHA记录，请保留旧文件后重新准备。" >&2; exit 1; }
-  (cd "$license_cache" && shasum -a 256 -c "node-$node_version-LICENSE.sha256")
-fi
-cp "$node_license" "$resources/Runtime/NODE-LICENSE"
+bash "$repo_root/scripts/python-runtime.sh" "$app_root/build_resources.py" --repo "$repo_root" --app "$app_root" --resources "$resources" --channel "$channel" --node-version "$node_version"
 cp "$app_root/llm-worker.cjs" "$resources/"
 while IFS= read -r -d '' relative; do
   case "/$relative/" in */.env*/*|*/data/runtime/*) continue ;; esac
@@ -171,16 +139,19 @@ SWIFTICON
 xcrun swift "$work/check-icon.swift" "$work/AppIcon.iconset/icon_512x512@2x.png" "$work/ValidatedIcon.iconset/icon_512x512@2x.png"
 codesign --force --sign - --timestamp=none "$resources/Runtime/node"
 
-/usr/bin/python3 - "$work" "$app_root" "$repo_root" <<'PY'
+/usr/bin/python3 - "$work" "$app_root" "$repo_root" "$channel" <<'PY'
 import hashlib,json,pathlib,subprocess,sys,datetime
-work,app,repo=map(pathlib.Path,sys.argv[1:])
+work,app,repo=map(pathlib.Path,sys.argv[1:4]);channel=sys.argv[4]
 bundle=work/'论文速递.app';resources=bundle/'Contents/Resources'
-# Check the actual bundled bytes, not only the originals checked before compile.
-sample=json.loads((resources/'Seed/sample.json').read_text())
-for item in [sample['pdf'],*sample['figures']]:
- file=resources/'Seed/assets'/item['src']
- if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest()!=item['sha256']:
-  raise SystemExit('已打包样稿资产SHA不符：'+item['src'])
+# Check actual channel resources before signing; no signed-bundle removal.
+sys.path.insert(0,str(app));from build_resources import assert_no_scientific_seed,check_licenses
+check_licenses(resources/'Web')
+if channel=='release':assert_no_scientific_seed(resources,repo)
+else:
+ sample=json.loads((resources/'Seed/sample.json').read_text())
+ for item in [sample['pdf'],*sample['figures']]:
+  file=resources/'Seed/assets'/item['src']
+  if not file.is_file()or hashlib.sha256(file.read_bytes()).hexdigest()!=item['sha256']:raise SystemExit('私有验收原件SHA不符')
 entries=[]
 for base,label in [(work/'Sources','Sources'),(resources/'Web','Web'),(resources/'Seed','Seed'),(resources/'Shared','Shared'),(resources/'Assets','Assets'),(work/'Build','Build')]:
  for file in sorted(base.rglob('*')):
@@ -188,7 +159,7 @@ for base,label in [(work/'Sources','Sources'),(resources/'Web','Web'),(resources
   if file.is_file():entries.append({'path':label+'/'+file.relative_to(base).as_posix(),'bytes':file.stat().st_size,'sha256':hashlib.sha256(file.read_bytes()).hexdigest()})
 for relative in ['Contents/Info.plist','Contents/Resources/AppIcon.icns','Contents/Resources/llm-worker.cjs','Contents/Resources/Runtime/node','Contents/Resources/Runtime/NODE-LICENSE']:
  file=bundle/relative;entries.append({'path':relative,'bytes':file.stat().st_size,'sha256':hashlib.sha256(file.read_bytes()).hexdigest()})
-marker={'contract':'paper-digest-mac-build-v1','builtAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'sourceCommit':subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip(),'architecture':subprocess.check_output(['uname','-m'],text=True).strip(),'signing':'ad-hoc; not notarized','files':entries}
+marker={'contract':'paper-digest-mac-build-v1','distributionChannel':channel,'builtAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'sourceCommit':subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip(),'architecture':subprocess.check_output(['uname','-m'],text=True).strip(),'signing':'ad-hoc; not notarized','files':entries}
 (resources/'build-metadata.json').write_text(json.dumps(marker,ensure_ascii=False,indent=2)+'\n')
 PY
 plutil -lint "$bundle/Contents/Info.plist" > /dev/null
