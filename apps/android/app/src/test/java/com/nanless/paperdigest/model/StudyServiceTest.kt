@@ -65,7 +65,7 @@ class StudyServiceTest {
         assertFalse(store.session(id)!!.getBoolean("requestIssued"))
     }
     @Test fun protocolRoutingProxyRulesAndInputIdentityAreExplicit() {
-        val muse = StudyService.validatedConfig(config("auto").put("model", "muse-spark-1.3-contributor"))
+        val muse = StudyService.validatedConfig(config("auto").put("model", "muse-spark-1.3-contributor").put("httpProxy", "http://127.0.0.1:7897"))
         assertEquals("responses", muse.getString("protocol")); assertEquals("https://models.example/v1/responses", StudyService.apiURL(muse))
         assertThrows(IllegalArgumentException::class.java) { StudyService.validatedConfig(config("chat").put("model", "muse-spark-1.3-contributor")) }
         assertThrows(IllegalArgumentException::class.java) { StudyService.validatedConfig(config().put("endpoint", "http://public.example/v1")) }
@@ -80,5 +80,52 @@ class StudyServiceTest {
         assertThrows(AppFailure::class.java) { StudyService.decodeResponse("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n".toByteArray(), true) }
         assertThrows(IllegalArgumentException::class.java) { StudyService.decodeResponse(bytes + bytes, true) }
         assertThrows(IllegalArgumentException::class.java) { StudyService.responseText(completed.put("status", "incomplete"), "responses") }
+    }
+
+    @Test fun museMissingEmptyOrWhitespaceProxyIsRejectedDuringConfiguration() {
+        for (proxy in listOf<String?>(null, "", " \t\n")) {
+            val raw = config("auto").put("model", "muse-spark-1.3-contributor")
+            if (proxy != null) raw.put("httpProxy", proxy)
+            val error = assertThrows(IllegalArgumentException::class.java) { StudyService.validatedConfig(raw) }
+            assertEquals("Muse 模型必须配置 HTTP CONNECT 代理", error.message)
+        }
+    }
+    @Test fun museProxyMustRemainAnExplicitCredentialFreeHttpConnectAddress() {
+        for (proxy in listOf("https://127.0.0.1:7897", "http://user:password@127.0.0.1:7897", "http://127.0.0.1", "http://127.0.0.1:0", "http://127.0.0.1:65536", "http://127.0.0.1:7897/path", "http://127.0.0.1:7897?x=1", "http://127.0.0.1:7897#x")) {
+            assertThrows(IllegalArgumentException::class.java) { StudyService.validatedConfig(config("auto").put("model", "muse-spark-1.3-contributor").put("httpProxy", proxy)) }
+        }
+    }
+    @Test fun explicitMuseProxyAndResponsesRouteArePreserved() {
+        val raw = config("auto").put("model", "muse-spark-1.3-contributor").put("httpProxy", " http://127.0.0.1:7897 ")
+        val validated = StudyService.validatedConfig(raw)
+        assertEquals("http://127.0.0.1:7897", validated.getString("httpProxy"))
+        assertEquals("responses", validated.getString("protocol"))
+        assertEquals("https://models.example/v1/responses", StudyService.apiURL(validated))
+    }
+    @Test fun otherModelsDoNotInheritTheMuseProxyEvenWhenConfigured() {
+        for (model in listOf("mimo-v2.6-flash", "research-model")) {
+            val validated = StudyService.validatedConfig(config("auto").put("model", model).put("httpProxy", "not-a-proxy"))
+            assertEquals("", validated.getString("httpProxy")); assertEquals("chat", validated.getString("protocol"))
+        }
+    }
+    @Test fun musePrefixMatchingRemainsCaseInsensitiveAfterTrim() {
+        val raw = config("auto").put("model", " MUSE-SPARK-synthetic ")
+        assertThrows(IllegalArgumentException::class.java) { StudyService.validatedConfig(raw) }
+        val valid = StudyService.validatedConfig(raw.put("httpProxy", "http://127.0.0.1:7897"))
+        assertEquals("responses", valid.getString("protocol")); assertEquals("MUSE-SPARK-synthetic", valid.getString("model"))
+    }
+    @Test fun missingMuseProxyRejectsPreparationBeforeCredentialsTransportOrMaterialWrites() = runBlocking {
+        val store = store(); store.updateSettings(config("auto").put("model", "muse-spark-1.3-contributor"))
+        val personal = File(store.directory, "personal.json").readBytes()
+        var keys = 0; var calls = 0
+        val service = StudyService(store, { keys++; "synthetic-fixture-key" }) { _, _, _, _ -> calls++; error("transport must not run") }
+        try { service.prepare("local:test", "问题", "material", source()); fail("Missing proxy accepted") } catch (expected: IllegalArgumentException) {
+            assertEquals("Muse 模型必须配置 HTTP CONNECT 代理", expected.message)
+        }
+        assertEquals(0, keys); assertEquals(0, calls)
+        assertEquals(0, store.snapshot().getJSONArray("sessions").length())
+        assertArrayEquals(personal, File(store.directory, "personal.json").readBytes())
+        assertTrue(File(store.directory, "ModelUsage").listFiles().orEmpty().isEmpty())
+        assertFalse(File(store.directory, "RequestBudgetContinuity.json").exists())
     }
 }

@@ -5,6 +5,8 @@ import com.nanless.paperdigest.data.Paper
 import com.nanless.paperdigest.pdf.PdfOriginalSnapshot
 import com.nanless.paperdigest.pdf.PdfDocumentRef
 import com.nanless.paperdigest.pdf.PdfSelection
+import kotlinx.coroutines.Deferred
+import android.net.Uri
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
 
@@ -50,6 +52,9 @@ interface AppController {
     /** Native-only capability; the expected view token can reject a stale tap, never select a file. */
     suspend fun prepareOriginalPdfOutput(expectedReadingMaterialID: String): PdfOriginalSnapshot =
         throw IllegalStateException("当前原文输出入口不可用，请重新打开原文后重试")
+    /** Synchronously transfers the picker list to the Application; a UI coroutine only awaits this owned work. */
+    fun importPdfs(uris: List<Uri>): Deferred<JSONObject> =
+        throw IllegalStateException("当前 PDF 批次入口不可用，请重新选择原件")
     /** Only a current native request may consume the short-lived array; implementations erase it. */
     suspend fun unlockPdf(requestID: String, password: CharArray) {
         password.fill('\u0000')

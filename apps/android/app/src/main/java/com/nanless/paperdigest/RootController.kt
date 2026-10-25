@@ -60,6 +60,7 @@ class RootController internal constructor(private val context: Context, private 
     /** Application lifetime work. A screen awaiting a result never owns the producer. */
     private val exportScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val pdfAdmission = Mutex()
+    private val pdfBatchSequence = AtomicLong(0)
     private val pdfCommittedResults = ConcurrentHashMap<String, JSONObject>()
     private val pdfAcquisition = java.util.concurrent.atomic.AtomicReference<Deferred<JSONObject>?>(null)
     private val pdfUnlocks = PdfUnlockMailbox { prompt -> _state.update { it.copy(pdfUnlockPrompt = prompt) } }
@@ -297,20 +298,7 @@ class RootController internal constructor(private val context: Context, private 
                 }
                 "ui.pdfError" -> { val message = payload.optString("message", "原文显示未完成").take(500); _state.update { it.copy(error = message) }; JSONObject().put("reported", true) }
                 "pdf.import" -> ownedPdfAcquisition(command, access, dispatchAtStart) {
-                    val operation = currentCoroutineContext()
-                    val check = { operation.ensureActive(); dispatch.requireCurrent(dispatchAtStart); requirePdfAcquisition(access, true) }
-                    val session = pdf.prepareImport(Uri.parse(payload.getString("uri")), check)
-                    val result = finishPdfSession(session, "import", check)
-                    adoptPdfResult(result, check) { document ->
-                        val p = Paper(document.id, document.displayName.removeSuffix(".pdf"), sourceKind = "local", identityStatus = "local-original", localPDFPath = document.localPath, pdfSHA256 = document.sha256)
-                        // No later cancellation can delete an original after this registration has returned.
-                        personal.rememberPaper(p)
-                        pdf.acceptImport(result)
-                        offlineReading = null; generation.incrementAndGet()
-                        _state.update { it.copy(selectedPaperId = p.id, viewedPaper = Paper.fromJson(p.json()), article = null, pdfDocument = document, pdfMode = true, pdfPage = 1, pdfSelection = null,
-                            pdfReceipt = JSONObject().put("paperID", p.id).put("sha256", document.sha256).put("version", JSONObject.NULL).put("isStale", false).put("currentness", "local-original")) }
-                        JSONObject().put("paperID", p.id).put("pageCount", document.pageCount).put("sha256", document.sha256)
-                    }
+                    importPdfOriginal(Uri.parse(payload.getString("uri")), access, dispatchAtStart)
                 }
                 "pdf.page" -> {
                     maintenance.withLock {
@@ -363,13 +351,13 @@ class RootController internal constructor(private val context: Context, private 
                 }
                 "jobs.cancel" -> {
                     val id = payload.getString("id")
-                    val pdfOwned = active.containsKey(id) && personal.snapshot().getJSONArray("jobs").objects().any { it.optString("id") == id && it.optString("kind") in setOf("pdf.import", "pdf.open", "pdf.annotation.open") }
+                    val pdfOwned = active.containsKey(id) && personal.snapshot().getJSONArray("jobs").objects().any { it.optString("id") == id && it.optString("kind") in setOf("pdf.import", "pdf.import.batch", "pdf.open", "pdf.annotation.open") }
                     if (id in exportOwnedJobs || pdfOwned) {
                         // A provider may be blocked inside an open/read/write call. No terminal state or lock release precedes actual drain.
                         _state.update { it.copy(notice = "已请求停止，正在等待本次文件操作关闭；原任务尚未报告停止。") }
                         active[id]?.let { it.cancel(); it.join() }
                         JSONObject().put("cancelRequested", true).put("drained", true)
-                            .put("message", "本次导出任务已结束；实际结果请查看原记录，已封存材料保留。")
+                            .put("message", "本次文件任务已结束；实际结果请查看原记录，已接纳或封存的原件保留。")
                     } else {
                         active[id]?.cancel()
                         runCatching { WorkManager.getInstance(context).cancelWorkById(UUID.fromString(id)) }
@@ -502,9 +490,10 @@ class RootController internal constructor(private val context: Context, private 
         JSONObject().put("paperID", p.id).put("sha256", old.pdfFile?.let(BackupCodec::hash) ?: "").put("version", old.article.sourceVersion ?: JSONObject.NULL)
             .put("sourceURL", old.paper.pdfURL ?: "").put("currentness", "offline-snapshot").put("isStale", true).put("notices", JSONArray(listOf("正在读取已封存的原离线快照；未联网核对网站当前修订。")))
     } ?: library.pdfReceipt(p.id)
-    private suspend fun runTask(kind: String, paperID: String = "", gate: () -> Unit = {}, body: suspend () -> JSONObject): JSONObject {
-        val id = UUID.randomUUID().toString(); val job = currentCoroutineContext()[Job]!!
+    private suspend fun runTask(kind: String, paperID: String = "", gate: () -> Unit = {}, parentJobID: String? = null, itemIndex: Int? = null, taskID: String = UUID.randomUUID().toString(), body: suspend () -> JSONObject): JSONObject {
+        val id = taskID; val job = currentCoroutineContext()[Job]!!
         val row = JSONObject().put("id", id).put("kind", kind).put("paperID", paperID).put("status", "running").put("createdAt", now()).put("startedAt", now())
+        if (parentJobID != null) { require(itemIndex != null && itemIndex >= 0); row.put("parentJobID", parentJobID).put("itemIndex", itemIndex).put("title", "导入所选 PDF（第 ${itemIndex + 1} 份）") }
         maintenance.withLock { gate(); personal.upsertJob(row); active[id] = job }; refresh()
         try {
             val result = withContext(CoroutineName(id)) { body() }
@@ -619,6 +608,119 @@ class RootController internal constructor(private val context: Context, private 
         }
         refresh()
     }
+    override fun importPdfs(uris: List<Uri>): Deferred<JSONObject> {
+        val selectedUris = uris.toList() // Synchronous picker handoff; no Activity/Compose scope owns this copy.
+        require(selectedUris.isNotEmpty() && selectedUris.all { it.scheme == "content" }) { "请通过系统文件选择器选择 PDF" }
+        val current = _state.value
+        val initial = ReadingAccess(current.selectedPaperId, generation.get(), current.pdfDocument?.sha256,
+            current.pdfSelection, current.pdfPage, current.readingMaterialID)
+        val epoch = dispatch.epoch
+        val ticket = pdfBatchSequence.incrementAndGet()
+        lateinit var task: Deferred<JSONObject>
+        task = exportScope.async(start = CoroutineStart.LAZY) {
+            try {
+                pdfAdmission.withLock {
+                    if (ticket != pdfBatchSequence.get()) throw CancellationException("这份选择已被后来的文件操作替代，未读取旧列表")
+                    stopPdfAcquisition(retireQueuedBatch = false) // The previous parser drains without holding maintenance.
+                    if (ticket != pdfBatchSequence.get()) throw CancellationException("这份选择已被后来的文件操作替代，未读取旧列表")
+                    dispatch.requireCurrent(epoch)
+                    requirePdfAcquisition(initial, true)
+                    pdfAcquisition.set(task)
+                }
+                runPdfImportBatch(selectedUris, initial, epoch)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val message = "本批 PDF 处理未正常结束；已接纳原件保留，请查看任务记录。"
+                _state.update { it.copy(error = message) }
+                throw AppFailure("operation", message) // Provider exception text may contain its private URI.
+            }
+        }
+        task.invokeOnCompletion { pdfAcquisition.compareAndSet(task, null) }
+        task.start()
+        return task
+    }
+
+    private suspend fun runPdfImportBatch(uris: List<Uri>, initial: ReadingAccess, epoch: String): JSONObject {
+        val operation = currentCoroutineContext()
+        val job = operation[Job] ?: error("缺少本次批次作业")
+        val id = UUID.randomUUID().toString()
+        val progress = PdfImportBatchProgress(uris.size)
+        val row = JSONObject().put("id", id).put("kind", "pdf.import.batch").put("paperID", "")
+            .put("title", "导入所选 PDF（${uris.size} 份）").put("identity", "本机所选原件")
+            .put("status", "running").put("createdAt", now()).put("startedAt", now())
+        suspend fun persist(status: String) {
+            maintenance.withLock {
+                val latest = personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id } ?: row.copy()
+                latest.put("status", status).put("result", progress.snapshot(status)).put("message", progress.message())
+                if (status != "running") latest.put("endedAt", now())
+                personal.upsertJob(latest)
+            }
+            refresh()
+        }
+        maintenance.withLock {
+            dispatch.requireCurrent(epoch); requirePdfAcquisition(initial, true); operation.ensureActive()
+            personal.upsertJob(row.copy().put("result", progress.snapshot("running")).put("message", progress.message()))
+            active[id] = job
+        }
+        refresh()
+        _state.update { it.copy(notice = progress.message(), error = null) }
+        var currentIndex = -1
+        var accepted: java.util.concurrent.atomic.AtomicReference<JSONObject?>? = null
+        var terminalFailure: Throwable? = null
+        var cancelled = false
+        try {
+            for ((index, uri) in uris.withIndex()) {
+                operation.ensureActive(); dispatch.requireCurrent(epoch)
+                val access = maintenance.withLock {
+                    dispatch.requireCurrent(epoch); operation.ensureActive()
+                    val current = _state.value
+                    ReadingAccess(current.selectedPaperId, generation.get(), current.pdfDocument?.sha256,
+                        current.pdfSelection, current.pdfPage, current.readingMaterialID).also { requirePdfAcquisition(it, true) }
+                }
+                currentIndex = index
+                val childID = UUID.randomUUID().toString()
+                val acceptedItem = java.util.concurrent.atomic.AtomicReference<JSONObject?>(null)
+                accepted = acceptedItem
+                progress.begin(index, childID)
+                persist("running")
+                try {
+                    val actual = runTask("pdf.import", gate = { dispatch.requireCurrent(epoch); requirePdfAcquisition(access, true) },
+                        parentJobID = id, itemIndex = index, taskID = childID) {
+                        importPdfOriginal(uri, access, epoch) { facts -> acceptedItem.set(facts.copy()) }
+                    }
+                    progress.completed(index, actual)
+                } catch (failure: PdfInvalidDocumentException) {
+                    // Only definite native structure failures qualify; provider/FS/parser IOException must stop the batch.
+                    progress.failed(index)
+                }
+                persist("running")
+                currentIndex = -1; accepted = null
+            }
+        } catch (failure: Throwable) {
+            terminalFailure = failure
+            cancelled = failure is CancellationException
+            if (currentIndex >= 0 && progress.status(currentIndex) == "running") {
+                val committed = accepted?.get()
+                if (committed != null) progress.completed(currentIndex, committed)
+                else if (cancelled) progress.cancelled(currentIndex) else progress.failed(currentIndex)
+            }
+        } finally {
+            withContext(NonCancellable) {
+                try { persist(progress.finalStatus(cancelled)) }
+                catch (recordFailure: Throwable) {
+                    if (terminalFailure != null) terminalFailure!!.addSuppressed(recordFailure) else terminalFailure = recordFailure
+                    _state.update { it.copy(error = "批次记录未能完整保存；已接纳原件保留，未开始的文件没有报告成功。") }
+                } finally { active.remove(id); refresh() }
+            }
+        }
+        val status = progress.finalStatus(cancelled)
+        val result = progress.snapshot(status).put("jobID", id).put("message", progress.message())
+        _state.update { it.copy(notice = progress.message()) }
+        terminalFailure?.let { throw it }
+        return result
+    }
+
     override suspend fun unlockPdf(requestID: String, password: CharArray) {
         pdfUnlocks.submit(requestID, password)
     }
@@ -632,7 +734,8 @@ class RootController internal constructor(private val context: Context, private 
             "阅读空间已切换，原解锁请求没有取得另一论文的权限"
         }
     }
-    private suspend fun stopPdfAcquisition() {
+    private suspend fun stopPdfAcquisition(retireQueuedBatch: Boolean = true) {
+        if (retireQueuedBatch) pdfBatchSequence.incrementAndGet()
         val original = pdfAcquisition.get() ?: return
         original.cancel(); original.join()
     }
@@ -653,6 +756,23 @@ class RootController internal constructor(private val context: Context, private 
             throw cancelled
         }
     }
+    private suspend fun importPdfOriginal(uri: Uri, access: ReadingAccess, epoch: String, onAccepted: (JSONObject) -> Unit = {}): JSONObject {
+        val operation = currentCoroutineContext()
+        val check = { operation.ensureActive(); dispatch.requireCurrent(epoch); requirePdfAcquisition(access, true) }
+        val session = pdf.prepareImport(uri, check)
+        val result = finishPdfSession(session, "import", check)
+        return adoptPdfResult(result, check) { document ->
+            val p = Paper(document.id, document.displayName.removeSuffix(".pdf"), sourceKind = "local", identityStatus = "local-original", localPDFPath = document.localPath, pdfSHA256 = document.sha256)
+            // No later cancellation can delete an original after this registration has returned.
+            personal.rememberPaper(p)
+            pdf.acceptImport(result)
+            offlineReading = null; generation.incrementAndGet()
+            _state.update { it.copy(selectedPaperId = p.id, viewedPaper = Paper.fromJson(p.json()), article = null, pdfDocument = document, pdfMode = true, pdfPage = 1, pdfSelection = null,
+                pdfReceipt = JSONObject().put("paperID", p.id).put("sha256", document.sha256).put("version", JSONObject.NULL).put("isStale", false).put("currentness", "local-original")) }
+            JSONObject().put("paperID", p.id).put("pageCount", document.pageCount).put("sha256", document.sha256).also { onAccepted(it) }
+        }
+    }
+
     private suspend fun finishPdfSession(session: PdfImportSession, purpose: String, check: () -> Unit): PdfImportedOriginal {
         var result: PdfImportedOriginal? = null
         try {

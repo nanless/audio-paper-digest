@@ -99,7 +99,16 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
         } catch(e:CancellationException) { throw e } catch(e:Exception){localError=e.message ?: "操作未完成，已有资料保留"}finally{if(guarded)pendingActions.remove(command)}
     } }
     val importPDF=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()){uris ->
-        if(uris.isNotEmpty())scope.launch{val errors=mutableListOf<String>();for(uri in uris){try{controller.execute("pdf.import",obj("uri" to uri.toString()))}catch(e:CancellationException){throw e}catch(e:Exception){errors+=e.message?:"导入未完成"}};route="reader";if(errors.isNotEmpty())localError="${errors.size} 份 PDF 未导入：${errors.distinct().joinToString("；")}"}
+        if(uris.isNotEmpty())try {
+            // Transfer the whole picker result before a composition coroutine can be cancelled by rotation.
+            val originalBatch=controller.importPdfs(uris.toList())
+            scope.launch {try {
+                val result=originalBatch.await()
+                if(result.optInt("completed")>0)route="reader"
+                if(result.optString("status")!="completed")localError=result.optString("message","所选 PDF 未全部接纳，请查看原批次记录")
+            }catch(cancelled:CancellationException){throw cancelled}
+             catch(error:Exception){localError=error.message?:"本批次未完成，请查看任务记录；原件保留"}}
+        }catch(error:Exception){localError=error.message?:"未开始导入，请重新选择原件"}
     }
     val restore=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri -> if(uri!=null)action("app.restore.prepare",obj("uri" to uri.toString()))}
     val dark=when(state.settings.optString("appearance")){"dark"->true;"light"->false;else->androidx.compose.foundation.isSystemInDarkTheme()}

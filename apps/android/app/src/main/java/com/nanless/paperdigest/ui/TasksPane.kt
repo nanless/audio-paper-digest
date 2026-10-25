@@ -85,17 +85,19 @@ import androidx.compose.ui.unit.dp
       if(job.optBoolean("localRescueExport"))Text("本机救援导出任务；此任务记录不包含在原研究快照，也不改写原费用与历史。",style=MaterialTheme.typography.bodySmall)
       Text(job.optString("identity",job.optString("paperID","研究空间")),style=MaterialTheme.typography.bodySmall)
       job.optString("message",job.optString("error")).takeIf{it.isNotBlank()}?.let { Text(it) }
-      job.optJSONObject("material")?.let { m ->
+      job.optJSONObject("material")?.takeIf{!isModelTask(job)}?.let { m ->
        Text("材料：${m.optString("kind")} · ${m.optString("createdAt")}\n${if(m.has("fileCount"))m.optInt("fileCount").toString()+" 文件" else "文件数未记录"}\n${m.optString("sha256")}",style=MaterialTheme.typography.labelSmall)
       }
       Text("${job.optString("startedAt")}  ${job.optString("endedAt")}",style=MaterialTheme.typography.labelSmall)
       if(job.optString("status") in listOf("running","pending","queued")) {
        TextButton({action("jobs.cancel",obj("id" to job.optString("id")))}) { Text("取消") }
       }
-      job.optJSONObject("usage")?.let { Text("原始用量：$it",style=MaterialTheme.typography.bodySmall) }
+      studyTaskPresentation(job,state.sessions)?.let { recorded ->
+       Text(recorded.evidence,style=MaterialTheme.typography.bodySmall)
+       Text(recorded.usage,style=MaterialTheme.typography.bodySmall)
+       Text(recorded.charge,style=MaterialTheme.typography.bodySmall)
+      }
       jobSession(job,state.sessions)?.let { session ->
-       Text(sessionEvidenceLabel(session),style=MaterialTheme.typography.bodySmall)
-       Text(sessionChargeLabel(session),style=MaterialTheme.typography.bodySmall)
        TextButton({action("ui.session.open",obj("id" to session.getString("id")))}){Text("打开原研究记录")}
       }
       job.optString("paperID").takeIf{it.isNotEmpty()}?.let { id ->
@@ -123,20 +125,13 @@ internal fun pendingExportStatus(p:org.json.JSONObject):String = when(p.optStrin
  else -> "状态尚未确认，请重新核验"
 }
 
-internal fun jobStatus(value:String):String = when(value){"queued","pending"->"等待执行";"running"->"进行中";"completed"->"已完成";"failed"->"未完成";"cancelled"->"已取消";"interrupted"->"已中断，可检查原记录";else->value.ifBlank{"状态未记录"}}
-internal fun jobTitle(value:String):String=when(value){"library.sync"->"同步已发布论文";"model.run"->"基于原文继续研究";"model.check"->"检查模型连接";"cloud.upload"->"保存完整研究空间";"cloud.check"->"检查坚果云连接";"cloud.restore"->"恢复研究快照";"zotero.archive"->"完整存档到 Zotero";"zotero.resume"->"继续 Zotero 存档并回读";"pdf.open"->"准备 PDF 原件";"export.retained.prepare"->"核验保留的原完整快照";"export.retained.save"->"另存并回读保留的原快照";"export.prepare"->"准备导出原件";"retained.export.prepare"->"准备保留快照原件";"export.save"->"写出并回读原件";else->value.ifBlank{"研究任务"}}
+internal fun jobStatus(value:String):String = when(value){"queued","pending"->"等待执行";"running"->"进行中";"complete","completed"->"已完成";"partial"->"部分完成";"failed"->"未完成";"cancelled"->"已取消";"interrupted"->"已中断，可检查原记录";else->value.ifBlank{"状态未记录"}}
+internal fun jobTitle(value:String):String=when(value){"library.sync"->"同步已发布论文";"model.run"->"基于原文继续研究";"model.check"->"检查模型连接";"cloud.upload"->"保存完整研究空间";"cloud.check"->"检查坚果云连接";"cloud.restore"->"恢复研究快照";"cloud.restore.prepare"->"下载并校验恢复快照";"cloud.automatic"->"自动保存完整研究空间";"cloud.list"->"读取云端备份版本";"zotero.archive"->"完整存档到 Zotero";"zotero.resume"->"继续 Zotero 存档并回读";"pdf.open"->"准备 PDF 原件";"pdf.import"->"导入 PDF 原件";"pdf.import.batch"->"批量导入 PDF 原件";"pdf.annotation.open"->"定位原文批注";"export.retained.prepare"->"核验保留的原完整快照";"export.retained.save"->"另存并回读保留的原快照";"export.prepare"->"准备导出原件";"retained.export.prepare"->"准备保留快照原件";"export.save"->"写出并回读原件";else->value.ifBlank{"研究任务"}}
 
 /** Display ordering never rewrites the original cross-platform arrays or invents missing times. */
 internal fun recordsNewest(records:List<org.json.JSONObject>):List<org.json.JSONObject> = records.withIndex().sortedWith(compareByDescending<IndexedValue<org.json.JSONObject>>{ indexed ->
  listOf("startedAt","createdAt","endedAt").firstNotNullOfOrNull{key->runCatching{java.time.Instant.parse(indexed.value.optString(key))}.getOrNull()}?:java.time.Instant.MIN
 }.thenBy{it.index}).map{it.value}
-
-internal fun jobSession(job:org.json.JSONObject,sessions:List<org.json.JSONObject>):org.json.JSONObject? {
- if(job.optString("kind") in setOf("export.prepare","retained.export.prepare","export.save","export.retained.prepare","export.retained.save"))return null
- val explicit=job.optString("sessionID").ifBlank{job.optJSONObject("result")?.optString("sessionID").orEmpty()}
- val id=explicit.ifBlank{job.optString("id")}
- return sessions.firstOrNull{it.optString("id")==id}
-}
 
 internal fun retainedAttemptStatus(row:org.json.JSONObject):String = when(row.optString("state")) {
  "verified" -> if(row.optBoolean("readbackProven"))"当次完整回读已确认；不代表外部文件此后未变化" else "原回读证明当前无法核验"

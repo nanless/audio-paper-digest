@@ -1,8 +1,10 @@
 # Mac应用69项实际验收状态
 
-本页逐项记录[正式验收矩阵](mac-app-acceptance.md)的实际结果，不改变原69项要求。当前为 **43项通过、26项待验**；没有据此宣布全部功能和全部系统条件通过。只有原要求的全部适用条件已有对应证据才记为“通过”；任一必测条件未覆盖仍记为“待验”，并另列已完成范围。隔离测试、原生实机和文件回读分别标明。“待验”包含缺少实际条件或证据的项目，不一概表示功能已经失败。
+本页逐项记录[正式验收矩阵](mac-app-acceptance.md)的实际结果，不改变原69项要求。当前为 **44项通过、25项待验**；没有据此宣布全部功能和全部系统条件通过。只有原要求的全部适用条件已有对应证据才记为“通过”；任一必测条件未覆盖仍记为“待验”，并另列已完成范围。隔离测试、原生实机和文件回读分别标明。“待验”包含缺少实际条件或证据的项目，不一概表示功能已经失败。
 
 当前安装为a081正式资源通道。此前8dd已沿原83文件快照完成真实坚果云取消、重启、续传、九块及最终清单回读，并完成原生确认取消和实际恢复；这部分按未变化的实际服务实现和原材料复用，不冒称a081重新执行了云恢复。恢复后同一既有Zotero归档只读99项通过、0失败；ac7于11:45完成的原生六角色回读仍保留其原包身份，不冒称8dd重新执行了许可读取或写入。用户新增的[17项专项验收](mac-app-cloud.md)按本次实际范围逐项更新，原69项计数不因云传输成功而自动改变。
+
+2026-10-26新增a081原生资料库检索补验及非作者复核，仅将LIB-02改为通过。中文单字/双字、标题缩写、作者、编号、标点、标签、无结果、缓存导读和私人笔记均有实际界面记录；两种正文特有短语另与全部22份目录文件核对。操作结束返回原导读及PDF第5页，九组个人字段与同一原基准逐值相同；不扩展其他资料库、键盘、离线或冷启动条件。
 
 ## 当前安装与证据复用
 
@@ -73,8 +75,8 @@ a081完整runner的23套原生、31组Node命令及59项打包测试全部通过
 | ID | 状态 | 已有证据 | 未关闭条件或适用范围 | 证据组 |
 |---|---|---|---|---|
 | LIB-01 | 待验 | 真实8005篇列表、ID定位，分页/多选/组合筛选/排序有1227项输入的隔离UI检查。 | 真库组合筛选、排序、清除条件、批量及上下文动作尚缺完整实机记录。 | DATA, TESTS |
-| LIB-02 | 待验 | 标题/标签/导读/私人笔记检索和范围说明已有实现与隔离反例，真实ID搜索已使用。 | 真库1字/2字中文、缩写/标点、无结果及私人笔记命中尚未逐项记录；PDF原文不属于资料库全文索引。 | DATA, TESTS |
-| LIB-03 | 待验 | 真实收藏1条、阅读记录/问题/PDF页在旧重启及备份恢复后保持；待读/计数/来源更正有隔离回归。 | 真实待读状态切换及退出重启后保持尚未完整记录；已有收藏和阅读恢复不能替代该条件。 | HISTORY, MODEL, TESTS |
+| LIB-02 | 通过 | a081实际单字1569项、双字3016项、任务标签469项；MiCLA缩写、含标点名称、作者和arXiv编号各命中原论文1项，无结果0项。仅在私人笔记中的短语命中原arXiv论文，仅在缓存导读中的短语命中原会议身份；22份目录及其他文本来源均排除。清除后回到8005项，原个人字段及阅读位置保持，非作者复核通过。 | 限当次目录、既有缓存及笔记；PDF原文仍在阅读器内查找，不参与资料库全文索引。 | SEARCH18, DATA, TESTS |
+| LIB-03 | 待验 | a081真实右键加入MiCLA待读，列表和计数均1；正常退出旧进程后，新进程仍为原论文1项，再正常移出还原0项。最终保存→冷启动的阅读状态一致，原收藏、会话、笔记等保持，原179项任务未变，仅新增两项正常读取任务；非作者复核待读持久子条件通过。 | 切论文及网站同步、更名、删除的整组关联条件仍须精确证据；不据本轮单篇持久结果扩大通过。 | WANTED18, HISTORY, MODEL, TESTS |
 
 ## 个人笔记
 
@@ -154,6 +156,8 @@ a081完整runner的23套原生、31组Node命令及59项打包测试全部通过
 - **MODEL**：`/Users/francis7999/.codex/visualizations/2026/10/22/01a162ed-db18-7000-8840-f9262fd79e83/mac-real-model-curated-independent-review.md`；`apps/macos/.qa/live-e2e/exports/final-v11-research-independent-readback.json`；`apps/macos/.qa/live-e2e/final9b-independent-evidence-review.json`。
 - **ZOT**：`apps/macos/.qa/live-e2e/zotero-602F6E60-A78B-491D-8B0D-D3E07C95DD3C/readback-20261024T182412.048051Z/readback-result.json`（只读GET及文件，非新原生回读完成）；`apps/macos/.qa/live-e2e/zotero-602F6E60-A78B-491D-8B0D-D3E07C95DD3C/readback-20261024T174741.116180Z/readback-result.json`；`apps/macos/.qa/live-e2e/zotero-repeat-comparison-20261024T174744.854274Z.json`；`apps/macos/.qa/live-e2e/zotero-restart-final878-current.ax.txt`；`apps/macos/.qa/live-e2e/zotero-602F6E60-A78B-491D-8B0D-D3E07C95DD3C/readback-20261024T171751.075453Z/readback-result.json`；`apps/macos/.qa/live-e2e/zotero-repeat-comparison-20261024T171908.006176Z.json`；`apps/macos/.qa/live-e2e/final9b-independent-evidence-review.json`；`apps/macos/.qa/live-e2e/zotero-native-final9b-complete.ax.txt`。
 - **DIAGNOSTICS**：`apps/macos/.qa/live-e2e/exports/final9b-diagnostics.json`；`apps/macos/.qa/live-e2e/help-native-final9b-diagnostics.ax.txt`。
+- **SEARCH18**：`apps/macos/.qa/library-native18/results-v1.json`及追加作者/编号的`results-v2.json`、逐次原生AX和两份保存前后对照；非作者报告为`apps/macos/.qa/library-native18-independent/review.json`及`review-v2-delta.json`。私人检索短语和正文只保存在本机忽略目录。
+- **WANTED18**：`apps/macos/.qa/library-wanted18/result-v2.json`、加入/退出/冷启动/移出/返回阅读的AX与原保存件；非作者报告为`apps/macos/.qa/library-wanted18-independent/review-v2.json`。原v1阶段开始与最终保存位置不等的观察继续保留。
 - **HISTORY**：`docs/mac-app-validation.md`；`docs/mac-app-review-log.md`；`/Users/francis7999/.codex/visualizations/2026/10/22/01a162ed-db18-7000-8840-f9262fd79e83/mac-zotero-real-edit-protection-and-client-open.md`；`/Users/francis7999/.codex/visualizations/2026/10/22/01a162ed-db18-7000-8840-f9262fd79e83/mac-zotero-real-restart-repeat-83e4-success.md`。
 - **TESTS**：`apps/macos/.qa/cloud-full-v6-result.json`；`cloud-js-v7-result.json`；`cloud-settings-v11-144-independent-result.json`；`settings-recovery-v11-final-independent-result.json`（均在同一.qa目录）；`apps/macos/.qa/live-final-js-regression-v16.log`；`apps/macos/.qa/live-final-js-regression-v16-result.json`；`apps/macos/.qa/workspace-pagination-independent-final.log`；`apps/macos/.qa/live-final-source-regression-v11.log（保留旧DesktopUI19/20失败；原生/服务段已完成）`；`apps/macos/.qa/desktopui-final-find-fix.log`；`apps/macos/.qa/navigation-final-find-fix.log`；`apps/macos/.qa/reader-preamble/result.json`；`docs/mac-app-review-log.md（各轮独审、冻结SHA与适用范围）`；`apps/macos/.qa/live-final-source-regression-v14.log`；`apps/macos/.qa/live-final-source-regression-v14-result.json`；`完整取消保护独审记录见 docs/mac-app-validation.md`。
 - **CANCEL878**：`apps/macos/.qa/live-e2e/export-cancel-final878.ax.txt`；`apps/macos/.qa/live-e2e/tasks-cancel-final878.png`；`apps/macos/.qa/live-e2e/tasks-cancel-final878.ax.txt`；`apps/macos/.qa/live-e2e/exports/final878-research.md`；`apps/macos/.qa/live-e2e/menu-backup-cancel-final878.ax.txt`。

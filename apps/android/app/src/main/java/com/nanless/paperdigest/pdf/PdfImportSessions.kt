@@ -65,12 +65,18 @@ internal class PdfImportSessions(private val resolver:ContentResolver,private va
                 try {
                     val call=currentCoroutineContext();val hash=MessageDigest.getInstance("SHA-256")
                     open().use{input->java.io.FileOutputStream(source).use{output->copy(input,{b,n->output.write(b,0,n);hash.update(b,0,n)}){call.ensureActive();boundary(check)};output.fd.sync()}}
-                    require(source.length()>0) { "PDF 文件为空" }
                     val sha=hash.digest().hex();require(expectedSHA==null||sha==expectedSHA) { "原 PDF 字节与当前来源不符" }
                     require(identity(folder)==folderID) { "PDF 导入目录已被替换" }
                     val sourceID=identity(source)
                     val password=PdfSessionSecrets.copy(research,sha)?:CharArray(0)
-                    val locked=try { probe(source,password);false }catch(_:PdfPasswordRequiredException){true}finally{password.fill('\u0000')}
+                    val locked=try { probe(source,password){call.ensureActive();boundary(check)};false }catch(_:PdfPasswordRequiredException){true}
+                    catch(invalid:PdfInvalidDocumentException){
+                        // A parser error is continuable only after the complete issued original is reverified.
+                        call.ensureActive();boundary(check)
+                        require(identity(research)==rootID&&identity(imports)==importsID&&identity(folder)==folderID&&identity(source)==sourceID) { "原 PDF 读取来源已变化" }
+                        require(digest(source){call.ensureActive();boundary(check)}==sha&&identity(source)==sourceID&&identity(research)==rootID&&identity(imports)==importsID&&identity(folder)==folderID) { "原 PDF 字节已变化" }
+                        throw invalid
+                    }finally{password.fill('\u0000')}
                     call.ensureActive();boundary(check);require(identity(research)==rootID&&identity(imports)==importsID) { "研究空间已变化，未接纳旧导入" }
                     val session=PdfImportSession(folder.name,name.replace(Regex("[\\p{Cntrl}/\\\\]"),"_").take(500).ifBlank{"本地论文.pdf"},sha,locked)
                     synchronized(lock){require(active.size<4) { "请先完成或取消已有 PDF 导入" };active[session]=Slot(session,folder,rootID,importsID,source,folderID,sourceID)}
@@ -94,7 +100,8 @@ internal class PdfImportSessions(private val resolver:ContentResolver,private va
                     require(digest(slot.source){checkAll()}==session.sha256) { "待解锁 PDF 原字节已变化" }
                     val secret=password?.copyOf()?:PdfSessionSecrets.copy(research,session.sha256)?:CharArray(0)
                     try {
-                        val facts=try{probe(slot.source,secret)}catch(failure:PdfPasswordRequiredException){checkAll();throw failure}
+                        val facts=try{probe(slot.source,secret,checkAll)}catch(failure:PdfPasswordRequiredException){checkAll();throw failure}
+                        catch(invalid:PdfInvalidDocumentException){checkAll();require(digest(slot.source){checkAll()}==session.sha256) { "待解锁 PDF 原字节已变化" };checkAll();throw invalid}
                         checkAll()
                         val destination=File(imports,session.sha256+".pdf")
                         var created=false;var newIdentity:String?=null
@@ -159,9 +166,27 @@ internal class PdfImportSessions(private val resolver:ContentResolver,private va
     private fun boundary(check:()->Unit){check();require(identity(control)==controlIdentity) { "PDF 导入控制目录已变化" }}
     private fun boundary(slot:Slot,check:()->Unit){if(slot.cancelled.get())throw CancellationException("已取消 PDF 解锁；原文件保留");boundary(check);require(identity(research)==slot.rootIdentity&&identity(imports)==slot.importsIdentity&&identity(slot.folder)==slot.folderIdentity&&identity(slot.source)==slot.sourceIdentity) { "研究空间已变化，未接纳旧 PDF" }}
     private data class Facts(val pages:Int,val encrypted:Boolean,val canExtract:Boolean,val canPrint:Boolean)
-    private fun probe(file:File,password:CharArray):Facts {
-        try{return PDDocument.load(file,String(password),MemoryUsageSetting.setupMixed(4L*1024*1024,512L*1024*1024)).use{pdf->require(pdf.numberOfPages>0) { "PDF 没有页面" };Facts(pdf.numberOfPages,pdf.isEncrypted,pdf.currentAccessPermission.canExtractContent(),pdf.currentAccessPermission.canPrint())}}
-        catch(_:InvalidPasswordException){throw PdfPasswordRequiredException()}
+    private fun probe(file:File,password:CharArray,check:()->Unit={}):Facts {
+        // Independent content fact, before opening PDFBox or any scratch file. Scan the bounded
+        // complete original, so an otherwise accepted long preamble gains no new 1024-byte limit.
+        if(!hasPDFSignature(file,check))throw PdfInvalidDocumentException("文件已完整读取，但没有 PDF 文件头，未导入此文件")
+        val facts=try {
+            PDDocument.load(file,String(password),MemoryUsageSetting.setupMixed(4L*1024*1024,512L*1024*1024)).use{pdf->
+                Facts(pdf.numberOfPages,pdf.isEncrypted,pdf.currentAccessPermission.canExtractContent(),pdf.currentAccessPermission.canPrint())
+            }
+        }catch(_:InvalidPasswordException){throw PdfPasswordRequiredException()}
+        // Only after normal close: parser/scratch/close IOException must retain its original type.
+        if(facts.pages==0)throw PdfInvalidDocumentException("PDF 已完整解析，但没有可用的物理页面")
+        return facts
+    }
+    private fun hasPDFSignature(file:File,check:()->Unit):Boolean {
+        val marker=byteArrayOf(37,80,68,70,45);val bytes=ByteArray(65536);var matched=0
+        file.inputStream().use{input->
+            while(true){check();val count=input.read(bytes);if(count<0)break;if(count==0)continue
+                for(index in 0 until count){val value=bytes[index];matched=if(value==marker[matched])matched+1 else if(value==marker[0])1 else 0;if(matched==marker.size){check();return true}}
+            }
+        }
+        check();return false
     }
     private fun directory(file:File):File {require(file.absoluteFile==file.canonicalFile) { "PDF 控制目录不能是链接" };var p:File?=file;while(p!=null){require(!Files.isSymbolicLink(p.toPath())) { "PDF 目录不能是链接" };p=p.parentFile};check(file.isDirectory||file.mkdirs()) { "PDF 控制目录不可用" };return file}
     private fun identity(file:File):String {require(file.absoluteFile==file.canonicalFile&&!Files.isSymbolicLink(file.toPath())) { "PDF 路径已变化" };return requireNotNull(Files.readAttributes(file.toPath(),BasicFileAttributes::class.java,LinkOption.NOFOLLOW_LINKS).fileKey()) { "PDF 路径身份不可核对" }.toString()}

@@ -48,6 +48,10 @@ class StudyService(private val store: PersonalStore, private val loadKey: () -> 
             val same = store.snapshot().getJSONArray("sessions").objects().filter { it.optString("fingerprint") == fingerprint }
             val existing = same.firstOrNull { it.optString("status") == "completed" }
             if (existing != null) return@withLock verifySaved(existing).put("reused", true)
+            val floorIDs = RequestContinuity.read(store.directory).map { it.id }.toSet()
+            require(same.none { !it.optBoolean("requestIssued") && it.getString("id") in floorIDs }) {
+                "相同输入已有原派发账本，但原会话不足以核验恢复；请保留原记录并明确选择新建研究。"
+            }
             val issued = same.filter { it.optBoolean("requestIssued") }
             require(issued.size <= 1) { "相同输入存在多条已派发记录，请明确选择原记录核验，不会自动重新请求" }
             if (issued.isNotEmpty()) return@withLock recoverSavedLocked(issued.single().getString("id")).put("reused", true)
@@ -94,8 +98,9 @@ class StudyService(private val store: PersonalStore, private val loadKey: () -> 
             // request. OkHttp header exceptions can contain the credential.
             val request = try {
                 val body = requestBody(config, input.getJSONArray("messages"))
-                Request.Builder().url(apiURL(config)).header("Authorization", "Bearer $key")
+                val original = Request.Builder().url(apiURL(config)).header("Authorization", "Bearer $key")
                     .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+                OpenCodeRequestHeaders.apply(config.getString("endpoint"), id, original)
             } catch (_: Exception) {
                 throw AppFailure("configuration", "模型地址或本机凭据无法构造有效请求，尚未派发；请检查已保存的连接与密钥。")
             }
@@ -335,6 +340,7 @@ class StudyService(private val store: PersonalStore, private val loadKey: () -> 
             val tokens = raw.optInt("maxTokens", 8000); require(tokens in 128..64000)
             val timeout = raw.optLong("timeoutMs", 180000); require(timeout in 1000..600000)
             val proxy = if (model.lowercase().startsWith("muse-spark-")) raw.optString("httpProxy").trim() else ""
+            if (model.lowercase().startsWith("muse-spark-")) require(proxy.isNotEmpty()) { "Muse 模型必须配置 HTTP CONNECT 代理" }
             if (proxy.isNotEmpty()) { val p = URI(proxy); require(p.scheme == "http" && p.host != null && p.port in 1..65535 && p.userInfo == null && p.query == null && p.fragment == null && p.path in listOf("", "/")) { "代理须为不含密码的 HTTP CONNECT 地址" } }
             return JSONObject().put("endpoint", endpoint).put("model", model).put("protocol", protocol).put("maxTokens", tokens).put("timeoutMs", timeout).put("httpProxy", proxy).put("responsesStream", protocol == "responses" && raw.optBoolean("responsesStream")).put("reasoningEffort", raw.optString("reasoningEffort", "default"))
         }

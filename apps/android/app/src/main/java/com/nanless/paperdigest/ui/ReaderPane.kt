@@ -200,9 +200,12 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  var chapters by remember(state.pdfDocument?.sha256){mutableStateOf<List<JSONObject>>(emptyList())};var chapterLoading by remember{mutableStateOf(false)};var chapterError by remember{mutableStateOf<String?>(null)};var chapterMenu by remember{mutableStateOf(false)};val chapterScope=rememberCoroutineScope()
  LaunchedEffect(question,evidence,from,to,chapter){delay(600);action("personal.reading",obj("paperID" to id,"question" to question,"scope" to evidence,"from" to from.toIntOrNull(),"to" to to.toIntOrNull(),"chapter" to chapter))}
  var chosen by rememberSaveable(id){mutableStateOf<String?>(null)}
- val sessions=recordsNewest(state.sessions.filter{it.optString("paperID")==id});val session=sessions.find{it.optString("id")==chosen}?:sessions.firstOrNull()
+ val originalSessions=state.sessions.filter{it.optString("paperID")==id}
+ val uniqueRecords=remember(state.sessions){uniqueStudySessionIndex(state.sessions)}
+ val sessions=recordsNewest(originalSessions.filter{uniqueRecords[it.optString("id")]===it})
+ val session=if(chosen==null)sessions.firstOrNull() else uniqueStudySession(sessions,chosen)
  var html by remember(session?.toString()){mutableStateOf<String?>(null)};var renderError by remember(session?.toString()){mutableStateOf<String?>(null)}
- LaunchedEffect(session?.toString()){if(session!=null)try{html=ResearchRenderer.render(context,session.optString("answer",session.optString("text")));renderError=null}catch(e:Exception){renderError=e.message}}
+ LaunchedEffect(session?.toString()){if(session!=null)try{html=ResearchRenderer.render(context,sessionAnswer(session));renderError=null}catch(e:Exception){renderError=e.message}}
  Column(Modifier.fillMaxSize()){
  Column(Modifier.weight(1f,fill=false).verticalScroll(rememberScrollState()).padding(16.dp)){
  OutlinedTextField(question,{question=it.take(16000)},Modifier.fillMaxWidth(),label={Text("向这篇论文提问")},placeholder={Text("例如：这项方法依赖哪些假设？")},minLines=2,maxLines=6)
@@ -219,7 +222,8 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  if(evidence=="range")Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(from,{from=it.filter(Char::isDigit)},Modifier.weight(1f),label={Text("起始物理页")});OutlinedTextField(to,{to=it.filter(Char::isDigit)},Modifier.weight(1f),label={Text("结束物理页")})}
  Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text("仅点击发送才调用模型 · 用量据实记录",style=MaterialTheme.typography.labelSmall,modifier=Modifier.weight(1f));Button({action("model.run",obj("question" to question,"evidenceKind" to evidence,"fromPage" to from.toIntOrNull(),"toPage" to to.toIntOrNull(),"chapter" to chapter,"force" to false))},enabled=question.isNotBlank()&&!state.busy&&evidence in listOf("guide","selection","page","chapter","range","full")&&(evidence!="chapter"||chapters.any{it.optInt("index")==chapter})){Icon(Icons.Outlined.Send,null);Text("发送")}}
  if(sessions.isNotEmpty()){var menu by remember{mutableStateOf(false)};Box{TextButton({menu=true}){Text("研究记录 ${sessions.size} · ${session?.optString("question").orEmpty().take(30)}")};DropdownMenu(menu,{menu=false}){sessions.forEach{s->DropdownMenuItem({Text(s.optString("question").take(70))},{chosen=s.optString("id");menu=false})}}}}
- session?.let{s->Text("${jobStatus(s.optString("status"))} · ${s.optJSONObject("usage")?.toString()?:"用量未记录"}",style=MaterialTheme.typography.labelSmall);Text("金额以原记录为准，未知不表示免费。",style=MaterialTheme.typography.labelSmall)}
+ if(originalSessions.size!=sessions.size)Text("部分原记录身份重复或归属冲突，未用于显示；原资料仍保留。",style=MaterialTheme.typography.labelSmall)
+ session?.let{s->Text("${jobStatus(s.optString("status"))} · ${sessionUsageLabel(s)}",style=MaterialTheme.typography.labelSmall);Text(sessionModelLabel(s),style=MaterialTheme.typography.labelSmall);Text(sessionChargeLabel(s),style=MaterialTheme.typography.labelSmall)}
  }
  when{renderError!=null->Text(renderError!!,Modifier.padding(16.dp));html!=null->Box(Modifier.weight(1f)){StaticDocument(html!!)};else->EmptyPane("让阅读形成研究记录","每次回答关联实际输入、来源页码和原始用量，可完整导出。")}
  }
