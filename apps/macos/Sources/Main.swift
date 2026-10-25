@@ -177,7 +177,15 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             // This authenticated same-view round trip is the readiness signal;
             // didFinish alone may precede module initialization in WKWebView.
             if source===settingsWeb,command=="app.bootstrap"{applySettingsPaneRequest(documentReady:true)}
-        }catch{replyHandler(nil,error.localizedDescription)}}
+        }catch{
+            if let cancelled=Self.cloudCancellationReply(error,command:command){replyHandler(cancelled,nil)}
+            else{replyHandler(nil,error.localizedDescription)}
+        }}
+    }
+    /// Only native cancellation types produce this outcome; server/error text cannot grant it.
+    static func cloudCancellationReply(_ error:Error,command:String)->[String:Any]? {
+        guard command.hasPrefix("cloud."),error is CancellationError || error is DesktopOperationCancelled else{return nil}
+        return ["cancelled":true,"message":(error as? DesktopOperationCancelled)?.localizedDescription ?? "已取消本次云端操作；原快照和已完成步骤保留。"]
     }
     func emit(_ name:String,_ object:[String:Any]=[:],to targets:[WKWebView]?=nil) {
         guard JSONSerialization.isValidJSONObject(object),let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8),let event=try? JSONSerialization.data(withJSONObject:[name]),let json=String(data:event,encoding:.utf8) else{return}
@@ -333,7 +341,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
                 if (store.value["personalPapers"] as? [String:[String:Any]])?[base] != nil{row["paperID"]=base}
             }
             row["status"]=(result["status"] as? String=="partial" || result["isStale"] as? Bool==true) ? "partial":"complete";row["message"]=result["isStale"] as? Bool==true ? "当前来源复验失败，保留可读旧缓存，请核对提示":"操作已结束，请查看实际结果";row["result"]=result.filter{["status","archiveID","parentKey","retryable","reused","sha256","paperCount","recordCount","identity","title"].contains($0.key)};row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");return result
-        } catch {jobs[identifier]=nil;row=(store.value["jobs"] as? [[String:Any]])?.first{$0["id"] as? String==identifier} ?? row;row["status"]=(task.isCancelled || error is CancellationError || error is DesktopOperationCancelled) ? "cancelled":"failed";row["message"]=error.localizedDescription;row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");throw error}
+        } catch {jobs[identifier]=nil;row=(store.value["jobs"] as? [[String:Any]])?.first{$0["id"] as? String==identifier} ?? row;row["status"]=(task.isCancelled || error is CancellationError || error is DesktopOperationCancelled) ? "cancelled":"failed";row["message"]=error is CancellationError ? "已取消；已完成的步骤和原材料保留。":error.localizedDescription;row["endedAt"]=ISO8601DateFormatter().string(from:Date());try store.upsertJob(row);emit("jobs.changed");throw error}
     }
     func recordProgress(id:String,update:[String:Any]) {
         guard var row=(store.value["jobs"] as? [[String:Any]])?.first(where:{$0["id"] as? String==id}) else{return}

@@ -263,7 +263,7 @@ actor CloudCredentialSession {
         } catch {
             // A retired request cannot overwrite the new target/session's state.
             if cloudCredentialContextCurrent(target: credentialTarget, generation: credentialGeneration) {
-                cloudLastError = error.localizedDescription
+                cloudLastError = error is CancellationError || error is DesktopOperationCancelled ? nil : error.localizedDescription
                 if let cause = error as? CloudArchiveService.CloudError, cause == .authentication || cause == .credentialsUnavailable {
                     cloudSessionCredentials.invalidateVerification()
                     cloudAutomaticPausedInMemory = true; cloudCredentialState = "unknown"

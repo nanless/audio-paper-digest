@@ -86,6 +86,7 @@ export function mountCloud(app){
    // probes credentials; further native job events keep it up to date.
    refresh().catch(()=>{});
    const result=await pending;if(disposed||token!==action)return;
+   if(result?.cancelled===true){message=typeof result.message==='string'&&result.message?result.message:'已取消本次云端操作；原快照和已完成步骤保留。';await refresh();return;}
    if(after)after(result);
    if(command==='cloud.upload')message='传输操作已结束，完整备份状态以实际回读结果为准。';
    else if(command==='cloud.restore')message='恢复操作已结束，请核对当前资料及原生窗口提示。';

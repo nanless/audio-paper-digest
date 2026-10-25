@@ -435,6 +435,38 @@ private actor IntegrationDAV {
         _=try await realSettings.evaluateJavaScript("window.paperDigestShowSettingsPane=__originalPaneHook;true")
         let settingsRequests=await settingsDAV.count()
         try check(settingsKeyReads==0 && settingsRequests==0,"real settings bootstrap and deep links issue no model credential read or cloud transport request")
+
+        // Exercise the real WK -> native job -> typed cancellation -> cloud UI path.
+        // A service error containing a cancellation word remains an ordinary failure.
+        _=try await settingsApp.dispatch("settings.open",payload:["pane":"cloud"]);settingsApp.settingsWindow?.alphaValue=0
+        try await wait("cloud pane for cancellation presentation"){(try? await realSettings.evaluateJavaScript("document.querySelector('[data-pane=cloud]').getAttribute('aria-current')==='page'")) as? Bool==true}
+        _=try await realSettings.evaluateJavaScript("document.querySelector('#cloud-discard').click();true")
+        try await wait("cancel fixture destination draft discarded"){(try? await realSettings.evaluateJavaScript("!document.querySelector('#cloud-check').disabled")) as? Bool==true}
+        let cancelProfile=try settingsApp.cloudLocalStore().profile
+        settingsApp.cloudArchive=try CloudArchiveService(folder:cancelProfile.folder,destinationID:cancelProfile.destinationID,
+            credentials:{.init(username:"fixture@example.invalid",password:"in-memory-cancel-fixture")},checkpointSink:{_ in},
+            transport:{_,_ in throw CancellationError()},minimumRequestInterval:0)
+        _=try await realSettings.evaluateJavaScript("document.querySelector('#cloud-check').click();true")
+        try await wait("actual WK receives cancelled job result"){
+            (try? await realSettings.evaluateJavaScript("!document.querySelector('#cloud-check').disabled && (document.querySelector('#cloud-message').textContent.includes('已取消') || !!document.querySelector('#cloud-error').textContent)")) as? Bool==true
+        }
+        try check((try await realSettings.evaluateJavaScript("document.querySelector('#cloud-error').textContent==='' && document.querySelector('#cloud-message').textContent.includes('已取消')")) as? Bool==true,"actual native cancellation is a readable status, not Swift framework error or completed backup")
+        let cancelledCloudJobs=(settingsApp.store.snapshot()["jobs"] as! [[String:Any]]).filter{$0["command"] as? String=="cloud.check" && $0["status"] as? String=="cancelled"}
+        try check(cancelledCloudJobs.count==1 && !(cancelledCloudJobs[0]["message"] as? String ?? "").contains("Swift.CancellationError"),"actual cancelled job preserves its cancelled state with a human-readable task message")
+        try check(settingsApp.cloudLastError==nil && settingsApp.jobs.isEmpty && !settingsApp.cloudBusy,"cancelled request leaves no persistent cloud error or active native job")
+        settingsApp.cloudArchive=try CloudArchiveService(folder:cancelProfile.folder,destinationID:cancelProfile.destinationID,
+            credentials:{.init(username:"fixture@example.invalid",password:"in-memory-cancel-fixture")},checkpointSink:{_ in},
+            transport:{_,_ in throw DesktopError.message("cancelled appears in a real fixture service failure")},minimumRequestInterval:0)
+        _=try await realSettings.evaluateJavaScript("document.querySelector('#cloud-check').click();true")
+        try await wait("actual WK receives ordinary service failure"){
+            (try? await realSettings.evaluateJavaScript("!document.querySelector('#cloud-check').disabled && !!document.querySelector('#cloud-error').textContent")) as? Bool==true
+        }
+        let serviceFailureText=try await realSettings.evaluateJavaScript("document.querySelector('#cloud-error').textContent") as? String
+        let ordinaryFailureHasNoOutcome=(try await realSettings.evaluateJavaScript("document.querySelector('#cloud-message').textContent===''") as? Bool)==true
+        try check(serviceFailureText==CloudArchiveService.CloudError.transport.localizedDescription && ordinaryFailureHasNoOutcome,"ordinary service failure remains an error while private provider text stays redacted")
+        try check((settingsApp.store.snapshot()["jobs"] as! [[String:Any]]).contains{$0["command"] as? String=="cloud.check" && $0["status"] as? String=="failed"},"ordinary service failure remains a failed job")
+        try check(PaperDigestApp.cloudCancellationReply(DesktopError.message("cancelled appears in an ordinary failure"),command:"cloud.check")==nil,"ordinary error words cannot grant a native cancellation outcome")
+        try check(PaperDigestApp.cloudCancellationReply(CancellationError(),command:"model.run")==nil,"cloud cancellation presentation cannot change a non-cloud command protocol")
         _=beforeRestorePersonal // Exact original research material is retained; jobs legitimately advance.
         print("Cloud integration review: \(passed) passed; 0 failed; temporary sources only; no real credentials/network")
     }
