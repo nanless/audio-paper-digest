@@ -1,0 +1,17 @@
+{
+  "publicHTMLBytes": 32573,
+  "publicHTMLSHA256": "2fc6a849315312a16fa916ff6e0e8df9728ad596270a9d953894e9e778eeaa4b",
+  "mathObservation": {
+    "rawMathML": 0,
+    "originalDisplayTeX": [
+      "\\mathbf{x}_{\\mathrm{mix}}=\\mu\\mathbf{x}_{a}+(1-\\mu)\\mathbf{x}_{b}.",
+      "\\rho_{\\alpha}(\\mathbf{u},\\mathbf{v})=\\mathbf{u}-\\alpha\\frac{\\mathbf{u}^{\\top}\\mathbf{v}}{\\|\\mathbf{v}\\|_{2}^{2}}\\mathbf{v}.",
+      "\\ell_{\\mathrm{patch}}(\\mathbf{x}_{a},\\mathbf{x}_{b})=\\frac{1}{|\\mathcal{M}|}\\sum_{j\\in\\mathcal{M}}\\left\\|\\mathbf{h}_{a|b}^{(j)}-\\operatorname{sg}\\left(\\mathbf{p}_{a}^{(j)}\\right)\\right\\|_{2}^{2}.",
+      "\\ell_{\\mathrm{clip}}(\\mathbf{x}_{a},\\mathbf{x}_{b})=\\left\\|\\rho_{\\alpha_{a|b}^{\\star}}\\left(\\mathbf{z}_{\\mathrm{mix}},\\mathbf{z}_{b}\\right)-\\operatorname{sg}\\left(\\mathbf{t}_{a}\\right)\\right\\|_{2}^{2}."
+    ],
+    "imageTags": 3,
+    "imageSrcPresent": 0,
+    "tables": 4
+  },
+  "contractNote": "published-html-mathml-v1 identifies extraction preservation; this count is observation, not a contract rewrite"
+}

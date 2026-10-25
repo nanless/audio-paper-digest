@@ -450,21 +450,36 @@ private final class CloudDAVListing: NSObject, XMLParserDelegate {
         return delegate.members
     }
     private static func checkedPath(_ href: String) throws -> String {
-        guard let url = URL(string:href,relativeTo:URL(string:"https://dav.jianguoyun.com")!)?.absoluteURL,
-              CloudArchiveService.validURL(url), !href.contains("\\"), !url.path.contains("/../"), !url.path.contains("/./") else { throw CloudArchiveService.CloudError.incompleteListing }
-        return URLComponents(url:url,resolvingAgainstBaseURL:false)!.path
+        guard !href.contains("\\"), let raw = URLComponents(string: href),
+              (raw.scheme != nil || (raw.host == nil && href.hasPrefix("/"))),
+              raw.percentEncodedPath == raw.path, !raw.path.contains("//"),
+              !raw.path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0 == "." || $0 == ".." }),
+              let url = URL(string: href, relativeTo: URL(string: "https://dav.jianguoyun.com")!)?.absoluteURL,
+              let actual = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              actual.scheme == "https", actual.host == "dav.jianguoyun.com", (actual.port == nil || actual.port == 443),
+              actual.user == nil, actual.password == nil, actual.query == nil, actual.fragment == nil,
+              actual.path == raw.path, actual.path == "/dav" || actual.path.hasPrefix("/dav/") else {
+            throw CloudArchiveService.CloudError.incompleteListing
+        }
+        return actual.path
     }
+    /// A successful DAV collection may identify itself without its final slash.
+    /// Do not normalize files, repeated slashes, escaped separators, or dot paths.
+    private static func collectionPath(_ path: String) -> String { path.hasSuffix("/") ? path : path + "/" }
     static func requireCollection(_ data: Data, path: String) throws {
         let members = try read(data)
-        guard members.count == 1, try checkedPath(members[0].href) == path,
-              members[0].collection, members[0].success else { throw CloudArchiveService.CloudError.incompleteListing }
+        guard members.count == 1, members[0].collection, members[0].success,
+              try collectionPath(checkedPath(members[0].href)) == path else { throw CloudArchiveService.CloudError.incompleteListing }
     }
     static func parse(_ data: Data, path: String, month: String) throws -> [CloudArchiveService.SnapshotReference] {
         let members = try read(data)
         var root = false, references: [CloudArchiveService.SnapshotReference] = [], seen = Set<String>()
         for member in members {
-            let actual = try checkedPath(member.href)
-            guard seen.insert(actual).inserted, member.success else { throw CloudArchiveService.CloudError.incompleteListing }
+            let raw = try checkedPath(member.href)
+            let actual = member.collection ? collectionPath(raw) : raw
+            // No resource may appear twice through the trailing-slash alias,
+            // including a file/collection disagreement for the same URI.
+            guard seen.insert(collectionPath(raw)).inserted, member.success else { throw CloudArchiveService.CloudError.incompleteListing }
             if actual == path { guard member.collection else { throw CloudArchiveService.CloudError.incompleteListing }; root = true; continue }
             guard actual.hasPrefix(path) else { throw CloudArchiveService.CloudError.incompleteListing }
             let tail = String(actual.dropFirst(path.count))

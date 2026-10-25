@@ -15,7 +15,9 @@ apps/macos/release.sh inspect \
   --version 1.0.0
 ```
 
-`inspect`只读核对工作区、来源提交、清单、主程序、包内文件、实际签名、架构与最低系统。工作区须干净，包括文档；构建提交之后的最终HEAD若有差异，只接受已经提交的 `docs/*.md` 文档变化，并在产物中分别记录运行源码提交、发行对应提交和文档文件集合。任何业务代码、资源、构建脚本、配置或测试提交变化都要求重新构建，不会被解释成“只是文档”。
+`inspect`只读核对工作区、来源提交、清单、主程序、包内文件、实际签名、架构与最低系统。工作区须干净，包括文档。构建提交之后，只接受已提交的 `docs/*.md`、独立的 `apps/android/` 树，以及未打入应用的 `apps/macos/release_tools.py` 和 `apps/macos/Tests/ReleasePackaging.test.py` 两个发行验证文件。文档变化与其他运行外变化分别记录在 `documentationOnlyChanges`、`otherNonRuntimeChanges`，运行源码提交与最终发行提交也分别保留；Android代码不能冒称文档。
+
+这项放行仍逐项比较 Mac 清单中的原 Git 字节、当前检出字节和实际包内文件，并核完整原生源码、构建输入、签名和包文件集合。Mac 业务、资源、构建、依赖锁或其他测试文件变化仍要求重新构建。2026-10-25 新增的 Android 独立树、共享输入变更拒绝及验证文件分类已通过45项隔离测试和非作者复核；这不证明 Android APK 或真实业务验收已经通过。Android 仍按[自己的功能表](android-feature-parity.md)及最终安装包独立核验。
 
 ```bash
 apps/macos/release.sh prepare \

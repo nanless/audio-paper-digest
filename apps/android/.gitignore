@@ -1,0 +1,16 @@
+/.gradle/
+/.kotlin/
+/.qa/
+/.build/
+/local.properties
+**/build/
+*.jks
+*.keystore
+/signing.properties
+
+!app/src/main/java/com/nanless/paperdigest/data/
+!app/src/main/java/com/nanless/paperdigest/data/**
+!app/src/test/java/com/nanless/paperdigest/data/
+!app/src/test/java/com/nanless/paperdigest/data/**
+!app/src/androidTest/java/com/nanless/paperdigest/data/
+!app/src/androidTest/java/com/nanless/paperdigest/data/**

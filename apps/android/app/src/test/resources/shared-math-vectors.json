@@ -1,0 +1,219 @@
+{
+  "source": "apps/macos/Resources/native.js",
+  "sourceSHA256": "5b04b212b1863f161e0b8412ff1b1e8f041a38862d2747b6cd5e1c23c35d7189",
+  "excerptSHA256": "d9ce66ce720f3a41a52914c864c77f1011de1297db4b31ce0d2433ff91fef5dd",
+  "method": "Actual current Mac escapedAt/scientificMathAt/nextScientificMath executed in an isolated vm with no DOM or product work",
+  "scope": "delimiter recognition for HTML text; code/pre/attributes excluded by each platform DOM traversal, not this parser",
+  "vectors": [
+    {
+      "name": "inline",
+      "text": "A $x_a$ B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 7,
+          "text": "x_a",
+          "display": false,
+          "raw": "$x_a$"
+        }
+      ]
+    },
+    {
+      "name": "display-dollar",
+      "text": "A $$x^2$$ B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 9,
+          "text": "x^2",
+          "display": true,
+          "raw": "$$x^2$$"
+        }
+      ]
+    },
+    {
+      "name": "bracket",
+      "text": "A \\[\\frac{x}{y}\\] B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 17,
+          "text": "\\frac{x}{y}",
+          "display": true,
+          "raw": "\\[\\frac{x}{y}\\]"
+        }
+      ]
+    },
+    {
+      "name": "parenthesis",
+      "text": "A \\(x+y\\) B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 9,
+          "text": "x+y",
+          "display": false,
+          "raw": "\\(x+y\\)"
+        }
+      ]
+    },
+    {
+      "name": "escaped-currency",
+      "text": "价格 \\$5；另一个价格 \\$6。公式 $x_a$ 保留。",
+      "expected": [
+        {
+          "start": 20,
+          "end": 25,
+          "text": "x_a",
+          "display": false,
+          "raw": "$x_a$"
+        }
+      ]
+    },
+    {
+      "name": "escaped-close",
+      "text": "A $x+\\$+y$ B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 10,
+          "text": "x+\\$+y",
+          "display": false,
+          "raw": "$x+\\$+y$"
+        }
+      ]
+    },
+    {
+      "name": "escaped-bracket",
+      "text": "A \\\\[x\\\\] B",
+      "expected": []
+    },
+    {
+      "name": "even-slashes-dollar",
+      "text": "A \\\\$x$ B",
+      "expected": [
+        {
+          "start": 4,
+          "end": 7,
+          "text": "x",
+          "display": false,
+          "raw": "$x$"
+        }
+      ]
+    },
+    {
+      "name": "inline-newline",
+      "text": "A $x\ny$ B",
+      "expected": []
+    },
+    {
+      "name": "display-newline",
+      "text": "A $$x\ny$$ B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 9,
+          "text": "x\ny",
+          "display": true,
+          "raw": "$$x\ny$$"
+        }
+      ]
+    },
+    {
+      "name": "bracket-newline",
+      "text": "A \\[x\ny\\] B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 9,
+          "text": "x\ny",
+          "display": true,
+          "raw": "\\[x\ny\\]"
+        }
+      ]
+    },
+    {
+      "name": "paren-newline",
+      "text": "A \\(x\ny\\) B",
+      "expected": []
+    },
+    {
+      "name": "empty-dollar",
+      "text": "A $$ B",
+      "expected": []
+    },
+    {
+      "name": "empty-bracket",
+      "text": "A \\[\\] B",
+      "expected": []
+    },
+    {
+      "name": "unclosed",
+      "text": "A \\(x B",
+      "expected": []
+    },
+    {
+      "name": "multiple",
+      "text": "A $x$ and \\[y\\] then $$z$$",
+      "expected": [
+        {
+          "start": 2,
+          "end": 5,
+          "text": "x",
+          "display": false,
+          "raw": "$x$"
+        },
+        {
+          "start": 10,
+          "end": 15,
+          "text": "y",
+          "display": true,
+          "raw": "\\[y\\]"
+        },
+        {
+          "start": 21,
+          "end": 26,
+          "text": "z",
+          "display": true,
+          "raw": "$$z$$"
+        }
+      ]
+    },
+    {
+      "name": "spaces",
+      "text": "A $ x $ B",
+      "expected": [
+        {
+          "start": 2,
+          "end": 7,
+          "text": " x ",
+          "display": false,
+          "raw": "$ x $"
+        }
+      ]
+    },
+    {
+      "name": "literal-code-text",
+      "text": "Literal text contains `$x$` (HTML text rule, not a code element)",
+      "expected": [
+        {
+          "start": 23,
+          "end": 26,
+          "text": "x",
+          "display": false,
+          "raw": "$x$"
+        }
+      ]
+    },
+    {
+      "name": "html-attribute-is-not-text",
+      "text": "link title is outside text walk",
+      "expected": []
+    },
+    {
+      "name": "plain",
+      "text": "A normal paragraph with no math",
+      "expected": []
+    }
+  ]
+}

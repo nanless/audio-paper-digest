@@ -41,7 +41,7 @@ export function mountCloud(app){
  const $=id=>pane.querySelector('#'+id),fields=['account','folder','automatic','intervalHours'];
  const nodes={account:$('cloud-account'),folder:$('cloud-folder'),automatic:$('cloud-automatic'),intervalHours:$('cloud-interval')};
  const dirty=new Set(),revisions=new Map(fields.map(k=>[k,0]));
- let state={account:'',folder:'PaperDigest',automatic:false,intervalHours:24,credentialState:'unknown',busy:false},request=0,action=0,listGeneration=0,submitting=false,cancelPending=false,disposed=false,message='',localError='',stateReadError='';
+ let state={account:'',folder:'PaperDigest',automatic:false,intervalHours:24,credentialState:'unknown',busy:false},request=0,action=0,listGeneration=0,submitting=false,cancelPending=false,disposed=false,message='',localError='',stateReadError='',checkedTarget=null;
  $('cloud-month').value=new Date().toISOString().slice(0,7);
  const monthValid=value=>/^\d{4}-(?:0[1-9]|1[0-2])$/.test(value)&&Number(value.slice(0,4))>=2000;
  const snapshotValid=(s,month)=>s&&s.month===month&&typeof s.id==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(s.id)&&Number.isSafeInteger(s.encodedBytes)&&s.encodedBytes>=0&&Number.isSafeInteger(s.chunkCount)&&s.chunkCount>=1&&typeof s.sha256==='string'&&/^[a-f0-9]{64}$/.test(s.sha256);
@@ -73,12 +73,12 @@ export function mountCloud(app){
   const token=++request;
   try{const next=await app.call('cloud.state');if(disposed||token!==request)return;
    if(!next||typeof next!=='object'||Array.isArray(next))throw new Error('坚果云本机状态格式无效');
-   if(state.account!==next.account||state.folder!==next.folder)invalidateVersions();if(state.busy&&!next.busy&&message.startsWith('已请求取消'))message='当前传输已结束；已完成步骤仍保留。';state=next;stateReadError='';paint();return state;
+   if(state.account!==next.account||state.folder!==next.folder)invalidateVersions();if(checkedTarget&&(next.account!==checkedTarget.account||next.folder!==checkedTarget.folder)){checkedTarget=null;if(message.startsWith('本次连接检查通过'))message='连接目标已变化，请重新检查当前连接。';}if(state.busy&&!next.busy&&message.startsWith('已请求取消'))message='当前传输已结束；已完成步骤仍保留。';state=next;stateReadError='';paint();return state;
   }catch(e){if(!disposed&&token===request){stateReadError='未能更新坚果云本机状态：'+(e?.message||String(e));paint();}throw e;}
  }
  async function perform(command,payload={},after){
   if(disposed||submitting||(command!=='cloud.revealTransfers'&&(state.busy||dirty.size)))return;
-  const token=++action;submitting=true;localError='';message='正在处理，请等待实际结果。';paint();
+  const token=++action,checkTarget=command==='cloud.check'?{account:state.account,folder:state.folder}:null;checkedTarget=null;submitting=true;localError='';message='正在处理，请等待实际结果。';paint();
   try{
    const pending=app.call(command,payload);
    // This local read lets a native job expose its cancellation ID. It never
@@ -89,7 +89,7 @@ export function mountCloud(app){
    if(command==='cloud.upload')message='传输操作已结束，完整备份状态以实际回读结果为准。';
    else if(command==='cloud.restore')message='恢复操作已结束，请核对当前资料及原生窗口提示。';
    else if(command==='cloud.list')message='版本读取操作已结束，请查看当前月份的实际结果。';
-   else if(command==='cloud.check')message='连接检查已结束，请查看实际状态。';
+   else if(command==='cloud.check'){checkedTarget=checkTarget;message='本次连接检查通过：已完成坚果云 WebDAV 认证并读取根目录；尚未验证上传权限或完整备份。';}
    else if(command==='cloud.revealTransfers')message='已请求打开本机保留快照目录；此操作不连接网盘。';
    else if(command==='cloud.setPassword'||command==='cloud.deletePassword')message='应用密码操作已结束；密码仅由原生钥匙串管理。';
    await refresh();

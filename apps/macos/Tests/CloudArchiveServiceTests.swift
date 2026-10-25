@@ -63,6 +63,7 @@ private actor CloudTestDAV {
     var requests: [Recorded] = []
     var faults: [Fault] = []
     var overrideListing: Data?
+    var omitCollectionSlash = false
     var responseURL: URL?
     var block = false
     var cancelledRequestOnce = false
@@ -74,6 +75,7 @@ private actor CloudTestDAV {
     func remove(_ path: String) { files.removeValue(forKey:path) }
     func addDirectory(_ path: String) { directories.insert(path) }
     func listing(_ data: Data?) { overrideListing=data }
+    func missingCollectionSlash(_ value: Bool) { omitCollectionSlash=value }
     func redirectResponse(_ url: URL?) { responseURL=url }
     func cancelNextRequest() { cancelledRequestOnce=true }
     func hold() { block=true }
@@ -119,7 +121,9 @@ private actor CloudTestDAV {
                 }
                 for file in files.keys.sorted() where file.hasPrefix(path) && !file.dropFirst(path.count).contains("/") { members.append((file,false)) }
             }
-            return response(207,Self.xml(members))
+            return response(207,Self.xml(members.map { path, collection in
+                (omitCollectionSlash && collection && path != "/dav/" ? String(path.dropLast()) : path, collection)
+            }))
         default: return response(405)
         }
     }
@@ -439,6 +443,30 @@ private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
             for _ in 0..<600 { await many.addDirectory(monthPath+UUID().uuidString.lowercased()+"/") }
             try await rejects { _=try await budget.list(month:"2026-10") }
             try require(await many.records().count==600,"never dispatch request 601 or claim prefix is complete")
+        }
+        await check("successful DAV collection aliases allow an immutable upload and month list without trailing slashes") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog();await dav.missingCollectionSlash(true)
+            let s=try service(dav,log);let info=try await s.upload(encodedBackup:small)
+            try require(try await s.list(month:info.reference.month)==[info],"collection aliases preserve exact completed snapshot")
+            try require(try await s.download(reference:info.reference)==small,"original encoded bytes unchanged")
+        }
+        await check("trailing-slash aliases cannot hide duplicates or file-collection conflicts") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
+            let path="/dav/PaperDigest/2026-10/",id="00112233-4455-6677-8899-aabbccddeeff"
+            await dav.addDirectory(path)
+            let cases=[CloudTestDAV.xml([(path,true),(String(path.dropLast()),true)]),
+                       CloudTestDAV.xml([(path,true),(path+id,true),(path+id+"/",true)]),
+                       CloudTestDAV.xml([(path,true),(path+id,false),(path+id+"/",true)])]
+            for xml in cases { await dav.listing(xml);try await rejects(.incompleteListing) { _=try await s.list(month:"2026-10") } }
+        }
+        await check("collection alias compatibility never accepts escaped or ambiguous URI paths") {
+            let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
+            let path="/dav/PaperDigest/2026-10/"
+            await dav.addDirectory(path)
+            for bad in ["/dav/PaperDigest/2026-10//", "/dav/PaperDigest/%32%30%32%36-10", "/dav/PaperDigest%2F2026-10", "/dav/PaperDigest/../PaperDigest/2026-10", "dav/PaperDigest/2026-10", "//dav.jianguoyun.com/dav/PaperDigest/2026-10"] {
+                await dav.listing(CloudTestDAV.xml([(bad,true)]))
+                try await rejects(.incompleteListing) { _=try await s.list(month:"2026-10") }
+            }
         }
         await check("750 DAV entries, missing root, evil href, duplicate and DTD refuse incomplete lists") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)

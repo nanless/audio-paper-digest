@@ -1,0 +1,1 @@
+<resources><style name="Theme.PaperDigest" parent="Theme.Material3.DayNight.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">false</item><item name="android:windowActionModeOverlay">true</item><item name="android:colorAccent">#A9C7EF</item></style></resources>
