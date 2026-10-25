@@ -36,6 +36,8 @@ class CloudFailure(val code: String, val untilMillis: Long? = null) : Exception(
     "integrity" -> "云端快照完整性校验失败，当前研究资料未改变"
     "incompleteListing" -> "月份列表不完整，不能据此判断备份是否存在"
     "busy" -> "已有云端操作正在进行"
+    "selectionExpired" -> "此版本选择已失效，请重新读取当前目标的月份列表"
+    "versionChanged" -> "云端此版本的清单已变化，请重新读取列表并核对后再恢复"
     "targetChanged" -> "云端保存目标已经变化，旧任务未读取凭据或上传资料；请在当前目标明确新建备份"
     "checkpointStore" -> "本机续传记录保存失败，已停止云端操作"
     "redirect" -> "云端返回重定向，已停止发送认证信息"
@@ -75,6 +77,20 @@ data class CloudManifest(val reference: CloudReference, val createdAt: Long, val
         }
         fun number(obj: JSONObject, key: String): Long { val n = obj.get(key); require(n is Number && n.toDouble().isFinite() && n.toDouble() == n.toLong().toDouble()); return n.toLong() }
         fun month(time: Long) = Instant.ofEpochMilli(time).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("uuuu-MM"))
+    }
+}
+/** Exact raw listing receipt; small immutable identity, not a client-supplied authority. */
+data class CloudSnapshotIdentity(val reference: CloudReference, val createdAt: Long, val encodedBytes: Long,
+    val sha256: String, val chunkCount: Int, val manifestSHA256: String, val manifestBytes: Int) {
+    fun info() = JSONObject().put("reference", reference.json()).put("createdAt", Instant.ofEpochMilli(createdAt).toString())
+        .put("encodedBytes", encodedBytes).put("sha256", sha256).put("chunkCount", chunkCount)
+        .put("manifestSHA256", manifestSHA256).put("manifestBytes", manifestBytes)
+    internal fun requireRaw(raw: ByteArray, ref: CloudReference) {
+        if (reference != ref || raw.size != manifestBytes || BackupCodec.hash(raw) != manifestSHA256) throw CloudFailure("versionChanged")
+    }
+    companion object {
+        internal fun observed(manifest: CloudManifest, raw: ByteArray) = CloudSnapshotIdentity(manifest.reference,
+            manifest.createdAt, manifest.encodedBytes, manifest.sha256, manifest.chunks.size, BackupCodec.hash(raw), raw.size)
     }
 }
 data class CloudCheckpoint(val destinationID: String, val folder: String, val manifest: CloudManifest, val verified: Set<Int> = emptySet(), val manifestVerified: Boolean = false, val retryAfter: Long? = null) {
@@ -177,7 +193,9 @@ class CloudArchive(
         if (CloudManifest.parse(actual, cp.manifest.reference) != cp.manifest) throw CloudFailure("integrity")
         cp = cp.copy(manifestVerified = true, retryAfter = null); persist(cp); cp.manifest
     }
-    suspend fun list(month: String): List<CloudManifest> = operation {
+    suspend fun list(month: String): List<CloudManifest> = listMapped(month) { manifest, _ -> manifest }
+    suspend fun listIdentities(month: String): List<CloudSnapshotIdentity> = listMapped(month, CloudSnapshotIdentity::observed)
+    private suspend fun <T> listMapped(month: String, observed: (CloudManifest, ByteArray) -> T): List<T> = operation {
         CloudReference(month, UUID(0, 0).toString()); val directory = "/dav/$folder/$month/"
         val response = requestResponse("PROPFIND", directory, PROP, mapOf("Depth" to "1", "Content-Type" to "application/xml; charset=utf-8"), setOf(207, 404), LISTING)
         if (response.status == 404) emptyList() else {
@@ -188,12 +206,17 @@ class CloudArchive(
                 if (m.collection) { try { CloudReference(month, tail.removeSuffix("/")).also { require(tail == it.id + "/") } } catch (e: Exception) { throw CloudFailure("incompleteListing") } }
                 else { if ('/' in tail) throw CloudFailure("incompleteListing"); null }
             }
-            val result = ArrayList<CloudManifest>(); for (ref in refs) optionalGet(path(ref) + "manifest.json", MANIFEST)?.let { result += CloudManifest.parse(it, ref) }
-            result.sortedWith(compareByDescending<CloudManifest> { it.createdAt }.thenBy { it.reference.id })
+            val result = ArrayList<Triple<Long, String, T>>(); for (ref in refs) optionalGet(path(ref) + "manifest.json", MANIFEST)?.let { raw ->
+                val manifest = CloudManifest.parse(raw, ref); result += Triple(manifest.createdAt, manifest.reference.id, observed(manifest, raw))
+            }
+            result.sortedWith(compareByDescending<Triple<Long, String, T>> { it.first }.thenBy { it.second }).map { it.third }
         }
     }
-    suspend fun download(reference: CloudReference, target: File): CloudManifest = operation {
-        require(!target.exists()); val base = path(reference); val manifest = CloudManifest.parse(request("GET", base + "manifest.json", accepted = setOf(200), limit = MANIFEST), reference)
+    suspend fun download(reference: CloudReference, target: File, expected: CloudSnapshotIdentity? = null): CloudManifest = operation {
+        require(!target.exists()); val base = path(reference)
+        val raw = request("GET", base + "manifest.json", accepted = setOf(200), limit = MANIFEST)
+        expected?.requireRaw(raw, reference) // Before any chunk request or local output creation.
+        val manifest = CloudManifest.parse(raw, reference)
         try {
             FileOutputStreamSync(target).use { out -> for (chunk in manifest.chunks) {
                 val bytes = request("GET", base + chunkName(chunk.index), accepted = setOf(200), limit = chunk.bytes)

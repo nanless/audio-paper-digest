@@ -114,6 +114,8 @@ class RootController private constructor(private val context: Context, private v
         }
     }
     val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) })
+    private val cloudSelections = CloudRestoreSelections(cloud) { CloudSelectionContext(cloud.targetID, dispatch.epoch) }
+    private fun cloudView(): JSONObject = cloud.state().put("selectionContext", cloudSelections.contextToken())
     private val zotero = ZoteroService(research, secrets, ZoteroMaterialProvider { options ->
         maintenance.withLock {
             val bound = readingRequests[options.getString("readingRequestID")] ?: error("存档准备已失效，请重新核验当前阅读材料")
@@ -169,7 +171,7 @@ class RootController private constructor(private val context: Context, private v
             val viewed = offlineReading?.takeIf { old -> old.paper.id == it.selectedPaperId }?.paper ?: it.viewedPaper?.takeIf { old -> old.id == it.selectedPaperId } ?: current
             val reading = it.copy(papers = papers, viewedPaper = viewed, article = article, pdfReceipt = receipt)
             reading.copy(readingMaterialID = readingID(reading), personal = p, settings = p.getJSONObject("settings").copy(), jobs = mergedJobs(p.getJSONArray("jobs").objects()),
-            sessions = p.getJSONArray("sessions").objects(), cloud = cloud.state(), zotero = zoteroView, catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
+            sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(), zotero = zoteroView, catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
     }
     private fun paper(id: String): Paper = library.papers().firstOrNull { it.id == id } ?: throw AppFailure("missing", "论文不在已保存资料库中")
     private fun selected(): Paper = offlineReading?.takeIf { it.paper.id == _state.value.selectedPaperId }?.paper ?: _state.value.viewedPaper?.takeIf { it.id == _state.value.selectedPaperId } ?: paper(_state.value.selectedPaperId ?: throw AppFailure("missing", "请先选择论文"))
@@ -992,7 +994,7 @@ class RootController private constructor(private val context: Context, private v
         return JSONObject().put("restoreID", id).put("fileCount", staged.entries.size).put("sha256", staged.encodedSHA256).put("message", "完整备份已通过逐文件校验。恢复后将回到此快照；保留本机连接、实际派发计数和恢复前副本。")
     }
     private suspend fun cloudCommand(command: String, payload: JSONObject): JSONObject = when (command) {
-        "cloud.state" -> cloud.state()
+        "cloud.state" -> cloudView()
         "cloud.save" -> cloud.save(payload.getString("account"), payload.optString("folder", "PaperDigest"), payload.optBoolean("automatic"), payload.optInt("intervalHours", 24))
         "cloud.check" -> runTask(command) { cloud.check() }
         "cloud.upload" -> maintenance.withLock {
@@ -1003,8 +1005,15 @@ class RootController private constructor(private val context: Context, private v
             WorkManager.getInstance(context).enqueueUniqueWork("paperdigest-cloud-manual-${cloud.targetID}", ExistingWorkPolicy.KEEP, work)
             JSONObject().put("queued", true).put("jobID", id.toString()).put("message", "备份已加入后台任务，完整回读通过后才会标为完成")
         }
-        "cloud.list" -> JSONObject().put("snapshots", JSONArray(cloud.list(payload.getString("month")).map { row -> val r = row.getJSONObject("reference"); row.copy().put("month", r.getString("month")).put("id", r.getString("id")) }))
-        "cloud.restore.prepare" -> runTask(command) { val prepared = cloud.prepareRestore(CloudReference(payload.getString("month"), payload.getString("id"))); restoreToken(prepared.staged).put("reference", prepared.manifest.reference.json()) }
+        "cloud.list" -> cloudSelections.list(payload.getString("month"))
+        "cloud.restore.prepare" -> {
+            val selectionID = payload.getString("selectionID")
+            runTask(command, gate = { cloudSelections.requireSelection(selectionID) }) {
+                val operation = currentCoroutineContext()
+                val prepared = cloudSelections.prepare(selectionID) { operation.ensureActive() }
+                restoreToken(prepared.staged).put("reference", prepared.manifest.reference.json())
+            }
+        }
         "cloud.archivePending" -> cloud.archivePending()
         "cloud.retained.list" -> JSONObject().put("retained", cloud.retainedList())
         "retained.list" -> JSONObject().put("transfers", JSONArray(cloud.retainedList().objects().map { row -> row.copy().put("id", row.optString("transferID", row.optString("id"))) }))

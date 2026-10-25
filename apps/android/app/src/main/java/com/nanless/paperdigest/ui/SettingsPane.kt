@@ -95,11 +95,15 @@ import java.time.ZoneOffset
  val cloud=state.cloud;var account by rememberSaveable{mutableStateOf(cloud.optString("account"))};var folder by rememberSaveable{mutableStateOf(cloud.optString("folder","PaperDigest"))};var automatic by rememberSaveable{mutableStateOf(cloud.optBoolean("automatic"))};var interval by rememberSaveable{mutableStateOf(cloud.optInt("intervalHours",24).toString())};var dirty by rememberSaveable{mutableStateOf(false)}
  LaunchedEffect(cloud.toString()){if(!dirty){account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString()}}
  var month by rememberSaveable{mutableStateOf(YearMonth.now(ZoneOffset.UTC).toString())};var versions by remember{mutableStateOf<List<JSONObject>>(emptyList())};var confirm by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)}
+ val listGate=remember{CloudListRequestGate()};val actualContext by rememberUpdatedState(cloud.optString("selectionContext"));var listedTicket by remember{mutableStateOf<CloudListRequestGate.Ticket?>(null)};var listing by remember{mutableStateOf(false)}
+ fun retireList(){listGate.invalidate();versions=emptyList();listedTicket=null;listing=false;error=null}
+ LaunchedEffect(actualContext){retireList()}
+ DisposableEffect(listGate){onDispose{listGate.invalidate()}}
  var saving by remember{mutableStateOf(false)};val busy=cloud.optBoolean("busy")||saving||state.busy;val pending=cloud.optJSONObject("pending");val scope=rememberCoroutineScope()
  Text("坚果云资料",style=MaterialTheme.typography.titleLarge);Text("保存全部研究空间。独立目录与 Zotero 附件同步分开；资料上限 512 MiB，编码快照上限 750 MiB。自动任务由 Android 调度，可能延后；强制停止应用后不会继续。")
- OutlinedTextField(account,{account=it;dirty=true},Modifier.fillMaxWidth(),label={Text("坚果云账号")},enabled=!busy,singleLine=true);OutlinedTextField(folder,{folder=it;dirty=true},Modifier.fillMaxWidth(),label={Text("独立目录（例如 PaperDigest，不可用 zotero）")},enabled=!busy,singleLine=true)
- Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
- Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存设置")};TextButton({account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
+ OutlinedTextField(account,{account=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("坚果云账号")},enabled=!busy,singleLine=true);OutlinedTextField(folder,{folder=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("独立目录（例如 PaperDigest，不可用 zotero）")},enabled=!busy,singleLine=true)
+ Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true;retireList()},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true;retireList()},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
+ Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存设置")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
  OutlinedButton(password,enabled=!dirty&&!busy){Text("设置第三方应用密码…")};OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy){Text("检查连接与权限")}
  cloud.optString("lastError").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
  if(pending!=null)Text(if(pending.optBoolean("damaged"))"未完成材料损坏或缺少检查点。可原样保留，但不能保证完整恢复。" else "有未完成的同一快照：${pending.optLong("fileCount")} 文件 / ${pending.optLong("encodedBytes")} 字节。继续不会创建新版本。")
@@ -107,9 +111,26 @@ import java.time.ZoneOffset
  if(busy&&cloud.optString("activeJobID").isNotEmpty())OutlinedButton({action("jobs.cancel",obj("id" to cloud.optString("activeJobID")))}){Text("取消当前传输（保留续传）")}
  if(pending!=null)TextButton({confirm=true},enabled=!busy&&!dirty){Text("保留快照并停止本次续传…")}
  cloud.optJSONObject("lastBackup")?.let{Text("最近完整保存：${it.optString("createdAt")} · ${it.optLong("encodedBytes")} 字节",style=MaterialTheme.typography.bodySmall)};if(cloud.optBoolean("automaticPaused"))Text("自动备份已暂停：请检查上述原因后显式重新启用。",color=MaterialTheme.colorScheme.error)
- HorizontalDivider();Text("已保存版本",style=MaterialTheme.typography.titleMedium);Text("版本按 UTC 月份归档，时间按原记录显示。列表不会自动联网。")
- OutlinedTextField(month,{month=it},label={Text("UTC 月份 YYYY-MM")},singleLine=true)
- Button({scope.launch{try{versions=controller.execute("cloud.list",obj("month" to month)).rows("snapshots");error=null}catch(e:Exception){error=e.message}}},enabled=!dirty&&!busy&&month.matches(Regex("\\d{4}-\\d{2}"))){Text("读取此月版本")};error?.let{Text(it)}
- versions.forEach{v->OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text(v.optString("createdAt"));Text("${v.optLong("encodedBytes")} 字节",style=MaterialTheme.typography.bodySmall);Text(v.optString("sha256"),style=MaterialTheme.typography.labelSmall);TextButton({action("cloud.restore.prepare",obj("month" to v.optString("month",month),"id" to v.optString("id")))},enabled=!busy&&!dirty){Text("校验并准备恢复…")}}}}
+ HorizontalDivider();Text("已保存版本",style=MaterialTheme.typography.titleMedium);Text("版本按 UTC 月份归档，时间显示为本机时区。列表不会自动联网；目标或月份变化后请重新读取。")
+ OutlinedTextField(month,{month=it;retireList()},label={Text("UTC 月份 YYYY-MM")},singleLine=true,enabled=!busy)
+ Button({val ticket=listGate.begin(actualContext,month);versions=emptyList();listedTicket=null;listing=true;error=null;scope.launch{try{
+  val reply=controller.execute("cloud.list",obj("month" to ticket.month))
+  if(listGate.accepts(ticket,actualContext,month)&&!dirty&&reply.optString("selectionContext")==ticket.context&&reply.optString("month")==ticket.month){versions=reply.rows("snapshots");listedTicket=ticket;error=null}
+ }catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;if(listGate.accepts(ticket,actualContext,month))error=e.message}finally{if(listGate.accepts(ticket,actualContext,month))listing=false}}},enabled=!dirty&&!busy&&!listing&&actualContext.isNotEmpty()&&month.matches(Regex("\\d{4}-\\d{2}"))){Text(if(listing)"正在读取…" else "读取此月版本")};error?.let{Text(it)}
+ versions.forEach{v->key(v.optString("selectionID")){var details by remember{mutableStateOf(false)};val ticket=listedTicket
+  OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){
+   Text(cloudLocalTime(v.optString("createdAt")));Text(cloudReadableBytes(v.optLong("encodedBytes")),style=MaterialTheme.typography.bodySmall)
+   TextButton({details=!details}){Text(if(details)"收起校验信息" else "查看校验信息")}
+   if(details){Text("快照 SHA-256：${v.optString("sha256")}",style=MaterialTheme.typography.labelSmall);Text("清单 SHA-256：${v.optString("manifestSHA256")}",style=MaterialTheme.typography.labelSmall);Text("${v.optInt("chunkCount")} 个分块 · 清单 ${v.optInt("manifestBytes")} 字节",style=MaterialTheme.typography.bodySmall)}
+   TextButton({if(ticket!=null&&listGate.accepts(ticket,actualContext,month)&&!dirty)action("cloud.restore.prepare",obj("selectionID" to v.getString("selectionID")))},enabled=!busy&&!dirty&&ticket!=null&&listGate.accepts(ticket,actualContext,month)){Text("校验并准备恢复…")}
+  }}
+ }}
  if(confirm)AlertDialog(onDismissRequest={confirm=false},title={Text("原样保留并结束本次续传？")},text={Text("本机原快照和检查点移入保留区，云端半成品不自动删除。完整有效的快照可以导出后从文件恢复；损坏材料需要人工核对。")},confirmButton={TextButton({action("cloud.archivePending",JSONObject());confirm=false}){Text("保留并停止")}},dismissButton={TextButton({confirm=false}){Text("取消")}})
+}
+
+private fun cloudLocalTime(value:String):String=runCatching{java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM).withZone(java.time.ZoneId.systemDefault()).format(java.time.Instant.parse(value))}.getOrDefault(value)
+private fun cloudReadableBytes(bytes:Long):String {
+ val units=listOf("字节","KiB","MiB","GiB");var value=bytes.toDouble();var unit=0
+ while(value>=1024&&unit<units.lastIndex){value/=1024;unit++}
+ return if(unit==0)"$bytes 字节" else String.format(java.util.Locale.getDefault(),"%.1f %s",value,units[unit])
 }

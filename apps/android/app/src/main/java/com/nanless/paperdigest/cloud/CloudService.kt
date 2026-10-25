@@ -81,6 +81,10 @@ class CloudService(
     }
     suspend fun check(): JSONObject = operation { archive().probe(); credentialState = "present"; pause(false); state() }
     suspend fun list(month: String): List<JSONObject> = operation { archive().list(month).map { it.info() } }
+    internal suspend fun listBound(month: String, expectedDestinationID: String): List<CloudSnapshotIdentity> = operation {
+        if (destinationID != expectedDestinationID) throw CloudFailure("selectionExpired")
+        archive().listIdentities(month)
+    }
     suspend fun upload(automatic: Boolean = false, expectedDestinationID: String = targetID): JSONObject = operation {
         // A queued worker's target is authority, not a hint. Check after the
         // operation mutex is held, before obtaining credentials or a snapshot.
@@ -110,13 +114,18 @@ class CloudService(
         retained.deleteRecursively(); scheduleChanged(state()); info.info()
     }
     data class PreparedRestore(val id: String, val staged: BackupCodec.Staged, val manifest: CloudManifest)
-    suspend fun prepareRestore(reference: CloudReference, check: () -> Unit = {}): PreparedRestore {
+    suspend fun prepareRestore(reference: CloudReference, check: () -> Unit = {}): PreparedRestore = prepareRestoreInternal(reference, null, null, check)
+    internal suspend fun prepareRestoreBound(expected: CloudSnapshotIdentity, expectedDestinationID: String, check: () -> Unit = {}): PreparedRestore =
+        prepareRestoreInternal(expected.reference, expected, expectedDestinationID, check)
+    private suspend fun prepareRestoreInternal(reference: CloudReference, expected: CloudSnapshotIdentity?, expectedDestinationID: String?, check: () -> Unit): PreparedRestore {
         var preparedStage:BackupCodec.Staged?=null
         try { return operation {
+            if (expectedDestinationID != null && destinationID != expectedDestinationID) throw CloudFailure("selectionExpired")
             val capturedContext=coroutineContext;val stageCheck={capturedContext.ensureActive();check()}
+            stageCheck()
             val file = File(controlRoot, "download-${UUID.randomUUID()}.paperdigest")
             try {
-                val manifest = archive().download(reference, file)
+                val manifest = archive().download(reference, file, expected)
                 val staged = BackupCodec.stage(file.inputStream(), researchRoot.parentFile!!,stageCheck)
                 preparedStage=staged
                 if (staged.encodedSHA256 != manifest.sha256 || staged.encodedBytes != manifest.encodedBytes) throw CloudFailure("integrity")
