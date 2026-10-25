@@ -8,6 +8,7 @@ import com.nanless.paperdigest.data.*
 import com.nanless.paperdigest.model.StudyService
 import com.nanless.paperdigest.pdf.*
 import com.nanless.paperdigest.secret.SecretVault
+import com.nanless.paperdigest.secret.SecretStore
 import com.nanless.paperdigest.ui.*
 import com.nanless.paperdigest.zotero.*
 import kotlinx.coroutines.*
@@ -27,8 +28,12 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
 
 /** The Application owns one controller for UI and workers; maintenance never opens a second store. */
-class RootController internal constructor(private val context: Context, private val installBackground: Boolean = true,
-    private val exportStoreFactory: ((File, File) -> PendingExportStore)? = null): AppController {
+class RootController private constructor(private val context: Context, private val installBackground: Boolean,
+    private val exportStoreFactory: ((File, File) -> PendingExportStore)?, secretStore: SecretStore?): AppController {
+    internal constructor(context: Context, installBackground: Boolean = true, exportStoreFactory: ((File, File) -> PendingExportStore)? = null) :
+        this(context, installBackground, exportStoreFactory, null)
+    internal constructor(context: Context, installBackground: Boolean, secretStore: SecretStore) :
+        this(context, installBackground, null, secretStore)
     private val research = RootResearchDirectory.resolve(context.noBackupFilesDir)
     val personal = PersonalStore(research)
     private val library = CatalogRepository(context, personal)
@@ -41,7 +46,7 @@ class RootController internal constructor(private val context: Context, private 
     private val readingRequests = ConcurrentHashMap<String, ReadingRequest>()
     private val preparedReadings = ConcurrentHashMap<String, PreparedReading>()
     private val pdf = PdfRepository(context, research)
-    private val secrets = SecretVault(context)
+    private val secrets: SecretStore = secretStore ?: SecretVault(context)
     private val modelKeyBinding = ModelKeyBinding(File(context.noBackupFilesDir.canonicalFile, "PaperDigestDevice"))
     private val model = StudyService(personal, { modelKeyBinding.requireEndpoint(personal.settings().getString("endpoint")); secrets.load("model.primary") })
     private val exports = ExportService(context, personal, model, library::publishedRecords, library::citationOriginal)
@@ -53,6 +58,8 @@ class RootController internal constructor(private val context: Context, private 
     private val maintenance = Mutex()
     private val dispatch = WorkspaceDispatch(File(context.noBackupFilesDir.canonicalFile, "PaperDigestDevice"))
     private val generation = AtomicLong(0)
+    private val modelCredentialRevision = ModelCredentialRevision()
+    private val freshStudies = FreshStudyGate<FreshStudyIntent>()
     private val active = ConcurrentHashMap<String, Job>()
     private val restores = ConcurrentHashMap<String, BackupCodec.Staged>()
     private val _state = MutableStateFlow(UiState())
@@ -195,6 +202,7 @@ class RootController internal constructor(private val context: Context, private 
     }
 
     private data class ReadingAccess(val owner: String?, val generation: Long, val pdfSHA: String?, val selection: PdfSelection?, val pdfPage: Int, val materialID: String)
+    private data class FreshStudyIntent(val check: Boolean, val payload: JSONObject, val access: ReadingAccess, val epoch: String)
     private fun requireReading(access: ReadingAccess, pdfRequired: Boolean = false) {
         require(access.owner != null && _state.value.selectedPaperId == access.owner && generation.get() == access.generation) { "论文已经切换，原操作没有取得新论文的材料或派发权限" }
         if (pdfRequired) require(access.pdfSHA != null && _state.value.pdfDocument?.sha256 == access.pdfSHA) { "PDF 原件已经切换，未采用另一版本的页码或选区" }
@@ -260,6 +268,8 @@ class RootController internal constructor(private val context: Context, private 
     }
 
     override suspend fun execute(command: String, payload: JSONObject): JSONObject {
+        // A pending credential mutation must not wait behind maintenance and then silently acquire a new lease.
+        if (command in setOf("model.fresh.prepare", "model.fresh.check.prepare", "model.fresh.commit")) modelCredentialRevision.ready()
         // A cancelled search must not reset reader drafts or turn into a global task error.
         if (command == "library.search") return withContext(Dispatchers.IO) { maintenance.withLock { library.searchCached(payload.getString("query")) } }
         val current = _state.value
@@ -339,6 +349,9 @@ class RootController internal constructor(private val context: Context, private 
                     _state.update { previous -> require(generation.get() == operation); previous.copy(selectedPaperId = opened.paper.id, viewedPaper = Paper.fromJson(opened.paper.json()), article = library.prepareOfflineArticle(opened.article), pdfMode = false, pdfDocument = null, pdfReceipt = JSONObject(), pdfSelection = null, pdfPage = 1) }
                     JSONObject().put("opened", true).put("paperID", opened.paper.id).put("packageID", opened.id).put("offlineMode", true)
                 } } }
+                "model.fresh.prepare", "model.fresh.check.prepare" -> prepareFreshStudy(command, payload, access, dispatchAtStart)
+                "model.fresh.commit" -> commitFreshStudy(payload)
+                "model.fresh.discard" -> maintenance.withLock { JSONObject().put("cancelled", freshStudies.discard(payload.getString("confirmationID"))) }
                 "model.run", "model.check" -> prepareStudy(command, payload, access)
                 "model.recover" -> maintenance.withLock {
                     require(active.isEmpty()) { "请待当前任务结束再核验原保存回答" }
@@ -515,7 +528,101 @@ class RootController internal constructor(private val context: Context, private 
         }
         finally { pdfCommittedResults.remove(id); active.remove(id); refresh() }
     }
+    private fun freshConfigIdentity(): String {
+        val settings = personal.settings()
+        return canonical(JSONObject().put("route", StudyService.validatedConfig(settings))
+            .put("dailyRequests", settings.optInt("dailyRequests", 20).coerceIn(1, 1000)).put("offlineMode", settings.optBoolean("offlineMode")))
+    }
+    private fun freshStudyStamp(intent: FreshStudyIntent): FreshStudyStamp {
+        dispatch.requireCurrent(intent.epoch)
+        val current = _state.value
+        val kind = intent.payload.optString("evidenceKind", "guide")
+        if (!intent.check) {
+            requireReadingMaterials(intent.access)
+            requireReading(intent.access, kind != "guide")
+            if (kind == "selection") require(intent.access.selection != null && current.pdfSelection == intent.access.selection) { "原文选区已变化，请重新确认。" }
+            if (kind == "page") require(current.pdfPage == intent.access.pdfPage) { "原文物理页已变化，请重新确认。" }
+        }
+        return FreshStudyStamp(dispatch.epoch, modelCredentialRevision.ready(), if (intent.check) null else intent.access.owner,
+            if (intent.check) "connection-check" else readingID(current), if (!intent.check && kind != "guide") current.pdfDocument?.sha256 else null,
+            if (!intent.check && kind == "page") current.pdfPage else null, if (!intent.check && kind == "selection") current.pdfSelection else null,
+            freshConfigIdentity(), canonical(intent.payload))
+    }
+    private suspend fun prepareFreshStudy(command: String, raw: JSONObject, access: ReadingAccess, expectedEpoch: String): JSONObject = maintenance.withLock {
+        currentCoroutineContext().ensureActive()
+        dispatch.requireCurrent(expectedEpoch)
+        modelCredentialRevision.ready()
+        val check = command == "model.fresh.check.prepare"
+        require(raw.keys().asSequence().toSet().all { it in setOf("question", "evidenceKind", "fromPage", "toPage", "chapter", "readingMaterialID") }) { "确认参数无效，请重新准备。" }
+        val payload = if (check) JSONObject().put("evidenceKind", "connection-check") else raw.copy().also {
+            require(raw.getString("readingMaterialID").isNotBlank() && raw.getString("readingMaterialID") == access.materialID) { "阅读材料已变化，请重新准备。" }
+            it.remove("readingMaterialID")
+            val question = it.getString("question"); require(question.isNotBlank() && question.length <= 16000) { "请填写明确的研究问题。" }
+            require(it.getString("evidenceKind") in listOf("guide", "selection", "page", "chapter", "range", "full")) { "请明确选择实际原文范围。" }
+        }
+        payload.put("force", true)
+        val value = FreshStudyIntent(check, payload, access, expectedEpoch)
+        val scope: String
+        if (check) scope = "固定最小连接检查，不包含论文、笔记或选区。"
+        else {
+            requireReadingMaterials(access)
+            val kind = payload.getString("evidenceKind")
+            if (kind == "guide") {
+                val article = _state.value.article ?: error("请先读取当前导读。")
+                ReadingSourceBinding.requireArticle(selected(), article)
+                scope = "当前导读文字与公式结构，不包含图像。"
+            } else {
+                requireReading(access, true)
+                val doc = _state.value.pdfDocument ?: error("请先打开原文 PDF。")
+                fun integer(key: String): Int { val n = payload.get(key); require(n is Number && n.toDouble().isFinite() && n.toDouble() == n.toInt().toDouble()) { "请填写实际物理页。" }; return n.toInt() }
+                if (kind == "selection") {
+                    val selection = access.selection ?: error("请先选择实际 PDF 文字。")
+                    require(selection == _state.value.pdfSelection && selection.documentSHA256 == doc.sha256 && selection.text.isNotBlank())
+                    require(selection.pages.isNotEmpty() && selection.pages.all { it in 1..doc.pageCount }) { "物理页范围无效。" }
+                    scope = "原 PDF 当前选区，物理页 " + selection.pages.distinct().sorted().joinToString(", ") + " 的文字，不包含图像。"
+                } else {
+                    val range = when (kind) {
+                        "page" -> access.pdfPage to access.pdfPage
+                        "full" -> 1 to doc.pageCount
+                        "chapter" -> { val entries = pdf.outline(doc); val index = integer("chapter"); require(index in entries.indices) { "请选择原 PDF 中实际存在的章节。" }; entries[index].page to entries[index].endPage }
+                        else -> integer("fromPage") to integer("toPage")
+                    }
+                    require(range.first in 1..doc.pageCount && range.second in range.first..doc.pageCount) { "物理页范围无效。" }
+                    scope = "原 PDF 物理页 ${range.first}–${range.second} 的文字，不包含图像。"
+                }
+            }
+        }
+        val stamp = freshStudyStamp(value)
+        currentCoroutineContext().ensureActive()
+        val intent = freshStudies.prepare(stamp, value)
+        JSONObject().put("confirmationID", intent.id).put("kind", if (check) "connection-check" else "study")
+            .put("draftIdentity", sha256(canonical(payload).toByteArray()))
+            .put("question", if (check) "检查当前模型连接" else payload.getString("question")).put("scope", scope)
+            .put("model", StudyService.validatedConfig(personal.settings()).getString("model"))
+            .put("notice", "确认后将另建一次请求并可能产生费用；原研究记录、原回答和已产生用量保留。")
+    }
+    private suspend fun commitFreshStudy(payload: JSONObject): JSONObject = maintenance.withLock {
+        val id = payload.getString("confirmationID")
+        val intent = freshStudies.peek(id)
+        try {
+            val operation = currentCoroutineContext()
+            val currentStamp = freshStudyStamp(intent.value)
+            require(payload.getString("draftIdentity") == sha256(canonical(intent.value.payload).toByteArray())) { "问题或范围已变化，请重新确认。" }
+            val confirmed = freshStudies.consume(id, currentStamp)
+            prepareStudyLocked(if (confirmed.value.check) "model.check" else "model.run", confirmed.value.payload.copy(), confirmed.value.access) {
+                operation.ensureActive()
+                require(freshStudyStamp(confirmed.value) == confirmed.stamp) { "研究材料或模型连接已变化，请重新确认。" }
+            }
+        } catch (failure: Throwable) {
+            freshStudies.discard(id)
+            throw failure
+        }
+    }
     private suspend fun prepareStudy(command: String, payload: JSONObject, access: ReadingAccess): JSONObject = maintenance.withLock {
+        prepareStudyLocked(command, payload, access)
+    }
+    private suspend fun prepareStudyLocked(command: String, payload: JSONObject, access: ReadingAccess, extraGuard: () -> Unit = {}): JSONObject {
+        extraGuard()
         if (command != "model.check") requireReading(access, payload.optString("evidenceKind", "guide") != "guide")
         val evidenceKind = payload.optString("evidenceKind", "guide")
         if (command != "model.check" && evidenceKind == "selection") require(access.selection != null && _state.value.pdfSelection == access.selection) { "原文选区已经变化，旧问题没有采用另一段文字" }
@@ -550,16 +657,20 @@ class RootController internal constructor(private val context: Context, private 
         if (command != "model.check") requireReading(access, payload.optString("evidenceKind", "guide") != "guide")
         if (command != "model.check" && evidenceKind == "selection") require(_state.value.pdfSelection == access.selection) { "提取期间选区已经变化，未派发请求" }
         if (command != "model.check" && evidenceKind == "page") require(_state.value.pdfPage == access.pdfPage) { "提取期间物理页已经变化，未派发请求" }
+        extraGuard()
         val prepared = model.prepare(p?.id ?: "configuration-check", if (command == "model.check") "请只回复连接成功。" else payload.getString("question"), evidence, source, payload.optBoolean("force"))
-        if (command != "model.check") {
-            try { requireReading(access, payload.optString("evidenceKind", "guide") != "guide") }
-            catch (e: Exception) { if (!prepared.optBoolean("reused")) personal.appendSession(prepared.copy().put("status", "cancelled").put("error", "准备期间阅读上下文变化，未派发请求")); throw e }
+        try {
+            if (command != "model.check") requireReading(access, payload.optString("evidenceKind", "guide") != "guide")
+            extraGuard()
+        } catch (e: Exception) {
+            if (!prepared.optBoolean("reused")) personal.appendSession(prepared.copy().put("status", "cancelled").put("error", if (command == "model.check") "准备期间模型连接变化，未派发请求" else "准备期间阅读上下文变化，未派发请求"))
+            throw e
         }
-        if (prepared.optBoolean("reused")) return@withLock prepared
+        if (prepared.optBoolean("reused")) return prepared
         val id = prepared.getString("id"); val work = OneTimeWorkRequestBuilder<StudyWorker>().setId(UUID.fromString(id)).setInputData(workDataOf("sessionID" to id, "workspaceEpoch" to dispatch.epoch)).setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).addTag("paperdigest-paid-study").build()
         personal.upsertJob(JSONObject().put("id", id).put("kind", command).put("paperID", p?.id.orEmpty()).put("status", "queued").put("createdAt", now()).put("message", "等待系统执行；未发出的请求不会产生模型用量"))
         WorkManager.getInstance(context).enqueueUniqueWork("paperdigest-study-$id", ExistingWorkPolicy.KEEP, work)
-        prepared.put("queued", true)
+        return prepared.put("queued", true)
     }
     suspend fun performStudy(id: String, workspaceEpoch: String) {
         val job = currentCoroutineContext()[Job]!!
@@ -594,7 +705,10 @@ class RootController internal constructor(private val context: Context, private 
         result.put("material", JSONObject().put("kind", session.optJSONObject("source")?.optString("kind") ?: "研究输入").put("createdAt", session.optString("createdAt")).put("sha256", session.optString("inputSHA256")))
         return result
     }
-    override suspend fun updateSecret(kind: SecretKind, value: String?) = withContext(Dispatchers.IO) {
+    override suspend fun updateSecret(kind: SecretKind, value: String?) {
+        val mutation = if (kind == SecretKind.MODEL) modelCredentialRevision.begin().also { freshStudies.invalidate() } else null
+        try {
+            withContext(Dispatchers.IO) {
         if (kind == SecretKind.CLOUD) cloud.setPassword(value) else {
             val scope = if (kind == SecretKind.MODEL) "model.primary" else "zotero.primary"
             if (kind == SecretKind.MODEL) {
@@ -607,6 +721,10 @@ class RootController internal constructor(private val context: Context, private 
             if (kind == SecretKind.ZOTERO) { zotero.credentialsChanged(); val z = zotero.state(); _state.update { it.copy(zotero = z) } }
         }
         refresh()
+            }
+        } finally {
+            if (mutation != null) modelCredentialRevision.end(mutation)
+        }
     }
     override fun importPdfs(uris: List<Uri>): Deferred<JSONObject> {
         val selectedUris = uris.toList() // Synchronous picker handoff; no Activity/Compose scope owns this copy.

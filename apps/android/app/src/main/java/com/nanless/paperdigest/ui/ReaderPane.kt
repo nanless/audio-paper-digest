@@ -149,10 +149,10 @@ import org.json.JSONObject
   }
   if(showLayout)AlertDialog(onDismissRequest={showLayout=false},title={Text("阅读布局")},text={Column(Modifier.heightIn(max=readerViewportHeight).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
    if(LocalHingeConstrained.current)Text("布局按避开分隔或遮挡折痕后的实际安全宽度计算；折痕位置不放置正文或操作。")
-   Text(if(canSplit)"只在 PDF 已打开且两栏均有足够宽度时并排。收窄窗口会改为一次显示一份内容；原页码、问题和笔记保留。" else "当前可用宽度或大字设置不适合并排，请从阅读模式切换导读、研究、笔记与 PDF。")
+   Text(if(canSplit)"只在 PDF 已打开且两栏均有足够宽度时并排。收窄窗口会改为一次显示一份内容；原页码、问题和笔记保留。" else "当前窗口适合单栏，扩大窗口后可使用双栏；也可切换导读、研究、笔记与 PDF。")
    FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("both" to "并排阅读","reading" to "专注导读与研究","pdf" to "专注 PDF").forEach{(value,label)->FilterChip(focus==value,{focus=value;if(value=="reading")phonePDF=false;if(value=="pdf")phonePDF=true},enabled=canSplit,label={Text(label)})}}
    if(hingePair!=null)Text("导读与 PDF 分别使用左右安全区域；物理中缝位置不能拖动。")
-   else if(geometry.canSplit){Text("左侧 ${geometry.leftPercent.toInt()}% · 两栏至少各 ${geometry.minimumPaneDp.toInt()} dp")
+   else if(geometry.canSplit){Text("左侧 ${geometry.leftPercent.toInt()}%")
     if(geometry.maxPercent>geometry.minPercent)Slider(value=geometry.leftPercent,onValueChange={splitPercent=it},valueRange=geometry.minPercent..geometry.maxPercent)
    }
   }},confirmButton={TextButton({showLayout=false}){Text("关闭")}})
@@ -194,6 +194,7 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
 @OptIn(ExperimentalLayoutApi::class)
 @Composable private fun ResearchPane(state:UiState,controller:AppController,action:Action){
  val context=LocalContext.current;val id=state.selectedPaperId.orEmpty()
+ var freshDraftRevision by remember(id){mutableLongStateOf(0)}
  val reading=state.personal.optJSONObject("readingState")?.optJSONObject(id)?:JSONObject()
  var question by rememberSaveable(id){mutableStateOf(reading.optString("question"))};var evidence by rememberSaveable(id){mutableStateOf(reading.optString("scope","guide"))};var from by rememberSaveable(id){mutableStateOf(reading.optInt("from",reading.optInt("fromPage",1)).toString())};var to by rememberSaveable(id){mutableStateOf(reading.optInt("to",reading.optInt("toPage",1)).toString())}
  var chapter by rememberSaveable(id){mutableIntStateOf(reading.optInt("chapter",0))}
@@ -208,19 +209,21 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  LaunchedEffect(session?.toString()){if(session!=null)try{html=ResearchRenderer.render(context,sessionAnswer(session));renderError=null}catch(e:Exception){renderError=e.message}}
  Column(Modifier.fillMaxSize()){
  Column(Modifier.weight(1f,fill=false).verticalScroll(rememberScrollState()).padding(16.dp)){
- OutlinedTextField(question,{question=it.take(16000)},Modifier.fillMaxWidth(),label={Text("向这篇论文提问")},placeholder={Text("例如：这项方法依赖哪些假设？")},minLines=2,maxLines=6)
- Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)){listOf("guide" to "导读","selection" to "选区","page" to "当前页","chapter" to "章节","range" to "页段","full" to "全文").forEach{(v,l)->FilterChip(evidence==v,{evidence=v},label={Text(l)})}}
+ OutlinedTextField(question,{question=it.take(16000);freshDraftRevision++},Modifier.fillMaxWidth(),label={Text("向这篇论文提问")},placeholder={Text("例如：这项方法依赖哪些假设？")},minLines=2,maxLines=6)
+ Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)){listOf("guide" to "导读","selection" to "选区","page" to "当前页","chapter" to "章节","range" to "页段","full" to "全文").forEach{(v,l)->FilterChip(evidence==v,{evidence=v;freshDraftRevision++},label={Text(l)})}}
  Text(if(evidence=="guide")"导读证据：${state.article?.sourceVersion?:"版本未标注"} · ${state.article?.revisionSHA256?.take(12).orEmpty()}" else "PDF 证据：${state.pdfReceipt.optString("version").ifBlank{"原版本未标注"}} · ${state.pdfDocument?.sha256?.take(12).orEmpty()} · 物理页",style=MaterialTheme.typography.labelSmall)
  if(evidence=="chapter"){
   FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
    OutlinedButton({val sha=state.pdfDocument?.sha256;if(sha!=null){chapterLoading=true;chapterError=null;chapterScope.launch{try{val result=controller.execute("pdf.outline");require(result.optString("pdfSHA")==sha&&controller.state.value.selectedPaperId==id&&controller.state.value.pdfDocument?.sha256==sha){"原文已切换，未采用旧目录"};chapters=result.rows("chapters");if(chapters.isEmpty())chapterError="此原件没有可用目录；请选择明确页段，不按博客标题推断章节。"}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;chapterError=e.message}finally{chapterLoading=false}}}},enabled=state.pdfDocument!=null&&!chapterLoading&&!state.busy){Text(if(chapterLoading)"正在读取目录…" else "读取原 PDF 目录")}
-   Box{TextButton({chapterMenu=true},enabled=chapters.isNotEmpty()){Text(chapters.firstOrNull{it.optInt("index")==chapter}?.optString("title")?:"选择真实章节")};DropdownMenu(chapterMenu,{chapterMenu=false}){chapters.forEach{entry->DropdownMenuItem({Text("${entry.optString("title")} · 物理页 ${entry.optInt("page")}–${entry.optInt("endPage")}")},{chapter=entry.optInt("index");chapterMenu=false})}}}
+   Box{TextButton({chapterMenu=true},enabled=chapters.isNotEmpty()){Text(chapters.firstOrNull{it.optInt("index")==chapter}?.optString("title")?:"选择真实章节")};DropdownMenu(chapterMenu,{chapterMenu=false}){chapters.forEach{entry->DropdownMenuItem({Text("${entry.optString("title")} · 物理页 ${entry.optInt("page")}–${entry.optInt("endPage")}")},{chapter=entry.optInt("index");freshDraftRevision++;chapterMenu=false})}}}
   }
   chapterError?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.labelSmall)}
  }
  if(evidence !in listOf("guide","selection","page","chapter","range","full"))Text("原记录的证据范围为 $evidence；请先明确选择 Android 当前可用的原文范围，未自动改用其他材料。",color=MaterialTheme.colorScheme.error)
- if(evidence=="range")Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(from,{from=it.filter(Char::isDigit)},Modifier.weight(1f),label={Text("起始物理页")});OutlinedTextField(to,{to=it.filter(Char::isDigit)},Modifier.weight(1f),label={Text("结束物理页")})}
+ if(evidence=="range")Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(from,{from=it.filter(Char::isDigit);freshDraftRevision++},Modifier.weight(1f),label={Text("起始物理页")});OutlinedTextField(to,{to=it.filter(Char::isDigit);freshDraftRevision++},Modifier.weight(1f),label={Text("结束物理页")})}
  Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text("仅点击发送才调用模型 · 用量据实记录",style=MaterialTheme.typography.labelSmall,modifier=Modifier.weight(1f));Button({action("model.run",obj("question" to question,"evidenceKind" to evidence,"fromPage" to from.toIntOrNull(),"toPage" to to.toIntOrNull(),"chapter" to chapter,"force" to false))},enabled=question.isNotBlank()&&!state.busy&&evidence in listOf("guide","selection","page","chapter","range","full")&&(evidence!="chapter"||chapters.any{it.optInt("index")==chapter})){Icon(Icons.Outlined.Send,null);Text("发送")}}
+ FreshStudyAction(state,controller,obj("question" to question,"evidenceKind" to evidence,"fromPage" to from.toIntOrNull(),"toPage" to to.toIntOrNull(),"chapter" to chapter),draftRevision=freshDraftRevision,
+  enabled=question.isNotBlank()&&!state.busy&&evidence in listOf("guide","selection","page","chapter","range","full")&&(evidence!="chapter"||chapters.any{it.optInt("index")==chapter}))
  if(sessions.isNotEmpty()){var menu by remember{mutableStateOf(false)};Box{TextButton({menu=true}){Text("研究记录 ${sessions.size} · ${session?.optString("question").orEmpty().take(30)}")};DropdownMenu(menu,{menu=false}){sessions.forEach{s->DropdownMenuItem({Text(s.optString("question").take(70))},{chosen=s.optString("id");menu=false})}}}}
  if(originalSessions.size!=sessions.size)Text("部分原记录身份重复或归属冲突，未用于显示；原资料仍保留。",style=MaterialTheme.typography.labelSmall)
  session?.let{s->Text("${jobStatus(s.optString("status"))} · ${sessionUsageLabel(s)}",style=MaterialTheme.typography.labelSmall);Text(sessionModelLabel(s),style=MaterialTheme.typography.labelSmall);Text(sessionChargeLabel(s),style=MaterialTheme.typography.labelSmall)}
