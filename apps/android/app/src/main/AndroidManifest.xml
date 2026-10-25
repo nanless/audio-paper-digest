@@ -11,5 +11,6 @@
   </activity>
   <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/></provider>
   <service android:name="androidx.work.impl.foreground.SystemForegroundService" android:foregroundServiceType="dataSync" xmlns:tools="http://schemas.android.com/tools" tools:node="merge"/>
+  <provider android:name=".pdf.PdfOriginalFileProvider" android:authorities="${applicationId}.pdf-originals" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/pdf_share_paths"/></provider>
  </application>
 </manifest>
