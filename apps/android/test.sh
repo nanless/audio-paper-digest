@@ -28,4 +28,6 @@ bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/DeviceSelectio
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseBoundaries.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseKeystoreCanonical.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseCompiledIcon.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleasePackagedAssets.test.py"
 exec "$app_root/build.sh" :app:testDebugUnitTest :app:lintDebug "$@"

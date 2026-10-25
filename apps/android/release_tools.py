@@ -5,6 +5,8 @@ if os.environ.get('CODEX_SANDBOX'): raise SystemExit('normal_environment_require
 P=pathlib.Path
 APP='com.nanless.paperdigest'
 ICON_SHA='18b7f280a530e6a881bc7017a1f78d6ba2c1a65741dea6a04116782433e3fbfb'
+# Exact original and independently reviewed lossless AAPT2 encoding; unknown encodings stay closed.
+ICON_PACKAGED_SHAS={ICON_SHA,'60456a5becd90786a1aac02afdeb5fa1b2f82a4aab7bdb265a13bf80efb6d4be'}
 ANDROID='{http://schemas.android.com/apk/res/android}'
 FIELDS=['group','module','version','classifier','type','extension','fileName','bytes','sha256']
 SCIENTIFIC_SHAS={'01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c','60acc8f1d621516fa24c6594b7cda414860e4654a5b93ed040d02f8d65e95620','710ffddb9dfcfc1870ade398b5b8c44c9fb498ac5579753b02c7b664c70aaffc','49bdbf0a6534bccb8c8933030b1a8c0017471d6db5383412ee2ba425bc8a08a4'}
@@ -136,16 +138,51 @@ def compiled_icon(apk,sdk,facts):
  require(foreground.tag=='inset' and foreground.get(ANDROID+'drawable')==refs['drawable/pd_icon'] and abs(float(foreground.get(ANDROID+'inset','').rstrip('%'))-16)<0.001,'adaptive_icon_foreground')
  return {'pngPath':paths['drawable/pd_icon'],'adaptiveReferenceVerified':True,'insetPercent':16,'background':'#ff24282d'}
 
-NODE_AUDIT="""import {pathToFileURL} from 'node:url';import fs from 'node:fs/promises';
-const [helper,assets,materials]=process.argv.slice(2),m=await import(pathToFileURL(helper));
-const runtime=m.verifyRuntimeMaterials(JSON.parse(await fs.readFile(materials,'utf8'))),resources=await m.auditGeneratedAssets(assets,'release');
+PDFBOX_ASSET_SOURCE={'group':'com.tom-roush','module':'pdfbox-android','version':'2.0.27.0','classifier':None,'type':'aar','extension':'aar','fileName':'pdfbox-android-2.0.27.0.aar','bytes':3254019,'sha256':'30277f879cfd571db2a137582c95516a0d4ea6778e945519bc58ca93d57d88c7'}
+RELEASE_PROFILE_OUTPUTS={'dexopt/baseline.prof':'binary_art_profile/release/compileReleaseArtProfile/baseline.prof','dexopt/baseline.profm':'binary_art_profile_metadata/release/compileReleaseArtProfile/baseline.profm'}
+def audit_packaged_asset_sources(assets,repo,materials):
+ # The committed whole-AAR pin is authority; runtime JSON is never an asset allowlist.
+ assets=P(assets);repo=P(repo);rows=load(materials)['artifacts']
+ sources=[{k:item[k] for k in FIELDS} for item in rows if item.get('group')=='com.tom-roush' and item.get('module')=='pdfbox-android']
+ require(sources==[PDFBOX_ASSET_SOURCE],'packaged_library_source_changed')
+ cache=P(os.environ.get('GRADLE_USER_HOME',str(P.home()/'.gradle'))).absolute()/'caches/modules-2/files-2.1/com.tom-roush/pdfbox-android/2.0.27.0'
+ archives=list(cache.glob('*/pdfbox-android-2.0.27.0.aar'))
+ require(len(archives)==1,'packaged_library_archive_missing_or_ambiguous');archive=regular(archives[0]);expected={}
+ require(archive.stat().st_size==PDFBOX_ASSET_SOURCE['bytes'] and file_sha(archive)==PDFBOX_ASSET_SOURCE['sha256'],'packaged_library_archive_changed')
+ with zipfile.ZipFile(archive) as z:
+  for row in safe_members(z,require_apk=False):
+   if row.is_dir() or not row.filename.startswith('assets/'):continue
+   name=row.filename[len('assets/'):];data=z.read(row)
+   require(name.startswith('com/tom_roush/') and name not in expected,'packaged_library_asset_collision')
+   expected[name]={'bytes':len(data),'sha256':sha(data),'origin':'locked-aar'}
+ require(len(expected)==112 and file_sha(archive)==PDFBOX_ASSET_SOURCE['sha256'],'packaged_library_archive_changed')
+ for name,relative in RELEASE_PROFILE_OUTPUTS.items():
+  original=regular(repo/'apps/android/app/build/intermediates'/relative)
+  require(name not in expected,'packaged_asset_source_collision')
+  expected[name]={'bytes':original.stat().st_size,'sha256':file_sha(original),'origin':'compileReleaseArtProfile','buildOutput':relative}
+  require(original.stat().st_size==expected[name]['bytes'] and file_sha(original)==expected[name]['sha256'],'release_profile_changed')
+ # Verify every source member, not only whichever extras happen to be in this APK.
+ for name,item in expected.items():
+  target=regular(assets/name)
+  require(target.stat().st_size==item['bytes'] and file_sha(target)==item['sha256'],'packaged_source_asset_changed')
+ # Only owned, freshly extracted temporary copies are separated. Unknown assets remain for Node to reject.
+ for name in expected:(assets/name).unlink()
+ return {'contract':'android-packaged-asset-sources-v1','libraryArtifact':PDFBOX_ASSET_SOURCE,'libraryFiles':112,'profileFiles':2,'files':expected}
+
+NODE_AUDIT="""import {pathToFileURL} from 'node:url';import fs from 'node:fs/promises';import {execFileSync} from 'node:child_process';
+const [helper,assets,materials,python,tool,repo]=process.argv.slice(2),m=await import(pathToFileURL(helper));
+const runtime=m.verifyRuntimeMaterials(JSON.parse(await fs.readFile(materials,'utf8')));
+const bridge='import importlib.util,json,sys; s=importlib.util.spec_from_file_location("pd_asset_sources",sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m);print(json.dumps(m.audit_packaged_asset_sources(sys.argv[2],sys.argv[3],sys.argv[4]),sort_keys=True))';
+const packagedSources=JSON.parse(execFileSync(python,['-c',bridge,tool,assets,repo,materials],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:120000,maxBuffer:8*1024*1024}));
+const resources=await m.auditGeneratedAssets(assets,'release');
 const licenses=JSON.parse(await fs.readFile(assets+'/licenses/manifest.json','utf8'));
-console.log(JSON.stringify({runtime,resources,licenseRecords:licenses.resolvedRecordCount,licenseArtifacts:licenses.uniqueArtifactCount,licenseFiles:632,pendingArtifacts:licenses.pendingArtifacts}));"""
+console.log(JSON.stringify({runtime,resources,packagedSources,licenseRecords:licenses.resolvedRecordCount,licenseArtifacts:licenses.uniqueArtifactCount,licenseFiles:632,pendingArtifacts:licenses.pendingArtifacts}));"""
 def inspect(apk,repo,sdk,version,code,materials,certificate=None):
+ require(file_sha(regular(repo/'apps/android/app/src/main/res/drawable-nodpi/pd_icon.png'))==ICON_SHA,'c_icon_source_changed')
  apk=regular(apk);before=file_sha(apk);facts=manifest_facts(sdk.call('apkanalyzer','manifest','print',apk),version,code);sdk.call('zipalign','-c','-P','16','4',apk)
  icon_binding=compiled_icon(apk,sdk,facts)
  with zipfile.ZipFile(apk) as z,tempfile.TemporaryDirectory(prefix='paperdigest-apk-audit-') as tmp:
-  rows=safe_members(z);assets=P(tmp)/'assets';assets.mkdir();natives=[];icon=[]
+  rows=safe_members(z);assets=P(tmp).resolve()/'assets';assets.mkdir();natives=[];icon=[]
   for row in rows:
    n=row.filename
    if row.is_dir():continue
@@ -162,10 +199,10 @@ def inspect(apk,repo,sdk,version,code,materials,certificate=None):
     with z.open(row) as source,open(target,'xb') as dest:shutil.copyfileobj(source,dest,65536)
    if n.startswith('lib/'):
     parts=n.split('/');require(len(parts)==3 and parts[1] in ABI and n.endswith('.so'),'native_layout');data=z.read(row);natives.append({'path':n,'bytes':len(data),'sha256':sha(data),**elf_facts(data,parts[1])})
-   if n.startswith('res/') and n.endswith('/pd_icon.png'):data=z.read(row);icon.append({'path':n,'sha256':sha(data)})
-  require(len(icon)==1 and icon[0]['sha256']==ICON_SHA and icon[0]['path']==icon_binding['pngPath'],'c_icon_changed')
+   if n.startswith('res/') and n==icon_binding['pngPath']:data=z.read(row);icon.append({'path':n,'sha256':sha(data)})
+  require(len(icon)==1 and icon[0]['sha256'] in ICON_PACKAGED_SHAS and icon[0]['path']==icon_binding['pngPath'],'c_icon_changed')
   require({x['abi'] for x in natives}==set(ABI),'universal_abi_set_changed')
-  asset_info=json.loads(run(['node','--input-type=module','-e',NODE_AUDIT,'paperdigest-release-audit',repo/'apps/android/prepare-assets.mjs',assets,materials],'release_assets_failed'))
+  asset_info=json.loads(run(['node','--input-type=module','-e',NODE_AUDIT,'paperdigest-release-audit',repo/'apps/android/prepare-assets.mjs',assets,materials,sys.executable,P(__file__).resolve(),repo],'release_assets_failed'))
  signature=None
  if certificate:
   require(re.fullmatch('[0-9a-f]{64}',certificate),'certificate_pin_format')
@@ -175,7 +212,7 @@ def inspect(apk,repo,sdk,version,code,materials,certificate=None):
   require('Verified using v2 scheme (APK Signature Scheme v2): true' in output and 'Verified using v3 scheme (APK Signature Scheme v3): true' in output,'signature_schemes')
   signature={'certificateSHA256':certificate,'v2':True,'v3':True,'verifiedMinSDK':28,'verifiedMaxSDK':37}
  require(file_sha(apk)==before,'audit_changed_apk')
- return {'sha256':before,'bytes':apk.stat().st_size,'manifest':facts,'assets':asset_info,'icon':{**icon[0],**icon_binding},'nativeLibraries':natives,'signature':signature,'formalDeviceTested':False,'publicationEligible':False}
+ return {'sha256':before,'bytes':apk.stat().st_size,'manifest':facts,'assets':asset_info,'icon':{**icon[0],**icon_binding,'originalSourceSHA256':ICON_SHA},'nativeLibraries':natives,'signature':signature,'formalDeviceTested':False,'publicationEligible':False}
 
 def prepare(args):
  repo=args.repo.resolve();require(not args.output.exists(),'output_exists');require(re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}(?:-[A-Za-z0-9.-]+)?',args.version),'version_format')
