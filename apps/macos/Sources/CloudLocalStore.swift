@@ -148,7 +148,7 @@ import Foundation
         old.checkpoint = checkpoint
         try write(old, relative: destinationID.uuidString + "/pending.json")
     }
-    func complete(_ info: CloudArchiveService.SnapshotInfo, destinationID: UUID) throws {
+    func complete(_ info: CloudArchiveService.SnapshotInfo, destinationID: UUID, keepAutomaticPaused: Bool = false) throws {
         guard profile.destinationID == destinationID, let pending = try pending(),
               pending.sha256 == info.sha256, pending.encodedBytes == info.encodedBytes,
               let checkpoint = pending.checkpoint, checkpoint.manifestVerified,
@@ -157,7 +157,7 @@ import Foundation
               checkpoint.chunks.count == info.chunkCount,
               Set(checkpoint.verifiedChunkIndices) == Set(checkpoint.chunks.indices) else { throw DesktopError.message("云端完成回执没有完整绑定原快照") }
         var next = profile
-        next.automaticPaused = false
+        next.automaticPaused = keepAutomaticPaused
         next.lastBackup = Completed(month: info.reference.month, id: info.reference.id, createdAt: ISO8601DateFormatter().string(from: info.createdAt), encodedBytes: info.encodedBytes)
         try write(next, relative: "profile.json"); profile = next
         // Remote manifest and every stored chunk have already been read back.

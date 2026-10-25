@@ -43,6 +43,12 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var cloudAutomaticPausedInMemory=false
     var cloudActiveJobID:String?,cloudLastError:String?
     var cloudSchedule:Timer?
+    let cloudSessionCredentials=CloudSessionCredentials()
+    var cloudPasswordPrompt:((NSAlert,NSSecureTextField)->NSApplication.ModalResponse)?
+    var cloudServiceTransportOverride:CloudArchiveService.Transport?
+    var cloudVaultLoadOverride:(@Sendable(UUID) async throws->String?)?
+    var cloudVaultSaveOverride:((String,UUID)throws->Void)?
+    var cloudVaultRemoveOverride:((UUID)throws->Void)?
     var offlinePDF:[String:Any]?
     var currentPDFReceipt:[String:Any]=[:]
     var pendingPDFPage:Int?
@@ -90,6 +96,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         for(id,task) in jobs{task.cancel();model?.cancel(id)}
         await library?.cancelSync()
         for task in closing{_=try? await task.value}
+        cloudSessionCredentials.clear();cloudArchive=nil;cloudAutomaticPausedInMemory=true
     }
     func flushEdits() async throws {
         guard let web=web else{return}

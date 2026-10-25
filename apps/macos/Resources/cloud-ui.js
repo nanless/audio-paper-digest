@@ -23,7 +23,7 @@ export function mountCloud(app){
  [data-setting-pane="cloud"] p{font-size:12px;line-height:1.7}
  </style>
  <h1>坚果云资料</h1><p>为全部研究资料保存独立版本：笔记、解析、原始用量、阅读进度、导读、原文与已有归档检查点。已有版本保留，恢复前还会保存当前资料副本。</p>
- <p>上传内容包含私人研究材料；请使用你自己的坚果云账户。API、Zotero 与坚果云应用密码留在本机钥匙串，不随资料备份迁移。</p>
+ <p>上传内容包含私人研究材料；请使用你自己的坚果云账户。API 与 Zotero 密钥留在本机钥匙串；坚果云应用密码可仅本次保存在内存，或由你选择保存到钥匙串。密码均不随资料备份迁移。</p>
  <section class="cloud-card" aria-label="坚果云连接设置"><h2>独立保存目录</h2>
  <label>坚果云账号<input id="cloud-account" type="text" autocomplete="off" spellcheck="false" placeholder="坚果云登录邮箱"></label>
  <label>独立目录<input id="cloud-folder" type="text" value="PaperDigest" autocomplete="off" spellcheck="false"></label>
@@ -31,8 +31,8 @@ export function mountCloud(app){
  <label class="cloud-inline"><input id="cloud-automatic" type="checkbox">应用运行时定期保存</label>
  <label>保存间隔（小时）<input id="cloud-interval" type="number" min="6" max="168" step="1" value="24"></label>
  <p>默认24小时，可设6–168小时。退出应用后不会在后台继续；正在运行的任务须先保存完毕。单次完整资料上限512 MiB，编码备份上限750 MiB，超过限制会明确停止，不会省略文件。</p>
- <div class="cloud-actions"><button id="cloud-save" type="button">保存坚果云设置</button><button id="cloud-discard" type="button" aria-label="撤销坚果云未保存更改">撤销未保存更改</button><button id="cloud-set-password" type="button">设置应用密码…</button><button id="cloud-delete-password" type="button">移除本机应用密码</button><button id="cloud-check" type="button">检查连接</button></div>
- <p>使用坚果云单独生成的第三方应用密码，在原生安全输入窗口填写，不在本页面输入登录密码。</p>
+ <div class="cloud-actions"><button id="cloud-save" type="button">保存坚果云设置</button><button id="cloud-discard" type="button" aria-label="撤销坚果云未保存更改">撤销未保存更改</button><button id="cloud-session-password" type="button">仅本次使用应用密码…</button><button id="cloud-clear-session-password" type="button" disabled>清除本次密码</button><button id="cloud-set-password" type="button">保存应用密码到钥匙串…</button><button id="cloud-delete-password" type="button">移除本机应用密码</button><button id="cloud-check" type="button">检查连接</button></div>
+ <p>使用坚果云单独生成的第三方应用密码，在原生安全输入窗口填写。仅本次使用不会读取或写入钥匙串，退出或更换账号后清除；清除本次密码会暂停自动备份，不移除钥匙串原条目。设置后仍须检查连接，不在本页面输入密码。</p>
  </section>
  <section class="cloud-card" aria-label="完整资料保存状态"><h2>全部研究资料</h2><p id="cloud-status" role="status"></p><p id="cloud-last"></p><p id="cloud-pending"></p>
  <div class="cloud-actions"><button id="cloud-upload" type="button">立即保存全部资料</button><button id="cloud-cancel" type="button" disabled>取消当前传输</button><button id="cloud-archive-pending" type="button" hidden>保留快照并停止本次续传…</button><button id="cloud-reveal-transfers" type="button">在 Finder 查看保留的快照</button></div><p>明确停止本次续传时，原传输材料和检查点原样保留在本机，云端半成品不会自动删除。经过校验的完整 snapshot.paperdigest 文件可通过“文件→恢复个人资料…”取回当时研究资料；损坏或缺少的材料须手工核对，不能保证可恢复。新连接会另建版本，不冒充原续传。</p></section>
@@ -56,13 +56,14 @@ export function mountCloud(app){
   const damaged=state.pending?.damaged===true,busy=submitting||state.busy===true,configured=typeof state.account==='string'&&!!state.account.trim()&&typeof state.folder==='string'&&!!state.folder;
   for(const node of Object.values(nodes))node.disabled=busy;
   $('cloud-save').disabled=busy||!dirty.size;$('cloud-discard').disabled=busy||!dirty.size;
-  for(const id of ['cloud-set-password','cloud-delete-password','cloud-check','cloud-upload','cloud-list'])$(id).disabled=busy||!!dirty.size||!configured;
+  for(const id of ['cloud-session-password','cloud-clear-session-password','cloud-set-password','cloud-delete-password','cloud-check','cloud-upload','cloud-list'])$(id).disabled=busy||!!dirty.size||!configured;
+  $('cloud-clear-session-password').disabled=busy||!!dirty.size||!configured||state.sessionPasswordAvailable!==true;
   $('cloud-month').disabled=busy;
   $('cloud-archive-pending').textContent=damaged?'原样保留损坏材料并停止本次续传…':'保留快照并停止本次续传…';$('cloud-archive-pending').hidden=!state.pending;$('cloud-archive-pending').disabled=busy||!!dirty.size||!state.pending;$('cloud-reveal-transfers').disabled=submitting;
   $('cloud-cancel').disabled=!(busy&&typeof state.activeJobID==='string'&&state.activeJobID)||cancelPending;
   for(const button of pane.querySelectorAll('[data-cloud-restore]'))button.disabled=busy||!!dirty.size;
   pane.dataset.submitting=submitting?'true':'';
-  $('cloud-status').textContent=(state.busy?'传输正在进行。':'')+({confirmed:'本次已确认应用密码状态；连接与完整传输结果仍须另行核验。',missing:'尚未保存应用密码。',unknown:'应用密码状态未检查；只有主动连接或传输才访问钥匙串。'}[state.credentialState]||'应用密码状态未检查。');
+  $('cloud-status').textContent=(state.busy?'传输正在进行。':'')+(state.sessionPasswordAvailable===true?('本次内存中已有应用密码，退出后清除；'+(state.sessionPasswordVerified===true?'本次密码已用于成功的云端请求，完整备份仍须另行核验。':'尚未检查连接。')):({confirmed:'本次已确认应用密码状态；连接与完整传输结果仍须另行核验。',missing:'尚未保存应用密码。',unknown:'应用密码状态未检查；只有主动连接或传输才访问钥匙串。'}[state.credentialState]||'应用密码状态未检查。'));
   $('cloud-last').textContent=state.lastBackup?'最近已确认完整备份：'+time(state.lastBackup.createdAt)+' · '+size(state.lastBackup.encodedBytes):'尚无已确认的完整备份记录。';
   $('cloud-pending').textContent=damaged?'未完成的本机传输材料已损坏或缺少有效检查点，可原样保留；须手工核对，不能保证完整或可恢复。':state.pending?'待续传的同一快照：'+time(state.pending.createdAt)+' · '+size(state.pending.encodedBytes)+' · '+(Number.isSafeInteger(state.pending.fileCount)&&state.pending.fileCount>=0?state.pending.fileCount:'未记录')+' 个文件；继续时不重新采集变化中的资料。':'';
   $('cloud-upload').textContent=damaged?'请先处理未完成材料':state.pending?'继续保存同一快照':'立即保存全部资料';if(damaged)$('cloud-upload').disabled=true;
@@ -91,6 +92,8 @@ export function mountCloud(app){
    else if(command==='cloud.list')message='版本读取操作已结束，请查看当前月份的实际结果。';
    else if(command==='cloud.check'){checkedTarget=checkTarget;message='本次连接检查通过：已完成坚果云 WebDAV 认证并读取根目录；尚未验证上传权限或完整备份。';}
    else if(command==='cloud.revealTransfers')message='已请求打开本机保留快照目录；此操作不连接网盘。';
+   else if(command==='cloud.setSessionPassword')message='本次内存密码已设置；尚未检查连接，退出后清除。';
+   else if(command==='cloud.clearSessionPassword')message='本次内存密码已清除；自动备份已暂停。';
    else if(command==='cloud.setPassword'||command==='cloud.deletePassword')message='应用密码操作已结束；密码仅由原生钥匙串管理。';
    await refresh();
    if(command==='cloud.archivePending')message=state.pending?'原续传仍保留，请核对原生窗口提示。':'本次续传已停止，原传输材料保留在本机；云端半成品不会自动删除。';
@@ -119,7 +122,7 @@ export function mountCloud(app){
   }catch(e){if(!disposed&&token===action)localError=e?.message||String(e);}
   finally{if(!disposed&&token===action){submitting=false;paint();}}
  };
- for(const [id,command]of [['cloud-set-password','cloud.setPassword'],['cloud-delete-password','cloud.deletePassword'],['cloud-check','cloud.check'],['cloud-upload','cloud.upload']])$(id).onclick=()=>perform(command);
+ for(const [id,command]of [['cloud-session-password','cloud.setSessionPassword'],['cloud-clear-session-password','cloud.clearSessionPassword'],['cloud-set-password','cloud.setPassword'],['cloud-delete-password','cloud.deletePassword'],['cloud-check','cloud.check'],['cloud-upload','cloud.upload']])$(id).onclick=()=>perform(command);
  $('cloud-archive-pending').onclick=()=>{if(state.pending)return perform('cloud.archivePending');};
  $('cloud-reveal-transfers').onclick=()=>perform('cloud.revealTransfers');
  $('cloud-cancel').onclick=async()=>{
