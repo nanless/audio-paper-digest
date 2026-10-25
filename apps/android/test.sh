@@ -25,4 +25,7 @@ for qa_argument in "$@"; do
  [[ "$qa_argument" == -* ]] || { echo "测试入口只接受 Gradle 选项；设备测试请使用 --device SERIAL，其他任务请使用 build.sh。" >&2; exit 1; }
 done
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/DeviceSelection.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseBoundaries.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseKeystoreCanonical.test.py"
 exec "$app_root/build.sh" :app:testDebugUnitTest :app:lintDebug "$@"
