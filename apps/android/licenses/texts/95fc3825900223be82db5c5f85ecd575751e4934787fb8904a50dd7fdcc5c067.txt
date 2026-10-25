@@ -1,0 +1,40 @@
+StartFontMetrics 4.1
+
+Comment Copyright (c) 1985, 1987, 1988, 1989, 1997 Adobe Systems Incorporated. All Rights Reserved.
+
+Comment Creation Date: Thu May  1 15:14:13 1997
+
+Comment UniqueID 43082
+
+Comment VMusage 45775 55535
+
+FontName ZapfDingbats
+
+FullName ITC Zapf Dingbats
+
+FamilyName ZapfDingbats
+
+Weight Medium
+
+ItalicAngle 0
+
+IsFixedPitch false
+
+CharacterSet Special
+
+FontBBox -1 -143 981 820 
+
+UnderlinePosition -100
+
+UnderlineThickness 50
+
+Version 002.000
+
+Notice Copyright (c) 1985, 1987, 1988, 1989, 1997 Adobe Systems Incorporated. All Rights Reserved.ITC Zapf Dingbats is a registered trademark of International Typeface Corporation.
+
+EncodingScheme FontSpecific
+
+StdHW 28
+
+StdVW 90
+

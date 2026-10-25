@@ -1,0 +1,48 @@
+StartFontMetrics 4.1
+
+Comment Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated.  All Rights Reserved.
+
+Comment Creation Date: Thu May  1 12:43:52 1997
+
+Comment UniqueID 43052
+
+Comment VMusage 37169 48194
+
+FontName Helvetica-Bold
+
+FullName Helvetica Bold
+
+FamilyName Helvetica
+
+Weight Bold
+
+ItalicAngle 0
+
+IsFixedPitch false
+
+CharacterSet ExtendedRoman
+
+FontBBox -170 -228 1003 962 
+
+UnderlinePosition -100
+
+UnderlineThickness 50
+
+Version 002.000
+
+Notice Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated.  All Rights Reserved.Helvetica is a trademark of Linotype-Hell AG and/or its subsidiaries.
+
+EncodingScheme AdobeStandardEncoding
+
+CapHeight 718
+
+XHeight 532
+
+Ascender 718
+
+Descender -207
+
+StdHW 118
+
+StdVW 140
+

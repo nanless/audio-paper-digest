@@ -1,0 +1,57 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; style-src &#x27;unsafe-inline&#x27;; img-src &#x27;none&#x27;; script-src &#x27;none&#x27;; connect-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;"><title>com.google.guava:listenablefuture:1.0 · POM原文</title><style>body{font-family:system-ui,sans-serif;max-width:920px;margin:40px auto;padding:0 24px;line-height:1.65;color:#202630;background:#fafbfc}h1{font-size:28px}a{color:#2458a7}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;background:#fff;border:1px solid #dce1e8;border-radius:12px;padding:20px}li{margin:8px 0}.muted{color:#596575}section{margin:24px 0}small{font-size:12px} @media(prefers-color-scheme:dark){body{color:#e3e9f0;background:#141922}pre{background:#1a222e;border-color:#394555}a{color:#90baff}.muted{color:#a8b4c4}}</style></head><body><a href="../index.html">返回许可目录</a><h1>com.google.guava:listenablefuture:1.0 · POM原文</h1><p class="muted">原文字节 SHA256：<code>53873caf26bc1ed8a567ea6c939ab2aaa3f47a5e32d5cade95ddf5080d23238a</code></p><pre>&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;project xmlns=&quot;http://maven.apache.org/POM/4.0.0&quot; xmlns:xsi=&quot;http://www.w3.org/2001/XMLSchema-instance&quot;
+  xsi:schemaLocation=&quot;http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd&quot;&gt;
+  &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+  &lt;parent&gt;
+    &lt;groupId&gt;com.google.guava&lt;/groupId&gt;
+    &lt;artifactId&gt;guava-parent&lt;/artifactId&gt;
+    &lt;version&gt;26.0-android&lt;/version&gt;
+  &lt;/parent&gt;
+  &lt;artifactId&gt;listenablefuture&lt;/artifactId&gt;
+  &lt;version&gt;1.0&lt;/version&gt;
+  &lt;name&gt;Guava ListenableFuture only&lt;/name&gt;
+  &lt;description&gt;
+    Contains Guava&#x27;s com.google.common.util.concurrent.ListenableFuture class,
+    without any of its other classes -- but is also available in a second
+    &quot;version&quot; that omits the class to avoid conflicts with the copy in Guava
+    itself. The idea is:
+
+    - If users want only ListenableFuture, they depend on listenablefuture-1.0.
+
+    - If users want all of Guava, they depend on guava, which, as of Guava
+    27.0, depends on
+    listenablefuture-9999.0-empty-to-avoid-conflict-with-guava. The 9999.0-...
+    version number is enough for some build systems (notably, Gradle) to select
+    that empty artifact over the &quot;real&quot; listenablefuture-1.0 -- avoiding a
+    conflict with the copy of ListenableFuture in guava itself. If users are
+    using an older version of Guava or a build system other than Gradle, they
+    may see class conflicts. If so, they can solve them by manually excluding
+    the listenablefuture artifact or manually forcing their build systems to
+    use 9999.0-....
+  &lt;/description&gt;
+  &lt;build&gt;
+    &lt;plugins&gt;
+      &lt;plugin&gt;
+        &lt;artifactId&gt;maven-source-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;groupId&gt;org.codehaus.mojo&lt;/groupId&gt;
+        &lt;artifactId&gt;animal-sniffer-maven-plugin&lt;/artifactId&gt;
+      &lt;/plugin&gt;
+      &lt;plugin&gt;
+        &lt;artifactId&gt;maven-javadoc-plugin&lt;/artifactId&gt;
+        &lt;executions&gt;
+          &lt;execution&gt;
+            &lt;id&gt;attach-docs&lt;/id&gt;
+          &lt;/execution&gt;
+          &lt;execution&gt;
+            &lt;id&gt;generate-javadoc-site-report&lt;/id&gt;
+            &lt;phase&gt;site&lt;/phase&gt;
+            &lt;goals&gt;&lt;goal&gt;javadoc&lt;/goal&gt;&lt;/goals&gt;
+          &lt;/execution&gt;
+        &lt;/executions&gt;
+      &lt;/plugin&gt;
+    &lt;/plugins&gt;
+  &lt;/build&gt;
+&lt;/project&gt;
+</pre></body></html>

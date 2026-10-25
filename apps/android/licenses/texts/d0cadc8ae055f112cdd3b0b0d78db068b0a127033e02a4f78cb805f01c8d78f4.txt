@@ -1,0 +1,48 @@
+StartFontMetrics 4.1
+
+Comment Copyright (c) 1985, 1987, 1989, 1990, 1993, 1997 Adobe Systems Incorporated.  All Rights Reserved.
+
+Comment Creation Date: Thu May  1 12:49:17 1997
+
+Comment UniqueID 43068
+
+Comment VMusage 43909 54934
+
+FontName Times-Roman
+
+FullName Times Roman
+
+FamilyName Times
+
+Weight Roman
+
+ItalicAngle 0
+
+IsFixedPitch false
+
+CharacterSet ExtendedRoman
+
+FontBBox -168 -218 1000 898 
+
+UnderlinePosition -100
+
+UnderlineThickness 50
+
+Version 002.000
+
+Notice Copyright (c) 1985, 1987, 1989, 1990, 1993, 1997 Adobe Systems Incorporated.  All Rights Reserved.Times is a trademark of Linotype-Hell AG and/or its subsidiaries.
+
+EncodingScheme AdobeStandardEncoding
+
+CapHeight 662
+
+XHeight 450
+
+Ascender 683
+
+Descender -217
+
+StdHW 28
+
+StdVW 84
+

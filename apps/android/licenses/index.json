@@ -1,0 +1,1094 @@
+{
+  "contract": "android-offline-license-index-v1",
+  "resolvedRecordCount": 123,
+  "uniqueArtifactCount": 120,
+  "artifacts": [
+    {
+      "index": 0,
+      "coordinate": "androidx.activity:activity-compose:1.10.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/000.html"
+    },
+    {
+      "index": 1,
+      "coordinate": "androidx.activity:activity-ktx:1.10.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/001.html"
+    },
+    {
+      "index": 2,
+      "coordinate": "androidx.activity:activity:1.10.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/002.html"
+    },
+    {
+      "index": 3,
+      "coordinate": "androidx.annotation:annotation-experimental:1.5.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/003.html"
+    },
+    {
+      "index": 4,
+      "coordinate": "androidx.annotation:annotation-jvm:1.9.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/004.html"
+    },
+    {
+      "index": 5,
+      "coordinate": "androidx.appcompat:appcompat-resources:1.7.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/005.html"
+    },
+    {
+      "index": 6,
+      "coordinate": "androidx.appcompat:appcompat:1.7.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/006.html"
+    },
+    {
+      "index": 7,
+      "coordinate": "androidx.arch.core:core-common:2.2.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/007.html"
+    },
+    {
+      "index": 8,
+      "coordinate": "androidx.arch.core:core-runtime:2.2.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/008.html"
+    },
+    {
+      "index": 9,
+      "coordinate": "androidx.autofill:autofill:1.3.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/009.html"
+    },
+    {
+      "index": 10,
+      "coordinate": "androidx.cardview:cardview:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/010.html"
+    },
+    {
+      "index": 11,
+      "coordinate": "androidx.collection:collection-jvm:1.5.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/011.html"
+    },
+    {
+      "index": 12,
+      "coordinate": "androidx.collection:collection-ktx:1.5.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/012.html"
+    },
+    {
+      "index": 13,
+      "coordinate": "androidx.compose.animation:animation-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/013.html"
+    },
+    {
+      "index": 14,
+      "coordinate": "androidx.compose.animation:animation-core-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/014.html"
+    },
+    {
+      "index": 15,
+      "coordinate": "androidx.compose.foundation:foundation-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/015.html"
+    },
+    {
+      "index": 16,
+      "coordinate": "androidx.compose.foundation:foundation-layout-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/016.html"
+    },
+    {
+      "index": 17,
+      "coordinate": "androidx.compose.material3.adaptive:adaptive-android:1.3.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/017.html"
+    },
+    {
+      "index": 18,
+      "coordinate": "androidx.compose.material3.adaptive:adaptive-layout-android:1.3.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/018.html"
+    },
+    {
+      "index": 19,
+      "coordinate": "androidx.compose.material3.adaptive:adaptive-navigation-android:1.3.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/019.html"
+    },
+    {
+      "index": 20,
+      "coordinate": "androidx.compose.material3:material3-android:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/020.html"
+    },
+    {
+      "index": 21,
+      "coordinate": "androidx.compose.material:material-icons-core-android:1.7.8",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/021.html"
+    },
+    {
+      "index": 22,
+      "coordinate": "androidx.compose.material:material-icons-extended-android:1.7.8",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/022.html"
+    },
+    {
+      "index": 23,
+      "coordinate": "androidx.compose.material:material-ripple-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/023.html"
+    },
+    {
+      "index": 24,
+      "coordinate": "androidx.compose.runtime:runtime-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/024.html"
+    },
+    {
+      "index": 25,
+      "coordinate": "androidx.compose.runtime:runtime-annotation-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/025.html"
+    },
+    {
+      "index": 26,
+      "coordinate": "androidx.compose.runtime:runtime-retain-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/026.html"
+    },
+    {
+      "index": 27,
+      "coordinate": "androidx.compose.runtime:runtime-saveable-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/027.html"
+    },
+    {
+      "index": 28,
+      "coordinate": "androidx.compose.ui:ui-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/028.html"
+    },
+    {
+      "index": 29,
+      "coordinate": "androidx.compose.ui:ui-geometry-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/029.html"
+    },
+    {
+      "index": 30,
+      "coordinate": "androidx.compose.ui:ui-graphics-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/030.html"
+    },
+    {
+      "index": 31,
+      "coordinate": "androidx.compose.ui:ui-text-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/031.html"
+    },
+    {
+      "index": 32,
+      "coordinate": "androidx.compose.ui:ui-tooling-preview-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/032.html"
+    },
+    {
+      "index": 33,
+      "coordinate": "androidx.compose.ui:ui-unit-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/033.html"
+    },
+    {
+      "index": 34,
+      "coordinate": "androidx.compose.ui:ui-util-android:1.12.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/034.html"
+    },
+    {
+      "index": 35,
+      "coordinate": "androidx.concurrent:concurrent-futures-ktx:1.1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/035.html"
+    },
+    {
+      "index": 36,
+      "coordinate": "androidx.concurrent:concurrent-futures:1.1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/036.html"
+    },
+    {
+      "index": 37,
+      "coordinate": "androidx.constraintlayout:constraintlayout-core:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/037.html"
+    },
+    {
+      "index": 38,
+      "coordinate": "androidx.constraintlayout:constraintlayout:2.1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/038.html"
+    },
+    {
+      "index": 39,
+      "coordinate": "androidx.coordinatorlayout:coordinatorlayout:1.1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/039.html"
+    },
+    {
+      "index": 40,
+      "coordinate": "androidx.core:core-ktx:1.17.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/040.html"
+    },
+    {
+      "index": 41,
+      "coordinate": "androidx.core:core-viewtree:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/041.html"
+    },
+    {
+      "index": 42,
+      "coordinate": "androidx.core:core:1.17.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/042.html"
+    },
+    {
+      "index": 43,
+      "coordinate": "androidx.cursoradapter:cursoradapter:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/043.html"
+    },
+    {
+      "index": 44,
+      "coordinate": "androidx.customview:customview-poolingcontainer:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/044.html"
+    },
+    {
+      "index": 45,
+      "coordinate": "androidx.customview:customview:1.2.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/045.html"
+    },
+    {
+      "index": 46,
+      "coordinate": "androidx.drawerlayout:drawerlayout:1.1.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/046.html"
+    },
+    {
+      "index": 47,
+      "coordinate": "androidx.dynamicanimation:dynamicanimation:1.1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/047.html"
+    },
+    {
+      "index": 48,
+      "coordinate": "androidx.emoji2:emoji2-views-helper:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/048.html"
+    },
+    {
+      "index": 49,
+      "coordinate": "androidx.emoji2:emoji2:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/049.html"
+    },
+    {
+      "index": 50,
+      "coordinate": "androidx.exifinterface:exifinterface:1.3.2",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/050.html"
+    },
+    {
+      "index": 51,
+      "coordinate": "androidx.fragment:fragment-compose:1.8.9",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/051.html"
+    },
+    {
+      "index": 52,
+      "coordinate": "androidx.fragment:fragment-ktx:1.8.9",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/052.html"
+    },
+    {
+      "index": 53,
+      "coordinate": "androidx.fragment:fragment:1.8.9",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/053.html"
+    },
+    {
+      "index": 54,
+      "coordinate": "androidx.graphics:graphics-path:1.0.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/054.html"
+    },
+    {
+      "index": 55,
+      "coordinate": "androidx.graphics:graphics-shapes-android:1.0.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/055.html"
+    },
+    {
+      "index": 56,
+      "coordinate": "androidx.interpolator:interpolator:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/056.html"
+    },
+    {
+      "index": 57,
+      "coordinate": "androidx.lifecycle:lifecycle-common-java8:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/057.html"
+    },
+    {
+      "index": 58,
+      "coordinate": "androidx.lifecycle:lifecycle-common-jvm:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/058.html"
+    },
+    {
+      "index": 59,
+      "coordinate": "androidx.lifecycle:lifecycle-livedata-core-ktx:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/059.html"
+    },
+    {
+      "index": 60,
+      "coordinate": "androidx.lifecycle:lifecycle-livedata-core:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/060.html"
+    },
+    {
+      "index": 61,
+      "coordinate": "androidx.lifecycle:lifecycle-livedata:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/061.html"
+    },
+    {
+      "index": 62,
+      "coordinate": "androidx.lifecycle:lifecycle-process:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/062.html"
+    },
+    {
+      "index": 63,
+      "coordinate": "androidx.lifecycle:lifecycle-runtime-android:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/063.html"
+    },
+    {
+      "index": 64,
+      "coordinate": "androidx.lifecycle:lifecycle-runtime-compose-android:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/064.html"
+    },
+    {
+      "index": 65,
+      "coordinate": "androidx.lifecycle:lifecycle-runtime-ktx-android:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/065.html"
+    },
+    {
+      "index": 66,
+      "coordinate": "androidx.lifecycle:lifecycle-service:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/066.html"
+    },
+    {
+      "index": 67,
+      "coordinate": "androidx.lifecycle:lifecycle-viewmodel-android:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/067.html"
+    },
+    {
+      "index": 68,
+      "coordinate": "androidx.lifecycle:lifecycle-viewmodel-compose-android:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/068.html"
+    },
+    {
+      "index": 69,
+      "coordinate": "androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/069.html"
+    },
+    {
+      "index": 70,
+      "coordinate": "androidx.lifecycle:lifecycle-viewmodel-savedstate-android:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/070.html"
+    },
+    {
+      "index": 71,
+      "coordinate": "androidx.lifecycle:lifecycle-viewmodel:2.10.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/071.html"
+    },
+    {
+      "index": 72,
+      "coordinate": "androidx.loader:loader:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/072.html"
+    },
+    {
+      "index": 73,
+      "coordinate": "androidx.pdf:pdf-core:1.0.0-beta01",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/073.html"
+    },
+    {
+      "index": 74,
+      "coordinate": "androidx.pdf:pdf-document-service:1.0.0-beta01",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/074.html"
+    },
+    {
+      "index": 75,
+      "coordinate": "androidx.pdf:pdf-viewer-fragment:1.0.0-beta01",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/075.html"
+    },
+    {
+      "index": 76,
+      "coordinate": "androidx.pdf:pdf-viewer:1.0.0-beta01",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/076.html"
+    },
+    {
+      "index": 77,
+      "coordinate": "androidx.profileinstaller:profileinstaller:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/077.html"
+    },
+    {
+      "index": 78,
+      "coordinate": "androidx.recyclerview:recyclerview:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/078.html"
+    },
+    {
+      "index": 79,
+      "coordinate": "androidx.resourceinspection:resourceinspection-annotation:1.0.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/079.html"
+    },
+    {
+      "index": 80,
+      "coordinate": "androidx.room:room-common-jvm:2.7.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/080.html"
+    },
+    {
+      "index": 81,
+      "coordinate": "androidx.room:room-runtime-android:2.7.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/081.html"
+    },
+    {
+      "index": 82,
+      "coordinate": "androidx.savedstate:savedstate-android:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/082.html"
+    },
+    {
+      "index": 83,
+      "coordinate": "androidx.savedstate:savedstate-compose-android:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/083.html"
+    },
+    {
+      "index": 84,
+      "coordinate": "androidx.savedstate:savedstate-ktx:1.4.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/084.html"
+    },
+    {
+      "index": 85,
+      "coordinate": "androidx.sqlite:sqlite-android:2.5.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/085.html"
+    },
+    {
+      "index": 86,
+      "coordinate": "androidx.sqlite:sqlite-framework-android:2.5.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/086.html"
+    },
+    {
+      "index": 87,
+      "coordinate": "androidx.startup:startup-runtime:1.1.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/087.html"
+    },
+    {
+      "index": 88,
+      "coordinate": "androidx.tracing:tracing-ktx:1.2.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/088.html"
+    },
+    {
+      "index": 89,
+      "coordinate": "androidx.tracing:tracing:1.2.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/089.html"
+    },
+    {
+      "index": 90,
+      "coordinate": "androidx.transition:transition:1.5.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/090.html"
+    },
+    {
+      "index": 91,
+      "coordinate": "androidx.vectordrawable:vectordrawable-animated:1.1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/091.html"
+    },
+    {
+      "index": 92,
+      "coordinate": "androidx.vectordrawable:vectordrawable:1.1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/092.html"
+    },
+    {
+      "index": 93,
+      "coordinate": "androidx.versionedparcelable:versionedparcelable:1.1.1",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/093.html"
+    },
+    {
+      "index": 94,
+      "coordinate": "androidx.viewpager2:viewpager2:1.1.0-beta02",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/094.html"
+    },
+    {
+      "index": 95,
+      "coordinate": "androidx.viewpager:viewpager:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/095.html"
+    },
+    {
+      "index": 96,
+      "coordinate": "androidx.window:window-core-android:1.5.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/096.html"
+    },
+    {
+      "index": 97,
+      "coordinate": "androidx.window:window:1.5.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/097.html"
+    },
+    {
+      "index": 98,
+      "coordinate": "androidx.work:work-runtime-ktx:2.11.2",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/098.html"
+    },
+    {
+      "index": 99,
+      "coordinate": "androidx.work:work-runtime:2.11.2",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/099.html"
+    },
+    {
+      "index": 100,
+      "coordinate": "com.google.android.material:material:1.13.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/100.html"
+    },
+    {
+      "index": 101,
+      "coordinate": "com.google.errorprone:error_prone_annotations:2.30.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/101.html"
+    },
+    {
+      "index": 102,
+      "coordinate": "com.google.guava:listenablefuture:1.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/102.html"
+    },
+    {
+      "index": 103,
+      "coordinate": "com.squareup.okhttp3:okhttp:4.12.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/103.html"
+    },
+    {
+      "index": 104,
+      "coordinate": "com.squareup.okio:okio-jvm:3.6.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/104.html"
+    },
+    {
+      "index": 105,
+      "coordinate": "com.tom-roush:pdfbox-android:2.0.27.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/105.html"
+    },
+    {
+      "index": 106,
+      "coordinate": "org.bouncycastle:bcpkix-jdk15to18:1.72",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "LicenseRef-BouncyCastle-1.72"
+      ],
+      "htmlPath": "artifacts/106.html"
+    },
+    {
+      "index": 107,
+      "coordinate": "org.bouncycastle:bcprov-jdk15to18:1.72",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "LicenseRef-BouncyCastle-1.72"
+      ],
+      "htmlPath": "artifacts/107.html"
+    },
+    {
+      "index": 108,
+      "coordinate": "org.bouncycastle:bcutil-jdk15to18:1.72",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "LicenseRef-BouncyCastle-1.72"
+      ],
+      "htmlPath": "artifacts/108.html"
+    },
+    {
+      "index": 109,
+      "coordinate": "org.commonmark:commonmark-ext-gfm-tables:0.24.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "BSD-2-Clause"
+      ],
+      "htmlPath": "artifacts/109.html"
+    },
+    {
+      "index": 110,
+      "coordinate": "org.commonmark:commonmark:0.24.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "BSD-2-Clause"
+      ],
+      "htmlPath": "artifacts/110.html"
+    },
+    {
+      "index": 111,
+      "coordinate": "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.10",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/111.html"
+    },
+    {
+      "index": 112,
+      "coordinate": "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.10",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/112.html"
+    },
+    {
+      "index": 113,
+      "coordinate": "org.jetbrains.kotlin:kotlin-stdlib:2.4.21",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/113.html"
+    },
+    {
+      "index": 114,
+      "coordinate": "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/114.html"
+    },
+    {
+      "index": 115,
+      "coordinate": "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/115.html"
+    },
+    {
+      "index": 116,
+      "coordinate": "org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.7.3",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/116.html"
+    },
+    {
+      "index": 117,
+      "coordinate": "org.jetbrains:annotations:23.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/117.html"
+    },
+    {
+      "index": 118,
+      "coordinate": "org.jsoup:jsoup:1.21.2",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "MIT"
+      ],
+      "htmlPath": "artifacts/118.html"
+    },
+    {
+      "index": 119,
+      "coordinate": "org.jspecify:jspecify:1.0.0",
+      "status": "established-for-inspected-artifact",
+      "licenseIDs": [
+        "Apache-2.0"
+      ],
+      "htmlPath": "artifacts/119.html"
+    }
+  ],
+  "supplementary": {
+    "katexVersion": "0.19.1",
+    "fontFaces": 20,
+    "fontFiles": 60
+  },
+  "fullManifest": "manifest.json",
+  "htmlIndex": "index.html"
+}

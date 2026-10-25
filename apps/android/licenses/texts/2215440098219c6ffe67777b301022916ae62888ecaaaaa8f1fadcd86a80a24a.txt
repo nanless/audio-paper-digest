@@ -1,0 +1,40 @@
+StartFontMetrics 4.1
+
+Comment Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated. All rights reserved.
+
+Comment Creation Date: Thu May  1 15:12:25 1997
+
+Comment UniqueID 43064
+
+Comment VMusage 30820 39997
+
+FontName Symbol
+
+FullName Symbol
+
+FamilyName Symbol
+
+Weight Medium
+
+ItalicAngle 0
+
+IsFixedPitch false
+
+CharacterSet Special
+
+FontBBox -180 -293 1090 1010 
+
+UnderlinePosition -100
+
+UnderlineThickness 50
+
+Version 001.008
+
+Notice Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated. All rights reserved.
+
+EncodingScheme FontSpecific
+
+StdHW 92
+
+StdVW 85
+

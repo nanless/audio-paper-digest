@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <!-- This module was also published with a richer model, Gradle metadata,  -->
+  <!-- which should be used instead. Do not delete the following line which  -->
+  <!-- is to indicate to Gradle or any Gradle module metadata file consumer  -->
+  <!-- that they should prefer consuming it instead. -->
+  <!-- do_not_remove: published-with-gradle-metadata -->
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>androidx.savedstate</groupId>
+  <artifactId>savedstate-android</artifactId>
+  <version>1.4.0</version>
+  <packaging>aar</packaging>
+  <name>Saved State</name>
+  <description>Android Lifecycle Saved State</description>
+  <url>https://developer.android.com/jetpack/androidx/releases/savedstate#1.4.0</url>
+  <inceptionYear>2018</inceptionYear>
+  <organization>
+    <name>The Android Open Source Project</name>
+  </organization>
+  <licenses>
+    <license>
+      <name>The Apache Software License, Version 2.0</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <name>The Android Open Source Project</name>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:https://android.googlesource.com/platform/frameworks/support</connection>
+    <url>https://cs.android.com/androidx/platform/frameworks/support</url>
+  </scm>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>androidx.savedstate</groupId>
+        <artifactId>savedstate-compose</artifactId>
+        <version>1.4.0</version>
+      </dependency>
+      <dependency>
+        <groupId>androidx.savedstate</groupId>
+        <artifactId>savedstate-ktx</artifactId>
+        <version>1.4.0</version>
+      </dependency>
+      <dependency>
+        <groupId>androidx.savedstate</groupId>
+        <artifactId>savedstate-testing</artifactId>
+        <version>1.4.0</version>
+      </dependency>
+      <dependency>
+        <groupId>org.jetbrains.kotlin</groupId>
+        <artifactId>kotlin-stdlib</artifactId>
+        <version>2.0.21</version>
+      </dependency>
+      <dependency>
+        <groupId>org.jetbrains.androidx.savedstate</groupId>
+        <artifactId>savedstate</artifactId>
+        <version>1.3.2</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>androidx.annotation</groupId>
+      <artifactId>annotation-jvm</artifactId>
+      <version>1.9.1</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>androidx.core</groupId>
+      <artifactId>core-ktx</artifactId>
+      <version>1.13.1</version>
+      <scope>runtime</scope>
+      <type>aar</type>
+    </dependency>
+    <dependency>
+      <groupId>androidx.core</groupId>
+      <artifactId>core-viewtree</artifactId>
+      <version>1.0.0</version>
+      <scope>runtime</scope>
+      <type>aar</type>
+    </dependency>
+    <dependency>
+      <groupId>androidx.lifecycle</groupId>
+      <artifactId>lifecycle-common-jvm</artifactId>
+      <version>2.9.2</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-stdlib</artifactId>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlinx</groupId>
+      <artifactId>kotlinx-coroutines-core</artifactId>
+      <version>1.9.0</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlinx</groupId>
+      <artifactId>kotlinx-serialization-core-jvm</artifactId>
+      <version>1.7.3</version>
+      <scope>compile</scope>
+    </dependency>
+  </dependencies>
+</project>

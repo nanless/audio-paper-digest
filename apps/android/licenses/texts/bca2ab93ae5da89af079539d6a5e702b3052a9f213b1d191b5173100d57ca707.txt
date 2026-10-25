@@ -1,0 +1,26 @@
+# Scripts-10.0.0.txt
+# Date: 2017-03-11, 06:40:37 GMT
+# © 2017 Unicode®, Inc.
+# Unicode and the Unicode Logo are registered trademarks of Unicode, Inc. in the U.S. and other countries.
+# For terms of use, see http://www.unicode.org/terms_of_use.html
+#
+# Unicode Character Database
+#   For documentation, see http://www.unicode.org/reports/tr44/
+# For more information, see:
+#   UAX #24, Unicode Script Property: http://www.unicode.org/reports/tr24/
+#     Especially the sections:
+#       http://www.unicode.org/reports/tr24/#Assignment_Script_Values
+#       http://www.unicode.org/reports/tr24/#Assignment_ScriptX_Values
+#
+
+# ================================================
+
+# Property:	Script
+
+#  All code points not explicitly listed for Script
+#  have the value Unknown (Zzzz).
+
+# @missing: 0000..10FFFF; Unknown
+
+# ================================================
+

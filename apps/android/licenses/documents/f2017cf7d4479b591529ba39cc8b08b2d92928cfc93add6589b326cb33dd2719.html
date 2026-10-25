@@ -1,0 +1,141 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; style-src &#x27;unsafe-inline&#x27;; img-src &#x27;none&#x27;; script-src &#x27;none&#x27;; connect-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;"><title>OkHttp 4.12.0 · 原列表生成器源码</title><style>body{font-family:system-ui,sans-serif;max-width:920px;margin:40px auto;padding:0 24px;line-height:1.65;color:#202630;background:#fafbfc}h1{font-size:28px}a{color:#2458a7}code{overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;background:#fff;border:1px solid #dce1e8;border-radius:12px;padding:20px}li{margin:8px 0}.muted{color:#596575}section{margin:24px 0}small{font-size:12px} @media(prefers-color-scheme:dark){body{color:#e3e9f0;background:#141922}pre{background:#1a222e;border-color:#394555}a{color:#90baff}.muted{color:#a8b4c4}}</style></head><body><a href="../index.html">返回许可目录</a><h1>OkHttp 4.12.0 · 原列表生成器源码</h1><p class="muted">原文字节 SHA256：<code>f2017cf7d4479b591529ba39cc8b08b2d92928cfc93add6589b326cb33dd2719</code></p><pre>/*
+ * Copyright (C) 2017 Square, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package okhttp3.internal.publicsuffix;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okio.BufferedSink;
+import okio.BufferedSource;
+import okio.ByteString;
+import okio.GzipSink;
+import okio.Okio;
+import okio.Sink;
+
+/**
+ * Downloads the public suffix list from https://publicsuffix.org/list/public_suffix_list.dat and
+ * transforms the file into an efficient format used by OkHttp.
+ *
+ * &lt;p&gt;The intent is to use this class to update the list periodically by manually running the main
+ * method. This should be run from the top-level okhttp directory.
+ *
+ * &lt;p&gt;The resulting file is used by {@link PublicSuffixDatabase}.
+ */
+public final class PublicSuffixListGenerator {
+  private static final String OKHTTP_RESOURCE_DIR = &quot;okhttp&quot; + File.separator + &quot;src&quot;
+      + File.separator + &quot;main&quot; + File.separator + &quot;resources&quot; + File.separator
+      + &quot;okhttp3&quot; + File.separator + &quot;internal&quot; + File.separator + &quot;publicsuffix&quot;;
+  private static final String OKHTTP_TEST_RESOURCE_DIR = &quot;okhttp&quot; + File.separator + &quot;src&quot;
+      + File.separator + &quot;test&quot; + File.separator + &quot;resources&quot; + File.separator
+      + &quot;okhttp3&quot; + File.separator + &quot;internal&quot; + File.separator + &quot;publicsuffix&quot;;
+  private static final File publicSuffixListDotDat
+      = new File(OKHTTP_TEST_RESOURCE_DIR, &quot;public_suffix_list.dat&quot;);
+
+  private static final ByteString EXCEPTION_RULE_MARKER = ByteString.encodeUtf8(&quot;!&quot;);
+  private static final String WILDCARD_CHAR = &quot;*&quot;;
+
+  public static void main(String... args) throws IOException {
+    File resources = new File(OKHTTP_RESOURCE_DIR);
+    File testResources = publicSuffixListDotDat.getParentFile();
+    for (File file : Arrays.asList(resources, testResources)) {
+      if (!file.mkdirs() &amp;&amp; !file.exists()) {
+        throw new RuntimeException(&quot;Unable to create resource directory &quot; + file);
+      }
+    }
+
+    OkHttpClient client = new OkHttpClient.Builder().build();
+    Request request = new Request.Builder()
+        .url(&quot;https://publicsuffix.org/list/public_suffix_list.dat&quot;)
+        .build();
+    try (Response response = client.newCall(request).execute()) {
+      BufferedSource source = response.body().source();
+      try (Sink fileSink = Okio.sink(publicSuffixListDotDat)) {
+        source.readAll(fileSink);
+      }
+    }
+
+    SortedSet&lt;ByteString&gt; sortedRules = new TreeSet&lt;&gt;();
+    SortedSet&lt;ByteString&gt; sortedExceptionRules = new TreeSet&lt;&gt;();
+    try (BufferedSource source = Okio.buffer(Okio.source(publicSuffixListDotDat))) {
+      int totalRuleBytes = 0;
+      int totalExceptionRuleBytes = 0;
+      while (!source.exhausted()) {
+        String line = source.readUtf8LineStrict();
+        if (line.trim().isEmpty() || line.startsWith(&quot;//&quot;)) continue;
+
+        if (line.contains(WILDCARD_CHAR)) {
+          assertWildcardRule(line);
+        }
+
+        ByteString rule = ByteString.encodeUtf8(line);
+        if (rule.startsWith(EXCEPTION_RULE_MARKER)) {
+          rule = rule.substring(1);
+          // We use &#x27;\n&#x27; for end of value.
+          totalExceptionRuleBytes += rule.size() + 1;
+          sortedExceptionRules.add(rule);
+        } else {
+          totalRuleBytes += rule.size() + 1; // We use &#x27;\n&#x27; for end of value.
+          sortedRules.add(rule);
+        }
+      }
+
+      Sink fileSink = Okio.sink(new File(resources,
+          PublicSuffixDatabase.PUBLIC_SUFFIX_RESOURCE));
+      try (BufferedSink sink = Okio.buffer(new GzipSink(fileSink))) {
+        sink.writeInt(totalRuleBytes);
+        for (ByteString domain : sortedRules) {
+          sink.write(domain).writeByte(&#x27;\n&#x27;);
+        }
+
+        sink.writeInt(totalExceptionRuleBytes);
+        for (ByteString domain : sortedExceptionRules) {
+          sink.write(domain).writeByte(&#x27;\n&#x27;);
+        }
+      }
+    }
+  }
+
+  /**
+   * These assertions ensure the {@link PublicSuffixDatabase} remains correct. The specification is
+   * very flexible regarding wildcard rules, but this flexibility is not something currently used
+   * in practice. To simplify the implementation, we&#x27;ve avoided implementing the flexible rules in
+   * favor of supporting what&#x27;s actually used in practice. That means if these assertions ever fail,
+   * the implementation will need to be revisited to support a more flexible rule.
+   */
+  private static void assertWildcardRule(String rule) {
+    if (rule.indexOf(WILDCARD_CHAR) != 0) {
+      throw new RuntimeException(&quot;Wildcard Assertion Failure: &quot; + rule + &quot;\nA wildcard rule was &quot;
+          + &quot;added with a wildcard that is not in leftmost position! We&#x27;ll need to change the &quot;
+          + PublicSuffixDatabase.class.getName() + &quot; to handle this.&quot;);
+    }
+    if (rule.indexOf(WILDCARD_CHAR, 1) != -1) {
+      throw new RuntimeException(&quot;Wildcard Assertion Failure: &quot; + rule + &quot;\nA wildcard rule was &quot;
+          + &quot;added with multiple wildcards! We&#x27;ll need to change &quot;
+          + PublicSuffixDatabase.class.getName() + &quot; to handle this.&quot;);
+    }
+    if (rule.length() == 1) {
+      throw new RuntimeException(&quot;Wildcard Assertion Failure: &quot; + rule + &quot;\nA wildcard rule was &quot;
+          + &quot;added that wildcards the first level! We&#x27;ll need to change the &quot;
+          + PublicSuffixDatabase.class.getName() + &quot; to handle this.&quot;);
+    }
+  }
+}
+</pre></body></html>

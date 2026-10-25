@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.tom-roush</groupId>
+  <artifactId>pdfbox-android</artifactId>
+  <version>2.0.27.0</version>
+  <packaging>aar</packaging>
+  <name>PdfBox-Android</name>
+  <description>The Apache PdfBox project ported to work on Android</description>
+  <url>https://github.com/TomRoush/PdfBox-Android</url>
+  <licenses>
+    <license>
+      <name>The Apache Software License, Version 2.0</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <name>Tom Roush</name>
+      <email>tom@tom-roush.com</email>
+      <organization>PdfBox-Android Developers</organization>
+      <organizationUrl>https://github.com/TomRoush/PdfBox-Android</organizationUrl>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:git@github.com:TomRoush/PdfBox-Android.git</connection>
+    <developerConnection>scm:git:ssh@github.com:TomRoush/PdfBox-Android.git</developerConnection>
+    <url>https://github.com/TomRoush/PdfBox-Android</url>
+  </scm>
+  <dependencies>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk15to18</artifactId>
+      <version>1.72</version>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpkix-jdk15to18</artifactId>
+      <version>1.72</version>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcutil-jdk15to18</artifactId>
+      <version>1.72</version>
+    </dependency>
+  </dependencies>
+</project>
