@@ -52,7 +52,10 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var offlinePDF:[String:Any]?
     var currentPDFReceipt:[String:Any]=[:]
     var pendingPDFPage:Int?
-    var contextGeneration=0
+    var nativeTaskWindowID=UUID(),nativeTaskDocumentID=UUID()
+    var nativeTaskController:NativeTasksController?,nativeTaskCoordinator:NativeTaskHostCoordinator?
+    var nativeTasksRequestedVisible=false
+    var contextGeneration=0 {didSet{if oldValue != contextGeneration{nativeTasksContextDidChange()}}}
     var pdfOwner="",pdfVersion=""
     var pdfView=PDFView(), currentPDFSHA="", currentPaperID="", currentPDFPath:URL?, currentPaper:[String:Any]=[:], currentArticle:[String:Any]=[:]
     var selectionSource:[String:Any]=[:], annotationsByID:[String:PDFAnnotation]=[:], jobs:[String:Task<[String:Any],Error>]=[:]
@@ -80,7 +83,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         } catch { showError(error); NSApp.terminate(nil) }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool{false}
-    func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {window.makeKeyAndOrderFront(nil);return true}
+    func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {window.makeKeyAndOrderFront(nil);emit("nativeTasks.layout");return true}
     func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
         guard !terminationPending,!maintenanceBusy,!storageDetailBusy,!storageDetailSystemPanel else{return .terminateCancel}
         if !jobs.isEmpty {
@@ -108,7 +111,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if sender===storageDetailWindow {_=closeStorageDetails();return false}
         if sender===window,storageDetailsActive {_=mainContextMenuAvailable();return false}
         guard sender===window || sender===settingsWindow else{return true}
-        Task{do{try await flushEdits();sender.orderOut(nil)}catch{showError(error)}};return false
+        Task{do{try await flushEdits();if sender===self.window{self.nativeTasksRequestedVisible=false;self.retireNativeTasks(restoreFocus:true)};sender.orderOut(nil)}catch{showError(error)}};return false
     }
     func buildWindow() {
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1440,height:900),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
@@ -123,6 +126,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         let content=NSView(frame:window.contentView!.bounds);content.autoresizingMask=[.width,.height];window.contentView=content;content.addSubview(web)
         pdfView.isHidden=true;pdfView.autoScales=true;pdfView.displayMode = .singlePageContinuous;pdfView.displaysPageBreaks=true;pdfView.backgroundColor = .windowBackgroundColor
         window.contentView!.addSubview(pdfView)
+        installNativeTasks()
         NotificationCenter.default.addObserver(self,selector:#selector(pdfPageChanged),name:.PDFViewPageChanged,object:pdfView)
         NotificationCenter.default.addObserver(self,selector:#selector(pdfSelectionChanged),name:.PDFViewSelectionChanged,object:pdfView)
         web.load(URLRequest(url:URL(string:"paperapp://app/index.html")!))
@@ -165,6 +169,11 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         guard message.frameInfo.isMainFrame,message.frameInfo.securityOrigin.protocol=="paperapp",message.frameInfo.securityOrigin.host=="app",let body=message.body as? [String:Any],let command=body["command"] as? String else{replyHandler(nil,"已拒绝非应用主界面的操作");return}
         let payload=body["payload"] as? [String:Any] ?? [:]
         guard let source=message.webView else{replyHandler(nil,"操作来源窗口不可用");return}
+        if command=="nativeTasks.bootstrap" || command=="nativeTasks.present" {
+            let frameURL=message.frameInfo.request.url,isMainFrame=message.frameInfo.isMainFrame
+            Task{do{replyHandler(try await nativeTasksMessage(command,payload:payload,source:source,frameURL:frameURL,isMainFrame:isMainFrame),nil)}catch{replyHandler(nil,"任务视图已变化，请重新选择后台任务")}}
+            return
+        }
         if source===storageDetailWeb {
             Task{do{replyHandler(try await storageDetailCommand(command,payload:payload,source:source),nil)}catch{replyHandler(nil,error.localizedDescription)}}
             return
@@ -188,6 +197,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         return ["cancelled":true,"message":(error as? DesktopOperationCancelled)?.localizedDescription ?? "已取消本次云端操作；原快照和已完成步骤保留。"]
     }
     func emit(_ name:String,_ object:[String:Any]=[:],to targets:[WKWebView]?=nil) {
+        if name=="jobs.changed"{nativeTaskController?.reload()}
+        if name=="personal.changed"{nativeTasksContextDidChange()}
+        if name=="settings.changed"{updateNativeTasksAppearance()}
         guard JSONSerialization.isValidJSONObject(object),let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8),let event=try? JSONSerialization.data(withJSONObject:[name]),let json=String(data:event,encoding:.utf8) else{return}
         for target in (targets ?? [web,settingsWeb,storageDetailWeb].compactMap({$0})) {target.evaluateJavaScript("window.dispatchEvent(new CustomEvent(\(json).at(0),{detail:\(text)}));",completionHandler:nil)}
     }
@@ -203,7 +215,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if command=="app.bootstrap" {
             let settings=model.configuration()
             _=try? await library.handle(command:"library.network",payload:["httpProxy":settings["httpProxy"] ?? ""])
-            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":"1.0.0","build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
+            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":"1.0.0","nativeTasks":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
         }
         if command.hasPrefix("library.") {
             if command=="library.article",let id=payload["paperID"] as? String {
@@ -350,6 +362,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         do{try store.upsertJob(row);emit("job.progress",["id":id,"progress":update]);emit("jobs.changed")}catch{jobs[id]?.cancel();model.cancel(id);emit("app.error",["message":"任务进度未能保存，已请求停止："+error.localizedDescription])}
     }
     func positionPDF(_ payload:[String:Any]) {
+        guard !nativeTasksRequestedVisible else{pdfView.isHidden=true;return}
         guard payload["visible"] as? Bool==true else{pdfView.isHidden=true;return}
         let x=payload["x"] as? Double ?? 0,y=payload["y"] as? Double ?? 0,w=payload["width"] as? Double ?? 0,h=payload["height"] as? Double ?? 0
         guard w>=150,h>=100,x>=0,y>=0 else{pdfView.isHidden=true;return}
