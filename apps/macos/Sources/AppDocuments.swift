@@ -240,7 +240,17 @@ import UniformTypeIdentifiers
         defer{try? fm.removeItem(at:stage)}
         try RestoreLocalPolicy.apply(stage:stage,current:directory)
         let stagedStore=try DesktopStore(directory:stage);try validateSettings(stagedStore.value["settings"] as? [String:Any] ?? [:]);_=try LibraryService(dataDirectory:stage)
-        let alert=NSAlert();alert.messageText="恢复个人研究空间？";alert.informativeText="原备份全部文件已通过 SHA 校验。研究资料回到所选快照时点；本机模型、网络、预算配置及已派发请求计数保留。快照之后的笔记、解析和费用原始记录仍保存在恢复前副本：\(old.lastPathComponent)。API、网盘与 Zotero 许可由本机钥匙串保护。";alert.addButton(withTitle:"恢复并重新载入");alert.addButton(withTitle:"取消");guard try await documentConfirmation(alert,access:access,kinds:[.help]) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消恢复")}
+        let alert=NSAlert()
+        alert.messageText="恢复个人研究空间？"
+        alert.informativeText="备份文件已通过完整性校验。\n\n确认后会先保留当前研究空间，再恢复所选快照。快照之后的笔记、解析和原始用量可从恢复前副本找回。\n\n本机模型、网络和预算设置，以及已派发请求计数继续保留；API、网盘与 Zotero 许可不随备份替换。"
+        let backupLocation=NSView(frame:NSRect(x:0,y:0,width:440,height:54))
+        let backupCaption=NSTextField(labelWithString:"确认后保留的副本名称")
+        backupCaption.frame=NSRect(x:0,y:36,width:440,height:18);backupCaption.font = .systemFont(ofSize:12);backupCaption.textColor = .secondaryLabelColor
+        let backupName=NSTextField(wrappingLabelWithString:old.lastPathComponent)
+        backupName.frame=NSRect(x:0,y:0,width:440,height:32);backupName.font = .monospacedSystemFont(ofSize:11,weight:.regular);backupName.textColor = .secondaryLabelColor;backupName.isSelectable=true;backupName.maximumNumberOfLines=2;backupName.toolTip=old.path
+        backupLocation.addSubview(backupCaption);backupLocation.addSubview(backupName);alert.accessoryView=backupLocation
+        alert.addButton(withTitle:"恢复并重新载入");alert.addButton(withTitle:"取消")
+        guard try await documentConfirmation(alert,access:access,kinds:[.help]) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消恢复")}
         try requireDocumentContext(access,kinds:[.help])
         try Task.checkCancellation()
         try fm.moveItem(at:directory,to:old)

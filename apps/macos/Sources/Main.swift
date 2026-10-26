@@ -81,7 +81,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             zotero=ZoteroService(dataDirectory:directory)
             model=ModelService(directory:directory,store:store)
             storage=DesktopStorage(directory:directory,store:store)
-            buildMenu(); buildWindow(); configureSchedule(); configureCloudSchedule()
+            applyApplicationAppearance();buildMenu(); buildWindow(); configureSchedule(); configureCloudSchedule()
             NSWorkspace.shared.notificationCenter.addObserver(self,selector:#selector(didWake),name:NSWorkspace.didWakeNotification,object:nil)
             NSApp.activate(ignoringOtherApps:true)
         } catch { showError(error); NSApp.terminate(nil) }
@@ -209,7 +209,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func emit(_ name:String,_ object:[String:Any]=[:],to targets:[WKWebView]?=nil) {
         if name=="jobs.changed"{nativeTaskController?.reload()}
         if name=="personal.changed"{nativeWorkspaceContextDidChange()}
-        if name=="settings.changed"{updateNativeTasksAppearance();updateNativeNotesAppearance()}
+        if name=="settings.changed"{applyApplicationAppearance();updateNativeTasksAppearance();updateNativeNotesAppearance()}
         guard JSONSerialization.isValidJSONObject(object),let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8),let event=try? JSONSerialization.data(withJSONObject:[name]),let json=String(data:event,encoding:.utf8) else{return}
         for target in (targets ?? [web,settingsWeb,storageDetailWeb].compactMap({$0})) {target.evaluateJavaScript("window.dispatchEvent(new CustomEvent(\(json).at(0),{detail:\(text)}));",completionHandler:nil)}
     }
