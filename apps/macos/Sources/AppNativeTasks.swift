@@ -40,7 +40,9 @@ extension PaperDigestApp {
             return try coordinator.bootstrap(client:client,paperID:paper,observedClient:observed.clientID,current:nativeTasksContext)
         }
         guard command=="nativeTasks.present" else{throw NativeTaskPresentationError.stale}
-        let request=try NativeTaskPresentRequest(payload),ticket=try coordinator.reserve(request,current:context)
+        let request=try NativeTaskPresentRequest(payload)
+        guard !request.tasks || !nativeNotesRequestedVisible else{throw NativeTaskPresentationError.stale}
+        let ticket=try coordinator.reserve(request,current:context)
         nativeTasksRequestedVisible=request.tasks
         controller.retire()
         do{
@@ -84,6 +86,6 @@ extension PaperDigestApp {
             guard result as? Bool==true else{throw DesktopError.message("原论文当前不可达，已保存的请求与费用记录仍保留")};return .opened
         }
     }
-    func webView(_ view:WKWebView,didStartProvisionalNavigation navigation:WKNavigation!){guard view===web else{return};nativeTaskDocumentID=UUID();nativeTasksContextDidChange()}
-    func webViewWebContentProcessDidTerminate(_ view:WKWebView){guard view===web else{return};nativeTaskDocumentID=UUID();nativeTasksContextDidChange()}
+    func webView(_ view:WKWebView,didStartProvisionalNavigation navigation:WKNavigation!){guard view===web else{return};nativeTaskDocumentID=UUID();nativeWorkspaceContextDidChange()}
+    func webViewWebContentProcessDidTerminate(_ view:WKWebView){guard view===web else{return};nativeTaskDocumentID=UUID();nativeWorkspaceContextDidChange()}
 }
