@@ -6,17 +6,23 @@ struct NativeNotesLayout { let owner:NativeTaskOwner;let sequence:Int64;let note
 struct NativeNotesHostContext: Equatable { let owner: NativeTaskOwner; let paperID:String }
 @MainActor struct NativeNotesPresentRequest {
     let nonce:String,clientID:String,paperID:String,sequence:Int64,notes:Bool,focus:Bool
+    let focusIntent:String?
     init(_ raw:[String:Any]) throws {
-        guard Set(raw.keys)==Set(["nonce","clientID","paperID","sequence","notes","focus"]),let nonce=raw["nonce"] as? String,NativeNotesHostCoordinator.validID(nonce),let clientID=raw["clientID"] as? String,NativeNotesHostCoordinator.validID(clientID),let paperID=NativeTaskProjection.identifier(raw["paperID"],empty:true),let sequence=NativeTaskProjection.integer(raw["sequence"]),sequence>0,let notes=NativeTaskProjection.bool(raw["notes"]),let focus=NativeTaskProjection.bool(raw["focus"]) else {throw NativeNotesError.stale}
+        guard (Set(raw.keys)==Set(["nonce","clientID","paperID","sequence","notes","focus"]) || Set(raw.keys)==Set(["nonce","clientID","paperID","sequence","notes","focus","focusIntent"])),let nonce=raw["nonce"] as? String,NativeNotesHostCoordinator.validID(nonce),let clientID=raw["clientID"] as? String,NativeNotesHostCoordinator.validID(clientID),let paperID=NativeTaskProjection.identifier(raw["paperID"],empty:true),let sequence=NativeTaskProjection.integer(raw["sequence"]),sequence>0,let notes=NativeTaskProjection.bool(raw["notes"]),let focus=NativeTaskProjection.bool(raw["focus"]) else {throw NativeNotesError.stale}
         self.nonce=nonce;self.clientID=clientID;self.paperID=paperID;self.sequence=sequence;self.notes=notes;self.focus=focus
+        guard focus || raw["focusIntent"]==nil else{throw NativeNotesError.stale}
+        self.focusIntent=focus ? (raw["focusIntent"] as? String).flatMap{NativeNotesHostCoordinator.validID($0) ? $0:nil}:nil
     }
+    func permitsInitialFocus(_ observation:NativeNotesDOMObservation?)->Bool{guard focus,let focusIntent else{return false};return observation?.focusIntent==focusIntent}
 }
 @MainActor struct NativeNotesDOMObservation {
     let clientID:String,notesVisible:Bool,blocked:Bool,width:Double,height:Double,main:NativeTaskRectangle,toolbar:NativeTaskRectangle,sidebar:NativeTaskRectangle?,notes:NativeTaskRectangle
+    let focusIntent:String?
     init(_ raw:[String:Any])throws {
         func number(_ value:Any?)->Double?{guard let n=value as? NSNumber,CFGetTypeID(n) != CFBooleanGetTypeID(),n.doubleValue.isFinite else{return nil};return n.doubleValue}
         func rect(_ value:Any?)throws->NativeTaskRectangle{guard let d=value as? [String:Any],let x=number(d["x"]),let y=number(d["y"]),let w=number(d["width"]),let h=number(d["height"]) else{throw NativeNotesError.invalidLayout};return .init(x:x,y:y,width:w,height:h)}
         guard let client=raw["clientID"] as? String,NativeNotesHostCoordinator.validID(client),let visible=NativeTaskProjection.bool(raw["notesVisible"]),let blocked=NativeTaskProjection.bool(raw["blocked"]),let width=number(raw["width"]),let height=number(raw["height"]),width>0,height>0,let sideVisible=NativeTaskProjection.bool(raw["sidebarVisible"]) else{throw NativeNotesError.invalidLayout}
+        focusIntent=(raw["focusIntent"] as? String).flatMap{NativeNotesHostCoordinator.validID($0) ? $0:nil}
         self.clientID=client;self.notesVisible=visible;self.blocked=blocked;self.width=width;self.height=height;main=try rect(raw["main"]);toolbar=try rect(raw["toolbar"]);notes=try rect(raw["notes"]);sidebar=sideVisible ? try rect(raw["sidebar"]):nil
     }
     func geometry(nativeFrame:NativeTaskRectangle,pageZoom:Double)throws->(notes:NativeTaskRectangle,allowed:NativeTaskRectangle){

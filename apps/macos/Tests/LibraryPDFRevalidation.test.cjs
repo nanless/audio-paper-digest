@@ -4,7 +4,7 @@ const {execFileSync,spawn}=require('child_process');
 const app=path.resolve(__dirname,'..'),repo=path.resolve(app,'../..'),temporary=fs.mkdtempSync(path.join(os.tmpdir(),'LibraryPDFLoopback-'));
 let pdf=fs.readFileSync(path.join(repo,'prototypes/macos-research/assets/micla-2610.27491v1.pdf')),offline=false,publicSHA=null,kind='conference',pdfRequests=0,indexRequests=0;
 const binary=path.join(temporary,'LibraryTests');
-execFileSync('/usr/bin/xcrun',['swiftc','-O','-parse-as-library',path.join(app,'Sources/DesktopArxivIdentifier.swift'),path.join(app,'Sources/PublishedSourceWarning.swift'),path.join(app,'Sources/LibraryService.swift'),path.join(app,'Sources/BackupCodec.swift'),path.join(__dirname,'LibraryServiceTests.swift'),'-o',binary],{stdio:'inherit'});
+execFileSync('/usr/bin/xcrun',['swiftc','-O','-parse-as-library',path.join(app,'Sources/DesktopArxivIdentifier.swift'),path.join(app,'Sources/PublishedSourceWarning.swift'),path.join(app,'Sources/PublishedAggregate.swift'),path.join(app,'Sources/PublishedAggregateStore.swift'),path.join(app,'Sources/LibraryService.swift'),path.join(app,'Sources/BackupCodec.swift'),path.join(__dirname,'LibraryServiceTests.swift'),'-o',binary],{stdio:'inherit'});
 const server=http.createServer(async(req,res)=>{
  if(req.url==='/control') {let body='';for await(const chunk of req)body+=chunk;const value=JSON.parse(body);pdf=Buffer.from(value.pdf,'base64');offline=value.offline;publicSHA=value.publicSHA;kind=value.kind;res.end('okay');return;}
  if(req.url==='/blog/index.json') {

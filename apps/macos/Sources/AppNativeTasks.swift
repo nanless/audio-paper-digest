@@ -25,7 +25,7 @@ extension PaperDigestApp {
         let script="""
         const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
         const t=document.getElementById('tasks-view'),s=document.querySelector('.sidebar'),m=document.querySelector('.main-pane'),bar=document.querySelector('.toolbar');
-        return {clientID:document.documentElement.getAttribute('data-native-tasks-document')||'',tasksVisible:!!t&&!t.hidden&&getComputedStyle(t).display!=='none',blocked:!!document.querySelector('[data-dialog-surface][open]'),width:innerWidth,height:innerHeight,main:rect(m),toolbar:rect(bar),sidebarVisible:!!s&&getComputedStyle(s).display!=='none',sidebar:rect(s),tasks:rect(t)};
+        return {clientID:document.documentElement.getAttribute('data-native-tasks-document')||'',focusIntent:document.documentElement.getAttribute('data-native-tasks-focus-intent')||'',tasksVisible:!!t&&!t.hidden&&getComputedStyle(t).display!=='none',blocked:!!document.querySelector('[data-dialog-surface][open]'),width:innerWidth,height:innerHeight,main:rect(m),toolbar:rect(bar),sidebarVisible:!!s&&getComputedStyle(s).display!=='none',sidebar:rect(s),tasks:rect(t)};
         """
         guard let raw=try await source.callAsyncJavaScript(script,arguments:[:],in:nil,contentWorld:.defaultClient) as? [String:Any] else{throw NativeTaskPresentationError.invalidLayout};return try .init(raw)
     }
@@ -44,14 +44,14 @@ extension PaperDigestApp {
         guard !request.tasks || !nativeNotesRequestedVisible else{throw NativeTaskPresentationError.stale}
         let ticket=try coordinator.reserve(request,current:context)
         nativeTasksRequestedVisible=request.tasks
-        controller.retire()
+        if request.tasks{controller.prepareForLayout(sequence:request.sequence,focusIntent:request.focusIntent,keyboardSource:source)}else{controller.retire()}
         do{
             let observation=request.tasks ? try await nativeTasksObservedDOM(source:source):nil
             guard source===web,nativeTasksContext==context,!terminationPending,!maintenanceBusy,!storageDetailsActive else{throw NativeTaskPresentationError.stale}
             let f=web.frame,frame=NativeTaskRectangle(x:f.minX,y:f.minY,width:f.width,height:f.height)
             if let ready=try coordinator.finish(ticket,current:nativeTasksContext,observation:observation,nativeFrame:frame,pageZoom:web.pageZoom){
                 pdfView.isHidden=true;try controller.apply(ready.layout,allowedContent:ready.allowed)
-                if request.focus,window?.isKeyWindow==true{controller.focusInitialControl()}
+
             }else{retireNativeTasks(restoreFocus:true)}
             return ["accepted":true]
         }catch{if coordinator.isLatest(ticket,current:nativeTasksContext){retireNativeTasks(restoreFocus:true)};throw DesktopError.message("任务视图布局已变化，请重新选择后台任务")}

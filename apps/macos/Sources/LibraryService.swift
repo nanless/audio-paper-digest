@@ -347,10 +347,37 @@ actor LibraryService {
         guard syncID == identifier else { throw CancellationError() }
         let encoded = try JSONEncoder().encode(replacement)
         guard encoded.count <= Self.maxTotal else { throw ServiceError.invalid("合并后的本地目录超过大小限制。") }
+        if shardCount>0 {
+            _ = try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).stage(manifest:index,validationEpoch:replacement.validationEpoch!)
+            try Task.checkCancellation();guard syncID==identifier else{throw CancellationError()}
+        }
         try atomicWrite(encoded, to: directory.appendingPathComponent("current.json"))
         snapshot = replacement
         progress(Progress(phase: "complete", message: "已同步 \(summary.paperCount) 篇论文，\(summary.recordCount) 条页面记录", completed: shardCount, total: shardCount))
         return summary
+    }
+
+    func aggregateCatalog()throws->PublishedAggregateCatalog? {
+        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch)
+    }
+    func aggregateOriginalRow(id:String)throws->Data {
+        guard let catalog=try aggregateCatalog(),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在")}
+        return try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).originalRow(for:descriptor)
+    }
+
+    func aggregateDocument(id:String) async throws->AggregateDocument {
+        guard let catalog=try aggregateCatalog(),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在")}
+        let epoch=snapshot.validationEpoch,sourceSnapshot=snapshot.summary.snapshotID
+        let url=try PublishedAggregateReader.pageURL(descriptor.sourceURL,siteBase:siteBaseURL)
+        let raw=try await read(url,limit:16*1024*1024)
+        try Task.checkCancellation()
+        guard snapshot.validationEpoch==epoch,snapshot.summary.snapshotID==sourceSnapshot else{throw AggregateFailure.invalid("读取期间目录验证代已变化，未拼接新目录与旧网页")}
+        // Production read() accepts only HTTP200 with the actual response URL equal to this same-site URL.
+        return try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).cacheDocument(raw,descriptor:descriptor,responseURL:url,fetchedAt:Self.now())
+    }
+    func aggregateCachedDocument(id:String,rawHTMLSHA256:String)throws->AggregateDocument {
+        guard let catalog=try aggregateCatalog(),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("当前汇总目录未核验")}
+        return try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).cachedDocument(descriptor:descriptor,rawHTMLSHA256:rawHTMLSHA256)
     }
 
     private func parsePaper(_ row: [String: Any]) throws -> Paper? {
@@ -716,6 +743,47 @@ actor LibraryService {
         }
         return copy.stringValue ?? ""
     }
+    /// Website aggregates have their own descriptor/body contract and never pass through Paper extraction.
+    static func extractAggregateHTML(_ bytes:Data,descriptor:PublishedAggregate,responseURL:URL,fetchedAt:String,siteBaseURL:URL=PublishedAggregateReader.site)throws->AggregateDocument {
+        guard bytes.count>0,bytes.count<=16*1024*1024,let raw=String(data:bytes,encoding:.utf8),(ISO8601DateFormatter().date(from:fetchedAt) != nil || {let format=ISO8601DateFormatter();format.formatOptions=[.withInternetDateTime,.withFractionalSeconds];return format.date(from:fetchedAt) != nil}()) else{throw AggregateFailure.invalid("汇总网页原件编码、时间或大小无效")}
+        let expected=try PublishedAggregateReader.pageURL(descriptor.sourceURL,siteBase:siteBaseURL)
+        try PublishedAggregateReader.require(responseURL.absoluteString==expected.absoluteString,"汇总实际响应地址不一致")
+        // Preserve ordinary HTML5 grouping in Foundation tidy; this changes only tag names, never attributes or boundaries.
+        let containers=try NSRegularExpression(pattern:"(?i)<(/?)(section|article|main)(?=[\\s/>])")
+        let adapted=containers.stringByReplacingMatches(in:raw,range:NSRange(raw.startIndex..<raw.endIndex,in:raw),withTemplate:"<$1div")
+        let doc=try htmlDocumentPreservingMath(adapted)
+        let canonical=try doc.nodes(forXPath:"//link[translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='canonical']")
+        try PublishedAggregateReader.require(canonical.count<=1,"汇总网页声明多个规范地址")
+        if let element=canonical.first as? XMLElement {
+            guard let value=element.attribute(forName:"href")?.stringValue else{throw AggregateFailure.invalid("汇总规范地址缺失")}
+            try PublishedAggregateReader.require(try PublishedAggregateReader.pageURL(value,siteBase:siteBaseURL)==expected,"汇总规范地址与目录不一致")
+        }
+        let selector:String
+        switch descriptor.kind {
+        case .daily,.conference: selector="//div[@id='article-body' and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"
+        case .page:
+            if expected.absoluteString == siteBaseURL.appendingPathComponent("conferences",isDirectory:true).absoluteString {selector="//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]"}
+            else {selector="//div[contains(concat(' ',normalize-space(@class),' '),' reader-guide-content ') and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"}
+        }
+        let nodes=try doc.nodes(forXPath:selector)
+        guard nodes.count==1,let body=nodes.first as? XMLElement else{throw AggregateFailure.invalid("汇总正文结构缺失或重复，未读取导航/首页代替")}
+        for hidden in try body.nodes(forXPath:".//*[@hidden]"){hidden.detach()}
+        let originalImages=try body.nodes(forXPath:".//img").compactMap{($0 as? XMLElement)?.attribute(forName:"src")?.stringValue}
+        try sanitize(body,pageURL:expected)
+        var resources:[AggregateDocument.Resource]=[]
+        for source in originalImages {
+            if let url=URL(string:source,relativeTo:expected)?.absoluteURL,url.scheme=="https",url.user==nil,url.password==nil {
+                resources.append(.init(sourceURL:url.absoluteString,kind:"image",missingReason:"尚未保存该图片；没有声称完整离线"))
+            }else{resources.append(.init(sourceURL:source,kind:"image",missingReason:"原图片地址不受本入口支持，未下载或隐藏缺项"))}
+        }
+        for node in try body.nodes(forXPath:".//img") {(node as? XMLElement)?.removeAttribute(forName:"src")}
+        try PublishedAggregateReader.require(resources.count<=128,"汇总图片数量超过本入口上限")
+        let plain=try articlePlainText(body)
+        try PublishedAggregateReader.require(!plain.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,"汇总没有连续可读正文")
+        let html=(body.children ?? []).map{$0.xmlString(options:[.nodePreserveWhitespace])}.joined()
+        return AggregateDocument(contract:"published-aggregate-document-v1",descriptor:descriptor,responseURL:responseURL.absoluteString,fetchedAt:fetchedAt,rawHTMLSHA256:PublishedAggregateReader.sha(bytes),rawHTMLBytes:bytes.count,sanitizedBodySHA256:PublishedAggregateReader.sha(Data(html.utf8)),bodyHTML:html,plainText:plain,parserContract:"published-aggregate-html-v1",resources:resources,completeOffline:false,notices:["网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。"]+(resources.isEmpty ? []:["部分图片尚未保存，不能称为完整离线页面。"]))
+    }
+
     static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {
         let doc = try htmlDocumentPreservingMath(raw)
         // Foundation's HTML tidy removes HTML5 <article>/<section> wrappers on macOS;
@@ -1137,5 +1205,13 @@ private final class LibraryTransferCancellation: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         cancelled = true; task?.cancel()
         if let process, process.isRunning { process.terminate() }
+    }
+}
+
+
+extension LibraryService {
+    func aggregateLatestVerifiedDocument(id: String) throws -> AggregateDocument? {
+        guard let catalog = try aggregateCatalog(), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("当前汇总目录未核验") }
+        return try PublishedAggregateStore(directory: directory,siteBase:siteBaseURL).latestVerifiedDocument(for: descriptor)
     }
 }

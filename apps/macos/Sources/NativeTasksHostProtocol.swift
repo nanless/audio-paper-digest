@@ -4,17 +4,23 @@ import CoreFoundation
 struct NativeTaskHostContext: Equatable { let owner: NativeTaskOwner; let paperID:String }
 @MainActor struct NativeTaskPresentRequest {
     let nonce:String,clientID:String,paperID:String,sequence:Int64,tasks:Bool,focus:Bool
+    let focusIntent:String?
     init(_ raw:[String:Any]) throws {
-        guard Set(raw.keys)==Set(["nonce","clientID","paperID","sequence","tasks","focus"]),let nonce=raw["nonce"] as? String,NativeTaskHostCoordinator.validID(nonce),let clientID=raw["clientID"] as? String,NativeTaskHostCoordinator.validID(clientID),let paperID=NativeTaskProjection.identifier(raw["paperID"],empty:true),let sequence=NativeTaskProjection.integer(raw["sequence"]),sequence>0,let tasks=NativeTaskProjection.bool(raw["tasks"]),let focus=NativeTaskProjection.bool(raw["focus"]) else {throw NativeTaskPresentationError.stale}
+        guard (Set(raw.keys)==Set(["nonce","clientID","paperID","sequence","tasks","focus"]) || Set(raw.keys)==Set(["nonce","clientID","paperID","sequence","tasks","focus","focusIntent"])),let nonce=raw["nonce"] as? String,NativeTaskHostCoordinator.validID(nonce),let clientID=raw["clientID"] as? String,NativeTaskHostCoordinator.validID(clientID),let paperID=NativeTaskProjection.identifier(raw["paperID"],empty:true),let sequence=NativeTaskProjection.integer(raw["sequence"]),sequence>0,let tasks=NativeTaskProjection.bool(raw["tasks"]),let focus=NativeTaskProjection.bool(raw["focus"]) else {throw NativeTaskPresentationError.stale}
         self.nonce=nonce;self.clientID=clientID;self.paperID=paperID;self.sequence=sequence;self.tasks=tasks;self.focus=focus
+        guard focus || raw["focusIntent"]==nil else{throw NativeTaskPresentationError.stale}
+        self.focusIntent=focus ? (raw["focusIntent"] as? String).flatMap{NativeTaskHostCoordinator.validID($0) ? $0:nil}:nil
     }
+    func permitsInitialFocus(_ observation:NativeTaskDOMObservation?)->Bool{guard focus,let focusIntent else{return false};return observation?.focusIntent==focusIntent}
 }
 @MainActor struct NativeTaskDOMObservation {
     let clientID:String,tasksVisible:Bool,blocked:Bool,width:Double,height:Double,main:NativeTaskRectangle,toolbar:NativeTaskRectangle,sidebar:NativeTaskRectangle?,tasks:NativeTaskRectangle
+    let focusIntent:String?
     init(_ raw:[String:Any])throws {
         func number(_ value:Any?)->Double?{guard let n=value as? NSNumber,CFGetTypeID(n) != CFBooleanGetTypeID(),n.doubleValue.isFinite else{return nil};return n.doubleValue}
         func rect(_ value:Any?)throws->NativeTaskRectangle{guard let d=value as? [String:Any],let x=number(d["x"]),let y=number(d["y"]),let w=number(d["width"]),let h=number(d["height"]) else{throw NativeTaskPresentationError.invalidLayout};return .init(x:x,y:y,width:w,height:h)}
         guard let client=raw["clientID"] as? String,NativeTaskHostCoordinator.validID(client),let visible=NativeTaskProjection.bool(raw["tasksVisible"]),let blocked=NativeTaskProjection.bool(raw["blocked"]),let width=number(raw["width"]),let height=number(raw["height"]),width>0,height>0,let sideVisible=NativeTaskProjection.bool(raw["sidebarVisible"]) else{throw NativeTaskPresentationError.invalidLayout}
+        focusIntent=(raw["focusIntent"] as? String).flatMap{NativeTaskHostCoordinator.validID($0) ? $0:nil}
         self.clientID=client;self.tasksVisible=visible;self.blocked=blocked;self.width=width;self.height=height;main=try rect(raw["main"]);toolbar=try rect(raw["toolbar"]);tasks=try rect(raw["tasks"]);sidebar=sideVisible ? try rect(raw["sidebar"]):nil
     }
     func geometry(nativeFrame:NativeTaskRectangle,pageZoom:Double)throws->(task:NativeTaskRectangle,allowed:NativeTaskRectangle){

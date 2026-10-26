@@ -23,6 +23,10 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
 @MainActor final class NativeTasksController: NSViewController {
     typealias SnapshotProvider = () throws -> NativeTaskInput
     let route: NativeTaskRouteGate
+    private var pendingLayoutSequence:Int64?,keyboardSequence:Int64=0,inputEpoch:UInt64=0,keyboardGestureEpoch:UInt64?
+    private var keyboardOwner:NativeTaskOwner?,inputEventMonitor:Any?
+    private weak var keyboardSource:NSView?,observedKeyboardWindow:NSWindow?
+
     private let provider: SnapshotProvider, callbacks: NativeTaskCallbacks
     private let progressFactory: @MainActor () -> NSProgressIndicator
     private var indicators: [NSProgressIndicator] = []
@@ -43,11 +47,13 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
         self.route = route; self.provider = provider; self.callbacks = callbacks; self.progressFactory = progressFactory
         super.init(nibName: nil, bundle: nil)
     }
+    deinit { NotificationCenter.default.removeObserver(self);if let inputEventMonitor{NSEvent.removeMonitor(inputEventMonitor)} }
     required init?(coder: NSCoder) { fatalError("Not archived") }
     override func loadView() {
         view = NSView(frame: NSRect(x: 0, y: 0, width: 850, height: 650))
         header.font = .systemFont(ofSize: 24, weight: .semibold)
-        let help = label("同步、原文、个人研究与存档的原记录。", size: 13, secondary: true)
+        let help = label("同步、原文、个人研究与存档的原记录。Control-Tab 进入操作区，Tab 或 Shift-Tab 切换。", size: 13, secondary: true)
+        view.setAccessibilityHelp("Control-Tab 进入操作区，Control-Shift-Tab 从末项进入；Tab 或 Shift-Tab 到边界时返回页面。")
         filters.target = self; filters.action = #selector(changeFilter); filters.selectedSegment = 0; filters.setAccessibilityLabel("任务筛选")
         previous.target = self; previous.action = #selector(previousPage); previous.bezelStyle = .rounded
         next.target = self; next.action = #selector(nextPage); next.bezelStyle = .rounded
@@ -75,8 +81,10 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
         if isViewLoaded { render() }
     }
     func apply(_ layout: NativeTaskLayout, allowedContent: NativeTaskRectangle) throws {
+        guard layout.owner==route.owner,layout.sequence>route.sequence,pendingLayoutSequence==nil || pendingLayoutSequence==layout.sequence else{throw NativeTaskPresentationError.stale}
         do { try route.accept(layout, allowedContent: allowedContent) }
         catch { if isViewLoaded { view.isHidden = !route.showing }; throw error }
+        pendingLayoutSequence=nil
         _ = view
         view.isHidden = !route.showing
         if route.showing {
@@ -84,9 +92,59 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
             reload()
         }
     }
-    func focusInitialControl(){guard route.showing,!view.isHidden else{return};view.window?.makeFirstResponder(filters)}
+
     private func stopIndicators() { indicators.forEach { $0.stopAnimation(nil) }; indicators.removeAll() }
-    func retire() { stopIndicators(); route.retire(); if isViewLoaded { view.isHidden = true }; actionButtons.forEach { $0.isEnabled = false } }
+    func retire(){pendingLayoutSequence=nil;keyboardOwner=nil;keyboardSequence=0;keyboardSource=nil;keyboardGestureEpoch=nil;monitorKeyboardWindow(nil);deactivateForLayout()}
+
+    private func keyboardControls()->[NSControl]{let controls:[NSControl]=[filters,previous,next,reread]+actionButtons;return controls.filter{$0.isEnabled && !$0.isHiddenOrHasHiddenAncestor && $0.window===view.window}}
+    private func keyboardContext()->(NSWindow,NSView)?{
+        guard route.showing,pendingLayoutSequence==nil,keyboardOwner==route.owner,keyboardSequence==route.sequence,!view.isHidden,inputEventMonitor != nil,let window=observedKeyboardWindow,window===view.window,window.isKeyWindow,let source=keyboardSource,source.window===window else{return nil}
+        return(window,source)
+    }
+    /// Only a current, synchronous native keyboard event may grant this operation. Page requests never grant it.
+    func focusInitialControl(backwards:Bool=false){
+        guard keyboardGestureEpoch==inputEpoch,keyboardGestureEpoch != nil,let(window,source)=keyboardContext(),let responder=window.firstResponder,(responder===window || (responder as? NSView).map{$0===source || $0.isDescendant(of:source)}==true),let target=backwards ? keyboardControls().last:keyboardControls().first else{return}
+        _=focusKeyboardControl(target,window:window)
+    }
+    private func focusKeyboardControl(_ control:NSControl,window:NSWindow)->Bool{
+        _=control.scrollToVisible(control.bounds)
+        return window.makeFirstResponder(control)
+    }
+    private func navigateKeyboard(_ event:NSEvent)->Bool{
+        guard event.type == .keyDown,event.keyCode==48,!event.modifierFlags.contains(.command),!event.modifierFlags.contains(.option),let(window,source)=keyboardContext() else{return false}
+        let backwards=event.modifierFlags.contains(.shift),group=event.modifierFlags.contains(.control),controls=keyboardControls(),before=window.firstResponder
+        keyboardGestureEpoch=inputEpoch;defer{keyboardGestureEpoch=nil}
+        if let index=controls.firstIndex(where:{$0===before}){
+            if group{return window.makeFirstResponder(source)}
+            let next=index+(backwards ? -1:1)
+            if controls.indices.contains(next){return focusKeyboardControl(controls[next],window:window)}
+            return window.makeFirstResponder(source)
+        }
+        guard group else{return false}
+        if before===window || (before as? NSView).map({$0===source || $0.isDescendant(of:source)})==true{focusInitialControl(backwards:backwards);return window.firstResponder !== before}
+        return false
+    }
+    private func monitorKeyboardWindow(_ window:NSWindow?){
+        guard observedKeyboardWindow !== window else{return}
+        if let inputEventMonitor{NSEvent.removeMonitor(inputEventMonitor);self.inputEventMonitor=nil}
+        if let old=observedKeyboardWindow{NotificationCenter.default.removeObserver(self,name:NSWindow.didResignKeyNotification,object:old)}
+        observedKeyboardWindow=window
+        if let window{
+            NotificationCenter.default.addObserver(self,selector:#selector(keyboardWindowResigned(_:)),name:NSWindow.didResignKeyNotification,object:window)
+            inputEventMonitor=NSEvent.addLocalMonitorForEvents(matching:[.keyDown,.leftMouseDown,.rightMouseDown,.otherMouseDown]){[weak self] event in
+                guard let self,let own=self.observedKeyboardWindow,event.window===own else{return event}
+                self.inputEpoch &+= 1;self.keyboardGestureEpoch=nil
+                return self.navigateKeyboard(event) ? nil:event
+            }
+        }
+    }
+    @objc private func keyboardWindowResigned(_ note:Notification){inputEpoch &+= 1;keyboardGestureEpoch=nil}
+    func prepareForLayout(sequence:Int64,focusIntent:String?=nil,keyboardSource:NSView?=nil){
+        guard sequence>route.sequence,sequence>(pendingLayoutSequence ?? route.sequence),sequence<=9_007_199_254_740_991 else{return}
+        self.keyboardSource=keyboardSource;keyboardOwner=route.owner;keyboardSequence=sequence;pendingLayoutSequence=sequence;keyboardGestureEpoch=nil
+        monitorKeyboardWindow(isViewLoaded ? view.window:nil);deactivateForLayout()
+    }
+    private func deactivateForLayout(){stopIndicators();route.retire();if isViewLoaded{view.isHidden=true};actionButtons.forEach{$0.isEnabled=false}}
     func setFilter(_ value: NativeTaskFilter) { filter = value; pageIndex = 0; if isViewLoaded { filters.selectedSegment = NativeTaskFilter.allCases.firstIndex(of: value)!; render() } }
     func setPage(_ value: Int) { pageIndex = value; if isViewLoaded { render() } }
     @objc private func changeFilter() { guard NativeTaskFilter.allCases.indices.contains(filters.selectedSegment) else { return }; setFilter(NativeTaskFilter.allCases[filters.selectedSegment]) }
@@ -133,7 +191,7 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
         view.layoutSubtreeIfNeeded()
         let maxY = max(0, document.bounds.height - scroll.contentView.bounds.height)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, max(0, oldOrigin.y)))); scroll.reflectScrolledClipView(scroll.contentView)
-        if let oldFocus, let button = actionButtons.first(where: { $0.lease?.jobID == oldFocus.0 && $0.lease?.action == oldFocus.1 }) { view.window?.makeFirstResponder(button) }
+        if let oldFocus, let button = actionButtons.first(where: { $0.lease?.jobID == oldFocus.0 && $0.lease?.action == oldFocus.1 }),button.isEnabled,!button.isHiddenOrHasHiddenAncestor { view.window?.makeFirstResponder(button) }
     }
     @objc private func clicked(_ sender: NativeTaskActionButton) {
         guard let lease = sender.lease else { return }

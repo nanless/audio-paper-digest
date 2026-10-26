@@ -3,7 +3,7 @@ import WebKit
 
 extension PaperDigestApp {
     var nativeNotesContext:NativeNotesHostContext{.init(owner:.init(windowID:nativeNotesWindowID,documentID:nativeTaskDocumentID,contextGeneration:contextGeneration),paperID:currentPaperID)}
-    func nativeWorkspaceContextDidChange(){nativeTasksContextDidChange();nativeNotesContextDidChange()}
+    func nativeWorkspaceContextDidChange(){retireAggregateContext();nativeTasksContextDidChange();nativeNotesContextDidChange()}
     func nativeNotesSnapshot()throws->NativeNotesSnapshot{guard let store else{throw NativeNotesError.unavailable};return try NativeNotesProjection.make(store.value)}
     func installNativeNotes(){
         nativeNotesController?.retire();nativeNotesWindowID=UUID()
@@ -26,7 +26,7 @@ extension PaperDigestApp {
         let script="""
         const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
         const n=document.getElementById('notes-view'),s=document.querySelector('.sidebar'),m=document.querySelector('.main-pane'),bar=document.querySelector('.toolbar');
-        return {clientID:document.documentElement.getAttribute('data-native-notes-document')||'',notesVisible:!!n&&!n.hidden&&getComputedStyle(n).display!=='none',blocked:!!document.querySelector('[data-dialog-surface][open]'),width:innerWidth,height:innerHeight,main:rect(m),toolbar:rect(bar),sidebarVisible:!!s&&getComputedStyle(s).display!=='none',sidebar:rect(s),notes:rect(n)};
+        return {clientID:document.documentElement.getAttribute('data-native-notes-document')||'',focusIntent:document.documentElement.getAttribute('data-native-notes-focus-intent')||'',notesVisible:!!n&&!n.hidden&&getComputedStyle(n).display!=='none',blocked:!!document.querySelector('[data-dialog-surface][open]'),width:innerWidth,height:innerHeight,main:rect(m),toolbar:rect(bar),sidebarVisible:!!s&&getComputedStyle(s).display!=='none',sidebar:rect(s),notes:rect(n)};
         """
         guard let raw=try await source.callAsyncJavaScript(script,arguments:[:],in:nil,contentWorld:.defaultClient) as? [String:Any] else{throw NativeNotesError.invalidLayout};return try .init(raw)
     }
@@ -43,12 +43,12 @@ extension PaperDigestApp {
         guard command=="nativeNotes.present" else{throw NativeNotesError.stale}
         let request=try NativeNotesPresentRequest(payload)
         guard !request.notes || !nativeTasksRequestedVisible else{throw NativeNotesError.stale}
-        let ticket=try coordinator.reserve(request,current:context);nativeNotesRequestedVisible=request.notes;controller.retire()
+        let ticket=try coordinator.reserve(request,current:context);nativeNotesRequestedVisible=request.notes;if request.notes{controller.prepareForLayout(sequence:request.sequence,focusIntent:request.focusIntent,keyboardSource:source)}else{controller.retire()}
         do{
             let observation=request.notes ? try await nativeNotesObservedDOM(source:source):nil
             guard source===web,nativeNotesContext==context,!terminationPending,!maintenanceBusy,!storageDetailsActive,!request.notes || !nativeTasksRequestedVisible else{throw NativeNotesError.stale}
             let f=web.frame,frame=NativeTaskRectangle(x:f.minX,y:f.minY,width:f.width,height:f.height)
-            if let ready=try coordinator.finish(ticket,current:nativeNotesContext,observation:observation,nativeFrame:frame,pageZoom:web.pageZoom){pdfView.isHidden=true;try controller.apply(ready.layout,allowed:ready.allowed);if request.focus,window?.isKeyWindow==true{controller.focusInitialControl()}}
+            if let ready=try coordinator.finish(ticket,current:nativeNotesContext,observation:observation,nativeFrame:frame,pageZoom:web.pageZoom){pdfView.isHidden=true;try controller.apply(ready.layout,allowed:ready.allowed);}
             else{retireNativeNotes(restoreFocus:true)}
             return ["accepted":true]
         }catch{if coordinator.isLatest(ticket,current:nativeNotesContext){nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)};throw NativeNotesError.stale}

@@ -58,6 +58,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var nativeNotesWindowID=UUID()
     var nativeNotesController:NativeNotesController?,nativeNotesCoordinator:NativeNotesHostCoordinator?
     var nativeNotesRequestedVisible=false
+    var aggregateSession:AggregateViewSession?,aggregateOpenSequence=0,aggregateTransitionPending=false
     var contextGeneration=0 {didSet{if oldValue != contextGeneration{nativeWorkspaceContextDidChange()}}}
     var pdfOwner="",pdfVersion=""
     var pdfView=PDFView(), currentPDFSHA="", currentPaperID="", currentPDFPath:URL?, currentPaper:[String:Any]=[:], currentArticle:[String:Any]=[:]
@@ -183,6 +184,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             Task{do{replyHandler(try await nativeTasksMessage(command,payload:payload,source:source,frameURL:frameURL,isMainFrame:isMainFrame),nil)}catch{replyHandler(nil,"任务视图已变化，请重新选择后台任务")}}
             return
         }
+        if command.hasPrefix("aggregates."),source !== web {replyHandler(nil,"汇总阅读只支持当前主窗口");return}
         if command=="reader.sourceNotices.show",source !== web {replyHandler(nil,"来源说明只支持当前主阅读窗口");return}
         if source===storageDetailWeb {
             Task{do{replyHandler(try await storageDetailCommand(command,payload:payload,source:source),nil)}catch{replyHandler(nil,error.localizedDescription)}}
@@ -221,6 +223,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if terminationPending {
             guard savingCommands.contains(command) else{throw DesktopError.message("正在保存并退出或整理资料，请稍后再操作")}
         }
+        if (aggregateSession != nil || aggregateTransitionPending), Self.aggregateForbids(command){throw DesktopError.message("汇总页面只供阅读，请先打开单篇论文再使用这项研究功能")}
+        if command.hasPrefix("aggregates."){return try await dispatchAggregates(command,payload:payload)}
         if command.hasPrefix("cloud."){return try await dispatchCloud(command,payload:payload)}
         if command=="app.bootstrap" {
             let settings=model.configuration()
@@ -350,6 +354,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         let isZotero=command.hasPrefix("zotero."),isCloud=command.hasPrefix("cloud.")
         let cloudTitle=["cloud.check":"检查坚果云连接","cloud.upload":"备份完整研究空间","cloud.list":"读取云端备份版本","cloud.restore":"恢复云端研究空间"][command] ?? "坚果云资料"
         var row:[String:Any]=["id":identifier,"command":command,"paperID":(isZotero || isCloud) ? "":currentPaperID,"title":isCloud ? cloudTitle:isZotero ? (command=="zotero.resume" ? "继续 Zotero 归档":"Zotero 操作"):(currentPaper["titleZh"] ?? currentPaper["title"] ?? command),"status":"running","startedAt":ISO8601DateFormatter().string(from:Date()),"message":"正在执行"]
+        if command=="aggregates.document"{row["title"]="读取网站汇总"}
         if isCloud {
             let profile=try cloudLocalStore().profile
             row["identity"]="坚果云 · "+profile.account+" / "+profile.folder

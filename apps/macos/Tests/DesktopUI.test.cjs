@@ -45,6 +45,7 @@ async function installFixture(page, initial={}) {
       const b=window.__fixture;window.__calls.push({command,payload:copy(payload)});
       switch(command) {
         case 'app.bootstrap':return copy({personal:b.personal,settings:b.settings,paper:b.selected,library:{paperCount:b.papers.length,recordCount:b.papers.length}});
+        case 'aggregates.list':return {records:[],available:false,notice:'This isolated paper fixture has no source-bound aggregate manifest'};
         case 'library.status':return {paperCount:b.papers.length,recordCount:b.papers.length};
         case 'library.list':return copy({papers:b.papers});
         case 'library.search':case 'personal.search':return {ids:[]};
