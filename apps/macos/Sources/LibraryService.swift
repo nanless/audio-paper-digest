@@ -403,12 +403,12 @@ actor LibraryService {
             if missing { cached.completeOffline = false }
             let parserCurrent=cached.markdown != nil || cached.mathMLContract=="published-html-mathml-v1"
             let current = parserCurrent && Self.sourceMatches(cached, paper: paper) && cached.catalogEpoch == snapshot.validationEpoch && Self.age(cached.fetchedAt) <= 6 * 3600
-            if current && (!downloadImages || !missing), cached.isStale != true { return cached }
-            if cached.isStale == true, cached.catalogEpoch == snapshot.validationEpoch, cached.expectedSourceVersion == paper.sourceVersion, Self.age(cached.validationAttemptedAt) < 300 { return cached }
+            if current && (!downloadImages || !missing), cached.isStale != true { return Self.presentSourceWarning(cached) }
+            if cached.isStale == true, cached.catalogEpoch == snapshot.validationEpoch, cached.expectedSourceVersion == paper.sourceVersion, Self.age(cached.validationAttemptedAt) < 300 { return Self.presentSourceWarning(cached) }
         }
         if !refresh, snapshot.summary.syncedAt == nil, var seeded = try seedArticle(paper) {
             seeded.blogURL = paper.blogURL; seeded.cacheStatus = "bundled"; seeded.isStale = false
-            indexText(seeded); return seeded
+            indexText(seeded); return Self.presentSourceWarning(seeded)
         }
         do {
             return try await fetchArticle(paper, cache: cache, previous: previous, downloadImages: downloadImages, progress: progress)
@@ -420,7 +420,7 @@ actor LibraryService {
             if old.markdown==nil,old.mathMLContract != "published-html-mathml-v1"{old.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
             old.notices = Array(Set(old.notices + ["网站当前修订复验失败，正在读取先前保存的旧导读；获取于\(old.fetchedAt)，旧来源版本\(old.sourceVersion ?? "未标版本")，目录期待版本\(paper.sourceVersion ?? "未标版本")。\(error.localizedDescription)"])).sorted()
             if previous != nil { try atomicWrite(try JSONEncoder().encode(old), to: cache) }
-            return old
+            return Self.presentSourceWarning(old)
         }
     }
     private func fetchArticle(_ paper: Paper, cache: URL, previous: Article?, downloadImages: Bool, progress: @escaping @Sendable (Progress) -> Void) async throws -> Article {
@@ -487,6 +487,17 @@ actor LibraryService {
         let revision = Self.sha256(try JSONSerialization.data(withJSONObject: identity, options: .sortedKeys))
         let file = directory.appendingPathComponent("article-revisions/" + key).appendingPathComponent(revision + ".json")
         if !FileManager.default.fileExists(atPath: file.path) { try atomicWrite(bytes, to: file) }
+    }
+    static func presentSourceWarning(_ article:Article, blogURL:String?=nil)->Article {
+        guard case .object(let fields)=article.citation else{return article}
+        var citation:[String:Any]=[:]
+        for key in ["contract","verified","identityStatus","paperKey","paperId","pageUrl","sourceUrl","url","pdfUrl","sourceKind","arxivId","sourceVersionWarning"] {
+            guard let field=fields[key] else{continue}
+            switch field {case .string(let value):citation[key]=value;case .bool(let value):citation[key]=value;default:citation[key]=NSNull()}
+        }
+        var result=article
+        result.notices=PublishedSourceWarning.merge(article.notices,citation:citation,material:.init(paperID:article.paperID,blogURL:article.blogURL ?? blogURL,sourceURL:article.sourceURL,pdfURL:article.pdfURL,sourceVersion:article.sourceVersion))
+        return result
     }
     private static func sourceMatches(_ article: Article, paper: Paper) -> Bool {
         article.paperID == paper.id && article.blogURL == paper.blogURL && article.sourceURL == (paper.sourceURL ?? paper.blogURL) && article.pdfURL == paper.pdfURL && article.sourceVersion == paper.sourceVersion
@@ -735,10 +746,10 @@ actor LibraryService {
         }
         guard images.count <= 32 else { throw ServiceError.invalid("单篇图片超过32张，未开始批量下载。") }
         let html = (body.children ?? []).map { $0.xmlString(options: [.nodePreserveWhitespace]) }.joined()
-        return Article(paperID: paper.id, html: html, markdown: nil, plainText: try articlePlainText(body), citation: citation,
+        return presentSourceWarning(Article(paperID: paper.id, html: html, markdown: nil, plainText: try articlePlainText(body), citation: citation,
                        resources: images, sourceURL: paper.sourceURL ?? paper.blogURL, pdfURL: paper.pdfURL, sourceVersion: paper.sourceVersion,
                        fetchedAt: now(), revisionSHA256: sha256(Data(html.utf8)), completeOffline: false,
-                       notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"],mathMLContract:"published-html-mathml-v1")
+                       notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"],mathMLContract:"published-html-mathml-v1"),blogURL:pageURL.absoluteString)
     }
 
     private static func sanitize(_ root: XMLElement, pageURL: URL) throws {

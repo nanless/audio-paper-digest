@@ -1,0 +1,79 @@
+{
+  "contract": "synthetic-redacted-public-sync-history-v1",
+  "rows": [
+    {
+      "command": "library.sync",
+      "endedAt": "2026-10-26T11:36:24Z",
+      "id": "synthetic-saved-global-sync-1",
+      "message": "操作已结束，请查看实际结果",
+      "paperID": "arxiv:2610.27491",
+      "progress": {
+        "completed": 22,
+        "message": "已同步 8005 篇论文，8720 条页面记录",
+        "phase": "complete",
+        "total": 22
+      },
+      "result": {
+        "paperCount": 8005,
+        "recordCount": 8720
+      },
+      "startedAt": "2026-10-26T11:36:21Z",
+      "status": "complete",
+      "title": "MiCLA：用混合到成分的残差对齐学习复调音频表示"
+    },
+    {
+      "command": "library.sync",
+      "endedAt": "2026-10-25T20:02:20Z",
+      "id": "synthetic-saved-global-sync-2",
+      "message": "操作已结束，请查看实际结果",
+      "paperID": "conference:interspeech:2026:conference-paper-id:cui26_interspeech",
+      "progress": {
+        "completed": 22,
+        "message": "已同步 8005 篇论文，8720 条页面记录",
+        "phase": "complete",
+        "total": 22
+      },
+      "result": {
+        "paperCount": 8005,
+        "recordCount": 8720
+      },
+      "startedAt": "2026-10-25T20:02:18Z",
+      "status": "complete",
+      "title": "TurnGuide：按轮次先写文本再说语音的全双工对话建模"
+    },
+    {
+      "command": "library.sync",
+      "endedAt": "2026-10-24T07:51:21Z",
+      "id": "synthetic-saved-global-sync-3",
+      "message": "操作已结束，请查看实际结果",
+      "paperID": "",
+      "progress": {
+        "completed": 22,
+        "message": "已同步 8005 篇论文，8720 条页面记录",
+        "phase": "complete",
+        "total": 22
+      },
+      "result": {
+        "paperCount": 8005,
+        "recordCount": 8720
+      },
+      "startedAt": "2026-10-24T07:51:18Z",
+      "status": "complete",
+      "title": "library.sync"
+    },
+    {
+      "command": "library.sync",
+      "endedAt": "2026-10-24T04:27:33Z",
+      "id": "synthetic-saved-global-sync-4",
+      "message": "操作已结束，请查看实际结果",
+      "paperID": "arxiv:2610.27491",
+      "result": {
+        "paperCount": 8005,
+        "recordCount": 8720
+      },
+      "startedAt": "2026-10-24T04:27:14Z",
+      "status": "complete",
+      "title": "MiCLA：用混合到成分的残差对齐学习复调音频表示"
+    }
+  ]
+}

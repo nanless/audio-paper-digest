@@ -92,8 +92,12 @@ struct NativeTaskPage {
         return matches[0]
     }
     static func metadata(_ job: [String: Any], sessions: [[String: Any]]?) -> [String] {
-        var lines = ["对象身份：" + (text(job["identity"]) ?? text(job["paperID"]) ?? "未记录")]
         let command = job["command"] as? String ?? ""
+        var lines = ["对象身份：" + (command == "library.sync" ? "全站目录" : (text(job["identity"]) ?? text(job["paperID"]) ?? "未记录"))]
+        if command == "library.sync" {
+            let context = [text(job["title"], limit: 512).map { "标题：" + $0 }, text(job["paperID"]).map { "论文ID：" + $0 }, text(job["identity"]).map { "身份：" + $0 }].compactMap { $0 }
+            if !context.isEmpty { lines.append("原记录上下文（不代表同步范围）：" + context.joined(separator: " · ")) }
+        }
         guard ["model.run", "model.check"].contains(command) else {
             let material = job["material"] as? [String: Any] ?? [:]
             if command.hasPrefix("cloud."), material["kind"] as? String == "workspace-snapshot", let created = date(material["createdAt"]), let count = integer(material["fileCount"]), count > 0, count <= 100000, let hash = validSHA(material["sha256"]) {
@@ -149,7 +153,7 @@ struct NativeTaskPage {
             let rawProgress = job["progress"] as? [String: Any] ?? [:]
             let progress: NativeTaskProgress?
             if let done = integer(rawProgress["completed"]), let total = integer(rawProgress["total"]), total > 0, done <= total { progress = .init(completed: done, total: total) } else { progress = nil }
-            let title = text(job["title"], limit: 512) ?? command.flatMap { names[$0] } ?? "原任务标题未记录"
+            let title = command == "library.sync" ? "同步网站目录" : (text(job["title"], limit: 512) ?? command.flatMap { names[$0] } ?? "原任务标题未记录")
             let commandTitle = command.flatMap { names[$0] } ?? text(command) ?? "任务类型未记录"
             let statusTitle = status.flatMap { statuses[$0] } ?? "原状态未识别"
             let relevant: [String: Any] = ["id": id ?? "", "paperID": paper ?? "", "command": command ?? "", "status": status ?? "", "unique": unique, "actions": actions.map(\.rawValue), "metadata": details]

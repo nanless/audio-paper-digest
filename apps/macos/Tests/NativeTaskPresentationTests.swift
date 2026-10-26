@@ -106,6 +106,53 @@ struct TestFailure: Error { let message: String }
         await run("cancelled UI task no delegate") { var calls=0;let g=NativeTaskRouteGate(owner:owner());let c=NativeTasksController(route:g,provider:{.init(jobs:[job()],sessions:[],liveJobIDs:[])},callbacks:callbacks{_,_,_ in calls+=1;return .opened});try c.apply(.init(owner:g.owner,sequence:1,tasks:true,rectangle:bounds),allowedContent:bounds);let lease=c.actionButtons[0].lease!;let t=Task{await Task.yield();await c.invoke(lease)};t.cancel();await t.value;try check(calls == 0,"cancelled delegate dispatched") }
         await run("callback failure does not expose raw error") { struct UnsafeError: Error,CustomStringConvertible {var description:String{"SYNTHETIC_RAW_DETAIL_NOT_FOR_UI"}};let g=NativeTaskRouteGate(owner:owner());let c=NativeTasksController(route:g,provider:{.init(jobs:[job()],sessions:[],liveJobIDs:[])},callbacks:callbacks{_,_,_ in throw UnsafeError()});try c.apply(.init(owner:g.owner,sequence:1,tasks:true,rectangle:bounds),allowedContent:bounds);await c.invoke(c.actionButtons[0].lease!);try check(c.noticeText.contains("本次入口未完成") && !c.noticeText.contains("SYNTHETIC_RAW"),"raw error exposed") }
         await run("native test opens no windows") {try check(NSApp.windows.isEmpty,"unexpected window")}
+        await run("saved global sync records describe directory scope and retain raw context") {
+            let fixture=URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/native-library-sync-context.json")
+            let original=try Data(contentsOf:fixture)
+            let object=try JSONSerialization.jsonObject(with:original) as! [String:Any],raw=object["rows"] as! [[String:Any]]
+            let value=try snapshot(raw)
+            try check(value.rows.count==4,"actual redacted row count changed")
+            for (row,job) in zip(value.rows,raw) {
+                try check(row.title=="同步网站目录","saved reading title mislabels whole-directory operation")
+                try check(row.metadata.first=="对象身份：全站目录","saved paper ID mislabels whole-directory scope")
+                let metadata=row.metadata.joined(separator:"\n")
+                for key in ["title","paperID","identity"] {if let text=job[key] as? String,!text.isEmpty{try check(metadata.contains(text),"original raw context disappeared")}}
+                try check(row.paperID==NativeTaskProjection.identifier(job["paperID"]),"changed private lease owner instead of presentation")
+                try check(row.actions==[.resync],"global action changed")
+            }
+            try check(try Data(contentsOf:fixture)==original,"source fixture bytes changed")
+        }
+        await run("only exact command controls global scope, never raw title or prefix") {
+            for command in ["library.article","library.sync.single","model.run"] {
+                var raw=job(command:command);raw["title"]="同步网站目录"
+                let row=try snapshot([raw]).rows[0]
+                try check(row.title=="同步网站目录" && row.metadata.first=="对象身份：paper-a","title or prefix incorrectly granted global scope")
+                try check(!row.metadata.joined().contains("不代表同步范围"),"non-global metadata changed")
+            }
+        }
+        await run("missing global raw context remains honestly absent") {
+            let raw:[String:Any]=["id":"synthetic-empty-global","command":"library.sync","status":"complete"]
+            let row=try snapshot([raw]).rows[0]
+            try check(row.title=="同步网站目录" && row.metadata.first=="对象身份：全站目录","global scope needs invented paper")
+            try check(!row.metadata.joined().contains("原记录上下文"),"invented unavailable history")
+        }
+        await run("duplicate global IDs do not gain resync authority") {
+            let raw=job(command:"library.sync")
+            let rows=try snapshot([raw,raw]).rows
+            try check(rows.allSatisfy{$0.actions.isEmpty && $0.title=="同步网站目录"},"scope fix changed duplicate capability guard")
+        }
+        await run("global display ignores unrelated paid session but preserves unknown fee rules") {
+            let row=try snapshot([job(command:"library.sync")],sessions:[session()]).rows[0]
+            try check(row.metadata.contains("模型费用：本任务无需本地模型请求"),"global sync inherited model usage")
+            try check(!row.metadata.joined().contains("输入12"),"paid record attached to global task")
+        }
+        await run("global projection never mutates original job JSON") {
+            let raw=job(command:"library.sync")
+            let before=try JSONSerialization.data(withJSONObject:raw,options:[.sortedKeys])
+            _=try snapshot([raw])
+            let after=try JSONSerialization.data(withJSONObject:raw,options:[.sortedKeys])
+            try check(before==after,"rewrote original history")
+        }
         let result:[String:Any] = ["passed":passed,"failed":failed,"syntheticOnly":true,"windowsOpened":NSApp.windows.count,"serviceCalls":0,"keychainAccess":false,"fullMainCompiled":false,"actualAXInspection":false]
         if CommandLine.arguments.count == 2 { let data=try! JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]);try! data.write(to:URL(fileURLWithPath:CommandLine.arguments[1])) }
         print("RESULT \(passed) passed / \(failed) failed");exit(failed == 0 ? 0:1)

@@ -128,6 +128,7 @@ actor DesktopStorage {
             notices.append("这份旧离线HTML快照未经过公式结构保真读取，部分MathML可能缺失。原包保持不变；如需核对，请对照包内原始PDF，或联网读取网站当前导读。")
         }
         article["notices"]=Array(Set(notices)).sorted()
+        article=PublishedSourceWarning.project(article,manifestBlogURL:manifest.blogURL)
         paper["offlineMode"]=true;paper["offlinePackageID"]=id
         var result:[String:Any]=["paper":paper,"article":article,"offlineMode":true,"packageID":id,"sourceVersion":manifest.sourceVersion ?? NSNull(),"createdAt":manifest.createdAt,"websiteFreshness":"not-checked","articleFileSHA256":Self.sha(articleBytes)]
         if let hash=manifest.pdfSHA256,let entry=manifest.files.first(where:{$0.role=="pdf" && $0.sha256==hash}),let source=manifest.pdfURL {

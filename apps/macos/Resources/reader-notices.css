@@ -1,0 +1,17 @@
+/* Only the guide pane changes height. Original article/PDF/export bytes stay intact. */
+#guide-pane.has-reader-source-notice{display:flex;flex-direction:column}
+#guide-pane.has-reader-source-notice[hidden]{display:none}
+#guide-pane.has-reader-source-notice #article{flex:1;min-height:0;height:auto}
+.reader-source-notice{flex:none;display:flex;align-items:flex-start;gap:12px;padding:14px 22px;border-bottom:1px solid var(--line);background:light-dark(#f1f5fa,#27313d);color:var(--ink)}
+.reader-source-notice[hidden]{display:none}
+.reader-source-notice-icon{display:grid;place-items:center;flex:none;width:20px;height:20px;margin-top:1px;border:1px solid currentColor;border-radius:50%;font:600 12px Georgia,serif;color:light-dark(#456b95,#a6c5e9)}
+.reader-source-notice-copy{flex:1;min-width:0}
+.reader-source-notice-copy strong{font-size:12px;font-weight:600}
+.reader-source-notice-preview{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.65;color:var(--muted)}
+.reader-source-notice-open{flex:none;align-self:center;border:1px solid var(--line);border-radius:6px;padding:6px 9px;background:var(--surface);color:var(--ink);font:inherit;font-size:11px;white-space:nowrap;cursor:pointer}
+.reader-source-notice-open:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.reader-source-notice-dialog h2{font-size:19px;margin:0 0 10px}
+.reader-source-notice-dialog .dialog-subtitle{margin-bottom:20px;overflow-wrap:anywhere}
+.reader-source-notice-full p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.8;padding:12px 0;border-top:1px solid var(--line)}
+.reader-source-notice-dialog>.secondary-button{display:block;margin:20px 0 0 auto}
+@media(max-width:1050px){.reader-source-notice{padding:12px 16px;gap:9px}.reader-source-notice-open{padding:6px 8px}}
