@@ -174,6 +174,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             Task{do{replyHandler(try await nativeTasksMessage(command,payload:payload,source:source,frameURL:frameURL,isMainFrame:isMainFrame),nil)}catch{replyHandler(nil,"任务视图已变化，请重新选择后台任务")}}
             return
         }
+        if command=="reader.sourceNotices.show",source !== web {replyHandler(nil,"来源说明只支持当前主阅读窗口");return}
         if source===storageDetailWeb {
             Task{do{replyHandler(try await storageDetailCommand(command,payload:payload,source:source),nil)}catch{replyHandler(nil,error.localizedDescription)}}
             return
@@ -215,7 +216,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if command=="app.bootstrap" {
             let settings=model.configuration()
             _=try? await library.handle(command:"library.network",payload:["httpProxy":settings["httpProxy"] ?? ""])
-            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":"1.0.0","nativeTasks":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
+            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":"1.0.0","nativeTasks":true,"nativeSourceNotices":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
         }
         if command.hasPrefix("library.") {
             if command=="library.article",let id=payload["paperID"] as? String {
@@ -315,8 +316,13 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "app.revealData":revealData();return [:]
         case "storage.show":try await showStorageDetails();return [:]
         case "details.show":
-            guard let raw=payload["kind"] as? String,let kind=NativeDetailKind(rawValue:raw),kind != .storage else{throw DesktopError.message("未知详情窗口")}
+            guard let raw=payload["kind"] as? String,let kind=NativeDetailKind(rawValue:raw),kind != .storage,kind != .sourceNotices else{throw DesktopError.message("未知详情窗口")}
             try await showNativeDetails(kind);return [:]
+        case "reader.sourceNotices.show":
+            try requireMainContextAvailable()
+            let request=try ReaderSourceNoticeRequest(payload)
+            try await showNativeDetails(.sourceNotices,sourceRequest:request)
+            return try sourceNoticePresentation(request)
         case "storage.status":return try await storage.capacity()
         case "storage.packages":return ["packages":try await storage.listPackages()]
         case "storage.prepare":return try await runJob(command,payload:payload){notify in try await self.prepareOffline(progress:notify)}

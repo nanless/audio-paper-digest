@@ -47,10 +47,19 @@ function mountArchive(paper){
  history.append(explanation,$('zotero-pending'),$('zotero-recent'));archive.append(history);
  return zotero.openArchive();
 }
+function mountSourceNotices(context,snapshot){
+ if(snapshot?.contract!=='reader-source-notice-snapshot-v1'||snapshot.paperID!==context?.paperID||snapshot.revisionSHA256!==context?.revision||!Array.isArray(snapshot.notices)||!snapshot.notices.length||snapshot.notices.some(x=>typeof x!=='string'||!x.trim()))throw new Error('来源说明与本窗口导读身份不符');
+ const container=$('detail-content'),section=document.createElement('section');section.className='native-source-notices';
+ const heading=document.createElement('h1');heading.textContent='导读来源说明';
+ const identity=document.createElement('p');identity.className='dialog-subtitle';identity.textContent=context.title||context.paperID;
+ section.append(heading,identity);
+ for(const text of snapshot.notices){const paragraph=document.createElement('p');paragraph.className='native-source-notice-text';paragraph.textContent=text;section.append(paragraph);}
+ container.replaceChildren(section);
+}
 async function start(){
  const result=await nativeCall('details.bootstrap');if(!active)return;
  presentationID=result.presentationID;if(typeof presentationID!=='string'||!presentationID)throw new Error('详情窗口身份不可用');
- kind=result.kind||'storage';if(!['storage','help','export','zotero'].includes(kind))throw new Error('未知详情内容');
+ kind=result.kind||'storage';if(!['storage','help','export','zotero','source-notices'].includes(kind))throw new Error('未知详情内容');
  document.title=result.title+' · 论文速递';$('details-title').textContent='论文速递 · '+result.title;$('detail-dialog').setAttribute('aria-label',result.title);
  $('details-refresh').hidden=kind!=='storage';
  document.documentElement.style.colorScheme=result.appearance==='system'?'light dark':result.appearance||'light dark';
@@ -58,6 +67,7 @@ async function start(){
  if(kind==='storage'){storage=mountStorage({call,toast,error},{isCurrent:()=>active,openOffline});await refresh();}
  else if(kind==='help')content=mountHelp($('detail-content'),{call,close,showClose:false});
  else if(kind==='export')content=mountExport($('detail-content'),{call,close,context:result.context,showClose:false});
+ else if(kind==='source-notices')mountSourceNotices(result.context,result.sourceNotices);
  else await mountArchive(result.paper);
  if(active){const heading=$('detail-content').querySelector('h1,h2');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}}
  controls();

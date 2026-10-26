@@ -2,7 +2,8 @@ import AppKit
 import WebKit
 
 enum NativeDetailKind:String,Hashable { case storage,help,export,zotero
-    var title:String {switch self {case .storage:return "本机资料";case .help:return "使用说明";case .export:return "导出当前研究";case .zotero:return "存入 Zotero"}}
+    case sourceNotices="source-notices"
+    var title:String {switch self {case .storage:return "本机资料";case .help:return "使用说明";case .export:return "导出当前研究";case .zotero:return "存入 Zotero";case .sourceNotices:return "导读来源说明"}}
 }
 // Only this file can mint a document operation capability. JSON/session strings
 // alone cannot authorize source-dependent work or native panels.
@@ -17,6 +18,7 @@ enum NativeDetailKind:String,Hashable { case storage,help,export,zotero
     let paperID:String
     let previousResponder:NSResponder?
     var kind:NativeDetailKind = .storage
+    var sourceNoticeSnapshot:ReaderSourceNoticeSnapshot? = nil
 }
 
 extension PaperDigestApp {
@@ -50,19 +52,29 @@ extension PaperDigestApp {
               !terminationPending else{throw DesktopError.message("详情窗口的原始资料已变化或关闭，操作未继续")}
     }
     func showStorageDetails() async throws {try await showNativeDetails(.storage)}
-    func showNativeDetails(_ kind:NativeDetailKind) async throws {
+    func showNativeDetails(_ kind:NativeDetailKind,sourceRequest:ReaderSourceNoticeRequest?=nil) async throws {
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，请稍后打开本机资料")}
-        if storageDetailsActive {if window?.isVisible==true{storageDetailWindow?.makeKeyAndOrderFront(nil)};return}
+        if storageDetailsActive {
+            if kind == .sourceNotices {throw ReaderSourceNoticeError.changed}
+            if window?.isVisible==true{storageDetailWindow?.makeKeyAndOrderFront(nil)};return
+        }
         let generation=contextGeneration
+        let sourceNoticeSnapshot:ReaderSourceNoticeSnapshot?
+        if kind == .sourceNotices {
+            guard let sourceRequest else{throw ReaderSourceNoticeError.invalidRequest}
+            let original=try ReaderSourceNoticeSnapshot(paperID:currentPaperID,article:currentArticle)
+            try original.requireRequest(sourceRequest);sourceNoticeSnapshot=original
+        }else{sourceNoticeSnapshot=nil}
         try await flushEdits()
         try Task.checkCancellation()
         guard generation==contextGeneration,!terminationPending,!maintenanceBusy else{throw DesktopError.message("保存期间阅读资料已变化，请重新打开本机资料")}
+        try sourceNoticeSnapshot?.requireCurrent(paperID:currentPaperID,article:currentArticle)
         // Another request may have completed its flush while this one awaited it.
-        if storageDetailsActive {return}
+        if storageDetailsActive {if kind == .sourceNotices {throw ReaderSourceNoticeError.changed};return}
         guard let window,let scheme else{throw DesktopError.message("主阅读窗口尚未准备完成")}
         guard window.attachedSheet==nil else{throw DesktopError.message("请先完成主阅读窗口的当前确认")}
         if kind == .export || kind == .zotero {guard !currentPaperID.isEmpty else{throw DesktopError.message("请先选择论文")}}
-        let session=StorageDetailSession(generation:generation,paperID:currentPaperID,previousResponder:window.firstResponder,kind:kind)
+        let session=StorageDetailSession(generation:generation,paperID:currentPaperID,previousResponder:window.firstResponder,kind:kind,sourceNoticeSnapshot:sourceNoticeSnapshot)
         let detail=NSWindow(contentRect:NSRect(x:0,y:0,width:820,height:700),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
         detail.title=kind.title;detail.minSize=NSSize(width:700,height:520);detail.isReleasedWhenClosed=false;detail.delegate=self
         let configuration=WKWebViewConfiguration()
@@ -71,7 +83,7 @@ extension PaperDigestApp {
         let view=WKWebView(frame:detail.contentView!.bounds,configuration:configuration)
         view.autoresizingMask=[.width,.height];view.navigationDelegate=self;detail.contentView=view
         storageDetailSession=session;storageDetailWindow=detail;storageDetailWeb=view
-        storageDetailDocumentAccess=DetailDocumentAccess(session:session,source:view);storageDetailArchiveMaterials=nil
+        storageDetailDocumentAccess = kind == .sourceNotices ? nil:DetailDocumentAccess(session:session,source:view);storageDetailArchiveMaterials=nil
         do {
             // Session reservation and native final guards block source changes.
             // Same-source main callbacks may still settle without invalidating
@@ -79,12 +91,23 @@ extension PaperDigestApp {
             let paused=try await web.callAsyncJavaScript("if(typeof window.paperDigestPauseForDetails!=='function')throw new Error('主阅读视图尚未准备完成');return window.paperDigestPauseForDetails(paperID);",arguments:["paperID":session.paperID],in:nil,contentWorld:.page) as? [String:Any]
             try Task.checkCancellation();_=try validateStorageDetail(view,id:session.id)
             guard paused?["paused"] as? Bool==true,generation==contextGeneration,!terminationPending,!maintenanceBusy else{throw DesktopError.message("阅读上下文已变化，本机资料未打开")}
+            try sourceNoticeSnapshot?.requireCurrent(paperID:currentPaperID,article:currentArticle)
             view.load(URLRequest(url:URL(string:"paperapp://app/details.html")!))
             window.beginSheet(detail){[weak self,weak detail] _ in
                 guard let self,let detail,self.storageDetailWindow===detail else{return}
                 self.finishStorageDetails(sessionID:session.id)
             }
         }catch{finishStorageDetails(sessionID:session.id);throw error}
+    }
+    func sourceNoticePresentation(_ request:ReaderSourceNoticeRequest)throws->[String:Any] {
+        guard let session=storageDetailSession,session.kind == .sourceNotices,
+              session.generation==contextGeneration,session.paperID==currentPaperID,
+              let view=storageDetailWeb,let detail=storageDetailWindow,
+              detail.contentView===view,detail.sheetParent===window,
+              let original=session.sourceNoticeSnapshot else{throw ReaderSourceNoticeError.changed}
+        try original.requireRequest(request)
+        try original.requireCurrent(paperID:currentPaperID,article:currentArticle)
+        return ["presented":true,"paperID":original.paperID,"revisionSHA256":original.revisionSHA256]
     }
     func finishStorageDetails(sessionID:String){
         guard let session=storageDetailSession,session.id==sessionID else{return}
@@ -109,6 +132,11 @@ extension PaperDigestApp {
         guard !terminationPending else{throw DesktopError.message("正在保存并退出，未开始新操作")}
         if command=="details.bootstrap" {
             guard session.generation==contextGeneration,session.paperID==currentPaperID else{throw DesktopError.message("原阅读资料已变化，请关闭后重新打开详情")}
+            if session.kind == .sourceNotices {
+                guard let original=session.sourceNoticeSnapshot else{throw ReaderSourceNoticeError.unavailable}
+                try original.requireCurrent(paperID:currentPaperID,article:currentArticle)
+                return ["presentationID":session.id,"kind":session.kind.rawValue,"title":session.kind.title,"appearance":store.setting("appearance") as? String ?? "system","context":["title":currentPaper["titleZh"] ?? currentPaper["title"] ?? "","paperID":original.paperID,"revision":original.revisionSHA256],"sourceNotices":original.json]
+            }
             return ["presentationID":session.id,"kind":session.kind.rawValue,"title":session.kind.title,"appearance":store.setting("appearance") as? String ?? "system","paper":currentPaper,"context":["title":currentPaper["titleZh"] ?? currentPaper["title"] ?? "","paperID":session.paperID,"revision":currentArticle["revisionSHA256"] ?? ""]]
         }
         if command=="details.close" {return ["closed":closeStorageDetails()]}
@@ -117,6 +145,7 @@ extension PaperDigestApp {
             .storage:["storage.status","storage.packages","storage.cleanupPlan","storage.cleanup","storage.open","app.revealData"],
             .help:["app.backup","app.restore","app.diagnostics"],
             .export:["app.export"],
+            .sourceNotices:[],
             .zotero:["archive.materials","zotero.status","zotero.collections","zotero.authorize","zotero.checkAuthorization","zotero.archive","zotero.resume","zotero.open"]]
         guard allowed[session.kind]?.contains(command)==true else{throw DesktopError.message("此详情窗口不支持该操作")}
         guard let access=storageDetailDocumentAccess else{throw DesktopError.message("详情资料权限不可用")}

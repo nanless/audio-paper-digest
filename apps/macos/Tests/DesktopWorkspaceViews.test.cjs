@@ -46,12 +46,13 @@ async function show(page,view){await page.locator('[data-view="'+view+'"]').clic
 async function visibleAX(page){const session=await page.context().newCDPSession(page);try{return (await session.send('Accessibility.getFullAXTree')).nodes.filter(node=>!node.ignored);}finally{await session.detach();}}
 (async()=>{try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
- for(const view of ['tasks','notes'])await one(view+' candidate reveal refreshes only hidden outer pane and retains controls',async page=>{
-  await page.evaluate(view=>{window.originalWorkspace=document.getElementById(view+'-view');window.originalWorkspaceList=document.getElementById(view==='tasks'?'task-list':'all-notes');window.originalWorkspaceControl=view==='tasks'?document.querySelector('[data-task-filter=active]'):document.querySelector('#notes-view h1');},view);
+ for(const view of ['tasks','notes'])await one(view+(view==='tasks'?' reveal refreshes outer pane and retains task controls':' reveal creates fresh read-only index and preserves the original editor'),async page=>{
+  await page.evaluate(view=>{window.originalWorkspace=document.getElementById(view+'-view');window.originalWorkspaceList=document.getElementById(view==='tasks'?'task-list':'all-notes');window.originalWorkspaceControl=view==='tasks'?document.querySelector('[data-task-filter=active]'):document.querySelector('#notes-view h1');window.originalNoteEditor=document.getElementById('note-editor');},view);
   await show(page,view);
   assert.equal(await page.evaluate(view=>document.getElementById(view+'-view')!==originalWorkspace,view),true,'candidate must provide a fresh visible container; actual Mac result still requires native acceptance');
-  assert.equal(await page.evaluate(view=>document.getElementById(view==='tasks'?'task-list':'all-notes')===originalWorkspaceList,view),true,'preserve original list node and handlers');
-  assert.equal(await page.evaluate(view=>view==='tasks'?document.querySelector('[data-task-filter=active]')===originalWorkspaceControl:document.querySelector('#notes-view h1')===originalWorkspaceControl,view),true,'do not deep-clone live controls');
+  assert.equal(await page.evaluate(view=>document.getElementById(view==='tasks'?'task-list':'all-notes')===originalWorkspaceList,view),view==='tasks','tasks keep live filters; read-only notes rebuild the hidden-born index');
+  assert.equal(await page.evaluate(view=>view==='tasks'?document.querySelector('[data-task-filter=active]')===originalWorkspaceControl:document.querySelector('#notes-view h1')===originalWorkspaceControl,view),view==='tasks','tasks keep controls; notes use a fresh heading');
+  assert.equal(await page.evaluate(()=>document.getElementById('note-editor')===originalNoteEditor),true,'the original live editor and its handlers remain untouched');
   const shown=await page.evaluate(view=>({visible:!document.getElementById(view+'-view').hidden,duplicates:document.querySelectorAll('#'+view+'-view').length}),view);assert.deepEqual(shown,{visible:true,duplicates:1});
  });
  await one('tasks retained filters and cancel use actual fixture IDs across repeated transitions',async page=>{
