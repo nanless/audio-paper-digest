@@ -67,8 +67,36 @@ const results=[];let browser;
   }catch(error){result.error=error.stack;console.error('FAIL Android document tables',width,font,scheme,error.message);}
   finally{results.push(result);await page.close();}
  }
+
+ // Controlled parser rejection, not an emulated old WebView: replace only the
+ // comparison function token with an unknown function and observe CSSOM reject it.
+ for(const width of [360,840]){
+  const page=await browser.newPage({viewport:{width,height:800}}),result={width,control:'comparison-function-declaration-rejected',passed:false},requests=[];
+  try{
+   await page.route('**/*',route=>{requests.push(route.request().url());return route.abort();});
+   await page.setContent(head('light')+'</body></html>');
+   const tables=await page.evaluate(raw=>[...new DOMParser().parseFromString(raw,'text/html').querySelectorAll('#article-body table')].map(t=>t.outerHTML),raw);
+   assert.equal(tables.length,2);
+   const modern=head('light'),withoutFallback=modern.replace('max-width:calc(100vw - 64px);','');
+   const metrics=()=>page.evaluate(()=>{const tables=[...document.querySelectorAll('table')],title=tables[1].rows[1].cells[1].querySelector('a'),r=title.getBoundingClientRect();return {titleWidth:r.width,titleHeight:r.height,titleMax:getComputedStyle(title).maxWidth,tableWidth:tables[1].scrollWidth,pageWidth:document.documentElement.scrollWidth};});
+   await page.setContent(withoutFallback+tables.join('')+'</body></html>');const previousModern=await metrics();
+   await page.setContent(modern+tables.join('')+'</body></html>');const currentModern=await metrics();
+   assert.deepEqual(currentModern,previousModern,'Supported comparison function retains exactly the previous modern geometry');
+   assert.equal(modern.split('max-width:min(').length,2,'One production title comparison-function declaration');
+   await page.setContent(modern.replace('max-width:min(','max-width:unsupported-min(')+tables.join('')+'</body></html>');
+   result.actual=await page.evaluate(()=>{
+    const tables=[...document.querySelectorAll('table')],title=tables[1].rows[1].cells[1].querySelector('a'),r=title.getBoundingClientRect(),rule=[...document.styleSheets[0].cssRules].find(r=>r.selectorText?.replace(/\s/g,'')==='td>a:only-child');
+    return {rejected:!CSS.supports('max-width','unsupported-min(24em,calc(100vw - 64px))'),rule:rule.style.cssText,maxWidth:getComputedStyle(title).maxWidth,titleWidth:r.width,titleHeight:r.height,pageWidth:document.documentElement.scrollWidth,fragments:tables.map(t=>t.outerHTML)};
+   });
+   assert.equal(result.actual.rejected,true);assert.ok(!result.actual.rule.includes('unsupported-min'),'Parser drops the unsupported declaration');
+   assert.equal(result.actual.maxWidth,(width-64)+'px','Previous viewport fallback survives rejected comparison function');
+   assert.ok(result.actual.titleWidth<=width-64+1);assert.ok(result.actual.pageWidth<=width+1);assert.deepEqual(result.actual.fragments,tables);
+   assert.deepEqual(requests,[]);result.modern=currentModern;result.passed=true;console.log('PASS Android title fallback with parser rejection',width);
+  }catch(error){result.error=error.stack;console.error('FAIL Android title fallback with parser rejection',width,error.message);}
+  finally{results.push(result);await page.close();}
+ }
 }finally{
  await browser?.close();const inputsChanged=Object.keys(inputs).filter(p=>digest(fs.readFileSync(p))!==inputs[p]);
- fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({scope:'Actual production Android UI head/CSP + two byte-preserved published daily24 tables in controlled Chromium; CSS font-size36 is a browser stress control, not Android fontScale2 or WebView/Compose/AX/provider evidence.',inputs,inputsChanged,passed:results.filter(r=>r.passed).length,failed:results.filter(r=>!r.passed).length,results},null,2)+'\n');
- if(inputsChanged.length||results.length!==8||results.some(r=>!r.passed))process.exitCode=1;
+ fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({scope:'Actual production Android UI head/CSP + two byte-preserved published daily24 tables in controlled Chromium; CSS font-size36 is a browser stress control, not Android fontScale2 or WebView/Compose/AX/provider evidence. Two extra parser-rejection controls are synthetic unsupported-declaration controls, not old WebView execution.',inputs,inputsChanged,passed:results.filter(r=>r.passed).length,failed:results.filter(r=>!r.passed).length,results},null,2)+'\n');
+ if(inputsChanged.length||results.length!==10||results.some(r=>!r.passed))process.exitCode=1;
 }})().catch(error=>{console.error(error);process.exitCode=1});
