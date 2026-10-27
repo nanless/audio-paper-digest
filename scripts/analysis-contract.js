@@ -1,7 +1,7 @@
 const { CURRENT_MODEL_POLICY, boundModelPolicy, assertAgentIdentity } = require('../manual/scripts/manual-agent-policy.js');
 const crypto = require('crypto');
 const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
-const { sourceBackedSettingAxes } = require('./lib/experiment-source-setting-axes.js');
+const { sourceBackedSettingAxes, sourceBackedSampleSizeBoundary } = require('./lib/experiment-source-setting-axes.js');
 const {
     PAPER_EVALUATION_TITLE,
     normalizeAnalysisSectionTitle,
@@ -828,7 +828,7 @@ function sourceBoundLossSwitchColumns(table, source) {
     const identifier = table.header.findIndex(header => /^(?:变体|variant|abbrev\.)$/iu.test(String(header).trim()));
     const controls = [
         /^(?:条件注入|conditioning)$/iu,
-        /^(?:波形损失归一化|waveform[- ]loss normalization)$/iu,
+        /^(?:波形损失归一化|损失归一化|waveform[- ]loss normalization)$/iu,
         /^(?:语谱图辅助损失|auxiliary spectrogram loss)$/iu
     ].map(pattern => table.header.findIndex(header => pattern.test(String(header).trim())));
     if (identifier < 0 || controls.some(index => index < 0)
@@ -1699,7 +1699,8 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         const after = resultLines.slice(table.endLine + 1).join('\n').trim()
             .split(/\n\s*\n/).filter(Boolean).slice(0, 5)
             .find(paragraph => paragraph.replace(/[*_`#>\s]/g, '').length >= 50
-                && boundaryPattern.test(paragraph)) || '';
+                && (boundaryPattern.test(paragraph)
+                    || sourceBackedSampleSizeBoundary(paragraph, table, options.sourceText, results))) || '';
         if (!before) {
             return `实验结果第 ${index + 1} 张表前缺少与上下文衔接的具体比较问题`;
         }
@@ -1769,6 +1770,8 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
     const resultHasNegative = hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
+        || tables.some(table => String(results).split(/\n\s*\n/u)
+            .some(paragraph => sourceBackedSampleSizeBoundary(paragraph, table, options.sourceText, results)))
         || sourceBoundMatchedAcousticGap(results, tables, options.sourceText)
         || hasSourceBackedNetIntervalNegative(results, tables, options.sourceText)
         || sourceBoundLowerMetricIncrease(results, sourceText)
@@ -2750,6 +2753,80 @@ function stripDuplicatedLineFootnoteMarkers(text) {
 }
 
 // 这些组合只声明当前句的实测条件，不能替代结果指标或比较方向。
+function hasSourceBoundTextVideoComparison(rawSentence, sourceText, prefix = '', following = '') {
+    const denied = /假设|假想|假定|如果|若|可能|预计|预期|计划|未来|第三方|他人|先前研究|相关工作|外部研究|引用|引述|转述|撤回|撤销|否认|并非|不是|没有|从未|未(?:实际)?(?:测量|观测|报告|执行|进行)|[“”「」"'`]|(?:^|\n)\s*>|<\/?(?:blockquote|pre|code)\b|\b(?:if|assuming|suppose|hypothetical|not|never|previous work|prior study|related (?:work|study)|other (?:work|study|research)|external (?:work|study|research)|third[- ]party|quoted|withdrawn|retracted)\b/iu;
+    if (denied.test(rawSentence)) return false;
+    const surface = String(rawSentence).replace(/\s+/gu, '');
+    const scope = /(?:在|于)(?:采用([A-Z][A-Za-z0-9/._-]{1,39})的)?([A-Z][A-Za-z0-9._-]{2,39})文本到视频检索上[，,]/u.exec(surface);
+    const comparison = /([A-Z][A-Za-z0-9_-]{1,39})的R@1为(\d+(?:\.\d+)?)[，,]相对于([A-Z][A-Za-z0-9_-]{1,39})的(\d+(?:\.\d+)?)高(\d+(?:\.\d+)?)个百分点/u.exec(surface);
+    if (!scope || !comparison || comparison[1] === comparison[3]
+        || Number(comparison[2]) > 100 || Number(comparison[4]) > 100
+        || !(Number(comparison[2]) > Number(comparison[4]))
+        || Math.abs(Number(comparison[2]) - Number(comparison[4]) - Number(comparison[5])) > 1e-6) return false;
+    const foreignHeading = /^(?:#{1,6}\s*)?(?:第三方研究|先前研究|相关工作|假设实验|引述|previous work|prior study|related work|external research|hypothetical experiment)[.：:]?$/iu;
+    let foreign = false;
+    for (const part of String(prefix).split(/[。！？!?\n]/u).map(part => part.trim()).filter(Boolean)) {
+        if (foreignHeading.test(part)) foreign = true;
+        if (/^(?:本研究|本文)(?:独立实验|实测结果|检索结果)[：:]?$/u.test(part)) foreign = false;
+    }
+    if (foreign || (String(prefix).match(/```|~~~/gu) || []).length % 2
+        || ['blockquote', 'pre', 'code'].some(tag => (String(prefix).match(new RegExp('<' + tag + '\\b[^>]*>', 'gi')) || []).length
+            > (String(prefix).match(new RegExp('</' + tag + '\\s*>', 'gi')) || []).length)
+        || [['“', '”'], ['‘', '’'], ['「', '」'], ['<blockquote>', '</blockquote>'], ['<pre>', '</pre>'], ['<code>', '</code>']]
+            .some(([open, close]) => String(prefix).lastIndexOf(open) > String(prefix).lastIndexOf(close))
+        || ['"', "'", '`'].some(quote => String(prefix).split(quote).length % 2 === 0)
+        || /^(?:(?:上述|以上|该|此|这个)(?:文本到视频)?(?:结果|比较|实验|结论)[^。\n]{0,35}(?:撤回|撤销|不成立|从未|未(?:实际)?(?:报告|进行|执行))|(?:This|That)\s+(?:(?:result|experiment|comparison)\s+)?(?:was |is )?(?:not|never|(?:only )?hypothetical|withdrawn)|We\s+(?:did not|do not|never)\s+(?:actually\s+)?(?:perform this experiment|compare these models)\b)/iu.test(String(following).trim())) return false;
+    const source = String(sourceText || '')
+        .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/gu, '\n[quoted material]\n')
+        .replace(/<(?:blockquote|pre|code)\b[^>]*>[\s\S]*?<\/(?:blockquote|pre|code)\s*>/giu, '\n[quoted material]\n')
+        .replace(/^\s*>.*$/gmu, '[quoted material]')
+        .replace(/“[^”]*”|‘[^’]*’|「[^」]*」|"[^"\n]*"|'[^'\n]*'|`[^`\n]*`/gu, '[quoted material]');
+    const opening = source.trim().split('\n')[0];
+    if (foreignHeading.test(opening) || denied.test(opening) || opening === '[quoted material]') return false;
+    const observedAt = match => {
+        const before = source.slice(0, match.index);
+        const previous = before.trimEnd().split('\n').at(-1) || '';
+        if (denied.test(previous + '\n' + match[0]) || previous === '[quoted material]'
+            || /^(?:This|That|We)[^.!?\n]{0,60}\b(?:not|never|withdrawn|retracted|hypothetical)\b/iu.test(adjacentSourceStatementAfter(source, match.index + match[0].length))) return false;
+        for (const line of before.split('\n').reverse().slice(0, 80)) {
+            if (foreignHeading.test(line.trim())) return false;
+            if (/^\s*(?:#{1,6}\s+|\d+(?:\.\d+)*[ .]+|Appendix\s+[A-Z])\S/iu.test(line)) break;
+        }
+        return true;
+    };
+    const escaped = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const benchmark = new RegExp('(?<![A-Za-z0-9._-])' + escaped(scope[2]) + '(?![A-Za-z0-9._-])', 'u');
+    const claims = [...source.matchAll(/^We compare ([A-Z][A-Za-z0-9_-]{1,39}) with representative methods on [^\n]+$/gmu)];
+    if (!claims.some(claim => claim[1] === comparison[1] && benchmark.test(claim[0]) && observedAt(claim))) return false;
+    if (scope[1]) {
+        const encoder = new RegExp('The four-dataset comparison uses ' + escaped(scope[1]) + '(?=;|\\.)', 'gu');
+        if (![...source.matchAll(encoder)].some(observedAt)) return false;
+    }
+    return [...source.matchAll(/^Table\s+\d+\. Text-to-video retrieval on (two|three|four|five|[2-5]) benchmarks\.[^\n]*$/gmu)].some(caption => {
+        if (!observedAt(caption)) return false;
+        const tail = source.slice(caption.index + caption[0].length);
+        const end = /^(?:Table\s+\d+\.|\d+(?:\.\d+)*\.\s+[A-Z])/mu.exec(tail);
+        const body = tail.slice(0, end ? end.index : tail.length);
+        if (denied.test(body)) return false;
+        const lines = body.split('\n').map(line => line.trim()).filter(Boolean);
+        const metric = lines.indexOf('R@1');
+        const count = ({ two: 2, three: 3, four: 4, five: 5 })[caption[1]] || Number(caption[1]);
+        const columns = lines.slice(1, metric);
+        if (lines[0] !== 'Model' || metric !== count + 1 || !columns.includes(scope[2])
+            || lines.slice(metric, metric + 4).join('|') !== 'R@1|R@5|R@10|SumR') return false;
+        const valueOf = model => {
+            const name = new RegExp('^' + escaped(model) + '(?:$|,| \\()', 'u');
+            const starts = lines.flatMap((line, index) => name.test(line) ? [index] : []);
+            if (starts.length !== 1) return NaN;
+            const values = lines.slice(starts[0] + 1, starts[0] + 1 + count * 4);
+            if (values.length !== count * 4 || values.some(value => !/^\d+(?:\.\d+)?$/u.test(value))) return NaN;
+            return Number(values[columns.indexOf(scope[2]) * 4]);
+        };
+        return valueOf(comparison[1]) === Number(comparison[2])
+            && valueOf(comparison[3]) === Number(comparison[4]);
+    });
+}
+
 function hasConcreteCoreSummarySetting(sentence, sourceText = '') {
     if (/(?:假设|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做)/.test(sentence)) return false;
     const affirmedSetting = !/(?:讨论|提及|并非|不是|不能|假想|设想|计划|未来|无关|文件目录|否认|反驳|引用|引述)/u.test(sentence);
@@ -3033,8 +3110,11 @@ function sourceBoundCorrectionRateObservations(text, sourceText) {
 
 function coreSummaryQuantitativeResultState(text, sourceText = null) {
     const correctionRates = sourceBoundCorrectionRateObservations(text, sourceText);
-    const candidates = String(text || '').split(/[。！？!?\n]/).map((rawSentence, sentenceIndex) => {
+    const rawSentences = String(text || '').split(/[。！？!?\n]/);
+    const candidates = rawSentences.map((rawSentence, sentenceIndex) => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
+        const retrievalComparison = hasSourceBoundTextVideoComparison(rawSentence, sourceText,
+            rawSentences.slice(0, sentenceIndex).join('\n'), rawSentences.slice(sentenceIndex + 1).find(part => part.trim()) || '');
         const bayesianGroupResult = hasSourceBackedBayesianGroupResult(sentence, sourceText);
         // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
         // 不能顶替缺失的结果指标。
@@ -3061,7 +3141,7 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
-            && (hasCoreSummaryComparisonDirection(sentence, numbers, sourceText) || correctionRates[sentenceIndex]?.direction));
+            && (hasCoreSummaryComparisonDirection(sentence, numbers, sourceText) || correctionRates[sentenceIndex]?.direction || retrievalComparison));
         // 会议原文常把具体划分写成“AliMeeting远场集”或“VoxAngeles未见语言集”，
         // 这算真实的评测设置，尽管里面既没有“数据集”三个字，也没有
         // `test/benchmark` 这样的英文词。只接受带明确设置后缀的拉丁文命名标识；
@@ -3072,7 +3152,8 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
         const hasMeasuredCrossValidation = !/(?:假设|假想|如果|若在|预计|预期|可能|计划|未来|并非|不是|未进行|未做|没有)/u.test(sentence)
             && /(?:在|于)[^。！？!?\n]{1,160}(?:[1-9][0-9]*|[一二两三四五六七八九十]+)折交叉验证(?:下|中|上)/u.test(sentence);
         const hasSetting = hasMeasuredCrossValidation || narrowMeasuredResult || /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
-            || hasNamedSetting || /(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)/i.test(rawSentence) || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence, sourceText)
+            || hasNamedSetting || retrievalComparison
+            || /(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)/i.test(rawSentence) || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence, sourceText)
             || /(?:在|于)\s*FLEURS(?![A-Za-z0-9_])(?:[\u3400-\u9fff]{1,8}(?:到|→)[\u3400-\u9fff]{1,8}(?:上|中)|[^，,；;。！？!?\n]{0,60}(?:oracle提交决策|校准评测)上下文(?:上|中))/.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);

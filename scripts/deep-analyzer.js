@@ -4178,8 +4178,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
         const countedDistinctions = [
             { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*件\\s*(?:不同的?|独立的?)?(?:事项|事)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
-            { pattern: new RegExp('(?:复现(?:时)?(?:要|应|需))?(?:先)?分清\\s*([三两二32])\\s*件事\\s*[，,:：]\\s*'
-                + conceptList + '\\s*(?:是(?:相互)?独立的|是不同的主张)', 'gu'), listGroup: 2, countGroup: 1 },
+            { pattern: new RegExp('(?:(?:复现(?:时)?(?:要|应|需))|需要)?(?:先)?分清\\s*([三两二32])\\s*件事\\s*[，,:：]\\s*'
+                + conceptList + '\\s*(?:是(?:相互)?独立的|是不同(?:的)?主张)', 'gu'), listGroup: 2, countGroup: 1 },
             { pattern: new RegExp(conceptList + '\\s*(?:要|应|需)?(?:分开|分别)(?:看|确认|核实|核对|验证|判断)', 'gu'), listGroup: 1 },
             { pattern: new RegExp('复现(?:时)?(?:要|应|需)把' + conceptList + '\\s*([三两二32])\\s*件事分开', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp('(?:(?:复现(?:前|时)?(?:要|应|需))|应|要|需|并)?(?:把|将)' + conceptList
@@ -4322,7 +4322,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // models. Bind only this closed acquisition clause, never a later author
         // release claim or an arbitrary model name absent from the paper.
         if (type === 'model') {
-            const base = /^(?:(?:本文|本研究|本工作|我们)(?:使用|采用)的)?基座(?:模型)?(?:是|为)开放权重的([A-Za-z][A-Za-z0-9_.+-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.+-]*){0,3})[。！？!?；;]?$/u.exec(segment.trim());
+            const base = /^(?:(?:本文|本研究|本工作|我们)(?:使用|采用)的)?基座(?:模型)?(?:是|为)开放权重的[ \t]*([A-Za-z][A-Za-z0-9_.+-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.+-]*){0,3})[。！？!?；;]?$/u.exec(segment.trim());
             if (base && !/^(?:Table|Figure|Section|Equation|Appendix|Algorithm)\s+[0-9]/iu.test(base[1])) {
                 const source = String(sourceText || '')
                     // Keep a nonempty boundary: removing quoted negation must
@@ -5091,6 +5091,20 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 && !/^(?:[“”‘’「」"'`]|(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|否定|区分)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳))/u.test(after);
         };
         const bounded = pattern => [...value.matchAll(pattern)].some(span => contains(span) && safe(span));
+        // Public webpages are a training-text input, not a release of the
+        // paper's code. Keep the exemption inside this complete input list;
+        // later code/weight availability predicates are checked separately.
+        if (type === 'code') for (const span of value.matchAll(/输入是公开网页(?:、(?:教育网页|代码|数学)){1,5}等文本词元(?=[，,。！？!?；;]|$)/gu)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (contains(span) && safe(span) && /^\s*$/u.test(prefix)
+                && span[0].split('、').includes('代码')) return true;
+        }
+        // This closed prior-work clause owns its released weights; it does
+        // not qualify a paper's own model or a following release assertion.
+        if (type === 'model') for (const span of value.matchAll(/已有小模型路线多是蒸馏或微调已发布的大权重(?=[，,。！？!?；;]|$)/gu)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (contains(span) && safe(span) && /^\s*$/u.test(prefix)) return true;
+        }
         const safeRecoverySpan = span => {
             const before = value.slice(0, span.index);
             const after = value.slice(span.index + span[0].length).replace(/^[\s，,；;：:。.!?！？]+/u, '')
@@ -8836,6 +8850,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-recovery-revision.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-compatible-candidate-replay.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-transport-continuation.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-fact-pre-request-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),

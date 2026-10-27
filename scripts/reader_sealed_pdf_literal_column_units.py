@@ -45,6 +45,59 @@ def uncertainty_surface(value):
     return re.sub(r'\s*±\s*', '±', surface(value))
 
 
+def system_configuration_surface(value):
+    # Only this separately certified font/position profile projects the
+    # calligraphic loss with its subscript and the printed degree-circle.
+    text = surface(value)
+    if text == '+ Grouped KL + 𝓛_W (full)':
+        return '+ Grouped KL + LW (full)'
+    if text == 'Direction (°) ↓':
+        return 'Direction (◦) ↓'
+    return text
+
+
+def variant_surface(value):
+    text = uncertainty_surface(value)
+    return {'Rank ↓': 'Rank↓', 'ℓ only': 'ℓonly'}.get(text, text)
+
+
+def system_configuration_symbols(page, cells):
+    last = [c for c in cells if c['row'] == 9 and c['column'] == 0]
+    need(len(last) == 1 and last[0]['text'] == '+ Grouped KL + LW (full)',
+         'system_configuration_loss_label_changed')
+    words = [w for w in last[0]['words'] if w[4] == 'LW']
+    need(len(words) == 1, 'system_configuration_loss_word_not_unique')
+    word = words[0]
+    chars = []
+    header_symbols = []
+    for block in page.get_text('rawdict', flags=fitz.TEXTFLAGS_TEXT)['blocks']:
+        for line in block.get('lines', []):
+            for span in line['spans']:
+                for char in span['chars']:
+                    bbox = char['bbox']
+                    item = {'char': char['c'], 'bbox': list(bbox), 'origin': list(char['origin']),
+                            'font': span['font'], 'size': span['size']}
+                    if word[0] - .05 <= bbox[0] and bbox[2] <= word[2] + .05 \
+                            and word[1] - .05 <= bbox[1] and bbox[3] <= word[3] + .05:
+                        chars.append(item)
+                    if char['c'] in ('W', '◦') and any(c['row'] == 0 and c['column'] in (1, 2, 4)
+                            and any(w[0] - .05 <= bbox[0] and bbox[2] <= w[2] + .05
+                                    and w[1] - .05 <= bbox[1] and bbox[3] <= w[3] + .05 for w in c['words'])
+                            for c in cells):
+                        header_symbols.append(item)
+    need(len(chars) == 2 and [c['char'] for c in chars] == ['L', 'W']
+         and re.fullmatch(r'CMSY\d+', chars[0]['font'])
+         and re.fullmatch(r'CMMI\d+', chars[1]['font'])
+         and chars[1]['size'] < .8 * chars[0]['size']
+         and chars[1]['origin'][1] > chars[0]['origin'][1] + .8,
+         'system_configuration_mathcal_subscript_not_observed')
+    need(len(header_symbols) == 3 and sum(c['char'] == 'W' and re.fullmatch(r'CMMI\d+', c['font'])
+                                         is not None for c in header_symbols) == 2
+         and sum(c['char'] == '◦' and re.fullmatch(r'CMSY\d+', c['font'])
+                 is not None for c in header_symbols) == 1, 'system_configuration_header_symbols_changed')
+    return {'loss': chars, 'headerSymbols': header_symbols, 'renderedLossLabel': '+ Grouped KL + 𝓛_W (full)'}
+
+
 def pdf_lines(page):
     return [line for block in page.get_text('dict', flags=fitz.TEXTFLAGS_TEXT)['blocks']
             for line in block.get('lines', [])]
@@ -144,8 +197,30 @@ def source_grid(page, caption, document, additional_captions=()):
     merged = headers[:2] == ['Dataset', 'Method']
     background_axis = headers[0] == 'Background'
     snr_axis = headers[0] == 'SNR (dB)'
-    need(merged or headers[0] in ('Method', 'Generator') or background_axis or snr_axis,
+    system_axis = headers[0] == 'System/configuration'
+    variant_axis = headers[0] == 'Variant'
+    need(merged or headers[0] in ('Method', 'Generator') or background_axis or snr_axis or system_axis or variant_axis,
          'literal_method_axis_not_explicit')
+    if system_axis:
+        need(headers == ['System/configuration', 'W SI-SDR (dB) ↑', 'Direction (◦) ↓',
+                         'Intensity coherence error ↓', 'W paired CLAP ↑'],
+             'system_configuration_complete_headers_changed')
+        need(re.fullmatch(r'Table [1-9]\d*: FOA reconstruction and cumulative ablation\. '
+                          r'The upper block compares codecs on native scenes; each “\+” below adds to '
+                          r'the previous row, with grouped KL replacing uniform KL\. '
+                          r'Ablations use matched updates from scratch and 24 kHz evaluation\. '
+                          r'Bold marks the best per block\.', surface(caption[4])),
+             'system_configuration_two_block_caption_missing')
+        need(len(horizontal) == 4, 'system_configuration_two_blocks_missing')
+    if variant_axis:
+        need(headers == ['Variant', 'Final acc (%)', 'AULC (%)', 'Rank↓'],
+             'variant_complete_headers_changed')
+        need(re.fullmatch(r'Table [1-9]\d*\. Ablations over the full matrix \(48 settings × 10 seeds, '
+                          r'mean±std across seeds\)\. Each variant replaces [A-Za-z][A-Za-z0-9 -]{0,64} '
+                          r'in the rank- ing against the five deployable baselines\. Top, component ablation, '
+                          r'best per column in bold; bottom, sensitivity to k \(default k=10 is '
+                          r'the full rule\)\.', surface(caption[4])), 'variant_two_block_caption_missing')
+        need(len(horizontal) == 4, 'variant_two_blocks_missing')
     label_column = 1 if merged else 0
     flat_inline_uncertainty = not merged and not background_axis and not snr_axis
     # Only this literal original SNR(dB) axis may own column zero's unit.
@@ -173,6 +248,11 @@ def source_grid(page, caption, document, additional_captions=()):
             need(2 <= len(lines) <= 64, 'literal_method_rows_missing')
             ys = [y for y, _ in lines]
             need(all(b - a >= 4 for a, b in zip(ys, ys[1:])), 'literal_method_rows_overlap')
+            if system_axis:
+                need(len(lines) == 9 and ys[3] < horizontal[2] < ys[4],
+                     'system_configuration_complete_blocks_changed')
+            if variant_axis:
+                need(len(lines) == 10 and ys[6] < horizontal[2] < ys[7], 'variant_complete_blocks_changed')
             if snr_axis and len(horizontal) == 4:
                 need(literal(lines[-1][1]) == 'Overall' and len(ys) >= 3
                      and ys[-2] < horizontal[-2] < ys[-1], 'literal_snr_aggregate_band_changed')
@@ -230,7 +310,9 @@ def source_grid(page, caption, document, additional_captions=()):
                             need(SCALAR.fullmatch(text) or (r == len(lines) - 1 and text == 'Overall'),
                                  'literal_snr_axis_not_scalar_or_final_overall')
                         else:
-                            need(re.match(r'^[A-Za-z]', text) and len(text) <= 240, 'literal_method_not_label')
+                            need(((re.match(r'^[A-Za-z]', text) or variant_axis and text == 'ℓonly') if not system_axis or r < 5
+                                  else re.match(r'^\+ [A-Za-z]', text)) and len(text) <= 240,
+                                 'literal_method_not_label')
                     else:
                         count_ratio = background_axis and re.fullmatch(r'\d+/[1-9]\d*', text)
                         # An inline mean and uncertainty are one complete PDF
@@ -261,6 +343,25 @@ def source_grid(page, caption, document, additional_captions=()):
             need(len(owned) == len(words) and len(set(owned)) == len(words), 'literal_unowned_or_repeated_word')
             box = [top[0], top[1], top[2], bottom]
             glyphs = complete_glyphs(page, words, box)
+            symbols = None
+            if system_axis:
+                need(rows[4][0] == 'Phase (base)' and all(not row[0].startswith('+') for row in rows[:4]),
+                     'system_configuration_cumulative_base_missing')
+                symbols = system_configuration_symbols(page, cells)
+                condition_bands = [
+                    {'text': 'The upper block compares codecs on native scenes', 'words': [],
+                     'top': separator, 'bottom': horizontal[2], 'sourceRows': list(range(1, 5))},
+                    {'text': 'each “+” below adds to the previous row, with grouped KL replacing uniform KL',
+                     'words': [], 'top': horizontal[2], 'bottom': bottom, 'sourceRows': list(range(5, 10))}]
+            if variant_axis:
+                need([row[0] for row in rows] == ['full rule, Eq. (3)', 'no fit term ℓ', 'no k-NN term aknn',
+                     'no NCM term ancm', 'ancm only', 'aknn only', 'ℓonly', 'k=5', 'k=10 (default)', 'k=20'],
+                     'variant_complete_component_and_k_identities_changed')
+                condition_bands = [
+                    {'text': 'Top, component ablation', 'words': [], 'top': separator,
+                     'bottom': horizontal[2], 'sourceRows': list(range(1, 8))},
+                    {'text': 'bottom, sensitivity to k (default k=10 is the full rule)', 'words': [],
+                     'top': horizontal[2], 'bottom': bottom, 'sourceRows': list(range(8, 11))}]
             if flat_inline_uncertainty and any(MEAN_CI.fullmatch(v) for row in rows for v in row[1:]):
                 # New inline-uncertainty tables also cannot ignore a short
                 # partial rule in an otherwise ordinary three-rule grid.
@@ -279,7 +380,12 @@ def source_grid(page, caption, document, additional_captions=()):
                     'wordBoxCount': len(words), 'fullTableQuoteEvidence': full_quote,
                     'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()],
                     **({'axisProfile': 'complete-literal-snr-axis-v1'} if snr_axis else
-                       {'axisProfile': 'complete-literal-background-axis-v1'} if background_axis else {})}
+                       {'axisProfile': 'complete-literal-background-axis-v1'} if background_axis else
+                       {'axisProfile': 'complete-literal-system-cumulative-axis-v1',
+                        'symbolEvidence': symbols} if system_axis else
+                       {'axisProfile': 'complete-literal-component-k-variant-axis-v1'} if variant_axis else {}),
+                    **({'cellSurfaceProfile': 'complete-inline-mean-uncertainty-spacing-v1'}
+                       if flat_inline_uncertainty and any(MEAN_CI.fullmatch(v) for row in rows for v in row[1:]) else {})}
             # Different arbitrary cut points within the same empty gap prove
             # the same complete physical cells. Different cell ownership does
             # not: reject rather than select a grid using candidate results.
@@ -809,12 +915,18 @@ def prove_pdf_bytes(raw, view, quotes):
                                  for q in quote_proofs), 'literal_complete_table_not_bound')
                     # Header + complete textual conditions identify the source
                     # first. No result value participates in this selection.
-                    header_surface = header_path if grid.get('headerProfile') else surface
+                    system_axis = grid.get('axisProfile') == 'complete-literal-system-cumulative-axis-v1'
+                    variant_axis = grid.get('axisProfile') == 'complete-literal-component-k-variant-axis-v1'
+                    header_surface = system_configuration_surface if system_axis else variant_surface if variant_axis else header_path if grid.get('headerProfile') else surface
                     need([header_surface(v) for v in view[0]] == [header_surface(v) for v in grid['headers']], 'literal_headers_changed')
                     if grid.get('headerProfile'):
                         need(all(not re.findall(r'[↑↓→]', rendered) or re.findall(r'[↑↓→]', rendered) == re.findall(r'[↑↓→]', original)
                                  for rendered, original in zip(view[0], grid['headers'])), 'literal_explicit_header_direction_changed')
-                    identity_surface = window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else surface
+                    if system_axis:
+                        need(view[-1][0] == grid['symbolEvidence']['renderedLossLabel'],
+                             'system_configuration_rendered_loss_symbol_changed')
+                    identity_surface = (system_configuration_surface if system_axis else variant_surface if variant_axis else window_condition_surface
+                                        if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else surface)
                     ids = [[identity_surface(row[c]) for c in grid['identityColumns']] for row in view[1:]]
                     need(ids == [[surface(v) for v in identity] for identity in grid['rowIdentities']],
                          'literal_complete_row_identity_changed')
@@ -823,12 +935,27 @@ def prove_pdf_bytes(raw, view, quotes):
                     continue
     need(len(grids) == 1, 'literal_bound_table_not_unique:' + str(len(grids)))
     grid = grids[0]
-    cell_surface = (window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1'
-                    else uncertainty_surface if grid.get('headerProfile') else surface)
+    cell_surface = (system_configuration_surface if grid.get('axisProfile') == 'complete-literal-system-cumulative-axis-v1' else
+                    variant_surface if grid.get('axisProfile') == 'complete-literal-component-k-variant-axis-v1' else
+                    window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1'
+                    else uncertainty_surface if grid.get('headerProfile') or grid.get('cellSurfaceProfile') else surface)
     need([[cell_surface(v) for v in row] for row in view[1:]] == [[cell_surface(v) for v in row] for row in grid['rows']],
          'literal_complete_cell_value_changed')
+    # The capability names the exact displayed cell. Preserve separately the
+    # observed source literal when the certified ± spacing projection differs.
+    for item in grid['units']:
+        displayed = [row[item['column']] for row in view[1:]]
+        if displayed != item['values']:
+            item['sourceValues'] = item['values']
+            item['values'] = displayed
     proof = {'contract': CONTRACT, 'valueOrigin': 'sealed_pdf', 'sourceBasis': 'independent-complete-pdf-grid',
-             'projectionProfile': ('whitespace-same-delta-and-literal-wb-wc-equals-spacing-v1'
+             'projectionProfile': ('font-bound-mathcal-subscript-and-degree-circle-system-axis-v1'
+                                   if grid.get('axisProfile') == 'complete-literal-system-cumulative-axis-v1' else
+                                   'literal-component-k-axis-ell-spacing-and-complete-inline-uncertainty-v1'
+                                   if grid.get('axisProfile') == 'complete-literal-component-k-variant-axis-v1' else
+                                   'complete-flat-inline-mean-uncertainty-spacing-v1'
+                                   if grid.get('cellSurfaceProfile') else
+                                   'whitespace-same-delta-and-literal-wb-wc-equals-spacing-v1'
                                    if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else
                                    'whitespace-same-delta-frame-frequency-parent-leaf-v1'
                                    if grid.get('headerProfile') == 'complete-frame-frequency-parent-leaf-v1' else

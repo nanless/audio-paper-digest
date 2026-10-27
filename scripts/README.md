@@ -67,7 +67,7 @@ npm run test:compat
 | 文件 | 类型与职责 |
 |---|---|
 | `analysis-contract.js` | Node 共享：核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
-| `lib/experiment-source-setting-axes.js` | Node 库：以本文已执行的实验声明、完整原表和对应行身份核验扰动类型与融合调度设置轴；只识别列类型，不改数值、科学结论或费用额度，其他表格与整篇检查照常执行。 |
+| `lib/experiment-source-setting-axes.js` | Node 库：以本文已执行的实验声明、完整原表和对应行身份核验扰动、融合调度与样本量设置轴，并核对同一原矩阵支持的样本量比较边界；不改数值、来源或费用额度，其他表格与整篇检查照常执行。 |
 | `analysis-engine.js` | Node 共享：用公共失败轮次调度，首轮全批、下一轮只失败集合，等待每轮结果和保存完成；管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
 | `analysis-waiver.js` | Node 库：核验用户针对当前日更批次的分析豁免，检查 deep、filtered、papers 三份文件的精确字节和逐篇来源 SHA；不修改分析正文。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
@@ -265,6 +265,7 @@ npm run test:compat
 | `lib/reader-paid-resolved-replay-worker.js` | Node 内部子进程：在无生产密钥且禁止网络的独立进程中运行固定旧渲染器，验证原响应能逐字恢复当前文章及计划；不直接接受发布任务。 |
 | `lib/reader-paid-response-replay.js` | Node 库：显式复验被旧程序变换损坏的付费原响应：正式用量记录须绑定原输出 SHA，真实后续修复请求及响应须精确关联原候选；保留原次数和失败记录，经正常完整解析与来源、事实反馈校验后才可保存。缺少这些证明时拒绝，不能作为通用原响应导入入口。 |
 | `lib/reader-parent-recovery.js` | Node 库：为已付费失败稿规划有累计上限的后续修复，核对每轮原稿、费用和父回执；公开诊断准备只允许实现变化，保留旧账，不自动添加请求额度。 |
+| `lib/reader-transport-continuation.js` | Node 库：为首个显式轮中有唯一配对 ECONNRESET、无新正文的同输入请求登记一次48k传输补充账；保留原80k账、内容次数和未知费用，原剩余32k只供正常局部修补，合计物理请求仍不超过6次。 |
 | `lib/reader-parent-upstream-preflight.js` | Node 库：在真实日更论文锁、封存来源及原上游反馈作用域中，对副本复核正常主分析、资源扫描和七个文本阶段的指纹；失效时交回父阶段恢复，不改论文、成功状态或请求额度。 |
 | `lib/reader-scientific-quote-coverage.js` | Node 库：生成绑定和保存稿冷核共用逐格科学量检查；完整系数、带符号指数及单位须由同一已绑定引文的完整行支撑。只做临时数值投影，保留原稿、引文、通用分词和来源权限；不完整或错误科学量交回正常失败修复，不能剪行后当作通过。 |
 | `lib/reader-fact-pre-request-recovery.js` | Node 库：只为真实零请求配置失败核验原完整签名父稿、同一未完成反馈与用量历史；不透明作用域仅将唯一短片段定位到原正文完整句，保留原失败和额度，不恢复旧正式文件。 |
@@ -299,7 +300,7 @@ npm run test:compat
 | `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。保留上游时验证实际返回的原论文 Reader，假想的未保存主文投影不授予人工权限。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
 | `lib/reader-sealed-figure-alias.js` | Node 库：在真实日更封存来源的同步作用域内，核验未选图号引用同一图片资产的别名关系；保留全部原始图片证据，所选图片仍须去重。返回前重读四份来源并核对输入，不授予请求预算或整篇通过资格。 |
 | `lib/reader-sealed-pdf-column-units.js` | Reader 封存 PDF 表格列单位的精确绑定与重放。 |
-| `reader_sealed_pdf_literal_column_units.py` | 日更真实封存 PDF 完整表的独立列单位证明；保留完整方法、数据集合并条件、双层分组头与均值±区间及全部原格，不依赖 HTML 显示等价。 |
+| `reader_sealed_pdf_literal_column_units.py` | 日更真实封存 PDF 完整表的独立列单位证明；保留完整方法、数据集合并条件、双层分组头、累计配置与组件/参数分带、均值±区间及全部原格，数学字形只按同表字体与位置证明投影，不依赖 HTML 显示等价。 |
 | `reader_grouped_vector_column_units.py` | 发布端重放与 Reader 相同的完整偏好向量表列单位；调用方先核四份封存来源及真实 PDF 引文，保留两层列路径、全部行和均值差合并格。 |
 | `lib/reader-authenticated-pdf-table-evidence.js` | 共用会议及历史真实 PDF 的私有来源能力，为正常 `source_quotes` 表派生唯一原表引文与严格行列单位证明；解析、恢复及保存后冷核使用同一实现，不制造 DOM 或放宽旧完整稿出版准入。 |
 | `lib/reader-source-table-column-units.js` | 在已核验的封存来源作用域中，以原 DOM 表、行名及同列单元格核对百分比单位；合并表头另须完整跨度覆盖、唯一指标路径及明确原表注。不改数字、单位或来源，冷态恢复与发布端同步重放。 |

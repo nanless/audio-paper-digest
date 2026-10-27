@@ -35,14 +35,17 @@ test('真实Noisy原PDF完整平表在日更四源scope热核与保存后冷核�
         const files = ['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json'].map(name =>
             path.join(plan.sourcesDir, fixture.paperId, 'generation-000001', name));
         const before = files.map(file => fs.readFileSync(file));
-        const table = { header: fixture.view[0], rows: fixture.view.slice(1) };
+        // The normal Reader parser inserts spaces around ±. Both literal
+        // values remain in the same cell and must still match the whole PDF.
+        const normalizedView = fixture.view.map(row => row.map(value => value.replace(/±/gu, ' ± ')));
+        const table = { header: normalizedView[0], rows: normalizedView.slice(1) };
         let evidence;
         await daily.withDailyFreshAnalysisContext(plan, () => {
             fresh.attachFreshSourceRecord(paper, paper.analysisManifest, source);
             return fresh.withFreshPaperContext(paper, () => quotes.withArtifacts(source.structuredArtifacts, fixture.paperId, () => {
                 evidence = quotes.evidenceForQuotes(fixture.pdfSourceQuotes);
                 const proof = columns.deriveBundle(quotes.verifiedSourceContext().expectation,
-                    fixture.view, fixture.pdfSourceQuotes);
+                    normalizedView, fixture.pdfSourceQuotes);
                 assert.equal(proof.contract, 'reader-sealed-pdf-literal-column-units-v1');
                 assert.equal(proof.valueOrigin, 'sealed_pdf');
                 assert.equal(proof.sourceTableOrdinal, undefined);
