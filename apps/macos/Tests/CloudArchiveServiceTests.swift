@@ -233,6 +233,21 @@ private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
                 try require(try await s.download(reference:state.reference)==small,"exact bytes retained under real-time timestamps")
             }
         }
+        for (instant,expectedMonth) in [("2026-10-31T23:59:59Z","2026-10"),("2026-11-01T00:00:00Z","2026-11")] {
+            await check("native snapshot reference uses UTC boundary "+instant) {
+                let date=ISO8601DateFormatter().date(from:instant)!,clock=CloudTestClock(date),dav=CloudTestDAV(),log=CloudCheckpointLog(),destination=UUID()
+                let original=try service(dav,log,destination:destination,clock:clock),info=try await original.upload(encodedBackup:small)
+                try require(info.reference.month==expectedMonth && info.createdAt==date,"native minted snapshot reference and manifest retain exact UTC instant/month")
+                guard let state=await log.latest() else{throw CloudTestError(message:"Missing native UTC checkpoint")}
+                let priorFiles=await dav.allFiles(),priorPuts=await dav.records().filter{$0.method=="PUT"}.count
+                clock.advance(2)
+                let resumed=try service(dav,log,destination:destination,clock:clock),repeated=try await resumed.upload(encodedBackup:small,resuming:state)
+                try require(repeated.reference==info.reference && repeated.createdAt==date,"resume after clock advances retains original month, UUID and timestamp")
+                let afterFiles=await dav.allFiles(),afterPuts=await dav.records().filter{$0.method=="PUT"}.count
+                try require(afterFiles==priorFiles && afterPuts==priorPuts,"UTC-boundary resume does not publish a new or overwritten version")
+                try require(try await resumed.download(reference:info.reference)==small,"UTC-boundary completed version actual GET returns original bytes")
+            }
+        }
         await check("complete immutable multi-chunk upload, month listing and original BackupCodec bytes") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
             let info=try await s.upload(encodedBackup:large)

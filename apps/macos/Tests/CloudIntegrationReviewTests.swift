@@ -114,6 +114,62 @@ private actor IntegrationDAV {
             app.model=ModelService(directory:d,store:app.store,keyProvider:{throw DesktopError.message("Credential fixture forbids model keys")})
             apps.append(app);return app
         }
+        if !CommandLine.arguments.contains("--credentials-only") {
+            // Run the actual scheduled callback once; no wall clock wait, system
+            // clock mutation, real account, credential store or network is used.
+            func scheduledApp(_ name:String)throws->(PaperDigestApp,CloudLocalStore,IntegrationDAV) {
+                let app=try credentialApp("schedule-"+name),dav=IntegrationDAV()
+                let transportService=try service(app,dav),local=try app.cloudLocalStore()
+                try local.save(account:local.profile.account,folder:local.profile.folder,automatic:true,intervalHours:24)
+                app.cloudArchive=transportService
+                app.cloudVaultLoadOverride={_ in throw DesktopError.message("Scheduled fixture forbids real credential access")}
+                return(app,local,dav)
+            }
+            let (scheduled,scheduledLocal,scheduledDAV)=try scheduledApp("actual-timer")
+            scheduled.currentPaperID="unrelated-current-paper"
+            scheduled.configureCloudSchedule();let retiredTimer=scheduled.cloudSchedule!
+            scheduled.configureCloudSchedule();let actualTimer=scheduled.cloudSchedule!
+            try check(!retiredTimer.isValid && actualTimer.isValid && actualTimer.timeInterval==300,"cloud configuration invalidates old timer and installs actual300s repeating callback")
+            actualTimer.fire()
+            try await wait("actual timer-created cloud upload terminal") {
+                !scheduled.cloudBusy && scheduled.jobs.isEmpty && scheduled.cloudActiveJobID==nil &&
+                (scheduled.store.snapshot()["jobs"] as! [[String:Any]]).contains{$0["command"] as? String=="cloud.upload" && $0["status"] as? String=="complete"}
+            }
+            let taskRows=scheduled.store.snapshot()["jobs"] as! [[String:Any]],uploadRows=taskRows.filter{$0["command"] as? String=="cloud.upload"}
+            try check(uploadRows.count==1 && uploadRows[0]["paperID"] as? String=="" && uploadRows[0]["endedAt"] != nil,"real timer uses one normal global workspace upload job and actual terminal status")
+            let calls=await scheduledDAV.records(),remoteFiles=await scheduledDAV.allFiles()
+            try check(calls.contains{$0.hasPrefix("PUT ")} && calls.contains{$0.hasPrefix("GET ")} && remoteFiles.keys.contains{$0.hasSuffix("manifest.json")},"actual timer completes original service PUT and full GET/manifest path")
+            guard let backup=scheduledLocal.profile.lastBackup else{throw DesktopError.message("Actual scheduled upload did not save completion")}
+            let downloaded=try await scheduled.cloudService().download(reference:.init(month:backup.month,id:backup.id)),decoded=try BackupCodec.parse(downloaded)
+            try check(decoded.files.contains{$0.path=="personal.json"} && (try scheduledLocal.pending())==nil,"actual scheduled snapshot is normally decodable and pending only clears after complete")
+            let completedCalls=await scheduledDAV.count(),completedJobs=try canonical(scheduled.store.snapshot()["jobs"]!)
+            await scheduled.performScheduledCloudBackupIfDue()
+            try check(await scheduledDAV.count()==completedCalls && (try canonical(scheduled.store.snapshot()["jobs"]!))==completedJobs,"awaited scheduled callback does not dispatch again before interval is due")
+            actualTimer.invalidate()
+            for guardName in ["cloudBusy","maintenance","termination","jobs","details","memoryPause","durablePause","notDue","disabled"] {
+                let (guarded,local,dav)=try scheduledApp(guardName)
+                switch guardName {
+                case "cloudBusy":guarded.cloudBusy=true
+                case "maintenance":guarded.maintenanceBusy=true
+                case "termination":guarded.terminationPending=true
+                case "jobs":guarded.jobs["owned-fixture-job"]=Task<[String:Any],Error>{[: ]}
+                case "details":guarded.storageDetailSession=StorageDetailSession(generation:0,paperID:"fixture-paper",previousResponder:nil)
+                case "memoryPause":guarded.cloudAutomaticPausedInMemory=true
+                case "durablePause":try local.pauseAutomatic(true)
+                case "notDue":try local.recordAttempt()
+                case "disabled":try local.save(account:local.profile.account,folder:local.profile.folder,automatic:false,intervalHours:24)
+                default:throw DesktopError.message("Unknown scheduled fixture guard")
+                }
+                let before=try canonical(guarded.store.snapshot()),profile=try Data(contentsOf:local.root.appendingPathComponent("profile.json"))
+                await guarded.performScheduledCloudBackupIfDue()
+                let requestCount=await dav.count()
+                try check(requestCount==0 && (try canonical(guarded.store.snapshot()))==before && (try Data(contentsOf:local.root.appendingPathComponent("profile.json")))==profile && (try local.pending())==nil,"awaited original callback guard "+guardName+" sends0transport and preserves personal/profile/pending")
+                if guardName=="disabled" {guarded.configureCloudSchedule();try check(guarded.cloudSchedule==nil,"disabled cloud automation creates no timer")}
+                guarded.jobs.removeAll();guarded.storageDetailSession=nil
+            }
+            print("Cloud schedule native focused: actualTimer1 normal callback plus nine independent guards completed; no real credentials/network")
+            if CommandLine.arguments.contains("--schedule-only") { print("Cloud schedule focused: \(passed) passed;0failed");return }
+        }
         for kind in ["missing-local-permission","private-provider-error"] {
             let app=try credentialApp(kind),local=try app.cloudLocalStore(),dav=IntegrationDAV()
             try local.save(account:"credential-fixture@example.invalid",folder:"CredentialFixture",automatic:true,intervalHours:24)

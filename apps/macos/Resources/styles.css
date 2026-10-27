@@ -1682,7 +1682,7 @@ kbd {
 .appearance-light {
   color-scheme: light;
 }
-.no-motion * {
+.reduce-motion * {
   scroll-behavior: auto !important;
   transition: none !important;
 }

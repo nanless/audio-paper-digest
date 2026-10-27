@@ -9,7 +9,7 @@ trap 'rm -rf "$test_work"' EXIT
 mkdir "$test_work/Sources"
 cp "$app_root"/Sources/*.swift "$test_work/Sources/"
 sources=("$test_work"/Sources/*.swift)
-for suite in DesktopStore BackupCodec ReleaseBootstrap ReleaseEmptyLibrary CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment; do
+for suite in DesktopStore BackupCodec ReleaseBootstrap ReleaseEmptyLibrary CloudArchiveService CloudSessionCredentials CloudIntegrationReview DesktopStorage DesktopStorageDetail DesktopNativeDetails DesktopNative DesktopEvidenceReview DesktopProvenanceReview DesktopContextReview DesktopArchiveIdentity DesktopReaderLink ModelEvidenceExport DesktopAppDocsEvidence DesktopDiagnostics LibraryService LibraryImageSources LibraryMathML PublishedSourceWarning PublishedAggregate AggregatePresentation AggregateResources AggregateResourceTransport AggregateResourceBudget AggregateSystemPaths ReaderSourceNoticeSnapshot ZoteroService NativeTaskPresentation NativeAggregateTask AggregateReady NativeTaskUsageAliases NativeTasksHostProtocol NativeTasksHostMain NativeTasksHostProgress NativeNotesHost NativeNotesHostMain NativeWorkspaceFocus NativeWorkspaceScroll NativeWorkspaceAttachment; do
   echo "正在核验 ${suite}（隔离临时资料，不访问用户文库或付费服务）"
   xcrun swiftc -parse-as-library -D PAPER_DIGEST_TESTS "${sources[@]}" "$app_root/Tests/${suite}Tests.swift" -o "$test_work/$suite"
   if [[ "$suite" == "ModelEvidenceExport" || "$suite" == "DesktopAppDocsEvidence" ]]; then
@@ -26,6 +26,7 @@ node "$app_root/Tests/LibraryMetadata.test.cjs"
 node "$app_root/Tests/LibraryReadingContinuity.test.cjs"
 node "$app_root/Tests/StartupResume.test.cjs"
 node "$app_root/Tests/SettingsUI.test.cjs"
+node "$app_root/Tests/ReducedMotion.test.cjs"
 node "$app_root/Tests/CloudUI.test.cjs"
 node "$app_root/Tests/ZoteroUI.test.cjs"
 node "$app_root/Tests/ZoteroSettingsIntegration.test.cjs"
@@ -70,6 +71,7 @@ node "$app_root/Tests/DesktopDetailContainer.test.cjs"
 node "$app_root/Tests/AggregateImagesUI.test.cjs"
 node "$app_root/Tests/AggregateMathUI.test.cjs"
 node "$app_root/Tests/AggregateFocusUI.test.cjs"
+node "$app_root/Tests/AggregateReadyUI.test.cjs"
 node "$app_root/Tests/SearchNavigationFocus.test.cjs"
 node "$app_root/Tests/PublishedHeadingMatch.test.cjs"
 bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"

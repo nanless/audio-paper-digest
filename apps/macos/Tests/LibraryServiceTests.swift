@@ -386,6 +386,44 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(await library.list(minimumScore:7.5).count==5,"score filters use published decimal strings and numeric values consistently")
         print("ROUND 11 published score scalar: PASS")
     }
+    @MainActor static func testPersonalCatalogJoin() async throws {
+        let folder=try temporary();defer{try? FileManager.default.removeItem(at:folder)}
+        let a=row("2501.00001",slug:"join-a",title:"Alpha",date:"2026-01-01"),b=row("2501.00002",slug:"join-b",title:"Beta",date:"2026-01-02")
+        let aid="arxiv:2501.00001",bid="arxiv:2501.00002"
+        let transport=LibraryFixtureTransport(try fixture([[a,b]])),library=try service(folder,transport)
+        _=try await library.sync()
+        let store=try DesktopStore(directory:folder)
+        try store.setList("favorites",ids:[aid]);try store.setList("reading",ids:[aid,bid])
+        _=try store.saveNote(id:aid,text:"Personal A remains A",baseRevision:0)
+        _=try store.saveNote(id:bid,text:"Personal B remains B",baseRevision:0)
+        try store.saveReading(id:aid,state:["guideScroll":1234,"pdfPage":5,"pdfOpen":true])
+        try store.saveReading(id:bid,state:["guideScroll":22,"pdfPage":2,"pdfOpen":false])
+        try store.rememberPaper(["id":aid,"title":"Alpha","sourceKind":"arxiv"])
+        let personalFile=folder.appendingPathComponent("personal.json"),original=try Data(contentsOf:personalFile)
+        func unchanged(_ phase:String)throws {
+            try expect(try Data(contentsOf:personalFile)==original,phase+" normal catalog sync preserves every personal file byte")
+            let cold=try DesktopStore(directory:folder),state=cold.snapshot()
+            try expect(state["favorites"] as? [String]==[aid] && (state["reading"] as? [String])?.count==2 && Set(state["reading"] as? [String] ?? [])==Set([aid,bid]),phase+" cold list counts and exact identities remain1/2")
+            let notes=state["notes"] as! [String:[String:Any]],reading=state["readingState"] as! [String:[String:Any]]
+            try expect(notes[aid]?["text"] as? String=="Personal A remains A" && notes[bid]?["text"] as? String=="Personal B remains B",phase+" no cross-paper note reassignment")
+            try expect(reading[aid]?["pdfPage"] as? Int==5 && reading[aid]?["guideScroll"] as? Int==1234 && reading[bid]?["pdfPage"] as? Int==2,phase+" reading positions stay with their original IDs")
+            try expect((state["personalPapers"] as? [String:[String:Any]])?[aid]?["title"] as? String=="Alpha",phase+" original saved-paper fallback remains available")
+        }
+        let renamed=row("2501.00001",slug:"join-a",title:"Alpha corrected",date:"2026-02-01")
+        for(path,bytes) in try fixture([[renamed,b]]){await transport.update(path,bytes)}
+        let corrected=try await library.sync(),correctedRows=await library.list()
+        try expect(corrected.paperCount==2 && correctedRows.first{$0.id==aid}?.title=="Alpha corrected","normal renamed catalog retains stable A identity and updated public title")
+        try unchanged("rename")
+        for(path,bytes) in try fixture([[b]]){await transport.update(path,bytes)}
+        let removed=try await library.sync(),remaining=await library.list()
+        try expect(removed.missingFromLatest==[aid] && remaining.map(\.id)==[bid],"normal full snapshot removal flags only A without turning it into B or a retraction")
+        try unchanged("remove")
+        for(path,bytes) in try fixture([[renamed,b]]){await transport.update(path,bytes)}
+        let restored=try await library.sync(),coldLibrary=try service(folder,transport),coldRows=await coldLibrary.list()
+        try expect(restored.missingFromLatest.isEmpty && Set(coldRows.map(\.id))==Set([aid,bid]) && coldRows.first{$0.id==aid}?.title=="Alpha corrected","normal restore and new LibraryService reload expose the same two public identities")
+        try unchanged("restore")
+        print("ROUND 12 seeded personal/catalog rename-remove-restore join: PASS")
+    }
     static func liveArticle() async throws {
         let folder=try temporary();defer{try? FileManager.default.removeItem(at:folder)}
         let seed=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("prototypes/macos-research")
@@ -421,6 +459,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
     static func main() async {
         do {
             if let option=CommandLine.arguments.firstIndex(of:"--pdf-loopback"),CommandLine.arguments.count>option+1 {try await testMutablePDFLoopback(CommandLine.arguments[option+1])}
+            else if CommandLine.arguments.contains("--personal-sync-only") { try await testPersonalCatalogJoin() }
             else if CommandLine.arguments.contains("--live") { try await live() }
             else if CommandLine.arguments.contains("--article-live") { try await liveArticle() }
             else if CommandLine.arguments.contains("--citations-live") { try await liveCitations() }
@@ -436,6 +475,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
                 try await testPDFVersionContract()
                 try await testStrictLegacyIdentifiers()
                 try await testPublishedScoreScalar()
+                try await testPersonalCatalogJoin()
             }
             print("PASS \(assertions) assertions")
         } catch { fputs("FAIL: \(error.localizedDescription)\n", stderr); exit(1) }

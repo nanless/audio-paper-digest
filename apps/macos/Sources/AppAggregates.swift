@@ -8,6 +8,10 @@ import WebKit
     var access: AggregateReadAccess?
     var document: AggregatePresentationDocument?
     var loading = false
+    // Minted only for the latest native-served presentation; never a source capability.
+    var readyNonce: String?
+    var readyDisplaySHA: String?
+    var readyPosted = false
     init(generation: Int, aggregateID: String) { self.generation = generation; self.aggregateID = aggregateID }
 }
 
@@ -56,7 +60,11 @@ extension PaperDigestApp {
         try store.upsertJob(row)
         emit("jobs.changed")
     }
-    func dispatchAggregates(_ command: String, payload: [String: Any]) async throws -> [String: Any] {
+    static func postAggregateLayoutChanged(_ web: WKWebView) {
+        NSAccessibility.post(element: web, notification: .layoutChanged, userInfo: [.uiElements: [web]])
+    }
+    func dispatchAggregates(_ command: String, payload: [String: Any],
+                            notifyLayout: @MainActor (WKWebView) -> Void = PaperDigestApp.postAggregateLayoutChanged) async throws -> [String: Any] {
         if command == "aggregates.list" {
             guard payload.isEmpty else { throw DesktopError.message("汇总目录不接受自报来源") }
             guard let catalog = try await library.aggregateCatalog() else { return ["records": [], "available": false, "notice": "当前目录没有可核验的汇总见证，请同步来源后读取已发布汇总"] }
@@ -83,6 +91,24 @@ extension PaperDigestApp {
             aggregateSession = session
             return ["id": id, "sessionID": session.id, "contextGeneration": session.generation]
         }
+        if command == "aggregates.viewReady" {
+            guard Set(payload.keys) == ["id", "sessionID", "documentReadyNonce", "displayBodySHA256"] else { throw DesktopError.message("汇总就绪回执字段无效") }
+            let session = try aggregateSession(payload)
+            try requireAggregateTransitionAvailable()
+            guard !aggregateTransitionPending, !session.loading, !session.readyPosted,
+                  let access = session.access, let document = session.document,
+                  document.source.descriptor == access.descriptor,
+                  let nonce = session.readyNonce, payload["documentReadyNonce"] as? String == nonce,
+                  let displaySHA = session.readyDisplaySHA, payload["displayBodySHA256"] as? String == displaySHA,
+                  displaySHA == PublishedAggregateReader.sha(Data(document.displayHTML.utf8)),
+                  let web = web, let window = window, web.window === window,
+                  window.isVisible, !web.isHiddenOrHasHiddenAncestor else { throw DesktopError.message("汇总就绪回执已失效") }
+            // No suspension between the current-owner check and the public layout notification.
+            // This updates accessibility layout only; it grants no reading or write capability.
+            session.readyPosted = true
+            notifyLayout(web)
+            return ["accepted": true]
+        }
         guard Set(payload.keys).isSubset(of: ["id", "sessionID", "index"]) else { throw DesktopError.message("汇总操作不接受正文或任意地址") }
         if command == "aggregates.leave" {
             // A delayed leave for an older presentation cannot close a newer context.
@@ -92,6 +118,7 @@ extension PaperDigestApp {
         let session = try aggregateSession(payload)
         if command == "aggregates.document" {
             guard !session.loading else { throw DesktopError.message("汇总正文正在读取") }
+            session.readyNonce = nil; session.readyDisplaySHA = nil; session.readyPosted = false
             session.loading = true
             defer { session.loading = false }
             return try await runJob(command, payload: [:], identifier: session.id) { _ in
@@ -109,6 +136,10 @@ extension PaperDigestApp {
                 try self.requireMainContextAvailable()
                 session.document = document
                 var value = try document.bridgeValue()
+                let nonce = UUID().uuidString.lowercased()
+                session.readyNonce = nonce
+                session.readyDisplaySHA = PublishedAggregateReader.sha(Data(document.displayHTML.utf8))
+                value["documentReadyNonce"] = nonce
                 value["sessionID"] = session.id; value["contextGeneration"] = session.generation
                 return value
             }

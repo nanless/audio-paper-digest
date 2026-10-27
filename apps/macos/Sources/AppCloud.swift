@@ -308,14 +308,15 @@ actor CloudCredentialSession {
         cloudSchedule?.invalidate(); cloudSchedule = nil
         guard let local = try? cloudLocalStore(), local.profile.automatic else { return }
         cloudSchedule = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, !self.cloudBusy, !self.maintenanceBusy, !self.terminationPending, !self.cloudAutomaticPausedInMemory,
-                      self.jobs.isEmpty, !self.storageDetailsActive,
-                      let local = try? self.cloudLocalStore(), local.profile.automatic, self.cloudAutomaticPermitted(profile: local.profile),
-                      Date().timeIntervalSince(local.profile.lastAttemptAt ?? .distantPast) >= Double(local.profile.intervalHours) * 3600 else { return }
-                do { _ = try await self.dispatchCloud("cloud.upload", payload: [:]) }
-                catch { self.emit("cloud.changed") }
-            }
+            Task { @MainActor in await self?.performScheduledCloudBackupIfDue() }
         }
+    }
+    func performScheduledCloudBackupIfDue() async {
+        guard !cloudBusy, !maintenanceBusy, !terminationPending, !cloudAutomaticPausedInMemory,
+              jobs.isEmpty, !storageDetailsActive,
+              let local = try? cloudLocalStore(), local.profile.automatic, cloudAutomaticPermitted(profile: local.profile),
+              Date().timeIntervalSince(local.profile.lastAttemptAt ?? .distantPast) >= Double(local.profile.intervalHours) * 3600 else { return }
+        do { _ = try await dispatchCloud("cloud.upload", payload: [:]) }
+        catch { emit("cloud.changed") }
     }
 }
