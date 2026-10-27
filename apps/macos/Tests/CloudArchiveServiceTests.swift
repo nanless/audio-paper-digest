@@ -159,6 +159,21 @@ private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 #endif
+/// Hold the first chunk PUT from each independent client before forwarding to
+/// the existing controlled HTTP origin. No production timing or transport changes.
+private actor CloudIndependentPublishGate {
+    private var clients: Set<String> = []
+    private var waiting: [CheckedContinuation<Void,Never>] = []
+    private var released=false
+    func wait(_ request: URLRequest) async {
+        guard request.httpMethod == "PUT", let path=request.url?.path,
+              path.hasSuffix("chunk-000000.bin"),clients.insert(path).inserted else{return}
+        if released{return}
+        await withCheckedContinuation{waiting.append($0)}
+    }
+    func count()->Int{clients.count}
+    func release(){released=true;let values=waiting;waiting=[];for value in values{value.resume()}}
+}
 @main struct CloudArchiveServiceTests {
     static func main() async throws {
         var passed=0, failures:[String]=[]
@@ -336,6 +351,34 @@ private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
             try require(first.reference != second.reference,"fresh random UUID")
             try require(old.allSatisfy{all[$0.key]==$0.value},"all old object bytes preserved")
             try require(await dav.records().allSatisfy{!["DELETE","MOVE","COPY"].contains($0.method)},"no deletion or version overwrite operation")
+        }
+        await check("two independent destination clients concurrently publish identical bytes without altering any prior version") {
+            let dav=CloudTestDAV(),initialLog=CloudCheckpointLog(),initial=try service(dav,initialLog)
+            let original=try await initial.upload(encodedBackup:small),old=await dav.allFiles()
+            let gate=CloudIndependentPublishGate(),leftLog=CloudCheckpointLog(),rightLog=CloudCheckpointLog(),leftID=UUID(),rightID=UUID()
+            func client(_ destination:UUID,_ log:CloudCheckpointLog)throws->CloudArchiveService{
+                try CloudArchiveService(destinationID:destination,credentials:{.init(username:"fixture@example.invalid",password:"synthetic-app-password")},checkpointSink:{try await log.save($0)},transport:{request,limit in await gate.wait(request);return try await dav.request(request,limit:limit)},minimumRequestInterval:0)
+            }
+            let left=try client(leftID,leftLog),right=try client(rightID,rightLog)
+            let leftTask=Task{try await left.upload(encodedBackup:small)},rightTask=Task{try await right.upload(encodedBackup:small)}
+            let deadline=Date().addingTimeInterval(5)
+            while await gate.count()<2 && Date()<deadline{try await Task.sleep(nanoseconds:10_000_000)}
+            let bothActuallyHeld=await gate.count()==2,whileHeld=await dav.allFiles()
+            await gate.release()
+            // Consume both terminal results before any assertion can leave an owned task behind.
+            let leftResult=await leftTask.result,rightResult=await rightTask.result
+            let a=try leftResult.get(),b=try rightResult.get()
+            try require(bothActuallyHeld && whileHeld==old,"both independent clients must reach their real chunk PUT before either writes")
+            try require(Set([original.reference.id,a.reference.id,b.reference.id]).count==3,"identical bytes must retain three distinct immutable versions")
+            let final=await dav.allFiles(),records=await dav.records()
+            try require(old.allSatisfy{final[$0.key]==$0.value},"every old chunk and manifest byte remains")
+            try require(records.allSatisfy{!["DELETE","MOVE","COPY"].contains($0.method)} && records.filter{$0.method=="PUT"}.allSatisfy{$0.createOnly},"no overwrite or destructive method")
+            let leftCheckpoint=await leftLog.latest(),rightCheckpoint=await rightLog.latest()
+            try require(leftCheckpoint?.destinationID==leftID && rightCheckpoint?.destinationID==rightID && leftCheckpoint?.manifestVerified==true && rightCheckpoint?.manifestVerified==true,"each independent client retains its own target/checkpoint and real final manifest")
+            let leftBytes=try await left.download(reference:a.reference),rightBytes=try await right.download(reference:b.reference),oldBytes=try await initial.download(reference:original.reference)
+            try require(leftBytes==small && rightBytes==small && oldBytes==small,"all three versions must GET back the original whole backup")
+            let listed=try await left.list(month:a.reference.month)
+            try require(Set(listed.map{$0.reference.id})==Set([original.reference.id,a.reference.id,b.reference.id]),"shared month lists every completed independent version")
         }
         await check("connection probe requires a real successful DAV root collection, not HTTP207 alone") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)

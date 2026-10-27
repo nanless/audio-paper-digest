@@ -685,6 +685,57 @@ private final class MockZotero: @unchecked Sendable {
             try require(backend.requests.filter{$0.0 != "GET"}.count==writesBeforeLegacy && credentials.loads==readsBeforeForeign,"restore refuses foreign journal before reading another server credential")
             passed += 1
         }
+        do {
+            let (service,backend,credentials)=try fixture()
+            let a="TARG2222",b="TARG3333"
+            backend.collections=[a:["key":a,"version":1,"data":["name":"Controlled original target"]],b:["key":b,"version":1,"data":["name":"Controlled other target"]]]
+            var request=input;request.collectionKey=a;request.collectionName=nil
+            let first=try await service.archive(request)
+            try require(first.status=="complete","original exact target must really archive before testing retarget rejection")
+            let journal=root.appendingPathComponent("zotero-archives/"+first.archiveID+".json"),before=try Data(contentsOf:journal),objects=try JSONSerialization.data(withJSONObject:backend.objects,options:[.sortedKeys]),files=backend.files
+            let writes=backend.requests.filter{$0.0 != "GET"}.count,loads=credentials.loads
+            var retarget=request;retarget.collectionKey=b
+            do{_=try await service.archive(retarget,resumeID:first.archiveID);throw NSError(domain:"expected retarget rejection",code:1)}catch ZoteroService.ServiceError.invalid{}
+            try require(try Data(contentsOf:journal)==before && JSONSerialization.data(withJSONObject:backend.objects,options:[.sortedKeys])==objects && backend.files==files,"changed collection must preserve original journal, parent/role objects and original files exactly")
+            try require(backend.requests.filter{$0.0 != "GET"}.count==writes && credentials.loads==loads,"retarget old journal cannot write or load a new grant")
+            let parent=backend.objects[first.parentKey!]!["data"] as! [String:Any]
+            try require(parent["collections"] as? [String]==[a],"old mapping must remain only its original collection, not the available other/default collection")
+            print("PASS changed collection rejects old journal before write and preserves original mapping")
+            passed += 1
+        }
+        do {
+            let (service,backend,_)=try fixture(),a="TARG2222",b="TARG3333"
+            let originalCollection:[String:Any]=["key":a,"version":1,"data":["name":"Controlled original target"]]
+            backend.collections=[a:originalCollection,b:["key":b,"version":1,"data":["name":"Controlled other target"]]]
+            var request=input;request.collectionKey=a;request.collectionName=nil
+            let first=try await service.archive(request)
+            try require(first.status=="complete","original target must be a real completed normal archive")
+            let journal=root.appendingPathComponent("zotero-archives/"+first.archiveID+".json"),before=try Data(contentsOf:journal),objects=try JSONSerialization.data(withJSONObject:backend.objects,options:[.sortedKeys]),files=backend.files,writes=backend.requests.filter{$0.0 != "GET"}.count
+            func mapping(_ data:Data)throws->Data{
+                let j=try JSONSerialization.jsonObject(with:data) as! [String:Any]
+                let steps=(j["steps"] as! [[String:Any]]).map{["role":$0["role"]!,"key":$0["key"] ?? NSNull()]}
+                return try JSONSerialization.data(withJSONObject:["serverID":j["serverID"]!,"fingerprint":j["fingerprint"]!,"request":j["request"]!,"collectionKey":j["collectionKey"]!,"parentKey":j["parentKey"]!,"steps":steps],options:[.sortedKeys])
+            }
+            let bound=try mapping(before)
+            backend.collections[a]=nil
+            let absent=try await service.archive(request,resumeID:first.archiveID)
+            try require(absent.status=="partial" && absent.archiveID==first.archiveID && absent.parentKey==first.parentKey && absent.steps.first{$0.role=="bibliography"}?.verified==false,"removed old target cannot keep a green completion")
+            try require(try mapping(Data(contentsOf:journal))==bound && backend.requests.filter{$0.0 != "GET"}.count==writes,"missing target cannot remap to remaining other collection or write")
+            backend.collections[a]=originalCollection
+            var forbiddenReads=0
+            ZoteroMockProtocol.handler={r in
+                if r.httpMethod=="GET",r.url?.path=="/api/users/0/collections"{forbiddenReads+=1;backend.requests.append(("GET","/api/users/0/collections"));return(403,["X-Zotero-Version":backend.version,"Zotero-API-Version":"3","Zotero-Server-ID":backend.serverID,"Content-Type":"application/json"],Data("{}".utf8))}
+                return try backend.response(r)
+            }
+            let denied=try await service.archive(request,resumeID:first.archiveID)
+            try require(forbiddenReads==1 && denied.status=="partial" && denied.steps.first{$0.role=="bibliography"}?.error?.contains("403")==true,"actual controlled HTTP403 remains explicit incomplete permission failure")
+            try require(try mapping(Data(contentsOf:journal))==bound && JSONSerialization.data(withJSONObject:backend.objects,options:[.sortedKeys])==objects && backend.files==files && backend.requests.filter{$0.0 != "GET"}.count==writes,"forbidden old target must preserve original keys/source/parent/bytes and never use default target")
+            ZoteroMockProtocol.handler={try backend.response($0)}
+            let recovered=try await service.archive(request,resumeID:first.archiveID)
+            try require(recovered.status=="complete" && recovered.archiveID==first.archiveID && recovered.parentKey==first.parentKey && mapping(Data(contentsOf:journal))==bound && backend.requests.filter{$0.0 != "GET"}.count==writes,"normal reauthorization/readback of available original target must reuse original mapping without any new object/write")
+            print("PASS missing or HTTP403 old target preserves exact mapping then resumes original target readback")
+            passed += 1
+        }
         if FileManager.default.fileExists(atPath:"/Applications/Zotero.app/Contents/Resources/app/omni.ja") {
             let script=URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("ZoteroNoteTitleContract.test.cjs")
             let process=Process(),stdin=Pipe(),output=Pipe();process.executableURL=URL(fileURLWithPath:"/usr/bin/env");process.arguments=["node",script.path];process.standardInput=stdin;process.standardOutput=output;process.standardError=output
