@@ -414,11 +414,30 @@ function sealCompletion(paper,result){
 }
 function validateCompletion(paper){
     const checked=readVerifiedCompletion(paper);if(!checked)return true;
-    return require('./reader-dom-span-projection').withSavedPaper(paper,()=>
+    const daily=require('./daily-fresh-source-plan'),paperSha256=stableSha(paper);
+    const runReference=daily.dailyFreshSourceReference(checked.plan);
+    // The sealed record supplies the actual run, not a caller-authored scope.
+    // Cold replay must derive its parser capabilities from the same verified
+    // daily source as normal parsing; saved evidence alone cannot authorize a
+    // separately reread artifacts object.
+    try {
+        const result=require('./analysis-stop-control').withModelRequestsForbidden(()=>
+        daily.withDailyFreshAnalysisContext(checked.plan,()=>
+        require('./fresh-analysis-context').withFreshPaperContext(paper,()=>
+        require('./reader-dom-span-projection').withSavedPaper(paper,()=>
         require('./reader-table-pdf-evidence').withSavedPaper(paper,()=>
         require('./reader-sealed-pdf-quote-evidence').withSavedPaper(paper,()=>
         require('./reader-source-table-column-units').withSavedPaper(paper,()=>
-        require('./reader-authenticated-pdf-table-evidence').withSavedPaper(paper,()=>replayNormalCompletion(paper,checked))))));
+        require('./reader-authenticated-pdf-table-evidence').withSavedPaper(paper,()=>replayNormalCompletion(paper,checked)))))))));
+        if(result&&typeof result.then==='function')fail('cold completion replay must remain synchronous','run');
+        return result;
+    } finally {
+        const after=readVerifiedCompletion(paper);
+        if(stableSha(paper)!==paperSha256||!after||!isDeepStrictEqual(after.saved,checked.saved)
+            ||!isDeepStrictEqual(after.source,checked.source)
+            ||!isDeepStrictEqual(daily.dailyFreshSourceReference(after.plan),runReference))
+            fail('cold completion paper/run/source/records changed during replay','run');
+    }
 }
 function readVerifiedCompletion(paper){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
@@ -428,7 +447,8 @@ function readVerifiedCompletion(paper){
         if(marked)fail('ordinary completion cannot leave canonical daily source','run');return null;
     }
     const runFile=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId,'run.json');
-    const actualDaily=fs.existsSync(runFile)&&read(runFile).value.contract===require('./fresh-analysis-context').DAILY_SOURCE_RUN_CONTRACT;
+    const actualRun=fs.existsSync(runFile)?read(runFile).value:null;
+    const actualDaily=actualRun?.contract===require('./fresh-analysis-context').DAILY_SOURCE_RUN_CONTRACT;
     if(!actualDaily){if(marked)fail('ordinary completion cannot leave canonical daily source','run');return null;}
     if(!/^\d{4}\.\d{4,5}$/.test(canonical(paper)))fail('actual daily source lacks canonical paper ID','run');
     const attempts=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId,'reader-attempts'),dir=completionDirectory(attempts),files=completionFiles(dir,paper);
@@ -446,7 +466,13 @@ function readVerifiedCompletion(paper){
         ||!isDeepStrictEqual(saved.stage,stageCore(stage)))fail('normal final completion/source/stage differs','run');
     let last;
     for(const record of saved.records)last=replay({paper,identity:record.identity,directory:attempts,requestId:record.requestId,pins:record.pins});
-    const source=savedSourceScope(paper,saved.identity,attempts);return{source,last,saved};
+    const source=savedSourceScope(paper,saved.identity,attempts);
+    const daily=require('./daily-fresh-source-plan');
+    const plan=daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({
+        ...actualRun,runDir:path.dirname(runFile)
+    }));
+    if(!daily.isPaperBoundToPlan(paper,plan))fail('saved completion is outside actual daily plan','run');
+    return{source,last,saved,plan};
 }
 function replayNormalCompletion(paper,{source,last,saved}){
     const deep=require('../deep-analyzer');
