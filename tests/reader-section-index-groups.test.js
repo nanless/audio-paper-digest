@@ -111,8 +111,10 @@ test('公开请求记录绑定索引协议与实现SHA，只用原两次额度�
     assert.equal(requestRecord.identity.repairImplementationSha256,
         repair.shaText([
             '../scripts/lib/reader-repair.js',
+            '../scripts/lib/reader-target-ordinal-patch.js',
             '../prompts/api-reader-concept-terms-v1.md',
-            '../prompts/api-reader-repair-v11.md'
+            '../prompts/api-reader-repair-v11.md',
+            '../scripts/lib/reader-request-diagnostics.js'
         ].map(file => file.startsWith('../prompts/')
             ? require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(file.slice(3)).toString('utf8')
             : fs.readFileSync(require.resolve(file), 'utf8')).join('\0')));

@@ -5349,7 +5349,7 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
         // 损失名称的方向与阶段开关的身份须结合来源判断；仅相应歧义重放
         // 正常封存来源，不能从调用方字符串或错误文字授予身份。
         if (options.paper && tableIssue
-            && (/^实验结果第 \d+ 张表指标“(?:损失|loss)”缺少 ↑\/↓ 方向$/i.test(tableIssue)
+            && (/^实验结果第 \d+ 张表指标“(?:损失|loss|波形损失归一化|损失归一化|waveform[- ]loss normalization|语谱图辅助损失|auxiliary spectrogram loss)”缺少 ↑\/↓ 方向$/i.test(tableIssue)
                 || /^实验结果第 \d+ 张表缺少方法、数据集或设置识别列$/u.test(tableIssue))) {
             const sourceText = coreSummaryBoundMethodSource(options.paper);
             tableIssue = validateExperimentTableContract(analysis, { ...tableOptions, sourceText });
