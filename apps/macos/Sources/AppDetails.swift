@@ -33,6 +33,8 @@ extension PaperDigestApp {
         if NSApp.isRunning{NSSound.beep()};return false
     }
     func validateMenuItem(_ item:NSMenuItem)->Bool {
+        if item.action == #selector(focusAggregateBody){return aggregateNativeHost?.bodyFocusAvailable == true}
+        if item.action == #selector(focusAggregateNavigation){return aggregateNativeHost?.navigationFocusAvailable == true}
         if aggregateSession != nil || aggregateTransitionPending {let paperActions:[Selector]=[#selector(togglePDF),#selector(printPDF),#selector(exportResearch)];if paperActions.contains(where:{item.action==$0}){return false}}
         guard storageDetailsActive else{return true}
         let actions:[Selector]=[#selector(toggleSidebar),#selector(togglePDF),#selector(findCurrent),#selector(findLibrary),#selector(fontLarger),#selector(fontSmaller),#selector(fullScreen),#selector(helpPage),#selector(openLocal),#selector(exportResearch),#selector(restore),#selector(printPDF),#selector(backup),#selector(exportDiagnostics)]

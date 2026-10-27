@@ -17,6 +17,7 @@ import WebKit
 
 extension PaperDigestApp {
     func retireAggregateContext() {
+        retireNativeAggregate()
         aggregateOpenSequence += 1
         aggregateTransitionPending = false
         if let session = aggregateSession { jobs[session.id]?.cancel() }
@@ -91,6 +92,7 @@ extension PaperDigestApp {
             aggregateSession = session
             return ["id": id, "sessionID": session.id, "contextGeneration": session.generation]
         }
+        if command == "aggregates.nativePresent" { return try await presentNativeAggregate(payload) }
         if command == "aggregates.viewReady" {
             guard Set(payload.keys) == ["id", "sessionID", "documentReadyNonce", "displayBodySHA256"] else { throw DesktopError.message("汇总就绪回执字段无效") }
             let session = try aggregateSession(payload)

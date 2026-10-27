@@ -36,8 +36,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
 @MainActor final class PaperDigestApp:NSObject,NSApplicationDelegate,WKScriptMessageHandlerWithReply,WKNavigationDelegate,NSWindowDelegate,NSMenuItemValidation {
     var window:NSWindow!, web:WKWebView!, toolbar:NSToolbar!, settingsWindow:NSWindow?
     var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!
-    var terminationPending=false {didSet{if terminationPending{nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout")}}}
-    var maintenanceBusy=false {didSet{if maintenanceBusy{nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout")}}}
+    var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
+    var maintenanceBusy=false {didSet{if maintenanceBusy{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var cloudLocal:CloudLocalStore?,cloudArchive:CloudArchiveService?
     var cloudBusy=false,cloudCredentialState="unknown"
     var cloudAutomaticPausedInMemory=false
@@ -54,11 +54,12 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var pendingPDFPage:Int?
     var nativeTaskWindowID=UUID(),nativeTaskDocumentID=UUID()
     var nativeTaskController:NativeTasksController?,nativeTaskCoordinator:NativeTaskHostCoordinator?
-    var nativeTasksRequestedVisible=false
+    var nativeTasksRequestedVisible=false {didSet{if nativeTasksRequestedVisible{retireNativeAggregate()}}}
     var nativeNotesWindowID=UUID()
     var nativeNotesController:NativeNotesController?,nativeNotesCoordinator:NativeNotesHostCoordinator?
-    var nativeNotesRequestedVisible=false
+    var nativeNotesRequestedVisible=false {didSet{if nativeNotesRequestedVisible{retireNativeAggregate()}}}
     var aggregateSession:AggregateViewSession?,aggregateOpenSequence=0,aggregateTransitionPending=false
+    var aggregateNativeHost:NativeAggregateController?, aggregateNativeSequence:Int64=0
     var contextGeneration=0 {didSet{if oldValue != contextGeneration{nativeWorkspaceContextDidChange()}}}
     var pdfOwner="",pdfVersion=""
     var pdfView=PDFView(), currentPDFSHA="", currentPaperID="", currentPDFPath:URL?, currentPaper:[String:Any]=[:], currentArticle:[String:Any]=[:]
@@ -69,7 +70,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var settingsPaneRequest:String?
     var settingsPaneRequestID=UUID()
     var storageDetailWindow:NSWindow?,storageDetailWeb:WKWebView?
-    var storageDetailSession:StorageDetailSession? {didSet{if storageDetailSession != nil{nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue != nil{emit("nativeNotes.layout")}}}
+    var storageDetailSession:StorageDetailSession? {didSet{if storageDetailSession != nil{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue != nil{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var storageDetailBusy=false,storageDetailSystemPanel=false
     var storageDetailDocumentAccess:DetailDocumentAccess?
     var storageDetailArchiveMaterials:[String:Any]?
@@ -88,7 +89,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         } catch { showError(error); NSApp.terminate(nil) }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool{false}
-    func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {window.makeKeyAndOrderFront(nil);emit("nativeTasks.layout");emit("nativeNotes.layout");return true}
+    func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool {window.makeKeyAndOrderFront(nil);emit("nativeTasks.layout");emit("nativeNotes.layout");restoreNativeAggregateLayout();return true}
     func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
         guard !terminationPending,!maintenanceBusy,!storageDetailBusy,!storageDetailSystemPanel else{return .terminateCancel}
         if !jobs.isEmpty {
@@ -116,7 +117,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if sender===storageDetailWindow {_=closeStorageDetails();return false}
         if sender===window,storageDetailsActive {_=mainContextMenuAvailable();return false}
         guard sender===window || sender===settingsWindow else{return true}
-        Task{do{try await flushEdits();if sender===self.window{self.nativeTasksRequestedVisible=false;self.retireNativeTasks(restoreFocus:true);self.nativeNotesRequestedVisible=false;self.retireNativeNotes(restoreFocus:true)};sender.orderOut(nil)}catch{showError(error)}};return false
+        Task{do{try await flushEdits();if sender===self.window{self.suspendNativeAggregate();self.nativeTasksRequestedVisible=false;self.retireNativeTasks(restoreFocus:true);self.nativeNotesRequestedVisible=false;self.retireNativeNotes(restoreFocus:true)};sender.orderOut(nil)}catch{showError(error)}};return false
     }
     func buildWindow() {
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1440,height:900),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
@@ -146,7 +147,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         let edit=group("编辑")
         for (title,selector,key) in [("撤销",Selector(("undo:")),"z"),("重做",Selector(("redo:")),"Z"),("剪切",#selector(NSText.cut(_:)),"x"),("复制",#selector(NSText.copy(_:)),"c"),("粘贴",#selector(NSText.paste(_:)),"v"),("全选",#selector(NSText.selectAll(_:)),"a")] {edit.addItem(withTitle:title,action:selector,keyEquivalent:key)}
         edit.addItem(.separator());action(edit,"查找当前文档…",#selector(findCurrent),"f");action(edit,"搜索全部论文",#selector(findLibrary),"f",[.command,.shift])
-        let view=group("显示");action(view,"显示/隐藏侧栏",#selector(toggleSidebar),"s",[.command,.control]);action(view,"打开/关闭 PDF",#selector(togglePDF),"d",[.command,.shift]);action(view,"放大正文",#selector(fontLarger),"+");action(view,"缩小正文",#selector(fontSmaller),"-");action(view,"进入/退出全屏",#selector(fullScreen),"f",[.command,.control])
+        let view=group("显示");action(view,"阅读正文",#selector(focusAggregateBody),"\t",[.control]);action(view,"返回页面导航",#selector(focusAggregateNavigation),"\t",[.control,.shift]);action(view,"显示/隐藏侧栏",#selector(toggleSidebar),"s",[.command,.control]);action(view,"打开/关闭 PDF",#selector(togglePDF),"d",[.command,.shift]);action(view,"放大正文",#selector(fontLarger),"+");action(view,"缩小正文",#selector(fontSmaller),"-");action(view,"进入/退出全屏",#selector(fullScreen),"f",[.command,.control])
         let win=group("窗口");win.addItem(withTitle:"最小化",action:#selector(NSWindow.performMiniaturize(_:)),keyEquivalent:"m");win.addItem(withTitle:"缩放",action:#selector(NSWindow.performZoom(_:)),keyEquivalent:"");NSApp.windowsMenu=win
         let help=group("帮助");action(help,"使用说明",#selector(helpPage));action(help,"导出诊断…",#selector(exportDiagnostics));action(help,"在 Finder 查看资料",#selector(revealData))
     }
@@ -211,7 +212,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func emit(_ name:String,_ object:[String:Any]=[:],to targets:[WKWebView]?=nil) {
         if name=="jobs.changed"{nativeTaskController?.reload()}
         if name=="personal.changed"{nativeWorkspaceContextDidChange()}
-        if name=="settings.changed"{applyApplicationAppearance();updateNativeTasksAppearance();updateNativeNotesAppearance()}
+        if name=="settings.changed"{applyApplicationAppearance();updateNativeTasksAppearance();updateNativeNotesAppearance();updateNativeAggregateAppearance()}
         guard JSONSerialization.isValidJSONObject(object),let data=try? JSONSerialization.data(withJSONObject:object),let text=String(data:data,encoding:.utf8),let event=try? JSONSerialization.data(withJSONObject:[name]),let json=String(data:event,encoding:.utf8) else{return}
         for target in (targets ?? [web,settingsWeb,storageDetailWeb].compactMap({$0})) {target.evaluateJavaScript("window.dispatchEvent(new CustomEvent(\(json).at(0),{detail:\(text)}));",completionHandler:nil)}
     }
@@ -229,7 +230,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if command=="app.bootstrap" {
             let settings=model.configuration()
             _=try? await library.handle(command:"library.network",payload:["httpProxy":settings["httpProxy"] ?? ""])
-            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":"1.0.0","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
+            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":"1.0.0","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"nativeAggregateHost":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
         }
         if command.hasPrefix("library.") {
             if command=="library.article",let id=payload["paperID"] as? String {
