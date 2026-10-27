@@ -3,12 +3,31 @@ process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const crypto = require('node:crypto'), zlib = require('node:zlib');
+const fixture = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,
+    'fixtures/reader-transport-continuation-2610-34220.json.gz'))));
+const fixtureIdentity = JSON.parse(Buffer.from(fixture.candidate.rawBase64, 'base64')).identity;
+const fixtureModel = fixtureIdentity.model;
+// The real candidate's route is semantic identity, not an implementation
+// field. Pin this isolated test before any project module captures its config.
+test.mock.method(require('../scripts/env-loader'), 'loadProjectEnv', () => {
+    const environment = {
+        PAPER_ANALYZER_MODEL: fixtureModel.model, PAPER_ANALYZER_ENDPOINT: fixtureModel.endpoint,
+        PAPER_ANALYZER_API_KEY: 'unused-test-no-network', PAPER_ANALYZER_FALLBACK_API_KEYS: '',
+        PAPER_ANALYZER_SECONDARY_MODEL: fixtureModel.model, PAPER_ANALYZER_SECONDARY_ENDPOINT: fixtureModel.endpoint,
+        PAPER_ANALYZER_SECONDARY_API_KEY: 'unused-test-no-network', PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS: '',
+        PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY: '', HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9',
+        PD_API_READER_REPAIR_MAX_TOKENS: String(fixtureIdentity.repairMaxTokens)
+    };
+    Object.assign(process.env, environment);
+    return environment;
+});
+for (const protocol of ['node:http', 'node:https']) {
+    test.mock.method(require(protocol), 'request', () => { throw new Error('TEST_NETWORK_FORBIDDEN'); });
+}
 const Config = require('../scripts/config'), daily = require('../scripts/lib/daily-fresh-source-plan');
 const engine = require('../scripts/analysis-engine'), repair = require('../scripts/lib/reader-repair');
 const retry = require('../scripts/lib/explicit-reader-retry-round');
 const continuation = require('../scripts/lib/reader-transport-continuation');
-const fixture = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,
-    'fixtures/reader-transport-continuation-2610-34220.json.gz'))));
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const json = file => JSON.parse(fs.readFileSync(file));
 function bytes(record) {
@@ -194,6 +213,9 @@ async function currentIdentity(f) {
         { sourceText: details.text, structuredArtifacts: details.structuredArtifacts });
     assert.equal(prepared.identity.inputFingerprint, f.identity.inputFingerprint);
     assert.equal(prepared.identity.sourceSha256, f.identity.sourceSha256);
+    assert.deepEqual(prepared.identity.model, f.identity.model);
+    assert.equal(prepared.identity.repairMaxTokens, f.identity.repairMaxTokens);
+    assert.equal(prepared.identity.maxAttempts, f.identity.maxAttempts);
     assert.notEqual(prepared.identity.parserImplementationSha256, f.identity.parserImplementationSha256);
     return prepared.identity;
 }
@@ -206,6 +228,7 @@ for (const installFirst of [true, false]) test('真实四源和当前正常ident
         const migrated = require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(f.directory, identity,
             { allowNewImplementationAllowance: false,
                 ephemeralImageEvidenceSha256: repair.hashDraft(f.envelope.payload.ephemeralImageEvidence) });
+        assert.ok(migrated, 'same-route implementation migration must retain the actual candidate');
         assert.deepEqual(['attempts', 'fullAttempts', 'transportFailures'].map(k => migrated[k]), [0, 0, 1]);
         assert.deepEqual(migrated.draft, f.envelope.payload.draft);
         assert.equal(fs.existsSync(f.candidateFile), false);
