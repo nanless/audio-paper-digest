@@ -14324,6 +14324,7 @@ def generation_template_fingerprint():
         'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'reader_authenticated_pdf_hierarchical_table.py': script_dir / 'reader_authenticated_pdf_hierarchical_table.py',
         'analysis-contract.js': script_dir / 'analysis-contract.js',
+        'lib/experiment-source-setting-axes.js': script_dir / 'lib' / 'experiment-source-setting-axes.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
         'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
         'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',

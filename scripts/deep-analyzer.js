@@ -8821,6 +8821,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         parserImplementationSha256: repair.shaText([
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/experiment-source-setting-axes.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/llm-usage.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/llm-pending-request.js'), 'utf8'),
