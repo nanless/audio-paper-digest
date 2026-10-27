@@ -127,7 +127,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         configuration.userContentController.addScriptMessageHandler(self,contentWorld:.page,name:"desktop")
         configuration.preferences.javaScriptCanOpenWindowsAutomatically=false
         web=WKWebView(frame:window.contentView!.bounds,configuration:configuration);web.autoresizingMask=[.width,.height];web.navigationDelegate=self
-        web.setValue(false,forKey:"drawsBackground");web.allowsBackForwardNavigationGestures=false
+        web.allowsBackForwardNavigationGestures=false
         let content=NSView(frame:window.contentView!.bounds);content.autoresizingMask=[.width,.height];window.contentView=content;content.addSubview(web)
         pdfView.isHidden=true;pdfView.autoScales=true;pdfView.displayMode = .singlePageContinuous;pdfView.displaysPageBreaks=true;pdfView.backgroundColor = .windowBackgroundColor
         window.contentView!.addSubview(pdfView)
