@@ -463,7 +463,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func openSettings(){showSettingsWindow()}
     @objc func toggleSidebar(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"sidebar"])}
     @objc func togglePDF(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"pdf"])}
-    @objc func findCurrent(){guard mainContextMenuAvailable() else{return};let focused=(window.firstResponder as? NSView).map{$0 === pdfView || $0.isDescendant(of:pdfView)} ?? false;emit("menu.command",["action":"find","pdfFocused":focused])}
+    @objc func findCurrent(){guard mainContextMenuAvailable() else{return};if findNativeAggregate(){return};let focused=(window.firstResponder as? NSView).map{$0 === pdfView || $0.isDescendant(of:pdfView)} ?? false;emit("menu.command",["action":"find","pdfFocused":focused])}
     @objc func findLibrary(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"search"])}
     @objc func fontLarger(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"font","delta":1])}
     @objc func fontSmaller(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"font","delta":-1])}

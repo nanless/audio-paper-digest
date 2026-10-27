@@ -64,6 +64,10 @@ struct AggregateReadingAppearance:Equatable {
     private let headings:[String]
     private var readingAppearance:AggregateReadingAppearance
     private var appearanceSequence=0
+    private var findSequence=0
+    #if PAPER_DIGEST_TESTS
+    var beforeFindCompletion:(() async -> Void)?
+    #endif
     private var layingOut=false
     private let failed:()->Void
 
@@ -241,6 +245,28 @@ struct AggregateReadingAppearance:Equatable {
     @discardableResult func focusBody()->Bool {
         guard bodyFocusAvailable,let window=view.window else{return false}
         return window.makeFirstResponder(web)
+    }
+    var findTitle:String {title.stringValue}
+    var findLease:String? {bodyFocusAvailable ? eventNonce:nil}
+    /// Only a native Find confirmation invokes this; no page message accepts a query.
+    func find(_ query:String,lease:String) async throws -> Bool {
+        try Task.checkCancellation()
+        guard bodyFocusAvailable,eventNonce==lease,!query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,query.count<=4096 else {throw CancellationError()}
+        findSequence+=1;let sequence=findSequence
+        let configuration=WKFindConfiguration();configuration.caseSensitive=false;configuration.wraps=true
+        do {
+            let result=try await web.find(query,configuration:configuration)
+            #if PAPER_DIGEST_TESTS
+            if let beforeFindCompletion {await beforeFindCompletion()}
+            #endif
+            try Task.checkCancellation()
+            guard bodyFocusAvailable,eventNonce==lease,sequence==findSequence else {throw CancellationError()}
+            status.stringValue=result.matchFound ? "已定位当前汇总中的匹配文字":"当前汇总未找到该文字"
+            layout();return result.matchFound
+        } catch {
+            if !(error is CancellationError),bodyFocusAvailable,eventNonce==lease,sequence==findSequence {status.stringValue="查找未完成，请重试";layout()}
+            throw error
+        }
     }
     @discardableResult func focusNavigation()->Bool {
         guard navigationFocusAvailable,let window=view.window,let source=navigationSource else{return false}

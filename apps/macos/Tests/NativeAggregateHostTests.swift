@@ -24,6 +24,12 @@ private actor FixtureTransport {
     override var isKeyWindow:Bool {testKey}
     override var isVisible: Bool { testVisible }
 }
+@MainActor private final class FindCompletionGate {
+    var entered=false,released=false
+    private var continuation:CheckedContinuation<Void,Never>?
+    func wait() async {entered=true;if released{return};await withCheckedContinuation{continuation=$0}}
+    func release(){released=true;continuation?.resume();continuation=nil}
+}
 @main @MainActor struct NativeAggregateHostTests {
     static var passed = 0, failed = 0
     static func check(_ value: @autoclosure () throws -> Bool, _ reason: String) throws { if try !value() { throw Failure(text: reason) } }
@@ -316,6 +322,63 @@ private actor FixtureTransport {
             let source=app.aggregateSession!.document!.source
             h.webViewWebContentProcessDidTerminate(body)
             try check(app.aggregateNativeHost==nil && h.view.superview==nil && !h.focusBody() && app.aggregateSession!.document!.source==source,"render failure left stale overlay or changed source")
+        }
+        func newFindHost() async throws -> NativeAggregateController {
+            let (_,payload)=try await opened();_=try await app.presentNativeAggregate(payload,bundleWeb:resources)
+            let h=app.aggregateNativeHost!;_=try await readyBody(h);return h
+        }
+        func findRefused(_ body:() async throws -> Void) async -> Bool {do{try await body();return false}catch{return true}}
+        await run("aggregate loading and failed contexts disable Find without falling back to old paper") {
+            let item=NSMenuItem(title:"查找当前文档…",action:#selector(PaperDigestApp.findCurrent),keyEquivalent:"f")
+            try check(app.aggregateSession != nil && app.aggregateNativeHost==nil,"fixture not failed current aggregate")
+            try check(!app.validateMenuItem(item) && app.findNativeAggregate(),"failed aggregate opened old guide Find")
+            app.retireAggregateContext();try check(app.validateMenuItem(item) && !app.findNativeAggregate(),"non-aggregate Find changed")
+            app.aggregateTransitionPending=true;try check(!app.validateMenuItem(item) && app.findNativeAggregate(),"pending aggregate borrowed old guide");app.aggregateTransitionPending=false
+        }
+        await run("actual ownWK Find selects and scrolls to final section without source read or focus move") {
+            let h=try await newFindHost(),body=try await readyBody(h),before=await transport.requests,source=app.aggregateSession!.document!.source
+            window.makeFirstResponder(app.web);let focus=window.firstResponder
+            let found=try await h.find("最后一节",lease:h.findLease!)
+            let observed=try await body.callAsyncJavaScript("const s=getSelection();return {selection:s?.toString()||'',scroll:scrollY}",arguments:[:],in:nil,contentWorld:.defaultClient) as! [String:Any]
+            let after=await transport.requests
+            try check(found && (observed["selection"] as? String)=="最后一节" && (observed["scroll"] as? Double ?? 0)>0,"native Find did not select/reveal actual match")
+            try check(window.firstResponder === focus && before==after && app.aggregateSession!.document!.source==source,"Find moved focus or source")
+            try check(h.findTitle==source.descriptor.titleZh,"Find title not current aggregate")
+        }
+        await run("actual ownWK missing Find reports no match and preserves document") {
+            let h=app.aggregateNativeHost!,before=await transport.requests,source=app.aggregateSession!.document!.source
+            let found=try await h.find("CONTROLLED_ABSENT_FIND",lease:h.findLease!)
+            let after=await transport.requests
+            try check(!found && h.view.subviews.compactMap{$0 as? NSTextField}.contains{$0.stringValue=="当前汇总未找到该文字"},"missing Find did not report actual negative")
+            try check(before==after && app.aggregateSession!.document!.source==source,"negative Find fetched or changed source")
+        }
+        await run("Find refuses invalid nonce empty oversized and nonkey window before search") {
+            let h=app.aggregateNativeHost!,lease=h.findLease!
+            for (query,token) in [("最后一节",UUID().uuidString),("",lease),(String(repeating:"x",count:4097),lease)] {let refused=await findRefused{_=try await h.find(query,lease:token)};try check(refused,"invalid Find accepted")}
+            window.testKey=false;defer{window.testKey=true}
+            let refused=await findRefused{_=try await h.find("最后一节",lease:lease)};try check(h.findLease==nil && refused,"nonkey Find accepted")
+        }
+        await run("suspend and restore revoke old Find nonce while keeping own body") {
+            let h=app.aggregateNativeHost!,oldLease=h.findLease!,s=app.aggregateSession!,body=try await readyBody(h)
+            app.suspendNativeAggregate();try check(h.findLease==nil,"suspended Find available")
+            let suspendedRefused=await findRefused{_=try await h.find("最后一节",lease:oldLease)};try check(suspendedRefused,"suspended Find accepted")
+            _=try await app.presentNativeAggregate(["id":id,"sessionID":s.id,"documentReadyNonce":s.readyNonce!,"sequence":2],bundleWeb:resources);_=try await readyBody(h)
+            try check(h.findLease != oldLease && h.view.subviews.contains{$0===body},"resume did not revoke lease or rebuilt body")
+            let oldRefused=await findRefused{_=try await h.find("最后一节",lease:oldLease)};try check(oldRefused,"old Find lease revived")
+        }
+        await run("held actual WKFindResult cannot update replacement same-ID aggregate after leave ABA") {
+            let h=app.aggregateNativeHost!,s=app.aggregateSession!,lease=h.findLease!,gate=FindCompletionGate()
+            h.beforeFindCompletion={await gate.wait()};defer{gate.release();h.beforeFindCompletion=nil}
+            let pending=Task{do{_=try await h.find("最后一节",lease:lease);return false}catch is CancellationError{return true}catch{return false}}
+            let deadline=Date().addingTimeInterval(5)
+            while !gate.entered && Date()<deadline {try await Task.sleep(nanoseconds:10_000_000)}
+            try check(gate.entered,"actual WKFindResult did not arrive")
+            _=try await app.dispatchAggregates("aggregates.leave",payload:["id":id,"sessionID":s.id])
+            let latest=try await newFindHost(),body=try await readyBody(latest),source=app.aggregateSession!.document!.source
+            let labels=latest.view.subviews.compactMap{$0 as? NSTextField}.map{$0.stringValue};window.makeFirstResponder(app.web);let focus=window.firstResponder
+            gate.release();let refused=await pending.value
+            try check(refused && app.aggregateNativeHost === latest && latest !== h && h.view.superview==nil,"late Find borrowed replacement")
+            try check(labels==latest.view.subviews.compactMap{$0 as? NSTextField}.map{$0.stringValue} && window.firstResponder === focus && app.aggregateSession!.document!.source==source && latest.view.subviews.contains{$0===body},"late Find changed new status/focus/body/source")
         }
         app.retireAggregateContext();app.web.removeFromSuperview();window.close()
         try check(keyReads==0,"credentials read")
