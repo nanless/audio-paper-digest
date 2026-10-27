@@ -143,3 +143,25 @@ test('实现闭包包含两端真正使用的评分叶子，旧固定清单不�
         assert.ok(fs.statSync(path.join(root, leaf)).isFile());
     }
 });
+
+test('两种已保存证明仅容纳原分数减法机器误差且不改原证明', () => {
+    const boundaryVectors = require('./fixtures/scoring-consensus-boundaries.json');
+    for (const vector of boundaryVectors) {
+        for (const method of ['second_pass_consensus', 'multi_pass_consensus']) {
+            const stage = { stabilityWarning: true, finalScore: vector.second,
+                auditSha256: 'b'.repeat(64), stabilityResolution: {
+                    contract: 'api-scoring-stability-resolution-v1', status: 'resolved', method,
+                    firstAuditScore: vector.first, secondAuditScore: vector.second,
+                    scoreDifference: vector.difference, firstAuditSha256: 'a'.repeat(64),
+                    secondAuditSha256: 'b'.repeat(64), thirdAuditScore: vector.second,
+                    thirdAuditSha256: 'b'.repeat(64), thirdAttempts: 1 } };
+            const before = JSON.stringify(stage);
+            assert.equal(predicate(stage), vector.expected, `${method}: ${vector.name}`);
+            assert.equal(JSON.stringify(stage), before);
+            if (vector.expected) {
+                stage.stabilityResolution.status = 'unresolved';
+                assert.equal(predicate(stage), false, '数值容差不能将原未解决状态改判通过');
+            }
+        }
+    }
+});

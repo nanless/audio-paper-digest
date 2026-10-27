@@ -30,3 +30,25 @@ class ScoringStabilityTest(unittest.TestCase):
             with self.subTest(value=str(value)):
                 case['finalScore'] = value
                 self.assertFalse(scoring_stability_is_resolved(case))
+
+
+class ScoringConsensusBoundaryTest(unittest.TestCase):
+    def test_same_boundary_vectors_and_original_proof_bytes(self):
+        cases = json.loads((ROOT / 'tests/fixtures/scoring-consensus-boundaries.json').read_text())
+        for case in cases:
+            for method in ('second_pass_consensus', 'multi_pass_consensus'):
+                with self.subTest(name=case['name'], method=method):
+                    stage = {'stabilityWarning': True, 'finalScore': case['second'],
+                             'auditSha256': 'b' * 64, 'stabilityResolution': {
+                                 'contract': 'api-scoring-stability-resolution-v1',
+                                 'status': 'resolved', 'method': method,
+                                 'firstAuditScore': case['first'], 'secondAuditScore': case['second'],
+                                 'scoreDifference': case['difference'], 'firstAuditSha256': 'a' * 64,
+                                 'secondAuditSha256': 'b' * 64, 'thirdAuditScore': case['second'],
+                                 'thirdAuditSha256': 'b' * 64, 'thirdAttempts': 1}}
+                    before = json.dumps(stage, sort_keys=True)
+                    self.assertIs(scoring_stability_is_resolved(stage), case['expected'])
+                    self.assertEqual(json.dumps(stage, sort_keys=True), before)
+                    if case['expected']:
+                        stage['stabilityResolution']['status'] = 'unresolved'
+                        self.assertFalse(scoring_stability_is_resolved(stage))

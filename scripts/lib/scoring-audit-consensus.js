@@ -1,7 +1,7 @@
 'use strict';
 
 const { SCORING_STABILITY_RESOLUTION_CONTRACT,
-    SCORING_STABILITY_CONSENSUS_TOLERANCE } = require('./scoring-stability');
+    SCORING_STABILITY_CONSENSUS_TOLERANCE, scoringDifferenceWithinTolerance } = require('./scoring-stability');
 
 const SCORING_STABILITY_THRESHOLD = 0.5;
 
@@ -27,7 +27,7 @@ async function runScoringAuditConsensus({ firstResult, firstScore, requiresConse
     if (!Number.isFinite(secondScore)) throw new Error('评分共识的第二次审计分数无效');
     const difference = Math.abs(secondScore - firstScore);
     resolution = { contract: SCORING_STABILITY_RESOLUTION_CONTRACT,
-        status: difference <= SCORING_STABILITY_CONSENSUS_TOLERANCE ? 'resolved' : 'unresolved',
+        status: scoringDifferenceWithinTolerance(difference, firstScore, secondScore) ? 'resolved' : 'unresolved',
         method: 'second_pass_consensus', threshold: SCORING_STABILITY_THRESHOLD,
         consensusTolerance: SCORING_STABILITY_CONSENSUS_TOLERANCE,
         firstAuditScore: firstScore, secondAuditScore: secondScore, scoreDifference: difference,
@@ -48,7 +48,8 @@ async function runScoringAuditConsensus({ firstResult, firstScore, requiresConse
         .sort((left, right) => left.difference - right.difference);
     const consensus = pairs[0];
     resolution = { ...resolution, method: 'multi_pass_consensus',
-        status: consensus.difference <= SCORING_STABILITY_CONSENSUS_TOLERANCE ? 'resolved' : 'unresolved',
+        status: scoringDifferenceWithinTolerance(consensus.difference, consensus.leftScore, consensus.rightScore)
+            ? 'resolved' : 'unresolved',
         firstAuditScore: consensus.leftScore, secondAuditScore: consensus.rightScore,
         scoreDifference: consensus.difference,
         firstAuditSha256: fingerprintAudit(consensus.left.audit),

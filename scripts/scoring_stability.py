@@ -20,6 +20,19 @@ def _valid_sha(value):
     return isinstance(value, str) and re.fullmatch(r'[a-f0-9]{64}', value) is not None
 
 
+# Mirror the JS comparison without rounding or rewriting any saved proof.
+def scoring_difference_within_tolerance(difference, first_score, second_score):
+    if not _finite_number(difference) or difference < 0:
+        return False
+    if difference <= SCORING_STABILITY_CONSENSUS_TOLERANCE:
+        return True
+    return (all(_finite_number(score) and 0 <= score <= 10
+                for score in (first_score, second_score))
+            and difference == abs(second_score - first_score)
+            and difference - SCORING_STABILITY_CONSENSUS_TOLERANCE
+            <= math.ulp(1.0) * max(1, abs(first_score), abs(second_score)))
+
+
 def scoring_stability_is_resolved(stage):
     if not isinstance(stage, dict) or stage.get('stabilityWarning') is not True:
         return True
@@ -32,7 +45,9 @@ def scoring_stability_is_resolved(stage):
             or not (resolution.get('method') == 'second_pass_consensus' or multi_pass)
             or not all(_finite_number(resolution.get(field))
                        for field in ('firstAuditScore', 'secondAuditScore', 'scoreDifference'))
-            or not 0 <= resolution['scoreDifference'] <= SCORING_STABILITY_CONSENSUS_TOLERANCE
+            or not scoring_difference_within_tolerance(resolution['scoreDifference'],
+                                                       resolution['firstAuditScore'],
+                                                       resolution['secondAuditScore'])
             or not _valid_sha(resolution.get('secondAuditSha256'))):
         return False
     if not multi_pass:

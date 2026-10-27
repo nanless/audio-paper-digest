@@ -6,6 +6,18 @@ const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-
 const SCORING_STABILITY_CONSENSUS_TOLERANCE = 0.3;
 const validSha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
+// Only the threshold comparison absorbs binary subtraction error. Keep the
+// original scores/difference in the proof; an over-threshold exception must be
+// the exact subtraction of valid 0..10 scores, within one operand-scale epsilon.
+function scoringDifferenceWithinTolerance(difference, firstScore, secondScore) {
+    if (!Number.isFinite(difference) || difference < 0) return false;
+    if (difference <= SCORING_STABILITY_CONSENSUS_TOLERANCE) return true;
+    return [firstScore, secondScore].every(score => Number.isFinite(score) && score >= 0 && score <= 10)
+        && difference === Math.abs(secondScore - firstScore)
+        && difference - SCORING_STABILITY_CONSENSUS_TOLERANCE
+            <= Number.EPSILON * Math.max(1, Math.abs(firstScore), Math.abs(secondScore));
+}
+
 function scoringStabilityIsResolved(stage) {
     if (stage?.stabilityWarning !== true) return true;
     const resolution = stage.stabilityResolution;
@@ -16,8 +28,8 @@ function scoringStabilityIsResolved(stage) {
         || !(resolution.method === 'second_pass_consensus' || multiPass)
         || !['firstAuditScore', 'secondAuditScore', 'scoreDifference']
             .every(field => Number.isFinite(resolution[field]))
-        || resolution.scoreDifference < 0
-        || resolution.scoreDifference > SCORING_STABILITY_CONSENSUS_TOLERANCE
+        || !scoringDifferenceWithinTolerance(resolution.scoreDifference,
+            resolution.firstAuditScore, resolution.secondAuditScore)
         || !validSha(resolution.secondAuditSha256)) return false;
     // Old second-pass proofs did not carry the third-pass selection fields.
     if (!multiPass) return true;
@@ -34,5 +46,6 @@ function scoringStabilityIsResolved(stage) {
             - resolution.scoreDifference) < 1e-9;
 }
 
-module.exports = { scoringStabilityIsResolved, SCORING_STABILITY_RESOLUTION_CONTRACT,
+module.exports = { scoringStabilityIsResolved, scoringDifferenceWithinTolerance,
+    SCORING_STABILITY_RESOLUTION_CONTRACT,
     SCORING_STABILITY_CONSENSUS_TOLERANCE };
