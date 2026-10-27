@@ -1,0 +1,38 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+const mac=process.env.PD_HEADING_MAC||path.resolve(__dirname,'..'),{chromium}=require(path.join(mac,'node_modules/playwright'));
+const {server,installFixture}=require(path.join(mac,'Tests/DesktopUI.test.cjs'));
+const fixtureFile=process.env.PD_HEADING_FIXTURE||path.join(mac,'Tests/Fixtures/published-special-title.json');
+const fixture=JSON.parse(fs.readFileSync(fixtureFile)),published=fixture.article,paper=fixture.paper;
+const sourceFile=process.env.PD_HEADING_SOURCE||path.join(mac,'Resources/native.js');
+fs.mkdirSync(path.join(mac,'.qa'),{recursive:true});const output=process.env.PD_HEADING_OUTPUT||fs.mkdtempSync(path.join(mac,'.qa/published-heading-'));fs.mkdirSync(output,{recursive:true});assert.ok(!fs.existsSync(path.join(output,'result.json')));
+const sha=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'),source=fs.readFileSync(sourceFile,'utf8');
+const inputs=Object.fromEntries([__filename,sourceFile,fixtureFile].map(p=>[p,sha(p)]));
+assert.equal(fixture.origin.articleCacheSHA256,'560fc521411c9116374a90dbebdc49e591bebe0b2f2b11a40fea428534d92de1');
+assert.equal(crypto.createHash('sha256').update(published.html).digest('hex'),fixture.origin.htmlSHA256);assert.equal(Buffer.byteLength(published.html),725);
+const cases=[
+ {name:'exact published special title with paired emphasis removes only duplicate first heading',title:paper.title,html:published.html,remove:true},
+ {name:'paired strong requires actual strong span',title:'Position: **Beyond Text** Future',heading:'Position: <strong>Beyond Text</strong> Future',remove:true},
+ {name:'paired underscore emphasis uses existing Markdown parser',title:'Position: _Beyond Text_ Future',heading:'Position: <em>Beyond Text</em> Future',remove:true},
+ {name:'nested paired emphasis requires exact nested DOM',title:'Position: ***Beyond Text*** Future',heading:'Position: <em><strong>Beyond Text</strong></em> Future',remove:true},
+ {name:'same plaintext with strong instead of expected emphasis retains source heading',title:'Position: *Beyond Text* Future',heading:'Position: <strong>Beyond Text</strong> Future',remove:false},
+ {name:'paired title and differing words retain source heading',title:'Position: *Beyond Text* Future',heading:'Position: <em>Different Text</em> Future',remove:false},
+ {name:'unpaired stars do not explain missing literal punctuation',title:'Position: *Beyond Text Future',heading:'Position: Beyond Text Future',remove:false},
+ {name:'literal mathematical stars are not generic stripped',title:'A * B * C',heading:'A B C',remove:false},
+ {name:'raw HTML title does not grant Markdown span equivalence',title:'Position: <em>Beyond Text</em> Future',heading:'Position: <em>Beyond Text</em> Future',remove:false},
+ {name:'escaped literal stars retain nonmatching emphasis heading',title:'Position: \\*Beyond Text\\* Future',heading:'Position: <em>Beyond Text</em> Future',remove:false},
+ {name:'matching later heading remains after actual preamble content',title:'Position: *Beyond Text* Future',heading:'Position: <em>Beyond Text</em> Future',prefix:'<p>Controlled preamble content must remain.</p>',remove:false},
+ {name:'new Markdown equivalence does not remove first H1 source',tag:'h1',title:'Position: *Beyond Text* Future',heading:'Position: <em>Beyond Text</em> Future',remove:false},
+ {name:'new Markdown equivalence does not remove first H3 source',tag:'h3',title:'Position: *Beyond Text* Future',heading:'Position: <em>Beyond Text</em> Future',remove:false},
+ {name:'original exact plain title removal remains unchanged',title:'Position: Beyond Text Future',heading:'Position: Beyond Text Future',remove:true},
+];
+const results=[];let browser;
+(async()=>{try{await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+for(const c of cases){const p=await browser.newPage(),errors=[],external=[];p.setDefaultTimeout(10000);const html=c.html||`${c.prefix||''}<${c.tag||'h2'} id="published-heading">📄 ${c.heading}</${c.tag||'h2'}><p>✅ <strong>6.8/10</strong> | <a href="https://icml.cc/virtual/2026/poster/67080">original source link</a></p><p>Controlled body wording and literal A * B preserved.</p>`;
+const selected={...paper,title:c.title,titleZh:c.title},article={...published,html};
+try{p.on('pageerror',e=>errors.push(e.message));await p.route('https://**',r=>{external.push(r.request().url());return r.abort();});await p.route('**/native.js',r=>r.fulfill({contentType:'text/javascript',body:source}));await installFixture(p,{nativeStorageWindow:true,papers:[selected],primary:selected,article});await p.goto('http://127.0.0.1:'+server.address().port);await p.locator('[data-library-open]').click();await p.waitForFunction(()=>document.querySelector('#guide-frame')?.contentDocument?.querySelector('main'));
+const actual=await p.evaluate(({html,remove})=>{const d=document.querySelector('#guide-frame').contentDocument,main=d.querySelector('main');const expected=new DOMParser().parseFromString(html,'text/html').body;for(const n of expected.querySelectorAll('h1 a,h2 a,h3 a,h4 a'))if(n.getAttribute('href')?.startsWith('#')&&n.textContent.trim()==='#')n.remove();if(remove)expected.firstElementChild.remove();for(const [i,h]of [...expected.querySelectorAll('h2,h3')].entries())if(!h.id)h.id='section-'+i;const body=new DOMParser().parseFromString(paperDigestArchiveHTML().html,'text/html').body;body.querySelector(':scope>h1')?.remove();for(const selector of [':scope>.eyebrow',':scope>.original',':scope>.meta',':scope>.notice'])for(const node of body.querySelectorAll(selector))node.remove();return {body:body.innerHTML,expected:expected.innerHTML,notices:[...main.querySelectorAll(':scope>.notice')].map(n=>n.textContent),bodyHeadings:[...body.querySelectorAll('h2')].map(n=>n.textContent),calls:__calls.map(n=>n.command),unimplemented:__unimplemented};},{html,remove:c.remove});
+// Compare original body literally apart from the one allowed first-heading removal and existing outline IDs.
+assert.equal(actual.body,actual.expected);assert.deepEqual(actual.notices,published.notices);assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.deepEqual(actual.unimplemented,[]);assert.equal(actual.calls.some(x=>/^(model\.|zotero\.)/.test(x)),false);results.push({name:c.name,passed:true,sourceHeadingRemoved:c.remove});console.log('PASS',c.name);
+}catch(e){results.push({name:c.name,passed:false,error:e.stack});console.error('FAIL',c.name,e.message);}finally{await p.close();}}
+}finally{await browser?.close();if(server.listening)await new Promise(r=>server.close(r));const changed=Object.keys(inputs).filter(p=>sha(p)!==inputs[p]);fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({scope:'Actual production browser renderGuide with exact public saved special article plus explicitly controlled title/inline variants; no source file writes/provider/model/nativeGUI',inputs,inputsChanged:changed,passed:results.filter(x=>x.passed).length,failed:results.filter(x=>!x.passed).length,results},null,2)+'\n');if(changed.length||results.length!==14||results.some(x=>!x.passed))process.exitCode=1;}})().catch(e=>{console.error(e);process.exitCode=1;});

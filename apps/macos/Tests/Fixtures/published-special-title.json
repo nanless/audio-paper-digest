@@ -1,0 +1,31 @@
+{
+  "schema": "PUBLISHED_SPECIAL_FIRST_TITLE_V1",
+  "origin": {
+    "articleCacheSHA256": "560fc521411c9116374a90dbebdc49e591bebe0b2f2b11a40fea428534d92de1",
+    "paperMetadataSHA256": "bda0fcbc3302885408694eb7cfaff1d223e75c9a602061bc7c46a9ce48eff98e",
+    "htmlSHA256": "77299e1010e9dec3b3b019b7ef3ac67d77552b3f37b3303c911af6cb4c2e2582",
+    "htmlUTF8Bytes": 725,
+    "publicURL": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-05-23-position-beyond-text-the-text-centric-bias-in/",
+    "derivation": "Exact published html, notices, paperID and revision copied; selected public paper metadata copied without runtime/cache/personal fields. Controlled title variants in test are not alternate source evidence."
+  },
+  "paper": {
+    "id": "conference:icml:2026:openreview-forum-id:n1mAjfRDZ6",
+    "title": "Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future",
+    "titleZh": "Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future",
+    "date": "2026-05-23",
+    "sourceKind": "conference",
+    "identityStatus": "verified",
+    "sourceURL": "https://openreview.net/forum?id=n1mAjfRDZ6",
+    "blogURL": "https://nanless.github.io/audio-paper-digest-blog/posts/2026-05-23-position-beyond-text-the-text-centric-bias-in/",
+    "authors": []
+  },
+  "article": {
+    "paperID": "conference:icml:2026:openreview-forum-id:n1mAjfRDZ6",
+    "html": "<h2 id=\"-position-beyond-text-the-text-centric-bias-in-foundation-models-must-be-revisited-for-a-speech-first-future\">📄 Position: <em>Beyond Text</em> The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future<a class=\"anchor\" href=\"#-position-beyond-text-the-text-centric-bias-in-foundation-models-must-be-revisited-for-a-speech-first-future\" rel=\"noopener noreferrer\">#</a>\n</h2><p>✅ <strong>6.8/10</strong> | 前50% | <a href=\"https://icml.cc/virtual/2026/poster/67080\" rel=\"noopener noreferrer\">arxiv</a>\n</p><hr>\n</hr><p><a href=\"https://nanless.github.io/audio-paper-digest-blog/posts/2026-05-23/\" rel=\"noopener noreferrer\">← 返回 2026-05-23 语音/音乐/音频论文速递</a></p>",
+    "revisionSHA256": "77299e1010e9dec3b3b019b7ef3ac67d77552b3f37b3303c911af6cb4c2e2582",
+    "notices": [
+      "兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。",
+      "本次分析使用可访问的作者早期预印本，不是会议 camera-ready 定稿；标题、内容、实验结果和结论可能与会议最终版本不同。"
+    ]
+  }
+}

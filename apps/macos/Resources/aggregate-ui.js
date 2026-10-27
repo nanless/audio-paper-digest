@@ -7,6 +7,10 @@ const frameCSS=`:root{color-scheme:light dark}*{box-sizing:border-box}body{margi
 /** Aggregate pages keep their own ID/session/document contract; no Paper or Article is synthesized. */
 export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>input}){
  const $=id=>document.getElementById(id);let sequence=0,indexSequence=0,active=null,frame=null,returnView='library';
+ let interaction=0,focusAtRequest=0,movingHeadingFocus=false;
+ const interacted=()=>{if(!movingHeadingFocus)interaction++;};
+ for(const type of ['keydown','pointerdown','focusin','click'])document.addEventListener(type,interacted,true);
+ document.defaultView?.addEventListener('blur',event=>{if(event.target===document.defaultView)interacted();},true);
  const link=document.createElement('link');link.rel='stylesheet';link.href='aggregate.css';document.head.append(link);
  const navigation=$('app-window').querySelector('[data-view=conference]').parentElement;
  const pages=button('',()=>app.setView('pages'));pages.className='nav-item';pages.dataset.view='pages';const icon=document.createElement('i');icon.dataset.lucide='file-text';pages.append(icon,text('span','网站页面'));navigation.append(pages);
@@ -20,9 +24,15 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
  const current=(request,session=active)=>request===sequence&&app.state.view==='aggregate'&&session===active;
  const sessionPayload=session=>({id:session.id,sessionID:session.sessionID});
  function freshPane(){const fresh=document.createElement('section');fresh.id='aggregate-view';fresh.className='view aggregate-view';fresh.setAttribute('role','region');fresh.setAttribute('aria-label','已发布汇总正文');pane.replaceWith(fresh);pane=fresh;frame=null;return fresh;}
- function focusHeading(request){requestAnimationFrame(()=>{if(request===sequence&&app.state.view==='aggregate'&&pane.isConnected&&!pane.hidden&&!pane.closest('[hidden],[inert]'))pane.querySelector('h1')?.focus({preventScroll:true});});}
- function topBar(title,request){const header=document.createElement('header');header.className='aggregate-heading';const leading=document.createElement('div');const heading=text('h1',title);heading.tabIndex=-1;leading.append(text('span','已发布成果','eyebrow'),heading);const actions=document.createElement('div');actions.className='aggregate-actions';actions.append(button('返回'+({today:'今日更新',conference:'会议整理',pages:'网站页面'}[returnView]||'资料库'),()=>onBack(returnView)));header.append(leading,actions);pane.append(header);focusHeading(request);return actions;}
- function loading(id,from){const request=++sequence;active=null;if(from&&from!=='aggregate')returnView=from;freshPane();pane.dataset.aggregateID=id;topBar('正在读取汇总页面',request);const status=text('p','正在核对原始目录与网页正文…','aggregate-status');status.setAttribute('role','status');pane.append(status);return request;}
+ function focusHeading(request){
+  const ownedPane=pane,heading=ownedPane.querySelector('h1'),session=active,ownedFrame=frame,intent=focusAtRequest;
+  requestAnimationFrame(()=>{
+   if(request!==sequence||app.state.view!=='aggregate'||pane!==ownedPane||(ownedFrame&&(active!==session||frame!==ownedFrame))||intent!==interaction||!heading?.isConnected||heading!==ownedPane.querySelector('h1')||!ownedPane.isConnected||ownedPane.hidden||ownedPane.closest('[hidden],[inert]'))return;
+   movingHeadingFocus=true;try{heading.focus({preventScroll:true});}finally{movingHeadingFocus=false;}
+  });
+ }
+ function topBar(title,request,{focus=true}={}){const header=document.createElement('header');header.className='aggregate-heading';const leading=document.createElement('div');const heading=text('h1',title);heading.tabIndex=-1;leading.append(text('span','已发布成果','eyebrow'),heading);const actions=document.createElement('div');actions.className='aggregate-actions';actions.append(button('返回'+({today:'今日更新',conference:'会议整理',pages:'网站页面'}[returnView]||'资料库'),()=>onBack(returnView)));header.append(leading,actions);pane.append(header);if(focus)focusHeading(request);return actions;}
+ function loading(id,from){const request=++sequence;focusAtRequest=interaction;active=null;if(from&&from!=='aggregate')returnView=from;freshPane();pane.dataset.aggregateID=id;topBar('正在读取汇总页面',request);const status=text('p','正在核对原始目录与网页正文…','aggregate-status');status.setAttribute('role','status');pane.append(status);return request;}
  function bind(session,request){if(request!==sequence||app.state.view!=='aggregate')return false;active=session;return true;}
  function failure(error,id,request){if(request!==sequence||app.state.view!=='aggregate')return;freshPane();const actions=topBar('汇总页面暂不可读',request);const message=text('p',error?.message||String(error),'aggregate-status');message.setAttribute('role','alert');pane.append(message);actions.append(button('重新读取',()=>open(id)));if(active)actions.append(button('打开原站',()=>app.call('aggregates.website',sessionPayload(active)).catch(app.error)));}
  function appearance(){if(!frame?.isConnected)return;const root=frame.contentDocument?.documentElement;if(!root)return;const settings=app.state.settings||{};root.style.colorScheme=['light','dark'].includes(settings.appearance)?settings.appearance:'light dark';root.style.setProperty('--font',Math.max(16,Math.min(24,Number(settings.font)||18))+'px');}
@@ -32,7 +42,7 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
   if(value?.contract!=='published-aggregate-document-v1'||value.descriptor?.id!==session.id||value.sessionID!==session.sessionID||typeof value.displayHTML!=='string')throw new Error('汇总正文回执与当前页面不一致');
   // Pure local display derivation; original receipt/raw/body/image identities are never rewritten.
   const displayHTML=prepareBody(value.displayHTML);if(!current(request,session))return false;
-  freshPane();const descriptor=value.descriptor,actions=topBar(descriptor.titleZh||descriptor.title,request);
+  freshPane();const descriptor=value.descriptor,actions=topBar(descriptor.titleZh||descriptor.title,request,{focus:false});
   actions.append(button('打开原站',()=>app.call('aggregates.website',sessionPayload(session)).catch(app.error)));
   const resourceRows=Array.isArray(value.resourceImages)?value.resourceImages:(value.resources||[]),missingImages=resourceRows.filter(row=>row.missingReason).length,savedImages=resourceRows.length-missingImages;
   const status=text('p',(labels[descriptor.kind]||'网站页面')+' · '+(descriptor.displayDate||'网站日期未记录')+' · '+value.readNotice+(resourceRows.length?(savedImages?' · 图片 '+savedImages+'/'+resourceRows.length+' 已保存':' · '+missingImages+' 项图片未保存'):''),'aggregate-status');if(value.isStale)status.classList.add('is-stale');status.setAttribute('role','status');pane.append(status);
@@ -46,7 +56,7 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
   pane.append(source);
   const outline=document.createElement('details');outline.className='aggregate-outline';outline.append(text('summary','本页目录'));const entries=document.createElement('nav');entries.setAttribute('aria-label','汇总正文目录');outline.append(entries);pane.append(outline);
   frame=document.createElement('iframe');frame.className='aggregate-frame';frame.title=(labels[descriptor.kind]||'网站页面')+'：'+(descriptor.titleZh||descriptor.title);frame.setAttribute('sandbox','allow-same-origin');const rendered=frame;
-  frame.addEventListener('load',()=>{if(!current(request,session)||frame!==rendered)return;appearance();const doc=frame.contentDocument;if(!doc)return;entries.replaceChildren();for(const [i,heading]of [...doc.querySelectorAll('h2,h3')].entries()){if(!heading.id)heading.id='aggregate-heading-'+i;entries.append(button(heading.textContent,()=>{if(current(request,session))heading.scrollIntoView();}));}outline.hidden=!entries.childElementCount;doc.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;event.preventDefault();const value=anchor.getAttribute('data-aggregate-link');if(value&&/^(?:0|[1-9][0-9]*)$/.test(value))activateLink(Number(value),request,session);});});
+  frame.addEventListener('load',()=>{if(!current(request,session)||frame!==rendered)return;appearance();const doc=frame.contentDocument;if(!doc)return;entries.replaceChildren();for(const [i,heading]of [...doc.querySelectorAll('h2,h3')].entries()){if(!heading.id)heading.id='aggregate-heading-'+i;entries.append(button(heading.textContent,()=>{if(current(request,session))heading.scrollIntoView();}));}outline.hidden=!entries.childElementCount;doc.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;event.preventDefault();const value=anchor.getAttribute('data-aggregate-link');if(value&&/^(?:0|[1-9][0-9]*)$/.test(value))activateLink(Number(value),request,session);});focusHeading(request);});
   frame.srcdoc=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'"><title>${escape(descriptor.titleZh||descriptor.title)}</title><style>${frameCSS}</style></head><body><main>${displayHTML}</main></body></html>`;pane.append(frame);return true;
  }
  async function leave(){const session=active;++sequence;if(session){await app.call('aggregates.leave',sessionPayload(session));if(active===session)active=null;}frame=null;}
