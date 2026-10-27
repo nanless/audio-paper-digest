@@ -8,6 +8,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -30,6 +32,7 @@ import org.json.JSONObject
  val preview=previewJSON?.let{JSONObject(it)}
  var busy by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)};var completed by remember{mutableStateOf(false)};var details by rememberSaveable{mutableStateOf(false)}
  val scope=rememberCoroutineScope();val context=LocalContext.current
+ val keyboardVisible=WindowInsets.ime.getBottom(LocalDensity.current)>0
  val active=state.jobs.firstOrNull{it.optString("kind") in setOf("zotero.migration.preview","zotero.migration.confirm")&&it.optString("status")=="running"}
  fun close(){if(!busy)scope.launch{try{preview?.optString("previewID")?.takeIf{it.isNotBlank()}?.let{controller.execute("zotero.migration.discard",obj("previewID" to it))}}finally{closed()}}}
  fun retire(){val old=preview;previewJSON=null;details=false;old?.optString("previewID")?.takeIf{it.isNotBlank()}?.let{id->scope.launch{runCatching{controller.execute("zotero.migration.discard",obj("previewID" to id))}}}}
@@ -37,7 +40,10 @@ import org.json.JSONObject
   val uri=java.net.URI(root.trim());require(uri.scheme=="https"&&uri.host=="dav.jianguoyun.com"&&uri.port in setOf(-1,443)&&uri.rawUserInfo==null&&uri.rawQuery==null&&uri.rawFragment==null&&uri.rawPath.endsWith("/zotero/")){"请填写 Zotero 客户端正在使用的 HTTPS 附件目录，并保留末尾 /zotero/"}
   return root.trim().removeSuffix("zotero/")
  }
- AlertDialog(onDismissRequest={close()},title={Text(if(completed)"本次存档已逐项核验" else "用坚果云继续这次存档")},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+ AlertDialog(onDismissRequest={close()},
+  modifier=Modifier.windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime)).padding(horizontal=12.dp,vertical=8.dp),
+  properties=DialogProperties(usePlatformDefaultWidth=false,decorFitsSystemWindows=false),
+  title={Text(if(completed)"本次存档已逐项核验" else "用坚果云继续这次存档",style=if(keyboardVisible)MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
   Text("保留 Zotero 已有书目和已上传附件。接下来会把同一份材料写入坚果云附件目录，并逐项读取核对；原来的空间不足记录仍保留。")
   Text("使用本 App 已连接的坚果云账号：${state.cloud.optString("account")}",style=MaterialTheme.typography.titleSmall)
   Text("本次只授权这份迁移记录使用该连接；不会让其他新存档自动共用。应用重启、更换账号、修改密码、恢复资料或主动撤销后，需要重新确认。密码不会复制到 Zotero 设置或研究备份。",style=MaterialTheme.typography.bodySmall)
