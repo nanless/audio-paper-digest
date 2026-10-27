@@ -23,10 +23,13 @@ function directory(t) {
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     return dir;
 }
-function payload(dir) {
+function envelopeBytes(dir) {
     const names = fs.readdirSync(dir).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
     assert.equal(names.length, 1);
-    return JSON.parse(fs.readFileSync(path.join(dir, names[0]))).payload;
+    return fs.readFileSync(path.join(dir, names[0]));
+}
+function payload(dir) {
+    return JSON.parse(envelopeBytes(dir)).payload;
 }
 function options(dir, callback, extra = {}) {
     return { sourceText: row.sourceText, structuredArtifacts: artifacts, readerAttemptsDir: dir,
@@ -139,13 +142,14 @@ test('正常引擎以原full余额恢复空目标，不再付费派发空patch�
     const diagnostics = path.join(dir, 'request-diagnostics');
     assert.deepEqual(fs.existsSync(diagnostics)
         ? fs.readdirSync(diagnostics).filter(name => name.endsWith('.request.json')) : [], []);
-    const before = counters(payload(dir));
+    const before = counters(payload(dir)), beforeBytes = envelopeBytes(dir);
     let furtherRequests = 0;
     await assert.rejects(generate(options(dir, async () => {
         furtherRequests++; throw new Error('exhausted full budget must not dispatch');
     })), /读者文章|Reader|长文/u);
     assert.equal(furtherRequests, 0);
     assert.deepEqual(counters(payload(dir)), before);
+    assert.ok(envelopeBytes(dir).equals(beforeBytes), '无请求的预算阻断不能改写原候选CAS字节');
 });
 
 test('local-only实际恢复在空目标full规划后零请求停止，旧次数和传输记录不变', async t => {
@@ -155,7 +159,7 @@ test('local-only实际恢复在空目标full规划后零请求停止，旧次数
         if (++seedCalls === 1) return JSON.stringify(original.draft);
         throw new Error('isolated test: no second content response');
     })), /isolated test/u);
-    const before = payload(dir), expectedCounters = counters(before);
+    const before = payload(dir), expectedCounters = counters(before), beforeBytes = envelopeBytes(dir);
     assert.equal(before.attempts, 1);
     assert.equal(before.fullAttempts, 1);
     let calls = 0;
@@ -165,6 +169,7 @@ test('local-only实际恢复在空目标full规划后零请求停止，旧次数
     assert.equal(calls, 0);
     assert.deepEqual(counters(payload(dir)), expectedCounters);
     assert.equal(repair.hashDraft(payload(dir).draft), repair.hashDraft(before.draft));
+    assert.ok(envelopeBytes(dir).equals(beforeBytes), 'local-only零请求拒绝保留原完整候选字节');
     const blocked = plans().at(-1);
     assert.equal(blocked.nextKind, 'full');
     assert.equal(blocked.permittedFullResponses, 0);
@@ -195,4 +200,59 @@ test('合法零节点metadata原子删除仍走patch，正文资格与原full次
     assert.equal(payload(dir).attempts, 2);
     assert.equal(payload(dir).fullAttempts, 1);
     assert.ok(!Object.hasOwn(payload(dir).draft, 'sourceBindingsContract'));
+});
+
+function signedResourceSample() {
+    const sample = require('./reader-signed-draft-fixture').fixture({ noFigures: true });
+    sample.paper.apiReaderArticle = sample.paper.apiReaderArticle.replace(/^### ([^\n]+)\n\n/u,
+        match => match + '本文代码已开源，可直接下载。\n\n');
+    deep.repairApiReaderArticleAndPlanBindings(sample.paper, sample.paper.analysisManifest);
+    const feedback = '仅按核验后的资源状态更正已有声明。';
+    const seed = deep.prepareApiReaderRevisionSeed(sample.paper, sample.sourceDetails.text, feedback);
+    return { ...sample, feedback, seed };
+}
+function resourceOptions(sample, dir, callback) {
+    return { sourceText: sample.sourceDetails.text, structuredArtifacts: sample.sourceDetails.structuredArtifacts,
+        readerResources: sample.paper.apiReaderResources, reviewFeedback: sample.feedback,
+        initialDraft: sample.seed.initialDraft, revisionSeed: sample.seed, resourceLocalRevision: true,
+        readerAttemptsDir: dir, readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+        readerCallModel: callback };
+}
+test('synthetic：真实签名起点下模拟普通资源context丢失目标，零请求且原稿CAS不变', async t => {
+    capturePlans(t);
+    const sample = signedResourceSample(), dir = directory(t), before = JSON.stringify(sample.paper);
+    const build = repair.buildRepairContext;
+    t.mock.method(repair, 'buildRepairContext', (...args) => {
+        const context = build(...args);
+        assert.ok(context.targets.length > 0, '构造对照只丢弃真实已规划的资源节点，不绕过签名起点');
+        assert.equal(context.atomicOperation, null);
+        return { ...context, targets: [] };
+    });
+    let calls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed(sample.paper, sample.paper.analysis,
+        sample.sourceDetails.text, resourceOptions(sample, dir, async () => {
+            calls++; throw new Error('must not dispatch an ordinary empty resource patch');
+        })), error => error.code === 'READER_RESOURCE_LOCAL_NO_SAFE_TARGET'
+            && error.message === '资源局部修订缺少安全补丁范围，保留已签Reader与现有付费记录');
+    assert.equal(calls, 0);
+    assert.equal(JSON.stringify(sample.paper), before);
+    assert.deepEqual(fs.readdirSync(dir), [], '无模型请求时不另写失败候选或用量记录');
+});
+test('有效资源正文目标仍到达原局部请求，真实签名起点与full限制不被放宽', async t => {
+    capturePlans(t);
+    const sample = signedResourceSample(), dir = directory(t), before = JSON.stringify(sample.paper);
+    let calls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed(sample.paper, sample.paper.analysis,
+        sample.sourceDetails.text, resourceOptions(sample, dir, async (messages, budget, request) => {
+            calls++;
+            assert.equal(request.usageContext.stage, 'apiReaderRepair');
+            assert.ok(budget <= 16000);
+            const prompt = messages[0].content[0].text;
+            const authorization = JSON.parse(prompt.split('\n').find(line => line.startsWith('{"draftSha256":')));
+            assert.ok(authorization.targets.length > 0);
+            assert.ok(authorization.targets.every(target => /^\/sections\/\d+\/body$/u.test(target.path)));
+            throw new Error('isolated valid resource target reached');
+        })), /isolated valid resource target reached/u);
+    assert.equal(calls, 1);
+    assert.equal(JSON.stringify(sample.paper), before);
 });
