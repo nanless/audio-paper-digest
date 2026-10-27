@@ -336,21 +336,56 @@ def verify(output, repo):
     return {'verified':True,'publicationEligible':False,'sourceCommit':info['sourceCommit'],'version':info['version']}
 
 def verify_dmg(image, repo, info):
+    import time
     run(['/usr/bin/hdiutil','verify',image])
-    with tempfile.TemporaryDirectory(prefix='paperdigest-dmg-readback-') as tmp:
-        mount=pathlib.Path(tmp)/'mounted';mount.mkdir()
-        attached=False
-        try:
-            run(['/usr/bin/hdiutil','attach','-readonly','-nobrowse','-noautoopen','-mountpoint',mount,image])
-            attached=True
-            names={p.name for p in mount.iterdir()}
-            require(names.issuperset({info['bundleName'],'Applications'}) and names.issubset({info['bundleName'],'Applications','.fseventsd','.Trashes','.DS_Store','.VolumeIcon.icns'}),'DMG含未知内容或缺少拖入目标')
-            link=mount/'Applications'
-            require(link.is_symlink() and os.readlink(link)=='/Applications','DMG拖入目标不是系统Applications')
-            checked=audit_app(mount/info['bundleName'],repo,info['record'],info['version'])
-            require(checked['bundleInventorySHA256']==info['bundleInventorySHA256'],'DMG内实际应用与ZIP审定应用不同')
-        finally:
-            if attached:run(['/usr/bin/hdiutil','detach',mount])
+    temporary=pathlib.Path(tempfile.mkdtemp(prefix='paperdigest-dmg-readback-'))
+    mount=temporary/'mounted';mount.mkdir()
+    failures=[]
+    def require_own_mount():
+        require(os.path.ismount(mount),'DMG实际挂载未确认；未读取挂载内容')
+        images=plistlib.loads(run(['/usr/bin/hdiutil','info','-plist'])).get('images',[])
+        owners=[item for item in images for entity in item.get('system-entities',[])
+                if os.path.realpath(entity.get('mount-point',''))==os.path.realpath(mount)]
+        require(len(owners)==1 and os.path.realpath(owners[0].get('image-path',''))==os.path.realpath(image),'DMG挂载归属未确认；保留临时目录，未读取、卸载或删除')
+    try:
+        run(['/usr/bin/hdiutil','attach','-readonly','-nobrowse','-noautoopen','-mountpoint',mount,image])
+        require_own_mount()
+        names={p.name for p in mount.iterdir()}
+        require(names.issuperset({info['bundleName'],'Applications'}) and names.issubset({info['bundleName'],'Applications','.fseventsd','.Trashes','.DS_Store','.VolumeIcon.icns'}),'DMG含未知内容或缺少拖入目标')
+        link=mount/'Applications'
+        require(link.is_symlink() and os.readlink(link)=='/Applications','DMG拖入目标不是系统Applications')
+        checked=audit_app(mount/info['bundleName'],repo,info['record'],info['version'])
+        require(checked['bundleInventorySHA256']==info['bundleInventorySHA256'],'DMG内实际应用与ZIP审定应用不同')
+    except BaseException as error:
+        failures.append(('DMG核验',error))
+    try:
+        # An attach error can still leave a real mount. Detach only this image's
+        # exact private mountpoint; never walk/delete a live or unrelated volume.
+        if os.path.ismount(mount):
+            for attempt in range(3):
+                if not os.path.ismount(mount):break
+                require_own_mount() # Fresh ownership before every normal detach.
+                try:
+                    run(['/usr/bin/hdiutil','detach',mount])
+                    break
+                except Rejected as error:
+                    if attempt==2 or not re.search(r'(?:[Rr]esource busy|资源忙)',str(error)):
+                        raise
+                    print('DMG正常卸载暂时忙，短暂等待后重试（'+str(attempt+1)+'/3）：'+str(error),file=sys.stderr)
+                    time.sleep(0.25)
+            require(not os.path.ismount(mount),'DMG挂载未释放；保留临时目录，未删除')
+    except BaseException as error:
+        failures.append(('DMG卸载',error))
+    try:
+        if not os.path.ismount(mount):
+            # rmdir can only remove empty directories, including during a race.
+            mount.rmdir();temporary.rmdir()
+    except BaseException as error:
+        failures.append(('DMG临时目录清理',error))
+    if len(failures)==1:
+        raise failures[0][1]
+    if failures:
+        raise Rejected('；'.join(phase+'：'+str(error) for phase,error in failures)) from failures[0][1]
 
 def publish_plan(args):
     verify(args.prepared.resolve(),args.repo.resolve())

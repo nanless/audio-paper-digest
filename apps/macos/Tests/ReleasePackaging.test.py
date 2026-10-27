@@ -330,4 +330,221 @@ class Packaging(unittest.TestCase):
         self.add_formal_resource('raw-data-uri.css',('body{background:url("DATA:image/png;charset=UTF-8,'+encoded+'")}').encode())
         self.assertIn('原图',self.call(expected=1))
 
+
+class VerifyDmgCleanup(unittest.TestCase):
+    """Current public verify_dmg control flow; only ordinary simulated files and tools.
+
+    Run independently with: python3 apps/macos/Tests/ReleasePackaging.test.py VerifyDmgCleanup
+    This class never constructs Packaging's signed-app template or calls a real hdiutil.
+    """
+    def setUp(self):
+        import ast, types
+        if os.environ.get('CODEX_SANDBOX'):
+            raise RuntimeError('请在本机正常开发环境执行测试')
+        self.temp=tempfile.TemporaryDirectory(prefix='paperdigest-dmg-cleanup-unit-')
+        self.root=pathlib.Path(self.temp.name)
+        self.image=self.root/'candidate.dmg'
+        self.image.write_bytes(b'Explicit simulated image, never passed to a real tool')
+        self.state={'active':False,'mount':None,'temporary':None,'calls':[],
+                    'recursiveCleanup':False,'payload':None,'auditCalls':0,'rmdirAttempts':[],
+                    'detachAttempts':0,'afterBusy':False,'sleeps':[]}
+        self.ast=ast;self.types=types
+
+    def tearDown(self):
+        # A retained simulated mount is only normal owned fixture files. Always clean
+        # this sandbox too; never leave fault fixtures under .qa or touch a real volume.
+        root=self.root
+        self.temp.cleanup()
+        self.assertFalse(root.exists())
+
+    def exercise(self,attach_error=False,detach_error=False,body_error=False,
+                 foreign=False,detach_lies=False,info_error=False,notmounted=False,
+                 busy=0,nonbusy=False,ownership_flips=False,unmounted_after_busy=False):
+        from unittest import mock
+        import re
+        state=self.state
+        def make(prefix):
+            path=pathlib.Path(tempfile.mkdtemp(prefix=prefix,dir=self.root))
+            state['temporary']=path
+            return str(path)
+        def recursive_cleanup_forbidden(*args,**kwargs):
+            state['recursiveCleanup']=True
+            raise AssertionError('verify_dmg must not recursively clean a mount')
+        # Load only these current public definitions. No ignored before-file,
+        # copied verifier body, tool module import, or legacy control is used.
+        nodes=[node for node in self.ast.parse(HELPER.read_text()).body
+               if isinstance(node,(self.ast.FunctionDef,self.ast.ClassDef))
+               and node.name in ('Rejected','require','verify_dmg')]
+        self.assertEqual({node.name for node in nodes},{'Rejected','require','verify_dmg'})
+        env={'pathlib':pathlib,'plistlib':plistlib,
+             'tempfile':self.types.SimpleNamespace(mkdtemp=make,TemporaryDirectory=recursive_cleanup_forbidden),
+             'shutil':self.types.SimpleNamespace(rmtree=recursive_cleanup_forbidden),
+             're':re,'sys':sys}
+        exec(compile(self.ast.Module(body=nodes,type_ignores=[]),str(HELPER),'exec'),env)
+        rejected=env['Rejected']
+        original=rejected('ATTACH_ORIGINAL') if attach_error else rejected('BODY_ORIGINAL')
+        detach=rejected('DETACH_BUSY_ORIGINAL');information=rejected('INFO_ORIGINAL')
+        def run(args):
+            self.assertEqual(args[0],'/usr/bin/hdiutil')
+            action=args[1];state['calls'].append(action)
+            if action=='verify':return b''
+            if action=='attach':
+                mount=pathlib.Path(args[args.index('-mountpoint')+1])
+                state['mount']=mount;state['active']=not notmounted
+                payload=mount/'Fixture.app/Contents/_CodeSignature/CodeResources'
+                payload.parent.mkdir(parents=True);payload.write_text('Owned simulated payload')
+                state['payload']=payload
+                (mount/'Applications').symlink_to('/Applications')
+                if attach_error:raise original
+                return b''
+            if action=='info':
+                if info_error:raise information
+                image=self.root/'FOREIGN.dmg' if foreign or (ownership_flips and state['afterBusy']) else self.image
+                return plistlib.dumps({'images':[{'image-path':str(image),
+                    'system-entities':[{'mount-point':str(state['mount']),'dev-entry':'/dev/QA-SIMULATED'}]}]})
+            if action=='detach':
+                self.assertEqual(pathlib.Path(args[2]),state['mount'])
+                self.assertEqual(state['calls'][-2],'info','Fresh ownership required before each detach')
+                self.assertNotIn('-force',args)
+                state['detachAttempts']+=1
+                if state['detachAttempts']<=busy:
+                    state['afterBusy']=True
+                    if unmounted_after_busy:
+                        state['active']=False
+                        shutil.rmtree(state['mount']/'Fixture.app');(state['mount']/'Applications').unlink()
+                    raise rejected('hdiutil: could not unmount test device - Resource busy')
+                if nonbusy:raise rejected('hdiutil: Permission denied')
+                if detach_error:raise detach
+                if detach_lies:return b''
+                state['active']=False
+                # This fake unmount removes only known ordinary simulated payloads,
+                # exposing the original empty directory. No real mount is involved.
+                shutil.rmtree(state['mount']/'Fixture.app')
+                (state['mount']/'Applications').unlink()
+                return b''
+            raise AssertionError('Unexpected simulated tool operation')
+        def audit(*args):
+            state['auditCalls']+=1
+            if body_error:raise original
+            return {'bundleInventorySHA256':'exact'}
+        env.update(run=run,audit_app=audit,
+                   os=self.types.SimpleNamespace(path=self.types.SimpleNamespace(
+                       ismount=lambda path:state['active'] and pathlib.Path(path)==state['mount'],
+                       realpath=os.path.realpath),readlink=os.readlink))
+        real_rmdir=pathlib.Path.rmdir
+        def observe_rmdir(path):
+            self.assertIn(path,(state['mount'],state['temporary']))
+            state['rmdirAttempts'].append((path,state['active'],not any(path.iterdir())))
+            return real_rmdir(path)
+        error=None
+        with mock.patch.object(pathlib.Path,'rmdir',observe_rmdir), mock.patch('time.sleep',side_effect=state['sleeps'].append):
+            try:
+                env['verify_dmg'](self.image,self.root,{'bundleName':'Fixture.app','record':{},
+                    'version':'1','bundleInventorySHA256':'exact'})
+            except BaseException as caught:
+                error=caught
+        self.assertFalse(state['recursiveCleanup'])
+        self.assertEqual(state['calls'].count('attach'),1)
+        self.assertTrue(all(seconds==0.25 for seconds in state['sleeps']))
+        self.assertLessEqual(sum(state['sleeps']),0.5)
+        self.assertTrue(all(not active for _,active,_ in state['rmdirAttempts']))
+        if state['active']:
+            self.assertEqual(state['payload'].read_text(),'Owned simulated payload')
+            self.assertTrue(state['mount'].parent.exists())
+            self.assertEqual(state['rmdirAttempts'],[])
+        return error,original,detach,information,rejected
+
+    def assert_empty_removed(self):
+        self.assertFalse(self.state['active'])
+        self.assertFalse(self.state['mount'].parent.exists())
+        self.assertEqual([(active,empty)for _,active,empty in self.state['rmdirAttempts']],[(False,True),(False,True)])
+
+    def test_success_detaches_then_removes_only_empty_owned_directories(self):
+        error,*_=self.exercise()
+        self.assertIsNone(error);self.assertEqual(self.state['auditCalls'],1)
+        self.assertIn('detach',self.state['calls']);self.assert_empty_removed()
+
+    def test_partial_attach_preserves_original_and_detaches_owned_mount(self):
+        error,original,*_=self.exercise(attach_error=True)
+        self.assertIs(error,original);self.assertEqual(self.state['auditCalls'],0)
+        self.assertIn('detach',self.state['calls']);self.assert_empty_removed()
+
+    def test_body_failure_preserves_original_and_detaches(self):
+        error,original,*_=self.exercise(body_error=True)
+        self.assertIs(error,original);self.assertEqual(self.state['auditCalls'],1)
+        self.assertIn('detach',self.state['calls']);self.assert_empty_removed()
+
+    def test_detach_failure_retains_payload_and_exact_detach_error(self):
+        error,_,detach,*_=self.exercise(detach_error=True)
+        self.assertIs(error,detach);self.assertTrue(self.state['active'])
+
+    def test_body_and_detach_failures_keep_both_messages_and_original_cause(self):
+        error,original,_,_,rejected=self.exercise(body_error=True,detach_error=True)
+        self.assertIsInstance(error,rejected);self.assertIs(error.__cause__,original)
+        self.assertIn('BODY_ORIGINAL',str(error));self.assertIn('DETACH_BUSY_ORIGINAL',str(error))
+
+    def test_attach_and_detach_failures_keep_both_messages_and_original_cause(self):
+        error,original,_,_,rejected=self.exercise(attach_error=True,detach_error=True)
+        self.assertIsInstance(error,rejected);self.assertIs(error.__cause__,original)
+        self.assertIn('ATTACH_ORIGINAL',str(error));self.assertIn('DETACH_BUSY_ORIGINAL',str(error))
+
+    def test_partial_attach_foreign_owner_is_never_audited_or_detached(self):
+        error,original,_,_,rejected=self.exercise(attach_error=True,foreign=True)
+        self.assertIsInstance(error,rejected);self.assertIs(error.__cause__,original)
+        self.assertIn('归属未确认',str(error));self.assertEqual(self.state['auditCalls'],0)
+        self.assertNotIn('detach',self.state['calls']);self.assertTrue(self.state['active'])
+
+    def test_successful_detach_exit_with_live_mount_is_rejected(self):
+        error,_,_,_,rejected=self.exercise(detach_lies=True)
+        self.assertIsInstance(error,rejected);self.assertIn('未释放',str(error))
+        self.assertTrue(self.state['active'])
+
+    def test_info_failure_keeps_original_attach_cause_and_mounted_evidence(self):
+        error,original,_,_,rejected=self.exercise(attach_error=True,info_error=True)
+        self.assertIsInstance(error,rejected);self.assertIs(error.__cause__,original)
+        self.assertIn('ATTACH_ORIGINAL',str(error));self.assertIn('INFO_ORIGINAL',str(error))
+        self.assertNotIn('detach',self.state['calls']);self.assertTrue(self.state['active'])
+
+    def test_attach_exit_zero_without_mount_never_audits_or_detaches_or_removes_payload(self):
+        error,_,_,_,rejected=self.exercise(notmounted=True)
+        self.assertIsInstance(error,rejected);self.assertIn('实际挂载未确认',str(error))
+        self.assertEqual(self.state['auditCalls'],0);self.assertNotIn('detach',self.state['calls'])
+        self.assertEqual(self.state['payload'].read_text(),'Owned simulated payload')
+        self.assertEqual([(active,empty)for _,active,empty in self.state['rmdirAttempts']],[(False,False)])
+
+    def test_attach_exit_zero_foreign_owner_never_audits_or_detaches(self):
+        error,_,_,_,rejected=self.exercise(foreign=True)
+        self.assertIsInstance(error,rejected);self.assertIn('归属未确认',str(error))
+        self.assertEqual(self.state['auditCalls'],0);self.assertNotIn('detach',self.state['calls'])
+        self.assertTrue(self.state['active'])
+
+
+    def test_two_busy_failures_recheck_owner_then_third_normal_detach_succeeds(self):
+        error,*_=self.exercise(busy=2)
+        self.assertIsNone(error);self.assertEqual(self.state['detachAttempts'],3)
+        self.assertEqual(self.state['sleeps'],[0.25,0.25]);self.assert_empty_removed()
+
+    def test_persistent_busy_stops_after_third_attempt_and_retains_evidence(self):
+        error,_,_,_,rejected=self.exercise(busy=3)
+        self.assertIsInstance(error,rejected);self.assertIn('Resource busy',str(error))
+        self.assertEqual(self.state['detachAttempts'],3);self.assertTrue(self.state['active'])
+        self.assertEqual(self.state['sleeps'],[0.25,0.25])
+
+    def test_nonbusy_failure_is_not_retried(self):
+        error,_,_,_,rejected=self.exercise(nonbusy=True)
+        self.assertIsInstance(error,rejected);self.assertIn('Permission denied',str(error))
+        self.assertEqual(self.state['detachAttempts'],1);self.assertEqual(self.state['sleeps'],[])
+        self.assertTrue(self.state['active'])
+
+    def test_owner_change_after_busy_prevents_any_second_detach(self):
+        error,_,_,_,rejected=self.exercise(busy=1,ownership_flips=True)
+        self.assertIsInstance(error,rejected);self.assertIn('归属未确认',str(error))
+        self.assertEqual(self.state['detachAttempts'],1);self.assertEqual(self.state['sleeps'],[0.25])
+        self.assertTrue(self.state['active'])
+
+    def test_mount_already_gone_after_busy_is_not_detached_again(self):
+        error,*_=self.exercise(busy=1,unmounted_after_busy=True)
+        self.assertIsNone(error);self.assertEqual(self.state['detachAttempts'],1)
+        self.assertEqual(self.state['sleeps'],[0.25]);self.assert_empty_removed()
+
 if __name__=='__main__':unittest.main(verbosity=2)
