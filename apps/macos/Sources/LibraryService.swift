@@ -835,7 +835,8 @@ actor LibraryService {
         return try await read(url,limit:limit)
     }
     func aggregatePresentationImages(_ source:AggregateDocument,allowNetwork:Bool) async throws->AggregateResourceRender? {
-        let cached=try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).latestResourceRendering(source:source)
+        let store=PublishedAggregateStore(directory:directory,siteBase:siteBaseURL)
+        let cached=try store.latestResourceRendering(source:source) ?? store.importAndroidResourceRendering(source)
         if !allowNetwork{return cached}
         if let cached,cached.manifest.images.allSatisfy({$0.sha256 != nil}){return cached}
         return try await aggregateResourceRendering(source)

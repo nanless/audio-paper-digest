@@ -143,6 +143,7 @@ struct PublishedAggregateStore {
     func cachedDocument(descriptor:PublishedAggregate,rawHTMLSHA256:String)throws->AggregateDocument {
         _=try originalRow(for:descriptor);try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(rawHTMLSHA256),"汇总网页修订无效")
         let folder=["aggregate-documents",PublishedAggregateReader.sha(Data(descriptor.id.utf8)),descriptor.source.manifestSHA256,rawHTMLSHA256]
+        if !fm.fileExists(atPath:try child(folder).path){return try importAndroidDocument(descriptor,rawSHA:rawHTMLSHA256)}
         let raw=try read(try child(folder+["original.html"]),limit:16*1024*1024)
         let saved=try JSONDecoder().decode(AggregateDocument.self,from:read(try child(folder+["document.json"]),limit:20*1024*1024))
         try PublishedAggregateReader.require(PublishedAggregateReader.sha(raw)==rawHTMLSHA256 && saved.descriptor==descriptor,"汇总原HTML或目录绑定不一致")
@@ -156,7 +157,7 @@ struct PublishedAggregateStore {
 
 extension PublishedAggregateStore {
     /// Only the exact original ID + manifest scope may select a previously verified HTML revision.
-    func latestVerifiedDocument(for descriptor: PublishedAggregate) throws -> AggregateDocument? {
+    private func latestNativeVerifiedDocument(for descriptor: PublishedAggregate) throws -> AggregateDocument? {
         _ = try originalRow(for: descriptor)
         let folder = try child(["aggregate-documents", PublishedAggregateReader.sha(Data(descriptor.id.utf8)), descriptor.source.manifestSHA256])
         guard fm.fileExists(atPath: folder.path) else { return nil }
@@ -258,5 +259,90 @@ extension PublishedAggregateStore {
             if latest==nil || time(value.manifest.observedAt)>time(latest!.manifest.observedAt){latest=value}
         }
         try noLinks(folder);return latest
+    }
+}
+
+extension PublishedAggregateStore {
+    private struct AndroidRawSource {let raw:Data;let witness:AggregateDocument}
+    /// Foreign body is checked as auxiliary evidence, then ignored for actual display derivation.
+    private func androidSource(_ descriptor:PublishedAggregate,rawSHA:String)throws->AndroidRawSource {
+        _=try originalRow(for:descriptor);try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(rawSHA),"Android原网页修订无效")
+        let folder=["aggregate-documents-android",PublishedAggregateReader.sha(Data(descriptor.id.utf8)),descriptor.source.manifestSHA256,rawSHA]
+        let raw=try read(child(folder+["original.html"]),limit:16*1024*1024)
+        let witness=try JSONDecoder().decode(AggregateDocument.self,from:read(child(folder+["document.json"]),limit:20*1024*1024))
+        try PublishedAggregateReader.require(witness.contract=="published-aggregate-document-v1"&&witness.parserContract=="published-aggregate-jsoup-v1"&&witness.descriptor==descriptor&&witness.rawHTMLSHA256==rawSHA&&PublishedAggregateReader.sha(raw)==rawSHA&&witness.rawHTMLBytes==raw.count&&witness.responseURL==descriptor.sourceURL&&witness.completeOffline==false,"Android原网页来源或格式不受支持，原件保留")
+        let body=try read(child(folder+["body.html"]),limit:16*1024*1024)
+        try PublishedAggregateReader.require(body==Data(witness.bodyHTML.utf8)&&PublishedAggregateReader.sha(body)==witness.sanitizedBodySHA256,"Android原网页派生见证未通过核验")
+        // The native extractor alone remains authoritative, including canonical URL/HTML shape guards.
+        _=try LibraryService.extractAggregateHTML(raw,descriptor:descriptor,responseURL:URL(string:witness.responseURL)!,fetchedAt:witness.fetchedAt,siteBaseURL:siteBase)
+        return .init(raw:raw,witness:witness)
+    }
+    private func importAndroidDocument(_ descriptor:PublishedAggregate,rawSHA:String)throws->AggregateDocument {
+        let source=try androidSource(descriptor,rawSHA:rawSHA)
+        return try cacheDocument(source.raw,descriptor:descriptor,responseURL:URL(string:source.witness.responseURL)!,fetchedAt:source.witness.fetchedAt)
+    }
+    /// Native revisions retain their first observation identity. Foreign raw candidates are not current-site grants.
+    func latestVerifiedDocument(for descriptor:PublishedAggregate)throws->AggregateDocument? {
+        var latest=try latestNativeVerifiedDocument(for:descriptor)
+        let folder=try child(["aggregate-documents-android",PublishedAggregateReader.sha(Data(descriptor.id.utf8)),descriptor.source.manifestSHA256])
+        guard fm.fileExists(atPath:folder.path) else{return latest};try noLinks(folder)
+        let paths=try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil).sorted{$0.lastPathComponent<$1.lastPathComponent}
+        func time(_ value:String)throws->Date {let formatter=ISO8601DateFormatter();if let date=formatter.date(from:value){return date};formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds];guard let date=formatter.date(from:value)else{throw AggregateFailure.invalid("Android原修订观察时间无效")};return date}
+        var selected:String?,selectedTime:Date?=try latest.map{try time($0.fetchedAt)}
+        for path in paths {
+            try Task.checkCancellation();let raw=path.lastPathComponent;try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(raw),"Android保存修订目录格式未知，原件保留")
+            let source=try androidSource(descriptor,rawSHA:raw)
+            // Never re-sign an already-owned raw revision with another platform's observation time.
+            let owned=try child(["aggregate-documents",PublishedAggregateReader.sha(Data(descriptor.id.utf8)),descriptor.source.manifestSHA256,raw])
+            if fm.fileExists(atPath:owned.path){_=try cachedDocument(descriptor:descriptor,rawHTMLSHA256:raw);continue}
+            let date=try time(source.witness.fetchedAt)
+            if selectedTime==nil||date>selectedTime!{selected=raw;selectedTime=date}
+        }
+        try noLinks(folder)
+        if let selected{latest=try importAndroidDocument(descriptor,rawSHA:selected)}
+        return latest
+    }
+    private struct AndroidImageWitness:Decodable {
+        let contract:String;let parserContract:String;let plan:AggregateImagePlan;let observedAt:String;let images:[AggregateImageRecord];let renderedBodySHA256:String;let completeOffline:Bool
+    }
+    func importAndroidResourceRendering(_ source:AggregateDocument)throws->AggregateResourceRender? {
+        let plan=try imagePlan(source)
+        let folder=try child(["aggregate-resource-renders-android-v1",PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256,AggregateResources.contract])
+        guard fm.fileExists(atPath:folder.path)else{return nil};try noLinks(folder)
+        let android=try androidSource(source.descriptor,rawSHA:source.rawHTMLSHA256)
+        var selected:AndroidImageWitness?,selectedSHA:String?
+        func time(_ value:String)throws->Date {let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds];if let date=formatter.date(from:value){return date};formatter.formatOptions=[.withInternetDateTime];guard let date=formatter.date(from:value)else{throw AggregateFailure.invalid("Android图片观察时间无效")};return date}
+        for entry in try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil).sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) {
+            let name=entry.lastPathComponent
+            try PublishedAggregateReader.require(name.hasSuffix(".json")&&PublishedAggregateReader.validSHA(String(name.dropLast(5))),"Android图片修订目录格式未知，原件保留")
+            let raw=try read(entry,limit:4*1024*1024),sha=PublishedAggregateReader.sha(raw);try PublishedAggregateReader.require(sha==String(name.dropLast(5)),"Android图片见证真实字节已变化")
+            let value=try JSONDecoder().decode(AndroidImageWitness.self,from:raw)
+            try PublishedAggregateReader.require(value.contract==AggregateResources.contract&&value.parserContract=="published-aggregate-jsoup-images-v1"&&value.completeOffline==false&&value.plan.contract==AggregateResources.contract&&value.plan.descriptor==source.descriptor&&value.plan.rawHTMLSHA256==source.rawHTMLSHA256&&value.plan.originalBodySHA256==android.witness.sanitizedBodySHA256&&PublishedAggregateReader.sha(Data(value.plan.templateBodyHTML.utf8))==value.plan.templateBodySHA256,"Android图片来源见证未通过核验")
+            try PublishedAggregateReader.require(value.plan.slots==plan.slots&&value.images.map{$0.slot}==plan.slots,"两端图片位置或图注不同，未把其他派生图片接到本端正文")
+            try AggregateResources.validateReferenceBudget(value.images)
+            for record in value.images {
+                if let sha=record.sha256,let mime=record.mime,let size=record.bytes {
+                    try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(sha),"Android图片SHA无效")
+                    let data=try read(child(["aggregate-image-bytes-v1",sha]),limit:size)
+                    try PublishedAggregateReader.require(data.count==size&&PublishedAggregateReader.sha(data)==sha&&LibraryService.aggregateImageMIME(data)==mime,"Android图片实际字节或类型不符")
+                }else{try PublishedAggregateReader.require(record.sha256==nil&&record.mime==nil&&record.bytes==nil&&record.missingReason?.isEmpty==false,"Android图片缺项状态无效")}
+            }
+            let observed=try time(value.observedAt)
+            let priorDate=try selected.map{try time($0.observedAt)}
+            if priorDate==nil||observed>priorDate!{selected=value;selectedSHA=sha}
+        }
+        try noLinks(folder);guard let selected,let selectedSHA else{return nil}
+        var images:[Int:AggregateImageBytes]=[:],missing:[Int:String]=[:]
+        for record in selected.images {
+            if let sha=record.sha256,let mime=record.mime,let size=record.bytes {
+                let data=try read(child(["aggregate-image-bytes-v1",sha]),limit:size);try PublishedAggregateReader.require(data.count==size,"Android图片实际长度已变化")
+                images[record.slot.index] = .init(data:data,mime:mime)
+            }else{missing[record.slot.index]=record.missingReason}
+        }
+        let native=try cacheResourceRendering(source:source,plan:plan,images:images,missing:missing,observedAt:selected.observedAt)
+        // Append-only provenance is auxiliary; neither foreign rendered body nor its SHA becomes native authority.
+        let provenance:[String:Any]=["contract":"published-aggregate-resource-import-v1","nativePlatform":"macos","nativeManifestSHA256":native.manifestSHA256,"foreignPlatform":"android","foreignManifestSHA256":selectedSHA,"rawHTMLSHA256":source.rawHTMLSHA256,"sourceManifestSHA256":source.descriptor.source.manifestSHA256]
+        try immutable(JSONSerialization.data(withJSONObject:provenance,options:[.sortedKeys,.withoutEscapingSlashes]),to:child(["aggregate-resource-imports-macos-v1",native.manifestSHA256,selectedSHA+".json"]))
+        return native
     }
 }

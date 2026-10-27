@@ -58,6 +58,14 @@ async function check(label,width,height,hostile=false){
   assert.match(await frame.locator('main').innerText(),/\[图片未缓存：missing UI-only slot\]/);assert.match(await frame.locator('main').innerText(),/Missing-slot caption retained/);
   assert.match(await page.locator('.aggregate-status').innerText(),/图片 1\/2 已保存/);assert.match(await page.locator('.aggregate-status').innerText(),/UI-only local image fixture/);assert.equal(await page.locator('.aggregate-status.is-stale').count(),1);
   await page.locator('.aggregate-source summary').click();const sourceText=await page.locator('.aggregate-source').innerText();assert.ok(sourceText.includes(iconSHA)&&sourceText.includes(doc.resourceManifestSHA256));assert.match(sourceText,/不是完整离线包/);assert.match(sourceText,/Controlled missing image/);await page.locator('.aggregate-source summary').click();
+  if(hostile){
+   // The production math display now sanitizes before mounting the frame. Preserve
+   // the independent CSP negative by attempting the same resource after that boundary.
+   assert.equal(await frame.locator('#blocked-ui-remote,script').count(),0);
+   assert.deepEqual(remoteRequests,[],'Hostile receipt resource must be removed before frame load');
+   await frame.evaluate(()=>{const image=document.createElement('img');image.id='blocked-ui-remote';image.src='https://unapproved.invalid/ui-must-not-fetch.png';document.querySelector('main').append(image);});
+   await frame.waitForFunction(()=>{const image=document.getElementById('blocked-ui-remote');return image?.complete&&image.naturalWidth===0;});
+  }
   const policy=await frame.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');assert.match(policy,/default-src 'none'/);assert.match(policy,/img-src data:/);assert.match(policy,/script-src 'none'/);assert.equal(await page.locator('#aggregate-view iframe').getAttribute('sandbox'),'allow-same-origin');
   assert.deepEqual(remoteTransport,[]);assert.deepEqual(remoteResponses,[]);assert.equal(await page.evaluate(()=>window.__untrustedImageFrameRan===true),false);
   if(hostile){assert.equal(remoteRequests.filter(x=>x.type==='image').length,1);assert.equal(failedRemote.filter(x=>x.reason==='csp').length,1);assert.equal(await frame.locator('#blocked-ui-remote').evaluate(i=>i.complete&&i.naturalWidth===0),true);}else assert.deepEqual(remoteRequests,[]);

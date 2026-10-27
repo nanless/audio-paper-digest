@@ -6,16 +6,17 @@ extension PaperDigestApp {
     func nativeWorkspaceContextDidChange(){retireAggregateContext();nativeTasksContextDidChange();nativeNotesContextDidChange()}
     func nativeNotesSnapshot()throws->NativeNotesSnapshot{guard let store else{throw NativeNotesError.unavailable};return try NativeNotesProjection.make(store.value)}
     func installNativeNotes(){
-        nativeNotesController?.retire();nativeNotesWindowID=UUID()
+        retireNativeNotes(restoreFocus:true);nativeNotesWindowID=UUID()
         let coordinator=NativeNotesHostCoordinator(context:nativeNotesContext);nativeNotesCoordinator=coordinator
         let controller=NativeNotesController(route:.init(owner:nativeNotesContext.owner),provider:{[weak self] in guard let self else{throw NativeNotesError.unavailable};return try self.nativeNotesSnapshot()},open:{[weak self,weak coordinator] lease in guard let self,let coordinator else{throw NativeNotesError.stale};try await self.performNativeNotesOpen(lease,coordinator:coordinator)},close:{[weak self,weak coordinator] in guard let self,let coordinator else{throw NativeNotesError.stale};try await self.performNativeNotesClose(coordinator:coordinator)})
-        nativeNotesController=controller;controller.view.isHidden=true;window.contentView?.addSubview(controller.view);updateNativeNotesAppearance()
+        nativeNotesController=controller;controller.view.isHidden=true;updateNativeNotesAppearance()
     }
     func updateNativeNotesAppearance(){let name=store?.setting("appearance") as? String ?? "system";nativeNotesController?.view.appearance=name=="dark" ? NSAppearance(named:.darkAqua):name=="light" ? NSAppearance(named:.aqua):nil}
     func retireNativeNotes(restoreFocus:Bool){
         nativeNotesCoordinator?.retire()
         if restoreFocus,let root=nativeNotesController?.view,let responder=window?.firstResponder as? NSView,responder===root || responder.isDescendant(of:root){window?.makeFirstResponder(web)}
         nativeNotesController?.retire()
+        nativeNotesController?.view.removeFromSuperview()
     }
     func nativeNotesContextDidChange(){
         nativeNotesRequestedVisible=false
@@ -43,12 +44,20 @@ extension PaperDigestApp {
         guard command=="nativeNotes.present" else{throw NativeNotesError.stale}
         let request=try NativeNotesPresentRequest(payload)
         guard !request.notes || !nativeTasksRequestedVisible else{throw NativeNotesError.stale}
-        let ticket=try coordinator.reserve(request,current:context);nativeNotesRequestedVisible=request.notes;if request.notes{controller.prepareForLayout(sequence:request.sequence,focusIntent:request.focusIntent,keyboardSource:source)}else{controller.retire()}
+        let ticket=try coordinator.reserve(request,current:context);nativeNotesRequestedVisible=request.notes;if request.notes{controller.prepareForLayout(sequence:request.sequence,focusIntent:request.focusIntent,keyboardSource:source)}else{
+            guard nativeNotesController===controller,nativeNotesCoordinator===coordinator,nativeNotesContext==context,coordinator.isLatest(ticket,current:nativeNotesContext) else{throw NativeNotesError.stale}
+            if let responder=window?.firstResponder as? NSView,responder===controller.view || responder.isDescendant(of:controller.view){window?.makeFirstResponder(web)}
+            controller.retire()
+        }
         do{
             let observation=request.notes ? try await nativeNotesObservedDOM(source:source):nil
             guard source===web,nativeNotesContext==context,!terminationPending,!maintenanceBusy,!storageDetailsActive,!request.notes || !nativeTasksRequestedVisible else{throw NativeNotesError.stale}
             let f=web.frame,frame=NativeTaskRectangle(x:f.minX,y:f.minY,width:f.width,height:f.height)
-            if let ready=try coordinator.finish(ticket,current:nativeNotesContext,observation:observation,nativeFrame:frame,pageZoom:web.pageZoom){pdfView.isHidden=true;try controller.apply(ready.layout,allowed:ready.allowed);}
+            if let ready=try coordinator.finish(ticket,current:nativeNotesContext,observation:observation,nativeFrame:frame,pageZoom:web.pageZoom){
+                guard let content=window?.contentView,controller.view.superview==nil || controller.view.superview===content else{throw NativeNotesError.stale}
+                if controller.view.superview==nil{content.addSubview(controller.view)}
+                pdfView.isHidden=true;try controller.apply(ready.layout,allowed:ready.allowed);
+            }
             else{retireNativeNotes(restoreFocus:true)}
             return ["accepted":true]
         }catch{if coordinator.isLatest(ticket,current:nativeNotesContext){nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)};throw NativeNotesError.stale}

@@ -91,9 +91,37 @@ struct NativeTaskPage {
               matches[0]["kind"] as? String == (command == "model.check" ? "connection-check" : "study") else { return nil }
         return matches[0]
     }
+    // A historical paper context never identifies a website aggregate. Only the native
+    // producer's versioned descriptor witness is displayed as the aggregate source.
+    static func aggregateSource(_ job: [String: Any]) -> (id: String, title: String, kind: String, manifest: String, shard: String, row: String)? {
+        guard job["command"] as? String == "aggregates.document",
+              let value = job["aggregateSource"] as? [String: Any],
+              Set(value.keys) == ["contract", "id", "title", "kind", "manifestSHA256", "shardSHA256", "normalizedRowSHA256"],
+              value["contract"] as? String == "aggregate-task-source-v1",
+              let id = identifier(value["id"]), id.hasPrefix("page:/"), id.count > 6,
+              let title = text(value["title"], limit: 512),
+              let kind = value["kind"] as? String, ["daily", "conference", "page"].contains(kind),
+              let manifest = validSHA(value["manifestSHA256"]), let shard = validSHA(value["shardSHA256"]),
+              let row = validSHA(value["normalizedRowSHA256"]) else { return nil }
+        return (id, title, kind, manifest, shard, row)
+    }
     static func metadata(_ job: [String: Any], sessions: [[String: Any]]?) -> [String] {
         let command = job["command"] as? String ?? ""
         var lines = ["对象身份：" + (command == "library.sync" ? "全站目录" : (text(job["identity"]) ?? text(job["paperID"]) ?? "未记录"))]
+        if command == "aggregates.document" {
+            let aggregate = aggregateSource(job)
+            lines = ["对象身份：网站汇总 · " + (aggregate?.id ?? "原聚合身份未记录")]
+            if let aggregate {
+                let kindTitle = ["daily": "日更汇总", "conference": "会议汇总与专题", "page": "网站页面"][aggregate.kind] ?? "网站汇总"
+                lines.append("材料依据：原聚合目录 · 类别 " + kindTitle + " · 目录 SHA-256 " + aggregate.manifest + " · 分片 SHA-256 " + aggregate.shard + " · 原行 SHA-256 " + aggregate.row)
+            } else {
+                lines.append("材料依据：本任务未记录可核对的聚合目录见证")
+                let context = [text(job["title"], limit: 512).map { "标题：" + $0 }, text(job["paperID"]).map { "论文ID：" + $0 }, text(job["identity"]).map { "身份：" + $0 }].compactMap { $0 }
+                if !context.isEmpty { lines.append("原记录上下文（不代表聚合身份）：" + context.joined(separator: " · ")) }
+            }
+            lines.append("模型费用：本任务无需本地模型请求")
+            return lines
+        }
         if command == "library.sync" {
             let context = [text(job["title"], limit: 512).map { "标题：" + $0 }, text(job["paperID"]).map { "论文ID：" + $0 }, text(job["identity"]).map { "身份：" + $0 }].compactMap { $0 }
             if !context.isEmpty { lines.append("原记录上下文（不代表同步范围）：" + context.joined(separator: " · ")) }
@@ -133,12 +161,13 @@ struct NativeTaskPage {
     static func make(_ input: NativeTaskInput) throws -> NativeTaskSnapshot {
         guard let jobs = input.jobs else { throw NativeTaskPresentationError.recordsUnavailable }
         var ids: [String: Int] = [:]; for job in jobs { if let id = identifier(job["id"]) { ids[id, default: 0] += 1 } }
-        let names = ["cloud.check": "检查坚果云连接", "cloud.upload": "云端完整备份", "cloud.list": "读取云端备份版本", "cloud.restore": "恢复云端研究空间", "library.sync": "同步网站目录", "library.article": "读取图文导读", "library.downloadPDF": "下载原文", "pdf.open": "打开原文", "model.run": "个人解析", "model.check": "模型连接测试", "archive.materials": "准备归档材料", "zotero.archive": "存入 Zotero", "zotero.resume": "继续 Zotero 归档", "storage.prepare": "保存离线快照", "app.export": "导出研究"]
+        let names = ["cloud.check": "检查坚果云连接", "cloud.upload": "云端完整备份", "cloud.list": "读取云端备份版本", "cloud.restore": "恢复云端研究空间", "library.sync": "同步网站目录", "aggregates.document": "读取网站汇总", "library.article": "读取图文导读", "library.downloadPDF": "下载原文", "pdf.open": "打开原文", "model.run": "个人解析", "model.check": "模型连接测试", "archive.materials": "准备归档材料", "zotero.archive": "存入 Zotero", "zotero.resume": "继续 Zotero 归档", "storage.prepare": "保存离线快照", "app.export": "导出研究"]
         let statuses = ["running": "进行中", "queued": "等待中", "complete": "已完成", "partial": "部分完成", "failed": "失败", "interrupted": "上次运行中断", "cancelled": "已取消"]
         let terminal = Set(["complete", "partial", "failed", "interrupted", "cancelled"])
         let sessionIndex = input.sessions.map { sessions in Dictionary(grouping: sessions, by: { ($0["id"] as? String) ?? "" }) }
         let rows = try jobs.enumerated().map { index, job -> NativeTaskRow in
-            let id = identifier(job["id"]), paper = identifier(job["paperID"]), command = job["command"] as? String, status = job["status"] as? String
+            let id = identifier(job["id"]), command = job["command"] as? String, status = job["status"] as? String
+            let paper = command == "aggregates.document" ? nil : identifier(job["paperID"])
             let unique = id.map { ids[$0] == 1 } ?? false
             var actions: [NativeTaskAction] = []
             if unique, let id {
@@ -153,7 +182,7 @@ struct NativeTaskPage {
             let rawProgress = job["progress"] as? [String: Any] ?? [:]
             let progress: NativeTaskProgress?
             if let done = integer(rawProgress["completed"]), let total = integer(rawProgress["total"]), total > 0, done <= total { progress = .init(completed: done, total: total) } else { progress = nil }
-            let title = command == "library.sync" ? "同步网站目录" : (text(job["title"], limit: 512) ?? command.flatMap { names[$0] } ?? "原任务标题未记录")
+            let title = command == "library.sync" ? "同步网站目录" : command == "aggregates.document" ? (aggregateSource(job)?.title ?? "读取网站汇总") : (text(job["title"], limit: 512) ?? command.flatMap { names[$0] } ?? "原任务标题未记录")
             let commandTitle = command.flatMap { names[$0] } ?? text(command) ?? "任务类型未记录"
             let statusTitle = status.flatMap { statuses[$0] } ?? "原状态未识别"
             let relevant: [String: Any] = ["id": id ?? "", "paperID": paper ?? "", "command": command ?? "", "status": status ?? "", "unique": unique, "actions": actions.map(\.rawValue), "metadata": details]

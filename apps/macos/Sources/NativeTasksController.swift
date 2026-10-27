@@ -87,6 +87,7 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
         catch { if isViewLoaded { view.isHidden = !route.showing }; throw error }
         pendingLayoutSequence=nil
         _ = view
+        monitorKeyboardWindow(view.window)
         view.isHidden = !route.showing
         if route.showing {
             view.frame = NSRect(x: layout.rectangle.x, y: layout.rectangle.y, width: layout.rectangle.width, height: layout.rectangle.height)

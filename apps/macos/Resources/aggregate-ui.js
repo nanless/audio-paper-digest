@@ -5,7 +5,7 @@ const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&
 const frameCSS=`:root{color-scheme:light dark}*{box-sizing:border-box}body{margin:0;background:light-dark(#fdfdfc,#222326);color:light-dark(#24272b,#ebebe7);font:var(--font,18px)/1.95 -apple-system,'PingFang SC',sans-serif;overflow-wrap:anywhere}main{max-width:840px;width:100%;margin:auto;padding:20px 38px 90px}h1{font-size:30px;line-height:1.4}h2{font-size:24px;line-height:1.5;margin-top:36px}h3{font-size:20px}a{color:light-dark(#3468cf,#98b8ff)}table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;font-size:14px}th,td{padding:9px;border:1px solid light-dark(#d5d8da,#515459)}pre{overflow:auto;white-space:pre-wrap;padding:18px;background:light-dark(#f0f1ee,#313337)}img{display:block;max-width:100%;height:auto}img:not([src]){display:none}figcaption{font-size:.88em;line-height:1.7;color:light-dark(#535b63,#b7bec5)}figure{margin:24px 0}math[display=block]{display:block;overflow:auto;margin:24px 0}blockquote{margin:22px 0;border-left:3px solid #8b9fa9;padding-left:18px}@media(max-width:650px){main{padding:16px 24px 70px}h1{font-size:25px}}`;
 
 /** Aggregate pages keep their own ID/session/document contract; no Paper or Article is synthesized. */
-export function mountAggregates(app,{open,onBack,onPaper}){
+export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>input}){
  const $=id=>document.getElementById(id);let sequence=0,indexSequence=0,active=null,frame=null,returnView='library';
  const link=document.createElement('link');link.rel='stylesheet';link.href='aggregate.css';document.head.append(link);
  const navigation=$('app-window').querySelector('[data-view=conference]').parentElement;
@@ -30,6 +30,8 @@ export function mountAggregates(app,{open,onBack,onPaper}){
  function render(value,request,session){
   if(!current(request,session))return false;
   if(value?.contract!=='published-aggregate-document-v1'||value.descriptor?.id!==session.id||value.sessionID!==session.sessionID||typeof value.displayHTML!=='string')throw new Error('汇总正文回执与当前页面不一致');
+  // Pure local display derivation; original receipt/raw/body/image identities are never rewritten.
+  const displayHTML=prepareBody(value.displayHTML);if(!current(request,session))return false;
   freshPane();const descriptor=value.descriptor,actions=topBar(descriptor.titleZh||descriptor.title,request);
   actions.append(button('打开原站',()=>app.call('aggregates.website',sessionPayload(session)).catch(app.error)));
   const resourceRows=Array.isArray(value.resourceImages)?value.resourceImages:(value.resources||[]),missingImages=resourceRows.filter(row=>row.missingReason).length,savedImages=resourceRows.length-missingImages;
@@ -45,7 +47,7 @@ export function mountAggregates(app,{open,onBack,onPaper}){
   const outline=document.createElement('details');outline.className='aggregate-outline';outline.append(text('summary','本页目录'));const entries=document.createElement('nav');entries.setAttribute('aria-label','汇总正文目录');outline.append(entries);pane.append(outline);
   frame=document.createElement('iframe');frame.className='aggregate-frame';frame.title=(labels[descriptor.kind]||'网站页面')+'：'+(descriptor.titleZh||descriptor.title);frame.setAttribute('sandbox','allow-same-origin');const rendered=frame;
   frame.addEventListener('load',()=>{if(!current(request,session)||frame!==rendered)return;appearance();const doc=frame.contentDocument;if(!doc)return;entries.replaceChildren();for(const [i,heading]of [...doc.querySelectorAll('h2,h3')].entries()){if(!heading.id)heading.id='aggregate-heading-'+i;entries.append(button(heading.textContent,()=>{if(current(request,session))heading.scrollIntoView();}));}outline.hidden=!entries.childElementCount;doc.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;event.preventDefault();const value=anchor.getAttribute('data-aggregate-link');if(value&&/^(?:0|[1-9][0-9]*)$/.test(value))activateLink(Number(value),request,session);});});
-  frame.srcdoc=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'"><title>${escape(descriptor.titleZh||descriptor.title)}</title><style>${frameCSS}</style></head><body><main>${value.displayHTML}</main></body></html>`;pane.append(frame);return true;
+  frame.srcdoc=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'"><title>${escape(descriptor.titleZh||descriptor.title)}</title><style>${frameCSS}</style></head><body><main>${displayHTML}</main></body></html>`;pane.append(frame);return true;
  }
  async function leave(){const session=active;++sequence;if(session){await app.call('aggregates.leave',sessionPayload(session));if(active===session)active=null;}frame=null;}
  async function renderIndex(view){

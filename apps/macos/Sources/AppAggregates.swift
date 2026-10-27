@@ -33,6 +33,29 @@ extension PaperDigestApp {
               window.attachedSheet == nil, NSApp.modalWindow == nil,
               !terminationPending, !maintenanceBusy else { throw DesktopError.message("请先关闭当前原生面板，再打开汇总") }
     }
+    // This is called only with the actor-minted access, after the await owner check.
+    // It records provenance, not a capability to reopen a paper or invoke a provider.
+    func recordAggregateJobSource(_ session: AggregateViewSession, access: AggregateReadAccess) throws {
+        guard aggregateSession === session, session.generation == contextGeneration,
+              session.access === access, access.descriptor.id == session.aggregateID,
+              currentPaperID.isEmpty, currentArticle.isEmpty, !terminationPending, !maintenanceBusy,
+              let records = store.value["jobs"] as? [[String: Any]],
+              records.filter({ $0["id"] as? String == session.id }).count == 1,
+              var row = records.first(where: { $0["id"] as? String == session.id }),
+              row["command"] as? String == "aggregates.document", row["status"] as? String == "running" else {
+            throw DesktopError.message("汇总任务或来源身份已变化，未写入其他记录")
+        }
+        let descriptor = access.descriptor
+        let title = descriptor.titleZh.isEmpty ? descriptor.title : descriptor.titleZh
+        row["paperID"] = ""
+        row["title"] = title
+        row["aggregateSource"] = ["contract": "aggregate-task-source-v1", "id": descriptor.id,
+            "title": title, "kind": descriptor.kind.rawValue,
+            "manifestSHA256": descriptor.source.manifestSHA256, "shardSHA256": descriptor.source.shardSHA256,
+            "normalizedRowSHA256": descriptor.source.normalizedRowSHA256]
+        try store.upsertJob(row)
+        emit("jobs.changed")
+    }
     func dispatchAggregates(_ command: String, payload: [String: Any]) async throws -> [String: Any] {
         if command == "aggregates.list" {
             guard payload.isEmpty else { throw DesktopError.message("汇总目录不接受自报来源") }
@@ -79,6 +102,7 @@ extension PaperDigestApp {
                 try Task.checkCancellation()
                 guard self.aggregateSession === session, session.generation == self.contextGeneration else { throw CancellationError() }
                 session.access = access
+                try self.recordAggregateJobSource(session, access: access)
                 let document = try await self.library.aggregatePresentation(access)
                 try Task.checkCancellation()
                 guard self.aggregateSession === session, session.generation == self.contextGeneration, !self.terminationPending, !self.maintenanceBusy else { throw DesktopError.message("汇总已关闭，迟到正文未安装") }

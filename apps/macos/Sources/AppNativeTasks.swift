@@ -4,11 +4,11 @@ import WebKit
 extension PaperDigestApp {
     var nativeTasksContext:NativeTaskHostContext{.init(owner:.init(windowID:nativeTaskWindowID,documentID:nativeTaskDocumentID,contextGeneration:contextGeneration),paperID:currentPaperID)}
     func installNativeTasks(){
-        nativeTaskController?.retire();nativeTaskWindowID=UUID()
+        retireNativeTasks(restoreFocus:true);nativeTaskWindowID=UUID()
         let coordinator=NativeTaskHostCoordinator(context:nativeTasksContext);nativeTaskCoordinator=coordinator
         let route=NativeTaskRouteGate(owner:nativeTasksContext.owner)
         let controller=NativeTasksController(route:route,provider:{[weak self] in guard let self,let store=self.store else{throw NativeTaskPresentationError.recordsUnavailable};return .init(jobs:store.value["jobs"] as? [[String:Any]],sessions:store.value["sessions"] as? [[String:Any]],liveJobIDs:Set(self.jobs.keys))},callbacks:.init(sourceBound:{[weak self,weak coordinator] lease in guard let self,let coordinator else{throw NativeTaskPresentationError.stale};return try await self.performNativeTaskAction(lease,coordinator:coordinator)}))
-        nativeTaskController=controller;let view=controller.view;view.isHidden=true;window.contentView?.addSubview(view)
+        nativeTaskController=controller;let view=controller.view;view.isHidden=true
         updateNativeTasksAppearance()
     }
     func updateNativeTasksAppearance(){let name=store?.setting("appearance") as? String ?? "system";nativeTaskController?.view.appearance=name=="dark" ? NSAppearance(named:.darkAqua):name=="light" ? NSAppearance(named:.aqua):nil}
@@ -20,6 +20,7 @@ extension PaperDigestApp {
         nativeTaskCoordinator?.retire()
         if restoreFocus,let root=nativeTaskController?.view,let responder=window?.firstResponder as? NSView,responder===root || responder.isDescendant(of:root){window?.makeFirstResponder(web)}
         nativeTaskController?.retire()
+        nativeTaskController?.view.removeFromSuperview()
     }
     func nativeTasksObservedDOM(source:WKWebView)async throws->NativeTaskDOMObservation{
         let script="""
@@ -44,12 +45,18 @@ extension PaperDigestApp {
         guard !request.tasks || !nativeNotesRequestedVisible else{throw NativeTaskPresentationError.stale}
         let ticket=try coordinator.reserve(request,current:context)
         nativeTasksRequestedVisible=request.tasks
-        if request.tasks{controller.prepareForLayout(sequence:request.sequence,focusIntent:request.focusIntent,keyboardSource:source)}else{controller.retire()}
+        if request.tasks{controller.prepareForLayout(sequence:request.sequence,focusIntent:request.focusIntent,keyboardSource:source)}else{
+            guard nativeTaskController===controller,nativeTaskCoordinator===coordinator,nativeTasksContext==context,coordinator.isLatest(ticket,current:nativeTasksContext) else{throw NativeTaskPresentationError.stale}
+            if let responder=window?.firstResponder as? NSView,responder===controller.view || responder.isDescendant(of:controller.view){window?.makeFirstResponder(web)}
+            controller.retire()
+        }
         do{
             let observation=request.tasks ? try await nativeTasksObservedDOM(source:source):nil
             guard source===web,nativeTasksContext==context,!terminationPending,!maintenanceBusy,!storageDetailsActive else{throw NativeTaskPresentationError.stale}
             let f=web.frame,frame=NativeTaskRectangle(x:f.minX,y:f.minY,width:f.width,height:f.height)
             if let ready=try coordinator.finish(ticket,current:nativeTasksContext,observation:observation,nativeFrame:frame,pageZoom:web.pageZoom){
+                guard let content=window?.contentView,controller.view.superview==nil || controller.view.superview===content else{throw NativeTaskPresentationError.stale}
+                if controller.view.superview==nil{content.addSubview(controller.view)}
                 pdfView.isHidden=true;try controller.apply(ready.layout,allowedContent:ready.allowed)
 
             }else{retireNativeTasks(restoreFocus:true)}

@@ -59,6 +59,60 @@ import Darwin
   let staged=try BackupCodec.stage(data:encoded,parentDirectory:parent),restored=PublishedAggregateStore(directory:staged.stageDirectory)
   try check(try restored.cachedResourceRendering(source:source,manifestSHA256:full.manifestSHA256).bodyHTML==full.bodyHTML,"normal whole-backup encode/stage restores original source and source-bound image bytes")
   try check(rejects{_=try store.cacheResourceRendering(source:source,plan:plan,images:[:],missing:[:],observedAt:"invalid")},"resource observation time is validated")
+  try check(try AggregateForeignFixtures.nativeRawImport(),"foreign Android raw is natively rederived without rewriting foreign sidecar or observation")
+  try check(try AggregateForeignFixtures.badForeignBody(),"foreign damaged body witness fails before native publication")
+  try check(try AggregateForeignFixtures.badForeignDescriptor(),"foreign descriptor cannot borrow another original manifest row")
+  try check(try AggregateForeignFixtures.foreignImageSourceMismatch(),"foreign image slot mismatch cannot grant a native image rendering")
   print("RESULT passed=\(passed) failed=0; controlled graphics, no real image network claims")
+ }
+}
+
+
+private enum AggregateForeignFixtures {
+ struct Fixture {
+  let root:URL,store:PublishedAggregateStore,descriptor:PublishedAggregate,raw:String,folder:URL
+ }
+ static func require(_ value:Bool)throws{if !value{throw AggregateFailure.invalid("TEST foreign fixture assertion")}}
+ static func make()throws->Fixture {
+  let fm=FileManager.default,root=fm.temporaryDirectory.appendingPathComponent("aggregate-foreign51-"+UUID().uuidString)
+  try fm.createDirectory(at:root.appendingPathComponent("index"),withIntermediateDirectories:true)
+  let shard=try JSONSerialization.data(withJSONObject:[["pageType":"daily","permalink":"/audio-paper-digest-blog/foreign51/","title":"Controlled foreign source","date":"2026-10-24"]],options:.sortedKeys),sha=PublishedAggregateReader.sha(shard)
+  let manifest=try JSONSerialization.data(withJSONObject:["contract":"paper-search-index-manifest-v1","recordCount":1,"totalBytes":shard.count,"shards":[["url":"search-index/part-0001-"+sha.prefix(12)+".json","sha256":sha,"bytes":shard.count,"recordCount":1]]],options:.sortedKeys)
+  try shard.write(to:root.appendingPathComponent("index/"+sha+".json"));let store=PublishedAggregateStore(directory:root),descriptor=try store.stage(manifest:manifest,validationEpoch:UUID().uuidString).records[0]
+  let bytes=Data("<html><body><div id='article-body' class='post-content'><p>Before</p><figure><img src='https://arxiv.org/html/2501.00001v1/a.png' alt='Slot'/><figcaption>Original caption</figcaption></figure><p>After</p></div></body></html>".utf8)
+  let native=try LibraryService.extractAggregateHTML(bytes,descriptor:descriptor,responseURL:URL(string:descriptor.sourceURL)!,fetchedAt:"2026-10-24T00:00:00Z")
+  var foreign=try JSONSerialization.jsonObject(with:JSONEncoder().encode(native)) as! [String:Any]
+  let body="<p>Before</p><figure><img alt=\"Slot\"><figcaption>Original caption</figcaption></figure><p>After</p>"
+  foreign["parserContract"]="published-aggregate-jsoup-v1";foreign["bodyHTML"]=body;foreign["sanitizedBodySHA256"]=PublishedAggregateReader.sha(Data(body.utf8))
+  let folder=root.appendingPathComponent("aggregate-documents-android/"+PublishedAggregateReader.sha(Data(descriptor.id.utf8))+"/"+descriptor.source.manifestSHA256+"/"+native.rawHTMLSHA256)
+  try fm.createDirectory(at:folder,withIntermediateDirectories:true);try bytes.write(to:folder.appendingPathComponent("original.html"));try Data(body.utf8).write(to:folder.appendingPathComponent("body.html"));try JSONSerialization.data(withJSONObject:foreign,options:.sortedKeys).write(to:folder.appendingPathComponent("document.json"))
+  return .init(root:root,store:store,descriptor:descriptor,raw:native.rawHTMLSHA256,folder:folder)
+ }
+ static func nativeRawImport()throws->Bool {
+  let f=try make();defer{try?FileManager.default.removeItem(at:f.root)}
+  let original=try Data(contentsOf:f.folder.appendingPathComponent("document.json"));guard let native=try f.store.latestVerifiedDocument(for:f.descriptor)else{return false}
+  let again=try f.store.cachedDocument(descriptor:f.descriptor,rawHTMLSHA256:f.raw)
+  let unchanged=try Data(contentsOf:f.folder.appendingPathComponent("document.json"))==original
+  return native==again&&native.parserContract=="published-aggregate-html-v1"&&native.fetchedAt=="2026-10-24T00:00:00Z"&&native.bodyHTML.contains("Original caption")&&native.rawHTMLSHA256==f.raw&&unchanged
+ }
+ static func badForeignBody()throws->Bool {
+  let f=try make();defer{try?FileManager.default.removeItem(at:f.root)};try Data("bad".utf8).write(to:f.folder.appendingPathComponent("body.html"))
+  do{_=try f.store.latestVerifiedDocument(for:f.descriptor);return false}catch{return String(describing:error).contains("Android原网页派生见证未通过核验") && !FileManager.default.fileExists(atPath:f.root.appendingPathComponent("aggregate-documents").path)}
+ }
+ static func badForeignDescriptor()throws->Bool {
+  let f=try make();defer{try?FileManager.default.removeItem(at:f.root)};let path=f.folder.appendingPathComponent("document.json");var row=try JSONSerialization.jsonObject(with:Data(contentsOf:path)) as! [String:Any];var descriptor=row["descriptor"] as! [String:Any];descriptor["title"]="Other title";row["descriptor"]=descriptor;try JSONSerialization.data(withJSONObject:row).write(to:path)
+  do{_=try f.store.cachedDocument(descriptor:f.descriptor,rawHTMLSHA256:f.raw);return false}catch{return String(describing:error).contains("Android原网页来源或格式不受支持") && !FileManager.default.fileExists(atPath:f.root.appendingPathComponent("aggregate-documents").path)}
+ }
+ static func foreignImageSourceMismatch()throws->Bool {
+  let f=try make();defer{try?FileManager.default.removeItem(at:f.root)};let native=try f.store.cachedDocument(descriptor:f.descriptor,rawHTMLSHA256:f.raw),plan=try f.store.imagePlan(native)
+  let foreign=try JSONSerialization.jsonObject(with:Data(contentsOf:f.folder.appendingPathComponent("document.json"))) as! [String:Any]
+  var foreignPlan=try JSONSerialization.jsonObject(with:JSONEncoder().encode(plan)) as! [String:Any]
+  foreignPlan["originalBodySHA256"]=foreign["sanitizedBodySHA256"];var slots=foreignPlan["slots"] as! [[String:Any]];slots[0]["sourceURL"]="https://arxiv.org/html/2501.00001v1/other.png";foreignPlan["slots"]=slots
+  let record:[String:Any]=["slot":slots[0],"missingReason":"controlled missing"]
+  let witness:[String:Any]=["contract":AggregateResources.contract,"parserContract":"published-aggregate-jsoup-images-v1","plan":foreignPlan,"images":[record],"observedAt":"2026-10-24T00:00:00Z","renderedBodySHA256":String(repeating:"a",count:64),"completeOffline":false]
+  let bytes=try JSONSerialization.data(withJSONObject:witness,options:.sortedKeys),sha=PublishedAggregateReader.sha(bytes)
+  let folder=f.root.appendingPathComponent("aggregate-resource-renders-android-v1/"+PublishedAggregateReader.sha(Data(f.descriptor.id.utf8))+"/"+f.descriptor.source.manifestSHA256+"/"+f.raw+"/"+AggregateResources.contract)
+  try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true);try bytes.write(to:folder.appendingPathComponent(sha+".json"))
+  do{_=try f.store.importAndroidResourceRendering(native);return false}catch{return String(describing:error).contains("两端图片位置或图注不同") && !FileManager.default.fileExists(atPath:f.root.appendingPathComponent(AggregateResources.renderDirectory).path)}
  }
 }

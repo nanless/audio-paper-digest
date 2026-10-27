@@ -47,7 +47,7 @@ import AppKit
     func apply(_ layout:NativeNotesLayout,allowed:NativeTaskRectangle)throws{
         guard layout.owner==route.owner,layout.sequence>route.sequence,pendingLayoutSequence==nil || pendingLayoutSequence==layout.sequence else{throw NativeNotesError.stale}
         do{try route.accept(layout,allowed:allowed)}catch{retire();throw error}
-        pendingLayoutSequence=nil;_=view;view.isHidden = !route.showing
+        pendingLayoutSequence=nil;_=view;monitorKeyboardWindow(view.window);view.isHidden = !route.showing
         if route.showing{view.frame = .init(x:layout.rectangle.x,y:layout.rectangle.y,width:layout.rectangle.width,height:layout.rectangle.height);reload()}
     }
     func retire(){pendingLayoutSequence=nil;keyboardOwner=nil;keyboardSequence=0;keyboardSource=nil;keyboardGestureEpoch=nil;monitorKeyboardWindow(nil);deactivateForLayout()}
