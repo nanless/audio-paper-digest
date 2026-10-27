@@ -267,7 +267,7 @@ npm run test:compat
 | `lib/reader-parent-recovery.js` | Node 库：为已付费失败稿规划有累计上限的后续修复，核对每轮原稿、费用和父回执；公开诊断准备只允许实现变化，保留旧账，不自动添加请求额度。 |
 | `lib/reader-transport-continuation.js` | Node 库：为首个显式轮中有唯一配对 ECONNRESET、无新正文的同输入请求登记一次48k传输补充账；保留原80k账、内容次数和未知费用，原剩余32k只供正常局部修补，合计物理请求仍不超过6次。已消费补充的付费全文另按真实原点承接公共实现迁移，不复活安装前状态。 |
 | `lib/reader-parent-upstream-preflight.js` | Node 库：在真实日更论文锁、封存来源及原上游反馈作用域中，对副本复核正常主分析、资源扫描和七个文本阶段的指纹；失效时交回父阶段恢复，不改论文、成功状态或请求额度。 |
-| `lib/reader-scientific-quote-coverage.js` | Node 库：生成绑定和保存稿冷核共用逐格科学量检查；完整系数、带符号指数及单位须由同一已绑定引文的完整行支撑。只做临时数值投影，保留原稿、引文、通用分词和来源权限；不完整或错误科学量交回正常失败修复，不能剪行后当作通过。 |
+| `lib/reader-scientific-quote-coverage.js` | Node 库：生成绑定和保存稿冷核共用逐格科学量检查；旧完整行引文保持原规则，日更三阶段学习率表另须真实 PDF 字形能力逐角色证明完整科学量。只做临时数值投影，保留原稿、引文、其他单元格、通用分词和来源权限；不完整或错误科学量交回正常失败修复。 |
 | `lib/reader-fact-pre-request-recovery.js` | Node 库：只为真实零请求配置失败核验原完整签名父稿、同一未完成反馈与用量历史；不透明作用域仅将唯一短片段定位到原正文完整句，保留原失败和额度，不恢复旧正式文件。 |
 | `lib/reader-derived-parent-replay.js` | Node 内部库：在调用方完成真实付费、Git 与父稿核验后比较自动来源引文；仅对已绑定完整原表修正的槽位核验原稿与正常裁减投影，不生成父稿、发布资格或模型额度。 |
 | `lib/reader-pre-image-check.js` | Node 库：下载图片前，只读判断已用完修复次数且当前纯文本或原表检查仍失败的草稿；有新授权、剩余次数或已被当前检查接受时继续正常下载和完整验收，不复用旧像素证明。 |
@@ -305,7 +305,7 @@ npm run test:compat
 | `reader_grouped_vector_column_units.py` | 发布端重放与 Reader 相同的完整偏好向量表列单位；调用方先核四份封存来源及真实 PDF 引文，保留两层列路径、全部行和均值差合并格。 |
 | `lib/reader-authenticated-pdf-table-evidence.js` | 共用会议及历史真实 PDF 的私有来源能力，为正常 `source_quotes` 表派生唯一原表引文与严格行列单位证明；解析、恢复及保存后冷核使用同一实现，不制造 DOM 或放宽旧完整稿出版准入。 |
 | `lib/reader-source-table-column-units.js` | 在已核验的封存来源作用域中，以原 DOM 表、行名及同列单元格核对百分比单位；合并表头另须完整跨度覆盖、唯一指标路径及明确原表注。不改数字、单位或来源，冷态恢复与发布端同步重放。 |
-| `lib/reader-sealed-pdf-quote-evidence.js` | Reader 封存 PDF 逐字引文证据的绑定与重放。 |
+| `lib/reader-sealed-pdf-quote-evidence.js` | Reader 封存 PDF 逐字引文证据的绑定与重放；在真实来源作用域中为完整三阶段学习率引文建立临时字形能力，旧引文证明不变。 |
 | `lib/reader-sealed-pdf-table-evidence.js` | Reader 封存 PDF 原表结构与单元格证据的绑定与重放。 |
 | `lib/reader-source-blocked-normalization.js` | Node 库：对封存来源导致的完整表阻塞重跑唯一顺序调整，核对原稿与准备稿双 SHA，并保留真实绑定与承载正文的失败诊断；付费回放必须先逐字对应保存的原稿，不授予成功资格或新额度。 |
 | `lib/reader-source-diagnostics.js` | Node 库：把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
@@ -323,7 +323,7 @@ npm run test:compat
 | `reader_pdf_cell_evidence.py` | 按受控 PDF 提取和核验表格单元格证据。 |
 | `reader_pdf_visual_audit_cache.py` | Python 库：有界缓存旧 PDF 后端成功的纯视觉抽取；每次核对真实 PDF 和完整实现字节，返回独立副本；四份封存来源、当前绑定与逐格数字资格仍由原核验器每次重放。 |
 | `reader_sealed_pdf_column_units.py` | 核验受控 PDF 原表列单位证据，供 Node 和发布器重放。 |
-| `reader_sealed_pdf_quote_evidence.py` | 核验受控 PDF 精确引文，供 Node 和发布器重放。 |
+| `reader_sealed_pdf_quote_evidence.py` | 核验受控 PDF 精确引文，供 Node 和发布器重放；独立只读操作核对三阶段学习率的上标字形、完整引文范围及有限相邻归属，旧操作输出不变。 |
 | `reader_authenticated_pdf_hierarchical_table.py` | 从真实 PDF 完整表格的字形、列组、原行和条件带唯一映射展示子集；先闭合原表再选择，不猜单位，不制造 HTML DOM。 |
 | `reader_authenticated_pdf_footnote_evidence.py` | 从真实 PDF 独立导出同页同栏的当前作者资源声明、附着上标和唯一同号 URL；拒绝未来、否定、第三方和歧义归属。 |
 | `reader_sealed_pdf_table_evidence.py` | 核验受控 PDF 原表结构与单元格，供 Node 和发布器重放。 |

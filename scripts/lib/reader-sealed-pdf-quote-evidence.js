@@ -5,12 +5,15 @@ const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const CONTRACT = 'reader-sealed-pdf-quotes-v1';
+const SCIENTIFIC_CONTRACT = 'reader-sealed-pdf-scientific-quantities-v1';
+const SCIENTIFIC_OPERATION = 'scientific_glyph_atoms_v1';
 const scope = new AsyncLocalStorage(), root = path.resolve(__dirname, '../..');
+const scientificCapabilities = new WeakMap();
 const program = path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const stable = value => require('./reader-repair').hashDraft(value);
 
-function deriveBundle(expectation, quotes = []) {
+function deriveBundle(expectation, quotes = [], operation = null) {
     require('../env-loader').requireExternalRuntime('reader-sealed-pdf-quote-evidence');
     require('../workspace-role').requireWorkspaceRole('daily', root);
     const sources = path.resolve(expectation.rootDir || ''), run = path.basename(path.dirname(sources));
@@ -24,11 +27,12 @@ function deriveBundle(expectation, quotes = []) {
         fs.chmodSync(directory, 0o700);
         const file = path.join(directory, 'private-input.json'); let fd;
         try {
-            fs.writeFileSync(file, JSON.stringify({ pdfBase64: before.pdf.toString('base64'), pdfSha256: sha(before.pdf), quotes }), { mode: 0o600 });
+            if (operation !== null && operation !== SCIENTIFIC_OPERATION) throw new Error('Unknown sealed PDF operation');
+            fs.writeFileSync(file, JSON.stringify({ ...(operation ? {operation} : {}), pdfBase64: before.pdf.toString('base64'), pdfSha256: sha(before.pdf), quotes }), { mode: 0o600 });
             fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
             const raw = require('./reader-pdf-extraction-scope').runPdfExtractor(program, fd);
             const response = JSON.parse(raw), after = api.readFreshArxivRewriteSource(expectation);
-            if (response.contract !== CONTRACT || response.document?.contract !== CONTRACT
+            if (response.contract !== (operation ? SCIENTIFIC_CONTRACT : CONTRACT) || response.document?.contract !== CONTRACT
                 || response.document.pdfSha256 !== sha(before.pdf) || !Array.isArray(response.results) || response.results.length !== quotes.length
                 || !isDeepStrictEqual(before.manifest, after.manifest) || before.sourceManifestSha256 !== after.sourceManifestSha256
                 || stable(before.runtimeDetails) !== stable(after.runtimeDetails) || sha(fs.readFileSync(program)) !== programSha256) throw new Error('PDF quotation source or extraction program changed');
@@ -85,6 +89,32 @@ function assertQuoteEvidence(proof) {
     return true;
 }
 
+// The caller has resolved actual sealed-PDF quotations in the current source
+// scope. A JSON object or a copied returned token cannot create this authority.
+function scientificCoverageForQuotes(quotes) {
+    const active = scope.getStore();
+    if (!active || !Array.isArray(quotes)) throw new Error('Scientific PDF coverage requires the actual source scope');
+    const selected = quotes.flatMap((quote, index) => quote?.valueOrigin === 'sealed_pdf'
+        && quote.contract === CONTRACT ? [{quote,index}] : []);
+    if (!selected.length) return null;
+    const response = deriveBundle(active.expectation, selected.map(item=>item.quote.quote), SCIENTIFIC_OPERATION);
+    if (!isDeepStrictEqual(response.document, active.document)
+        || response.results.some((result,index)=>!result.eligible || !isDeepStrictEqual(result.evidence,selected[index].quote)))
+        throw new Error('Scientific PDF coverage differs from the original complete quotations');
+    const schedules = response.results.flatMap((result,index)=>result.family === 'adamw-three-stage-learning-rates-v1'
+        && result.scientificQuantities?.length === 3
+        ? [{quoteIndex:selected[index].index, atoms:result.scientificQuantities}] : []);
+    const token = Object.freeze(Object.create(null));
+    scientificCapabilities.set(token, {active,values:quotes.map(item=>typeof item==='string'?item:item?.quote),schedules});
+    return token;
+}
+function readScientificCoverage(token, values) {
+    const entry = scientificCapabilities.get(token);
+    if (!entry || entry.active !== scope.getStore() || !isDeepStrictEqual(entry.values,values))
+        throw new Error('Scientific PDF coverage token is absent, copied, stale or from another source');
+    return structuredClone(entry.schedules);
+}
+
 function withSavedPaper(paper, callback) {
     const bindings = paper?.apiReaderPlan?.tableBindings || [];
     const marked = bindings.filter(binding => binding.sealedPdfQuoteEvidence !== undefined);
@@ -119,4 +149,5 @@ function withSavedPaper(paper, callback) {
 const extractionScope = callback => require('./reader-pdf-extraction-scope').withPdfExtractionScope(callback);
 module.exports = { CONTRACT, deriveBundle, withArtifacts: (...args) => extractionScope(() => withArtifacts(...args)),
     document, evidenceForQuotes, quoteEvidence, assertQuoteEvidence,
-    withSavedPaper: (...args) => extractionScope(() => withSavedPaper(...args)), verifiedSourceContext };
+    withSavedPaper: (...args) => extractionScope(() => withSavedPaper(...args)), verifiedSourceContext,
+    scientificCoverageForQuotes, readScientificCoverage };

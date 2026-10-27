@@ -2011,8 +2011,12 @@ function readerNumericTokens(value) {
 }
 
 function readerScientificQuoteProjection(table, quotes) {
+    const values = quotes.map(item => typeof item === 'string' ? item : item?.quote);
+    const hasScientific = [table.header, ...table.rows].some(row => row.some(value => /(?:×|\\times)\s*10/.test(String(value))));
+    const pdfCapability = hasScientific && quotes.some(item => item?.valueOrigin === 'sealed_pdf')
+        ? require('./lib/reader-sealed-pdf-quote-evidence').scientificCoverageForQuotes(quotes) : null;
     return require('./lib/reader-scientific-quote-coverage').projectScientificQuoteCoverage(
-        table, quotes.map(item => typeof item === 'string' ? item : item?.quote), readerNumericTokens);
+        table, values, readerNumericTokens, { pdfCapability });
 }
 
 function readerScientificQuoteFailure(projection) {

@@ -7237,7 +7237,56 @@ def _reader_table_header_unit_evidence_failures(table, quotes):
     return failures
 
 
-def _api_reader_scientific_quote_projection(rendered, quote_corpus):
+class _ReaderScientificPdfQuoteCapability:
+    __slots__ = ('__weakref__',)
+
+
+_READER_SCIENTIFIC_PDF_QUOTES = weakref.WeakKeyDictionary()
+
+
+def _reader_verified_scientific_pdf_quotes(capability, source_binding, quote_corpus):
+    # A JSON proof, a quotation string or a boolean cannot issue this capability.
+    bound = _READER_SCIENTIFIC_PDF_QUOTES.get(capability) if type(capability) is _ReaderScientificPdfQuoteCapability else None
+    if bound is None or source_binding is not bound['binding'] \
+            or _stable_json_sha256(source_binding) != bound['bindingSha256'] \
+            or _javascript_string_sha256(bound['paper'].get('apiReaderArticle', '')) != bound['articleSha256'] \
+            or _daily_fresh_normalized_paper_id(bound['paper']) != bound['paperId'] \
+            or bound['paper'].get('freshRewriteProvenance') != bound['provenance'] \
+            or _stable_json_sha256(bound['paper'].get('analysisManifest', {}).get('sourceAcquisition')) != bound['sourceAcquisitionSha256']:
+        raise PublishDataValidationError('科学计数量缺少本次真实 PDF 与原表绑定能力。')
+    _daily_fresh_validate_bundle(bound['runDir'], bound['paperId'], bound['provenance'], bound['paper'])
+    actual_pdf = _daily_fresh_read_private_file(bound['pdfFile'], '科学计数量来源 PDF', 64 * 1024 * 1024)
+    if actual_pdf != bound['pdfBytes']:
+        raise PublishDataValidationError('科学计数量来源 PDF 在同次核验中变化。')
+    from reader_sealed_pdf_quote_evidence import extract_pdf_scientific_quantities
+    result = extract_pdf_scientific_quantities(actual_pdf, [proof['quote'] for proof in bound['proofs']])
+    if result.get('contract') != 'reader-sealed-pdf-scientific-quantities-v1' \
+            or result.get('document') != bound['document'] or len(result.get('results', [])) != len(bound['proofs']):
+        raise PublishDataValidationError('科学计数量提取未保留原 PDF 引文来源。')
+    atoms = {}
+    for original, response in zip(bound['proofs'], result['results']):
+        if response.get('eligible') is not True or response.get('evidence') != original:
+            raise PublishDataValidationError('科学计数量未重放完整原始 PDF 引文。')
+        if original['quote'] not in quote_corpus:
+            raise PublishDataValidationError('科学计数量来源引文不属于本表。')
+        quantities = response.get('scientificQuantities', [])
+        if quantities and response.get('family') != 'adamw-three-stage-learning-rates-v1':
+            raise PublishDataValidationError('科学计数量不属于获准的完整 AdamW 三阶段句。')
+        for atom in quantities:
+            role = atom.get('role')
+            if role not in ('SFT', 'RL-Stage I', 'RL-Stage II') or atom.get('unit') != '' or role in atoms:
+                raise PublishDataValidationError('科学计数量不属于唯一完整三阶段学习率。')
+            if not isinstance(atom.get('coefficient'), str) or not re.fullmatch(r'[+−-]?[0-9]+(?:\.[0-9]+)?', atom['coefficient']) \
+                    or not isinstance(atom.get('signedExponent'), str) or not re.fullmatch(r'[+-][0-9]+', atom['signedExponent']):
+                raise PublishDataValidationError('科学计数量系数或带符号指数不完整。')
+            atoms[role] = {**atom, 'quoteIndex': quote_corpus.index(original['quote']), 'origin': 'verified_pdf_glyph'}
+    if _daily_fresh_read_private_file(bound['pdfFile'], '科学计数量来源 PDF', 64 * 1024 * 1024) != actual_pdf:
+        raise PublishDataValidationError('科学计数量来源 PDF 在提取后变化。')
+    _daily_fresh_validate_bundle(bound['runDir'], bound['paperId'], bound['provenance'], bound['paper'])
+    return atoms if set(atoms) == {'SFT', 'RL-Stage I', 'RL-Stage II'} else {}
+
+
+def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientific_pdf_capability=None, source_binding=None):
     """Ephemeral whole-cell coverage only; never changes text, tokens or provenance.
 
     A complete signed coefficient/exponent/unit must occur in one bound quote
@@ -7303,6 +7352,31 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus):
                 key = quantity_key(single, single['sup'] or single['tex'])
             source_atoms.setdefault(key, (quote_index, line_index))
 
+    glyph_schedule = {}
+    roles = ('SFT', 'RL-Stage I', 'RL-Stage II')
+    schedule_profile = (rendered['header'] == ['阶段', '学习率', '采样与复用', '组与奖励']
+        and len(rendered['rows']) == 3 and all(len(values) == 4 for values in rendered['rows'])
+        and [values[0] for values in rendered['rows']] == list(roles))
+    # Other tables keep the old projection and do not trigger new PDF work.
+    if scientific_pdf_capability is not None and schedule_profile:
+        atoms = _reader_verified_scientific_pdf_quotes(scientific_pdf_capability, source_binding, quote_corpus)
+        if set(atoms) == set(roles):
+            baseline = re.compile(r'\s*(?P<coefficient>' + coefficient + r')\s*×\s*10(?P<base>[+−-][0-9]+)(?P<unit>\s*' + unit + r')?\s*')
+            admitted = {}
+            for row, role in enumerate(roles, 1):
+                value = str(rendered['rows'][row - 1][1])
+                parsed = line_atom.fullmatch(value.strip()) or baseline.fullmatch(value.strip())
+                if parsed is None:
+                    break
+                exponent = parsed.groupdict().get('sup') or parsed.groupdict().get('tex') or parsed.groupdict().get('base')
+                atom = atoms[role]
+                source_key = (atom['coefficient'].replace('−', '-').lstrip('+'), exponent_key(atom['signedExponent']), atom['unit'])
+                if quantity_key(parsed, exponent) != source_key:
+                    break
+                admitted[(row, 1)] = atom
+            if len(admitted) == 3:
+                glyph_schedule = admitted
+
     failures, proofs, tokens = [], [], set()
     for row, column, value in cells:
         if not marker.search(unicodedata.normalize('NFKC', value)):
@@ -7313,6 +7387,13 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus):
         # footnotes, or additional scalars from being mistaken for a unitless
         # prefix. No substring or fallback atom can grant coverage.
         stripped = value.strip()
+        if (row, column) in glyph_schedule:
+            atom = glyph_schedule[(row, column)]
+            proofs.append({'row': row, 'column': column, 'start': len(value) - len(value.lstrip()),
+                'end': len(value.rstrip()), 'coefficient': atom['coefficient'], 'signedExponent': atom['signedExponent'],
+                'unit': '', 'quoteIndex': atom['quoteIndex'], 'origin': atom['origin'], 'role': atom['role'],
+                'pdfGlyphEvidence': atom})
+            continue  # Only the three complete role-bound LR cells gain new coverage.
         match = line_atom.fullmatch(stripped)
         if not match:
             failures.append({'row': row, 'column': column, 'value': value,
@@ -7924,7 +8005,7 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
     return result
 
 
-def _verify_reader_sealed_pdf_quote_bindings(paper):
+def _verify_reader_sealed_pdf_quote_bindings(paper, *, scientific_capabilities=None):
     """Verify separate PDF quotations by re-extracting the official sealed file."""
     from reader_sealed_pdf_quote_evidence import extract_pdf_quote_document, quote_evidence
     bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
@@ -7952,8 +8033,9 @@ def _verify_reader_sealed_pdf_quote_bindings(paper):
     if artifacts != {key: value for key, value in runtime['structuredArtifacts'].items()
                      if key != 'payloadSha256'}:
         raise PublishDataValidationError('独立 PDF 引文输入与封存结构化来源不一致。')
-    document = extract_pdf_quote_document(_daily_fresh_read_private_file(
-        source_dir / 'source.pdf', '独立 PDF 引文来源文件', 64 * 1024 * 1024))
+    pdf_file = source_dir / 'source.pdf'
+    pdf_bytes = _daily_fresh_read_private_file(pdf_file, '独立 PDF 引文来源文件', 64 * 1024 * 1024)
+    document = extract_pdf_quote_document(pdf_bytes)
     if sum(len(binding.get('sealedPdfQuoteEvidence', []))
            for binding in marked if isinstance(binding.get('sealedPdfQuoteEvidence'), list)) > 64:
         raise PublishDataValidationError('独立 PDF 引文总数超过来源核验上限。')
@@ -7981,6 +8063,15 @@ def _verify_reader_sealed_pdf_quote_bindings(paper):
                 raise PublishDataValidationError('独立 PDF 引文不能由封存原文件完整重放。')
             actual_quotes.append(saved['quote'])
         result[index] = actual_quotes
+        if scientific_capabilities is not None:
+            capability = _ReaderScientificPdfQuoteCapability()
+            _READER_SCIENTIFIC_PDF_QUOTES[capability] = {'binding': binding,
+                'bindingSha256': _stable_json_sha256(binding), 'paper': paper,
+                'articleSha256': _javascript_string_sha256(paper.get('apiReaderArticle', '')),
+                'sourceAcquisitionSha256': _stable_json_sha256(paper.get('analysisManifest', {}).get('sourceAcquisition')),
+                'runDir': run_dir, 'paperId': paper_id, 'provenance': copy.deepcopy(proof),
+                'pdfFile': pdf_file, 'pdfBytes': pdf_bytes, 'document': copy.deepcopy(document), 'proofs': copy.deepcopy(quotes)}
+            scientific_capabilities[index] = capability
     return result
 
 
@@ -8492,7 +8583,8 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
         raise PublishDataValidationError('同一表格不能混用两种 PDF 来源证明。')
     pdf_values.update(generic_pdf_values)
     try:
-        pdf_quote_values = _verify_reader_sealed_pdf_quote_bindings(paper)
+        scientific_pdf_capabilities = {}
+        pdf_quote_values = _verify_reader_sealed_pdf_quote_bindings(paper, scientific_capabilities=scientific_pdf_capabilities)
     except Exception as error:
         raise PublishDataValidationError('独立封存 PDF 逐字引文不能重放：' + str(error)) from error
 
@@ -8646,7 +8738,8 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                 *[set(_api_reader_numeric_tokens(quote)) for quote in pdf_quote_values[index]])
                 if index in pdf_quote_values
                 else set(_api_reader_numeric_tokens('\n'.join(quote_corpus))))
-            scientific_projection = _api_reader_scientific_quote_projection(rendered, quote_corpus)
+            scientific_projection = _api_reader_scientific_quote_projection(rendered, quote_corpus,
+                scientific_pdf_capability=scientific_pdf_capabilities.get(index), source_binding=binding)
             if scientific_projection['failures']:
                 raise PublishDataValidationError(
                     f'第 {index} 个表格中的完整科学计数量未被本表来源引文精确覆盖：'
@@ -14495,6 +14588,7 @@ def review_protocol_fingerprint():
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'daily_hugo_capture.py': script_dir / 'daily_hugo_capture.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
+        'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
         'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'review-blog.py': script_dir / 'review-blog.py',
         'manual/manual-review-blog.py': MANUAL_SCRIPTS_DIR / 'manual-review-blog.py',
