@@ -527,7 +527,7 @@ class RootController private constructor(private val context: Context, private v
         } catch (error: Exception) {
             refresh()
             val message = when (error) { is AppFailure, is CloudFailure, is IllegalArgumentException, is IllegalStateException -> error.message ?: "操作未完成"; else -> "操作未完成，原资料已保留；请检查连接、权限或所选文件" }
-            _state.update { it.copy(error = message) }; throw AppFailure("operation", message)
+            _state.update { it.copy(error = message) }; throw ZoteroTransportObservation.operationFailure(message, error)
         }
     }
 
