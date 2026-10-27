@@ -1140,6 +1140,13 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
         || !Array.isArray(figures)
         || !authors || typeof authors !== 'object' || Array.isArray(authors)
         || !resources || typeof resources !== 'object' || Array.isArray(resources)) return false;
+    try { require('./lib/reader-request-diagnostics').validateReaderVersionMetadataCompletion(paper); }
+    catch (error) {
+        if (Array.isArray(options.diagnostics)) options.diagnostics.push({ check: 'reader_version_metadata_replay', message: error.message });
+        return false;
+    }
+    try { require('./lib/reader-target-ordinal-patch').validateCompletion(paper); }
+    catch (error) { options.diagnostics?.push({ check: 'reader_target_ordinal', message: error.message }); return false; }
     // Saved signatures prove identity, not that a retired numeric placeholder
     // table has meaningful result columns. Apply the current shared semantic
     // check to the actual published body, including legacy signed records.

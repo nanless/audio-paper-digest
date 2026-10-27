@@ -3099,6 +3099,10 @@ function readerLengthShortfall(issue) {
 }
 
 function repairOperationProtocol(context) {
+    if (context.atomicOperation?.kind === READER_VERSION_METADATA_KIND) return '本轮是 replace_reader_version_4_with_3_v1 原子操作，仅把完整旧 JSON 的顶层 version 数字 4 改为 3。'
+        + '不得删除、增加或重写任何其他键、正文、标记、表格、图片、公式或来源字段。'
+        + '只输出 {"version":1,"rawSha256":"复制 atomicOperation.rawSha256","fromVersion":4,"toVersion":3}。'
+        + '不输出完整文章、replacements、deleteFields 或任何额外字段；原文其余字节由程序保留，修复后仍完整核验整篇。';
     if (!context.atomicOperation && context.targets.every(target => /^\/(?:sections\/\d+\/body|conceptBridges\/\d+)$/.test(target.path))) return '本轮不修改表格、公式、图片及其来源声明；已有标记保持原样。';
     // 复杂结构仍使用冻结的完整来源协议，其正文同时进入实现指纹。
     const frozen = require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8');
@@ -3581,6 +3585,62 @@ function readTopLevelMembers(raw) {
     return members;
 }
 
+
+const READER_VERSION_METADATA_KIND = 'replace_reader_version_4_with_3_v1';
+function buildReaderVersionMetadataRepairContext(raw) {
+    if (typeof raw !== 'string' || Buffer.byteLength(raw) > MAX_FILE_BYTES) return null;
+    try {
+        const members = readTopLevelMembers(raw), value = require('./publication-file-primitives').strictJson(Buffer.from(raw), 'Reader version raw');
+        if (members.length !== ROOT_FIELDS.length || !ROOT_FIELDS.every(name => members.some(member => member.name === name))
+            || value.version !== 4 || typeof value.readerTitle !== 'string' || !value.readerTitle.trim()
+            || typeof value.oneSentenceThesis !== 'string' || !value.oneSentenceThesis.trim()
+            || ARRAY_FIELDS.some(name => !Array.isArray(value[name]))) return null;
+        const member = members.find(item => item.name === 'version');
+        if (raw.slice(member.valueStart, member.valueEnd) !== '4') return null;
+        const probe = { ...value, version: 3 };
+        if (!parseRepairableDraft(probe) || probe.sections.length > READER_LIMITS.maximumSections
+            || probe.conceptBridges.length < READER_LIMITS.minimumConceptBridges
+            || probe.figurePlacements.length > READER_LIMITS.maximumFigures
+            || !probe.sections.every(section => section && typeof section === 'object' && !Array.isArray(section)
+                && Object.keys(section).sort().join(',') === 'body,heading,kind'
+                && READER_SECTION_KINDS.includes(section.kind)
+                && ['kind','heading','body'].every(name => typeof section[name] === 'string' && section[name].trim()))) return null;
+        return { kind: READER_VERSION_METADATA_KIND, rawSha256: shaText(raw), fromVersion: 4, toVersion: 3 };
+    } catch { return null; }
+}
+function parseReaderVersionMetadataPatch(raw) {
+    if (typeof raw !== 'string' || Buffer.byteLength(raw) > 4096) throw new Error('Reader 版本补丁必须是完整的小型 JSON 对象');
+    const members = readTopLevelMembers(raw), value = require('./publication-file-primitives').strictJson(Buffer.from(raw), 'Reader version ACK');
+    assertSafeJson(value);
+    for (const [name,literal] of [['version','1'],['fromVersion','4'],['toVersion','3']]) {
+        const span = members.find(item => item.name === name);
+        if (!span || raw.slice(span.valueStart,span.valueEnd) !== literal) throw new Error('Reader version ACK requires exact integer literals');
+    }
+    if (members.length !== 4 || members.map(item => item.name).sort().join(',') !== 'fromVersion,rawSha256,toVersion,version') {
+        throw new Error('Reader 版本补丁包含多余、缺失或重复字段');
+    }
+    return value;
+}
+function applyReaderVersionMetadataRepair(raw, patch, context) {
+    const current = buildReaderVersionMetadataRepairContext(raw);
+    if (!current || JSON.stringify(current) !== JSON.stringify(context)
+        || !patch || typeof patch !== 'object' || Array.isArray(patch)
+        || Object.keys(patch).sort().join(',') !== 'fromVersion,rawSha256,toVersion,version'
+        || patch.version !== 1 || patch.rawSha256 !== current.rawSha256
+        || patch.fromVersion !== 4 || patch.toVersion !== 3) {
+        throw new Error('Reader 版本修复只允许模型明确绑定原始 SHA 并把完整稿 version 从 4 改为 3');
+    }
+    const member = readTopLevelMembers(raw).find(item => item.name === 'version');
+    const result = raw.slice(0,member.valueStart) + '3' + raw.slice(member.valueEnd);
+    const expected = JSON.parse(raw); expected.version = 3;
+    if (JSON.stringify(JSON.parse(result)) !== JSON.stringify(expected)
+        || result.slice(0,member.valueStart) !== raw.slice(0,member.valueStart)
+        || result.slice(member.valueStart + 1) !== raw.slice(member.valueEnd)) {
+        throw new Error('Reader 版本修复改变了 version 之外的原始字节');
+    }
+    return result;
+}
+
 function buildTopLevelMetadataRepairContext(raw) {
     if (typeof raw !== 'string') return null;
     try {
@@ -3602,6 +3662,7 @@ function buildTopLevelMetadataRepairContext(raw) {
 }
 
 function applyTopLevelMetadataRepair(raw, patch, context) {
+    if (context?.kind === READER_VERSION_METADATA_KIND) return applyReaderVersionMetadataRepair(raw, patch, context);
     const current = buildTopLevelMetadataRepairContext(raw);
     if (!current || JSON.stringify(context) !== JSON.stringify(current)
         || !patch || Object.keys(patch).sort().join(',') !== 'deleteFields,rawSha256,version'
@@ -3635,8 +3696,10 @@ const CONCEPT_TERMS_PROMPT_CONTRACT = 'reader-concept-terms-prompt-v1';
 const CONCEPT_TERMS_PROMPT_PATH = 'prompts/api-reader-concept-terms-v1.md';
 function readerRepairImplementationSha256() {
     return shaText([fs.readFileSync(__filename, 'utf8'),
+        fs.readFileSync(path.join(__dirname, 'reader-target-ordinal-patch.js'), 'utf8'),
         require('./prompt-evidence.js').readPromptEvidenceBytes(CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
-        require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8')].join('\0'));
+        require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8'),
+        fs.readFileSync(require.resolve('./reader-request-diagnostics.js'), 'utf8')].join('\0'));
 }
 function buildConceptTermsRepairContext(draft, issues, sourceText) {
     const blocking = issues.filter(issue => issue?.diagnosticOnly !== true);
@@ -3720,7 +3783,7 @@ function compileConceptTermsPatch(draft, response, context) {
         path: `/conceptBridges/${index}`, oldSha256: hashDraft(draft.conceptBridges[index]), value })) };
 }
 
-module.exports = { budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

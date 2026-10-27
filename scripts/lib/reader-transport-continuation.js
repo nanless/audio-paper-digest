@@ -191,6 +191,93 @@ function read(directory, parent) {
     }
     return { filename, receipt, identity: original.identity, payload: original.payload };
 }
+const CONSUMED_PAID_ANCHOR = 'reader-consumed-transport-paid-anchor-v1';
+function paidAnchorFile(directory, roundId) {
+    return path.join(path.dirname(location(directory, roundId)), roundId + '.consumed-paid-anchor.json');
+}
+function anchorPaidRows(files, identity, receipt, rawSha256) {
+    const root = path.resolve(require('../config').FILES.llmUsageDir);
+    if (!Array.isArray(files) || files.length !== 3) fail('consumed paid anchor requires the original three saved fee records');
+    const rows = files.map(file => {
+        if (path.dirname(path.resolve(file.file)) !== root || !uuid.test(path.basename(file.file,'.json'))
+            || !hex.test(file.sha256 || '')) fail('consumed paid anchor fee path differs');
+        const record = checked(file.file, file.sha256); return { ...file, event: record.value };
+    });
+    const starts = rows.filter(row => row.event.kind === 'request_started'), terminals = rows.filter(row => row.event.kind === 'request');
+    const dispositions = rows.filter(row => row.event.kind === 'disposition');
+    if (starts.length !== 1 || terminals.length !== 1 || dispositions.length !== 1) fail('consumed paid anchor history is ambiguous');
+    const start = starts[0].event, terminal = terminals[0].event, disposition = dispositions[0].event;
+    const labels = ['runId','paperId','stage','unitId','contentAttempt','transportAttempt','protocol','model','inputSha256'];
+    if (rows.some(({event}) => event.version !== 'llm-usage-v1' || event.runId !== identity.freshAnalysis.runId
+        || event.paperId !== identity.paperId || event.stage !== 'apiReaderArticle' || event.contentAttempt !== 1)
+        || start.eventId !== terminal.eventId || !labels.every(key => (start[key] ?? null) === (terminal[key] ?? null))
+        || start.model !== identity.model.model || start.protocol !== identity.model.protocol
+        || start.inputSha256 !== receipt.grant.inputSha256 || start.transportAttempt !== 1
+        || terminal.statusCode !== 200 || terminal.outcome !== 'completed' || terminal.transportStarted !== true
+        || terminal.outputTextSha256 !== rawSha256 || terminal.usage?.status !== 'reported'
+        || !Number.isSafeInteger(terminal.usage.totalTokens) || terminal.usage.totalTokens <= 0
+        || disposition.disposition !== 'rejected' || disposition.outputTextSha256 !== rawSha256
+        || Date.parse(start.at) < Date.parse(receipt.requests[0].at)
+        || Date.parse(start.at) - Date.parse(receipt.requests[0].at) > 10000
+        || !(Date.parse(start.at) < Date.parse(terminal.at) && Date.parse(terminal.at) <= Date.parse(disposition.at))) {
+        fail('consumed paid anchor is not the unique actual full response on the original body');
+    }
+}
+function readConsumedPaidAnchor(directory, state) {
+    const receipt = state.receipt, grant = receipt.grant;
+    const record = checked(paidAnchorFile(directory, grant.parentRoundId)), anchor = record.value;
+    const candidate = unpack(anchor.candidateSnapshot), envelope = candidate.value, payload = envelope.payload;
+    if (anchor.contract !== CONSUMED_PAID_ANCHOR || receipt.physicalRequests !== 1
+        || receipt.reservedOutputTokens !== 48000 || receipt.requests.length !== 1
+        || anchor.sidecarReceiptSha256 !== sha(fs.readFileSync(state.filename))
+        || anchor.sidecarGrantSha256 !== hash(grant) || anchor.originalA0EnvelopeSha256 !== grant.candidateEnvelopeSha256
+        || anchor.parentRoundId !== grant.parentRoundId || anchor.identitySha256 !== grant.identitySha256
+        || hash(envelope.identity) !== grant.identitySha256 || envelope.payloadSha256 !== hash(payload)
+        || payload.status !== 'failed' || payload.attempts !== 1 || payload.fullAttempts !== 1
+        || payload.transportFailures !== state.payload.transportFailures
+        || !equal(envelope.identity.freshAnalysis, state.identity.freshAnalysis)
+        || !equal(payload.explicitReaderRetryRound, state.payload.explicitReaderRetryRound)
+        || typeof payload.rawDraft !== 'string' || !payload.rawDraft.trim()
+        || anchor.rawSha256 !== sha(payload.rawDraft)) fail('consumed paid A1 ancestor differs');
+    anchorPaidRows(anchor.fees, envelope.identity, receipt, anchor.rawSha256);
+    return { anchor, candidate };
+}
+function prepareConsumedPaidAnchor({ directory, identity, paper, usageFiles }) {
+    const fresh = require('./fresh-analysis-context'), engine = require('../analysis-engine');
+    if (!fresh.isDailyFreshSourceScope() || !engine.paperAnalysisLockHeld(paper)
+        || path.resolve(fresh.freshReaderAttemptsDirectory()) !== path.resolve(directory)
+        || !equal(fresh.freshAnalysisIdentity(identity.paperId), identity.freshAnalysis)) fail('consumed paid anchor requires actual daily source and paper lock');
+    const candidate = checked(path.join(directory, hash(identity) + '.json'));
+    const roundId = candidate.value.payload?.explicitReaderRetryRound?.roundId;
+    const parent = checked(path.join(directory,'explicit-retry-rounds',roundId + '.json'));
+    const state = read(directory, parent.value);
+    if (!state || hash(identity) !== state.receipt.grant.identitySha256) fail('consumed anchor must start from the original supplement identity');
+    return require('./explicit-reader-retry-round').withExplicitRound(paper,parent.value.grant,()=>{
+        candidateLink(directory,state,identity,candidate.value.payload);
+        const anchor = { contract: CONSUMED_PAID_ANCHOR, parentRoundId: roundId,
+            sidecarReceiptSha256: sha(fs.readFileSync(state.filename)), sidecarGrantSha256: hash(state.receipt.grant),
+            originalA0EnvelopeSha256: state.receipt.grant.candidateEnvelopeSha256,
+            identitySha256: hash(identity), rawSha256: sha(candidate.value.payload.rawDraft),
+            candidateSnapshot: snapshot(candidate), fees: usageFiles, newRequests: 0, newBudget: 0 };
+        const filename = paidAnchorFile(directory,roundId);
+        if (fs.existsSync(filename)) {
+            if (!equal(checked(filename).value,anchor)) fail('a different consumed paid anchor already exists');
+        } else {
+            // Validate before the create-only write; the temporary record is
+            // not a grant and changes neither parent nor supplement ledgers.
+            const payload=candidate.value.payload;
+            if (state.receipt.physicalRequests!==1 || payload.attempts!==1 || payload.fullAttempts!==1
+                || payload.transportFailures!==state.payload.transportFailures || typeof payload.rawDraft!=='string') fail('consumed anchor requires saved first full content');
+            anchorPaidRows(usageFiles,identity,state.receipt,anchor.rawSha256);
+            const fd=fs.openSync(filename,'wx',0o600);
+            try { fs.writeFileSync(fd,JSON.stringify(anchor));fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+            const parentFd=fs.openSync(path.dirname(filename),'r');try{fs.fsyncSync(parentFd);}finally{fs.closeSync(parentFd);}
+        }
+        readConsumedPaidAnchor(directory,state);
+        return {file:filename,sha256:sha(fs.readFileSync(filename)),newRequests:0,newBudget:0};
+    });
+}
+
 function candidateLink(directory, state, identity, payload) {
     const { grant } = state.receipt;
     if (!equal(identity.freshAnalysis, state.identity.freshAnalysis)
@@ -201,11 +288,18 @@ function candidateLink(directory, state, identity, payload) {
         // Reuse the original strict normal migration verifier: allowed fields,
         // epoch, prompt/request policy, archive SHA and nondecreasing counters.
         const audit = (payload.readerRecoveryRevisions || []).filter(item => item.fromIdentitySha256 === grant.identitySha256);
-        if (audit.length !== 1 || audit[0].oldEnvelopeSha256 !== grant.candidateEnvelopeSha256
-            || audit[0].oldPayloadSha256 !== grant.payloadSha256) fail('missing exact continuation migration ancestor');
+        if (audit.length !== 1) fail('missing exact continuation migration ancestor');
+        let ancestorEnvelopeSha256 = grant.candidateEnvelopeSha256, ancestorPayloadSha256 = grant.payloadSha256;
+        if (audit[0].oldEnvelopeSha256 !== ancestorEnvelopeSha256 || audit[0].oldPayloadSha256 !== ancestorPayloadSha256) {
+            const paid = readConsumedPaidAnchor(directory, state);
+            ancestorEnvelopeSha256 = paid.candidate.sha256;
+            ancestorPayloadSha256 = hash(paid.candidate.value.payload);
+        }
+        if (audit[0].oldEnvelopeSha256 !== ancestorEnvelopeSha256 || audit[0].oldPayloadSha256 !== ancestorPayloadSha256)
+            fail('missing exact paid continuation migration ancestor');
         const archive = path.join(directory, audit[0].archivedName || '');
         const ancestor = fs.existsSync(archive) ? archive : path.join(directory, grant.identitySha256 + '.json');
-        checked(ancestor, grant.candidateEnvelopeSha256);
+        checked(ancestor, ancestorEnvelopeSha256);
         require('./explicit-reader-retry-round').sameRoundIdentityAfterPublicMigration(directory, identity, payload,
             { grant: { identitySha256: grant.identitySha256, runId: grant.runId } });
     }
@@ -267,4 +361,4 @@ function consume({ directory, parent, paper, body, options }) {
     fs.renameSync(temp, filename);
     return true;
 }
-module.exports = { CONTRACT, plan, install, validate, consume };
+module.exports = { CONTRACT, prepareConsumedPaidAnchor, plan, install, validate, consume };

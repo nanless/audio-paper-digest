@@ -11331,6 +11331,42 @@ def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_
 _READER_RESOURCE_CLAIM_REPLAY_CACHE = set()
 
 
+def _has_source_bound_reader_patch_completion(paper):
+    # Cache routing only. The Node validator reopens and proves every record.
+    manifest = paper.get('analysisManifest') or {}
+    contracts = manifest.get('contracts') or {}
+    stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
+    if any(key in contracts for key in ('readerTargetOrdinalPatch', 'readerVersionMetadataRecovery')) \
+            or any(key in stage for key in ('ordinalPatchContract', 'ordinalPatchCompilations',
+                'ordinalCompletionProof', 'versionMetadataRecoveryContract', 'versionMetadataRecoveryProof')):
+        return True
+    provenance = paper.get('freshRewriteProvenance') or {}
+    run_id = provenance.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        return False
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    run_file = run_dir / 'run.json'
+    if not run_file.exists():
+        return False
+    try:
+        run = json.loads(run_file.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return True
+    if run.get('contract') != 'daily-fresh-source-run-v1':
+        return False
+    paper_id = re.sub(r'v\d+$', '', str(paper.get('arxivId') or ''))
+    if not re.fullmatch(r'\d{4}\.\d{4,5}', paper_id):
+        return True  # Actual daily records cannot hide their index by dropping ID.
+    attempts = run_dir / 'reader-attempts'
+    metadata_directory = attempts / 'version-metadata-completion-index'
+    metadata_index = metadata_directory / (paper_id + '.json')
+    ordinal_index = attempts / 'ordinal-completions'
+    return metadata_index.exists() or metadata_index.is_symlink() or metadata_directory.is_symlink() \
+        or (metadata_directory.exists() and not metadata_directory.is_dir()) or ordinal_index.is_symlink() \
+        or (ordinal_index.exists() and not ordinal_index.is_dir()) \
+        or (ordinal_index.is_dir() and any(ordinal_index.glob(paper_id + '-*.json')))
+
+
 def _validate_reader_resource_claim_source_replay(paper, source_details, paper_id):
     """Production publication uses the same source-bound claim guard as writing."""
     if paper.get('analysisManifest', {}).get('contracts', {}).get('apiReaderArticle') \
@@ -11346,7 +11382,8 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
                               'resources': paper.get('apiReaderResources')}), paper.get('sourceSha256'),
            _sha256_file(cli), _sha256_file(SHARED_SCRIPTS_DIR / 'deep-analyzer.js'),
            _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-binding.js'))
-    if not authenticated_footnotes and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
+    bound_patch_completion = _has_source_bound_reader_patch_completion(paper)
+    if not authenticated_footnotes and not bound_patch_completion and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
         return
     node = shutil.which('node')
     if not node:
@@ -11359,7 +11396,7 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
         result = _run_bounded_subprocess(
             [node, str(cli), str(source_file.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
             env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=180 if authenticated_footnotes else 30,
+            timeout_seconds=180 if authenticated_footnotes or bound_patch_completion else 30,
             max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
     accepted_response = result.stdout.strip() == '{"verified":true}'
     if authenticated_footnotes:
@@ -11371,7 +11408,7 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
     if result.returncode != 0 or result.timed_out or result.output_truncated \
             or not accepted_response:
         raise PublishDataValidationError(f'{paper_id} 读者正文的资源可用性宣称未通过封存来源核验。')
-    if not authenticated_footnotes:
+    if not authenticated_footnotes and not bound_patch_completion:
         _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
 
 
@@ -14303,6 +14340,8 @@ def generation_template_fingerprint():
         'publication_local_replay.py': script_dir / 'publication_local_replay.py',
         'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
+        'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
+        'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
@@ -14466,6 +14505,8 @@ def review_protocol_fingerprint():
         'publication_local_replay.py': script_dir / 'publication_local_replay.py',
         'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
+        'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
+        'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
         'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
         'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
         'reader_damaged_raster_pdf_asset.py': script_dir / 'reader_damaged_raster_pdf_asset.py',

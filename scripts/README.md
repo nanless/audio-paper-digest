@@ -265,7 +265,7 @@ npm run test:compat
 | `lib/reader-paid-resolved-replay-worker.js` | Node 内部子进程：在无生产密钥且禁止网络的独立进程中运行固定旧渲染器，验证原响应能逐字恢复当前文章及计划；不直接接受发布任务。 |
 | `lib/reader-paid-response-replay.js` | Node 库：显式复验被旧程序变换损坏的付费原响应：正式用量记录须绑定原输出 SHA，真实后续修复请求及响应须精确关联原候选；保留原次数和失败记录，经正常完整解析与来源、事实反馈校验后才可保存。缺少这些证明时拒绝，不能作为通用原响应导入入口。 |
 | `lib/reader-parent-recovery.js` | Node 库：为已付费失败稿规划有累计上限的后续修复，核对每轮原稿、费用和父回执；公开诊断准备只允许实现变化，保留旧账，不自动添加请求额度。 |
-| `lib/reader-transport-continuation.js` | Node 库：为首个显式轮中有唯一配对 ECONNRESET、无新正文的同输入请求登记一次48k传输补充账；保留原80k账、内容次数和未知费用，原剩余32k只供正常局部修补，合计物理请求仍不超过6次。 |
+| `lib/reader-transport-continuation.js` | Node 库：为首个显式轮中有唯一配对 ECONNRESET、无新正文的同输入请求登记一次48k传输补充账；保留原80k账、内容次数和未知费用，原剩余32k只供正常局部修补，合计物理请求仍不超过6次。已消费补充的付费全文另按真实原点承接公共实现迁移，不复活安装前状态。 |
 | `lib/reader-parent-upstream-preflight.js` | Node 库：在真实日更论文锁、封存来源及原上游反馈作用域中，对副本复核正常主分析、资源扫描和七个文本阶段的指纹；失效时交回父阶段恢复，不改论文、成功状态或请求额度。 |
 | `lib/reader-scientific-quote-coverage.js` | Node 库：生成绑定和保存稿冷核共用逐格科学量检查；完整系数、带符号指数及单位须由同一已绑定引文的完整行支撑。只做临时数值投影，保留原稿、引文、通用分词和来源权限；不完整或错误科学量交回正常失败修复，不能剪行后当作通过。 |
 | `lib/reader-fact-pre-request-recovery.js` | Node 库：只为真实零请求配置失败核验原完整签名父稿、同一未完成反馈与用量历史；不透明作用域仅将唯一短片段定位到原正文完整句，保留原失败和额度，不恢复旧正式文件。 |
@@ -273,8 +273,9 @@ npm run test:compat
 | `lib/reader-pre-image-check.js` | Node 库：下载图片前，只读判断已用完修复次数且当前纯文本或原表检查仍失败的草稿；有新授权、剩余次数或已被当前检查接受时继续正常下载和完整验收，不复用旧像素证明。 |
 | `lib/reader-proof-read-scope.js` | Node 库：在一次恢复准备期间复用未变化的证明文件读取；每次核对文件状态，结束即清空，完整恢复链仍重新核验。 |
 | `lib/reader-recovery-revision.js` | Node 库：显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不会产出成功凭证。 |
+| `lib/reader-target-ordinal-patch.js` | Node 库：普通已有节点补丁的上下文承诺、短序号回复与严格 SHA 编译、正常费用封存及保存稿冷重放；首版仅用于 Responses，其他协议保留原路径，不授额度或完成资格。 |
 | `lib/reader-repair.js` | Node 库：保存未通过检查的文章草稿，核对允许修改字段的 SHA，并应用经校验的局部修改。表格数量预估仅供参考；合法原表行列示例只进入对应错误的修复反馈，不改来源证据与候选输入身份。补表时仍核验原表选择或完整逐字引文，最终文章须通过完整解析检查。严格只有 kind/heading/body 的超节稿可用同 kind 连续索引分组计划，由程序保留全部原标题、正文与来源绑定；唯一已知续文字段可用v2原字段引用计划，全部原段及空串逐项保留；未知字段继续完整重排。各请求共用原有尝试额度。 |
-| `lib/reader-request-diagnostics.js` | Node 库：在 Reader 修复付费请求前保存当前草稿、准确 SHA、允许修改的内容与提示词，响应后保留原文和请求关联 SHA；逐次记录不可覆写，写入失败停止，不授予正文或发布资格。 |
+| `lib/reader-request-diagnostics.js` | Node 库：在 Reader 修复付费请求前保存当前草稿、准确 SHA、允许修改的内容与提示词，响应后保留原文和请求关联 SHA；显式付费版本号纠正另绑定来源原点、正常费用与固定完成索引。逐次记录不可覆写，写入失败停止，不授予正文或发布资格。 |
 | `lib/reader-saved-feedback-input-continuity.js` | Node 库：同一原父子事实包的显示合并变化时，重建真实原付费输入；保留当前全部事实约束、原稿、费用和次数，不授予新额度。 |
 | `lib/reader-unsent-empty-candidate.js` | 核验被明确“传输前阻断”回执证明的零内容空候选，将其原字节和传输失败历史保留后交回正常同输入迁移；不替代多候选付费证明，不恢复成功状态或增加额度。 |
 
@@ -461,7 +462,7 @@ npm run test:compat
 | `lib/error-codes.js` | Node 库：稳定错误码字典（标签、可重试性、建议命令、文档锚点），供 recover 与报告复用。 |
 | `lib/env-schema.js` | Node 库：`.env` 的集中 schema（必填/类型/范围/密钥标记）与只读解析，供 config:check 等新工具复用（doctor 保留自己的检查）。 |
 | `lib/source-acquisition-policy.js` | Node 库：抓取前公告时段提示与 429/5xx/RSS 失败的“下一步”纯函数，不联网。 |
-| `lib/llm-usage.js` | Node 库：规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
+| `lib/llm-usage.js` | Node 库：规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。受控修复可只读捕获正常保存事件的路径与 SHA，不另建账本或改变写入结果。 |
 | `lib/llm-usage-summary.js` | Node 库：按日期聚合真实请求用量（成功/失败、阶段/模型/账号、可用费用字段），先按目录/文件 mtime 过滤再读取，提供缓存与文本/JSON 输出。 |
 | `lib/digest-live-status.js` | Node 库：只读合成日更运行状态（阶段、数量、当前论文、失败列表、最近日志、账号池、费用、无进度提示），供 `digest:status --watch` 使用。 |
 | `lib/error-guidance.js` | Node 库：把已知错误映射成“原因、下一步、可复制命令、文档位置”，供各入口在打印原错误后追加人话指引；不改变错误码与堆栈。 |
