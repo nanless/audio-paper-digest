@@ -9396,7 +9396,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const proposedRepairContext = canPlanLocalQuotes
             ? withReaderSourceTableEvidence(() => repair.buildRepairContext(candidate, currentIssues,
                 sourceEvidence, options.sourceText, repairOptions)) : null;
-        const sourceBindingNeedsFullRetry = readerIssuesRequireFullSourceBindingRetry(
+        let sourceBindingNeedsFullRetry = readerIssuesRequireFullSourceBindingRetry(
             recovered, candidate, fullAttempts, currentIssues, readerCapabilityPolicy,
             options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy,
             proposedRepairContext
@@ -9405,13 +9405,25 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const metadataRepair = repair;
         const metadataOperation = !candidate && !sourceBindingNeedsFullRetry
             ? metadataRepair.buildTopLevelMetadataRepairContext(previousDraft) : null;
-        const repairContext = metadataOperation ? {
+        let repairContext = metadataOperation ? {
             draftSha256: metadataOperation.rawSha256, targets: [], figureOrdinals: [],
             evidence: sourceEvidence, atomicOperation: metadataOperation,
             targetGuidance: '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
         } : candidate && !sourceBindingNeedsFullRetry
             ? proposedRepairContext || withReaderSourceTableEvidence(() => repair.buildRepairContext(candidate, currentIssues,
                 sourceEvidence, options.sourceText, repairOptions)) : null;
+        // No authorized nodes means this cannot be a paid patch. The raw
+        // metadata-deletion protocol is separate and genuinely has zero nodes.
+        // Route an ordinary empty context through the existing full planner;
+        // its original full/window/local-only limits still decide admission.
+        const emptyRepairContext = repairContext && repairContext.targets.length === 0 && !metadataOperation;
+        const emptyRepairSourceBlocked = emptyRepairContext && currentIssues.some(issue =>
+            repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+            || issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly !== true);
+        if (emptyRepairContext && !emptyRepairSourceBlocked) {
+            repairContext = null;
+            sourceBindingNeedsFullRetry = true;
+        }
         const requestPlanState = () => ({
             paperId: getPaperArxivId(paper), identitySha256: repair.hashDraft(identity),
             candidateSha256: candidate ? repair.hashDraft(candidate) : null,
@@ -9422,9 +9434,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sourceBindingNeedsFullRetry, repairContext, issues: currentIssues });
         const nextRequestPlan = require('./lib/reader-next-request-plan').buildReaderNextRequestPlan(requestPlanState());
         console.log(`    [reader-next-request-plan] ${JSON.stringify(nextRequestPlan)}`);
-        if (repairContext && repairContext.targets.length === 0
-            && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
-                || issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly !== true)) {
+        if (emptyRepairContext && (emptyRepairSourceBlocked || nextRequestPlan.blocker
+            || options.readerFactLocalRevision === true || options.resourceLocalRevision === true
+            || revalidatedPatchOnly)) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
             repair.saveFailedCandidate(candidateDirectory, identity, {
                 ...latestFailure,
@@ -9435,8 +9447,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {})
             });
-            throw readerRepairStopped('READER_REPAIR_NO_ALLOWED_TARGET',
-                '没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
+            const blocker = nextRequestPlan.blocker || {
+                code: 'READER_REPAIR_NO_ALLOWED_TARGET',
+                message: '没有可安全修复的 Reader 授权节点，当前范围不允许全文；已保留失败草稿与原次数，本次未发送模型请求'
+            };
+            throw readerRepairStopped(blocker.code, blocker.message);
         }
         if (options.readerFactLocalRevision === true && (!repairContext || repairContext.targets.length === 0
             || sourceBindingNeedsFullRetry || repairContext.atomicOperation

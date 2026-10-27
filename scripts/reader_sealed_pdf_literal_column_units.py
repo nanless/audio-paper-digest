@@ -147,6 +147,7 @@ def source_grid(page, caption, document, additional_captions=()):
     need(merged or headers[0] in ('Method', 'Generator') or background_axis or snr_axis,
          'literal_method_axis_not_explicit')
     label_column = 1 if merged else 0
+    flat_inline_uncertainty = not merged and not background_axis and not snr_axis
     # Only this literal original SNR(dB) axis may own column zero's unit.
     # Its exact row identities are checked before any measured result values.
     units = {c: (m.group(2) or m.group(3)).lower() for c, header in enumerate(headers)
@@ -165,6 +166,7 @@ def source_grid(page, caption, document, additional_captions=()):
     possibilities = {}
     for edges in column_edges(groups, words, top[0], top[2]):
         try:
+            separating_rule = None
             body = [w for w in words if separator < cy(w) < bottom]
             label_words = [w for w in body if edges[label_column] < cx(w) < edges[label_column + 1]]
             lines = rows_of(label_words)
@@ -187,7 +189,26 @@ def source_grid(page, caption, document, additional_captions=()):
                                             'sourceRows': [i + 1 for i in indices]})
                 need(len(condition_bands) >= 2, 'literal_dataset_conditions_missing')
             else:
-                need(len(horizontal) == 3 or (snr_axis and len(horizontal) == 4), 'literal_unlabelled_body_bands')
+                ordinary = len(horizontal) == 3 or (snr_axis and len(horizontal) == 4)
+                if not ordinary:
+                    # One full-width rule may separate two ordinary data rows
+                    # in a single-header flat table. It cannot hide a condition
+                    # label, cut a word, or introduce a partial/merged band.
+                    need(not snr_axis and not background_axis and len(horizontal) == 4,
+                         'literal_unlabelled_body_bands')
+                    inner = horizontal[2]
+                    need(sum(a < inner < b for a, b in zip(ys, ys[1:])) == 1,
+                         'literal_body_rule_not_between_rows')
+                    body_rules = [d['rect'] for d in page.get_drawings()
+                                  if d['rect'].height < .1 and d['rect'].width > 1
+                                  and separator < d['rect'].y0 < bottom
+                                  and max(d['rect'].x0, top[0]) < min(d['rect'].x1, top[2])]
+                    need(body_rules and all(abs(r.x0 - top[0]) < .1 and abs(r.x1 - top[2]) < .1
+                                            and abs(r.y0 - inner) < .1 for r in body_rules),
+                         'literal_partial_or_extra_body_rule')
+                    need(not any(w[1] <= inner <= w[3] for w in body),
+                         'literal_body_rule_crosses_word')
+                    separating_rule = inner
             cells, rows = [], []
             for c, g in enumerate(groups):
                 cells.append({'row': 0, 'column': c, 'words': g['words'], 'text': g['text']})
@@ -212,13 +233,27 @@ def source_grid(page, caption, document, additional_captions=()):
                             need(re.match(r'^[A-Za-z]', text) and len(text) <= 240, 'literal_method_not_label')
                     else:
                         count_ratio = background_axis and re.fullmatch(r'\d+/[1-9]\d*', text)
-                        need(SCALAR.fullmatch(text) or text in ('–', '—', '-') or COMPOUND.fullmatch(text) or count_ratio,
+                        # An inline mean and uncertainty are one complete PDF
+                        # cell. Keep both literal terms; the full view below
+                        # must match every original cell, sign and precision.
+                        need(SCALAR.fullmatch(text) or (flat_inline_uncertainty and MEAN_CI.fullmatch(text))
+                             or text in ('–', '—', '-') or COMPOUND.fullmatch(text) or count_ratio,
                              'literal_data_cell_not_complete')
                         if c in units:
-                            need(SCALAR.fullmatch(text) or text in ('–', '—', '-'), 'literal_unit_value_not_scalar')
+                            need(SCALAR.fullmatch(text) or (flat_inline_uncertainty and MEAN_CI.fullmatch(text))
+                                 or text in ('–', '—', '-'), 'literal_unit_value_not_scalar')
                     row.append(text)
                     cells.append({'row': r + 1, 'column': c, 'words': values, 'text': text})
                 rows.append(row)
+            if separating_rule is not None:
+                # Labels alone do not define a complete row: all its metric
+                # cells must lie on that same side of the physical separator.
+                row_extents = [(min(w[1] for cell in cells if cell['row'] == r for w in cell['words']),
+                                max(w[3] for cell in cells if cell['row'] == r for w in cell['words']))
+                               for r in range(1, len(rows) + 1)]
+                need(all(hi < separating_rule or separating_rule < lo for lo, hi in row_extents)
+                     and sum(a[1] < separating_rule < b[0] for a, b in zip(row_extents, row_extents[1:])) == 1,
+                     'literal_body_rule_splits_complete_row')
             identities = [tuple(row[:label_column + 1]) for row in rows]
             need(len(set(identities)) == len(identities), 'literal_row_identity_not_unique')
             owned = [tuple(w) for cell in cells for w in cell['words']]
@@ -226,6 +261,17 @@ def source_grid(page, caption, document, additional_captions=()):
             need(len(owned) == len(words) and len(set(owned)) == len(words), 'literal_unowned_or_repeated_word')
             box = [top[0], top[1], top[2], bottom]
             glyphs = complete_glyphs(page, words, box)
+            if flat_inline_uncertainty and any(MEAN_CI.fullmatch(v) for row in rows for v in row[1:]):
+                # New inline-uncertainty tables also cannot ignore a short
+                # partial rule in an otherwise ordinary three-rule grid.
+                body_rules = [d['rect'] for d in page.get_drawings()
+                              if d['rect'].height < .1 and d['rect'].width > 1
+                              and separator < d['rect'].y0 < bottom
+                              and max(d['rect'].x0, top[0]) < min(d['rect'].x1, top[2])]
+                need(all(abs(r.x0 - top[0]) < .1 and abs(r.x1 - top[2]) < .1
+                         and any(abs(r.y0 - y) < .1 for y in horizontal[2:-1])
+                         and not any(g['bbox'][1] <= r.y0 <= g['bbox'][3] for g in glyphs)
+                         for r in body_rules), 'literal_uncertainty_partial_or_crossing_rule')
             grid = {'page': page.number + 1, 'bbox': box, 'headers': headers, 'rows': rows,
                     'rowIdentities': [list(identity) for identity in identities], 'identityColumns': list(range(label_column + 1)),
                     'columnBoundaries': edges, 'rowBoundaries': row_edges, 'horizontalRules': horizontal,
