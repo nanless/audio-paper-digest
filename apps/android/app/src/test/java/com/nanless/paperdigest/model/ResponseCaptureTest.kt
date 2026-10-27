@@ -36,7 +36,7 @@ class ResponseCaptureTest {
         val root = Files.createTempDirectory("response-capture-author-").toRealPath().toFile()
         val server = MockWebServer().apply { start() }
         val store = PersonalStore(root).apply { updateSettings(JSONObject().put("endpoint", server.url("/v1").toString()).put("model", "synthetic-model").put("protocol", "chat").put("dailyRequests", 5).put("timeoutMs", 10000)) }
-        val service = StudyService(store, { "synthetic-capture-test-key" })
+        val service = StudyService(store, { "synthetic-capture-test-key" }, HostCapturePublication)
         fun prepare() = runBlocking { service.prepare("fixture:partial", "Synthetic question", "Synthetic original evidence", JSONObject().put("paperID", "fixture:partial").put("kind", "range").put("pages", JSONArray().put(1))) }.getString("id")
         fun bytes(size: Int = 400000) = JSONObject().put("model", "synthetic-model").put("usage", JSONObject().put("total_tokens", 5)).put("choices", JSONArray().put(JSONObject().put("finish_reason", "stop").put("message", JSONObject().put("content", "x".repeat(size))))).toString().toByteArray()
         fun bins(id: String) = File(root, "ModelUsage").listFiles()!!.filter { it.name.startsWith("$id-response-capture-") && it.name.endsWith(".bin") }
@@ -92,7 +92,7 @@ class ResponseCaptureTest {
     @Test fun knownBrokenFinalResponsePathRejectsBeforeAnyPaidDispatch() = runBlocking {
         Fixture().use { f ->
             var requests = 0
-            val service = StudyService(f.store, { "synthetic-key" }) { _, _, _, _ -> requests++; HttpBytes(200, emptyMap(), f.bytes(4)) }
+            val service = StudyService(f.store, { "synthetic-key" }, HostCapturePublication) { _, _, _, _ -> requests++; HttpBytes(200, emptyMap(), f.bytes(4)) }
             val id = service.prepare("fixture:partial", "Synthetic preflight question", "Synthetic evidence", JSONObject().put("paperID", "fixture:partial")).getString("id")
             val blocked = File(f.root, "ModelUsage/$id-response.bin").apply { mkdir() }; File(blocked, "protected").writeText("must preserve")
             assertTrue(runCatching { service.run(id) }.isFailure)
@@ -206,7 +206,7 @@ class ResponseCaptureTest {
             val capture = f.bins(id).single(); val metadata = File(capture.parentFile, capture.name.removeSuffix(".bin") + ".json")
             val originals = listOf(capture, metadata, File(f.root, "ModelUsage/$id-input.json"), File(f.root, RequestContinuity.FILE), File(f.root, "ModelUsage/response-integrity.android.key")).associateWith { it.readBytes() }
             val restoredStore = PersonalStore(f.root); var keys = 0; var requests = 0
-            val reopened = StudyService(restoredStore, { keys++; error("Recovery must not read a current API key") }) { _, _, _, _ -> requests++; error("Recovery must not call HTTP") }
+            val reopened = StudyService(restoredStore, { keys++; error("Recovery must not read a current API key") }, HostCapturePublication) { _, _, _, _ -> requests++; error("Recovery must not call HTTP") }
             val result = reopened.recoverSaved(id)
             assertEquals("completed", result.getString("status")); assertTrue(result.getBoolean("recovered")); assertArrayEquals(raw, File(f.root, "ModelUsage/$id-response.bin").readBytes())
             assertEquals("android-body-complete-capture-promotion-v1", JSONObject(File(f.root, "ModelUsage/$id-response.json").readText()).getJSONObject("capturePromotion").getString("contract"))
@@ -254,7 +254,7 @@ class ResponseCaptureTest {
             }
             val files = f.root.walkTopDown().filter { it.isFile }.associateWith { it.readBytes() }; val names = files.keys.map { it.relativeTo(f.root).path }.toSet()
             var keys = 0; var requests = 0
-            val service = StudyService(f.store, { keys++; "must-not-read" }) { _, _, _, _ -> requests++; error("must not dispatch") }
+            val service = StudyService(f.store, { keys++; "must-not-read" }, HostCapturePublication) { _, _, _, _ -> requests++; error("must not dispatch") }
             assertTrue("Reject $variant rather than choosing or rewriting original material", runCatching { service.recoverSaved(id) }.isFailure)
             files.forEach { (file, bytes) -> assertArrayEquals(bytes, file.readBytes()) }; assertEquals(names, f.root.walkTopDown().filter { it.isFile }.map { it.relativeTo(f.root).path }.toSet())
             assertEquals(0, keys); assertEquals(0, requests); assertEquals(1, f.server.requestCount); assertEquals(1, f.count())
@@ -280,7 +280,7 @@ class ResponseCaptureTest {
         Fixture().use { f ->
             var requests = 0
             var credential = "synthetic-header-bait\nsecond-line"
-            val service = StudyService(f.store, { credential }) { _, _, _, _ -> requests++; HttpBytes(200, emptyMap(), f.bytes(10)) }
+            val service = StudyService(f.store, { credential }, HostCapturePublication) { _, _, _, _ -> requests++; HttpBytes(200, emptyMap(), f.bytes(10)) }
             val id = service.prepare("fixture:partial", "Synthetic header question", "Synthetic evidence", JSONObject().put("paperID", "fixture:partial")).getString("id")
             val originalInput = File(f.root, "ModelUsage/$id-input.json").readBytes()
             val error = runCatching { service.run(id) }.exceptionOrNull(); assertNotNull(error)
@@ -294,5 +294,72 @@ class ResponseCaptureTest {
             assertEquals("completed", service.run(id).getString("status")); assertEquals(1, requests); assertEquals(1, f.count())
             assertArrayEquals(originalInput, File(f.root, "ModelUsage/$id-input.json").readBytes())
         }
+    }
+
+    @Test fun interruptedAtomicPromotionBeforeOrAfterPublicationUsesOriginalCaptureOnRecovery() = runBlocking {
+        for (afterPublication in listOf(false, true)) Fixture().use { f ->
+            val (id, raw) = f.captureOnlyAfterActualHttpEof(); val bin = f.bins(id).single()
+            val protected = listOf(bin, File(bin.parentFile, bin.name.removeSuffix(".bin") + ".json"), File(bin.parentFile, "$id-input.json"), File(f.root, RequestContinuity.FILE)).associateWith { it.readBytes() }
+            var keys = 0; var http = 0
+            val interrupted = CapturePublication { target, content ->
+                if (afterPublication) HostCapturePublication.publishNew(target, content)
+                throw java.io.IOException("Synthetic interruption at atomic publication boundary")
+            }
+            val first = StudyService(f.store, { keys++; error("No recovery key read") }, interrupted) { _, _, _, _ -> http++; error("No recovery HTTP") }
+            assertTrue(runCatching { first.recoverSaved(id) }.isFailure)
+            val standard = File(bin.parentFile, "$id-response.bin")
+            if (afterPublication) assertArrayEquals(raw, standard.readBytes()) else assertFalse(standard.exists())
+            assertNotEquals("completed", f.store.session(id)!!.getString("status"))
+            val reopened = StudyService(f.store, { keys++; error("No recovery key read") }, HostCapturePublication) { _, _, _, _ -> http++; error("No recovery HTTP") }
+            val recovered = reopened.recoverSaved(id); assertEquals("completed", recovered.getString("status")); assertArrayEquals(raw, standard.readBytes())
+            assertTrue(reopened.recoverSaved(id).getBoolean("recovered")); protected.forEach { (file, bytes) -> assertArrayEquals(bytes, file.readBytes()) }
+            assertEquals(0, keys); assertEquals(0, http); assertEquals(1, f.server.requestCount); assertEquals(1, f.count())
+        }
+    }
+
+    @Test fun foreignTargetCreatedAfterStagingIsNeverReplacedByPromotion() = runBlocking {
+        Fixture().use { f ->
+            val (id, _) = f.captureOnlyAfterActualHttpEof(); val bin = f.bins(id).single(); val original = bin.readBytes()
+            val foreign = byteArrayOf(9, 8, 7); var identity: Any? = null; var modified = 0L; var targetFile: File? = null; var keys = 0; var http = 0
+            val collision = CapturePublication { target, content ->
+                target.writeBytes(foreign); check(target.setLastModified(1500000000000L)); targetFile = target; modified = target.lastModified()
+                identity = Files.readAttributes(target.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS).fileKey()
+                HostCapturePublication.publishNew(target, content)
+            }
+            val service = StudyService(f.store, { keys++; error("No recovery key") }, collision) { _, _, _, _ -> http++; error("No recovery HTTP") }
+            assertTrue(runCatching { service.recoverSaved(id) }.isFailure)
+            val target = requireNotNull(targetFile); assertArrayEquals(foreign, target.readBytes()); assertEquals(modified, target.lastModified())
+            assertEquals(identity, Files.readAttributes(target.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS).fileKey())
+            assertArrayEquals(original, bin.readBytes()); assertNotEquals("completed", f.store.session(id)!!.getString("status")); assertEquals(0, keys); assertEquals(0, http); assertEquals(1, f.server.requestCount); assertEquals(1, f.count())
+        }
+    }
+
+    @Test fun unsupportedPublicationKeepsOriginalCaptureForLaterSupportedRecovery() = runBlocking {
+        Fixture().use { f ->
+            val (id, raw) = f.captureOnlyAfterActualHttpEof(); val bin = f.bins(id).single(); val original = bin.readBytes()
+            var keys = 0; var http = 0
+            val unsupported = CapturePublication { _, _ -> throw java.io.IOException("Synthetic unsupported atomic publisher") }
+            val first = StudyService(f.store, { keys++; error("No recovery key") }, unsupported) { _, _, _, _ -> http++; error("No recovery HTTP") }
+            assertTrue(runCatching { first.recoverSaved(id) }.isFailure)
+            assertFalse(File(bin.parentFile, "$id-response.bin").exists()); assertFalse(File(bin.parentFile, "$id-response.json").exists()); assertArrayEquals(original, bin.readBytes())
+            val reopened = StudyService(f.store, { keys++; error("No recovery key") }, HostCapturePublication) { _, _, _, _ -> http++; error("No recovery HTTP") }
+            assertEquals("completed", reopened.recoverSaved(id).getString("status")); assertArrayEquals(raw, File(bin.parentFile, "$id-response.bin").readBytes())
+            assertEquals(0, keys); assertEquals(0, http); assertEquals(1, f.server.requestCount); assertEquals(1, f.count())
+        }
+    }
+
+    @Test fun publicationRejectsHigherAncestorLinkWithoutChangingRealForeignTarget() {
+        val root = Files.createTempDirectory("capture-ancestor-").toRealPath().toFile()
+        val real = File(root, "real/nested").apply { check(mkdirs()) }
+        val alias = File(root, "alias"); val foreign = File(real, "response.bin").apply { writeBytes(byteArrayOf(3, 2, 1)) }
+        val before = Files.readAttributes(foreign.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        try {
+            Files.createSymbolicLink(alias.toPath(), real.parentFile.toPath())
+            assertTrue(runCatching { HostCapturePublication.publishNew(File(alias, "nested/response.bin"), byteArrayOf(8)) }.isFailure)
+            assertTrue(runCatching { HostCapturePublication.publishNew(File(alias, "nested/missing.bin"), byteArrayOf(8)) }.isFailure)
+            assertArrayEquals(byteArrayOf(3, 2, 1), foreign.readBytes()); assertFalse(File(real, "missing.bin").exists())
+            val after = Files.readAttributes(foreign.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+            assertEquals(before.fileKey(), after.fileKey()); assertEquals(before.lastModifiedTime(), after.lastModifiedTime()); assertEquals(setOf("response.bin"), real.list()!!.toSet())
+        } finally { Files.deleteIfExists(alias.toPath()); root.deleteRecursively() }
     }
 }

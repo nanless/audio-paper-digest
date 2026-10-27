@@ -2,6 +2,7 @@ package com.nanless.paperdigest.review
 
 import com.nanless.paperdigest.cloud.RequestContinuity
 import com.nanless.paperdigest.data.*
+import com.nanless.paperdigest.model.HostCapturePublication
 import com.nanless.paperdigest.model.StudyService
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
@@ -21,7 +22,7 @@ class ModelCaptureProtocolReviewTest {
         val root = Files.createTempDirectory("capture-protocol-review-").toRealPath().toFile()
         val store = PersonalStore(root)
         var keys = 0
-        val service = StudyService(store, { keys++; "synthetic-only" })
+        val service = StudyService(store, { keys++; "synthetic-only" }, HostCapturePublication)
         val body = JSONObject().put("model", "synthetic-provider").put("choices", JSONArray().put(JSONObject().put("finish_reason", "stop").put("message", JSONObject().put("content", "A complete JSON answer is not proof of completed HTTP.")))).toString()
         init { store.updateSettings(JSONObject().put("endpoint", server.url("/v1").toString().trimEnd('/')).put("model", "synthetic-requested").put("protocol", "chat").put("timeoutMs", 5000)) }
         suspend fun prepare() = service.prepare("local:protocol-fixture", "Synthetic question", "Synthetic evidence", JSONObject().put("paperID", "local:protocol-fixture")).getString("id")

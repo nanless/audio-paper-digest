@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(paperdigest_capture_publish C)
+add_library(paperdigest_capture_publish SHARED capture_publication.c)
+set_target_properties(paperdigest_capture_publish PROPERTIES C_STANDARD 11)
+target_compile_options(paperdigest_capture_publish PRIVATE -Wall -Wextra -Werror)
+target_link_options(paperdigest_capture_publish PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384")

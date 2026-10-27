@@ -28,8 +28,13 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.coroutineContext
 
 /** Personal study is separate from the server publication workflow. No automatic paid retry. */
-class StudyService(private val store: PersonalStore, private val loadKey: () -> String?,
-    private val transport: (suspend (Request, Int, String?, Long) -> HttpBytes)? = null) {
+class StudyService private constructor(private val store: PersonalStore, private val loadKey: () -> String?,
+    private val transport: (suspend (Request, Int, String?, Long) -> HttpBytes)?,
+    private val capturePublication: CapturePublication) {
+    constructor(store: PersonalStore, loadKey: () -> String?, transport: (suspend (Request, Int, String?, Long) -> HttpBytes)? = null)
+        : this(store, loadKey, transport, AndroidCapturePublication)
+    internal constructor(store: PersonalStore, loadKey: () -> String?, publication: CapturePublication,
+        transport: (suspend (Request, Int, String?, Long) -> HttpBytes)? = null) : this(store, loadKey, transport, publication)
     private val lock = Mutex()
     private val inFlight = mutableSetOf<String>()
     private val usage = File(store.directory, "ModelUsage").also { it.mkdirs() }
@@ -306,13 +311,9 @@ class StudyService(private val store: PersonalStore, private val loadKey: () -> 
     }
 
     private fun createResponseMaterial(target: File, bytes: ByteArray) {
-        val temporary = File(usage, ".capture-promotion-${UUID.randomUUID()}.tmp")
-        try {
-            JsonFiles.write(temporary, bytes)
-            try { Files.createLink(target.toPath(), temporary.toPath()) }
-            catch (error: java.nio.file.FileAlreadyExistsException) { require(JsonFiles.read(target, 16 * 1024 * 1024L).contentEquals(bytes)) { "恢复目标已有不同原件，未覆盖" } }
-            require(JsonFiles.read(target, 16 * 1024 * 1024L).contentEquals(bytes)) { "完整响应恢复回读不符" }
-        } finally { temporary.delete() }
+        try { capturePublication.publishNew(target, bytes) }
+        catch (error: java.nio.file.FileAlreadyExistsException) { require(JsonFiles.read(target, 16 * 1024 * 1024L).contentEquals(bytes)) { "恢复目标已有不同原件，未覆盖" } }
+        require(JsonFiles.read(target, 16 * 1024 * 1024L).contentEquals(bytes)) { "完整响应恢复回读不符" }
     }
 
     @Synchronized private fun authenticate(value: JSONObject, create: Boolean): String {

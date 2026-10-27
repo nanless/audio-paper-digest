@@ -2,6 +2,7 @@ package com.nanless.paperdigest.review
 
 import com.nanless.paperdigest.cloud.RequestContinuity
 import com.nanless.paperdigest.data.*
+import com.nanless.paperdigest.model.HostCapturePublication
 import com.nanless.paperdigest.model.StudyService
 import kotlinx.coroutines.*
 import org.json.JSONArray
@@ -22,7 +23,7 @@ class SavedResponseRecoveryReviewTest {
         var beforeResponse: (() -> Unit)? = null
         val source = JSONObject().put("paperID", "fixture:paper").put("kind", "published-guide").put("revision", "a".repeat(64))
         init { store.updateSettings(JSONObject().put("endpoint", "https://original.example.invalid/v1").put("model", "synthetic-requested-model").put("protocol", "chat").put("maxTokens", 512).put("dailyRequests", 20)) }
-        val service = StudyService(store, { keys++; "synthetic-only-not-real-secret" }) { _, _, _, _ ->
+        val service = StudyService(store, { keys++; "synthetic-only-not-real-secret" }, HostCapturePublication) { _, _, _, _ ->
             requests++; entered?.complete(Unit); gate?.await(); beforeResponse?.invoke()
             HttpBytes(200, emptyMap(), JSONObject().put("model", "synthetic-actual-model").put("usage", JSONObject().put("prompt_tokens", 11).put("completion_tokens", 13).put("total_tokens", 24))
                 .put("choices", JSONArray().put(JSONObject().put("finish_reason", finish).put("message", JSONObject().put("content", "A genuine synthetic provider answer.")))).toString().toByteArray())
