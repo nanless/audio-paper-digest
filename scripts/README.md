@@ -67,6 +67,7 @@ npm run test:compat
 | 文件 | 类型与职责 |
 |---|---|
 | `analysis-contract.js` | Node 共享：核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
+| `lib/experiment-source-setting-axes.js` | Node 库：以本文已执行的实验声明、完整原表和对应行身份核验扰动类型与融合调度设置轴；只识别列类型，不改数值、科学结论或费用额度，其他表格与整篇检查照常执行。 |
 | `analysis-engine.js` | Node 共享：用公共失败轮次调度，首轮全批、下一轮只失败集合，等待每轮结果和保存完成；管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
 | `analysis-waiver.js` | Node 库：核验用户针对当前日更批次的分析豁免，检查 deep、filtered、papers 三份文件的精确字节和逐篇来源 SHA；不修改分析正文。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
