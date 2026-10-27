@@ -31,4 +31,21 @@ object AggregateHtml {
         clean(body,source);val plain=plainText(body);require(plain.isNotBlank()){"汇总缺少连续正文"};val derived=body.html()
         return JSONObject().put("contract","published-aggregate-document-v1").put("descriptor",descriptor.json()).put("responseURL",responseURL).put("fetchedAt",fetchedAt).put("rawHTMLSHA256",PublishedAggregateReader.sha(raw)).put("rawHTMLBytes",raw.size).put("sanitizedBodySHA256",PublishedAggregateReader.sha(derived.toByteArray())).put("bodyHTML",derived).put("plainText",plain).put("parserContract","published-aggregate-jsoup-v1").put("resources",JSONArray(resources)).put("completeOffline",false).put("notices",JSONArray(listOf("网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。")))
     }
+    /** Independent resource derivation; the original parse/document bytes remain unchanged. */
+    fun imagePlan(raw:ByteArray,descriptor:PublishedAggregate,responseURL:String,fetchedAt:String):AggregateImagePlan {
+        val original=parse(raw,descriptor,responseURL,fetchedAt)
+        val source=descriptor.sourceURL;val doc=Jsoup.parse(PublishedUtf8.decode(raw),source)
+        val selector=when(descriptor.kind){"daily","conference"->"div#article-body.post-content";"page"->if(URI(source).rawPath=="/audio-paper-digest-blog/conferences/")"#conference-directory.conference-directory"else"div.reader-guide-content.post-content";else->error("invalid aggregate kind")}
+        val body=doc.select(selector).single();body.select("[hidden]").remove();body.select("section,article,main").forEach{it.tagName("div")}
+        val originalSources=java.util.IdentityHashMap<Element,String>()
+        body.select("img").forEach{originalSources[it]=it.attr("src")}
+        clean(body,source)
+        val slots=body.select("img").mapIndexed{i,image->
+            val address=originalSources[image].orEmpty();val caption=image.parents().firstOrNull{it.normalName()=="figure"}?.select("figcaption")?.joinToString("\n"){it.wholeText()}?.trim().orEmpty()
+            AggregateImageSlot(i,safeURL(address,source),image.attr("alt"),caption)
+        }
+        require(slots.size<=128)
+        return AggregateImagePlan(descriptor,original.getString("rawHTMLSHA256"),original.getString("sanitizedBodySHA256"),slots,body.html())
+    }
+
 }

@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
  var davBaseURL by rememberSaveable{mutableStateOf(z.optString("davBaseURL"))}
  var davUsername by rememberSaveable{mutableStateOf(z.optString("davUsername"))}
  var collection by rememberSaveable{mutableStateOf(z.optString("collection"))}
+ var independentDraft by rememberSaveable{mutableStateOf(false)}
  var dirty by rememberSaveable{mutableStateOf(false)}
  var saving by remember{mutableStateOf(false)};var listing by remember{mutableStateOf(false)}
  var error by remember{mutableStateOf<String?>(null)}
@@ -27,7 +28,7 @@ import kotlinx.coroutines.launch
  var listedFor by remember{mutableStateOf<String?>(null)};var showCollections by remember{mutableStateOf(false)}
  val busy=saving||listing||z.optBoolean("busy")||state.busy
  LaunchedEffect(z.toString()){
-  if(!dirty){val type=z.optString("libraryType","users");val id=z.optString("libraryID");if(type!=libraryType||id!=libraryID){collections=emptyList();listedFor=null};libraryType=type;libraryID=id;collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername")}
+  if(!dirty){independentDraft=false;val type=z.optString("libraryType","users");val id=z.optString("libraryID");if(type!=libraryType||id!=libraryID){collections=emptyList();listedFor=null};libraryType=type;libraryID=id;collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername")}
  }
  Text("Zotero 完整存档",style=MaterialTheme.typography.titleLarge)
  Text("使用官方 Web API 保存书目和笔记，附件可选 Zotero Storage 或个人文库的 WebDAV。创建专用 API key，无需 Zotero 登录密码。完整研究空间备份在“坚果云”设置中独立配置。")
@@ -52,22 +53,35 @@ import kotlinx.coroutines.launch
  },enabled=!dirty&&!busy&&libraryID.isNotEmpty()){Text(if(listing)"正在读取真实分类…" else "读取并选择分类…")}
  FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
   Button({val submitted=obj("libraryType" to libraryType,"libraryID" to libraryID,"collection" to collection,"attachmentBackend" to attachmentBackend,"davBaseURL" to davBaseURL,"davUsername" to davUsername);saving=true;scope.launch{try{controller.execute("zotero.save",submitted);if(libraryType==submitted.optString("libraryType")&&libraryID==submitted.optString("libraryID")&&collection==submitted.optString("collection")&&attachmentBackend==submitted.optString("attachmentBackend")&&davBaseURL==submitted.optString("davBaseURL")&&davUsername==submitted.optString("davUsername"))dirty=false;error=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy){Text("保存目标文库")}
-  TextButton({libraryType=z.optString("libraryType","users");libraryID=z.optString("libraryID");collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername");dirty=false;error=null},enabled=dirty&&!busy){Text("撤销未保存更改")}
+  TextButton({independentDraft=false;libraryType=z.optString("libraryType","users");libraryID=z.optString("libraryID");collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername");dirty=false;error=null},enabled=dirty&&!busy){Text("撤销未保存更改")}
  }
  error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
  OutlinedButton(password,enabled=!dirty&&!busy){Text("为已保存目标设置专用 API key…")}
- if(attachmentBackend=="webdav")OutlinedButton(davPassword,enabled=!dirty&&!busy){Text("为已保存附件目标设置独立应用密码…")}
+ if(attachmentBackend=="webdav"){
+  if(z.optString("davCredentialSource")=="saved-cloud"&&!independentDraft){
+   Text("本次迁移记录使用已连接的坚果云；其他新存档仍需单独配置附件密码。",style=MaterialTheme.typography.bodySmall)
+   Text(if(z.optString("borrowedCredentialState")=="granted")"本次授权有效"else"继续前，请在原存档记录重新确认坚果云连接。",style=MaterialTheme.typography.bodySmall)
+   TextButton({action("zotero.migration.revoke",JSONObject())},enabled=!dirty){Text("撤销本次迁移记录的共享连接授权")}
+   TextButton({independentDraft=true;dirty=true},enabled=!busy){Text("为其他存档配置独立附件连接")}
+   Text("保存独立连接会结束本次共享授权；迁移记录继续前仍需重新确认坚果云。",style=MaterialTheme.typography.bodySmall)
+  }else OutlinedButton(davPassword,enabled=!dirty&&!busy){Text("为已保存附件目标设置独立应用密码…")}
+ }
  Button({action("zotero.check",JSONObject())},enabled=!dirty&&!busy){Text("核验身份、目标与权限")}
  Text("许可状态：${when(z.optString("credentialState")){"confirmed"->"已核验";"missing"->"尚未保存";else->"需要主动核验"}}")
  z.optJSONObject("permissions")?.let{Text("最近核验：${it.optString("verifiedAt")}",style=MaterialTheme.typography.labelSmall)}
  Text("独立存档记录",style=MaterialTheme.typography.titleLarge)
- z.rows("journals").forEach{j->OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+ z.rows("journals").forEach{j->
+ val hasMigrationChild=z.rows("journals").any{it.optString("migrationParentID")==j.optString("id")}
+ OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
   Text("附件后端：${if(j.optString("attachmentBackend","storage")=="webdav")"WebDAV" else "Zotero Storage"}")
+  if(j.optString("migrationParentID").isNotBlank())Text("由原 Storage 存档继续；原记录和原材料仍单独保留。",style=MaterialTheme.typography.bodySmall)
+  if(hasMigrationChild)Text("已另建 WebDAV 继续记录；此处仍保留原 Storage 的结果。",style=MaterialTheme.typography.bodySmall)
   Text(j.optString("paperID"));Text("${jobStatus(j.optString("status"))} · ${j.optString("createdAt")}")
   Text("原目标：${if(j.optString("libraryType")=="groups")"群组" else "个人文库"} ${j.optString("libraryID")} · ${if(j.optString("collection").isEmpty())"不指定分类" else "所选原分类"}",style=MaterialTheme.typography.labelSmall)
   j.ids("notices").forEach{Text(it,color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)}
   j.optString("error").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
-  OutlinedButton({action("zotero.resume",obj("journalID" to j.optString("id")))},enabled=!busy&&!dirty){Text(if(j.optString("status")=="completed")"重新逐项回读" else "沿原断点继续")}
+  OutlinedButton({action("zotero.resume",obj("journalID" to j.optString("id")))},enabled=!busy&&!dirty&&!hasMigrationChild){Text(if(j.optString("status")=="completed")"重新逐项回读" else "沿原断点继续")}
+  ZoteroMigrationEntry(j,state,controller,action,enabled=!busy&&!dirty)
  }}}
  z.optJSONObject("macHistory")?.let{history->
   val oldRecords=history.rows("records")
@@ -117,12 +131,26 @@ internal fun collectionPath(row:JSONObject,all:List<JSONObject>):String {
  val sourceMatches=state.readingMaterialID.isNotBlank()&&prepared?.opt("readingMaterialID")==state.readingMaterialID
  val materialsCurrent=prepared?.opt("materialsCurrent")==true
  val canConfirm=prepared!=null&&optionsMatch&&currentRequest&&sourceMatches&&materialsCurrent
+ var materialDetails by rememberSaveable(prepared?.optString("preparedID")){mutableStateOf(false)}
+ val materialContext=androidx.compose.ui.platform.LocalContext.current
  AlertDialog(onDismissRequest=close,title={Text("存档到 Zotero")},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)){
  Text("引用书目与来源元数据始终保留。其余材料可明确选择；导读需要已完整离线保存科学图片。")
  listOf(Triple("PDF 原件",pdf,{v:Boolean->pdf=v;optionRevision++;Unit}),Triple("图文导读",guide,{v:Boolean->guide=v;optionRevision++;Unit}),Triple("研究、原始输入与用量",analysis,{v:Boolean->analysis=v;optionRevision++;Unit}),Triple("笔记与标注",note,{v:Boolean->note=v;optionRevision++;Unit})).forEach{(label,value,set)->Row{Text(label,Modifier.weight(1f));Checkbox(value,set)}}
  if(prepared!=null)TextButton({prepare()},enabled=state.readingMaterialID.isNotBlank()&&!state.busy&&!state.zotero.optBoolean("busy")){Text("按当前选项重新准备材料")}
  if(state.zotero.optString("libraryID").isEmpty())Text("请先在设置 → Zotero 配置并核验目标文库。",color=MaterialTheme.colorScheme.error)
- if(prepared!=null&&!canConfirm)Text("所选材料、阅读版本、笔记或解析已变化，或原准备请求缺少绑定；请按当前选项重新准备，旧包不会上传。",color=MaterialTheme.colorScheme.tertiary)
- prepared?.let{p->Text("准备完成：${p.rows("roles").size+1} 项材料",style=MaterialTheme.typography.titleSmall);p.ids("notices").forEach{notice->Text(notice,color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)};p.rows("roles").forEach{r->Text("${r.optString("role")} · ${r.optLong("bytes")} 字节\n${r.optString("sha256")}",style=MaterialTheme.typography.labelSmall)}}
+ if(prepared!=null&&!canConfirm)Text("这份准备的材料已不适用于当前选项或阅读内容，请重新准备。",color=MaterialTheme.colorScheme.tertiary)
+ prepared?.let{p->
+  Text("准备完成：${p.rows("roles").size+1} 项材料",style=MaterialTheme.typography.titleSmall)
+  p.ids("notices").forEach{notice->Text(notice,color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)}
+  Text("引用书目",style=MaterialTheme.typography.bodyMedium)
+  p.rows("roles").forEach{r->
+   val label=when(r.optString("role")){"source-metadata"->"来源信息";"pdf"->"PDF 原件";"guide"->"图文导读";"analysis"->"研究记录与用量";"note"->"笔记与标注";"guide-preview-pdf"->"导读预览 PDF";else->"其他材料"}
+   Text("$label · ${android.text.format.Formatter.formatShortFileSize(materialContext,r.optLong("bytes"))}",style=MaterialTheme.typography.bodyMedium)
+  }
+  TextButton({materialDetails=!materialDetails}){Text(if(materialDetails)"收起材料与校验信息" else "查看材料与校验信息")}
+  if(materialDetails)Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+   p.rows("roles").forEach{r->Text("材料类型：${r.optString("role")}\n原件长度：${r.optLong("bytes")} 字节\nSHA-256：${r.optString("sha256")}",style=MaterialTheme.typography.labelSmall)}
+  }
+ }
  }},confirmButton={if(prepared==null)TextButton({prepare()},enabled=state.readingMaterialID.isNotBlank()&&state.zotero.optString("libraryID").isNotEmpty()&&!state.busy&&!state.zotero.optBoolean("busy")){Text("核验并准备材料")}else TextButton({if(canConfirm){action("zotero.archive",obj("preparedID" to prepared.optString("preparedID"),"readingMaterialID" to state.readingMaterialID));close()}},enabled=canConfirm&&!state.busy&&!state.zotero.optBoolean("busy")){Text("确认存档")}},dismissButton={TextButton(close){Text("关闭")}})
 }

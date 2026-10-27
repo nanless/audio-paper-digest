@@ -5,6 +5,8 @@ import com.nanless.paperdigest.secret.SecretStore
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavBackend
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavTarget
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavLease
+import com.nanless.paperdigest.zotero.webdav.ZoteroDavAuthorization
+import com.nanless.paperdigest.zotero.webdav.ZoteroDavStorageAdoption
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavAttachment
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavCodec
 import com.nanless.paperdigest.zotero.webdav.DavFiles
@@ -34,6 +36,8 @@ import java.util.UUID
 interface ZoteroTransport {
     suspend fun request(request:Request,limit:Int=4*1024*1024):HttpBytes
     suspend fun download(request:Request,target:File,limit:Long):HttpFile
+    /** Reports the native-created inode before publication, including cancellation before return. */
+    suspend fun downloadOwned(request:Request,target:File,limit:Long,owned:(ZoteroOwnedFileReceipt)->Unit):HttpFile=error("此传输未提供临时文件所有权回执")
 }
 class NetworkZoteroTransport:ZoteroTransport by ZoteroDrainedTransport()
 
@@ -44,6 +48,7 @@ class ZoteroService(
     private val clock:()->Long=System::currentTimeMillis,
     private val sleep:suspend(Long)->Unit={delay(it)},
     private val davFactory:(File,SecretStore)->ZoteroDavBackend={ root, keys -> ZoteroDavBackend.network(root,keys) },
+    private val migrationFiles:ZoteroOwnedDownloadFiles=AndroidZoteroOwnedDownloadFiles,
 ) {
     private val mutex=Mutex()
     private val profile=File(researchRoot,"ZoteroConnection/connection.json")
@@ -63,8 +68,10 @@ class ZoteroService(
     private var credentialOperation:CredentialOperation?=null
     @Volatile private var busy=false
     @Volatile private var prepared:JSONObject?=null
-    fun beginCredentialMutation():ZoteroCredentialMutation=synchronized(workerGate){
-        val binding=MutationBinding(credentialTarget(connection()),workspaceIdentity);val token=credentialLease.beginMutation();ownedMutations[token]=binding;confirmedAPIFilePermission=false;apiRevision=UUID.randomUUID().toString();davRevision=UUID.randomUUID().toString();credentialEpoch++;prepared=null;token
+    fun beginCredentialMutation():ZoteroCredentialMutation=synchronized(workerGate){beginCredentialMutationLocked(null)}
+    private fun beginCredentialMutationLocked(preserve:MigrationPreview?):ZoteroCredentialMutation {
+        retireMigrationAuthorities(preserve)
+        val binding=MutationBinding(credentialTarget(connection()),workspaceIdentity);val token=credentialLease.beginMutation();ownedMutations[token]=binding;confirmedAPIFilePermission=false;apiRevision=UUID.randomUUID().toString();davRevision=UUID.randomUUID().toString();credentialEpoch++;prepared=null;return token
     }
     suspend fun cancelAndDrain(){
         val original=synchronized(workerGate){workers.keys.toList()}
@@ -82,9 +89,10 @@ class ZoteroService(
         if(binding.workspace!==workspaceIdentity||binding.target!=credentialTarget(connection()))throw ZoteroCredentialSuperseded()
     }}
     fun endCredentialMutation(token:ZoteroCredentialMutation){synchronized(workerGate){check(ownedMutations.remove(token)!=null);credentialLease.endMutation(token)}}
-    fun credentialsChanged(){synchronized(workerGate){credentialLease.changed();confirmedAPIFilePermission=false;apiRevision=UUID.randomUUID().toString();davRevision=UUID.randomUUID().toString();credentialEpoch++;prepared=null}}
+    fun credentialsChanged(){synchronized(workerGate){retireMigrationAuthorities();credentialLease.changed();confirmedAPIFilePermission=false;apiRevision=UUID.randomUUID().toString();davRevision=UUID.randomUUID().toString();credentialEpoch++;prepared=null}}
     private fun credentialTarget(c:JSONObject)=listOf("destinationID","libraryType","libraryID","collection","attachmentBackend","davBaseURL","davUsername","davDestinationID","davAccountID").joinToString("\u0000"){c.optString(it)}
     private fun requireCredentialCurrent(){
+        migrationOperationGuard?.invoke()
         credentialOperation?.let{operation->credentialLease.requireCurrent(operation.lease);if(operation.target!=credentialTarget(connection()))throw ZoteroCredentialSuperseded()}
     }
     /** Re-project captured Root views at publication time; never trust their old permission fields. */
@@ -93,7 +101,21 @@ class ZoteroService(
         val target=listOf("libraryType","libraryID","collection","attachmentBackend","davBaseURL","davUsername","davDestinationID","davAccountID").joinToString("\u0000"){view.optString(it)}
         val verifiedAt=credentialLease.confirmedAtView(target)
         val permission=verifiedAt?.let{JSONObject().put("verifiedAt",it).put("library",true).put("write",true).put("files",confirmedAPIFilePermission).put("notes",true)}
-        return result.put("credentialState",if(permission==null)"unknown" else "confirmed").put("permissions",permission ?: JSONObject.NULL)
+        return projectBorrowedState(result.put("credentialState",if(permission==null)"unknown" else "confirmed").put("permissions",permission ?: JSONObject.NULL))
+    }
+    private fun projectBorrowedState(view:JSONObject):JSONObject {
+        val current=connection();val borrowed=current.optString("davCredentialSource")=="saved-cloud"&&backend(current)=="webdav"
+        val fields=listOf("libraryType","libraryID","collection","attachmentBackend","davBaseURL","davUsername","davDestinationID","davAccountID")
+        val same=fields.all{view.optString(it)==current.optString(it)}
+        val granted=if(!borrowed||!same)false else runCatching{
+            val target=davTarget(current)
+            val snapshot=synchronized(workerGate){Triple(credentialEpoch,migrationGeneration,migrationAuthorizations.values.toList())}
+            snapshot.third.any{authorization->runCatching{
+                authorization.requirePublished(target)
+                synchronized(workerGate){snapshot.first==credentialEpoch&&snapshot.second==migrationGeneration&&migrationAuthorizations.values.any{it===authorization}&&credentialTarget(current)==credentialTarget(connection())}
+            }.getOrDefault(false)}
+        }.getOrDefault(false)
+        return view.put("davCredentialSource",if(borrowed&&same)"saved-cloud"else"independent").put("borrowedCredentialState",if(borrowed&&same){if(granted)"granted"else"confirmation-required"}else"not-applicable")
     }
     private fun checkedDirectory(dir:File){
         var part:File?=dir.absoluteFile;while(part!=null){require(!Files.isSymbolicLink(part.toPath())){"连接目录不能含链接"};part=part.parentFile}
@@ -144,7 +166,7 @@ class ZoteroService(
                 val target="$type:$id";val destination=known.optString(target).takeIf{it.isNotBlank()}?:UUID.randomUUID().toString()
                 known.put(target,destination);c.put("destinations",known).put("destinationID",destination)
             }
-            c.put("libraryType",type).put("libraryID",id).put("collection",collection).put("attachmentBackend",selectedBackend)
+            c.put("libraryType",type).put("libraryID",id).put("collection",collection).put("attachmentBackend",selectedBackend);c.remove("davCredentialSource")
             if(selectedBackend=="webdav"){
                 val base=payload.getString("davBaseURL");val username=payload.getString("davUsername")
                 val provisional=ZoteroDavTarget.native(type,id,base,username,UUID.randomUUID().toString(),UUID.randomUUID().toString())
@@ -163,7 +185,7 @@ class ZoteroService(
             .put("journals",JSONArray(records.listFiles()?.filter{it.isDirectory}?.mapNotNull{dir->runCatching{readJournal(dir.name).apply{remove("bibliography");remove("roles")}}.getOrNull()}?.sortedByDescending{it.optString("createdAt")}?:emptyList<JSONObject>()))
         val verifiedAt=credentialLease.confirmedAt(credentialTarget(c))
         val permission=verifiedAt?.let{JSONObject().put("verifiedAt",it).put("library",true).put("write",true).put("files",confirmedAPIFilePermission).put("notes",true)}
-        return result.put("credentialState",if(permission==null)"unknown" else "confirmed").put("permissions",permission ?: JSONObject.NULL)
+        return projectBorrowedState(result.put("credentialState",if(permission==null)"unknown" else "confirmed").put("permissions",permission ?: JSONObject.NULL))
     }
     suspend fun execute(command:String,payload:JSONObject=JSONObject()):JSONObject {
         if(command in listOf("state","zotero.state"))return state()
@@ -187,6 +209,206 @@ class ZoteroService(
             }} finally{synchronized(workerGate){workers.remove(worker)}}
         }
     }
+    private val migrationStore=ZoteroStorageMigrationStore(researchRoot,migrationFiles)
+    private class MigrationPreview(val id:String,val parentID:String,val target:ZoteroDavTarget,val workspace:Any,val config:String,val epoch:Long,val generation:Long,val lease:ZoteroCredentialLease.Check){
+        var authorization:ZoteroDavAuthorization?=null
+        var parent:MigrationParent?=null
+        var result:ZoteroStorageReadOnlyVerifier.Result?=null
+        var confirming=false
+        var childID:String?=null
+        var confirmedEpoch:Long?=null
+    }
+    private val migrationPreviews=mutableMapOf<String,MigrationPreview>()
+    private val migrationAuthorizations=mutableMapOf<String,ZoteroDavAuthorization>()
+    private val borrowedWorkers=java.util.IdentityHashMap<Job,Boolean>()
+    private var migrationGeneration=0L
+    private var migrationOperationGuard:(()->Unit)?=null
+    private fun retireMigrationAuthorities(preserve:MigrationPreview?=null){
+        migrationPreviews.clear();migrationAuthorizations.clear()
+        if(preserve==null)migrationGeneration++ else migrationPreviews[preserve.id]=preserve
+    }
+    /** Synchronous revocation precedes any Cloud/profile mutation; joining is deliberately separate. */
+    fun revokeBorrowedStorageMigrations(){synchronized(workerGate){retireMigrationAuthorities()}}
+    suspend fun cancelAndDrainBorrowed(){
+        val original=synchronized(workerGate){borrowedWorkers.keys.toList()}
+        withContext(NonCancellable){original.forEach{it.cancel()};original.forEach{it.join()}}
+    }
+    /** Local target registration only. Root issues its original unpublished consent grant before preview awaits. */
+    fun beginStorageMigrationPreview(parentID:String,baseURL:String,username:String):String=synchronized(workerGate){
+        require(UUID.fromString(parentID).toString()==parentID)
+        val c=validatedConnection();require(c.getString("libraryType")=="users"){"附件迁移仅支持个人文库"}
+        val candidate=ZoteroDavTarget.native("users",c.getString("libraryID"),baseURL,username,UUID.randomUUID().toString(),UUID.randomUUID().toString())
+        // An interrupted local publication must retain its original child target IDs.
+        val child=migrationStore.childForParent(parentID)?.let{migrationStore.openChild(it)}
+        val identity=canonical(JSONObject().put("user",candidate.userID).put("root",candidate.root).put("username",username))
+        val known=c.optJSONObject("davDestinations")?.optJSONObject(identity)
+        val target=child?.target?:if(backend(c)=="webdav")davTarget(c)else known?.let{ZoteroDavTarget.native("users",candidate.userID,baseURL,username,it.getString("destinationID"),it.getString("accountID"))}?:candidate
+        require(target.root==candidate.root&&target.username==username&&target.userID==candidate.userID){"请恢复该迁移记录的原附件连接"}
+        val id=UUID.randomUUID().toString();migrationPreviews[id]=MigrationPreview(id,parentID,target,workspaceIdentity,credentialTarget(c),credentialEpoch,migrationGeneration,credentialLease.capture());id
+    }
+    fun migrationTarget(previewID:String):ZoteroDavTarget=synchronized(workerGate){
+        val p=migrationPreviews[previewID]?:throw ZoteroCredentialSuperseded();requirePreviewCurrent(p);p.target
+    }
+    private fun requirePreviewCurrent(p:MigrationPreview){synchronized(workerGate){
+        if(migrationPreviews[p.id]!==p||p.workspace!==workspaceIdentity||p.config!=credentialTarget(connection())||p.epoch!=credentialEpoch||p.generation!=migrationGeneration)throw ZoteroCredentialSuperseded()
+        credentialLease.requireCurrent(p.lease);p.authorization?.requireCurrent(p.target)
+    }}
+    private fun parentMatchesConnection(parent:MigrationParent){
+        val j=parent.header();val c=validatedConnection()
+        require(listOf("destinationID","libraryType","libraryID","collection").all{j.optString(it)==c.optString(it)}){"原存档属于另一文库或分类，未迁移"}
+    }
+    private fun verifier(parent:MigrationParent):ZoteroStorageReadOnlyVerifier {
+        val base="/users/${parent.header().getString("libraryID")}/items"
+        return ZoteroStorageReadOnlyVerifier(researchRoot,migrationStore,{key,optional->
+            val r=api("GET","$base/$key?format=json",allow404=optional)
+            if(r.code==404)null else JSONObject(r.bytes.toString(Charsets.UTF_8))
+        },{key,target,limit,check,owned->
+            var request=apiRequest("GET","$base/$key/file",null,emptyMap());var redirects=0
+            while(true){
+                check();requireCredentialCurrent();val origin=request.url.host=="api.zotero.org";if(origin)beforeApi()
+                val response=transport.downloadOwned(request,target,limit,owned);currentCoroutineContext().ensureActive();check()
+                if(origin)acceptApi(response.code,response.headers,allowRedirect=true)else{cooldown(response.code,response.headers);requireCredentialCurrent();if(response.code==429)throw AppFailure("backoff","附件服务要求等待，原断点保留")}
+                if(response.code in 300..399){require(redirects++<5){"附件重定向过多"};val location=response.headers.entries.firstOrNull{it.key.equals("Location",true)}?.value?:error("缺少附件地址");val resolved=request.url.resolve(location)?.toString()?:error("无效附件地址");safeExternal(resolved);request=Request.Builder().url(resolved).get().build();continue}
+                require(response.code==200&&response.bytes==limit){"Storage 原附件未完整回读"};check();break
+            }
+        })
+    }
+    private fun migrationPreviewResult(p:MigrationPreview,parent:MigrationParent):JSONObject {
+        val j=parent.header();val rows=j.getJSONArray("roles").objects();val observed=p.result?.observations.orEmpty()
+        return JSONObject().put("roles",JSONArray(rows.map{r->val observation=observed.singleOrNull{it.key==r.getString("key")};JSONObject().put("role",r.getString("role")).put("bytes",r.getLong("bytes")).put("sha256",r.getString("sha256")).put("apiItemExists",observation?.exists==true).put("storageBytesVerified",observation?.storageBytesVerified==true)})).put("existingStorageVerifiedCount",p.result?.adoptions?.size?:0).put("fileCount",rows.count{!it.getBoolean("note")}).put("previewID",p.id).put("parentJournalID",parent.id).put("paperID",j.getString("paperID")).put("title",j.getJSONObject("bibliography").optString("title")).put("libraryType","users").put("libraryID",p.target.userID).put("collection",j.optString("collection")).put("root",p.target.root).put("username",p.target.username).put("roleCount",j.getJSONArray("roles").length()).put("storageFilesVerified",p.result?.adoptions?.size?:0).put("prepared",false).put("remoteWrites",false)
+    }
+    suspend fun previewStorageMigration(previewID:String,authorization:ZoteroDavAuthorization):JSONObject=coroutineScope {
+        val p=synchronized(workerGate){(migrationPreviews[previewID]?:throw ZoteroCredentialSuperseded()).also{requirePreviewCurrent(it);require(it.authorization==null||it.authorization===authorization);authorization.requireCurrent(it.target);it.authorization=authorization}}
+        val worker=currentCoroutineContext()[Job]?:error("缺少原生操作")
+        synchronized(workerGate){requirePreviewCurrent(p);workers[worker]=true;borrowedWorkers[worker]=true}
+        try{mutex.withLock{
+            requirePreviewCurrent(p);credentialOperation=CredentialOperation(p.lease,p.config);busy=true
+            val context=currentCoroutineContext();var parent:MigrationParent?=null
+            val check:()->Unit={context.ensureActive();requirePreviewCurrent(p);parent?.let{migrationStore.requireParentQuick(it)}}
+            migrationOperationGuard=check
+            try{
+                parent=migrationStore.captureParent(p.parentID);parentMatchesConnection(parent!!);check();check()
+                val existing=migrationStore.childForParent(parent!!.id)?.let{migrationStore.openChild(it)}
+                val result=verifier(parent!!).verify(parent!!,p.target,check,existing);check();migrationStore.requireParent(parent!!)
+                p.parent=parent;p.result=result;migrationPreviewResult(p,parent!!)
+            }finally{migrationOperationGuard=null;credentialOperation=null;busy=false}
+        }}finally{synchronized(workerGate){workers.remove(worker);borrowedWorkers.remove(worker)}}
+    }
+    private fun preparedMigration(child:MigrationChild)=preparedResult(child.journal).put("migration",true).put("status","prepared").put("parentJournalID",child.origin.getString("parentJournalID"))
+    suspend fun confirmStorageMigration(previewID:String,authorization:ZoteroDavAuthorization,publishLocal:suspend((()->JSONObject))->JSONObject):JSONObject {
+        val p=synchronized(workerGate){migrationPreviews[previewID]?:throw ZoteroCredentialSuperseded()}
+        val mutation=synchronized(workerGate){
+            require(p.authorization===authorization){"请确认原预览使用的同一连接授权"};authorization.requireCurrent(p.target)
+            p.childID?.let{id->
+                if(p.workspace!==workspaceIdentity||p.confirmedEpoch!=credentialEpoch||p.generation!=migrationGeneration||migrationAuthorizations[id]!==authorization)throw ZoteroCredentialSuperseded()
+                authorization.requirePublished(p.target)
+                val child=migrationStore.openChild(id);require(p.target.matches(child.origin.getJSONObject("target")));return preparedMigration(child)
+            }
+            requirePreviewCurrent(p);require(p.parent!=null&&p.result!=null&&!p.confirming){"请先完成原存档预览，再确认迁移"};p.confirming=true
+            val token=beginCredentialMutationLocked(p);token to credentialEpoch
+        }
+        val token=mutation.first;val epoch=mutation.second
+        try{
+            cancelAndDrain()
+            return coroutineScope {
+                val worker=currentCoroutineContext()[Job]?:error("缺少原生操作");synchronized(workerGate){workers[worker]=true;borrowedWorkers[worker]=true}
+                try{mutex.withLock{
+                    requireCredentialMutation(token);val context=currentCoroutineContext();val parent=requireNotNull(p.parent);var localPublished=false
+                    val guard={
+                        context.ensureActive();authorization.requireCurrent(p.target)
+                        synchronized(workerGate){if(p.workspace!==workspaceIdentity||epoch!=credentialEpoch||p.generation!=migrationGeneration||migrationPreviews[p.id]!==p)throw ZoteroCredentialSuperseded()}
+                        if(!localPublished){requireCredentialMutation(token)}else require(davTarget(validatedConnection()).matches(p.target.binding()))
+                        migrationStore.requireParentQuick(parent)
+                    }
+                    migrationOperationGuard=guard;busy=true
+                    try{
+                        guard();parentMatchesConnection(parent);migrationStore.requireParent(parent)
+                        val existing=migrationStore.childForParent(parent.id)?.let{migrationStore.openChild(it)}
+                        val fresh=verifier(parent).verify(parent,p.target,guard,existing)
+                        require(canonical(JSONArray(fresh.observations.map{it.json()}))==canonical(JSONArray(requireNotNull(p.result).observations.map{it.json()}))){"远端材料自预览后已变化，请重新核对"}
+                        guard()
+                        val response=publishLocal {
+                            guard();migrationStore.requireParent(parent)
+                            val child=migrationStore.create(parent,p.target,fresh.observations,guard)
+                            sealMigrationChild(child,fresh.adoptions,guard)
+                            synchronized(workerGate){
+                                guard();val c=connection()
+                                val identity=canonical(JSONObject().put("user",p.target.userID).put("root",p.target.root).put("username",p.target.username))
+                                val destinations=c.optJSONObject("davDestinations")?:JSONObject();val known=destinations.optJSONObject(identity)
+                                require(known==null||(known.optString("destinationID")==p.target.destinationID&&known.optString("accountID")==p.target.accountID)){"该附件连接已有另一原生身份，未覆盖原连接"}
+                                destinations.put(identity,JSONObject().put("destinationID",p.target.destinationID).put("accountID",p.target.accountID));c.put("davDestinations",destinations).put("davCredentialSource","saved-cloud").put("attachmentBackend","webdav").put("davBaseURL",p.target.root.removeSuffix("zotero/")).put("davUsername",p.target.username).put("davDestinationID",p.target.destinationID).put("davAccountID",p.target.accountID)
+                                require(!Files.isSymbolicLink(profile.toPath()));JsonFiles.write(profile,c);localPublished=true
+                                p.childID=child.id;p.confirmedEpoch=epoch;guard()
+                            }
+                            preparedMigration(migrationStore.openChild(child.id))
+                        }
+                        guard();require(localPublished&&p.childID!=null){"未执行原生迁移发布"}
+                        require(response.optString("journalID")==p.childID&&response.optString("status")=="prepared"&&response.optString("attachmentBackend")=="webdav"){"本地迁移发布回执不符"}
+                        authorization.requirePublished(p.target)
+                        synchronized(workerGate){guard();authorization.requirePublished(p.target);migrationAuthorizations[requireNotNull(p.childID)]=authorization}
+                        migrationStore.requireParent(parent);response
+                    }finally{migrationOperationGuard=null;busy=false}
+                }}finally{synchronized(workerGate){workers.remove(worker);borrowedWorkers.remove(worker)}}
+            }
+        }catch(error:Throwable){
+            synchronized(workerGate){p.childID?.let{if(migrationAuthorizations[it]===authorization)migrationAuthorizations.remove(it)};p.childID=null;p.confirmedEpoch=null}
+            throw error
+        }finally{synchronized(workerGate){p.confirming=false};endCredentialMutation(token)}
+    }
+    private fun migrationMaterial(j:JSONObject,index:Int):ZoteroDavAttachment {
+        val r=j.getJSONArray("roles").getJSONObject(index)
+        return ZoteroDavAttachment.native(r.getString("key"),j.getString("parentKey"),r.getString("role"),j.getString("paperID"),j.getString("identity"),r.getString("title"),r.getString("contentType"),File(records,"${j.getString("id")}/${r.getString("file")}"),r.getString("sha256"))
+    }
+    private fun sealMigrationChild(child:MigrationChild,adoptions:Map<String,ZoteroDavStorageAdoption>,check:()->Unit){
+        val j=readJournal(child.id);val codec=ZoteroDavCodec(davRoot())
+        j.getJSONArray("roles").objects().forEachIndexed{i,r->
+            if(r.getBoolean("note"))return@forEachIndexed
+            check();val material=migrationMaterial(j,i);val adoption=adoptions[r.getString("key")]
+            if(r.has("davJournalID")){
+                val sealed=codec.reopen(r.getString("davJournalID"),child.target,check);val plan=codec.verify(sealed,child.target,check)
+                require(canonical(plan.getJSONObject("attachment"))==canonical(material.descriptor())){"原迁移封存与材料不符"}
+                if(plan.has("storageAdoption"))requireNotNull(adoption).requirePlan(plan,child.target)else require(adoption==null)
+            }else{
+                val sealed=if(adoption==null)codec.prepare(material,child.target,check)else codec.prepareStorageMigration(material,child.target,adoption,check)
+                check();r.put("davJournalID",sealed.id);save(j)
+            }
+        }
+        check();migrationStore.requireChild(migrationStore.openChild(child.id))
+    }
+    private suspend fun archiveMigrationChild(id:String):JSONObject {
+        val child=migrationStore.openChild(id);val parent=migrationStore.captureParent(child.origin.getString("parentJournalID"));parentMatchesConnection(parent)
+        val c=validatedConnection();require(backend(c)=="webdav"&&davTarget(c).matches(child.target.binding())){"请恢复迁移子记录的原连接"}
+        val authorization=synchronized(workerGate){migrationAuthorizations[id]}?:throw IllegalArgumentException("请先明确确认此迁移记录使用的坚果云连接")
+        val worker=currentCoroutineContext()[Job]?:error("缺少原生操作");synchronized(workerGate){authorization.requireCurrent(child.target);borrowedWorkers[worker]=true}
+        val context=currentCoroutineContext();val previous=migrationOperationGuard
+        val guard={context.ensureActive();authorization.requirePublished(child.target);synchronized(workerGate){if(migrationAuthorizations[id]!==authorization)throw ZoteroCredentialSuperseded()};migrationStore.requireParentQuick(parent)}
+        migrationOperationGuard=guard
+        try{
+            guard();val verified=verifier(parent).verify(parent,child.target,guard,child);guard();sealMigrationChild(child,verified.adoptions,guard)
+            val j=readJournal(id);val base="/users/${j.getString("libraryID")}/items";val roles=j.getJSONArray("roles");j.put("status","running");save(j)
+            try{
+                check();val expectedParent=j.getJSONObject("bibliography").copy().put("key",j.getString("parentKey"))
+                if(j.optString("collection").isNotBlank())expectedParent.put("collections",JSONArray().put(j.getString("collection")))
+                verifyItem(base,expectedParent)
+                for(i in 0 until roles.length()){
+                    guard();val r=roles.getJSONObject(i);val file=File(records,"$id/${r.getString("file")}");val key=r.getString("key")
+                    val item=JSONObject().put("key",key).put("version",0).put("parentItem",j.getString("parentKey")).put("tags",JSONArray().put(JSONObject().put("tag","PaperDigest:${r.getString("role")}:${r.getString("sha256")}")))
+                    if(r.getBoolean("note"))item.put("itemType","note").put("note",file.readText())else item.put("itemType","attachment").put("linkMode","imported_file").put("title",r.getString("title")).put("contentType",r.getString("contentType")).put("filename",filename(r))
+                    ensureItem(base,item,j,null,r)
+                    if(r.getBoolean("note"))verifyRole(base,key,file,r,j.getString("parentKey"))else{
+                        beforeApi();val lease=ZoteroDavLease.nativeBorrowed(child.target,apiRevision,davRevision,credentialEpoch,authorization){runCatching{guard();requireCredentialCurrent();true}.getOrDefault(false)}
+                        val backend=davFactory(davRoot(),secrets);val adoption=verified.adoptions[key]
+                        val proof=if(adoption==null)backend.resume(r.getString("davJournalID"),lease)else backend.resumeStorageMigration(r.getString("davJournalID"),lease,adoption)
+                        require(proof.opt("apiMetadataVerified")==true&&proof.opt("davBytesVerified")==true);r.put("davVerification",proof)
+                    }
+                    guard();migrationStore.requireParent(parent);r.put("status","verified").put("verifiedAt",now());save(j)
+                }
+                verifyItem(base,expectedParent);guard();migrationStore.requireParent(parent);j.put("status","completed").put("completedAt",now()).remove("error");save(j)
+                return JSONObject().put("journalID",id).put("status","completed").put("migration",true).put("roleCount",roles.length()+1).put("officialClientsOpened",false)
+            }catch(e:Exception){j.put("status",if(e is CancellationException)"cancelled"else"failed").put("error",safeMessage(e));save(j);throw e}
+        }finally{migrationOperationGuard=previous;synchronized(workerGate){borrowedWorkers.remove(worker)}}
+    }
+
     private fun validatedConnection():JSONObject=connection().also{require(it.optString("libraryType") in listOf("users","groups")&&it.optString("libraryID").matches(Regex("[1-9][0-9]{0,15}"))){"请先保存文库类型和 ID"}}
     private suspend fun check(){
         credentialLease.clearConfirmation()
@@ -281,6 +503,8 @@ class ZoteroService(
     private fun readJournal(id:String):JSONObject {require(UUID.fromString(id).toString()==id);return JSONObject(JsonFiles.read(File(records,"$id/journal.json")).toString(Charsets.UTF_8)).also{require(it.getString("contract")=="paperdigest-zotero-web-v1"&&it.getString("id")==id)}}
     private fun save(j:JSONObject){JsonFiles.write(File(records,"${j.getString("id")}/journal.json"),j)}
     private suspend fun archive(id:String):JSONObject {
+        if(migrationStore.isChild(id))return archiveMigrationChild(id)
+        require(!migrationStore.parentHasMigration(id)){"原 Storage 记录已有迁移子记录，请明确打开该迁移记录续传"}
         val j=readJournal(id);val c=validatedConnection()
         require(sameBackend(j,c)&&j.getString("destinationID")==c.getString("destinationID")&&j.getString("libraryType")==c.getString("libraryType")&&j.getString("libraryID")==c.getString("libraryID")&&j.optString("collection")==c.optString("collection")){"此断点属于其他 Zotero 连接；请恢复原连接后续传，不能跨账户重用"}
         val base="/${j.getString("libraryType")}/${j.getString("libraryID")}/items";val dir=File(records,id)

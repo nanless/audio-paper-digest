@@ -33,6 +33,15 @@ class ZoteroDavBackend internal constructor(root:File,private val secrets:Secret
         val context=currentCoroutineContext();val check={context.ensureActive();lease.requireCurrent()}
         try{val result=codec.prepare(material,lease.target,check);check();synchronized(preparedLeases){preparedLeases[result]=lease};result}catch(e:Exception){throw safe(e)}
     }
+    internal suspend fun prepareStorageMigration(material:ZoteroDavAttachment,lease:ZoteroDavLease,adoption:ZoteroDavStorageAdoption):ZoteroDavPrepared=withContext(Dispatchers.IO){
+        val context=currentCoroutineContext();val check={context.ensureActive();lease.requireCurrent();adoption.requireCurrent()}
+        try{codec.prepareStorageMigration(material,lease.target,adoption,check)}catch(e:Exception){throw safe(e)}
+    }
+    internal suspend fun resumeStorageMigration(id:String,lease:ZoteroDavLease,adoption:ZoteroDavStorageAdoption):JSONObject=mutex.withLock{
+        val context=currentCoroutineContext();val check={context.ensureActive();lease.requireCurrent();adoption.requireCurrent()}
+        val prepared=try{withContext(Dispatchers.IO){codec.reopen(id,lease.target,check)}}catch(e:Exception){throw safe(e)}
+        run(prepared,lease,adoption)
+    }
     suspend fun archive(prepared:ZoteroDavPrepared,lease:ZoteroDavLease):JSONObject=mutex.withLock{
         davRequire(synchronized(preparedLeases){preparedLeases[prepared]===lease},"stale")
         try{run(prepared,lease)}finally{synchronized(preparedLeases){preparedLeases.remove(prepared)}}
@@ -43,29 +52,32 @@ class ZoteroDavBackend internal constructor(root:File,private val secrets:Secret
         val prepared=try{withContext(Dispatchers.IO){codec.reopen(id,lease.target,check)}}catch(e:Exception){throw safe(e)}
         run(prepared,lease)
     }
-    private suspend fun run(prepared:ZoteroDavPrepared,lease:ZoteroDavLease):JSONObject=withContext(Dispatchers.IO){
-        val context=currentCoroutineContext();val check={context.ensureActive();lease.requireCurrent();prepared.journal.checkDirectory()}
+    private suspend fun run(prepared:ZoteroDavPrepared,lease:ZoteroDavLease,adoption:ZoteroDavStorageAdoption?=null):JSONObject=withContext(Dispatchers.IO){
+        val context=currentCoroutineContext();val check:()->Unit={context.ensureActive();lease.requireCurrent();prepared.journal.checkDirectory();adoption?.requireCurrent()}
         val j=prepared.journal
         var attempt:String?=null
         try{
-            val plan=codec.verify(prepared,lease.target,check)
+            val plan=codec.verify(prepared,lease.target,check);adoption?.requirePlan(plan,lease.target)
+            davRequire(adoption!=null||!plan.has("storageAdoption"),"stale") // Persisted JSON cannot grant Storage adoption.
             // Authenticate the actual API user+library+permissions before issuing any new attempt or DAV write.
             api.authenticate(lease,check);check()
             val id=UUID.randomUUID().toString();attempt=id
             j.update{state->state.getJSONArray("attempts").put(JSONObject().put("id",id).put("apiRevision",lease.apiRevision).put("davRevision",lease.davRevision).put("epoch",lease.epoch).put("startedAt",java.time.Instant.ofEpochMilli(clock()).toString()).put("status","running"));state.put("status","running")}
             val first=api.read(lease,plan,check);val state=j.read();val base=if(state.has("baseVersion"))strictLong(state.opt("baseVersion"))?:throw ZoteroDavFailure("journalChanged") else null
-            if(base==null){davRequire(first.md5==null&&first.mtime==null,"conflict");j.update{it.put("baseVersion",first.version)}}
+            if(adoption!=null){adoption.requireItem(first);if(base==null)j.update{it.put("baseVersion",first.version)}else davRequire(base==first.version,"conflict")}
+            else if(base==null){davRequire(first.md5==null&&first.mtime==null,"conflict");j.update{it.put("baseVersion",first.version)}}
             else if(first.md5==null)davRequire(first.version==base,"conflict")
             else davRequire(j.read().optString("phase") in setOf("api-patch-planned","api-verified","completed")&&matches(first,plan)&&first.version>base,"conflict")
             ensureBlob(j,plan,lease,"zip",check);ensureBlob(j,plan,lease,"prop",check)
             check();val before=api.read(lease,plan,check);val originalVersion=j.read().getLong("baseVersion")
-            if(!matches(before,plan)){
+            if(adoption!=null){adoption.requireItem(before);j.update{it.put("phase","api-verified")}}
+            else if(!matches(before,plan)){
                 davRequire(before.md5==null&&before.mtime==null&&before.version==originalVersion,"conflict")
                 j.update{it.put("phase","api-patch-planned")};check()
                 api.patch(lease,plan,originalVersion,check)
             }else davRequire(j.read().optString("phase") in setOf("api-patch-planned","api-verified","completed")&&before.version>originalVersion,"conflict")
             val finalAPI=api.read(lease,plan,check)
-            davRequire(matches(finalAPI,plan)&&finalAPI.version>originalVersion,"conflict")
+            if(adoption!=null){adoption.requireItem(finalAPI);davRequire(matches(finalAPI,plan)&&finalAPI.version==originalVersion,"conflict")}else davRequire(matches(finalAPI,plan)&&finalAPI.version>originalVersion,"conflict")
             j.update{it.put("phase","api-verified").put("verifiedApiVersion",finalAPI.version)}
             // API metadata is not enough: actual DAV objects must still match after that write.
             readBlob(j,plan,lease,"zip",check).also{davRequire(it,"conflict")}
@@ -110,6 +122,9 @@ class ZoteroDavBackend internal constructor(root:File,private val secrets:Secret
         }finally{reply?.cleanup()}
     }
     private fun davAuthorization(lease:ZoteroDavLease,check:()->Unit):String{
+        lease.borrowedAuthorization?.let { provider ->
+            check();lease.requireCurrent();val header=provider.authorization(lease.target,check);check();lease.requireCurrent();return header
+        }
         check();lease.requireCurrent();val secret=try{guardedSecrets.load(lease.target.secretScope)}catch(e:Exception){if(e is CancellationException||e is ZoteroDavFailure)throw e;throw ZoteroDavFailure("authentication")}
         check();lease.requireCurrent();davRequire(!secret.isNullOrBlank()&&secret.toByteArray().size<=8192&&Charsets.UTF_8.newEncoder().canEncode(secret)&&!secret.any{it.code<32||it.code==127},"authentication")
         return try{Credentials.basic(lease.target.username,secret?:throw ZoteroDavFailure("authentication"),Charsets.UTF_8)}catch(_:Exception){throw ZoteroDavFailure("authentication")}

@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.draggable
@@ -69,7 +70,7 @@ import org.json.JSONObject
   val showPDF=pdfAvailable&&(split||if(canSplit)focus=="pdf" else phonePDF)
   val showText=!pdfAvailable||split||!showPDF
   Column(Modifier.fillMaxSize()){
-   Box(Modifier.fillMaxWidth()){
+   Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)){
    Column(if(hingePair!=null)Modifier.width(hingePair.left.width.dp)else Modifier.fillMaxWidth()){
    Row(Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
     if(geometry.compactChrome){
@@ -81,10 +82,16 @@ import org.json.JSONObject
       DropdownMenu(modeMenu,{modeMenu=false}){modes.forEach{value->DropdownMenuItem({Text(value)},{chooseMode(value)})}}
      }
     }else Column(Modifier.weight(1f).clickable(onClickLabel="查看完整论文信息"){showPaperInfo=true}.padding(horizontal=8.dp)){
-     Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
-     Text("打开时来源："+(paper.sourceVersion?:paper.sourceKind),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+     Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis)
+     Text(paperSourceLabel(paper),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
     }
-    IconButton({showPaperInfo=true}){BadgedBox(badge={if(sourceNotices.isNotEmpty())Badge{Text(sourceNotices.size.toString())}}){Icon(if(sourceTone=="info")Icons.Outlined.Info else Icons.Outlined.Warning,"$sourceLabel，查看完整信息与 ${sourceNotices.size} 项提示",tint=sourceColor)}}
+    TextButton({showPaperInfo=true},Modifier.sizeIn(minWidth=48.dp,minHeight=48.dp),contentPadding=PaddingValues(horizontal=10.dp,vertical=8.dp)){
+     Icon(if(sourceTone=="info")Icons.Outlined.Info else Icons.Outlined.Warning,"$sourceLabel，查看完整信息与 ${sourceNotices.size} 项提示",tint=sourceColor)
+     if(sourceNotices.isNotEmpty()){
+      Spacer(Modifier.width(4.dp))
+      Badge(containerColor=if(sourceTone=="error")MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiaryContainer,contentColor=if(sourceTone=="error")MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onTertiaryContainer){Text(sourceNotices.size.toString())}
+     }
+    }
     IconButton({togglePDF()}){Icon(Icons.Outlined.PictureAsPdf,if(state.pdfMode)"关闭 PDF" else "打开 PDF")}
     Box{
      IconButton({export=true}){Icon(Icons.Outlined.MoreVert,"论文操作与导出")}
@@ -115,10 +122,10 @@ import org.json.JSONObject
      }
     }
    }
-   if(!geometry.compactChrome)Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){
+   if(!geometry.compactChrome)Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
     listOf("导读","研究","笔记").forEach{value->FilterChip(tab==value&&(!showPDF||split),{chooseMode(value)},label={Text(value)})}
     if(pdfAvailable)FilterChip(showPDF,{chooseMode("PDF")},label={Text("PDF")})
-    TextButton({showPaperInfo=true}){Text(if(sourceNotices.isEmpty())"来源与版本" else "$sourceLabel · ${sourceNotices.size}",color=sourceColor)}
+    if(sourceNotices.isNotEmpty())TextButton({showPaperInfo=true}){Text("$sourceLabel · ${sourceNotices.size}",color=sourceColor)}
     if(canSplit)TextButton({showLayout=true}){Text("阅读布局")}
    }
    }
@@ -209,7 +216,7 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  LaunchedEffect(session?.toString()){if(session!=null)try{html=ResearchRenderer.render(context,sessionAnswer(session));renderError=null}catch(e:Exception){renderError=e.message}}
  Column(Modifier.fillMaxSize()){
  Column(Modifier.weight(1f,fill=false).verticalScroll(rememberScrollState()).padding(16.dp)){
- OutlinedTextField(question,{question=it.take(16000);freshDraftRevision++},Modifier.fillMaxWidth(),label={Text("向这篇论文提问")},placeholder={Text("例如：这项方法依赖哪些假设？")},minLines=2,maxLines=6)
+ OutlinedTextField(question,{question=it.take(16000);freshDraftRevision++},Modifier.fillMaxWidth(),shape=MaterialTheme.shapes.medium,label={Text("向这篇论文提问")},placeholder={Text("例如：这项方法依赖哪些假设？")},minLines=2,maxLines=6)
  Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)){listOf("guide" to "导读","selection" to "选区","page" to "当前页","chapter" to "章节","range" to "页段","full" to "全文").forEach{(v,l)->FilterChip(evidence==v,{evidence=v;freshDraftRevision++},label={Text(l)})}}
  Text(if(evidence=="guide")"导读证据：${state.article?.sourceVersion?:"版本未标注"} · ${state.article?.revisionSHA256?.take(12).orEmpty()}" else "PDF 证据：${state.pdfReceipt.optString("version").ifBlank{"原版本未标注"}} · ${state.pdfDocument?.sha256?.take(12).orEmpty()} · 物理页",style=MaterialTheme.typography.labelSmall)
  if(evidence=="chapter"){
@@ -227,8 +234,9 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  if(sessions.isNotEmpty()){var menu by remember{mutableStateOf(false)};Box{TextButton({menu=true}){Text("研究记录 ${sessions.size} · ${session?.optString("question").orEmpty().take(30)}")};DropdownMenu(menu,{menu=false}){sessions.forEach{s->DropdownMenuItem({Text(s.optString("question").take(70))},{chosen=s.optString("id");menu=false})}}}}
  if(originalSessions.size!=sessions.size)Text("部分原记录身份重复或归属冲突，未用于显示；原资料仍保留。",style=MaterialTheme.typography.labelSmall)
  session?.let{s->Text("${jobStatus(s.optString("status"))} · ${sessionUsageLabel(s)}",style=MaterialTheme.typography.labelSmall);Text(sessionModelLabel(s),style=MaterialTheme.typography.labelSmall);Text(sessionChargeLabel(s),style=MaterialTheme.typography.labelSmall)}
+ if(session==null)Text("每次回答关联实际输入、来源页码和原始用量，可完整导出。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=8.dp))
  }
- when{renderError!=null->Text(renderError!!,Modifier.padding(16.dp));html!=null->Box(Modifier.weight(1f)){StaticDocument(html!!)};else->EmptyPane("让阅读形成研究记录","每次回答关联实际输入、来源页码和原始用量，可完整导出。")}
+ when{renderError!=null->Text(renderError!!,Modifier.padding(16.dp));html!=null->Box(Modifier.weight(1f)){StaticDocument(html!!)}}
  }
 }
 
@@ -239,8 +247,11 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  LaunchedEffect(note.toString()){if(!dirty){draft=note.optString("text");revision=note.optInt("revision")}}
  var reloadNote by remember{mutableStateOf(false)};var edit by remember{mutableStateOf<JSONObject?>(null)};var editText by remember{mutableStateOf("")};var removeCount by remember{mutableIntStateOf(1)};var remove by remember{mutableStateOf<JSONObject?>(null)};var saving by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)};val saveScope=rememberCoroutineScope()
  Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
- Text("阅读笔记",style=MaterialTheme.typography.titleLarge)
- OutlinedTextField(draft,{draft=it;dirty=true},Modifier.fillMaxWidth().heightIn(min=200.dp),label={Text("你的想法、疑问与结论")})
+ Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+  Text("阅读笔记",style=MaterialTheme.typography.titleLarge,modifier=Modifier.weight(1f))
+  PaperLabel(if(dirty)"有未保存更改" else if(note.has("text"))"已保存内容" else "尚无笔记")
+ }
+ OutlinedTextField(draft,{draft=it;dirty=true},Modifier.fillMaxWidth().heightIn(min=200.dp),shape=MaterialTheme.shapes.medium,label={Text("你的想法、疑问与结论")})
  Button({val submitted=draft;val base=revision;saving=true;saveScope.launch{try{val result=controller.execute("personal.note",obj("paperID" to id,"text" to submitted,"baseRevision" to base));revision=result.optInt("revision",base+1);if(draft==submitted)dirty=false;error=null}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=dirty&&!saving&&!state.busy){Text(if(saving)"正在保存…" else "保存笔记")};error?.let{Text(it,color=MaterialTheme.colorScheme.error);TextButton({reloadNote=true}){Text("查看并重新读取已保存版本…")}}
  state.pdfSelection?.takeIf{it.text.isNotBlank()}?.let{selection->Text("原文选区 · 物理页 ${selection.pages.joinToString()}",style=MaterialTheme.typography.titleSmall);Text(selection.text);Button({action("pdf.highlight",obj("comment" to "","color" to "yellow"))}){Text("保存高亮标注")}}
  Text("PDF 标注",style=MaterialTheme.typography.titleLarge)

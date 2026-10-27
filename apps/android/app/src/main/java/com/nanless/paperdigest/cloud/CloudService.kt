@@ -26,7 +26,8 @@ class CloudService(
     private val workspace: CloudWorkspace, private val transport: CloudTransport = NutstoreTransport(),
     private val now: () -> Long = System::currentTimeMillis,
     private val scheduleChanged: (JSONObject) -> Unit = {},
-    private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) }
+    private val sleep: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    private val borrowing: CloudCredentialBorrowing? = null
 ) {
     private val lock = Mutex(); @Volatile private var busy = false
     @Volatile private var credentialState = "unknown"; @Volatile private var memoryPaused = false
@@ -38,6 +39,20 @@ class CloudService(
         val file = File(controlRoot, "profile.json")
         profile = if (file.exists()) readJSON(file, 64 * 1024) else JSONObject().put("contract", "paperdigest-android-cloud-profile-v1").put("destinationID", UUID.randomUUID().toString()).put("account", "").put("folder", "PaperDigest").put("automatic", false).put("intervalHours", 24).put("automaticPaused", false)
         validateProfile(profile)
+        borrowing?.attachOwner(::credentialBinding, ::borrowedAuthorization)
+    }
+    fun credentialBinding(): CloudCredentialBinding { val p = profile; return CloudCredentialBinding(p.getString("destinationID"), p.getString("account"), p.getString("folder")) }
+    fun credentialsTargetWouldChange(account: String, folder: String): Boolean = account.trim() != profile.getString("account") || folder != profile.getString("folder")
+    fun beginCredentialMutation(): CloudCredentialMutation? = borrowing?.beginMutation()
+    suspend fun drainCredentialBorrowers(token: CloudCredentialMutation?) { if (token != null) requireNotNull(borrowing).drain(token) }
+    fun endCredentialMutation(token: CloudCredentialMutation?) { if (token != null) requireNotNull(borrowing).endMutation(token) }
+    private fun borrowedAuthorization(binding: CloudCredentialBinding): String {
+        if (binding != credentialBinding()) throw CloudFailure("selectionExpired")
+        val password = try { vault.load("cloud.${binding.destinationID}") ?: throw CloudFailure("credentialsUnavailable") }
+        catch (e: CancellationException) { throw e } catch (_: Exception) { throw CloudFailure("credentialsUnavailable") }
+        if (binding != credentialBinding()) throw CloudFailure("selectionExpired")
+        require(password.toByteArray(Charsets.UTF_8).size <= 8192 && password.isNotBlank() && Charsets.UTF_8.newEncoder().canEncode(password) && password.none { it.code < 32 || it.code == 127 }) { "已保存的坚果云连接暂不可用" }
+        return okhttp3.Credentials.basic(binding.account, password, Charsets.UTF_8)
     }
     private val destinationID get() = profile.getString("destinationID")
     val targetID: String get() = destinationID
@@ -64,7 +79,13 @@ class CloudService(
         catch (e: CloudFailure) { if (e.code == "authentication" || e.code == "credentialsUnavailable") pause(true); throw e }
         finally { busy = false; lock.unlock() }
     }
-    suspend fun save(account: String, folder: String, automatic: Boolean, intervalHours: Int): JSONObject = operation {
+    suspend fun save(account: String, folder: String, automatic: Boolean, intervalHours: Int, credentialMutation: CloudCredentialMutation? = null): JSONObject {
+        val owned = credentialMutation == null
+        val token = credentialMutation ?: if (credentialsTargetWouldChange(account, folder)) beginCredentialMutation() else null
+        try {
+            drainCredentialBorrowers(token)
+            return operation {
+                if (token != null) requireNotNull(borrowing).requireMutation(token)
         val trimmed = account.trim(); val changed = trimmed != profile.getString("account") || folder != profile.getString("folder")
         require(!changed || !hasPending()) { "请先续传或原样保留未完成材料，再更换账号或目录" }
         val next = copyProfile().put("account", trimmed).put("folder", folder).put("automatic", automatic).put("intervalHours", intervalHours)
@@ -73,11 +94,20 @@ class CloudService(
         persistProfile(next)
         if (changed) { cached = null; credentialState = "unknown"; memoryPaused = false }
         scheduleChanged(state()); state()
+            }
+        } finally { if (owned) endCredentialMutation(token) }
     }
-    suspend fun setPassword(value: String?): JSONObject = operation {
-        if (value == null) { vault.remove(credentialScope); cached = null; credentialState = "missing"; pause(true) }
-        else { vault.save(credentialScope, value); cached = null; credentialState = "present" }
-        state()
+    suspend fun setPassword(value: String?, credentialMutation: CloudCredentialMutation? = null): JSONObject {
+        val owned = credentialMutation == null; val token = credentialMutation ?: beginCredentialMutation()
+        try {
+            drainCredentialBorrowers(token)
+            return operation {
+                if (token != null) requireNotNull(borrowing).requireMutation(token)
+                if (value == null) { vault.remove(credentialScope); cached = null; credentialState = "missing"; pause(true) }
+                else { vault.save(credentialScope, value); cached = null; credentialState = "present" }
+                state()
+            }
+        } finally { if (owned) endCredentialMutation(token) }
     }
     suspend fun check(): JSONObject = operation { archive().probe(); credentialState = "present"; pause(false); state() }
     suspend fun list(month: String): List<JSONObject> = operation { archive().list(month).map { it.info() } }
@@ -151,7 +181,12 @@ class CloudService(
         val folder = File(controlRoot, transferID); BackupCodec.checkedDirectory(folder)
         BackupCodec.checkedFile(folder, "snapshot.paperdigest").also { require(it.length() <= BackupCodec.MAX_ENCODED) }
     }
-    suspend fun restore(reference: CloudReference): JSONObject = operation {
+    suspend fun restore(reference: CloudReference, credentialMutation: CloudCredentialMutation? = null): JSONObject {
+        val owned=credentialMutation==null;val token=credentialMutation?:beginCredentialMutation()
+        try {
+            drainCredentialBorrowers(token)
+            return operation {
+                if(token!=null)requireNotNull(borrowing).requireMutation(token)
         val file = File(controlRoot, "download-${UUID.randomUUID()}.paperdigest")
         var staged: BackupCodec.Staged? = null
         try {
@@ -162,6 +197,8 @@ class CloudService(
             workspace.restore(staged)
             JSONObject().put("sha256", manifest.sha256).put("reference", reference.json()).put("status", "complete")
         } finally { file.delete(); staged?.directory?.let { if (it.exists()) it.deleteRecursively() } }
+            }
+        } finally { if(owned)endCredentialMutation(token) }
     }
     suspend fun archivePending(): JSONObject = operation {
         require(hasPending()) { "没有未完成材料" }; val folder = targetFolder(); BackupCodec.checkedDirectory(folder)

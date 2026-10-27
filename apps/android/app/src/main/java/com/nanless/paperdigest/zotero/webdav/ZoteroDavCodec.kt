@@ -26,9 +26,11 @@ internal class ZoteroDavCodec(root:File,private val available:()->Long,directory
     constructor(root:File,available:()->Long={root.usableSpace}):this(root,available,DavFiles::syncDirectory)
     internal val files=DavFiles(root,directorySync)
     private val issuer=Any()
-    fun prepare(material:ZoteroDavAttachment,target:ZoteroDavTarget,check:()->Unit={}):ZoteroDavPrepared {
+    fun prepare(material:ZoteroDavAttachment,target:ZoteroDavTarget,check:()->Unit={}):ZoteroDavPrepared = prepareInternal(material,target,null,check)
+    internal fun prepareStorageMigration(material:ZoteroDavAttachment,target:ZoteroDavTarget,adoption:ZoteroDavStorageAdoption,check:()->Unit={}):ZoteroDavPrepared = prepareInternal(material,target,adoption,check)
+    private fun prepareInternal(material:ZoteroDavAttachment,target:ZoteroDavTarget,adoption:ZoteroDavStorageAdoption?,check:()->Unit):ZoteroDavPrepared {
         check();files.check();val sourceBefore=DavFiles.regular(material.source)
-        val count=sourceBefore.size();val mtime=sourceBefore.lastModifiedTime().toMillis()
+        val count=sourceBefore.size();val mtime=adoption?.wireMtime(material,target)?:sourceBefore.lastModifiedTime().toMillis()
         davRequire(count in 1..MAX_FILE&&mtime in 1..9_999_999_999_999L,"limit")
         val free=available();davRequire(free>0&&free>=count*3+4*1024*1024,"capacity")
         val id=UUID.randomUUID().toString();val dir=files.create(id)
@@ -40,6 +42,7 @@ internal class ZoteroDavCodec(root:File,private val available:()->Long,directory
         // Failure keeps only this unregistered private operation; there is no success journal or remote write.
         DavFiles.newChannel(original).use{out->FileChannel.open(material.source.toPath(),READ,NOFOLLOW_LINKS).use{input->val b=ByteBuffer.allocate(65536);while(true){opCheck();b.clear();val n=input.read(b);if(n<0)break;davRequire(n>0,"storage");copied+=n;davRequire(copied<=count,"sourceChanged");sha.update(b.array(),0,n);md5.update(b.array(),0,n);b.flip();while(b.hasRemaining())out.write(b)};out.force(true)}}
         DavFiles.same(material.source,sourceBefore);val fileSHA=davHex(sha.digest());val fileMD5=davHex(md5.digest());davRequire(copied==count&&fileSHA==material.sourceSHA256,"sourceChanged")
+        adoption?.requireFile(fileMD5,copied,fileSHA)
         val originalBefore=DavFiles.regular(original)
         DavFiles.newChannel(zip).use{channel->
             // The wrapper's close only flushes: the underlying channel must still be fsynced after ZIP finalization.
@@ -52,6 +55,7 @@ internal class ZoteroDavCodec(root:File,private val available:()->Long,directory
         verifyZip(zip,material.filename,facts,opCheck)
         val plan=JSONObject().put("target",target.binding()).put("attachment",material.descriptor()).put("file",facts)
             .put("zip",JSONObject().put("bytes",zip.length()).put("sha256",DavFiles.hash(zip,opCheck))).put("prop",JSONObject().put("bytes",propBytes.size).put("sha256",davHash(propBytes)))
+        if(adoption!=null)plan.put("storageAdoption",adoption.binding()).put("sourceObservedMtime",sourceBefore.lastModifiedTime().toMillis())
         opCheck();return ZoteroDavPrepared(DavJournal.create(files,id,dir,plan),issuer)
     }
     fun reopen(id:String,target:ZoteroDavTarget,check:()->Unit={}):ZoteroDavPrepared {val p=ZoteroDavPrepared(DavJournal.reopen(files,id),issuer);verify(p,target,check);return p}

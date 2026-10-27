@@ -7,7 +7,7 @@ import java.time.Instant
 /** Aggregate display identity only. Neither this stamp nor any UI DTO grants a paper capability. */
 data class AggregateCatalogStamp(val snapshotSHA256:String,val validationEpoch:String)
 data class AggregateResource(val sourceURL:String,val missingReason:String)
-data class AggregateDocumentView(val descriptor:PublishedAggregate,val bodyHTML:String,val rawHTMLSHA256:String,val bodySHA256:String,val rawHTMLBytes:Int,val fetchedAt:String,val resources:List<AggregateResource>,val notices:List<String>,val fromCache:Boolean) {
+data class AggregateDocumentView(val descriptor:PublishedAggregate,val bodyHTML:String,val rawHTMLSHA256:String,val bodySHA256:String,val rawHTMLBytes:Int,val fetchedAt:String,val resources:List<AggregateResource>,val notices:List<String>,val fromCache:Boolean,val images:AggregateImageAccess?=null,val imageError:String?=null) {
     companion object {
         internal fun verified(value:JSONObject,descriptor:PublishedAggregate,fromCache:Boolean):AggregateDocumentView {
             require(value.getString("contract")=="published-aggregate-document-v1"&&canonical(value.getJSONObject("descriptor"))==canonical(descriptor.json()))
@@ -27,6 +27,7 @@ internal interface AggregateBrowsePort {
     suspend fun revisions(id:String):List<AggregateCachedRevision>
     suspend fun read(id:String):JSONObject
     suspend fun cached(id:String,sha:String):JSONObject
+    suspend fun images(id:String,rawHTMLSHA256:String,allowNetwork:Boolean):AggregateImageAccess?=null
     fun offlineMode():Boolean
     fun readingEpoch():Long
     fun mayPresent(readingEpoch:Long):Boolean
@@ -112,7 +113,14 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
     }
     private suspend fun adopt(token:Long,stamp:AggregateCatalogStamp,epoch:Long,descriptor:PublishedAggregate,value:JSONObject,cached:Boolean):JSONObject {
         if(!ready(token,stamp,epoch))return stale(token)
-        val document=AggregateDocumentView.verified(value,descriptor,cached)
+        val base=AggregateDocumentView.verified(value,descriptor,cached)
+        var images:AggregateImageAccess?=null;var imageError:String?=null
+        try{
+            val candidate=port.images(descriptor.id,base.rawHTMLSHA256,!cached&&!port.offlineMode())
+            if(candidate!=null)require(candidate.plan.descriptor==descriptor&&candidate.plan.rawHTMLSHA256==base.rawHTMLSHA256&&candidate.plan.originalBodySHA256==base.bodySHA256){"图片与本次原网页修订不同"}
+            images=candidate
+        }catch(e:CancellationException){throw e}catch(_:Exception){imageError="图片保存或缓存核验未完成；下方仍保留原网页正文，没有改用其他图片修订。"}
+        val document=base.copy(images=images,imageError=imageError)
         var revisions=emptyList<AggregateCachedRevision>();var cacheError:String?=null
         try{revisions=port.revisions(descriptor.id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有自动改用其他修订。"}
         if(!ready(token,stamp,epoch))return stale(token)

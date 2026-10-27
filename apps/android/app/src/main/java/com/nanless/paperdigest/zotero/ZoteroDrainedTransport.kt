@@ -21,7 +21,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** Zotero owns callback lifetime, including ordinary API requests and Storage readbacks. */
-internal class ZoteroDrainedTransport(private val calls:Call.Factory=ZoteroDavNetworkTransport.hardenedClient()):ZoteroTransport {
+internal class ZoteroDrainedTransport(private val calls:Call.Factory=ZoteroDavNetworkTransport.hardenedClient(),private val ownedFiles:ZoteroOwnedDownloadFiles=AndroidZoteroOwnedDownloadFiles):ZoteroTransport {
     override suspend fun request(request:Request,limit:Int):HttpBytes {
         require(limit>0)
         return exchange(request){response,check->
@@ -32,21 +32,33 @@ internal class ZoteroDrainedTransport(private val calls:Call.Factory=ZoteroDavNe
             check();HttpBytes(response.code,headers(response),output.toByteArray())
         }
     }
-    override suspend fun download(request:Request,target:File,limit:Long):HttpFile {
+    override suspend fun download(request:Request,target:File,limit:Long):HttpFile=downloadInto(request,target,limit,null)
+    override suspend fun downloadOwned(request:Request,target:File,limit:Long,owned:(ZoteroOwnedFileReceipt)->Unit):HttpFile=downloadInto(request,target,limit,owned)
+    private suspend fun downloadInto(request:Request,target:File,limit:Long,owned:((ZoteroOwnedFileReceipt)->Unit)?):HttpFile {
         require(limit>0);DavFiles.directory(target.parentFile)
         require(!Files.isSymbolicLink(target.toPath())){"下载目标不能是链接"}
         val temporary=File(target.parentFile,".zotero-readback-${UUID.randomUUID()}")
-        var createdKey:Any?=null
+        var createdKey:Any?=null;var complete=false;var failure:Throwable?=null
+        var privateSink:ZoteroOwnedDownloadSink?=null
         try{return exchange(request){response,check->
             if(response.code !in 200..299)return@exchange HttpFile(response.code,headers(response),0,null)
             val body=response.body?:throw AppFailure("transport","服务未返回文件")
             require(body.contentLength()<=limit){"下载文件超过大小限制"}
             var count=0L;val digest=MessageDigest.getInstance("SHA-256")
-            DavFiles.newChannel(temporary).use{output->createdKey=DavFiles.regular(temporary).fileKey();body.byteStream().use{input->val b=ByteArray(65536);while(true){check();val n=input.read(b);if(n<0)break;count+=n;require(count<=limit){"下载文件超过大小限制"};digest.update(b,0,n);val block=ByteBuffer.wrap(b,0,n);while(block.hasRemaining())output.write(block)}};output.force(true)}
+            val output=if(owned==null)DavFiles.newChannel(temporary)else ownedFiles.create(target).also{privateSink=it;owned(it.receipt)}.channel
+            output.use{channel->if(owned==null)createdKey=DavFiles.regular(temporary).fileKey();body.byteStream().use{input->val b=ByteArray(65536);while(true){check();val n=input.read(b);if(n<0)break;count+=n;require(count<=limit){"下载文件超过大小限制"};digest.update(b,0,n);val block=ByteBuffer.wrap(b,0,n);while(block.hasRemaining())channel.write(block)}};if(owned==null)channel.force(true)else requireNotNull(privateSink).force()}
             check();DavFiles.directory(target.parentFile);require(!Files.isSymbolicLink(target.toPath())){"下载目标不能是链接"}
-            Files.move(temporary.toPath(),target.toPath(),ATOMIC_MOVE,REPLACE_EXISTING)
+            if(owned==null)Files.move(temporary.toPath(),target.toPath(),ATOMIC_MOVE,REPLACE_EXISTING)
+            else requireNotNull(privateSink).receipt.requireCurrent()
+            complete=true
             HttpFile(response.code,headers(response),count,digest.digest().joinToString(""){"%02x".format(it.toInt()and 255)})
-        }}finally{if(createdKey!=null&&Files.exists(temporary.toPath(),NOFOLLOW_LINKS)&&!Files.isSymbolicLink(temporary.toPath())&&DavFiles.regular(temporary).fileKey()==createdKey)Files.delete(temporary.toPath())}
+        }}catch(e:Throwable){failure=e;throw e}finally{
+            if(owned==null){if(createdKey!=null&&Files.exists(temporary.toPath(),NOFOLLOW_LINKS)&&!Files.isSymbolicLink(temporary.toPath())&&DavFiles.regular(temporary).fileKey()==createdKey)Files.delete(temporary.toPath())}
+            else try{
+                privateSink?.close()
+                if(!complete)privateSink?.receipt?.deleteIfCurrent()
+            }catch(cleanup:Throwable){val original=failure;if(original!=null)original.addSuppressed(cleanup)else throw cleanup}
+        }
     }
     private fun headers(response:Response)=response.headers.names().associateWith{response.header(it).orEmpty()}
     private suspend fun <T> exchange(request:Request,read:(Response,()->Unit)->T):T {

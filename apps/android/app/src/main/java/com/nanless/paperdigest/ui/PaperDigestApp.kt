@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nanless.paperdigest.data.AggregateImageAccess
 import com.nanless.paperdigest.data.ExportService
 import com.nanless.paperdigest.data.Paper
 import com.nanless.paperdigest.pdf.PdfReaderPane
@@ -136,7 +137,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     }
     val savedScreens=rememberSaveableStateHolder()
     val scheme=paperColorScheme(dark)
-    MaterialTheme(colorScheme=scheme) {
+    MaterialTheme(colorScheme=scheme,typography=paperTypography,shapes=paperShapes) {
         val tabs=listOf("library" to "文献","reader" to "阅读","tasks" to "任务","settings" to "设置")
         val icons=listOf(Icons.Outlined.LibraryBooks,Icons.Outlined.MenuBook,Icons.Outlined.Checklist,Icons.Outlined.Settings)
         val navigate:(String)->Unit={next->if(renderedRouteRevision==routeRevision)navigateCurrent(next)}
@@ -147,8 +148,8 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
         BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             val wide=maxWidth>=840.dp
             Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                if(wide) NavigationRail { Spacer(Modifier.height(24.dp)); Text("论文\n速递",fontWeight=FontWeight.Bold,modifier=Modifier.padding(16.dp)); tabs.forEachIndexed {i,t->NavigationRailItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }
-                Scaffold(Modifier.weight(1f),snackbarHost={SnackbarHost(snackbar)},bottomBar={if(!wide)NavigationBar { tabs.forEachIndexed{i,t->NavigationBarItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }}) { padding ->
+                if(wide) NavigationRail(containerColor=MaterialTheme.colorScheme.background) { Spacer(Modifier.height(24.dp)); Icon(Icons.Outlined.AutoStories,null,Modifier.padding(20.dp).size(28.dp),tint=MaterialTheme.colorScheme.primary); tabs.forEachIndexed {i,t->NavigationRailItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }
+                Scaffold(Modifier.weight(1f),snackbarHost={SnackbarHost(snackbar)},bottomBar={if(!wide)NavigationBar(containerColor=MaterialTheme.colorScheme.surface,tonalElevation=0.dp) { tabs.forEachIndexed{i,t->NavigationBarItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }}) { padding ->
                     Column(Modifier.fillMaxSize().padding(padding)) {
                         if(state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         state.storageWarning?.let{warning->
@@ -165,9 +166,9 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                             "library" -> LibraryPane(state,controller,action,{importPDF.launch(arrayOf("application/pdf"))})
                             "aggregates" -> AggregatePane(state,action)
                             "reader" -> ReaderPane(state,controller,action)
-                            "tasks" -> TasksPane(state,action)
-                            "session" -> SessionPane(state,selectedSessionID,controller,action)
-                            "settings" -> SettingsPane(state,controller,action,{restore.launch(arrayOf("application/octet-stream","*/*"))},settingsPaneRequest,settingsRequestID)
+                            "tasks" -> NonOccludingViewport{TasksPane(state,action)}
+                            "session" -> NonOccludingViewport{SessionPane(state,selectedSessionID,controller,action)}
+                            "settings" -> NonOccludingViewport{SettingsPane(state,controller,action,{restore.launch(arrayOf("application/octet-stream","*/*"))},settingsPaneRequest,settingsRequestID)}
                         }}
                     }
                 }
@@ -253,8 +254,23 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
     }
 }
 
-@Composable internal fun SectionTitle(title:String,subtitle:String?=null,actions:@Composable RowScope.()->Unit={}) { Row(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=18.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)){Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.SemiBold);subtitle?.let{Text(it,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}};actions()} }
-@Composable internal fun EmptyPane(title:String,text:String){Column(Modifier.fillMaxWidth().padding(32.dp)){Icon(Icons.Outlined.AutoStories,null,Modifier.size(44.dp),MaterialTheme.colorScheme.primary);Spacer(Modifier.height(20.dp));Text(title,style=MaterialTheme.typography.titleLarge);Text(text,Modifier.padding(top=8.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)}}
+@Composable internal fun SectionTitle(title:String,subtitle:String?=null,actions:@Composable RowScope.()->Unit={}) {
+ Row(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=18.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+  Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)){
+   Text(title,style=MaterialTheme.typography.headlineMedium)
+   subtitle?.let{Text(it,style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+  }
+  actions()
+ }
+}
+@Composable internal fun EmptyPane(title:String,text:String){
+ Column(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=36.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+  Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer){Icon(Icons.Outlined.AutoStories,null,Modifier.padding(18.dp).size(28.dp),MaterialTheme.colorScheme.onPrimaryContainer)}
+  Text(title,style=MaterialTheme.typography.titleLarge)
+  Text(text,color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodyMedium)
+ }
+}
+
 @OptIn(ExperimentalMaterial3Api::class,ExperimentalLayoutApi::class)
 @Composable internal fun LibraryPane(state:UiState,controller:AppController,action:Action,importPDF:()->Unit){
  var source by rememberSaveable{mutableStateOf("")};var task by rememberSaveable{mutableStateOf("")};var method by rememberSaveable{mutableStateOf("")};var minimum by rememberSaveable{mutableStateOf("")};var choosing by rememberSaveable{mutableStateOf(false)};var picked by rememberSaveable{mutableStateOf(listOf<String>())}
@@ -294,16 +310,26 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
   // leaves little height, the header can scroll away while actual results remain clickable.
   LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(horizontal=16.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
    item(key="library-heading"){
-    FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
-     Text("文献资料库",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.SemiBold)
-     OutlinedButton({action("ui.aggregates",JSONObject())}){Text("网站汇总")}
+    Row(Modifier.fillMaxWidth().padding(top=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+     Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)){
+      Text("文献资料库",style=MaterialTheme.typography.headlineMedium)
+      Text("发现、阅读，积累自己的研究",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+     }
      IconButton(importPDF){Icon(Icons.Outlined.FileOpen,"导入 PDF")}
      IconButton({action("library.sync",JSONObject())},enabled=!state.loading){Icon(Icons.Outlined.Sync,"同步已发布内容")}
     }
    }
-   item(key="library-catalog"){Text(catalogMessage(state.catalogSummary,localCount),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+   item(key="library-catalog"){
+    Surface(onClick={action("ui.aggregates",JSONObject())},shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer){
+     Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){
+      Icon(Icons.Outlined.Article,null,Modifier.size(24.dp),tint=MaterialTheme.colorScheme.onPrimaryContainer)
+      Text("网站汇总",style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.onPrimaryContainer,modifier=Modifier.weight(1f))
+      Icon(Icons.Outlined.ChevronRight,null,tint=MaterialTheme.colorScheme.onPrimaryContainer)
+     }
+    }
+   }
    item(key="library-search"){
-    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,placeholder={Text("搜索论文信息、笔记与本机已缓存导读",maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)},leadingIcon={Icon(Icons.Outlined.Search,null)},
+    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,shape=MaterialTheme.shapes.medium,placeholder={Text("搜索论文、作者与笔记",maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)},leadingIcon={Icon(Icons.Outlined.Search,null)},
      keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(imeAction=androidx.compose.ui.text.input.ImeAction.Search),
      keyboardActions=androidx.compose.foundation.text.KeyboardActions(onSearch={keyboard?.hide()}))
    }
@@ -311,7 +337,9 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
     FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
      Text("${papers.size} 篇匹配",style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(vertical=12.dp))
      OutlinedButton({showFilters=true}){Icon(Icons.Outlined.Tune,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text(if(activeFilters==0)"筛选与排序 · $sort" else "筛选 $activeFilters 项 · $sort")}
-     TextButton({showSearchInfo=true}){Icon(if(cachedSearch.error!=null)Icons.Outlined.ErrorOutline else Icons.Outlined.Info,null,Modifier.size(18.dp));Spacer(Modifier.width(4.dp));Text(when{cachedSearch.error!=null->"检索未完成 · 查看";cachedSearch.loading->"正在检查导读…";(cachedSearch.result?.unavailable?:0)>0||unknownCached>0->"部分缓存未核 · 查看";query.isBlank()->"目录与检索范围";else->"检索范围与状态"})}
+     IconButton({showSearchInfo=true}){Icon(if(cachedSearch.error!=null)Icons.Outlined.ErrorOutline else Icons.Outlined.Info,if(cachedSearch.error!=null)"检索未完成，查看范围与状态" else "目录与检索范围")}
+     if(cachedSearch.loading)Text("正在检查导读…",style=MaterialTheme.typography.labelMedium,modifier=Modifier.padding(vertical=12.dp))
+     else if((cachedSearch.result?.unavailable?:0)>0||unknownCached>0)Text("部分缓存未核对",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.tertiary,modifier=Modifier.padding(vertical=12.dp))
      TextButton({choosing=!choosing;if(!choosing)picked=emptyList()}){Text(if(choosing)"完成多选" else "多选")}
     }
     if(activeFilters>0)Text(listOf(filter.takeUnless{it=="全部"},source.takeIf{it.isNotEmpty()}?.let{"来源：$it"},task.takeIf{it.isNotEmpty()}?.let{"任务：$it"},method.takeIf{it.isNotEmpty()}?.let{"方法：$it"},minimum.takeIf{it.isNotEmpty()}?.let{"最低 $it 分"}).filterNotNull().joinToString(" · "),style=MaterialTheme.typography.labelSmall)
@@ -325,18 +353,22 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
     }
    }
    if(papers.isEmpty())item(key="library-empty"){EmptyPane(if(cachedSearch.loading)"正在查找本机导读" else if(cachedSearch.error!=null)"论文信息与笔记暂未匹配" else "这里还没有匹配的论文",if(query.isNotBlank())"当前筛选下未显示论文；缓存检查范围与未完成项可在“检索范围与状态”查看。" else "同步已发布资料，或导入本地 PDF。同步读取已有分析，不会重复请求模型。")}
-   items(papers,key={it.id}){paper->ElevatedCard(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else action("paper.open",obj("paperID" to paper.id))},modifier=Modifier.fillMaxWidth()){
-    Column(Modifier.padding(16.dp)){
+   items(papers,key={it.id}){paper->OutlinedCard(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else action("paper.open",obj("paperID" to paper.id))},colors=CardDefaults.outlinedCardColors(containerColor=MaterialTheme.colorScheme.surfaceContainerLow),border=androidx.compose.foundation.BorderStroke(1.dp,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f)),modifier=Modifier.fillMaxWidth()){
+    Column(Modifier.padding(18.dp)){
      FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(2.dp)){
       if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id})
       Text(paper.date,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
-      paper.score?.let{Text("$it 分",style=MaterialTheme.typography.labelLarge)}
+      paper.score?.let{PaperLabel("$it 分")}
      }
      if(paper.id in missingFromLatest)Text("未列入最新网站快照，保留本机资料（不表示撤稿）",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
      Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=3,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.padding(vertical=8.dp))
      if(paper.titleZh!=paper.title)Text(paper.title,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
      Text(paper.authors.take(3).joinToString(" · "),style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.padding(top=8.dp))
-     Text(listOf(paper.task,paper.method,paper.sourceVersion?:paper.sourceKind).filter{it.isNotBlank()}.joinToString("  ·  "),style=MaterialTheme.typography.labelSmall,modifier=Modifier.padding(top=8.dp))
+     FlowRow(Modifier.padding(top=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+      if(paper.task.isNotBlank())PaperLabel(paper.task)
+      if(paper.method.isNotBlank())PaperLabel(paper.method)
+     }
+     Text(paperSourceLabel(paper),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=8.dp))
     }
    }}
   }
@@ -362,16 +394,21 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
  }
 }
 
-@Composable internal fun StaticDocument(body:String,fontSize:Int=18,initialScroll:Int=0,onScroll:(Int)->Unit={}){
+@Composable internal fun StaticDocument(body:String,fontSize:Int=18,initialScroll:Int=0,onScroll:(Int)->Unit={},images:AggregateImageAccess?=null){
  val context=LocalContext.current
  val scrollValue=rememberUpdatedState(initialScroll);val scrollCallback=rememberUpdatedState(onScroll)
  val restoring=remember{java.util.concurrent.atomic.AtomicBoolean(true)}
  val activeView=remember{java.util.concurrent.atomic.AtomicReference<WebView?>(null)}
  val activeDocument=remember{java.util.concurrent.atomic.AtomicReference<StreamedHtmlDocument?>(null)}
+ val activeImages=remember{java.util.concurrent.atomic.AtomicReference<Pair<StreamedHtmlDocument,AggregateImageAccess>?>(null)}
  val background=MaterialTheme.colorScheme.surface.toArgb();val foreground=MaterialTheme.colorScheme.onSurface.toArgb();val link=MaterialTheme.colorScheme.primary.toArgb()
  val zoom=(fontSize.coerceIn(14,30)/18f*LocalDensity.current.fontScale*100).toInt().coerceAtLeast(50)
  // The shared head is small; body remains the immutable renderer result, never concatenated/replaced.
- val document=remember(body,background,foreground,link){StreamedHtmlDocument(ExportService.htmlDocumentHead("",background,foreground,link),body,"</body></html>")}
+ val document=remember(body,background,foreground,link,images){
+  var head=ExportService.htmlDocumentHead("",background,foreground,link)
+  if(images!=null){require(head.contains("img-src data:;"));head=head.replace("img-src data:;","img-src ${images.cspImageSource};")}
+  StreamedHtmlDocument(head,body,"</body></html>")
+ }
  AndroidView(factory={WebView(it).apply {
   activeView.set(this)
   outlineProvider=android.view.ViewOutlineProvider.BOUNDS;clipToOutline=true
@@ -404,6 +441,14 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
     if(activeView.get()===view&&owner!=null&&owner.canServe(u.toString(),request.isForMainFrame,request.method)){
      return WebResourceResponse("text/html","utf-8",200,"OK",mapOf("Cache-Control" to "no-store","X-Content-Type-Options" to "nosniff"),owner.openStream())
     }
+    val bound=activeImages.get()
+    if(activeView.get()===view&&owner!=null&&view?.tag===owner&&bound!=null&&bound.first===owner){
+     val response=runCatching{bound.second.open(u.toString(),request.isForMainFrame,request.method)}.getOrNull()
+     if(response!=null){
+      if(activeView.get()===view&&activeDocument.get()===owner&&view?.tag===owner&&activeImages.get()===bound)return WebResourceResponse(response.first,null,200,"OK",mapOf("Cache-Control" to "no-store","X-Content-Type-Options" to "nosniff"),response.second)
+      response.second.close()
+     }
+    }
     return WebResourceResponse("text/plain","utf-8",403,"Forbidden",emptyMap(),ByteArrayInputStream(byteArrayOf()))
    }
   }
@@ -412,9 +457,9 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
   web.setBackgroundColor(background)
   if(web.settings.textZoom!=zoom)web.settings.textZoom=zoom
   if(web.tag!==document){
-   restoring.set(true);web.stopLoading();activeDocument.set(document);web.tag=document;web.loadUrl(document.url)
+   restoring.set(true);web.stopLoading();activeImages.set(images?.let{document to it});activeDocument.set(document);web.tag=document;web.loadUrl(document.url)
   }
- },onRelease={web->if(activeView.compareAndSet(web,null))activeDocument.set(null);web.stopLoading();web.tag=null;web.destroy()},modifier=Modifier.fillMaxSize().clipToBounds())
+ },onRelease={web->if(activeView.compareAndSet(web,null)){activeDocument.set(null);activeImages.set(null)};web.stopLoading();web.tag=null;web.destroy()},modifier=Modifier.fillMaxSize().clipToBounds())
 }
 
 @Composable private fun FilterChoice(label:String,options:List<String>,value:String,change:(String)->Unit){

@@ -3,16 +3,23 @@ package com.nanless.paperdigest.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.ui.unit.dp
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun TasksPane(state:UiState,action:Action) {
  var filter by rememberSaveable { mutableStateOf("全部") }
  var page by rememberSaveable { mutableIntStateOf(0) }
+ var pendingExpanded by rememberSaveable{mutableStateOf(false)}
+ val listState=rememberLazyListState()
+ LaunchedEffect(page,filter){listState.scrollToItem(0)}
  val jobs=recordsNewest(state.jobs).filter {
   when(filter) {
    "进行中" -> it.optString("status") in listOf("running","pending","queued")
@@ -22,25 +29,38 @@ import androidx.compose.ui.unit.dp
  }
  val last=((jobs.size-1).coerceAtLeast(0))/20
  LaunchedEffect(last) { if(page>last) page=last }
+ BoxWithConstraints(Modifier.fillMaxSize()) {
+ val compactHeight=maxHeight<480.dp
  Column(Modifier.fillMaxSize()) {
-  SectionTitle("后台任务","真实进度、来源与用量，都有据可查")
-  Row(Modifier.padding(horizontal=20.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+  if(compactHeight)Column(Modifier.padding(horizontal=20.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(2.dp)){
+   Text("后台任务",style=MaterialTheme.typography.titleLarge)
+   Text("同步、研究与存档进度",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  }else SectionTitle("后台任务","同步、研究与存档进度")
+  FlowRow(Modifier.padding(horizontal=20.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
    listOf("全部","进行中","需关注").forEach { value ->
     FilterChip(filter==value,{filter=value;page=0},label={Text(value)})
    }
   }
-  LazyColumn(Modifier.weight(1f),contentPadding=PaddingValues(20.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+  LazyColumn(Modifier.weight(1f),state=listState,contentPadding=PaddingValues(horizontal=16.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
    item("pending-exports-title") {
-    Column {
-     Text("待保存原件", style=MaterialTheme.typography.titleMedium)
+    PaperPanel {
+     Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+      Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)){
+       Text("待保存原件",style=MaterialTheme.typography.titleMedium)
+       Text(if(state.pendingExportsLoading)"正在读取记录…" else if(state.pendingExports.isEmpty())"尚无待保存原件" else "${state.pendingExports.size} 份材料 · 准备完成后需另选保存位置",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+      }
+      TextButton({pendingExpanded=!pendingExpanded}){Text(if(pendingExpanded)"收起" else "查看")}
+     }
      state.notice?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall)}
-     Text("准备完成不表示已写到所选位置。继续时使用原操作的同一份原件，不重新采集当前资料。",style=MaterialTheme.typography.bodySmall)
-     TextButton({action("export.pending.list",obj())},enabled=!state.pendingExportsLoading){Text("重新核验待保存清单")}
-     if(state.pendingExportsLoading) { LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取本机待保存记录…") }
-     state.pendingExportsError?.let { Text(it,color=MaterialTheme.colorScheme.error) }
-     if(!state.pendingExportsLoading&&state.pendingExportsError==null&&state.pendingExports.isEmpty())Text("尚无待保存原件。")
+     state.pendingExportsError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+     if(state.pendingExportsLoading)LinearProgressIndicator(Modifier.fillMaxWidth())
+     if(pendingExpanded){
+      Text("继续保存同一次准备的原件；不会重新采集当前资料。",style=MaterialTheme.typography.bodySmall)
+      TextButton({action("export.pending.list",obj())},enabled=!state.pendingExportsLoading){Text("重新核验待保存清单")}
+     }
     }
    }
+   if(pendingExpanded){
    items(pendingExportsNewest(state.pendingExports),key={"export-"+it.getString("operationID")}) { pending ->
     OutlinedCard(Modifier.fillMaxWidth().testTag("pending-export-${pending.getString("operationID")}")) {
      Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
@@ -74,21 +94,33 @@ import androidx.compose.ui.unit.dp
      }
     }
    }
+   }
    item("task-history-title") {Text("任务记录",style=MaterialTheme.typography.titleMedium)}
-   if(jobs.isEmpty()&&!state.pendingExportsLoading&&state.pendingExportsError==null) item("empty-jobs") {EmptyPane("当前没有任务","同步、研究、下载与存档会在这里留下真实记录。") }
+   if(jobs.isEmpty()&&!state.pendingExportsLoading&&state.pendingExportsError==null) item("empty-jobs") {
+    if(compactHeight)Column(Modifier.padding(horizontal=8.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
+     Text("当前没有任务",style=MaterialTheme.typography.titleMedium)
+     Text("同步、研究、下载与存档会在这里留下真实记录。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+    }else EmptyPane("当前没有任务","同步、研究、下载与存档会在这里留下真实记录。")
+   }
    items(jobs.drop(page*20).take(20),key={it.optString("id")}) { job ->
-    OutlinedCard(Modifier.fillMaxWidth()) {
+    var details by rememberSaveable(job.optString("id")){mutableStateOf(false)}
+    OutlinedCard(Modifier.fillMaxWidth(),colors=CardDefaults.outlinedCardColors(containerColor=MaterialTheme.colorScheme.surfaceContainerLow),border=androidx.compose.foundation.BorderStroke(1.dp,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f))) {
      Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
       Text(job.optString("title").takeIf{it.isNotBlank()}?:jobTitle(job.optString("kind",job.optString("command"))),style=MaterialTheme.typography.titleMedium)
-      Text(jobStatus(job.optString("status")),color=MaterialTheme.colorScheme.primary)
+      StatusLabel(job.optString("status"))
       if(job.optBoolean("localRetainedExport"))Text("本机保留快照任务；此后续任务不属于原捕获快照，不修改原任务和费用。",style=MaterialTheme.typography.bodySmall)
       if(job.optBoolean("localRescueExport"))Text("本机救援导出任务；此任务记录不包含在原研究快照，也不改写原费用与历史。",style=MaterialTheme.typography.bodySmall)
       Text(job.optString("identity",job.optString("paperID","研究空间")),style=MaterialTheme.typography.bodySmall)
       job.optString("message",job.optString("error")).takeIf{it.isNotBlank()}?.let { Text(it) }
+      if(details){
       job.optJSONObject("material")?.takeIf{!isModelTask(job)}?.let { m ->
        Text("材料：${m.optString("kind")} · ${m.optString("createdAt")}\n${if(m.has("fileCount"))m.optInt("fileCount").toString()+" 文件" else "文件数未记录"}\n${m.optString("sha256")}",style=MaterialTheme.typography.labelSmall)
       }
-      Text("${job.optString("startedAt")}  ${job.optString("endedAt")}",style=MaterialTheme.typography.labelSmall)
+      Text("开始：${readableMoment(job.optString("startedAt"))}",style=MaterialTheme.typography.bodySmall)
+      if(job.optString("endedAt").isNotBlank())Text("结束：${readableMoment(job.optString("endedAt"))}",style=MaterialTheme.typography.bodySmall)
+      }
+      TextButton({details=!details}){Text(if(details)"收起时间与材料信息" else "时间与材料信息")}
+
       if(job.optString("status") in listOf("running","pending","queued")) {
        TextButton({action("jobs.cancel",obj("id" to job.optString("id")))}) { Text("取消") }
       }
@@ -107,11 +139,12 @@ import androidx.compose.ui.unit.dp
     }
    }
   }
-  Row(Modifier.fillMaxWidth().padding(horizontal=20.dp),horizontalArrangement=Arrangement.SpaceBetween) {
-   TextButton({page--},enabled=page>0) { Text("上一页") }
-   Text(if(jobs.isEmpty())"0 条" else "${page*20+1}–${minOf((page+1)*20,jobs.size)} / ${jobs.size}",Modifier.padding(top=12.dp))
-   TextButton({page++},enabled=page<last) { Text("下一页") }
+  Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+   IconButton({page--},enabled=page>0){Icon(Icons.Outlined.ChevronLeft,"上一页")}
+   Text(if(jobs.isEmpty())"0 条" else "${page*20+1}–${minOf((page+1)*20,jobs.size)} / ${jobs.size}",Modifier.weight(1f).padding(horizontal=8.dp),style=MaterialTheme.typography.labelLarge,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+   IconButton({page++},enabled=page<last){Icon(Icons.Outlined.ChevronRight,"下一页")}
   }
+ }
  }
 }
 

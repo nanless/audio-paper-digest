@@ -49,9 +49,16 @@ class ZoteroDavTarget private constructor(
 }
 
 /** One explicit run/resume lease. Config/key mutation retires it; only the Root can issue the next lease. */
-class ZoteroDavLease private constructor(val target:ZoteroDavTarget,val apiRevision:String,val davRevision:String,val epoch:Long,private val current:()->Boolean) {
-    fun requireCurrent(){davRequire(current(),"stale")}
-    companion object {fun native(target:ZoteroDavTarget,apiRevision:String,davRevision:String,epoch:Long,current:()->Boolean):ZoteroDavLease{davRequire(validUUID(apiRevision)&&validUUID(davRevision)&&epoch>=0,"identity");return ZoteroDavLease(target,apiRevision,davRevision,epoch,current)}}
+class ZoteroDavLease private constructor(val target:ZoteroDavTarget,val apiRevision:String,val davRevision:String,val epoch:Long,private val current:()->Boolean,internal val borrowedAuthorization:ZoteroDavAuthorization?) {
+    fun requireCurrent(){davRequire(current(),"stale");borrowedAuthorization?.requireCurrent(target)}
+    companion object {
+        fun native(target:ZoteroDavTarget,apiRevision:String,davRevision:String,epoch:Long,current:()->Boolean):ZoteroDavLease {
+            davRequire(validUUID(apiRevision)&&validUUID(davRevision)&&epoch>=0,"identity");return ZoteroDavLease(target,apiRevision,davRevision,epoch,current,null)
+        }
+        fun nativeBorrowed(target:ZoteroDavTarget,apiRevision:String,davRevision:String,epoch:Long,authorization:ZoteroDavAuthorization,current:()->Boolean):ZoteroDavLease {
+            davRequire(validUUID(apiRevision)&&validUUID(davRevision)&&epoch>=0,"identity");authorization.requireCurrent(target);return ZoteroDavLease(target,apiRevision,davRevision,epoch,current,authorization)
+        }
+    }
 }
 
 class ZoteroDavFailure internal constructor(val code:String):Exception(when(code){

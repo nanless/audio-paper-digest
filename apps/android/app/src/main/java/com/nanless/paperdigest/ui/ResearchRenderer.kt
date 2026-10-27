@@ -47,7 +47,7 @@ object ResearchRenderer {
         }
         return null
     }
-    private data class TokenizedText(val text:String,val formulae:List<Formula>)
+    internal data class TokenizedText(val text:String,val formulae:List<Formula>)
     private fun tokenizeHTMLText(text:String):TokenizedText {
         require(text.length<=1_000_000){"原文文字超过安全渲染上限"}
         val prefix="PDMATH${UUID.randomUUID().toString().replace("-", "")}X";val output=StringBuilder();val formulae=mutableListOf<Formula>();var i=0
@@ -116,6 +116,27 @@ object ResearchRenderer {
             if(inline!=null){image.attr("src",inline).removeAttr("srcset").attr("loading","lazy")}
             else image.replaceWith(org.jsoup.nodes.Element("span").attr("role","note").attr("data-source-url",original).text("[图片未核验离线保存：${image.attr("alt")}]"))
         }
+        renderHTMLMath(context,document)
+    }
+
+    /** Typed aggregate display only. It grants no paper, article, model, or source authority. */
+    suspend fun renderAggregateHTML(context:Context,document:com.nanless.paperdigest.data.AggregateDocumentView,requireCurrent:()->Unit):String =
+        renderAggregateBound(document,requireCurrent){html->
+            withContext(Dispatchers.Default){renderHTMLMath(context,Jsoup.parseBodyFragment(html),"<p role='note'>部分原始 MathML 未携带 TeX；已保留原结构，请对照网站原页核对。</p>")}
+        }
+
+    /** Owner checks bracket the real asynchronous renderer, including cancellation/late completion. */
+    internal suspend fun renderAggregateBound(document:com.nanless.paperdigest.data.AggregateDocumentView,requireCurrent:()->Unit,render:suspend(String)->String):String {
+        requireCurrent()
+        val rendered=render(document.images?.bodyHTML?:document.bodyHTML)
+        requireCurrent()
+        return rendered
+    }
+
+    internal data class TextTarget(val node:org.jsoup.nodes.TextNode,val tokenized:TokenizedText,val firstFormula:Int)
+    internal data class HTMLMathPlan(val document:org.jsoup.nodes.Document,val targets:List<org.jsoup.nodes.Element>,val formulae:List<Formula>,val textTargets:List<TextTarget>,val missingAnnotation:Boolean)
+    internal fun prepareHTMLMath(html:String):HTMLMathPlan = prepareHTMLMath(Jsoup.parseBodyFragment(html))
+    private fun prepareHTMLMath(document:org.jsoup.nodes.Document):HTMLMathPlan {
         val targets=mutableListOf<org.jsoup.nodes.Element>();val formulas=mutableListOf<Formula>()
         val seen=mutableSetOf<org.jsoup.nodes.Element>();var missing=false
         document.select("math").forEach { math ->
@@ -127,7 +148,6 @@ object ResearchRenderer {
                 targets.add(target);formulas+=Formula("",tex,math.attr("display")=="block"||target.hasClass("katex-display"))
             }
         }
-        data class TextTarget(val node:org.jsoup.nodes.TextNode,val tokenized:TokenizedText,val firstFormula:Int)
         val textTargets=mutableListOf<TextTarget>()
         document.body().getAllElements().flatMap{it.textNodes()}.forEach{node->
             val parent=node.parent() as? org.jsoup.nodes.Element
@@ -143,6 +163,12 @@ object ResearchRenderer {
                 }
             }
         }
+        return HTMLMathPlan(document,targets,formulas,textTargets,missing)
+    }
+
+    private suspend fun renderHTMLMath(context:Context,document:org.jsoup.nodes.Document,missingNotice:String="<p role='note'>部分原始 MathML 未携带 TeX；已保留原结构，旧版 Android WebView 可能无法正确排版，请对照 PDF 原文。</p>"):String {
+        val plan=prepareHTMLMath(document)
+        val targets=plan.targets;val formulas=plan.formulae;val textTargets=plan.textTargets;val missing=plan.missingAnnotation
         if(formulas.isNotEmpty()) {
             val rendered=renderFormulae(context,formulas)
             targets.forEachIndexed { i,target ->
@@ -156,8 +182,8 @@ object ResearchRenderer {
                 holder.childNodes().toList().forEach{target.node.before(it)};target.node.remove()
             }
         }
-        val notice=if(missing)"<p role='note'>部分原始 MathML 未携带 TeX；已保留原结构，旧版 Android WebView 可能无法正确排版，请对照 PDF 原文。</p>" else ""
-        notice+(if(formulas.isNotEmpty())style(context)else "")+document.body().html()
+        val notice=if(missing)missingNotice else ""
+        return notice+(if(formulas.isNotEmpty())style(context)else "")+document.body().html()
     }
 
     private suspend fun renderPrepared(context:Context,prepared:Prepared):String = withContext(Dispatchers.Default) {

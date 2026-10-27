@@ -9,6 +9,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -28,12 +31,32 @@ import java.time.ZoneOffset
  var pane by rememberSaveable{mutableStateOf("阅读")};var secret by remember{mutableStateOf<SecretKind?>(null)}
  var handledRequest by rememberSaveable{mutableIntStateOf(-1)}
  LaunchedEffect(requestID,requestedPane){if(handledRequest!=requestID&&requestedPane in listOf("阅读","模型","资料","坚果云","Zotero","关于")){pane=requestedPane!!;handledRequest=requestID}}
- Column(Modifier.fillMaxSize()){
- SectionTitle("设置","连接、研究资料与阅读偏好")
- ScrollableTabRow(listOf("阅读","模型","资料","坚果云","Zotero","关于").indexOf(pane)){listOf("阅读","模型","资料","坚果云","Zotero","关于").forEach{Tab(pane==it,{pane=it},text={Text(it)})}}
- Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(16.dp)){
- savedPanes.SaveableStateProvider(pane){when(pane){
- "阅读"->{Text("按你的节奏阅读",style=MaterialTheme.typography.titleLarge);listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(v,l)->FilterChip(state.settings.optString("appearance","system")==v,{action("settings.save",obj("changes" to obj("appearance" to v)))},label={Text(l)})};Text("正文字号");Slider(state.settings.optInt("font",18).coerceIn(14,30).toFloat(),{action("settings.save",obj("changes" to obj("font" to it.toInt())))},valueRange=14f..30f,steps=15);Row{Text("离线模式",Modifier.weight(1f));Switch(state.settings.optBoolean("offlineMode"),{action("settings.save",obj("changes" to obj("offlineMode" to it)))})};Text("离线模式读取已保存的导读与 PDF；未保存的资料会明确提示。");Row{Text("减少界面动画",Modifier.weight(1f));Switch(state.settings.optBoolean("reduceMotion"),{action("settings.save",obj("changes" to obj("reduceMotion" to it)))},modifier=Modifier.semantics{contentDescription="减少界面动画"})}
+ val categories=listOf("阅读","模型","资料","坚果云","Zotero","关于")
+ var categoryMenu by remember{mutableStateOf(false)}
+ BoxWithConstraints(Modifier.fillMaxSize()){
+ val wide=maxWidth>=840.dp
+ Row(Modifier.fillMaxSize()){
+ if(wide)Column(Modifier.width(208.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+  Text("设置",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.padding(vertical=16.dp))
+  categories.forEach{category->
+   NavigationDrawerItem(label={Text(category)},selected=pane==category,onClick={pane=category},icon={SettingsCategoryIcon(category)})
+  }
+ }
+ Column(Modifier.weight(1f).fillMaxHeight()){
+ if(!wide)Row(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){
+  Text("设置",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.weight(1f))
+  Box{
+   FilledTonalButton({categoryMenu=true},modifier=Modifier.semantics{contentDescription="选择设置分组：$pane"}){SettingsCategoryIcon(pane);Spacer(Modifier.width(8.dp));Text(pane);Icon(Icons.Outlined.ArrowDropDown,null)}
+   DropdownMenu(categoryMenu,{categoryMenu=false}){
+    categories.forEach{category->DropdownMenuItem(text={Text(category)},leadingIcon={SettingsCategoryIcon(category)},onClick={pane=category;categoryMenu=false})}
+   }
+  }
+ }
+ savedPanes.SaveableStateProvider(pane){
+ Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=16.dp,vertical=12.dp),horizontalAlignment=Alignment.CenterHorizontally){
+ PaperPanel(Modifier.widthIn(max=760.dp)){
+ when(pane){
+ "阅读"->{Text("按你的节奏阅读",style=MaterialTheme.typography.titleLarge);FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(v,l)->FilterChip(state.settings.optString("appearance","system")==v,{action("settings.save",obj("changes" to obj("appearance" to v)))},label={Text(l)})}};Text("正文字号 · ${state.settings.optInt("font",18)}",style=MaterialTheme.typography.titleSmall);Slider(state.settings.optInt("font",18).coerceIn(14,30).toFloat(),{action("settings.save",obj("changes" to obj("font" to it.toInt())))},valueRange=14f..30f,steps=15);Row{Text("离线模式",Modifier.weight(1f));Switch(state.settings.optBoolean("offlineMode"),{action("settings.save",obj("changes" to obj("offlineMode" to it)))})};Text("离线模式读取已保存的导读与 PDF；未保存的资料会明确提示。");Row{Text("减少界面动画",Modifier.weight(1f));Switch(state.settings.optBoolean("reduceMotion"),{action("settings.save",obj("changes" to obj("reduceMotion" to it)))},modifier=Modifier.semantics{contentDescription="减少界面动画"})}
  var syncHours by rememberSaveable{mutableStateOf(state.settings.optInt("syncHours",12).toString())};var syncDirty by rememberSaveable{mutableStateOf(false)};var syncSaving by remember{mutableStateOf(false)};var syncError by remember{mutableStateOf<String?>(null)};val syncScope=rememberCoroutineScope()
  LaunchedEffect(state.settings.optInt("syncHours",12)){if(!syncDirty)syncHours=state.settings.optInt("syncHours",12).toString()}
  OutlinedTextField(syncHours,{syncHours=it.filter(Char::isDigit);syncDirty=true},label={Text("已发布目录同步间隔（1–168 小时）")},singleLine=true)
@@ -41,7 +64,7 @@ import java.time.ZoneOffset
  Text("Android 可因电量与网络延后执行；离线模式不会联网。目录同步读取已有发布结果，不调用模型。",style=MaterialTheme.typography.bodySmall)}
  "模型"->{var freshCheckRevision by remember{mutableLongStateOf(0)};var draft by rememberSaveable{mutableStateOf(state.settings.toString())};var changedKeys by rememberSaveable{mutableStateOf(listOf<String>())};var dirty by rememberSaveable{mutableStateOf(false)};LaunchedEffect(state.settings.toString()){if(!dirty)draft=state.settings.toString()};var saving by remember{mutableStateOf(false)};var saveError by remember{mutableStateOf<String?>(null)};val saveScope=rememberCoroutineScope();val settings=JSONObject(draft)
  Text("本机模型连接",style=MaterialTheme.typography.titleLarge);Text("只有你明确发送研究问题或检查连接时才会请求 API。密钥保存在 Android 安全存储，不随备份迁移。")
- listOf("endpoint" to "API 地址","model" to "模型名称","protocol" to "协议 chat / responses","httpProxy" to "HTTP CONNECT 代理（Muse 必填）","maxTokens" to "单次输出上限","dailyRequests" to "每日请求上限（UTC）","timeoutMs" to "超时（毫秒）","reasoningEffort" to "推理强度").forEach{(k,l)->OutlinedTextField(settings.optString(k),{v->draft=JSONObject(draft).put(k,v).toString();changedKeys=(changedKeys+k).distinct();dirty=true;freshCheckRevision++},Modifier.fillMaxWidth(),label={Text(l)},singleLine=true)}
+ listOf("endpoint" to "API 地址","model" to "模型名称","protocol" to "协议 chat / responses","httpProxy" to "HTTP CONNECT 代理（Muse 必填）","maxTokens" to "单次输出上限","dailyRequests" to "每日请求上限（UTC）","timeoutMs" to "超时（毫秒）","reasoningEffort" to "推理强度").forEach{(k,l)->OutlinedTextField(settings.optString(k),{v->draft=JSONObject(draft).put(k,v).toString();changedKeys=(changedKeys+k).distinct();dirty=true;freshCheckRevision++},Modifier.fillMaxWidth(),shape=MaterialTheme.shapes.small,label={Text(l)},singleLine=true)}
  Row{Text("Responses 流式响应",Modifier.weight(1f));Switch(settings.optBoolean("responsesStream"),{draft=JSONObject(draft).put("responsesStream",it).toString();changedKeys=(changedKeys+"responsesStream").distinct();dirty=true;freshCheckRevision++})}
  Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({val submitted=draft;val changes=JSONObject().apply{changedKeys.forEach{key->put(key,JSONObject(submitted).get(key))}};saving=true;saveScope.launch{try{controller.execute("settings.save",obj("changes" to changes));if(draft==submitted){dirty=false;changedKeys=emptyList()};saveError=null}catch(e:Exception){saveError=e.message}finally{saving=false}}},enabled=dirty&&!saving){Text("保存连接")};OutlinedButton({draft=state.settings.toString();dirty=false;changedKeys=emptyList();freshCheckRevision++},enabled=dirty&&!saving){Text("撤销更改")}}
  saveError?.let{Text(it,color=MaterialTheme.colorScheme.error)};OutlinedButton({secret=SecretKind.MODEL},enabled=!dirty&&!saving&&!state.busy){Text("为已保存连接设置模型密钥…")};FreshStudyAction(state,controller,connectionCheck=true,draftRevision=freshCheckRevision,enabled=!dirty&&!saving&&!state.busy,label="检查当前连接（计入用量）")}
@@ -55,6 +78,9 @@ import java.time.ZoneOffset
  "Zotero"->ZoteroSettings(state,controller,action,{secret=SecretKind.ZOTERO},{secret=SecretKind.ZOTERO_DAV})
  "关于"->AboutContent({showLicenses=true})
  }}
+ }
+ }
+ }
  }
  }
  secret?.let{kind->SecretDialog(kind,controller,{secret=null})}
@@ -101,7 +127,7 @@ import java.time.ZoneOffset
  DisposableEffect(listGate){onDispose{listGate.invalidate()}}
  var saving by remember{mutableStateOf(false)};val busy=cloud.optBoolean("busy")||saving||state.busy;val pending=cloud.optJSONObject("pending");val scope=rememberCoroutineScope()
  Text("坚果云资料",style=MaterialTheme.typography.titleLarge);Text("保存全部研究空间。独立目录与 Zotero 附件同步分开；资料上限 512 MiB，编码快照上限 750 MiB。自动任务由 Android 调度，可能延后；强制停止应用后不会继续。")
- OutlinedTextField(account,{account=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("坚果云账号")},enabled=!busy,singleLine=true);OutlinedTextField(folder,{folder=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("独立目录（例如 PaperDigest，不可用 zotero）")},enabled=!busy,singleLine=true)
+ OutlinedTextField(account,{account=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("坚果云账号")},enabled=!busy,singleLine=true);OutlinedTextField(folder,{folder=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("备份目录")},supportingText={Text("例如 PaperDigest；不能使用 Zotero 的附件目录。")},enabled=!busy,singleLine=true)
  Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true;retireList()},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true;retireList()},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
  Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存设置")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
  OutlinedButton(password,enabled=!dirty&&!busy){Text("设置第三方应用密码…")};OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy){Text("检查连接与权限")}

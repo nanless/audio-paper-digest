@@ -57,6 +57,9 @@ class RootController private constructor(private val context: Context, private v
     private val exportDestinationVerifier: ExportDestinationVerifier = { uri, sha, bytes -> verifyExportDestination(uri, sha, bytes) }
     private val maintenance = Mutex()
     private val dispatch = WorkspaceDispatch(File(context.noBackupFilesDir.canonicalFile, "PaperDigestDevice"))
+    private val cloudCredentialBorrowing=CloudCredentialBorrowing{dispatch.epoch}
+    private data class MigrationConsent(val grant:CloudDavGrant,val binding:CloudCredentialBinding,val epoch:String,val target:com.nanless.paperdigest.zotero.webdav.ZoteroDavTarget)
+    private val migrationConsents=ConcurrentHashMap<String,MigrationConsent>()
     private val generation = AtomicLong(0)
     private val modelCredentialRevision = ModelCredentialRevision()
     private val freshStudies = FreshStudyGate<FreshStudyIntent>()
@@ -105,7 +108,7 @@ class RootController private constructor(private val context: Context, private v
             retainedAccess.retireAll(); retainedConfirmationClear()
             pdf.clearSessionPasswords()
             leaveAggregateView()
-            dispatch.rotate();zotero.workspaceRestored();preparedReadings.clear()
+            dispatch.rotate();cloudCredentialBorrowing.workspaceRestored();migrationConsents.clear();zotero.workspaceRestored();preparedReadings.clear()
             val restoreContext = currentCoroutineContext()
             RestorePolicy.install(staged, research, initialize = { personal.reload(); personal.retireRestoredDispatch(); library.reload() }, check = { restoreContext.ensureActive() })
             offlineReading = null
@@ -114,7 +117,7 @@ class RootController private constructor(private val context: Context, private v
             refresh()
         }
     }
-    val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) })
+    val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) }, borrowing=cloudCredentialBorrowing)
     private val aggregateViewRevision=AtomicLong(0)
     override fun captureAggregateView()=AggregateViewLease(aggregateViewRevision.get(),generation.get())
     override fun enterAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.enter()}
@@ -134,6 +137,7 @@ class RootController private constructor(private val context: Context, private v
             override suspend fun revisions(id:String)=maintenance.withLock{library.aggregateCachedRevisions(id)}
             override suspend fun read(id:String)=maintenance.withLock{library.aggregateDocument(id)}
             override suspend fun cached(id:String,sha:String)=maintenance.withLock{library.aggregateCachedDocument(id,sha)}
+            override suspend fun images(id:String,rawHTMLSHA256:String,allowNetwork:Boolean)=maintenance.withLock{library.aggregateImages(id,rawHTMLSHA256,allowNetwork)}
             override fun offlineMode()=personal.settings().optBoolean("offlineMode")
             override fun readingEpoch()=generation.get()
             override fun mayPresent(readingEpoch:Long):Boolean {val view=_state.value;return generation.get()==readingEpoch&&view.selectedPaperId==null&&view.viewedPaper==null&&view.pdfDocument==null}
@@ -183,6 +187,7 @@ class RootController private constructor(private val context: Context, private v
         }
     })
     init {
+        cloudCredentialBorrowing.attachDrain{zotero.cancelAndDrainBorrowed()}
         if (installBackground) CloudWorkerRuntime.install({ cloud }, { service, expected -> runTask("cloud.automatic") { service.upload(automatic = true, expectedDestinationID = expected) } })
         refresh(); if (installBackground) { scheduleCloud(cloud.state()); scheduleCatalog() }
         exportScope.launch { try { reconcilePendingExports() } catch (_: Exception) { /* Independent pending-list error is already visible. */ } }
@@ -315,9 +320,18 @@ class RootController private constructor(private val context: Context, private v
         val current = _state.value
         val access = ReadingAccess(current.selectedPaperId, generation.get(), current.pdfDocument?.sha256, current.pdfSelection, current.pdfPage, readingID(current))
         val dispatchAtStart = dispatch.epoch
-        return withContext(Dispatchers.IO) { executeBound(command, payload.copy(), access, dispatchAtStart) }
+        val cloudMutation=when {
+            command=="cloud.save"&&cloud.credentialsTargetWouldChange(payload.getString("account"),payload.optString("folder","PaperDigest"))->cloud.beginCredentialMutation()
+            command in setOf("app.restore.commit","cloud.restore.commit","zotero.migration.revoke")->cloud.beginCredentialMutation()
+            else->null
+        }
+        if(cloudMutation!=null)retireBorrowedMigrationViews()
+        try {
+            cloud.drainCredentialBorrowers(cloudMutation) // Outside maintenance and Cloud operation mutex.
+            return withContext(Dispatchers.IO) { executeBound(command, payload.copy(), access, dispatchAtStart,cloudMutation) }
+        } finally {cloud.endCredentialMutation(cloudMutation)}
     }
-    private suspend fun executeBound(command: String, payload: JSONObject, access: ReadingAccess, dispatchAtStart: String): JSONObject {
+    private suspend fun executeBound(command: String, payload: JSONObject, access: ReadingAccess, dispatchAtStart: String,cloudMutation:CloudCredentialMutation?=null): JSONObject {
         try {
             _state.update { it.copy(error = null, notice = null) }
             val result = when (command) {
@@ -462,7 +476,8 @@ class RootController private constructor(private val context: Context, private v
                 }
                 "restore.discard" -> { restores.remove(payload.getString("restoreID"))?.directory?.deleteRecursively(); JSONObject().put("cancelled", true) }
                 else -> when {
-                    command.startsWith("cloud.") || command.startsWith("retained.") -> cloudCommand(command, payload)
+                    command.startsWith("cloud.") || command.startsWith("retained.") -> cloudCommand(command, payload,cloudMutation)
+                    command.startsWith("zotero.migration.") -> migrationCommand(command,payload)
                     command.startsWith("zotero.") -> {
                         val bound = payload.copy()
                         var handle: String? = null
@@ -751,13 +766,16 @@ class RootController private constructor(private val context: Context, private v
     }
     override suspend fun updateSecret(kind: SecretKind, value: String?) {
         val mutation = if (kind == SecretKind.MODEL) modelCredentialRevision.begin().also { freshStudies.invalidate() } else null
+        val cloudMutation=if(kind==SecretKind.CLOUD)cloud.beginCredentialMutation()else null
+        if(cloudMutation!=null)retireBorrowedMigrationViews()
         val zoteroMutation = if (kind in setOf(SecretKind.ZOTERO, SecretKind.ZOTERO_DAV)) zotero.beginCredentialMutation() else null
         try {
-            if (zoteroMutation != null) _state.update { current -> current.copy(zotero = current.zotero.copy().put("credentialState", "unknown").put("permissions", JSONObject.NULL)) }
+            cloud.drainCredentialBorrowers(cloudMutation)
+            if (zoteroMutation != null) _state.update { current -> current.copy(zotero = zotero.projectCredentialState(current.zotero).put("credentialState", "unknown").put("permissions", JSONObject.NULL)) }
             if (zoteroMutation != null) zotero.cancelAndDrain() // Never hold maintenance while waiting for real transport cleanup.
             withContext(Dispatchers.IO) {
         when(kind) {
-            SecretKind.CLOUD -> cloud.setPassword(value)
+            SecretKind.CLOUD -> cloud.setPassword(value,cloudMutation)
             SecretKind.MODEL -> maintenance.withLock {
                 val endpoint = if (value != null) StudyService.validatedConfig(personal.settings()).getString("endpoint") else ""
                 modelKeyBinding.clear()
@@ -777,6 +795,7 @@ class RootController private constructor(private val context: Context, private v
         refresh()
             }
         } finally {
+            cloud.endCredentialMutation(cloudMutation)
             if (zoteroMutation != null) zotero.endCredentialMutation(zoteroMutation)
             if (mutation != null) modelCredentialRevision.end(mutation)
         }
@@ -1046,9 +1065,59 @@ class RootController private constructor(private val context: Context, private v
         val id = UUID.randomUUID().toString(); restores[id] = staged
         return JSONObject().put("restoreID", id).put("fileCount", staged.entries.size).put("sha256", staged.encodedSHA256).put("message", "完整备份已通过逐文件校验。恢复后将回到此快照；保留本机连接、实际派发计数和恢复前副本。")
     }
-    private suspend fun cloudCommand(command: String, payload: JSONObject): JSONObject = when (command) {
+    private fun retireBorrowedMigrationViews(){
+        migrationConsents.clear();zotero.revokeBorrowedStorageMigrations()
+        // Publish retirement synchronously as well. An older StateFlow CAS must retry its current projection.
+        _state.update{current->current.copy(zotero=zotero.projectCredentialState(current.zotero))}
+    }
+    private fun requireMigrationConsent(consent:MigrationConsent){
+        dispatch.requireCurrent(consent.epoch)
+        require(cloud.credentialBinding()==consent.binding){"坚果云连接已变化，请重新确认"}
+        consent.grant.requireCurrent(consent.target)
+    }
+    private suspend fun migrationCommand(command:String,payload:JSONObject):JSONObject=when(command){
+        "zotero.migration.preview"->{
+            val binding=cloud.credentialBinding();require(binding.account.isNotBlank()){"请先连接坚果云"}
+            val epoch=dispatch.epoch
+            // The supplied address only selects the explicit target; it cannot select a saved secret scope.
+            val id=zotero.beginStorageMigrationPreview(payload.getString("journalID"),payload.getString("davBaseURL"),binding.account)
+            val target=zotero.migrationTarget(id)
+            val grant=cloudCredentialBorrowing.issue(target,binding) // Before the first suspension: same-text password ABA retires this exact object.
+            val consent=MigrationConsent(grant,binding,epoch,target)
+            try {
+                requireMigrationConsent(consent)
+                val result=runTask(command,gate={require(active.isEmpty()){"请等当前资料任务结束后再预览"}}){zotero.previewStorageMigration(id,grant)}
+                requireMigrationConsent(consent)
+                if(migrationConsents.size>=8){migrationConsents.values.forEach{cloudCredentialBorrowing.discardUnpublished(it.grant)};migrationConsents.clear()}
+                migrationConsents[id]=consent
+                result.put("previewID",id).put("account",binding.account).put("targetRoot",target.root)
+            }catch(e:Throwable){cloudCredentialBorrowing.discardUnpublished(grant);throw e}
+        }
+        "zotero.migration.confirm"->{
+            val id=payload.getString("previewID");val consent=migrationConsents[id]?:error("这次预览已失效，请重新确认")
+            requireMigrationConsent(consent)
+            val result=runTask(command,gate={require(active.isEmpty()){"请等当前资料任务结束后再继续存档"}}){
+                requireMigrationConsent(consent)
+                val prepared=zotero.confirmStorageMigration(id,consent.grant){publish->maintenance.withLock{
+                    requireMigrationConsent(consent);currentCoroutineContext().ensureActive();val prepared=publish();cloudCredentialBorrowing.publish(consent.grant,consent.target);prepared
+                }}
+                requireMigrationConsent(consent)
+                require(prepared.optString("status")=="prepared"&&prepared.opt("migration")==true){"迁移材料尚未准备完成"}
+                // One explicit confirmation continues the already sealed child through the normal worker. No prepare is repeated.
+                zotero.execute("zotero.resume",JSONObject().put("journalID",prepared.getString("journalID")))
+            }
+            requireMigrationConsent(consent);migrationConsents.remove(id,consent);result
+        }
+        "zotero.migration.discard"->{
+            migrationConsents.remove(payload.getString("previewID"))?.let{cloudCredentialBorrowing.discardUnpublished(it.grant)}
+            JSONObject().put("cancelled",true)
+        }
+        "zotero.migration.revoke"->{JSONObject().put("revoked",true).put("message","本次坚果云存档授权已撤销，已有材料与断点保留")}
+        else->error("未知存档操作")
+    }
+    private suspend fun cloudCommand(command: String, payload: JSONObject,cloudMutation:CloudCredentialMutation?=null): JSONObject = when (command) {
         "cloud.state" -> cloudView()
-        "cloud.save" -> cloud.save(payload.getString("account"), payload.optString("folder", "PaperDigest"), payload.optBoolean("automatic"), payload.optInt("intervalHours", 24))
+        "cloud.save" -> cloud.save(payload.getString("account"), payload.optString("folder", "PaperDigest"), payload.optBoolean("automatic"), payload.optInt("intervalHours", 24),cloudMutation)
         "cloud.check" -> runTask(command) { cloud.check() }
         "cloud.upload" -> maintenance.withLock {
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("kind") == "cloud.upload" && it.optString("status") in listOf("queued", "running") }) { "已有备份任务，请先等待或停止后续传" }

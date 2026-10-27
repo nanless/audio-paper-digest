@@ -138,6 +138,19 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         return result
     }
 
+    /** Only an actually opened native aggregate ID/raw revision may fetch its source-bound images. */
+    internal suspend fun aggregateImages(id:String,rawHTMLSHA256:String,allowNetwork:Boolean):AggregateImageAccess?=withContext(Dispatchers.IO) {
+        if(allowNetwork)require(!personal.settings().optBoolean("offlineMode")){"当前为离线模式"}
+        val before=snapshot;val descriptor=aggregateCatalog()?.records?.firstOrNull{it.id==id}?:error("当前汇总目录尚未核验")
+        val context=coroutineContext
+        fun current(){context.ensureActive();require(snapshot.epoch==before.epoch&&snapshot.summary.optString("snapshotID")==before.summary.optString("snapshotID")){"图片读取期间目录已变化"}}
+        current()
+        val result=AggregateImageLoader.read(PublishedAggregateStore(directory),descriptor,rawHTMLSHA256,allowNetwork,
+            approved={address->runCatching{approvedResource(URI(address))}.getOrDefault(false)},
+            fetch={address,limit->fetchOverride?.invoke(address,limit)?:readExternal(address,limit)},check=::current)
+        current();result
+    }
+
     /** A display stamp has no Paper capability and comes from one immutable native catalog snapshot. */
     fun aggregateStamp():AggregateCatalogStamp {val current=snapshot;return AggregateCatalogStamp(current.summary.optString("snapshotID"),current.epoch)}
     fun aggregateCachedRevisions(id:String):List<AggregateCachedRevision> {
