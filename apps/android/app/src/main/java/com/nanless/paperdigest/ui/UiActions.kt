@@ -2,6 +2,7 @@ package com.nanless.paperdigest.ui
 
 import com.nanless.paperdigest.data.Article
 import com.nanless.paperdigest.data.Paper
+import com.nanless.paperdigest.data.AggregateBrowseState
 import com.nanless.paperdigest.pdf.PdfOriginalSnapshot
 import com.nanless.paperdigest.pdf.PdfDocumentRef
 import com.nanless.paperdigest.pdf.PdfSelection
@@ -41,11 +42,19 @@ data class UiState(
     val catalogSyncedAt: String? = null,
     val catalogSummary: JSONObject = JSONObject(),
     val storageWarning: String? = null,
+    val aggregate: AggregateBrowseState = AggregateBrowseState(),
 )
 
-enum class SecretKind { MODEL, ZOTERO, CLOUD }
+enum class SecretKind { MODEL, ZOTERO, ZOTERO_DAV, CLOUD }
+
+data class AggregateViewLease(val navigationEpoch:Long,val readingEpoch:Long)
 
 interface AppController {
+    fun captureAggregateView():AggregateViewLease=AggregateViewLease(0,0)
+    fun enterAggregateView() {}
+    fun leaveAggregateView() {}
+    fun retireAggregateView() {}
+    suspend fun executeAggregateInView(command:String,payload:JSONObject,lease:AggregateViewLease):JSONObject=execute(command,payload)
     val state: StateFlow<UiState>
     /** Returns only actual service results. Unknown commands must fail visibly. */
     suspend fun execute(command: String, payload: JSONObject = JSONObject()): JSONObject

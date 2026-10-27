@@ -19,8 +19,8 @@ class UiBehaviorInstrumentedTest {
  private class Controller:AppController {
   override val state=MutableStateFlow(UiState(papers=listOf(Paper("p1","Original paper","真实论文")),selectedPaperId="p1",personal=JSONObject().put("notes",JSONObject()).put("annotations",JSONObject())))
   val calls=mutableListOf<Pair<String,JSONObject>>();var noteFails=true;var restoreFails=true
-  override suspend fun execute(command:String,payload:JSONObject):JSONObject {calls+=command to JSONObject(payload.toString());if(command=="cloud.list")return JSONObject().put("snapshots",org.json.JSONArray().put(JSONObject().put("month",payload.optString("month")).put("id","fixture-snapshot").put("createdAt","2026-10-25T00:00:00Z").put("encodedBytes",123).put("sha256","a".repeat(64))))
-   if(command=="cloud.restore.prepare")return JSONObject().put("restoreID","test-validated-token").put("fileCount",3).put("message","原材料已校验，尚未恢复")
+  override suspend fun execute(command:String,payload:JSONObject):JSONObject {calls+=command to JSONObject(payload.toString());if(command=="cloud.list")return JSONObject().put("selectionContext",state.value.cloud.getString("selectionContext")).put("month",payload.getString("month")).put("snapshots",org.json.JSONArray().put(JSONObject().put("selectionID","test-cloud-selection").put("createdAt","2026-10-25T00:00:00Z").put("encodedBytes",123).put("sha256","a".repeat(64))))
+   if(command=="cloud.restore.prepare"){check(payload.keys().asSequence().toSet()==setOf("selectionID"));check(payload.getString("selectionID")=="test-cloud-selection");return JSONObject().put("restoreID","test-validated-token").put("fileCount",3).put("message","原材料已校验，尚未恢复")}
    if(command=="cloud.restore.commit"){if(restoreFails)throw IllegalStateException("恢复被阻断，当前资料保留");return JSONObject().put("restored",true)}
    if(command=="pdf.outline")return JSONObject().put("pdfSHA",state.value.pdfDocument!!.sha256).put("chapters",org.json.JSONArray().put(JSONObject().put("index",0).put("title","第一章").put("page",1).put("endPage",7).put("depth",0)).put(JSONObject().put("index",1).put("title","第二章").put("page",8).put("endPage",13).put("depth",0)))
    if(command=="zotero.collections")return JSONObject().put("collections",org.json.JSONArray().put(JSONObject().put("key","AAAAAAAA").put("data",JSONObject().put("name","音频研究").put("parentCollection",false))).put(JSONObject().put("key","BBBBBBBB").put("data",JSONObject().put("name","优先阅读").put("parentCollection","AAAAAAAA"))))
@@ -47,11 +47,13 @@ class UiBehaviorInstrumentedTest {
   compose.onNodeWithText("下一页").performClick();compose.onNodeWithText("21–40 / 43").assertIsDisplayed();compose.onNodeWithText("下一页").performClick();compose.onNodeWithText("41–43 / 43").assertIsDisplayed();compose.onNodeWithText("下一页").assertIsNotEnabled()
  }
  @Test fun validatedRestoreSurvivesRecreationAndClosesOnlyAfterSuccess(){
-  val controller=Controller();val restoration=StateRestorationTester(compose)
+  val controller=Controller();controller.state.value=controller.state.value.copy(cloud=JSONObject().put("selectionContext","synthetic-cloud-context").put("account","synthetic-account").put("folder","PaperDigest").put("automatic",false));val restoration=StateRestorationTester(compose)
   restoration.setContent{PaperDigestApp(controller)}
   compose.onNodeWithText("设置").performClick();compose.onNodeWithText("坚果云").performScrollTo().performClick()
-  compose.onNodeWithText("读取此月版本").performScrollTo().performClick()
-  compose.onNodeWithText("校验并准备恢复…").performScrollTo().performClick()
+  compose.onNodeWithText("读取此月版本").performScrollTo().assertIsEnabled().performClick();compose.waitForIdle()
+  compose.onNodeWithText("校验并准备恢复…").performScrollTo().performClick();compose.waitForIdle()
+  val selection=controller.calls.single{it.first=="cloud.restore.prepare"}.second
+  assertEquals(setOf("selectionID"),selection.keys().asSequence().toSet());assertEquals("test-cloud-selection",selection.getString("selectionID"))
   compose.onNodeWithText("恢复完整研究资料？").assertIsDisplayed()
   restoration.emulateSavedInstanceStateRestore()
   compose.onNodeWithText("恢复完整研究资料？").assertIsDisplayed()
@@ -95,7 +97,7 @@ class UiBehaviorInstrumentedTest {
 
  @Test fun zoteroCollectionsUseRealParentNamesAndSaveExactSelectedKey(){
   val controller=Controller();controller.state.value=controller.state.value.copy(zotero=JSONObject().put("libraryType","users").put("libraryID","123").put("collection",""))
-  compose.setContent{val observed by controller.state.collectAsState();androidx.compose.material3.MaterialTheme{androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())){ZoteroSettings(observed,controller,{_,_->},{})}}}
+  compose.setContent{val observed by controller.state.collectAsState();androidx.compose.material3.MaterialTheme{androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())){ZoteroSettings(observed,controller,{_,_->},{},davPassword={})}}}
   assertTrue(controller.calls.isEmpty())
   compose.onNodeWithText("读取并选择分类…").performScrollTo().performClick()
   compose.onNodeWithText("音频研究 / 优先阅读").performClick()
@@ -103,6 +105,38 @@ class UiBehaviorInstrumentedTest {
   val save=controller.calls.single{it.first=="zotero.save"}.second
   assertEquals("users",save.getString("libraryType"));assertEquals("123",save.getString("libraryID"));assertEquals("BBBBBBBB",save.getString("collection"))
   assertEquals(1,controller.calls.count{it.first=="zotero.collections"})
+  assertEquals("storage",save.getString("attachmentBackend"));assertEquals("",save.getString("davBaseURL"));assertEquals("",save.getString("davUsername"))
+  assertTrue(controller.calls.none{it.first=="zotero.check"})
+ }
+ @Test fun webdavTargetChangesRequireSaveAndSeparatePasswordActionWithoutGrantingAuthority(){
+  val controller=Controller();var apiPasswordActions=0;var davPasswordActions=0
+  controller.state.value=controller.state.value.copy(zotero=JSONObject().put("libraryType","users").put("libraryID","123").put("collection","").put("attachmentBackend","storage").put("credentialState","confirmed"))
+  compose.setContent{val observed by controller.state.collectAsState();androidx.compose.material3.MaterialTheme{androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())){ZoteroSettings(observed,controller,{command,payload->controller.calls+=command to JSONObject(payload.toString())},{apiPasswordActions++},davPassword={davPasswordActions++})}}}
+  compose.onNodeWithText("Zotero Storage").assertIsSelected()
+  compose.onNodeWithText("为已保存附件目标设置独立应用密码…").assertDoesNotExist()
+  compose.onNodeWithText("WebDAV 附件").performScrollTo().performClick()
+  compose.onNodeWithText("群组文库").assertIsNotEnabled()
+  compose.onNodeWithText("核验身份、目标与权限").performScrollTo().assertIsNotEnabled()
+  compose.onNodeWithText("为已保存目标设置专用 API key…").performScrollTo().assertIsNotEnabled()
+  compose.onNodeWithText("为已保存附件目标设置独立应用密码…").performScrollTo().assertIsNotEnabled()
+  assertTrue(controller.calls.isEmpty());assertEquals(0,apiPasswordActions);assertEquals(0,davPasswordActions)
+  compose.onNodeWithText("WebDAV 上一级地址（不含末段 zotero）").performScrollTo().performTextReplacement("https://dav.example.invalid/dav/")
+  compose.onNodeWithText("WebDAV 独立账号").performScrollTo().performTextReplacement("synthetic-dav-user")
+  compose.onNodeWithText("保存目标文库").performScrollTo().performClick();compose.waitForIdle()
+  val davSave=controller.calls.single{it.first=="zotero.save"}.second
+  assertEquals("users",davSave.getString("libraryType"));assertEquals("webdav",davSave.getString("attachmentBackend"));assertEquals("https://dav.example.invalid/dav/",davSave.getString("davBaseURL"));assertEquals("synthetic-dav-user",davSave.getString("davUsername"))
+  compose.onNodeWithText("许可状态：需要主动核验").performScrollTo().assertExists()
+  compose.onNodeWithText("为已保存附件目标设置独立应用密码…").performScrollTo().assertIsEnabled().performClick();compose.waitForIdle()
+  assertEquals(1,davPasswordActions);assertEquals(0,apiPasswordActions)
+  compose.onNodeWithText("许可状态：需要主动核验").assertExists()
+  assertTrue(controller.calls.none{it.first in setOf("zotero.check","zotero.archive","zotero.resume")||it.first.startsWith("cloud.")})
+  compose.onNodeWithText("Zotero Storage").performScrollTo().performClick()
+  compose.onNodeWithText("群组文库").assertIsEnabled()
+  compose.onNodeWithText("为已保存附件目标设置独立应用密码…").assertDoesNotExist()
+  compose.onNodeWithText("保存目标文库").performScrollTo().performClick();compose.waitForIdle()
+  assertEquals("storage",controller.calls.last{it.first=="zotero.save"}.second.getString("attachmentBackend"))
+  assertEquals(1,davPasswordActions);assertEquals(0,apiPasswordActions)
+  assertTrue(controller.calls.none{it.first=="zotero.check"})
  }
  @Test fun modelSaveChangesOnlyEditedFieldsAndPreservesOtherPreferences(){
   val controller=Controller();controller.state.value=controller.state.value.copy(settings=JSONObject().put("endpoint","https://a.invalid/v1").put("model","fixture-model").put("appearance","dark").put("font",24))

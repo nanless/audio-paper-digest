@@ -11,10 +11,14 @@ import androidx.compose.ui.unit.dp
 import org.json.JSONObject
 import kotlinx.coroutines.launch
 
-@Composable internal fun ZoteroSettings(state:UiState,controller:AppController,action:Action,password:()->Unit){
+@OptIn(ExperimentalLayoutApi::class)
+@Composable internal fun ZoteroSettings(state:UiState,controller:AppController,action:Action,password:()->Unit,davPassword:()->Unit){
  val scope=rememberCoroutineScope();val z=state.zotero
  var libraryType by rememberSaveable{mutableStateOf(z.optString("libraryType","users"))}
  var libraryID by rememberSaveable{mutableStateOf(z.optString("libraryID"))}
+ var attachmentBackend by rememberSaveable{mutableStateOf(z.optString("attachmentBackend","storage"))}
+ var davBaseURL by rememberSaveable{mutableStateOf(z.optString("davBaseURL"))}
+ var davUsername by rememberSaveable{mutableStateOf(z.optString("davUsername"))}
  var collection by rememberSaveable{mutableStateOf(z.optString("collection"))}
  var dirty by rememberSaveable{mutableStateOf(false)}
  var saving by remember{mutableStateOf(false)};var listing by remember{mutableStateOf(false)}
@@ -23,11 +27,17 @@ import kotlinx.coroutines.launch
  var listedFor by remember{mutableStateOf<String?>(null)};var showCollections by remember{mutableStateOf(false)}
  val busy=saving||listing||z.optBoolean("busy")||state.busy
  LaunchedEffect(z.toString()){
-  if(!dirty){val type=z.optString("libraryType","users");val id=z.optString("libraryID");if(type!=libraryType||id!=libraryID){collections=emptyList();listedFor=null};libraryType=type;libraryID=id;collection=z.optString("collection")}
+  if(!dirty){val type=z.optString("libraryType","users");val id=z.optString("libraryID");if(type!=libraryType||id!=libraryID){collections=emptyList();listedFor=null};libraryType=type;libraryID=id;collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername")}
  }
  Text("Zotero 完整存档",style=MaterialTheme.typography.titleLarge)
- Text("使用官方 Web API v3 保存到你的个人或可编辑群组文库。创建单独 API key，授予目标资料、笔记、写入与文件权限；无需提供 Zotero 登录密码。附件使用 Zotero Storage，坚果云工作空间备份与此独立。")
- Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("users" to "个人文库","groups" to "群组文库").forEach{(v,l)->FilterChip(libraryType==v,{libraryType=v;dirty=true;collections=emptyList();listedFor=null},enabled=!busy,label={Text(l)})}}
+ Text("使用官方 Web API 保存书目和笔记，附件可选 Zotero Storage 或个人文库的 WebDAV。创建专用 API key，无需 Zotero 登录密码。完整研究空间备份在“坚果云”设置中独立配置。")
+ FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){listOf("storage" to "Zotero Storage","webdav" to "WebDAV 附件").forEach{(v,l)->FilterChip(attachmentBackend==v,{attachmentBackend=v;if(v=="webdav")libraryType="users";dirty=true;collections=emptyList();listedFor=null},enabled=!busy,label={Text(l)})}}
+ if(attachmentBackend=="webdav"){
+  Text("仅支持个人文库。填写 zotero 文件夹的上一级 HTTPS 地址；请先在服务端准备好 zotero 文件夹。账号和应用密码单独保存，绝不会自动复用研究空间备份密码。")
+  OutlinedTextField(davBaseURL,{davBaseURL=it;dirty=true},Modifier.fillMaxWidth(),enabled=!busy,label={Text("WebDAV 上一级地址（不含末段 zotero）")},singleLine=true)
+  OutlinedTextField(davUsername,{davUsername=it;dirty=true},Modifier.fillMaxWidth(),enabled=!busy,label={Text("WebDAV 独立账号")},singleLine=true)
+ }
+ FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){listOf("users" to "个人文库","groups" to "群组文库").forEach{(v,l)->FilterChip(libraryType==v,{libraryType=v;dirty=true;collections=emptyList();listedFor=null},enabled=!busy&&(attachmentBackend!="webdav"||v=="users"),label={Text(l)})}}
  OutlinedTextField(libraryID,{libraryID=it.filter(Char::isDigit);dirty=true;collections=emptyList();listedFor=null},Modifier.fillMaxWidth(),enabled=!busy,label={Text("文库数字 ID（在 Zotero API key 页面可查看）")},singleLine=true)
  val selectedName=collections.firstOrNull{collectionKey(it)==collection}?.let{collectionPath(it,collections)}
  OutlinedTextField(if(collection.isEmpty())"不指定分类" else selectedName?:"已保存的分类（读取后显示名称）",{},Modifier.fillMaxWidth(),readOnly=true,label={Text("存档分类")})
@@ -40,17 +50,19 @@ import kotlinx.coroutines.launch
    val rows=result.rows("collections");require(rows.all{com.nanless.paperdigest.zotero.ZoteroService.validKey(collectionKey(it))}){"Zotero 分类身份异常，未采用不完整列表"};collections=rows;listedFor="$type:$id";showCollections=true
   }catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{listing=false}}
  },enabled=!dirty&&!busy&&libraryID.isNotEmpty()){Text(if(listing)"正在读取真实分类…" else "读取并选择分类…")}
- Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
-  Button({val submitted=obj("libraryType" to libraryType,"libraryID" to libraryID,"collection" to collection);saving=true;scope.launch{try{controller.execute("zotero.save",submitted);if(libraryType==submitted.optString("libraryType")&&libraryID==submitted.optString("libraryID")&&collection==submitted.optString("collection"))dirty=false;error=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy){Text("保存目标文库")}
-  TextButton({libraryType=z.optString("libraryType","users");libraryID=z.optString("libraryID");collection=z.optString("collection");dirty=false;error=null},enabled=dirty&&!busy){Text("撤销未保存更改")}
+ FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+  Button({val submitted=obj("libraryType" to libraryType,"libraryID" to libraryID,"collection" to collection,"attachmentBackend" to attachmentBackend,"davBaseURL" to davBaseURL,"davUsername" to davUsername);saving=true;scope.launch{try{controller.execute("zotero.save",submitted);if(libraryType==submitted.optString("libraryType")&&libraryID==submitted.optString("libraryID")&&collection==submitted.optString("collection")&&attachmentBackend==submitted.optString("attachmentBackend")&&davBaseURL==submitted.optString("davBaseURL")&&davUsername==submitted.optString("davUsername"))dirty=false;error=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy){Text("保存目标文库")}
+  TextButton({libraryType=z.optString("libraryType","users");libraryID=z.optString("libraryID");collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername");dirty=false;error=null},enabled=dirty&&!busy){Text("撤销未保存更改")}
  }
  error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
  OutlinedButton(password,enabled=!dirty&&!busy){Text("为已保存目标设置专用 API key…")}
+ if(attachmentBackend=="webdav")OutlinedButton(davPassword,enabled=!dirty&&!busy){Text("为已保存附件目标设置独立应用密码…")}
  Button({action("zotero.check",JSONObject())},enabled=!dirty&&!busy){Text("核验身份、目标与权限")}
  Text("许可状态：${when(z.optString("credentialState")){"confirmed"->"已核验";"missing"->"尚未保存";else->"需要主动核验"}}")
  z.optJSONObject("permissions")?.let{Text("最近核验：${it.optString("verifiedAt")}",style=MaterialTheme.typography.labelSmall)}
  Text("独立存档记录",style=MaterialTheme.typography.titleLarge)
  z.rows("journals").forEach{j->OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+  Text("附件后端：${if(j.optString("attachmentBackend","storage")=="webdav")"WebDAV" else "Zotero Storage"}")
   Text(j.optString("paperID"));Text("${jobStatus(j.optString("status"))} · ${j.optString("createdAt")}")
   Text("原目标：${if(j.optString("libraryType")=="groups")"群组" else "个人文库"} ${j.optString("libraryID")} · ${if(j.optString("collection").isEmpty())"不指定分类" else "所选原分类"}",style=MaterialTheme.typography.labelSmall)
   j.ids("notices").forEach{Text(it,color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)}

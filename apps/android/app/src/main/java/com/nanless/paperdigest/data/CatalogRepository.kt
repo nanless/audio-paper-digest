@@ -111,6 +111,43 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         personal.personalPapers().forEach { p -> if (p.localPDFPath != null && p.pdfSHA256 != null) runCatching { StoragePaths.resolve(p.localPDFPath, personal.directory, p.pdfSHA256); offlineIds += p.id } }
     }
 
+    /** Current epoch, not a coincidentally equal old manifest SHA, activates aggregate metadata. */
+    fun aggregateCatalog():PublishedAggregateCatalog? {
+        val current=snapshot
+        val result=PublishedAggregateStore(directory).load(current.summary.optString("snapshotID"),current.epoch)
+        require(snapshot.epoch==current.epoch){"读取期间目录验证代变化，请重新读取汇总"}
+        return result
+    }
+    suspend fun aggregateDocument(id:String):JSONObject=withContext(Dispatchers.IO) {
+        require(!personal.settings().optBoolean("offlineMode")){"当前为离线模式，请明确读取已保存的汇总修订"}
+        val before=snapshot
+        val descriptor=PublishedAggregateStore(directory).load(before.summary.optString("snapshotID"),before.epoch)?.records?.firstOrNull{it.id==id}?:error("汇总目录尚未同步或条目不存在")
+        val raw=read(descriptor.sourceURL,16*1024*1024)
+        coroutineContext.ensureActive()
+        val latest=snapshot;require(latest.epoch==before.epoch&&latest.summary.optString("snapshotID")==before.summary.optString("snapshotID")){"读取期间目录验证代变化，未拼接新目录与旧网页"}
+        // Native read uses a same-site request, no followed redirects and HTTP200; UI never supplies a URL.
+        val result=PublishedAggregateStore(directory).cacheDocument(raw,descriptor,descriptor.sourceURL,now())
+        coroutineContext.ensureActive();require(snapshot.epoch==before.epoch){"保存期间目录验证代变化，旧原件保留但未采纳到新目录"}
+        result
+    }
+    fun aggregateCachedDocument(id:String,rawHTMLSHA256:String):JSONObject {
+        val before=snapshot
+        val descriptor=aggregateCatalog()?.records?.firstOrNull{it.id==id}?:error("当前汇总目录尚未核验")
+        val result=PublishedAggregateStore(directory).cachedDocument(descriptor,rawHTMLSHA256)
+        require(snapshot.epoch==before.epoch){"读取期间目录验证代变化，请明确读取原修订"}
+        return result
+    }
+
+    /** A display stamp has no Paper capability and comes from one immutable native catalog snapshot. */
+    fun aggregateStamp():AggregateCatalogStamp {val current=snapshot;return AggregateCatalogStamp(current.summary.optString("snapshotID"),current.epoch)}
+    fun aggregateCachedRevisions(id:String):List<AggregateCachedRevision> {
+        val before=snapshot
+        val descriptor=PublishedAggregateStore(directory).load(before.summary.optString("snapshotID"),before.epoch)?.records?.firstOrNull{it.id==id}?:error("当前汇总目录尚未核验")
+        val result=PublishedAggregateStore(directory).cachedRevisions(descriptor)
+        require(snapshot.epoch==before.epoch){"读取修订清单期间目录验证代变化，未拼接旧清单"}
+        return result
+    }
+
     suspend fun sync(progress: (Int, Int, String) -> Unit = { _, _, _ -> }): JSONObject = syncMutex.withLock { withContext(Dispatchers.IO) {
         require(!personal.settings().optBoolean("offlineMode")) { "当前为离线模式，请先在设置中允许联网" }
         val index = read(SITE + "index.json", MAX_TOTAL)
@@ -186,6 +223,8 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         val originalManifest = File(directory, "index-manifests/$snapshotID.json")
         if (originalManifest.exists()) require(JsonFiles.read(originalManifest, MAX_TOTAL.toLong()).contentEquals(index)) { "原目录清单身份对应的原始字节变化" }
         else JsonFiles.write(originalManifest, index)
+        if(!legacyIndex)PublishedAggregateStore(directory).stage(index,epoch){operationContext.ensureActive()}
+        operationContext.ensureActive()
         JsonFiles.writeStream(current, MAX_TOTAL.toLong()) { output ->
             val writer = OutputStreamWriter(output, Charsets.UTF_8)
             writer.write("{\"format\":\"mac-published-library-v1\",\"validationEpoch\":" + JSONObject.quote(epoch) + ",\"summary\":" + summary.toString() + ",\"papers\":[")
@@ -414,7 +453,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 map[value] = "data:${imageMime(bytes)};base64," + java.util.Base64.getEncoder().encodeToString(bytes)
             }
         }
-        return article.copy(inlineImages = map)
+        return PublishedSourceWarning.present(article.copy(inlineImages = map))
     }
     private suspend fun read(url: String, limit: Int): ByteArray {
         fetchOverride?.let { return it(url, limit).also { b -> require(b.size <= limit) } }
@@ -531,7 +570,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             sanitize(body, paper.blogURL)
             require(body.select("img").size <= 32) { "单篇科学图超过32张" }
             val html = body.html()
-            return Article(paper.id, html, articlePlainText(body), paper.sourceURL ?: paper.blogURL, paper.blogURL, sha256(html.toByteArray()), now(), paper.sourceVersion, false, emptyList(), false, citation, catalogEpoch = epoch, pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml-v1")
+            return PublishedSourceWarning.present(Article(paper.id, html, articlePlainText(body), paper.sourceURL ?: paper.blogURL, paper.blogURL, sha256(html.toByteArray()), now(), paper.sourceVersion, false, emptyList(), false, citation, catalogEpoch = epoch, pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml-v1"))
         }
         fun articlePlainText(body: Element): String {
             val copy = body.clone()

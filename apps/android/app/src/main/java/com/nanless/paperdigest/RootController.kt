@@ -104,7 +104,8 @@ class RootController private constructor(private val context: Context, private v
             exportAttempts.clear()
             retainedAccess.retireAll(); retainedConfirmationClear()
             pdf.clearSessionPasswords()
-            dispatch.rotate()
+            leaveAggregateView()
+            dispatch.rotate();zotero.workspaceRestored();preparedReadings.clear()
             val restoreContext = currentCoroutineContext()
             RestorePolicy.install(staged, research, initialize = { personal.reload(); personal.retireRestoredDispatch(); library.reload() }, check = { restoreContext.ensureActive() })
             offlineReading = null
@@ -114,6 +115,41 @@ class RootController private constructor(private val context: Context, private v
         }
     }
     val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) })
+    private val aggregateViewRevision=AtomicLong(0)
+    override fun captureAggregateView()=AggregateViewLease(aggregateViewRevision.get(),generation.get())
+    override fun enterAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.enter()}
+    override fun leaveAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.leave()}
+    override fun retireAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.retire()}
+    override suspend fun executeAggregateInView(command:String,payload:JSONObject,lease:AggregateViewLease):JSONObject {
+        if(captureAggregateView()!=lease)return JSONObject().put("status","not-adopted")
+        val viewGuard={aggregateViewRevision.get()==lease.navigationEpoch}
+        val claimGuard={generation.get()==lease.readingEpoch}
+        if(command in setOf("aggregate.close","aggregate.back"))return aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard)
+        return withContext(Dispatchers.IO){val result=aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard);refresh();result}
+    }
+    private val aggregateBrowser by lazy {
+        AggregateBrowser(object:AggregateBrowsePort {
+            override fun stamp()=library.aggregateStamp()
+            override suspend fun catalog()=maintenance.withLock{library.aggregateCatalog()}
+            override suspend fun revisions(id:String)=maintenance.withLock{library.aggregateCachedRevisions(id)}
+            override suspend fun read(id:String)=maintenance.withLock{library.aggregateDocument(id)}
+            override suspend fun cached(id:String,sha:String)=maintenance.withLock{library.aggregateCachedDocument(id,sha)}
+            override fun offlineMode()=personal.settings().optBoolean("offlineMode")
+            override fun readingEpoch()=generation.get()
+            override fun mayPresent(readingEpoch:Long):Boolean {val view=_state.value;return generation.get()==readingEpoch&&view.selectedPaperId==null&&view.viewedPaper==null&&view.pdfDocument==null}
+        },claimReading={live->
+            pdfAdmission.withLock {
+                if(!live())false else {
+                    stopPdfAcquisition()
+                    if(!live())false else {
+                        generation.incrementAndGet();offlineReading=null
+                        _state.update{it.copy(selectedPaperId=null,viewedPaper=null,article=null,pdfDocument=null,pdfMode=false,pdfSelection=null,pdfReceipt=JSONObject(),readingMaterialID="",loading=false,error=null)}
+                        true
+                    }
+                }
+            }
+        },publish={value->_state.update{it.copy(aggregate=value)}},commitReading={live,commit->pdfAdmission.withLock{live()&&commit()}})
+    }
     private val cloudSelections = CloudRestoreSelections(cloud) { CloudSelectionContext(cloud.targetID, dispatch.epoch) }
     private fun cloudView(): JSONObject = cloud.state().put("selectionContext", cloudSelections.contextToken())
     private val zotero = ZoteroService(research, secrets, ZoteroMaterialProvider { options ->
@@ -153,6 +189,7 @@ class RootController private constructor(private val context: Context, private v
     }
 
     private fun refresh() {
+        aggregateBrowser.observeNativeState()
         val p = personal.snapshot()
         val papers = library.papers()
         val zoteroView = zoteroPresentation(p)
@@ -171,7 +208,7 @@ class RootController private constructor(private val context: Context, private v
             val viewed = offlineReading?.takeIf { old -> old.paper.id == it.selectedPaperId }?.paper ?: it.viewedPaper?.takeIf { old -> old.id == it.selectedPaperId } ?: current
             val reading = it.copy(papers = papers, viewedPaper = viewed, article = article, pdfReceipt = receipt)
             reading.copy(readingMaterialID = readingID(reading), personal = p, settings = p.getJSONObject("settings").copy(), jobs = mergedJobs(p.getJSONArray("jobs").objects()),
-            sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(), zotero = zoteroView, catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
+            sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(), zotero = zotero.projectCredentialState(zoteroView), catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
     }
     private fun paper(id: String): Paper = library.papers().firstOrNull { it.id == id } ?: throw AppFailure("missing", "论文不在已保存资料库中")
     private fun selected(): Paper = offlineReading?.takeIf { it.paper.id == _state.value.selectedPaperId }?.paper ?: _state.value.viewedPaper?.takeIf { it.id == _state.value.selectedPaperId } ?: paper(_state.value.selectedPaperId ?: throw AppFailure("missing", "请先选择论文"))
@@ -272,6 +309,7 @@ class RootController private constructor(private val context: Context, private v
     override suspend fun execute(command: String, payload: JSONObject): JSONObject {
         // A pending credential mutation must not wait behind maintenance and then silently acquire a new lease.
         if (command in setOf("model.fresh.prepare", "model.fresh.check.prepare", "model.fresh.commit")) modelCredentialRevision.ready()
+        if(command.startsWith("aggregate."))return executeAggregateInView(command,payload,captureAggregateView())
         // A cancelled search must not reset reader drafts or turn into a global task error.
         if (command == "library.search") return withContext(Dispatchers.IO) { maintenance.withLock { library.searchCached(payload.getString("query")) } }
         val current = _state.value
@@ -283,7 +321,7 @@ class RootController private constructor(private val context: Context, private v
         try {
             _state.update { it.copy(error = null, notice = null) }
             val result = when (command) {
-                "app.bootstrap" -> { refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = z) }; JSONObject().put("ready", true) }
+                "app.bootstrap" -> { refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; JSONObject().put("ready", true) }
                 "library.sync" -> runTask(command) { maintenance.withLock { library.sync { _, _, message -> _state.update { it.copy(notice = message) } } } }
                 "paper.open" -> openPaper(payload.getString("paperID"), payload.optBoolean("refresh"))
                 "pdf.open" -> ownedPdfAcquisition(command, access, dispatchAtStart) {
@@ -446,7 +484,7 @@ class RootController private constructor(private val context: Context, private v
                                 require(original != null && original.token == access.materialID) { "此预览属于另一阅读来源，请重新核验材料；原断点仍可在设置中明确续传" }
                                 require(original.roles == ReadingSourceBinding.selectedRoleIdentity(personal.snapshot(), original.paperID, original.options)) { "所选笔记、标注或研究已经变化，请重新准备材料；原断点保留。" }
                             }
-                            val actual = if (command in listOf("zotero.archive", "zotero.resume")) runTask(command, access.owner.orEmpty()) { zotero.execute(command, bound) } else zotero.execute(command, bound)
+                            val actual = if (command != "zotero.state") runTask(command, access.owner.orEmpty(), gate = { require(active.isEmpty()) { "请等当前资料任务结束再操作 Zotero" } }) { zotero.execute(command, bound) } else zotero.execute(command, bound)
                             if (command == "zotero.prepare") authorization = handle?.let { readingRequests[it]?.authorization }
                             actual
                         } finally { handle?.let(readingRequests::remove) }
@@ -458,7 +496,7 @@ class RootController private constructor(private val context: Context, private v
                             result.put("readingMaterialID", access.materialID).put("materialsCurrent", original.roles == ReadingSourceBinding.selectedRoleIdentity(personal.snapshot(), original.paperID, original.options))
                         }
                         val z = zoteroPresentation()
-                        _state.update { it.copy(zotero = z) }; result
+                        _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; result
                     }
                     else -> throw AppFailure("unsupported", "这个操作尚不受支持：$command")
                 }
@@ -480,8 +518,12 @@ class RootController private constructor(private val context: Context, private v
 
     private suspend fun openPaper(id: String, refresh: Boolean = false): JSONObject {
         val p = paper(id)
+        leaveAggregateView()
+        val admissionView=aggregateViewRevision.get()
         val captured = pdfAdmission.withLock {
+            if(aggregateViewRevision.get()!=admissionView)return JSONObject().put("status","not-adopted")
             stopPdfAcquisition()
+            if(aggregateViewRevision.get()!=admissionView)return JSONObject().put("status","not-adopted")
             // Serialize a real source switch against a new native acquisition admission.
             val changed = generation.incrementAndGet()
             offlineReading = null
@@ -490,8 +532,8 @@ class RootController private constructor(private val context: Context, private v
         }
         if (p.blogURL.isNotEmpty()) try {
             val a = maintenance.withLock { library.article(p, refresh) }
-            if (captured == generation.get()) _state.update { it.copy(article = a, loading = false) }
-        } catch (e: Exception) { if (captured == generation.get()) _state.update { it.copy(loading = false) }; throw e }
+            if (captured == generation.get()) _state.update { it.copy(article = a, loading = false) }else return JSONObject().put("status","not-adopted")
+        } catch (e: Exception) { if (captured != generation.get())return JSONObject().put("status","not-adopted");_state.update { it.copy(loading = false) }; throw e }
         return p.json()
     }
     private suspend fun currentPDF(p: Paper): Pair<File, String> {
@@ -709,22 +751,33 @@ class RootController private constructor(private val context: Context, private v
     }
     override suspend fun updateSecret(kind: SecretKind, value: String?) {
         val mutation = if (kind == SecretKind.MODEL) modelCredentialRevision.begin().also { freshStudies.invalidate() } else null
+        val zoteroMutation = if (kind in setOf(SecretKind.ZOTERO, SecretKind.ZOTERO_DAV)) zotero.beginCredentialMutation() else null
         try {
+            if (zoteroMutation != null) _state.update { current -> current.copy(zotero = current.zotero.copy().put("credentialState", "unknown").put("permissions", JSONObject.NULL)) }
+            if (zoteroMutation != null) zotero.cancelAndDrain() // Never hold maintenance while waiting for real transport cleanup.
             withContext(Dispatchers.IO) {
-        if (kind == SecretKind.CLOUD) cloud.setPassword(value) else {
-            val scope = if (kind == SecretKind.MODEL) "model.primary" else "zotero.primary"
-            if (kind == SecretKind.MODEL) {
+        when(kind) {
+            SecretKind.CLOUD -> cloud.setPassword(value)
+            SecretKind.MODEL -> maintenance.withLock {
+                val endpoint = if (value != null) StudyService.validatedConfig(personal.settings()).getString("endpoint") else ""
+                modelKeyBinding.clear()
+                if (value == null) secrets.remove("model.primary") else { secrets.save("model.primary", value); modelKeyBinding.bind(endpoint) }
+            }
+            SecretKind.ZOTERO, SecretKind.ZOTERO_DAV -> zotero.withCredentialMutation(zoteroMutation!!) {
                 maintenance.withLock {
-                    val endpoint = if (value != null) StudyService.validatedConfig(personal.settings()).getString("endpoint") else ""
-                    modelKeyBinding.clear()
-                    if (value == null) secrets.remove(scope) else { secrets.save(scope, value); modelKeyBinding.bind(endpoint) }
+                    zotero.requireCredentialMutation(zoteroMutation)
+                    val scope = if(kind == SecretKind.ZOTERO_DAV) zotero.webdavSecretScope() else "zotero.primary"
+                    if (value == null) secrets.remove(scope) else secrets.save(scope, value)
+                    zotero.credentialsChanged()
+                    val z = zotero.state();_state.update { it.copy(zotero = zotero.projectCredentialState(z)) }
                 }
-            } else if (value == null) secrets.remove(scope) else secrets.save(scope, value)
-            if (kind == SecretKind.ZOTERO) { zotero.credentialsChanged(); val z = zotero.state(); _state.update { it.copy(zotero = z) } }
+            }
         }
+
         refresh()
             }
         } finally {
+            if (zoteroMutation != null) zotero.endCredentialMutation(zoteroMutation)
             if (mutation != null) modelCredentialRevision.end(mutation)
         }
     }

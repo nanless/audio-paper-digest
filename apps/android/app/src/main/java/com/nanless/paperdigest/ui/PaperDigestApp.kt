@@ -64,24 +64,41 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     val pendingActions=remember{mutableStateMapOf<String,Boolean>()}
     var restoreCommand by rememberSaveable { mutableStateOf("app.restore.commit") }
     val snackbar = remember { SnackbarHostState() }
+    var routeRevision by remember { mutableLongStateOf(0) }
+    val renderedRouteRevision=routeRevision
+    val renderedAggregateLease=controller.captureAggregateView()
+    fun navigateCurrent(next:String) {
+        if(next==route)return
+        if(route=="aggregates")controller.leaveAggregateView()
+        if(next=="aggregates")controller.enterAggregateView()
+        routeRevision++;route=next
+    }
+    DisposableEffect(controller){onDispose{controller.retireAggregateView()}}
     val action: Action = action@{ command,payload ->
+        val viewSensitive=command.startsWith("aggregate.")||command.startsWith("ui.")||command in setOf("paper.open","storage.openPackage")
+        if(viewSensitive&&(renderedRouteRevision!=routeRevision||(route=="aggregates"&&renderedAggregateLease!=controller.captureAggregateView())))return@action
+        when(command) {
+            "ui.reader" -> {navigateCurrent("reader");return@action}
+            "ui.aggregates" -> {navigateCurrent("aggregates");return@action}
+            "ui.library" -> {navigateCurrent("library");return@action}
+            "ui.tasks" -> {navigateCurrent("tasks");return@action}
+            "ui.session.open" -> {val id=payload.getString("id");if(state.sessions.none{it.optString("id")==id})return@action;selectedSessionID=id;navigateCurrent("session");return@action}
+            "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in listOf("阅读","模型","资料","坚果云","Zotero")};settingsRequestID++;navigateCurrent("settings");return@action}
+        }
         if(command.endsWith("restore.prepare")&&preparedRestoreJSON!=null){localError="请先确认或取消已校验的恢复材料";return@action}
         val guarded=command.startsWith("export.retained.") || command in setOf("pdf.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","export.delivery.prepare","export.pending.list","export.reconcile","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check")
         if(guarded&&pendingActions[command]==true)return@action
         if(guarded)pendingActions[command]=true
         scope.launch {
         try {
+            if(viewSensitive&&(renderedRouteRevision!=routeRevision||(route=="aggregates"&&renderedAggregateLease!=controller.captureAggregateView())))return@launch
             when(command) {
-                "ui.reader" -> route="reader"
-                "ui.tasks" -> route="tasks"
-                "ui.session.open" -> {val id=payload.getString("id");require(state.sessions.any{it.optString("id")==id}){"原研究记录不存在"};selectedSessionID=id;route="session"}
-                "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in listOf("阅读","模型","资料","坚果云","Zotero")};settingsRequestID++;route="settings"}
                 else -> {
-                    val result=controller.execute(command,payload)
-                    if(command=="paper.open" || command=="pdf.import" || command=="storage.openPackage") route="reader"
+                    val result=if(command.startsWith("aggregate."))controller.executeAggregateInView(command,payload,renderedAggregateLease)else controller.execute(command,payload)
+                    if(command in setOf("paper.open","pdf.import","storage.openPackage")&&renderedRouteRevision==routeRevision&&result.optString("status")!="not-adopted")navigateCurrent("reader")
                     if(command=="export.prepare" || command=="retained.export.prepare") {
                         require(result.optString("preparation")=="ready" && result.optBoolean("ready")) {"原件尚未就绪，请到任务查看真实进度"}
-                        if(snackbar.showSnackbar("原件已准备，尚未保存到所选位置。",actionLabel="查看待保存") == SnackbarResult.ActionPerformed) route="tasks"
+                        if(snackbar.showSnackbar("原件已准备，尚未保存到所选位置。",actionLabel="查看待保存") == SnackbarResult.ActionPerformed) navigateCurrent("tasks")
                     }
                     if(command=="export.delivery.cancel" || command=="export.retained.delivery.cancel") {
                         exportDeliveryJSON?.let{old->val claim=JSONObject(old);if(claim.optString("operationID")==payload.optString("operationID")&&claim.optString("attemptID")==payload.optString("attemptID"))exportDeliveryJSON=null}
@@ -104,7 +121,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             val originalBatch=controller.importPdfs(uris.toList())
             scope.launch {try {
                 val result=originalBatch.await()
-                if(result.optInt("completed")>0)route="reader"
+                if(result.optInt("completed")>0)navigateCurrent("reader")
                 if(result.optString("status")!="completed")localError=result.optString("message","所选 PDF 未全部接纳，请查看原批次记录")
             }catch(cancelled:CancellationException){throw cancelled}
              catch(error:Exception){localError=error.message?:"本批次未完成，请查看任务记录；原件保留"}}
@@ -122,12 +139,16 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     MaterialTheme(colorScheme=scheme) {
         val tabs=listOf("library" to "文献","reader" to "阅读","tasks" to "任务","settings" to "设置")
         val icons=listOf(Icons.Outlined.LibraryBooks,Icons.Outlined.MenuBook,Icons.Outlined.Checklist,Icons.Outlined.Settings)
-        BackHandler(route!="library"){route=if(route=="session")"tasks" else "library"}
+        val navigate:(String)->Unit={next->if(renderedRouteRevision==routeRevision)navigateCurrent(next)}
+        BackHandler(route!="library"){
+            if(route=="aggregates"&&state.aggregate.selected!=null)action("aggregate.back",JSONObject())
+            else navigate(if(route=="session")"tasks"else"library")
+        }
         BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             val wide=maxWidth>=840.dp
             Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                if(wide) NavigationRail { Spacer(Modifier.height(24.dp)); Text("论文\n速递",fontWeight=FontWeight.Bold,modifier=Modifier.padding(16.dp)); tabs.forEachIndexed {i,t->NavigationRailItem((route==t.first||(route=="session"&&t.first=="reader")),{route=t.first},{Icon(icons[i],t.second)},label={Text(t.second)})} }
-                Scaffold(Modifier.weight(1f),snackbarHost={SnackbarHost(snackbar)},bottomBar={if(!wide)NavigationBar { tabs.forEachIndexed{i,t->NavigationBarItem((route==t.first||(route=="session"&&t.first=="reader")),{route=t.first},{Icon(icons[i],t.second)},label={Text(t.second)})} }}) { padding ->
+                if(wide) NavigationRail { Spacer(Modifier.height(24.dp)); Text("论文\n速递",fontWeight=FontWeight.Bold,modifier=Modifier.padding(16.dp)); tabs.forEachIndexed {i,t->NavigationRailItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }
+                Scaffold(Modifier.weight(1f),snackbarHost={SnackbarHost(snackbar)},bottomBar={if(!wide)NavigationBar { tabs.forEachIndexed{i,t->NavigationBarItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }}) { padding ->
                     Column(Modifier.fillMaxSize().padding(padding)) {
                         if(state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         state.storageWarning?.let{warning->
@@ -142,6 +163,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                         (localError ?: state.error)?.let { message -> Surface(color=MaterialTheme.colorScheme.errorContainer,modifier=Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp)){Text(message,Modifier.weight(1f));TextButton({localError=null;action("app.bootstrap",JSONObject())}){Text("重新载入")}} }}
                         savedScreens.SaveableStateProvider(if(route=="reader")"reader-${state.selectedPaperId}" else route){when(route){
                             "library" -> LibraryPane(state,controller,action,{importPDF.launch(arrayOf("application/pdf"))})
+                            "aggregates" -> AggregatePane(state,action)
                             "reader" -> ReaderPane(state,controller,action)
                             "tasks" -> TasksPane(state,action)
                             "session" -> SessionPane(state,selectedSessionID,controller,action)
@@ -274,6 +296,7 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
    item(key="library-heading"){
     FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
      Text("文献资料库",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.SemiBold)
+     OutlinedButton({action("ui.aggregates",JSONObject())}){Text("网站汇总")}
      IconButton(importPDF){Icon(Icons.Outlined.FileOpen,"导入 PDF")}
      IconButton({action("library.sync",JSONObject())},enabled=!state.loading){Icon(Icons.Outlined.Sync,"同步已发布内容")}
     }

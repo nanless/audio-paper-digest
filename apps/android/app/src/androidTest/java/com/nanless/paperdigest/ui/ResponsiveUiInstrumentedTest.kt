@@ -9,7 +9,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.lifecycle.Lifecycle
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
@@ -26,7 +29,7 @@ import org.junit.Test
 
 /** Explicit synthetic UI fixture only; actual 8005 corpus/science/source gates remain separate Main tests. */
 class ResponsiveUiInstrumentedTest {
- @get:Rule val compose=createComposeRule()
+ @get:Rule val compose=createAndroidComposeRule<ComponentActivity>()
  private class Controller:AppController {
   val target=Paper("fixture:responsive-target","Synthetic viewport target","短屏目标论文",sourceKind="fixture",task="测试任务",method="测试方法")
   override val state=MutableStateFlow(UiState(papers=listOf(target),personal=JSONObject().put("notes",JSONObject()).put("annotations",JSONObject()).put("readingState",JSONObject()),settings=JSONObject().put("font",18)))
@@ -43,7 +46,21 @@ class ResponsiveUiInstrumentedTest {
   override suspend fun updateSecret(kind:SecretKind,value:String?)=error("No credentials permitted")
   override suspend fun updatePdfSelection(selection:PdfSelection)=error("No native document fixture")
  }
- private fun content(width:Int=320,height:Int=480,scale:Float=2f,body:@Composable ()->Unit){compose.setContent{
+ private fun content(width:Int=320,height:Int=480,scale:Float=2f,body:@Composable ()->Unit){
+  // First launch after a host rotation may be relaunched. Do not attach an unsaved fixture to the old instance.
+  val expected=when(InstrumentationRegistry.getArguments().getString("expectedOrientation")){"landscape"->android.content.res.Configuration.ORIENTATION_LANDSCAPE;"portrait"->android.content.res.Configuration.ORIENTATION_PORTRAIT;else->InstrumentationRegistry.getInstrumentation().targetContext.resources.configuration.orientation}
+  var lastIdentity=0;var stableSince=0L
+  compose.waitUntil(15000){
+   var ready=false
+   compose.activityRule.scenario.onActivity{activity->
+    val decor=activity.window.decorView;val landscape=expected==android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val correctBounds=activity.resources.configuration.orientation==expected&&decor.width>0&&decor.height>0&&((decor.width>decor.height)==landscape)
+    val identity=System.identityHashCode(activity);val now=android.os.SystemClock.elapsedRealtime()
+    if(!correctBounds||activity.lifecycle.currentState!=Lifecycle.State.RESUMED||identity!=lastIdentity){lastIdentity=identity;stableSince=now}
+    ready=correctBounds&&activity.lifecycle.currentState==Lifecycle.State.RESUMED&&now-stableSince>=750
+   };ready
+  }
+  compose.setContent{
   val density=LocalDensity.current
   CompositionLocalProvider(LocalDensity provides Density(density.density,scale)){
    MaterialTheme{Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)){Box(Modifier.width(width.dp).height(height.dp)){body()}}}

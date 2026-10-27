@@ -52,7 +52,7 @@ import java.time.ZoneOffset
  Text("完整离线研究包",style=MaterialTheme.typography.titleMedium);Text("打开封存时的真实版本；旧快照不表示已核对当前网站。");TextButton({scope.launch{try{packages=controller.execute("storage.list").rows("packages")}catch(e:Exception){message=e.message}}}){Text("读取已保存的离线包")};packages.forEach{p->OutlinedButton({action("storage.openPackage",obj("id" to p.optString("id")))}){Text(p.optString("title",p.optString("paperID")))}}
  TextButton({scope.launch{try{retained=controller.execute("retained.list").rows("transfers")}catch(e:Exception){message=e.message}}}){Text("查看保留快照")};message?.let{Text(it)};retained.forEach{r->OutlinedButton({action("retained.export.prepare",obj("transferID" to r.optString("id")))}){Text("导出 ${r.optString("createdAt",r.optString("id"))}")}}}
  "坚果云"->CloudSettings(state,controller,action,{secret=SecretKind.CLOUD})
- "Zotero"->ZoteroSettings(state,controller,action,{secret=SecretKind.ZOTERO})
+ "Zotero"->ZoteroSettings(state,controller,action,{secret=SecretKind.ZOTERO},{secret=SecretKind.ZOTERO_DAV})
  "关于"->AboutContent({showLicenses=true})
  }}
  }
@@ -64,7 +64,7 @@ import java.time.ZoneOffset
 @Composable private fun SecretDialog(kind:SecretKind,controller:AppController,close:()->Unit){
  var text by remember{mutableStateOf("")};var busy by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)};val scope=rememberCoroutineScope()
  fun save(value:String?){busy=true;scope.launch{try{controller.updateSecret(kind,value);text="";close()}catch(e:Exception){error=e.message}finally{busy=false}}}
- AlertDialog(onDismissRequest={if(!busy){text="";close()}},title={Text(when(kind){SecretKind.MODEL->"模型 API 密钥";SecretKind.CLOUD->"坚果云第三方应用密码";SecretKind.ZOTERO->"Zotero 专用 API key"})},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("仅在本机加密保存，不进入设置、任务记录或研究备份。");CredentialPasswordField(text,{text=it});error?.let{Text(it,color=MaterialTheme.colorScheme.error)};TextButton({save(null)},enabled=!busy){Text("删除本机保存的密钥")}}},confirmButton={TextButton({save(text)},enabled=text.isNotBlank()&&!busy){Text("安全保存")}},dismissButton={TextButton(close,enabled=!busy){Text("取消")}})
+ AlertDialog(onDismissRequest={if(!busy){text="";close()}},title={Text(when(kind){SecretKind.MODEL->"模型 API 密钥";SecretKind.CLOUD->"坚果云第三方应用密码";SecretKind.ZOTERO->"Zotero 专用 API key";SecretKind.ZOTERO_DAV->"Zotero WebDAV 独立应用密码"})},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("仅在本机加密保存，不进入设置、任务记录或研究备份。");CredentialPasswordField(text,{text=it});error?.let{Text(it,color=MaterialTheme.colorScheme.error)};TextButton({save(null)},enabled=!busy){Text("删除本机保存的密钥")}}},confirmButton={TextButton({save(text)},enabled=text.isNotBlank()&&!busy){Text("安全保存")}},dismissButton={TextButton(close,enabled=!busy){Text("取消")}})
 }
 
 

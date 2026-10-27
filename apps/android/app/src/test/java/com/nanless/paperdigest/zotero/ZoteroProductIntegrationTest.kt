@@ -1,0 +1,116 @@
+package com.nanless.paperdigest.zotero
+
+import com.nanless.paperdigest.cloud.BackupCodec
+import com.nanless.paperdigest.data.*
+import com.nanless.paperdigest.secret.SecretStore
+import com.nanless.paperdigest.ui.SecretKind
+import com.nanless.paperdigest.zotero.webdav.*
+import kotlinx.coroutines.*
+import okhttp3.Request
+import okio.Buffer
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.file.Files
+import java.util.UUID
+
+class ZoteroProductIntegrationTest {
+    private class Keys:SecretStore {
+        var onSave:(String)->Unit={}
+        val reads=mutableListOf<String>();val writes=mutableListOf<String>();val values=mutableMapOf("zotero.primary" to "SYNTHETIC-API-KEY")
+        override fun load(scope:String):String? {reads+=scope;require(scope!="cloud.primary");return values[scope]}
+        override fun save(scope:String,secret:String){writes+=scope;onSave(scope);values[scope]=secret}
+        override fun remove(scope:String){writes+=scope;values.remove(scope)}
+    }
+    private class Server:ZoteroTransport,DavWireTransport {
+        val calls=mutableListOf<Request>();val blobs=mutableMapOf<String,ByteArray>();val items=mutableMapOf<String,JSONObject>()
+        var davApiBackoff=false;var normalAttachmentBackoffOnce=false;var davApiCalls=0
+        var apiFilesPermission=false;var writes=0;var puts=0;var patches=0;var lostZip=false
+        var beforeDav:suspend()->Unit={};var drainGate:CompletableDeferred<Unit>?=null;var drainEntered=CompletableDeferred<Unit>()
+        private fun bytes(code:Int,j:JSONObject?=null)=HttpBytes(code,emptyMap(),j?.toString()?.toByteArray()?:byteArrayOf())
+        override suspend fun request(request:Request,limit:Int):HttpBytes {
+            calls+=request;assertNull(request.header("Authorization"));assertEquals("SYNTHETIC-API-KEY",request.header("Zotero-API-Key"))
+            val p=request.url.encodedPath
+            if(p=="/keys/current")return bytes(200,JSONObject().put("userID",123).put("access",JSONObject().put("user",JSONObject().put("library",true).put("write",true).put("notes",true).put("files",apiFilesPermission))))
+            if(request.method=="POST"&&p.endsWith("/items")){
+                writes++;val b=Buffer();request.body!!.writeTo(b);val a=JSONArray(b.readUtf8());for(i in 0 until a.length()){val item=a.getJSONObject(i);assertFalse(items.containsKey(item.getString("key")));items[item.getString("key")]=item.copy().put("version",1)}
+                return bytes(200,JSONObject().put("failed",JSONObject()))
+            }
+            assertFalse("DAV mode must never enter Storage /file",p.endsWith("/file"))
+            val key=request.url.pathSegments.last();val item=items[key]?:return bytes(404)
+            if(request.method=="PATCH"){
+                patches++;assertEquals(item.getLong("version").toString(),request.header("If-Unmodified-Since-Version"));val b=Buffer();request.body!!.writeTo(b);val fields=JSONObject(b.readUtf8());assertEquals(setOf("md5","mtime"),fields.keys().asSequence().toSet());item.put("md5",fields.getString("md5")).put("mtime",fields.getLong("mtime")).put("version",item.getLong("version")+1);return bytes(204)
+            }
+            val backoff=normalAttachmentBackoffOnce&&item.optString("itemType")=="attachment"
+            if(backoff)normalAttachmentBackoffOnce=false
+            return bytes(200,JSONObject().put("key",key).put("version",item.getLong("version")).put("library",JSONObject().put("type","user").put("id",123)).put("data",item.copy())).let{if(backoff)it.copy(headers=mapOf("Backoff" to "60"))else it}
+        }
+        override suspend fun download(request:Request,target:File,limit:Long):HttpFile=error("Storage download must not be used")
+        override suspend fun exchange(request:Request,limit:Long,reply:DavReplyFile?,check:()->Unit):DavWireReply {
+            check()
+            if(request.url.host=="api.zotero.org"){
+                davApiCalls++;val r=request(request,limit.toInt());val headers=if(davApiBackoff&&request.url.encodedPath=="/keys/current")r.headers+mapOf("Backoff" to "60")else r.headers;return DavWireReply(r.code,headers,r.bytes,r.bytes.size.toLong(),davHash(r.bytes))
+            }
+            calls+=request;assertNull(request.header("Zotero-API-Key"));assertTrue(request.header("Authorization")!!.startsWith("Basic "));assertEquals("dav.example.org",request.url.host)
+            try{beforeDav()}finally{drainGate?.let{gate->withContext(NonCancellable){drainEntered.complete(Unit);gate.await()}}}
+            check();val path=request.url.encodedPath
+            if(request.method=="PUT"){
+                puts++;assertEquals("*",request.header("If-None-Match"));if(blobs.containsKey(path))return DavWireReply(412,emptyMap());val b=Buffer();request.body!!.writeTo(b);blobs[path]=b.readByteArray();if(lostZip&&path.endsWith(".zip")){lostZip=false;throw java.io.IOException("synthetic lost response after write")};return DavWireReply(201,emptyMap())
+            }
+            val raw=blobs[path]?:return DavWireReply(404,emptyMap())
+            if(reply!=null)reply.open().use{c->val b=ByteBuffer.wrap(raw);while(b.hasRemaining())c.write(b);c.force(true)}
+            return DavWireReply(200,emptyMap(),if(reply==null)raw.copyOf()else byteArrayOf(),raw.size.toLong(),davHash(raw))
+        }
+    }
+    private class Fixture {
+        val parent=Files.createTempDirectory("zotero-product-synthetic-").toFile().canonicalFile
+        val root=File(parent,"Research").apply{mkdir()};val keys=Keys();val server=Server()
+        val file=File(parent,"synthetic.json").apply{writeText("{\"synthetic\":true}");setLastModified(1_800_000_000_000)}
+        var notes=true;var seals=0;var failSealAt:Int?=null
+        fun service(root:File=this.root,keys:Keys=this.keys)=ZoteroService(root,keys,ZoteroMaterialProvider{
+            ZoteroMaterials("synthetic-paper","a".repeat(64),JSONObject().put("itemType","preprint").put("title","Synthetic paper"),buildList{
+                add(ZoteroMaterial("source-metadata","Synthetic metadata","application/json",file=file,sha256=davHash(file.readBytes())))
+                if(notes){val html="<p>Synthetic private note</p>";add(ZoteroMaterial("note","Synthetic note","text/html",noteHTML=html,sha256=davHash(html.toByteArray())))}
+            })
+        },server,davFactory={path,store->seals++;if(seals==failSealAt)throw IllegalStateException("synthetic seal interruption");ZoteroDavBackend(path,store,server)})
+        val service=service()
+        suspend fun configure(backend:String="webdav",base:String="https://dav.example.org/dav/",username:String="synthetic-user",type:String="users"){
+            service.execute("save",JSONObject().put("libraryType",type).put("libraryID","123").put("attachmentBackend",backend).put("davBaseURL",base).put("davUsername",username));if(backend=="webdav")keys.values[service.webdavSecretScope()]="SYNTHETIC-DAV-APP-PASSWORD"
+        }
+        suspend fun prepare()=service.execute("prepare").getString("preparedID")
+        fun journal(id:String)=JSONObject(File(root,"ZoteroArchives/$id/journal.json").readText())
+        fun saveJournal(id:String,j:JSONObject)=File(root,"ZoteroArchives/$id/journal.json").writeText(j.toString())
+        fun close(){parent.deleteRecursively()}
+    }
+    private suspend fun refusal(block:suspend()->Unit):Exception {try{block()}catch(e:Exception){return e};throw AssertionError("Expected refusal")}
+    private fun personal()=JSONObject().put("schema",1).put("notes",JSONObject()).put("settings",JSONObject()).put("favorites",JSONArray()).put("reading",JSONArray()).put("readingState",JSONObject()).put("annotations",JSONObject()).put("sessions",JSONArray()).put("jobs",JSONArray())
+
+    @Test fun freshNativeMaterialsSealWithoutCredentialsOrHttpThenArchiveDavFilesAndApiNotes()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();assertTrue(f.keys.reads.isEmpty());assertTrue(f.server.calls.isEmpty());val j=f.journal(id);assertEquals("webdav",j.getString("attachmentBackend"));assertTrue(j.getJSONArray("roles").getJSONObject(0).has("davJournalID"));assertFalse(j.getJSONArray("roles").getJSONObject(1).has("davJournalID"));assertEquals("completed",f.service.execute("archive",JSONObject().put("preparedID",id)).getString("status"));assertEquals(2,f.server.puts);assertEquals(1,f.server.patches);assertEquals(1,f.server.items.values.count{it.optString("itemType")=="note"});assertTrue(f.keys.reads.contains(f.service.webdavSecretScope()));assertTrue(f.keys.reads.all{it=="zotero.primary"||it==f.service.webdavSecretScope()});assertFalse(f.journal(id).getJSONArray("roles").getJSONObject(0).getJSONObject("davVerification").getBoolean("officialClientsOpened"))}finally{f.close()}}
+    @Test fun savedCheckpointColdResumeRetainsKeysAndOriginalFailedAttempt()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();val j=f.journal(id);f.server.lostZip=true;refusal{f.service.execute("archive",JSONObject().put("preparedID",id))};val keys=j.getJSONArray("roles").objects().map{it.getString("key")}.toSet()+j.getString("parentKey");val cold=f.service();assertEquals("completed",cold.execute("resume",JSONObject().put("journalID",id)).getString("status"));assertEquals(keys,f.server.items.keys);assertEquals(2,f.server.puts);val davID=j.getJSONArray("roles").getJSONObject(0).getString("davJournalID");val dj=JSONObject(File(f.root,"ZoteroDavArchives/$davID/journal.json").readText());assertEquals(2,dj.getJSONArray("attempts").length());assertEquals("failed",dj.getJSONArray("attempts").getJSONObject(0).getString("status"));assertNotEquals(dj.getJSONArray("attempts").getJSONObject(0).getString("apiRevision"),dj.getJSONArray("attempts").getJSONObject(1).getString("apiRevision"))}finally{f.close()}}
+    @Test fun backendSwitchRejectsOldJournalBeforeAnyCredentialOrNetwork()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();val original=f.journal(id).toString();f.configure("storage");refusal{f.service.execute("resume",JSONObject().put("journalID",id))};assertTrue(f.keys.reads.isEmpty());assertTrue(f.server.calls.isEmpty());assertEquals(original,f.journal(id).toString());f.configure();assertEquals("completed",f.service.execute("resume",JSONObject().put("journalID",id)).getString("status"))}finally{f.close()}}
+    @Test fun davAccountAndRootChangesGetDifferentScopesCannotRepurposeOldCheckpoint()=runBlocking{for(change in listOf("root","account")){val f=Fixture();try{f.configure();val id=f.prepare();val originalScope=f.service.webdavSecretScope();f.configure(base=if(change=="root")"https://dav.example.org/other/" else "https://dav.example.org/dav/",username=if(change=="account")"another-user"else "synthetic-user");assertNotEquals(originalScope,f.service.webdavSecretScope());refusal{f.service.execute("resume",JSONObject().put("journalID",id))};assertTrue(f.keys.reads.isEmpty());assertTrue(f.server.calls.isEmpty());f.configure();assertEquals(originalScope,f.service.webdavSecretScope())}finally{f.close()}}}
+    @Test fun groupWebdavRejectedAndOriginalSavedConnectionPreserved()=runBlocking{val f=Fixture();try{f.configure();val before=File(f.root,"ZoteroConnection/connection.json").readBytes();refusal{f.configure(type="groups")};assertArrayEquals(before,File(f.root,"ZoteroConnection/connection.json").readBytes());assertTrue(f.server.calls.isEmpty())}finally{f.close()}}
+    @Test fun sealedOriginalCorruptionStopsBeforeApiParentCreation()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();val dav=f.journal(id).getJSONArray("roles").getJSONObject(0).getString("davJournalID");File(f.root,"ZoteroDavArchives/$dav/original.bin").appendText("tampered");refusal{f.service.execute("archive",JSONObject().put("preparedID",id))};assertTrue(f.keys.reads.isEmpty());assertTrue(f.server.calls.isEmpty())}finally{f.close()}}
+    @Test fun primarySourceCorruptionStopsBeforeAnyCredentialOrNetwork()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();File(f.root,"ZoteroArchives/$id/material-0").appendText("tampered");refusal{f.service.execute("resume",JSONObject().put("journalID",id))};assertTrue(f.keys.reads.isEmpty());assertTrue(f.server.calls.isEmpty())}finally{f.close()}}
+    @Test fun differentSealedRoleKeyCannotBeInjectedIntoPrimaryJournal()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();val first=f.journal(id);val id2=UUID.randomUUID().toString();val role=first.getJSONArray("roles").getJSONObject(0);val attachment=ZoteroDavAttachment.native("ABCD2345","BCDE3456","source-metadata","synthetic-paper","a".repeat(64),"Synthetic metadata","application/json",f.file,davHash(f.file.readBytes()));val c=JSONObject(File(f.root,"ZoteroConnection/connection.json").readText());val target=ZoteroDavTarget.native("users","123",c.getString("davBaseURL"),c.getString("davUsername"),c.getString("davDestinationID"),c.getString("davAccountID"));val lease=ZoteroDavLease.native(target,UUID.randomUUID().toString(),UUID.randomUUID().toString(),0){true};val extra=ZoteroDavBackend(File(f.root,"ZoteroDavArchives"),f.keys,f.server).prepare(attachment,lease);role.put("davJournalID",extra.id);f.saveJournal(id,first);refusal{f.service.execute("resume",JSONObject().put("journalID",id))};assertTrue(f.keys.reads.isEmpty());assertTrue(f.server.calls.isEmpty())}finally{f.close()}}
+    @Test fun interruptedLocalSealCanResumeSamePreparedCheckpointWithoutHttp()=runBlocking{val f=Fixture();try{f.configure();f.failSealAt=1;refusal{f.prepare()};val prior=File(f.root,"ZoteroArchives").listFiles()!!.single().name;assertTrue(File(f.root,"ZoteroArchives/$prior/material-0").isFile);f.failSealAt=null;assertEquals(prior,f.prepare());assertTrue(f.journal(prior).getJSONArray("roles").getJSONObject(0).has("davJournalID"));assertTrue(f.keys.reads.isEmpty());assertTrue(f.server.calls.isEmpty())}finally{f.close()}}
+    @Test fun repeatedPrepareReusesSealedCheckpointAndKeys()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();val first=f.journal(id);val count=f.seals;assertEquals(id,f.prepare());assertEquals(count,f.seals);assertEquals(first.toString(),f.journal(id).toString())}finally{f.close()}}
+    @Test fun targetMutationWaitsForActualTransportDrainAndNeverRetriesAutomatically()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();val entered=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>();f.server.beforeDav={entered.complete(Unit);awaitCancellation()};f.server.drainGate=release;val archive=async{runCatching{f.service.execute("archive",JSONObject().put("preparedID",id))}};entered.await();val save=async{f.configure("storage")};f.server.drainEntered.await();assertFalse(save.isCompleted);assertEquals("webdav",f.service.state().getString("attachmentBackend"));assertEquals("unknown",f.service.state().getString("credentialState"));release.complete(Unit);save.await();archive.await();assertEquals("storage",f.service.state().getString("attachmentBackend"));assertEquals(0,f.server.puts);assertEquals("cancelled",f.journal(id).getString("status"));val calls=f.server.calls.size;yield();assertEquals(calls,f.server.calls.size)}finally{f.server.drainGate?.complete(Unit);f.close()}}
+    @Test fun rootDavPasswordMutationWritesOnlyDedicatedScopeAndRetiresConfirmation()=runBlocking{val f=Fixture();try{f.configure();f.service.execute("check");val root=RootUpdateSecretBody(f.service,f.keys);val scope=f.service.webdavSecretScope();root.updateSecret(SecretKind.ZOTERO_DAV,"SYNTHETIC-NEW-DAV-PASSWORD");assertEquals(listOf(scope),f.keys.writes);assertEquals("SYNTHETIC-API-KEY",f.keys.values["zotero.primary"]);assertEquals("unknown",f.service.state().getString("credentialState"));assertTrue(f.keys.reads.none{it.startsWith("cloud")})}finally{f.close()}}
+    @Test fun completeBackupContainsConfigurationOriginalsAndCheckpointsButNeverCredentials()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();File(f.root,"personal.json").writeText(personal().toString());val snapshot=File(f.parent,"snapshot.paperdigest");BackupCodec.capture(f.root,snapshot);val restored=BackupCodec.stage(snapshot.inputStream(),f.parent);assertTrue(File(restored.directory,"ZoteroConnection/connection.json").isFile);assertTrue(File(restored.directory,"ZoteroArchives/$id/material-0").isFile);val dav=f.journal(id).getJSONArray("roles").getJSONObject(0).getString("davJournalID");for(name in listOf("original.bin","attachment.zip","attachment.prop","journal.json"))assertArrayEquals(File(f.root,"ZoteroDavArchives/$dav/$name").readBytes(),File(restored.directory,"ZoteroDavArchives/$dav/$name").readBytes());restored.directory.walkTopDown().filter{it.isFile}.forEach{file->for(secret in f.keys.values.values)assertFalse(file.readBytes().toString(Charsets.ISO_8859_1).contains(secret))};val freshKeys=Keys().apply{values.clear()};val cold=f.service(restored.directory,freshKeys);refusal{cold.execute("resume",JSONObject().put("journalID",id))};assertEquals(0,f.server.puts);freshKeys.values["zotero.primary"]="SYNTHETIC-API-KEY";freshKeys.values[cold.webdavSecretScope()]="SYNTHETIC-DAV-APP-PASSWORD";assertEquals("completed",cold.execute("resume",JSONObject().put("journalID",id)).getString("status"))}finally{f.close()}}
+    @Test fun legacyProfileMigratesOnlyConfigurationOnceAndRestoredConfigRemainsAuthoritative()=runBlocking{val f=Fixture();try{val legacy=File(f.parent,"PaperDigestZotero/connection.json").apply{parentFile.mkdir();writeText(JSONObject().put("destinationID",UUID.randomUUID().toString()).put("libraryType","users").put("libraryID","123").put("collection","").toString())};assertEquals("123",f.service.state().getString("libraryID"));legacy.writeText("{\"libraryID\":\"999\"}");assertEquals("123",f.service.state().getString("libraryID"));assertEquals("storage",f.service.state().getString("attachmentBackend"));assertTrue(f.keys.reads.isEmpty())}finally{f.close()}}
+    @Test fun configSymlinkCannotBecomeRestoredAuthority()=runBlocking{val f=Fixture();try{val actual=File(f.parent,"external.json").apply{writeText("{}")};val directory=File(f.root,"ZoteroConnection").apply{mkdir()};Files.createSymbolicLink(File(directory,"connection.json").toPath(),actual.toPath());refusal{f.service.execute("save",JSONObject().put("libraryID","123"))};assertEquals("{}",actual.readText());assertTrue(f.keys.reads.isEmpty())}finally{f.close()}}
+    @Test fun webdavCheckReportsActualApiFilePermissionWithoutInventingStorageRights()=runBlocking{val f=Fixture();try{f.configure();val actual=f.service.execute("check");assertEquals("confirmed",actual.getString("credentialState"));assertFalse(actual.getJSONObject("permissions").getBoolean("files"));assertTrue(actual.getJSONObject("permissions").getBoolean("notes"));assertFalse(f.service.projectCredentialState(actual).getJSONObject("permissions").getBoolean("files"));f.server.apiFilesPermission=true;assertTrue(f.service.execute("check").getJSONObject("permissions").getBoolean("files"))}finally{f.close()}}
+    @Test fun exactRootCredentialWriteAndConfigMutationShareNativeMutex()=runBlocking{val f=Fixture();val entered=java.util.concurrent.CountDownLatch(1);val release=java.util.concurrent.CountDownLatch(1);try{f.configure();val originalScope=f.service.webdavSecretScope();f.keys.onSave={assertEquals(originalScope,it);entered.countDown();check(release.await(5,java.util.concurrent.TimeUnit.SECONDS))};val root=RootUpdateSecretBody(f.service,f.keys);val key=async(Dispatchers.Default){root.updateSecret(SecretKind.ZOTERO_DAV,"SYNTHETIC-NEW-PASSWORD")};assertTrue(withContext(Dispatchers.IO){entered.await(5,java.util.concurrent.TimeUnit.SECONDS)});val config=async(Dispatchers.Default){f.service.execute("save",JSONObject().put("libraryType","users").put("libraryID","123").put("attachmentBackend","webdav").put("davBaseURL","https://dav.example.org/other/").put("davUsername","synthetic-other"))};delay(40);assertFalse(config.isCompleted);assertEquals(originalScope,f.service.webdavSecretScope());release.countDown();key.await();config.await();val nextScope=f.service.webdavSecretScope();assertNotEquals(originalScope,nextScope);assertEquals("SYNTHETIC-NEW-PASSWORD",f.keys.values[originalScope]);assertNull(f.keys.values[nextScope]);assertEquals("unknown",f.service.state().getString("credentialState"))}finally{release.countDown();f.close()}}
+
+    @Test fun exactRootPendingPasswordCannotWriteAfterWorkspaceRestoreEvenSameTarget()=runBlocking{val f=Fixture();try{f.configure();val root=RootUpdateSecretBody(f.service,f.keys);root.maintenance.lock();val work=async{runCatching{root.updateSecret(SecretKind.ZOTERO_DAV,"SYNTHETIC-STALE-PASSWORD")}};yield();f.service.workspaceRestored();root.maintenance.unlock();assertTrue(work.await().exceptionOrNull() is ZoteroCredentialSuperseded);assertTrue(f.keys.writes.isEmpty());assertEquals("unknown",f.service.state().getString("credentialState"))}finally{f.close()}}
+
+    @Test fun legacyMigrationWhitelistsNonSecretFieldsAndNeverCopiesUnknownCredentialFields()=runBlocking{val f=Fixture();try{val legacy=File(f.parent,"PaperDigestZotero/connection.json").apply{parentFile.mkdir();writeText(JSONObject().put("destinationID",UUID.randomUUID().toString()).put("libraryType","users").put("libraryID","123").put("collection","").put("password","SYNTHETIC-LEGACY-PASSWORD").put("zoteroKey","SYNTHETIC-LEGACY-KEY").put("unknownSecret",JSONObject().put("nested","SYNTHETIC-NESTED-SECRET")).toString())};val original=legacy.readBytes();f.service.state();val config=JSONObject(File(f.root,"ZoteroConnection/connection.json").readText());assertEquals(setOf("destinationID","libraryType","libraryID","collection","attachmentBackend"),config.keys().asSequence().toSet());assertArrayEquals(original,legacy.readBytes());File(f.root,"personal.json").writeText(personal().toString());val snapshot=File(f.parent,"snapshot.paperdigest");BackupCodec.capture(f.root,snapshot);val stage=BackupCodec.stage(snapshot.inputStream(),f.parent);stage.directory.walkTopDown().filter{it.isFile}.forEach{assertFalse(it.readBytes().toString(Charsets.ISO_8859_1).contains("SYNTHETIC-LEGACY"));assertFalse(it.readBytes().toString(Charsets.ISO_8859_1).contains("SYNTHETIC-NESTED"))};assertTrue(f.keys.reads.isEmpty())}finally{f.close()}}
+
+    @Test fun persistedDavApiBackoffStopsOrdinaryServiceApiBeforeCredentialsOrRequest()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();f.server.davApiBackoff=true;refusal{f.service.execute("archive",JSONObject().put("preparedID",id))};val calls=f.server.calls.size;val reads=f.keys.reads.size;val cold=f.service();refusal{cold.execute("resume",JSONObject().put("journalID",id))};assertEquals("DAV API pacing must also guard ordinary Service API",calls,f.server.calls.size);assertEquals(reads,f.keys.reads.size);assertEquals(0,f.server.puts)}finally{f.close()}}
+    @Test fun normalServiceMetadataBackoffStopsBeforeEnteringDavBackend()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();f.server.normalAttachmentBackoffOnce=true;refusal{f.service.execute("archive",JSONObject().put("preparedID",id))};assertEquals("ordinary API cooldown must guard the backend transition",0,f.server.davApiCalls);assertEquals(0,f.server.puts)}finally{f.close()}}
+
+}

@@ -29,7 +29,10 @@ data class HttpBytes(val code: Int, val headers: Map<String, String>, val bytes:
 data class HttpFile(val code: Int, val headers: Map<String, String>, val bytes: Long, val sha256: String?)
 
 /** Redirects are evaluated by the caller; credentials never follow them automatically. */
-class SafeHttp(private val proxy: String? = null, private val localModel: Boolean = false, timeoutMs: Long = 180000) {
+class SafeHttp private constructor(private val proxy: String?, private val localModel: Boolean, timeoutMs: Long, private val downloadCalls:Call.Factory?) {
+    constructor(proxy:String?=null,localModel:Boolean=false,timeoutMs:Long=180000):this(proxy,localModel,timeoutMs,null)
+    /** JVM tests can own only a download callback; ordinary/model requests retain the real original client. */
+    internal constructor(downloadCalls:Call.Factory):this(null,false,180000,downloadCalls)
     private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .connectTimeout(30, TimeUnit.SECONDS).callTimeout(timeoutMs.coerceIn(1000, 600000), TimeUnit.MILLISECONDS)
         .readTimeout(timeoutMs.coerceIn(1000, 600000), TimeUnit.MILLISECONDS)
@@ -145,18 +148,23 @@ class SafeHttp(private val proxy: String? = null, private val localModel: Boolea
         }
     }
 
-    suspend fun download(request: Request, target: File, limit: Long): HttpFile = suspendCancellableCoroutine { continuation ->
+    suspend fun download(request: Request, target: File, limit: Long): HttpFile {
         val url = request.url
         require(url.scheme == "https" || (localModel && url.scheme == "http" && url.host in setOf("localhost", "127.0.0.1", "::1")))
         require(url.username.isEmpty() && url.password.isEmpty() && limit > 0)
         target.parentFile!!.mkdirs()
         val temporary = File(target.parentFile, ".download-${UUID.randomUUID()}")
-        val call = client.newCall(request)
+        val drained = CompletableDeferred<Unit>()
+        try { return suspendCancellableCoroutine { continuation ->
+        try {
+        val call = (downloadCalls ?: client).newCall(request)
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object: Callback {
             override fun onFailure(call: Call, e: IOException) {
-                temporary.delete()
-                if (continuation.isActive) continuation.resumeWithException(AppFailure("transport", "下载未完成，已保留原文件"))
+                try {
+                    temporary.delete()
+                    if (continuation.isActive) continuation.resumeWithException(AppFailure("transport", "下载未完成，已保留原文件"))
+                } finally { drained.complete(Unit) }
             }
             override fun onResponse(call: Call, response: Response) {
                 try {
@@ -185,9 +193,14 @@ class SafeHttp(private val proxy: String? = null, private val localModel: Boolea
                         }
                     }
                 } catch (e: Exception) { if (continuation.isActive) continuation.resumeWithException(if (e is IllegalArgumentException || e is AppFailure) e else AppFailure("transport", "下载未完成，原文件已保留")) }
-                finally { temporary.delete() }
+                finally { try { temporary.delete() } finally { drained.complete(Unit) } }
             }
         })
+        } catch (e:Exception) {
+            try { temporary.delete();if(continuation.isActive)continuation.resumeWithException(e) }
+            finally { drained.complete(Unit) }
+        }
+        }} finally { withContext(NonCancellable) { drained.await() } }
     }
 
     companion object {
