@@ -133,9 +133,27 @@ extension LibraryService {
         var page = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         page.fragment = nil; page.query = nil
         if let exact = page.url?.absoluteString {
-            if exact == document.source.responseURL, let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment, !fragment.isEmpty { return .anchor(fragment) }
-            if let record = try aggregateCatalog()?.records.first(where: { $0.sourceURL == exact }) { return .aggregate(record.id) }
-            if let paper = list(limit: 10000).first(where: { $0.identityStatus == "verified" && ($0.blogURL == exact || $0.appearances.contains(exact)) }) { return .paper(paper.id) }
+            func matchesKnownPage(_ known: String) -> Bool {
+                if exact == known { return true }
+                // Only one final slash may differ, on an already known same-site page.
+                // Query-bearing, encoded, traversal or repeated-slash paths gain no alias.
+                guard exact+"/"==known || exact==known+"/",
+                      URLComponents(url:url,resolvingAgainstBaseURL:false)?.query == nil,
+                      (try? sameSite(exact)) != nil,(try? sameSite(known)) != nil,
+                      let origin=URLComponents(string:document.source.responseURL),
+                      let candidate=URLComponents(string:exact),let expected=URLComponents(string:known),
+                      candidate.scheme=="https",candidate.host==origin.host,candidate.port==origin.port,
+                      candidate.host==expected.host,candidate.port==expected.port,
+                      expected.query==nil,expected.fragment==nil else{return false}
+                for path in [candidate.percentEncodedPath,expected.percentEncodedPath] {
+                    guard !path.contains("%"),!path.contains("\\"),!path.contains("//"),
+                          !path.split(separator:"/",omittingEmptySubsequences:false).contains(where:{$0=="." || $0==".."}) else{return false}
+                }
+                return true
+            }
+            if matchesKnownPage(document.source.responseURL), let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment, !fragment.isEmpty { return .anchor(fragment) }
+            if let record = try aggregateCatalog()?.records.first(where: { matchesKnownPage($0.sourceURL) }) { return .aggregate(record.id) }
+            if let paper = list(limit: 10000).first(where: { $0.identityStatus == "verified" && (matchesKnownPage($0.blogURL) || $0.appearances.contains(where:matchesKnownPage)) }) { return .paper(paper.id) }
         }
         return .external(url)
     }

@@ -33,6 +33,71 @@ actor AggregateFixtureTransport {
         files[prefix+"ci-daily/"] = Data(html.utf8)
         return (manifest,shard,sha,files)
     }
+    static func routingRegressions(_ root: URL) async throws {
+        let fm=FileManager.default,base="https://nanless.github.io/audio-paper-digest-blog/"
+        let fixtureRoot=CommandLine.arguments.count>1 ? URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true) : URL(fileURLWithPath:fm.currentDirectoryPath).appendingPathComponent("apps/macos/Tests/Fixtures")
+        let original=try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-original.html"))
+        let rowBytes=try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-rows.json"))
+        try expect(PublishedAggregateReader.sha(original)=="c51f3797c5e9036ddb5afef60fab0463c6a2ab48991980639f557d915fe9ab1a","real published daily24 original bytes retained")
+        try expect(PublishedAggregateReader.sha(rowBytes)=="378f31b189af4c9066adb5ec81fbf54b7fd355d89f075642e1bcce94e39de851","two real directory rows retained as exported fixture")
+        func install(_ rows:[[String:Any]],_ html:Data,_ page:String,_ suffix:String) async throws -> (LibraryService,AggregateReadAccess,AggregatePresentationDocument) {
+            let shard=try JSONSerialization.data(withJSONObject:rows,options:.sortedKeys),sha=PublishedAggregateReader.sha(shard),path="search-index/part-0001-"+sha.prefix(12)+".json"
+            let manifest=try JSONSerialization.data(withJSONObject:["contract":"paper-search-index-manifest-v1","recordCount":rows.count,"totalBytes":shard.count,"shards":[["url":path,"sha256":sha,"bytes":shard.count,"recordCount":rows.count]]],options:.sortedKeys)
+            let transport=AggregateFixtureTransport(["/audio-paper-digest-blog/index.json":manifest,"/audio-paper-digest-blog/"+path:shard,page:html])
+            let service=try LibraryService(dataDirectory:root.appendingPathComponent(suffix),transport:{url,limit in try await transport.read(url,limit)})
+            _=try await service.sync()
+            let access=try await service.aggregateReadAccess(id:"page:"+page),doc=try await service.aggregatePresentation(access)
+            return(service,access,doc)
+        }
+        let rows=try JSONSerialization.jsonObject(with:rowBytes) as! [[String:Any]]
+        let(real,access,document)=try await install(rows,original,"/audio-paper-digest-blog/posts/2026-10-24/","real")
+        for index in [1,3] {try expect(try await real.aggregateLink(access,document:document,index:index) == .paper("arxiv:2610.30682"),"real original daily24 link \(index) opens verified local paper with single final slash alias")}
+        try expect(document.source.rawHTMLSHA256==PublishedAggregateReader.sha(original)&&PublishedAggregateReader.sha(Data(document.source.bodyHTML.utf8))==document.source.sanitizedBodySHA256,"routing leaves original raw and body witness untouched")
+        let(_,shard,_,_)=try fixture();var controlledRows=try JSONSerialization.jsonObject(with:shard) as! [[String:Any]]
+        controlledRows.append(["pageType":"paper","permalink":"/audio-paper-digest-blog/papers/unverified/","title":"Unverified controlled paper","identityStatus":"unknown"])
+        let tests:[(String,AggregateLinkDestination)]=[
+            (base+"papers/ci-paper",.paper("arxiv:2510.00001")),
+            (base+"ci-conference",.aggregate("page:/audio-paper-digest-blog/ci-conference/")),
+            (base+"ci-daily#dest",.anchor("dest")),
+            (base+"papers/ci-paper/",.paper("arxiv:2510.00001")),
+            (base+"papers/ci-paper/?existing=1",.paper("arxiv:2510.00001")),
+        ]
+        let negatives=[
+            "https://example.invalid/audio-paper-digest-blog/papers/ci-paper",
+            "https://nanless.github.io.example.invalid/audio-paper-digest-blog/papers/ci-paper",
+            base+"papers/ci-paper-extra",base+"papers/ci-paper?new=1",base+"papers/ci-%70aper",
+            base+"papers/ci-paper//",base+"papers/unverified",base+"papers/unknown",
+            base+"ci-daily?new=1#dest",base+"ci-conference?new=1",
+            "https://nanless.github.io:443/audio-paper-digest-blog/papers/ci-paper",
+            "https://example.invalid/reference/?q=1#original",
+        ]
+        let all=tests+negatives.map{($0,.external(URL(string:$0)!))}
+        let cachedOffsite="https://example.invalid/archive/cold-paper",cachedOtherProject="https://nanless.github.io/another-project/cold-paper"
+        let coldCases:[(String,AggregateLinkDestination)]=[
+            (cachedOffsite+"/",.paper("arxiv:2510.00991")),(cachedOffsite,.external(URL(string:cachedOffsite)!)),
+            (cachedOtherProject+"/",.paper("arxiv:2510.00992")),(cachedOtherProject,.external(URL(string:cachedOtherProject)!)),
+        ]
+        let links=(all+coldCases).enumerated().map{"<a href='"+$0.element.0.replacingOccurrences(of:"&",with:"&amp;")+"'>route"+String($0.offset)+"</a>"}.joined()
+        let html=Data(("<html><body><div id='article-body' class='post-content'><h2 id='dest'>Controlled routing</h2>"+links+"</div></body></html>").utf8)
+        let(service,own,presented)=try await install(controlledRows,html,"/audio-paper-digest-blog/ci-daily/","boundaries")
+        for(index,test) in all.enumerated(){let actual=try await service.aggregateLink(own,document:presented,index:index);try expect(actual==test.1,"bounded route \(index) keeps same-site single-slash and original authority")}
+        // Cold snapshots were historically decoded directly: do not assume every saved paper
+        // was freshly minted by sameSite. Preserve old exact behavior, refuse only new aliases.
+        let current=root.appendingPathComponent("boundaries/PublishedLibrary/current.json")
+        var snapshot=try JSONSerialization.jsonObject(with:Data(contentsOf:current)) as! [String:Any]
+        var saved=snapshot["papers"] as! [[String:Any]]
+        let template=saved.first{$0["identityStatus"] as? String=="verified"}!
+        for (index,address) in [cachedOffsite,cachedOtherProject].enumerated() {
+            var paper=template;paper["id"]="arxiv:2510.0099"+String(index+1);paper["blogURL"]=address+"/";paper["appearances"]=[address+"/"];saved.append(paper)
+        }
+        snapshot["papers"]=saved
+        try JSONSerialization.data(withJSONObject:snapshot,options:.sortedKeys).write(to:current,options:.atomic)
+        let cold=try LibraryService(dataDirectory:root.appendingPathComponent("boundaries"),transport:{_,_ in throw URLError(.notConnectedToInternet)})
+        let coldAccess=try await cold.aggregateReadAccess(id:"page:/audio-paper-digest-blog/ci-daily/"),coldDocument=try await cold.aggregatePresentation(coldAccess)
+        for (index,test) in coldCases.enumerated(){try expect(try await cold.aggregateLink(coldAccess,document:coldDocument,index:all.count+index)==test.1,"cold snapshot route \(index) preserves exact but never extends offsite or other-project authority")}
+        try expect(coldDocument.source==presented.source,"cold routing keeps the same verified aggregate source")
+        try expect(try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-original.html"))==original&&Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-rows.json"))==rowBytes,"routing never rewrites source or catalog fixture")
+    }
     static func main() async throws {
         setbuf(stdout,nil)
         let fm = FileManager.default, root = try temp(); defer { try? fm.removeItem(at:root) }
@@ -85,6 +150,7 @@ actor AggregateFixtureTransport {
         try expect(await rejects { _ = try await service.aggregatePresentation(access) },"retired access cannot borrow replacement manifest")
         let replacement = try await service.aggregateReadAccess(id:id);await transport.setFailure(true)
         try expect(await rejects { _ = try await service.aggregatePresentation(replacement) },"new witness plus network failure never opens old-manifest HTML")
+        try await routingRegressions(root.appendingPathComponent("routing"))
         print("RESULT passed=\(checks) failed=0")
     }
 }

@@ -1,0 +1,7 @@
+{
+  "scope": "Public publisher bytes only, UI/route test; no user state. HTML copied byte-for-byte; two actual directory rows exported as JSON, field values unchanged. New compact test manifest is controlled, not the original full-directory identity.",
+  "originalResponsesSHA256": "887c0dbe97202349dd63a6ab70f5114752d96a30488fe16f9fbdb5e899c51675",
+  "originalManifestSHA256": "7efc68b35b3c86384a49dd5765f75cf2bcd44928b13582844c52a11c1c7195ae",
+  "originalHTMLSHA256": "c51f3797c5e9036ddb5afef60fab0463c6a2ab48991980639f557d915fe9ab1a",
+  "rowsSHA256": "378f31b189af4c9066adb5ec81fbf54b7fd355d89f075642e1bcce94e39de851"
+}

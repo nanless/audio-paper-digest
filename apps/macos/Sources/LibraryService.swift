@@ -1132,7 +1132,7 @@ actor LibraryService {
         }
     }
 
-    private func sameSite(_ value: String) throws -> URL {
+    func sameSite(_ value: String) throws -> URL {
         guard !value.isEmpty, let url = URL(string: value, relativeTo: siteBaseURL)?.absoluteURL,
               url.scheme == "https", url.host?.lowercased() == siteBaseURL.host?.lowercased(), url.port == siteBaseURL.port,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
