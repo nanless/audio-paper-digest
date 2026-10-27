@@ -8,6 +8,7 @@ extension PaperDigestApp {
     func suspendNativeAggregate(){aggregateNativeHost?.suspend()}
     func restoreNativeAggregateLayout(){emit("aggregates.layout")}
     @objc func focusAggregateBody(){_=aggregateNativeHost?.focusBody()}
+    @objc func focusAggregateToolbar(){_=aggregateNativeHost?.focusToolbar()}
     /// Returns true for an aggregate host even while unready, so no old paper is searched.
     func findNativeAggregate()->Bool {
         guard let host=aggregateNativeHost else{return aggregateSession != nil || aggregateTransitionPending}

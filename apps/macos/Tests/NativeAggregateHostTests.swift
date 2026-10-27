@@ -24,6 +24,10 @@ private actor FixtureTransport {
     override var isKeyWindow:Bool {testKey}
     override var isVisible: Bool { testVisible }
 }
+@MainActor private final class ToolbarUnrelatedInput: NSTextView {
+    var received=0
+    override func keyDown(with event:NSEvent){received+=1}
+}
 @MainActor private final class FindCompletionGate {
     var entered=false,released=false
     private var continuation:CheckedContinuation<Void,Never>?
@@ -380,6 +384,70 @@ private actor FixtureTransport {
             try check(refused && app.aggregateNativeHost === latest && latest !== h && h.view.superview==nil,"late Find borrowed replacement")
             try check(labels==latest.view.subviews.compactMap{$0 as? NSTextField}.map{$0.stringValue} && window.firstResponder === focus && app.aggregateSession!.document!.source==source && latest.view.subviews.contains{$0===body},"late Find changed new status/focus/body/source")
         }
+
+        func escapeEvent(in owner:NSWindow)->NSEvent {
+            NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:owner.windowNumber,context:nil,characters:"\u{1b}",charactersIgnoringModifiers:"\u{1b}",isARepeat:false,keyCode:53)!
+        }
+        func toolbarControls(_ h:NativeAggregateController)->[NSControl] {
+            h.view.subviews.compactMap{$0 as? NSControl}.filter{!($0 is NSTextField)}
+        }
+        func enterToolbarByMenu(_ h:NativeAggregateController) throws {
+            let previousMenu=NSApp.mainMenu;defer{NSApp.mainMenu=previousMenu};window.makeFirstResponder(app.web);app.buildMenu()
+            let items=(NSApp.mainMenu?.items.compactMap{$0.submenu}.flatMap{$0.items}) ?? []
+            guard let item=items.first(where:{$0.title=="页面操作"}) else{throw Failure(text:"native page actions menu absent")}
+            try check(app.validateMenuItem(item),"current toolbar menu unavailable")
+            _=NSApp.sendAction(item.action!,to:app,from:item)
+            try check(owns(window.firstResponder,toolbarControls(h).first!),"explicit page actions did not focus first actual control")
+        }
+        await run("main reverse group event enters toolbar and Escape returns only to navigation") {
+            let h=try await newFindHost();_=try await readyBody(h);window.makeFirstResponder(app.web)
+            NSApp.sendEvent(event([.control,.shift],in:window))
+            try check(owns(window.firstResponder,toolbarControls(h).first!),"main reverse group event cannot enter native toolbar")
+            NSApp.sendEvent(escapeEvent(in:window));try check(owns(window.firstResponder,app.web),"toolbar Escape did not return navigation")
+        }
+        await run("actual toolbar ordinary Tab and reverse cross controls and component boundaries") {
+            let h=try await newFindHost(),body=try await readyBody(h),controls=toolbarControls(h)
+            try enterToolbarByMenu(h)
+            for control in controls.dropFirst(){NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,control),"Tab skipped native enabled control")}
+            NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,body),"toolbar tail Tab did not enter own body")
+            window.makeFirstResponder(controls.first!);NSApp.sendEvent(event(.shift,in:window));try check(owns(window.firstResponder,app.web),"toolbar head reverse Tab trapped focus")
+        }
+        await run("expanded readonly source is in the actual keyboard chain after native source action") {
+            let h=try await newFindHost();_=try await readyBody(h);let controls=toolbarControls(h),source=controls[2]
+            let scroll=h.view.subviews.compactMap{$0 as? NSScrollView}.first!,text=scroll.documentView!
+            try enterToolbarByMenu(h);window.makeFirstResponder(source)
+            (source as! NSButton).performClick(nil);try check(!scroll.isHidden,"native source action did not expand")
+            NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,text),"expanded source text unreachable by Tab")
+            NSApp.sendEvent(event(.shift,in:window));try check(owns(window.firstResponder,source),"readonly source reverse Tab trapped focus")
+            NSApp.sendEvent(event([],in:window));NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,controls[3]),"source tail did not reach outline")
+            window.makeFirstResponder(text);NSApp.sendEvent(escapeEvent(in:window));try check(owns(window.firstResponder,app.web),"readonly source Escape did not return navigation")
+        }
+        await run("toolbar skips disabled controls without hijacking body ordinary Tab") {
+            let h=try await newFindHost(),body=try await readyBody(h),controls=toolbarControls(h)
+            try enterToolbarByMenu(h);controls[1].isEnabled=false;defer{controls[1].isEnabled=true}
+            NSApp.sendEvent(event(.option,in:window));try check(owns(window.firstResponder,controls[2]),"OptionTab did not skip disabled toolbar control")
+            _=h.focusBody();NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,body),"body ordinary Tab was diverted to toolbar")
+        }
+        await run("toolbar native menu rejects unrelated input nonkey sheet and stale owner") {
+            let h=try await newFindHost();_=try await readyBody(h)
+            let input=ToolbarUnrelatedInput(frame:NSRect(x:2,y:2,width:90,height:20));window.contentView!.addSubview(input);defer{input.removeFromSuperview()}
+            let previousMenu=NSApp.mainMenu;defer{NSApp.mainMenu=previousMenu};app.buildMenu()
+            let items=(NSApp.mainMenu?.items.compactMap{$0.submenu}.flatMap{$0.items}) ?? []
+            guard let item=items.first(where:{$0.title=="页面操作"}) else{throw Failure(text:"native page actions menu absent")}
+            @MainActor func refused(_ reason:String) throws {
+                let before=window.firstResponder
+                try check(!app.validateMenuItem(item),reason+" menu enabled")
+                _=NSApp.sendAction(item.action!,to:app,from:item)
+                try check(window.firstResponder===before,reason+" menu moved focus")
+            }
+            try check(window.makeFirstResponder(input),"fixture unrelated input did not accept first responder");try refused("unrelated native input")
+            window.makeFirstResponder(app.web);window.testKey=false;try refused("nonkey owner");window.testKey=true
+            let session=app.aggregateSession!
+            _=try await app.dispatchAggregates("aggregates.document",payload:["id":id,"sessionID":session.id]);try refused("replaced native document nonce")
+            let fresh=try await newFindHost();_=try await readyBody(fresh);window.makeFirstResponder(app.web)
+            app.storageDetailSession=StorageDetailSession(generation:app.contextGeneration,paperID:"",previousResponder:nil);try refused("source sheet");app.storageDetailSession=nil
+        }
+
         app.retireAggregateContext();app.web.removeFromSuperview();window.close()
         try check(keyReads==0,"credentials read")
         print("RESULT \(passed) passed / \(failed) failed")

@@ -108,8 +108,8 @@ struct AggregateReadingAppearance:Equatable {
         website.target = self; website.action = #selector(goWebsite)
         source.target = self; source.action = #selector(toggleSource)
         readBody.target = self; readBody.action = #selector(goBody); readBody.isEnabled = false
-        readBody.setAccessibilityHelp("按 Control-Tab 阅读正文；按 Control-Shift-Tab 返回页面导航。")
-        readBody.toolTip = "阅读正文（Control-Tab）；返回页面导航（Control-Shift-Tab）"
+        readBody.setAccessibilityHelp("按 Control-Tab 阅读正文；正文中按 Control-Shift-Tab 返回页面导航；导航中再按 Control-Shift-Tab 进入页面操作。操作栏按 Tab 切换，Escape 返回页面导航。")
+        readBody.toolTip = "阅读正文（Control-Tab）；返回导航或进入页面操作（Control-Shift-Tab）"
         back.nextKeyView = website; website.nextKeyView = source; source.nextKeyView = readBody; readBody.nextKeyView = web; web.nextKeyView = navigationSource
         title.isSelectable=true;title.maximumNumberOfLines=0;title.lineBreakMode = .byWordWrapping
         status.maximumNumberOfLines=0;status.lineBreakMode = .byWordWrapping
@@ -221,13 +221,46 @@ struct AggregateReadingAppearance:Equatable {
         guard let window else{return}
         keyboardMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown){[weak self,weak window] event in
             guard let self,let window,event.window===window,self.view.window===window,
-                  event.type == .keyDown,event.keyCode==48,event.modifierFlags.contains(.control),
-                  !event.modifierFlags.contains(.command),!event.modifierFlags.contains(.option),
-                  self.bodyFocusAvailable else{return event}
-            // A real current native event grants only this synchronous focus move.
-            let moved=event.modifierFlags.contains(.shift) ? self.focusNavigation():self.focusBody()
-            return moved ? nil:event
+                  event.type == .keyDown,self.bodyFocusAvailable else{return event}
+            let flags=event.modifierFlags
+            if event.keyCode==48,flags.contains(.control),!flags.contains(.command),!flags.contains(.option){
+                // Existing body/return commands keep their meaning; the previously idle
+                // reverse group event in main navigation enters the visible native toolbar.
+                let moved:Bool
+                if flags.contains(.shift){moved=self.navigationFocusAvailable ? self.focusNavigation():self.focusToolbar()}
+                else{moved=self.focusBody()}
+                return moved ? nil:event
+            }
+            guard self.toolbarOwnsResponder(window.firstResponder),!flags.contains(.command),!flags.contains(.control) else{return event}
+            if event.keyCode==48{return self.moveToolbarFocus(backward:flags.contains(.shift)) ? nil:event}
+            if event.keyCode==53,!flags.contains(.option){return self.focusNavigation() ? nil:event}
+            return event
         }
+    }
+    private func responder(_ responder:NSResponder?,isInside root:NSView)->Bool {
+        guard let value=responder as? NSView else{return false}
+        return value===root || value.isDescendant(of:root)
+    }
+    private var toolbarResponders:[NSView] {
+        let candidates:[NSView]=[back,website,source]+(sourceScroll.isHidden ? []:[sourceText])+[outline,readBody]
+        return candidates.filter{!$0.isHiddenOrHasHiddenAncestor && $0.window===view.window && (($0 as? NSControl)?.isEnabled ?? true)}
+    }
+    private func toolbarOwnsResponder(_ value:NSResponder?)->Bool {toolbarResponders.contains{responder(value,isInside:$0)}}
+    private func navigationOwnsResponder(_ value:NSResponder?)->Bool {guard let source=navigationSource else{return false};return responder(value,isInside:source)}
+    var toolbarFocusAvailable:Bool {bodyFocusAvailable && (ownsResponder(view.window?.firstResponder) || navigationOwnsResponder(view.window?.firstResponder))}
+    /// Explicit current menu/group action only; layout/ready never enters this chain.
+    @discardableResult func focusToolbar()->Bool {
+        guard toolbarFocusAvailable,let window=view.window,let first=toolbarResponders.first else{return false}
+        return window.makeFirstResponder(first)
+    }
+    private func moveToolbarFocus(backward:Bool)->Bool {
+        guard bodyFocusAvailable,let window=view.window else{return false}
+        let controls=toolbarResponders
+        guard let index=controls.firstIndex(where:{responder(window.firstResponder,isInside:$0)}) else{return false}
+        let next=index+(backward ? -1:1)
+        if next<0{return focusNavigation()}
+        if next>=controls.count{return focusBody()}
+        return window.makeFirstResponder(controls[next])
     }
     var bodyFocusAvailable: Bool {
         guard !retired, ready, eventNonce != nil,current(), !view.isHiddenOrHasHiddenAncestor,
