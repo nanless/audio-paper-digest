@@ -4,6 +4,8 @@
 /.build/
 /local.properties
 **/build/
+**/.cxx/
+**/.externalNativeBuild/
 *.jks
 *.keystore
 /signing.properties
