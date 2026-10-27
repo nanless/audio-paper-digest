@@ -4,6 +4,21 @@ const savedScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const { normalizeReaderSourceDisplayArtifacts: display } = require('./reader-source-display');
 const text = value => display(String(value ?? '')).normalize('NFKC').replace(/[*_`]/g,'').replace(/\s+/g,' ').trim();
 const compact = value => text(value).replace(/\s+/g,'');
+// Local identity matching only: a visible symbol plus the identical explicit
+// TeX annotation is one symbol. Never project bare repeated numbers/letters.
+function captionIdentity(value) {
+    return text(value).replace(/×\\times(?=\s|[0-9(])/g, '\\times')
+        .replace(/\bmean±\\pmstd\b/g, 'mean\\pmstd');
+}
+function rowIdentity(value) {
+    const raw = String(value ?? '')
+        .replace(/(?<![\p{L}\p{N}_])ℓ\\ell(?![\p{L}\p{N}_^\\({])/gu, 'ℓ')
+        .replace(/(?<![\p{L}\p{N}_])([A-Za-z])([A-Za-z]{1,24})\1\^\{\\mathrm\{\2\}\}(?![\p{L}\p{N}_^\\({])/gu,
+            (_whole, base, power) => base + power)
+        .replace(/(?<![\p{L}\p{N}_])([A-Za-z])=([0-9]{1,6})\1\{=\}\2(?![\p{L}\p{N}._^\\({])/gu,
+            (_whole, name, number) => `${name}=${number}`);
+    return compact(raw);
+}
 const decimal = value => {
     let [integer, fraction = ''] = value.replace(/^\+/, '').split('.');
     const negative = integer.startsWith('-'); integer = integer.replace(/^-/, '').replace(/^0+(?=\d)/, '');
@@ -191,7 +206,7 @@ function mergedCaptionPercentCoverage(rendered, quotes, tables) {
     return result;
 }
 function coverageFromTables(rendered, quotes, tables) {
-    const quoteStrings = (quotes || []).filter(item => typeof item === 'string').map(text);
+    const quoteStrings = (quotes || []).filter(item => typeof item === 'string').map(captionIdentity);
     const headers = rendered?.header || [], rows = rendered?.rows || [], result = [];
     if (headers.length < 2 || !rows.length || rows.some(row => !Array.isArray(row) || row.length !== headers.length)) return [];
     for (let column = 1; column < headers.length; column++) {
@@ -203,7 +218,7 @@ function coverageFromTables(rendered, quotes, tables) {
                 || table.cells.some(cell => !/^[a-f0-9]{64}$/.test(cell.sourceDomSha256 || ''))
                 || (table.cells.some(cell => cell.rowspan !== 1 || cell.colspan !== 1) && !fullWidthBodyBands(table))
                 || table.matrix.some(row => !Array.isArray(row) || row.length !== headers.length)) return false;
-            const caption = text(table.caption).split(/(?<=\.)\s/)[0];
+            const caption = captionIdentity(table.caption).split(/(?<=\.)\s/)[0];
             if (caption.length < 24 || !quoteStrings.some(quote => quote.includes(caption))) return false;
             return compact(table.matrix[0][0]) === compact(headers[0])
                 && compact(table.matrix[0][column]) === compact(headers[column]);
@@ -214,9 +229,9 @@ function coverageFromTables(rendered, quotes, tables) {
         const headerCell = source.cells.filter(cell => cell.row === 0 && cell.column === column);
         if (headerCell.length !== 1 || compact(headerCell[0].text) !== compact(source.matrix[0][column])) continue;
         for (let row = 0; row < rows.length; row++) {
-            const rowName = compact(rows[row][0]), renderedValues = numericCell(rows[row][column]);
+            const rowName = rowIdentity(rows[row][0]), renderedValues = numericCell(rows[row][column]);
             if (!rowName || !renderedValues) continue;
-            const matches = source.matrix.slice(1).map((values,index) => ({values,sourceRow:index+1})).filter(item => compact(item.values[0]) === rowName);
+            const matches = source.matrix.slice(1).map((values,index) => ({values,sourceRow:index+1})).filter(item => rowIdentity(item.values[0]) === rowName);
             if (matches.length !== 1) continue;
             const item = matches[0], sourceValues = numericCell(item.values[column]);
             if (!sourceValues || JSON.stringify(sourceValues) !== JSON.stringify(renderedValues)) continue;

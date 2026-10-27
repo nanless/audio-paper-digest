@@ -43,6 +43,8 @@ Node 与 Python 均在真实请求发送前保存 `request_started`，终态沿�
 
 MiMo 和 Kimi 请求默认设置 `agent:false`，直接连接。若 curl 直连正常而脚本返回 403，检查调用方是否绕过 `requestLlmJson()`，或自行传入代理连接对象。不要把 Muse 的强制代理规则用于其他模型。
 
+资源扫描收到 OpenAI Responses 明确的结构化拒答时，记录为单篇 `MODEL_REFUSAL`，不重复请求；仅开源链接扫描复用正常的封存原文 URL 提取后备，仍须核验资源归属、可达状态及整篇资格。其他分析阶段继续保留拒答失败。未知空输出、网络、认证、配额、截断或异常终态不能冒充拒答，也不能由此放行。
+
 ## 4. arXiv/HuggingFace 抓取失败
 
 先检查项目代理和相应来源的进度记录。arXiv Node 请求须使用 HTTP CONNECT；HuggingFace curl 可额外使用 `ALL_PROXY=socks5h://...`。遇到 429 应按配置退避，不要删除进度文件后用更高并发反复请求。

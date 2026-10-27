@@ -1,0 +1,272 @@
+{
+  "paperId": "2610.34694",
+  "draft": {
+    "version": 3,
+    "readerTitle": "把网上钢琴录音和乐谱配成对：Gangqinpu 数据集如何建成和验证",
+    "oneSentenceThesis": "Gangqinpu 用自动转谱、对齐、表情过滤和流派标注把多风格钢琴音频、演奏MIDI与乐谱配成18786对，用节拍跟踪跨数据集提升与转谱和渲染主要在域内获益证明其补充价值，但跨域泛化仍不均匀且标注全为自动生成。",
+    "conceptBridges": [
+      {
+        "terms": [
+          "演奏MIDI",
+          "乐谱MIDI"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_1]]",
+        "explanation": "演奏MIDI指从音频转录得到的带实际触键时间与力度的音符序列，乐谱MIDI指从MusicXML展开重复段后得到的代表谱面音高与节拍位置的序列；前者保留表情偏差，后者提供标准参照，两者对齐后才能把谱面拍点映射到演奏时间并派生节拍标注。"
+      },
+      {
+        "terms": [
+          "插入率",
+          "删除率"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_2]]",
+        "explanation": "插入率按演奏音符数归一化的多余音符比例，删除率按乐谱音符数归一化的缺失音符比例；两者都从精修前的原始对齐计算，大于10%即丢弃，避免后续插值掩盖录音与乐谱根本对不上的情况。"
+      },
+      {
+        "terms": [
+          "节拍",
+          "下拍"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_3]]",
+        "explanation": "节拍指乐谱网格中的每个拍点时刻，下拍指每小节第一拍兼带拍号调号变化的位置；论文先取谱面拍点附近正负0.05四分音符内的已观测音符中位时间作为拍点时间，无支撑再内插或外推，并给启发式置信度以屏蔽不可靠区段。"
+      },
+      {
+        "terms": [
+          "乐谱组",
+          "划分组"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_4]]",
+        "explanation": "乐谱组指经移调不变音程模式检索加单调对齐验证后判为相同或高度相似乐谱的集合，用于报告乐谱多样性，划分组则在此基础上再合并可能相关的改编与片段并跨Gangqinpu与ASAP连边，仅用于切分训练验证测试，保证同一组不分散到不同划分以减少泄漏。"
+      },
+      {
+        "terms": [
+          "演奏MIDI到乐谱转录",
+          "表情演奏渲染"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_5]]",
+        "explanation": "演奏MIDI到乐谱转录指从带表情偏差的演奏音符恢复拍点、手部、调号拍号与量化时值等谱面属性，表情演奏渲染则反向从乐谱预测力度、音符间间隔与时值；前者考验对齐与量化能力，后者考验对乐谱偏离的建模，两者方向相反但都依赖同一套音符级对应关系。"
+      }
+    ],
+    "figurePlacements": [
+      {
+        "figureOrdinal": 1,
+        "targetKind": "background",
+        "marker": "[[FIGURE_1]]",
+        "focusPoints": [
+          "先找到音频、演奏MIDI、乐谱三个椭圆节点的位置",
+          "再沿红色转录箭头与蓝色渲染箭头看输入输出方向",
+          "注意绿色节拍跟踪箭头指向拍点时刻而非音符"
+        ]
+      },
+      {
+        "figureOrdinal": 2,
+        "targetKind": "method_overview",
+        "marker": "[[FIGURE_2]]",
+        "focusPoints": [
+          "从顶部虚框的钢琴音频与纸质乐谱向下看主流程",
+          "注意步骤一到步骤四如何得到演奏MIDI与乐谱MIDI再对齐",
+          "看过滤器1到4在流程中出现的位置与作用"
+        ]
+      },
+      {
+        "figureOrdinal": 3,
+        "targetKind": "experiment_setup",
+        "marker": "[[FIGURE_3]]",
+        "focusPoints": [
+          "先看图a各流派条形占比，确认流行与古典为主",
+          "再看图b与图c横轴对数刻度下的中位虚线位置",
+          "看图d纵轴对数刻度下每组样本数的分布高度"
+        ]
+      }
+    ],
+    "tableBindings": [
+      {
+        "tableIndex": 1,
+        "sourceType": "source_quotes",
+        "sourceTableOrdinal": null,
+        "cellBindings": [],
+        "sourceQuotes": [
+          "We introduce Gangqinpu, a multi-genre piano dataset containing 18,786 score–performance pairs and 1,007.1 hours of source audio, with automatic note-level alignments and derived beat/downbeat annotations."
+        ]
+      },
+      {
+        "tableIndex": 2,
+        "sourceType": "source_quotes",
+        "sourceTableOrdinal": null,
+        "cellBindings": [],
+        "sourceQuotes": [
+          "The eight-feature MLP achieves 98.61% accuracy and 98.41% macro-F1 on the 288 expert-labeled held-out samples (Table 4)."
+        ]
+      },
+      {
+        "tableIndex": 3,
+        "sourceType": "source_quotes",
+        "sourceTableOrdinal": null,
+        "cellBindings": [],
+        "sourceQuotes": [
+          "The gains are larger on Gangqinpu, where beat F1 improves from 60.18 to 78.16 and downbeat F1 from 39.60 to 63.66."
+        ]
+      },
+      {
+        "tableIndex": 4,
+        "sourceType": "source_quotes",
+        "sourceTableOrdinal": null,
+        "cellBindings": [],
+        "sourceQuotes": [
+          "Velocity MAE decreases from 17.50 to 13.05, IOI MAE from 78.51 to 54.66 ms, and duration MAE from 309.47 to 269.04 ms."
+        ]
+      }
+    ],
+    "formulaBindings": [],
+    "sections": [
+      {
+        "kind": "background",
+        "heading": "钢琴的三种表示各记录什么信息",
+        "body": "一篇钢琴作品的演奏可以用三种互补形式记录。音频记录实际声音，演奏MIDI记录每个音符的实际按下与松开时间、力度与踏板动作，乐谱记录作曲层面的音高、声部、拍号与小节结构。初学者容易把后两者混淆，关键区别是演奏MIDI带有人为的时间提前拖后与轻重变化，而乐谱给出的是量化后的标准位置。\n\n论文要解决的是同时对齐这三种模态的数据稀缺问题。已有同时对齐三者的ASAP只有1067场演奏，其中仅519场有音频，且基本是西方古典曲目。流行与爵士常只有主音谱、非正式改编甚至即兴，没有现成可对照的完整乐谱，因此需要从录音出发做转录再与乐谱配对。\n\n下面这张任务关系图先把输入输出讲清楚，读图时注意箭头方向代表任务的数据流向，颜色区分三类任务。\n\n[[FIGURE_1]]\n\n图中音频、演奏MIDI与乐谱是三个节点。红色箭头是转录类，包括音频到演奏MIDI、音频到乐谱、演奏MIDI到乐谱；蓝色箭头是表情演奏渲染，即从乐谱预测演奏的时间与力度；绿色箭头是节拍跟踪，输出拍点与小节首拍时刻。这张图帮助理解后文为什么同一套对齐结果能同时服务节拍、转谱与渲染三个实验。"
+      },
+      {
+        "kind": "related_work",
+        "heading": "已有钢琴数据集各缺哪一块",
+        "body": "按原文比较，已有数据集在模态与曲风上各有缺口。MAESTRO用雅马哈自动钢琴采集，音频与MIDI同步质量高，但没有乐谱且基本是古典。ASAP有乐谱与拍点乃至音符级扩展，但规模约94.5小时且古典为主。ATEPP与Aria-MIDI用自动转录扩大规模，分别约1000小时与百万级MIDI，但前者乐谱只覆盖约一半音轨，后者缺乏乐谱对照。\n\nACPAS混合真实与合成音频并带拍点标注，PianoCoRe把多个语料整合成音符对齐的MIDI集合但无音频，POP909有909首流行MIDI改编与拍点和弦调性标注，但没有与独立记谱配对的钢琴录音。也就是说，要么缺音频，要么缺乐谱，要么缺音符级对齐，要么局限于古典。\n\nGangqinpu的定位是补多风格下音频、转录演奏MIDI与乐谱三者对齐这一块。它提供音频链接与下载脚本、转录MIDI、乐谱与音符级对齐及拍点标注，曲风覆盖流行、古典、爵士、民谣与传统、摇滚与布鲁斯。论文不声称转录无误差，明确标注来自网络音频与自动转录，存在转录误差与来源不确定性。"
+      },
+      {
+        "kind": "problem",
+        "heading": "论文要做的配对有多难",
+        "body": "输入是网上收集的钢琴音频与对应乐谱，加标题与贡献者等文本元数据。目标是输出每对样本的演奏MIDI、音符级谱演对应、拍点与下拍时刻及其置信度、表情与否标签、流派标签，并划分不泄漏的训练验证测试集。必须保留的信息是实际演奏的时间与力度偏差，不能把机械合成直接当演奏。\n\n困难有四处。第一，音频时长与乐谱长度不一，还有非钢琴编制需要剔除。第二，转录误差与演奏改编会导致音符对不上。第三，网上很多是照谱直接合成的死板渲染，听感机械，对学习表情偏差没有监督价值。第四，同曲不同改编与移调版本若分散到训练与测试，会虚增分数，需要跨Gangqinpu与ASAP联合分组。\n\n论文的输出条件在后文实验中固定使用，节拍、转谱与渲染都只取各自所需输入与标注的子集，并在两个数据集的测试集上分别报告，因此结论的成立范围与划分绑定。"
+      },
+      {
+        "kind": "method_overview",
+        "heading": "从网上音频乐谱到可用数据集的全流程",
+        "body": "整体流程分六步。先按时长与乐谱条件过滤，再用Transkun v2把音频转成演奏MIDI并清理，同时把MusicXML乐谱展开重复段后转成乐谱MIDI；然后用DualDTWNoteMatcher做音符级对应，再用RAScoP精修对齐与MIDI；接着派生拍点标注与元数据并做对齐误差与表情过滤；再做流派标注；最后做乐谱相似分组与音频去重并与ASAP联合切分。\n\n读这张流水线图时抓住样本形态的变化：音频加乐谱进入，转录后变成两个MIDI序列，对齐后变成对应关系，精修后补上插值音符并标记，标注后变成带拍点时间与置信度的三元组，过滤与分组后才进入最终数据集。\n\n[[FIGURE_2]]\n\n图中顶部虚框是网上配对来源，步骤一完成两种MIDI的生成，步骤二与步骤三分别是初始音符对齐与精修，步骤四生成拍点并执行过滤器3与过滤器4，步骤五与步骤六分别是流派标注与联合切分。过滤器1要求音频至少60秒，过滤器2要求至少32小节且仅钢琴声部，过滤器3要求插入率与删除率各不超过10%，过滤器4要求表情概率至少0.5。这四个阈值是保留样本的硬条件。"
+      },
+      {
+        "kind": "component",
+        "heading": "音频如何变成可对齐的两个MIDI序列",
+        "body": "转录选用Transkun v2，理由是它用基于Transformer的区间打分加非自回归半马尔可夫条件随机场解码，能结构化预测音符与踏板区间，且不靠踏板延长来决定音符结束，使音符结束时间与踏板活动分开表示。论文没有重新训练转录模型，而是直接调用该模型再做清理：合并演奏音轨为单音符序列，去掉重复与过短音符，截断同音高重叠音符。\n\n乐谱侧用SyMuPe与Partitura工具处理MusicXML，展开重复与不同结尾，生成乐谱MIDI同时保留到谱面位置与节拍信息的链接。这样两边都是音符序列，但时间基准不同，一边是秒为单位的演奏时间，一边是四分音符为单位的谱面时间，等待下一步建立对应。\n\n[[CONCEPT_BRIDGE_1]]"
+      },
+      {
+        "kind": "component",
+        "heading": "音符对应与拍点时间如何算出并标上可信度",
+        "body": "初始对应使用Parangonar中的DualDTWNoteMatcher，它把音高序列匹配与按音高的起始时间对齐分开做，论文引用其在四个钢琴数据集上99.0%对98.5%的组合匹配分数作为选用依据。之后用RAScoP做对齐与MIDI精修，精修中补上的演奏音符明确标记为插值，以区别于转录实际观测到的事件。\n\n为判断谱演一致性，论文从精修前的原始对齐计算插入率与删除率，分别按演奏音符数与乐谱音符数归一化。任一超过10%即剔除，防止后续插值掩盖实质不匹配。这一步是过滤器3。\n\n拍点派生先从展开后的乐谱取节拍网格，保留拍号变化，6/8、9/8、12/8等复拍子用附点四分音符作一拍。再经精修对应把谱面拍点传到演奏时间：取谱面拍点正负0.05四分音符内的音符，用其对应演奏起始时间的中位数作拍点时间；无直接支撑的拍点在相邻锚点间线性内插，边界处用局部速度估计外推，下拍与拍号调号变化映射到同一时间线。\n\n置信度是启发式而非校准概率。有观测音符支撑给0.95，全为插值给0.40；在锚点间内插取0.75乘以较低锚点置信度，外推给0.25；若拍点附近有插值乐谱音符再乘0.35。低于0.50记低置信，低于0.35记模糊，后续训练与评测可屏蔽这些区段。\n\n[[CONCEPT_BRIDGE_2]]\n\n[[CONCEPT_BRIDGE_3]]"
+      },
+      {
+        "kind": "component",
+        "heading": "怎样自动去掉照谱合成的死板演奏",
+        "body": "网上集合常混入照谱直接合成的演奏，时间僵硬、力度几乎无变化。论文按听感的时间与力度表现区分表情与非表情，不论是真人录音还是数字编辑，只要有足够表情变化都可保留，因为渲染任务要学的是相对乐谱的有音乐意义的偏离。\n\n分类器输入是一段演奏MIDI加对应乐谱。标注子集经两位专家独立听辨，不一致处反复听辨讨论至共识，得到779个表情样本与370个非表情样本。特征只从原始对齐中的已观测对应提取，避开精修插值。做法是把同谱面起始时间的音符编组并取中位演奏起始时间，在正负4四分音符窗口内拟合谱面到演奏时间的局部线性映射，窗口内不足6个不同起始位置时加宽，残差得到 timing variability、correlation与entropy三项；另有和弦内异步、力度标准差、不同力度数、上谱表与其他谱表平均力度差、和弦内最高音与其余音的力度差，共八个手工特征。\n\n模型是两层隐藏层32与16单元加ReLU的多层感知机，输出二分类概率，用Adam训练，L2正则系数为0.001并早停。训练另加982个可用ASAP演奏作正例与合成扰动谱面渲染作负例，各来源按75比25切分训练与保留集，合成变体按底层乐谱分组，训练集内过采样平衡类别，预测表情概率至少0.5才保留。这是过滤器4。"
+      },
+      {
+        "kind": "component",
+        "heading": "流派标签与防泄漏切分如何做",
+        "body": "流派标注分两阶段。先用Qwen-Flash读标题与贡献者等文本元数据分类，未定者再用LAION-CLAP音乐检查点比较音频嵌入与流派文本描述，仍不达置信度记未知。标签归一为流行、古典、爵士、民谣与传统、摇滚、布鲁斯，另加其他与未知。\n\n防泄漏先检索候选：用上下声部移调不变音程模式找相似，再经单调对齐与多声音符匹配验证。元数据保留两级分组，乐谱组用于报告乐谱组数，划分组额外连接可能相关的改编与片段并跨Gangqinpu与ASAP连边，仅用于划分。每个划分组整体放入一个分区，同谱多演奏不拆散，还检查精确音频重复。\n\n与ASAP的联合分组使用nASAP v2.1.1，含前人用作测试的ASAP曲目组固定放入测试集，其余分组训练验证测试分配。结果是Gangqinpu训练验证测试为17773、499、514，nASAP为955、50、61。后文三项下游任务都用这套固定划分，只取各自所需输入的子集并在两测试集分别报告。\n\n[[CONCEPT_BRIDGE_4]]\n\n[[CONCEPT_BRIDGE_5]]"
+      },
+      {
+        "kind": "training",
+        "heading": "分类器训练了什么以及没有训练什么",
+        "body": "本节说明训练对象，避免误以为全文训练了转录或节拍模型。论文没有训练Transkun v2、DualDTWNoteMatcher、Qwen-Flash与LAION-CLAP，这些是直接调用或作为标注与对齐工具；下游的Beat This!、PM2S与S2A是拿来验证数据价值的基线，按是否加入Gangqinpu做对照训练，但其内部优化细节不是本文贡献。\n\n唯一为建库训练的是表情二分类多层感知机。输入是标准化后的八维特征向量，参数是两层权重与偏置，监督来自专家听辨标签、ASAP正例与合成负例，损失为二分类概率输出对应的训练目标加L2正则，早停防止过拟合。75比25的切分在每个来源内独立做，合成按谱分组防止同谱泄漏。\n\n该分类器的评估只支持作为本收集流程的过滤部件，不证明换转录管线或换数据源仍有效。论文明确其 held-out 表现见后文表格，且与SyMuPe质量分类器和NOMML的比较只是考察谁更适合本过滤任务，不是评价那些模型的通用性能。"
+      },
+      {
+        "kind": "experiment_setup",
+        "heading": "数据集规模与分布在什么条件下统计",
+        "body": "统计对象是经四道过滤与分组后的保留样本，共18786对演奏，源音频总计1007.1小时，自动识别出15645个乐谱组，其中2445组含多演奏。乐谱组是经相似分析的操作性多样性度量，不是人工核验的不同作品数，含移调变体。平均音频时长3.22分钟，中位3.04分钟，每演奏中位音符956个且含插值音符。\n\n下表只整理论文摘要与正文连续句直接报告的规模数字，用于核对量级，完整分布见后图。表前说明比较问题：该表回答保留样本有多少对与多少小时，不涉及质量判断。\n\n| 项目 | 规模 |\n| --- | --- |\n| 配对演奏数 | 18786 对 |\n| 源音频总时长 | 1007.1 小时 |\n\n该规模远大于ASAP的1067场与94.5小时，且曲风不只古典，这是后文能做跨风格节拍与转谱对照的前提。但时长是源音频时长，转录与对齐误差仍在，且音频以外部链接与下载脚本提供，复现需自行下载。\n\n读分布图时注意横纵轴刻度与中位线含义，图a是占比，图b与图c横轴对数，图d纵轴对数。\n\n[[FIGURE_3]]\n\n图a可见流行占44.5%，古典16.3%，未知24.0%，其余为民谣与传统4.0%、爵士1.7%、摇滚0.4%、布鲁斯0.3%与其他8.8%，说明流行与古典主导但确有多风格。图b与图c中位线分别在3.04分钟与956个音符，分布呈长尾。图d显示13200个组仅一场，2081组两场，230组三场，66组四场，60组五到九场，8组十场以上，提供同谱多演奏的对照条件，但多数仍是单演奏。"
+      },
+      {
+        "kind": "result",
+        "heading": "表情过滤器在保留集上表现如何",
+        "body": "测量对象是分类器能否复现专家听辨的表情与非表情判断。比较方法包括本文八特征多层感知机、SyMuPe四分类质量模型映射为二分类，以及GigaMIDI的中位度量层NOMML取阈值12。条件一致处是同一批保留样本：专家标注保留集195表情与93非表情，加ASAP人类演奏246与合成噪声系列各120。指标是每子集单类检出率，以及仅在混合两类的三块真实数据共534样本上的池化准确率与宏平均F1，方向都是越高越好。\n\n下表整理连续句直接报告的池化结果，回答过滤器在自有保留集上的绝对水平。表前公平条件是同一288专家保留样本，指标方向为越高越好。\n\n| 条件 | 准确率 | 宏平均F1 |\n| --- | --- | --- |\n| 八特征多层感知机保留集 | 98.61% | 98.41% |\n\n该行对应193/195表情正确与91/93非表情正确，每类各错2个，支持其作为本管线过滤部件。但跨条件有限制：合成起始噪声增大时本文模型检出率从100.0%降至46毫秒98.3%、60毫秒83.3%、80毫秒30.8%，而SyMuPe把76/93非表情判为高质量，NOMML对所有样本都给12层而全判表情，说明后两者不适合本任务的谱同步表情检测。未胜出项是强噪声合成的识别，此时本文模型也会大量漏检，不能推广到其他转录管线。"
+      },
+      {
+        "kind": "result",
+        "heading": "加入新数据后节拍跟踪变化多大",
+        "body": "测量对象是用Beat This!从音频估计拍点与下拍时刻。比较方法是只用ASAP训练 versus ASAP加Gangqinpu训练，在ASAP测试集26样本与Gangqinpu测试集514样本上分别评测。低置信与时间不一致区及标注范围外在训练与评测时屏蔽，预测与参考落在屏蔽区都不计入。指标为F1、CMLt与AMLt，都是越高越好，CMLt与AMLt反映节拍序列跟踪的连续正确程度。\n\n下表聚焦论文连续句报告的Gangqinpu测试集F1绝对值，回答新数据在域内与跨域的增益。表前公平条件是同一固定联合划分与同一屏蔽规则，指标方向越高越好。\n\n| 测试集与目标 | 仅ASAP训练F1 | ASAP加Gangqinpu训练F1 |\n| --- | --- | --- |\n| Gangqinpu拍点 | 60.18% | 78.16% |\n| Gangqinpu下拍 | 39.60% | 63.66% |\n\nGangqinpu上拍点提升约17.98个百分点，下拍提升约24.06个百分点；ASAP上拍点从57.69%到61.98%，下拍从43.23%到47.55%，分别提升4.30与4.31个百分点，且CMLt与AMLt同步提高。这是三项任务中唯一在两测试集全部指标都提升的，支持节奏监督有跨数据集价值。但需注意ASAP测试仅26样本，增益的稳定性仍需更大样本验证，且提升依赖置信度屏蔽，不屏蔽时数字会不同。"
+      },
+      {
+        "kind": "result",
+        "heading": "转谱与渲染的获益是否只留在域内",
+        "body": "转谱用PM2S从演奏MIDI预测谱面属性，包括拍点与下拍标签、手部、调号拍号、量化起始与时值，指标分别为正类F1、宏平均F1与支持度加权F1，越高越好。渲染用改编S2A从乐谱预测力度、音符间间隔与时值，指标为平均绝对误差，越低越好，其中时间误差单位为毫秒，力度误差单位为MIDI力度单位，衡量与参考演奏的一致而非听感好坏。\n\n转谱在Gangqinpu测试集多数目标提升，拍点与下拍F1分别提高14.02与20.95个百分点，起始与时值加权F1提高18.87与19.32点，手部也提升，但拍号宏平均F1下降；迁移到ASAP则喜忧参半，拍点、下拍与时值提升，手部、调号拍号与起始量化下降。也就是说，转谱获益主要在域内，不均匀跨属性与跨数据集。\n\n下表整理渲染在Gangqinpu测试集的平均绝对误差绝对值，回答加入新数据后域内拟合误差的变化。表前公平条件是同一固定划分与同一改编S2A，指标方向越低越好。\n\n| 训练数据 | 力度误差 | 音符间间隔误差 | 时值误差 |\n| --- | --- | --- |\n| 仅ASAP训练 | 17.50 | 78.51 ms | 309.47 ms |\n| ASAP加Gangqinpu训练 | 13.05 | 54.66 ms | 269.04 ms |\n\n在Gangqinpu上三项误差都下降，力度、间隔与时值分别减少约4.45、23.85毫秒与40.43毫秒；但在ASAP上三项都小幅上升，力度从16.40到16.62，间隔从66.40毫秒到68.96毫秒，时值从999.66毫秒到1058.28毫秒。未胜出项正是ASAP侧的渲染退化，说明渲染获益不跨域，挑战来自音乐与数据分布差异。复现时不要把域内误差下降理解为听感必然变好，也不要把相对变化误读为百分点以外的含义。"
+      },
+      {
+        "kind": "ablation",
+        "heading": "阈值与标注选择对结果有什么影响",
+        "body": "论文没有传统消融表，但过滤与标注阈值本身构成条件分析。插入率与删除率各10%的硬阈值决定哪些配对进入数据集，表情概率0.5决定哪些保留为表情演奏，拍点置信度0.50与0.35决定低置信与模糊区及训练评测屏蔽。这些阈值改变会同时改变数据量与噪声水平，后文数字都绑定这套取值。\n\n分类器对照可视为过滤方案的替代比较。SyMuPe为通用质量分诊设计，把除高质量外的三类都当非表情，导致非表情检出仅18.3%；NOMML固定输出12层，在本保留集上池化准确率82.58%只是类别分布441表情对93非表情的结果，宏平均F1仅45.23%。这说明类别层面的通用质量不等于谱同步表情，不能直接替换。\n\n合成噪声系列显示本文特征对微小抖动的边界：46毫秒高斯噪声仍98.3%判非表情，80毫秒反而降至30.8%，即大随机抖动被部分当成表情变化。这提示基于局部残差标准差、相关与熵的特征区分的是结构化表情与小噪声，而非任意大扰动，实际部署需先确认转录噪声水平。"
+      },
+      {
+        "kind": "limitation",
+        "heading": "这些结论在什么条件下才成立",
+        "body": "第一，所有对齐与拍点标注全自动，未经人工逐音符审计，未来工作才计划人工抽查。因此音符对应与拍点时间的正确性依赖转录与对齐质量，长尾中的长录音与大谱面更易累积误差。\n\n第二，音频来源为网上收集且以链接加下载脚本提供，录制或合成来源未经核验，转录误差客观存在。分类器评估不支持推广到其他转录管线或数据源，跨管线需重标定。\n\n第三，下游结论绑定固定联合划分与可用子集。节拍ASAP测试仅26样本，转谱手部分配ASAP测试59样本其余61样本，Gangqinpu测试514样本。跨数据集增益仅在节拍任务全面成立，转谱与渲染主要在域内成立，ASAP侧转谱多项下降、渲染三项均小幅上升，不能推广为全面提升。\n\n第四，流派标签自动生成，流行与古典主导且未知占24.0%，乐谱组是操作性相似度量而非核验作品数。把组数当作品数或把自动流派当人工标签都会夸大结论。"
+      },
+      {
+        "kind": "reproduction",
+        "heading": "要复现第一步做什么与需要什么资源",
+        "body": "复现先分清三件事。代码与数据集作者资源当前可用，地址为论文给出的仓库链接，可下载流水线代码与数据索引；权重可下载指Transkun v2、Qwen-Flash与LAION-CLAP等外部模型需另行获取；系统可运行指端到端需要转录、Parangonar、RAScoP、SyMuPe与Partitura等依赖及音频下载带宽，不等于解压即跑。\n\n第一步是按仓库脚本取回音频并跑过滤器1与过滤器2，确认60秒与32小节纯钢琴条件，再跑Transkun v2转录与MusicXML到乐谱MIDI的转换，保留谱面位置链接。接着跑DualDTWNoteMatcher与RAScoP，计算原始对齐的插入率与删除率并执行10%剔除，再按正负0.05四分音符规则与置信度公式生成拍点。\n\n关键超参数与信息条件要保留：局部映射窗口正负4四分音符且至少6个不同起始位置，拍点中位时间规则，置信度0.95、0.40、0.75乘子、0.25外推与0.35惩罚，表情概率0.5，L2系数0.001。缺口是论文未报告转录与下游基线的完整训练预算与硬件，复现成本需自行记录。"
+      },
+      {
+        "kind": "synthesis",
+        "heading": "什么时候值得尝试与还需补哪项验证",
+        "body": "当任务需要多风格钢琴的谱演对应或节奏监督，且能接受自动标注噪声时值得尝试。节拍跟踪最可能跨数据集获益，转谱中拍点、下拍与时值在域内获益较稳，渲染适合在同分布内学习力度与时间偏离。若目标是古典小样本上的通用提升，应先在自有划分上验证，因为转谱与渲染迁移到ASAP并不一致。\n\n使用时把低置信拍点屏蔽打开，把乐谱组与划分组分开理解：前者看多样性，后者做切分。不要把池化准确率直接当两类均衡能力，要同时看宏平均F1；不要把毫秒误差下降等同于听感评价，论文明确渲染指标只是与参考演奏的一致度。\n\n还需补的验证是人工抽查对齐与拍点，尤其长尾长录音；换转录模型后重测表情过滤器；在更大ASAP节拍测试与人工听感评价上重测渲染。补上这些，才能判断增益来自音乐多样性还是单纯数据量。"
+      }
+    ]
+  },
+  "resourceIdentity": {
+    "contract": "api-reader-resource-identity-v1",
+    "sourceTextSha256": "b8839eb914cf09a8ef8549e80f00a3e072a26148468901dedb334d4d6dd42ad5",
+    "resources": [
+      {
+        "type": "code",
+        "origin": "paper_source",
+        "sourceQuote": "The code and dataset are publicly available at https://github.com/wei-zeng98/gangqinpu",
+        "sourceQuoteSha256": "66c963ea0d50deaaebbf6d8abfcbcb8de4edefc09c9cf00d191dddada2cab75b",
+        "originalUrl": "https://github.com/wei-zeng98/gangqinpu",
+        "finalUrl": "https://github.com/wei-zeng98/gangqinpu",
+        "redirects": [],
+        "status": 200,
+        "availability": "available",
+        "retryable": false
+      },
+      {
+        "type": "dataset",
+        "origin": "paper_source",
+        "sourceQuote": "The code and dataset are publicly available at https://github.com/wei-zeng98/gangqinpu",
+        "sourceQuoteSha256": "66c963ea0d50deaaebbf6d8abfcbcb8de4edefc09c9cf00d191dddada2cab75b",
+        "originalUrl": "https://github.com/wei-zeng98/gangqinpu",
+        "finalUrl": "https://github.com/wei-zeng98/gangqinpu",
+        "redirects": [],
+        "status": 200,
+        "availability": "available",
+        "retryable": false
+      }
+    ],
+    "identitySha256": "76518d5464f5b7e0ffb896bdb3a8378dc701a82ce0a01a11b004c3cfc8f0b0e3"
+  },
+  "sourceText": "Gangqinpu: A Multi-Genre, Multi-Task Piano Dataset with Aligned Audio, MIDI, and Musical Scores\nAbstract\nAligned audio, performance MIDI, and musical scores provide valuable supervision for music analysis and performance modeling, yet datasets that jointly align all three modalities remain scarce and limited in scale and genre diversity. We introduce Gangqinpu, a multi-genre piano dataset containing 18,786 score–performance pairs and 1,007.1 hours of source audio, with automatic note-level alignments and derived beat/downbeat annotations. It spans diverse genres, including pop, classical, jazz, folk/traditional, rock, and blues. Our automated pipeline transcribes piano audio, aligns the resulting MIDI with musical scores, assigns genre labels, and filters out non-expressive performances with a score-informed binary classifier. We further construct joint splits with ASAP using conservative score-similarity grouping to reduce data leakage. We evaluate Gangqinpu on performance MIDI-to-score transcription, expressive performance rendering, and beat tracking. Downstream experiments demonstrate the value of Gangqinpu as complementary training data, with cross-dataset gains in beat tracking and primarily in-domain benefits for transcription and expressive performance rendering. The code and dataset are publicly available at https://github.com/wei-zeng98/gangqinpu.\n1 Introduction\nPiano music has long been an important research domain in music information retrieval (MIR), owing to its extensive and stylistically diverse repertoire, rich polyphonic structure, and availability in both acoustic and symbolic representations. A piano piece and its performance can be represented through three complementary modalities. Audio captures the acoustic realization, performance MIDI describes note-level performance details, and a musical score encodes the underlying compositional structure.\nFigure 1illustrates these relationships. Transcription converts audio into performance MIDI [1, 2, 3, 4, 5, 6, 7] or musical scores [8, 9, 10, 11, 12, 13]. It can also recover scores from performance MIDI [14, 15, 16]. Expressive performance rendering predicts timing and dynamics from scores [16, 17, 18, 19, 20, 21, 22, 23, 24], while beat tracking estimates beat and downbeat times from audio or performance MIDI [25, 26, 27, 28]. Aligned datasets with rhythmic annotations thus support multiple tasks in music analysis and performance modeling.\nFigure 1: Musical representations and associated tasks. Arrows indicate task input–output relationships; colors distinguish transcription (red), rendering (blue), and beat tracking (green).\nDespite the importance of data connecting these modalities, existing piano datasets typically provide only a subset of audio, performance MIDI, and musical scores. Datasets that jointly align all three modalities remain scarce. ASAP [29] is a notable example, but it provides audio for only 519 of its 1,067 MIDI performances, with a small number of performances not fully aligned to their corresponding scores. Moreover, its repertoire is restricted to Western classical piano music. The broader predominance of classical repertoire in existing datasets limits their coverage of musical styles and applications.\nBeyond classical music, pop and jazz performances may involve lead sheets, informal arrangements, or improvisation rather than fully notated scores, making transcription from recordings particularly useful. Expressive performance rendering also has potential applications in contemporary music production by transforming quantized MIDI into natural-sounding performances within digital audio workstations (DAWs). However, research on expressive performance rendering has focused predominantly on classical piano [30]. These applications motivate larger aligned piano datasets spanning a broader range of genres.\nTo address this gap, we introduce Gangqinpu, a multi-genre piano dataset with aligned audio, transcribed performance MIDI, and musical scores. We construct the dataset from online audio–score pairs using an automated pipeline for audio transcription, expressive performance filtering, genre annotation, and note-level score alignment. A score-informed binary classifier filters out non-expressive performances with limited timing and dynamic variation, including renderings synthesized directly from scores. The dataset spans diverse genres, including pop, classical, jazz, folk/traditional, rock, and blues, with additional samples labeled as other or unknown.\nThe main contributions of this work are as follows:\n• \nWe introduce Gangqinpu, a multi-genre piano dataset with 18,786 score–performance pairs, 1,007.1 hours of source audio, and automatic note-level and beat/downbeat annotations.\n• \nWe develop an automated construction pipeline for transcription, alignment, genre annotation, and expressive performance filtering, with joint score grouping across Gangqinpu and ASAP to reduce data leakage.\n• \nWe demonstrate Gangqinpu’s value as complementary training data for beat tracking, performance MIDI-to-score transcription, and expressive performance rendering. Gains extend across datasets for beat tracking and are primarily in-domain for transcription and rendering.\n2 Related Work\n2.1 Piano Datasets\nPiano performance MIDI datasets are typically constructed through direct capture or automatic music transcription (AMT). MAESTRO [31] provides synchronized audio and MIDI captured using Yamaha Disklavier pianos, but this approach requires specialized recording equipment. AMT enables more scalable collection from existing recordings: ATEPP [32] provides transcribed performances by professional pianists, while Aria-MIDI [33] scales up to over one million MIDI files from online recordings, both subject to transcription errors.\nFor tasks that relate performances to musical notation, performance MIDI must be paired with corresponding scores. ASAP [29] provides beat-level alignments, and (n)ASAP [34] extends these to the note level through automatic alignment and manual inspection. ACPAS [35] combines real and synthesized audio with MIDI scores and beat-level annotations. ATEPP provides corresponding MusicXML scores for a subset of its recordings, while PianoCoRe [36] consolidates existing corpora into a large note-aligned MIDI collection.\nTable 1summarizes these datasets in terms of scale, modalities, and annotations. Existing score-aligned resources predominantly cover Western classical repertoire, where performances typically follow established scores. Extending such resources to popular music is challenging because recordings may be produced without a written score [30]. POP909 [37] supports popular-music research through MIDI arrangements with beat, chord, and key annotations, but does not provide piano recordings paired with independently notated scores. Gangqinpu addresses this gap by connecting multi-genre piano recordings with musical scores through transcribed performance MIDI and automatic note-level alignments.\n2.2 Audio-to-MIDI Piano Transcription and Score–Performance Alignment\nRecent piano transcription systems include autoregressive encoder–decoder models such as Aria-AMT [38] and interval-based models such as Transkun v2 [2]. Aria-AMT predicts note and pedal tokens, whereas Transkun v2 combines Transformer-based interval scoring with non-autoregressive semi-CRF decoding. We select Transkun v2 for its structured prediction of note and pedal intervals and its ability to preserve note offsets without pedal-based extension, allowing note offsets and sustain-pedal activity to be represented separately.\nFor symbolic alignment, Nakamura et al. [39] combine HMM-based matching with error detection and local realignment using merged-output HMMs. DualDTWNoteMatcher [40], implemented in Parangonar, instead separates pitch-sequence matching from pitch-wise onset alignment. Across four evaluated piano datasets, it achieved a higher combined note-matching F1 than the Nakamura baseline (99.0% versus 98.5%). These reported results and its integration with our symbolic processing and refinement pipeline motivate our choice of DualDTWNoteMatcher.\nSize\nModalities\nOrigin\nAnnotations\nDataset\nGenre\nPieces / Scores\nPerf.\nHours\nAudio\nMIDI\nScore\nAudio / MIDI Source\nAlign.\nBeats\nMAESTRO v3 [31]\nMostly classical\n–\n1,276\n198.7\n✓\\checkmark\n✓\\checkmark\n–\nReal / Captured\n–\n–\nASAP/(n)ASAP [29, 34]\nClassical\n235\n1,067\n94.5\nExternal△\n✓\\checkmark\n✓\\checkmark\nReal / Captured\nBeat / Note†\n✓\\checkmark\nATEPP v1.2 [32]\nClassical\n1,595\n11,674\n∼\\sim1,000\nExternal\n✓\\checkmark\n△∗\\triangle^{\\ast}\nReal (web) / AMT\n–\n–\nACPAS [35]\nClassical\n497\n2,189\n179.8\nExt./Synth.\n✓\\checkmark\n✓\\checkmark\nReal+Synth. / Mixed\nBeat§\n✓\\checkmark\nPianoCoRe-A [36]\nPrimarily classical\n1,591\n157,207\n12,509\n–\n✓\\checkmark\n✓\\checkmark\nNone / Mixed\nNote\n–\nPOP909 [37]\nPop\n909\n–\n∼\\sim60\n–\n✓\\checkmark\n–\nReference / Arrangement\n–\n✓\\checkmark\nGangqinpu\nMultiple\n15,645\n18,786\n1,007.1\nExternal\n✓\\checkmark\n✓\\checkmark\nWeb / AMT\nNote\n✓\\checkmark\n✓\\checkmark indicates availability, △\\triangle partial coverage, and – unavailable or unreported information. External (Ext.) audio is obtained separately; Gangqinpu provides audio URLs and a download script. Align. denotes score–performance alignment. Captured denotes instrument-recorded MIDI, AMT automatic transcription, and Web online audio of unverified recording/synthesis origin. † Statistics follow (n)ASAP [34]; 1,062 performances have note alignments. ∗ MusicXML covers roughly half the tracks. § 30 performances lack alignment.\nTable 1: Comparison of piano datasets by scale, modalities, data origin, and score–performance annotations.\n3 Dataset Construction\n3.1 Overall Pipeline\nDotted horizontal links indicate paired representations. Filters retain samples satisfying: (1) audio duration ≥60\\geq 60 s; (2) at least 32 measures and piano-only parts; (3) insertion and deletion rates each ≤10%\\leq 10\\%, measured from the raw alignment before refinement; (4) predicted expressive-performance probability ≥0.5\\geq 0.5.\nFigure 2: Overview of the Gangqinpu dataset construction pipeline.\nFigure 2 summarizes the construction of Gangqinpu from online audio–score pairs. After filtering by audio duration, score length, and instrumentation, we transcribe audio into performance MIDI using Transkun v2 [2], clean the resulting MIDI, and convert MusicXML scores into score MIDI. DualDTWNoteMatcher [40] establishes note-level correspondences between the two representations, followed by alignment and MIDI refinement using RAScoP [36]. We then derive beat/downbeat annotations and metadata, retaining samples that satisfy raw alignment error thresholds and are classified as expressive performances (see Section 3.4). Accepted samples receive genre labels through Qwen-Flash [41], with LAION-CLAP [42] as a fallback. Finally, score-similarity grouping and duplicate-audio checks guide joint data splitting with ASAP to reduce leakage across partitions and datasets.\n3.2 Data Acquisition and Preprocessing\nWe collect publicly accessible piano audio and associated sheet music from online sources, together with metadata such as titles and contributor information. We retain recordings lasting at least 60 seconds (Filter 1) and scores containing at least 32 measures with piano-only parts, excluding short excerpts and scores for other instrumentation (Filter 2).\nScores are converted into MusicXML and processed using the SyMuPe and Partitura toolkits [43, 44]. Repeats and alternative endings are unfolded, and a score MIDI representation is generated while retaining links to score positions and metrical information. Before alignment, performance tracks are merged into a single note sequence, duplicate and implausibly short notes are removed, and overlapping notes of the same pitch are truncated. The resulting representations retain score structure and expressive performance information for note-level alignment and annotation.\n3.3 Alignment-Derived Beat Annotation and Confidence\nWe obtain initial note correspondences using Parangonar’s DualDTWNoteMatcher [40] and refine them with RAScoP [36]. Interpolated performance notes introduced during refinement are explicitly marked to distinguish them from observed transcription events. To assess score–performance consistency, we compute insertion and deletion rates from the raw alignment, normalized by the numbers of performance and score notes, respectively. Pairs are excluded if either rate exceeds 10% (Filter 3), preventing subsequent interpolation from masking substantial mismatches.\nA metrical grid is extracted from the unfolded score, preserving time-signature changes and using dotted-quarter-note beats in compound meters such as 6/8, 9/8, and 12/8. Score beats are transferred to performance time through the refined note correspondences. Inspired by the ASAP annotation procedure [29], we identify notes within ±0.05\\pm 0.05 quarter notes of each score beat and use the median of their corresponding performance onset times as the beat time. Beats without direct support are linearly interpolated between neighboring onset anchors or extrapolated at the boundaries using a local tempo estimate. Downbeats and time/key-signature changes are mapped to the same performance timeline.\nWe assign heuristic confidence scores based on the evidence supporting each beat. A beat initially receives a confidence of 0.95 if any nearby mapped note is observed, or 0.40 if all are interpolated. When beat times are interpolated between neighboring onset anchors, confidence is 0.75 times the lower anchor confidence; extrapolated beats receive 0.25. If any score note within ±0.05\\pm 0.05 quarter notes of the beat is marked as interpolated, confidence is multiplied by 0.35. We mark beats with confidence below 0.50 as low confidence and those below 0.35 as ambiguous. These scores reflect heuristic annotation reliability rather than calibrated probabilities and support masking uncertain regions in downstream tasks.\n3.4 Expressive Performance Filtering\nOnline audio–score collections often include deadpan renderings synthesized directly from notation, which sound mechanical due to rigid timing and little or no expressive variation in dynamics. Although useful for some transcription tasks, such examples provide limited supervision for expressive performance rendering, where the objective is to learn musically meaningful deviations from the score. We therefore distinguish expressive from non-expressive performances based on perceived timing and dynamics, regardless of production origin. Human recordings and digitally edited MIDI renderings are both eligible if they exhibit sufficient expressiveness.\nTo automate this selection, we train a binary classifier that takes a performance MIDI and its corresponding score as input (Filter 4). We construct a labeled subset of Gangqinpu through independent listening assessments by two human experts. Each expert assigns an expressive or non-expressive label according to the audible performance. Disagreements are discussed and reassessed through repeated listening until consensus is reached. The resulting subset contains 779 expressive and 370 non-expressive examples.\nThe classifier is a multilayer perceptron (MLP) operating on eight handcrafted features summarized in Table 2. Features are extracted from observed note correspondences in the raw alignment, avoiding interpolated events introduced during refinement. To measure timing variation, we first group notes with the same score onset and represent each group by its median performed onset. At each onset position, we fit a local linear mapping from score time to performance time within a window of ±4\\pm 4 quarter notes, widening it when necessary to include at least six distinct onset positions, where available. Differences between observed and predicted onset times yield three features: timing variability, correlation, and entropy. Separate features measure onset differences within chords and variation in note velocities.\nThe standardized feature vector is processed by two hidden layers with 32 and 16 units and ReLU activations, followed by a binary probabilistic output. Training uses Adam, L2L_{2} regularization with α=10−3\\alpha=10^{-3}, and early stopping. The labeled subset is supplemented with 982 usable ASAP performances as positive examples and synthetically perturbed score renderings as negative examples. Each source is partitioned into training and held-out subsets at a 75:25 ratio, with synthetic variants grouped by their underlying score; class imbalance is addressed by oversampling within the training set. Samples with a predicted expressive-class probability of at least 0.5 are retained.\nFeature\nDefinition\nTiming variability\nStandard deviation of local onset residuals.\nTiming correlation\nLag-one autocorrelation of onset residuals.\nTiming entropy\nShannon entropy of onset residuals discretized into 10 ms bins.\nChord asynchrony\nMedian onset range within groups of simultaneously notated notes.\nVelocity variability\nStandard deviation of note velocities.\nVelocity diversity\nNumber of distinct note velocities.\nStaff contrast\nMean velocity of upper-staff notes minus that of notes on other staves.\nPitch contrast\nMean within-chord velocity difference between the highest note and the remaining notes.\nTable 2: Score-informed timing and dynamic features used for expressive performance classification.\n3.5 Genre Annotation and Leakage-Aware Splitting\nWe assign sample-level genre labels using a two-stage procedure. Qwen-Flash [41] first classifies each sample from its textual metadata, including the title and contributor information. Samples whose genre remains undetermined are subsequently assessed using LAION-CLAP [42] with the music checkpoint, which compares audio embeddings with textual genre descriptions. Predictions that do not meet the confidence criteria remain labeled as unknown. Labels are normalized into six named genres (pop, classical, jazz, folk/traditional, rock, and blues), along with the additional categories of other and unknown.\nTo reduce leakage, we identify related scores before assigning samples to training, validation, and test sets. Candidate pairs are retrieved using transposition-invariant pitch-interval patterns from the upper and lower voices, then verified through monotonic alignment and polyphonic note matching. We maintain two grouping levels in the metadata. Score-similarity groups (score_group_id) are used to report the number of score groups in the dataset. Broader split groups (group_id) additionally link potentially related arrangements and excerpts, including matches between Gangqinpu and ASAP, and are used only for partition assignment. Each split group is assigned entirely to one partition, retaining multiple performances of the same score together. Exact audio duplicates are also checked across partitions.\nWe jointly group Gangqinpu and (n)ASAP v2.1.1 [29, 34] to account for cross-dataset overlap. Groups containing the ASAP test pieces used by [15] are assigned to the test set. The remaining groups are assigned to training, validation, or test, with each group kept in a single partition. The resulting train/validation/test splits contain 17,773/499/514 Gangqinpu samples and 955/50/61 (n)ASAP samples. All downstream tasks in Section 5 use these fixed assignments, selecting samples with the required inputs and annotations. Evaluation is reported separately on the two datasets.\n4 Dataset Statistics\nGangqinpu contains 18,786 paired performances totaling 1,007.1 hours of source audio, organized into 15,645 automatically identified score groups. These groups capture identical or highly similar scores, including transposed variants, and serve as an operational measure of score diversity rather than a verified count of distinct compositions. Among them, 2,445 groups contain multiple performances, providing alternative realizations of similar musical material. Table 3 summarizes the dataset scale, and Figure 3 presents its principal distributions.\nFigure 3summarizes the genre, duration, and note-count distributions. Pop and classical dominate the automatically assigned genre labels, alongside folk/traditional, jazz, rock, and blues; uncertain assignments remain unknown. Audio duration and note counts exhibit long-tailed distributions, reflecting variation in recording length and sequence size. Note counts are computed from refined performance MIDI and include interpolated notes.\nFigure 3: Distributions of (a) automatically assigned genre labels, (b) audio duration, (c) refined performance MIDI note counts, including interpolated notes, and (d) performances per score group. Panels (b) and (c) use logarithmic horizontal axes; panel (d) uses a logarithmic vertical axis. Dashed lines indicate medians.\nStatistic\nValue\nPerformances\n18,786\nScore groups\n15,645\nGroups with multiple performances\n2,445\nTotal audio duration (hours)\n1,007.1\nMean audio duration (min)\n3.22\nMedian audio duration (min)\n3.04\nMedian notes per performance\n956\nTable 3: Summary statistics of Gangqinpu. Score groups are identified automatically through score-similarity analysis.\n5 Experiments\n5.1 Expressive Performance Classification\nWe evaluate whether the proposed classifier distinguishes expressive from non-expressive performances according to expert listening judgments, irrespective of recording or production provenance, using four subsets: ASAP, real human performances; expressive and non-expressive, the two classes of our own expert-labeled subset; and hard_neg, a synthetic negative class rendered directly from scores with small Gaussian onset/velocity noise (σonset≤30\\sigma_{\\text{onset}}\\!\\leq\\!30 ms, σvelocity≤9\\sigma_{\\text{velocity}}\\!\\leq\\!9). After alignment and feature-validity checks, the expert-labeled subset contains 779 expressive and 370 non-expressive samples; a fixed 75/25 split within each class yields 195 expressive and 93 non-expressive held-out samples, with ASAP and hard_neg likewise split 75/25 to supplement training and evaluation.\nThe eight-feature MLP achieves 98.61% accuracy and 98.41% macro-F1 on the 288 expert-labeled held-out samples (Table 4). It correctly identifies 193 of 195 expressive performances and 91 of 93 non-expressive performances, with two errors in each class. These results support its use as an automatic filtering component for the collected data, although they do not establish generalization to other transcription pipelines or data sources.\nComparison with existing classifiers. We compare against two published, readily available classifiers addressing related tasks: the SyMuPe quality classifier [43, 36], a four-way MIDI quality model (score, high quality, low quality, corrupted), mapped to binary here by treating high quality as expressive and the remaining three categories as non-expressive; and NOMML, the median-metric-level measure from GigaMIDI [45], applied with its reported threshold (median level =12=12). Evaluation uses the same 534 held-out samples as Table 4, plus 480 synthetic samples (120 each) from the hard_neg and 46/60/80 ms noise conditions.\nSubset\nnn\nOurs\nSyMuPe\nNOMML\nASAP (human)\n246\n100.0%\n99.6%\n100.0%\nexpressive\n195\n99.0%\n86.7%\n100.0%\nnon-expressive\n93\n97.8%\n18.3%\n0.0%\nhard_neg (synthetic)\n120\n100.0%\n100.0%\n0.0%\nnoise 46 ms (synthetic)\n120\n98.3%\n100.0%\n0.0%\nnoise 60 ms (synthetic)\n120\n83.3%\n100.0%\n0.0%\nnoise 80 ms (synthetic)\n120\n30.8%\n100.0%\n0.0%\nPooled accuracy (n=534n{=}534)\n99.25%\n80.71%\n82.58%\nPooled macro-F1\n98.70%\n56.88%\n45.23%\nTable 4: Comparison with SyMuPe and NOMML. Per-subset values are detection rates for that subset’s single ground-truth class; pooled rows combine the three real-data splits (n=534n{=}534), the only ones mixing both classes.\nTable 4shows that our classifier achieves the highest pooled accuracy and macro-F1 on the real-data evaluation subset, while its detection rate decreases as synthetic onset noise increases. SyMuPe recalls expressive performances well but labels 76 of 93 non-expressive samples as high quality, reflecting its design for general quality triage rather than score-synchronized expressiveness detection. NOMML assigns a metric level of 12 to every sample and therefore predicts all samples as expressive. Its pooled accuracy of 82.58% reflects the class distribution (441 expressive and 93 non-expressive), while its macro-F1 is 45.23%. These comparisons assess the classifiers’ suitability for our filtering task rather than their general performance.\n5.2 Downstream Task Evaluation\nWe evaluate the utility of Gangqinpu on three complementary tasks: beat tracking, performance MIDI-to-score transcription, and expressive performance rendering. We use Beat This! [26] for estimating beat and downbeat positions from audio, PM2S [14] for recovering score-related symbolic attributes from performance MIDI, and an adapted S2A [24] model for predicting expressive timing and velocity from a musical score. These tasks assess the usefulness of the dataset’s rhythmic annotations, score–performance correspondences, and expressive performance representations, respectively.\nFor each baseline, we compare training on ASAP alone with training on ASAP combined with Gangqinpu and evaluate both conditions separately on the ASAP and Gangqinpu test sets. All tasks follow the fixed joint split assignments, with usable subsets determined by the required inputs and annotations. The ASAP test subsets contain 26 samples for Beat This!, 59 for PM2S hand assignment, and 61 for the remaining PM2S tasks and S2A. All tasks use 514 Gangqinpu test samples.\n5.2.1 Beat Tracking\nWe evaluate Beat This! [26] on beat and downbeat tracking using F1, CMLt, and AMLt [46]. Low-confidence and temporally inconsistent annotation regions, together with regions outside the annotated span, are masked during training and evaluation. Both predicted and reference events within masked regions are excluded from metric computation. Table 5 compares the two training conditions on both test sets. Adding Gangqinpu improves all reported metrics on both datasets. On ASAP, beat and downbeat F1 increase by 4.30 and 4.31 percentage points, respectively. The gains are larger on Gangqinpu, where beat F1 improves from 60.18 to 78.16 and downbeat F1 from 39.60 to 63.66. Higher CMLt and AMLt scores indicate more reliable beat-sequence tracking. These results suggest that Gangqinpu provides useful rhythmic supervision, with benefits extending to the ASAP test set.\nTarget\nTraining data\nF1 ↑\\uparrow\nCMLt ↑\\uparrow\nAMLt ↑\\uparrow\nASAP test\nBeat\nASAP\n57.69\n21.66\n26.63\nASAP + Gangqinpu\n61.98\n28.57\n30.64\nDownbeat\nASAP\n43.23\n10.90\n21.30\nASAP + Gangqinpu\n47.55\n13.41\n22.79\nGangqinpu test\nBeat\nASAP\n60.18\n28.64\n35.09\nASAP + Gangqinpu\n78.16\n58.42\n63.63\nDownbeat\nASAP\n39.60\n9.26\n19.91\nASAP + Gangqinpu\n63.66\n30.51\n51.63\nTable 5: Beat This! results under two training conditions. All metrics are expressed as percentages.\n5.2.2 Performance MIDI-to-Score Transcription\nWe evaluate PM2S [14] on the prediction of score-related attributes from performance MIDI, including beat and downbeat labels, hand assignment, key and time signatures, and rhythmic quantisation. We report positive-class F1 for beat and downbeat labels, macro-F1 for hand assignment and key/time signatures, and support-weighted F1 for quantised onsets and note values. Here, beat and downbeat scores measure note-level label prediction rather than the audio-based event detection evaluated in the preceding task.\nTable 6shows that adding Gangqinpu improves most evaluated attributes on the Gangqinpu test set. Beat and downbeat F1 increase by 14.02 and 20.95 percentage points, respectively, while onset and note-value weighted F1 improve by 18.87 and 19.32 points. Hand assignment also improves, whereas time-signature macro-F1 decreases. Transfer to ASAP is mixed: beat, downbeat, and note-value prediction improve, while hand assignment, key/time signatures, and onset quantisation decline. These results demonstrate benefits for transcription within the Gangqinpu domain, but do not indicate uniform improvements across attributes or datasets.\nASAP test\nGangqinpu test\nPrediction target\nMetric ↑\\uparrow\nASAP\nASAP + G\nASAP\nASAP + G\nBeat label\nF1\n62.97\n64.89\n69.28\n83.30\nDownbeat label\nF1\n43.36\n48.68\n42.02\n62.97\nHand assignment\nMacro-F1\n86.65\n84.81\n86.99\n93.99\nKey signature\nMacro-F1\n36.26\n30.87\n78.39\n79.33\nTime signature\nMacro-F1\n45.40\n43.96\n51.00\n45.43\nQuantised onset\nWeighted-F1\n53.59\n49.71\n55.67\n74.54\nNote value\nWeighted-F1\n40.39\n41.37\n34.86\n54.18\nTable 6: PM2S results under ASAP-only and combined training (ASAP + G, where G denotes Gangqinpu). All scores are percentages. Bold indicates the better training condition for each target within each test set.\n5.2.3 Expressive Performance Rendering\nWe evaluate the adapted S2A [24] model to predict expressive performance attributes from musical scores. We report mean absolute error (MAE) for MIDI velocity, inter-onset interval (IOI), and note duration, with timing errors expressed in milliseconds. These metrics measure agreement with the reference performance rather than perceptual expressiveness.\nAs shown in Table 7, adding Gangqinpu reduces all three errors on the Gangqinpu test set. Velocity MAE decreases from 17.50 to 13.05, IOI MAE from 78.51 to 54.66 ms, and duration MAE from 309.47 to 269.04 ms. On ASAP, all three errors increase modestly, indicating that the benefits do not transfer uniformly across domains. Together, these results support the utility of Gangqinpu for modeling performances within its domain, while highlighting the challenge of improving performance across different musical and data distributions.\nTraining data\nVelocity ↓\\downarrow\nIOI (ms) ↓\\downarrow\nDuration (ms) ↓\\downarrow\nASAP test\nASAP\n16.40\n66.40\n999.66\nASAP + Gangqinpu\n16.62\n68.96\n1,058.28\nGangqinpu test\nASAP\n17.50\n78.51\n309.47\nASAP + Gangqinpu\n13.05\n54.66\n269.04\nTable 7: Expressive performance rendering results using the adapted S2A model. All metrics are MAE. Velocity errors are in MIDI velocity units.\n6 Conclusion\nWe introduced Gangqinpu, a multi-genre piano dataset comprising 18,786 paired performances and 1,007.1 hours of source audio, with transcribed performance MIDI and musical scores connected by automatic note-level alignments. Our construction pipeline combines expressive performance filtering, confidence-aware beat annotation, genre labeling, and leakage-aware splitting to support multiple downstream tasks. Experiments demonstrate improved beat tracking on both Gangqinpu and ASAP, alongside gains in most performance MIDI-to-score transcription targets and all evaluated rendering metrics on Gangqinpu. Transfer to ASAP remains mixed for the latter two tasks, highlighting the challenges of cross-domain generalization. Future work will focus on manually auditing automatic annotations.",
+  "provenance": {
+    "candidateEnvelopeSha256": "9a61e42d4f6a6ab54367725a939f5bdeee281e2c38f8c1f2ed34023f66350ed5",
+    "candidateDraftSha256": "3c22b8eb3277fc615830b59af92a84559ca91fab31227fb1a784d40ad6f71f34",
+    "sourceTextSha256": "b8839eb914cf09a8ef8549e80f00a3e072a26148468901dedb334d4d6dd42ad5",
+    "originalNodePath": "/sections/15/body",
+    "originalIssues": [
+      {
+        "path": null,
+        "message": "读者文章中的资源声明与已验证的可达状态不一致：/sections/15/body 声称本文 model 已开源或当前可用，但资源身份记录中没有该类型处于 available 状态的资源; conflictExcerpt=\"权重可下载指Transkun v2、Qwen-Flash与LAION-CLAP等外部模型需另行获取；\""
+      },
+      {
+        "path": "/sections/15/body",
+        "message": "/sections/15/body 声称本文 model 已开源或当前可用，但资源身份记录中没有该类型处于 available 状态的资源",
+        "conflictExcerpt": "权重可下载指Transkun v2、Qwen-Flash与LAION-CLAP等外部模型需另行获取；",
+        "code": "reader_resource_availability_claim"
+      }
+    ],
+    "counters": {
+      "attempts": 2,
+      "fullAttempts": 1,
+      "transportFailures": 0,
+      "noProgress": 1,
+      "failureSignature": "13b0c9f4622771e22964dd638287b8f5ccb90a037a7bb3149b14f78f6751e608",
+      "validationFailureSignature": "reader-validation-v2:{\"gateSha256\":\"d017db857fe0184429c670abef6d4c4d3d81a46e950685389f6b6bc273da2ba0\",\"deficits\":[]}",
+      "validationFailureStreak": 2
+    }
+  }
+}

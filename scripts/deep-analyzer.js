@@ -4317,8 +4317,52 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             .flatMap(index => clusters[index].mentions.map(mention => mention.type)));
     };
     const claimAssociationMaxChars = 80;
-    const isThirdPartyTypeAttribution = (segment, type, mentions) => {
+    const isThirdPartyTypeAttribution = (segment, type, mentions, matchIndex, matchEnd) => {
+        // A postposed owner can describe the weights needed from named upstream
+        // models. Bind only this closed acquisition clause, never a later author
+        // release claim or an arbitrary model name absent from the paper.
+        if (type === 'model') {
+            const acquisition = /^(?:模型)?权重可(?:下载|获取)指([^。！？!?；;，,：:]{1,180})等(?:外部|第三方)模型(?:的权重)?需(?:要)?(?:另行|单独)获取[。！？!?；;]?$/u.exec(segment.trim());
+            if (acquisition) {
+                const names = acquisition[1].split(/、|与|和|及/u).map(name => name.trim());
+                const source = String(sourceText || '').replace(/\s+/gu, ' ');
+                const upstreamModel = name => {
+                    if (!/^[A-Za-z][A-Za-z0-9_.+-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.+-]*){0,3}$/u.test(name)
+                        || /^(?:Table|Figure|Section|Equation|Appendix|Algorithm)\s+[0-9]/iu.test(name)) return false;
+                    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[ \t]+/gu, '\\s+');
+                    if (new RegExp('\\bwe\\s+(?:introduce|present|propose|release)\\s+'
+                        + escaped + '(?![A-Za-z0-9_.+-])', 'iu').test(source)) return false;
+                    // A citation plus an explicit model kind or upstream model
+                    // operation is required; merely occurring in a caption or
+                    // an author dataset name does not establish this role.
+                    const cited = new RegExp('(?<![A-Za-z0-9_.+-])' + escaped
+                        + '\\s*\\[[0-9]+(?:\\s*[,–-]\\s*[0-9]+)*\\]', 'giu');
+                    return [...source.matchAll(cited)].some(match => {
+                        const before = source.slice(Math.max(0, match.index - 180), match.index).split(/[.!?;]/u).at(-1);
+                        const after = source.slice(match.index + match[0].length, match.index + match[0].length + 180).split(/[.!?;]/u)[0];
+                        if (/\b(?:not|never|if|would|could|might|may|will|planned|hypothetical|quoted)\b/iu.test(before)) return false;
+                        return /\b(?:models?|checkpoints?|encoders?|transcription systems?)\s*(?:such as|including|like)?\s*$/iu.test(before)
+                            || /^\s*(?:first\s+)?(?:classifies|predicts|encodes|transcribes)\b/iu.test(after)
+                            || (/\b(?:use|using|select|adopt)\s*$/iu.test(before)
+                                && /^\s*(?:with\s+(?:the\s+)?(?:music\s+)?)?(?:models?|checkpoints?|encoders?)\b/iu.test(after));
+                    });
+                };
+                if (names.length <= 6 && names.every(upstreamModel)) return true;
+            }
+        }
         const markers = [...segment.matchAll(/(?:第三方|外部|论文引用的|相关(?:工作|研究|基线|项目|资源|仓库)|已有(?:工作|研究|方法|模型|系统|项目|资源))/g)];
+        if (type === 'model') {
+            const distance = mention => matchIndex >= mention.end ? matchIndex - mention.end
+                : mention.index >= matchEnd ? mention.index - matchEnd : 0;
+            const modelMentions = mentions.filter(mention => mention.type === type);
+            const nearest = Math.min(...modelMentions.map(distance));
+            // An earlier external model does not own the next author-weight
+            // predicate, even when both appear in the same comma-free clause.
+            if (modelMentions.filter(mention => distance(mention) === nearest).some(mention => {
+                const prefix = segment.slice(0, mention.index);
+                return /(?:本文|本论文|本研究|本工作|该论文|本项目|论文作者|作者团队|项目团队|我们)(?:的)?(?:(?:自有|自研|自己|自行训练|训练|微调(?:后)?|(?:已经|现已|已|所|新)?(?:发布|提供|公开|开源))(?:的|了)?)?\s*$/u.test(prefix);
+            })) return false;
+        }
         return markers.some(marker => {
             const markerEnd = marker.index + marker[0].length;
             const following = mentions.filter(mention => mention.index >= markerEnd
@@ -5334,7 +5378,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 && !/(?:尚未|并未|未曾|没有|未公开|未发布|未确认|未验证|未发现|未找到|不存在|尚无)/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:说|声称|断言|认为)(?:证据)?不支持(?:作者|本文|本论文|本研究|本工作)?$/u.test(assertionPrefix)) return true;
             if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length)
-                || isThirdPartyTypeAttribution(segment, type, mentions)
+                || isThirdPartyTypeAttribution(segment, type, mentions, localMatchIndex, localMatchEnd)
                 || isDataSourceRepositoryAttribution(segment, type)
                 || isExistingDatasetAttribution(segment, type)
                 || isSelfOwnedResourceAvailabilityDenial(segment, type)
@@ -13689,6 +13733,17 @@ function getModelOutputTerminationError(apiType, response, maxTokens) {
                 { code: 'MODEL_OUTPUT_INCOMPLETE', retryable: false, category: 'output_incomplete' }
             );
         }
+        if (response?.status === 'completed' && response.error == null
+            && response.incomplete_details == null && Array.isArray(response.output)
+            && response.output.some(item => item?.type === 'message'
+                && item.role === 'assistant' && item.status === 'completed'
+                && Array.isArray(item.content) && item.content.some(block =>
+                    block?.type === 'refusal' && typeof block.refusal === 'string'
+                    && block.refusal.trim()))) {
+            return makeModelRequestError('提供方返回结构化拒答，保留本次请求并停止重试', {
+                code: 'MODEL_REFUSAL', retryable: false, category: 'refusal', scope: 'paper'
+            });
+        }
         return null;
     }
     if (apiType === 'anthropic' && response?.stop_reason === 'max_tokens') {
@@ -19129,11 +19184,16 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
         return await callModel([{ role: 'user', content: prompt }], 8000,
             { usageContext: { stage: 'openSourceScan' } });
     } catch (error) {
-        // 只有模型响应无法解析时，才从已核验全文中明确出现的仓库 URL 生成这一节。
-        // 网络或其他模型错误继续抛出，不能用这段替代内容掩盖失败。
-        if (error?.scope === 'run' || error?.code !== 'MODEL_INVALID_RESPONSE') throw error;
+        // 明确的结构化拒答不再重复请求；这一节只从原文逐字提取资源 URL。
+        // 不把未知空输出、网络、认证、配额或终态错误冒充拒答。
+        const refusal = error?.modelRequestClassified === true
+            && error.code === 'MODEL_REFUSAL' && error.category === 'refusal'
+            && error.scope === 'paper';
+        if (!refusal && (error?.scope === 'run' || error?.code !== 'MODEL_INVALID_RESPONSE')) throw error;
         const fallback = buildDeterministicOpenSourceScan(sourceText);
-        console.warn('    [deep] 开源扫描模型响应无效，使用 sealed source URL 后备');
+        console.warn(refusal
+            ? '    [deep] 开源扫描收到结构化拒答，不重试模型，使用 sealed source URL 后备'
+            : '    [deep] 开源扫描模型响应无效，使用 sealed source URL 后备');
         return fallback;
     }
 }

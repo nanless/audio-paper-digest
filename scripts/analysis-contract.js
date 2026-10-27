@@ -3170,6 +3170,50 @@ function hasExplicitArtifactHandoff(summary, sourceText = '') {
         const currentOwnedPair = !extraOwnerDenied.test(localNotice)
             && !extraOwnerDenied.test(first) && !extraOwnerDenied.test(second);
         const source = String(sourceText || '').replace(/\s+/gu, ' ');
+        // Constructed questions supply the model input; the same structured
+        // response reaches a rule verifier, whose two rewards drive the policy
+        // update. These are actual product edges, not a list of RL components.
+        const constructedInput = sentences[index - 1] || '';
+        const priorNotice = normalizeLocalEvidenceHeading(sentences[index - 2] || '');
+        const rewardChainDenied = /否认|否定|反驳|驳斥|撤回|放弃|弃用|丢弃|(?:^|[，,：:])\s*(?:若|倘若)(?!干)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:构造|相加|优化|更新)/u;
+        const rewardChainRevoked = /^(?:上述|以上|前述|该|此|两类)(?:方法链|方法流程|流程|回答与奖励流程|回答|奖励|策略更新)[^。]{0,60}(?:并未|没有|未曾|从未|尚未|不曾|不成立|错误|撤回|未执行|不执行|放弃|弃用|丢弃|未进入|不进入|不再)/u;
+        if (currentOwnedPair && index > 0 && typedSafe(index - 1, 3)
+            && ![constructedInput, first, second].some(part => rewardChainDenied.test(part))
+            && !rewardChainRevoked.test(normalizeLocalEvidenceHeading(sentences[index + 2] || ''))
+            && !(/[：:]$/u.test(priorNotice) && (extraOwnerDenied.test(priorNotice)
+                || /\b(?:hypothetical|planned|future|not implemented)\b/iu.test(priorNotice)))
+            && /构造答案已知的选择题[^。]{1,180}候选项构成模型的输入$/u.test(constructedInput)
+            && /^模型以该输入生成结构化回答[，,]/u.test(first)
+            && /[，,]\s*该回答(?:随即|随后|再)?进入规则奖励函数$/u.test(first)
+            && /^奖励函数按答案是否与构造时确定的正确答案一致计算准确率奖励[、，,]\s*按是否遵守格式计算格式奖励[，,]/u.test(second)
+            && /两类奖励相加后作为[^，,。]{0,50}组内比较信号[，,][^。]{0,100}从而优化策略/u.test(second)) {
+            // Require affirmative source evidence for all three handoffs.
+            // Local scope rejects a quoted, hypothetical or foreign protocol
+            // without vetoing an unrelated related-work section elsewhere.
+            const sourceDenied = /\b(?:if|assuming|suppose|may|might|could|would|hypothetical(?:ly)?|planned|future|previous|prior|related|another|cited|quoted|not|never|false|incorrect|untrue)\b|\b(?:other|external)\s+(?:authors?|teams?|researchers?|work|research|methods?|systems?|models?)\b|[“”"]/iu;
+            const sourceOwnerHeading = /^(?:(?:previous|prior|related|other|external|third[- ]party)\s+(?:work|research|stud(?:y|ies)|methods?|systems?|protocols?)|(?:hypothetical|planned|future)\s*(?:work|research|methods?|systems?|protocols?)?|not implemented)[.:：]?$/iu;
+            const rawSource = String(sourceText || '');
+            const supported = pattern => {
+                const match = new RegExp(pattern.source.replace(/ /gu, '\\s+'), pattern.flags).exec(rawSource);
+                if (!match) return false;
+                const before = rawSource.slice(0, match.index);
+                const previousLine = before.slice(0, before.lastIndexOf('\n')).trimEnd().split('\n').at(-1) || '';
+                const priorHeading = normalizeLocalEvidenceHeading(previousLine);
+                if (sourceOwnerHeading.test(priorHeading)) return false;
+                const boundary = [...before.matchAll(/[.!?](?=\s|$)/gu)].at(-1);
+                const start = boundary ? boundary.index + 1 : 0;
+                const after = rawSource.slice(match.index + match[0].length);
+                const followingBoundary = after.search(/[.!?](?=\s|$)/u);
+                const end = followingBoundary < 0 ? rawSource.length
+                    : match.index + match[0].length + followingBoundary + 1;
+                return !sourceDenied.test(rawSource.slice(start, end));
+            };
+            if (supported(/we construct[^.]{0,160}tasks whose answers are known by construction/iu)
+                && supported(/For each generated response[^.]{0,140}the rule-based reward function[^.]{0,100}combines these two components/iu)
+                && supported(/We compute the accuracy reward by comparing the model[’']s answer with the answer derived from task construction/iu)
+                && supported(/The format reward[^.]{0,120}is a binary indicator of whether the response follows the required structure/iu)
+                && supported(/These advantages guide policy updates to favor higher-reward responses/iu)) return true;
+        }
         const adapted = /先在[^，,。]{0,70}合成[^，,。]{1,40}子集上(?:抽取|取)小批量做([1-9][0-9]{0,5})步内循环梯度更新[，,]\s*得到临时适应参数$/u.exec(first);
         const meta = /^再(?:把初始化向这些临时参数方向|以这些临时参数为目标把初始化向其方向|以临时参数与当前初始化的差为方向)做外循环移动[，,]\s*重复([1-9][0-9]{0,5})次元迭代得到易适应的元初始化[，,]\s*(?:接着(?:以该元初始化为起点)?|该元初始化直接作为起点[，,]\s*)用同一小时真实目标语音微调([1-9][0-9]{0,5})轮并在留出的真实集上评分$/u.exec(second);
         if (currentOwnedPair && adapted && meta
