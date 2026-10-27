@@ -1,8 +1,10 @@
 """Self-contained SVG dependency classification, without browser or network."""
 import hashlib
+import json
 from pathlib import Path
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import reader_inline_svg as renderer
@@ -14,6 +16,52 @@ def svg(body):
 
 
 class ReaderInlineSvgDependencyTest(unittest.TestCase):
+    def test_real_sealed_math_alttext_keeps_original_bytes_and_value(self):
+        fixture = json.loads((Path(__file__).resolve().parents[1] / 'fixtures' /
+                              'reader-inline-svg-2610-32637.json').read_text())
+        raw = fixture['inlineSvg'].encode()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), fixture['inlineSvgSha256'])
+        with self.assertRaises(ET.ParseError):
+            ET.fromstring(renderer.normalize_static_html_breaks(
+                renderer.normalize_html_svg_entities(raw.decode())))
+        projected = renderer.validate_svg(raw)
+        root = ET.fromstring(projected)
+        self.assertIn('y_{<u}', [node.attrib.get('alttext') for node in root.iter()])
+        self.assertEqual(projected.replace('alttext="y_{&lt;u}"', 'alttext="y_{<u}"'),
+                         renderer.normalize_static_html_breaks(
+                             renderer.normalize_html_svg_entities(raw.decode())))
+        descriptor = renderer.source_descriptor({
+            'kind': 'inline_svg', 'mediaType': 'image/svg+xml', 'inlineSvg': fixture['inlineSvg'],
+            'inlineSvgBytes': len(raw), 'inlineSvgSha256': fixture['inlineSvgSha256']}, '2610.32637v1')
+        self.assertEqual(descriptor['inlineSvgSourceSha256'], fixture['inlineSvgSha256'])
+        png = renderer.render_svg(raw)
+        self.assertEqual(png[:8], b'\x89PNG\r\n\x1a\n')
+        self.assertGreater(len(png), 1000)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), fixture['inlineSvgSha256'])
+
+    def test_only_quoted_math_alttext_is_projected(self):
+        for body in ('<math alttext="x<y"><mi>x</mi></math>',
+                     "<math alttext='x<y'><mi>x</mi></math>",
+                     '<math alttext="x&lt;y"><mi>x</mi></math>',
+                     '<math alttext="x<y"/>',
+                     '<span>prefix\u2028text</span>\n<math\n alttext="x<y"><mi>x</mi></math>'):
+            with self.subTest(body=body):
+                root = ET.fromstring(renderer.validate_svg(svg(body)))
+                self.assertEqual(root.find('.//math').attrib['alttext'], 'x<y')
+        raw = '<math title=\'alttext="x<y"\'><mi>x</mi></math>'
+        self.assertEqual(renderer.normalize_math_alttext_less_than(raw), raw)
+
+    def test_alttext_projection_does_not_admit_malformed_or_active_content(self):
+        for body in ('<math alttext=x<y><mi>x</mi></math>',
+                     '<math alttext="x<y" alttext="z"><mi>x</mi></math>',
+                     '<math alttext="x<y" onclick="x()"><mi>x</mi></math>',
+                     '<math alttext="x<y"><script>x()</script></math>',
+                     '<math alttext="x<y" style="background:url(https://example.invalid/x)"></math>',
+                     '<span alttext="x<y"></span>',
+                     '<math alttext="x<y"><mi>&unknown;</mi></math>'):
+            with self.subTest(body=body), self.assertRaises(Exception):
+                renderer.validate_svg(svg(body))
+
     def test_empty_css_icons_are_unavailable_without_rewriting_bytes(self):
         for body in ('<span class="ltx_inline-block fas fa-fire" aria-hidden="true"></span>',
                      '<span class="far fa-circle" aria-hidden="false"></span>'):

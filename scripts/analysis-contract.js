@@ -3539,7 +3539,81 @@ function hasTypedProcessingProductChain(summary, sourceText = '') {
     return false;
 }
 
+function hasSourceBoundSymbolAndTrajectoryHandoff(summary, sourceText = '') {
+    if (/```|~~~|(?:^|\n)\s*>/u.test(String(summary || ''))) return false;
+    const parts = String(summary || '').split(/[。！？!?；;\n]/u).map(part => part.trim()).filter(Boolean);
+    const denied = /假设|假想|假定|设想|如果|倘若|(?:^|[，,：:])\s*若|预计|预期|可能|未来|计划|建议|讨论|提及|第三方|他人|外部团队|其他团队|先前研究|先前工作|相关工作|既有研究|基线方法|对照系统|引用|引述|转述|否认|否定|撤回|不成立|错误|丢弃|弃用|(?:并非|并未|没有|从未|尚未|未曾)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:映射|查表|输出|得到|重复|拼成|混合|参与|训练|打分|相加|送入|优化|执行|实现)/u;
+    const owner = /^(?:(?:第三方|他人|外部|其他|先前|此前|既有|相关|基线|对照)(?:作者|团队|研究|工作|方法|系统)(?:的)?(?:方法|流程|步骤|描述|如下|所示)*|(?:previous|prior|related|third[- ]party|external|other|baseline|control)\s+(?:work|research|methods?|systems?|teams?))\s*[：:.]?$/iu;
+    const revoked = /^(?:上述|以上|前述|该|此|这一|这些|这个)(?:方法|处理|流程|过程|步骤|链|向量|轨迹|奖励)[^。]{0,80}(?:未|不|没有|否认|否定|撤回|放弃|弃用|丢弃|假设|错误)/u;
+    const safe = (index, count) => {
+        const window = parts.slice(index, index + count);
+        const previous = normalizeLocalEvidenceHeading(parts[index - 1] || '');
+        return window.length === count && window.every(part => part.length <= 350 && !denied.test(part) && !/[“”‘’"]/u.test(part))
+            && !owner.test(previous) && !denied.test(previous)
+            && !revoked.test(parts[index + count] || '')
+            && !/^(?:本文|我们|本研究|作者)(?:并未|没有|从未|不曾|不会|不再|未|不)(?:实际|真正|直接)?(?:执行|实现|采用|使用|训练|优化)(?:上述|该|此|这一)?(?:方法|流程|过程|步骤|链|向量|轨迹|奖励)/u.test(parts[index + count] || '')
+            && !/^(?:本文|我们|本研究|作者)(?:已|已经|现已)?(?:放弃|弃用|丢弃|否认|否定|撤回)(?:了)?(?:上述|该|此|这一)?(?:方法|流程|过程|步骤|链|向量|轨迹|奖励)/u.test(parts[index + count] || '');
+    };
+    // Check the entire source sentence, including denial after the matched
+    // words, and the adjacent independent attribution heading. A phrase in
+    // related work or a retracted procedure cannot authorize a current chain.
+    const source = String(sourceText || '');
+    const sourceDenied = /[“”‘’"]|\b(?:if|assuming|suppose|hypothetical|planned|future|previous|prior|related|not|never|false|incorrect|unimplemented|quotes?|quoted|quotations?|cited)\b|\b(?:other|external|third[- ]party)\s+(?:authors?|teams?|work|research)\b/iu;
+    const sourceRevoked = /^\s*(?:(?:this|that)\s+(?:was|is|has been)\s+(?:never|not)\s+(?:actually\s+)?(?:implemented|executed|performed|used|adopted)|(?:this|that|the|the above|the preceding)\s+(?:procedure|process|method|pipeline|chain|step|reward)[^.!?]{0,100}\b(?:not|never|false|incorrect|hypothetical|abandoned|discarded)\b|we\s+(?:(?:did|do|have|will)\s+not\s+(?:actually\s+)?(?:implement|execute|perform|use|adopt)|(?:never|no longer)\s+(?:implemented?|executed?|performed?|used?|adopted?)|(?:abandon|discard|reject|retract)(?:ed)?)\s+(?:this|that|the above|the preceding)?\s*(?:procedure|process|method|pipeline|chain|step|reward))/iu;
+    const supported = pattern => {
+        const match = pattern.exec(source);
+        if (!match) return false;
+        const before = source.slice(0, match.index), after = source.slice(match.index + match[0].length);
+        const sentenceStart = Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?')) + 1;
+        const sentenceEnd = after.search(/[.!?]/u);
+        const sentence = source.slice(sentenceStart, match.index + match[0].length
+            + (sentenceEnd < 0 ? after.length : sentenceEnd));
+        const prefix = before.slice(before.lastIndexOf('\n') + 1);
+        const previousLine = normalizeLocalEvidenceHeading(before.slice(0, before.lastIndexOf('\n')).trimEnd().split('\n').at(-1) || '');
+        const following = sentenceEnd < 0 ? '' : after.slice(sentenceEnd + 1).trimStart();
+        let fenced = false, foreignHeading = false;
+        for (const line of before.split('\n')) if (/^\s*(?:```|~~~)/u.test(line)) fenced = !fenced;
+        for (const line of before.split('\n').reverse().slice(0, 50)) {
+            const heading = normalizeLocalEvidenceHeading(line);
+            if (owner.test(heading) || /^(?:hypothetical|planned|future)(?: work| procedure| method)?[.:]?$/iu.test(heading)) {
+                foreignHeading = true; break;
+            }
+            if (/^\s*(?:#{1,6}\s+|(?:\d+(?:\.\d+)*|[A-Z]\.\d+)\s+)\S/u.test(line)) break;
+        }
+        return !sourceDenied.test(sentence) && !sourceDenied.test(prefix)
+            && !owner.test(previousLine) && !sourceRevoked.test(following) && !fenced && !foreignHeading
+            && !/(?:^|\n)\s*>/u.test(sentence)
+            && !/<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$/iu.test(before.slice(Math.max(before.lastIndexOf('</blockquote>'), before.lastIndexOf('</pre>'), before.lastIndexOf('</code>')) + 1));
+    };
+    for (let index = 0; index < parts.length; index++) {
+        const first = parts[index], second = parts[index + 1] || '', third = parts[index + 2] || '';
+        // Lexical symbols index an aligned acoustic/duration table. Its output
+        // vectors become pseudo frames consumed by the unchanged training path.
+        if (safe(index, 3)
+            && /^(?:方法)?(?:第一步)?(?:把|将)输入文本经发音词典映射为音素序列[，,]\s*输出离散音素符号作为下一步查表与定长的索引$/u.test(first)
+            && /^(?:第二步)?查表来自配对音频音素对齐统计[，,]\s*每个音素对应一个平均对数梅尔向量[^。]{1,180}(?:得到|生成)帧数[，,]\s*(?:把|将)符号索引转为带时长的声学向量$/u.test(second)
+            && /^(?:第三步)?(?:把|将)这些向量按各自帧数重复[，,][^。]{1,140}拼成伪语音帧序列后与真实语音随机混合[，,][^。]{1,100}参与训练(?:[，,][^。]{1,80})?$/u.test(third)
+            && supported(/From a phoneme alignment of the paired audio,\s*we extract a mean log-mel vector and median duration/iu)
+            && supported(/To inject text, we map sentences to phonemes via a lexicon/iu)
+            && supported(/We insert silence between words,\s*repeat vectors for their duration with linear interpolation at boundaries,\s*and feed this to the front-end exactly like real audio/iu)
+            && supported(/Audio and text sentences are mixed randomly in batches,\s*using the same losses/iu)) return true;
+        // An executed agent produces a tool trajectory; a judge consumes that
+        // same trajectory, and the resulting reward enters the policy update.
+        // Neither a GRPO mention nor an isolated judge score supplies the edge.
+        if (safe(index, 2)
+            && /^智能体以[^。]{1,100}为输入[，,]\s*调用[^。]{1,100}工具[^。]{1,100}[，,]\s*输出[^。]{1,60}及其多轮轨迹$/u.test(first)
+            && /^(?:大模型)?评判员以上述轨迹为输入逐轮对[^。]{1,80}打分[，,]\s*输出过程奖励[，,]\s*再将其与成品结果奖励加权相加送入组相对策略优化训练(?:[，,][^。]{1,220})?$/u.test(second)
+            && supported(/The episode yields a trajectory/iu)
+            && supported(/A process reward model\s*\(PRM\)\s*scores each action from its interaction history and the\s*tool feedback it produced/iu)
+            && supported(/We average the[^.!?]{1,100}valid judgments of a turn[^.!?]{1,100}and add a normalized process term to the shared outcome term/iu)
+            && supported(/We optimize the policy using rollout importance sampling/iu)
+            && supported(/The process judge reviews consecutive windows of[^.;!?]{1,80}assistant turns/iu)) return true;
+    }
+    return false;
+}
+
 function hasExplicitNaturalProductChain(summary, sourceText = '') {
+    if (hasSourceBoundSymbolAndTrajectoryHandoff(summary, sourceText)) return true;
     if (hasTypedProcessingProductChain(summary, sourceText)) return true;
     if (hasCachedCausalStateHandoff(summary)) return true;
     if (hasTypedNaturalProductHandoff(summary)) return true;

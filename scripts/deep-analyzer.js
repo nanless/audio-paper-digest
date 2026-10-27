@@ -4322,6 +4322,41 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // models. Bind only this closed acquisition clause, never a later author
         // release claim or an arbitrary model name absent from the paper.
         if (type === 'model') {
+            const base = /^(?:(?:本文|本研究|本工作|我们)(?:使用|采用)的)?基座(?:模型)?(?:是|为)开放权重的([A-Za-z][A-Za-z0-9_.+-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.+-]*){0,3})[。！？!?；;]?$/u.exec(segment.trim());
+            if (base && !/^(?:Table|Figure|Section|Equation|Appendix|Algorithm)\s+[0-9]/iu.test(base[1])) {
+                const source = String(sourceText || '')
+                    // Keep a nonempty boundary: removing quoted negation must
+                    // never manufacture a new affirmative source sentence.
+                    .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/gu, ' [quoted material] ')
+                    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, ' [quoted material] ')
+                    .replace(/^[ \t]*>.*$/gmu, ' [quoted material] ')
+                    .replace(/“[^”]*”|‘[^’]*’|「[^」]*」|"[^"\n]*"/gu, ' [quoted material] ')
+                    .replace(/[^\S\r\n]+/gu, ' ');
+                const name = base[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[ \t]+/gu, '\\s+');
+                // A named base is upstream only when the paper explicitly uses
+                // that cited open-weight model. Neither a title occurrence nor
+                // the author's own release establishes this limited attribution.
+                const own = new RegExp('\\bwe\\s+(?:(?:publicly|also|now|hereby|newly)\\s+)?'
+                    + '(?:introduce|present|propose|release|develop)\\s+'
+                    + '(?:(?:our|a|the)\\s+)?(?:(?:new|own|self[- ]developed)\\s+)?'
+                    + '(?:(?:model|(?:weights|checkpoints)\\s+of)\\s+)?' + name
+                    + '(?![A-Za-z0-9_+-]|\\.[A-Za-z0-9])', 'iu');
+                const ownedModel = new RegExp('\\bour\\s+(?:(?:own|new|newly\\s+developed)\\s+)?'
+                    + 'model\\s+' + name + '(?![A-Za-z0-9_+-]|\\.[A-Za-z0-9])', 'iu');
+                const used = new RegExp('(?:^|[\r\n.!?;])\\s*We\\s+'
+                    + '(?:implement\\s+our\\s+(?:framework|system|method)\\s+using|use|adopt)\\s+'
+                    + '(?:the\\s+)?open[- ]weight\\s+'
+                    + '(?:(?:audio|language|vision|speech|multimodal|pretrained|pre-trained)[- ]?){0,4}'
+                    + 'model\\s+' + name + '\\s*'
+                    + '\\((?=[^()]{1,100}\\b(?:19|20)\\d{2}\\b)[A-Za-z][^()]{1,100}\\)\\s*[.!?;]', 'giu');
+                if (!own.test(source) && !ownedModel.test(source) && [...source.matchAll(used)].some(span => {
+                    const introduction = source.slice(0, span.index).trimEnd().split(/[\r\n]/u).at(-1);
+                    if (/\b(?:quotes?|quoted|quotation|example|hypothetical|claim|reported|false|incorrect)\b/iu.test(introduction)) return false;
+                    const following = source.slice(span.index + span[0].length).trimStart();
+                    return !/^(?:(?:The\s+(?:preceding|previous|above)|This)\s+(?:statement|claim)|These\s+(?:weights|checkpoints))\b[^.!?\r\n]{0,100}\b(?:false|incorrect|withdrawn|unavailable|not\s+(?:true|released|available))\b/iu.test(following)
+                        && !/^(?:We\s+(?:did|do)\s+not\s+(?:actually\s+)?(?:use|adopt)\s+(?:this|that)\s+model\b|This\s+(?:was|is)\s+(?:only\s+)?hypothetical\b)/iu.test(following);
+                })) return true;
+            }
             const acquisition = /^(?:模型)?权重可(?:下载|获取)指([^。！？!?；;，,：:]{1,180})等(?:外部|第三方)模型(?:的权重)?需(?:要)?(?:另行|单独)获取[。！？!?；;]?$/u.exec(segment.trim());
             if (acquisition) {
                 const names = acquisition[1].split(/、|与|和|及/u).map(name => name.trim());

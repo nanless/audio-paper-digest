@@ -80,6 +80,42 @@ def normalize_static_html_breaks(text):
     return text
 
 
+def normalize_math_alttext_less_than(text):
+    """Project literal HTML MathML alttext into equivalent XML attributes.
+
+    HTML permits a literal '<' inside quoted attributes; ElementTree does not.
+    Keep the sealed input untouched and preserve the decoded attribute value.
+    All elements, other attributes and dependencies still use the normal gates.
+    """
+    class MathTokens(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.replacements = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag != 'math':
+                return
+            token = self.get_starttag_text()
+            line, column = self.getpos()
+            offset = sum(len(part) + 1 for part in text.split('\n')[:line - 1]) + column
+            for match in re.finditer(r'''([^\s=<>/"']+)\s*=\s*(["'])(.*?)\2''', token, re.S):
+                if match.group(1) == 'alttext' and '<' in match.group(3):
+                    self.replacements.append((offset + match.start(3), match.group(3),
+                                              match.group(3).replace('<', '&lt;')))
+
+        def handle_startendtag(self, tag, attrs):
+            self.handle_starttag(tag, attrs)
+
+    tokens = MathTokens()
+    tokens.feed(text)
+    tokens.close()
+    for offset, original, replacement in reversed(tokens.replacements):
+        if text[offset:offset + len(original)] != original:
+            raise ValueError('MathML 属性位置无效')
+        text = text[:offset] + replacement + text[offset + len(original):]
+    return text
+
+
 class UnsupportedSvgDependency(ValueError):
     """Intact source requires a specifically identified, unsealed CSS rule."""
 
@@ -151,7 +187,8 @@ def has_unsaved_latexml_static_layout(element, parents):
 def validate_svg(raw):
     if not raw or len(raw) > MAX_SOURCE_BYTES:
         raise ValueError('内联 SVG 字节为空或超过受控上限')
-    text = normalize_static_html_breaks(normalize_html_svg_entities(raw.decode('utf-8')))
+    text = normalize_math_alttext_less_than(
+        normalize_static_html_breaks(normalize_html_svg_entities(raw.decode('utf-8'))))
     if re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
         raise ValueError('内联 SVG 不允许实体或处理指令')
     root = ET.fromstring(text)
@@ -282,7 +319,8 @@ def source_descriptor(resource, arxiv_id):
         raise ValueError('内联 SVG 的封存原字节不符')
     if not raw or len(raw) > MAX_SOURCE_BYTES or re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
         raise ValueError('内联 SVG 不允许实体、处理指令或超限来源')
-    root = ET.fromstring(normalize_static_html_breaks(normalize_html_svg_entities(text)))
+    root = ET.fromstring(normalize_math_alttext_less_than(
+        normalize_static_html_breaks(normalize_html_svg_entities(text))))
     element_id = root.attrib.get('id')
     if root.tag.split('}')[-1] != 'svg' or not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(element_id or '')):
         raise ValueError('内联 SVG 没有原文元素定位')
