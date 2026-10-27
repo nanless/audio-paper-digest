@@ -1,6 +1,7 @@
 const { CURRENT_MODEL_POLICY, boundModelPolicy, assertAgentIdentity } = require('../manual/scripts/manual-agent-policy.js');
 const crypto = require('crypto');
 const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
+const { sourceBackedSettingAxes } = require('./lib/experiment-source-setting-axes.js');
 const {
     PAPER_EVALUATION_TITLE,
     normalizeAnalysisSectionTitle,
@@ -771,6 +772,8 @@ function sourceBackedIdentityColumns(table, sourceText) {
     });
     const stageSwitchColumns = table.header.flatMap((header, index) => /^S[1-9][0-9]?$/.test(String(header).trim()) ? [index] : []);
     const sourceBoundStageSwitches = hasObservedStageSwitchTable(table, rawSource, stageSwitchColumns);
+    const observedLossSwitchColumns = sourceBoundLossSwitchColumns(table, rawSource);
+    const observedSettingAxes = sourceBackedSettingAxes(table, rawSource);
     // These two categorical axes are not generic "signal" identifiers.
     // Each actual audiogram/signal pair must belong to one observed source table.
     const audiogram = table.header.findIndex(header => /^(?:听力图|audiograms?)$/iu.test(String(header).trim()));
@@ -798,6 +801,8 @@ function sourceBackedIdentityColumns(table, sourceText) {
         if (table.rows.length < 2) return [];
         if (pairedAudiogramSignals && (index === audiogram || index === signal)) return [index];
         if (sourceBoundStageSwitches && stageSwitchColumns.includes(index)) return [index];
+        if (observedLossSwitchColumns.has(index)) return [index];
+        if (observedSettingAxes.has(index)) return [index];
         const labels = table.rows.map(row => String(row[index] || '').trim());
         if (String(header).trim() === '来源') {
             const completeLabels = labels.every(label => label.length >= 1 && label.length <= 80 && /\p{L}/u.test(label));
@@ -812,6 +817,60 @@ function sourceBackedIdentityColumns(table, sourceText) {
             return match && source.includes(match[1]);
         }) ? [index] : [];
     }));
+}
+
+// A loss *setting* is categorical only when the complete observed factorial
+// configuration table supplies the same row identities and switch values.
+// Boolean-looking metric cells alone never establish that column type.
+function sourceBoundLossSwitchColumns(table, source) {
+    const empty = new Set();
+    if (table.header.length !== 4 || table.rows.length !== 8) return empty;
+    const identifier = table.header.findIndex(header => /^(?:变体|variant|abbrev\.)$/iu.test(String(header).trim()));
+    const controls = [
+        /^(?:条件注入|conditioning)$/iu,
+        /^(?:波形损失归一化|waveform[- ]loss normalization)$/iu,
+        /^(?:语谱图辅助损失|auxiliary spectrogram loss)$/iu
+    ].map(pattern => table.header.findIndex(header => pattern.test(String(header).trim())));
+    if (identifier < 0 || controls.some(index => index < 0)
+        || table.rows.some(row => row.length !== 4 || controls.some(index => !/^(?:是|否)$/u.test(String(row[index]).trim())))) return empty;
+    const denied = text => !ownObservedSourceScope(text)
+        || /```|~~~|(?:^|\n)\s*[>“”"'‘’]|\b(?:quoted?|quotation|(?:not|never)\s+(?:actually\s+)?(?:implemented|executed|performed|trained|evaluated)|(?:did|do|does) not (?:actually )?(?:train|evaluate|implement|execute|perform)|abandon(?:ed)?|retract(?:ed)?)\b|\b(?:external|prior|third[- ]party)\s+(?:work|study|paper|experiment)\b|(?:外部研究|第三方|未实际执行|从未执行|没有执行|未实施|未训练|未评估|撤销|撤回)/iu.test(text);
+    const claims = [...source.matchAll(/^To isolate the contributions of conditioning, loss normalization, and spectrogram loss, eight model variants are trained and evaluated[^\n]*$/gmu)];
+    for (const claim of claims) {
+        const reference = /The variants are summarized in Table\s+(\d+)\./u.exec(claim[0]);
+        if (!reference) continue;
+        const before = source.slice(0, claim.index);
+        // A quoted code block or independent foreign-work heading cannot lend
+        // the paper an observed configuration table.
+        if ((before.match(/^\s*```[^\n]*$|^\s*~~~[^\n]*$/gmu) || []).length % 2) continue;
+        const tail = source.slice(claim.index + claim[0].length);
+        const caption = /^Table\s+(\d+): Overview of model variants differing in conditioning, waveform-loss normalization, and use of an auxiliary spectrogram loss\.([^\n]*)\n/gmu.exec(tail);
+        if (!caption || caption[1] !== reference[1] || tail.slice(0, caption.index).trim()) continue;
+        const rest = tail.slice(caption.index + caption[0].length);
+        const boundary = /^(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+[A-Z][^\n]*|(?:Table|Figure)\s+\d+:|Conclusions?|Discussion|References?)\s*$/mu.exec(rest);
+        const body = rest.slice(0, boundary ? boundary.index : rest.length);
+        const scope = before.trim().split('\n').slice(-1).join('\n') + '\n' + claim[0] + '\n' + caption[0] + body
+            + '\n' + (boundary ? adjacentSourceStatementAfter(rest, boundary.index + boundary[0].length) : '');
+        if (denied(scope)) continue;
+        const lines = body.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+        if (lines.length !== 45 || lines[0] !== 'Abbrev.' || lines[1] !== 'Conditioning'
+            || lines[2] !== 'Loss Norm.' || !/^LSTFT(?:L_\{\\mathrm\{STFT\}\})?$/u.test(lines[3]) || lines[4] !== 'Description') continue;
+        const vectors = new Set();
+        const names = new Set();
+        let matches = true;
+        for (let row = 0; row < 8; row++) {
+            const [name, conditioning, normalization, spectrogram] = lines.slice(5 + row * 5, 9 + row * 5);
+            if (!/^[A-Za-z][A-Za-z0-9-]*$/u.test(name) || !/^(?:–|FiLM)$/u.test(conditioning)
+                || !/^(?:–|✓)$/u.test(normalization) || !/^(?:–|✓)$/u.test(spectrogram)) { matches = false; break; }
+            const flags = [conditioning === 'FiLM', normalization === '✓', spectrogram === '✓'];
+            vectors.add(flags.join('|'));
+            names.add(name);
+            if (String(table.rows[row][identifier]).trim() !== name
+                || controls.some((column, index) => String(table.rows[row][column]).trim() !== (flags[index] ? '是' : '否'))) { matches = false; break; }
+        }
+        if (matches && vectors.size === 8 && names.size === 8) return new Set(controls);
+    }
+    return empty;
 }
 
 function ownObservedSourceScope(text) {
@@ -1538,6 +1597,52 @@ function sourceBoundReverseBaselineComparison(results, tables, sourceText) {
     return false;
 }
 
+function sourceBoundMatchedAcousticGap(results, tables, sourceText) {
+    if (/```|~~~|(?:^|\n)\s*>|<(?:blockquote|pre|code)\b/iu.test(String(results || ''))) return false;
+    const quoted = value => value.lastIndexOf('“') > value.lastIndexOf('”')
+        || value.lastIndexOf('‘') > value.lastIndexOf('’')
+        || (value.match(/(?<!\\)"/gu) || []).length % 2 === 1;
+    const source = String(sourceText || '');
+    const pattern = /\b([A-Z][A-Za-z0-9_-]{1,40}) produces recognizable isolated coda-like sounds\s*(?:\[[0-9]+\])?\.\s*Yet its generated recordings remain distinguishable from natural codas in (one|two|three|four|five|six|seven|eight|nine|ten) of (one|two|three|four|five|six|seven|eight|nine|ten) acoustic descriptions, including after the strictest matching on measured recording properties \(Fig\.\s*[0-9]+; exact estimates in the Supplement\)\.\s*That matched comparison uses ([1-9][0-9]*) generated clips and (one|two|three|four|five|six|seven|eight|nine|ten) independent natural reference groups\./gu;
+    const cardinal = value => ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'].indexOf(value);
+    for (const match of source.matchAll(pattern)) {
+        const [, name, positiveWord, totalWord, clips, groupsWord] = match;
+        const positive = cardinal(positiveWord), total = cardinal(totalWord), groups = cardinal(groupsWord);
+        if (positive <= 0 || positive > total || groups < 2) continue;
+        const before = source.slice(0, match.index);
+        const prefix = before.split('\n').at(-1);
+        const previous = normalizeLocalEvidenceHeading(before.slice(0, before.lastIndexOf('\n')).trimEnd().split('\n').at(-1) || '');
+        const following = source.slice(match.index + match[0].length).split(/\n\s*\n/u)[0];
+        const revoked = /(?:(?:this|that|the (?:above|preceding|matched))\s+(?:comparison|result|experiment|test)[^.!?]{0,100}\b(?:never|not\s+(?:actually\s+)?(?:performed|conducted|observed)|false|incorrect|withdrawn|retracted)\b|(?:this|that)\s+(?:was|is)\s+(?:never|not|only hypothetical)\b|we\s+(?:did|do|have|will)\s+not\s+(?:actually\s+)?(?:perform|conduct|run|observe)\s+(?:this|that|the (?:above|preceding|matched))\s+(?:comparison|result|experiment|test)\b)/iu;
+        let fenced = false;
+        for (const line of before.split('\n')) if (/^\s*(?:```|~~~)/u.test(line)) fenced = !fenced;
+        if (!ownObservedSourceScope(prefix + '\n' + match[0]) || /[“”‘’"]|(?:^|\s)>/u.test(prefix)
+            || quoted(before)
+            || /^(?:(?:previous|prior|related|third[- ]party|other)\s+(?:work|research|study)|quoted statement|quotation|hypothetical example)[.:]?$/iu.test(previous)
+            || fenced || revoked.test(following)
+            || /<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$/iu.test(before.slice(Math.max(before.lastIndexOf('</blockquote>'), before.lastIndexOf('</pre>'), before.lastIndexOf('</code>')) + 1))) continue;
+        const reported = [...String(results).matchAll(/[^。；\n]+/gu)].some(fragment => {
+            const sentence = fragment[0];
+            if (quoted(String(results).slice(0, fragment.index))) return false;
+            if (/假设|如果|未来|计划|预计|可能|第三方|他人|先前研究|相关工作|引用|引述|转述|并非|并未|不是|未曾|未(?:实际)?(?:观测|观察|测得|发现|报告|执行|进行|比较)|没有|尚未|否认|撤回|错误|[“”‘’"?？]/u.test(sentence)) return false;
+            const measured = /([1-9][0-9]*)\s*个孤立生成片段在\s*([1-9][0-9]*)\s*种固定声学描述中有\s*([1-9][0-9]*)\s*种仍可与自然\s*coda\s*区分/u.exec(sentence);
+            return measured && measured[1] === clips && Number(measured[2]) === total && Number(measured[3]) === positive;
+        });
+        if (!reported) continue;
+        // The same reported row must retain the generator, strict matching,
+        // both natural reference groups, and the full denominator. A generic
+        // statement that two distributions differ cannot supply a failure case.
+        if (tables.some(table => {
+            const contrast = table.header.findIndex(header => String(header).trim() === '数据与对照');
+            const count = table.header.findIndex(header => new RegExp('^可区分描述数\\s*/\\s*' + total + '$', 'u').test(String(header).trim()));
+            return contrast >= 0 && count >= 0 && table.rows.some(row =>
+                String(row[0]).trim() === '自然与 ' + name && String(row[count]).trim() === String(positive)
+                && new RegExp('^' + clips + '\\s*个生成片段[，,]\\s*' + groups + '\\s*个独立自然参照组[，,]\\s*严格匹配$', 'u').test(String(row[contrast]).trim()));
+        })) return true;
+    }
+    return false;
+}
+
 function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     const results = extractSection(analysis, '实验结果');
     if (!results) return null;
@@ -1664,6 +1769,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
     const resultHasNegative = hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
+        || sourceBoundMatchedAcousticGap(results, tables, options.sourceText)
         || hasSourceBackedNetIntervalNegative(results, tables, options.sourceText)
         || sourceBoundLowerMetricIncrease(results, sourceText)
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceText, true)
