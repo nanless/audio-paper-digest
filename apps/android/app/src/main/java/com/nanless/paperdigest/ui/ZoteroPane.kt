@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
  Text("独立存档记录",style=MaterialTheme.typography.titleLarge)
  z.rows("journals").forEach{j->
  val hasMigrationChild=z.rows("journals").any{it.optString("migrationParentID")==j.optString("id")}
- OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+ key(j.optString("id")){OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
   Text("附件后端：${if(j.optString("attachmentBackend","storage")=="webdav")"WebDAV" else "Zotero Storage"}")
   if(j.optString("migrationParentID").isNotBlank())Text("由原 Storage 存档继续；原记录和原材料仍单独保留。",style=MaterialTheme.typography.bodySmall)
   if(hasMigrationChild)Text("已另建 WebDAV 继续记录；此处仍保留原 Storage 的结果。",style=MaterialTheme.typography.bodySmall)
@@ -82,7 +82,7 @@ import kotlinx.coroutines.launch
   j.optString("error").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
   OutlinedButton({action("zotero.resume",obj("journalID" to j.optString("id")))},enabled=!busy&&!dirty&&!hasMigrationChild){Text(if(j.optString("status")=="completed")"重新逐项回读" else "沿原断点继续")}
   ZoteroMigrationEntry(j,state,controller,action,enabled=!busy&&!dirty)
- }}}
+ }}}}
  z.optJSONObject("macHistory")?.let{history->
   val oldRecords=history.rows("records")
   if(oldRecords.isNotEmpty()||history.optInt("unreadableCount")>0){
