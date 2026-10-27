@@ -13,12 +13,26 @@ struct AggregatePresentationDocument: Sendable {
     let validatedAt: String?
     let displayHTML: String
     fileprivate let links: [String]
+    let imageRender: AggregateResourceRender?
+    let imageNotice: String
 
-    fileprivate init(source: AggregateDocument, access: AggregateReadAccess, stale: Bool, notice: String) throws {
+    fileprivate init(source: AggregateDocument, access: AggregateReadAccess, stale: Bool, notice: String, images:AggregateResourceRender?=nil, imageNotice:String="") throws {
         try PublishedAggregateReader.require(source.descriptor == access.descriptor, "汇总正文与原目录不一致")
         try PublishedAggregateReader.require(PublishedAggregateReader.sha(Data(source.bodyHTML.utf8)) == source.sanitizedBodySHA256, "汇总正文派生身份无效")
-        let tree = try XMLDocument(xmlString: "<div>" + source.bodyHTML + "</div>", options: [.nodeLoadExternalEntitiesNever, .nodePreserveWhitespace])
+        if let images {
+            try PublishedAggregateReader.require(images.manifest.plan.descriptor==source.descriptor&&images.manifest.plan.rawHTMLSHA256==source.rawHTMLSHA256&&images.manifest.plan.originalBodySHA256==source.sanitizedBodySHA256&&images.manifest.completeOffline==false&&PublishedAggregateReader.sha(Data(images.bodyHTML.utf8))==images.manifest.renderedBodySHA256,"图片呈现与原网页身份不符")
+        }
+        let tree = try XMLDocument(xmlString: "<div>" + (images?.bodyHTML ?? source.bodyHTML) + "</div>", options: [.nodeLoadExternalEntitiesNever, .nodePreserveWhitespace])
         guard let root = tree.rootElement() else { throw AggregateFailure.invalid("汇总正文为空") }
+        var imageSources:[Int:String]=[:]
+        if let images {
+            let available=images.manifest.images.filter{$0.sha256 != nil},nodes=try root.nodes(forXPath:".//img")
+            try PublishedAggregateReader.require(nodes.count==available.count,"图片呈现数量不符")
+            for (index,node) in nodes.enumerated() {
+                guard let image=node as? XMLElement,let dataURL=image.attribute(forName:"src")?.stringValue,let mime=available[index].mime,dataURL.hasPrefix("data:"+mime+";base64,"),let data=Data(base64Encoded:String(dataURL.dropFirst(("data:"+mime+";base64,").count))),data.count==available[index].bytes,PublishedAggregateReader.sha(data)==available[index].sha256,LibraryService.aggregateImageMIME(data)==mime else{throw AggregateFailure.invalid("图片呈现没有匹配真实核验字节")}
+                imageSources[index]=dataURL
+            }
+        }
         var addresses: [String] = []
         for node in try root.nodes(forXPath: ".//a[@href]") {
             guard let anchor = node as? XMLElement, let href = anchor.attribute(forName: "href")?.stringValue else { continue }
@@ -38,13 +52,14 @@ struct AggregatePresentationDocument: Sendable {
             }
         }
         for node in try root.nodes(forXPath: ".//script | .//iframe | .//object | .//embed | .//form | .//style | .//link | .//meta | .//base") { node.detach() }
-        for node in try root.nodes(forXPath: ".//img") {
+        for (index,node) in try root.nodes(forXPath: ".//img").enumerated() {
             guard let image = node as? XMLElement, let parent = image.parent as? XMLElement else { continue }
+            if let dataURL=imageSources[index]{image.addAttribute(XMLNode.attribute(withName:"src",stringValue:dataURL) as! XMLNode);continue}
             let description = image.attribute(forName: "alt")?.stringValue ?? ""
             let placeholder = XMLNode.text(withStringValue: "[图片未缓存" + (description.isEmpty ? "" : "：" + description) + "]") as! XMLNode
             parent.insertChild(placeholder, at: image.index); image.detach()
         }
-        self.source = source; self.isStale = stale; self.readNotice = notice
+        self.source = source; self.isStale = stale; self.readNotice = notice;self.imageRender=images;self.imageNotice=imageNotice
         self.validatedAt = stale ? nil : ISO8601DateFormatter().string(from: Date())
         self.displayHTML = (root.children ?? []).map { $0.xmlString(options: [.nodePreserveWhitespace]) }.joined()
         self.links = addresses
@@ -61,6 +76,12 @@ struct AggregatePresentationDocument: Sendable {
         value["displayBodySHA256"] = PublishedAggregateReader.sha(Data(displayHTML.utf8))
         value["isStale"] = isStale; value["readNotice"] = readNotice; value["linkCount"] = links.count
         value["validatedAt"] = validatedAt ?? NSNull()
+        value["imageNotice"]=imageNotice
+        if let render=imageRender {
+            value["resourceManifestSHA256"]=render.manifestSHA256;value["resourceContract"]=render.manifest.contract;value["resourceObservedAt"]=render.manifest.observedAt;value["resourceBodySHA256"]=render.manifest.renderedBodySHA256
+            value["resourceImages"]=render.manifest.images.map{row -> [String:Any] in ["position":row.slot.index,"sourceURL":row.slot.sourceURL as Any? ?? NSNull(),"alternative":row.slot.alternative,"caption":row.slot.caption,"sha256":row.sha256 as Any? ?? NSNull(),"mime":row.mime as Any? ?? NSNull(),"bytes":row.bytes as Any? ?? NSNull(),"missingReason":row.missingReason as Any? ?? NSNull()]}
+            value["notices"]=source.notices.map{$0=="部分图片尚未保存，不能称为完整离线页面。" ? "原正文修订首次保存时未含图片；独立图片修订状态见下。":$0}
+        }
         return value
     }
 }
@@ -86,13 +107,22 @@ extension LibraryService {
         do {
             let source = try await aggregateDocument(id: access.descriptor.id)
             try Task.checkCancellation(); try requireAggregateAccess(access)
-            return try AggregatePresentationDocument(source: source, access: access, stale: false, notice: "已读取并核对网站当前正文")
+            let images=try await presentationImageResult(source,allowNetwork:true)
+            try Task.checkCancellation();try requireAggregateAccess(access)
+            return try AggregatePresentationDocument(source: source, access: access, stale: false, notice: "已读取并核对网站当前正文",images:images.0,imageNotice:images.1)
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             try requireAggregateAccess(access)
             guard let cached else { throw error }
-            return try AggregatePresentationDocument(source: cached, access: access, stale: true, notice: "网站当前正文未能读取；显示本机已核验的旧快照，未声称当前版本")
+            let images=try await presentationImageResult(cached,allowNetwork:false)
+            try Task.checkCancellation();try requireAggregateAccess(access)
+            return try AggregatePresentationDocument(source: cached, access: access, stale: true, notice: "网站当前正文未能读取；显示本机已核验的旧快照，未声称当前版本",images:images.0,imageNotice:images.1)
         }
+    }
+    private func presentationImageResult(_ source:AggregateDocument,allowNetwork:Bool) async throws->(AggregateResourceRender?,String) {
+        do{let images=try await aggregatePresentationImages(source,allowNetwork:allowNetwork);return(images,images==nil ? "没有已核验的独立图片修订":"图片按独立保存时刻核验；未声称全部网页资源完整离线")}
+        catch is CancellationError{throw CancellationError()}
+        catch{return(nil,"图片资源核验未完成；保留只读正文，没有挑选其他资源修订")}
     }
     func aggregateLink(_ access: AggregateReadAccess, document: AggregatePresentationDocument, index: Int) throws -> AggregateLinkDestination {
         try requireAggregateAccess(access)

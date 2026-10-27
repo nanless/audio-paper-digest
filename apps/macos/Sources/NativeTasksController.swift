@@ -34,6 +34,7 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
     private(set) var readFailed = false
     private(set) var filter: NativeTaskFilter = .all
     private(set) var pageIndex = 0
+    private var renderedFilter: NativeTaskFilter?, renderedPage: Int?
     private(set) var actionButtons: [NativeTaskActionButton] = []
     private(set) var lastActionTask: Task<Void, Never>?
     private(set) var noticeText = ""
@@ -165,6 +166,8 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
         actionButtons = []
         guard let snapshot else { summary.stringValue = "任务记录尚未读取"; stack.addArrangedSubview(label("暂时无法读取任务。请重新读取，原记录保留。")); previous.isEnabled = false; next.isEnabled = false; return }
         let page = snapshot.page(filter: filter, requested: pageIndex); pageIndex = page.page
+        let samePage = renderedFilter == filter && renderedPage == page.page
+        renderedFilter = filter; renderedPage = page.page
         summary.stringValue = page.summary + (readFailed ? " · 未刷新，显示上次原记录" : "")
         previous.isEnabled = page.page > 0; next.isEnabled = page.page + 1 < page.pageCount
         if page.rows.isEmpty { stack.addArrangedSubview(label("没有此类任务", size: 17)); stack.addArrangedSubview(label("同步、原文下载、个人解析与存档的实际记录会出现在这里。", secondary: true)) }
@@ -190,8 +193,8 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
         }
         view.layoutSubtreeIfNeeded()
         let maxY = max(0, document.bounds.height - scroll.contentView.bounds.height)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, max(0, oldOrigin.y)))); scroll.reflectScrolledClipView(scroll.contentView)
-        if let oldFocus, let button = actionButtons.first(where: { $0.lease?.jobID == oldFocus.0 && $0.lease?.action == oldFocus.1 }),button.isEnabled,!button.isHiddenOrHasHiddenAncestor { view.window?.makeFirstResponder(button) }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, max(0, samePage ? oldOrigin.y : 0)))); scroll.reflectScrolledClipView(scroll.contentView)
+        if samePage, let oldFocus, let button = actionButtons.first(where: { $0.lease?.jobID == oldFocus.0 && $0.lease?.action == oldFocus.1 }),button.isEnabled,!button.isHiddenOrHasHiddenAncestor { view.window?.makeFirstResponder(button) }
     }
     @objc private func clicked(_ sender: NativeTaskActionButton) {
         guard let lease = sender.lease else { return }

@@ -22,6 +22,7 @@ import AppKit
     private let scroll=NSScrollView(),document=NotesCanvas()
     private let previous=NSButton(title:"上一页",target:nil,action:nil),next=NSButton(title:"下一页",target:nil,action:nil),reread=NSButton(title:"重新读取",target:nil,action:nil),back=NSButton(title:"返回资料库",target:nil,action:nil)
     private(set) var snapshot:NativeNotesSnapshot?,pageIndex=0,readFailed=false,buttons:[NativeNotesButton]=[]
+    private var renderedPage:Int?
     private(set) var lastActionTask:Task<Void,Never>?
     private var pending=Set<String>()
     init(route:NativeNotesRouteGate,provider:@escaping()throws->NativeNotesSnapshot,open:@escaping(NativeNotesLease)async throws->Void,close:@escaping()async throws->Void){self.route=route;self.provider=provider;self.open=open;self.close=close;super.init(nibName:nil,bundle:nil)}
@@ -110,7 +111,9 @@ import AppKit
         route.renewPresentation()
         stack.arrangedSubviews.forEach{stack.removeArrangedSubview($0);$0.removeFromSuperview()};buttons=[]
         guard let snapshot else{summary.stringValue="笔记记录尚未读取";stack.addArrangedSubview(label("暂时无法读取笔记。原研究记录保留，请重新读取。"));previous.isEnabled=false;next.isEnabled=false;return}
-        let page=snapshot.page(pageIndex);pageIndex=page.index;summary.stringValue="\(page.total) 篇笔记 · 第 \(page.index+1) / \(page.count) 页"+(readFailed ? " · 未刷新":"")
+        let page=snapshot.page(pageIndex);pageIndex=page.index
+        let samePage=renderedPage==page.index;renderedPage=page.index
+        summary.stringValue="\(page.total) 篇笔记 · 第 \(page.index+1) / \(page.count) 页"+(readFailed ? " · 未刷新":"")
         previous.isEnabled=page.index>0;next.isEnabled=page.index+1<page.count
         if page.rows.isEmpty{stack.addArrangedSubview(label("留住你的思考",size:17));stack.addArrangedSubview(label("研究笔记、原文摘录和个人批注会按论文汇集在这里。",secondary:true))}
         for row in page.rows{
@@ -121,8 +124,8 @@ import AppKit
             NSLayoutConstraint.activate([card.widthAnchor.constraint(equalTo:stack.widthAnchor),fields.leadingAnchor.constraint(equalTo:card.leadingAnchor,constant:16),fields.trailingAnchor.constraint(equalTo:card.trailingAnchor,constant:-16),fields.topAnchor.constraint(equalTo:card.topAnchor,constant:14),fields.bottomAnchor.constraint(equalTo:card.bottomAnchor,constant:-14)])
             for field in fields.arrangedSubviews.compactMap({$0 as? NSTextField}){field.widthAnchor.constraint(equalTo:fields.widthAnchor).isActive=true}
         }
-        view.layoutSubtreeIfNeeded();scroll.contentView.scroll(to:.init(x:0,y:min(max(0,document.bounds.height-scroll.contentView.bounds.height),max(0,origin.y))));scroll.reflectScrolledClipView(scroll.contentView)
-        if let focused,let button=buttons.first(where:{$0.lease?.row.paperID==focused}),button.isEnabled,!button.isHiddenOrHasHiddenAncestor{view.window?.makeFirstResponder(button)}
+        view.layoutSubtreeIfNeeded();scroll.contentView.scroll(to:.init(x:0,y:min(max(0,document.bounds.height-scroll.contentView.bounds.height),max(0,samePage ? origin.y:0))));scroll.reflectScrolledClipView(scroll.contentView)
+        if samePage,let focused,let button=buttons.first(where:{$0.lease?.row.paperID==focused}),button.isEnabled,!button.isHiddenOrHasHiddenAncestor{view.window?.makeFirstResponder(button)}
     }
     @objc private func clicked(_ sender:NativeNotesButton){guard let lease=sender.lease else{return};lastActionTask=Task{[weak self] in await self?.invoke(lease)}}
     func invoke(_ lease:NativeNotesLease)async{

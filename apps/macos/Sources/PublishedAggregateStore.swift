@@ -183,3 +183,80 @@ extension PublishedAggregateStore {
         return latest
     }
 }
+
+extension PublishedAggregateStore {
+    func imagePlan(_ source:AggregateDocument)throws->AggregateImagePlan {
+        try PublishedAggregateReader.require(try cachedDocument(descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256)==source,"图片计划必须重放原网页修订")
+        let folder=["aggregate-documents",PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256]
+        return try LibraryService.aggregateImagePlan(source,rawHTML:read(child(folder+["original.html"]),limit:16*1024*1024),siteBaseURL:siteBase)
+    }
+    private func resourceFolder(_ source:AggregateDocument)throws->[String] {
+        try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(source.rawHTMLSHA256),"图片原网页SHA无效")
+        return [AggregateResources.renderDirectory,PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256,AggregateResources.contract]
+    }
+    func cacheResourceRendering(source:AggregateDocument,plan:AggregateImagePlan,images:[Int:AggregateImageBytes],missing:[Int:String],observedAt:String)throws->AggregateResourceRender {
+        try PublishedAggregateReader.require(try imagePlan(source)==plan,"图片位置或原来源已变化")
+        let valid=Set(plan.slots.map{$0.index});try PublishedAggregateReader.require(Set(images.keys).isSubset(of:valid)&&Set(missing.keys).isSubset(of:valid)&&Set(images.keys).isDisjoint(with:Set(missing.keys)),"图片结果含未知或冲突位置")
+        var assets:[String:AggregateImageBytes]=[:]
+        let records=plan.slots.map { slot -> AggregateImageRecord in
+            if let asset=images[slot.index]{let sha=PublishedAggregateReader.sha(asset.data);assets[sha]=asset;return .init(slot:slot,sha256:sha,mime:asset.mime,bytes:asset.data.count,missingReason:nil)}
+            return .init(slot:slot,sha256:nil,mime:nil,bytes:nil,missingReason:missing[slot.index] ?? "该图片尚未保存")
+        }
+        let html=try AggregateResources.render(source:source,plan:plan,images:records,assets:assets)
+        let manifest=AggregateResourceManifest(contract:AggregateResources.contract,plan:plan,observedAt:observedAt,images:records,renderedBodySHA256:PublishedAggregateReader.sha(Data(html.utf8)),completeOffline:false)
+        try validResourceTime(observedAt)
+        let bytes=try json(manifest),sha=PublishedAggregateReader.sha(bytes)
+        try PublishedAggregateReader.require(bytes.count<=4*1024*1024,"图片资源清单超过大小限制")
+        for (sha,asset) in assets.sorted(by:{$0.key<$1.key}) {try immutable(asset.data,to:child(["aggregate-image-bytes-v1",sha]))}
+        try immutable(bytes,to:child(resourceFolder(source)+[sha+".json"]))
+        return try cachedResourceRendering(source:source,manifestSHA256:sha)
+    }
+    private func validResourceTime(_ value:String)throws {
+        let formatter=ISO8601DateFormatter();var time=formatter.date(from:value)
+        if time==nil{formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds];time=formatter.date(from:value)}
+        try PublishedAggregateReader.require(time != nil,"图片资源观察时间无效")
+    }
+    func cachedResourceRendering(source:AggregateDocument,manifestSHA256:String)throws->AggregateResourceRender {
+        let plan=try imagePlan(source)
+        try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(manifestSHA256),"图片资源修订SHA无效")
+        let bytes=try read(child(resourceFolder(source)+[manifestSHA256+".json"]),limit:4*1024*1024)
+        try PublishedAggregateReader.require(PublishedAggregateReader.sha(bytes)==manifestSHA256,"图片资源清单真实字节已变化")
+        let manifest=try JSONDecoder().decode(AggregateResourceManifest.self,from:bytes)
+        try PublishedAggregateReader.require(manifest.contract==AggregateResources.contract&&manifest.plan==plan&&manifest.completeOffline==false,"图片资源原HTML、目录或派生版本不符")
+        try validResourceTime(manifest.observedAt)
+        try AggregateResources.validateReferenceBudget(manifest.images)
+        var assets:[String:AggregateImageBytes]=[:]
+        for record in manifest.images {
+            if let sha=record.sha256,let mime=record.mime {
+                try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(sha),"图片字节SHA无效")
+                guard let size=record.bytes else{throw AggregateFailure.invalid("图片字节长度缺失")}
+                let data=try read(child(["aggregate-image-bytes-v1",sha]),limit:size)
+                try PublishedAggregateReader.require(data.count==size,"图片字节长度与清单不一致")
+                assets[sha] = .init(data:data,mime:mime)
+            }
+        }
+        let html=try AggregateResources.render(source:source,plan:plan,images:manifest.images,assets:assets)
+        try PublishedAggregateReader.require(PublishedAggregateReader.sha(Data(html.utf8))==manifest.renderedBodySHA256,"图片渲染派生身份不符")
+        return .init(manifest:manifest,manifestSHA256:manifestSHA256,bodyHTML:html)
+    }
+}
+
+extension PublishedAggregateStore {
+    /// Strict same-HTML scope. Every peer is cold-verified; damaged peers cannot be skipped for an older render.
+    func latestResourceRendering(source:AggregateDocument)throws->AggregateResourceRender? {
+        _=try imagePlan(source)
+        let folder=try child(resourceFolder(source));try noLinks(folder)
+        guard fm.fileExists(atPath:folder.path) else{return nil}
+        let files=try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil)
+        var latest:AggregateResourceRender?
+        for file in files.sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) {
+            let name=file.lastPathComponent
+            try PublishedAggregateReader.require(name.hasSuffix(".json")&&PublishedAggregateReader.validSHA(String(name.dropLast(5))),"图片修订目录含未知项，未挑选旧修订")
+            let value=try cachedResourceRendering(source:source,manifestSHA256:String(name.dropLast(5)))
+            let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+            func time(_ text:String)->Date{formatter.date(from:text) ?? ISO8601DateFormatter().date(from:text)!}
+            if latest==nil || time(value.manifest.observedAt)>time(latest!.manifest.observedAt){latest=value}
+        }
+        try noLinks(folder);return latest
+    }
+}

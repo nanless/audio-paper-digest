@@ -784,6 +784,98 @@ actor LibraryService {
         return AggregateDocument(contract:"published-aggregate-document-v1",descriptor:descriptor,responseURL:responseURL.absoluteString,fetchedAt:fetchedAt,rawHTMLSHA256:PublishedAggregateReader.sha(bytes),rawHTMLBytes:bytes.count,sanitizedBodySHA256:PublishedAggregateReader.sha(Data(html.utf8)),bodyHTML:html,plainText:plain,parserContract:"published-aggregate-html-v1",resources:resources,completeOffline:false,notices:["网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。"]+(resources.isEmpty ? []:["部分图片尚未保存，不能称为完整离线页面。"]))
     }
 
+    static func aggregateImagePlan(_ source:AggregateDocument,rawHTML:Data,siteBaseURL:URL=PublishedAggregateReader.site)throws->AggregateImagePlan {
+        try PublishedAggregateReader.require(PublishedAggregateReader.sha(rawHTML)==source.rawHTMLSHA256,"图片原HTML身份不符")
+        let bytes=rawHTML,descriptor=source.descriptor,fetchedAt=source.fetchedAt
+        guard let responseURL=URL(string:source.responseURL) else{throw AggregateFailure.invalid("图片原响应地址无效")}
+        guard bytes.count>0,bytes.count<=16*1024*1024,let raw=String(data:bytes,encoding:.utf8),(ISO8601DateFormatter().date(from:fetchedAt) != nil || {let format=ISO8601DateFormatter();format.formatOptions=[.withInternetDateTime,.withFractionalSeconds];return format.date(from:fetchedAt) != nil}()) else{throw AggregateFailure.invalid("汇总网页原件编码、时间或大小无效")}
+        let expected=try PublishedAggregateReader.pageURL(descriptor.sourceURL,siteBase:siteBaseURL)
+        try PublishedAggregateReader.require(responseURL.absoluteString==expected.absoluteString,"汇总实际响应地址不一致")
+        // Independent resource-body derivation retains figure/caption boundaries; the v1 extractor above is unchanged.
+        let marker="data-aggregate-tag-"+UUID().uuidString.lowercased()
+        let figures=try NSRegularExpression(pattern:"(?i)<(figure|figcaption)(?=[\\s/>])")
+        let figureBody=figures.stringByReplacingMatches(in:raw,range:NSRange(raw.startIndex..<raw.endIndex,in:raw),withTemplate:"<div "+marker+"=\"$1\"")
+        let closes=try NSRegularExpression(pattern:"(?i)</(?:figure|figcaption)\\s*>")
+        let grouped=closes.stringByReplacingMatches(in:figureBody,range:NSRange(figureBody.startIndex..<figureBody.endIndex,in:figureBody),withTemplate:"</div>")
+        let containers=try NSRegularExpression(pattern:"(?i)<(/?)(section|article|main)(?=[\\s/>])")
+        let adapted=containers.stringByReplacingMatches(in:grouped,range:NSRange(grouped.startIndex..<grouped.endIndex,in:grouped),withTemplate:"<$1div")
+        let doc=try htmlDocumentPreservingMath(adapted);defer{withExtendedLifetime(doc){}}
+        let canonical=try doc.nodes(forXPath:"//link[translate(@rel,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='canonical']")
+        try PublishedAggregateReader.require(canonical.count<=1,"汇总网页声明多个规范地址")
+        if let element=canonical.first as? XMLElement {
+            guard let value=element.attribute(forName:"href")?.stringValue else{throw AggregateFailure.invalid("汇总规范地址缺失")}
+            try PublishedAggregateReader.require(try PublishedAggregateReader.pageURL(value,siteBase:siteBaseURL)==expected,"汇总规范地址与目录不一致")
+        }
+        let selector:String
+        switch descriptor.kind {
+        case .daily,.conference: selector="//div[@id='article-body' and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"
+        case .page:
+            if expected.absoluteString == siteBaseURL.appendingPathComponent("conferences",isDirectory:true).absoluteString {selector="//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]"}
+            else {selector="//div[contains(concat(' ',normalize-space(@class),' '),' reader-guide-content ') and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"}
+        }
+        let nodes=try doc.nodes(forXPath:selector)
+        guard nodes.count==1,let body=nodes.first as? XMLElement else{throw AggregateFailure.invalid("汇总正文结构缺失或重复，未读取导航/首页代替")}
+        for hidden in try body.nodes(forXPath:".//*[@hidden]"){hidden.detach()}
+        let groups=try body.nodes(forXPath:".//div[@"+marker+"]").compactMap{node -> (XMLElement,String)? in
+            guard let element=node as? XMLElement,let tag=element.attribute(forName:marker)?.stringValue?.lowercased(),["figure","figcaption"].contains(tag) else{return nil};return(element,tag)
+        }
+        try sanitize(body,pageURL:expected)
+        for (element,tag) in groups{element.name=tag}
+        return try AggregateResources.plan(source:source,sanitizedBody:body)
+    }
+    static func aggregateImageMIME(_ bytes:Data)->String? {
+        guard !bytes.isEmpty,let ext=try? imageExtension(bytes,url:PublishedAggregateReader.site) else{return nil}
+        return imageMIME(ext)
+    }
+    /// The same normal network/type guards as paper images, without a paper or model capability.
+    private func aggregateImageData(_ slot:AggregateImageSlot,limit:Int) async throws->Data {
+        guard let address=slot.sourceURL,let url=URL(string:address),url.scheme=="https",url.user==nil,url.password==nil,url.port==nil || url.port==443,url.fragment==nil else{throw AggregateFailure.invalid("原图片地址不受支持")}
+        if url.host?.lowercased()==siteBaseURL.host?.lowercased(),!Self.isOwnedPublishedImage(url){_=try sameSite(address)}
+        else{guard Self.isApprovedExternalResource(url) else{throw AggregateFailure.invalid("原图片不在已支持的官方来源")}}
+        return try await read(url,limit:limit)
+    }
+    func aggregatePresentationImages(_ source:AggregateDocument,allowNetwork:Bool) async throws->AggregateResourceRender? {
+        let cached=try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).latestResourceRendering(source:source)
+        if !allowNetwork{return cached}
+        if let cached,cached.manifest.images.allSatisfy({$0.sha256 != nil}){return cached}
+        return try await aggregateResourceRendering(source)
+    }
+    func aggregateResourceRendering(_ source:AggregateDocument) async throws->AggregateResourceRender {
+        let store=PublishedAggregateStore(directory:directory,siteBase:siteBaseURL)
+        guard try aggregateCatalog()?.records.contains(source.descriptor)==true else{throw AggregateFailure.invalid("图片原目录已变化")}
+        let current=try store.cachedDocument(descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256)
+        try PublishedAggregateReader.require(current==source,"图片必须绑定已核验的原网页修订")
+        let epoch=snapshot.validationEpoch,snapshotID=snapshot.summary.snapshotID
+        let plan=try store.imagePlan(source)
+        var assets:[Int:AggregateImageBytes]=[:],missing:[Int:String]=[:],downloaded:[String:AggregateImageBytes]=[:],total=0,referencedBytes=0
+        for slot in plan.slots {
+            try Task.checkCancellation()
+            do {
+                guard referencedBytes<AggregateResources.maxReferencedBytes else{throw AggregateFailure.invalid("页面图片引用预算已耗尽")}
+                let asset:AggregateImageBytes
+                if let address=slot.sourceURL,let cached=downloaded[address]{asset=cached}
+                else{
+                    guard total<AggregateResources.maxTotalBytes else{throw AggregateFailure.invalid("页面图片累计或保守传输预算已耗尽")}
+                    let bytes:Data
+                    do{bytes=try await aggregateImageData(slot,limit:min(AggregateResources.maxImageBytes,AggregateResources.maxTotalBytes-total,AggregateResources.maxReferencedBytes-referencedBytes))}
+                    catch is CancellationError{throw CancellationError()}
+                    catch{if !(error is AggregateFailure){total=AggregateResources.maxTotalBytes};throw error}
+                    total+=bytes.count
+                    guard let mime=Self.aggregateImageMIME(bytes) else{throw AggregateFailure.invalid("原图片字节类型不受支持")}
+                    asset = .init(data:bytes,mime:mime)
+                    if let address=slot.sourceURL{downloaded[address]=asset}
+                }
+                guard asset.data.count<=AggregateResources.maxReferencedBytes-referencedBytes else{throw AggregateFailure.invalid("页面图片引用累计超过64 MiB")}
+                referencedBytes+=asset.data.count
+                assets[slot.index]=asset
+            }catch is CancellationError{throw CancellationError()}
+            catch{missing[slot.index]="该图片未保存；原地址不可用、类型不支持或超出安全限额"}
+        }
+        try Task.checkCancellation()
+        guard snapshot.validationEpoch==epoch,snapshot.summary.snapshotID==snapshotID else{throw AggregateFailure.invalid("保存图片期间目录已变化")}
+        return try store.cacheResourceRendering(source:source,plan:plan,images:assets,missing:missing,observedAt:Self.now())
+    }
+
     static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {
         let doc = try htmlDocumentPreservingMath(raw)
         // Foundation's HTML tidy removes HTML5 <article>/<section> wrappers on macOS;
