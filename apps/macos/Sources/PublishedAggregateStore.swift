@@ -217,6 +217,14 @@ extension PublishedAggregateStore {
         if time==nil{formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds];time=formatter.date(from:value)}
         try PublishedAggregateReader.require(time != nil,"图片资源观察时间无效")
     }
+    /// Re-read a retained source-bound image before reusing it in a later partial rendering.
+    func retainedResourceBytes(_ record:AggregateImageRecord)throws->AggregateImageBytes {
+        guard let sha=record.sha256,PublishedAggregateReader.validSHA(sha),let mime=record.mime,
+              let size=record.bytes,size>0,size<=AggregateResources.maxImageBytes,record.missingReason==nil else{throw AggregateFailure.invalid("已存图片记录不完整")}
+        let bytes=try read(child(["aggregate-image-bytes-v1",sha]),limit:size)
+        try PublishedAggregateReader.require(bytes.count==size&&PublishedAggregateReader.sha(bytes)==sha&&LibraryService.aggregateImageMIME(bytes)==mime,"已存图片真实字节或类型不符")
+        return .init(data:bytes,mime:mime)
+    }
     func cachedResourceRendering(source:AggregateDocument,manifestSHA256:String)throws->AggregateResourceRender {
         let plan=try imagePlan(source)
         try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(manifestSHA256),"图片资源修订SHA无效")
@@ -256,7 +264,8 @@ extension PublishedAggregateStore {
             let value=try cachedResourceRendering(source:source,manifestSHA256:String(name.dropLast(5)))
             let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
             func time(_ text:String)->Date{formatter.date(from:text) ?? ISO8601DateFormatter().date(from:text)!}
-            if latest==nil || time(value.manifest.observedAt)>time(latest!.manifest.observedAt){latest=value}
+            if latest==nil || time(value.manifest.observedAt)>time(latest!.manifest.observedAt) ||
+                (time(value.manifest.observedAt)==time(latest!.manifest.observedAt) && value.manifest.images.filter{$0.sha256 != nil}.count>latest!.manifest.images.filter{$0.sha256 != nil}.count){latest=value}
         }
         try noLinks(folder);return latest
     }

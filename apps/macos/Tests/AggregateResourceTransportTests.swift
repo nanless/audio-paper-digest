@@ -2,6 +2,8 @@ import Foundation
 import Darwin
 private actor ImageTransportFixture {
  let manifest:Data,shard:Data,shardPath:String,image:Data
+ var queued:[String:[Data]]=[:]
+ var failedImages:Set<String>=[]
  var html:String,failHTML=false,blockImages=false,imageStarted=false,addresses:[String]=[],overrides:[String:Data]=[:],imageLimits:[Int]=[]
  init()throws{
   let paper:[String:Any]=["pageType":"paper","permalink":"/audio-paper-digest-blog/ci-paper/","title":"Controlled source paper","date":"2026-10-24","sourceKind":"arxiv","identityStatus":"verified","arxivId":"2501.00001","citation":["identityStatus":"verified","sourceKind":"arxiv","arxivId":"2501.00001v1","sourceUrl":"https://arxiv.org/abs/2501.00001v1","pdfUrl":"https://arxiv.org/pdf/2501.00001v1.pdf"]]
@@ -16,10 +18,13 @@ private actor ImageTransportFixture {
   addresses.append(url.absoluteString)
   if url.path.hasSuffix("/index.json"){return manifest}
   if url.path.hasSuffix(shardPath){return shard}
-  if url.host=="arxiv.org"{imageStarted=true;imageLimits.append(limit);if blockImages{try await Task.sleep(nanoseconds:30_000_000_000)};return overrides[url.absoluteString] ?? image}
+  if url.host=="arxiv.org"{imageStarted=true;imageLimits.append(limit);if failedImages.contains(url.lastPathComponent){throw URLError(.notConnectedToInternet)};if blockImages{try await Task.sleep(nanoseconds:30_000_000_000)};if var next=queued[url.absoluteString],!next.isEmpty{let bytes=next.removeFirst();queued[url.absoluteString]=next;return bytes};return overrides[url.absoluteString] ?? image}
   if (url.path.hasSuffix("/ci-images/")||url.path.hasSuffix("/ci-images")){if failHTML{throw URLError(.notConnectedToInternet)};return Data(html.utf8)}
   throw AggregateFailure.invalid("Unexpected controlled transport URL")
  }
+ func queue(_ path:String,_ values:[Data]){queued["https://arxiv.org/html/2610.30682/"+path]=values}
+ func setFailedImages(_ values:Set<String>){failedImages=values}
+ func imageAddresses()->[String]{addresses.filter{$0.hasPrefix("https://arxiv.org/")}}
  func setOffline(_ value:Bool){failHTML=value}
  func change(_ body:String,block:Bool=false){html=Self.page(body);failHTML=false;blockImages=block;imageStarted=false}
  func override(_ path:String,_ bytes:Data){overrides["https://arxiv.org/html/2610.30682/"+path]=bytes}
@@ -45,6 +50,19 @@ private actor ImageTransportFixture {
   await fixture.setOffline(true);let offline=try await library.aggregatePresentation(access)
   try check(offline.isStale&&offline.displayHTML==first.displayHTML&&offline.imageRender?.manifestSHA256==first.imageRender?.manifestSHA256,"network-failed body fallback replays same original HTML and same image revision without refetch")
   try check(await fixture.countImages()==1,"offline fallback performs no new image requests")
+  await fixture.change("<p>Partial reconnect</p><img src='https://arxiv.org/html/2610.30682/x1.png' alt='Already saved'/><img src='https://arxiv.org/html/2610.30682/x2.png' alt='Still missing'/>")
+  await fixture.setFailedImages(["x2.png"])
+  let partial=try await library.aggregatePresentation(access)
+  try check(partial.imageRender?.manifest.images[0].sha256 != nil&&partial.imageRender?.manifest.images[1].sha256==nil,"first partial page preserves one actual original image")
+  let beforeRetry=await fixture.imageAddresses().count
+  await fixture.setFailedImages(["x1.png","x2.png"])
+  let retry=try await library.aggregatePresentation(access),retried=await fixture.imageAddresses()
+  try check(Array(retried.dropFirst(beforeRetry))==["https://arxiv.org/html/2610.30682/x2.png"]&&retry.imageRender?.manifest.images[0]==partial.imageRender?.manifest.images[0],"online partial retry requests only missing image and preserves verified saved bytes when network still fails")
+  await fixture.setFailedImages([])
+  let beforeFill=await fixture.imageAddresses().count,filled=try await library.aggregatePresentation(access),fillRequests=await fixture.imageAddresses()
+  try check(Array(fillRequests.dropFirst(beforeFill))==["https://arxiv.org/html/2610.30682/x2.png"]&&filled.imageRender?.manifest.images.allSatisfy{$0.sha256 != nil}==true&&filled.imageRender?.manifest.images[0]==partial.imageRender?.manifest.images[0],"partial completion downloads only missing original image and retains earlier position and identity")
+  let beforeReopen=await fixture.countImages(),reopened=try await library.aggregatePresentation(access),afterReopen=await fixture.countImages()
+  try check(reopened.imageRender?.manifest.images.allSatisfy{$0.sha256 != nil}==true&&reopened.displayHTML==filled.displayHTML&&beforeReopen == afterReopen,"cold reopening retains completed partial rendering without another image request, including equal-second observations")
   await fixture.change("<img src='https://127.0.0.1/private.png' alt='No private request'/><img src='https://unapproved.invalid/image.png' alt='No unknown host'/><img src='https://arxiv.org/html/2610.30682/x1.png' alt='Valid'/>")
   let guarded=try await library.aggregatePresentation(access)
   try check(!(await fixture.sawForbidden())&&guarded.imageRender?.manifest.images.filter{$0.sha256 != nil}.count==1,"source-bound private/unsupported URL is rejected before transport; a supported image still reads")
@@ -66,6 +84,20 @@ private actor ImageTransportFixture {
   let afterTotal=await fixture.countImages()
   try check(total.manifest.images.filter{$0.sha256 != nil}.count==4&&total.manifest.images.last?.missingReason != nil && afterTotal==beforeTotal+4,"64MiB page transfer budget admits four bounded images and stops before fifth request")
   try check(await fixture.limits().allSatisfy{$0>0&&$0<=AggregateResources.maxImageBytes},"every normal image request receives a positive bounded remaining-byte limit")
+  await fixture.change("<p>Reserve cached references first</p><img src='https://arxiv.org/html/2610.30682/unsafe.svg'/>"+(0..<4).map{_ in "<img src='https://arxiv.org/html/2610.30682/budget-0.png'/>"}.joined())
+  let reservedSource=try await library.aggregateDocument(id:catalog.records[0].id),reservedFirst=try await library.aggregateResourceRendering(reservedSource)
+  try check(reservedFirst.manifest.images[0].sha256==nil&&reservedFirst.manifest.images.dropFirst().allSatisfy{$0.sha256 != nil},"four saved repeated image references exhaust64MiB after a missing first image")
+  let beforeReserved=await fixture.countImages(),reservedAgain=try await library.aggregateResourceRendering(reservedSource),afterReserved=await fixture.countImages()
+  try check(reservedAgain.manifest.images.dropFirst().elementsEqual(reservedFirst.manifest.images.dropFirst())&&beforeReserved == afterReserved,"partial retry reserves existing reference budget before considering earlier missing positions")
+  await fixture.change("<img src='https://arxiv.org/html/2610.30682/order.png' alt='Earlier'/><img src='https://arxiv.org/html/2610.30682/order.png' alt='Later'/>")
+  await fixture.queue("order.png",[Data("<html/>".utf8),await fixture.imageBytes()])
+  let orderSource=try await library.aggregateDocument(id:catalog.records[0].id),orderFirst=try await library.aggregateResourceRendering(orderSource)
+  try check(orderFirst.manifest.images[0].sha256==nil&&orderFirst.manifest.images[1].sha256 != nil,"independent ordering precondition: only later same-URL slot is cached through normal transport")
+  await fixture.setFailedImages(["order.png"])
+  let orderBefore=await fixture.countImages(),orderRetry=try await library.aggregateResourceRendering(orderSource),orderAfter=await fixture.countImages()
+  print("LATER_SAVED_RETRY_REQUESTS=\(orderAfter-orderBefore);SAVED=\(orderRetry.manifest.images.filter{$0.sha256 != nil}.count)")
+  try check(orderBefore==orderAfter&&orderRetry.manifest.images.allSatisfy{$0.sha256 != nil},"independent earlier missing same-URL slot reuses later verified bytes without transport")
+  await fixture.setFailedImages([])
   await fixture.change("<p>Cancellation scope</p><img src='https://arxiv.org/html/2610.30682/x1.png' alt='Cancellation'/>",block:true)
   let task=Task{try await library.aggregatePresentation(access)}
   for _ in 0..<200{if await fixture.started(){break};try await Task.sleep(nanoseconds:5_000_000)}

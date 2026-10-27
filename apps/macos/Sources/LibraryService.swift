@@ -848,13 +848,30 @@ actor LibraryService {
         try PublishedAggregateReader.require(current==source,"图片必须绑定已核验的原网页修订")
         let epoch=snapshot.validationEpoch,snapshotID=snapshot.summary.snapshotID
         let plan=try store.imagePlan(source)
-        var assets:[Int:AggregateImageBytes]=[:],missing:[Int:String]=[:],downloaded:[String:AggregateImageBytes]=[:],total=0,referencedBytes=0
+        let cached=try store.latestResourceRendering(source:source) ?? store.importAndroidResourceRendering(source)
+        if let cached{try PublishedAggregateReader.require(cached.manifest.plan==plan,"已存图片与当前网页位置不符")}
+        let retained=Dictionary(uniqueKeysWithValues:(cached?.manifest.images ?? []).filter{$0.sha256 != nil}.map{($0.slot.index,$0)})
+        let retainedByURL=plan.slots.reduce(into:[String:AggregateImageRecord]()){result,slot in
+            if let address=slot.sourceURL,let record=retained[slot.index],result[address]==nil{result[address]=record}
+        }
+        let retainedBytes=retained.values.reduce(0){$0+($1.bytes ?? 0)}
+        try PublishedAggregateReader.require(retainedBytes<=AggregateResources.maxReferencedBytes,"已有图片引用累计超过64 MiB")
+        var assets:[Int:AggregateImageBytes]=[:],missing:[Int:String]=[:],downloaded:[String:AggregateImageBytes]=[:],total=0,referencedBytes=retainedBytes
         for slot in plan.slots {
             try Task.checkCancellation()
+            if let record=retained[slot.index]{
+                try PublishedAggregateReader.require(record.slot==slot,"已存图片位置不符")
+                let asset=try store.retainedResourceBytes(record);assets[slot.index]=asset
+                if let address=slot.sourceURL{downloaded[address]=asset}
+                continue
+            }
             do {
                 guard referencedBytes<AggregateResources.maxReferencedBytes else{throw AggregateFailure.invalid("页面图片引用预算已耗尽")}
                 let asset:AggregateImageBytes
                 if let address=slot.sourceURL,let cached=downloaded[address]{asset=cached}
+                else if let address=slot.sourceURL,let record=retainedByURL[address]{
+                    asset=try store.retainedResourceBytes(record);downloaded[address]=asset
+                }
                 else{
                     guard total<AggregateResources.maxTotalBytes else{throw AggregateFailure.invalid("页面图片累计或保守传输预算已耗尽")}
                     let bytes:Data
