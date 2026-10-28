@@ -264,8 +264,10 @@ test('公开生成器把续段计划绑定实际请求SHA和v2协议，不增加
         repair.shaText(
             [
                 '../scripts/lib/reader-repair.js',
+                '../scripts/lib/reader-target-ordinal-patch.js',
                 '../prompts/api-reader-concept-terms-v1.md',
                 '../prompts/api-reader-repair-v11.md',
+                '../scripts/lib/reader-request-diagnostics.js',
             ].map(file => file.startsWith('../prompts/')
                 ? require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(file.slice(3)).toString('utf8')
                 : fs.readFileSync(require.resolve(file), 'utf8')).join('\0'),

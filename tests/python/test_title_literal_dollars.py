@@ -14,6 +14,39 @@ TITLE = 'Oído: Open-Vocabulary Speech Recognition on a $5 Microcontroller witho
 
 
 class TitleLiteralDollarTests(unittest.TestCase):
+    def test_literal_title_stars_are_explicit_and_idempotent(self):
+        for title, expected in [
+                ('Probing the phon* representations of the Mimi codebooks',
+                 r'Probing the phon\* representations of the Mimi codebooks'),
+                ('H1*-H2* and a $5 System', r'H1\*-H2\* and a \$5 System'),
+                (r'Already phon\* and \$5', r'Already phon\* and \$5'),
+                ('A **literal** title', r'A \*\*literal\*\* title')]:
+            with self.subTest(title=title):
+                self.assertEqual(publish.markdown_title_for_publish(title), expected)
+                self.assertEqual(publish.markdown_title_for_publish(expected), expected)
+
+    @unittest.skipUnless(shutil.which('hugo'), 'Hugo not installed')
+    def test_real_hugo_literal_star_title_keeps_the_same_link_and_visible_text(self):
+        title = 'Probing the phon* representations of the Mimi codebooks'
+        url = 'https://example.invalid/phon-star'
+        with tempfile.TemporaryDirectory(prefix='pd-title-star-test-') as temporary:
+            root = Path(temporary)
+            (root / 'content').mkdir()
+            (root / 'layouts/_default').mkdir(parents=True)
+            (root / 'hugo.toml').write_text('baseURL="https://example.invalid/"\n')
+            (root / 'layouts/_default/single.html').write_text('{{ .Content }}')
+            for name, shown in [('raw', title), ('explicit', publish.markdown_title_for_publish(title))]:
+                (root / f'content/{name}.md').write_text(
+                    f'---\ntitle: "Literal star"\n---\n\n> 英文题目：*[{shown}]({url})*\n')
+            subprocess.run(['hugo', '--source', str(root), '--destination', str(root / 'public'),
+                            '--cacheDir', str(root / 'cache'), '--quiet'],
+                           check=True, capture_output=True, timeout=30)
+            raw = (root / 'public/raw/index.html').read_text()
+            explicit = (root / 'public/explicit/index.html').read_text()
+            self.assertEqual(explicit, raw)
+            self.assertIn(f'<em><a href="{url}">{title}</a></em>', explicit)
+            self.assertNotIn(r'phon\*', explicit)
+
     def test_price_titles_preserve_literal_currency_and_math_compatibility(self):
         for title, expected in [(TITLE, TITLE), ('A $5 and $10 System', 'A $5 and $10 System'),
                                 (r'A \$5 System', 'A $5 System'),

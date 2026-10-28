@@ -1,0 +1,57 @@
+{
+  "contract": "actual-paid-response-reward-handoff-fixture-v1",
+  "notes": "Exact latest paid response and readable sealed-source excerpts. These tests grant no production capability, adoption, budget or publication status.",
+  "adoptionAuthorized": false,
+  "paperId": "2610.34609",
+  "diagnosticId": "c7b55b4c-5aa1-4f4e-87ab-1164ec8ba00d",
+  "sourceRunId": "cc02fdfc-2fc5-4eff-afff-b9e149c42137",
+  "fullSealedSourceSha256": "5f0b55a6fce53b506c6775cb65130b1ffd538eb3bfcd1d8606290aaa2eb409a6",
+  "sourceExcerpts": [
+    {
+      "startLine": 61,
+      "endLine": 69,
+      "text": "Recent work on reasoning-oriented post-training has explored reinforcement learning with verifiable rewards (RLVR) [19], which evaluates model responses using rule-based verifiers rather than learned reward models.\nUnlike SFT, which imitates predefined demonstrations, RLVR encourages exploration through outcome-based feedback.\nIn Audio-R1, we use Group Relative Policy Optimization (GRPO) [30] to optimize the policy under this framework.\nFor each prompt xx, we sample LL responses {yi}i=1L\\{y_{i}\\}_{i=1}^{L} from the policy πθ(⋅∣x)\\pi_{\\theta}(\\cdot\\mid x) and compute their rewards as\nri=𝒱(yi,y∗),i=1,…,L.r_{i}=\\mathcal{V}(y_{i},y^{*}),\\qquad i=1,\\ldots,L.\n(1)\nwhere 𝒱\\mathcal{V} is a rule-based reward function and y∗y^{*} is the ground-truth answer.\nGRPO computes each response advantage as A^i=(ri−μr)/(σr+ϵ)\\hat{A}_{i}=(r_{i}-\\mu_{r})/(\\sigma_{r}+\\epsilon), where μr\\mu_{r} and σr\\sigma_{r} are the mean and standard deviation of the group rewards, and ϵ\\epsilon ensures numerical stability.\nThese advantages guide policy updates to favor higher-reward responses, enabling learning without supervision of the reasoning process.",
+      "sha256": "84fd2742cc8dcba335677f8ce38b870de397fbb6aba926e05b3fdf5aef37cdb3"
+    },
+    {
+      "startLine": 71,
+      "endLine": 73,
+      "text": "As illustrated in Figure 1, we construct three self-supervised audio tasks whose answers are known by construction, enabling scalable data generation and verification of deterministic responses without human annotations or external supervision.\nAlthough simple to construct, the tasks are designed to probe complementary aspects of audio understanding: cross-clip correspondence, local contextual compatibility, and temporal structure.\nFor each task, we denote the audio input by 𝐚′\\mathbf{a}^{\\prime}, which may consist of multiple clips or segments, and the target answer by y∗y^{*}, with a task-specific subscript.",
+      "sha256": "64d9d4eb2137450fe9d147286c29860be41c9e51abd2b20149a5a1c5ea6977a0"
+    },
+    {
+      "startLine": 100,
+      "endLine": 112,
+      "text": "3.3 Reward Design\nBuilding on the tasks designed to encourage the use of audio evidence, we use final-answer correctness and format compliance as learning signals for reasoning traces.\nFor each generated response yiy_{i}, the rule-based reward function 𝒱\\mathcal{V} combines these two components:\n𝒱⁡(yi,y∗)=Racc,i+λ​Rformat,i,\\mathcal{V}(y_{i},y^{*})=R_{\\mathrm{acc},i}+\\lambda R_{\\mathrm{format},i},\n(5)\nwhere λ\\lambda controls the contribution of format compliance relative to answer correctness.\nAccuracy Reward.\nWe compute the accuracy reward by comparing the model’s answer with the answer derived from task construction.\nSince each task is formulated as a multiple-choice question, we assign the binary reward Racc,i=𝟙[y^i=y∗]R_{\\mathrm{acc},i}=\\mathbbm{1}[\\hat{y}_{i}=y^{*}], where y^i\\hat{y}_{i} is the final answer extracted from response yiy_{i}, and y∗y^{*} is the ground-truth answer defined in Sec. 3.2.\nFormat Reward.\nThe format reward Rformat,iR_{\\mathrm{format},i} is a binary indicator of whether the response follows the required structure.\nSpecifically, the reasoning must be enclosed within <think> and </think>, followed by the final answer enclosed within <answer> and </answer>.\nWe assign Rformat,i=1R_{\\mathrm{format},i}=1 when response yiy_{i} follows this format and Rformat,i=0R_{\\mathrm{format},i}=0 otherwise.",
+      "sha256": "767ec5dfdd9519407b004dae07bdab19459350a19e1cddfbe50aa478506676e0"
+    }
+  ],
+  "summary": "## 核心摘要\n读者需要理解的对象是大音频语言模型，它同时接收音频和文字问题并输出答案与推理过程，困难在于音频推理数据难以人工标注，而普通问答奖励又不能保证模型真正使用了声音证据。论文提出的方法叫Audio-R1，它先从同一段录音自动构造答案已知的选择题，分别考查跨片段对应、局部上下文补全和时间顺序，被遮蔽或打乱的音频连同候选项构成模型的输入。模型以该输入生成结构化回答，把推理放在<think>标签内、最终选项放在<answer>标签内，该回答随即进入规则奖励函数。奖励函数按答案是否与构造时确定的正确答案一致计算准确率奖励、按是否遵守格式计算格式奖励，两类奖励相加后作为GRPO多采样强化学习的组内比较信号，仅当同一提示的多个采样奖励有差异时才产生有效更新，从而优化策略并在冻结音频编码器的同时更新语言骨干与音频对齐器。多任务训练下Qwen2.5-Omni在MMAR、MMAU-mini和MMAU-Pro上的平均准确率从基线的62.2%升至66.2%，较基线平均高约4.0个百分点。Audio-R1处理后的Qwen3-Omni在MMAR、MMAU-mini和MMAU-Pro上的准确率分别为70.3%、77.5%和63.6%，高于文中所列闭源与强化学习对照。结论适用于所选的候选式自监督任务和已具备基础能力的基座，开放式理解与更广分布的稳健性尚未验证。原文未披露训练、推理或部署成本。\n",
+  "summarySha256": "4220ef300510900c8d43675bb1868c33f2ba2bdf89baccd0f352ea06486ff05f",
+  "methodWindow": "论文提出的方法叫Audio-R1，它先从同一段录音自动构造答案已知的选择题，分别考查跨片段对应、局部上下文补全和时间顺序，被遮蔽或打乱的音频连同候选项构成模型的输入。模型以该输入生成结构化回答，把推理放在<think>标签内、最终选项放在<answer>标签内，该回答随即进入规则奖励函数。奖励函数按答案是否与构造时确定的正确答案一致计算准确率奖励、按是否遵守格式计算格式奖励，两类奖励相加后作为GRPO多采样强化学习的组内比较信号，仅当同一提示的多个采样奖励有差异时才产生有效更新，从而优化策略并在冻结音频编码器的同时更新语言骨干与音频对齐器。",
+  "methodWindowSha256": "3b5a4e2c196654ee59bd6df2b3e88f6c9e3687029b02a98b0cd2804a3e3e15c0",
+  "originalDisposition": {
+    "status": "rejected",
+    "error": "核心摘要未达到 core-summary-detailed-v3: 缺少 2–4 步方法链的分工与衔接",
+    "outputTextSha256": "4220ef300510900c8d43675bb1868c33f2ba2bdf89baccd0f352ea06486ff05f",
+    "candidateSummarySha256": "d6a768c5ebd0637ef4d1ba68144f8c6ab0de8815528ac5546cfa60cfd3f8a312",
+    "contract": "core-summary-request-diagnostics-v1",
+    "id": "c7b55b4c-5aa1-4f4e-87ab-1164ec8ba00d",
+    "requestSha256": "08345e6048f52e85e89abdeedc71fe88fd2808f21ea57b2d8c3ba61df2efd176",
+    "at": "2026-10-27T05:53:27.040Z"
+  },
+  "originalDiagnosticFiles": {
+    "requestSha256": "08345e6048f52e85e89abdeedc71fe88fd2808f21ea57b2d8c3ba61df2efd176",
+    "responseSha256": "2ff4e96f2a3f873004dabba541c32f7720eec6609f8f789968b10d53952ba2ce",
+    "dispositionSha256": "352fa083dae370e1883c481d438dd88288e346f0a4e06ce27e37cf3c0e1b1683"
+  },
+  "protectedHistory": {
+    "paidCoreRequests": 3,
+    "attempts": [
+      1,
+      2,
+      3
+    ],
+    "resetAllowed": false
+  }
+}

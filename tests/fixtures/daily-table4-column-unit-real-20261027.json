@@ -1,0 +1,576 @@
+{
+  "provenance": {
+    "paperId": "2610.35329v1",
+    "sourceRunId": "cc02fdfc-2fc5-4eff-afff-b9e149c42137",
+    "candidateEnvelopeSha256": "29e0b5c2f95bb8a49a9e5cc984fd4b3f3a1dec286b9034c90c7f540bb95e9acf",
+    "paidDraftSha256": "5c08133606f8faa7748b5772be44570a67045c0341cea9843f4264ef20ac4b8b",
+    "bodyPath": "/sections/11/body",
+    "bodyUtf8Sha256": "b9f57c771d99a8b02fac58add711bf222c92cb3c0aa329393fac1ef14ccd4c2a",
+    "sourceMetadataSha256": "a5a205b88568cb685e7d8b00db2a7938e5e09c8751fef97d6ca78f30a02d2550",
+    "sourceTableDomSha256": "a0e3c99a41c19f004c4a94bed2ca48a8a2a6c51e98d0a0ea5095cbf7ddd6dff2"
+  },
+  "body": "消融要回答三项是否都必要，以及唯一的超参数k是否难调。下表在完整矩阵上逐个去掉或只留一项，每行把该变体放回与5个可部署基线的排名中，指标仍是最终准确率、AULC和平均名次；下半部分把k在5、10、20之间变动，默认10即完整规则。条件与主结果一致。\n\n| Variant | Final acc (%) | AULC (%) | Rank↓ |\n|---|---|---|---|\n| full rule, Eq. (3) | 76.78±0.17 | 71.99±0.19 | 1.08 |\n| no fit term l | 75.09±0.28 | 71.22±0.21 | 1.77 |\n| no k-NN term aknn | 76.64±0.25 | 71.93±0.20 | 1.10 |\n| no NCM term ancm | 76.74±0.17 | 71.82±0.19 | 1.31 |\n| ancm only | 74.44±0.32 | 70.77±0.21 | 2.27 |\n| aknn only | 76.26±0.16 | 71.50±0.19 | 1.77 |\n| l only | 76.56±0.17 | 71.74±0.22 | 1.48 |\n| k=5 | 76.75±0.16 | 71.96±0.22 | 1.17 |\n| k=10 (default) | 76.78±0.17 | 71.99±0.19 | 1.08 |\n| k=20 | 76.78±0.17 | 71.92±0.24 | 1.23 |\n\n去掉任何一项都有损失，但程度不同。去掉拟合项损失最大，AULC下降最多、名次明显变差；去掉最近类均值项次之；去掉近邻项最小。在仅拟合项基础上加两几何项，AULC增加、名次从1.48到1.08，其中原型项贡献大。\n\n值得注意的是仅拟合项即已标注损失本身已超过所有基线，也超过单几何项，这被归因于浅层头的参数自由度和特征容量有限，过拟合症状比深端到端网络轻。所有变体仍保持对基线的最好平均名次，说明池几何本身是有效信号。k在4倍范围内变动AULC最多差0.07个百分点，且都保持可部署第一并与val-best打平，实践中可认为不敏感。未评测的范围是端到端微调下几何随检查点移动的情形，原文未做，不能把此处的不敏感推广过去。",
+  "rendered": {
+    "header": [
+      "Variant",
+      "Final acc (%)",
+      "AULC (%)",
+      "Rank↓"
+    ],
+    "rows": [
+      [
+        "full rule, Eq. (3)",
+        "76.78±0.17",
+        "71.99±0.19",
+        "1.08"
+      ],
+      [
+        "no fit term l",
+        "75.09±0.28",
+        "71.22±0.21",
+        "1.77"
+      ],
+      [
+        "no k-NN term aknn",
+        "76.64±0.25",
+        "71.93±0.20",
+        "1.10"
+      ],
+      [
+        "no NCM term ancm",
+        "76.74±0.17",
+        "71.82±0.19",
+        "1.31"
+      ],
+      [
+        "ancm only",
+        "74.44±0.32",
+        "70.77±0.21",
+        "2.27"
+      ],
+      [
+        "aknn only",
+        "76.26±0.16",
+        "71.50±0.19",
+        "1.77"
+      ],
+      [
+        "l only",
+        "76.56±0.17",
+        "71.74±0.22",
+        "1.48"
+      ],
+      [
+        "k=5",
+        "76.75±0.16",
+        "71.96±0.22",
+        "1.17"
+      ],
+      [
+        "k=10 (default)",
+        "76.78±0.17",
+        "71.99±0.19",
+        "1.08"
+      ],
+      [
+        "k=20",
+        "76.78±0.17",
+        "71.92±0.24",
+        "1.23"
+      ]
+    ]
+  },
+  "quotes": [
+    "Table 4: Ablations over the full matrix (48 settings ×\\times 10 seeds, mean±\\pmstd across seeds). Each variant replaces Geo-Con in the ranking against the five deployable baselines. Top, component ablation, best per column in bold; bottom, sensitivity to kk (default k=10k{=}10 is the full rule).\nVariant\nFinal acc (%)\nAULC (%)\nRank↓\\downarrow\nfull rule, Eq. (3)\n76.78±\\pm0.17\n71.99±\\pm0.19\n1.08\nno fit term ℓ\\ell\n75.09±\\pm0.28\n71.22±\\pm0.21\n1.77",
+    "no kk-NN term aknna^{\\mathrm{knn}}\n76.64±\\pm0.25\n71.93±\\pm0.20\n1.10\nno NCM term ancma^{\\mathrm{ncm}}\n76.74±\\pm0.17\n71.82±\\pm0.19\n1.31\nancma^{\\mathrm{ncm}} only\n74.44±\\pm0.32\n70.77±\\pm0.21\n2.27\naknna^{\\mathrm{knn}} only\n76.26±\\pm0.16\n71.50±\\pm0.19\n1.77",
+    "ℓ\\ell only\n76.56±\\pm0.17\n71.74±\\pm0.22\n1.48\nk=5k{=}5\n76.75±\\pm0.16\n71.96±\\pm0.22\n1.17\nk=10k{=}10 (default)\n76.78±\\pm0.17\n71.99±\\pm0.19\n1.08\nk=20k{=}20\n76.78±\\pm0.17\n71.92±\\pm0.24\n1.23",
+    "Removing any component costs performance, though by different amounts.\nDropping the fit term ℓ\\ell hurts most (−0.77-0.77 pp AULC, rank 1.77), dropping the NCM term ancma^{\\mathrm{ncm}} is second (−0.17-0.17, rank 1.31), and dropping the kk-NN term aknna^{\\mathrm{knn}} is smallest (−0.07-0.07, rank 1.10).\nOn top of the fit term alone, the two geometric terms add 0.25 pp AULC and improve the rank from 1.48 to 1.08"
+  ],
+  "sourceTable": {
+    "bodyRows": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "caption": "Table 4: Ablations over the full matrix (48 settings \\times 10 seeds, mean\\pmstd across seeds). Each variant replaces Geo-Con in the ranking against the five deployable baselines. Top, component ablation, best per column in bold; bottom, sensitivity to k (default k{=}10 is the full rule).",
+    "cells": [
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "298b7e2a71f5671ee1795a664405f8a6d152f680c0a61fea252af08155783574",
+        "text": "Variant"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "0b24043569cc86a6b22318c722666a432e2cc1c6cef35c746d391916c86c4be7",
+        "text": "Final acc (%)"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "e9c6b9c445e9ab4d13770dd6258906575471f8cab7c683518957b09d9cc13671",
+        "text": "AULC (%)"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "35c1a4352e5645b1da3ec0506a3843e4d1ad8418769077ced70afead08056d7a",
+        "text": "Rank↓\\downarrow"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "c063fc5b4368730fb80b24662df84cbcdeea81ccf1edb8cd119a2c355df830e6",
+        "text": "full rule, Eq. (3)"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "13245bdcf42cce14a2a243c5e45890ec23032a3165053f25f71e59093ce5893d",
+        "text": "76.78±\\pm0.17"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "cc09ced7fd17b5d1996e0446575f0244ad74d7b9688ed5d4047c898459a6da44",
+        "text": "71.99±\\pm0.19"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "d9a59ad57a0938e91d6bdfd710ca071fc2ccb06db781acb37ea8364e745866b2",
+        "text": "1.08"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "62b615029211c772aa7015179afa2481bf3981b45c5527d5fe55d8e9c0e10ef4",
+        "text": "no fit term ℓ\\ell"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "0c41068144e580214ae4238ee5b0cfe8c7e5e09044771c40829821f392d4919b",
+        "text": "75.09±\\pm0.28"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "f2b0eca1a75b8c474a756803d7ccc00e8604a8de9480ab98f7d70e1cc8a1a80b",
+        "text": "71.22±\\pm0.21"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "df168075adbdc64575d47dc887d504b713059559a58659fc415befb72d3371f5",
+        "text": "1.77"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "854358d48c3015e79fcea6857f3cffd9ec6d0d6da2d3d2a907a7a88503119b24",
+        "text": "no kk-NN term aknna^{\\mathrm{knn}}"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "59ca1247a3506082805191127bb9ae162dbdef3514b3dac60d7c6100af3fe533",
+        "text": "76.64±\\pm0.25"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "7927b27b1b20d0696c80f2b6c55aac25598651c31bf806d109b24580181dfcf8",
+        "text": "71.93±\\pm0.20"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "c684c47e345ed21ce87503aa73bbe523bea3d241690fd88caeaf1cd519d89dbd",
+        "text": "1.10"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "44bbaca1ab7de4d0d8c39c3cded70b92d6d8fd6f3cf7474b4d5bfdcdd5a326b0",
+        "text": "no NCM term ancma^{\\mathrm{ncm}}"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "423ef49cd0f7ab382ff768f0d6f2d9d15476c2b11f051f77d510807ad266b902",
+        "text": "76.74±\\pm0.17"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "aa085cb8745e054f8c28a37e971fd2b2c3d2f5175fadbed89a6f6bd1fc7d8d6a",
+        "text": "71.82±\\pm0.19"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "8bffc34c141e749f27a5a304d285fd9ae469dcff663488d98d20c7c662e48a3c",
+        "text": "1.31"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "ae5beff2113e7f585a0e4bf64cfe6f6047a9e508ccc5b82c141f842039c198f1",
+        "text": "ancma^{\\mathrm{ncm}} only"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "098f058c89495c9667c58c1f4a6ff24805e8327a2aa6bce2829e834f6d4a09b8",
+        "text": "74.44±\\pm0.32"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "814ad6edc6cf66523d84144bafacd23632fb92ad1266ca555a33b94c19f08c28",
+        "text": "70.77±\\pm0.21"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 5,
+        "rowspan": 1,
+        "sourceDomSha256": "91cd8700d3ab71b1c95f88b9807f6a8e60b6446ca53711efaa198e304853e2cb",
+        "text": "2.27"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "2fa8711e3b4cfa6f9acb84e762ff4db4fb4db8483fd5d8e3bf63fa7a1f60acb6",
+        "text": "aknna^{\\mathrm{knn}} only"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "4e8d5d0c953d13c290b9ba5a47fd7899224a7961179c72608b308e05a405354e",
+        "text": "76.26±\\pm0.16"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "81d0e50635e5a023eedf37f00c6d34cffda9088313382a3810fd8b00b6b77afb",
+        "text": "71.50±\\pm0.19"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 6,
+        "rowspan": 1,
+        "sourceDomSha256": "753d3517c04a3987bf7946fcc4d30bfd7be346445222b9ad72cc4b60c9b43248",
+        "text": "1.77"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "dec75bf40d9b841a99efaf2df015209f0950a209d2c7b33894d6c8e31b6e4ad7",
+        "text": "ℓ\\ell only"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "f47f854a54ff70f41fb331fc679fe84116808b7e5138c5d5a0fca28bdf76efee",
+        "text": "76.56±\\pm0.17"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "db298182dc0a19e9bf93fc8a06c1fd8512e0c7936f5cf03445c7413e4a6fdf06",
+        "text": "71.74±\\pm0.22"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 7,
+        "rowspan": 1,
+        "sourceDomSha256": "07133d87a07dc5685edd3e0eb41642b31b7c16bcdef8271107d1d3afe3c3144e",
+        "text": "1.48"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "97f38f5d0a8b0cb6cb23e51cfc6b4913951a32590205e0e4b05a4e6316530160",
+        "text": "k=5k{=}5"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "3dcc7f17513a3de96a8964e29f7d904da82879dc80ea53c0f42052aa3f72d26f",
+        "text": "76.75±\\pm0.16"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "2cbeb97a588e3edaa62d7d8aebbc08186c46e44278671b7e2a799715d9b88bbb",
+        "text": "71.96±\\pm0.22"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 8,
+        "rowspan": 1,
+        "sourceDomSha256": "5b942cc2c759ac1338d44eab0bdb7caa2a2ad97141bbfbba4aa7b42ec2f51eb2",
+        "text": "1.17"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 9,
+        "rowspan": 1,
+        "sourceDomSha256": "e5321b2c157f78827feb1147598b8e30a93476c272c05c3f7a1f9c7d4f4cc8c8",
+        "text": "k=10k{=}10 (default)"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 9,
+        "rowspan": 1,
+        "sourceDomSha256": "a061372b14da59d00139be10b94345e0db7c22dff97572f87517399997a7333b",
+        "text": "76.78±\\pm0.17"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 9,
+        "rowspan": 1,
+        "sourceDomSha256": "e6d0fa806839927abb2e38996c46697507eb17910fdb6c9f27daae298fb55ea4",
+        "text": "71.99±\\pm0.19"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 9,
+        "rowspan": 1,
+        "sourceDomSha256": "d9779a2aa7fad3d43af4421d9a6b6ebe168fa37e1374f01cdb43652d8d76d13e",
+        "text": "1.08"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 10,
+        "rowspan": 1,
+        "sourceDomSha256": "54dcf5e2cfc074a250efd3bb82d38fa041c4cc61f5398ab038b3181abe4b9989",
+        "text": "k=20k{=}20"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": false,
+        "row": 10,
+        "rowspan": 1,
+        "sourceDomSha256": "09fa75b6505fd19d68065cc9a43618fd44f812a23b8afafcf6911250c49b2429",
+        "text": "76.78±\\pm0.17"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 10,
+        "rowspan": 1,
+        "sourceDomSha256": "91e00ef1814523305313254293adb140851379bb8a66edc7eec4e0b915c1fbe1",
+        "text": "71.92±\\pm0.24"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 10,
+        "rowspan": 1,
+        "sourceDomSha256": "9bb4a12578ebcf37c66158b0bc7b80e28af5fc2c171b3bc62c57b1d5cbf670eb",
+        "text": "1.23"
+      }
+    ],
+    "headerRows": [],
+    "label": "Table 4:",
+    "matrix": [
+      [
+        "Variant",
+        "Final acc (%)",
+        "AULC (%)",
+        "Rank↓\\downarrow"
+      ],
+      [
+        "full rule, Eq. (3)",
+        "76.78±\\pm0.17",
+        "71.99±\\pm0.19",
+        "1.08"
+      ],
+      [
+        "no fit term ℓ\\ell",
+        "75.09±\\pm0.28",
+        "71.22±\\pm0.21",
+        "1.77"
+      ],
+      [
+        "no kk-NN term aknna^{\\mathrm{knn}}",
+        "76.64±\\pm0.25",
+        "71.93±\\pm0.20",
+        "1.10"
+      ],
+      [
+        "no NCM term ancma^{\\mathrm{ncm}}",
+        "76.74±\\pm0.17",
+        "71.82±\\pm0.19",
+        "1.31"
+      ],
+      [
+        "ancma^{\\mathrm{ncm}} only",
+        "74.44±\\pm0.32",
+        "70.77±\\pm0.21",
+        "2.27"
+      ],
+      [
+        "aknna^{\\mathrm{knn}} only",
+        "76.26±\\pm0.16",
+        "71.50±\\pm0.19",
+        "1.77"
+      ],
+      [
+        "ℓ\\ell only",
+        "76.56±\\pm0.17",
+        "71.74±\\pm0.22",
+        "1.48"
+      ],
+      [
+        "k=5k{=}5",
+        "76.75±\\pm0.16",
+        "71.96±\\pm0.22",
+        "1.17"
+      ],
+      [
+        "k=10k{=}10 (default)",
+        "76.78±\\pm0.17",
+        "71.99±\\pm0.19",
+        "1.08"
+      ],
+      [
+        "k=20k{=}20",
+        "76.78±\\pm0.17",
+        "71.92±\\pm0.24",
+        "1.23"
+      ]
+    ],
+    "ordinal": 4,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "a0e3c99a41c19f004c4a94bed2ca48a8a2a6c51e98d0a0ea5095cbf7ddd6dff2"
+  }
+}

@@ -2011,8 +2011,12 @@ function readerNumericTokens(value) {
 }
 
 function readerScientificQuoteProjection(table, quotes) {
+    const values = quotes.map(item => typeof item === 'string' ? item : item?.quote);
+    const hasScientific = [table.header, ...table.rows].some(row => row.some(value => /(?:×|\\times)\s*10/.test(String(value))));
+    const pdfCapability = hasScientific && quotes.some(item => item?.valueOrigin === 'sealed_pdf')
+        ? require('./lib/reader-sealed-pdf-quote-evidence').scientificCoverageForQuotes(quotes) : null;
     return require('./lib/reader-scientific-quote-coverage').projectScientificQuoteCoverage(
-        table, quotes.map(item => typeof item === 'string' ? item : item?.quote), readerNumericTokens);
+        table, values, readerNumericTokens, { pdfCapability });
 }
 
 function readerScientificQuoteFailure(projection) {
@@ -4178,8 +4182,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
         const countedDistinctions = [
             { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*件\\s*(?:不同的?|独立的?)?(?:事项|事)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
-            { pattern: new RegExp('(?:复现(?:时)?(?:要|应|需))?(?:先)?分清\\s*([三两二32])\\s*件事\\s*[，,:：]\\s*'
-                + conceptList + '\\s*(?:是(?:相互)?独立的|是不同的主张)', 'gu'), listGroup: 2, countGroup: 1 },
+            { pattern: new RegExp('(?:(?:复现(?:时)?(?:要|应|需))|需要)?(?:先)?分清\\s*([三两二32])\\s*件事\\s*[，,:：]\\s*'
+                + conceptList + '\\s*(?:是(?:相互)?独立的|是不同(?:的)?主张)', 'gu'), listGroup: 2, countGroup: 1 },
             { pattern: new RegExp(conceptList + '\\s*(?:要|应|需)?(?:分开|分别)(?:看|确认|核实|核对|验证|判断)', 'gu'), listGroup: 1 },
             { pattern: new RegExp('复现(?:时)?(?:要|应|需)把' + conceptList + '\\s*([三两二32])\\s*件事分开', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp('(?:(?:复现(?:前|时)?(?:要|应|需))|应|要|需|并)?(?:把|将)' + conceptList
@@ -4317,8 +4321,87 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             .flatMap(index => clusters[index].mentions.map(mention => mention.type)));
     };
     const claimAssociationMaxChars = 80;
-    const isThirdPartyTypeAttribution = (segment, type, mentions) => {
+    const isThirdPartyTypeAttribution = (segment, type, mentions, matchIndex, matchEnd) => {
+        // A postposed owner can describe the weights needed from named upstream
+        // models. Bind only this closed acquisition clause, never a later author
+        // release claim or an arbitrary model name absent from the paper.
+        if (type === 'model') {
+            const base = /^(?:(?:本文|本研究|本工作|我们)(?:使用|采用)的)?基座(?:模型)?(?:是|为)开放权重的[ \t]*([A-Za-z][A-Za-z0-9_.+-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.+-]*){0,3})[。！？!?；;]?$/u.exec(segment.trim());
+            if (base && !/^(?:Table|Figure|Section|Equation|Appendix|Algorithm)\s+[0-9]/iu.test(base[1])) {
+                const source = String(sourceText || '')
+                    // Keep a nonempty boundary: removing quoted negation must
+                    // never manufacture a new affirmative source sentence.
+                    .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/gu, ' [quoted material] ')
+                    .replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote\s*>/giu, ' [quoted material] ')
+                    .replace(/^[ \t]*>.*$/gmu, ' [quoted material] ')
+                    .replace(/“[^”]*”|‘[^’]*’|「[^」]*」|"[^"\n]*"/gu, ' [quoted material] ')
+                    .replace(/[^\S\r\n]+/gu, ' ');
+                const name = base[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[ \t]+/gu, '\\s+');
+                // A named base is upstream only when the paper explicitly uses
+                // that cited open-weight model. Neither a title occurrence nor
+                // the author's own release establishes this limited attribution.
+                const own = new RegExp('\\bwe\\s+(?:(?:publicly|also|now|hereby|newly)\\s+)?'
+                    + '(?:introduce|present|propose|release|develop)\\s+'
+                    + '(?:(?:our|a|the)\\s+)?(?:(?:new|own|self[- ]developed)\\s+)?'
+                    + '(?:(?:model|(?:weights|checkpoints)\\s+of)\\s+)?' + name
+                    + '(?![A-Za-z0-9_+-]|\\.[A-Za-z0-9])', 'iu');
+                const ownedModel = new RegExp('\\bour\\s+(?:(?:own|new|newly\\s+developed)\\s+)?'
+                    + 'model\\s+' + name + '(?![A-Za-z0-9_+-]|\\.[A-Za-z0-9])', 'iu');
+                const used = new RegExp('(?:^|[\r\n.!?;])\\s*We\\s+'
+                    + '(?:implement\\s+our\\s+(?:framework|system|method)\\s+using|use|adopt)\\s+'
+                    + '(?:the\\s+)?open[- ]weight\\s+'
+                    + '(?:(?:audio|language|vision|speech|multimodal|pretrained|pre-trained)[- ]?){0,4}'
+                    + 'model\\s+' + name + '\\s*'
+                    + '\\((?=[^()]{1,100}\\b(?:19|20)\\d{2}\\b)[A-Za-z][^()]{1,100}\\)\\s*[.!?;]', 'giu');
+                if (!own.test(source) && !ownedModel.test(source) && [...source.matchAll(used)].some(span => {
+                    const introduction = source.slice(0, span.index).trimEnd().split(/[\r\n]/u).at(-1);
+                    if (/\b(?:quotes?|quoted|quotation|example|hypothetical|claim|reported|false|incorrect)\b/iu.test(introduction)) return false;
+                    const following = source.slice(span.index + span[0].length).trimStart();
+                    return !/^(?:(?:The\s+(?:preceding|previous|above)|This)\s+(?:statement|claim)|These\s+(?:weights|checkpoints))\b[^.!?\r\n]{0,100}\b(?:false|incorrect|withdrawn|unavailable|not\s+(?:true|released|available))\b/iu.test(following)
+                        && !/^(?:We\s+(?:did|do)\s+not\s+(?:actually\s+)?(?:use|adopt)\s+(?:this|that)\s+model\b|This\s+(?:was|is)\s+(?:only\s+)?hypothetical\b)/iu.test(following);
+                })) return true;
+            }
+            const acquisition = /^(?:模型)?权重可(?:下载|获取)指([^。！？!?；;，,：:]{1,180})等(?:外部|第三方)模型(?:的权重)?需(?:要)?(?:另行|单独)获取[。！？!?；;]?$/u.exec(segment.trim());
+            if (acquisition) {
+                const names = acquisition[1].split(/、|与|和|及/u).map(name => name.trim());
+                const source = String(sourceText || '').replace(/\s+/gu, ' ');
+                const upstreamModel = name => {
+                    if (!/^[A-Za-z][A-Za-z0-9_.+-]*(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_.+-]*){0,3}$/u.test(name)
+                        || /^(?:Table|Figure|Section|Equation|Appendix|Algorithm)\s+[0-9]/iu.test(name)) return false;
+                    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[ \t]+/gu, '\\s+');
+                    if (new RegExp('\\bwe\\s+(?:introduce|present|propose|release)\\s+'
+                        + escaped + '(?![A-Za-z0-9_.+-])', 'iu').test(source)) return false;
+                    // A citation plus an explicit model kind or upstream model
+                    // operation is required; merely occurring in a caption or
+                    // an author dataset name does not establish this role.
+                    const cited = new RegExp('(?<![A-Za-z0-9_.+-])' + escaped
+                        + '\\s*\\[[0-9]+(?:\\s*[,–-]\\s*[0-9]+)*\\]', 'giu');
+                    return [...source.matchAll(cited)].some(match => {
+                        const before = source.slice(Math.max(0, match.index - 180), match.index).split(/[.!?;]/u).at(-1);
+                        const after = source.slice(match.index + match[0].length, match.index + match[0].length + 180).split(/[.!?;]/u)[0];
+                        if (/\b(?:not|never|if|would|could|might|may|will|planned|hypothetical|quoted)\b/iu.test(before)) return false;
+                        return /\b(?:models?|checkpoints?|encoders?|transcription systems?)\s*(?:such as|including|like)?\s*$/iu.test(before)
+                            || /^\s*(?:first\s+)?(?:classifies|predicts|encodes|transcribes)\b/iu.test(after)
+                            || (/\b(?:use|using|select|adopt)\s*$/iu.test(before)
+                                && /^\s*(?:with\s+(?:the\s+)?(?:music\s+)?)?(?:models?|checkpoints?|encoders?)\b/iu.test(after));
+                    });
+                };
+                if (names.length <= 6 && names.every(upstreamModel)) return true;
+            }
+        }
         const markers = [...segment.matchAll(/(?:第三方|外部|论文引用的|相关(?:工作|研究|基线|项目|资源|仓库)|已有(?:工作|研究|方法|模型|系统|项目|资源))/g)];
+        if (type === 'model') {
+            const distance = mention => matchIndex >= mention.end ? matchIndex - mention.end
+                : mention.index >= matchEnd ? mention.index - matchEnd : 0;
+            const modelMentions = mentions.filter(mention => mention.type === type);
+            const nearest = Math.min(...modelMentions.map(distance));
+            // An earlier external model does not own the next author-weight
+            // predicate, even when both appear in the same comma-free clause.
+            if (modelMentions.filter(mention => distance(mention) === nearest).some(mention => {
+                const prefix = segment.slice(0, mention.index);
+                return /(?:本文|本论文|本研究|本工作|该论文|本项目|论文作者|作者团队|项目团队|我们)(?:的)?(?:(?:自有|自研|自己|自行训练|训练|微调(?:后)?|(?:已经|现已|已|所|新)?(?:发布|提供|公开|开源))(?:的|了)?)?\s*$/u.test(prefix);
+            })) return false;
+        }
         return markers.some(marker => {
             const markerEnd = marker.index + marker[0].length;
             const following = mentions.filter(mention => mention.index >= markerEnd
@@ -5012,6 +5095,20 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 && !/^(?:[“”‘’「」"'`]|(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|否定|区分)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳))/u.test(after);
         };
         const bounded = pattern => [...value.matchAll(pattern)].some(span => contains(span) && safe(span));
+        // Public webpages are a training-text input, not a release of the
+        // paper's code. Keep the exemption inside this complete input list;
+        // later code/weight availability predicates are checked separately.
+        if (type === 'code') for (const span of value.matchAll(/输入是公开网页(?:、(?:教育网页|代码|数学)){1,5}等文本词元(?=[，,。！？!?；;]|$)/gu)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (contains(span) && safe(span) && /^\s*$/u.test(prefix)
+                && span[0].split('、').includes('代码')) return true;
+        }
+        // This closed prior-work clause owns its released weights; it does
+        // not qualify a paper's own model or a following release assertion.
+        if (type === 'model') for (const span of value.matchAll(/已有小模型路线多是蒸馏或微调已发布的大权重(?=[，,。！？!?；;]|$)/gu)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (contains(span) && safe(span) && /^\s*$/u.test(prefix)) return true;
+        }
         const safeRecoverySpan = span => {
             const before = value.slice(0, span.index);
             const after = value.slice(span.index + span[0].length).replace(/^[\s，,；;：:。.!?！？]+/u, '')
@@ -5334,7 +5431,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 && !/(?:尚未|并未|未曾|没有|未公开|未发布|未确认|未验证|未发现|未找到|不存在|尚无)/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:说|声称|断言|认为)(?:证据)?不支持(?:作者|本文|本论文|本研究|本工作)?$/u.test(assertionPrefix)) return true;
             if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length)
-                || isThirdPartyTypeAttribution(segment, type, mentions)
+                || isThirdPartyTypeAttribution(segment, type, mentions, localMatchIndex, localMatchEnd)
                 || isDataSourceRepositoryAttribution(segment, type)
                 || isExistingDatasetAttribution(segment, type)
                 || isSelfOwnedResourceAvailabilityDenial(segment, type)
@@ -8742,6 +8839,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         parserImplementationSha256: repair.shaText([
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/experiment-source-setting-axes.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/llm-usage.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/llm-pending-request.js'), 'utf8'),
@@ -8754,13 +8852,17 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/signed-reader-recovery-draft.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-paid-response-replay.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-recovery-revision.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-target-ordinal-patch.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-compatible-candidate-replay.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-transport-continuation.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-fact-pre-request-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-unsent-empty-candidate.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-malformed-previous-draft-view.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-fact-table-claim-location.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-display.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-scientific-quote-coverage.js'), 'utf8'),
@@ -8865,6 +8967,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let pixelFigureOrdinals = [];
     let recovered = null;
     let readerRecoveryRevisions = [];
+    let ordinalPatchCompilations = [];
     const sectionGroupCompilations = [];
     let candidate = null;
     let draftOrderMappings = [];
@@ -9140,6 +9243,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     if (!inputProofOnly && !operatorCorrection) recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
         candidateDirectory, identity, recovered, paper);
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
+    ordinalPatchCompilations = recovered?.ordinalPatchCompilations || [];
+    const savedOrdinalOriginDraft = recovered?.draft ? structuredClone(recovered.draft) : null;
+    for (const record of ordinalPatchCompilations) require('./lib/reader-target-ordinal-patch').replay({
+        paper, identity: record.identity, directory: candidateDirectory, requestId: record.requestId, pins: record.pins });
     candidate = recovered?.draft || start.signedRecoveryDraft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];
     currentIssues = recovered?.issues || [];
@@ -9226,6 +9333,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         }
         return parsed;
     };
+    let versionMetadataRecoveryProof = recovered?.metadataRecoveryProof || null;
     let candidateRevalidated = false;
     // 恢复候选即使被之前的执行单元标成失败，也要重新校验。已保存的成功标志不能
     // 替代当前完整检查。
@@ -9234,11 +9342,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             normalizeCandidate();
             candidateRevalidated = true;
             const parsed = parseCandidate(JSON.stringify(candidate));
-            const result = { ...parsed, contentMode, attempts: completedAttempts, fullAttempts, transportFailures, imageEvidence,
+            const result = { ...parsed, ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}), contentMode, attempts: completedAttempts, fullAttempts, transportFailures, imageEvidence,
                 modelImagePreflightEvidenceSha256,
-                providerImageExclusions, resumedCandidate: true, draftOrderMappings,
+                providerImageExclusions, resumedCandidate: true, draftOrderMappings, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 ...(operatorCorrection ? {operatorCorrectionProof:operatorCorrection.proof} : {}),
                 ...(recovered?.resolvedReaderCandidateReplayProof ? { resolvedReaderCandidateReplayProof: recovered.resolvedReaderCandidateReplayProof } : {}) };
+            if (ordinalPatchCompilations.length) require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
+                paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations
+            }, result, { issues: currentIssues, pixelFigureOrdinals });
             const retiredCandidate = operatorCorrection || recovered?.resolvedReaderCandidateReplayProof ? null : deferOrRetireReaderCandidate(
                 result, repair, candidateDirectory, identity
             );
@@ -9246,6 +9357,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             return result;
         }
         catch (error) {
+            if (ordinalPatchCompilations.length && error?.scope === 'run') throw error;
             if (operatorCorrection) throw Object.assign(new Error('人工修正未通过完整 Reader 解析，保留原稿并停止新的 Reader 请求', {cause:error}),
                 {code:'READER_OPERATOR_CORRECTION_REJECTED',retryable:false,readerIssues:error.readerIssues});
             if (recovered?.resolvedReaderCandidateReplayProof) {
@@ -9325,15 +9437,19 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (candidate && !normalizationError) {
             try {
                 const parsed = parseCandidate(JSON.stringify(candidate));
-                const result = { ...parsed, contentMode, attempts: completedAttempts,
-                    imageEvidence, modelImagePreflightEvidenceSha256,
+                const result = { ...parsed, ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}), contentMode, attempts: completedAttempts,
+                    imageEvidence, modelImagePreflightEvidenceSha256, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                     providerImageExclusions, resumedCandidate: true, draftOrderMappings };
+                if (ordinalPatchCompilations.length) require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
+                    paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations
+                }, result, { issues: currentIssues, pixelFigureOrdinals });
                 const retiredCandidate = deferOrRetireReaderCandidate(
                     result, repair, candidateDirectory, identity
                 );
                 if (retiredCandidate) result.retiredCandidate = retiredCandidate;
                 return result;
             } catch (error) {
+                if (ordinalPatchCompilations.length && error?.scope === 'run') throw error;
                 currentIssues = collectReaderDraftIssues(candidate, error);
             }
         }
@@ -9352,22 +9468,55 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const proposedRepairContext = canPlanLocalQuotes
             ? withReaderSourceTableEvidence(() => repair.buildRepairContext(candidate, currentIssues,
                 sourceEvidence, options.sourceText, repairOptions)) : null;
-        const sourceBindingNeedsFullRetry = readerIssuesRequireFullSourceBindingRetry(
+        let sourceBindingNeedsFullRetry = readerIssuesRequireFullSourceBindingRetry(
             recovered, candidate, fullAttempts, currentIssues, readerCapabilityPolicy,
             options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy,
             proposedRepairContext
         )
             || Boolean(explicitRound?.fullRegenerationReasonSha256 && fullAttempts === 0);
         const metadataRepair = repair;
-        const metadataOperation = !candidate && !sourceBindingNeedsFullRetry
+        let metadataOperation = !candidate && !sourceBindingNeedsFullRetry
             ? metadataRepair.buildTopLevelMetadataRepairContext(previousDraft) : null;
-        const repairContext = metadataOperation ? {
+        let versionMetadataOrigin = null;
+        if (!candidate && !sourceBindingNeedsFullRetry && !metadataOperation) {
+            const versionOperation = metadataRepair.buildReaderVersionMetadataRepairContext(previousDraft);
+            if (versionOperation) {
+                versionMetadataOrigin = require('./lib/reader-request-diagnostics').findReaderVersionMetadataOrigin({
+                    directory: candidateDirectory, paper, identity, rawDraft: previousDraft });
+                if (versionMetadataOrigin) metadataOperation = versionOperation;
+            }
+        }
+        if (metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND) {
+            // Diagnostic projection only: never returned, adopted, or counted.
+            // Any additional content/source blocker must stop before paying for
+            // a version-only response which cannot fix that blocker.
+            const probe = JSON.parse(previousDraft); probe.version = 3;
+            parseCandidate(JSON.stringify(probe));
+            versionMetadataOrigin = require('./lib/reader-request-diagnostics').readReaderVersionMetadataOrigin({
+                directory: candidateDirectory, paper, identity, rawDraft: previousDraft });
+        }
+        let repairContext = metadataOperation ? {
             draftSha256: metadataOperation.rawSha256, targets: [], figureOrdinals: [],
             evidence: sourceEvidence, atomicOperation: metadataOperation,
-            targetGuidance: '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
+            targetGuidance: metadataOperation.kind === repair.READER_VERSION_METADATA_KIND
+                ? '本次只授权模型明确确认完整原稿的顶层 version 从数字4改为3；其余键、值和正文原始字节全部保留，之后仍检查整篇。'
+                : '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
         } : candidate && !sourceBindingNeedsFullRetry
             ? proposedRepairContext || withReaderSourceTableEvidence(() => repair.buildRepairContext(candidate, currentIssues,
                 sourceEvidence, options.sourceText, repairOptions)) : null;
+        // No authorized nodes means this cannot be a paid patch. The raw
+        // metadata-deletion protocol is separate and genuinely has zero nodes.
+        // Route an ordinary empty context through the existing full planner;
+        // its original full/window/local-only limits still decide admission.
+        const emptyRepairContext = repairContext && repairContext.targets.length === 0 && !metadataOperation;
+        const emptyRepairSourceBlocked = emptyRepairContext && currentIssues.some(issue =>
+            repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+            || issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly !== true);
+        if (emptyRepairContext && !emptyRepairSourceBlocked && !revalidatedPatchOnly
+            && options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
+            repairContext = null;
+            sourceBindingNeedsFullRetry = true;
+        }
         const requestPlanState = () => ({
             paperId: getPaperArxivId(paper), identitySha256: repair.hashDraft(identity),
             candidateSha256: candidate ? repair.hashDraft(candidate) : null,
@@ -9378,13 +9527,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sourceBindingNeedsFullRetry, repairContext, issues: currentIssues });
         const nextRequestPlan = require('./lib/reader-next-request-plan').buildReaderNextRequestPlan(requestPlanState());
         console.log(`    [reader-next-request-plan] ${JSON.stringify(nextRequestPlan)}`);
-        if (repairContext && repairContext.targets.length === 0
-            && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
-                || issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly !== true)) {
+        if (emptyRepairSourceBlocked) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
             repair.saveFailedCandidate(candidateDirectory, identity, {
                 ...latestFailure,
-                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 issues: currentIssues, attempts: attempt - 1, fullAttempts, transportFailures,
                 noProgress, failureSignature: previousFailureSignature,
                 validationFailureSignature: previousValidationFailureSignature, validationFailureStreak,
@@ -9409,7 +9556,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     '资源局部修订不能扩大到原签名稿中未发生资源冲突的节点');
             }
         }
-        if (options.resourceLocalRevision === true && (!repairContext || sourceBindingNeedsFullRetry)) {
+        if (options.resourceLocalRevision === true && (!repairContext || sourceBindingNeedsFullRetry || emptyRepairContext)) {
             throw readerRepairStopped('READER_RESOURCE_LOCAL_NO_SAFE_TARGET', '资源局部修订缺少安全补丁范围，保留已签Reader与现有付费记录');
         }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
@@ -9451,6 +9598,34 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const fullRegenerationEvidence = fullRegenerationTableFeedback
             ? repair.budgetReaderRepairSourceEvidence(sourceEvidence, fullRegenerationTableFeedback, repairOptions)
             : sourceEvidence;
+        const ordinaryOrdinal = require('./lib/reader-target-ordinal-patch');
+        if (!repairContext && (ordinalPatchCompilations.length || ordinaryOrdinal.hasActiveCompletion(paper))) throw readerRepairStopped(
+            'READER_ORDINAL_FULL_BASELINE_UNSUPPORTED',
+            '原ordinary补丁链尚不能切换为新全文基线；保留全部历史，不派发全文或复用旧编译证明');
+        const ordinalCapability = fresh.isDailyFreshSourceScope() && identity.contentMode === READER_SOURCE_CONTENT_MODE
+            && identity.model?.protocol === 'openai_responses'
+            && ordinaryOrdinal.eligible(repairContext, { ...options, metadataOperation, conceptTermsContext })
+            ? ordinaryOrdinal.prepare({ paper, identity, directory: candidateDirectory, draft: candidate,
+                repairContext, options: { ...options, metadataOperation, conceptTermsContext } }) : null;
+        const ordinalUsageRecords = [];
+        let ordinalCompiled = null;
+        const recordReaderDisposition = value => {
+            if (!ordinalCapability) return recordDisposition(value);
+            const captured = require('./lib/llm-usage').withPersistedLlmUsageRecords(() => recordDisposition({
+                ...value, unitId: repair.shaText(repairDiagnostic.id) }));
+            ordinalUsageRecords.push(...captured.records);
+            if (ordinalCompiled) {
+                const sealed = ordinaryOrdinal.seal(ordinalCapability, ordinalUsageRecords);
+                ordinalPatchCompilations.push({ contract: ordinaryOrdinal.COMPILATION_CONTRACT,
+                    identity: structuredClone(identity), requestId: repairDiagnostic.id,
+                    pins: { requestSha256: repairDiagnostic.requestSha256,
+                        responseSha256: ordinalCompiled.compilation.responseSha256,
+                        compilationSha256: ordinalCompiled.compilation.sha256, sealSha256: sealed.sha256 } });
+                ordinalCompiled = null;
+            }
+            return captured.result;
+        };
+        let previousDraftPromptView = previousDraft;
         const buildReaderPrompt = indexExamples => {
             const rendered = require('./lib/reader-resource-prose').renderPrompt(
             conceptTermsContext
@@ -9465,6 +9640,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? loadPrompt(readerRepairPromptPath(options), { title: paper.title || '', arxivId: getPaperArxivId(paper),
                 ...repair.factLocalSentencePromptVariables(repairContext, String(options.reviewFeedback || '').trim(),
                     options.sourceText || '', require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.sourceQuotes) })
+            : ordinalCapability ? ordinaryOrdinal.renderPrompt(ordinalCapability, {
+                feedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
+                    savedInputContinuity?.validationFeedback, ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
+                evidence: repairContext.evidence, mechanicalContract, naturalResourceProse })
             : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
@@ -9484,16 +9663,28 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 savedInputContinuity?.validationFeedback,
                 ...(!candidate ? currentIssues.filter(issue => issue.diagnosticOnly === true).map(issueFeedback) : []),
                 indexExamples].filter(Boolean).join('\n'),
-            previousDraft,
+            previousDraft: previousDraftPromptView,
             mechanicalContract
         }), naturalResourceProse);
-            return repairContext && patchRejectionFeedback
+            return repairContext && patchRejectionFeedback && !ordinalCapability
                 ? `${rendered}\n\n上一局部补丁拒绝诊断（仅用于修正响应格式）：\n${patchRejectionFeedback}\n`
                     + '旧诊断中的路径、received 与 expected-current 仅解释上次拒绝，不授予修改目标。'
                     + '本次请求的当前目标清单及 draftSha256、oldSha256 才是唯一有效依据；不得照抄旧 SHA 或新增目标。'
                 : rendered;
         };
         let prompt = buildReaderPrompt('');
+        if (prompt.length > API_READER_CONTEXT_MAX_CHARS && candidate === null && repairContext === null) {
+            const diagnostic = require('./lib/reader-malformed-previous-draft-view')
+                .malformedPreviousDraftDiagnostic({ raw: previousDraft,
+                    jsonText: typeof previousDraft === 'string' ? extractJsonObjectText(previousDraft) : '',
+                    candidate, repairContext, originalPromptChars: prompt.length,
+                    contextMaxChars: API_READER_CONTEXT_MAX_CHARS });
+            if (diagnostic !== null) {
+                // Send-only view: never replace the retained raw response or candidate.
+                previousDraftPromptView = diagnostic;
+                prompt = buildReaderPrompt('');
+            }
+        }
         const indexExamples = readerVerifiedTableIndexExamples(
             options.structuredArtifacts, repairContext ? repairContext.evidence : sourceEvidence,
             currentIssues, candidate
@@ -9520,6 +9711,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 '原全文预算已耗尽，最终请求范围不再是安全局部补丁；本次不发送模型请求');
         }
         let repairDiagnostic = null;
+        let repairResponseRecord = null;
+        let versionMetadataTransportRecords = [];
+        let versionRepairedRaw = null;
         let raw;
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
         const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
@@ -9556,12 +9750,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     ? { readerThinkingMode: resolveApiReaderRequestPolicy().thinkingMode } : {}),
                 temperature: attempt === 1 && !repairContext
                     ? start.temperature : API_READER_REPAIR_TEMPERATURE,
+                ...(ordinalCapability ? { readerTargetOrdinalCapability: ordinalCapability } : {}),
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
                 maxRetries: API_READER_TRANSPORT_MAX_RETRIES,
                 usageContext: { paperId: getPaperArxivId(paper),
                     stage: repairContext ? 'apiReaderRepair' : 'apiReaderArticle', contentAttempt: attempt }
             };
-            const isolated = await explicitRetry.withPhysicalBudget(explicitRound, paper, () => requestReaderModelWithImageIsolation({ requestModel,
+            const performReaderRequest = () => explicitRetry.withPhysicalBudget(explicitRound, paper, () => requestReaderModelWithImageIsolation({ requestModel,
                 buildMessages: inputs => {
                     const visibilityNotice = visibilityNoticeFor(inputs, repairContext);
                     const messages = buildReaderRequestMessages(prompt, visibilityNotice,
@@ -9572,24 +9767,51 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                             draftSha256: repairContext.draftSha256, draft: candidate,
                             ...(metadataOperation ? { rawDraft: previousDraft } : {}),
                             repairTargets: repairContext.targets,
+                            ...(ordinalCapability ? { readerTargetOrdinalRequest: ordinaryOrdinal.requestContract(ordinalCapability),
+                                actualRepairPromptContract: ordinaryOrdinal.CONTRACT,
+                                actualRepairPromptTemplateSha256: ordinaryOrdinal.TEMPLATE_SHA } : {}),
                             ...(conceptTermsContext ? { actualRepairPromptContract: conceptTermsContext.promptContract,
                                 actualRepairPromptPath: conceptTermsContext.promptPath,
                                 actualRepairPromptTemplateSha256: conceptTermsContext.promptTemplateSha256,
                                 termTargets: conceptTermsContext.targets } : {}),
                             atomicOperation: repairContext.atomicOperation || null,
+                            ...(metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND ? {
+                                metadataInputMessages: messages,
+                                metadataRequestConfig: { model: DEEP_CONFIG.model, protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
+                                    maxTokens: requestUsesEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens,
+                                    temperature: requestOptions.temperature, readerResponseFormat: requestOptions.readerResponseFormat ?? null,
+                                    readerThinkingMode: requestOptions.readerThinkingMode ?? null },
+                                metadataRequestBody: buildConfiguredModelRequestBody(sanitizeModelMessages(messages),
+                                    requestUsesEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens,
+                                    { ...DEEP_CONFIG, ...requestOptions }, detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model))
+                            } : {}),
                             ...(repairContext.sectionGroupPlanContract
                                 ? { sectionGroupPlanContract: repairContext.sectionGroupPlanContract } : {}),
                             inputMessagesSha256: repair.shaText(JSON.stringify(messages)),
                             images: inputs.map(image => ({ inputId: image.inputId, kind: image.kind,
                                 ordinal: image.ordinal, mime: image.mime,
                                 base64Sha256: repair.shaText(image.base64) }))
-                        });
+                        }, metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND
+                            ? { paper, versionMetadataOrigin } : undefined);
+                    if (metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND) requestOptions.usageContext.unitId = repair.shaText(repairDiagnostic.id);
+                    if (ordinalCapability) {
+                        ordinaryOrdinal.bindDiagnostic(ordinalCapability, repairDiagnostic, messages);
+                        requestOptions.usageContext.unitId = repair.shaText(repairDiagnostic.id);
+                    }
                     return messages;
                 }, imageInputs: selectedInputs,
                 maxTokens: repairContext
                     ? requestUsesEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens
                     : API_READER_MAX_TOKENS,
                 requestOptions }));
+            let isolated;
+            if (metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND) {
+                const captured = await require('./lib/llm-usage').withPersistedLlmUsageRecords(performReaderRequest);
+                isolated = captured.result; versionMetadataTransportRecords = captured.records;
+            } else if (ordinalCapability) {
+                const captured = await require('./lib/llm-usage').withPersistedLlmUsageRecords(performReaderRequest);
+                isolated = captured.result; ordinalUsageRecords.push(...captured.records);
+            } else isolated = await performReaderRequest();
             raw = isolated.raw;
             if (requestUsesEscalatedRepairBudget) {
                 // 收到一个 16000 token 的响应，就占用了实现层恢复同一条单次配额。后面
@@ -9621,7 +9843,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     try { repair.saveFailedCandidate(candidateDirectory, identity, {
                         status: 'failed', draft: paidCandidate,
                         rawDraft: repairContext ? previousDraft : paidRaw,
-                        draftOrderMappings, readerRecoveryRevisions, issues: currentIssues,
+                        draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
                         attempts: attempt, fullAttempts, noProgress,
                         failureSignature: previousFailureSignature, validationFailureStreak,
                         validationFailureSignature: previousValidationFailureSignature,
@@ -9658,7 +9880,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 noProgress = failureSignature === previousFailureSignature ? noProgress + 1 : 0;
                 previousFailureSignature = failureSignature;
                 repair.saveFailedCandidate(candidateDirectory, identity, {
-                    status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
+                    status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                     issues: currentIssues, attempts: attempt, fullAttempts, noProgress,
                     failureSignature, validationFailureSignature: previousValidationFailureSignature,
                     validationFailureStreak, implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
@@ -9675,7 +9897,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             // 上限；这次调用到此为止，之后重跑可以接着来。
             transportFailures += 1;
             repair.saveFailedCandidate(candidateDirectory, identity, {
-                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 issues: currentIssues, attempts: attempt - 1, fullAttempts,
                 noProgress, failureSignature: previousFailureSignature,
                 validationFailureSignature: previousValidationFailureSignature,
@@ -9691,7 +9913,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         implementationRepairAllowanceProof = null;
         // 在解析和修改候选之前保存原响应；记录写入失败必须停止，不能当模型重试吞掉。
         grantedReaderBudget.settleReaderResponse(grantedResponseLease, 'content', raw);
-        if (repairDiagnostic) require('./lib/reader-request-diagnostics')
+        if (repairDiagnostic) repairResponseRecord = require('./lib/reader-request-diagnostics')
             .saveReaderRepairResponse(repairDiagnostic, raw);
         if (!repairContext) fullAttempts += 1;
         const responseSha256 = repair.shaText(raw);
@@ -9702,7 +9924,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         let patchApplied = false;
         try {
             if (repairContext) {
-                let patch = repair.parseReaderPatchJson(extractJsonObjectText(raw));
+                let patch = metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND
+                    ? repair.parseReaderVersionMetadataPatch(raw)
+                    : ordinalCapability ? null : repair.parseReaderPatchJson(extractJsonObjectText(raw));
                 if (conceptTermsContext) {
                     patch = repair.compileConceptTermsPatch(candidate, patch, conceptTermsContext);
                 }
@@ -9716,10 +9940,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 }
                 if (metadataOperation) {
                     raw = metadataRepair.applyTopLevelMetadataRepair(previousDraft, patch, metadataOperation);
+                    if (metadataOperation.kind === repair.READER_VERSION_METADATA_KIND) versionRepairedRaw = raw;
                     candidate = repair.parseRecoveryDraft(raw);
-                    if (!candidate) throw new Error('Reader 删除程序元数据后仍不满足恢复结构');
+                    if (!candidate) throw new Error(metadataOperation.kind === repair.READER_VERSION_METADATA_KIND
+                        ? 'Reader 版本字段修复后仍不满足恢复结构' : 'Reader 删除程序元数据后仍不满足恢复结构');
                 } else {
-                    candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), {
+                    const patchOptions = {
                         rejectUnchanged: repairContext.issues.some(issue =>
                             ['reader_workflow_leakage', 'reader_awkward_translation'].includes(issue.code)
                             && repairContext.targets.some(target => target.path === issue.path)),
@@ -9731,7 +9957,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                         atomicOperation: repairContext.atomicOperation,
                         sourceText: options.sourceText || '',
                         structuredArtifacts: options.structuredArtifacts
-                    });
+                    };
+                    if (ordinalCapability) {
+                        ordinalCompiled = ordinaryOrdinal.compile(ordinalCapability, raw, patchOptions);
+                        candidate = ordinalCompiled.after;
+                    } else candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), patchOptions);
                     raw = JSON.stringify(candidate);
                     if (sectionGroupProof) sectionGroupCompilations.push(sectionGroupProof);
                 }
@@ -9748,24 +9978,34 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             normalizeCandidate();
             if (candidate) raw = JSON.stringify(candidate);
             const parsed = parseCandidate(raw);
-            recordDisposition({ ...dispositionBase, disposition: 'accepted', responseText: originalPaidResponse });
+            if (metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND) {
+                const captured = require('./lib/llm-usage').withPersistedLlmUsageRecords(() =>
+                    recordReaderDisposition({ ...dispositionBase, disposition: 'accepted', responseText: originalPaidResponse }));
+                versionMetadataRecoveryProof = require('./lib/reader-request-diagnostics').buildReaderVersionMetadataRecoveryProof({
+                    directory: candidateDirectory, paper, identity, origin: versionMetadataOrigin, diagnostic: repairDiagnostic,
+                    response: repairResponseRecord, transportRecords: versionMetadataTransportRecords,
+                    dispositionRecords: captured.records, repairedRaw: versionRepairedRaw });
+            } else recordReaderDisposition({ ...dispositionBase, disposition: 'accepted', responseText: originalPaidResponse });
             const result = {
                 ...parsed,
+                ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}),
                 contentMode,
                 attempts: attempt,
                 imageEvidence,
                 modelImagePreflightEvidenceSha256,
                 providerImageExclusions,
                 repairVersion: repair.REPAIR_VERSION,
-                draftOrderMappings,
+                draftOrderMappings, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 ...(sectionGroupCompilations.length ? { sectionGroupCompilations } : {}),
                 fullAttempts,
                 transportFailures,
                 resumedCandidate: Boolean(recovered)
             };
+            if (ordinalCapability && ordinalPatchCompilations.length) ordinaryOrdinal.attachOrigin(ordinalCapability, result, { issues: currentIssues, pixelFigureOrdinals });
             const acceptedRecoveryPayload = {
+                ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}),
                 status: 'failed', draft: candidate, rawDraft: JSON.stringify(candidate),
-                draftOrderMappings, readerRecoveryRevisions, issues: [],
+                draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: [],
                 attempts: attempt, fullAttempts, noProgress: 0, failureSignature: '', imageEvidence,
                 providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
@@ -9781,11 +10021,20 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             if (retiredCandidate) result.retiredCandidate = retiredCandidate;
             return result;
         } catch (error) {
+            if (error?.code === 'READER_VERSION_METADATA_EVIDENCE_INVALID') {
+                repair.saveFailedCandidate(candidateDirectory, identity, { status: 'failed', draft: null, rawDraft: previousDraft,
+                    draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: [{ path: null, message: error.message }],
+                    attempts: attempt, fullAttempts, transportFailures, noProgress,
+                    failureSignature: previousFailureSignature, validationFailureStreak, validationFailureSignature: previousValidationFailureSignature,
+                    imageEvidence, providerImageExclusions, implementationRepairAllowanceProof: null,
+                    ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}) });
+                throw error;
+            }
             const preservePaidCandidateOnLedgerFailure = storageError => {
                 try { repair.saveFailedCandidate(candidateDirectory, identity, {
                     status: 'failed', draft: candidate,
                     rawDraft: candidate ? JSON.stringify(candidate) : originalPaidResponse,
-                    draftOrderMappings, readerRecoveryRevisions, issues: currentIssues,
+                    draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
                     attempts: attempt, fullAttempts, transportFailures, noProgress,
                     failureSignature: previousFailureSignature, validationFailureStreak,
                     validationFailureSignature: previousValidationFailureSignature,
@@ -9799,9 +10048,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 }
                 throw storageError;
             };
-            if (error?.code === 'LLM_USAGE_NOT_PERSISTED') preservePaidCandidateOnLedgerFailure(error);
+            if (error?.code === 'LLM_USAGE_NOT_PERSISTED' || ordinalCapability && error?.scope === 'run')
+                preservePaidCandidateOnLedgerFailure(error);
             try {
-                recordDisposition({ ...dispositionBase, disposition: 'rejected',
+                recordReaderDisposition({ ...dispositionBase, disposition: 'rejected',
                     errorCode: error.code || 'READER_VALIDATION_FAILED', responseText: originalPaidResponse });
             } catch (storageError) {
                 if (storageError?.code === 'LLM_USAGE_NOT_PERSISTED') preservePaidCandidateOnLedgerFailure(storageError);
@@ -9814,7 +10064,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 repair.saveFailedCandidate(candidateDirectory, identity, {
                     status: 'failed', draft: candidate,
                     rawDraft: repairContext ? candidate ? JSON.stringify(candidate) : previousDraft : raw,
-                    draftOrderMappings, readerRecoveryRevisions, issues: currentIssues,
+                    draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
                     attempts: attempt, fullAttempts, transportFailures, noProgress,
                     failureSignature: previousFailureSignature, validationFailureStreak,
                     validationFailureSignature: previousValidationFailureSignature,
@@ -9856,7 +10106,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ? validationFailureStreak + 1 : 1;
             previousValidationFailureSignature = normalizedFailureSignature;
             repair.saveFailedCandidate(candidateDirectory, identity, {
-                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                 issues: currentIssues, attempts: attempt, fullAttempts, noProgress, failureSignature, imageEvidence,
                 providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
@@ -10504,6 +10754,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const directMaterializer = directContext.directReaderMaterializer();
     const paidFigures = require('./lib/reader-paid-resolved-render')
         .reuseVerifiedPaidResolvedFigures(injectedReaderResult.figures, paper, arxivId);
+    const correctionFigures = require('./lib/reader-fact-table-claim-location')
+        .reuseVerifiedCorrectionFigures(injectedReaderResult.figures, paper);
     const localSourceInput = options.localSourceCorrectionInput;
     const localSource = localSourceInput && require('./lib/conference-source-resource-correction');
     if (localSourceInput) localSource.assertFinalizerInput(localSourceInput, paper);
@@ -10517,7 +10769,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         ? bindDirectApiReaderFiguresToEvidence(injectedReaderResult.figures, generated.imageEvidence) : null;
     const materializedFigures = localSourceInput
         ? localSource.readVerifiedSignedFigures(localSourceInput, injectedReaderResult.figures)
-        : paidFigures ?? (options.reuseSignedFigures
+        : correctionFigures ?? paidFigures ?? (options.reuseSignedFigures
             ? reuseSignedApiReaderFigureAssets(injectedReaderResult.figures, options.reuseSignedFigures, arxivId)
             : aliasFigures ?? await (directMaterializer || materializeApiReaderFigures)(
                 injectedReaderResult.figures, arxivId
@@ -10648,6 +10900,12 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(paper, sourceDetails,
             { preserveUpstream: options.preserveReaderUpstream === true
                 || options.preserveScientificUpstream === true });
+    }
+    if (generated.metadataRecoveryProof) require('./lib/reader-request-diagnostics')
+        .sealReaderVersionMetadataCompletion(paper, generated.metadataRecoveryProof);
+    if (readerResult.ordinalPatchCompilations?.length) {
+        const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
+        manifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
     }
     return paper;
 }
@@ -13689,6 +13947,17 @@ function getModelOutputTerminationError(apiType, response, maxTokens) {
                 { code: 'MODEL_OUTPUT_INCOMPLETE', retryable: false, category: 'output_incomplete' }
             );
         }
+        if (response?.status === 'completed' && response.error == null
+            && response.incomplete_details == null && Array.isArray(response.output)
+            && response.output.some(item => item?.type === 'message'
+                && item.role === 'assistant' && item.status === 'completed'
+                && Array.isArray(item.content) && item.content.some(block =>
+                    block?.type === 'refusal' && typeof block.refusal === 'string'
+                    && block.refusal.trim()))) {
+            return makeModelRequestError('提供方返回结构化拒答，保留本次请求并停止重试', {
+                code: 'MODEL_REFUSAL', retryable: false, category: 'refusal', scope: 'paper'
+            });
+        }
         return null;
     }
     if (apiType === 'anthropic' && response?.stop_reason === 'max_tokens') {
@@ -13878,6 +14147,9 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
             ? '局部修复' : '长文';
         console.log(`    [api] ${requestLabel}请求推理设置=${bodyObj.thinking.type === 'disabled' ? '关闭' : '开启'}（请求参数，尚不代表网关接受）`);
     }
+    if (config.readerTargetOrdinalCapability && config.usageContext?.stage === 'apiReaderRepair')
+        require('./lib/reader-target-ordinal-patch').recordRequestWitness(
+            config.readerTargetOrdinalCapability, bodyObj, config.usageContext);
     const postData = JSON.stringify(bodyObj);
     const headers = {
         ...buildHeaders(apiType, config.key, postData),
@@ -13960,6 +14232,7 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
         readerResponseFormat: options.readerResponseFormat,
         repairThinkingMode: options.repairThinkingMode,
         primaryThinkingMode: options.primaryThinkingMode,
+        readerTargetOrdinalCapability: options.readerTargetOrdinalCapability,
         usageContext: options.usageContext,
         usageDirectory: options.usageDirectory,
         usageSink: options.usageSink,
@@ -18793,6 +19066,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 contentMode: READER_SOURCE_CONTENT_MODE,
                 ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
                 attempts: readerResult.attempts,
+                ...(readerResult.ordinalPatchCompilations?.length ? {
+                    ordinalPatchContract: require('./lib/reader-target-ordinal-patch').CONTRACT,
+                    ordinalPatchCompilations: structuredClone(readerResult.ordinalPatchCompilations) } : {}),
                 ...(readerResult.draftOrderMappings?.some(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT)
                     ? { conceptTermsRepairPromptBindings: readerResult.draftOrderMappings.filter(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT) } : {}),
                 model: DEEP_CONFIG.model,
@@ -18855,6 +19131,10 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 } : {}),
                 ...apiReaderOperatorExecution(readerResult.operatorCorrectionProof)
             });
+            if (readerResult.ordinalPatchCompilations?.length) {
+                const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
+                analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
+            }
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             transferDeferredReaderCandidate(generatedReaderResult, paper);
             console.log(`    [deep] ✅ 初学研究者读者文章已生成`);
@@ -19129,11 +19409,16 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
         return await callModel([{ role: 'user', content: prompt }], 8000,
             { usageContext: { stage: 'openSourceScan' } });
     } catch (error) {
-        // 只有模型响应无法解析时，才从已核验全文中明确出现的仓库 URL 生成这一节。
-        // 网络或其他模型错误继续抛出，不能用这段替代内容掩盖失败。
-        if (error?.scope === 'run' || error?.code !== 'MODEL_INVALID_RESPONSE') throw error;
+        // 明确的结构化拒答不再重复请求；这一节只从原文逐字提取资源 URL。
+        // 不把未知空输出、网络、认证、配额或终态错误冒充拒答。
+        const refusal = error?.modelRequestClassified === true
+            && error.code === 'MODEL_REFUSAL' && error.category === 'refusal'
+            && error.scope === 'paper';
+        if (!refusal && (error?.scope === 'run' || error?.code !== 'MODEL_INVALID_RESPONSE')) throw error;
         const fallback = buildDeterministicOpenSourceScan(sourceText);
-        console.warn('    [deep] 开源扫描模型响应无效，使用 sealed source URL 后备');
+        console.warn(refusal
+            ? '    [deep] 开源扫描收到结构化拒答，不重试模型，使用 sealed source URL 后备'
+            : '    [deep] 开源扫描模型响应无效，使用 sealed source URL 后备');
         return fallback;
     }
 }

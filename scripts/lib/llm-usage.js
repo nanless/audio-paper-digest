@@ -8,6 +8,15 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage();
+const persistedRecords = new AsyncLocalStorage();
+function withPersistedLlmUsageRecords(callback) {
+    if (typeof callback !== 'function') throw new TypeError('Usage capture requires a callback');
+    const records = [];
+    const result = persistedRecords.run(records, callback);
+    return result && typeof result.then === 'function'
+        ? result.then(value => ({ result: value, records: records.slice() }))
+        : { result, records: records.slice() };
+}
 const VERSION = 'llm-usage-v1';
 const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -150,6 +159,10 @@ function writeLlmUsageEvent(event, options = {}) {
     fs.renameSync(temp, target);
     const directoryFd = fs.openSync(directory, 'r');
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+    const capture = persistedRecords.getStore();
+    if (capture) capture.push({ file: target,
+        sha256: crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex'),
+        eventId: event.eventId, kind: event.kind });
     return true;
 }
 
@@ -231,5 +244,5 @@ function summarizeLlmUsage(events, options = {}) {
             .map(([name, value]) => [name, { ...value, sum: value.reportedRequests ? value.sum : null }])) })) };
 }
 
-module.exports = { VERSION, normalizeUsagePaperId, usagePaperKey, normalizeLlmUsage, withLlmUsageContext, usageContext, inputStatistics,
+module.exports = { withPersistedLlmUsageRecords, VERSION, normalizeUsagePaperId, usagePaperKey, normalizeLlmUsage, withLlmUsageContext, usageContext, inputStatistics,
     buildLlmUsageEvent, writeLlmUsageEvent, recordLlmUsage, recordLlmDisposition, summarizeLlmUsage };

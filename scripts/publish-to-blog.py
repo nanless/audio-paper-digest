@@ -64,6 +64,7 @@ from publish_common import (
     is_publish_currency_literal,
     is_publish_currency_unit_literal, decode_publish_currency_unit_display,
     strict_source_cell_math_display, extract_markdown_tables,
+    is_publication_technical_asterisk_cell_view,
     _assert_hash_key_premises, _assert_ecmascript_number_premises, _manual_canonical_json,
     _verified_daily_publication_table_scope,
     validate_experiment_table_contract, EXPERIMENT_TABLE_CONTRACT_VERSIONS,
@@ -4453,8 +4454,8 @@ def plain_title_for_publish(title):
 
 
 def markdown_title_for_publish(title):
-    """Escape literal title dollars at the Markdown boundary; no metadata cleanup."""
-    return re.sub(r'(\\*)\$', lambda match: match[1] + ('' if len(match[1]) % 2 else '\\') + '$', str(title or ''))
+    """Escape literal title dollars and stars; preserve the plain metadata title."""
+    return re.sub(r'(\\*)([$*])', lambda match: match[1] + ('' if len(match[1]) % 2 else '\\') + match[2], str(title or ''))
 
 
 def yaml_title_for_publish(title):
@@ -7237,7 +7238,56 @@ def _reader_table_header_unit_evidence_failures(table, quotes):
     return failures
 
 
-def _api_reader_scientific_quote_projection(rendered, quote_corpus):
+class _ReaderScientificPdfQuoteCapability:
+    __slots__ = ('__weakref__',)
+
+
+_READER_SCIENTIFIC_PDF_QUOTES = weakref.WeakKeyDictionary()
+
+
+def _reader_verified_scientific_pdf_quotes(capability, source_binding, quote_corpus):
+    # A JSON proof, a quotation string or a boolean cannot issue this capability.
+    bound = _READER_SCIENTIFIC_PDF_QUOTES.get(capability) if type(capability) is _ReaderScientificPdfQuoteCapability else None
+    if bound is None or source_binding is not bound['binding'] \
+            or _stable_json_sha256(source_binding) != bound['bindingSha256'] \
+            or _javascript_string_sha256(bound['paper'].get('apiReaderArticle', '')) != bound['articleSha256'] \
+            or _daily_fresh_normalized_paper_id(bound['paper']) != bound['paperId'] \
+            or bound['paper'].get('freshRewriteProvenance') != bound['provenance'] \
+            or _stable_json_sha256(bound['paper'].get('analysisManifest', {}).get('sourceAcquisition')) != bound['sourceAcquisitionSha256']:
+        raise PublishDataValidationError('科学计数量缺少本次真实 PDF 与原表绑定能力。')
+    _daily_fresh_validate_bundle(bound['runDir'], bound['paperId'], bound['provenance'], bound['paper'])
+    actual_pdf = _daily_fresh_read_private_file(bound['pdfFile'], '科学计数量来源 PDF', 64 * 1024 * 1024)
+    if actual_pdf != bound['pdfBytes']:
+        raise PublishDataValidationError('科学计数量来源 PDF 在同次核验中变化。')
+    from reader_sealed_pdf_quote_evidence import extract_pdf_scientific_quantities
+    result = extract_pdf_scientific_quantities(actual_pdf, [proof['quote'] for proof in bound['proofs']])
+    if result.get('contract') != 'reader-sealed-pdf-scientific-quantities-v1' \
+            or result.get('document') != bound['document'] or len(result.get('results', [])) != len(bound['proofs']):
+        raise PublishDataValidationError('科学计数量提取未保留原 PDF 引文来源。')
+    atoms = {}
+    for original, response in zip(bound['proofs'], result['results']):
+        if response.get('eligible') is not True or response.get('evidence') != original:
+            raise PublishDataValidationError('科学计数量未重放完整原始 PDF 引文。')
+        if original['quote'] not in quote_corpus:
+            raise PublishDataValidationError('科学计数量来源引文不属于本表。')
+        quantities = response.get('scientificQuantities', [])
+        if quantities and response.get('family') != 'adamw-three-stage-learning-rates-v1':
+            raise PublishDataValidationError('科学计数量不属于获准的完整 AdamW 三阶段句。')
+        for atom in quantities:
+            role = atom.get('role')
+            if role not in ('SFT', 'RL-Stage I', 'RL-Stage II') or atom.get('unit') != '' or role in atoms:
+                raise PublishDataValidationError('科学计数量不属于唯一完整三阶段学习率。')
+            if not isinstance(atom.get('coefficient'), str) or not re.fullmatch(r'[+−-]?[0-9]+(?:\.[0-9]+)?', atom['coefficient']) \
+                    or not isinstance(atom.get('signedExponent'), str) or not re.fullmatch(r'[+-][0-9]+', atom['signedExponent']):
+                raise PublishDataValidationError('科学计数量系数或带符号指数不完整。')
+            atoms[role] = {**atom, 'quoteIndex': quote_corpus.index(original['quote']), 'origin': 'verified_pdf_glyph'}
+    if _daily_fresh_read_private_file(bound['pdfFile'], '科学计数量来源 PDF', 64 * 1024 * 1024) != actual_pdf:
+        raise PublishDataValidationError('科学计数量来源 PDF 在提取后变化。')
+    _daily_fresh_validate_bundle(bound['runDir'], bound['paperId'], bound['provenance'], bound['paper'])
+    return atoms if set(atoms) == {'SFT', 'RL-Stage I', 'RL-Stage II'} else {}
+
+
+def _api_reader_scientific_quote_projection(rendered, quote_corpus, *, scientific_pdf_capability=None, source_binding=None):
     """Ephemeral whole-cell coverage only; never changes text, tokens or provenance.
 
     A complete signed coefficient/exponent/unit must occur in one bound quote
@@ -7303,6 +7353,31 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus):
                 key = quantity_key(single, single['sup'] or single['tex'])
             source_atoms.setdefault(key, (quote_index, line_index))
 
+    glyph_schedule = {}
+    roles = ('SFT', 'RL-Stage I', 'RL-Stage II')
+    schedule_profile = (rendered['header'] == ['阶段', '学习率', '采样与复用', '组与奖励']
+        and len(rendered['rows']) == 3 and all(len(values) == 4 for values in rendered['rows'])
+        and [values[0] for values in rendered['rows']] == list(roles))
+    # Other tables keep the old projection and do not trigger new PDF work.
+    if scientific_pdf_capability is not None and schedule_profile:
+        atoms = _reader_verified_scientific_pdf_quotes(scientific_pdf_capability, source_binding, quote_corpus)
+        if set(atoms) == set(roles):
+            baseline = re.compile(r'\s*(?P<coefficient>' + coefficient + r')\s*×\s*10(?P<base>[+−-][0-9]+)(?P<unit>\s*' + unit + r')?\s*')
+            admitted = {}
+            for row, role in enumerate(roles, 1):
+                value = str(rendered['rows'][row - 1][1])
+                parsed = line_atom.fullmatch(value.strip()) or baseline.fullmatch(value.strip())
+                if parsed is None:
+                    break
+                exponent = parsed.groupdict().get('sup') or parsed.groupdict().get('tex') or parsed.groupdict().get('base')
+                atom = atoms[role]
+                source_key = (atom['coefficient'].replace('−', '-').lstrip('+'), exponent_key(atom['signedExponent']), atom['unit'])
+                if quantity_key(parsed, exponent) != source_key:
+                    break
+                admitted[(row, 1)] = atom
+            if len(admitted) == 3:
+                glyph_schedule = admitted
+
     failures, proofs, tokens = [], [], set()
     for row, column, value in cells:
         if not marker.search(unicodedata.normalize('NFKC', value)):
@@ -7313,6 +7388,13 @@ def _api_reader_scientific_quote_projection(rendered, quote_corpus):
         # footnotes, or additional scalars from being mistaken for a unitless
         # prefix. No substring or fallback atom can grant coverage.
         stripped = value.strip()
+        if (row, column) in glyph_schedule:
+            atom = glyph_schedule[(row, column)]
+            proofs.append({'row': row, 'column': column, 'start': len(value) - len(value.lstrip()),
+                'end': len(value.rstrip()), 'coefficient': atom['coefficient'], 'signedExponent': atom['signedExponent'],
+                'unit': '', 'quoteIndex': atom['quoteIndex'], 'origin': atom['origin'], 'role': atom['role'],
+                'pdfGlyphEvidence': atom})
+            continue  # Only the three complete role-bound LR cells gain new coverage.
         match = line_atom.fullmatch(stripped)
         if not match:
             failures.append({'row': row, 'column': column, 'value': value,
@@ -7924,7 +8006,7 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
     return result
 
 
-def _verify_reader_sealed_pdf_quote_bindings(paper):
+def _verify_reader_sealed_pdf_quote_bindings(paper, *, scientific_capabilities=None):
     """Verify separate PDF quotations by re-extracting the official sealed file."""
     from reader_sealed_pdf_quote_evidence import extract_pdf_quote_document, quote_evidence
     bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
@@ -7952,8 +8034,9 @@ def _verify_reader_sealed_pdf_quote_bindings(paper):
     if artifacts != {key: value for key, value in runtime['structuredArtifacts'].items()
                      if key != 'payloadSha256'}:
         raise PublishDataValidationError('独立 PDF 引文输入与封存结构化来源不一致。')
-    document = extract_pdf_quote_document(_daily_fresh_read_private_file(
-        source_dir / 'source.pdf', '独立 PDF 引文来源文件', 64 * 1024 * 1024))
+    pdf_file = source_dir / 'source.pdf'
+    pdf_bytes = _daily_fresh_read_private_file(pdf_file, '独立 PDF 引文来源文件', 64 * 1024 * 1024)
+    document = extract_pdf_quote_document(pdf_bytes)
     if sum(len(binding.get('sealedPdfQuoteEvidence', []))
            for binding in marked if isinstance(binding.get('sealedPdfQuoteEvidence'), list)) > 64:
         raise PublishDataValidationError('独立 PDF 引文总数超过来源核验上限。')
@@ -7981,6 +8064,15 @@ def _verify_reader_sealed_pdf_quote_bindings(paper):
                 raise PublishDataValidationError('独立 PDF 引文不能由封存原文件完整重放。')
             actual_quotes.append(saved['quote'])
         result[index] = actual_quotes
+        if scientific_capabilities is not None:
+            capability = _ReaderScientificPdfQuoteCapability()
+            _READER_SCIENTIFIC_PDF_QUOTES[capability] = {'binding': binding,
+                'bindingSha256': _stable_json_sha256(binding), 'paper': paper,
+                'articleSha256': _javascript_string_sha256(paper.get('apiReaderArticle', '')),
+                'sourceAcquisitionSha256': _stable_json_sha256(paper.get('analysisManifest', {}).get('sourceAcquisition')),
+                'runDir': run_dir, 'paperId': paper_id, 'provenance': copy.deepcopy(proof),
+                'pdfFile': pdf_file, 'pdfBytes': pdf_bytes, 'document': copy.deepcopy(document), 'proofs': copy.deepcopy(quotes)}
+            scientific_capabilities[index] = capability
     return result
 
 
@@ -8492,7 +8584,8 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
         raise PublishDataValidationError('同一表格不能混用两种 PDF 来源证明。')
     pdf_values.update(generic_pdf_values)
     try:
-        pdf_quote_values = _verify_reader_sealed_pdf_quote_bindings(paper)
+        scientific_pdf_capabilities = {}
+        pdf_quote_values = _verify_reader_sealed_pdf_quote_bindings(paper, scientific_capabilities=scientific_pdf_capabilities)
     except Exception as error:
         raise PublishDataValidationError('独立封存 PDF 逐字引文不能重放：' + str(error)) from error
 
@@ -8589,6 +8682,10 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                     if article is not None and isinstance(cell.get('renderedText'), str) \
                     and is_publish_currency_unit_literal(cell['renderedText']) else actual_text
                 canonical_comparison_text = cell.get('renderedText')
+                if is_publication_technical_asterisk_cell_view(canonical_comparison_text, actual_text, cell.get('sourceText')):
+                    # Exact published view only; source text, DOM identity,
+                    # canonical table/article hashes and all other cells stay strict.
+                    display_source_text = canonical_comparison_text
                 math_display = strict_source_cell_math_display(cell.get('sourceText'))
                 if math_display and actual_text == math_display['displayText'] \
                         and canonical_comparison_text in (math_display['sourceText'], math_display['displayText']):
@@ -8646,7 +8743,8 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                 *[set(_api_reader_numeric_tokens(quote)) for quote in pdf_quote_values[index]])
                 if index in pdf_quote_values
                 else set(_api_reader_numeric_tokens('\n'.join(quote_corpus))))
-            scientific_projection = _api_reader_scientific_quote_projection(rendered, quote_corpus)
+            scientific_projection = _api_reader_scientific_quote_projection(rendered, quote_corpus,
+                scientific_pdf_capability=scientific_pdf_capabilities.get(index), source_binding=binding)
             if scientific_projection['failures']:
                 raise PublishDataValidationError(
                     f'第 {index} 个表格中的完整科学计数量未被本表来源引文精确覆盖：'
@@ -11331,6 +11429,48 @@ def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_
 _READER_RESOURCE_CLAIM_REPLAY_CACHE = set()
 
 
+def _has_source_bound_reader_patch_completion(paper):
+    # Cache routing only. The Node validator reopens and proves every record.
+    manifest = paper.get('analysisManifest') or {}
+    contracts = manifest.get('contracts') or {}
+    stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
+    if 'apiReaderFactFeedbackCorrection' in paper \
+            or 'factReviewClaimLocationCorrection' in stage \
+            or any(key in contracts for key in ('readerTargetOrdinalPatch', 'readerVersionMetadataRecovery')) \
+            or any(key in stage for key in ('ordinalPatchContract', 'ordinalPatchCompilations',
+                'ordinalCompletionProof', 'versionMetadataRecoveryContract', 'versionMetadataRecoveryProof')):
+        return True
+    provenance = paper.get('freshRewriteProvenance') or {}
+    run_id = provenance.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        return False
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    run_file = run_dir / 'run.json'
+    if not run_file.exists():
+        return False
+    try:
+        run = json.loads(run_file.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return True
+    if run.get('contract') != 'daily-fresh-source-run-v1':
+        return False
+    paper_id = re.sub(r'v\d+$', '', str(paper.get('arxivId') or ''))
+    if not re.fullmatch(r'\d{4}\.\d{4,5}', paper_id):
+        return True  # Actual daily records cannot hide their index by dropping ID.
+    attempts = run_dir / 'reader-attempts'
+    metadata_directory = attempts / 'version-metadata-completion-index'
+    metadata_index = metadata_directory / (paper_id + '.json')
+    ordinal_index = attempts / 'ordinal-completions'
+    correction_directory = run_dir / 'reader-feedback-corrections'
+    correction_index = correction_directory / (paper_id + '.json')
+    return metadata_index.exists() or metadata_index.is_symlink() or metadata_directory.is_symlink() \
+        or correction_index.exists() or correction_index.is_symlink() or correction_directory.is_symlink() \
+        or (correction_directory.exists() and not correction_directory.is_dir()) \
+        or (metadata_directory.exists() and not metadata_directory.is_dir()) or ordinal_index.is_symlink() \
+        or (ordinal_index.exists() and not ordinal_index.is_dir()) \
+        or (ordinal_index.is_dir() and any(ordinal_index.glob(paper_id + '-*.json')))
+
+
 def _validate_reader_resource_claim_source_replay(paper, source_details, paper_id):
     """Production publication uses the same source-bound claim guard as writing."""
     if paper.get('analysisManifest', {}).get('contracts', {}).get('apiReaderArticle') \
@@ -11346,7 +11486,8 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
                               'resources': paper.get('apiReaderResources')}), paper.get('sourceSha256'),
            _sha256_file(cli), _sha256_file(SHARED_SCRIPTS_DIR / 'deep-analyzer.js'),
            _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-binding.js'))
-    if not authenticated_footnotes and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
+    bound_patch_completion = _has_source_bound_reader_patch_completion(paper)
+    if not authenticated_footnotes and not bound_patch_completion and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
         return
     node = shutil.which('node')
     if not node:
@@ -11359,7 +11500,7 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
         result = _run_bounded_subprocess(
             [node, str(cli), str(source_file.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
             env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=180 if authenticated_footnotes else 30,
+            timeout_seconds=180 if authenticated_footnotes or bound_patch_completion else 30,
             max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
     accepted_response = result.stdout.strip() == '{"verified":true}'
     if authenticated_footnotes:
@@ -11371,7 +11512,7 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
     if result.returncode != 0 or result.timed_out or result.output_truncated \
             or not accepted_response:
         raise PublishDataValidationError(f'{paper_id} 读者正文的资源可用性宣称未通过封存来源核验。')
-    if not authenticated_footnotes:
+    if not authenticated_footnotes and not bound_patch_completion:
         _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
 
 
@@ -14303,6 +14444,9 @@ def generation_template_fingerprint():
         'publication_local_replay.py': script_dir / 'publication_local_replay.py',
         'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
+        'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
+        'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
+        'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
@@ -14324,6 +14468,7 @@ def generation_template_fingerprint():
         'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'reader_authenticated_pdf_hierarchical_table.py': script_dir / 'reader_authenticated_pdf_hierarchical_table.py',
         'analysis-contract.js': script_dir / 'analysis-contract.js',
+        'lib/experiment-source-setting-axes.js': script_dir / 'lib' / 'experiment-source-setting-axes.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
         'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
         'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',
@@ -14455,6 +14600,7 @@ def review_protocol_fingerprint():
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'daily_hugo_capture.py': script_dir / 'daily_hugo_capture.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
+        'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
         'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',
         'review-blog.py': script_dir / 'review-blog.py',
         'manual/manual-review-blog.py': MANUAL_SCRIPTS_DIR / 'manual-review-blog.py',
@@ -14465,6 +14611,9 @@ def review_protocol_fingerprint():
         'publication_local_replay.py': script_dir / 'publication_local_replay.py',
         'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
+        'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
+        'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
+        'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
         'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
         'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
         'reader_damaged_raster_pdf_asset.py': script_dir / 'reader_damaged_raster_pdf_asset.py',

@@ -137,8 +137,10 @@ test('实际准备身份包含窄模板实现SHA，而普通v12模板声明不�
         sourceText: source, structuredArtifacts: fixture.sourceDetails.structuredArtifacts });
     const expected = crypto.createHash('sha256').update([
         fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-repair.js'), 'utf8'),
+        fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-target-ordinal-patch.js'), 'utf8'),
         require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(repair.CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
-        require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8')].join('\0')).digest('hex');
+        require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8'),
+        fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-request-diagnostics.js'), 'utf8')].join('\0')).digest('hex');
     assert.equal(context.identity.repairImplementationSha256, expected);
     assert.equal(context.identity.repairImplementationSha256, repair.readerRepairImplementationSha256());
 });

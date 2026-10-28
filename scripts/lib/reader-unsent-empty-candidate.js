@@ -29,6 +29,39 @@ function isEmpty(payload) {
         && !payload.implementationRepairAllowanceProof && !payload.implementationRepairAllowanceLineage
         && !payload.unfundedTransportFailureHistory?.length;
 }
+// An initial request can have two real, paired TLS failures and no content at
+// all. It is not an unsent obstruction and has no earlier paid draft to select.
+// Leave its original A0/F0/T1 candidate to the normal loader; never manufacture
+// a paid-response witness or discard its physical request records.
+function initialTransportOnly(empty, events, allEvents, identity, sameInputCandidates) {
+    if (empty.length !== 1 || sameInputCandidates !== 1
+        || empty[0].envelope.payload.transportFailures !== 1
+        || events.length < 1 || events.length > 2 || allEvents.length !== events.length * 2) return false;
+    const input = events[0].event.inputSha256;
+    if (!/^[a-f0-9]{64}$/.test(input || '')
+        || new Set(events.map(record => record.event.eventId)).size !== events.length) return false;
+    const starts = allEvents.filter(event => event.kind === 'request_started');
+    if (starts.length !== events.length || new Set(starts.map(event => event.eventId)).size !== starts.length) return false;
+    const labels = ['runId', 'paperId', 'stage', 'unitId', 'contentAttempt', 'transportAttempt',
+        'protocol', 'model', 'inputSha256'];
+    const savedAt = fs.statSync(empty[0].filename).mtimeMs;
+    return events.every(({ event, at }, index) => {
+        const start = starts.find(item => item.eventId === event.eventId);
+        return event.version === 'llm-usage-v1' && uuid.test(String(event.eventId || '') + '.json')
+            && event.outcome === 'transport_error' && event.transportStarted === true
+            && event.statusCode === null && event.outputTextSha256 === null
+            && event.usage?.status === 'unavailable'
+            && ['inputTokens', 'outputTokens', 'totalTokens'].every(key => event.usage[key] === null)
+            && event.stage === 'apiReaderArticle' && event.contentAttempt === 1
+            && event.transportAttempt === index + 1 && event.inputSha256 === input
+            && event.model === identity.model?.model && event.protocol === identity.model?.protocol
+            && at <= savedAt && (!index || at > events[index - 1].at)
+            && start?.version === 'llm-usage-v1' && start.outcome === 'result_unknown'
+            && labels.every(key => (start[key] ?? null) === (event[key] ?? null))
+            && Number.isFinite(Date.parse(start.at)) && Date.parse(start.at) <= at
+            && (!index || Date.parse(start.at) > events[index - 1].at);
+    });
+}
 function proof(file, expectedSha256) {
     return require('./reader-proof-read-scope').readReaderProofJson(file, { expectedSha256 });
 }
@@ -113,12 +146,13 @@ function withRecovery(directory, identity, callback) {
     validateHistory(directory, identity, checked?.envelope.payload);
     if (checked && !isEmpty(checked.envelope.payload)) return callback();
     if (!safeScope(directory, identity)) return callback();
-    const empty = [];
+    const empty = []; let sameInputCandidates = 0;
     for (const name of fs.existsSync(directory) ? fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)) : []) {
         const original = repair.readFailedCandidateEnvelope(directory,null,path.join(directory,name));
-        if (original && isEmpty(original.envelope.payload)
-            && require('./reader-compatible-candidate-replay').sameInput(original.envelope.identity,identity))
-            empty.push({ ...original, filename:path.join(directory,name) });
+        if (original && require('./reader-compatible-candidate-replay').sameInput(original.envelope.identity,identity)) {
+            sameInputCandidates++;
+            if (isEmpty(original.envelope.payload)) empty.push({ ...original, filename:path.join(directory,name) });
+        }
     }
     if (!empty.length) return callback();
     const usageDirectory = require('../config').FILES.llmUsageDir, events = [], allEvents=[],allRecords=[];
@@ -133,6 +167,17 @@ function withRecovery(directory, identity, callback) {
     }
     events.sort((a,b) => a.at-b.at);
     if (events.some((event,index) => index && event.at === events[index-1].at)) fail('ambiguous request order');
+    if (!events.some(record => isUnsent(record.event))
+        && initialTransportOnly(empty, events, allEvents, identity, sameInputCandidates)) {
+        // Recheck the source/CAS and every real terminal before the unchanged
+        // normal callback. This branch writes no archive, receipt or allowance.
+        if (!safeScope(directory, identity)) fail('transport-only recovery lost its sealed source scope');
+        for (const record of allRecords) proof(path.join(usageDirectory, record.basename), record.sha256);
+        const original = empty[0];
+        if (repair.readFailedCandidateEnvelope(directory, null, original.filename)?.envelopeSha256 !== original.envelopeSha256)
+            fail('transport-only empty CAS changed');
+        return callback();
+    }
     const real = events.filter(record => !isUnsent(record.event)).at(-1);
     if (!real || real.event.outcome !== 'completed' || real.event.statusCode !== 200
         || real.event.transportStarted !== true || real.event.usage?.status !== 'reported'

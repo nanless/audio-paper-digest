@@ -68,6 +68,9 @@ globalThis.fetch = deny;
         ? require('./conference-source-context').readerPdfSourceForContext(authenticatedHandle).sourceText : input.sourceText;
     if (crypto.createHash('sha256').update(sourceText).digest('hex') !== input.paper.sourceSha256) throw new Error('Authenticated PDF source text SHA differs');
     const deep = require('../deep-analyzer');
+    require('./reader-request-diagnostics').validateReaderVersionMetadataPublicationCompletion(input.paper);
+    require('./reader-target-ordinal-patch').validateCompletion(input.paper);
+    require('./reader-fact-table-claim-location').validatePublication(input.paper);
     const draft = deep.readerResourceClaimDraftFromArticle(input.paper.apiReaderPlan, input.paper.apiReaderArticle);
     // Python publication replays this same actual article/plan gate even when
     // no Node analysis scheduler ran during an explicit generate/publish resume.

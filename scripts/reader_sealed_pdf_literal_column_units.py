@@ -45,6 +45,59 @@ def uncertainty_surface(value):
     return re.sub(r'\s*±\s*', '±', surface(value))
 
 
+def system_configuration_surface(value):
+    # Only this separately certified font/position profile projects the
+    # calligraphic loss with its subscript and the printed degree-circle.
+    text = surface(value)
+    if text == '+ Grouped KL + 𝓛_W (full)':
+        return '+ Grouped KL + LW (full)'
+    if text == 'Direction (°) ↓':
+        return 'Direction (◦) ↓'
+    return text
+
+
+def variant_surface(value):
+    text = uncertainty_surface(value)
+    return {'Rank ↓': 'Rank↓', 'ℓ only': 'ℓonly'}.get(text, text)
+
+
+def system_configuration_symbols(page, cells):
+    last = [c for c in cells if c['row'] == 9 and c['column'] == 0]
+    need(len(last) == 1 and last[0]['text'] == '+ Grouped KL + LW (full)',
+         'system_configuration_loss_label_changed')
+    words = [w for w in last[0]['words'] if w[4] == 'LW']
+    need(len(words) == 1, 'system_configuration_loss_word_not_unique')
+    word = words[0]
+    chars = []
+    header_symbols = []
+    for block in page.get_text('rawdict', flags=fitz.TEXTFLAGS_TEXT)['blocks']:
+        for line in block.get('lines', []):
+            for span in line['spans']:
+                for char in span['chars']:
+                    bbox = char['bbox']
+                    item = {'char': char['c'], 'bbox': list(bbox), 'origin': list(char['origin']),
+                            'font': span['font'], 'size': span['size']}
+                    if word[0] - .05 <= bbox[0] and bbox[2] <= word[2] + .05 \
+                            and word[1] - .05 <= bbox[1] and bbox[3] <= word[3] + .05:
+                        chars.append(item)
+                    if char['c'] in ('W', '◦') and any(c['row'] == 0 and c['column'] in (1, 2, 4)
+                            and any(w[0] - .05 <= bbox[0] and bbox[2] <= w[2] + .05
+                                    and w[1] - .05 <= bbox[1] and bbox[3] <= w[3] + .05 for w in c['words'])
+                            for c in cells):
+                        header_symbols.append(item)
+    need(len(chars) == 2 and [c['char'] for c in chars] == ['L', 'W']
+         and re.fullmatch(r'CMSY\d+', chars[0]['font'])
+         and re.fullmatch(r'CMMI\d+', chars[1]['font'])
+         and chars[1]['size'] < .8 * chars[0]['size']
+         and chars[1]['origin'][1] > chars[0]['origin'][1] + .8,
+         'system_configuration_mathcal_subscript_not_observed')
+    need(len(header_symbols) == 3 and sum(c['char'] == 'W' and re.fullmatch(r'CMMI\d+', c['font'])
+                                         is not None for c in header_symbols) == 2
+         and sum(c['char'] == '◦' and re.fullmatch(r'CMSY\d+', c['font'])
+                 is not None for c in header_symbols) == 1, 'system_configuration_header_symbols_changed')
+    return {'loss': chars, 'headerSymbols': header_symbols, 'renderedLossLabel': '+ Grouped KL + 𝓛_W (full)'}
+
+
 def pdf_lines(page):
     return [line for block in page.get_text('dict', flags=fitz.TEXTFLAGS_TEXT)['blocks']
             for line in block.get('lines', [])]
@@ -144,9 +197,32 @@ def source_grid(page, caption, document, additional_captions=()):
     merged = headers[:2] == ['Dataset', 'Method']
     background_axis = headers[0] == 'Background'
     snr_axis = headers[0] == 'SNR (dB)'
-    need(merged or headers[0] in ('Method', 'Generator') or background_axis or snr_axis,
+    system_axis = headers[0] == 'System/configuration'
+    variant_axis = headers[0] == 'Variant'
+    need(merged or headers[0] in ('Method', 'Generator') or background_axis or snr_axis or system_axis or variant_axis,
          'literal_method_axis_not_explicit')
+    if system_axis:
+        need(headers == ['System/configuration', 'W SI-SDR (dB) ↑', 'Direction (◦) ↓',
+                         'Intensity coherence error ↓', 'W paired CLAP ↑'],
+             'system_configuration_complete_headers_changed')
+        need(re.fullmatch(r'Table [1-9]\d*: FOA reconstruction and cumulative ablation\. '
+                          r'The upper block compares codecs on native scenes; each “\+” below adds to '
+                          r'the previous row, with grouped KL replacing uniform KL\. '
+                          r'Ablations use matched updates from scratch and 24 kHz evaluation\. '
+                          r'Bold marks the best per block\.', surface(caption[4])),
+             'system_configuration_two_block_caption_missing')
+        need(len(horizontal) == 4, 'system_configuration_two_blocks_missing')
+    if variant_axis:
+        need(headers == ['Variant', 'Final acc (%)', 'AULC (%)', 'Rank↓'],
+             'variant_complete_headers_changed')
+        need(re.fullmatch(r'Table [1-9]\d*\. Ablations over the full matrix \(48 settings × 10 seeds, '
+                          r'mean±std across seeds\)\. Each variant replaces [A-Za-z][A-Za-z0-9 -]{0,64} '
+                          r'in the rank- ing against the five deployable baselines\. Top, component ablation, '
+                          r'best per column in bold; bottom, sensitivity to k \(default k=10 is '
+                          r'the full rule\)\.', surface(caption[4])), 'variant_two_block_caption_missing')
+        need(len(horizontal) == 4, 'variant_two_blocks_missing')
     label_column = 1 if merged else 0
+    flat_inline_uncertainty = not merged and not background_axis and not snr_axis
     # Only this literal original SNR(dB) axis may own column zero's unit.
     # Its exact row identities are checked before any measured result values.
     units = {c: (m.group(2) or m.group(3)).lower() for c, header in enumerate(headers)
@@ -165,12 +241,18 @@ def source_grid(page, caption, document, additional_captions=()):
     possibilities = {}
     for edges in column_edges(groups, words, top[0], top[2]):
         try:
+            separating_rule = None
             body = [w for w in words if separator < cy(w) < bottom]
             label_words = [w for w in body if edges[label_column] < cx(w) < edges[label_column + 1]]
             lines = rows_of(label_words)
             need(2 <= len(lines) <= 64, 'literal_method_rows_missing')
             ys = [y for y, _ in lines]
             need(all(b - a >= 4 for a, b in zip(ys, ys[1:])), 'literal_method_rows_overlap')
+            if system_axis:
+                need(len(lines) == 9 and ys[3] < horizontal[2] < ys[4],
+                     'system_configuration_complete_blocks_changed')
+            if variant_axis:
+                need(len(lines) == 10 and ys[6] < horizontal[2] < ys[7], 'variant_complete_blocks_changed')
             if snr_axis and len(horizontal) == 4:
                 need(literal(lines[-1][1]) == 'Overall' and len(ys) >= 3
                      and ys[-2] < horizontal[-2] < ys[-1], 'literal_snr_aggregate_band_changed')
@@ -187,7 +269,26 @@ def source_grid(page, caption, document, additional_captions=()):
                                             'sourceRows': [i + 1 for i in indices]})
                 need(len(condition_bands) >= 2, 'literal_dataset_conditions_missing')
             else:
-                need(len(horizontal) == 3 or (snr_axis and len(horizontal) == 4), 'literal_unlabelled_body_bands')
+                ordinary = len(horizontal) == 3 or (snr_axis and len(horizontal) == 4)
+                if not ordinary:
+                    # One full-width rule may separate two ordinary data rows
+                    # in a single-header flat table. It cannot hide a condition
+                    # label, cut a word, or introduce a partial/merged band.
+                    need(not snr_axis and not background_axis and len(horizontal) == 4,
+                         'literal_unlabelled_body_bands')
+                    inner = horizontal[2]
+                    need(sum(a < inner < b for a, b in zip(ys, ys[1:])) == 1,
+                         'literal_body_rule_not_between_rows')
+                    body_rules = [d['rect'] for d in page.get_drawings()
+                                  if d['rect'].height < .1 and d['rect'].width > 1
+                                  and separator < d['rect'].y0 < bottom
+                                  and max(d['rect'].x0, top[0]) < min(d['rect'].x1, top[2])]
+                    need(body_rules and all(abs(r.x0 - top[0]) < .1 and abs(r.x1 - top[2]) < .1
+                                            and abs(r.y0 - inner) < .1 for r in body_rules),
+                         'literal_partial_or_extra_body_rule')
+                    need(not any(w[1] <= inner <= w[3] for w in body),
+                         'literal_body_rule_crosses_word')
+                    separating_rule = inner
             cells, rows = [], []
             for c, g in enumerate(groups):
                 cells.append({'row': 0, 'column': c, 'words': g['words'], 'text': g['text']})
@@ -209,16 +310,32 @@ def source_grid(page, caption, document, additional_captions=()):
                             need(SCALAR.fullmatch(text) or (r == len(lines) - 1 and text == 'Overall'),
                                  'literal_snr_axis_not_scalar_or_final_overall')
                         else:
-                            need(re.match(r'^[A-Za-z]', text) and len(text) <= 240, 'literal_method_not_label')
+                            need(((re.match(r'^[A-Za-z]', text) or variant_axis and text == 'ℓonly') if not system_axis or r < 5
+                                  else re.match(r'^\+ [A-Za-z]', text)) and len(text) <= 240,
+                                 'literal_method_not_label')
                     else:
                         count_ratio = background_axis and re.fullmatch(r'\d+/[1-9]\d*', text)
-                        need(SCALAR.fullmatch(text) or text in ('–', '—', '-') or COMPOUND.fullmatch(text) or count_ratio,
+                        # An inline mean and uncertainty are one complete PDF
+                        # cell. Keep both literal terms; the full view below
+                        # must match every original cell, sign and precision.
+                        need(SCALAR.fullmatch(text) or (flat_inline_uncertainty and MEAN_CI.fullmatch(text))
+                             or text in ('–', '—', '-') or COMPOUND.fullmatch(text) or count_ratio,
                              'literal_data_cell_not_complete')
                         if c in units:
-                            need(SCALAR.fullmatch(text) or text in ('–', '—', '-'), 'literal_unit_value_not_scalar')
+                            need(SCALAR.fullmatch(text) or (flat_inline_uncertainty and MEAN_CI.fullmatch(text))
+                                 or text in ('–', '—', '-'), 'literal_unit_value_not_scalar')
                     row.append(text)
                     cells.append({'row': r + 1, 'column': c, 'words': values, 'text': text})
                 rows.append(row)
+            if separating_rule is not None:
+                # Labels alone do not define a complete row: all its metric
+                # cells must lie on that same side of the physical separator.
+                row_extents = [(min(w[1] for cell in cells if cell['row'] == r for w in cell['words']),
+                                max(w[3] for cell in cells if cell['row'] == r for w in cell['words']))
+                               for r in range(1, len(rows) + 1)]
+                need(all(hi < separating_rule or separating_rule < lo for lo, hi in row_extents)
+                     and sum(a[1] < separating_rule < b[0] for a, b in zip(row_extents, row_extents[1:])) == 1,
+                     'literal_body_rule_splits_complete_row')
             identities = [tuple(row[:label_column + 1]) for row in rows]
             need(len(set(identities)) == len(identities), 'literal_row_identity_not_unique')
             owned = [tuple(w) for cell in cells for w in cell['words']]
@@ -226,6 +343,36 @@ def source_grid(page, caption, document, additional_captions=()):
             need(len(owned) == len(words) and len(set(owned)) == len(words), 'literal_unowned_or_repeated_word')
             box = [top[0], top[1], top[2], bottom]
             glyphs = complete_glyphs(page, words, box)
+            symbols = None
+            if system_axis:
+                need(rows[4][0] == 'Phase (base)' and all(not row[0].startswith('+') for row in rows[:4]),
+                     'system_configuration_cumulative_base_missing')
+                symbols = system_configuration_symbols(page, cells)
+                condition_bands = [
+                    {'text': 'The upper block compares codecs on native scenes', 'words': [],
+                     'top': separator, 'bottom': horizontal[2], 'sourceRows': list(range(1, 5))},
+                    {'text': 'each “+” below adds to the previous row, with grouped KL replacing uniform KL',
+                     'words': [], 'top': horizontal[2], 'bottom': bottom, 'sourceRows': list(range(5, 10))}]
+            if variant_axis:
+                need([row[0] for row in rows] == ['full rule, Eq. (3)', 'no fit term ℓ', 'no k-NN term aknn',
+                     'no NCM term ancm', 'ancm only', 'aknn only', 'ℓonly', 'k=5', 'k=10 (default)', 'k=20'],
+                     'variant_complete_component_and_k_identities_changed')
+                condition_bands = [
+                    {'text': 'Top, component ablation', 'words': [], 'top': separator,
+                     'bottom': horizontal[2], 'sourceRows': list(range(1, 8))},
+                    {'text': 'bottom, sensitivity to k (default k=10 is the full rule)', 'words': [],
+                     'top': horizontal[2], 'bottom': bottom, 'sourceRows': list(range(8, 11))}]
+            if flat_inline_uncertainty and any(MEAN_CI.fullmatch(v) for row in rows for v in row[1:]):
+                # New inline-uncertainty tables also cannot ignore a short
+                # partial rule in an otherwise ordinary three-rule grid.
+                body_rules = [d['rect'] for d in page.get_drawings()
+                              if d['rect'].height < .1 and d['rect'].width > 1
+                              and separator < d['rect'].y0 < bottom
+                              and max(d['rect'].x0, top[0]) < min(d['rect'].x1, top[2])]
+                need(all(abs(r.x0 - top[0]) < .1 and abs(r.x1 - top[2]) < .1
+                         and any(abs(r.y0 - y) < .1 for y in horizontal[2:-1])
+                         and not any(g['bbox'][1] <= r.y0 <= g['bbox'][3] for g in glyphs)
+                         for r in body_rules), 'literal_uncertainty_partial_or_crossing_rule')
             grid = {'page': page.number + 1, 'bbox': box, 'headers': headers, 'rows': rows,
                     'rowIdentities': [list(identity) for identity in identities], 'identityColumns': list(range(label_column + 1)),
                     'columnBoundaries': edges, 'rowBoundaries': row_edges, 'horizontalRules': horizontal,
@@ -233,7 +380,12 @@ def source_grid(page, caption, document, additional_captions=()):
                     'wordBoxCount': len(words), 'fullTableQuoteEvidence': full_quote,
                     'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()],
                     **({'axisProfile': 'complete-literal-snr-axis-v1'} if snr_axis else
-                       {'axisProfile': 'complete-literal-background-axis-v1'} if background_axis else {})}
+                       {'axisProfile': 'complete-literal-background-axis-v1'} if background_axis else
+                       {'axisProfile': 'complete-literal-system-cumulative-axis-v1',
+                        'symbolEvidence': symbols} if system_axis else
+                       {'axisProfile': 'complete-literal-component-k-variant-axis-v1'} if variant_axis else {}),
+                    **({'cellSurfaceProfile': 'complete-inline-mean-uncertainty-spacing-v1'}
+                       if flat_inline_uncertainty and any(MEAN_CI.fullmatch(v) for row in rows for v in row[1:]) else {})}
             # Different arbitrary cut points within the same empty gap prove
             # the same complete physical cells. Different cell ownership does
             # not: reject rather than select a grid using candidate results.
@@ -708,6 +860,189 @@ def caption_uncertainty_source_grid(page, caption, document):
             'units': [{'column': c, 'unit': unit, 'values': [row[c] for row in rows]} for c, unit in units.items()]}
 
 
+ATTACK_TUPLE = re.compile(r'([+−-]?\d+(?:\.\d+)?)(?:\s*±\s*(\d+(?:\.\d+)?))?'
+                          r'(?:\s*\(\s*([↑↓])\s*(<)?\s*(\d+(?:\.\d+)?)\s*\))?\Z')
+
+
+def attack_surface(value):
+    text = surface(value)
+    match = ATTACK_TUPLE.fullmatch(text)
+    if not match:
+        return text
+    return (match[1] + ('±' + match[2] if match[2] is not None else '')
+            + ('(' + match[3] + (match[4] or '') + match[5] + ')' if match[3] else ''))
+
+
+def attacker_source_grid(page, caption, document):
+    """Four closed split-deployment tables, with complete original change tuples.
+
+    These axes, rowspans, scale literals and printed subscripts are independent
+    of a candidate view. No tuple term, sign, precision or delta is calculated.
+    """
+    suffix = 'STIA SPEECH GENERATION USING THE MOSHI FRONTEND.'
+    profiles = {
+        'TABLE 2. COMPARISON OF STIA AND SPINV+TTS ON UNSEEN EMILIA SPEAKERS ACROSS THREE SPEECH FRONTENDS, USING IDENTICAL 3-SECOND REPRESENTATION LEAKS AND ATTACKER-CHOSEN ENGLISH PROMPTS.':
+            ('target', ['Target model', 'Attack', 'CAM ↑', 'ECAPA ↑', 'WER (%) ↓', 'UTMOS ↑'], 6, 5),
+        'TABLE 4. EFFECT OF AUXILIARY EMILIA-ENGLISH DATA BUDGETS ON ' + suffix:
+            ('budget', ['Clips(M)', 'Dura.(h)', 'CAM ↑', 'ECAPA ↑', 'WER (%) ↓', 'UTMOS ↑'], 3, 3),
+        'TABLE 5. EFFECT OF LEAKED REPRESENTATION DURATION ON ' + suffix:
+            ('leakage', ['Leakage', 'CAM ↑', 'ECAPA ↑', 'WER (%) ↓', 'UTMOS ↑'], 4, 3),
+        'TABLE 7. EFFECT OF MCADAMS INPUT ANONYMIZATION ON A FIXED STIA ATTACKER USING THE MOSHI FRONTEND.':
+            ('input', ['Input', 'CAM ↑', 'ECAPA ↑', 'WER (%) ↓', 'UTMOS ↑'], 2, 3)}
+    profile = profiles.get(surface(caption[4]))
+    need(profile, 'attack_closed_caption_missing')
+    mode, headers, row_count, rule_count = profile
+    rects = [d['rect'] for d in page.get_drawings()]
+    rules = sorted(set((float(r.x0), float(r.y0), float(r.x1)) for r in rects
+                       if r.height < .1 and r.width > 40), key=lambda r: r[1])
+    tops = [r for r in rules if 0 <= r[1] - caption[3] <= 24 and r[0] <= (caption[0] + caption[2]) / 2 <= r[2]]
+    need(tops, 'attack_top_rule_missing')
+    top = min(tops, key=lambda r: r[1])
+    next_caps = [b[1] for b in page.get_text('blocks') if NEXT_CAPTION.match(b[4])
+                 and b[1] > caption[3] and max(b[0], top[0]) < min(b[2], top[2])]
+    limit = min(next_caps or [page.rect.height])
+    horizontal = sorted(r[1] for r in rules if abs(r[0] - top[0]) < .1 and abs(r[2] - top[2]) < .1
+                        and top[1] <= r[1] < limit)
+    need(len(horizontal) == rule_count, 'attack_complete_rules_changed')
+    separator, bottom = horizontal[1], horizontal[-1]
+    words = [list(w[:5]) for w in page.get_text('words', flags=fitz.TEXTFLAGS_TEXT)
+             if top[0] < cx(w) < top[2] and top[1] < cy(w) < bottom]
+    need(words and len(words) <= 1024, 'attack_words_missing')
+    # Even when Clips(M)/Dura.(h) share a PDF text line, the original words
+    # must partition uniquely into the exact complete header, in x order.
+    header_words = sorted((w for w in words if cy(w) < separator), key=lambda w: w[0])
+    groups, offset = [], 0
+    for expected in headers:
+        ends = [end for end in range(offset + 1, min(len(header_words), offset + 6) + 1)
+                if surface(literal(header_words[offset:end])) == expected]
+        need(len(ends) == 1, 'attack_header_partition_not_unique')
+        values = header_words[offset:ends[0]]; offset = ends[0]
+        groups.append({'text': expected, 'words': values, 'left': min(w[0] for w in values),
+                       'right': max(w[2] for w in values)})
+    need(offset == len(header_words) and all(a['right'] < b['left'] for a, b in zip(groups, groups[1:])),
+         'attack_unowned_header_word')
+    possibilities = {}
+    for edges in column_edges(groups, words, top[0], top[2]):
+        try:
+            body = [w for w in words if cy(w) > separator]
+            label_column = 1 if mode == 'target' else 0
+            lines = rows_of([w for w in body if edges[label_column] < cx(w) < edges[label_column + 1]])
+            need(len(lines) == row_count, 'attack_complete_rows_changed')
+            ys = [y for y, _ in lines]
+            need(all(b - a > 4 for a, b in zip(ys, ys[1:])), 'attack_rows_overlap')
+            row_edges = [separator, *[(a + b) / 2 for a, b in zip(ys, ys[1:])], bottom]
+            bands = []
+            if mode == 'target':
+                for index, (lo, hi) in enumerate(zip(horizontal[1:], horizontal[2:])):
+                    values = [w for w in body if edges[0] < cx(w) < edges[1] and lo < cy(w) < hi]
+                    indices = [i for i, y in enumerate(ys) if lo < y < hi]
+                    need(len(rows_of(values)) == 1 and indices == [2 * index, 2 * index + 1]
+                         and literal(values) == ['Moshi', 'Kimi-Audio', 'Qwen3-Omni'][index],
+                         'attack_frontend_band_changed')
+                    bands.append({'text': literal(values), 'words': values, 'top': lo, 'bottom': hi,
+                                  'sourceRows': [i + 1 for i in indices]})
+            cells = [{'row': 0, 'column': c, 'text': h, 'words': g['words']}
+                     for c, (h, g) in enumerate(zip(headers, groups))]
+            rows, delta_cells = [], []
+            for row, (y, _) in enumerate(lines):
+                values_row = []
+                for c in range(len(headers)):
+                    if mode == 'target' and c == 0:
+                        values_row.append(bands[row // 2]['text']); continue
+                    values = [w for w in body if row_edges[row] < cy(w) < row_edges[row + 1]
+                              and edges[c] < cx(w) < edges[c + 1]]
+                    need(values and len(rows_of(values)) == 1, 'attack_cell_missing_or_multiline')
+                    text = literal(values)
+                    if c > label_column:
+                        if mode == 'budget' and c == 1:
+                            need(re.fullmatch(r'\d+\.\d+k', text), 'attack_duration_scale_changed')
+                        else:
+                            match = ATTACK_TUPLE.fullmatch(text)
+                            expected_delta = row % 2 == 1 if mode == 'target' else row > 0
+                            need(match and bool(match[2]) == (mode == 'target')
+                                 and bool(match[3]) == expected_delta, 'attack_complete_tuple_missing')
+                            if expected_delta:
+                                delta_cells.append((row + 1, c, match[5]))
+                    values_row.append(text)
+                    cells.append({'row': row + 1, 'column': c, 'words': values, 'text': text})
+                rows.append(values_row)
+            ids = [tuple(row[:label_column + 1]) for row in rows]
+            expected_labels = (['SpInv+TTS', 'STIA (ours)'] * 3 if mode == 'target' else
+                               ['0.80', '1.60', '2.40'] if mode == 'budget' else
+                               ['2.00 s', '3.00 s', '5.00 s', '8.00 s'] if mode == 'leakage' else
+                               ['Original', 'Anonymized'])
+            need([row[label_column] for row in rows] == expected_labels and len(set(ids)) == len(ids),
+                 'attack_complete_condition_identity_changed')
+            for inner in horizontal[2:-1]:
+                extents = [(min(w[1] for cell in cells if cell['row'] == r for w in cell['words']),
+                            max(w[3] for cell in cells if cell['row'] == r for w in cell['words']))
+                           for r in range(1, row_count + 1)]
+                need(all(hi < inner or inner < lo for lo, hi in extents)
+                     and sum(a[1] < inner < b[0] for a, b in zip(extents, extents[1:])) == 1,
+                     'attack_rule_splits_complete_row')
+            owned = [tuple(w) for cell in cells for w in cell['words']] + [tuple(w) for b in bands for w in b['words']]
+            need(len(owned) == len(words) == len(set(owned)), 'attack_unowned_or_repeated_word')
+            box = [top[0], top[1], top[2], bottom]
+            glyphs = complete_glyphs(page, words, box)
+            delta_proofs = []
+            for row, column, delta in delta_cells:
+                cell = next(c for c in cells if c['row'] == row and c['column'] == column)
+                word_ids = [i for i, w in enumerate(words) if w in cell['words']]
+                indices = [i for i, g in enumerate(glyphs) if g['word'] in word_ids]
+                text = ''.join(glyphs[i]['char'] for i in indices)
+                match = re.search(r'\(([↑↓])(<)?(\d+(?:\.\d+)?)\)\Z', text)
+                need(match and match[3] == delta, 'attack_delta_glyphs_changed')
+                numeric = indices[match.start(3):match.end(3)]
+                delta_proofs.append({'row': row, 'column': column, 'text': match[0], 'glyphIndices': numeric})
+            # Stroke boxes may have zero width (vertical) or sub-point length.
+            # Every intersecting drawing must be owned, not only long rules.
+            overlapping = [r for r in rects if r.x1 >= box[0] and r.x0 <= box[2]
+                           and r.y1 >= box[1] and r.y0 <= box[3]]
+            need(all(r.height < .1 for r in overlapping), 'attack_non_horizontal_rule')
+            partial = [r for r in overlapping if not (abs(r.x0 - top[0]) < .1 and abs(r.x1 - top[2]) < .1)]
+            need(len(overlapping) - len(partial) == len(horizontal), 'attack_repeated_full_rule')
+            need(len(partial) == (4 if mode == 'target' else 0), 'attack_partial_rule_count_changed')
+            underlines = []
+            for rect in partial:
+                owners = [d for d in delta_proofs if
+                          abs(min(glyphs[i]['bbox'][0] for i in d['glyphIndices']) - rect.x0) < .1
+                          and abs(max(glyphs[i]['bbox'][2] for i in d['glyphIndices']) - rect.x1) < .1
+                          and all(.5 < rect.y0 - glyphs[i]['origin'][1] < 1.6 for i in d['glyphIndices'])]
+                need(len(owners) == 1, 'attack_partial_rule_not_delta_underline')
+                underlines.append({**owners[0], 'rect': list(rect)})
+            need(mode != 'target' or sorted((d['row'], d['column']) for d in underlines)
+                 == [(2, 4), (4, 2), (4, 3), (4, 5)], 'attack_delta_underline_identity_changed')
+            table_lines = [line_text(line) for line in pdf_lines(page) if top[0] - .1 <= line['bbox'][0]
+                           and line['bbox'][2] <= top[2] + .1 and top[1] < (line['bbox'][1] + line['bbox'][3]) / 2 < bottom]
+            full = quote_evidence(document, normalize_quote(caption[4] + ' ' + ' '.join(table_lines)))
+            reporting = quote_evidence(document,
+                'All 4,000 utterance-level scores are aggregated separately by language. Table 2 reports mean ± standard deviation; '
+                'Tables 3–8 report means. Reported statistics are rounded to two decimals. Result presentation. Subscripts indicate '
+                'the direction and magnitude of absolute mean changes, computed before rounding. The reference is SpInv+TTS on '
+                'the same frontend in Table 2 and the first row of each table in Tables 3–8. Error-rate differences are expressed '
+                'in percentage points. Bold marks the numerically best reported mean, determined before rounding, within each '
+                'frontend in Table 2 and within each column in Tables 3–8. Underlined changes in Table 2 identify the largest '
+                'improvement across frontends for each metric.')
+            need(reporting['rawEndCodePoint'] < full['rawStartCodePoint'], 'attack_reporting_reference_not_prior')
+            units = [{'column': c, 'unit': (m[2] or m[3]).lower(), 'values': [row[c] for row in rows]}
+                     for c, h in enumerate(headers) if c > label_column
+                     and (m := UNIT.fullmatch(re.sub(r'\s*[↑↓]$', '', h)))]
+            need(units, 'attack_explicit_units_missing')
+            grid = {'page': page.number + 1, 'bbox': box, 'headers': headers, 'rows': rows,
+                    'rowIdentities': [list(i) for i in ids], 'identityColumns': list(range(label_column + 1)),
+                    'columnBoundaries': edges, 'rowBoundaries': row_edges, 'horizontalRules': horizontal,
+                    'conditionBands': bands, 'cells': cells, 'words': words, 'glyphs': glyphs, 'wordBoxCount': len(words),
+                    'fullTableQuoteEvidence': full, 'units': units, 'axisProfile': 'complete-literal-attacker-' + mode + '-axis-v1',
+                    'deltaGlyphs': delta_proofs, 'deltaUnderlines': underlines, 'statisticsEvidence': reporting,
+                    'deltaReference': 'same-frontend-SpInv+TTS' if mode == 'target' else 'first-row-of-this-table',
+                    'errorRateDeltaUnit': 'percentage points', 'deltaComputedBeforeRounding': True}
+            possibilities.setdefault(stable({'headers': headers, 'rows': rows, 'cells': cells, 'bands': bands}), grid)
+        except ValueError:
+            continue
+    need(len(possibilities) == 1, 'attack_complete_grid_not_unique:' + str(len(possibilities)))
+    return next(iter(possibilities.values()))
+
+
 def complete_quote_coverage(document, full, quotes):
     cursor = full['rawStartCodePoint']
     end = full['rawEndCodePoint']
@@ -754,7 +1089,10 @@ def prove_pdf_bytes(raw, view, quotes):
                                 try:
                                     grid = numeric_frontend_source_grid(page, caption, document)
                                 except ValueError:
-                                    grid = caption_uncertainty_source_grid(page, caption, document)
+                                    try:
+                                        grid = caption_uncertainty_source_grid(page, caption, document)
+                                    except ValueError:
+                                        grid = attacker_source_grid(page, caption, document)
                     full = grid['fullTableQuoteEvidence']
                     if grid.get('headerProfile') == 'complete-caption-parent-leaf-stacked-uncertainty-v1':
                         complete_quote_coverage(document, full, quote_proofs)
@@ -763,12 +1101,18 @@ def prove_pdf_bytes(raw, view, quotes):
                                  for q in quote_proofs), 'literal_complete_table_not_bound')
                     # Header + complete textual conditions identify the source
                     # first. No result value participates in this selection.
-                    header_surface = header_path if grid.get('headerProfile') else surface
+                    system_axis = grid.get('axisProfile') == 'complete-literal-system-cumulative-axis-v1'
+                    variant_axis = grid.get('axisProfile') == 'complete-literal-component-k-variant-axis-v1'
+                    header_surface = system_configuration_surface if system_axis else variant_surface if variant_axis else header_path if grid.get('headerProfile') else surface
                     need([header_surface(v) for v in view[0]] == [header_surface(v) for v in grid['headers']], 'literal_headers_changed')
                     if grid.get('headerProfile'):
                         need(all(not re.findall(r'[↑↓→]', rendered) or re.findall(r'[↑↓→]', rendered) == re.findall(r'[↑↓→]', original)
                                  for rendered, original in zip(view[0], grid['headers'])), 'literal_explicit_header_direction_changed')
-                    identity_surface = window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else surface
+                    if system_axis:
+                        need(view[-1][0] == grid['symbolEvidence']['renderedLossLabel'],
+                             'system_configuration_rendered_loss_symbol_changed')
+                    identity_surface = (system_configuration_surface if system_axis else variant_surface if variant_axis else window_condition_surface
+                                        if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else surface)
                     ids = [[identity_surface(row[c]) for c in grid['identityColumns']] for row in view[1:]]
                     need(ids == [[surface(v) for v in identity] for identity in grid['rowIdentities']],
                          'literal_complete_row_identity_changed')
@@ -777,12 +1121,30 @@ def prove_pdf_bytes(raw, view, quotes):
                     continue
     need(len(grids) == 1, 'literal_bound_table_not_unique:' + str(len(grids)))
     grid = grids[0]
-    cell_surface = (window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1'
-                    else uncertainty_surface if grid.get('headerProfile') else surface)
+    cell_surface = (attack_surface if grid.get('axisProfile', '').startswith('complete-literal-attacker-') else
+                    system_configuration_surface if grid.get('axisProfile') == 'complete-literal-system-cumulative-axis-v1' else
+                    variant_surface if grid.get('axisProfile') == 'complete-literal-component-k-variant-axis-v1' else
+                    window_condition_surface if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1'
+                    else uncertainty_surface if grid.get('headerProfile') or grid.get('cellSurfaceProfile') else surface)
     need([[cell_surface(v) for v in row] for row in view[1:]] == [[cell_surface(v) for v in row] for row in grid['rows']],
          'literal_complete_cell_value_changed')
+    # The capability names the exact displayed cell. Preserve separately the
+    # observed source literal when the certified ± spacing projection differs.
+    for item in grid['units']:
+        displayed = [row[item['column']] for row in view[1:]]
+        if displayed != item['values']:
+            item['sourceValues'] = item['values']
+            item['values'] = displayed
     proof = {'contract': CONTRACT, 'valueOrigin': 'sealed_pdf', 'sourceBasis': 'independent-complete-pdf-grid',
-             'projectionProfile': ('whitespace-same-delta-and-literal-wb-wc-equals-spacing-v1'
+             'projectionProfile': ('complete-attacker-tuple-operator-whitespace-only-v1'
+                                   if grid.get('axisProfile', '').startswith('complete-literal-attacker-') else
+                                   'font-bound-mathcal-subscript-and-degree-circle-system-axis-v1'
+                                   if grid.get('axisProfile') == 'complete-literal-system-cumulative-axis-v1' else
+                                   'literal-component-k-axis-ell-spacing-and-complete-inline-uncertainty-v1'
+                                   if grid.get('axisProfile') == 'complete-literal-component-k-variant-axis-v1' else
+                                   'complete-flat-inline-mean-uncertainty-spacing-v1'
+                                   if grid.get('cellSurfaceProfile') else
+                                   'whitespace-same-delta-and-literal-wb-wc-equals-spacing-v1'
                                    if grid.get('axisProfile') == 'complete-literal-buffer-hop-window-axis-v1' else
                                    'whitespace-same-delta-frame-frequency-parent-leaf-v1'
                                    if grid.get('headerProfile') == 'complete-frame-frequency-parent-leaf-v1' else

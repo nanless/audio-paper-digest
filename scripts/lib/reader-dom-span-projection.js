@@ -33,6 +33,23 @@ function sealedArtifacts(paper) {
         return current.artifacts;
     } catch (_) { return null; }
 }
+// A publication view may escape literal technical-notation stars. This pure
+// predicate grants no source ability: callers still verify the complete source
+// DOM projection and every original binding, with original hashes unchanged.
+function isPublicationTechnicalAsteriskCellView(canonical, displayed, sourceText) {
+    if (typeof canonical !== 'string' || typeof displayed !== 'string'
+        || typeof sourceText !== 'string' || sourceText !== canonical
+        || !canonical || canonical.length > 512 || displayed === canonical
+        || /[\\`$<>\[\]{}|\r\n]|https?:\/\//iu.test(canonical)) return false;
+    // This is the unambiguous plain-cell subset of the publisher's existing
+    // _TECHNICAL_NOTATION_ASTERISK rule, not a general backslash remover.
+    const pattern = /(?<![\p{L}\p{N}_\\])([A-Za-z]+[0-9]+)\*(?!\*)/gu;
+    const matches = [...canonical.matchAll(pattern)];
+    if (!matches.length || matches.length !== (canonical.match(/\*/gu) || []).length) return false;
+    const expected = canonical.replace(pattern, (_whole, token) => token + '\\*');
+    return displayed === expected;
+}
+
 function fullWidthLabelBlankMatches(table, binding, cell, displayed, renderedTable) {
     const projection = require('./reader-pdf-cell-evidence');
     const normalize = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
@@ -74,7 +91,9 @@ function fullWidthLabelBlankMatches(table, binding, cell, displayed, renderedTab
         const sources = table.cells.filter(source => value.sourceRow >= source.row
             && value.sourceRow < source.row + Number(source.rowspan || 1)
             && value.sourceColumn >= source.column && value.sourceColumn < source.column + Number(source.colspan || 1));
-        const displayedValue = rows[value.renderedRow][value.renderedColumn];
+        const actualDisplayedValue = rows[value.renderedRow][value.renderedColumn];
+        const displayedValue = isPublicationTechnicalAsteriskCellView(value.renderedText, actualDisplayedValue, value.sourceText)
+            ? value.renderedText : actualDisplayedValue;
         if (sources.length !== 1 || sources[0].text !== value.sourceText
             || sources[0].sourceDomSha256 !== value.sourceDomSha256
             || normalize(value.renderedText) !== normalize(displayedValue)
@@ -93,4 +112,4 @@ function savedCellMatches(paper, binding, cell, displayed, renderedTable) {
         && table.sourceDomSha256 === binding?.sourceTableDomSha256);
     return tables.length === 1 && fullWidthLabelBlankMatches(tables[0], binding, cell, displayed, renderedTable);
 }
-module.exports = { withSavedPaper, fullWidthLabelBlankMatches, savedCellMatches };
+module.exports = { withSavedPaper, fullWidthLabelBlankMatches, savedCellMatches, isPublicationTechnicalAsteriskCellView };

@@ -467,6 +467,7 @@ function validatePersistedRound(directory, identity, payload) {
         || !Number.isSafeInteger(receipt.reservedOutputTokens) || receipt.reservedOutputTokens < 0 || receipt.reservedOutputTokens > receipt.grant.maxReservedOutputTokens) {
         throw new Error('Reader 新轮身份、原稿或实际请求预算证明不一致');
     }
+    useModule('./reader-transport-continuation').validate(directory, receipt, identity, payload);
 }
 // 旧首次装轮代码可能丢失仍在原档中的完整稿。只恢复同一已付轮的正文，不装新预算。
 function restoreExplicitRoundOriginalDraft(directory, identity, payload, paper) {
@@ -585,6 +586,10 @@ function consumePhysicalRequest(body, options) {
         }
     }
     const tokens = body.max_tokens ?? body.max_output_tokens;
+    if (useModule('./reader-transport-continuation').consume({
+        directory: path.dirname(path.dirname(scope.proof.receiptFile)),
+        parent: receipt, paper: scope.paper, body, options
+    })) return;
     if (!Number.isSafeInteger(tokens) || tokens < 1
         || receipt.physicalRequests >= receipt.grant.maxPhysicalRequests
         || receipt.reservedOutputTokens + tokens > receipt.grant.maxReservedOutputTokens) {
@@ -622,4 +627,5 @@ function hasPreparedOrScopedRound(directory, identity) {
 }
 
 module.exports = { hasPreparedOrScopedRound, CONTRACT, LOCAL_REPAIR_CONTRACT, PARENT_RECOVERY_CONTRACT: parentRecovery.CONTRACT, withExplicitLocalRepairRound, assertGrant, withExplicitRound, beginExplicitRound,
-    withPhysicalBudget, consumePhysicalRequest, validatePersistedRound, restoreExplicitRoundOriginalDraft };
+    withPhysicalBudget, consumePhysicalRequest, validatePersistedRound, restoreExplicitRoundOriginalDraft,
+    sameRoundIdentityAfterPublicMigration };

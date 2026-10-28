@@ -139,23 +139,32 @@ test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷�
             id: recovered.arxivId,
             text: direct.getDirectRewriteSource(recovered).text,
             dailyScope: fresh.isDailyFreshSourceScope(),
-            runId: direct.getDirectRewriteAnalysisContext().runId
+            runId: direct.getDirectRewriteAnalysisContext().runId,
+            refreshReaderDiagnostics: fresh.getFreshAnalysisContext().refreshReaderDiagnostics
         });
         return { analysis: '' };
     };
+    const beforeInvalidOptions = fs.readFileSync(Config.FILES.deepAnalysisResult);
+    await assert.rejects(deepOnly.runDeepAnalysis({ date: DATE, refreshReaderDiagnostics: 'true' }), /须为布尔值/);
+    assert.deepEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), beforeInvalidOptions);
     await deepOnly.runDeepAnalysis({ date: DATE, analyzeFn: analyze, analyzeBatch: mockBatch('deep-only', seen) });
+    writeJson(Config.FILES.deepAnalysisResult, envelope);
+    await deepOnly.runDeepAnalysis({ date: DATE, id: ID, refreshReaderDiagnostics: true,
+        analyzeFn: analyze, analyzeBatch: mockBatch('selected-deep-diagnostics', seen) });
     writeJson(Config.FILES.deepAnalysisResult, envelope);
     await batch.main({ analyzeFn: analyze, analyzeBatch: mockBatch('batch', seen) });
     writeJson(Config.FILES.deepAnalysisResult, envelope);
     await reanalyze.reanalyzeAll({ analyzeFn: analyze, analyzeBatch: mockBatch('reanalyze', seen) });
-    assert.equal(seen.length, 3);
+    assert.equal(seen.length, 4);
+    assert.deepEqual(seen.map(item => item.refreshReaderDiagnostics), [false, true, false, false],
+        'deep程序调用显式传入才启用原诊断迁移；本次其它调用仍默认关闭');
     for (const item of seen) {
         assert.equal(item.id, ID);
         assert.equal(item.text, sourcePayload(ID).text);
         assert.equal(item.dailyScope, true);
         assert.equal(item.runId, plan.runId);
     }
-    assert.equal(captureCalls, 1, '三个分析恢复入口运行后，来源抓取次数仍为一次');
+    assert.equal(captureCalls, 1, '四次分析恢复调用后，来源抓取次数仍为一次');
 
     // 把同一份分析记录补成完成状态，只是为了走到 Reader 分支；
     // 自定义操作不调模型，就能证明来源和图片的范围。
