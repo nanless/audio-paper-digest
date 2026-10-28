@@ -7668,12 +7668,19 @@ def decode_publish_currency_unit_display(value):
 
 
 def strict_source_cell_math_display(value):
-    """Project only a complete same-value visible/TeX duplicate source cell."""
+    """Project only complete, exact same-value duplicate source-cell forms."""
     if not isinstance(value, str) or not value or len(value) > 512 or '\n' in value or '\r' in value:
         return None
     text = value
     number = r'(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)'
     scalar = rf'[+−-]?{number}'
+    # This exact flattened unit has two literal U+200B characters. Its second
+    # scalar must preserve every numeric byte; no original MathML is inferred.
+    unit_duplicate = re.fullmatch(rf'({scalar})\u200bm\u200bs\1ms', text)
+    if unit_duplicate:
+        return {'contract': 'source-cell-math-display-v1', 'kind': 'zero-width-unit-duplicate',
+                'sourceText': value, 'sourceTextSha256': hashlib.sha256(value.encode('utf-8')).hexdigest(),
+                'displayText': f'{unit_duplicate[1]} ms'}
     duplicate = re.fullmatch(r'([^\\{}]+?)(¯?)\\(underline|mathbf)\{([^{}]+)\}', text)
     visible = re.fullmatch(rf'({scalar})[ \t]*±[ \t]*({number})', duplicate[1].rstrip(' \t')) if duplicate else None
     tex = re.fullmatch(rf'({scalar})[ \t]*\\pm[ \t]*({number})', duplicate[4].strip(' \t')) if duplicate else None
