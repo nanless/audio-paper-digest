@@ -1,6 +1,6 @@
 # Android 的 Zotero 接入研究与首版建议
 
-核查日期：2026-10-25。本页只依据 Zotero 官方文档、官方团队公告、官方 Android 仓库和 Android 开发文档。没有登录账户、读取密钥、写入真实文库或执行手机操作；以下是实现建议，不能作为已完成验收。Android 全功能映射见[功能对齐表](android-feature-parity.md)，Mac 已有归档要求仍见[原69项验收](mac-app-acceptance.md)。
+原始核查日期为2026-10-25，官方Android下载入口于2026-10-28补充核对。本页依据Zotero官方文档、团队公告、官方Android仓库和Android开发文档，说明接口能力与实现边界；资料研究本身没有登录账户、读取密钥或写入真实文库。实际开发结果另见[验收记录](android-validation.md)和[功能对齐表](android-feature-parity.md)，Mac已有归档要求见[原69项验收](mac-app-acceptance.md)。
 
 本轮主任务已采纳：首版保留完整 Zotero 存档目标，使用 **Zotero Web API v3**，由 Android 自己取得专属授权；用户可选择是否启用，系统分享另作快捷入口。这样不要求 Mac 在线，也不依赖官方 Android 应用公开本地写入服务。未完成时保持待实现或待验，不能把分享成功当完整归档。
 
@@ -8,7 +8,9 @@
 
 官方[Android 功能页](https://www.zotero.org/support/android)明确支持个人与群组文库同步、书目信息与分类管理、研究笔记、PDF 阅读和高亮/注记/图像/手写标注，以及从其他应用分享 URL、按标识符添加和给直接导入的 PDF 检索书目。浏览器自动取 PDF 仍受需要登录的文章限制。这说明 Android 已有可配合使用的正式客户端，不代表第三方应用获得了其全部内部能力。
 
-必须区分稳定版、测试版和源码。上述功能页仍把 EPUB/网页快照阅读列为后续能力，而[官方团队2026-06-24公告](https://forums.zotero.org/discussion/132371/available-for-beta-testing-on-android-epub-snapshot-support)明确介绍的是 beta 中的 EPUB/快照阅读与标注。因此不能仅看到 master 或 beta 就承诺用户当前正式客户端可以完整打开 HTML 导读。验收记录须包含真实安装版本和发布渠道。 本次核对[官方GitHub Releases](https://github.com/zotero/zotero-android/releases)未见任何发布资产；正式客户端应沿上述官方文档的Google Play入口获取，不能把自行编译的master或测试包作为稳定版验收。
+必须区分稳定版、测试版和源码。上述功能页仍把EPUB及网页快照阅读列为后续能力，而[官方团队2026-06-24公告](https://forums.zotero.org/discussion/132371/available-for-beta-testing-on-android-epub-snapshot-support)介绍的是测试版中的阅读与标注。因此不能仅看到主分支源码或测试版，就承诺稳定版可以完整打开HTML导读。验收记录须保存实际安装版本和发布渠道。
+
+截至2026-10-28，[官方Android下载页](https://www.zotero.org/download/android/)除Google Play外，也提供直接下载安装包的渠道；当日官网链接指向`1.0.0-247`通用APK。官方[GitHub Releases](https://github.com/zotero/zotero-android/releases)仍没有发布资产。验收使用官网或Google Play提供的稳定版，安装前记录实际下载版本；不从第三方镜像取包，也不以自行编译的主分支或测试版代替稳定版。
 
 官方[数据/文件同步说明](https://www.zotero.org/support/sync)区分书目、笔记等数据同步与附件文件同步；个人文库可使用 Zotero Storage 或 WebDAV，群组文件不能使用 WebDAV。官方团队另确认了[Android 内配置 WebDAV 的入口](https://forums.zotero.org/discussion/125242/how-to-setup-webdav-server-on-ios-or-in-webbrowser)：文库层级返回顶层，进入设置和账户，再选择个人文库文件同步方式。不能根据旧讨论误报“Android 不支持 WebDAV”。
 
