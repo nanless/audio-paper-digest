@@ -8,7 +8,7 @@
 
 官方[Android 功能页](https://www.zotero.org/support/android)明确支持个人与群组文库同步、书目信息与分类管理、研究笔记、PDF 阅读和高亮/注记/图像/手写标注，以及从其他应用分享 URL、按标识符添加和给直接导入的 PDF 检索书目。浏览器自动取 PDF 仍受需要登录的文章限制。这说明 Android 已有可配合使用的正式客户端，不代表第三方应用获得了其全部内部能力。
 
-必须区分稳定版、测试版和源码。上述功能页仍把EPUB及网页快照阅读列为后续能力，而[官方团队2026-06-24公告](https://forums.zotero.org/discussion/132371/available-for-beta-testing-on-android-epub-snapshot-support)介绍的是测试版中的阅读与标注。因此不能仅看到主分支源码或测试版，就承诺稳定版可以完整打开HTML导读。验收记录须保存实际安装版本和发布渠道。
+必须区分稳定版、测试版和源码。原研究时上述功能页把EPUB及网页快照列为后续能力，而[官方团队2026-06-24公告](https://forums.zotero.org/discussion/132371/available-for-beta-testing-on-android-epub-snapshot-support)介绍的是测试版；当时不能据主分支承诺稳定版完整打开HTML。2026-10-29已补实际官网release渠道`1.0.0-247`：正式包及签名核验后在官方客户端实际打开同一MiCLA自包含导读，完全断网且冷启仍显示完整混合公式及Fig2，经独立实图核验。故本轮这个版本、这个实际归档已关闭HTML读取缺口，不需要临时新增PDF转换；不推广为任意HTML、EPUB或其他版本全部兼容。具体范围及原失败见[官方客户端实测](android-feature-parity.md#e12)。
 
 截至2026-10-28，[官方Android下载页](https://www.zotero.org/download/android/)除Google Play外，也提供直接下载安装包的渠道；当日官网链接指向`1.0.0-247`通用APK。官方[GitHub Releases](https://github.com/zotero/zotero-android/releases)仍没有发布资产。验收使用官网或Google Play提供的稳定版，安装前记录实际下载版本；不从第三方镜像取包，也不以自行编译的主分支或测试版代替稳定版。
 
