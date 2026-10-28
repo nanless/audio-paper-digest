@@ -62,7 +62,7 @@ export function mountZotero(app) {
     mode = next;
     const saved = mode === 'resume';
     heading.textContent = saved ? '核验原归档' : originalHeading;
-    subtitle.textContent = saved ? '沿原归档保存的论文、材料和目标分类核验；未完成项目继续使用原检查点。' : originalSubtitle;
+    subtitle.textContent = saved ? resumeContext?.accountBindingState === 'legacy-unbound' ? '旧记录账号未绑定，仅回读核验；不会继续写入或补建缺项。' : '沿原归档保存的论文、材料和目标分类核验；未完成项目继续使用原检查点。' : originalSubtitle;
     materialOptions.forEach(option => { option.hidden = saved; });
     destination.hidden = saved; connection.hidden = saved; start.hidden = saved;
     checkpoint.hidden = !saved;
@@ -77,13 +77,14 @@ export function mountZotero(app) {
     $('zotero-connection-message').textContent = writable ? '已获本机写入许可。将逐项保存并回读验证，失败项目可以续传。' : !status?.authorized && unchecked ? '连接与分类查询不读取密钥。可主动检查已保存许可；系统可能请你确认钥匙串访问。' : status?.authorized ? '单次许可不足以完成多步附件归档。请在 Zotero 的原生窗口中自行决定是否持续允许。' : '可检查已保存许可，或在 Zotero 原生窗口中明确请求新的写入授权。';
     $('zotero-authorize').disabled = busy; grantButton.disabled = busy;
     $('zotero-refresh').disabled = busy;
-    document.querySelectorAll('#zotero-pending [data-zotero-resume],#zotero-recent [data-zotero-resume]').forEach(button => { button.disabled = busy; });
+    document.querySelectorAll('#zotero-pending [data-zotero-resume],#zotero-recent [data-zotero-resume]').forEach(button => { button.disabled = busy || button.dataset.zoteroBlocked === 'true'; });
     checkButton.disabled = busy || !status?.writesSupported; settingsCheck.disabled = checkButton.disabled;
     checkButton.hidden = mode === 'resume' || writable; settingsCheck.hidden = writable;
     start.disabled = busy || !writable || !materials || (!collectionKey() && !collectionName());
     // Saved resume is already an explicit credential-loading action, just like
     // the history buttons; a passive status query can legitimately be unknown.
     retry.disabled = busy || (mode !== 'resume' && !writable);
+    retry.textContent = resumeContext?.accountBindingState === 'legacy-unbound' ? '重新只读回读' : '重试未完成部分';
     grantButton.hidden = mode === 'resume' || writable;
   }
   function collectionKey() { return $('zotero-new-collection').value.trim() ? '' : $('zotero-collection').value; }
@@ -96,7 +97,7 @@ export function mountZotero(app) {
     if (collections.some(c => c.key === previous)) $('zotero-collection').value = previous;
   }
   function renderPending() {
-    const row = (record,index,action) => `<div class="zotero-pending-row"><p>${escape(record.title)}</p><small>归档记录 ${index+1} · ${escape(archiveSource(record))}<br>上次保存/核验：${escape(archiveTime(record))}</small><button type="button" class="secondary-button" data-zotero-resume="${escape(record.archiveID)}" aria-label="${escape(action+'，'+record.title+'，'+archiveSource(record)+'，'+archiveTime(record)+'，归档 '+record.archiveID)}">${action}</button></div>`;
+    const row = (record,index,action) => { const legacy = record.accountBindingState === 'legacy-unbound'; const blocked = legacy && !record.legacyReadOnlyEligible; if (legacy) action = blocked ? '旧记录账号未绑定，不能续写' : '仅只读回读'; return `<div class="zotero-pending-row"><p>${escape(record.title)}</p><small>归档记录 ${index+1} · ${escape(archiveSource(record))}<br>上次保存/核验：${escape(archiveTime(record))}${legacy ? '<br>旧记录账号未绑定，仅回读，不继续写入' : ''}</small><button type="button" class="secondary-button" data-zotero-resume="${escape(record.archiveID)}" ${blocked ? 'disabled data-zotero-blocked="true"' : ''} aria-label="${escape(action+'，'+record.title+'，'+archiveSource(record)+'，'+archiveTime(record)+'，归档 '+record.archiveID)}">${action}</button></div>`; };
     const pending = (status?.archives || []).filter(a => a.status === 'partial');
     $('zotero-pending').innerHTML = pending.length ? '<h2>未完成归档</h2>' + pending.map((a,i) => row(a,i,'从已保存步骤继续')).join('') : '';
     const recent = (status?.archives || []).filter(a => a.status === 'complete').slice(0,8);
@@ -134,13 +135,13 @@ export function mountZotero(app) {
   }
   function showResult(value) {
     lastResult = value;
-    $('zotero-result').textContent = value.status === 'complete' ? mode === 'resume' ? '原归档已完成本次回读核验。' : '所选内容均已保存，并完成回读核验。' : '部分内容未完成。已保存的结果保留，只重试缺失或未通过核验的部分。';
+    $('zotero-result').textContent = value.readOnly === true ? value.warning || '旧记录账号未绑定，本次仅只读回读，未继续写入。' : value.status === 'complete' ? mode === 'resume' ? '原归档已完成本次回读核验。' : '所选内容均已保存，并完成回读核验。' : '部分内容未完成。已保存的结果保留，只重试缺失或未通过核验的部分。';
     if (mode === 'resume') {
       if (value.title) $('archive-title').textContent = value.title;
       if (value.identity) $('archive-identity').textContent = value.identity;
     }
     $('zotero-steps').innerHTML = (value.steps || []).map(step => `<li class="${step.verified ? '' : 'failed'}">${escape(roleNames[step.role] || step.role)} · ${step.verified ? '已保存并核验' : '尚未完成'}${step.error ? `<small>${escape(step.error)}</small>` : ''}</li>`).join('');
-    retry.hidden = value.status === 'complete'; open.hidden = !value.parentKey;
+    retry.hidden = value.readOnly === true || value.status === 'complete'; open.hidden = !value.parentKey;
     app.emit?.('zotero.archive.result',value);
   }
   async function openArchive() {
@@ -195,7 +196,7 @@ export function mountZotero(app) {
     for (const option of ['archive-pdf','archive-guide','archive-analysis','archive-note']) { $(option).disabled = true; $(option).checked = false; }
     busy = true; updateControls();
     dialog.showModal();
-    $('zotero-result').textContent = '正在重读原检查点和真实存储结果，只续未完成内容…';
+    $('zotero-result').textContent = context?.accountBindingState === 'legacy-unbound' ? '正在只读回读旧记录；账号未绑定，不会继续写入或补建缺项。' : '正在重读原检查点和真实存储结果，只续未完成内容…';
     try { showResult(await app.call('zotero.resume',{resumeID:id})); await refresh(); }
     catch (error) { failure(error); retry.hidden = false; open.hidden = true; }
     finally { busy = false; updateControls(); }

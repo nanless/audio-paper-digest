@@ -62,10 +62,12 @@ actor ZoteroService {
         let steps: [Step]
         let retryable: Bool
         let serverID: String
+        var readOnly: Bool? = nil
+        var warning: String? = nil
     }
     enum ServiceError: Error, LocalizedError {
         case unavailable, unsupported, authorizationRequired, persistentAuthorizationRequired
-        case denied, serverChanged, invalid(String), http(Int), conflict, ambiguousDuplicate
+        case denied, serverChanged, accountChanged, accountUnidentified, legacyUnbound, invalid(String), http(Int), conflict, ambiguousDuplicate
         case verification(String), missingArchive
         var errorDescription: String? {
             switch self {
@@ -75,6 +77,9 @@ actor ZoteroService {
             case .persistentAuthorizationRequired: return "完整归档包含多步写入；请在 Zotero 中选择持续允许后重试。"
             case .denied: return "Zotero 写入授权已被拒绝，未继续写入。"
             case .serverChanged: return "Zotero 文库实例已变化；旧授权和归档检查点不能复用。"
+            case .accountChanged: return "Zotero 个人账号已变化；原归档保留，未向其他账号继续写入。"
+            case .accountUnidentified: return "Zotero 尚未提供可识别的个人账号；请连接可识别的 Zotero 账号后再归档。本机阅读不受影响。"
+            case .legacyUnbound: return "此旧记录没有个人账号绑定，不能继续写入；原断点保留。完整旧记录仅支持只读回读。"
             case .invalid(let value): return "归档输入无效：\(value)"
             case .http(let code): return "Zotero 请求失败（HTTP \(code)），已保留完成步骤。"
             case .conflict: return "Zotero 内容版本发生变化，已停止覆盖，请重新核对。"
@@ -85,6 +90,9 @@ actor ZoteroService {
         }
     }
     private struct Authorization: Codable { let key: String; let remember: Bool }
+    private struct PersonalLibraryBinding: Codable, Equatable { let serverID: String; let userID: Int }
+    private enum ArchiveScope { case readOnly, bound(PersonalLibraryBinding) }
+    private var archiveScope: ArchiveScope?
     private struct Journal: Codable {
         let id: String
         let serverID: String
@@ -95,6 +103,7 @@ actor ZoteroService {
         var steps: [Step]
         var createdParentPayload: Data? = nil
         var materialSHA256: [String: String]? = nil
+        var personalLibraryBinding: PersonalLibraryBinding? = nil
     }
     private struct Material {
         let role: String
@@ -210,18 +219,36 @@ actor ZoteroService {
                  progress: @escaping ([String: Any]) -> Void = { _ in }) async throws -> ArchiveResult {
         guard !operationInProgress else { throw ServiceError.invalid("另一归档正在进行") }
         operationInProgress = true
-        defer { operationInProgress = false }
+        defer { archiveScope = nil; operationInProgress = false }
+        archiveScope = .readOnly
+        // Decode old ownership before any possible credential load or remote mutation.
+        let previous = try resumeID.map { try loadJournal($0) }
+        if let previous, previous.personalLibraryBinding == nil {
+            guard previous.parentKey != nil, previous.collectionKey != nil,
+                  !previous.steps.isEmpty, previous.steps.allSatisfy({ $0.verified && $0.key != nil }) else { throw ServiceError.legacyUnbound }
+        }
         let current = try await status()
         guard current.writesSupported else { throw ServiceError.unsupported }
         try validate(input)
-        // Read the original checkpoint before resolving old paths. The optional hashes
-        // are captured only when the job was created; a root map cannot mint them.
-        let previous = try resumeID.map { try loadJournal($0) }
         if let previous, previous.serverID != current.serverID { throw ServiceError.serverChanged }
         let parentPayload = try await bibliographyPayload(input)
         let materials = try [sourceMetadataMaterial(input)] + materialsFor(input, expectedSHA256: previous?.materialSHA256)
         let fingerprint = try requestFingerprint(input, materials: materials)
         if let previous, previous.fingerprint != fingerprint { throw ServiceError.invalid("重试材料已变化，请新建归档") }
+        if let previous, previous.personalLibraryBinding == nil {
+            return try await verifyLegacyReadOnly(previous, materials: materials)
+        }
+        let binding: PersonalLibraryBinding
+        do { binding = try await personalLibraryBinding(serverID: current.serverID) }
+        catch ServiceError.http(let code) where [401,403].contains(code) && previous != nil {
+            // A failed public identity query cannot modify an old checkpoint or load its key.
+            var copy = previous!; markFailure("bibliography", error: ServiceError.http(code), journal: &copy)
+            return result(copy)
+        }
+        if let saved = previous?.personalLibraryBinding {
+            guard saved.serverID == previous!.serverID, saved.userID > 0, saved == binding else { throw ServiceError.accountChanged }
+        }
+        archiveScope = .bound(binding)
         try restoreAuthorization(serverID: current.serverID)
         guard let auth = authorization else { throw ServiceError.authorizationRequired }
         guard auth.remember else { throw ServiceError.persistentAuthorizationRequired }
@@ -238,6 +265,7 @@ actor ZoteroService {
                                     guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
                                     return Step(role: role, key: nil, verified: false, error: nil)
                                 })
+            journal.personalLibraryBinding = binding
             journal.materialSHA256 = Dictionary(uniqueKeysWithValues: materials.filter { ["pdf", "guide"].contains($0.role) }.map { ($0.role, $0.sha256) })
             try saveJournal(journal)
         }
@@ -374,6 +402,73 @@ actor ZoteroService {
             }
         }
 
+    }
+    private func personalLibraryBinding(serverID: String) async throws -> PersonalLibraryBinding {
+        let (bytes, response) = try await request("/api/users/0/collections", query: ["limit":"1"])
+        guard let objects = try JSONSerialization.jsonObject(with: bytes) as? [[String:Any]] else { throw ServiceError.verification("个人文库身份") }
+        var ids = Set<Int>()
+        for object in objects {
+            guard let library = object["library"] as? [String:Any], library["type"] as? String == "user",
+                  let number = library["id"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite, number.doubleValue <= 9_007_199_254_740_991, number.doubleValue == Double(number.int64Value), number.int64Value >= 0 else { throw ServiceError.verification("个人文库身份") }
+            ids.insert(number.intValue)
+        }
+        let header = response.value(forHTTPHeaderField: "Link") ?? ""
+        let pattern = try NSRegularExpression(pattern: #"<([^>]+)>\s*;\s*rel="alternate""#)
+        let ns = header as NSString, matches = pattern.matches(in: header, range: NSRange(location:0,length:ns.length))
+        guard matches.count <= 1 else { throw ServiceError.verification("个人文库身份链接") }
+        if let match = matches.first {
+            let raw = ns.substring(with: match.range(at:1))
+            guard let url = URL(string:raw), url.scheme == "https", url.host == "www.zotero.org", url.port == nil,
+                  url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+                  URLComponents(url:url,resolvingAgainstBaseURL:false)?.percentEncodedPath == url.path,
+                  let range = url.path.range(of:#"^/users/[1-9][0-9]*/collections$"#, options:.regularExpression), String(url.path[range]) == url.path,
+                  let id = Int(url.path.split(separator:"/")[1]) else { throw ServiceError.verification("个人文库身份链接") }
+            ids.insert(id)
+        }
+        guard ids.count <= 1 else { throw ServiceError.verification("个人文库身份不一致") }
+        guard let id = ids.first, id > 0 else { throw ServiceError.accountUnidentified }
+        return PersonalLibraryBinding(serverID:serverID,userID:id)
+    }
+    private func verifyLegacyReadOnly(_ journal: Journal, materials: [Material]) async throws -> ArchiveResult {
+        guard case .readOnly? = archiveScope, let parent = journal.parentKey, let collection = journal.collectionKey else { throw ServiceError.legacyUnbound }
+        try validateKey(parent); try validateKey(collection)
+        for step in journal.steps { guard let key = step.key, step.verified else { throw ServiceError.legacyUnbound }; try validateKey(key) }
+        let collections = try await collections()
+        guard collections.contains(where:{$0.key == collection}) else { throw ServiceError.verification("旧目标分类") }
+        let object = try await readObject("/api/users/0/items/\(parent)")
+        guard let data = object["data"] as? [String:Any], Self.matchesIdentity(journal.request.identity,data:data),
+              (data["collections"] as? [String] ?? []).contains(collection) else { throw ServiceError.verification("旧书目与目标分类（只读）") }
+        if let stored = journal.createdParentPayload, let expected = try JSONSerialization.jsonObject(with:stored) as? [String:Any] {
+            for (field,value) in expected {
+                if let text = value as? String {
+                    if text.isEmpty && data[field] == nil { continue }
+                    guard data[field] as? String == text else { throw ServiceError.verification("旧书目字段（只读）") }
+                }
+            }
+            let expectedCreators = expected["creators"] as? [[String:String]] ?? []
+            let actualCreators = data["creators"] as? [[String:String]] ?? []
+            guard expectedCreators == actualCreators else { throw ServiceError.verification("旧作者（只读）") }
+            let expectedTags = Set((expected["tags"] as? [[String:String]] ?? []).compactMap{$0["tag"]})
+            let actualTags = Set((data["tags"] as? [[String:Any]] ?? []).compactMap{$0["tag"] as? String})
+            guard expectedTags.isSubset(of:actualTags) else { throw ServiceError.verification("旧标签（只读）") }
+        }
+        for material in materials {
+            guard let key = journal.steps.first(where:{$0.role == material.role})?.key else { throw ServiceError.verification("旧材料缺少角色（只读）") }
+            try await verifyMaterial(material,itemKey:key,parent:parent)
+        }
+        for(role,html)in [("analysis",journal.request.analysisHTML),("note",journal.request.noteHTML)] {
+            guard let html,!html.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { continue }
+            guard let key = journal.steps.first(where:{$0.role == role})?.key else { throw ServiceError.verification("旧笔记缺少角色（只读）") }
+            let object = try await readObject("/api/users/0/items/\(key)")
+            let marker = "PaperDigest-Note: \(role):\(Self.sha256(Data(html.utf8)))"
+            guard let data = object["data"] as? [String:Any],data["parentItem"] as? String == parent,data["itemType"] as? String == "note",
+                  (data["note"] as? String ?? "").contains(marker),(data["note"] as? String ?? "").contains(html) else { throw ServiceError.verification("旧笔记正文（只读）") }
+        }
+        var value = result(journal)
+        // Preserve historical status bytes; this operation is not a new completed archive.
+        value = ArchiveResult(archiveID:value.archiveID,identity:value.identity,title:value.title,parentKey:value.parentKey,status:"partial",steps:value.steps,retryable:false,serverID:value.serverID,readOnly:true,warning:"旧记录未绑定个人账号；本次仅只读核验，未写入或修复，不能证明原账号。")
+        return value
     }
     private func resolveCollection(_ input: ArchiveRequest, existing: String?) async throws -> String {
         let available = try await collections()
@@ -698,8 +793,15 @@ actor ZoteroService {
     private func request(_ path: String, method: String = "GET", body: Data? = nil, authenticated: Bool = false,
                          contentType: String? = nil, headers: [String: String] = [:], requireServer: Bool = true,
                          query: [String: String] = [:], upload: Bool = false) async throws -> (Data, HTTPURLResponse) {
+        // This firewall runs before header construction, credential use and dispatch.
+        if case .readOnly? = archiveScope, method != "GET" { throw ServiceError.legacyUnbound }
         guard path.hasPrefix("/api/"), !path.contains("..") else { throw ServiceError.invalid("本地 API 路径") }
-        var components = URLComponents(url: base.appendingPathComponent(String(path.dropFirst())), resolvingAgainstBaseURL: false)!
+        var scopedPath = path
+        if case .bound(let binding)? = archiveScope, path.hasPrefix("/api/users/") {
+            guard binding.userID > 0, binding.serverID == serverID, path.hasPrefix("/api/users/0/") else { throw ServiceError.accountChanged }
+            scopedPath = "/api/users/\(binding.userID)/" + path.dropFirst("/api/users/0/".count)
+        }
+        var components = URLComponents(url: base.appendingPathComponent(String(scopedPath.dropFirst())), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
         var request = URLRequest(url: components.url!); request.httpMethod = method; request.httpBody = body
         request.setValue("3", forHTTPHeaderField: "Zotero-API-Version")
@@ -765,7 +867,7 @@ actor ZoteroService {
     }
     private func isRunFailure(_ error: Error) -> Bool {
         guard let error = error as? ServiceError else { return true }
-        switch error { case .authorizationRequired, .denied, .serverChanged, .unavailable: return true; default: return false }
+        switch error { case .authorizationRequired, .denied, .serverChanged, .accountChanged, .accountUnidentified, .legacyUnbound, .unavailable: return true; default: return false }
     }
     private func safe(_ error: Error) -> String {
         if let error = error as? ServiceError { return error.localizedDescription }
@@ -782,6 +884,7 @@ actor ZoteroService {
         return directory.appendingPathComponent("zotero-archives", isDirectory: true).appendingPathComponent(id + ".json")
     }
     private func saveJournal(_ journal: Journal) throws {
+        if case .readOnly? = archiveScope { throw ServiceError.legacyUnbound }
         let file = try journalURL(journal.id)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -803,7 +906,12 @@ actor ZoteroService {
             guard let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 32_768,
                   let object = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any],
                   object["serverID"] as? String == serverID else { continue }
-            summaries.append(object)
+            var projected = object
+            if let id = object["archiveID"] as? String, let journal = try? loadJournal(id) {
+                projected["accountBindingState"] = journal.personalLibraryBinding == nil ? "legacy-unbound":"bound"
+                projected["legacyReadOnlyEligible"] = journal.personalLibraryBinding == nil && !journal.steps.isEmpty && journal.steps.allSatisfy { $0.verified && $0.key != nil } && journal.parentKey != nil && journal.collectionKey != nil
+            }else{projected["accountBindingState"] = "unavailable"}
+            summaries.append(projected)
         }
         return Array(summaries.sorted { ($0["updatedAt"] as? Double ?? 0) > ($1["updatedAt"] as? Double ?? 0) }.prefix(100))
     }

@@ -68,6 +68,7 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     try errorPresentation(DesktopOperationCancelled("已取消导出"),expected:false)
     try errorPresentation(DesktopError.message("已取消导出"),expected:true)
     let (help,id)=try await show(.help)
+    let originalHelpContentSize=app.storageDetailWindow!.contentView!.bounds.size,originalHelpMinimum=app.storageDetailWindow!.minSize
     try await wait{(try? await help.evaluateJavaScript("!!document.querySelector('[data-detail-command=\"app.backup\"]')")) as? Bool==true}
     try check(app.storageDetailWindow?.title=="使用说明" && app.storageDetailWindow?.sheetParent===app.window,"help is real direct native sheet with its own title")
     try check((try await help.evaluateJavaScript("document.querySelectorAll('dialog,[data-dialog-surface]').length")) as? Int==0,"help has no hidden/nested modal facade")
@@ -136,6 +137,48 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     try check((try await zotero.evaluateJavaScript("document.querySelector('#zotero-archive-start').disabled")) as? Bool==true,"unavailable genuine materials keep archive start disabled")
     try await rejects("Zotero cannot inject arbitrary archive paths before preparation"){_=try await app.storageDetailCommand("zotero.archive",payload:["presentationID":zoteroID,"pdfPath":"/tmp/unowned.pdf"],source:zotero)}
     try check(app.storageDetailArchiveMaterials==nil && app.currentPaperID.hasPrefix("local:"),"failed genuine source preparation grants no material authority")
+    _=app.closeStorageDetails()
+    // Exact two public-source notices observed in the reviewed offline source
+    // sheet. The timestamp remains an explicit historical fixture string.
+    let shortNotices=["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。","网站当前修订复验失败，正在读取先前保存的旧导读；获取于2026-10-27T22:38:54Z，旧来源版本2610.27491v1，目录期待版本2610.27491v1。未能完成该操作。操作不被允许"]
+    func sourceSheet(_ notices:[String])async throws->WKWebView {
+        app.currentArticle=["paperID":app.currentPaperID,"revisionSHA256":String(repeating:"c",count:64),"notices":notices]
+        let request=try ReaderSourceNoticeRequest(["paperID":app.currentPaperID,"revisionSHA256":String(repeating:"c",count:64)])
+        try await app.showNativeDetails(.sourceNotices,sourceRequest:request)
+        guard let view=app.storageDetailWeb else{throw DesktopError.message("Missing own source sheet")}
+        try await wait{(try? await view.evaluateJavaScript("document.querySelectorAll('.native-source-notice-text').length")) as? Int==notices.count}
+        return view
+    }
+    func snapshot(_ view:WKWebView,_ name:String)async throws {
+        guard let output=ProcessInfo.processInfo.environment["PD_READER_LAYOUT_OUTPUT"] else{return}
+        let image:NSImage=try await withCheckedThrowingContinuation{continuation in view.takeSnapshot(with:nil){image,error in if let error{continuation.resume(throwing:error)}else if let image{continuation.resume(returning:image)}else{continuation.resume(throwing:DesktopError.message("No own source sheet snapshot"))}}}
+        guard let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),let png=bitmap.representation(using:.png,properties:[:]) else{throw DesktopError.message("Own snapshot encoding failed")}
+        let location=URL(fileURLWithPath:output);try FileManager.default.createDirectory(at:location,withIntermediateDirectories:true);try png.write(to:location.appendingPathComponent(name+".png"))
+    }
+    let shortView=try await sourceSheet(shortNotices)
+    print("OWN_SOURCE_GEOMETRY",app.storageDetailWindow!.frame,app.storageDetailWindow!.contentView!.bounds,app.storageDetailWindow!.contentLayoutRect,app.storageDetailWindow!.minSize)
+    try check(app.storageDetailWindow?.contentView?.bounds.size==NSSize(width:740,height:380) && app.storageDetailWindow?.minSize==NSSize(width:640,height:300),"source notices use their own compact real native initial and minimum size")
+    let rendered=try await shortView.evaluateJavaScript("[...document.querySelectorAll('.native-source-notice-text')].map(e=>e.textContent)") as? [String]
+    try check(rendered==shortNotices,"compact source window preserves both original public notice strings")
+    let shortVisible=try await shortView.evaluateJavaScript("(()=>{const nodes=[document.querySelector('.native-source-notices h1'),...document.querySelectorAll('.native-source-notice-text'),document.querySelector('#details-close')];return nodes.every(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight})})()") as? Bool==true
+    try check(shortVisible,"real short source text, heading and completion button fit the compact WK viewport")
+    try await snapshot(shortView,"compact-source-notices")
+    _=try await shortView.evaluateJavaScript("document.querySelector('#details-close').click();true")
+    try await wait{app.storageDetailWindow==nil&&app.storageDetailSession==nil}
+    try check(!app.storageDetailsActive && app.currentArticle["notices"] as? [String]==shortNotices,"normal actual completion closes the source sheet without changing notice source")
+    let longNotices=[String(repeating:"明确的长来源说明，用于受控可滚动窗口；原句与资料身份保持。",count:120),"可滚动到达的最后一条来源说明。"]
+    let longView=try await sourceSheet(longNotices)
+    guard let ownWindow=app.storageDetailWindow else{throw DesktopError.message("Missing own long notice window")}
+    ownWindow.setFrame(NSRect(origin:ownWindow.frame.origin,size:ownWindow.minSize),display:true)
+    try await wait{(try? await longView.evaluateJavaScript("document.documentElement.scrollHeight>innerHeight")) as? Bool==true}
+    _=try await longView.evaluateJavaScript("document.querySelector('.native-source-notice-text:last-child').scrollIntoView({block:'end'});true")
+    let endVisible=try await longView.evaluateJavaScript("(()=>{const last=document.querySelector('.native-source-notice-text:last-child'),r=last.getBoundingClientRect(),b=document.querySelector('#details-close').getBoundingClientRect();return scrollY>0&&last.textContent==='可滚动到达的最后一条来源说明。'&&r.top>=0&&r.bottom<=innerHeight&&b.top>=0&&b.bottom<=innerHeight&&document.documentElement.scrollWidth<=innerWidth})()") as? Bool==true
+    try check(endVisible,"long source notices scroll to the real last text at native minimum size while the actual completion button stays reachable")
+    try await snapshot(longView,"long-source-notices-end")
+    _=try await longView.evaluateJavaScript("document.querySelector('#details-close').click();true")
+    try await wait{app.storageDetailSession==nil}
+    let (_,unchangedHelpID)=try await show(.help)
+    try check(app.storageDetailWindow?.contentView?.bounds.size==originalHelpContentSize && originalHelpContentSize==NSSize(width:820,height:700) && app.storageDetailWindow?.minSize==originalHelpMinimum && unchangedHelpID==app.storageDetailSession?.id,"other native detail kinds retain original full initial/minimum dimensions and live session")
     _=app.closeStorageDetails();app.window.orderOut(nil)
     print("Native details assertions: \(count), failures: 0")
  }

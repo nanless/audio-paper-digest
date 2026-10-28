@@ -80,8 +80,11 @@ extension PaperDigestApp {
         guard window.attachedSheet==nil else{throw DesktopError.message("请先完成主阅读窗口的当前确认")}
         if kind == .export || kind == .zotero {guard !currentPaperID.isEmpty else{throw DesktopError.message("请先选择论文")}}
         let session=StorageDetailSession(generation:generation,paperID:currentPaperID,previousResponder:window.firstResponder,kind:kind,sourceNoticeSnapshot:sourceNoticeSnapshot)
-        let detail=NSWindow(contentRect:NSRect(x:0,y:0,width:820,height:700),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
-        detail.title=kind.title;detail.minSize=NSSize(width:700,height:520);detail.isReleasedWhenClosed=false;detail.delegate=self
+        let compactNotice = kind == .sourceNotices
+        let detail=NSWindow(contentRect:NSRect(x:0,y:0,width:compactNotice ? 740:820,height:compactNotice ? 380:700),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
+        detail.title=kind.title
+        if compactNotice {detail.contentMinSize=NSSize(width:640,height:300)} else {detail.minSize=NSSize(width:700,height:520)}
+        detail.isReleasedWhenClosed=false;detail.delegate=self
         let configuration=WKWebViewConfiguration()
         configuration.setURLSchemeHandler(scheme,forURLScheme:"paperapp")
         configuration.userContentController.addScriptMessageHandler(self,contentWorld:.page,name:"desktop")

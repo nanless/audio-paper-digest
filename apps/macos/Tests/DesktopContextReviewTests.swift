@@ -110,6 +110,11 @@ actor ContextPublishedFixture {
   check(safeArchive["pdfPath"]==nil && !(safeArchive["pdfNotice"] as? String ?? "").isEmpty && safeArchive["identity"] as? String=="arxiv:2610.27491v1","archive retains v1 citation and refuses mismatched catalog v2 PDF")
   var offlineRejected=false;do{_=try await app.prepareOffline(progress:{_ in})}catch{offlineRejected=true}
   check(offlineRejected,"offline preparation refuses mixed catalog v2 and reading v1 materials")
+  let readOnlyMessage="旧记录账号未绑定，仅回读；未继续写入"
+  _=try await app.runJob("zotero.resume",payload:[:],identifier:"legacy-read-only-task"){_ in ["status":"partial","archiveID":"legacy-fixture","identity":a,"title":"Old fixture","readOnly":true,"warning":readOnlyMessage]}
+  let legacyTask=(app.store.value["jobs"] as? [[String:Any]])?.first{$0["id"] as? String=="legacy-read-only-task"}
+  let legacyResult=legacyTask?["result"] as? [String:Any]
+  check(legacyTask?["status"] as? String=="partial" && legacyTask?["message"] as? String==readOnlyMessage && legacyResult?["readOnly"] as? Bool==true && legacyResult?["warning"] as? String==readOnlyMessage,"actual task projection preserves explicit legacy GET-only scope instead of reporting a new completed archive")
   print("Independent context/lifecycle review: \(passed) passed; \(failures.count) failed; credential provider calls \(credentials); no real network/model/Zotero")
   if !failures.isEmpty{exit(1)}
  }

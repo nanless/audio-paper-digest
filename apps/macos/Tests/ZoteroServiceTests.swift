@@ -33,6 +33,12 @@ private final class ZoteroMockProtocol: URLProtocol, @unchecked Sendable {
 }
 private final class MockZotero: @unchecked Sendable {
     var serverID = "test-instance"
+    var userID = 42
+    var validGeneratedKeys = false
+    var beforePersonalWrite: (() -> Void)?
+    var changeAccountDuringRawUpload = false
+    var wireRequests: [(String,String)] = []
+    var stagedFiles: [String:Data] = [:]
     var version = "10.0.6"
     var denied = false
     var oneTime = false
@@ -57,7 +63,11 @@ private final class MockZotero: @unchecked Sendable {
     let storage: URL
     private var counter = 100
     init(storage: URL) { self.storage = storage }
-    func key() -> String { counter += 1; return String(format: "ABCD%04d", counter) }
+    func key() -> String {
+        counter += 1
+        if validGeneratedKeys { var n=counter;var suffix="";for _ in 0..<4{suffix=String(2+n%8)+suffix;n/=8};return "ABCD"+suffix }
+        return String(format: "ABCD%04d", counter)
+    }
     func data(_ object: Any) throws -> Data { try JSONSerialization.data(withJSONObject: object) }
     func body(_ r: URLRequest) throws -> Data {
         if let body = r.httpBody { return body }
@@ -68,10 +78,25 @@ private final class MockZotero: @unchecked Sendable {
         return result
     }
     func response(_ request: URLRequest) throws -> (Int, [String: String], Data) {
-        let path = request.url!.path, method = request.httpMethod ?? "GET"
+        let wirePath = request.url!.path, method = request.httpMethod ?? "GET"
+        wireRequests.append((method,wirePath))
+        if method != "GET", wirePath.hasPrefix("/api/users/") { beforePersonalWrite?(); beforePersonalWrite = nil }
+        let wireComponents = wirePath.split(separator:"/").map(String.init)
+        if wireComponents.count >= 3, wireComponents[1] == "users", let requestedID = Int(wireComponents[2]), requestedID != 0, requestedID != userID {
+            return (400,["X-Zotero-Version":version,"Zotero-API-Version":"3","Zotero-Server-ID":serverID,"Content-Type":"application/json"],try data([:]))
+        }
+        // The mock validates the actual wire ID before routing. Canonical paths
+        // below preserve all original semantic counters; wireRequests retain proof.
+        let path = wireComponents.count >= 3 && wireComponents[1] == "users" ? "/api/users/0" + wirePath.dropFirst(("/api/users/"+wireComponents[2]).count) : wirePath
         requests.append((method, path))
-        let headers = ["X-Zotero-Version": version, "Zotero-API-Version": "3", "Zotero-Server-ID": serverID, "Content-Type": "application/json"]
-        func ok(_ object: Any, _ status: Int = 200) throws -> (Int, [String: String], Data) { (status, headers, try data(object)) }
+        var headers = ["X-Zotero-Version": version, "Zotero-API-Version": "3", "Zotero-Server-ID": serverID, "Content-Type": "application/json"]
+        if path == "/api/users/0/collections", userID > 0 { headers["Link"] = "<https://www.zotero.org/users/\(userID)/collections>; rel=\"alternate\"" }
+        func responseObject(_ value:Any)->Any {
+            if let list = value as? [[String:Any]] { return list.map{responseObject($0)} }
+            guard var object = value as? [String:Any], object["key"] != nil, object["data"] != nil else { return value }
+            object["library"] = ["type":"user","id":userID]; return object
+        }
+        func ok(_ object: Any, _ status: Int = 200) throws -> (Int, [String: String], Data) { (status, headers, try data(responseObject(object))) }
         if method == "GET", path == publicUnauthorizedPath || path + "/" == publicUnauthorizedPath { return try ok([:],401) }
         if path == "/api/" || path == "/api" { return (200, headers, Data("ready".utf8)) }
         if let requested = request.value(forHTTPHeaderField: "Zotero-Server-ID"), requested != serverID { return try ok([:], 412) }
@@ -132,7 +157,9 @@ private final class MockZotero: @unchecked Sendable {
             if contentType=="application/json", (try? JSONSerialization.jsonObject(with:wire)) is [String:Any] {
                 return (400,headers,Data("No file content provided".utf8))
             }
-            files[k] = wire; return (201, headers, Data())
+            stagedFiles[k] = wire
+            if changeAccountDuringRawUpload { changeAccountDuringRawUpload = false; userID += 1 }
+            return (201, headers, Data())
         }
         guard components.count >= 5, components[3] == "items" else { return try ok([:],404) }
         let k = components[4]
@@ -156,7 +183,8 @@ private final class MockZotero: @unchecked Sendable {
             let pairs = form.split(separator: "&").map { $0.split(separator: "=",maxSplits:1).map { String($0).removingPercentEncoding! } }
             let fields = Dictionary(uniqueKeysWithValues: pairs.map { ($0[0],$0[1]) })
             if let uploadKey = fields["upload"] {
-                guard uploads[uploadKey] == k, let file = files[k] else { return try ok([:],400) }
+                guard uploads[uploadKey] == k, let file = stagedFiles[k] else { return try ok([:],400) }
+                files[k] = file; stagedFiles[k] = nil
                 let actual = Insecure.MD5.hash(data:file).map { String(format:"%02x",$0) }.joined()
                 guard actual == hashes[k] else { return try ok([:],400) }
                 var object = objects[k]!, objectData = object["data"] as! [String: Any]
@@ -735,6 +763,120 @@ private final class MockZotero: @unchecked Sendable {
             try require(recovered.status=="complete" && recovered.archiveID==first.archiveID && recovered.parentKey==first.parentKey && mapping(Data(contentsOf:journal))==bound && backend.requests.filter{$0.0 != "GET"}.count==writes,"normal reauthorization/readback of available original target must reuse original mapping without any new object/write")
             print("PASS missing or HTTP403 old target preserves exact mapping then resumes original target readback")
             passed += 1
+        }
+        // Account ownership is tested against the mock's real wire-path gate,
+        // not its canonical counters used by the pre-existing assertions.
+        do {
+            let (service,backend,credentials)=try fixture()
+            let first=try await service.archive(input)
+            let file=root.appendingPathComponent("zotero-archives/"+first.archiveID+".json")
+            let original=try Data(contentsOf:file),summary=file.deletingPathExtension().appendingPathExtension("summary.json"),summaryBytes=try Data(contentsOf:summary)
+            let j=try JSONSerialization.jsonObject(with:original) as! [String:Any]
+            let binding=j["personalLibraryBinding"] as? [String:Any]
+            try require(first.status=="complete" && binding?["serverID"] as? String==backend.serverID && binding?["userID"] as? Int==42,"normal new archive records positive personal account from an empty real collection response's alternate header")
+            let personalWrites=backend.wireRequests.filter{$0.0 != "GET" && $0.1.hasPrefix("/api/users/")}
+            try require(!personalWrites.isEmpty && personalWrites.allSatisfy{$0.1.hasPrefix("/api/users/42/")},"every actual personal mutation is pinned to positive account42, never users0")
+            let count=backend.wireRequests.count,loads=credentials.loads,objects=try backend.data(backend.objects),files=backend.files
+            backend.userID=43
+            do{_=try await service.archive(input,resumeID:first.archiveID);throw NSError(domain:"expected account rejection",code:1)}catch ZoteroService.ServiceError.accountChanged{}
+            try require(credentials.loads==loads && backend.wireRequests.dropFirst(count).allSatisfy{$0.0=="GET"} && backend.files==files && backend.data(backend.objects)==objects,"same instance changed account refuses before credential load and any write")
+            try require(try Data(contentsOf:file)==original && Data(contentsOf:summary)==summaryBytes,"account rejection preserves original bound journal/summary bytes and all old keys/fingerprint")
+            backend.userID=42
+            let repeated=try await service.archive(input,resumeID:first.archiveID)
+            try require(repeated.status=="complete" && repeated.archiveID==first.archiveID && backend.wireRequests.filter{$0.0 != "GET" && $0.1.hasPrefix("/api/users/")}.count==personalWrites.count,"return to actual original account permits normal repeated readback without creating replacement objects")
+            passed += 5
+        }
+        do {
+            let (service,backend,_)=try fixture()
+            backend.beforePersonalWrite={backend.userID=43}
+            let result=try await service.archive(input)
+            try require(result.status=="partial" && result.parentKey==nil && backend.collections.isEmpty && backend.objects.isEmpty,"account switch immediately before first actual collection mutation is rejected by official-style positive route gate")
+            try require(backend.wireRequests.contains{$0.0=="POST" && $0.1=="/api/users/42/collections"} && !backend.wireRequests.contains{$0.0 != "GET" && $0.1.hasPrefix("/api/users/43/")},"TOCTOU does not follow dynamic users0 or rewrite to the new account")
+            passed += 2
+        }
+        do {
+            let (service,backend,_)=try fixture()
+            backend.changeAccountDuringRawUpload=true
+            let result=try await service.archive(input)
+            let key=result.steps.first{$0.role=="source-metadata"}?.key
+            try require(result.status=="partial" && key != nil && backend.stagedFiles[key!] != nil && backend.files[key!]==nil,"actual binary token only stages fixed item's bytes when the account changes during upload")
+            try require(backend.uploads.values.contains(key!) && backend.wireRequests.contains{$0.0=="POST" && $0.1=="/api/users/42/items/"+key!+"/file"} && backend.userID==43,"final file registration remains pinned to account42 and the original token's exact item")
+            try require(backend.files.isEmpty && result.steps.first{$0.role=="source-metadata"}?.verified==false && !backend.wireRequests.contains{$0.1.hasPrefix("/api/users/43/")},"account mismatch never registers staged bytes or verifies a role in the wrong account")
+            passed += 3
+        }
+        for kind in ["zero","missing","boolean","fraction","group","conflict","bad-link","mixed","huge"] {
+            let (service,backend,credentials)=try fixture()
+            if kind=="zero"{backend.userID=0}
+            ZoteroMockProtocol.handler={request in
+                let response=try backend.response(request)
+                guard request.url?.path=="/api/users/0/collections",request.url?.query=="limit=1" else{return response}
+                var headers=response.1
+                var library:[String:Any]=["type":"user","id":42]
+                switch kind {
+                case "zero": return response
+                case "missing":headers["Link"]=nil;return(response.0,headers,Data("[]".utf8))
+                case "boolean":library["id"]=true
+                case "fraction":library["id"]=42.5
+                case "group":library["type"]="group"
+                case "conflict":library["id"]=43
+                case "bad-link":headers["Link"]="<https://www.zotero.org.evil.invalid/users/42/collections>; rel=\"alternate\""
+                case "huge":library["id"]=9_007_199_254_740_992 as Int64
+                default:break
+                }
+                let object:[String:Any]=["key":"TARG2222","library":library,"data":["name":"identity fixture"]]
+                let list=kind=="mixed" ? [object,["key":"TARG3333","library":["type":"user","id":43],"data":["name":"other"]]] : [object]
+                return(response.0,headers,try backend.data(list))
+            }
+            var rejected=false
+            do{_=try await service.archive(input)}catch let error as ZoteroService.ServiceError{switch error{case .accountUnidentified,.verification:rejected=true;default:break}}
+            try require(rejected && credentials.loads==0 && backend.wireRequests.allSatisfy{$0.0=="GET"} && backend.objects.isEmpty,"\(kind) cannot mint an account binding, load a credential or write")
+            passed += 1
+        }
+        do {
+            let (service,backend,credentials)=try fixture()
+            backend.validGeneratedKeys=true
+            let first=try await service.archive(input)
+            let file=root.appendingPathComponent("zotero-archives/"+first.archiveID+".json"),summary=file.deletingPathExtension().appendingPathExtension("summary.json")
+            // Normal completed archive first; omit only the new optional field
+            // to replay the prior on-disk schema. No success journal is invented.
+            var old=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as! [String:Any]
+            old.removeValue(forKey:"personalLibraryBinding")
+            try backend.data(old).write(to:file)
+            let original=try Data(contentsOf:file),summaryBytes=try Data(contentsOf:summary),beforeCount=backend.wireRequests.count,loads=credentials.loads
+            credentials.failLoads=true
+            let readback=try await service.archive(input,resumeID:first.archiveID)
+            try require(readback.readOnly==true && readback.status=="partial" && !readback.retryable && readback.steps.allSatisfy(\.verified) && readback.warning?.contains("未绑定")==true,"legacy complete has explicitly read-only result, not a newly completed archive or reconstructed account")
+            try require(credentials.loads==loads && backend.wireRequests.dropFirst(beforeCount).allSatisfy{$0.0=="GET"},"legacy readback performs only real metadata/file GETs without reading the saved credential")
+            try require(try Data(contentsOf:file)==original && Data(contentsOf:summary)==summaryBytes,"successful legacy readback preserves every old journal and summary byte")
+            let status=try await service.handle(command:"zotero.status",payload:[:],progress:{_ in})
+            let row=(status["archives"] as! [[String:Any]]).first{$0["archiveID"] as? String==first.archiveID}
+            try require(row?["accountBindingState"] as? String=="legacy-unbound" && row?["legacyReadOnlyEligible"] as? Bool==true,"legacy UI projection derives read-only eligibility without rewriting old summary")
+            passed += 4
+            for damage in ["membership","hash","missing-note","missing-file"] {
+                let objects=backend.objects,files=backend.files
+                switch damage {
+                case "membership":var object=backend.objects[first.parentKey!]!;var data=object["data"] as! [String:Any];data["collections"]=[] as [String];object["data"]=data;backend.objects[first.parentKey!]=object
+                case "hash":let key=first.steps.first{$0.role=="pdf"}!.key!;var object=backend.objects[key]!;var data=object["data"] as! [String:Any];data["md5"]=nil;object["data"]=data;backend.objects[key]=object
+                case "missing-note":backend.objects[first.steps.first{$0.role=="note"}!.key!]=nil
+                default:let key=first.steps.first{$0.role=="pdf"}!.key!;backend.files[key]=nil;try? FileManager.default.removeItem(at:backend.storage.appendingPathComponent(key))
+                }
+                let count=backend.wireRequests.count
+                var rejected=false;do{_=try await service.archive(input,resumeID:first.archiveID)}catch{rejected=true}
+                try require(rejected && backend.wireRequests.dropFirst(count).allSatisfy{$0.0=="GET"} && credentials.loads==loads && Data(contentsOf:file)==original && Data(contentsOf:summary)==summaryBytes,"legacy \(damage) cannot PATCH/create/upload or save a new green checkpoint")
+                backend.objects=objects;backend.files=files
+                passed += 1
+            }
+        }
+        do {
+            let (service,backend,credentials)=try fixture();backend.validGeneratedKeys=true;backend.failPDFUploadOnce=true
+            let partial=try await service.archive(input)
+            try require(partial.status=="partial","legacy partial fixture must originate in actual normal transfer failure")
+            let file=root.appendingPathComponent("zotero-archives/"+partial.archiveID+".json"),summary=file.deletingPathExtension().appendingPathExtension("summary.json")
+            var old=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as! [String:Any];old.removeValue(forKey:"personalLibraryBinding");try backend.data(old).write(to:file)
+            let before=try Data(contentsOf:file),summaryBytes=try Data(contentsOf:summary),count=backend.wireRequests.count,loads=credentials.loads
+            do{_=try await service.archive(input,resumeID:partial.archiveID);throw NSError(domain:"expected old partial rejection",code:1)}catch ZoteroService.ServiceError.legacyUnbound{}
+            try require(backend.wireRequests.count==count && credentials.loads==loads && Data(contentsOf:file)==before && Data(contentsOf:summary)==summaryBytes,"unbound old partial refuses before even status/request/credential and preserves the original incomplete checkpoint")
+            passed += 2
         }
         if FileManager.default.fileExists(atPath:"/Applications/Zotero.app/Contents/Resources/app/omni.ja") {
             let script=URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("ZoteroNoteTitleContract.test.cjs")
