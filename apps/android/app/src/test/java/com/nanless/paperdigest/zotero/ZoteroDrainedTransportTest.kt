@@ -139,6 +139,27 @@ class ZoteroDrainedTransportTest {
         }finally{dir.deleteRecursively()}
     }
 
+    @Test fun destinationCategoriesNeverRetainPrivateUrlsAndSurviveRootWrapping()=runBlocking {
+        val cases=listOf(
+            "api.zotero.org" to ZoteroTransportObservation.Destination.API,
+            "files.zotero.net" to ZoteroTransportObservation.Destination.FILES,
+            "api.zotero.org.example.invalid" to ZoteroTransportObservation.Destination.OTHER,
+            "files.zotero.net.example.invalid" to ZoteroTransportObservation.Destination.OTHER,
+            "example.invalid" to ZoteroTransportObservation.Destination.OTHER,
+        )
+        for((host,expected)in cases){
+            val r=Request.Builder().url("https://$host/private/SYNTHETIC-SECRET?token=SYNTHETIC-SECRET").build()
+            val error=refuses{transport(Call.Factory{throw UnknownHostException("SYNTHETIC-SECRET")}).request(r,100)}
+            val original=observation(error)
+            assertEquals(expected,original.destination)
+            val copied=observation(ZoteroTransportObservation.operationFailure(requireNotNull(error.message),error))
+            assertNotSame(original,copied);assertEquals(expected,copied.destination)
+            assertFalse(original.message.orEmpty().contains(host));assertFalse(original.message.orEmpty().contains("SYNTHETIC-SECRET"))
+        }
+        val unknown=ZoteroTransportObservation.capture(ZoteroTransportObservation.Operation.REQUEST,ZoteroTransportObservation.Stage.CREATE_CALL,IOException(),null,true)
+        assertEquals(ZoteroTransportObservation.Destination.UNKNOWN,unknown.destination)
+    }
+
     @Test fun factoryFailureHasOnlyFixedDnsCategoriesAndNoOriginalCause()=runBlocking {
         val failure=UnknownHostException("SYNTHETIC-SECRET https://user:key@example.invalid/private")
         val error=refuses{transport(Call.Factory{throw failure}).request(request(),100)}

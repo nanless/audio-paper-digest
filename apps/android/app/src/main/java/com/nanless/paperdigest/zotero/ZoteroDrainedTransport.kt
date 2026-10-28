@@ -34,9 +34,10 @@ import kotlin.coroutines.resumeWithException
 /** Fixed categories only: never retain the original throwable or its text. */
 internal class ZoteroTransportObservation private constructor(
     val operation:Operation,val stage:Stage,val types:List<FailureType>,
-    val callCancelled:Boolean?,val contextActive:Boolean,
+    val callCancelled:Boolean?,val contextActive:Boolean,val destination:Destination,
 ):Exception("Zotero transport categories only",null,false,false) {
     enum class Operation { REQUEST, FILE_READBACK }
+    enum class Destination { API, FILES, OTHER, UNKNOWN }
     enum class Stage { CREATE_CALL, ENQUEUE, CALLBACK_FAILURE, RESPONSE_READ }
     enum class FailureType { DNS, CONNECT, TIMEOUT, TLS_PEER, TLS_HANDSHAKE, TLS, PROTOCOL, SOCKET, INTERRUPTED_IO, IO, DISPATCHER, SECURITY, OTHER }
     companion object {
@@ -46,11 +47,16 @@ internal class ZoteroTransportObservation private constructor(
             val observation=error.suppressed.firstOrNull{it is ZoteroTransportObservation} as? ZoteroTransportObservation
             if(observation!=null)result.addSuppressed(ZoteroTransportObservation(
                 observation.operation,observation.stage,observation.types.toList(),
-                observation.callCancelled,observation.contextActive,
+                observation.callCancelled,observation.contextActive,observation.destination,
             ))
             return result
         }
-        fun capture(operation:Operation,stage:Stage,error:Exception,call:Call?,contextActive:Boolean):ZoteroTransportObservation {
+        fun destination(request:Request):Destination=when(request.url.host){
+            "api.zotero.org"->Destination.API
+            "files.zotero.net"->Destination.FILES
+            else->Destination.OTHER
+        }
+        fun capture(operation:Operation,stage:Stage,error:Exception,call:Call?,contextActive:Boolean,destination:Destination=Destination.UNKNOWN):ZoteroTransportObservation {
             val seen=IdentityHashMap<Throwable,Boolean>();val types=ArrayList<FailureType>();var next:Throwable?=error
             repeat(4){
                 val value=next
@@ -73,7 +79,7 @@ internal class ZoteroTransportObservation private constructor(
                     next=runCatching{value.cause}.getOrNull()
                 }else next=null
             }
-            return ZoteroTransportObservation(operation,stage,types.toList(),runCatching{call?.isCanceled()}.getOrNull(),contextActive)
+            return ZoteroTransportObservation(operation,stage,types.toList(),runCatching{call?.isCanceled()}.getOrNull(),contextActive,destination)
         }
     }
     fun failure():AppFailure {
@@ -140,6 +146,7 @@ internal class ZoteroDrainedTransport(private val calls:Call.Factory=ZoteroDavNe
     private suspend fun <T> exchange(request:Request,operation:ZoteroTransportObservation.Operation,read:(Response,()->Unit)->T):T {
         val url=request.url
         require(url.scheme=="https"&&url.username.isEmpty()&&url.password.isEmpty()&&url.fragment==null){"服务地址必须是无凭据的 HTTPS"}
+        val destination=ZoteroTransportObservation.destination(request)
         val context=currentCoroutineContext();context.ensureActive();val drained=CompletableDeferred<Unit>()
         try{return suspendCancellableCoroutine{continuation->
             var call:Call?=null;var stage=ZoteroTransportObservation.Stage.CREATE_CALL
@@ -147,13 +154,13 @@ internal class ZoteroDrainedTransport(private val calls:Call.Factory=ZoteroDavNe
                 val created=calls.newCall(request);call=created;continuation.invokeOnCancellation{created.cancel()}
                 stage=ZoteroTransportObservation.Stage.ENQUEUE
                 created.enqueue(object:Callback{
-                    override fun onFailure(call:Call,e:IOException){try{if(continuation.isActive)continuation.resumeWithException(ZoteroTransportObservation.capture(operation,ZoteroTransportObservation.Stage.CALLBACK_FAILURE,e,call,context.isActive).failure())}finally{drained.complete(Unit)}}
+                    override fun onFailure(call:Call,e:IOException){try{if(continuation.isActive)continuation.resumeWithException(ZoteroTransportObservation.capture(operation,ZoteroTransportObservation.Stage.CALLBACK_FAILURE,e,call,context.isActive,destination).failure())}finally{drained.complete(Unit)}}
                     override fun onResponse(call:Call,response:Response){try{
                         val result=response.use{read(it){context.ensureActive()}}
                         if(continuation.isActive)continuation.resume(result)
-                    }catch(e:Exception){if(continuation.isActive)continuation.resumeWithException(if(e is CancellationException||e is AppFailure||e is IllegalArgumentException)e else ZoteroTransportObservation.capture(operation,ZoteroTransportObservation.Stage.RESPONSE_READ,e,call,context.isActive).failure())}finally{drained.complete(Unit)}}
+                    }catch(e:Exception){if(continuation.isActive)continuation.resumeWithException(if(e is CancellationException||e is AppFailure||e is IllegalArgumentException)e else ZoteroTransportObservation.capture(operation,ZoteroTransportObservation.Stage.RESPONSE_READ,e,call,context.isActive,destination).failure())}finally{drained.complete(Unit)}}
                 })
-            }catch(e:Exception){try{if(continuation.isActive)continuation.resumeWithException(if(e is CancellationException||e is AppFailure||e is IllegalArgumentException)e else ZoteroTransportObservation.capture(operation,stage,e,call,context.isActive).failure())}finally{drained.complete(Unit)}}
+            }catch(e:Exception){try{if(continuation.isActive)continuation.resumeWithException(if(e is CancellationException||e is AppFailure||e is IllegalArgumentException)e else ZoteroTransportObservation.capture(operation,stage,e,call,context.isActive,destination).failure())}finally{drained.complete(Unit)}}
         }}finally{withContext(NonCancellable){drained.await()}}
     }
 }
