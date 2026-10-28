@@ -1608,7 +1608,8 @@ function sourceBoundMatchedAcousticGap(results, tables, sourceText) {
     for (const match of source.matchAll(pattern)) {
         const [, name, positiveWord, totalWord, clips, groupsWord] = match;
         const positive = cardinal(positiveWord), total = cardinal(totalWord), groups = cardinal(groupsWord);
-        if (positive <= 0 || positive > total || groups < 2) continue;
+        if (positive <= 0 || positive > total || groups < 2
+            || !unquotedObservedComparison(source, match.index, match[0])) continue;
         const before = source.slice(0, match.index);
         const prefix = before.split('\n').at(-1);
         const previous = normalizeLocalEvidenceHeading(before.slice(0, before.lastIndexOf('\n')).trimEnd().split('\n').at(-1) || '');
@@ -1623,6 +1624,7 @@ function sourceBoundMatchedAcousticGap(results, tables, sourceText) {
             || /<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$/iu.test(before.slice(Math.max(before.lastIndexOf('</blockquote>'), before.lastIndexOf('</pre>'), before.lastIndexOf('</code>')) + 1))) continue;
         const reported = [...String(results).matchAll(/[^。；\n]+/gu)].some(fragment => {
             const sentence = fragment[0];
+            if (!unquotedObservedComparison(results, fragment.index, sentence)) return false;
             if (quoted(String(results).slice(0, fragment.index))) return false;
             if (/假设|如果|未来|计划|预计|可能|第三方|他人|先前研究|相关工作|引用|引述|转述|并非|并未|不是|未曾|未(?:实际)?(?:观测|观察|测得|发现|报告|执行|进行|比较)|没有|尚未|否认|撤回|错误|[“”‘’"?？]/u.test(sentence)) return false;
             const measured = /([1-9][0-9]*)\s*个孤立生成片段在\s*([1-9][0-9]*)\s*种固定声学描述中有\s*([1-9][0-9]*)\s*种仍可与自然\s*coda\s*区分/u.exec(sentence);
@@ -1639,6 +1641,163 @@ function sourceBoundMatchedAcousticGap(results, tables, sourceText) {
                 String(row[0]).trim() === '自然与 ' + name && String(row[count]).trim() === String(positive)
                 && new RegExp('^' + clips + '\\s*个生成片段[，,]\\s*' + groups + '\\s*个独立自然参照组[，,]\\s*严格匹配$', 'u').test(String(row[contrast]).trim()));
         })) return true;
+    }
+    return false;
+}
+
+// A local comparison cannot borrow an observation from a quotation, future
+// proposal, other study, or a statement revoked in its own continuation.
+function unquotedObservedComparison(text, index, body) {
+    const raw = String(text || ''), before = raw.slice(0, index);
+    const prefix = before.slice(before.lastIndexOf('\n') + 1);
+    const previous = normalizeLocalEvidenceHeading(before.slice(0, before.lastIndexOf('\n')).trimEnd().split('\n').at(-1) || '');
+    const quoted = before.lastIndexOf('“') > before.lastIndexOf('”')
+        || before.lastIndexOf('‘') > before.lastIndexOf('’')
+        || (before.match(/(?<!\\)"/gu) || []).length % 2 === 1;
+    let fenced = false;
+    for (const line of before.split('\n')) if (/^\s*(?:```|~~~)/u.test(line)) fenced = !fenced;
+    const htmlStart = Math.max(before.lastIndexOf('</blockquote>'), before.lastIndexOf('</pre>'), before.lastIndexOf('</code>')) + 1;
+    const continuation = raw.slice(index + body.length).replace(/^[\s，,;.。；]+/u, '').slice(0, 500);
+    const local = (prefix + body).replace(/(?<=[A-Za-z])’(?=[A-Za-z])/gu, '');
+    return !quoted && !fenced && !/[“”‘’"]|(?:^|\s)>/u.test(local)
+        && !/<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$/iu.test(before.slice(htmlStart))
+        && !/^(?:(?:previous|prior|related|third[- ]party|other)\s+(?:work|research|study)|quoted statement|quotation|hypothetical example|引用|引述|转述|相关工作|先前研究|第三方|他人)[.:：]?$/iu.test(previous)
+        && ownObservedSourceScope(previous)
+        && ownObservedSourceScope(prefix + '\n' + body)
+        && !/(?:假定|设想|转述|引述|引用|否认|驳斥|未进行|未执行|未比较|未发现|没有|不成立|错误|[?？])/u.test(prefix + body)
+        && !/^(?:(?:this|that|the above)\s+(?:comparisons?|results?|claims?|experiments?|ablations?|tests?)[^.!?]{0,80}(?:withdrawn|revoked|false|incorrect|not (?:performed|observed))|(?:上述|以上|前述|该|此)(?:比较|结果|说法|结论|实验|消融)[^。；\n]{0,30}(?:撤回|错误|不成立|未观测|未进行))/iu.test(continuation);
+}
+
+function sourceBoundFoldedObjectiveRegression(results, tables, sourceText) {
+    const source = String(sourceText || '');
+    // Method identities come from the observed comparison and the explicit
+    // training-objective mapping, never from a matching numerical value.
+    const observed = /^Table\s+[IVXLCDM0-9]+ compares eight models that all route and meet timing on the same engine\. ([A-Za-z][A-Za-z0-9_-]{1,40}) gives the lowest measured latency and energy:[^\n]{0,600}?Weighting the group-lasso by channel cycle cost does not improve this result\. ([A-Za-z][A-Za-z0-9_-]{1,40}) skips[^\n]{0,350}?so the plain lasso performs better on all three measured outcomes in these runs\./gmu;
+    const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const match of source.matchAll(observed)) {
+        const [, plain, cycle] = match;
+        if (plain === cycle || !unquotedObservedComparison(source, match.index, match[0])) continue;
+        const mapping = new RegExp(`(?<![A-Za-z0-9_-])${escape(cycle)} learns per-channel widths and adds the cycle-weighted group-lasso[^\\n]{0,250}?; ${escape(plain)} replaces cycle-weighted group-lasso with plain group-lasso[^.\\n]*\\.`, 'gu');
+        if (![...source.matchAll(mapping)].some(definition => unquotedObservedComparison(source, definition.index, definition[0]))) continue;
+        const statement = [...String(results).matchAll(/[^。；\n]+/gu)].some(fragment =>
+            unquotedObservedComparison(results, fragment.index, fragment[0])
+            && /普通组稀疏在三个实测结果上都优于按通道周期加权的组稀疏/u.test(fragment[0]));
+        if (!statement) continue;
+        for (const table of tables) {
+            const clean = value => String(value || '').replace(/[*_`$]/gu, '').trim();
+            const find = expression => table.header.flatMap((header, i) => expression.test(clean(header)) ? [i] : []);
+            const identity = find(/^构建$/u), objective = find(/^训练目标$/u);
+            const time = find(/^帧时间\s*ms\/帧\s*↓$/u), energy = find(/^动态能耗\s*μJ\/帧\s*↓$/u), quality = find(/^PESQ\s*↑$/u);
+            if ([identity, objective, time, energy, quality].some(columns => columns.length !== 1)) continue;
+            const rows = name => table.rows.filter(row => clean(row[identity[0]]) === name);
+            const first = rows(plain), second = rows(cycle);
+            if (first.length !== 1 || second.length !== 1
+                || clean(first[0][objective[0]]) !== '存储加普通组稀疏'
+                || clean(second[0][objective[0]]) !== '存储加周期加权组稀疏') continue;
+            const scalar = cell => /^\d+(?:\.\d+)?$/u.test(clean(cell)) ? Number(clean(cell)) : NaN;
+            // This gate only corroborates the retained adverse conclusion. It
+            // does not authenticate source-cell values or grant scientific or
+            // publication qualification. Never split bare HTML duplicates.
+            if ([time[0], energy[0], quality[0]].every(column => Number.isFinite(scalar(first[0][column])) && Number.isFinite(scalar(second[0][column])))
+                && scalar(first[0][time[0]]) < scalar(second[0][time[0]])
+                && scalar(first[0][energy[0]]) < scalar(second[0][energy[0]])
+                && scalar(first[0][quality[0]]) > scalar(second[0][quality[0]])) return true;
+        }
+    }
+    return false;
+}
+
+function sourceBoundDeadlineF1Comparison(results, tables, sourceText) {
+    const source = String(sourceText || ''), escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const sourceValues = (method, deadline, lookahead, dataset) => {
+        const captions = [...source.matchAll(/^Table\s+[0-9]+: Accuracy at the deadline, on the primary truth of each set; all rows are our models\. Each cell gives the recording-level macro F1 \(%\)[^\n]*$/gmu)];
+        if (captions.length !== 1 || !unquotedObservedComparison(source, captions[0].index, captions[0][0])) return null;
+        const prefix = source.slice(0, captions[0].index), start = prefix.lastIndexOf('\nDevelopment\nHeld-out\nSystem\n');
+        if (start < 0 || captions[0].index - start > 8000) return null;
+        const lines = prefix.slice(start).split('\n').map(line => line.trim()).filter(Boolean);
+        const firstRow = lines.findIndex(line => new RegExp(`^${escape(method)}, D=${deadline}(?:D=${deadline})?\\s*ms$`, 'u').test(line));
+        const headers = lines.slice(3, firstRow);
+        if (firstRow < 5 || headers.length > 10 || new Set(headers).size !== headers.length || headers.filter(header => header === dataset).length !== 1) return null;
+        const width = headers.length, secondRow = firstRow + 1 + width, thirdRow = secondRow + 1 + width * 3;
+        if (lines[secondRow] !== `${method}, full length (${lookahead}\u2009ms lookahead)`
+            && lines[secondRow] !== `${method}, full length (${lookahead} ms lookahead)`) return null;
+        if (!/^Harmonic BiCRNN, offline \(whole recording\)$/u.test(lines[thirdRow] || '')
+            || lines.length !== thirdRow + 1 + width * 3) return null;
+        const scalar = value => /^[0-9]+(?:\.[0-9]+)?$/u.test(value) ? value : null;
+        const column = headers.indexOf(dataset), a = scalar(lines[firstRow + 1 + column]), b = scalar(lines[secondRow + 1 + column * 3]);
+        // Retain the complete F1/paired-difference/CI rectangular layout; a
+        // metric moved across a source-table boundary cannot supply values.
+        if (a === null || b === null || !headers.every((_header, i) => scalar(lines[firstRow + 1 + i]) !== null
+            && scalar(lines[secondRow + 1 + i * 3]) !== null && scalar(lines[thirdRow + 1 + i * 3]) !== null
+            && /^\[.+,.+\]$/u.test(lines[secondRow + 3 + i * 3]) && /^\[.+,.+\]$/u.test(lines[thirdRow + 3 + i * 3]))) return null;
+        return [a, b];
+    };
+    const observed = /Within ([A-Za-z][A-Za-z0-9_-]{1,40}), answering at ([1-9][0-9]*)\s*ms instead of with ([1-9][0-9]*)\s*ms of lookahead costs ([0-9]+(?:\.[0-9]+)?) points on ([A-Za-z][A-Za-z0-9_-]{1,40})/gu;
+    for (const match of source.matchAll(observed)) {
+        const [, method, deadline, lookahead, delta, dataset] = match;
+        const values = sourceValues(method, deadline, lookahead, dataset);
+        if (!values || !(Number(delta) > 0) || Number(deadline) >= Number(lookahead)
+            || !unquotedObservedComparison(source, match.index, match[0])
+            || Math.abs(Number(values[1]) - Number(values[0]) - Number(delta)) >= 1e-9) continue;
+        const comparison = new RegExp(`(?<![A-Za-z0-9_-])${escape(method)}\\s*${deadline}\\s*ms\\s*相对自身整曲[^。；\\n]{0,80}?(?<![A-Za-z0-9_-])${escape(dataset)}\\s*-${escape(delta)}(?![0-9.])`, 'u');
+        if (![...String(results).matchAll(/[^。；\n]+/gu)].some(fragment =>
+            unquotedObservedComparison(results, fragment.index, fragment[0]) && comparison.test(fragment[0]))) continue;
+        for (const table of tables) {
+            const clean = value => String(value || '').replace(/[*_`]/gu, '').trim();
+            const identity = table.header.flatMap((header, i) => clean(header) === '系统' ? [i] : []);
+            const metric = table.header.flatMap((header, i) => clean(header) === `${dataset} 留出 ↑` ? [i] : []);
+            if (identity.length !== 1 || metric.length !== 1) continue;
+            const first = table.rows.filter(row => clean(row[identity[0]]) === `${method} ${deadline} ms`);
+            const second = table.rows.filter(row => clean(row[identity[0]]) === `${method} 整曲 ${lookahead} ms 前视`);
+            if (first.length !== 1 || second.length !== 1) continue;
+            const scalar = cell => /^([0-9]+(?:\.[0-9]+)?)%$/u.exec(clean(cell))?.[1];
+            const a = scalar(first[0][metric[0]]), b = scalar(second[0][metric[0]]);
+            if (a !== undefined && b !== undefined && a === values[0] && b === values[1] && Number(a) < Number(b)
+                && Math.abs(Number(b) - Number(a) - Number(delta)) < 1e-9) return true;
+        }
+    }
+    return false;
+}
+
+// A notation-loss ablation is adverse evidence only when the same observed
+// source and report retain its MIDI round trip, method, and lost advantage.
+function sourceBoundNotationRoundtripRegression(results, sourceText) {
+    const source = String(sourceText || ''), report = String(results || '');
+    const unquotedAt = (text, index) => {
+        const before = text.slice(0, index);
+        if (before.lastIndexOf('“') > before.lastIndexOf('”')
+            || before.lastIndexOf('‘') > before.lastIndexOf('’')
+            || (before.match(/(?<!\\)"/gu) || []).length % 2) return false;
+        let fenced = false;
+        for (const line of before.split('\n')) if (/^\s*(?:```|~~~)/u.test(line)) fenced = !fenced;
+        return !fenced && !/<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$/iu.test(
+            before.slice(Math.max(before.lastIndexOf('</blockquote>'), before.lastIndexOf('</pre>'), before.lastIndexOf('</code>')) + 1));
+    };
+    const scopeAt = (text, index, claim) => {
+        const before = text.slice(0, index), prefix = before.split('\n').at(-1);
+        const previous = normalizeLocalEvidenceHeading(before.slice(0, before.lastIndexOf('\n')).trimEnd().split('\n').at(-1) || '');
+        return unquotedAt(text, index) && ownObservedSourceScope(prefix + '\n' + claim)
+            && !/[“”‘’"]|(?:^|\s)>/u.test(prefix)
+            && !/^(?:(?:previous|prior|related|third[- ]party|other)\s+(?:work|research|study)|quoted statement|quotation|hypothetical example|第三方研究|其他研究|相关工作|先前研究|假设|引用)[.:：]?$/iu.test(previous);
+    };
+    const sourceRevoked = after => after.split(/(?<=[.!?])\s+|\n/u).slice(0, 2).some(part =>
+        /^\s*(?:(?:but|however)[, ]+)?(?:this|that|the (?:above|preceding))\s+(?:ablation|result|finding|comparison|experiment|claim)s?[^.!?\n]{0,100}\b(?:withdrawn|retracted|revoked|false|incorrect|not\s+(?:observed|performed|conducted|supported))\b/iu.test(part));
+    const pattern = /The ablation confirms that notation matters: when scores are first converted to MIDI before tokenisation, MIDI-derived ([A-Za-z][A-Za-z0-9_-]{1,40}) models match the performance of their MIDI counterparts, demonstrating that the advantage of MusicXML lies in the notational content lost upon conversion to MIDI, not in the tokenisation\s+strategy alone\./gu;
+    for (const observed of source.matchAll(pattern)) {
+        if (!unquotedObservedComparison(source, observed.index, observed[0])
+            || !scopeAt(source, observed.index, observed[0]) || sourceRevoked(source.slice(observed.index + observed[0].length))) continue;
+        const method = observed[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const adverse = new RegExp(`消融(?:将|把)同一(?:批)?乐谱先转\\s*MIDI\\s*再转回\\s*MusicXML\\s*后[，,]\\s*${method}\\s*(?:模型)?\\s*性能回落到\\s*MIDI\\s*水平[，,]\\s*支持优势来自记谱内容而非分词技巧本身`, 'gu');
+        for (const match of report.matchAll(adverse)) {
+            const sentenceStart = Math.max(report.lastIndexOf('。', match.index), report.lastIndexOf('；', match.index), report.lastIndexOf('\n', match.index)) + 1;
+            const sentenceEnd = report.slice(match.index).search(/[。；\n]/u);
+            const sentence = report.slice(sentenceStart, sentenceEnd < 0 ? report.length : match.index + sentenceEnd);
+            if (!unquotedObservedComparison(report, sentenceStart, sentence) || !scopeAt(report, match.index, sentence)
+                || /假设|假如|倘若|如果|(?:^|[，,\s])若|未来|计划|预计|可能|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|不是|未(?:能)?|没有|尚未|否认|反驳|撤回|撤销|错误(?:说法|结论)|[?？]/u.test(sentence)) continue;
+            const following = report.slice(match.index + match[0].length).split(/[。；\n]/u).filter(part => part.trim()).slice(0, 2);
+            if (following.some(part => /^\s*(?:(?:但|然而)[，,]?\s*)?(?:上述|前述|该|此)(?:消融)?(?:结论|结果|比较|说法)[^。；\n]{0,40}(?:撤回|撤销|不成立|错误|未(?:实际)?(?:进行|观测)|没有(?:进行|观测))/u.test(part))) continue;
+            return true;
+        }
     }
     return false;
 }
@@ -1769,10 +1928,13 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && /(?:蒸馏|候选)检查点[^。；\n]{0,70}[0-9]+(?:\.[0-9]+)?%[^。；\n]{0,40}比原始模型更偏/u.test(sentence)
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
-    const resultHasNegative = hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
+    const resultHasNegative = sourceBoundNotationRoundtripRegression(results, options.sourceText)
+        || hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
         || tables.some(table => String(results).split(/\n\s*\n/u)
             .some(paragraph => sourceBackedSampleSizeBoundary(paragraph, table, options.sourceText, results)))
         || sourceBoundMatchedAcousticGap(results, tables, options.sourceText)
+        || sourceBoundFoldedObjectiveRegression(results, tables, options.sourceText)
+        || sourceBoundDeadlineF1Comparison(results, tables, options.sourceText)
         || hasSourceBackedNetIntervalNegative(results, tables, options.sourceText)
         || sourceBoundLowerMetricIncrease(results, sourceText)
         || hasSourceBackedSequenceOrderAblation(results, tables, sourceText, true)
@@ -1787,7 +1949,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         || explicitMetricDecline
         || reportedLowerScore
         || reportedBiasRegression
-        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|降幅|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
+        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
     if (empirical && sourceHasNegative && !resultHasNegative) {
         return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';

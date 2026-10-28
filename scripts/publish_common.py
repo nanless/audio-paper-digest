@@ -3849,6 +3849,240 @@ def _has_source_backed_net_interval_negative(results, tables, source_text):
     return False
 
 
+def _source_bound_loss_switch_columns(table, source):
+    """Only the observed complete eight-variant factorial table types its switches."""
+    empty = set()
+    if _source_evidence_extra_i(source, table) or len(table['header']) != 4 or len(table['rows']) != 8:
+        return empty
+    # Quoted HTML/code cannot lend this paper an observed experiment.
+    source = _setting_axis_protected_source(source)
+    identifier = next((i for i,h in enumerate(table['header']) if re.fullmatch(r'(?:变体|variant|abbrev\.)', str(h).strip(), re.I)), -1)
+    controls = [next((i for i,h in enumerate(table['header']) if re.fullmatch(pattern, str(h).strip(), re.I)), -1) for pattern in (
+        r'(?:条件注入|conditioning)', r'(?:波形损失归一化|损失归一化|waveform[- ]loss normalization)',
+        r'(?:语谱图辅助损失|auxiliary spectrogram loss)')]
+    if identifier < 0 or any(i < 0 for i in controls) or any(len(row) != 4 or any(not re.fullmatch(r'(?:是|否)', str(row[i]).strip()) for i in controls) for row in table['rows']):
+        return empty
+    def denied(text):
+        return not _own_observed_source_scope(text) or re.search(
+            r'```|~~~|(?:^|\n)\s*[>“”"\'‘’]|\b(?:quoted?|quotation|(?:not|never)\s+(?:actually\s+)?(?:implemented|executed|performed|trained|evaluated)|(?:did|do|does) not (?:actually )?(?:train|evaluate|implement|execute|perform)|abandon(?:ed)?|retract(?:ed)?)\b|\b(?:external|prior|third[- ]party)\s+(?:work|study|paper|experiment)\b|(?:外部研究|第三方|未实际执行|从未执行|没有执行|未实施|未训练|未评估|撤销|撤回)', text, re.I)
+    for claim in re.finditer(r'^To isolate the contributions of conditioning, loss normalization, and spectrogram loss, eight model variants are trained and evaluated[^\n]*$', source, re.M):
+        reference = re.search(r'The variants are summarized in Table\s+(\d+)\.', claim[0])
+        if not reference:
+            continue
+        before, tail = source[:claim.start()], source[claim.end():]
+        if len(re.findall(r'^\s*```[^\n]*$|^\s*~~~[^\n]*$', before, re.M)) % 2:
+            continue
+        caption = re.search(r'^Table\s+(\d+): Overview of model variants differing in conditioning, waveform-loss normalization, and use of an auxiliary spectrogram loss\.([^\n]*)\n', tail, re.M)
+        if not caption or caption[1] != reference[1] or tail[:caption.start()].strip():
+            continue
+        rest = tail[caption.end():]
+        boundary = re.search(r'^(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+[A-Z][^\n]*|(?:Table|Figure)\s+\d+:|Conclusions?|Discussion|References?)\s*$', rest, re.M)
+        body = rest[:boundary.start()] if boundary else rest
+        next_line = next((line for line in rest[boundary.end():].splitlines() if line.strip()), '') if boundary else ''
+        adjacent = re.split(r'(?<=[.!?])\s+(?=[A-Z])', next_line[:400])[0]
+        scope = before.strip().split('\n')[-1] + '\n' + claim[0] + '\n' + caption[0] + body + '\n' + adjacent
+        if denied(scope):
+            continue
+        lines = [line.strip() for line in body.splitlines() if line.strip()]
+        if len(lines) != 45 or lines[:3] != ['Abbrev.', 'Conditioning', 'Loss Norm.'] or not re.fullmatch(r'LSTFT(?:L_\{\\mathrm\{STFT\}\})?', lines[3]) or lines[4] != 'Description':
+            continue
+        vectors, names, matches = set(), set(), True
+        for i in range(8):
+            name, conditioning, normalization, spectrogram = lines[5+i*5:9+i*5]
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9-]*', name) or conditioning not in ('–', 'FiLM') or normalization not in ('–', '✓') or spectrogram not in ('–', '✓'):
+                matches = False
+                break
+            flags = (conditioning == 'FiLM', normalization == '✓', spectrogram == '✓')
+            vectors.add(flags); names.add(name)
+            if str(table['rows'][i][identifier]).strip() != name or any(str(table['rows'][i][column]).strip() != ('是' if flags[j] else '否') for j,column in enumerate(controls)):
+                matches = False
+                break
+        if matches and len(vectors) == len(names) == 8:
+            return set(controls)
+    return empty
+
+
+# Ports only the two observed kernel-setting axes. Neither axis certifies metric
+# values or a paper's eligibility; all normal table and scientific gates remain.
+def _setting_axis_visible(value):
+    value = re.sub(r'\\(?:uparrow|downarrow)', '', str(value or '').replace('$', ''))
+    return re.sub(r'\s+', ' ', re.sub(r'[↑↓*_`]', '', value)).strip()
+
+
+def _setting_axis_protected_source(source):
+    source = re.sub(r'```[\s\S]*?```|~~~[\s\S]*?~~~', '\n[quoted material]\n', str(source or ''))
+    source = re.sub(r'<(?:blockquote|pre|code)\b[^>]*>[\s\S]*?</(?:blockquote|pre|code)\s*>', '\n[quoted material]\n', source, flags=re.I)
+    source = re.sub(r'^[ \t]*>.*$', '[quoted material]', source, flags=re.M)
+    return re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"\n]*"|\x27[^\x27\n]*\x27|`[^`\n]*`', '[quoted material]', source)
+
+
+_SETTING_AXIS_FOREIGN = re.compile(r'^(?:(?:#{1,6}|\d+(?:\.\d+)*)[ .]+)?(?:(?:previous|prior|related|other|third[- ]party)\s+(?:work|research|study|experiment)|hypothetical(?: example| experiment)?|quotation|quoted statement|引述|第三方研究|假设实验)[.:：]?$', re.I)
+_SETTING_AXIS_DENIED = re.compile(r'\b(?:if|assuming|suppose|hypothetical|planned|proposed only|not|never|unperformed|unimplemented|withdrawn|revoked|false)\b|\b(?:other|previous|prior|related|third[- ]party|external)\s+(?:authors?|teams?|research|work)\b|第三方|假设|没有|未执行|未实施|撤回|\[quoted material\]', re.I)
+_SETTING_AXIS_REVOKED = re.compile(r'^(?:(?:This|That|The (?:preceding|above))\s+(?:(?:experiment|comparison|procedure|study|claim)\s+)?(?:(?:was|is)\s+)?(?:never|not|(?:only )?hypothetical|false|withdrawn)|We\s+(?:never|(?:did|do)\s+not)\s+(?:actually\s+)?(?:conduct|run|perform|implement|compare))', re.I)
+
+
+def _setting_axis_own_statement(source, pattern):
+    match = re.search(pattern, source)
+    if not match:
+        return False
+    opening = source.strip().split('\n')[0]
+    if _SETTING_AXIS_FOREIGN.search(opening) or _SETTING_AXIS_DENIED.search(opening):
+        return False
+    before, after = source[:match.start()], source[match.end():]
+    boundaries = list(re.finditer(r'[.!?](?=\s+[A-Z]|\s*$)', before))
+    prior = boundaries[-1] if boundaries else None
+    start = prior.start()+1 if prior else before.rfind('\n')+1
+    end = re.search(r'[.!?](?=\s+[A-Z]|\s*$)', after)
+    statement = source[start:match.end()+(end.start() if end else len(after))]
+    following = after[end.start()+1:].lstrip() if end else ''
+    preceding = before[(boundaries[-2].start() if len(boundaries)>1 else -1)+1:prior.start()+1] if prior else ''
+    if _SETTING_AXIS_DENIED.search(statement) or _SETTING_AXIS_DENIED.search(preceding) or _SETTING_AXIS_REVOKED.search(following):
+        return False
+    for line in reversed(before.split('\n')[-80:]):
+        if _SETTING_AXIS_FOREIGN.search(line.strip()):
+            return False
+        if re.search(r'^\s*(?:#{1,6}\s+|\d+(?:\.\d+)*[ .]+|Appendix\s+[A-Z])\S', line, re.I):
+            break
+    return True
+
+
+def _setting_axis_own_table_scope(source, block, reject_prior=None):
+    lines = source[:block['index']].rstrip().split('\n')
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', block['caption'])
+    reject_prior = reject_prior or (lambda line: _SETTING_AXIS_DENIED.search(line))
+    if reject_prior(lines[-1] if lines else '') or _SETTING_AXIS_DENIED.search(sentences[0]) or any(_SETTING_AXIS_REVOKED.search(s) for s in sentences[1:]):
+        return False
+    for line in reversed(lines[-80:]):
+        if _SETTING_AXIS_FOREIGN.search(line.strip()):
+            return False
+        if re.search(r'^\s*(?:#{1,6}\s+|\d+(?:\.\d+)*[ .]+|Appendix\s+[A-Z])\S', line, re.I):
+            break
+    return True
+
+
+def _setting_axis_rows_safe(table, width):
+    return len(table['header']) == width and all(len(row) == width for row in table['rows'])
+
+
+def _setting_axis_perturbation_table(block, n):
+    if not re.search(r'^Table \d+: Rejections at n='+re.escape(n)+r'(?:n\{=\}'+re.escape(n)+r')? per side\.', block['caption']) or not re.search(r'Music and audio cells give the range over CLaMP\s+2, VGGish and PANNs\.', block['caption']):
+        return False
+    lines = [line.strip() for line in block['body'].split('\n') if line.strip()]
+    if lines[:7] != ['Alternative','Spaces','median','cubic','window','MMDAgg','Fréchet']:
+        return False
+    cursor = 7
+    def take():
+        nonlocal cursor
+        value = lines[cursor] if cursor < len(lines) else ''; cursor += 1
+        return value
+    def metrics():
+        return all(re.fullmatch(r'(?:[–-]|\d+(?:[–-]\d+)?/\d+(?:[–-]\d+/\d+)?)', take()) for _ in range(5))
+    for alternative in ('mean shift','contraction','rotation'):
+        if not re.fullmatch(alternative+r', s=0\.1(?:s\{=\}0\.1)?', take()) or take() != 'music, audio' or not metrics() or take() != 'Inception' or not metrics():
+            return False
+    for alternative in ('rank-2 rotation','rank-1 inflation'):
+        if take() != alternative or not re.fullmatch(r'CLaMP\s+2, PANNs', take()) or not metrics() or take() != 'Inception' or not metrics():
+            return False
+    if take() != 'mode drop, mean-matched' or take() != 'music, audio' or not metrics() or take() != 'mode drop, least-displacing' or take() != 'all five' or not re.fullmatch(r'\d+[–-]\d+/\d+ in every configuration', take()) or not re.fullmatch(r'(?:[–-]|\d+(?:[–-]\d+)?/\d+(?:[–-]\d+/\d+)?)', take()) or take() != 'control' or take() != 'all five' or not re.fullmatch(r'at most \d+/\d+ per cell', take()) or not re.fullmatch(r'(?:[–-]|\d+(?:[–-]\d+)?/\d+(?:[–-]\d+/\d+)?)', take()):
+        return False
+    return cursor < len(lines) and bool(re.search(r'^\d+\.\d+\s+\S', lines[cursor])) and not _SETTING_AXIS_REVOKED.search(lines[cursor+1] if cursor+1 < len(lines) else '')
+
+
+def _setting_axis_perturbation(table, source):
+    if not _setting_axis_rows_safe(table, 5) or len(table['rows']) != 5:
+        return False
+    header = re.fullmatch(r'变化[，,]\s*每侧\s*(\d+)', _setting_axis_visible(table['header'][0]))
+    if not header or list(map(_setting_axis_visible,table['header'][1:])) != ['中位数高斯','三次核','窄窗口高斯','MMDAgg']:
+        return False
+    alternatives = {'音乐音频均值平移 s=0.1','音乐音频收缩 s=0.1','音乐音频旋转 s=0.1','Inception 旋转 s=0.1','最小位移模式删除'}
+    labels = list(map(lambda row:_setting_axis_visible(row[0]), table['rows']))
+    if set(labels) != alternatives or len(set(labels)) != len(labels):
+        return False
+    n = header[1]
+    if not _setting_axis_own_statement(source, r'We apply one known change to an independent sample, and test the two samples with each kernel configuration as a permutation test') or not re.search(r'Unless noted, n='+n+r'(?:n\{=\}'+n+r')?(?:,|\.)',source):
+        return False
+    captions = list(re.finditer(r'^Table\s+\d+[.:]\s*[^\n]+', source, re.M))
+    for i, caption in enumerate(captions):
+        block = {'caption':caption[0],'index':caption.start(),'body':source[caption.end():captions[i+1].start() if i+1<len(captions) else len(source)]}
+        if _setting_axis_own_table_scope(source,block) and _setting_axis_perturbation_table(block,n):
+            return True
+    return False
+
+
+def _setting_axis_sample_size(table, raw_source):
+    if not _setting_axis_rows_safe(table,5) or len(table['rows']) != 4 or not re.fullmatch(r'每侧样本量[，,]\s*CIFAR-10\s+旋转\s+s=0\.1',_setting_axis_visible(table['header'][0])) or list(map(_setting_axis_visible,table['header'][1:])) != ['中位数高斯','三次核','窄窗口高斯','MMDAgg']:
+        return False
+    labels = [_setting_axis_visible(row[0]) for row in table['rows']]
+    if set(labels) != {'780','2500','10000','20000'} or len(set(labels)) != 4:
+        return False
+    source = _setting_axis_protected_source(re.sub(r'“(rotation|real pair)”',r'\1',raw_source))
+    if not _setting_axis_own_statement(source,r'We apply one known change to an independent sample, and test the two samples with each kernel configuration as a permutation test'):
+        return False
+    for caption in re.finditer(r'^A\.\d+ Power against sample size in vision\.[^\n]*$',source,re.M):
+        tail = source[caption.end():];boundary=re.search(r'^A\.\d+\s+[^\n]+$',tail,re.M)
+        block={'caption':caption[0],'index':caption.start(),'body':tail[:boundary.start()] if boundary else tail}
+        if not _setting_axis_own_table_scope(source,block,lambda line:_SETTING_AXIS_REVOKED.search(line.strip()) or re.search(r'^(?:If|Assuming|Suppose|Hypothetical|Not|Never|Other research|Previous (?:work|study)|Third[- ]party|第三方|假设|如果|\[quoted material\])',line.strip(),re.I)) or not re.search(r'Inception embeddings of CIFAR-10 are tested against a pool of 100,000100\{,\}000 DDPM samples\.',block['caption']) or not re.search(r'rotation is matched to the mean shift in 2-Wasserstein distance',block['caption']):
+            continue
+        lines=[line.strip() for line in block['body'].split('\n') if line.strip()]
+        headers=['Arm','Configuration','780780','2,5002{,}500','5,0005{,}000','10,00010{,}000','20,00020{,}000']
+        if lines[:len(headers)] != headers:
+            continue
+        cursor,rotation,valid=len(headers),{},True
+        for arm,configs in [('rotation',['median','cubic','window 0.050.05','MMDAgg']),('real pair',['median','cubic','window 0.050.05','MMDAgg']),('control',['median','cubic','window 0.050.05'])]:
+            if cursor >= len(lines) or lines[cursor] != arm:
+                valid=False;break
+            cursor+=1
+            for config in configs:
+                if cursor >= len(lines) or lines[cursor] != config:
+                    valid=False;break
+                cursor+=1;values=lines[cursor:cursor+5];cursor+=5
+                def bad(value,index):
+                    if value == 'n/a':
+                        return index in (0,1,2)
+                    match=re.fullmatch(r'(\d+)/(\d+)',value)
+                    return not match or int(match[2]) != [20,20,20,10,5][index] or int(match[1])>int(match[2])
+                if len(values)!=5 or any(bad(v,i) for i,v in enumerate(values)):
+                    valid=False;break
+                if arm=='rotation':rotation[config]=values
+            if not valid:break
+        if not valid or cursor>=len(lines):
+            continue
+        footer=lines[cursor];cursor+=1
+        if cursor!=len(lines) or not re.search(r'^Cells marked n/a were not run\.',footer) or not re.search(r'A mean shift of s=0\.1s\{=\}0\.1 is detected in every configuration at every size\.$',footer) or any(_SETTING_AXIS_REVOKED.search(s) for s in re.split(r'(?<=[.!?])\s+(?=[A-Z])',footer)):
+            continue
+        indexes={'780':0,'2500':1,'10000':3,'20000':4}
+        if all(_setting_axis_visible(row[i+1]) == ('未运行' if rotation[config][indexes[_setting_axis_visible(row[0])]]=='n/a' else rotation[config][indexes[_setting_axis_visible(row[0])]]) for row in table['rows'] for i,config in enumerate(['median','cubic','window 0.050.05','MMDAgg'])):
+            return True
+    return False
+
+
+def _source_backed_kernel_setting_axes(table, source):
+    if _source_evidence_extra_i(source,table):
+        return set()
+    return {0} if _setting_axis_perturbation(table,_setting_axis_protected_source(source)) or _setting_axis_sample_size(table,source) else set()
+
+
+def _setting_axis_observed_paragraph_scope(paragraph, result_scope):
+    position = result_scope.find(paragraph)
+    if position < 0 or result_scope.rfind(paragraph) != position:
+        return False
+    before,foreign=result_scope[:position],False
+    for part in (p.strip() for p in re.split(r'[。！？!?\n]',before)):
+        if _SETTING_AXIS_FOREIGN.search(part):foreign=True
+        if re.search(r'^(?:#{1,6}\s*)?(?:本研究|本文)(?:独立实验|实测结果|样本量扫描|实验结果|测量结果)[.:：]?$',part):foreign=False
+    if foreign or len(re.findall(r'```|~~~',before))%2 or any(len(before.split(q))%2==0 for q in ('"',"'",'`')) or any(len(re.findall('<'+tag+r'\b[^>]*>',before,re.I))>len(re.findall('</'+tag+r'\s*>',before,re.I)) for tag in ('blockquote','pre','code')) or any(before.rfind(op)>before.rfind(cl) for op,cl in [('“','”'),('‘','’'),('「','」'),('<blockquote>','</blockquote>'),('<pre>','</pre>'),('<code>','</code>')]):
+        return False
+    following=result_scope[position+len(paragraph):].lstrip()
+    return not re.search(r'^(?:(?:上述|以上|前述|该|此|这个)(?:样本量)?(?:扫描|比较|实验|结果|结论)[^。\n]{0,30}(?:撤回|撤销|不成立|从未|未(?:实际)?执行|没有(?:实际)?进行)|(?:This|That)\s+(?:(?:result|experiment|comparison)\s+)?(?:was |is )?(?:not|never|(?:only )?hypothetical|withdrawn)|We\s+(?:did not|do not|never)\s+(?:actually\s+)?(?:perform this experiment|compare these models)\b)',following,re.I)
+
+
+def _source_backed_sample_size_boundary(paragraph,table,source_text,result_scope=None):
+    text=str(paragraph or '');result_scope=text if result_scope is None else str(result_scope)
+    if _source_evidence_extra_i(text,source_text,result_scope) or not _setting_axis_sample_size(table,source_text) or not _setting_axis_observed_paragraph_scope(text,result_scope) or re.search(r'假设|假想|如果|若|可能|预计|计划|未来|第三方|他人|先前研究|相关工作|外部研究|引用|引述|转述|撤回|撤销|否认|未实测|未报告|没有进行|未(?:实际)?(?:进行|执行|实施)|从未|不是本研究|```|~~~|[“”「」"\'`]|(?:^|\n)\s*>|</?(?:blockquote|pre|code)\b|\b(?:if|assuming|hypothetical|not|never|previous work|other study|quoted|withdrawn|retracted)\b',text,re.I):
+        return False
+    return bool(re.search(r'中位数带宽[^。]{0,30}780\s*时\s*3/20[^。]{0,30}10000\s*起每次拒绝',text) and re.search(r'窄窗口与聚合检验[^。]{0,20}2500\s*起每次检出旋转',text) and re.search(r'三次核[^。]{0,20}10000\s*为\s*2/10[、，,]\s*20000\s*为\s*2/5',text) and re.search(r'(?:不据此建立高功效趋势|不能推广为三次核的高功效区间)',text))
+
+
 def _source_backed_identity_columns(table, source_text):
     raw_source = str(source_text or '')
     source = re.sub(r'\s+', '', raw_source)
@@ -3892,7 +4126,8 @@ def _source_backed_identity_columns(table, source_text):
             if all(has_pair(row) for row in table['rows']):
                 paired_audiogram_signals = True
                 break
-    columns = set()
+    columns = (_source_bound_loss_switch_columns(table, raw_source)
+               | _source_backed_kernel_setting_axes(table, raw_source))
     for index, header in enumerate(table['header']):
         if len(table['rows']) < 2:
             continue
@@ -4127,6 +4362,274 @@ def _has_source_backed_reward_switch_ablation(results, tables, source_text):
     return False
 
 
+def _source_bound_matched_acoustic_gap(results, tables, source_text):
+    """Replay the same source-owned matched comparison as the Node gate."""
+    if _source_evidence_extra_i(results, source_text) or re.search(
+            r'```|~~~|(?:^|\n)\s*>|<(?:blockquote|pre|code)\b', str(results or ''), re.I):
+        return False
+
+    def quoted(value):
+        return (value.rfind('“') > value.rfind('”')
+                or value.rfind('‘') > value.rfind('’')
+                or len(re.findall(r'(?<!\\)"', value)) % 2 == 1)
+
+    source = str(source_text or '')
+    pattern = (r'\b([A-Z][A-Za-z0-9_-]{1,40}) produces recognizable isolated coda-like sounds\s*'
+               r'(?:\[[0-9]+\])?\.\s*Yet its generated recordings remain distinguishable from natural codas in '
+               r'(one|two|three|four|five|six|seven|eight|nine|ten) of '
+               r'(one|two|three|four|five|six|seven|eight|nine|ten) acoustic descriptions, '
+               r'including after the strictest matching on measured recording properties '
+               r'\(Fig\.\s*[0-9]+; exact estimates in the Supplement\)\.\s*That matched comparison uses '
+               r'([1-9][0-9]*) generated clips and (one|two|three|four|five|six|seven|eight|nine|ten) '
+               r'independent natural reference groups\.')
+    cardinals = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+    for match in re.finditer(_source_evidence_pattern(pattern), source):
+        name, positive_word, total_word, clips, groups_word = match.groups()
+        positive, total, groups = map(cardinals.index, (positive_word, total_word, groups_word))
+        if (positive <= 0 or positive > total or groups < 2
+                or not _unquoted_observed_comparison(source, match.start(), match[0])):
+            continue
+        before = source[:match.start()]
+        prefix = before.split('\n')[-1]
+        previous = _normalize_local_evidence_heading(before[:before.rfind('\n')].rstrip(_JS_WHITESPACE).split('\n')[-1] if '\n' in before else '')
+        following = re.split(r'\n\s*\n', source[match.end():], maxsplit=1)[0]
+        revoked = (r'(?:(?:this|that|the (?:above|preceding|matched))\s+(?:comparison|result|experiment|test)'
+                   r'[^.!?]{0,100}\b(?:never|not\s+(?:actually\s+)?(?:performed|conducted|observed)|false|'
+                   r'incorrect|withdrawn|retracted)\b|(?:this|that)\s+(?:was|is)\s+(?:never|not|only hypothetical)\b|'
+                   r'we\s+(?:did|do|have|will)\s+not\s+(?:actually\s+)?(?:perform|conduct|run|observe)\s+'
+                   r'(?:this|that|the (?:above|preceding|matched))\s+(?:comparison|result|experiment|test)\b)')
+        fenced = sum(bool(re.search(r'^\s*(?:```|~~~)', line)) for line in before.split('\n')) % 2 == 1
+        html_start = max(before.rfind('</blockquote>'), before.rfind('</pre>'), before.rfind('</code>')) + 1
+        if (not _own_observed_source_scope(prefix + '\n' + match[0])
+                or re.search(r'[“”‘’"]|(?:^|\s)>', prefix) or quoted(before)
+                or re.fullmatch(_source_evidence_pattern(r'(?:(?:previous|prior|related|third[- ]party|other)\s+'
+                                  r'(?:work|research|study)|quoted statement|quotation|hypothetical example)[.:]?'), previous, re.I)
+                or fenced or re.search(_source_evidence_pattern(revoked), following, re.I)
+                or re.search(r'<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$', before[html_start:], re.I)):
+            continue
+        reported = False
+        for fragment in re.finditer(r'[^。；\n]+', str(results)):
+            sentence = fragment[0]
+            if not _unquoted_observed_comparison(results, fragment.start(), sentence):
+                continue
+            if quoted(str(results)[:fragment.start()]) or re.search(
+                    r'假设|如果|未来|计划|预计|可能|第三方|他人|先前研究|相关工作|引用|引述|转述|并非|并未|不是|'
+                    r'未曾|未(?:实际)?(?:观测|观察|测得|发现|报告|执行|进行|比较)|没有|尚未|否认|撤回|错误|[“”‘’"?？]', sentence):
+                continue
+            measured = re.search(r'([1-9][0-9]*)\s*个孤立生成片段在\s*([1-9][0-9]*)\s*种固定声学描述中有\s*'
+                                 r'([1-9][0-9]*)\s*种仍可与自然\s*coda\s*区分', sentence)
+            if measured and measured[1] == clips and int(measured[2]) == total and int(measured[3]) == positive:
+                reported = True
+                break
+        if not reported:
+            continue
+        for table in tables:
+            contrast = next((i for i, header in enumerate(table['header']) if str(header).strip(_JS_WHITESPACE) == '数据与对照'), -1)
+            count = next((i for i, header in enumerate(table['header']) if re.fullmatch(
+                r'可区分描述数\s*/\s*' + str(total), str(header).strip(_JS_WHITESPACE))), -1)
+            if contrast >= 0 and count >= 0 and any(
+                    str(row[0]).strip(_JS_WHITESPACE) == '自然与 ' + name
+                    and str(row[count]).strip(_JS_WHITESPACE) == str(positive)
+                    and re.fullmatch(clips + r'\s*个生成片段[，,]\s*' + str(groups)
+                                     + r'\s*个独立自然参照组[，,]\s*严格匹配', str(row[contrast]).strip(_JS_WHITESPACE))
+                    for row in table['rows']):
+                return True
+    return False
+
+
+def _unquoted_observed_comparison(text, index, body):
+    raw = str(text or '')
+    before = raw[:index]
+    prefix = before[before.rfind('\n') + 1:]
+    previous = _normalize_local_evidence_heading(before[:before.rfind('\n')].rstrip(_JS_WHITESPACE).split('\n')[-1])
+    quoted = (before.rfind('“') > before.rfind('”') or before.rfind('‘') > before.rfind('’')
+              or len(re.findall(r'(?<!\\)"', before)) % 2 == 1)
+    fenced = sum(bool(re.search(r'^\s*(?:```|~~~)', line)) for line in before.split('\n')) % 2 == 1
+    html_start = max(before.rfind('</blockquote>'), before.rfind('</pre>'), before.rfind('</code>')) + 1
+    continuation = re.sub(r'^[\s，,;.。；]+', '', raw[index + len(body):])[:500]
+    local = re.sub(r'(?<=[A-Za-z])’(?=[A-Za-z])', '', prefix + body)
+    return (not _source_evidence_extra_i(text, body) and not quoted and not fenced
+            and not re.search(r'[“”‘’"]|(?:^|\s)>', local)
+            and not re.search(r'<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$', before[html_start:], re.I)
+            and not re.fullmatch(_source_evidence_pattern(r'(?:(?:previous|prior|related|third[- ]party|other)\s+'
+                                 r'(?:work|research|study)|quoted statement|quotation|hypothetical example|'
+                                 r'引用|引述|转述|相关工作|先前研究|第三方|他人)[.:：]?'), previous, re.I)
+            and _own_observed_source_scope(previous)
+            and _own_observed_source_scope(prefix + '\n' + body)
+            and not re.search(r'(?:假定|设想|转述|引述|引用|否认|驳斥|未进行|未执行|未比较|未发现|没有|不成立|错误|[?？])', prefix + body)
+            and not re.search(_source_evidence_pattern(r'^(?:(?:this|that|the above)\s+'
+                              r'(?:comparisons?|results?|claims?|experiments?|ablations?|tests?)[^.!?]{0,80}(?:withdrawn|revoked|false|incorrect|'
+                              r'not (?:performed|observed))|(?:上述|以上|前述|该|此)(?:比较|结果|说法|结论|实验|消融)'
+                              r'[^。；\n]{0,30}(?:撤回|错误|不成立|未观测|未进行))'), continuation, re.I))
+
+
+def _source_bound_folded_objective_regression(results, tables, source_text):
+    source = str(source_text or '')
+    observed = (r'^Table\s+[IVXLCDM0-9]+ compares eight models that all route and meet timing on the same engine\. '
+                r'([A-Za-z][A-Za-z0-9_-]{1,40}) gives the lowest measured latency and energy:[^\n]{0,600}?'
+                r'Weighting the group-lasso by channel cycle cost does not improve this result\. '
+                r'([A-Za-z][A-Za-z0-9_-]{1,40}) skips[^\n]{0,350}?'
+                r'so the plain lasso performs better on all three measured outcomes in these runs\.')
+    for match in re.finditer(_source_evidence_pattern(observed), source, re.M):
+        plain, cycle = match.groups()
+        if plain == cycle or not _unquoted_observed_comparison(source, match.start(), match[0]):
+            continue
+        mapping = (r'(?<![A-Za-z0-9_-])' + re.escape(cycle)
+                   + r' learns per-channel widths and adds the cycle-weighted group-lasso[^\n]{0,250}?; '
+                   + re.escape(plain) + r' replaces cycle-weighted group-lasso with plain group-lasso[^.\n]*\.')
+        if not any(_unquoted_observed_comparison(source, definition.start(), definition[0])
+                   for definition in re.finditer(mapping, source)):
+            continue
+        if not any(_unquoted_observed_comparison(results, fragment.start(), fragment[0])
+                   and re.search(r'普通组稀疏在三个实测结果上都优于按通道周期加权的组稀疏', fragment[0])
+                   for fragment in re.finditer(r'[^。；\n]+', str(results))):
+            continue
+        for table in tables:
+            clean = lambda value: re.sub(r'[*_`$]', '', str(value or '')).strip(_JS_WHITESPACE)
+            find = lambda expression: [i for i, header in enumerate(table['header']) if re.fullmatch(expression, clean(header))]
+            identity, objective = find(r'构建'), find(r'训练目标')
+            time, energy, quality = find(r'帧时间\s*ms/帧\s*↓'), find(r'动态能耗\s*μJ/帧\s*↓'), find(r'PESQ\s*↑')
+            if any(len(columns) != 1 for columns in (identity, objective, time, energy, quality)):
+                continue
+            first = [row for row in table['rows'] if clean(row[identity[0]]) == plain]
+            second = [row for row in table['rows'] if clean(row[identity[0]]) == cycle]
+            if (len(first) != 1 or len(second) != 1 or clean(first[0][objective[0]]) != '存储加普通组稀疏'
+                    or clean(second[0][objective[0]]) != '存储加周期加权组稀疏'):
+                continue
+            scalar = lambda cell: float(clean(cell)) if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', clean(cell)) else math.nan
+            # Only corroborate the retained adverse conclusion. This is not a
+            # source-cell-value or publication qualification gate; never split
+            # bare HTML duplicates. Normal scientific checks are unchanged.
+            if (all(math.isfinite(scalar(first[0][column])) and math.isfinite(scalar(second[0][column]))
+                    for column in (time[0], energy[0], quality[0]))
+                    and scalar(first[0][time[0]]) < scalar(second[0][time[0]])
+                    and scalar(first[0][energy[0]]) < scalar(second[0][energy[0]])
+                    and scalar(first[0][quality[0]]) > scalar(second[0][quality[0]])):
+                return True
+    return False
+
+
+def _source_bound_deadline_f1_comparison(results, tables, source_text):
+    source = str(source_text or '')
+
+    def source_values(method, deadline, lookahead, dataset):
+        captions = list(re.finditer(_source_evidence_pattern(
+            r'^Table\s+[0-9]+: Accuracy at the deadline, on the primary truth of each set; all rows are our models\. '
+            r'Each cell gives the recording-level macro F1 \(%\)[^\n]*$'), source, re.M))
+        if len(captions) != 1 or not _unquoted_observed_comparison(source, captions[0].start(), captions[0][0]):
+            return None
+        prefix = source[:captions[0].start()]
+        start = prefix.rfind('\nDevelopment\nHeld-out\nSystem\n')
+        if start < 0 or captions[0].start() - start > 8000:
+            return None
+        lines = [line.strip(_JS_WHITESPACE) for line in prefix[start:].split('\n') if line.strip(_JS_WHITESPACE)]
+        row_pattern = re.escape(method) + r', D=' + deadline + r'(?:D=' + deadline + r')?\s*ms'
+        first_row = next((i for i, line in enumerate(lines) if re.fullmatch(_source_evidence_pattern(row_pattern), line)), -1)
+        headers = lines[3:first_row]
+        if first_row < 5 or len(headers) > 10 or len(set(headers)) != len(headers) or headers.count(dataset) != 1:
+            return None
+        width = len(headers)
+        second_row = first_row + 1 + width
+        third_row = second_row + 1 + width * 3
+        if (second_row >= len(lines) or lines[second_row] not in {
+                f'{method}, full length ({lookahead}\u2009ms lookahead)', f'{method}, full length ({lookahead} ms lookahead)'}
+                or third_row >= len(lines) or lines[third_row] != 'Harmonic BiCRNN, offline (whole recording)'
+                or len(lines) != third_row + 1 + width * 3):
+            return None
+        scalar = lambda value: value if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', value) else None
+        column = headers.index(dataset)
+        a, b = scalar(lines[first_row + 1 + column]), scalar(lines[second_row + 1 + column * 3])
+        if a is None or b is None or not all(
+                scalar(lines[first_row + 1 + i]) is not None
+                and scalar(lines[second_row + 1 + i * 3]) is not None
+                and scalar(lines[third_row + 1 + i * 3]) is not None
+                and re.fullmatch(r'\[.+,.+\]', lines[second_row + 3 + i * 3])
+                and re.fullmatch(r'\[.+,.+\]', lines[third_row + 3 + i * 3]) for i in range(width)):
+            return None
+        return a, b
+
+    observed = (r'Within ([A-Za-z][A-Za-z0-9_-]{1,40}), answering at ([1-9][0-9]*)\s*ms instead of with '
+                r'([1-9][0-9]*)\s*ms of lookahead costs ([0-9]+(?:\.[0-9]+)?) points on ([A-Za-z][A-Za-z0-9_-]{1,40})')
+    for match in re.finditer(_source_evidence_pattern(observed), source):
+        method, deadline, lookahead, delta, dataset = match.groups()
+        values = source_values(method, deadline, lookahead, dataset)
+        if (not values or not float(delta) > 0 or int(deadline) >= int(lookahead)
+                or not _unquoted_observed_comparison(source, match.start(), match[0])
+                or abs(float(values[1]) - float(values[0]) - float(delta)) >= 1e-9):
+            continue
+        comparison = (r'(?<![A-Za-z0-9_-])' + re.escape(method) + r'\s*' + deadline
+                      + r'\s*ms\s*相对自身整曲[^。；\n]{0,80}?(?<![A-Za-z0-9_-])' + re.escape(dataset)
+                      + r'\s*-' + re.escape(delta) + r'(?![0-9.])')
+        if not any(_unquoted_observed_comparison(results, fragment.start(), fragment[0])
+                   and re.search(_source_evidence_pattern(comparison), fragment[0])
+                   for fragment in re.finditer(r'[^。；\n]+', str(results))):
+            continue
+        for table in tables:
+            clean = lambda value: re.sub(r'[*_`]', '', str(value or '')).strip(_JS_WHITESPACE)
+            identity = [i for i, header in enumerate(table['header']) if clean(header) == '系统']
+            metric = [i for i, header in enumerate(table['header']) if clean(header) == dataset + ' 留出 ↑']
+            if len(identity) != 1 or len(metric) != 1:
+                continue
+            first = [row for row in table['rows'] if clean(row[identity[0]]) == f'{method} {deadline} ms']
+            second = [row for row in table['rows'] if clean(row[identity[0]]) == f'{method} 整曲 {lookahead} ms 前视']
+            if len(first) != 1 or len(second) != 1:
+                continue
+            def scalar(cell):
+                value = re.fullmatch(r'([0-9]+(?:\.[0-9]+)?)%', clean(cell))
+                return value[1] if value else None
+            a, b = scalar(first[0][metric[0]]), scalar(second[0][metric[0]])
+            if (a is not None and b is not None and a == values[0] and b == values[1]
+                    and float(a) < float(b) and abs(float(b) - float(a) - float(delta)) < 1e-9):
+                return True
+    return False
+
+
+def _source_bound_notation_roundtrip_regression(results, source_text):
+    # Exact own observed notation-loss ablation; no generic decline word gate.
+    source, report = str(source_text or ''), str(results or '')
+    def unquoted_at(text, index):
+        before = text[:index]
+        if (before.rfind('“') > before.rfind('”')
+                or before.rfind('‘') > before.rfind('’')
+                or len(re.findall(r'(?<!\\)"', before)) % 2):
+            return False
+        fenced = False
+        for line in before.split('\n'):
+            if re.search(r'^\s*(?:```|~~~)', line):
+                fenced = not fenced
+        start = max(before.rfind('</blockquote>'), before.rfind('</pre>'), before.rfind('</code>')) + 1
+        return not fenced and not re.search(r'<(?:blockquote|pre|code)\b[^>]*>[\s\S]*$', before[start:], re.I)
+    def scope_at(text, index, claim):
+        before = text[:index]
+        prefix = before.split('\n')[-1]
+        previous = _normalize_local_evidence_heading(before[:before.rfind('\n')].rstrip().split('\n')[-1] if '\n' in before else '')
+        return (unquoted_at(text, index)
+                and _own_observed_source_scope(prefix + '\n' + claim)
+                and not re.search(r'[“”‘’"]|(?:^|\s)>', prefix)
+                and not re.search(r'^(?:(?:previous|prior|related|third[- ]party|other)\s+(?:work|research|study)|quoted statement|quotation|hypothetical example|第三方研究|其他研究|相关工作|先前研究|假设|引用)[.:：]?$', previous, re.I))
+    def source_revoked(after):
+        return any(re.search(r'^\s*(?:(?:but|however)[, ]+)?(?:this|that|the (?:above|preceding))\s+(?:ablation|result|finding|comparison|experiment|claim)s?[^.!?\n]{0,100}\b(?:withdrawn|retracted|revoked|false|incorrect|not\s+(?:observed|performed|conducted|supported))\b', part, re.I)
+                   for part in re.split(r'(?<=[.!?])\s+|\n', after)[:2])
+    pattern = (r'The ablation confirms that notation matters: when scores are first converted to MIDI before tokenisation, MIDI-derived ([A-Za-z][A-Za-z0-9_-]{1,40}) models match the performance of their MIDI counterparts, demonstrating that the advantage of MusicXML lies in the notational content lost upon conversion to MIDI, not in the tokenisation\s+strategy alone\.')
+    for observed in re.finditer(pattern, source):
+        if (not _unquoted_observed_comparison(source, observed.start(), observed[0])
+                or not scope_at(source, observed.start(), observed[0]) or source_revoked(source[observed.end():])):
+            continue
+        adverse = (r'消融(?:将|把)同一(?:批)?乐谱先转\s*MIDI\s*再转回\s*MusicXML\s*后[，,]\s*' + re.escape(observed[1]) + r'\s*(?:模型)?\s*性能回落到\s*MIDI\s*水平[，,]\s*支持优势来自记谱内容而非分词技巧本身')
+        for match in re.finditer(adverse, report):
+            start = max(report.rfind('。', 0, match.start()), report.rfind('；', 0, match.start()), report.rfind('\n', 0, match.start())) + 1
+            ending = re.search(r'[。；\n]', report[match.start():])
+            sentence = report[start:match.start() + ending.start() if ending else len(report)]
+            if (not _unquoted_observed_comparison(report, start, sentence) or not scope_at(report, match.start(), sentence)
+                    or re.search(r'假设|假如|倘若|如果|(?:^|[，,\s])若|未来|计划|预计|可能|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|不是|未(?:能)?|没有|尚未|否认|反驳|撤回|撤销|错误(?:说法|结论)|[?？]', sentence)):
+                continue
+            following = [part for part in re.split(r'[。；\n]', report[match.end():]) if part.strip()][:2]
+            if any(re.search(r'^\s*(?:(?:但|然而)[，,]?\s*)?(?:上述|前述|该|此)(?:消融)?(?:结论|结果|比较|说法)[^。；\n]{0,40}(?:撤回|撤销|不成立|错误|未(?:实际)?(?:进行|观测)|没有(?:进行|观测))', part) for part in following):
+                continue
+            return True
+    return False
+
+
 def _validate_experiment_table_evidence_depth(
         analysis, document_type='', source_text=''):
     results = _extract_analysis_section(analysis, '实验结果')
@@ -4194,7 +4697,7 @@ def _validate_experiment_table_evidence_depth(
         after = next((
             paragraph for paragraph in after_candidates
             if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 50
-            and re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于', paragraph)
+            and (re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于', paragraph) or _source_backed_sample_size_boundary(paragraph, table, complete_source_text, results))
         ), '')
         if not before:
             return f'实验结果第 {index} 张表前缺少与上下文衔接的具体比较问题'
@@ -4292,7 +4795,7 @@ def _validate_experiment_table_evidence_depth(
         and all(re.search(r'distilled checkpoints[^\n]{0,140}(?<![0-9.])' + re.escape(number) + r'%[^\n]{0,140}scored worse on the bias benchmark than the original variants', source_text, re.I)
                 for number in re.findall(r'([0-9]+(?:\.[0-9]+)?)%', sentence))
         for sentence in re.split(r'[。；\n]', results))
-    result_has_negative = _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
+    result_has_negative = _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
