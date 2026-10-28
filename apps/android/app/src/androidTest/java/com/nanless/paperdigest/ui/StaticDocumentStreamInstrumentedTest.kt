@@ -118,4 +118,63 @@ class StaticDocumentStreamInstrumentedTest {
   println("PD_STATIC_STREAM_POSITION_AFTER "+actual.put("nativeY",afterNative).toString())
   assertEquals("原文B",actual.getString("identity"));assertTrue("old completion cannot reset new reading position in the same native pixel units",afterNative>=390)
  }
+
+ /** System accessibility must expose new native WebView content after the old view is released.
+  * Uses only UiAutomation's real tree; no JavaScript, direct provider getter, custom semantics,
+  * accessibility notifications, focus requests, extra frame or system-settings changes in this test.
+  * Default target Application initialization is outside the component fixture's isolation claim. */
+ @Test fun nativeAccessibilityLinksRemainReadableAfterLeavingAndRecreatingDocument(){
+  val visible=mutableStateOf(true);val generation=mutableIntStateOf(0)
+  val labels=listOf("原生可读链接一","原生可读链接二","原生可读链接三")
+  fun markup(revision:Int)="<h1>原生无障碍本地文档 $revision</h1>"+labels.joinToString(""){"<p><a href='#end'>$it $revision</a></p>"}+"<div style='height:1600px'></div><h2 id='end'>当前文档末尾 $revision</h2>"
+  val automation=instrument.uiAutomation
+  // UiAutomation is the observer used by this component test; never enable a system service.
+  compose.waitUntil(5000){var enabled=false;instrument.runOnMainSync{enabled=instrument.targetContext.getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.isEnabled==true};enabled}
+  fun physical(marker:String):WebView?=web(marker)?.takeIf{w->var current=false;instrument.runOnMainSync{val owner=w.tag as? StreamedHtmlDocument;current=w.isAttachedToWindow&&w.isShown&&w.hasWindowFocus()&&w.width>0&&w.height>0&&w.progress==100&&w.contentHeight>0&&owner!=null&&owner.mayNavigateWithin(w.url)&&!w.settings.javaScriptEnabled&&w.settings.blockNetworkLoads};current}
+  fun nativeLinks(diagnostic:JSONObject?=null):Map<String,Int>{
+   val root=automation.rootInActiveWindow?:return emptyMap()
+   val result=linkedMapOf<String,Int>();val childCounts=org.json.JSONArray();var visited=0
+   try{
+    if(root.packageName?.toString()!=instrument.targetContext.packageName)return emptyMap()
+    val window=root.windowId;diagnostic?.put("windowID",window)?.put("ownPackage",true)
+    fun visit(node:android.view.accessibility.AccessibilityNodeInfo,inWeb:Boolean){
+     check(++visited<=512){"bounded own accessibility tree exceeded"}
+     if(node.windowId!=window||node.packageName?.toString()!=instrument.targetContext.packageName)return
+     if(node.className?.toString()=="android.webkit.WebView")childCounts.put(node.childCount)
+     val webContent=inWeb||node.className?.toString()=="android.webkit.WebView"
+     if(webContent&&node.isVisibleToUser&&node.isClickable){
+      val text=node.text?.toString().orEmpty();val description=node.contentDescription?.toString().orEmpty()
+      for(label in labels.flatMap{listOf("$it 0","$it 1")})if(text==label||description==label)result[label]=(result[label]?:0)+1
+     }
+     for(i in 0 until node.childCount){val child=node.getChild(i)?:continue;try{visit(child,webContent)}finally{@Suppress("DEPRECATION") child.recycle()}}
+    }
+    visit(root,false);diagnostic?.put("visited",visited)?.put("webChildCounts",childCounts)?.put("fixedLabelCounts",JSONObject().apply{result.forEach{(label,count)->put(label,count)}})
+   }finally{@Suppress("DEPRECATION") root.recycle()}
+   return result
+  }
+  fun awaitNative(revision:Int):WebView {
+   var current:WebView?=null
+   compose.waitUntil(15000){
+    val candidate=physical("原生无障碍本地文档 $revision")
+    if(candidate==null)false else{val actual=nativeLinks();val complete=labels.all{actual["$it $revision"]==1}&&labels.none{actual.containsKey("$it ${1-revision}")};if(complete)current=candidate;complete}
+   }
+   return requireNotNull(current)
+  }
+  try{
+   compose.setContent{MaterialTheme{if(visible.value)key(generation.intValue){StaticDocument(markup(generation.intValue))}else Text("已离开原生无障碍文档")}}
+   val first=awaitNative(0)
+   compose.runOnIdle{visible.value=false};compose.onNodeWithText("已离开原生无障碍文档").assertIsDisplayed()
+   compose.waitUntil(5000){web("原生无障碍本地文档 0")==null}
+   compose.runOnIdle{generation.intValue=1;visible.value=true}
+   val second=awaitNative(1);assertNotSame("reopen must create a fresh real WebView",first,second)
+   instrument.runOnMainSync{assertFalse(second.settings.javaScriptEnabled);assertTrue(second.settings.blockNetworkLoads)}
+  }catch(failure:Throwable){
+   val diagnostic=JSONObject().put("generation",generation.intValue).put("originalFailureClass",failure.javaClass.simpleName)
+   runCatching{diagnostic.put("sameCurrentPhysicalReady",physical("原生无障碍本地文档 ${generation.intValue}")!=null)}.exceptionOrNull()?.let{failure.addSuppressed(it)}
+   for(fresh in listOf(false,true))try{val snapshot=JSONObject();if(fresh)check(automation.clearCache());nativeLinks(snapshot);diagnostic.put(if(fresh)"freshAfterPublicClearCache" else "originalCache",snapshot)}catch(observation:Throwable){failure.addSuppressed(observation);diagnostic.put(if(fresh)"freshErrorClass" else "originalCacheErrorClass",observation.javaClass.simpleName)}
+   println("PD_NATIVE_AX_REOPEN_DIAGNOSTIC "+diagnostic.toString())
+   throw failure
+  }finally{compose.runOnIdle{visible.value=false};compose.waitForIdle()}
+ }
+
 }

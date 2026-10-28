@@ -410,6 +410,16 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
  }
 }
 
+/** Register the real provider when this static document View joins its native window.
+ * No synthetic tree, focus transfer, notification, script or renderer-private API is used. */
+private class StaticDocumentWebView(context:android.content.Context):WebView(context) {
+ override fun onAttachedToWindow(){
+  super.onAttachedToWindow()
+  val accessibility=context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+  if(accessibility?.isEnabled==true)accessibilityNodeProvider
+ }
+}
+
 @Composable internal fun StaticDocument(body:String,fontSize:Int=18,initialScroll:Int=0,onScroll:(Int)->Unit={},images:AggregateImageAccess?=null,aggregateLink:AggregateLinkAction?=null,aggregateNonce:String?=null,aggregateCurrent:AggregateLinkCurrent?=null){
  val context=LocalContext.current
  val scrollValue=rememberUpdatedState(initialScroll);val scrollCallback=rememberUpdatedState(onScroll)
@@ -426,7 +436,7 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
   if(images!=null){require(head.contains("img-src data:;"));head=head.replace("img-src data:;","img-src ${images.cspImageSource};")}
   StreamedHtmlDocument(head,body,"</body></html>")
  }
- AndroidView(factory={WebView(it).apply {
+ AndroidView(factory={StaticDocumentWebView(it).apply {
   activeView.set(this)
   outlineProvider=android.view.ViewOutlineProvider.BOUNDS;clipToOutline=true
   settings.apply{javaScriptEnabled=false;allowFileAccess=false;allowContentAccess=false;blockNetworkLoads=true;domStorageEnabled=false;builtInZoomControls=true;displayZoomControls=false;if(android.os.Build.VERSION.SDK_INT>=33)setAlgorithmicDarkeningAllowed(false) else if(android.os.Build.VERSION.SDK_INT>=29)forceDark=android.webkit.WebSettings.FORCE_DARK_OFF}
