@@ -161,7 +161,7 @@ struct NativeTaskPage {
     static func make(_ input: NativeTaskInput) throws -> NativeTaskSnapshot {
         guard let jobs = input.jobs else { throw NativeTaskPresentationError.recordsUnavailable }
         var ids: [String: Int] = [:]; for job in jobs { if let id = identifier(job["id"]) { ids[id, default: 0] += 1 } }
-        let names = ["cloud.check": "检查坚果云连接", "cloud.upload": "云端完整备份", "cloud.list": "读取云端备份版本", "cloud.restore": "恢复云端研究空间", "library.sync": "同步网站目录", "aggregates.document": "读取网站汇总", "library.article": "读取图文导读", "library.downloadPDF": "下载原文", "pdf.open": "打开原文", "model.run": "个人解析", "model.check": "模型连接测试", "archive.materials": "准备归档材料", "zotero.archive": "存入 Zotero", "zotero.resume": "继续 Zotero 归档", "storage.prepare": "保存离线快照", "app.export": "导出研究"]
+        let names = ["cloud.check": "检查坚果云连接", "cloud.upload": "云端完整备份", "cloud.list": "读取云端备份版本", "cloud.restore": "恢复云端研究空间", "library.sync": "同步网站目录", "aggregates.document": "读取网站汇总", "library.article": "读取图文导读", "library.downloadPDF": "下载原文", "pdf.open": "打开原文", "model.run": "个人解析", "model.check": "模型连接测试", "archive.materials": "准备归档材料", "zotero.archive": "存入 Zotero", "zotero.resume": "继续 Zotero 归档", "zotero.status": "检查 Zotero 连接", "zotero.collections": "读取 Zotero 分类", "zotero.authorize": "申请 Zotero 存档许可", "zotero.checkAuthorization": "检查 Zotero 已保存许可", "storage.prepare": "保存离线快照", "app.export": "导出研究"]
         let statuses = ["running": "进行中", "queued": "等待中", "complete": "已完成", "partial": "部分完成", "failed": "失败", "interrupted": "上次运行中断", "cancelled": "已取消"]
         let terminal = Set(["complete", "partial", "failed", "interrupted", "cancelled"])
         let sessionIndex = input.sessions.map { sessions in Dictionary(grouping: sessions, by: { ($0["id"] as? String) ?? "" }) }
@@ -182,8 +182,10 @@ struct NativeTaskPage {
             let rawProgress = job["progress"] as? [String: Any] ?? [:]
             let progress: NativeTaskProgress?
             if let done = integer(rawProgress["completed"]), let total = integer(rawProgress["total"]), total > 0, done <= total { progress = .init(completed: done, total: total) } else { progress = nil }
-            let title = command == "library.sync" ? "同步网站目录" : command == "aggregates.document" ? (aggregateSource(job)?.title ?? "读取网站汇总") : (text(job["title"], limit: 512) ?? command.flatMap { names[$0] } ?? "原任务标题未记录")
-            let commandTitle = command.flatMap { names[$0] } ?? text(command) ?? "任务类型未记录"
+            let rawTitle = text(job["title"], limit: 512), knownTitle = command.flatMap { names[$0] }
+            let genericTitle = knownTitle != nil && (rawTitle == command || (command?.hasPrefix("zotero.") == true && rawTitle == "Zotero 操作"))
+            let title = command == "library.sync" ? "同步网站目录" : command == "aggregates.document" ? (aggregateSource(job)?.title ?? "读取网站汇总") : (genericTitle ? knownTitle! : rawTitle ?? knownTitle ?? "原任务标题未记录")
+            let commandTitle = knownTitle ?? text(command) ?? "任务类型未记录"
             let statusTitle = status.flatMap { statuses[$0] } ?? "原状态未识别"
             let relevant: [String: Any] = ["id": id ?? "", "paperID": paper ?? "", "command": command ?? "", "status": status ?? "", "unique": unique, "actions": actions.map(\.rawValue), "metadata": details]
             let bytes = try JSONSerialization.data(withJSONObject: relevant, options: [.sortedKeys])
