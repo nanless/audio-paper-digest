@@ -126,7 +126,25 @@ class PublishedCitationRepositoryTest {
   val real=f.repo.fetchPage(f.paper);val article=CatalogRepository.extractArticle(real.html,f.paper);val forged=PublishedCitationRepository.PublishedPage(real.html,real.sourceURL)
   val error=runCatching{f.repo.bindPage(f.paper,article,forged)}.exceptionOrNull();assertTrue(error is AppFailure);assertTrue(error!!.message!!.contains("凭证已失效"));assertTrue(f.directory.walkTopDown().none{it.isFile});f.repo.releasePage(real)
  }
- @Test fun syntheticCredentialBearingSourceIdentityIsRejectedBeforeAnyFileRequest()=fixture("arxiv-micla"){f->
+ @Test fun crossSecondOrdinaryMkdirKeepsTheSamePublishedDirectoryOwner()=fixture("arxiv-micla"){f->
+   val article=f.bound();Thread.sleep(1200);assertTrue(File(f.directory,"ordinary-cache-child").mkdir())
+   val raw=f.responses.getValue(f.address(PublishedCitationRepository.Format.BIBTEX));val original=f.repo.original(f.paper,article,PublishedCitationRepository.Format.BIBTEX)
+   assertArrayEquals(raw,original.bytes)
+   val reloaded=PublishedCitationRepository(f.directory){_,_->error("Cold exact cache must not fetch")}
+   assertArrayEquals(raw,reloaded.original(f.paper,article,PublishedCitationRepository.Format.BIBTEX,offline=true).bytes)
+  }
+  @Test fun exactValidOriginalFilesCopiedIntoANewPhysicalRootCannotBeAdoptedByOldOwner()=fixture("arxiv-micla"){f->
+   val article=f.bound();val original=f.repo.original(f.paper,article,PublishedCitationRepository.Format.BIBTEX)
+   val kept=File(f.parent,"RetainedExactCitationOriginals")
+   require(f.directory.canonicalFile==File(f.parent.canonicalFile,"Research/CitationOriginals"));require(kept.absoluteFile==File(f.parent.canonicalFile,"RetainedExactCitationOriginals")&&!kept.exists())
+   Files.move(f.directory.toPath(),kept.toPath());assertTrue(kept.copyRecursively(f.directory))
+   val rejected=runCatching{f.repo.original(f.paper,article,PublishedCitationRepository.Format.BIBTEX,offline=true)}.exceptionOrNull()
+   assertTrue(rejected is IllegalArgumentException);assertEquals("引用研究目录身份已变化，未在新目录认领旧保存记录",rejected?.message)
+   assertArrayEquals(original.bytes,File(kept,"raw/${original.sha256}.bib").readBytes())
+   val newOwner=PublishedCitationRepository(f.directory){_,_->error("Copied exact cache needs no request")}
+   assertArrayEquals(original.bytes,newOwner.original(f.paper,article,PublishedCitationRepository.Format.BIBTEX,offline=true).bytes)
+  }
+  @Test fun syntheticCredentialBearingSourceIdentityIsRejectedBeforeAnyFileRequest()=fixture("arxiv-micla"){f->
   val actual=CatalogRepository.extractArticle(PublishedUtf8.decode(f.responses.getValue(f.paper.blogURL)),f.paper);val address="https://fixture-user:fixture-password@arxiv.org/abs/2610.27491v1";val paper=f.paper.copy(sourceURL=address)
   val citation=actual.citation.copy().put("sourceUrl",address).put("absUrl",address);val article=actual.copy(sourceURL=address,citation=citation)
   val error=runCatching{f.repo.original(paper,article,PublishedCitationRepository.Format.BIBTEX)}.exceptionOrNull();assertTrue(error is IllegalArgumentException);assertTrue(error!!.message!!.contains("凭据"));assertTrue(f.calls.isEmpty());assertTrue(f.artifactFiles().isEmpty())

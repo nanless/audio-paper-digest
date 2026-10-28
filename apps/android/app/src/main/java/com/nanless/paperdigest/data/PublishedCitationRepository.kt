@@ -10,7 +10,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import java.io.File
+import java.lang.ref.WeakReference
 import java.net.URI
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.attribute.BasicFileAttributes
@@ -36,7 +39,8 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         fun metadata():JSONObject=record.copy()
     }
     private val root=makeRoot(researchDirectory)
-    private val identity=directoryIdentity(root)
+    private val anchor=anchorFor(root)
+    private val identity=anchor.identity
     private val mutex=locks.computeIfAbsent(root.absolutePath+"|"+identity){Mutex()}
     private val fetched=IdentityHashMap<PublishedPage,Fetched>()
 
@@ -152,7 +156,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
     }
     private fun binding(paper:Paper,article:Article,pageSHA:String)=JSONObject().put("paper",paperIdentity(paper)).put("articleRevisionSHA256",article.revisionSHA256).put("pageSHA256",pageSHA).put("pageURL",pageURL(paper.blogURL))
     private fun paperIdentity(paper:Paper)=JSONObject().put("id",paper.id).put("title",paper.title).put("blogURL",pageURL(paper.blogURL)).put("sourceKind",paper.sourceKind).put("identityStatus",paper.identityStatus).put("sourceURL",paper.sourceURL?:JSONObject.NULL).put("pdfURL",paper.pdfURL?:JSONObject.NULL).put("sourceVersion",paper.sourceVersion?:JSONObject.NULL)
-    private fun checkRoot(){require(root.absoluteFile==root.canonicalFile&&!Files.isSymbolicLink(root.toPath())&&directoryIdentity(root)==identity){"引用研究目录身份已变化，未在新目录认领旧保存记录"}}
+    private fun checkRoot(){require(anchor.pin.isOpen&&canonicalWithoutLinks(root)&&directoryIdentity(root)==identity){"引用研究目录身份已变化，未在新目录认领旧保存记录"}}
     private fun checked(folder:String,name:String):File {
         checkRoot();require(folder in listOf("pages","raw","receipts")&&name.matches(Regex("[a-f0-9]{64}\\.(?:html|json|bib|ris)")))
         val parent=File(root,folder);require(!Files.isSymbolicLink(parent.toPath()));check(parent.isDirectory||parent.mkdir());require(parent.absoluteFile==parent.canonicalFile)
@@ -167,7 +171,23 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
         private const val MAX_CITATION=1024*1024
         private val locks=ConcurrentHashMap<String,Mutex>()
         private fun makeRoot(input:File):File {require(!Files.isSymbolicLink(input.toPath())&&input.absoluteFile==input.canonicalFile);var p:File?=input;while(p!=null){require(!Files.isSymbolicLink(p.toPath()));p=p.parentFile};check(input.isDirectory||input.mkdirs());return input.canonicalFile}
-        private fun directoryIdentity(file:File):String {val a=Files.readAttributes(file.toPath(),BasicFileAttributes::class.java,LinkOption.NOFOLLOW_LINKS);require(a.isDirectory&&!a.isSymbolicLink);return (a.fileKey()?:throw AppFailure("citation","当前文件系统不能核验引用目录身份")).toString()+"|"+a.creationTime().toMillis()}
+        // Android NIO creationTime may be second-resolution mtime: our own mkdir must not retire this owner.
+        private fun directoryIdentity(file:File):String {val a=Files.readAttributes(file.toPath(),BasicFileAttributes::class.java,LinkOption.NOFOLLOW_LINKS);require(a.isDirectory&&!a.isSymbolicLink);return (a.fileKey()?:throw AppFailure("citation","当前文件系统不能核验引用目录身份")).toString()}
+        private fun canonicalWithoutLinks(file:File):Boolean {if(file.absoluteFile!=file.canonicalFile)return false;var p:File?=file;while(p!=null){if(Files.isSymbolicLink(p.toPath()))return false;p=p.parentFile};return true}
+        private class RootAnchor(val identity:String,val pin:FileChannel)
+        // Weak owners share one read-only directory pin across catalog reloads, never a Root/Context.
+        // Keeping the old inode open prevents delete/recreate from recycling it into this live identity.
+        private val anchors=ConcurrentHashMap<String,WeakReference<RootAnchor>>()
+        private fun anchorFor(root:File):RootAnchor=synchronized(anchors){
+            require(canonicalWithoutLinks(root)){"引用研究目录身份已变化，未在新目录认领旧保存记录"}
+            val before=directoryIdentity(root)
+            anchors[root.absolutePath]?.get()?.takeIf{it.identity==before&&it.pin.isOpen}?.let{return@synchronized it}
+            val pin=try{FileChannel.open(root.toPath(),StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS)}catch(error:Exception){throw AppFailure("citation","当前文件系统不能固定引用目录身份，未读取引用材料").apply{initCause(error)}}
+            try{
+                require(canonicalWithoutLinks(root)&&directoryIdentity(root)==before){"引用研究目录身份已变化，未在新目录认领旧保存记录"}
+                RootAnchor(before,pin).also{anchors[root.absolutePath]=WeakReference(it)}
+            }catch(error:Throwable){try{pin.close()}catch(close:Throwable){error.addSuppressed(close)};throw error}
+        }
         private fun validSHA(value:String)=value.matches(Regex("[a-f0-9]{64}"))
         private fun strictCount(value:JSONObject,key:String):Long {val n=value.get(key);require(n is Number&&n.toDouble().isFinite()&&n.toDouble()==n.toLong().toDouble()&&n.toLong()>0);return n.toLong()}
         private fun normalize(value:String)=value.replace(Regex("\\s+")," ").trim()
