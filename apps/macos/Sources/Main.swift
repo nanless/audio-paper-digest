@@ -482,7 +482,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         let id=UUID();lastSyncAttempt=Date()
         let task=Task{@MainActor in
             defer{if self.catalogSyncFlight?.id==id{self.catalogSyncFlight=nil}}
-            return try await self.runJob("library.sync",payload:payload){notify in try await self.library.handle(command:"library.sync",payload:payload,progress:notify)}
+            let result=try await self.runJob("library.sync",payload:payload){notify in try await self.library.handle(command:"library.sync",payload:payload,progress:notify)}
+            self.emit("library.changed")
+            return result
         }
         catalogSyncFlight=(id,task)
         return try await task.value
@@ -492,7 +494,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         lastSyncAttempt=Date()
         Task{
             guard catalogSyncFlight==nil else{return}
-            do{_=try await dispatch("library.sync",payload:[:]);emit("library.changed")}catch{emit("app.error",["message":error.localizedDescription])}
+            do{_=try await dispatch("library.sync",payload:[:])}catch{emit("app.error",["message":error.localizedDescription])}
         }
     }
     @objc func openSettings(){showSettingsWindow()}

@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import WebKit
 import CryptoKit
 
 private actor CatalogHeldTransport {
@@ -25,13 +27,20 @@ private actor CatalogHeldTransport {
 
 @main struct CatalogSchedulingTests {
     @MainActor static func main()async {
+        _=NSApplication.shared;NSApp.setActivationPolicy(.prohibited)
+        let receiver=WKWebView(frame:.zero)
+        receiver.loadHTMLString("<html><body><script>window.catalogChanges=0;window.addEventListener('library.changed',()=>window.catalogChanges++);window.catalogProbeReady=true;</script></body></html>",baseURL:nil)
+        var ready=false
+        for _ in 0..<500{if (try? await receiver.evaluateJavaScript("window.catalogProbeReady===true")) as? Bool==true{ready=true;break};try? await Task.sleep(nanoseconds:10_000_000)}
+        guard ready else{print("CatalogScheduling receiver did not initialize");exit(1)}
         var reports:[[String:Any]]=[];var failures=0;var cleanupComplete=true
-        for mode in ["wake","timer","automatic-then-manual","manual-then-manual"] {
+        for mode in ["settings-only","wake","timer","automatic-then-manual","manual-then-manual"] {
             let root=FileManager.default.temporaryDirectory.appendingPathComponent("CatalogScheduling-"+UUID().uuidString)
             var app:PaperDigestApp?;let gate=try! CatalogHeldTransport();var manual:Task<[String:Any],Error>?;var follower:Task<[String:Any],Error>?
             do {
                 try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
-                let current=PaperDigestApp();app=current;current.directory=root;current.store=try DesktopStore(directory:root)
+                let current=PaperDigestApp();app=current;current.directory=root;current.store=try DesktopStore(directory:root);current.web=receiver
+                _=try await receiver.evaluateJavaScript("window.catalogChanges=0")
                 current.library=try LibraryService(dataDirectory:root,siteBaseURL:URL(string:"https://fixture.example/blog/")!,transport:{url,limit in try await gate.read(url,limit)})
                 current.model=ModelService(directory:root,store:current.store,keyProvider:{throw DesktopError.message("Synthetic catalog test forbids credentials")})
                 if mode=="automatic-then-manual"{current.syncNow()}else{manual=Task{@MainActor in try await current.dispatch("library.sync",payload:[:])}}
@@ -39,7 +48,7 @@ private actor CatalogHeldTransport {
                 guard await gate.started else{throw DesktopError.message("Synthetic transport not entered")}
                 let recordedAtManualStart=current.lastSyncAttempt>Date.distantPast
                 let initialIDs=Set(current.jobs.keys)
-                if mode=="wake"{current.didWake()}else if mode=="timer"{current.syncNow()}else{follower=Task{@MainActor in try await current.dispatch("library.sync",payload:[:])}}
+                if mode=="wake"{current.didWake()}else if mode=="timer"{current.syncNow()}else if mode != "settings-only"{follower=Task{@MainActor in try await current.dispatch("library.sync",payload:[:])}}
                 // A bounded opportunity for the actual unawaited native callback task to start.
                 for _ in 0..<100{if current.jobs.count>initialIDs.count{break};try await Task.sleep(nanoseconds:2_000_000)}
                 let during=current.jobs.count;let automatic=Set(current.jobs.keys).subtracting(initialIDs)
@@ -49,8 +58,10 @@ private actor CatalogHeldTransport {
                 do{if let manual{_=try await manual.value};if let follower{_=try await follower.value};manualCompleted=true}catch{}
                 for _ in 0..<500{if current.jobs.isEmpty{break};try await Task.sleep(nanoseconds:2_000_000)}
                 let rows=(current.store.value["jobs"] as? [[String:Any]] ?? []).filter{$0["command"] as? String=="library.sync"}
-                let passed=recordedAtManualStart && during==1 && rows.count==1 && manualCompleted && current.jobs.isEmpty
-                reports.append(["case":mode,"manualAttemptRecorded":recordedAtManualStart,"activeJobsAfterAutomaticCallback":during,"catalogJobRows":rows.count,"transportCalls":await gate.calls,"manualCompleted":manualCompleted,"drained":current.jobs.isEmpty,"passed":passed])
+                let changes=(try await receiver.evaluateJavaScript("window.catalogChanges")) as? Int ?? -1
+                let fresh=try await current.library.handle(command:"library.list",payload:["query":"明确合成目录夹具"])
+                let passed=recordedAtManualStart && during==1 && rows.count==1 && manualCompleted && current.jobs.isEmpty && changes==1 && fresh["total"] as? Int==1
+                reports.append(["case":mode,"manualAttemptRecorded":recordedAtManualStart,"activeJobsAfterAutomaticCallback":during,"catalogJobRows":rows.count,"transportCalls":await gate.calls,"manualCompleted":manualCompleted,"libraryChangedEvents":changes,"freshQueryMatches":fresh["total"] ?? -1,"drained":current.jobs.isEmpty,"passed":passed])
                 if !passed{failures+=1}
             }catch{failures+=1;reports.append(["case":mode,"passed":false,"fixedError":"fixture-or-execution-failed"])}
             await gate.release()
@@ -68,7 +79,7 @@ private actor CatalogHeldTransport {
             do{try FileManager.default.removeItem(at:root)}catch{cleanupComplete=false}
         }
         if !cleanupComplete{failures+=1}
-        let result:[String:Any]=["cleanupComplete":cleanupComplete,"scope":"Actual PaperDigestApp dispatch/didWake/syncNow with temporary store and held LibraryService transport; no app startup/windows/network/Keychain/provider/whole-machine sleep", "cases":reports,"failures":failures]
+        let result:[String:Any]=["cleanupComplete":cleanupComplete,"scope":"Actual PaperDigestApp dispatch/didWake/syncNow with temporary store and held LibraryService transport; one offscreen real WK event receiver; no app startup/windows/network/Keychain/provider/whole-machine sleep", "cases":reports,"failures":failures]
         if let data=try?JSONSerialization.data(withJSONObject:result,options:.sortedKeys),let text=String(data:data,encoding:.utf8){print(text)}
         print("CatalogScheduling RESULT \(reports.count-failures) passed / \(failures) failed")
         if failures>0{exit(1)}

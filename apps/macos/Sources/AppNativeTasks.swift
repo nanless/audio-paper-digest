@@ -86,7 +86,7 @@ extension PaperDigestApp {
         case .openCloud:
             showSettingsWindow(initialPane:"cloud");return .opened
         case .resync:
-            _=try await dispatch("library.sync",payload:[:]);emit("library.changed");return .requested
+            _=try await dispatch("library.sync",payload:[:]);return .requested
         case .openSaved:
             guard let paperID=lease.paperID,let view=web else{throw NativeTaskPresentationError.stale}
             let result=try await view.callAsyncJavaScript("return typeof window.paperDigestNativeTasksOpenSaved==='function' ? await window.paperDigestNativeTasksOpenSaved(nonce,sequence,paperID) : false",arguments:["nonce":coordinator.nonceForDisplay,"sequence":coordinator.highestSequence,"paperID":paperID],in:nil,contentWorld:.page)
