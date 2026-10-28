@@ -7,6 +7,7 @@ import android.util.SparseArray
 import android.view.View
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
@@ -25,6 +26,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.os.bundleOf
 import androidx.fragment.compose.AndroidFragment
@@ -161,7 +163,7 @@ fun PdfReaderPane(document: PdfDocumentRef, page: Int, onPageChanged: (Int)->Uni
         }
     }
         if(compactControls&&compatibilitySearch)AlertDialog(onDismissRequest={closeSearch()},title={Text("查找 PDF 原文")},text={Column(Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState())){searchControls(false)}},confirmButton={TextButton(enabled=!searching,onClick={closeSearch()}){Text("关闭查找")}})
-        if(jumpOpen)AlertDialog(onDismissRequest={jumpOpen=false},title={Text("跳转到原文物理页")},text={Column(Modifier.heightIn(max=240.dp).verticalScroll(rememberScrollState())){OutlinedTextField(pageInput,{pageInput=it.filter(Char::isDigit).take(5);jumpError=null},singleLine=true,label={Text("页码（1–${document.pageCount}）")},isError=jumpError!=null);jumpError?.let{Text(it,color=MaterialTheme.colorScheme.error)}}},confirmButton={TextButton(onClick={val target=pageInput.toIntOrNull();if(target!=null&&target in 1..document.pageCount){navigate(target);jumpOpen=false}else jumpError="页码须为1–${document.pageCount}"}){Text("跳转")}},dismissButton={TextButton(onClick={jumpOpen=false}){Text("取消")}})
+        if(jumpOpen)AlertDialog(onDismissRequest={jumpOpen=false},title={Text("跳转到原文物理页")},text={Column(Modifier.heightIn(max=240.dp).verticalScroll(rememberScrollState())){OutlinedTextField(pageInput,{pageInput=it.filter(Char::isDigit).take(5);jumpError=null},singleLine=true,keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number),label={Text("页码（1–${document.pageCount}）")},isError=jumpError!=null);jumpError?.let{Text(it,color=MaterialTheme.colorScheme.error)}}},confirmButton={TextButton(onClick={val target=pageInput.toIntOrNull();if(target!=null&&target in 1..document.pageCount){navigate(target);jumpOpen=false}else jumpError="页码须为1–${document.pageCount}"}){Text("跳转")}},dismissButton={TextButton(onClick={jumpOpen=false}){Text("取消")}})
         if(showFailure&&failure!=null)AlertDialog(onDismissRequest={showFailure=false},title={Text("原文操作提示")},text={Column(Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState())){Text(failure.orEmpty())}},confirmButton={TextButton(onClick={showFailure=false}){Text("关闭")}})
     }
     textPage?.let{p->
