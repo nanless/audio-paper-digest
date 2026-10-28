@@ -2900,9 +2900,51 @@ function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null)
     }) || hasSourceMeasuredLossComparison(values);
 }
 
+// Selection accuracy is an observed outcome, not a GPU/batch-size setting.
+// Keep its numerator, held-out pool and hardware in the same source statement;
+// a metric mentioned elsewhere must not lend observations to a planned test.
+function sourceMeasuredPlannerSelection(sourceText) {
+    const lines = String(sourceText || '').split('\n');
+    const result = /^(?:Our|The frozen) (?:planner|selector) uniquely selected the measured fastest (?:design|configuration) in ([1-9]\d*)\/([1-9]\d*) held-out model-batch cases\.\s+This establishes selection accuracy within the declared validation pools across the tested workloads on ([A-Z][A-Za-z0-9 -]{1,45})\./u;
+    for (let index = 0; index < lines.length; index++) {
+        const match = result.exec(lines[index].trim());
+        if (!match || ![match[1], match[2]].every(value => Number.isSafeInteger(Number(value)))
+            || Number(match[1]) > Number(match[2])
+            || !/[A-Z][A-Za-z]*\d/u.test(match[3])) continue;
+        const before = lines.slice(0, index).filter(line => line.trim()).at(-1) || '';
+        const scope = before + '\n' + lines[index];
+        const start = lines.slice(0, index).join('\n').length + (index ? 1 : 0)
+            + lines[index].indexOf(match[0]);
+        const after = adjacentSourceStatementAfter(sourceText,
+            lines.slice(0, index + 1).join('\n').length);
+        if (!unquotedObservedComparison(sourceText, start, lines[index].trim())
+            || /\b(?:assuming|predicted|expected|planned|would|could|quoted|quotation|prior|earlier|third[- ]party|fabricated|incorrect|retracted)\b|\b(?:according\s+to|reported\s+by|et\s+al)\b|\b(?:did|do|does)\s+not\s+(?:measure|observe|report|select|evaluate)\b|[“”"‘’`]|(?:^|\n)\s*~/iu.test(scope)
+            || /\b(?:these?|those|this|that)\s+(?:results?|claims?|measurements?|experiments?)\b[^.!?]{0,80}\b(?:not measured|not observed|withdrawn|revoked|retracted|false|incorrect)\b/iu.test(lines[index].slice(match[0].length) + ' ' + after)) continue;
+        return { selected: match[1], cases: match[2], hardware: match[3] };
+    }
+    return null;
+}
+
+function sourceBoundPlannerSelectionResult(sentence, summary, sourceText) {
+    const source = sourceMeasuredPlannerSelection(sourceText);
+    const preceding = String(summary).slice(0, String(summary).indexOf(sentence))
+        .split(/[。！？!?\n]/u).filter(value => value.trim()).at(-1) || '';
+    if (!source) return false;
+    const hardware = source.hardware.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const hardwareSetting = new RegExp(`^(?:在|于)[ \\t]*${hardware}[ \\t]*上(?:[A-Za-z0-9._ -]{1,50}批量[1-9]\\d*时|(?:实测|评测|测试)(?=[，,：:]|$))`, 'u');
+    if (!hardwareSetting.test(preceding.trim())
+        || /(?:未|没有|并非|不是|不曾|并不|假定|假设|假想|如果|预计|预期|设想|可能|例示|示例|例子|撤回|他人|第三方|引用|引述|转述|先前|相关工作)/u.test(preceding)
+        || !unquotedObservedComparison(summary, String(summary).indexOf(sentence), sentence)
+        || /(?:假定|假如|若|可能|预计|预期|未来|计划|引用|引述|转述|讨论|第三方|未|没有|不曾|并不|错误|撤回)|[“”"‘’]|\b(?:assuming|predicted|quoted|prior|earlier|third[- ]party)\b/iu.test(sentence)) return false;
+    const result = /(?:冻结后的|本文的|本研究的)规划器在已声明验证池([1-9]\d*)个模型(?:与|和)批量组合中([1-9]\d*)\/([1-9]\d*)选中已测最快设计/u.exec(sentence);
+    return Boolean(result && result[1] === source.cases
+        && result[2] === source.selected && result[3] === source.cases);
+}
+
 function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
     const generic = classifyGenericSourceQuantitativeEvidence(sourceText, sentences);
-    return generic === true || sourceSoftwareFunctionalValidationResult(sourceText) ? true : generic;
+    return generic === true || sourceSoftwareFunctionalValidationResult(sourceText)
+        || sourceMeasuredPlannerSelection(sourceText) ? true : generic;
 }
 
 function stripDuplicatedLineFootnoteMarkers(text) {
@@ -3278,6 +3320,7 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
         const retrievalComparison = hasSourceBoundTextVideoComparison(rawSentence, sourceText,
             rawSentences.slice(0, sentenceIndex).join('\n'), rawSentences.slice(sentenceIndex + 1).find(part => part.trim()) || '');
         const bayesianGroupResult = hasSourceBackedBayesianGroupResult(sentence, sourceText);
+        const plannerSelection = sourceBoundPlannerSelectionResult(sentence, text, sourceText);
         // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
         // 不能顶替缺失的结果指标。
         const metricText = sentence.replace(/(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))/giu, '');
@@ -3299,11 +3342,11 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(admittedMetricText)
             || !/(?:假设|假想|如果|预计|预期|可能|计划|未来|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|尚未|未报告|否认|撤回|不成立|错误说法)|\b(?:hypothetical|assuming|if|planned|quoted|third[- ]party|not reported)\b/iu.test(sentence)
                 && CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(sentence)
-            || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult || correctionRates[sentenceIndex]?.metric
+            || hasCoreSummaryStatisticalResult(metricText) || bayesianGroupResult || plannerSelection || correctionRates[sentenceIndex]?.metric
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
-            && (hasCoreSummaryComparisonDirection(sentence, numbers, sourceText) || correctionRates[sentenceIndex]?.direction || retrievalComparison));
+            && (hasCoreSummaryComparisonDirection(sentence, numbers, sourceText) || plannerSelection || correctionRates[sentenceIndex]?.direction || retrievalComparison));
         // 会议原文常把具体划分写成“AliMeeting远场集”或“VoxAngeles未见语言集”，
         // 这算真实的评测设置，尽管里面既没有“数据集”三个字，也没有
         // `test/benchmark` 这样的英文词。只接受带明确设置后缀的拉丁文命名标识；

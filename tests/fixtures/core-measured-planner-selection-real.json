@@ -1,0 +1,42 @@
+{
+  "description": "Exact public-source excerpt, not the complete sealed source; three actual paid core summaries are unchanged. Source excerpt is sufficient to reproduce the old false-unavailable issue and the measured-selection fix.",
+  "paperId": "2610.35336",
+  "sourceExcerpt": "VI-B Selection accuracy on held-out cases\nThe frozen planner uniquely selected the measured fastest design in 13/13 held-out model-batch cases. This establishes selection accuracy within the declared validation pools across the tested workloads on H100 NVL. It does not establish optimality over unmeasured compositions or transfer to other GPU architectures.",
+  "sourceExcerptSha256": "58dbb5dee73d4b12450c3be9f143ba3f2a6f06dcc186e3c5407dd70083d86eba",
+  "fullSourceSha256": "3d9c4e49c108da5bab945d5fe6dbb27c411fb7e1ff68dbd8c3fa1b5ad7c035b4",
+  "sourceExcerptLocation": {
+    "originalFile": "source.txt",
+    "sourceVersion": "2610.35336v1",
+    "section": "VI-B Selection accuracy on held-out cases",
+    "startLine": 363,
+    "endLine": 364,
+    "startByte": 33892,
+    "endByteExclusive": 34251,
+    "lineNumbers": "1-based inclusive",
+    "byteOffsets": "0-based UTF-8, end exclusive; excludes terminating newline"
+  },
+  "paid": [
+    {
+      "id": "ec258cb4-aeb9-4b24-bc69-2a913338dc2f",
+      "at": "2026-10-28T08:02:08.873Z",
+      "rawResponse": "## 核心摘要\n\n流式语音合成与大语言模型推理按一次预填充加多步自回归生成分批发布结果，输出对应首个可发布的音频块或首个词元，难点在于不同阶段计算形状与驻留需求不同，融合边界决定共享的启动配置、线程块占用时间和固定开销分摊。论文把有序阶段划分为连续区域并为每个区域选择常规执行或常驻大内核，再配以串行或生产者与消费者并行的共享策略，最优答案在不同模型与批量下为零至四个大内核。边界规划器先用常规图画像构造区域图并枚举候选组合，再用分块图估计各区域在不同后端与线程块预算下的服务时间形成服务表，然后把候选组合展开为事件图并仿真到首次发布时刻，用最低预测分选择组合，全程不端到端实测候选设计。在H100 NVL上NH-TTS批量32时，选出的三巨内核重叠设计首音频发布时间比常规执行早4.05倍，比单巨内核设计早21.4%，该排序在批量64时为47.4 ms对61.0 ms对221.5 ms、在批量1时为27.5 ms对32.7 ms对73.0 ms。冻结后的规划器在已声明验证池13个模型与批量组合中13/13选中已测最快设计，常规与单双巨内核预测误差在5%以内而三巨内核被高估6%至22%仍不改变排序。规划器输入采集成本为分钟级，NH-TTS核基准耗时4.6 GPU-min，Qwen3-TTS四个批量合计耗时15.9 GPU-min，该口径仅为输入采集成本而非完整训练或部署费用。该结论限于三模型三框架已实现验证池与H100 NVL硬件，不证明未实现组合最优或跨GPU迁移。\n",
+      "outputTextSha256": "81cb40f3555e3120435094bd451a62196eeb9ba3cbc8aed8a73d66f3bd27a631",
+      "responseFileSha256": "66b30ac12dd115ba6312b115f55f5eddd5c380d25ce529955be14a050a1636f8"
+    },
+    {
+      "id": "13385fe5-4d2a-4d52-a6c7-12e406d0c8d9",
+      "at": "2026-10-28T08:02:24.727Z",
+      "rawResponse": "## 核心摘要\n\n流式语音合成与大语言模型推理按一次预填充加多步自回归生成分批发布结果，输出对应首个可发布的音频块或首个词元，难点在于不同阶段计算形状与驻留需求不同，融合边界决定共享的启动配置、线程块占用时间和固定开销分摊。论文把有序阶段划分为连续区域并为每个区域选择常规执行或常驻大内核，再配以串行或生产者与消费者并行的共享策略，最优答案在不同模型与批量下为零至四个大内核。边界规划器先用常规图画像构造区域图并枚举候选组合，再用分块图估计各区域在不同后端与线程块预算下的服务时间形成服务表，然后把候选组合展开为事件图并仿真到首次发布时刻，用最低预测分选择组合，全程不端到端实测候选设计。在H100 NVL上NH-TTS批量32时，选出的三巨内核重叠设计首音频发布时间比常规执行早4.05倍，比单巨内核设计早21.4%，该排序在批量64时为47.4 ms对61.0 ms对221.5 ms、在批量1时为27.5 ms对32.7 ms对73.0 ms。冻结后的规划器在已声明验证池13个模型与批量组合中13/13选中已测最快设计，常规与单双巨内核预测误差在5%以内而三巨内核被高估6%至22%仍不改变排序。规划器输入采集成本为分钟级，NH-TTS核基准耗时4.6 GPU-min，Qwen3-TTS四个批量合计耗时15.9 GPU-min，该口径仅为输入采集成本而非完整训练或部署费用。该结论限于三模型三框架已实现验证池与H100 NVL硬件，不证明未实现组合最优或跨GPU迁移。\n",
+      "outputTextSha256": "81cb40f3555e3120435094bd451a62196eeb9ba3cbc8aed8a73d66f3bd27a631",
+      "responseFileSha256": "143d5c11652f2b2b877c6a8cba02f955b07604a9c3b7b1a25a85c8729c8b9474"
+    },
+    {
+      "id": "8a55488e-a765-46fd-aa63-75962c6bb87b",
+      "at": "2026-10-28T08:02:37.633Z",
+      "rawResponse": "## 核心摘要\n\n流式语音合成与大语言模型推理按一次预填充加多步自回归生成分批发布结果，输出对应首个可发布的音频块或首个词元，难点在于不同阶段计算形状与驻留需求不同，融合边界决定共享的启动配置、线程块占用时间和固定开销分摊。论文把有序阶段划分为连续区域并为每个区域选择常规执行或常驻大内核，再配以串行或生产者与消费者并行的共享策略，最优答案在不同模型与批量下为零至四个大内核。边界规划器先用常规图画像构造区域图并枚举候选组合，再用分块图估计各区域在不同后端与线程块预算下的服务时间形成服务表，然后把候选组合展开为事件图并仿真到首次发布时刻，用最低预测分选择组合，全程不端到端实测候选设计。在H100 NVL上NH-TTS批量32时，选出的三巨内核重叠设计首音频发布时间比常规执行早4.05倍，比单巨内核设计早21.4%，该排序在批量64时为47.4 ms对61.0 ms对221.5 ms、在批量1时为27.5 ms对32.7 ms对73.0 ms。冻结后的规划器在已声明验证池13个模型与批量组合中13/13选中已测最快设计，常规与单双巨内核预测误差在5%以内而三巨内核被高估6%至22%仍不改变排序。规划器输入采集成本为分钟级，NH-TTS核基准耗时4.6 GPU-min，Qwen3-TTS四个批量合计耗时15.9 GPU-min，该口径仅为输入采集成本而非完整训练或部署费用。该结论限于三模型三框架已实现验证池与H100 NVL硬件，不证明未实现组合最优或跨GPU迁移。\n",
+      "outputTextSha256": "81cb40f3555e3120435094bd451a62196eeb9ba3cbc8aed8a73d66f3bd27a631",
+      "responseFileSha256": "61eabc66b110d9ca711320801466130b9db39851bf17a41bd2afefd64d34d42c"
+    }
+  ],
+  "oldUnavailableResponse": "## 核心摘要\n流式语音合成与大语言模型推理按一次预填充加多步自回归生成推进，输出对应首个可发布的音频块或首个词元，不同阶段计算形状与驻留需求不同使融合边界成为性能选择。每次切割决定哪些阶段共享同一启动配置、线程块被占用多久以及各阶段如何共享图形处理器，选错组合会导致发布等待延长。论文把有序阶段划分为连续区域并为每个区域选择常规执行或常驻大内核，常驻大内核指线程块常驻在图形处理器上并直接交接任务的融合大内核，再为区域间配置串行或生产者与消费者并行的共享策略。边界规划器先利用常规图画像构造区域图并列举受支持的组合，前一步的区域划分与候选约束直接决定后一步可估计的范围。其随后通过分块图估计各区域在不同后端与线程块预算下的服务时间，并显式建模去除屏障与权重预取带来的变化，该服务表成为事件仿真的输入。规划器把候选组合展开为事件图并仿真到首次发布时刻，用最低预测分选择组合，其关键差异在于全程只用常规图与独立算子证据而不端到端实测候选设计。原文未提供可核对的关键定量结果，该结论限于三模型三框架的已实现验证池，不包含未构建候选与跨图形处理器迁移，原文未披露训练、推理或部署成本。\n"
+}
