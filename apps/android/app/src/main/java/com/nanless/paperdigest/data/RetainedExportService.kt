@@ -53,7 +53,8 @@ class RetainedExportService(private val pending:PendingExportStore,controlRoot:F
   check();val row=pending.get(operationID,check);require(row.preparation=="retained"&&row.sourceIdentity.optString("format")=="backup"){"这里只能另存已结束准备的原完整研究快照"}
   val revision=pending.retainedRevision(operationID);val directory=operation(operationID)
   val producer=ExportProducerReceipt(directory,row.operationID,row.documentID,row.sourceIdentity)
-  val complete=producer.verifiedCapture(check);require(pending.retainedRevision(operationID)==revision)
+  // Actual inventory passes the producer's outbound gate before any retained lease exists.
+   val complete=producer.verifiedCapture(check);require(pending.retainedRevision(operationID)==revision)
   val proof=File(directory,"producer-complete.json");ExportArtifactWriter.regular(proof)
   val view=Snapshot(row.operationID,row.documentID,complete.mime,complete.name,complete.bytes,complete.sha256)
   val lease=Lease(view,revision,complete.file,attributes(complete.file).fileKey()?:error("无法确认原快照身份"),proof,BackupCodec.hash(JsonFiles.read(proof,65536)),attributes(File(directory,"operation.json")).fileKey()?:error("无法确认原准备身份"))

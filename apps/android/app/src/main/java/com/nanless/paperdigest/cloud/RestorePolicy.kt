@@ -75,6 +75,9 @@ object RestorePolicy {
                 else {
                     require(Files.isRegularFile(source,java.nio.file.LinkOption.NOFOLLOW_LINKS))
                     require(relative==BackupCodec.ROOTS_FILE||expected.containsKey(relative)){"暂存出现未预检的额外文件，原资料未替换"}
+                    // Legacy keys were fully decoded and checked above, but never
+                    // become authority on this device, even on a fresh installation.
+                    if(BackupCodec.isLocalOnlyIntegrityPath(relative)){seen+=relative;return@forEach}
                     java.io.FileOutputStream(target).use{output->Files.newInputStream(source,java.nio.file.StandardOpenOption.READ,java.nio.file.LinkOption.NOFOLLOW_LINKS).use{input->val b=ByteArray(65536);while(true){check();val n=input.read(b);if(n<0)break;if(n>0)output.write(b,0,n)}};output.flush();output.fd.sync()};BackupCodec.privateFile(target)
                     val actual=BackupCodec.hash(target,check)
                     if(relative!=BackupCodec.ROOTS_FILE)require(actual==expected.getValue(relative).sha256){"恢复工作副本不符原SHA"}
@@ -83,6 +86,26 @@ object RestorePolicy {
                 }
             }}
             require(seen==expected.keys+BackupCodec.ROOTS_FILE){"恢复工作副本文件集合不完整"}
+            // Only current-device keys survive the directory replacement. Never
+            // generate missing keys or copy the staged archive's key material.
+            for(relative in BackupCodec.localOnlyIntegrityPaths) {
+                check()
+                val local=File(current,relative)
+                if(!Files.exists(local.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS))continue
+                val source=BackupCodec.checkedFile(current,relative)
+                val target=File(effective,relative)
+                require(!target.exists()&&!Files.isSymbolicLink(target.toPath()))
+                target.parentFile!!.mkdirs();BackupCodec.checkedDirectory(target.parentFile!!);BackupCodec.privateDirectory(target.parentFile!!)
+                java.io.FileOutputStream(target).use { output ->
+                    Files.newInputStream(source.toPath(),java.nio.file.StandardOpenOption.READ,java.nio.file.LinkOption.NOFOLLOW_LINKS).use { input ->
+                        val buffer=ByteArray(65536)
+                        while(true){check();val n=input.read(buffer);if(n<0)break;if(n>0)output.write(buffer,0,n)}
+                    }
+                    output.flush();output.fd.sync()
+                }
+                BackupCodec.privateFile(target)
+                require(BackupCodec.hash(target,check)==BackupCodec.hash(BackupCodec.checkedFile(current,relative),check)){"本机完整性材料在保留期间变化，原资料未替换"}
+            }
             check();apply(effective,current,check);check()
             val before=File(current.parentFile,"${current.name}-BeforeRestore-${UUID.randomUUID()}")
             // No cancellation checks within the two-renames/initialize/rollback transaction.

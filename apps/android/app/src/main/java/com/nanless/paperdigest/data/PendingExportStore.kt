@@ -105,6 +105,13 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
             check()
             if (!UUID_PATTERN.matches(entry.name)) continue // Preserve unknown material; never delete it.
             val record = record(entry.name)
+            // Verify ready legacy bytes before retiring a chooser/writer checkpoint. Nonportable
+            // originals remain unchanged even on cold-start inspection, not merely on delivery.
+            val verifiedReady = if (record.getString("preparation") == "ready") try { verifyReady(record, check) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: BackupCodec.NonPortableArchiveException) { result += nonPortableView(record); continue }
+                catch (_: Exception) { null }
+            else null
             if (record.getString("preparation") == "preparing" && record.getString("jobID") !in activeJobIDs) {
                 record.put("preparation", "interrupted").put("message", "上次准备中断；已有材料保留，不会自动重新采集。")
                 write(record)
@@ -114,12 +121,17 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
                 record.put("delivery", "failed").put("message", "上次系统保存中断；外部位置可能已有部分文件，原准备文件仍保留。")
                 write(record)
             }
-            result += inspect(record, check)
+            result += verifiedReady?.let { view(record, it) } ?: inspect(record, check)
         }
         return result
     }
 
     @Synchronized fun get(operationID: String, check: () -> Unit = {}): PendingExport = inspect(record(operationID), check)
+    /** Read-only admission before Root creates a writer job/claim; never retires original state. */
+    @Synchronized fun deliverySource(operationID: String, check: () -> Unit = {}): PendingExport {
+        val original = record(operationID)
+        return view(original, verifyReady(original, check))
+    }
 
     /** UUID attempts prevent a late SAF callback from targeting a later chooser/save. */
     @Synchronized fun beginDelivery(operationID: String, check: () -> Unit = {}): PendingExport {
@@ -207,10 +219,17 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         return operationRevision(operationID)
     }
 
+    private fun nonPortableView(record: JSONObject): PendingExport = view(record, null).copy(
+        preparation = "unavailable", message = "原包含本机专用完整性材料，仅保留本机，未继续导出或改写")
     private fun inspect(record: JSONObject, check: () -> Unit): PendingExport {
         if (record.getString("preparation") != "ready") return view(record, null)
         return try { view(record, verify(record, check)) }
         catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: BackupCodec.NonPortableArchiveException) {
+            // A legacy secret-bearing artifact is retained byte-for-byte, including its checkpoint.
+            // Only this read-only projection changes; inspection must not retire/rewrite its UUID.
+            return nonPortableView(record)
+        }
         catch (_: Exception) {
             record.put("preparation", "unavailable").put("message", "原准备文件或清单不可用，未重新生成，也未将此结果标为可继续保存。")
             write(record); view(record, null)
@@ -239,6 +258,10 @@ class PendingExportStore(exportsRoot: File, controlRoot: File,
         require(value.getString("mime").length in 3..128 && value.getString("suggestedName").length in 1..160 && '\u0000' !in value.getString("suggestedName"))
         val bin = checked(exports, "$id.bin", true)
         require(bin.isFile && bin.length() == value.getLong("bytes") && hash(bin, check) == value.getString("sha256")) { "原准备文件长度或 SHA 不符" }
+        // Verify actual backup inventory before any ready/chooser/writer claim can be persisted.
+        // Generic PDF and research exports keep their ordinary byte/hash-only contract.
+        ExportProducerReceipt.validatePortableBackup(bin, controls, check)
+        require(bin.length() == value.getLong("bytes") && hash(bin, check) == value.getString("sha256")) { "原准备文件在核验期间已变化" }
         return value to raw
     }
     private fun core(value: JSONObject): String = canonical(value.copy().also { item ->

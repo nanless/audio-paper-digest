@@ -218,7 +218,12 @@ class CloudService(
         val file = BackupCodec.checkedFile(targetFolder(), "snapshot.paperdigest")
         require(file.length() == pending.getLong("encodedBytes") && BackupCodec.hash(file,check) == pending.getString("sha256")) { "原待传快照字节已变化" }
         val stage = BackupCodec.stage(file.inputStream(), controlRoot,check)
-        try { require(stage.entries.size == pending.getInt("fileCount")) { "原快照文件数变化" } } finally { stage.directory.deleteRecursively() }
+        try {
+            require(stage.entries.size == pending.getInt("fileCount")) { "原快照文件数变化" }
+            // Check the actual original archive inventory before upload, checkpoint
+            // updates or lastAttemptAt writes. Do not normalize old pending bytes.
+            BackupCodec.requirePortableInventory(stage.entries)
+        } finally { stage.directory.deleteRecursively() }
         return file
     }
     private fun archive(): CloudArchive {

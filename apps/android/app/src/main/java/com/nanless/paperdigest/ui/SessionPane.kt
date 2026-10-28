@@ -48,6 +48,7 @@ private data class SessionNoteDraft(val identity:SessionNoteIdentity,val session
    SelectionContainer{Text(session.optString("question").ifBlank{"原问题未记录"},style=MaterialTheme.typography.titleMedium)}
    Text("${jobStatus(session.optString("status"))} · ${sessionModelLabel(session)}",style=MaterialTheme.typography.bodySmall)
    Text(sessionEvidenceLabel(session),style=MaterialTheme.typography.bodySmall)
+    SavedStudySourceLinks(session,state.busy,action)
    Text("${sessionUsageLabel(session)} · ${sessionChargeLabel(session)}",style=MaterialTheme.typography.bodySmall)
    FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){
     TextButton({expanded=!expanded}){Text(if(expanded)"收起原依据" else "查看原依据")}
@@ -58,7 +59,7 @@ private data class SessionNoteDraft(val identity:SessionNoteIdentity,val session
    if(canRecoverSession(session))OutlinedButton({checking=true;error=null;scope.launch{try{controller.execute("model.recover",obj("id" to session.getString("id")))}catch(e:Exception){if(e is CancellationException)throw e;error=e.message}finally{checking=false}}},enabled=!checking&&!state.busy){Text(if(checking)"正在核对本机原材料…" else "核验已保存回答（不重新请求）")}
    error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
   }
-  if(html!=null)Box(Modifier.weight(1f)){StaticDocument(html!!,state.settings.optInt("font",18))}else EmptyPane("原回答尚未完整保存","已派发或中断的请求不会自动重新发送。原输入、原响应和实际用量保留。")
+  if(html!=null)Box(Modifier.weight(1f)){SavedStudyAnswerDocument(state,session,html!!,action)}else EmptyPane("原回答尚未完整保存","已派发或中断的请求不会自动重新发送。原输入、原响应和实际用量保留。")
  }
  if(saveNote)AlertDialog(onDismissRequest={if(!saving)saveNote=false},title={Text("追加到这条记录所属论文的笔记？")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){Text("保留现有笔记，在末尾追加这条原问题、保存回答和来源。其他论文的笔记不受影响。");error?.let{Text(it,color=MaterialTheme.colorScheme.error)}}},confirmButton={TextButton({val draft=noteDraft?:return@TextButton;saving=true;error=null;scope.launch{try{requireCurrentDraft(draft);val base=JSONObject(draft.baseNoteJSON);val original=JSONObject(draft.sessionJSON);controller.execute("personal.note",obj("paperID" to draft.identity.owner,"baseRevision" to base.optInt("revision"),"text" to base.optString("text")+noteFromSession(original)));saveNote=false}catch(e:Exception){if(e is CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=!saving){Text(if(saving)"正在保存…" else "保留原笔记并追加")}},dismissButton={TextButton({saveNote=false},enabled=!saving){Text("取消")}})
 }

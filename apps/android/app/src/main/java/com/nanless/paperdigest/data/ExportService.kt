@@ -23,10 +23,12 @@ class ExportService(private val context: Context, private val store: PersonalSto
     }
     private val artifactWriter by lazy { ExportArtifactWriter(directory) }
     fun register(file:File,mime:String,name:String,documentID:String=UUID.randomUUID().toString(),check:()->Unit={}):Prepared {
+        ExportProducerReceipt.validatePortableBackup(file, directory, check)
         val item=artifactWriter.register(file,mime,name,documentID,check)
         return Prepared(item.id,item.file,item.mime,item.name,item.sha256)
     }
     fun registerCompleted(captured:ExportProducerReceipt.CompletedCapture,documentID:String,check:()->Unit={}):Prepared {
+        ExportProducerReceipt.validatePortableBackup(captured.file, directory, check)
         val item=artifactWriter.completed(captured.file,captured.mime,captured.name,documentID,captured.sha256,captured.bytes,check)
         return Prepared(item.id,item.file,item.mime,item.name,item.sha256)
     }
@@ -101,6 +103,8 @@ class ExportService(private val context: Context, private val store: PersonalSto
         require(manifest.getString("documentID") == id)
         val file = File(directory, "$id.bin")
         require(file.isFile && file.length() == manifest.getLong("bytes") && BackupCodec.hash(file) == manifest.getString("sha256")) { "待导出原件已变化" }
+        ExportProducerReceipt.validatePortableBackup(file, directory)
+        require(file.length() == manifest.getLong("bytes") && ExportArtifactWriter.digest(file,{}) == manifest.getString("sha256")) { "待导出原件在核验期间已变化" }
         context.contentResolver.openOutputStream(uri, "wt")?.use { output -> file.inputStream().use { it.copyTo(output) } } ?: error("无法写入用户选择的位置")
         JSONObject().put("saved", true).put("bytes", file.length()).put("sha256", manifest.getString("sha256")).put("message", "已完整写入选择的位置")
     }

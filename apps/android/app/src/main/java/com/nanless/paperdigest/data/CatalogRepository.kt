@@ -330,6 +330,15 @@ class CatalogRepository(private val context: Context, private val personal: Pers
 
     private val pdfReceipts = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
     fun pdfReceipt(id: String): JSONObject = pdfReceipts[id]?.copy() ?: JSONObject()
+    /** Read the repository's exact published cache mapping only; never refresh or change receipts. */
+    suspend fun cachedPDFBySHA(expectedSHA256: String): File? = withContext(Dispatchers.IO) {
+        if (!com.nanless.paperdigest.cloud.BackupCodec.validSHA(expectedSHA256)) return@withContext null
+        try {
+            val file = com.nanless.paperdigest.cloud.BackupCodec.checkedFile(directory, "pdf/$expectedSHA256.pdf")
+            require(file.length() in 1..(100L * 1024 * 1024) && com.nanless.paperdigest.cloud.BackupCodec.hash(file) == expectedSHA256)
+            file
+        } catch (_: Exception) { null }
+    }
     suspend fun downloadPDF(paper: Paper): Pair<File, String> = withContext(Dispatchers.IO) {
         paper.localPDFPath?.let { path ->
             val file = StoragePaths.resolve(path, personal.directory, paper.pdfSHA256 ?: error("本地原文缺少内容指纹"), 200 * 1024 * 1024L)

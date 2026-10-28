@@ -14,7 +14,7 @@ import java.util.Base64
 import java.util.Locale
 import java.util.UUID
 
-/** The portable v2 format contains every regular research file, including hidden files. */
+/** Portable v2 preserves regular research files (including hidden assets), except local integrity keys. */
 object BackupCodec {
     const val MAX_DECODED = 512L * 1024 * 1024
     const val MAX_ENCODED = 750L * 1024 * 1024
@@ -23,6 +23,20 @@ object BackupCodec {
     data class Entry(val path: String, val sha256: String, val bytes: Long)
     data class Captured(val file: File, val sha256: String, val encodedBytes: Long, val fileCount: Int)
     data class Staged(val directory: File, val sourceDirectory: String, val entries: List<Entry>, val encodedSHA256: String, val encodedBytes: Long)
+
+    // Joint Android/Mac policy: exact Research-relative names only. Other .key and
+    // hidden research assets remain portable. Legacy decode deliberately does NOT
+    // filter these entries: its original inventory, bytes and SHA remain forensic evidence.
+    internal val localOnlyIntegrityPaths = setOf(
+        "ModelUsage/response-integrity.key",
+        "ModelUsage/response-integrity.android.key"
+    )
+    // These two logical paths also exclude case aliases on cross-platform/case-insensitive roots.
+    fun isLocalOnlyIntegrityPath(path: String): Boolean = localOnlyIntegrityPaths.any { alias(it) == alias(path) }
+    class NonPortableArchiveException : IllegalArgumentException("原待传或待导出快照包含仅限本机的完整性材料，未续传或改写；原包保留本机")
+    fun requirePortableInventory(entries: List<Entry>) {
+        if (entries.any { isLocalOnlyIntegrityPath(it.path) }) throw NonPortableArchiveException()
+    }
 
     // Captured stays a portable data DTO, while normal producer return is an
     // in-process identity capability. Weak identity keys do not retain periodic
@@ -69,6 +83,7 @@ object BackupCodec {
             val a = alias(path); require(files.add(a)) { "研究资料路径重复" }
             val reserved = alias(ROOTS_FILE)
             require((a != reserved || path == ROOTS_FILE) && !a.startsWith("$reserved/")) { "旧路径映射名称冲突" }
+            require(localOnlyIntegrityPaths.none { a.startsWith(alias(it) + "/") }) { "本机完整性控制槽不能作为研究目录导入" }
         }
         fun finish() { files.forEach { path -> var prefix = ""; path.split('/').dropLast(1).forEach { part -> prefix = if (prefix.isEmpty()) part else "$prefix/$part"; require(prefix !in files) { "文件与父目录冲突" } } } }
     }
@@ -105,6 +120,7 @@ object BackupCodec {
             if (Files.isDirectory(p, NOFOLLOW_LINKS)) return@forEach
             require(Files.isRegularFile(p, NOFOLLOW_LINKS)) { "备份不能包含特殊文件" }
             val relative = root.toPath().relativize(p).toString().replace(File.separatorChar, '/')
+            if (isLocalOnlyIntegrityPath(relative)) return@forEach
             paths.add(relative); total += Files.size(p); require(total <= MAX_DECODED && entries.size < MAX_ENTRIES) { "完整备份超过512MiB或100000项" }; entries += relative to p.toFile()
         } }
         paths.finish(); require(entries.any { it.first == "personal.json" }) { "研究资料缺少personal.json" }
@@ -133,7 +149,7 @@ object BackupCodec {
             try { require(verified.entries.map { it.path }.toSet() == entries.map { it.first }.toSet()); verified.entries.forEach { check(); require(checkedHash(checkedFile(root, it.path), check) == it.sha256) { "采集期间研究文件已变化" } } } finally { verified.directory.deleteRecursively() }
             FileOutputStream(temporary, true).use { it.fd.sync() }
             val encodedSHA = checkedHash(temporary, check); val encodedBytes = temporary.length()
-            val currentPaths = Files.walk(root.toPath()).use { walk -> walk.peek { check() }.filter { Files.isRegularFile(it, NOFOLLOW_LINKS) }.map { root.toPath().relativize(it).toString().replace(File.separatorChar, '/') }.toArray().map { it as String }.toSet() }
+            val currentPaths = Files.walk(root.toPath()).use { walk -> walk.peek { check() }.filter { Files.isRegularFile(it, NOFOLLOW_LINKS) }.map { root.toPath().relativize(it).toString().replace(File.separatorChar, '/') }.toArray().map { it as String }.filterNot(::isLocalOnlyIntegrityPath).toSet() }
             require(currentPaths == entries.map { it.first }.toSet()) { "采集期间研究目录已变化" }
             check()
             require(!output.exists()) { "不会覆盖已有快照" }; Files.move(temporary.toPath(), output.toPath(), ATOMIC_MOVE)

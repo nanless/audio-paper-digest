@@ -208,9 +208,14 @@ class RootController private constructor(private val context: Context, private v
             val receipt = it.pdfReceipt.copy()
             if (offlineReading == null && current != null && current.sourceKind != "local" && it.pdfDocument != null &&
                 (receipt.nullableString("version") != current.sourceVersion || receipt.nullableString("sourceURL") != current.pdfURL)) {
-                receipt.put("isStale", true).put("currentness", "catalog-source-changed")
+                if (receipt.optString("currentness") == "study-input-bound-original") {
+                    val originalVersion = receipt.nullableString("version")?.takeIf { it.isNotBlank() }
+                    val catalogVersion = current.sourceVersion?.takeIf { it.isNotBlank() }
+                    receipt.put("isStale", originalVersion != null && catalogVersion != null && originalVersion != catalogVersion)
+                } else receipt.put("isStale", true).put("currentness", "catalog-source-changed")
                 val notices = receipt.optJSONArray("notices")?.strings().orEmpty()
-                receipt.put("notices", JSONArray((notices + "当前打开的是原保存 PDF；最新目录指向不同原文版本或来源，未自动替换。").distinct()))
+                val mismatchNotice = if (receipt.optString("currentness") == "study-input-bound-original") "当前目录不能与此封存输入的版本和来源完全对应；仍按原输入 PDF SHA 读取，未自动替换。" else "当前打开的是原保存 PDF；最新目录指向不同原文版本或来源，未自动替换。"
+                receipt.put("notices", JSONArray((notices + mismatchNotice).distinct()))
             }
             val viewed = offlineReading?.takeIf { old -> old.paper.id == it.selectedPaperId }?.paper ?: it.viewedPaper?.takeIf { old -> old.id == it.selectedPaperId } ?: current
             val reading = it.copy(papers = papers, viewedPaper = viewed, article = article, pdfReceipt = receipt)
@@ -357,6 +362,20 @@ class RootController private constructor(private val context: Context, private v
                 }
                 "pdf.close" -> pdfAdmission.withLock { stopPdfAcquisition(); updateReading(access) { it.copy(pdfMode = false, pdfSelection = null) }; JSONObject().put("closed", true) }
                 "pdf.annotation.open" -> ownedPdfAcquisition(command, access, dispatchAtStart) { openAnnotation(payload.getString("id"), access, dispatchAtStart) }
+                "pdf.studySource.open" -> {
+                    val binding = maintenance.withLock {
+                        dispatch.requireCurrent(dispatchAtStart)
+                        requirePdfAcquisition(access, true)
+                        val id = (payload.opt("sessionID") ?: payload.opt("id")) as? String ?: error("缺少原研究身份")
+                        require(!payload.has("id") || payload.opt("id") == id) { "原研究身份不一致" }
+                        requireSavedStudySource(id)
+                    }
+                    val page = positiveStudySourcePage(payload.opt("page")) ?: error("原研究页码无效")
+                    require(page in binding.pages) { "页码不属于这次研究的原始输入" }
+                    ownedPdfAcquisition(command, access, dispatchAtStart, allowEmpty = true, ledgerOwner = binding.owner) {
+                        openStudySource(binding, page, access, dispatchAtStart)
+                    }
+                }
                 "pdf.outline" -> maintenance.withLock {
                     requireReading(access, true); val document = _state.value.pdfDocument ?: error("PDF 尚未打开")
                     val chapters = pdf.outline(document); requireReading(access, true)
@@ -381,6 +400,16 @@ class RootController private constructor(private val context: Context, private v
                 "personal.reading" -> maintenance.withLock {
                     val id = payload.getString("paperID"); val old = personal.snapshot().getJSONObject("readingState").optJSONObject(id)?.copy() ?: JSONObject()
                     listOf("question", "mode", "scope", "guideScroll", "from", "to", "split", "pdfOpen", "scroll", "fromPage", "toPage", "chapter").forEach { if (payload.has(it)) old.put(it, payload.get(it)) }; personal.saveReading(id, old); JSONObject().put("saved", true)
+                }
+                "personal.studyScroll" -> maintenance.withLock {
+                    val id = payload.getString("sessionID")
+                    val original = personal.snapshot().getJSONArray("sessions").objects().filter { it.opt("id") == id }.singleOrNull()
+                        ?: error("原研究不存在或身份重复，未保存另一条记录的位置")
+                    val identity = requireNotNull(studyAnswerPositionIdentity(original)) { "原研究记录身份不足" }
+                    val offset = payload.opt("scroll") as? Int ?: error("阅读位置无效")
+                    val old = personal.snapshot().getJSONObject("readingState").optJSONObject(identity.owner)?.copy() ?: JSONObject()
+                    personal.saveReading(identity.owner, mergedStudyAnswerScroll(old, original, payload.getString("binding"), offset))
+                    JSONObject().put("saved", true)
                 }
                 "pdf.highlight" -> highlight(payload, access)
                 "pdf.removeAnnotation" -> annotationChange(payload, true, access)
@@ -420,7 +449,7 @@ class RootController private constructor(private val context: Context, private v
                 }
                 "jobs.cancel" -> {
                     val id = payload.getString("id")
-                    val pdfOwned = active.containsKey(id) && personal.snapshot().getJSONArray("jobs").objects().any { it.optString("id") == id && it.optString("kind") in setOf("pdf.import", "pdf.import.batch", "pdf.open", "pdf.annotation.open") }
+                    val pdfOwned = active.containsKey(id) && personal.snapshot().getJSONArray("jobs").objects().any { it.optString("id") == id && it.optString("kind") in setOf("pdf.import", "pdf.import.batch", "pdf.open", "pdf.annotation.open", "pdf.studySource.open") }
                     if (id in exportOwnedJobs || pdfOwned) {
                         // A provider may be blocked inside an open/read/write call. No terminal state or lock release precedes actual drain.
                         _state.update { it.copy(notice = "已请求停止，正在等待本次文件操作关闭；原任务尚未报告停止。") }
@@ -522,7 +551,7 @@ class RootController private constructor(private val context: Context, private v
             return result
         } catch (cancelled: CancellationException) {
             refresh()
-            if (!command.startsWith("export.retained.") && command !in setOf("export.prepare", "retained.export.prepare", "export.save", "pdf.import", "pdf.open", "pdf.annotation.open")) {
+            if (!command.startsWith("export.retained.") && command !in setOf("export.prepare", "retained.export.prepare", "export.save", "pdf.import", "pdf.open", "pdf.annotation.open", "pdf.studySource.open")) {
                 _state.update { it.copy(error = "已取消；已有完整资料和已产生的用量记录保留") }
             }
             throw cancelled
@@ -574,7 +603,7 @@ class RootController private constructor(private val context: Context, private v
             val result = withContext(CoroutineName(id)) { body() }
             val latest = personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id } ?: row
             if (kind == "pdf.import") latest.put("paperID", result.getString("paperID"))
-            if (kind in setOf("pdf.import", "pdf.open", "pdf.annotation.open")) latest.put("result", result.copy())
+            if (kind in setOf("pdf.import", "pdf.open", "pdf.annotation.open", "pdf.studySource.open")) latest.put("result", result.copy())
             personal.upsertJob(latest.put("status", "completed").put("endedAt", now()).put("message", if (kind.endsWith("restore.prepare")) "完整材料校验完成，等待明确确认；尚未恢复研究资料" else "已完成"))
             return result
         }
@@ -934,12 +963,14 @@ class RootController private constructor(private val context: Context, private v
         val original = pdfAcquisition.get() ?: return
         original.cancel(); original.join()
     }
-    private suspend fun ownedPdfAcquisition(kind: String, access: ReadingAccess, epoch: String, body: suspend () -> JSONObject): JSONObject {
+    private suspend fun ownedPdfAcquisition(kind: String, access: ReadingAccess, epoch: String,
+        allowEmpty: Boolean = kind == "pdf.import", ledgerOwner: String = if (kind == "pdf.import") "" else access.owner.orEmpty(),
+        body: suspend () -> JSONObject): JSONObject {
         val task = pdfAdmission.withLock {
             stopPdfAcquisition()
-            requirePdfAcquisition(access, kind == "pdf.import")
+            requirePdfAcquisition(access, allowEmpty)
             val deferred = exportScope.async(start = CoroutineStart.LAZY) {
-                runTask(kind, if (kind == "pdf.import") "" else access.owner.orEmpty(), gate = { dispatch.requireCurrent(epoch); requirePdfAcquisition(access, kind == "pdf.import") }, body = body)
+                runTask(kind, ledgerOwner, gate = { dispatch.requireCurrent(epoch); requirePdfAcquisition(access, allowEmpty) }, body = body)
             }
             pdfAcquisition.set(deferred)
             deferred.invokeOnCompletion { pdfAcquisition.compareAndSet(deferred, null) }
@@ -1041,6 +1072,81 @@ class RootController private constructor(private val context: Context, private v
         personal.replaceAnnotations(p.id, updated)
         JSONObject().put("saved", true)
     }
+    /** Never use PersonalStore.session's first-match lookup for a navigation capability. */
+    private fun originalStudySession(id: String): JSONObject {
+        val sessions = personal.snapshot().getJSONArray("sessions").objects().filter { it.opt("id") == id }
+        require(sessions.size == 1) { "原研究不存在或身份重复，未选择另一条记录" }
+        return sessions.single()
+    }
+    private fun requireSavedStudySource(id: String): SavedStudySource =
+        readSavedStudyInput(originalStudySession(id), research)
+            ?: error("原研究的实际封存输入、已声明保存的响应材料、来源身份或原 PDF 页码无法核验，未采用摘要或当前版本替代")
+
+    private suspend fun openStudySource(binding: SavedStudySource, page: Int, access: ReadingAccess, epoch: String): JSONObject {
+        val operation = currentCoroutineContext()
+        val check = {
+            operation.ensureActive()
+            dispatch.requireCurrent(epoch)
+            requirePdfAcquisition(access, true)
+            // Native copy/parser checkpoints compare the already sealed capability's summary identity.
+            // Actual input and any declared saved response originals are re-read at admission/final commit.
+            val original = originalStudySession(binding.sessionID)
+            require(original.opt("paperID") == binding.owner && original.opt("inputSHA256") == binding.inputSHA &&
+                canonical(original.optJSONObject("source")) == binding.sourceJSON) { "原研究来源已变化，未采用另一份输入" }
+            require(page in binding.pages) { "页码不属于这次研究的原始输入" }
+        }
+        val prepared = maintenance.withLock {
+            check()
+            val owner = _state.value.viewedPaper?.takeIf { it.id == binding.owner } ?: paper(binding.owner)
+            val hash = binding.pdfSHA
+            val file = pdf.importedPDFBySHA(hash) ?: library.cachedPDFBySHA(hash)
+                ?: throw AppFailure("missing", "这次研究的原 SHA PDF 未保存在本机或校验失败；未换成当前版本")
+            owner to file
+        }
+        val session = pdf.prepareFileImport(prepared.second, prepared.first.title + ".pdf", binding.pdfSHA, check)
+        val result = finishPdfSession(session, "study-source", check)
+        return adoptPdfResult(result, check) { document ->
+            // PersonalStore's monitor also excludes direct record writes during this source CAS.
+            synchronized(personal) {
+                check()
+                require(document.sha256 == binding.pdfSHA && page in 1..document.pageCount && binding.pages.all { it in 1..document.pageCount }) {
+                    "原研究页码或 PDF 身份不符，未切换原文"
+                }
+                require(requireSavedStudySource(binding.sessionID) == binding) { "原封存输入、已保存响应材料字节或身份已变化，未切换原文" }
+                val source = JSONObject(binding.sourceJSON)
+                val version = source.nullableString("sourceVersion")?.takeIf { it.isNotBlank() }
+                val currentVersion = library.papers().firstOrNull { it.id == binding.owner }?.sourceVersion?.takeIf { it.isNotBlank() }
+                val differentVersion = version != null && currentVersion != null && version != currentVersion
+                val versionNotice = when {
+                    differentVersion -> "研究输入登记版本 $version，当前目录登记为 $currentVersion；按原输入 SHA 读取，未换成当前版本。"
+                    version == null -> "按本条研究封存输入的原 PDF SHA 读取；输入未登记网站版本，未联网核对当前修订。"
+                    else -> "按本条研究封存输入的原 PDF SHA 读取；登记版本 $version，未联网重新核对网站当前修订。"
+                }
+                val receipt = JSONObject().put("paperID", binding.owner).put("sha256", binding.pdfSHA)
+                    .put("version", version ?: JSONObject.NULL).put("sourceURL", source.optString("sourceURL"))
+                    .put("sessionID", binding.sessionID).put("inputSHA256", binding.inputSHA)
+                    .put("sourceNavigationID", UUID.randomUUID().toString())
+                    .put("currentness", "study-input-bound-original").put("isStale", differentVersion)
+                    .put("notices", JSONArray(listOf(versionNotice)))
+                val viewed = Paper.fromJson(prepared.first.json())
+                val reading = personal.snapshot().getJSONObject("readingState").optJSONObject(binding.owner)?.copy() ?: JSONObject()
+                // Last cancellable admission before the indivisible adoption, as for ordinary PDF import.
+                check()
+                personal.saveReading(binding.owner, reading.put("pdfPage", page))
+                offlineReading = null
+                generation.incrementAndGet()
+                _state.update { current ->
+                    current.copy(selectedPaperId = binding.owner, viewedPaper = viewed,
+                        article = current.article?.takeIf { current.selectedPaperId == binding.owner && it.paperID == binding.owner },
+                        pdfDocument = document, pdfMode = true, pdfPage = page, pdfSelection = null,
+                        pdfReceipt = receipt, loading = false)
+                }
+                JSONObject().put("opened", true).put("paperID", binding.owner).put("sessionID", binding.sessionID)
+                    .put("page", page).put("sha256", binding.pdfSHA)
+            }
+        }
+    }
+
     private suspend fun openAnnotation(id: String, access: ReadingAccess, epoch: String): JSONObject {
         val prepared = maintenance.withLock {
             requireReading(access)
@@ -1448,7 +1554,8 @@ class RootController private constructor(private val context: Context, private v
             val id = UUID.randomUUID().toString()
             val row = exportJobRow(id, "export.save", JSONObject().put("label", "已准备的原导出文件"))
                 .put("message", "正在写入并回读所选位置；原准备文件保留。")
-            val originalPending = pendingStore.get(operationID)
+            // Reject nonportable legacy bytes before creating a writer job or consuming the claim.
+            val originalPending = pendingStore.deliverySource(operationID)
             if (originalPending.sourceIdentity.optBoolean("rescueExport")) writeNativeExportJob(originalPending, row)
             else personal.upsertJob(row)
             exportAttempts[attemptID] = delivery.copy(writerJobID = id)

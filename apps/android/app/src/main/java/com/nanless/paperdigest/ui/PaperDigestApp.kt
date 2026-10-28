@@ -78,7 +78,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     }
     DisposableEffect(controller){onDispose{controller.retireAggregateView()}}
     val action: Action = action@{ command,payload ->
-        val viewSensitive=command.startsWith("aggregate.")||command.startsWith("ui.")||command in setOf("paper.open","storage.openPackage")
+        val viewSensitive=command.startsWith("aggregate.")||command.startsWith("ui.")||command in setOf("paper.open","storage.openPackage","pdf.studySource.open")
         if(viewSensitive&&(renderedRouteRevision!=routeRevision||(route=="aggregates"&&renderedAggregateLease!=controller.captureAggregateView())))return@action
         when(command) {
             "ui.reader" -> {navigateCurrent("reader");return@action}
@@ -89,7 +89,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in listOf("阅读","模型","资料","坚果云","Zotero")};settingsRequestID++;navigateCurrent("settings");return@action}
         }
         if(command.endsWith("restore.prepare")&&preparedRestoreJSON!=null){localError="请先确认或取消已校验的恢复材料";return@action}
-        val guarded=command.startsWith("export.retained.") || command in setOf("pdf.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","export.delivery.prepare","export.pending.list","export.reconcile","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check")
+        val guarded=command.startsWith("export.retained.") || command in setOf("pdf.open","pdf.studySource.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","export.delivery.prepare","export.pending.list","export.reconcile","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check")
         if(guarded&&pendingActions[command]==true)return@action
         if(guarded)pendingActions[command]=true
         scope.launch {
@@ -98,7 +98,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             when(command) {
                 else -> {
                     val result=if(command.startsWith("aggregate."))controller.executeAggregateInView(command,payload,renderedAggregateLease)else controller.execute(command,payload)
-                    if(command in setOf("paper.open","pdf.import","storage.openPackage")&&renderedRouteRevision==routeRevision&&result.optString("status")!="not-adopted")navigateCurrent("reader")
+                    if(command in setOf("paper.open","pdf.import","storage.openPackage","pdf.studySource.open")&&renderedRouteRevision==routeRevision&&result.optString("status")!="not-adopted"&&(command!="pdf.studySource.open"||result.optBoolean("opened")))navigateCurrent("reader")
                     if(command=="export.prepare" || command=="retained.export.prepare") {
                         require(result.optString("preparation")=="ready" && result.optBoolean("ready")) {"原件尚未就绪，请到任务查看真实进度"}
                         if(snackbar.showSnackbar("原件已准备，尚未保存到所选位置。",actionLabel="查看待保存") == SnackbarResult.ActionPerformed) navigateCurrent("tasks")

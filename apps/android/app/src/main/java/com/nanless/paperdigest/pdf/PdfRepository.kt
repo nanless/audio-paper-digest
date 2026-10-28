@@ -89,6 +89,15 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
         require(path.length() <= MAX_PDF_BYTES && digest(path) == document.sha256) { "原文实际字节已变化，未使用其他版本" }
         return path
     }
+    /** Exact archived original only; no caller path, import, download, password or receipt mutation. */
+    suspend fun importedPDFBySHA(sha256: String): File? = withContext(Dispatchers.IO) {
+        if (!Regex("[a-f0-9]{64}").matches(sha256)) return@withContext null
+        try {
+            val file = com.nanless.paperdigest.cloud.BackupCodec.checkedFile(root, "Imports/$sha256.pdf")
+            require(file.parentFile == imports && file.length() in 1..MAX_PDF_BYTES && digest(file) == sha256)
+            file
+        } catch (_: Exception) { null }
+    }
     suspend fun verify(document: PdfDocumentRef): File = withContext(Dispatchers.IO) { checked(document) }
     suspend fun readPages(document: PdfDocumentRef, from: Int = 1, to: Int = document.pageCount, password: String? = null): List<PdfPageText> = withContext(Dispatchers.IO) {
         require(from >= 1 && to >= from && to <= document.pageCount) { "原文物理页范围无效" }

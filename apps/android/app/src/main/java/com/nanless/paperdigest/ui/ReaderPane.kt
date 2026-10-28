@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.nanless.paperdigest.pdf.PdfReaderPane
+import com.nanless.paperdigest.data.studyAnswerPositionIdentity
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import org.json.JSONArray
@@ -40,6 +41,9 @@ import org.json.JSONObject
  var splitPercent by rememberSaveable(paper.id){mutableFloatStateOf(paperReading.optDouble("split",46.0).toFloat().takeIf{it.isFinite()}?.coerceIn(38f,62f)?:46f)}
  var export by remember(paper.id){mutableStateOf(false)};var zotero by remember(paper.id){mutableStateOf(false)}
  LaunchedEffect(state.pdfMode){phonePDF=state.pdfMode}
+  LaunchedEffect(state.pdfReceipt.optString("sourceNavigationID")){
+   if(state.pdfReceipt.optString("sourceNavigationID").isNotBlank()&&state.pdfMode){phonePDF=true;focus="pdf"}
+  }
  LaunchedEffect(paper.id,tab){action("personal.reading",obj("paperID" to paper.id,"mode" to when(tab){"研究"->"analysis";"笔记"->"note";else->"guide"}))}
  LaunchedEffect(paper.id,splitPercent){delay(600);action("personal.reading",obj("paperID" to paper.id,"split" to splitPercent))}
  val scope=rememberCoroutineScope();val tabStates=rememberSaveableStateHolder()
@@ -212,8 +216,10 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  val uniqueRecords=remember(state.sessions){uniqueStudySessionIndex(state.sessions)}
  val sessions=recordsNewest(originalSessions.filter{uniqueRecords[it.optString("id")]===it})
  val session=if(chosen==null)sessions.firstOrNull() else uniqueStudySession(sessions,chosen)
- var html by remember(session?.toString()){mutableStateOf<String?>(null)};var renderError by remember(session?.toString()){mutableStateOf<String?>(null)}
- LaunchedEffect(session?.toString()){if(session!=null)try{html=ResearchRenderer.render(context,sessionAnswer(session));renderError=null}catch(e:Exception){renderError=e.message}}
+ val answerBinding=session?.let{studyAnswerPositionIdentity(it)?.binding}
+  val currentAnswerBinding by rememberUpdatedState(answerBinding)
+  var html by remember(answerBinding){mutableStateOf<String?>(null)};var renderError by remember(answerBinding){mutableStateOf<String?>(null)}
+ LaunchedEffect(answerBinding){if(session!=null)try{val rendered=ResearchRenderer.render(context,sessionAnswer(session));if(currentAnswerBinding==answerBinding){html=rendered;renderError=null}}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;if(currentAnswerBinding==answerBinding)renderError=e.message}}
  Column(Modifier.fillMaxSize()){
  Column(Modifier.weight(1f,fill=false).verticalScroll(rememberScrollState()).padding(16.dp)){
  OutlinedTextField(question,{question=it.take(16000);freshDraftRevision++},Modifier.fillMaxWidth(),shape=MaterialTheme.shapes.medium,label={Text("向这篇论文提问")},placeholder={Text("例如：这项方法依赖哪些假设？")},minLines=2,maxLines=6)
@@ -233,10 +239,10 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
   enabled=question.isNotBlank()&&!state.busy&&evidence in listOf("guide","selection","page","chapter","range","full")&&(evidence!="chapter"||chapters.any{it.optInt("index")==chapter}))
  if(sessions.isNotEmpty()){var menu by remember{mutableStateOf(false)};Box{TextButton({menu=true}){Text("研究记录 ${sessions.size} · ${session?.optString("question").orEmpty().take(30)}")};DropdownMenu(menu,{menu=false}){sessions.forEach{s->DropdownMenuItem({Text(s.optString("question").take(70))},{chosen=s.optString("id");menu=false})}}}}
  if(originalSessions.size!=sessions.size)Text("部分原记录身份重复或归属冲突，未用于显示；原资料仍保留。",style=MaterialTheme.typography.labelSmall)
- session?.let{s->Text("${jobStatus(s.optString("status"))} · ${sessionUsageLabel(s)}",style=MaterialTheme.typography.labelSmall);Text(sessionModelLabel(s),style=MaterialTheme.typography.labelSmall);Text(sessionChargeLabel(s),style=MaterialTheme.typography.labelSmall)}
+ session?.let{s->Text("${jobStatus(s.optString("status"))} · ${sessionUsageLabel(s)}",style=MaterialTheme.typography.labelSmall);Text(sessionModelLabel(s),style=MaterialTheme.typography.labelSmall);Text(sessionChargeLabel(s),style=MaterialTheme.typography.labelSmall);SavedStudySourceLinks(s,state.busy,action)}
  if(session==null)Text("每次回答关联实际输入、来源页码和原始用量，可完整导出。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=8.dp))
  }
- when{renderError!=null->Text(renderError!!,Modifier.padding(16.dp));html!=null->Box(Modifier.weight(1f)){StaticDocument(html!!)}}
+ when{renderError!=null->Text(renderError!!,Modifier.padding(16.dp));html!=null&&session!=null->Box(Modifier.weight(1f)){SavedStudyAnswerDocument(state,session,html!!,action)}}
  }
 }
 
