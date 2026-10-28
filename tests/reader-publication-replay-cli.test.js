@@ -18,9 +18,10 @@ async function replay(extra={},coreIssue=null) {
  // Never let its stubs qualify a metadata/ordinal recovery record.
  const assertLegacyNoPatchLineage=(value,label)=>{
   assert.equal(value.freshRewriteProvenance,undefined,'protocol fixture cannot authenticate daily patch lineage');
+  assert.equal(Object.hasOwn(value,'apiReaderFactFeedbackCorrection'),false);
   const contracts=value.analysisManifest?.contracts||{},stage=value.analysisManifest?.stages?.apiReaderArticle||{};
   for(const key of ['readerVersionMetadataRecovery','readerTargetOrdinalPatch'])assert.equal(Object.hasOwn(contracts,key),false);
-  for(const key of ['versionMetadataRecoveryContract','versionMetadataRecoveryProof','ordinalPatchContract','ordinalPatchCompilations','ordinalCompletionProof'])assert.equal(Object.hasOwn(stage,key),false);
+  for(const key of ['versionMetadataRecoveryContract','versionMetadataRecoveryProof','ordinalPatchContract','ordinalPatchCompilations','ordinalCompletionProof','factReviewClaimLocationCorrection'])assert.equal(Object.hasOwn(stage,key),false);
   calls.push(label);return true;
  };
  const modules={
@@ -31,6 +32,7 @@ async function replay(extra={},coreIssue=null) {
    async withSavedPublicationPaper(value,callback){calls.push('actual-source-scope-fixture');return callback(value);}},
   './reader-request-diagnostics':{validateReaderVersionMetadataPublicationCompletion(value){return assertLegacyNoPatchLineage(value,'metadata-legacy-no-lineage');}},
   './reader-target-ordinal-patch':{validateCompletion(value){return assertLegacyNoPatchLineage(value,'ordinal-legacy-no-lineage');}},
+  './reader-fact-table-claim-location':{validatePublication(value){return assertLegacyNoPatchLineage(value,'claim-location-legacy-no-lineage');}},
   '../deep-analyzer':{readerResourceClaimDraftFromArticle(){return {};},assertReaderResultTableSemantics(){calls.push('table-semantics');},
    enforceReaderResourceClaims(){calls.push('resource-claims');},readerResourcePublicationResources(){calls.push('resources');return [];}},
   '../analysis-contract':{validateCoreSummaryStageBinding(value,options){assert.equal(JSON.stringify(value),JSON.stringify(paper));assert.equal(options.sourceText,sourceText);calls.push('normal-core-stage');return coreIssue;}}
@@ -45,7 +47,7 @@ test('严格同次出版模式沿原正常表语义、资源与核心函数一�
  const result=await replay();assert.equal(result.exitCode,0,JSON.stringify(result.response));assert.equal(result.response.verified,true);
  assert.equal(result.response.coreSummaryIssue,null);assert.deepEqual(result.response.resources,[]);
  assert.deepEqual(result.response.publicationReplay,{contract:'publication-one-invocation-source-replay-v1',inputSha256:result.inputSha256});
- assert.deepEqual(result.calls,['runtime','actual-source-scope-fixture','metadata-legacy-no-lineage','ordinal-legacy-no-lineage','table-semantics','resource-claims','resources','normal-core-stage']);
+ assert.deepEqual(result.calls,['runtime','actual-source-scope-fixture','metadata-legacy-no-lineage','ordinal-legacy-no-lineage','claim-location-legacy-no-lineage','table-semantics','resource-claims','resources','normal-core-stage']);
 });
 test('真实正常核心失败仍拒绝，不从已完成声明或自报JSON产生出版证明',async()=>{
  const result=await replay({},'fixture core failure');assert.equal(result.exitCode,1);assert.equal(result.response.verified,false);
@@ -59,7 +61,9 @@ test('错型、额外资格字段与假结果不能进入新模式；旧只读�
  for(const lineage of [
   {freshRewriteProvenance:{contract:'fresh-source-analysis-v1'}},
   {analysisManifest:{contracts:{readerTargetOrdinalPatch:'reader-target-ordinal-patch-v1'}}},
-  {analysisManifest:{stages:{apiReaderArticle:{versionMetadataRecoveryProof:{}}}}}
+  {analysisManifest:{stages:{apiReaderArticle:{versionMetadataRecoveryProof:{}}}}},
+  {apiReaderFactFeedbackCorrection:{contract:'daily-reader-fact-table-claim-location-v1'}},
+  {analysisManifest:{stages:{apiReaderArticle:{factReviewClaimLocationCorrection:{}}}}}
  ]) {
   const result=await replay({paper:{sourceSha256:hash('The complete fixture source mentions no released resources.'),apiReaderPlan:{tableBindings:[]},apiReaderResources:{resources:[]},apiReaderArticle:'Fixture article',...lineage}});
   assert.equal(result.exitCode,1);assert.equal(result.response.verified,false);

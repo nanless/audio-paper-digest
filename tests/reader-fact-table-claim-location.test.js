@@ -12,8 +12,10 @@ write(path.join(tmp,'.git/HEAD'),'ref: refs/heads/test\n');write(path.join(tmp,'
 write(path.join(tmp,'package.json'),JSON.stringify({type:'commonjs'}));
 write(path.join(tmp,'.paper-digest-workspace-role.json'),JSON.stringify({contract:'paper-digest-workspace-role-v1',version:1,role:'daily',workspaceRealpath:tmp}));
 write(path.join(tmp,'.env'),'PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor\nPAPER_ANALYZER_API_KEY=unused-no-network\nPAPER_ANALYZER_ENDPOINT=https://invalid.example/v1\nHTTPS_PROXY=http://127.0.0.1:9\nHTTP_PROXY=http://127.0.0.1:9\n');
-const python=fs.existsSync(path.join(ROOT,'.venv/bin/python'))?path.join(ROOT,'.venv/bin/python'):'/usr/bin/python3';
-write(path.join(tmp,'.venv/bin/python'),'#!/bin/sh\nexec '+JSON.stringify(python)+' "$@"\n');fs.chmodSync(path.join(tmp,'.venv/bin/python'),0o700);
+// The copied extractor must use the same supported interpreter selection as the
+// actual project, including setup-python's PATH on CI when ROOT has no .venv.
+const shellQuote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
+write(path.join(tmp,'.venv/bin/python'),'#!/bin/sh\ncd '+shellQuote(ROOT)+'\nexec bash '+shellQuote(path.join(ROOT,'scripts/python-runtime.sh'))+' "$@"\n');fs.chmodSync(path.join(tmp,'.venv/bin/python'),0o700);
 process.env.NODE_PATH=[path.join(ROOT,'node_modules'),process.env.NODE_PATH].filter(Boolean).join(path.delimiter);require('node:module').Module._initPaths();
 process.env.TMPDIR=tmp;process.env.TMP=tmp;process.env.TEMP=tmp;process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS='1';process.env.PYTHONDONTWRITEBYTECODE='1';
 const deny=()=>{throw Error('test forbids network/model requests');};require('node:net').Socket.prototype.connect=deny;require('node:tls').connect=deny;for(const n of ['node:http','node:https']){require(n).request=deny;require(n).get=deny;}globalThis.fetch=deny;

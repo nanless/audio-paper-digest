@@ -26,7 +26,7 @@ for(const name of ['deep-analyzer.js','analysis-engine.js','publish-to-blog.py',
 if(process.env.TEST_METADATA_PUBLICATION_SOURCE)fs.copyFileSync(process.env.TEST_METADATA_PUBLICATION_SOURCE,path.join(workspace,'scripts/lib/reader-request-diagnostics.js'));
 process.env.NODE_PATH=path.join(project,'node_modules');require('node:module').Module._initPaths();
 const guardPath=path.join(project,'tests/helpers/isolated-tmp-write-guard.cjs');
-assert.equal(sha(fs.readFileSync(guardPath)),'1581c918dace28ad826f919c742d38695d583cd4b778d7bc1b5ad2e74056743c');
+assert.equal(sha(fs.readFileSync(guardPath)),'3e0d04767bab55d468dbe123c64f3bdccd730bb39ca3851bf241ce6e44bc8a66');
 const oldTransport=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(project,'tests/fixtures/reader-transport-continuation-2610-34220.json.gz'))));
 const originalCanonicalParent=path.join(project,'data/runtime/daily-fresh-source-runs',oldTransport.runId,'reader-attempts/explicit-retry-rounds',oldTransport.parentReceipt.basename);
 const canonicalParent=fs.existsSync(originalCanonicalParent)?originalCanonicalParent:path.join(project,'tests/fixtures/reader-transport-continuation-2610-34220.json.gz');
