@@ -76,6 +76,8 @@ def build_aggregate_reader_presentations(records, *, publisher=None):
 def normalize_repeated_bold_prefixes(value):
     """Project identical adjacent bold labels, preserving quoted/code bytes.
 
+    Balanced inline-code atoms can belong to a repeated whole label; their
+    bytes remain opaque and only exactly identical atoms compare equal.
     This only narrows the old daily display rule outside ordinary Reader prose.
     It does not normalize numeric values, TeX, source evidence or image labels.
     """
@@ -84,7 +86,7 @@ def normalize_repeated_bold_prefixes(value):
     protected = re.compile(
         r'`+'
         r'|!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)'
-        r'|<?https://[^\s<>]+>?')
+        r'|<?https?://[^\s<>]+>?')
     output, fence = [], None
     for line in str(value or '').splitlines(keepends=True):
         marker = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
@@ -98,17 +100,48 @@ def normalize_repeated_bold_prefixes(value):
             fence = marker[1]; output.append(line); continue
         if re.match(r'^\s*(?:>\s*|\*论文图\s)', line) or re.match(r'^(?: {4}|\t)', line):
             output.append(line); continue
-        parts, start = [], 0
+        # Mask complete code atoms within a prose segment, rather than splitting
+        # a whole bold label at each atom. Equal raw atoms share a token so the
+        # existing whole-label backreference still requires exact equality.
+        prefix = '\x00reader-code:'
+        while prefix in line:
+            prefix += '\x00'
+        atoms, prose, parts, start = {}, [], [], 0
+
+        def flush_prose():
+            projected = pattern.sub(r'**\1\2** ', ''.join(prose))
+            for raw, token in atoms.items():
+                projected = projected.replace(token, raw)
+            parts.append(projected)
+            prose.clear()
+
         while (match := protected.search(line, start)) is not None:
             end = match.end()
+            prose.append(line[start:match.start()])
             if match[0].startswith('`'):
-                closing = re.compile(r'(?<!`)' + re.escape(match[0]) + r'(?!`)').search(line, end)
+                cursor = match.start()
+                while cursor > 0 and line[cursor - 1] == '\\':
+                    cursor -= 1
+                escaped = (match.start() - cursor) % 2 == 1
+                closing = (None if escaped else
+                           re.compile(r'(?<!`)' + re.escape(match[0]) + r'(?!`)').search(line, end))
                 # Unknown/unclosed code-like text is left intact as a
                 # conservative display restriction, not parsed as Markdown.
-                end = closing.end() if closing else len(line)
-            parts.extend((pattern.sub(r'**\1\2** ', line[start:match.start()]), line[match.start():end]))
+                if closing:
+                    end = closing.end()
+                    raw = line[match.start():end]
+                    token = atoms.setdefault(raw, prefix + str(len(atoms)) + '\x00')
+                    prose.append(token)
+                    start = end
+                    continue
+                end = len(line)
+            # Links, URLs and unclosed code remain barriers: no label match
+            # may cross them or inspect their bytes.
+            flush_prose()
+            parts.append(line[match.start():end])
             start = end
-        parts.append(pattern.sub(r'**\1\2** ', line[start:]))
+        prose.append(line[start:])
+        flush_prose()
         output.append(''.join(parts))
     return ''.join(output)
 

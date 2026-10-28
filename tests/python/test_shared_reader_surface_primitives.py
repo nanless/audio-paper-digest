@@ -97,8 +97,53 @@ class SharedReaderSurfacePrimitiveTests(unittest.TestCase):
         self.assertEqual(publisher._normalize_api_reader_source_cell('**分工：** **分工：**解释'),
                          publisher._normalize_api_reader_source_cell('**分工：** 解释'))
 
+    def test_whole_repeated_label_allows_only_identical_balanced_inline_code_atoms(self):
+        project = presentation.normalize_repeated_bold_prefixes
+        label = '压力源状态 × 思考痕迹 × `<PAD>`：'
+        raw = f'** {label}** ** {label}** 解释保留。'
+        expected = f'**{label}** 解释保留。'
+        for value, wanted in (
+            (raw, expected),
+            (f'** {label}**\t** {label}** ** {label}** 解释保留。', expected),
+            ('**`x` 与 ``a`b``：** **`x` 与 ``a`b``：** 文。',
+             '**`x` 与 ``a`b``：** 文。'),
+            ('**`**原样**`：** **`**原样**`：** 文。', '**`**原样**`：** 文。'),
+            ('`**分工：** **分工：**内部不改` ' + raw,
+             '`**分工：** **分工：**内部不改` ' + expected),
+            ('\x00reader-code:0\x00 ' + raw, '\x00reader-code:0\x00 ' + expected),
+            (r'**\\`x`：** **\\`x`：** 文。', r'**\\`x`：** 文。'),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(project(value), wanted)
+                self.assertEqual(project(project(value)), wanted)
+        protected = (
+            '**`<PAD>`：** **`<pad>`：** 文。',
+            '**`<PAD>`：** **``<PAD>``：** 文。',
+            '**`<PAD>`：** **` <PAD> `：** 文。',
+            '**`<PAD>`：** **`<PAD>`:** 文。',
+            '**`<PAD>`：**\n**`<PAD>`：** 文。',
+            '**`<PAD>`：** 中间正文 **`<PAD>`：** 文。',
+            '`' + raw + '`', '`` ' + raw + ' ``', '`' + raw,
+            '**`未闭合：** **`未闭合：** 文。',
+            '**[标签](https://example.org)：** **[标签](https://example.org)：** 文。',
+            '**https://example.org/a：** **https://example.org/a：** 文。',
+            '**http://example.org/ `x`：** **http://example.org/ `x`：** 文。',
+            r'**\`https://example.org\`：** **\`https://example.org\`：** 文。',
+            r'**\`[x](https://example.org)\`：** **\`[x](https://example.org)\`：** 文。',
+            '[' + raw + '](https://example.org)',
+            '![' + raw + '](https://example.org/a.png)',
+            '> ' + raw, '    ' + raw, '\t' + raw,
+            '*论文图 1。原论文 Figure 1：“' + raw + '”。*',
+            '```markdown\n' + raw + '\n```\n',
+            '~~~text\n' + raw + '\n~~~\n',
+        )
+        for value in protected:
+            with self.subTest(protected=value):
+                self.assertEqual(project(value), value)
+        self.assertEqual(publisher._normalize_api_reader_display_artifacts(raw), expected)
+
     def test_both_conference_renderers_project_only_the_view_not_saved_reader(self):
-        duplicate = '**组件分工：** **组件分工：** 同一原始说明。'
+        duplicate = '**组件 `<PAD>` 分工：** **组件 `<PAD>` 分工：** 同一原始说明。'
         packet = conference.ConferencePageRenderTest().packet()
         packet['paper']['apiReaderArticle'] += '\n\n' + duplicate
         digest = hashlib.sha256(packet['paper']['apiReaderArticle'].encode()).hexdigest()
@@ -106,7 +151,7 @@ class SharedReaderSurfacePrimitiveTests(unittest.TestCase):
         packet['paper']['analysisManifest']['stages']['apiReaderArticle']['articleSha256'] = digest
         before = copy.deepcopy(packet)
         actual = conference.MODULE.render_packet(packet)['markdown']
-        self.assertIn('**组件分工：** 同一原始说明。', actual)
+        self.assertIn('**组件 `<PAD>` 分工：** 同一原始说明。', actual)
         self.assertNotIn(duplicate, actual)
         self.assertEqual(packet, before)
         paper = historical_conference_paper()
@@ -116,7 +161,7 @@ class SharedReaderSurfacePrimitiveTests(unittest.TestCase):
         before = copy.deepcopy(paper)
         actual = historical.renderer.render_packet({
             'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04'})['markdown']
-        self.assertIn('**组件分工：** 同一原始说明。', actual)
+        self.assertIn('**组件 `<PAD>` 分工：** 同一原始说明。', actual)
         self.assertNotIn(duplicate, actual)
         self.assertEqual(paper, before)
 
