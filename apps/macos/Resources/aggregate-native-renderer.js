@@ -40,6 +40,13 @@ function renderMath(body){
   }
   if(start){fragment.append(text.slice(start));node.replaceWith(fragment);}
  }
+ for(const math of body.querySelectorAll('math[display="block"]')){
+  const parent=math.parentElement;
+  if(!parent||math.closest('pre,code')||parent.closest('math')||parent.matches('.katex,.math-scroll'))continue;
+  // Only move the existing top-level MathML node; its tree and annotation stay intact.
+  const wrapper=math.ownerDocument.createElement('span');wrapper.className='math-scroll';
+  math.replaceWith(wrapper);wrapper.append(math);
+ }
 }
 
 const nonce=window.__nativeAggregateNonce,main=document.querySelector('body > main');

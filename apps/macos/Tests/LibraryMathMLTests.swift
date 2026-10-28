@@ -187,5 +187,61 @@ actor MathMLFixtureTransport {
   try expect(observed["before"] as? String=="source-before" && observed["after"] as? String=="source-after","actual WebKit keeps scientific text around formulas in source order")
   try expect(web.window==nil,"native MathML regression never orders or focuses a user window")
  }
- @MainActor static func main()async throws {setbuf(stdout,nil);try normal();try safety();try await integration();try await wk();print("LibraryMathML PASS \(checks) checks; real published-source four formulas, actual isolated WK and cache, no network/user GUI/model/Keychain")}
+ @MainActor static func displayOverflow()async throws {
+  let mac=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("apps/macos")
+  let fixtureURL=URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/sofilnet-display-math.json")
+  let fixture=try JSONSerialization.jsonObject(with:Data(contentsOf:fixtureURL)) as! [String:Any]
+  let real=fixture["formulas"] as! [[String:String]],annotations=real.map{$0["tex"]!}
+  try expect(real.count==4,"four source-bound SoFilNet display formulas used for actual WebKit overflow regression")
+  func source(_ relative:String)throws->String {try String(contentsOf:mac.appendingPathComponent(relative),encoding:.utf8)}
+  func between(_ value:String,_ start:String,_ end:String)throws->String {
+   guard let a=value.range(of:start),let z=value.range(of:end,range:a.upperBound..<value.endIndex) else{throw LibraryService.ServiceError.invalid("missing actual production renderer boundary")}
+   return String(value[a.upperBound..<z.lowerBound])
+  }
+  let native=try source("Resources/native.js"),aggregate=try source("Resources/aggregate-native-renderer.js")
+  let helperStart="function escapedAt",helperEnd="const readerCSS=",aggregateEnd="const nonce=window.__nativeAggregateNonce"
+  guard let start=native.range(of:helperStart),let markdown=native.range(of:"function markdownHTML"),let rendering=native.range(of:"function renderMath(body)"),let end=native.range(of:helperEnd),let aggregateStart=aggregate.range(of:helperStart),let aggregateTail=aggregate.range(of:aggregateEnd) else{throw LibraryService.ServiceError.invalid("missing actual scientific renderer")}
+  let helper=String(native[start.lowerBound..<markdown.lowerBound])+String(native[rendering.lowerBound..<end.lowerBound]),aggregateHelper=String(aggregate[aggregateStart.lowerBound..<aggregateTail.lowerBound])
+  try expect(helper.trimmingCharacters(in:.whitespacesAndNewlines)==aggregateHelper.trimmingCharacters(in:.whitespacesAndNewlines),"reader and native aggregate execute the same actual scientific rendering helpers")
+  let katex=try source("node_modules/katex/dist/katex.min.js")
+  let variants=[("reader",try between(native,"const readerCSS=`","`;")),("web-aggregate",try between(source("Resources/aggregate-ui.js"),"const frameCSS=`","`;")),("native-aggregate",try source("Resources/aggregate-native-body.css")),("standalone-guide",try between(source("Sources/AppDocuments.swift"),"<style>","</style>"))]
+  let controls="<p id='inline-control'>前文<math><mi>x</mi></math>后文</p><math id='nested-control'><mrow><math display='block'><mi>y</mi></math></mrow></math><pre id='code-control'><code><math display='block'><mi>z</mi></math></code></pre><table><tr>"+(0..<12).map{"<td>受控宽表列\($0)</td>"}.joined()+"</tr></table>"
+  for (name,css) in variants {for raw in [false,true] {for width in [430,700] {
+   let config=WKWebViewConfiguration();config.websiteDataStore = .nonPersistent()
+   let web=WKWebView(frame:NSRect(x:0,y:0,width:CGFloat(width),height:1000),configuration:config)
+   let html="<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='Content-Security-Policy' content=\"default-src 'none';script-src 'none';style-src 'unsafe-inline'\"><style>"+css+":root{--font:24px}</style></head><body><main></main></body></html>"
+   web.loadHTMLString(html,baseURL:nil);var ready=false
+   for _ in 0..<400 {if (try? await web.evaluateJavaScript("document.readyState==='complete'&&!!document.querySelector('main')")) as? Bool==true{ready=true;break};try await Task.sleep(nanoseconds:10_000_000)}
+   try expect(ready,"actual script-free WebKit document loaded for "+name)
+   // Native test inspection runs the exact trusted renderer; page content remains script-free.
+   _=try await web.evaluateJavaScript(katex+";true")
+   _=try await web.evaluateJavaScript(helper+";true")
+   let payload:[String:Any]=["formulas":real.map{$0["html"]!},"tex":annotations,"controls":controls,"raw":raw]
+   let encoded=String(decoding:try JSONSerialization.data(withJSONObject:payload,options:.sortedKeys),as:UTF8.self)
+   let observed=try await web.evaluateJavaScript("const fixture112="+encoded+";" + #"""
+   (()=>{
+    const main=document.querySelector('main');main.innerHTML=fixture112.formulas.map((html,i)=>'<section id="formula-'+i+'">'+html+'</section>').join('')+fixture112.controls;
+    if(fixture112.raw)for(const s of main.querySelectorAll('section')){const math=s.querySelector('math');s.replaceChildren(math);}
+    const formulas=[...main.querySelectorAll('section math')],before=formulas.map(m=>m.outerHTML),expected=fixture112.raw?before:fixture112.tex.map(tex=>{const host=document.createElement('span');katex.render(tex,host,{displayMode:true,throwOnError:false,output:'mathml',trust:false,strict:'warn'});return host.querySelector('math').outerHTML;}),controlBefore=['inline-control','nested-control','code-control'].map(id=>document.getElementById(id).outerHTML);
+    renderMath(main);const once=main.innerHTML;renderMath(main);
+    const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}};
+    const metrics=formulas.map((old,i)=>{const m=document.querySelector('#formula-'+i+' math'),parent=m.parentElement,box=rect(parent),glyphs=[...m.querySelectorAll('mi,mn,mo')].filter(n=>!n.closest('annotation')),first=glyphs[0],last=glyphs[glyphs.length-1];parent.scrollLeft=0;const firstLeft=rect(first).left;parent.scrollLeft=100000;const lastRight=rect(last).right;const value={client:parent.clientWidth,scroll:parent.scrollWidth,left:parent.scrollLeft,firstVisible:firstLeft>=box.left-1,lastVisible:lastRight<=box.right+1,local:parent!==main&&parent.clientWidth>0&&getComputedStyle(parent).overflowX==='auto',preserved:m.outerHTML===expected[i],rawNodePreserved:!fixture112.raw||m===old,originalMarkupExact:m.outerHTML===before[i],annotation:m.querySelector('annotation').textContent};parent.scrollLeft=0;return value;});
+    const inline=document.querySelector('#inline-control'),range=document.createRange();range.selectNodeContents(inline.firstChild);const text=range.getBoundingClientRect(),mathRect=inline.querySelector('math').getBoundingClientRect();
+    const table=main.querySelector('table');table.scrollLeft=100000;
+    return {metrics,idempotent:once===main.innerHTML,controlsExact:controlBefore.every((x,i)=>x===document.getElementById(['inline-control','nested-control','code-control'][i]).outerHTML),inlineSameLine:Math.min(text.bottom,mathRect.bottom)>Math.max(text.top,mathRect.top),docWidth:document.documentElement.scrollWidth,viewport:innerWidth,katex:katex.version,table:{client:table.clientWidth,scroll:table.scrollWidth,left:table.scrollLeft}};
+   })()
+   """#) as! [String:Any]
+   let metrics=observed["metrics"] as! [[String:Any]]
+   try expect(observed["katex"] as? String=="0.19.1" && metrics.map{$0["annotation"] as! String}==annotations,"actual locked renderer retains all four exact public TeX annotations")
+   try expect(metrics.allSatisfy{$0["preserved"] as? Bool==true && $0["rawNodePreserved"] as? Bool==true} && observed["controlsExact"] as? Bool==true && observed["idempotent"] as? Bool==true,"display wrapping preserves direct original MathML nodes/trees, canonical KaTeX DOM result and controls idempotently")
+   try expect(metrics.allSatisfy{v in let overflow=(v["scroll"] as! Int)-(v["client"] as! Int);return v["local"] as? Bool==true && v["firstVisible"] as? Bool==true && v["lastVisible"] as? Bool==true && (overflow<=1 || (v["left"] as! Int)>0)},"actual WebKit local horizontal scroll reaches first and last visible glyph in "+name+" raw=\(raw) width=\(width)")
+   try expect((observed["docWidth"] as! Int)<=(observed["viewport"] as! Int)+1 && observed["inlineSameLine"] as? Bool==true,"display overflow stays local; inline math remains on its prose line")
+   let table=observed["table"] as! [String:Any]
+   try expect((table["scroll"] as! Int)>(table["client"] as! Int)+1 ? (table["left"] as! Int)>0 : (table["left"] as! Int)==0,"ordinary table is naturally fitted or locally scrollable when its actual width requires it")
+   try expect(web.window==nil,"overflow test never opens or focuses a window")
+   print("WK_DISPLAY_MATH "+String(decoding:try JSONSerialization.data(withJSONObject:["variant":name,"raw":raw,"width":width,"observed":observed],options:.sortedKeys),as:UTF8.self))
+   web.stopLoading()
+  }}}
+ }
+ @MainActor static func main()async throws {setbuf(stdout,nil);try normal();try safety();try await integration();try await wk();try await displayOverflow();print("LibraryMathML PASS \(checks) checks; real published-source four formulas, actual isolated WK and cache, no network/user GUI/model/Keychain")}
 }
