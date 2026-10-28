@@ -14,6 +14,54 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class SourceCellMathDisplayTests(unittest.TestCase):
+    def test_exact_zero_width_ms_duplicate_preserves_numeric_bytes_and_source_proof(self):
+        for scalar in ('0.991', '1.290', '1.216', '9.760', '.5', '-0.50', '+1', '−2.0'):
+            raw = scalar + '\u200bm\u200bs' + scalar + 'ms'
+            with self.subTest(raw=raw):
+                proof = strict_source_cell_math_display(raw)
+                self.assertEqual(proof, {
+                    'contract': 'source-cell-math-display-v1', 'kind': 'zero-width-unit-duplicate',
+                    'sourceText': raw, 'sourceTextSha256': hashlib.sha256(raw.encode()).hexdigest(),
+                    'displayText': scalar + ' ms'})
+                self.assertIsNone(strict_source_cell_math_display(proof['displayText']))
+        raw = '0.991\u200bm\u200bs0.991ms'
+        for wrong in (
+            '0.991ms0.991ms', '0.991 ms0.991ms',
+            raw.replace('\u200b', '', 1), raw.replace('\u200b', '\u200b\u200b', 1),
+            raw.replace('\u200b', '\u200c'), raw.replace('\u200b', '\ufeff'),
+            raw.replace('0.991ms', '0.992ms'), raw.replace('0.991ms', '0.9910ms'),
+            raw.replace('0.991ms', '.991ms'), raw.replace('ms', 's'),
+            raw.replace('ms', 'MS'), raw.replace('ms', ' ms'),
+            raw.replace('m\u200bs', 's\u200bm'), raw.replace('m\u200bs', 'm\u200bs\u200b'),
+            raw.replace('m\u200bs', 'm\u200b s'),
+            ' ' + raw, raw + ' ', raw + '\n', 'x=' + raw, raw + '+1',
+            raw + '/2', raw + ' Hz', '`' + raw + '`', '**' + raw + '**',
+            '[' + raw + '](https://example.org)', '<span>' + raw + '</span>',
+        ):
+            with self.subTest(wrong=wrong):
+                self.assertIsNone(strict_source_cell_math_display(wrong))
+
+    def test_zero_width_ms_view_requires_bound_whole_cell_and_protects_other_regions(self):
+        raw = '0.991\u200bm\u200bs0.991ms'
+        table = f'| Method | Time |\n| --- | --- |\n| A | {raw} |'
+        article = ('正文 ' + raw + '\n\n`' + raw + '`\n\n'
+                   '```text\n' + table + '\n```\n\n'
+                   '> ' + table.replace('\n', '\n> ') + '\n\n'
+                   '    ' + table.replace('\n', '\n    ') + '\n\n' + table)
+        plan = {'tableBindings': [{'tableIndex': 1, 'sourceType': 'artifact_table', 'cellBindings': [
+            {'renderedRow': 1, 'renderedColumn': 1, 'renderedText': raw, 'sourceText': raw}]}]}
+        before = copy.deepcopy(plan)
+        projected = blog._project_bound_source_cell_math_display(article, plan)
+        self.assertEqual(projected, article[:-len(table)] + table.replace(raw, '0.991 ms'))
+        self.assertEqual(plan, before)
+        self.assertEqual(blog._project_bound_source_cell_math_display(article, {'tableBindings': []}), article)
+        quotes = copy.deepcopy(plan); quotes['tableBindings'][0]['sourceType'] = 'source_quotes'
+        self.assertEqual(blog._project_bound_source_cell_math_display(article, quotes), article)
+        for field, value in [('sourceText', '0.992\u200bm\u200bs0.992ms'),
+                             ('renderedText', '0.992\u200bm\u200bs0.992ms')]:
+            wrong = copy.deepcopy(plan); wrong['tableBindings'][0]['cellBindings'][0][field] = value
+            self.assertEqual(blog._project_bound_source_cell_math_display(article, wrong), article)
+
     def test_shared_real_and_negative_cell_fixtures(self):
         fixture = json.loads((ROOT / 'tests/fixtures/source-cell-math-display-cases.json').read_text())
         for item in fixture['cases']:
@@ -44,7 +92,8 @@ class SourceCellMathDisplayTests(unittest.TestCase):
 
     def test_final_binding_decoder_never_accepts_a_different_canonical_cell(self):
         from test_table_currency_unit_literals import TableCurrencyUnitLiteralTest
-        for raw in ('[22]8[2^{2}]^{8}', r'0.5117±0.0042¯\underline{0.5117\pm 0.0042}'):
+        for raw in ('[22]8[2^{2}]^{8}', r'0.5117±0.0042¯\underline{0.5117\pm 0.0042}',
+                    '0.991\u200bm\u200bs0.991ms'):
             publisher, paper, reseal = TableCurrencyUnitLiteralTest().currency_source_fixture(raw)
             before = copy.deepcopy(paper)
             view = publisher._project_bound_source_cell_math_display(paper['apiReaderArticle'], paper['apiReaderPlan'])
