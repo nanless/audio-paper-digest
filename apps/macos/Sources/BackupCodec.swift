@@ -133,6 +133,17 @@ public enum BackupCodec {
     public static let maxDecodedBytes=512*1024*1024
     public static let maxEncodedBytes=750*1024*1024
     public static let maxEntries=100_000
+    /// Device-local response seals are never portable backup material. Preserve
+    /// every other hidden/input/response/receipt/usage file unchanged.
+    public static let localOnlyKeyPaths = ["ModelUsage/response-integrity.key", "ModelUsage/response-integrity.android.key"]
+    public static func isLocalOnlyKey(_ path: String) -> Bool {
+        localOnlyKeyPaths.contains { PrivateStoragePaths.aliasKey($0) == PrivateStoragePaths.aliasKey(path) }
+    }
+    public static func requirePortable(_ payload: Payload) throws {
+        guard !payload.files.contains(where: { isLocalOnlyKey($0.path) }) else {
+            throw PrivateStoragePaths.StorageError.invalid("旧快照含本机专用校验密钥，禁止导出或续传；原快照与检查点已原样保留，请先本机保留后新建不含密钥的备份")
+        }
+    }
     public struct Entry: Codable, Sendable {
         public let path:String
         public let sha256:String
@@ -167,6 +178,7 @@ public enum BackupCodec {
             guard actual.hasPrefix(prefix) else{throw PrivateStoragePaths.StorageError.invalid("备份枚举逃逸")}
             let relative=String(actual.dropFirst(prefix.count))
             _=try PrivateStoragePaths.checkedFile(relative:relative,directory:root)
+            if isLocalOnlyKey(relative) { continue } // metadata checked, secret bytes never read
             let bytes=try PrivateStoragePaths.boundedData(file,limit:maxDecodedBytes-total)
             total+=bytes.count
             files.append(Entry(path:relative,sha256:PrivateStoragePaths.sha256(bytes),data:bytes))
@@ -179,6 +191,7 @@ public enum BackupCodec {
     }
     public static func encode(_ payload:Payload) throws -> Data {
         try validate(payload)
+        try requirePortable(payload)
         let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
         let data=try encoder.encode(payload)
         guard data.count<=maxEncodedBytes else{throw PrivateStoragePaths.StorageError.invalid("备份编码超过750MiB")}
@@ -203,7 +216,7 @@ public enum BackupCodec {
         let fm=FileManager.default
         try fm.createDirectory(at:result,withIntermediateDirectories:false,attributes:[.posixPermissions:0o700])
         do {
-            for entry in payload.files {
+            for entry in payload.files where !isLocalOnlyKey(entry.path) {
                 let file=result.appendingPathComponent(entry.path)
                 try fm.createDirectory(at:file.deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
                 try entry.data.write(to:file,options:[.atomic])
@@ -214,7 +227,7 @@ public enum BackupCodec {
             let mapFile=result.appendingPathComponent(PrivateStoragePaths.aliasesFilename)
             try map.write(to:mapFile,options:[.atomic]);try fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:mapFile.path)
             // Stage readback does not turn arbitrary JSON into source credentials.
-            for entry in payload.files where entry.path != PrivateStoragePaths.aliasesFilename {
+            for entry in payload.files where entry.path != PrivateStoragePaths.aliasesFilename && !isLocalOnlyKey(entry.path) {
                 let file=try PrivateStoragePaths.checkedFile(relative:entry.path,directory:result)
                 guard try PrivateStoragePaths.sha256File(file)==entry.sha256 else{throw PrivateStoragePaths.StorageError.invalid("恢复暂存文件回读不符")}
             }

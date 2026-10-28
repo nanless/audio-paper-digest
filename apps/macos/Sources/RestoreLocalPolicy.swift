@@ -53,6 +53,22 @@ enum RequestBudgetContinuity {
 
 @MainActor enum RestoreLocalPolicy {
     static let connectionKeys: Set<String> = ["endpoint", "model", "protocol", "httpProxy", "responsesStream", "reasoningEffort", "maxTokens", "timeoutMs", "dailyRequests"]
+    /// Runs before the live-root swap. Only the destination Mac's keys survive;
+    /// imported archive keys have already been fully verified then skipped by stage.
+    private static func preserveLocalIntegrityKeys(stage: URL, current: URL) throws {
+        let fm = FileManager.default
+        for relative in BackupCodec.localOnlyKeyPaths {
+            let source = current.appendingPathComponent(relative)
+            guard fm.fileExists(atPath: source.path) || (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true else { continue }
+            let checked = try PrivateStoragePaths.checkedFile(relative: relative, directory: current)
+            let destination = stage.appendingPathComponent(relative), parent = destination.deletingLastPathComponent()
+            if fm.fileExists(atPath: parent.path) { _ = try PrivateStoragePaths.checkedDirectory(parent) }
+            else { try fm.createDirectory(at: parent, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
+            guard !fm.fileExists(atPath: destination.path), (try? destination.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { throw DesktopError.message("恢复暂存区含本机专用密钥冲突，原空间未改变") }
+            try fm.copyItem(at: checked, to: destination)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+        }
+    }
     static func apply(stage: URL, current: URL) throws {
         let currentFile = try PrivateStoragePaths.checkedFile(relative: "personal.json", directory: current)
         let stagedFile = try PrivateStoragePaths.checkedFile(relative: "personal.json", directory: stage)
@@ -61,6 +77,7 @@ enum RequestBudgetContinuity {
         guard let local = try JSONSerialization.jsonObject(with: currentData) as? [String: Any],
               var restored = try JSONSerialization.jsonObject(with: original) as? [String: Any] else { throw DesktopError.message("恢复资料无法读取，当前空间保留") }
         try DesktopStore.validate(local); try DesktopStore.validate(restored)
+        try preserveLocalIntegrityKeys(stage: stage, current: current)
         let localSettings = local["settings"] as! [String: Any]
         var restoredSettings = restored["settings"] as! [String: Any]
         for key in connectionKeys { restoredSettings.removeValue(forKey: key); if let value = localSettings[key] { restoredSettings[key] = value } }

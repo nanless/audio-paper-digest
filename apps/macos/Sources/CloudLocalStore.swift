@@ -130,6 +130,9 @@ import Foundation
         }
         let payload = try BackupCodec.parse(bytes)
         guard payload.files.count == pending.fileCount else { throw DesktopError.message("原续传快照文件数与实际材料不符") }
+        // Never filter/re-encode an old UUID-bound snapshot. Block before any
+        // credential/transport use and leave pending bytes/checkpoint untouched.
+        try BackupCodec.requirePortable(payload)
         return bytes
     }
     func saveCheckpoint(_ checkpoint: CloudArchiveService.UploadCheckpoint, destinationID: UUID, sha256: String) throws {

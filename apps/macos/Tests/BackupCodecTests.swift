@@ -177,6 +177,49 @@ private struct BackupTestError: Error, LocalizedError {
             try rejects{_=try BackupCodec.stage(payload([entry(String(repeating:"x",count:300))]),parentDirectory:root)}
             try require(Set(stages())==before,"failed stage removed");try unchanged()
         }
+        check("capture excludes only two local ModelUsage seals before reading bytes, preserving other research") {
+            let d=root.appendingPathComponent("local-seals");try fm.createDirectory(at:d,withIntermediateDirectories:false)
+            try personal.write(to:d.appendingPathComponent("personal.json"))
+            try fm.createDirectory(at:d.appendingPathComponent("ModelUsage"),withIntermediateDirectories:false)
+            let keep=[".hidden","other.key","response-integrity.key","ModelUsage/input.json","ModelUsage/response.json","ModelUsage/receipt.json","ModelUsage/usage.json","ModelUsage/other.key"]
+            for path in keep { try Data("ordinary synthetic research".utf8).write(to:d.appendingPathComponent(path)) }
+            for path in BackupCodec.localOnlyKeyPaths {
+                let key=d.appendingPathComponent(path);try Data().write(to:key)
+                let handle=try FileHandle(forWritingTo:key);try handle.truncate(atOffset:UInt64(BackupCodec.maxDecodedBytes+1));try handle.close()
+            }
+            let result=try BackupCodec.collect(sourceDirectory:d)
+            try require(result.files.count==keep.count+1 && !result.files.contains{BackupCodec.isLocalOnlyKey($0.path)},"no local key entry or per-file fingerprint; oversize key bytes never read")
+            try require(Set(result.files.map(\.path))==Set(keep+["personal.json"]),"all other hidden/key-named/input/response/receipt/usage files retained")
+            _=try BackupCodec.encode(result)
+        }
+        check("legacy key-containing archives fully verify then stage skips keys without changing response bytes") {
+            let response=Data("original sealed response fixture".utf8)
+            let legacy=payload(BackupCodec.localOnlyKeyPaths.map{entry($0,Data("synthetic old device key".utf8))}+[entry("ModelUsage/response.json",response)])
+            // JSONEncoder is deliberate test-only legacy construction; production encode must refuse.
+            let bytes=try JSONEncoder().encode(legacy),decoded=try BackupCodec.parse(bytes)
+            let oldFile=root.appendingPathComponent("legacy-original.paperdigest");try bytes.write(to:oldFile)
+            let staged=try BackupCodec.stage(decoded,parentDirectory:root);defer{try? fm.removeItem(at:staged.stageDirectory)}
+            try require(decoded.files.count==4,"old entries not rewritten during parse")
+            for path in BackupCodec.localOnlyKeyPaths{try require(!fm.fileExists(atPath:staged.stageDirectory.appendingPathComponent(path).path),"old key not imported")}
+            try require(try Data(contentsOf:staged.stageDirectory.appendingPathComponent("ModelUsage/response.json"))==response,"old response byte preserved without reseal")
+            try rejects{_=try BackupCodec.encode(decoded)}
+            try require(try Data(contentsOf:oldFile)==bytes,"legacy encoded archive remains byte-exact and locally usable")
+        }
+        check("reserved local seal case aliases cannot bypass portable export or restore policy") {
+            for path in ["modelusage/RESPONSE-INTEGRITY.KEY","MODELUSAGE/response-integrity.ANDROID.key"] {
+                let legacy=payload([entry(path)])
+                try require(BackupCodec.isLocalOnlyKey(path),"case alias recognized")
+                try rejects{_=try BackupCodec.encode(legacy)}
+                let staged=try BackupCodec.stage(legacy,parentDirectory:root);defer{try? fm.removeItem(at:staged.stageDirectory)}
+                try require(!fm.fileExists(atPath:staged.stageDirectory.appendingPathComponent(path).path),"alias key skipped")
+            }
+        }
+        check("even skipped legacy key bytes must pass original SHA before staging") {
+            let bad=BackupCodec.Entry(path:BackupCodec.localOnlyKeyPaths[0],sha256:String(repeating:"0",count:64),data:Data("synthetic damaged key".utf8))
+            let bytes=try JSONEncoder().encode(payload([bad])),before=stages()
+            try rejects{_=try BackupCodec.parse(bytes)};try rejects{_=try BackupCodec.stage(data:bytes,parentDirectory:root)}
+            try require(stages()==before,"corrupt skipped secret never bypasses integrity or writes stage")
+        }
         print("Backup codec regression: \(passed) passed; \(failures.count) failed. Temporary fixtures only; no live app, network, or Keychain access.")
         if !failures.isEmpty{FileHandle.standardError.write(Data((failures.joined(separator:"\n")+"\n").utf8));fflush(stdout);exit(1)}
     }

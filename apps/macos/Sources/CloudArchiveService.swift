@@ -56,13 +56,14 @@ public actor CloudArchiveService {
         public let chunkCount: Int
     }
     public enum CloudError: Error, LocalizedError, Sendable, Equatable {
-        case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing
+        case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing, localOnlySecret
         case credentialsUnavailable, authentication, forbidden, transport, redirect, oversizedResponse, busy, checkpointStore
         case httpStatus(Int), throttled(Date)
         public var errorDescription: String? {
             switch self {
             case .invalidConfiguration: return "坚果云配置无效；请使用单级英文目录和应用专用密码"
             case .invalidBackup: return "研究备份无效或超过完整备份上限（原资料512MiB、编码750MiB）"
+            case .localOnlySecret: return "旧快照含本机专用校验密钥，已停止上传；原快照与检查点保留在本机，请先原样保留后新建备份"
             case .invalidCheckpoint: return "续传记录与当前云目标或原备份不一致"
             case .integrity: return "云端快照内容校验失败；原本地资料未改变"
             case .incompleteListing: return "云端月份列表不完整，不能据此判断备份是否存在"
@@ -131,7 +132,9 @@ public actor CloudArchiveService {
     }
     public func upload(encodedBackup data: Data, resuming checkpoint: UploadCheckpoint? = nil) async throws -> SnapshotInfo {
         try begin(); defer { end() }
-        do { _ = try BackupCodec.parse(data) } catch { throw CloudError.invalidBackup }
+        let payload: BackupCodec.Payload
+        do { payload = try BackupCodec.parse(data) } catch { throw CloudError.invalidBackup }
+        do { try BackupCodec.requirePortable(payload) } catch { throw CloudError.localOnlySecret }
         let chunks = Self.makeChunks(data)
         var state: UploadCheckpoint
         if let checkpoint {

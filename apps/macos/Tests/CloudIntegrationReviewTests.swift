@@ -114,6 +114,53 @@ private actor IntegrationDAV {
             app.model=ModelService(directory:d,store:app.store,keyProvider:{throw DesktopError.message("Credential fixture forbids model keys")})
             apps.append(app);return app
         }
+        // Public synthetic fixtures only: restore keeps destination-local seals,
+        // legacy payloads remain readable, and unsafe pending bytes never resume.
+        do {
+            let source=try folder("seal-old-source"),current=try folder("seal-destination")
+            _=try DesktopStore(directory:source);_=try DesktopStore(directory:current)
+            for d in [source,current] { try fm.createDirectory(at:d.appendingPathComponent("ModelUsage"),withIntermediateDirectories:false) }
+            let oldKey=Data(repeating:0x11,count:32),localKey=Data(repeating:0x22,count:32),response=Data("original synthetic response, never resealed".utf8)
+            for p in BackupCodec.localOnlyKeyPaths { try oldKey.write(to:source.appendingPathComponent(p));try localKey.write(to:current.appendingPathComponent(p)) }
+            try response.write(to:source.appendingPathComponent("ModelUsage/response.json"))
+            let portable=try BackupCodec.collect(sourceDirectory:source)
+            let entries=portable.files + BackupCodec.localOnlyKeyPaths.map { BackupCodec.Entry(path:$0,sha256:PrivateStoragePaths.sha256(oldKey),data:oldKey) }
+            let legacy=BackupCodec.Payload(sourceDirectory:source.path,files:entries),legacyBytes=try JSONEncoder().encode(legacy)
+            let stage=try BackupCodec.stage(data:legacyBytes,parentDirectory:root).stageDirectory
+            try RestoreLocalPolicy.apply(stage:stage,current:current)
+            for p in BackupCodec.localOnlyKeyPaths {
+                try check(try Data(contentsOf:stage.appendingPathComponent(p))==localKey && Data(contentsOf:current.appendingPathComponent(p))==localKey,"restore preserves destination seal in staged new-live root, not source archive seal")
+                let permissions=try fm.attributesOfItem(atPath:stage.appendingPathComponent(p).path)[.posixPermissions] as! NSNumber
+                try check(permissions.intValue & 0o777 == 0o600,"preserved destination seal stays0600")
+            }
+            try check(try Data(contentsOf:stage.appendingPathComponent("ModelUsage/response.json"))==response,"restore does not resign or rewrite old response")
+            let recaptured=try BackupCodec.collect(sourceDirectory:stage)
+            try check(!recaptured.files.contains{BackupCodec.isLocalOnlyKey($0.path)},"preserved local seals never reenter export/cloud manifest")
+            let fresh=try folder("seal-fresh-destination");_=try DesktopStore(directory:fresh)
+            let freshStage=try BackupCodec.stage(data:legacyBytes,parentDirectory:root).stageDirectory
+            try RestoreLocalPolicy.apply(stage:freshStage,current:fresh)
+            try check(BackupCodec.localOnlyKeyPaths.allSatisfy{!fm.fileExists(atPath:freshStage.appendingPathComponent($0).path)},"fresh restore imports no archive seal, normal model use may create its own later")
+
+            let local=try CloudLocalStore(dataDirectory:source)
+            try local.save(account:"fixture@example.invalid",folder:"PaperDigestFixture",automatic:false,intervalHours:24)
+            let legacyPending=CloudLocalStore.Pending(contract:"paperdigest-cloud-pending-v1",destinationID:local.profile.destinationID,createdAt:"2026-10-24T12:00:00Z",fileCount:legacy.files.count,encodedBytes:legacyBytes.count,sha256:PrivateStoragePaths.sha256(legacyBytes),checkpoint:nil)
+            var originalPending=legacyPending;originalPending.checkpoint=checkpoint(local,legacyPending,verified:[0],manifest:false)
+            let pendingFolder=local.root.appendingPathComponent(local.profile.destinationID.uuidString);try fm.createDirectory(at:pendingFolder,withIntermediateDirectories:false)
+            let pendingBytes=try JSONEncoder().encode(originalPending)
+            try pendingBytes.write(to:pendingFolder.appendingPathComponent("pending.json"));try legacyBytes.write(to:pendingFolder.appendingPathComponent("snapshot.paperdigest"))
+            try await rejected("legacy pending with local seals is blocked without reencoding original UUID/SHA"){_=try local.bytes(for:originalPending)}
+            let credential=IntegrationCredentialWait(),checkpointTouch=IntegrationCredentialWait(),dav=IntegrationDAV()
+            let engine=try CloudArchiveService(folder:local.profile.folder,destinationID:local.profile.destinationID,credentials:{await credential.enter();throw DesktopError.message("Forbidden credential access")},checkpointSink:{_ in await checkpointTouch.enter()},transport:{request,limit in try await dav.request(request,limit)},minimumRequestInterval:0)
+            try await rejected("raw legacy service upload is blocked before credential and transport"){_=try await engine.upload(encodedBackup:legacyBytes,resuming:originalPending.checkpoint)}
+            let credentialEntered=await credential.entered(),checkpointWritten=await checkpointTouch.entered(),requestCount=await dav.count()
+            try check(!credentialEntered && !checkpointWritten && requestCount==0,"unsafe legacy upload has zero credential reads/checkpoint writes/remote requests")
+            try check(try Data(contentsOf:pendingFolder.appendingPathComponent("pending.json"))==pendingBytes && Data(contentsOf:pendingFolder.appendingPathComponent("snapshot.paperdigest"))==legacyBytes,"blocked old pending and original encoded bytes stay exact")
+            let retained=try local.archivePending()
+            try check(try Data(contentsOf:retained.appendingPathComponent("pending.json"))==pendingBytes && Data(contentsOf:retained.appendingPathComponent("snapshot.paperdigest"))==legacyBytes,"local retain remains available for unsafe legacy materials, no remote deletion")
+            let next=try local.prepare(portable)
+            try check(next.sha256 != originalPending.sha256 && next.checkpoint == nil && !(try BackupCodec.parse(local.bytes(for:next))).files.contains{BackupCodec.isLocalOnlyKey($0.path)},"new clean snapshot is separate from original retained checkpoint and has no keys")
+            if CommandLine.arguments.contains("--local-secrets-only") { print("Local secret backup/restore/cloud integration: \(passed) passed;0failed; synthetic fixtures only");return }
+        }
         if !CommandLine.arguments.contains("--credentials-only") {
             // Run the actual scheduled callback once; no wall clock wait, system
             // clock mutation, real account, credential store or network is used.

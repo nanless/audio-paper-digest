@@ -56,6 +56,22 @@ import Darwin
         try expect(try Data(contentsOf:personalFile)==before && Data(contentsOf:inputFile)==originalBytes,"successful export changes neither session nor sealed bytes")
         for _ in 0..<3{_=try export()}
         try expect(secretReads==1,"exports never call key provider after the explicit fixture request")
+        let portableBackup=try BackupCodec.collect(sourceDirectory:directory)
+        try expect(!portableBackup.files.contains{BackupCodec.isLocalOnlyKey($0.path)},"actual model-produced key excluded from portable backup")
+        let originalResponse=try Data(contentsOf:directory.appendingPathComponent("ModelUsage/"+id+"-response.json"))
+        for hasLocalKey in [false,true] {
+            let local=root.appendingPathComponent("restore-local-"+String(hasLocalKey));_=try DesktopStore(directory:local)
+            if hasLocalKey {try FileManager.default.createDirectory(at:local.appendingPathComponent("ModelUsage"),withIntermediateDirectories:false);try Data(repeating:0x44,count:32).write(to:local.appendingPathComponent("ModelUsage/response-integrity.key"))}
+            let stage=try BackupCodec.stage(portableBackup,parentDirectory:root).stageDirectory
+            try RestoreLocalPolicy.apply(stage:stage,current:local)
+            let restoredStore=try DesktopStore(directory:stage);var restoredCredentialReads=0
+            let restoredService=ModelService(directory:stage,store:restoredStore,keyProvider:{restoredCredentialReads+=1;throw DesktopError.message("Read-only restored archive must not request provider credentials")},resourcesDirectory:resources)
+            let restoredEvidence=try restoredService.exportEvidence(sessionID:id,paperID:owner)
+            try expect(restoredEvidence["evidence"] as? String==evidence && restoredStore.session(id)?["text"] as? String==saved["text"] as? String,"restored archive answer/evidence read without original HMAC or provider key")
+            try expect(restoredCredentialReads==0 && restoredService.responseRecovery["adopted"] as? Int==0,"foreign old seal grants no automatic adoption or provider request")
+            try expect(try Data(contentsOf:stage.appendingPathComponent("ModelUsage/"+id+"-response.json"))==originalResponse,"readonly import never resigns original response envelope")
+            try expect(FileManager.default.fileExists(atPath:stage.appendingPathComponent("ModelUsage/response-integrity.key").path)==hasLocalKey,"restore never imports or eagerly creates archive key")
+        }
         try rejects("wrong paper owner"){_=try service.exportEvidence(sessionID:id,paperID:"arxiv:other")}
         try rejects("unknown session"){_=try service.exportEvidence(sessionID:UUID().uuidString,paperID:owner)}
         try rejects("UUID path injection"){_=try service.exportEvidence(sessionID:"../"+id,paperID:owner)}
