@@ -245,6 +245,9 @@ public enum BackupCodec {
         for entry in payload.files {
             try PrivateStoragePaths.path(entry.path)
             let key=PrivateStoragePaths.aliasKey(entry.path)
+            guard !localOnlyKeyPaths.contains(where: { key.hasPrefix(PrivateStoragePaths.aliasKey($0)+"/") }) else {
+                throw PrivateStoragePaths.StorageError.invalid("本机专用校验密钥槽不能作为备份目录")
+            }
             var literalPrefix=""
             for part in entry.path.split(separator:"/") {
                 literalPrefix=literalPrefix.isEmpty ? String(part):literalPrefix+"/"+part

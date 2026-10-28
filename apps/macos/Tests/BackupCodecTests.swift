@@ -214,6 +214,20 @@ private struct BackupTestError: Error, LocalizedError {
                 try require(!fm.fileExists(atPath:staged.stageDirectory.appendingPathComponent(path).path),"alias key skipped")
             }
         }
+        check("reserved local seal slots cannot become directories even with no parent key entry") {
+            let before=stages()
+            for path in ["ModelUsage/response-integrity.key/child","ModelUsage/response-integrity.android.key/child","modelusage/RESPONSE-INTEGRITY.KEY/child","MODELUSAGE/response-integrity.ANDROID.KEY/deep/child"] {
+                let value=payload([entry(path)]),bytes=try JSONEncoder().encode(value)
+                try rejects{try BackupCodec.validate(value)}
+                try rejects{_=try BackupCodec.encode(value)}
+                try rejects{_=try BackupCodec.parse(bytes)}
+                try rejects{_=try BackupCodec.stage(data:bytes,parentDirectory:root)}
+            }
+            try require(stages()==before,"no fresh key directory stage created")
+            let ordinary=payload([entry("foo.key/child"),entry("ModelUsage/ordinary.key/child"),entry("nested/ModelUsage/response-integrity.key/child")])
+            let staged=try BackupCodec.stage(data:BackupCodec.encode(ordinary),parentDirectory:root);defer{try? fm.removeItem(at:staged.stageDirectory)}
+            for file in ordinary.files {try require(try Data(contentsOf:staged.stageDirectory.appendingPathComponent(file.path))==file.data,"ordinary key-named directories remain portable")}
+        }
         check("even skipped legacy key bytes must pass original SHA before staging") {
             let bad=BackupCodec.Entry(path:BackupCodec.localOnlyKeyPaths[0],sha256:String(repeating:"0",count:64),data:Data("synthetic damaged key".utf8))
             let bytes=try JSONEncoder().encode(payload([bad])),before=stages()
