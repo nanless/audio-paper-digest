@@ -64,6 +64,7 @@ from publish_common import (
     is_publish_currency_literal,
     is_publish_currency_unit_literal, decode_publish_currency_unit_display,
     strict_source_cell_math_display, extract_markdown_tables,
+    is_publication_technical_asterisk_cell_view,
     _assert_hash_key_premises, _assert_ecmascript_number_premises, _manual_canonical_json,
     _verified_daily_publication_table_scope,
     validate_experiment_table_contract, EXPERIMENT_TABLE_CONTRACT_VERSIONS,
@@ -8681,6 +8682,10 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                     if article is not None and isinstance(cell.get('renderedText'), str) \
                     and is_publish_currency_unit_literal(cell['renderedText']) else actual_text
                 canonical_comparison_text = cell.get('renderedText')
+                if is_publication_technical_asterisk_cell_view(canonical_comparison_text, actual_text, cell.get('sourceText')):
+                    # Exact published view only; source text, DOM identity,
+                    # canonical table/article hashes and all other cells stay strict.
+                    display_source_text = canonical_comparison_text
                 math_display = strict_source_cell_math_display(cell.get('sourceText'))
                 if math_display and actual_text == math_display['displayText'] \
                         and canonical_comparison_text in (math_display['sourceText'], math_display['displayText']):

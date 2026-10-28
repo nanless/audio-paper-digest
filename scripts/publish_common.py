@@ -8386,6 +8386,22 @@ def escape_technical_notation_asterisks(text):
     return prefix + ''.join(output)
 
 
+def is_publication_technical_asterisk_cell_view(canonical, displayed, source_text):
+    """Recognize only the exact existing sanitizer view of a plain bound cell."""
+    if (not isinstance(canonical, str) or not isinstance(displayed, str)
+            or not isinstance(source_text, str) or source_text != canonical
+            or not canonical or len(canonical) > 512 or displayed == canonical
+            or re.search(r'[\\`$<>\[\]{}|\r\n]|https?://', canonical, re.I)):
+        return False
+    matches = list(_TECHNICAL_NOTATION_ASTERISK.finditer(canonical))
+    if (not matches or len(matches) != canonical.count('*')
+            or any(not match['token'].isascii() for match in matches)):
+        return False
+    # Reuse the actual publisher, rather than decoding arbitrary Markdown
+    # escapes or inferring what an unmatched star originally meant.
+    return displayed == escape_technical_notation_asterisks(canonical)
+
+
 def escape_statistical_significance_stars(text):
     """转义 p 值后面的字面显著性星号。
 

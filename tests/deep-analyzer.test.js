@@ -5090,11 +5090,11 @@ has_dataset: 否
         }), /已有证据包含关键定量结果/);
     });
 
-    it('实验负面证据识别明确回落措辞但不接受孤立“最差”', () => {
+    it('实验负面证据识别明确回落措辞但不接受孤立“最差”或“降幅”', () => {
         const { validateExperimentTableEvidenceDepth } = require('../scripts/analysis-contract.js');
         const sourceText = 'Experimental results record accuracy degradation for large or small hidden-layer sizes.';
         const analysisWith = phrase => `## 实验结果\n该设置出现${phrase}，这是原文报告的受限条件。`;
-        for (const phrase of ['负结果', '负面结果', '性能回落', '回落至 74.07%', '7.70 的降幅']) {
+        for (const phrase of ['负结果', '负面结果', '性能回落', '回落至 74.07%']) {
             assert.strictEqual(validateExperimentTableEvidenceDepth(
                 analysisWith(phrase), { documentType: '方法研究', sourceText }
             ), null, phrase);
@@ -5110,9 +5110,11 @@ has_dataset: 否
                 { documentType: '方法研究', sourceText }
             ), /没有保留负面证据/, negated);
         }
-        assert.match(validateExperimentTableEvidenceDepth(
-            analysisWith('最差表现'), { documentType: '方法研究', sourceText }
-        ), /没有保留负面证据/);
+        for (const phrase of ['最差表现', '7.70 的降幅']) {
+            assert.match(validateExperimentTableEvidenceDepth(
+                analysisWith(phrase), { documentType: '方法研究', sourceText }
+            ), /没有保留负面证据/, phrase);
+        }
     });
 
     it('核心摘要对照是评测设置，但只写下降多少分仍精确报缺指标名', () => {
