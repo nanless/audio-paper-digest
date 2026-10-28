@@ -1,24 +1,24 @@
 # 文档导航
 
-新任务只有日更、官方会议和历史博客更新三条生产流程，默认使用 LLM/API。按你现在要完成的任务阅读，不必先通读所有协议。
+这里既有网站生产流程，也有两端应用的使用和验收说明。先按你要做的事选择入口，不必先通读所有协议。日更、官方会议和历史博客更新是三条生产流程，默认调用 LLM/API；打开已发布内容和恢复个人资料不会自动重跑这些流程。
 
 ## 第一次使用
 
-先读[项目首页](../README.md)选择任务，再按[安装与配置](setup.md)准备环境。[操作手册](../SKILL.md)给出执行顺序，[AGENTS.md](../AGENTS.md)列出不能绕过的来源、预算与发布规则。
+只使用应用，先读[Mac 使用说明](../apps/macos/README.md)或[Android 使用说明](../apps/android/README.md)，不必配置生产项目的 `.env`。维护网站时，先读[项目首页](../README.md)选择任务，再按[安装与配置](setup.md)准备环境。[操作手册](../SKILL.md)给出执行顺序，[AGENTS.md](../AGENTS.md)列出不能绕过的来源、预算与发布规则。
 
 | 你想了解什么 | 阅读位置 |
 |---|---|
 | 三条流程如何共用分析、Reader 和发布能力 | [三流程与共享核心](three-workflows.md) |
 | 当前流程逐步跟踪、已复现问题及改进顺序 | [三流程核读与改进计划](workflow-sharing-plan.md) |
-| 基于现有成果的 Mac 单栏阅读、按需双栏、个人 LLM 与 Zotero 存档 | [桌面研究工作台规划](desktop-research-workbench-plan.md)（正式应用规划，附真实样稿交互原型） |
+| 基于现有成果的 Mac 单栏阅读、按需双栏、个人 LLM 与 Zotero 存档 | [Mac 使用说明](../apps/macos/README.md)；设计背景见[工作台规划](desktop-research-workbench-plan.md) |
 | Mac 应用需求历史、现有结论和实现范围 | [完整需求整理](mac-app-requirements.md)与[应用构建及使用说明](../apps/macos/README.md) |
 | Mac 应用当前做到哪一步、哪些真实验收仍受阻 | [实施与测试记录](mac-app-validation.md)、[69项验收矩阵](mac-app-acceptance.md)、[五轮独立审查记录](mac-app-review-log.md) |
 | 当前 Mac 数据接入与 Zotero 完整归档的实际合同 | [已发布数据适配](mac-app-data.md)与[Zotero本机接口](mac-app-zotero.md) |
 | Mac完整研究资料保存到坚果云、版本续传与恢复 | [坚果云资料合同及新增17项验收](mac-app-cloud.md) |
 | 仓库Mac应用Release的ZIP/DMG、校验和与发布门槛 | [发行产物准备](mac-app-release.md) |
-| 新增Android原生应用、两端功能与同一Release的实施范围 | [跨端规划](android-app-plan.md)、[Android构建说明](../apps/android/README.md)与[86项功能映射](android-feature-parity.md) |
+| Android 使用、跨端功能与同一 Release 的实际范围 | [跨端规划](android-app-plan.md)、[Android构建说明](../apps/android/README.md)与[86项功能映射](android-feature-parity.md) |
 | Android的Zotero路线、坚果云与Mac资料互通 | [Zotero研究](android-zotero-research.md)、[完整备份合同](android-cloud-contract.md)与[原包互读向量](android-cloud-portable-fixtures.md) |
-| Mac 如何读取已发布成果、增量离线、版本和撤稿信息 | [客户端静态数据合同](desktop-data-contract.md)（拟新增 `desktop/v1`，尚未实现） |
+| 两端如何读取网站已有目录、论文和汇总页面 | 当前实现见[已发布数据适配](mac-app-data.md)与两端使用说明；[静态数据合同](desktop-data-contract.md)中的 `desktop/v1` 是后续接口设计，不能当作当前线上格式 |
 | Mac 界面参考、单栏与 PDF 双栏、逐屏尺寸及视觉验收 | [界面设计研究](macos-interface-design-research.md) |
 | Reader、SHA、CAS、检查点和凭证是什么 | [常见术语](writing-guide.md#术语先解释再统一称呼) |
 | 文档与论文讲解怎样写得清楚 | [写作约定](writing-guide.md) |

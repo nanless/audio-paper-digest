@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="850" viewBox="0 0 1200 850" role="img" aria-labelledby="title description">
+  <title id="title">论文速递：内容生产、两端阅读与个人资料保存</title>
+  <desc id="description">日更、会议和历史更新调用公共分析与发布流程。Mac和Android读取网站已发布的目录、导读、汇总和PDF来源，不重跑已有分析。本机新增研究可选择调用模型，个人资料可备份到坚果云，恢复前需要确认；两端使用不同的Zotero接口，研究备份与Zotero附件同步采用独立目录与授权，模型API密钥和登录凭据不随备份迁移。</desc>
+  <defs>
+    <style>
+      text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK SC",sans-serif;fill:#213247}
+      .title{font-size:27px;font-weight:700}.subtitle{font-size:16px;fill:#52657b}
+      .label{font-size:19px;font-weight:650}.body{font-size:16px}.small{font-size:14px;fill:#52657b}
+      .box{fill:#fff;stroke:#cbd6e3;stroke-width:1.5;rx:14}.flow{fill:none;stroke:#5477a2;stroke-width:2;marker-end:url(#arrow)}
+    </style>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#5477a2"/></marker>
+  </defs>
+  <rect width="1200" height="850" rx="20" fill="#f5f8fc"/>
+  <text x="44" y="53" class="title">同一份已发布成果，在两端继续阅读和研究</text>
+  <text x="44" y="83" class="subtitle">仓库流程生成并发布内容；应用读取已有成果，并保存你的个人研究资料。</text>
+
+  <rect x="44" y="111" width="1112" height="141" rx="16" fill="#eaf0fa"/>
+  <text x="65" y="141" class="small">内容生产 · 仓库中的三条流程</text>
+  <rect x="65" y="158" width="244" height="67" class="box"/>
+  <text x="86" y="185" class="label">日更 · 会议 · 历史更新</text>
+  <text x="86" y="209" class="small">分别核对来源与任务范围</text>
+  <path d="M309 192H353" class="flow"/>
+  <rect x="363" y="158" width="306" height="67" class="box"/>
+  <text x="383" y="185" class="label">公共分析、评分与导读</text>
+  <text x="383" y="209" class="small">保留来源、检查点与真实费用</text>
+  <path d="M669 192H713" class="flow"/>
+  <rect x="723" y="158" width="410" height="67" class="box"/>
+  <text x="744" y="185" class="label">生成 → 独立审查 → 发布与上线核验</text>
+  <text x="744" y="209" class="small">已有合格结果按来源身份复用</text>
+
+  <path d="M928 252V278" class="flow"/>
+  <rect x="44" y="289" width="1112" height="91" class="box"/>
+  <text x="65" y="321" class="label">网站已发布数据</text>
+  <text x="65" y="349" class="body">目录清单、图文导读、汇总与说明页、论文信息及 PDF 来源</text>
+  <text x="744" y="349" class="small">读取和校验；不会为浏览而重跑分析</text>
+  <path d="M315 380V413" class="flow"/>
+  <path d="M885 380V413" class="flow"/>
+
+  <rect x="44" y="425" width="542" height="139" class="box"/>
+  <text x="65" y="458" class="label">Mac 应用</text>
+  <text x="65" y="487" class="body">单栏阅读；打开 PDF 后并排阅读</text>
+  <text x="65" y="514" class="body">个人解析、笔记、离线资料与后台任务</text>
+  <text x="65" y="541" class="small">新增研究可选用本机配置的模型与代理</text>
+  <rect x="614" y="425" width="542" height="139" class="box"/>
+  <text x="635" y="458" class="label">Android 应用</text>
+  <text x="635" y="487" class="body">手机专注单面板；宽窗口按需并排</text>
+  <text x="635" y="514" class="body">适配手机、平板窗口与折叠屏姿态</text>
+  <text x="635" y="541" class="small">同样保留个人研究、来源版本与任务进度</text>
+
+  <path d="M180 564V604" class="flow"/>
+  <path d="M1017 564V604" class="flow"/>
+  <path d="M450 564V588H529V604" class="flow"/>
+  <path d="M750 564V588H671V604" class="flow"/>
+  <rect x="44" y="616" width="291" height="144" class="box"/>
+  <text x="65" y="648" class="label">Zotero · Mac</text>
+  <text x="65" y="677" class="body">连接本机 Zotero</text>
+  <text x="65" y="704" class="body">个人文库与所选分类</text>
+  <text x="65" y="734" class="small">使用该应用自己的本地许可</text>
+  <rect x="365" y="616" width="470" height="144" rx="14" fill="#e9f4f0" stroke="#a7c9bd" stroke-width="1.5"/>
+  <text x="386" y="648" class="label">坚果云 · 完整研究资料备份</text>
+  <text x="386" y="677" class="body">独立目录；版本备份、续传、确认后恢复</text>
+  <text x="386" y="704" class="body">保留导读、原文、笔记及模型研究记录</text>
+  <text x="386" y="734" class="small">两端凭据独立配置，不随研究备份迁移</text>
+  <rect x="865" y="616" width="291" height="144" class="box"/>
+  <text x="886" y="648" class="label">Zotero · Android</text>
+  <text x="886" y="677" class="body">连接官方 Web API</text>
+  <text x="886" y="704" class="body">完整存档与回读检查</text>
+  <text x="886" y="734" class="small">单独授权；不继承 Mac 许可</text>
+  <text x="44" y="803" class="small">研究备份与 Zotero 附件同步各用独立目录和授权；备份不含模型 API 密钥或登录凭据，不自动重发请求。</text>
+  <text x="44" y="828" class="small">本图说明数据关系与实现分工。各端已完成范围、设备条件及尚未通过的验收另见对应测试记录。</text>
+</svg>
