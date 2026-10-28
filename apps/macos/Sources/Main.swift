@@ -35,6 +35,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
 
 @MainActor final class PaperDigestApp:NSObject,NSApplicationDelegate,WKScriptMessageHandlerWithReply,WKNavigationDelegate,NSWindowDelegate,NSMenuItemValidation {
     var window:NSWindow!, web:WKWebView!, toolbar:NSToolbar!, settingsWindow:NSWindow?
+    var pdfObserversInstalled=false
     var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!
     var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var maintenanceBusy=false {didSet{if maintenanceBusy{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
@@ -133,8 +134,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         pdfView.isHidden=true;pdfView.autoScales=true;pdfView.displayMode = .singlePageContinuous;pdfView.displaysPageBreaks=true;pdfView.backgroundColor = .windowBackgroundColor
         window.contentView!.addSubview(pdfView)
         installNativeTasks();installNativeNotes()
-        NotificationCenter.default.addObserver(self,selector:#selector(pdfPageChanged),name:.PDFViewPageChanged,object:pdfView)
-        NotificationCenter.default.addObserver(self,selector:#selector(pdfSelectionChanged),name:.PDFViewSelectionChanged,object:pdfView)
+        installPDFObservers()
         web.load(URLRequest(url:URL(string:"paperapp://app/index.html")!))
         window.makeKeyAndOrderFront(nil)
     }
@@ -417,6 +417,16 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             pageTextStatus=(page.string ?? "").trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "empty":"available"
         }else{pageTextStatus="unknown"}
         return ["pageTextStatus":pageTextStatus,"paperID":currentPaperID,"contextGeneration":contextGeneration,"pageCount":doc?.pageCount ?? 0,"page":pdfView.currentPage.flatMap{doc?.index(for:$0)}.map{$0+1} ?? 1,"scale":pdfView.scaleFactor,"sha256":currentPDFSHA,"version":pdfVersion,"currentness":currentPDFReceipt["currentness"] ?? "not-checked","isStale":currentPDFReceipt["isStale"] ?? false,"notices":currentPDFReceipt["notices"] ?? []]}
+    func installPDFObservers() {
+        guard !pdfObserversInstalled else{return};pdfObserversInstalled=true
+        NotificationCenter.default.addObserver(self,selector:#selector(pdfPageChanged),name:.PDFViewPageChanged,object:pdfView)
+        NotificationCenter.default.addObserver(self,selector:#selector(pdfSelectionChanged),name:.PDFViewSelectionChanged,object:pdfView)
+        NotificationCenter.default.addObserver(self,selector:#selector(pdfScaleChanged),name:.PDFViewScaleChanged,object:pdfView)
+    }
+    @objc func pdfScaleChanged(_ notification:Notification) {
+        guard notification.object as? PDFView === pdfView,!pdfOwner.isEmpty,pdfOwner==currentPaperID,!currentPDFSHA.isEmpty,let document=pdfView.document,!document.isLocked else{return}
+        emit("pdf.scaleChanged",["paperID":pdfOwner,"contextGeneration":contextGeneration,"sha256":currentPDFSHA,"scale":pdfView.scaleFactor],to:[web].compactMap{$0})
+    }
     @objc func pdfPageChanged(){emit("pdf.changed",pdfStatus())}
     @objc func pdfSelectionChanged(){
         guard let selection=pdfView.currentSelection,let text=selection.string,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,let doc=pdfView.document,pdfOwner==currentPaperID,selection.pages.allSatisfy({doc.index(for:$0) != NSNotFound}) else{selectionSource=[:];emit("pdf.selection",["paperID":currentPaperID,"cleared":true,"pages":[]]);return}

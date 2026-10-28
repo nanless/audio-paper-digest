@@ -2,6 +2,7 @@
 // permission dialogs, real Keychain access, model requests, or personal profile IO.
 import AppKit
 import PDFKit
+import WebKit
 import Foundation
 import Darwin
 
@@ -218,6 +219,27 @@ private struct NoNativeCredentials: ZoteroCredentialStore {
             do{try app.unlockPDF(locked,passwordProvider:{"incorrect"})}catch{wrongIsError = !(error is DesktopOperationCancelled)}
             try require(wrongIsError && locked.isLocked,"wrong password is not swallowed as user cancellation")
             try require(app.pdfView.document===oldDocument && app.pdfOwner==oldOwner && app.currentPDFSHA==oldSHA && app.pdfView.currentPage===oldPage,"both rejection paths preserve current PDF identity and physical page")
+        }
+        await checkAsync("actual PDFKit scale notifications reach the own WK once and reject foreign or ownerless views") {
+            let originalWeb=app.web,originalOwner=app.pdfOwner,originalSHA=app.currentPDFSHA,originalDocument=app.pdfView.document,originalGeneration=app.contextGeneration
+            let observerWeb=WKWebView(frame:NSRect(x:0,y:0,width:400,height:200));app.web=observerWeb
+            defer{NotificationCenter.default.removeObserver(app);observerWeb.stopLoading();app.web=originalWeb;app.pdfOwner=originalOwner;app.currentPDFSHA=originalSHA;app.pdfView.document=originalDocument;app.contextGeneration=originalGeneration}
+            observerWeb.loadHTMLString("<script>window.scaleEvents=[];window.addEventListener('pdf.scaleChanged',e=>scaleEvents.push(e.detail));</script>",baseURL:nil)
+            let deadline=Date().addingTimeInterval(5)
+            while Date()<deadline {if (try? await observerWeb.evaluateJavaScript("Array.isArray(window.scaleEvents)")) as? Bool == true{break};try await Task.sleep(nanoseconds:10_000_000)}
+            try require((try await observerWeb.evaluateJavaScript("Array.isArray(window.scaleEvents)")) as? Bool == true,"actual own WK listener ready")
+            app.pdfOwner=owner;app.currentPDFSHA=expectedSHA;app.pdfView.document=document;app.contextGeneration=73;app.pdfView.autoScales=false
+            app.installPDFObservers();app.installPDFObservers()
+            _=try await observerWeb.evaluateJavaScript("scaleEvents=[]")
+            app.pdfView.scaleFactor=0.73
+            let records=try await observerWeb.evaluateJavaScript("scaleEvents") as? [[String:Any]] ?? []
+            try require(records.count==1 && records[0]["paperID"] as? String==owner && records[0]["sha256"] as? String==expectedSHA && records[0]["contextGeneration"] as? Int==73 && abs((records[0]["scale"] as? Double ?? 0)-app.pdfView.scaleFactor)<0.000001,"one real scale change emits exact owned scale/SHA/context, including duplicate-install rejection")
+            let foreign=PDFView(frame:NSRect(x:0,y:0,width:600,height:600));foreign.document=document;foreign.scaleFactor=0.81
+            _=try await observerWeb.evaluateJavaScript("true")
+            try require((try await observerWeb.evaluateJavaScript("scaleEvents.length")) as? Int==1,"another actual PDFView cannot emit into this owner")
+            app.pdfOwner="another-owner";app.pdfView.scaleFactor=0.84
+            _=try await observerWeb.evaluateJavaScript("true")
+            try require((try await observerWeb.evaluateJavaScript("scaleEvents.length")) as? Int==1,"old/ownerless PDF scale cannot update the current document")
         }
         await checkAsync("bootstrap settings and non-model actions do not read any secret") {
             var secretReads=0

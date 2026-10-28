@@ -86,6 +86,27 @@ let browser;
    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('pdf.changed',{detail:{paperID:'different-owner',page:1,pageCount:1,pageTextStatus:'available'}})));
    assert.equal(await page.locator('#pdf-text-status').innerText(),'当前页文字状态未检查');
   });
+  const nativeScale={paperID:primary.id,sha256:'01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c',contextGeneration:41,page:5,pageCount:13,scale:1,pageTextStatus:'available'};
+  await page.locator('#pdf-toggle').click();
+  await page.evaluate(d=>window.dispatchEvent(new CustomEvent('pdf.changed',{detail:d})),nativeScale);
+  const scaleEvent=async d=>page.evaluate(d=>window.dispatchEvent(new CustomEvent('pdf.scaleChanged',{detail:d})),d);
+  await check('owned PDF scale updates only scale, retaining current page and source status',async()=>{
+   await scaleEvent({...nativeScale,scale:1.27,page:1,pageTextStatus:'empty'});
+   assert.equal(await page.locator('#pdf-zoom').innerText(),'127%');assert.equal(await page.locator('#pdf-page').inputValue(),'5');assert.equal(await page.locator('#pdf-text-status').innerText(),'本页可提取文字');
+  });
+  await check('foreign SHA, paper, old or future native generation and invalid scale cannot change toolbar',async()=>{
+   for(const patch of [{paperID:'different-owner'},{sha256:'different-pdf'},{contextGeneration:40},{contextGeneration:42},{scale:0},{scale:-1},{scale:NaN},{scale:Infinity}])await scaleEvent({...nativeScale,scale:0.3,...patch});
+   assert.equal(await page.locator('#pdf-zoom').innerText(),'127%');
+  });
+  await page.locator('#pdf-toggle').click();
+  await check('closed PDF rejects a late scale event',async()=>{await scaleEvent({...nativeScale,scale:0.4});assert.equal(await page.locator('#pdf-zoom').innerText(),'127%');});
+  await open(papers[1].id);await open(primary.id);await page.locator('#pdf-toggle').click();
+  await page.evaluate(d=>window.dispatchEvent(new CustomEvent('pdf.changed',{detail:{...d,contextGeneration:43,scale:0.91}})),nativeScale);
+  await check('same-paper leave and reopen rejects earlier native generation but accepts fresh scale',async()=>{
+   await scaleEvent({...nativeScale,scale:0.2});assert.equal(await page.locator('#pdf-zoom').innerText(),'91%');
+   await scaleEvent({...nativeScale,contextGeneration:43,scale:0.77});assert.equal(await page.locator('#pdf-zoom').innerText(),'77%');
+  });
+  await page.locator('#pdf-toggle').click();
   // Native reply has already completed for A; intentionally delay transport delivery to the JS caller.
   await page.evaluate(()=>{const handler=webkit.messageHandlers.desktop,original=handler.postMessage.bind(handler);handler.postMessage=async message=>{const result=await original(message);if(message.command==='library.article'&&message.payload.refresh){window.__refreshReady=true;await new Promise(r=>window.__releaseRefresh=r);}return result;};});
   await page.locator('#refresh-reader').click();await page.waitForFunction(()=>window.__refreshReady);
