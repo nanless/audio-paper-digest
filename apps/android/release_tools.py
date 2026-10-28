@@ -317,21 +317,66 @@ def verify(folder,repo,sdk,certificate):
  apks=[n for n in assets if n.endswith('.apk')];require(apks==[f"paperdigest-android-{info['versionName']}-{info['versionCode']}-universal.apk"],'apk_name_or_count');require(sha(canonical(info['unsignedPayload']))==info['unsignedPayloadInventorySHA256'] and canonical(payload_inventory(folder/apks[0]))==canonical(info['unsignedPayload']),'signed_payload_changed');actual=inspect(folder/apks[0],repo,sdk,info['versionName'],info['versionCode'],folder/'android-runtime-materials.json',certificate);require(actual==info['signed'],'signed_audit_changed')
  return {'verified':True,'sourceCommit':info['sourceCommit'],'version':info['versionName'],'versionCode':info['versionCode'],'apk':apks[0],'apkSHA256':actual['sha256'],'certificateSHA256':certificate,'publicationEligible':False}
 
-def android_acceptance(path,expected):
+def android_acceptance(path,expected,private_draft=False):
  text=path.read_text();rows=re.findall(r'^\| (A-[A-Z]+-\d+) \|[^\n]*\| ([^|]+) \|$',text,re.M)
  # Reuse the existing Mac 69+17 IDs, mapped with A-; do not invent another inventory.
- require(len(rows)==86 and len(expected)==86 and {k for k,_ in rows}==expected and all(v.strip()=='通过' for _,v in rows),'android_acceptance_incomplete')
+ require(len(rows)==86 and len(expected)==86 and {k for k,_ in rows}==expected and all(v.strip() in ({'通过','待验'} if private_draft and k in {'A-REL-03','A-REL-04'} else {'通过'}) for k,v in rows),'android_acceptance_incomplete')
 
 def mac_module(repo):
  spec=importlib.util.spec_from_file_location('paperdigest_mac_release',repo/'apps/macos/release_tools.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 
-def joint_plan(args):
+def joint_plan(args,private_draft=False):
  android=verify(args.prepared,args.repo,SDK(args.sdk),args.certificate)
- mac=mac_module(args.repo);android_acceptance(args.android_acceptance,{'A-'+item for item in mac.IDS|mac.CLOUD_IDS});ns=argparse.Namespace(prepared=args.mac,repo=args.repo,acceptance_status=args.mac_acceptance,cloud_acceptance=args.mac_cloud,repository='nanless/audio-paper-digest',prerelease=False);plan=mac.publish_plan(ns)
+ mac=mac_module(args.repo);android_acceptance(args.android_acceptance,{'A-'+item for item in mac.IDS|mac.CLOUD_IDS},private_draft=private_draft);ns=argparse.Namespace(prepared=args.mac,repo=args.repo,acceptance_status=args.mac_acceptance,cloud_acceptance=args.mac_cloud,repository='nanless/audio-paper-digest',prerelease=False);plan=mac.publish_plan(ns,private_draft=private_draft)
  mac_info=load(args.mac/'build-info.json');require(android['sourceCommit']==mac_info['releaseHead'] and android['version']==mac_info['version'],'joint_release_identity')
  names=list(load(args.prepared/'android-release-manifest.json')['assets'])+['android-release-manifest.json','ANDROID-SHA256SUMS'];mac_names=list(load(args.mac/'release-manifest.json')['assets'])+['release-manifest.json','SHA256SUMS'];require(not set(names)&set(mac_names),'joint_asset_collision')
  argv=plan['argv'];at=argv.index('--repo');argv[at:at]=[str(args.prepared/n) for n in sorted(names)]
- return {**plan,'argv':argv,'androidSourceCommit':android['sourceCommit'],'macRuntimeSourceCommit':mac_info['sourceCommit'],'downloadVerificationRequired':True,'remoteTagOIDChecked':False,'formalQAInstallAndSameCertificateUpgrade':'must have separate actual evidence; never overwrite/wipe the two debug AVDs'}
+ return {**plan,'argv':argv,'androidSourceCommit':android['sourceCommit'],'macRuntimeSourceCommit':mac_info['sourceCommit'],'downloadVerificationRequired':True,'remoteTagOIDChecked':private_draft,'formalQAInstallAndSameCertificateUpgrade':'must have separate actual evidence; never overwrite/wipe the two debug AVDs'}
+
+def joint_public_plan(args):
+ # Only read the existing draft and download it; no tag/upload/publication occurs here.
+ require(type(args.draft_id) is int and args.draft_id>0,'draft_id_required')
+ paths=[args.android_acceptance,args.mac_acceptance,args.mac_cloud,
+        args.prepared/'android-release-manifest.json',args.mac/'release-manifest.json']
+ before={str(p):file_sha(regular(p)) for p in paths}
+ plan=joint_plan(args) # All 86 IDs on each platform must be actual passes.
+ mac=mac_module(args.repo);info=load(args.mac/'build-info.json');tag='v'+info['version']
+ tag_record=mac.verified_remote_tag(tag,info['releaseHead'])
+ endpoint='repos/nanless/audio-paper-digest/releases/'+str(args.draft_id)
+ expected={}
+ for folder,manifest in [(args.prepared,'android-release-manifest.json'),(args.mac,'release-manifest.json')]:
+  for name in list(load(folder/manifest)['assets'])+[manifest,'ANDROID-SHA256SUMS' if manifest.startswith('android') else 'SHA256SUMS']:
+   require(name not in expected,'joint_asset_collision');p=regular(folder/name);expected[name]=p.stat().st_size
+ def draft():
+  record=json.loads(run(['gh','api','--hostname','github.com',endpoint],'draft_read_failed'))
+  require(type(record.get('id')) is int and record['id']==args.draft_id and record.get('tag_name')==tag and record.get('draft') is True and record.get('published_at') is None,'existing_private_draft_required')
+  assets=record.get('assets');require(isinstance(assets,list) and len(assets)==len(expected),'draft_asset_set')
+  require(all(isinstance(a,dict) and type(a.get('id')) is int and a['id']>0 and a.get('name') in expected and type(a.get('size')) is int and a['size']==expected[a['name']] and a.get('state')=='uploaded' for a in assets),'draft_asset_record')
+  require(len({a['name'] for a in assets})==len(expected) and len({a['id'] for a in assets})==len(expected),'draft_asset_set')
+  require(isinstance(record.get('body'),str) and record['body'].rstrip('\n')==(args.mac/'RELEASE_NOTES.md').read_text().rstrip('\n'),'draft_notes_changed')
+  stable={k:record.get(k) for k in ['id','tag_name','draft','published_at','name','body','prerelease','target_commitish','updated_at']}
+  stable['assets']=sorted([{k:a.get(k) for k in ['id','name','size','state','updated_at','digest']} for a in assets],key=lambda a:a['name'])
+  return stable
+ original=draft()
+ with tempfile.TemporaryDirectory(prefix='paperdigest-private-release-download-') as tmp:
+  downloaded=P(tmp).resolve()
+  for asset in original['assets']:
+   # Bind the bytes to this verified release's asset ID, never a same-tag lookup.
+   argv=['gh','api','--hostname','github.com','-H','Accept: application/octet-stream',
+         'repos/nanless/audio-paper-digest/releases/assets/'+str(asset['id'])]
+   try:
+    with open(downloaded/asset['name'],'xb') as output:
+     result=subprocess.run(argv,stdout=output,stderr=subprocess.PIPE,timeout=1200)
+   except (OSError,subprocess.TimeoutExpired):raise ReleaseError('draft_download_failed') from None
+   require(result.returncode==0 and (downloaded/asset['name']).stat().st_size==asset['size'],'draft_download_failed')
+  download=verify_downloaded(argparse.Namespace(**{**vars(args),'downloaded':downloaded}))
+ require(canonical(draft())==canonical(original),'draft_changed_during_verification')
+ require(mac.verified_remote_tag(tag,info['releaseHead'])==tag_record,'remote_tag_changed')
+ require(before=={str(p):file_sha(regular(p)) for p in paths},'qualification_changed')
+ return {'executed':False,'publicPublication':False,'stage':'publish-verified-existing-draft','draftID':args.draft_id,
+         'remoteTag':tag_record,'downloadVerification':download,'sourceCommit':info['releaseHead'],
+         'qualification':'两端全部86项通过；同一私有草稿、远端标签和下载实包已核对；命令尚未执行',
+         'argv':['gh','api','--hostname','github.com','--method','PATCH',endpoint,'-F','draft=false']}
 
 def verify_downloaded(args):
  # Caller downloads with gh into a fresh directory. This function performs no network request.
@@ -355,18 +400,20 @@ def main():
  p=sub.add_parser('prepare');p.add_argument('--output',type=P,required=True);p.add_argument('--version',required=True);p.add_argument('--code',type=int,required=True)
  p=sub.add_parser('sign');p.add_argument('--prepared',type=P,required=True);p.add_argument('--output',type=P,required=True);p.add_argument('--keystore',type=P,required=True);p.add_argument('--alias',required=True);p.add_argument('--certificate',required=True)
  p=sub.add_parser('finalize-signed');p.add_argument('--prepared',type=P,required=True);p.add_argument('--signed-apk',type=P,required=True);p.add_argument('--output',type=P,required=True);p.add_argument('--certificate',required=True)
- for name in ['verify','joint-plan','verify-downloaded']:
+ for name in ['verify','joint-plan','joint-private-draft-plan','joint-public-plan','verify-downloaded']:
   p=sub.add_parser(name);p.add_argument('--prepared',type=P,required=True);p.add_argument('--certificate',required=True)
   if name!='verify':p.add_argument('--mac',type=P,required=True)
-  if name=='joint-plan':
+  if name in {'joint-plan','joint-private-draft-plan','joint-public-plan'}:
    for flag in ['android-acceptance','mac-acceptance','mac-cloud']:p.add_argument('--'+flag,type=P,required=True)
+  if name=='joint-public-plan':p.add_argument('--draft-id',type=int,required=True)
   if name=='verify-downloaded':p.add_argument('--downloaded',type=P,required=True)
  args=parser.parse_args();args.repo=args.repo.resolve()
  if args.command=='prepare':result=prepare(args)
  elif args.command=='sign':result=sign(args)
  elif args.command=='finalize-signed':result=finalize_signed(args)
  elif args.command=='verify':result=verify(args.prepared,args.repo,SDK(args.sdk),args.certificate)
- elif args.command=='joint-plan':result=joint_plan(args)
+ elif args.command in {'joint-plan','joint-private-draft-plan'}:result=joint_plan(args,private_draft=args.command=='joint-private-draft-plan')
+ elif args.command=='joint-public-plan':result=joint_public_plan(args)
  else:result=verify_downloaded(args)
  print(json.dumps(result,ensure_ascii=False,sort_keys=True))
 if __name__=='__main__':

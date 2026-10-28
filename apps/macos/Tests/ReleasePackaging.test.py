@@ -547,4 +547,58 @@ class VerifyDmgCleanup(unittest.TestCase):
         self.assertIsNone(error);self.assertEqual(self.state['detachAttempts'],1)
         self.assertEqual(self.state['sleeps'],[0.25]);self.assert_empty_removed()
 
+
+class ReleaseStages(unittest.TestCase):
+    """Stage gates with controlled tool replies; no network, packaging or app launch."""
+    def setUp(self):
+        import importlib.util
+        from unittest.mock import patch
+        self.patch=patch;spec=importlib.util.spec_from_file_location('release_stage_mac',HELPER);self.m=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.m)
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=pathlib.Path(self.tmp.name);self.head='1'*40
+        self.prepared=self.root/'prepared';self.prepared.mkdir();self.status=self.root/'status.md';self.cloud=self.root/'cloud.md'
+        self.status.write_text('\n'.join('| '+n+' | 通过 | fixture |' for n in sorted(self.m.IDS)))
+        self.cloud.write_text('\n'.join('| '+n+' | '+('待验' if n in {'REL-03','REL-04'} else '通过')+' | fixture |' for n in sorted(self.m.CLOUD_IDS)))
+        save(self.prepared/'build-info.json',{'distributionChannel':'release','sourceCommit':self.head,'releaseHead':self.head,'version':'1.0.0'})
+        save(self.prepared/'release-manifest.json',{'assets':{'package.zip':{}}})
+        import argparse
+        self.args=argparse.Namespace(prepared=self.prepared,repo=self.root,acceptance_status=self.status,cloud_acceptance=self.cloud,repository='nanless/audio-paper-digest',prerelease=False)
+        self.remote=('2'*40+'\trefs/tags/v1.0.0\n'+self.head+'\trefs/tags/v1.0.0^{}\n').encode()
+        self.calls=[]
+        def run(argv):self.calls.append(argv);return self.remote
+        for target,kwargs in [('verify',{'return_value':{'verified':True}}),('source_state',{'return_value':(self.head,[])}),('run',{'side_effect':run})]:
+            patcher=self.patch.object(self.m,target,**kwargs);patcher.start();self.addCleanup(patcher.stop)
+    def reject(self,fn):
+        with self.assertRaises(self.m.Rejected):fn()
+    def test_private_stage_accepts_only_two_late_pending_and_checks_peeled_tag(self):
+        result=self.m.publish_plan(self.args,private_draft=True)
+        self.assertEqual('private-draft',result['stage']);self.assertEqual(self.head,result['remoteTag']['commitOID']);self.assertTrue(result['remoteTag']['annotated'])
+        self.assertEqual([['git','ls-remote','--tags','https://github.com/nanless/audio-paper-digest.git','refs/tags/v1.0.0','refs/tags/v1.0.0^{}']],self.calls)
+        self.assertIn('--draft',result['argv']);self.assertIn('--verify-tag',result['argv']);self.assertFalse(result['executed']);self.assertFalse(result['publicPublication'])
+    def test_default_still_rejects_late_pending(self):self.reject(lambda:self.m.publish_plan(self.args));self.assertEqual([],self.calls)
+    def test_business_pending_or_partial_cannot_enter_private_stage(self):
+        original=self.status.read_text()
+        for value in ['待验','失败','不适用','部分通过']:
+            self.status.write_text(original.replace('| 通过 |','| '+value+' |',1));self.reject(lambda:self.m.publish_plan(self.args,True))
+    def test_each_late_failure_or_blocked_is_rejected(self):
+        original=self.cloud.read_text()
+        for item in ['REL-03','REL-04']:
+            for value in ['失败','受阻','不适用']:
+                self.cloud.write_text(original.replace('| '+item+' | 待验 |','| '+item+' | '+value+' |'));self.reject(lambda:self.m.publish_plan(self.args,True))
+    def test_cloud_prerequisite_pending_and_duplicate_ids_are_rejected(self):
+        original=self.cloud.read_text()
+        for text in [original.replace('| CLOUD-01 | 通过 |','| CLOUD-01 | 待验 |'),original.replace('REL-05','REL-04'),original+'\n| REL-03 | 待验 | duplicate |']:
+            self.cloud.write_text(text);self.reject(lambda:self.m.publish_plan(self.args,True))
+    def test_missing_wrong_foreign_or_duplicate_remote_tag_rejected(self):
+        for raw in [b'',('3'*40+'\trefs/tags/v1.0.0\n').encode(),(self.head+'\trefs/tags/v2.0.0\n').encode(),(self.head+'\trefs/tags/v1.0.0\n') .encode()*2]:
+            self.remote=raw;self.reject(lambda:self.m.publish_plan(self.args,True))
+    def test_lightweight_exact_tag_is_supported(self):
+        self.remote=(self.head+'\trefs/tags/v1.0.0\n').encode();self.assertFalse(self.m.publish_plan(self.args,True)['remoteTag']['annotated'])
+    def test_changed_head_private_channel_and_artifact_failure_keep_old_gates(self):
+        with self.patch.object(self.m,'source_state',return_value=('3'*40,[])):self.reject(lambda:self.m.publish_plan(self.args,True))
+        info=json.loads((self.prepared/'build-info.json').read_bytes());info['distributionChannel']='private-qa';save(self.prepared/'build-info.json',info);self.reject(lambda:self.m.publish_plan(self.args,True))
+        with self.patch.object(self.m,'verify',side_effect=self.m.Rejected('actual artifact failure')):self.reject(lambda:self.m.publish_plan(self.args,True))
+    def test_old_all_pass_plan_remains_nonexecuted_draft(self):
+        self.cloud.write_text(self.cloud.read_text().replace('待验','通过'));result=self.m.publish_plan(self.args)
+        self.assertEqual('fully-qualified-draft',result['stage']);self.assertIn('--draft',result['argv']);self.assertEqual([],self.calls)
+
 if __name__=='__main__':unittest.main(verbosity=2)

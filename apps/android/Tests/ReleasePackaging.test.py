@@ -164,4 +164,105 @@ class ReleaseTests(unittest.TestCase):
   for name in ['assets/.env.local','res/raw/.env.production','META-INF/signing.properties']:
    p=self.apk([(name,b'SYNTHETIC_NOT_CREDENTIAL')]);
    with zipfile.ZipFile(p) as z:self.failcode('private_payload_path',lambda:m.safe_members(z))
+
+class JointReleaseStages(unittest.TestCase):
+ """Controlled GitHub replies and real downloaded-byte comparison; no SDK or remote calls."""
+ def setUp(self):
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.p=P(self.tmp.name).resolve();self.head='1'*40;self.commands=[]
+  spec=importlib.util.spec_from_file_location('joint_stage_mac',P(m.__file__).resolve().parents[1]/'macos/release_tools.py');self.mac=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.mac)
+  self.a=self.p/'android';self.b=self.p/'mac';self.a.mkdir();self.b.mkdir()
+  self.astatus=self.p/'android.md';self.mstatus=self.p/'mac.md';self.cloud=self.p/'cloud.md'
+  self.astatus.write_text('\n'.join('| A-'+n+' | original | condition | 通过 |' for n in sorted(self.mac.IDS|self.mac.CLOUD_IDS)))
+  self.mstatus.write_text('\n'.join('| '+n+' | 通过 | fixture |' for n in sorted(self.mac.IDS)))
+  self.cloud.write_text('\n'.join('| '+n+' | 通过 | fixture |' for n in sorted(self.mac.CLOUD_IDS)))
+  (self.a/'app.apk').write_bytes(b'explicit controlled APK bytes');(self.b/'package.zip').write_bytes(b'explicit controlled Mac ZIP bytes');(self.b/'RELEASE_NOTES.md').write_text('Fixed reviewed scope\n')
+  (self.b/'build-info.json').write_text(json.dumps({'distributionChannel':'release','sourceCommit':self.head,'releaseHead':self.head,'version':'1.0.0'}))
+  for folder,manifest,assets,checksums in [(self.a,'android-release-manifest.json',['app.apk'],'ANDROID-SHA256SUMS'),(self.b,'release-manifest.json',['package.zip','build-info.json','RELEASE_NOTES.md'],'SHA256SUMS')]:
+   (folder/manifest).write_text(json.dumps({'assets':{name:{'bytes':(folder/name).stat().st_size,'sha256':m.file_sha(folder/name)} for name in assets}}));(folder/checksums).write_text('explicit fixture checksums')
+  self.expected={p.name:p for folder in [self.a,self.b] for p in folder.iterdir()}
+  self.record={'id':77,'tag_name':'v1.0.0','draft':True,'published_at':None,'body':'Fixed reviewed scope\n','name':'reviewed title','prerelease':False,'updated_at':'fixed','assets':[{'id':i+1,'name':n,'size':p.stat().st_size,'state':'uploaded','download_count':0} for i,(n,p) in enumerate(sorted(self.expected.items()))]}
+  self.args=types.SimpleNamespace(prepared=self.a,mac=self.b,repo=REPO,sdk=self.p/'unused-sdk',certificate='0'*64,android_acceptance=self.astatus,mac_acceptance=self.mstatus,mac_cloud=self.cloud,draft_id=77)
+  self.remote=(self.head+'\trefs/tags/v1.0.0\n').encode();self.api_reads=0;self.after=None;self.corrupt=None;self.omit=None
+  def macrun(argv):self.commands.append(argv);return self.remote
+  def androidrun(argv,code,env=None):
+   self.commands.append(argv)
+   if argv[:2]==['gh','api']:
+    self.assertEqual(['gh','api','--hostname','github.com','repos/nanless/audio-paper-digest/releases/77'],argv)
+    self.api_reads+=1
+    record=json.loads(json.dumps(self.record))
+    if self.api_reads>1:
+     for a in record['assets']:a['download_count']+=1 # Download counters are not asset mutations.
+     if self.after:self.after(record)
+    return json.dumps(record)
+   if argv[:3]==['gh','release','download']:
+    out=P(argv[argv.index('--dir')+1])
+    for name,p in self.expected.items():(out/name).write_bytes(p.read_bytes())
+    return '' # Another same-tag release can supply good bytes; not proof of this ID.
+   raise AssertionError(argv)
+  def assetrun(argv,stdout,stderr,timeout):
+   self.commands.append(argv)
+   self.assertEqual(['gh','api','--hostname','github.com','-H','Accept: application/octet-stream'],argv[:6]);self.assertEqual(1200,timeout)
+   asset=next(a for a in self.record['assets'] if argv[6]=='repos/nanless/audio-paper-digest/releases/assets/'+str(a['id']))
+   name=asset['name'];p=self.expected[name]
+   if name==self.omit:return subprocess.CompletedProcess(argv,1,b'',b'controlled missing asset')
+   stdout.write(b'X'*p.stat().st_size if name==self.corrupt else p.read_bytes())
+   return subprocess.CompletedProcess(argv,0,b'',b'')
+  patches=[patch.object(m,'mac_module',return_value=self.mac),patch.object(m,'SDK',return_value=object()),patch.object(m,'verify',return_value={'sourceCommit':self.head,'version':'1.0.0','apkSHA256':'a'*64}),patch.object(self.mac,'verify',return_value={'verified':True}),patch.object(self.mac,'source_state',return_value=(self.head,[])),patch.object(self.mac,'run',side_effect=macrun),patch.object(m,'run',side_effect=androidrun),patch.object(m.subprocess,'run',side_effect=assetrun)]
+  for p in patches:p.start();self.addCleanup(p.stop)
+ def reject(self,fn):
+  with self.assertRaises((m.ReleaseError,self.mac.Rejected)):fn()
+ def test_joint_private_draft_keeps_both_union_assets_and_two_pending_only(self):
+  self.astatus.write_text(self.astatus.read_text().replace('| A-REL-03 | original | condition | 通过 |','| A-REL-03 | original | condition | 待验 |').replace('| A-REL-04 | original | condition | 通过 |','| A-REL-04 | original | condition | 待验 |'))
+  self.cloud.write_text(self.cloud.read_text().replace('| REL-03 | 通过 |','| REL-03 | 待验 |').replace('| REL-04 | 通过 |','| REL-04 | 待验 |'))
+  result=m.joint_plan(self.args,private_draft=True);self.assertTrue(result['remoteTagOIDChecked']);self.assertIn('--draft',result['argv']);self.assertIn('--verify-tag',result['argv'])
+  for name in self.expected:self.assertIn(str(self.expected[name]),result['argv'])
+  self.assertFalse(result['executed']);self.assertFalse(result['publicPublication'])
+ def test_android_private_pending_business_and_late_failures_never_qualify(self):
+  original=self.astatus.read_text()
+  for name,state in [('A-APP-01','待验'),('A-REL-03','失败'),('A-REL-04','受阻'),('A-CLOUD-01','不适用')]:
+   self.astatus.write_text(original.replace('| '+name+' | original | condition | 通过 |','| '+name+' | original | condition | '+state+' |'));self.reject(lambda:m.joint_plan(self.args,True))
+ def test_android_duplicate_missing_or_foreign_ids_never_qualify(self):
+  original=self.astatus.read_text()
+  for text in [original.replace('A-REL-05','A-REL-04'),original+'\n| A-REL-03 | original | condition | 通过 |',original.replace('A-APP-01','A-UNKNOWN-01')]:
+   self.astatus.write_text(text);self.reject(lambda:m.joint_plan(self.args,True))
+ def test_public_plan_all_pass_rechecks_same_id_tag_downloaded_exact_bytes(self):
+  result=m.joint_public_plan(self.args)
+  self.assertEqual(['gh','api','--hostname','github.com','--method','PATCH','repos/nanless/audio-paper-digest/releases/77','-F','draft=false'],result['argv'])
+  self.assertTrue(result['downloadVerification']['downloadedAssetsSHAExact']);self.assertEqual(len(self.expected),result['downloadVerification']['assets']);self.assertFalse(result['executed']);self.assertFalse(result['publicPublication']);self.assertEqual(2,self.api_reads)
+  self.assertFalse(any(c[:2]==['gh','release'] for c in self.commands));self.assertEqual(2,sum(c[:2]==['git','ls-remote'] for c in self.commands))
+  self.assertEqual({'repos/nanless/audio-paper-digest/releases/assets/'+str(a['id']) for a in self.record['assets']},{c[6] for c in self.commands if c[:6]==['gh','api','--hostname','github.com','-H','Accept: application/octet-stream']})
+ def test_public_pending_either_platform_cannot_read_or_publish_draft(self):
+  for p in [self.astatus,self.cloud]:
+   original=p.read_text();p.write_text(original.replace('通过','待验',1));self.reject(lambda:m.joint_public_plan(self.args));p.write_text(original)
+  self.assertEqual(0,self.api_reads)
+ def test_wrong_draft_id_tag_or_published_state_is_rejected(self):
+  original=dict(self.record)
+  for change in [{'id':78},{'tag_name':'v2.0.0'},{'draft':False},{'published_at':'already public'}]:
+   self.record={**original,**change};self.reject(lambda:m.joint_public_plan(self.args))
+ def test_missing_duplicate_wrongsize_or_unuploaded_asset_is_rejected(self):
+  original=json.loads(json.dumps(self.record))
+  for change in ['missing','duplicate','size','state']:
+   self.record=json.loads(json.dumps(original))
+   if change=='missing':self.record['assets'].pop()
+   elif change=='duplicate':self.record['assets'][-1]=self.record['assets'][0]
+   elif change=='size':self.record['assets'][0]['size']+=1
+   else:self.record['assets'][0]['state']='new'
+   self.reject(lambda:m.joint_public_plan(self.args))
+ def test_changed_notes_and_bad_remote_tag_are_rejected(self):
+  self.record['body']='unreviewed note';self.reject(lambda:m.joint_public_plan(self.args));self.record['body']='Fixed reviewed scope\n';self.remote=('2'*40+'\trefs/tags/v1.0.0\n').encode();self.reject(lambda:m.joint_public_plan(self.args))
+ def test_actual_download_mismatch_and_missing_asset_are_rejected(self):
+  self.corrupt='app.apk';self.reject(lambda:m.joint_public_plan(self.args));self.corrupt=None;self.omit='package.zip';self.reject(lambda:m.joint_public_plan(self.args))
+ def test_same_tag_other_release_good_bytes_cannot_qualify_bad_bound_asset(self):
+  # A tag-only download could return another release's good same-named bytes.
+  # The bound release's actual asset has the same name and size, but different bytes.
+  self.corrupt='app.apk';self.reject(lambda:m.joint_public_plan(self.args))
+  self.assertTrue(any(c[:6]==['gh','api','--hostname','github.com','-H','Accept: application/octet-stream'] for c in self.commands))
+  self.assertFalse(any(c[:2]==['gh','release'] for c in self.commands))
+ def test_draft_mutation_during_download_is_rejected(self):
+  self.after=lambda record:record.update(name='changed title');self.reject(lambda:m.joint_public_plan(self.args))
+ def test_current_head_change_retains_original_source_gate(self):
+  with patch.object(self.mac,'source_state',return_value=('2'*40,[])):self.reject(lambda:m.joint_public_plan(self.args))
+ def test_final_negative_draft_id_is_not_a_free_form_api_target(self):
+  self.args.draft_id=-1;self.reject(lambda:m.joint_public_plan(self.args));self.assertEqual([],self.commands)
+
 if __name__=='__main__':unittest.main(verbosity=2)

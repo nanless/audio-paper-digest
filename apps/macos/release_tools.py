@@ -260,20 +260,20 @@ def prepare(args):
         verify_zip(archive, repo, info, app.name)
         build_info={'contract': CONTRACT, 'preparedAtUTC': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'publicationEligible': False, 'publicationState': 'local-candidate-only', 'bundleName': app.name, **info}
         write_json(temporary/'build-info.json', build_info)
-        notes=f'''# 论文速递 {info['version']} · 本地候选包
+        notes=f'''# 论文速递 {info['version']} · 可校验安装包
 
-此目录用于准备与核验，尚未创建正式 GitHub Release，也未推送版本标签。不能把本地打包成功当成全部验收通过。
+本地准备工具不会创建或推送版本标签，也不会上传或公开 GitHub Release。是否已交付以远端实际状态及对应验收记录为准；打包成功不能替代完整验收。
 
 - 架构：{info['architecture']}；最低 macOS 15。
 - 包内版本：{info['version']}，构建号 {info['bundleVersion']}。
 - 运行源码提交：{info['sourceCommit']}。
-- 发行候选对应提交：{info['releaseHead']}；两者之间仅允许已提交的文档变动。
+- 发行候选对应提交：{info['releaseHead']}；允许的来源差异按核验记录分类，包括已提交文档、独立Android树与两份Mac发行验证文件；所有映射Mac输入仍须逐字一致。
 - 签名：本机 ad-hoc 开发签名，未 Apple 公证；没有宣称其他 Mac 可无阻碍安装。
 - ZIP 保留应用资源与签名；若包含 DMG，可将应用拖到 Applications。
 - 现有网站成果由客户端直接读取；个人资料与密钥不放入发行包。包内自带运行组件及许可。
 - 使用 SHA256SUMS 核对文件完整性；校验和不能替代 Apple 身份签名、完整验收或独立审查。
 
-正式版本说明须在全部适用验收条件关闭后由维护者据实整理。本候选没有把未完成条件写成通过，也没有安全校验绕过步骤。
+公开前须核对最终说明、全部适用验收、同一远端草稿及下载实包。本文只说明固定安装资产及签名范围，不提前宣告未完成条件通过。
 '''
         (temporary/'RELEASE_NOTES.md').write_text(notes)
         assets={p.name:{'bytes':p.stat().st_size,'sha256':digest(p.read_bytes())} for p in sorted(temporary.iterdir()) if p.is_file()}
@@ -387,22 +387,34 @@ def verify_dmg(image, repo, info):
     if failures:
         raise Rejected('；'.join(phase+'：'+str(error) for phase,error in failures)) from failures[0][1]
 
-def publish_plan(args):
+def verified_remote_tag(tag, head):
+    # Fixed repository, exact tag and optional peeled annotated-tag commit. Read only.
+    ref='refs/tags/'+tag
+    raw=run(['git','ls-remote','--tags','https://github.com/nanless/audio-paper-digest.git',ref,ref+'^{}']).decode('ascii')
+    rows=[line.split('\t') for line in raw.splitlines()]
+    require(rows and all(len(row)==2 and re.fullmatch('[a-f0-9]{40}',row[0]) and row[1] in {ref,ref+'^{}'} for row in rows),'远端标签记录无效')
+    refs={name:oid for oid,name in rows}
+    require(len(refs)==len(rows) and ref in refs and refs.get(ref+'^{}',refs[ref])==head,'远端版本标签未指向固定发行提交')
+    return {'tag':tag,'commitOID':head,'annotated':ref+'^{}' in refs}
+
+def publish_plan(args, private_draft=False):
     verify(args.prepared.resolve(),args.repo.resolve())
     text=args.acceptance_status.read_text(); rows=re.findall(r'^\| ((?:APP|DATA|READ|LIB|NOTE|EXP|LLM|JOB|ZOT)-\d+) \| ([^|]+) \|',text,re.M)
     require(len(rows)==69 and {row[0] for row in rows}==IDS and all(row[1].strip()=='通过' for row in rows),'69项适用必测验收尚未全部通过；不能生成公开发行命令')
     cloud_file=args.cloud_acceptance or args.repo/'docs/mac-app-cloud.md'
     extra=re.findall(r'^\| ((?:CLOUD|REL)-\d+) \| ([^|]+) \|',cloud_file.read_text(),re.M)
-    require(len(extra)==17 and {row[0] for row in extra}==CLOUD_IDS and all(row[1].strip()=='通过' for row in extra),'新增云端与发行17项尚未全部通过；不能生成公开发行命令')
+    require(len(extra)==17 and {row[0] for row in extra}==CLOUD_IDS and all(row[1].strip() in ({'通过','待验'} if private_draft and row[0] in {'REL-03','REL-04'} else {'通过'}) for row in extra),'新增云端与发行17项尚未全部通过；不能生成公开发行命令')
     info=load(args.prepared/'build-info.json')
     require(info.get('distributionChannel')=='release','私有QA或历史构建不能用于正式发行')
     head,_=source_state(args.repo.resolve(),info['sourceCommit'])
     require(head==info['releaseHead'],'HEAD已变化，需基于最终提交重新准备产物')
     require(args.repository=='nanless/audio-paper-digest','必须明确使用当前仓库')
+    tag=verified_remote_tag('v'+info['version'],head) if private_draft else None
     assets=[str(args.prepared.resolve()/name) for name in sorted(load(args.prepared/'release-manifest.json')['assets'])]+[str(args.prepared.resolve()/'release-manifest.json'),str(args.prepared.resolve()/'SHA256SUMS')]
     command=['gh','release','create','v'+info['version'],*assets,'--repo',args.repository,'--verify-tag','--target',head,'--title','论文速递 '+info['version'],'--notes-file',str(args.prepared.resolve()/'RELEASE_NOTES.md'),'--draft']
+    if private_draft:command[command.index('--repo')+1]='github.com/nanless/audio-paper-digest'
     if args.prerelease:command.append('--prerelease')
-    return {'executed':False,'automaticTagCreation':False,'publicPublication':False,'qualification':'原69项及新增云端与发行17项通过只是本地门，维护者仍须复核对应包的实际证据；命令仅创建草稿','requiresExistingRemoteTag':'v'+info['version'],'argv':command}
+    return {'stage':'private-draft' if private_draft else 'fully-qualified-draft','remoteTag':tag,'executed':False,'automaticTagCreation':False,'publicPublication':False,'qualification':('84项前置验收通过，REL-03/04仅可通过或待验；只准创建私有草稿，不能公开' if private_draft else '原69项及新增云端与发行17项通过只是本地门，维护者仍须复核对应包的实际证据；命令仅创建草稿'),'requiresExistingRemoteTag':'v'+info['version'],'argv':command}
 
 def main():
     require(not os.environ.get('CODEX_SANDBOX'),'请在本机正常开发环境准备发行产物')
@@ -412,16 +424,16 @@ def main():
     for name in ['inspect','prepare']:
         p=sub.add_parser(name);p.add_argument('--app',type=pathlib.Path,required=True);p.add_argument('--repo',type=pathlib.Path,default=REPO);p.add_argument('--build-record',type=pathlib.Path,required=True);p.add_argument('--version')
         if name=='prepare':p.add_argument('--output',type=pathlib.Path,required=True);p.add_argument('--dmg',action='store_true')
-    for name in ['verify','publish-plan']:
+    for name in ['verify','publish-plan','private-draft-plan']:
         p=sub.add_parser(name);p.add_argument('--prepared',type=pathlib.Path,required=True);p.add_argument('--repo',type=pathlib.Path,default=REPO)
-        if name=='publish-plan':p.add_argument('--acceptance-status',type=pathlib.Path,required=True);p.add_argument('--cloud-acceptance',type=pathlib.Path);p.add_argument('--repository',default='nanless/audio-paper-digest');p.add_argument('--prerelease',action='store_true')
+        if name in {'publish-plan','private-draft-plan'}:p.add_argument('--acceptance-status',type=pathlib.Path,required=True);p.add_argument('--cloud-acceptance',type=pathlib.Path);p.add_argument('--repository',default='nanless/audio-paper-digest');p.add_argument('--prerelease',action='store_true')
     args=parser.parse_args()
     if hasattr(args,'app'):require(not args.app.is_symlink(),'应用根不能是符号链接')
     if hasattr(args,'prepared'):require(not args.prepared.is_symlink(),'产物目录不能是符号链接')
     if args.command=='inspect':result=audit_app(args.app.resolve(),args.repo.resolve(),load(args.build_record),args.version);result.pop('record');result['publicationEligible']=False
     elif args.command=='prepare':result=prepare(args)
     elif args.command=='verify':result=verify(args.prepared.resolve(),args.repo.resolve())
-    else:result=publish_plan(args)
+    else:result=publish_plan(args,private_draft=args.command=='private-draft-plan')
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 if __name__=='__main__':
