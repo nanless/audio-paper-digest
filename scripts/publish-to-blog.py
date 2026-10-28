@@ -4454,8 +4454,8 @@ def plain_title_for_publish(title):
 
 
 def markdown_title_for_publish(title):
-    """Escape literal title dollars at the Markdown boundary; no metadata cleanup."""
-    return re.sub(r'(\\*)\$', lambda match: match[1] + ('' if len(match[1]) % 2 else '\\') + '$', str(title or ''))
+    """Escape literal title dollars and stars; preserve the plain metadata title."""
+    return re.sub(r'(\\*)([$*])', lambda match: match[1] + ('' if len(match[1]) % 2 else '\\') + match[2], str(title or ''))
 
 
 def yaml_title_for_publish(title):
