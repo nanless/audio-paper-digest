@@ -84,7 +84,8 @@ import UniformTypeIdentifiers
             let field=NSSecureTextField(frame:NSRect(x:0,y:0,width:260,height:24));alert.accessoryView=field;alert.addButton(withTitle:"解锁");alert.addButton(withTitle:"取消")
             password=alert.runModal() == .alertFirstButtonReturn ? field.stringValue:nil
         }
-        guard let password,document.unlock(withPassword:password),!document.isLocked else{throw DesktopError.message("PDF 未解锁；没有替换当前阅读资料")}
+        guard let password else{throw DesktopOperationCancelled("已取消打开加密 PDF；原阅读资料保留")}
+        guard document.unlock(withPassword:password),!document.isLocked else{throw DesktopError.message("PDF 未解锁；没有替换当前阅读资料")}
     }
     func archiveMaterials(_ payload:[String:Any],includeAnalysis:Bool=true,access:DetailDocumentAccess?=nil) async throws->[String:Any] {
         try requireDocumentContext(access,kinds:[.zotero,.export])

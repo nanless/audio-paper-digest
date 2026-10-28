@@ -27,6 +27,26 @@ import Darwin
         check(source["pages"] as? [Int]==Array(5...12),"parent chapter includes nested subsections through next peer chapter")
         doc.outlineRoot=oldOutline
         check(app.pdfStatus()["version"] as? String==version,"PDF status uses actual loaded PDF version")
+        let previousDocument=app.pdfView.document,previousOwner=app.pdfOwner,previousPage=app.pdfView.currentPage
+        let mixed=PDFDocument(),sourcePage=doc.page(at:0)!
+        mixed.insert(sourcePage.copy() as! PDFPage,at:0)
+        let pageBounds=sourcePage.bounds(for:.mediaBox)
+        let raster=NSImage(size:pageBounds.size,flipped:false){rect in
+            NSColor.white.setFill();rect.fill();sourcePage.draw(with:.mediaBox,to:NSGraphicsContext.current!.cgContext);return true
+        }
+        mixed.insert(PDFPage(image:raster)!,at:1)
+        let blank=PDFPage();blank.setBounds(pageBounds,for:.mediaBox);mixed.insert(blank,at:2)
+        app.pdfView.document=mixed
+        for(index,status)in [(0,"available"),(1,"empty"),(2,"empty"),(0,"available")] {
+            app.pdfView.go(to:mixed.page(at:index)!)
+            let actual=app.pdfStatus()
+            check(actual["page"] as? Int==index+1 && actual["pageTextStatus"] as? String==status,"current physical page \(index+1) text status \(status), including mixed-document return")
+        }
+        app.pdfOwner="different-owner"
+        check(app.pdfStatus()["pageTextStatus"] as? String=="unknown","another owner's PDF is not granted current-page text capability")
+        app.pdfOwner=previousOwner;app.pdfView.document=nil
+        check(app.pdfStatus()["pageTextStatus"] as? String=="unknown","missing current PDF reports uninspected rather than selectable")
+        app.pdfView.document=previousDocument;if let previousPage{app.pdfView.go(to:previousPage)}
         let long=PDFDocument(),firstPage=doc.page(at:0)!,copies=70000/firstPage.string!.count+2
         for index in 0..<copies {long.insert(firstPage.copy() as! PDFPage,at:index)}
         let longSelection=PDFSelection(document:long)

@@ -410,7 +410,13 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             let mark=PDFAnnotation(bounds:NSRectFromString(rect),forType:.highlight,withProperties:nil);mark.color=NSColor.systemYellow.withAlphaComponent(0.35);mark.contents=entry["text"] as? String;target.addAnnotation(mark);annotationsByID[id]=mark
         }
     }
-    func pdfStatus()->[String:Any]{let doc=pdfView.document;return ["paperID":currentPaperID,"contextGeneration":contextGeneration,"pageCount":doc?.pageCount ?? 0,"page":pdfView.currentPage.flatMap{doc?.index(for:$0)}.map{$0+1} ?? 1,"scale":pdfView.scaleFactor,"sha256":currentPDFSHA,"version":pdfVersion,"currentness":currentPDFReceipt["currentness"] ?? "not-checked","isStale":currentPDFReceipt["isStale"] ?? false,"notices":currentPDFReceipt["notices"] ?? []]}
+    func pdfStatus()->[String:Any]{
+        let doc=pdfView.document
+        let pageTextStatus:String
+        if pdfOwner==currentPaperID,let doc,!doc.isLocked,let page=pdfView.currentPage,doc.index(for:page) != NSNotFound {
+            pageTextStatus=(page.string ?? "").trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "empty":"available"
+        }else{pageTextStatus="unknown"}
+        return ["pageTextStatus":pageTextStatus,"paperID":currentPaperID,"contextGeneration":contextGeneration,"pageCount":doc?.pageCount ?? 0,"page":pdfView.currentPage.flatMap{doc?.index(for:$0)}.map{$0+1} ?? 1,"scale":pdfView.scaleFactor,"sha256":currentPDFSHA,"version":pdfVersion,"currentness":currentPDFReceipt["currentness"] ?? "not-checked","isStale":currentPDFReceipt["isStale"] ?? false,"notices":currentPDFReceipt["notices"] ?? []]}
     @objc func pdfPageChanged(){emit("pdf.changed",pdfStatus())}
     @objc func pdfSelectionChanged(){
         guard let selection=pdfView.currentSelection,let text=selection.string,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,let doc=pdfView.document,pdfOwner==currentPaperID,selection.pages.allSatisfy({doc.index(for:$0) != NSNotFound}) else{selectionSource=[:];emit("pdf.selection",["paperID":currentPaperID,"cleared":true,"pages":[]]);return}

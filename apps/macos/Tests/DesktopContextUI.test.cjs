@@ -78,6 +78,14 @@ let browser;
   await page.waitForSelector('[data-library-open="arxiv:2610.27491"]');
   const open=async id=>{await page.locator('#back').click();await page.locator(`[data-library-open="${id}"]`).click();await page.waitForFunction(id=>paperDigestArchiveHTML()?.paperID===id,id);};
   await page.locator('[data-library-open="arxiv:2610.27491"]').click();await page.waitForFunction(()=>paperDigestArchiveHTML()?.paperID==='arxiv:2610.27491');
+  await check('PDF footer uses current-page native text status and rejects a different paper update',async()=>{
+   for(const [status,label]of [['available','本页可提取文字'],['empty','本页未提取到文字 · 无 OCR，可继续阅读原件'],['unknown','当前页文字状态未检查']]){
+    await page.evaluate(({paperID,status})=>window.dispatchEvent(new CustomEvent('pdf.changed',{detail:{paperID,page:2,pageCount:3,scale:1,pageTextStatus:status}})),{paperID:primary.id,status});
+    assert.equal(await page.locator('#pdf-text-status').innerText(),label);
+   }
+   await page.evaluate(()=>window.dispatchEvent(new CustomEvent('pdf.changed',{detail:{paperID:'different-owner',page:1,pageCount:1,pageTextStatus:'available'}})));
+   assert.equal(await page.locator('#pdf-text-status').innerText(),'当前页文字状态未检查');
+  });
   // Native reply has already completed for A; intentionally delay transport delivery to the JS caller.
   await page.evaluate(()=>{const handler=webkit.messageHandlers.desktop,original=handler.postMessage.bind(handler);handler.postMessage=async message=>{const result=await original(message);if(message.command==='library.article'&&message.payload.refresh){window.__refreshReady=true;await new Promise(r=>window.__releaseRefresh=r);}return result;};});
   await page.locator('#refresh-reader').click();await page.waitForFunction(()=>window.__refreshReady);

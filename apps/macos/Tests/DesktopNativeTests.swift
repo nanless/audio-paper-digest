@@ -208,6 +208,17 @@ private struct NoNativeCredentials: ZoteroCredentialStore {
             try app.unlockPDF(locked,passwordProvider:{requested=true;return nil})
             try require(!requested,"already unlocked document never asks for password")
         }
+        check("encrypted PDF cancellation is a normal cancellation; wrong password remains an error and preserves current reading") {
+            let encrypted=root.appendingPathComponent("encrypted-micla.pdf"),oldDocument=app.pdfView.document,oldOwner=app.pdfOwner,oldSHA=app.currentPDFSHA,oldPage=app.pdfView.currentPage
+            guard let locked=PDFDocument(url:encrypted),locked.isLocked else{throw NativeTestFailure(message:"Expected actual encrypted fixture")}
+            var cancelled=false
+            do{try app.unlockPDF(locked,passwordProvider:{nil})}catch{cancelled=error is DesktopOperationCancelled}
+            try require(cancelled && locked.isLocked,"explicit cancellation has the type already ignored by showError")
+            var wrongIsError=false
+            do{try app.unlockPDF(locked,passwordProvider:{"incorrect"})}catch{wrongIsError = !(error is DesktopOperationCancelled)}
+            try require(wrongIsError && locked.isLocked,"wrong password is not swallowed as user cancellation")
+            try require(app.pdfView.document===oldDocument && app.pdfOwner==oldOwner && app.currentPDFSHA==oldSHA && app.pdfView.currentPage===oldPage,"both rejection paths preserve current PDF identity and physical page")
+        }
         await checkAsync("bootstrap settings and non-model actions do not read any secret") {
             var secretReads=0
             app.model=ModelService(directory:root,store:app.store,keyProvider:{secretReads+=1;throw NativeTestFailure(message:"Non-model path must never access secret")})
