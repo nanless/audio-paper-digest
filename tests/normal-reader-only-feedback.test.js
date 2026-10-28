@@ -1578,6 +1578,129 @@ test('只读Reader完成核验精确重放原父引文组合，不写反馈或�
     for (const [name, bytes] of files) assert.deepEqual(fs.readFileSync(path.join(directory, name)), bytes);
 });
 
+async function createCompletedCoreReaderRenderingSample(t) {
+    const sample = await createReviewedReaderSample(t);
+    const parent = { ...sample.feedback, primaryFeedback: '', rejectedPrimaryClaims: [],
+        coreFeedback: '保留原已纠正摘要的证据边界。', rejectedCoreClaims: ['原摘要错误已消失'],
+        readerFeedback: '', rejectedReaderClaims: [], sourceQuotes: [sample.source.text.slice(110, 180)] };
+    const parentBound = facts.validateFeedback(parent, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.coreSummaryRepair.factReview = parentBound.proof;
+    facts.withFactReview(parentBound, () => undefined);
+    const child = { ...sample.feedback, rejectedPrimaryClaims: [],
+        readerFeedback: '原Reader子包的约束。' + sample.feedback.readerFeedback };
+    const childBound = facts.validateFeedback(child, sample.plan, sample.paper);
+    facts.withFactReview(childBound, () => undefined);
+    sample.paper.analysisManifest.stages.apiReaderArticle.factReview = childBound.proof;
+    const next = { ...child, readerFeedback: child.readerFeedback + '\n本轮只纠正新增的图示范围。' };
+    return { ...sample, parent, parentBound, child, childBound, next };
+}
+
+test('核心父包的单调Reader孙包在cold完成核验重放同一指导且不升8000', async t => {
+    const sample = await createCompletedCoreReaderRenderingSample(t);
+    const child = facts.validateFeedback(sample.next, sample.plan, sample.paper);
+    facts.withFactReview(child, () => undefined);
+    let live;
+    const location = require('../scripts/lib/reader-fact-table-claim-location');
+    const originalVerified = location.withVerified;
+    const inherited = [];
+    t.mock.method(location, 'withVerified', (...args) => {
+        if (args[3]?.inheritedObligations) inherited.push(structuredClone(args[3].inheritedObligations));
+        return originalVerified(...args);
+    });
+    await engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.parentBound, () =>
+        facts.withReaderFactReview(child, sample.paper, () => {
+            live = facts.reviewFeedback('apiReaderArticle', sample.id);
+            Object.assign(sample.paper.analysisManifest.stages.apiReaderArticle, facts.fingerprintFields('apiReaderArticle'));
+            sample.paper.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = facts.sha(live);
+        })));
+    assert.ok(live.includes(sample.parent.coreFeedback));
+    const before = JSON.stringify(sample.paper);
+    const complete = require('../scripts/lib/completed-bound-fact-feedback');
+    assert.equal(complete.hasCompletedBoundFactFeedbackStages(sample.paper, sample.next, sample.plan), true);
+    facts.withReadOnlyReaderCompletion(facts.validateFeedback(sample.next, sample.plan, sample.paper), sample.paper, () => {
+        assert.equal(facts.reviewFeedback('apiReaderArticle', sample.id), live);
+        assert.equal(facts.current().restoredReaderConstraints, undefined);
+        assert.throws(() => facts.validateReaderReviewFeedbackLength('字'.repeat(4001), sample.id), /4000/);
+        assert.throws(() => facts.assertScoringOnlyModelStageAllowed('apiReaderArticle'), /只读Reader/);
+    });
+    assert.ok(inherited.length >= 3);
+    for (const observation of inherited) {
+        assert.deepEqual(observation[0].proof, sample.parentBound.proof);
+        for (const claim of sample.parent.rejectedCoreClaims) assert.ok(observation[0].claims.includes(claim));
+    }
+    assert.equal(JSON.stringify(sample.paper), before);
+    for (const mutate of [
+        p => { p.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = '0'.repeat(64); },
+        p => { p.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = facts.sha(live + '字'); },
+        p => { p.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = facts.sha(sample.parent.coreFeedback); },
+        p => { p.analysisManifest.stages.apiReaderArticle.factReview.feedbackSha256 = '0'.repeat(64); },
+        p => { p.analysisManifest.stages.coreSummaryRepair.factReview.sourceFiles['source.txt'] = '0'.repeat(64); },
+        p => { p.analysisManifest.stages.scoringAudit.status = 'pending'; },
+        p => { p.analysisManifest.stages.apiReaderArticle.restoredReaderConstraints = { maximumRenderedChars: 8000 }; }
+    ]) {
+        const bad = structuredClone(sample.paper); mutate(bad);
+        assert.equal(complete.hasCompletedBoundFactFeedbackStages(bad, sample.next, sample.plan), false);
+    }
+    const parentFile = path.join(daily.factFeedbackDirectory(sample.plan), sample.parentBound.proof.feedbackSha256 + '.json');
+    const bytes = fs.readFileSync(parentFile);
+    fs.unlinkSync(parentFile);
+    assert.equal(complete.hasCompletedBoundFactFeedbackStages(sample.paper, sample.next, sample.plan), false);
+    fs.writeFileSync(parentFile, bytes, { mode: 0o600 });
+    const alteredParent = { ...sample.parent, coreFeedback: sample.parent.coreFeedback + '字' };
+    fs.writeFileSync(parentFile, JSON.stringify(alteredParent), { mode: 0o600 });
+    assert.equal(complete.hasCompletedBoundFactFeedbackStages(sample.paper, sample.next, sample.plan), false);
+    fs.writeFileSync(parentFile, bytes, { mode: 0o600 });
+    assert.equal(complete.hasCompletedBoundFactFeedbackStages(sample.paper, sample.next, sample.plan), true);
+    const badSource = { ...sample.next, sourceFiles: { ...sample.next.sourceFiles, 'source.pdf': '0'.repeat(64) } };
+    assert.throws(() => complete.hasCompletedBoundFactFeedbackStages(sample.paper, badSource, sample.plan), /来源SHA已过期/);
+    for (const changed of [
+        { ...sample.next, readerFeedback: sample.next.readerFeedback + '字' },
+        { ...sample.next, sourceQuotes: [sample.source.text.slice(200, 260)] },
+        { ...sample.next, coreFeedback: '还要修改核心摘要。', rejectedCoreClaims: ['不属于Reader的核心义务'] }
+    ]) {
+        const changedBound = facts.validateFeedback(changed, sample.plan, sample.paper);
+        facts.withFactReview(changedBound, () => undefined);
+        const bad = structuredClone(sample.paper);
+        bad.analysisManifest.stages.apiReaderArticle.factReview = changedBound.proof;
+        assert.equal(complete.hasCompletedBoundFactFeedbackStages(bad, changed, sample.plan), false);
+    }
+    // The packet itself is within its existing 4k shape limit, while adding
+    // the genuine core-parent directive/quote makes the complete rendering too
+    // long. A copied 8k field cannot upgrade this new, non-restoring path.
+    const oversized = { ...sample.next, readerFeedback: sample.next.readerFeedback
+        + '字'.repeat(3800 - sample.next.readerFeedback.length) };
+    const oversizedBound = facts.validateFeedback(oversized, sample.plan, sample.paper);
+    facts.withFactReview(oversizedBound, () => undefined);
+    const oversizedRendering = live.replace(sample.next.readerFeedback, oversized.readerFeedback);
+    assert.ok(oversizedRendering.length > 4000);
+    const oversizedPaper = structuredClone(sample.paper);
+    oversizedPaper.analysisManifest.stages.apiReaderArticle.factReview = oversizedBound.proof;
+    oversizedPaper.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = facts.sha(oversizedRendering);
+    assert.equal(complete.hasCompletedBoundFactFeedbackStages(oversizedPaper, oversized, sample.plan), false);
+    oversizedPaper.analysisManifest.stages.apiReaderArticle.restoredReaderConstraints = { maximumRenderedChars: 8000 };
+    assert.equal(complete.hasCompletedBoundFactFeedbackStages(oversizedPaper, oversized, sample.plan), false);
+});
+
+test('核心父包的首次Reader子包继续接受无core指导及原raw反馈SHA', async t => {
+    const sample = await createCompletedCoreReaderRenderingSample(t);
+    let original;
+    await engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.parentBound, () =>
+        facts.withReaderFactReview(sample.childBound, sample.paper, () => {
+            original = facts.reviewFeedback('apiReaderArticle', sample.id);
+            Object.assign(sample.paper.analysisManifest.stages.apiReaderArticle, facts.fingerprintFields('apiReaderArticle'));
+        })));
+    assert.ok(!original.includes(sample.parent.coreFeedback));
+    const complete = require('../scripts/lib/completed-bound-fact-feedback');
+    for (const originalHash of [facts.sha(original), facts.sha(sample.child.readerFeedback.trim())]) {
+        sample.paper.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = originalHash;
+        assert.equal(complete.hasCompletedBoundFactFeedbackStages(sample.paper, sample.child, sample.plan), true);
+        facts.withReadOnlyReaderCompletion(facts.validateFeedback(sample.child, sample.plan, sample.paper), sample.paper, () => {
+            assert.equal(facts.reviewFeedback('apiReaderArticle', sample.id), original);
+            assert.equal(facts.current().restoredReaderConstraints, undefined);
+        });
+    }
+});
+
 test('旧Reader上游fallback拒绝非Reader检查点保存并在错误路径完整恢复内存', async t => {
     const sample = await createReviewedReaderSample(t), paper = sample.paper;
     const feedback = { ...sample.feedback, rejectedPrimaryClaims: [] };

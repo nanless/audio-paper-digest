@@ -1,0 +1,113 @@
+{
+  "contract": "real-reader-core-parent-rendering-cases-v1",
+  "provenance": "Only actual three bound feedback packages and observed rendering hashes. No full paper, source text, PDF, image or private filesystem path is included.",
+  "paperId": "2610.35336",
+  "sourceFiles": {
+    "source.txt": "3d9c4e49c108da5bab945d5fe6dbb27c411fb7e1ff68dbd8c3fa1b5ad7c035b4",
+    "source.pdf": "309dec05719f421f601e19dfe9875e0a67b2bba892371bed37207722a6200f43",
+    "source-runtime.json": "2918d57ca29dd411101007c3c2c0ef9a973a157eac274f5064bc5f8578ab1128",
+    "source-manifest.json": "ba474c0e81851b04a891af2b3d7fe83ef4734a26cb701144281663262277cced"
+  },
+  "coreParent": {
+    "contract": "daily-bound-fact-review-v1",
+    "batchDate": "2026-10-27",
+    "paperId": "2610.35336",
+    "runId": "cc02fdfc-2fc5-4eff-afff-b9e149c42137",
+    "sourceFiles": {
+      "source.txt": "3d9c4e49c108da5bab945d5fe6dbb27c411fb7e1ff68dbd8c3fa1b5ad7c035b4",
+      "source.pdf": "309dec05719f421f601e19dfe9875e0a67b2bba892371bed37207722a6200f43",
+      "source-runtime.json": "2918d57ca29dd411101007c3c2c0ef9a973a157eac274f5064bc5f8578ab1128",
+      "source-manifest.json": "ba474c0e81851b04a891af2b3d7fe83ef4734a26cb701144281663262277cced"
+    },
+    "coreAnalysisSha256": "862ae115d6782b81f2f53e048591408d412a916142d8b47c765131a46c65725c",
+    "coreSummarySha256": "e9ecacc6b7c1b764628fd97a03f4b8ae858b405839c0e4c139e928c7122b6679",
+    "coreFeedback": "只修核心摘要一节，其他十二个科学章节逐字保护，主分析不得重写。当前摘要末句无依据声称原文没有可核对关键定量结果、没有训练推理部署成本，须准确改正。原文明确在H100 NVL和已声明验证池13个模型-批量组合中13/13选中最快已测设计；NH-TTS B32三巨内核相对常规首音频快4.05倍、相对单巨内核延迟低21.4%，21.4%分母为单巨内核，不能反写单巨内核仅慢21.4%。VI-A还报告输入采集的核基准标定成本：NH-TTS 4.6 GPU-min、Qwen3-TTS四批量合15.9 GPU-min，这是规划器输入采集成本，不是完整训练成本、实际部署费用或完整TCO。摘要应如实选取主要定量证据并明确成本口径，收束结论于已实现候选池、H100 NVL硬件、未证明未实现组合或跨GPU迁移；不能把未知完整部署成本泛化成所有定量和成本都缺失。保持摘要与现有方法因果链，避免堆砌无关细节。",
+    "readerFeedback": "",
+    "rejectedCoreClaims": [
+      "原文未提供可核对的关键定量结果",
+      "原文未披露训练、推理或部署成本"
+    ],
+    "rejectedReaderClaims": [],
+    "sourceQuotes": [
+      "We compare the conventional baseline of TensorRT with CUDA graphs against multiple native megakernel and conventional graph design combinations. Each design runs at batch size 32 on H100 NVL GPU. Three megakernels (Figure 3) with overlap publish the first audio 4.05× sooner than conventional execution and 21.4% sooner than one megakernel design at batch size 32. The ordering holds at other batch sizes (Bn denotes batch size n): at B64, 47.4 ms against 61.0 ms for one megakernel and 221.5 ms for conventional; at B1, 27.5 ms against 32.7 and 73.0 ms respectively.",
+      "The frozen planner uniquely selected the measured fastest design in 13/13 held-out model-batch cases. This establishes selection accuracy within the declared validation pools across the tested workloads on H100 NVL. It does not establish optimality over unmeasured compositions or transfer to other GPU architectures.",
+      "NH-TTS reports the mean of per-batch request p95 TTFA over 36 batches in the main campaign. Qwen3-TTS computes p95 over three cohort-level first-PCM publication times per run and averages 9 run-p95 values across 3 processes at B1/B48/B64, or twelve across four processes at B16/B32. Llama computes p95 over 30 repetitions per process and aggregates across three processes using the arithmetic mean. We discard two warmup cohorts per process for NH-TTS, Qwen3-TTS and Llama, before measurement. Ratio confidence intervals use 20,000 bootstrap resamples of four matched GPU blocks for NH-TTS and Qwen3-TTS B16/B32, or nine matched process/run units for Qwen3-TTS B1/B48/B64, with paired resampling across designs. Collecting the planner’s inputs takes minutes: kernel benchmarks took 4.6 GPU-minutes for NH-TTS and 15.9 for Qwen3-TTS across four batch sizes."
+    ]
+  },
+  "firstReaderChild": {
+    "contract": "daily-bound-fact-review-v1",
+    "batchDate": "2026-10-27",
+    "paperId": "2610.35336",
+    "runId": "cc02fdfc-2fc5-4eff-afff-b9e149c42137",
+    "sourceFiles": {
+      "source.txt": "3d9c4e49c108da5bab945d5fe6dbb27c411fb7e1ff68dbd8c3fa1b5ad7c035b4",
+      "source.pdf": "309dec05719f421f601e19dfe9875e0a67b2bba892371bed37207722a6200f43",
+      "source-runtime.json": "2918d57ca29dd411101007c3c2c0ef9a973a157eac274f5064bc5f8578ab1128",
+      "source-manifest.json": "ba474c0e81851b04a891af2b3d7fe83ef4734a26cb701144281663262277cced"
+    },
+    "coreAnalysisSha256": "8df4c14bf08b0593fff391ab14509a75f14eabec62e008a98c07eb7531eb3acc",
+    "coreSummarySha256": "e2756ae69f0bffb437a061d95bfd38249ae3d3da6d77e5e9d2b548ec060b8742",
+    "coreFeedback": "",
+    "readerFeedback": "仅纠正Reader既有节点：/sections/9/body、/sections/14/body及/tableBindings/0、/tableBindings/4，把21.4%限定为三核TTFA相对单核降低，禁止复制主分析里反向分母或写单核受益；4.05×明确常规/三核时延比。/sections/6/body原文算例串行30.1ms、重叠28.2ms，纠正“三十分之1”。/sections/11/body及/tableBindings/3从封存Table ordinal2完整重绑Stage0行MK/TR、Stage1列MK/TR与四格0.991/1.290/1.216/9.760及脚注，保留总表数5。明确披露原表组合方向与正文7.57×/1.23×的codec减速归属无法闭合，分别呈现作者文字与表，不选边、不把表当作该归属的直接证实。不得再复制旧主分析反向21.4/7.57结论。其余科学上游/评分/作者/标签/图不变。同一图4解说19.3、6.67、28.6应为相对差距百分比而非百分点。 图4的相对百分比修正也同步/figurePlacements/1，表1只列B32/B64时不能称上表有3个批量。现有主文中反向百分比是本次不允许复制的旧错误，Reader必须以来源为准；不修改主文、摘要、评分、标签、作者及已正确原图。",
+    "rejectedCoreClaims": [],
+    "rejectedReaderClaims": [
+      "比三巨内核晚 21.4%",
+      "单个巨内核早 21.4%",
+      "则串行分数为三十分之 1 毫秒",
+      "常规声码器在旁路巨内核生产者时慢 7.57 倍而巨内核声码器只慢 1.23 倍",
+      "上表是并置代价取决于同伴实现的直接证据。",
+      "常规声码器与巨内核生产者并排时恶化最明显",
+      "差距为 19.3、6.67、28.6 个百分点",
+      "上表显示三巨内核在 3 个批量都最早。"
+    ],
+    "sourceQuotes": [
+      "publish the first audio 4.05× sooner than conventional execution and 21.4% sooner than one megakernel design at batch size 32.",
+      "publication scores are 20 + 4 + 6 + 0.1 = 30.1ms and 20 + max(6,8) + 0.2 = 28.2ms.",
+      "the conventional codec slows by 7.57× beside the producer megakernel, whereas the codec megakernel slows by 1.23×.",
+      "TABLE II: Megakernel vs TensorRT Latencies\nStage 1a\nMegakernel\nTensorRT\nMegakernel\n0.991​m​s0.991ms\n1.290​m​s1.290ms\nStage 0a\nTensorRT\n1.216​m​s1.216ms\n9.760​m​s9.760ms\naRefer Figure 3"
+    ]
+  },
+  "monotonicReaderChild": {
+    "contract": "daily-bound-fact-review-v1",
+    "batchDate": "2026-10-27",
+    "paperId": "2610.35336",
+    "runId": "cc02fdfc-2fc5-4eff-afff-b9e149c42137",
+    "sourceFiles": {
+      "source.txt": "3d9c4e49c108da5bab945d5fe6dbb27c411fb7e1ff68dbd8c3fa1b5ad7c035b4",
+      "source.pdf": "309dec05719f421f601e19dfe9875e0a67b2bba892371bed37207722a6200f43",
+      "source-runtime.json": "2918d57ca29dd411101007c3c2c0ef9a973a157eac274f5064bc5f8578ab1128",
+      "source-manifest.json": "ba474c0e81851b04a891af2b3d7fe83ef4734a26cb701144281663262277cced"
+    },
+    "coreAnalysisSha256": "8df4c14bf08b0593fff391ab14509a75f14eabec62e008a98c07eb7531eb3acc",
+    "coreSummarySha256": "e2756ae69f0bffb437a061d95bfd38249ae3d3da6d77e5e9d2b548ec060b8742",
+    "coreFeedback": "",
+    "readerFeedback": "仅纠正Reader既有节点：/sections/9/body、/sections/14/body及/tableBindings/0、/tableBindings/4，把21.4%限定为三核TTFA相对单核降低，禁止复制主分析里反向分母或写单核受益；4.05×明确常规/三核时延比。/sections/6/body原文算例串行30.1ms、重叠28.2ms，纠正“三十分之1”。/sections/11/body及/tableBindings/3从封存Table ordinal2完整重绑Stage0行MK/TR、Stage1列MK/TR与四格0.991/1.290/1.216/9.760及脚注，保留总表数5。明确披露原表组合方向与正文7.57×/1.23×的codec减速归属无法闭合，分别呈现作者文字与表，不选边、不把表当作该归属的直接证实。不得再复制旧主分析反向21.4/7.57结论。其余科学上游/评分/作者/标签/图不变。同一图4解说19.3、6.67、28.6应为相对差距百分比而非百分点。 图4的相对百分比修正也同步/figurePlacements/1，表1只列B32/B64时不能称上表有3个批量。现有主文中反向百分比是本次不允许复制的旧错误，Reader必须以来源为准；不修改主文、摘要、评分、标签、作者及已正确原图。\n新增独立拒稿只修Figure 4（DOM ordinal 3、[[FIGURE_3]]）既有解说：Qwen3-TTS五个批量的图示相对差距依次为8.10%、10.20%、10.10%、4.20%、3.20%，原“8.1 到 3.2 不等”漏掉中间最大值，应改为3.2%–10.2%。只替换/sections/9/body该原句中的这一范围；原图、图号、focusPoints、表格、公式及全部其余节点不变，正常装配器派生最终explanationQuote。保留本反馈此前全部约束及父core反馈ff094ac21fbdb8154b41267936429028f05e0250b0d4f71e0a4ef4ae09e3bff6，原真实请求/费用不变。图中数值由同源已签assetSHA及独立实际像素回执说明，不将数值列表伪造为TXT逐字引文。",
+    "rejectedCoreClaims": [],
+    "rejectedReaderClaims": [
+      "比三巨内核晚 21.4%",
+      "单个巨内核早 21.4%",
+      "则串行分数为三十分之 1 毫秒",
+      "常规声码器在旁路巨内核生产者时慢 7.57 倍而巨内核声码器只慢 1.23 倍",
+      "上表是并置代价取决于同伴实现的直接证据。",
+      "常规声码器与巨内核生产者并排时恶化最明显",
+      "差距为 19.3、6.67、28.6 个百分点",
+      "上表显示三巨内核在 3 个批量都最早。",
+      "中列语音模型二在小批量选中四巨内核、在大批量选中常规，差距为 8.1 到 3.2 不等"
+    ],
+    "sourceQuotes": [
+      "publish the first audio 4.05× sooner than conventional execution and 21.4% sooner than one megakernel design at batch size 32.",
+      "publication scores are 20 + 4 + 6 + 0.1 = 30.1ms and 20 + max(6,8) + 0.2 = 28.2ms.",
+      "the conventional codec slows by 7.57× beside the producer megakernel, whereas the codec megakernel slows by 1.23×.",
+      "TABLE II: Megakernel vs TensorRT Latencies\nStage 1a\nMegakernel\nTensorRT\nMegakernel\n0.991​m​s0.991ms\n1.290​m​s1.290ms\nStage 0a\nTensorRT\n1.216​m​s1.216ms\n9.760​m​s9.760ms\naRefer Figure 3",
+      "Fig. 4: Predicted selections within the implemented validation pools. Predicted and measured margins compare the winner with the nearest alternative in the same pool."
+    ]
+  },
+  "observed": {
+    "coreGuidedChars": 3805,
+    "coreGuidedSha256": "995905fc7e957e40405791da0771a7e900270b119398895b77ba11381650cbd4",
+    "ordinaryChars": 3384,
+    "ordinarySha256": "f5bada575a8d70f385eba6735fa36618f5378994104729e54f577e65c89be292",
+    "rawChildSha256": "28475cc0af03a971f54a20f9be16ec6156005e5d9a19cb35d3f619be765d7459",
+    "firstReaderReviewSha256": "2fd3fab07636ac84c1f9afcfd71b48b7ebe29b0bcdbfff616a87e242dbf6abf9"
+  }
+}

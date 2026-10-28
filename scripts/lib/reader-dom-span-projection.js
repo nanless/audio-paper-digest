@@ -50,6 +50,16 @@ function isPublicationTechnicalAsteriskCellView(canonical, displayed, sourceText
     return displayed === expected;
 }
 
+// Same whole-cell ms view as the publisher. This grants no source ability:
+// the original raw cell, DOM, coordinates and complete table still match below.
+function isPublicationZeroWidthDuplicateMsCellView(canonical, displayed, sourceText) {
+    if (typeof canonical !== 'string' || typeof displayed !== 'string'
+        || typeof sourceText !== 'string' || canonical !== sourceText
+        || canonical.length > 512 || /[\r\n]/u.test(canonical)) return false;
+    const match = /^([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\u200bm\u200bs\1ms$/u.exec(canonical);
+    return Boolean(match && displayed === `${match[1]} ms`);
+}
+
 function fullWidthLabelBlankMatches(table, binding, cell, displayed, renderedTable) {
     const projection = require('./reader-pdf-cell-evidence');
     const normalize = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
@@ -92,7 +102,8 @@ function fullWidthLabelBlankMatches(table, binding, cell, displayed, renderedTab
             && value.sourceRow < source.row + Number(source.rowspan || 1)
             && value.sourceColumn >= source.column && value.sourceColumn < source.column + Number(source.colspan || 1));
         const actualDisplayedValue = rows[value.renderedRow][value.renderedColumn];
-        const displayedValue = isPublicationTechnicalAsteriskCellView(value.renderedText, actualDisplayedValue, value.sourceText)
+        const displayedValue = (isPublicationTechnicalAsteriskCellView(value.renderedText, actualDisplayedValue, value.sourceText)
+            || isPublicationZeroWidthDuplicateMsCellView(value.renderedText, actualDisplayedValue, value.sourceText))
             ? value.renderedText : actualDisplayedValue;
         if (sources.length !== 1 || sources[0].text !== value.sourceText
             || sources[0].sourceDomSha256 !== value.sourceDomSha256
@@ -112,4 +123,5 @@ function savedCellMatches(paper, binding, cell, displayed, renderedTable) {
         && table.sourceDomSha256 === binding?.sourceTableDomSha256);
     return tables.length === 1 && fullWidthLabelBlankMatches(tables[0], binding, cell, displayed, renderedTable);
 }
-module.exports = { withSavedPaper, fullWidthLabelBlankMatches, savedCellMatches, isPublicationTechnicalAsteriskCellView };
+module.exports = { withSavedPaper, fullWidthLabelBlankMatches, savedCellMatches, isPublicationTechnicalAsteriskCellView,
+    isPublicationZeroWidthDuplicateMsCellView };

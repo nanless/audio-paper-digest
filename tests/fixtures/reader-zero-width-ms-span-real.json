@@ -1,0 +1,442 @@
+{
+  "description": "Minimal actual source DOM table and paid Reader binding plus the actual unchanged publication table; no whole paper, source article, authors or credentials.",
+  "paperId": "2610.35336",
+  "sourceRuntimeSha256": "2918d57ca29dd411101007c3c2c0ef9a973a157eac274f5064bc5f8578ab1128",
+  "originalPacketSha256": "a9a160b880fce847f73079280475abb7a8a5ca32902cf662b9f0d9d4e85c42e3",
+  "sourceTable": {
+    "bodyRows": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "caption": "TABLE II: Megakernel vs TensorRT Latencies",
+    "cells": [
+      {
+        "colspan": 2,
+        "column": 0,
+        "header": true,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "9e6a605eb052fe16ef43086abbb5cbc481729a1e2b7075c4aa6fe6637624c171",
+        "text": ""
+      },
+      {
+        "colspan": 2,
+        "column": 2,
+        "header": false,
+        "row": 0,
+        "rowspan": 1,
+        "sourceDomSha256": "d328a2a842cd1fe00f11ed6cc52f67aa974900c4bf4b584172db9d6841c6fab3",
+        "text": "Stage 1a"
+      },
+      {
+        "colspan": 2,
+        "column": 0,
+        "header": true,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "b414b237c6b19c3bce1e8daab0bd139b6da3b09144eaa983e79fd121963e9dba",
+        "text": ""
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "23779ba520f9c2e363aabe25c81cb3b1ce7c0b87bc8f5b40384af5dac18bf986",
+        "text": "Megakernel"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 1,
+        "rowspan": 1,
+        "sourceDomSha256": "39497e5474a0e77871bda7ec096a908a05f742b382025de66ccf900237f12dd9",
+        "text": "TensorRT"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "ab994ff024efa0551805bb47e17e185bf059c72ab4b6679197568643497df275",
+        "text": ""
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": true,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "aacdf4f84062fd4dea54f258a178007e87b3921e4007e4854c11068093ae96d4",
+        "text": "Megakernel"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "d00cd4935ba1df8bbd3bdf9c4bcdab4c54d59e002cf16234b6c52f0932fa3eff",
+        "text": "0.991​m​s0.991ms"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 2,
+        "rowspan": 1,
+        "sourceDomSha256": "6f16e1ec74e048f6b1e545384bd800877cb7bcc84bdefa15c6e03448e731c0e7",
+        "text": "1.290​m​s1.290ms"
+      },
+      {
+        "colspan": 1,
+        "column": 0,
+        "header": true,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "a69648f5e0f8e0a53247ad254a5fafe69e0cd3fcd3d9b163f9eb7fd35b21513e",
+        "text": "Stage 0a"
+      },
+      {
+        "colspan": 1,
+        "column": 1,
+        "header": true,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "6d8650590fbd7693d9b19e83f23c121b85bcde82fadf6f34a4a1c6adffa02aab",
+        "text": "TensorRT"
+      },
+      {
+        "colspan": 1,
+        "column": 2,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "64e74f1fcc0635bcb444c90d47c50c8a509e4bc46578a485ae0cd251e2f3a392",
+        "text": "1.216​m​s1.216ms"
+      },
+      {
+        "colspan": 1,
+        "column": 3,
+        "header": false,
+        "row": 3,
+        "rowspan": 1,
+        "sourceDomSha256": "4c864a7e033f68bb0729243e3e4153354932c58fbe1d2995ff1671f53f52749f",
+        "text": "9.760​m​s9.760ms"
+      },
+      {
+        "colspan": 4,
+        "column": 0,
+        "header": true,
+        "row": 4,
+        "rowspan": 1,
+        "sourceDomSha256": "d94d39dbd325238e6cd80e9a5b9f5eb623f10a6a1f06a5a9083eb6fce8011933",
+        "text": "aRefer Figure 3"
+      }
+    ],
+    "headerRows": [
+      4
+    ],
+    "label": "TABLE II:",
+    "matrix": [
+      [
+        "",
+        "",
+        "Stage 1a",
+        "Stage 1a"
+      ],
+      [
+        "",
+        "",
+        "Megakernel",
+        "TensorRT"
+      ],
+      [
+        "",
+        "Megakernel",
+        "0.991​m​s0.991ms",
+        "1.290​m​s1.290ms"
+      ],
+      [
+        "Stage 0a",
+        "TensorRT",
+        "1.216​m​s1.216ms",
+        "9.760​m​s9.760ms"
+      ],
+      [
+        "aRefer Figure 3",
+        "aRefer Figure 3",
+        "aRefer Figure 3",
+        "aRefer Figure 3"
+      ]
+    ],
+    "ordinal": 2,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "a1e089b958e891556fee694373ea9e43509a5a7856d2bb315966cd10298e83a7"
+  },
+  "binding": {
+    "tableIndex": 4,
+    "sourceType": "artifact_table",
+    "sourceTableOrdinal": 2,
+    "sourceTableDomSha256": "a1e089b958e891556fee694373ea9e43509a5a7856d2bb315966cd10298e83a7",
+    "renderedTableSha256": "e13958424d905cf4fff179d9a95ec6d19f397660161a704af785c57fbadc9e17",
+    "cellBindings": [
+      {
+        "renderedRow": 0,
+        "renderedColumn": 0,
+        "sourceRow": 0,
+        "sourceColumn": 0,
+        "renderedText": "",
+        "sourceText": "",
+        "sourceDomSha256": "9e6a605eb052fe16ef43086abbb5cbc481729a1e2b7075c4aa6fe6637624c171"
+      },
+      {
+        "renderedRow": 0,
+        "renderedColumn": 1,
+        "sourceRow": 0,
+        "sourceColumn": 1,
+        "renderedText": "",
+        "sourceText": "",
+        "sourceDomSha256": "9e6a605eb052fe16ef43086abbb5cbc481729a1e2b7075c4aa6fe6637624c171"
+      },
+      {
+        "renderedRow": 0,
+        "renderedColumn": 2,
+        "sourceRow": 0,
+        "sourceColumn": 2,
+        "renderedText": "Stage 1a",
+        "sourceText": "Stage 1a",
+        "sourceDomSha256": "d328a2a842cd1fe00f11ed6cc52f67aa974900c4bf4b584172db9d6841c6fab3"
+      },
+      {
+        "renderedRow": 0,
+        "renderedColumn": 3,
+        "sourceRow": 0,
+        "sourceColumn": 3,
+        "renderedText": "Stage 1a",
+        "sourceText": "Stage 1a",
+        "sourceDomSha256": "d328a2a842cd1fe00f11ed6cc52f67aa974900c4bf4b584172db9d6841c6fab3"
+      },
+      {
+        "renderedRow": 1,
+        "renderedColumn": 0,
+        "sourceRow": 1,
+        "sourceColumn": 0,
+        "renderedText": "",
+        "sourceText": "",
+        "sourceDomSha256": "b414b237c6b19c3bce1e8daab0bd139b6da3b09144eaa983e79fd121963e9dba"
+      },
+      {
+        "renderedRow": 1,
+        "renderedColumn": 1,
+        "sourceRow": 1,
+        "sourceColumn": 1,
+        "renderedText": "",
+        "sourceText": "",
+        "sourceDomSha256": "b414b237c6b19c3bce1e8daab0bd139b6da3b09144eaa983e79fd121963e9dba"
+      },
+      {
+        "renderedRow": 1,
+        "renderedColumn": 2,
+        "sourceRow": 1,
+        "sourceColumn": 2,
+        "renderedText": "Megakernel",
+        "sourceText": "Megakernel",
+        "sourceDomSha256": "23779ba520f9c2e363aabe25c81cb3b1ce7c0b87bc8f5b40384af5dac18bf986"
+      },
+      {
+        "renderedRow": 1,
+        "renderedColumn": 3,
+        "sourceRow": 1,
+        "sourceColumn": 3,
+        "renderedText": "TensorRT",
+        "sourceText": "TensorRT",
+        "sourceDomSha256": "39497e5474a0e77871bda7ec096a908a05f742b382025de66ccf900237f12dd9"
+      },
+      {
+        "renderedRow": 2,
+        "renderedColumn": 0,
+        "sourceRow": 2,
+        "sourceColumn": 0,
+        "renderedText": "",
+        "sourceText": "",
+        "sourceDomSha256": "ab994ff024efa0551805bb47e17e185bf059c72ab4b6679197568643497df275"
+      },
+      {
+        "renderedRow": 2,
+        "renderedColumn": 1,
+        "sourceRow": 2,
+        "sourceColumn": 1,
+        "renderedText": "Megakernel",
+        "sourceText": "Megakernel",
+        "sourceDomSha256": "aacdf4f84062fd4dea54f258a178007e87b3921e4007e4854c11068093ae96d4"
+      },
+      {
+        "renderedRow": 2,
+        "renderedColumn": 2,
+        "sourceRow": 2,
+        "sourceColumn": 2,
+        "renderedText": "0.991​m​s0.991ms",
+        "sourceText": "0.991​m​s0.991ms",
+        "sourceDomSha256": "d00cd4935ba1df8bbd3bdf9c4bcdab4c54d59e002cf16234b6c52f0932fa3eff"
+      },
+      {
+        "renderedRow": 2,
+        "renderedColumn": 3,
+        "sourceRow": 2,
+        "sourceColumn": 3,
+        "renderedText": "1.290​m​s1.290ms",
+        "sourceText": "1.290​m​s1.290ms",
+        "sourceDomSha256": "6f16e1ec74e048f6b1e545384bd800877cb7bcc84bdefa15c6e03448e731c0e7"
+      },
+      {
+        "renderedRow": 3,
+        "renderedColumn": 0,
+        "sourceRow": 3,
+        "sourceColumn": 0,
+        "renderedText": "Stage 0a",
+        "sourceText": "Stage 0a",
+        "sourceDomSha256": "a69648f5e0f8e0a53247ad254a5fafe69e0cd3fcd3d9b163f9eb7fd35b21513e"
+      },
+      {
+        "renderedRow": 3,
+        "renderedColumn": 1,
+        "sourceRow": 3,
+        "sourceColumn": 1,
+        "renderedText": "TensorRT",
+        "sourceText": "TensorRT",
+        "sourceDomSha256": "6d8650590fbd7693d9b19e83f23c121b85bcde82fadf6f34a4a1c6adffa02aab"
+      },
+      {
+        "renderedRow": 3,
+        "renderedColumn": 2,
+        "sourceRow": 3,
+        "sourceColumn": 2,
+        "renderedText": "1.216​m​s1.216ms",
+        "sourceText": "1.216​m​s1.216ms",
+        "sourceDomSha256": "64e74f1fcc0635bcb444c90d47c50c8a509e4bc46578a485ae0cd251e2f3a392"
+      },
+      {
+        "renderedRow": 3,
+        "renderedColumn": 3,
+        "sourceRow": 3,
+        "sourceColumn": 3,
+        "renderedText": "9.760​m​s9.760ms",
+        "sourceText": "9.760​m​s9.760ms",
+        "sourceDomSha256": "4c864a7e033f68bb0729243e3e4153354932c58fbe1d2995ff1671f53f52749f"
+      },
+      {
+        "renderedRow": 4,
+        "renderedColumn": 0,
+        "sourceRow": 4,
+        "sourceColumn": 0,
+        "renderedText": "aRefer Figure 3",
+        "sourceText": "aRefer Figure 3",
+        "sourceDomSha256": "d94d39dbd325238e6cd80e9a5b9f5eb623f10a6a1f06a5a9083eb6fce8011933"
+      },
+      {
+        "renderedRow": 4,
+        "renderedColumn": 1,
+        "sourceRow": 4,
+        "sourceColumn": 1,
+        "renderedText": "",
+        "sourceText": "aRefer Figure 3",
+        "sourceDomSha256": "d94d39dbd325238e6cd80e9a5b9f5eb623f10a6a1f06a5a9083eb6fce8011933"
+      },
+      {
+        "renderedRow": 4,
+        "renderedColumn": 2,
+        "sourceRow": 4,
+        "sourceColumn": 2,
+        "renderedText": "",
+        "sourceText": "aRefer Figure 3",
+        "sourceDomSha256": "d94d39dbd325238e6cd80e9a5b9f5eb623f10a6a1f06a5a9083eb6fce8011933"
+      },
+      {
+        "renderedRow": 4,
+        "renderedColumn": 3,
+        "sourceRow": 4,
+        "sourceColumn": 3,
+        "renderedText": "",
+        "sourceText": "aRefer Figure 3",
+        "sourceDomSha256": "d94d39dbd325238e6cd80e9a5b9f5eb623f10a6a1f06a5a9083eb6fce8011933"
+      }
+    ],
+    "sourceQuotes": []
+  },
+  "canonicalTable": {
+    "header": [
+      "",
+      "",
+      "Stage 1a",
+      "Stage 1a"
+    ],
+    "rows": [
+      [
+        "",
+        "",
+        "Megakernel",
+        "TensorRT"
+      ],
+      [
+        "",
+        "Megakernel",
+        "0.991​m​s0.991ms",
+        "1.290​m​s1.290ms"
+      ],
+      [
+        "Stage 0a",
+        "TensorRT",
+        "1.216​m​s1.216ms",
+        "9.760​m​s9.760ms"
+      ],
+      [
+        "aRefer Figure 3",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "markdown": "|  |  | Stage 1a | Stage 1a |\n| --- | --- | --- | --- |\n|  |  | Megakernel | TensorRT |\n|  | Megakernel | 0.991​m​s0.991ms | 1.290​m​s1.290ms |\n| Stage 0a | TensorRT | 1.216​m​s1.216ms | 9.760​m​s9.760ms |\n| aRefer Figure 3 |  |  |  |"
+  },
+  "publicationTable": {
+    "header": [
+      "",
+      "",
+      "Stage 1a",
+      "Stage 1a"
+    ],
+    "rows": [
+      [
+        "",
+        "",
+        "Megakernel",
+        "TensorRT"
+      ],
+      [
+        "",
+        "Megakernel",
+        "0.991 ms",
+        "1.290 ms"
+      ],
+      [
+        "Stage 0a",
+        "TensorRT",
+        "1.216 ms",
+        "9.760 ms"
+      ],
+      [
+        "aRefer Figure 3",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "markdown": "|  |  | Stage 1a | Stage 1a |\n| --- | --- | --- | --- |\n|  |  | Megakernel | TensorRT |\n|  | Megakernel | 0.991 ms | 1.290 ms |\n| Stage 0a | TensorRT | 1.216 ms | 9.760 ms |\n| aRefer Figure 3 |  |  |  |"
+  }
+}
