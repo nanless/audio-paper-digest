@@ -28,7 +28,7 @@
 
 <a id="第一次使用"></a>
 
-## 第一次运行生产任务
+## 第一次使用：运行生产任务
 
 1. 在 `/Users/francis7999/code/github_repos/audio-paper-digest` 核对目录和角色：`npm run workspace:role -- status`。三条流程都在此运行，角色保持 `daily`；历史入口使用已配置的跨角色开关。
 2. 按[安装与配置](docs/setup.md)安装依赖、填写项目 `.env` 并检查真实博客仓库。
