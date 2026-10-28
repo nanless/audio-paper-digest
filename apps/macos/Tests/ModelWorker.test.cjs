@@ -12,7 +12,7 @@ for(const relative of execFileSync('/usr/bin/git',['-C',repo,'ls-files','-z','--
  const target=path.join(resources,'Shared',relative);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(repo,relative),target);
 }
 const binary=path.join(temporary,'ModelServiceTests');
-execFileSync('/usr/bin/xcrun',['swiftc','-O','-parse-as-library',path.join(app,'Sources/DesktopStore.swift'),path.join(app,'Sources/BackupCodec.swift'),path.join(app,'Sources/RestoreLocalPolicy.swift'),path.join(app,'Sources/ModelService.swift'),path.join(__dirname,'ModelServiceTests.swift'),'-o',binary],{stdio:'inherit'});
+execFileSync('/usr/bin/xcrun',['swiftc','-O','-parse-as-library',path.join(app,'Sources/DesktopStore.swift'),path.join(app,'Sources/BackupCodec.swift'),path.join(app,'Sources/RestoreLocalPolicy.swift'),path.join(app,'Sources/ModelService.swift'),path.join(app,'Sources/NativeTaskProjection.swift'),path.join(__dirname,'ModelServiceTests.swift'),'-o',binary],{stdio:'inherit'});
 const requests=[],timers=new Set();
 const server=http.createServer(async(req,res)=>{
  let input='';for await(const bytes of req)input+=bytes;

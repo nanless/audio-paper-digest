@@ -18,7 +18,7 @@ let browser,passed=0;
     page.on('pageerror',e=>errors.push(e.message));
     await page.addInitScript(({settings,options})=>{
       const clone=x=>structuredClone(x);
-      window.fixture={settings:clone(settings),calls:[],pending:[],pendingBootstrap:[],hold:false,failNext:0,failBootstrap:options.failInitialBootstrap||0,holdBootstrap:!!options.holdInitialBootstrap,progressListeners:0};
+      window.fixture={settings:clone(settings),calls:[],pending:[],pendingBootstrap:[],pendingCheck:[],holdCheck:false,pendingSaveReply:[],holdSaveReply:false,hold:false,failNext:0,failBootstrap:options.failInitialBootstrap||0,holdBootstrap:!!options.holdInitialBootstrap,progressListeners:0};
       const add=window.addEventListener.bind(window);window.addEventListener=(type,...args)=>{if(type==='job.progress')fixture.progressListeners++;return add(type,...args);};
       window.webkit={messageHandlers:{desktop:{postMessage:async({command,payload={}})=>{
         const f=window.fixture;f.calls.push({command,payload:clone(payload)});
@@ -33,12 +33,16 @@ let browser,passed=0;
           if(f.failNext){f.failNext--;throw Error('Fixture settings write failure');}
           Object.assign(f.settings,payload);
           window.dispatchEvent(new CustomEvent('settings.changed'));
-          return clone(f.settings);
+          const committed=clone(f.settings);if(f.holdSaveReply)await new Promise(resolve=>f.pendingSaveReply.push(resolve));return committed;
         }
         if(command==='model.check'){
-          if(f.failCheck)throw Error('输出被 max_output_tokens=4096 截断 · 实际模型 reported-reasoning-fixture · openai_responses · 用量 {"input_tokens":155,"output_tokens":4096} · 费用金额未知；不会自动重发');
-          return {text:'真实本机夹具确认',actualModel:'reported-fixture',protocol:'openai_responses',usage:{input_tokens:12,output_tokens:7}};
+          if(f.failCheck)throw Error('输出被 max_output_tokens=4096 截断 · 实际模型 reported-reasoning-fixture · openai_responses · 输入155 · 输出4096 · 合计4251 tokens · 费用金额未知；不会自动重发');
+          f.settings.credentialState='present';f.settings.hasKey=true;
+          const result={text:'真实本机夹具确认',actualModel:'reported-fixture',protocol:'openai_responses',usage:{input_tokens:12,output_tokens:7,total_tokens:19},usageSummary:'输入12 · 输出7 · 合计19 tokens',credentialState:'present',hasKey:true};
+          if(f.holdCheck)await new Promise(resolve=>f.pendingCheck.push(resolve));
+          return result;
         }
+        if(command==='model.setKey'||command==='model.deleteKey'){f.settings.credentialState=command==='model.setKey'?'present':'missing';f.settings.hasKey=command==='model.setKey';return clone(f.settings);}
         if(command==='cloud.state')return {account:'',folder:'PaperDigest',automatic:false,intervalHours:24,credentialState:'unknown',busy:false};
         if(command==='zotero.status')return {running:true,version:'10.0.6',writesSupported:true,authorized:!!f.zoteroChecked,remember:!!f.zoteroChecked,authorizationState:f.zoteroChecked?'authorized':'unknown',archives:[]};
         if(command==='zotero.collections')return {collections:[]};
@@ -75,7 +79,7 @@ let browser,passed=0;
   });
   await check('incomplete connection error shows actual usage and does not retry',async page=>{
     await page.locator('[data-pane=model]').click();await page.evaluate(()=>fixture.failCheck=true);await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('不会自动重发'));
-    const result=await page.locator('#model-result').textContent();assert(result.includes('4096')&&result.includes('155')&&result.includes('reported-reasoning-fixture'));await page.waitForTimeout(350);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);assert.equal(await page.locator('#check-model').isDisabled(),false);
+    const result=await page.locator('#model-result').textContent();assert(result.includes('4096')&&result.includes('155')&&result.includes('reported-reasoning-fixture'));assert.doesNotMatch(result,/"(?:input_tokens|output_tokens)"\s*:|\{|\}/);await page.waitForTimeout(350);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);assert.equal(await page.locator('#check-model').isDisabled(),false);
   });
   await check('unchanged flush issues no write',async page=>{
     assert.deepEqual(await page.evaluate(()=>window.paperDigestFlushSettings()),{saved:true});assert.equal((await writes(page)).length,0);
@@ -194,5 +198,45 @@ let browser,passed=0;
     await page.setViewportSize({width:700,height:520});await page.locator('[data-pane=cloud]').click();await page.locator('#cloud-account').fill('draft-only@example.test');await page.evaluate(()=>{window.scroll25Cloud=document.querySelector('#cloud-account');const s=document.querySelector('.settings-content');s.scrollTop=s.scrollHeight;});await page.locator('[data-pane=model]').click();await page.locator('[data-pane=cloud]').click();
     assert.equal(await page.locator('.settings-content').evaluate(el=>el.scrollTop),0);assert.equal(await page.locator('#cloud-account').inputValue(),'draft-only@example.test');assert.equal(await page.evaluate(()=>scroll25Cloud===document.querySelector('#cloud-account')),true);assert.deepEqual(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='settings.save'||/^(cloud\.(?!state)|zotero\.|model\.)/.test(c.command))),[]);
   });
+  await check('connection check locks before pending save and rejects a second click without duplicate request',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>{fixture.hold=true;const m=document.querySelector('#model');m.value='saved-before-one-check';m.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#check-model').click();document.querySelector('#check-model').click();});
+    await pending(page);assert.equal(await page.locator('#check-model').isDisabled(),true);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),0);
+    await release(page);await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('reported-fixture'));assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);assert.equal(await page.locator('#check-model').isDisabled(),false);
+  });
+  await check('successful check shows safe token summary and updates only known credential status',async page=>{
+    await page.locator('[data-pane=model]').click();await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('reported-fixture'));
+    const text=await page.locator('#model-result').textContent();assert.match(text,/输入12 · 输出7 · 合计19 tokens/);assert.doesNotMatch(text,/"(?:input_tokens|output_tokens)"\s*:|\{|\}/);assert.match(await page.locator('#key-status').textContent(),/已确认密钥存在/);assert.equal((await writes(page)).length,0);
+  },{...initial,credentialState:'unknown',hasKey:null});
+  await check('held check preserves newer dirty model draft while refreshing credential label only',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>fixture.holdCheck=true);await page.locator('#check-model').click();await page.waitForFunction(()=>fixture.pendingCheck.length===1);
+    await page.evaluate(()=>fixture.hold=true);await edit(page,'model','new-dirty-model-draft');await flush(page);await pending(page);await page.evaluate(()=>fixture.pendingCheck.shift()());await page.waitForFunction(()=>!document.querySelector('#check-model').disabled);
+    assert.equal(await page.locator('#model').inputValue(),'new-dirty-model-draft');assert.equal(await page.evaluate(()=>fixture.settings.model),'fixture-model');assert.match(await page.locator('#key-status').textContent(),/已确认密钥存在/);
+    await page.evaluate(()=>fixture.hold=false);await release(page);await page.waitForFunction(()=>flushState==='saved');
+  },{...initial,credentialState:'unknown',hasKey:null});
+  await check('late successful check cannot resurrect credential after a concurrent explicit delete',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>fixture.holdCheck=true);await page.locator('#check-model').click();await page.waitForFunction(()=>fixture.pendingCheck.length===1);
+    await page.locator('#delete-key').click();await page.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('尚未保存'));await page.evaluate(()=>fixture.pendingCheck.shift()());await page.waitForFunction(()=>!document.querySelector('#check-model').disabled);
+    assert.match(await page.locator('#key-status').textContent(),/尚未保存/);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.deleteKey').length),1);
+  },{...initial,credentialState:'unknown',hasKey:null});
+  await check('failed precheck save preserves draft unlocks button and issues no paid check',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>{fixture.failNext=1;const m=document.querySelector('#model');m.value='unsaved-after-error';m.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#check-model').click();});await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('Fixture settings write failure'));
+    assert.equal(await page.locator('#check-model').isDisabled(),false);assert.equal(await page.locator('#model').inputValue(),'unsaved-after-error');assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),0);
+  });
+  await check('older held bootstrap cannot restore deleted credential state',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>{fixture.holdBootstrap=true;dispatchEvent(new Event('settings.changed'));});await page.waitForFunction(()=>fixture.pendingBootstrap.length===1);
+    await page.locator('#delete-key').click();await page.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('尚未保存'));
+    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await page.waitForTimeout(40);
+    assert.match(await page.locator('#key-status').textContent(),/尚未保存/);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),0);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.deleteKey').length),1);
+  },{...initial,credentialState:'present',hasKey:true});
+  await check('late saved-settings receipt cannot restore credential state after explicit delete',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>fixture.holdSaveReply=true);await edit(page,'model','issued-save-with-old-credential');await flush(page);await page.waitForFunction(()=>fixture.pendingSaveReply.length===1);
+    await page.locator('#delete-key').click();await page.waitForFunction(()=>document.querySelector('#key-status').textContent.includes('尚未保存'));await page.evaluate(()=>{fixture.holdSaveReply=false;fixture.pendingSaveReply.shift()();});await page.waitForFunction(()=>flushState==='saved');
+    assert.match(await page.locator('#key-status').textContent(),/尚未保存/);assert.equal(await page.locator('#model').inputValue(),'issued-save-with-old-credential');assert.equal((await writes(page)).length,1);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),0);
+  },{...initial,credentialState:'present',hasKey:true});
+  await check('successful check retires earlier unknown credential snapshot',async page=>{
+    await page.locator('[data-pane=model]').click();await page.evaluate(()=>{fixture.holdBootstrap=true;dispatchEvent(new Event('settings.changed'));});await page.waitForFunction(()=>fixture.pendingBootstrap.length===1);
+    await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('reported-fixture'));assert.match(await page.locator('#key-status').textContent(),/已确认密钥存在/);
+    await page.evaluate(()=>{fixture.holdBootstrap=false;fixture.pendingBootstrap.shift()();});await page.waitForTimeout(40);assert.match(await page.locator('#key-status').textContent(),/已确认密钥存在/);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='model.check').length),1);
+  },{...initial,credentialState:'unknown',hasKey:null});
   console.log(`Settings UI: ${passed} passed; real bundled UI with explicit local native fixtures; no remote requests or private profile IO`);
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{if(browser)await browser.close();server.close();});
