@@ -115,6 +115,9 @@ function finalizeDeepZeroWorkState(resultPath, filteredData, today, entryPlan = 
 
 async function runDeepAnalysis(options = {}) {
     console.log('=== 仅运行深度分析 ===\n');
+    if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean') {
+        throw new Error('refreshReaderDiagnostics 须为布尔值');
+    }
 
     const currentPath = Config.FILES.deepAnalysisResult;
     const filteredPath = Config.FILES.filteredPapers;
@@ -304,7 +307,8 @@ async function runDeepAnalysis(options = {}) {
             console.log(`  💾 已更新批次统计 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})`);
         }
     });
-    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources,
+        { refreshReaderDiagnostics: options.refreshReaderDiagnostics === true });
     const finalPayload = updateJsonFileLocked(resultPath, current => {
         dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan: dailySourcePlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);

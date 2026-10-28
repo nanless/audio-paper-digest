@@ -273,10 +273,13 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     const local = options.readerFactLocalRevision === true;
     if (local && !require('../deep-analyzer').hasReviewedReaderFactLocalSeed(target, source.text, reviewFeedback))
         throw new Error('Reader事实局部修订缺少当前已核完整签名稿，不能回退source-only生成');
-    const recoveryReaderResources = local ? null : require('./reader-failed-bundle-resource-replay').prepareRecoveryReaderResources(
+    const correction = require('./reader-fact-table-claim-location');
+    const corrected = target[correction.FIELD] !== undefined;
+    const recoveryReaderResources = local || corrected ? null : require('./reader-failed-bundle-resource-replay').prepareRecoveryReaderResources(
         target, source, { reviewFeedback });
     const result = await fresh.withFreshPaperContext(target, () =>
         require('./llm-usage').withLlmUsageContext({ paperId: require('../utils').normalizedId(paper) }, () =>
+            corrected ? correction.replaySavedCorrection(target, source, { reviewFeedback }) :
             require('../deep-analyzer').refreshApiReaderArticleFromSource(target, source, {
                 reviewFeedback,
                 ...(recoveryReaderResources ? { recoveryReaderResources } : {}),
@@ -284,6 +287,7 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
                 ...(parentUpstreamProof ? { parentUpstreamProof } : {}),
                 naturalResourceProse: options.naturalResourceProse === true
             })));
+
     if (daily.stableHash(protectedReaderUpstream(result)) !== daily.stableHash(before)) {
         const error = new Error('独立Reader纠错改变了原主文、摘要、评分、阶段或费用历史');
         error.code = 'READER_RETURN_PROTECTION_REJECTED'; error.retryable = false; throw error;

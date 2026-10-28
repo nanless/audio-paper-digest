@@ -86,13 +86,34 @@ function installTmpOnlyWriteGuard(directory,options={}){
  };
  const child=require('node:child_process'),runPython=child.execFileSync.bind(child);
  const scripts=new Set((options.readOnlyPythonScripts||[]).map(p=>path.resolve(p)));
+ const stdinScripts=new Set((options.readOnlyPythonStdinScripts||[]).map(p=>path.resolve(p)));
+ const gitBlobs=new Set(options.readOnlyGitBlobOids||[]);
+ const nodeScripts=new Set((options.readOnlyNodeScripts||[]).map(p=>path.resolve(p)));
  for(const name of ['exec','execSync','execFile','spawn','spawnSync','fork'])child[name]=()=>{throw violation('child process '+name);};
+ function childOptions(opts,fdInput=false){
+  const allowed=new Set(['cwd','env','timeout','maxBuffer','stdio','input','encoding','shell']);
+  if(!opts||typeof opts!=='object'||Array.isArray(opts)||Object.keys(opts).some(k=>!allowed.has(k))
+   ||(opts.shell!==undefined&&opts.shell!==false))throw violation('unsupported child options');
+  const stdio=opts.stdio,channel=v=>v==='pipe'||v==='ignore';
+  if(fdInput){if(!Array.isArray(stdio)||stdio.length!==4||!stdio.slice(0,3).every(channel)
+   ||typeof stdio[3]!=='number'||opts.input!==undefined)throw violation('unsafe child descriptor channels');assertFd(stdio[3]);}
+  else if(stdio!==undefined&&!(channel(stdio)||(Array.isArray(stdio)&&stdio.length===3&&stdio.every(channel))))
+   throw violation('unsafe child output channels');
+ }
  child.execFileSync=function(command,args,opts={}){
-  if(command!=='bash'||!Array.isArray(args)||args.length!==3||args[2]!=='3'
-   ||path.basename(args[0])!=='python-runtime.sh'||!scripts.has(path.resolve(args[1]))
-   ||path.dirname(path.resolve(args[0]))!==path.dirname(path.resolve(args[1]))
-   ||!Array.isArray(opts.stdio)||typeof opts.stdio[3]!=='number')throw violation('child process execFileSync');
-  assertFd(opts.stdio[3]);
+  if(command===process.execPath&&Array.isArray(args)&&args.length===2&&args[1]==='3'&&nodeScripts.has(path.resolve(args[0]))
+   &&Array.isArray(opts.stdio)&&typeof opts.stdio[3]==='number'&&opts.cwd===root){childOptions(opts,true);assertPath(args[0]);return runPython(command,args,{...opts,shell:false});}
+  if(command==='git'&&Array.isArray(args)&&args.length===7&&args[0]==='--no-lazy-fetch'&&args[1]==='--no-replace-objects'
+   &&args[2]==='-C'&&args[3]===root&&args[4]==='cat-file'&&args[5]==='blob'&&/^[a-f0-9]{40}$/.test(args[6])&&gitBlobs.has(args[6]))
+   {childOptions(opts);return runPython(command,args,{...opts,shell:false});}
+  const fdInput=Array.isArray(args)&&args.length===3&&args[2]==='3'&&scripts.has(path.resolve(args[1]))
+   &&Array.isArray(opts.stdio)&&typeof opts.stdio[3]==='number';
+  const stdinInput=Array.isArray(args)&&args.length===2&&stdinScripts.has(path.resolve(args[1]))
+   &&typeof opts.input==='string'&&opts.input.length<=32*1024*1024&&opts.cwd===root;
+  if(command!=='bash'||!Array.isArray(args)||(!fdInput&&!stdinInput)
+   ||path.basename(args[0])!=='python-runtime.sh'||path.dirname(path.resolve(args[0]))!==path.dirname(path.resolve(args[1])))throw violation('child process execFileSync');
+  childOptions(opts,fdInput);
+  if(stdinInput){const input=JSON.parse(opts.input);assertPath(input.sourceDirectory);}
   return runPython(command,args,{...opts,shell:false,env:{...(opts.env||process.env),
    PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(root,'pycache'),TMPDIR:root,TMP:root,TEMP:root}});
  };

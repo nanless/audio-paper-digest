@@ -342,13 +342,19 @@ function readerFactReviewScope(readerBound, paper, callback, restoringSaved, par
     const readerText = `${guidance}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${quotes.join('\n')}`;
     const maximumRenderedChars = restoringSaved ? 8000 : 4000;
     if (readerText.length > maximumRenderedChars) fail(`Reader双反馈与来源引文合计超过${maximumRenderedChars}字符（实际${readerText.length}字符）`);
-    return scope.run(Object.freeze({ ...(previous || { feedback: reader, proof: null }), readerBound: freshBound, readerOnly: true, readerText,
+    return require('./reader-fact-table-claim-location').withVerified(paper, context.plan, () => scope.run(Object.freeze({ ...(previous || { feedback: reader, proof: null }), readerBound: freshBound, readerOnly: true, readerText,
         ...(readOnly === READ_ONLY_READER_COMPLETION ? { readOnlyCompletion: true } : {}),
         ...(restoringSaved ? { restoredUpstreamFacts: Object.fromEntries(Object.entries(paper.analysisManifest?.stages || {})
             .filter(([name]) => !['apiReaderArticle', 'apiReaderTableAudit'].includes(name))
             .map(([name, value]) => [name, Object.fromEntries(['factReview', 'scoringFactReview'].filter(key => value[key] !== undefined).map(key => [key, structuredClone(value[key])]))])) } : {}),
         ...(restoringSaved ? { restoredReaderConstraints: { parentStage, parentProof: previous.proof, childProof: freshBound.proof, renderedSha256: sha(readerText), renderingRule: 'exact-string-union-v1', maximumRenderedChars, budgetRule: 'two-validated-saved-packets-v1' },
-            restoredReaderClaims: [...new Set([...reader.rejectedReaderClaims, ...previous.feedback.rejectedReaderClaims, ...(parentStage === 'coreSummaryRepair' ? previous.feedback.rejectedCoreClaims : [])])] } : {}) }), callback);
+            restoredReaderClaims: [...new Set([...reader.rejectedReaderClaims, ...previous.feedback.rejectedReaderClaims, ...(parentStage === 'coreSummaryRepair' ? previous.feedback.rejectedCoreClaims : [])])] } : {}) }), callback),
+        { completed: readOnly === READ_ONLY_READER_COMPLETION, feedbackProof: freshBound.proof,
+            inheritedObligations: previous ? [{ proof: previous.proof, claims: [
+                ...previous.feedback.rejectedReaderClaims,
+                ...(parentStage === 'coreSummaryRepair' ? previous.feedback.rejectedCoreClaims : []),
+                ...(previous.feedback.rejectedPrimaryClaims || [])
+            ] }] : [] });
 }
 function validateReaderReviewFeedbackLength(text, paperId) {
     const value = current(paperId);
@@ -449,18 +455,22 @@ function reviewFeedback(stage, paperId) {
 }
 function readerRejectedClaims(paperId) {
     const value = current(paperId);
-    if (value?.restoredReaderClaims) return value.restoredReaderClaims;
-    return (value?.readerOnly ? value.readerBound.feedback : value?.feedback)?.rejectedReaderClaims || [];
+    const claims = value?.restoredReaderClaims
+        || (value?.readerOnly ? value.readerBound.feedback : value?.feedback)?.rejectedReaderClaims || [];
+    return require('./reader-fact-table-claim-location').effectiveClaims(claims);
 }
 function validateRepairedClaims(stage, text, paperId) {
     const value = current(paperId);
     if (!value) return;
+    const locationCorrected = stage === 'apiReaderArticle'
+        && require('./reader-fact-table-claim-location').validate(String(text));
     const primaryFeedback = value.primaryBound?.feedback || value.feedback;
     const readerFeedback = value.readerOnly ? value.readerBound.feedback : value.feedback;
     const claims = usesPrimaryFeedback(stage) ? primaryFeedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? (value.coreOnly ? value.coreBound.feedback.rejectedCoreClaims : value.feedback.rejectedCoreClaims) : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : (value.restoredReaderClaims || readerFeedback.rejectedReaderClaims);
     const inheritedCoreClaims = value.coreOnly && stage === 'coreSummaryRepair' ? [...(value.feedback.rejectedPrimaryClaims || []), ...(value.feedback.rejectedCoreClaims || [])] : [];
     const scoringClaims = stage === 'scoringAudit' ? value.feedback.rejectedScoringClaims || [] : [];
-    if ([...claims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
+    const checkedClaims = locationCorrected ? require('./reader-fact-table-claim-location').effectiveClaims(claims) : claims;
+    if ([...checkedClaims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, READER_SCOPE_MODEL_REJECTED, READER_PRIMARY_REQUIRED, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
     withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withOriginalCoreContext, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, withReadOnlyReaderCompletion, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };

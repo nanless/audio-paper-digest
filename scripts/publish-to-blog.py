@@ -11434,7 +11434,9 @@ def _has_source_bound_reader_patch_completion(paper):
     manifest = paper.get('analysisManifest') or {}
     contracts = manifest.get('contracts') or {}
     stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
-    if any(key in contracts for key in ('readerTargetOrdinalPatch', 'readerVersionMetadataRecovery')) \
+    if 'apiReaderFactFeedbackCorrection' in paper \
+            or 'factReviewClaimLocationCorrection' in stage \
+            or any(key in contracts for key in ('readerTargetOrdinalPatch', 'readerVersionMetadataRecovery')) \
             or any(key in stage for key in ('ordinalPatchContract', 'ordinalPatchCompilations',
                 'ordinalCompletionProof', 'versionMetadataRecoveryContract', 'versionMetadataRecoveryProof')):
         return True
@@ -11459,7 +11461,11 @@ def _has_source_bound_reader_patch_completion(paper):
     metadata_directory = attempts / 'version-metadata-completion-index'
     metadata_index = metadata_directory / (paper_id + '.json')
     ordinal_index = attempts / 'ordinal-completions'
+    correction_directory = run_dir / 'reader-feedback-corrections'
+    correction_index = correction_directory / (paper_id + '.json')
     return metadata_index.exists() or metadata_index.is_symlink() or metadata_directory.is_symlink() \
+        or correction_index.exists() or correction_index.is_symlink() or correction_directory.is_symlink() \
+        or (correction_directory.exists() and not correction_directory.is_dir()) \
         or (metadata_directory.exists() and not metadata_directory.is_dir()) or ordinal_index.is_symlink() \
         or (ordinal_index.exists() and not ordinal_index.is_dir()) \
         or (ordinal_index.is_dir() and any(ordinal_index.glob(paper_id + '-*.json')))
@@ -14440,6 +14446,7 @@ def generation_template_fingerprint():
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
         'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
         'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
+        'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
@@ -14606,6 +14613,7 @@ def review_protocol_fingerprint():
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
         'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
         'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
+        'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
         'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
         'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
         'reader_damaged_raster_pdf_asset.py': script_dir / 'reader_damaged_raster_pdf_asset.py',

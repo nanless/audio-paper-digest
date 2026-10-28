@@ -8861,6 +8861,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-unsent-empty-candidate.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-malformed-previous-draft-view.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-fact-table-claim-location.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-display.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-scientific-quote-coverage.js'), 'utf8'),
@@ -9623,6 +9625,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             }
             return captured.result;
         };
+        let previousDraftPromptView = previousDraft;
         const buildReaderPrompt = indexExamples => {
             const rendered = require('./lib/reader-resource-prose').renderPrompt(
             conceptTermsContext
@@ -9660,7 +9663,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 savedInputContinuity?.validationFeedback,
                 ...(!candidate ? currentIssues.filter(issue => issue.diagnosticOnly === true).map(issueFeedback) : []),
                 indexExamples].filter(Boolean).join('\n'),
-            previousDraft,
+            previousDraft: previousDraftPromptView,
             mechanicalContract
         }), naturalResourceProse);
             return repairContext && patchRejectionFeedback && !ordinalCapability
@@ -9670,6 +9673,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 : rendered;
         };
         let prompt = buildReaderPrompt('');
+        if (prompt.length > API_READER_CONTEXT_MAX_CHARS && candidate === null && repairContext === null) {
+            const diagnostic = require('./lib/reader-malformed-previous-draft-view')
+                .malformedPreviousDraftDiagnostic({ raw: previousDraft,
+                    jsonText: typeof previousDraft === 'string' ? extractJsonObjectText(previousDraft) : '',
+                    candidate, repairContext, originalPromptChars: prompt.length,
+                    contextMaxChars: API_READER_CONTEXT_MAX_CHARS });
+            if (diagnostic !== null) {
+                // Send-only view: never replace the retained raw response or candidate.
+                previousDraftPromptView = diagnostic;
+                prompt = buildReaderPrompt('');
+            }
+        }
         const indexExamples = readerVerifiedTableIndexExamples(
             options.structuredArtifacts, repairContext ? repairContext.evidence : sourceEvidence,
             currentIssues, candidate
@@ -10739,6 +10754,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const directMaterializer = directContext.directReaderMaterializer();
     const paidFigures = require('./lib/reader-paid-resolved-render')
         .reuseVerifiedPaidResolvedFigures(injectedReaderResult.figures, paper, arxivId);
+    const correctionFigures = require('./lib/reader-fact-table-claim-location')
+        .reuseVerifiedCorrectionFigures(injectedReaderResult.figures, paper);
     const localSourceInput = options.localSourceCorrectionInput;
     const localSource = localSourceInput && require('./lib/conference-source-resource-correction');
     if (localSourceInput) localSource.assertFinalizerInput(localSourceInput, paper);
@@ -10752,7 +10769,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         ? bindDirectApiReaderFiguresToEvidence(injectedReaderResult.figures, generated.imageEvidence) : null;
     const materializedFigures = localSourceInput
         ? localSource.readVerifiedSignedFigures(localSourceInput, injectedReaderResult.figures)
-        : paidFigures ?? (options.reuseSignedFigures
+        : correctionFigures ?? paidFigures ?? (options.reuseSignedFigures
             ? reuseSignedApiReaderFigureAssets(injectedReaderResult.figures, options.reuseSignedFigures, arxivId)
             : aliasFigures ?? await (directMaterializer || materializeApiReaderFigures)(
                 injectedReaderResult.figures, arxivId
