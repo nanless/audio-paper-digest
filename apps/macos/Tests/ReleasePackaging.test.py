@@ -120,6 +120,23 @@ class Packaging(unittest.TestCase):
         self.assertEqual(sha((self.app/'Contents/MacOS/PaperDigest').read_bytes()),before)
         public=(self.output/'build-info.json').read_text();self.assertNotIn(str(self.root),public);self.assertNotIn('/explicit/private',public);self.assertNotIn('bundlePath',public);self.assertNotIn('.qa/',public)
 
+    def test_joint_release_notes_bind_android_claims_to_actual_android_evidence(self):
+        self.make_formal();self.prepare()
+        notes=(self.output/'RELEASE_NOTES.md').read_text()
+        for required in ['同一 Release 附带 Android APK 时','独立 release 签名 APK，非 debug 包','android-build-info.json','versionCode','签名证书 SHA-256','最低/目标 SDK 和 ABI','模拟器验收不等于实体机或 Google Play','签名连续','保留本机资料','由用户在自己的设备本机配置','不承诺任意 HTML']:
+            self.assertIn(required,notes)
+        for unsupported in ['所有 Zotero HTML 均兼容','已通过实体机验收','已在 Google Play 发布','Android versionCode: 1']:
+            self.assertNotIn(unsupported,notes)
+        self.assertNotIn(str(self.root),notes)
+        self.assertNotIn('/explicit/private',notes)
+        self.assertTrue(self.call('verify')['verified'])
+
+    def test_joint_release_notes_cannot_be_rewritten_after_manifest_sealing(self):
+        self.make_formal();self.prepare()
+        notes=self.output/'RELEASE_NOTES.md'
+        notes.write_text(notes.read_text().replace('模拟器验收不等于实体机或 Google Play','已通过实体机验收并在 Google Play'))
+        self.call('verify',expected=1)
+
     def test_03_dmg_actual_readonly_mount_and_applications_link(self):
         r=self.prepare(True);self.assertTrue(any(p.endswith('.dmg') for p in r['artifacts']));self.assertTrue(self.call('verify')['verified'])
 

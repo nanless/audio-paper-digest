@@ -273,6 +273,13 @@ def prepare(args):
 - 现有网站成果由客户端直接读取；个人资料与密钥不放入发行包。包内自带运行组件及许可。
 - 使用 SHA256SUMS 核对文件完整性；校验和不能替代 Apple 身份签名、完整验收或独立审查。
 
+## 同一 Release 附带 Android APK 时
+
+- Android 安装资产须为独立 release 签名 APK，非 debug 包。实际版本、versionCode、签名证书 SHA-256、最低/目标 SDK 和 ABI，以同次 android-build-info.json 及真实 APK 核验记录为准；本 Mac 打包工具不会替 Android 资产签发验收。
+- 模拟器验收不等于实体机或 Google Play 发布验证；仅声明本次实际覆盖的设备、系统与功能范围。Zotero、HTML 导出及外部附件的支持边界以对应验收记录为准，不承诺任意 HTML 或所有第三方客户端都兼容。
+- 升级须核对相同应用标识、签名连续和递增 versionCode，按本次验证的升级路径保留本机资料；不要通过卸载或清空资料代替升级。跨端功能和数据边界分别按各端记录核对。
+- 模型、网盘和 Zotero 凭据由用户在自己的设备本机配置；安装包与 Release 附件不内置账号、口令、私钥、生产配置或私人研究材料。
+
 公开前须核对最终说明、全部适用验收、同一远端草稿及下载实包。本文只说明固定安装资产及签名范围，不提前宣告未完成条件通过。
 '''
         (temporary/'RELEASE_NOTES.md').write_text(notes)
