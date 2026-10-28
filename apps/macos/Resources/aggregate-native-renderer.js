@@ -18,7 +18,8 @@ function scientificMathAt(text,start){
  return null;
 }
 function nextScientificMath(text){for(let i=0;i<text.length;i++){const match=scientificMathAt(text,i);if(match)return match;}return null;}
-function renderScientificMath(text,element,display){window.katex.render(text,element,{displayMode:display,throwOnError:false,output:'mathml',trust:false,strict:'warn'});}
+function prepareDisplayMath(wrapper){wrapper.tabIndex=0;wrapper.setAttribute('role','region');wrapper.setAttribute('aria-label','数学公式');wrapper.setAttribute('aria-description','内容较宽时可左右滚动');}
+function renderScientificMath(text,element,display){window.katex.render(text,element,{displayMode:display,throwOnError:false,output:'mathml',trust:false,strict:'warn'});if(display){const math=element.querySelector('math[display=block]');if(math)prepareDisplayMath(math.parentElement);}}
 function renderMath(body){
  // Rebuild legacy HTML+MathML wrappers directly from their original annotation,
  // without serializing TeX through delimiters a second time.
@@ -42,10 +43,14 @@ function renderMath(body){
  }
  for(const math of body.querySelectorAll('math[display="block"]')){
   const parent=math.parentElement;
-  if(!parent||math.closest('pre,code')||parent.closest('math')||parent.matches('.katex,.math-scroll'))continue;
-  // Only move the existing top-level MathML node; its tree and annotation stay intact.
-  const wrapper=math.ownerDocument.createElement('span');wrapper.className='math-scroll';
-  math.replaceWith(wrapper);wrapper.append(math);
+  if(!parent||math.closest('pre,code')||parent.closest('math'))continue;
+  let wrapper=parent;
+  if(!parent.matches('.katex,.math-scroll')){
+   // Only move the existing top-level MathML node; its tree and annotation stay intact.
+   wrapper=math.ownerDocument.createElement('span');wrapper.className='math-scroll';
+   math.replaceWith(wrapper);wrapper.append(math);
+  }
+  prepareDisplayMath(wrapper);
  }
 }
 
