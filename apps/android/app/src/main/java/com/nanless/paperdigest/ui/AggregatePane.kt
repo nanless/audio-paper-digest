@@ -24,7 +24,7 @@ import org.json.JSONObject
 
 /** Website pages have their own navigation and typed state; no paper reader/actions are composed here. */
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun AggregatePane(state:UiState,action:Action) {
+@Composable internal fun AggregatePane(state:UiState,action:Action,openLink:AggregateLinkAction?=null,linkCurrent:AggregateLinkCurrent?=null) {
     val aggregate=state.aggregate
     var filter by rememberSaveable { mutableStateOf("all") }
     var query by rememberSaveable { mutableStateOf("") }
@@ -115,7 +115,7 @@ import org.json.JSONObject
                 if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取正文…",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)}
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val doc=aggregate.document
-                    if(doc!=null)key(doc.descriptor.id,doc.rawHTMLSHA256){var scroll by rememberSaveable(doc.descriptor.id,doc.rawHTMLSHA256){mutableIntStateOf(0)};AggregateFormulaDocument(doc,state.settings.optInt("font",18),scroll,{scroll=it})}
+                    if(doc!=null)key(doc.descriptor.id,doc.rawHTMLSHA256){var scroll by rememberSaveable(doc.descriptor.id,doc.rawHTMLSHA256){mutableIntStateOf(0)};AggregateFormulaDocument(doc,state.settings.optInt("font",18),scroll,{scroll=it},openLink,linkCurrent)}
                     else Text(if(aggregate.loading)"正在读取网站正文。"else"尚未取得可显示的网页正文。",Modifier.padding(16.dp))
                 }
             }
@@ -143,7 +143,7 @@ import org.json.JSONObject
 internal fun aggregateKindLabel(kind:String)=when(kind){"daily"->"日更汇总";"conference"->"会议与专题";"page"->"网站页面";else->"网站页面"}
 
 /** The effect owns one genuine document; old completions cannot publish after its replacement. */
-@Composable private fun AggregateFormulaDocument(document:AggregateDocumentView,fontSize:Int,scroll:Int,onScroll:(Int)->Unit){
+@Composable private fun AggregateFormulaDocument(document:AggregateDocumentView,fontSize:Int,scroll:Int,onScroll:(Int)->Unit,openLink:AggregateLinkAction?,linkCurrent:AggregateLinkCurrent?){
     val context=androidx.compose.ui.platform.LocalContext.current
     val current by rememberUpdatedState(document)
     var rendered by remember(document){mutableStateOf<String?>(null)}
@@ -159,14 +159,14 @@ internal fun aggregateKindLabel(kind:String)=when(kind){"daily"->"日更汇总";
         }catch(cancelled:CancellationException){throw cancelled}
         catch(error:Exception){
             effect.ensureActive()
-            if(current===document){failure="部分公式未完成排版，保留原式供核对。";rendered=document.images?.bodyHTML?:document.bodyHTML}
+            if(current===document){failure="部分公式未完成排版，保留原式供核对。";rendered=document.linkHTML?:document.images?.bodyHTML?:document.bodyHTML}
         }
     }
     Column(Modifier.fillMaxSize()){
         failure?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
         val html=rendered
         if(html==null){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在排版公式…",style=MaterialTheme.typography.bodySmall)}
-        else Box(Modifier.weight(1f).fillMaxWidth()){StaticDocument(html,fontSize,scroll,onScroll,document.images)}
+        else Box(Modifier.weight(1f).fillMaxWidth()){StaticDocument(html,fontSize,scroll,onScroll,document.images,openLink,document.linkNonce,linkCurrent)}
     }
 }
 

@@ -50,6 +50,8 @@ enum class SecretKind { MODEL, ZOTERO, ZOTERO_DAV, CLOUD }
 data class AggregateViewLease(val navigationEpoch:Long,val readingEpoch:Long)
 
 interface AppController {
+    /** Synchronous display-effect guard; never accepts a URL or grants a source capability. */
+    fun aggregateLinkIsCurrent(nonce:String,index:Int):Boolean=false
     fun captureAggregateView():AggregateViewLease=AggregateViewLease(0,0)
     fun enterAggregateView() {}
     fun leaveAggregateView() {}

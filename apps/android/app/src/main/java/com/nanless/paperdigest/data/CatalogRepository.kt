@@ -151,6 +151,17 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         current();result
     }
 
+    /** Resolve only a native document href; cold current.json alone never grants a Paper route. */
+    internal suspend fun aggregateLink(document:AggregateDocumentView,href:String):AggregateLinkDestination {
+        val before=snapshot
+        val catalog=aggregateCatalog()?:error("网站目录尚未核验")
+        require(catalog.snapshotSHA256==before.summary.optString("snapshotID")&&catalog.records.any{it==document.descriptor})
+        return AggregateLinkRouting.resolve(document,href,catalog,before.published,verifiedOriginal={paper->
+            val witness=publishedRecords(paper)
+            witness.optString("status")=="verified-local-originals"&&witness.optString("snapshotID")==before.summary.optString("snapshotID")
+        },current={snapshot===before})
+    }
+
     /** A display stamp has no Paper capability and comes from one immutable native catalog snapshot. */
     fun aggregateStamp():AggregateCatalogStamp {val current=snapshot;return AggregateCatalogStamp(current.summary.optString("snapshotID"),current.epoch)}
     fun aggregateCachedRevisions(id:String):List<AggregateCachedRevision> {

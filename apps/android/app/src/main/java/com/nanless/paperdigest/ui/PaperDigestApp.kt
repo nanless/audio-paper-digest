@@ -44,6 +44,8 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
 internal typealias Action = (String, JSONObject) -> Unit
+internal typealias AggregateLinkAction = (String,Int,(JSONObject)->Unit)->Unit
+internal typealias AggregateLinkCurrent = (String,Int)->Boolean
 internal fun obj(vararg pairs: Pair<String, Any?>) = JSONObject().apply { pairs.forEach { (k,v) -> put(k,v ?: JSONObject.NULL) } }
 internal fun JSONObject.rows(key:String):List<JSONObject> = optJSONArray(key)?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } } ?: emptyList()
 internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
@@ -116,6 +118,20 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             }
         } catch(e:CancellationException) { throw e } catch(e:Exception){localError=e.message ?: "操作未完成，已有资料保留"}finally{if(guarded)pendingActions.remove(command)}
     } }
+    val aggregateLinkCurrent:AggregateLinkCurrent={nonce,index->route=="aggregates"&&renderedRouteRevision==routeRevision&&renderedAggregateLease==controller.captureAggregateView()&&controller.aggregateLinkIsCurrent(nonce,index)}
+    val aggregateLink:AggregateLinkAction=link@{nonce,index,reply->
+        if(route!="aggregates"||renderedRouteRevision!=routeRevision||renderedAggregateLease!=controller.captureAggregateView())return@link
+        scope.launch {
+            try {
+                if(route!="aggregates"||renderedRouteRevision!=routeRevision||renderedAggregateLease!=controller.captureAggregateView())return@launch
+                val result=controller.executeAggregateInView("aggregate.link",obj("nonce" to nonce,"index" to index),renderedAggregateLease)
+                if(renderedRouteRevision!=routeRevision||route!="aggregates")return@launch
+                if(result.optString("kind")=="paper"&&result.optString("status")=="link-opened"&&controller.state.value.selectedPaperId==result.optString("paperID"))navigateCurrent("reader")
+                else if(renderedAggregateLease==controller.captureAggregateView())reply(result)
+            }catch(cancelled:CancellationException){throw cancelled}
+            catch(error:Exception){if(renderedRouteRevision==routeRevision&&route=="aggregates")localError=error.message?:"链接未能打开，原网页保留。"}
+        }
+    }
     val importPDF=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()){uris ->
         if(uris.isNotEmpty())try {
             // Transfer the whole picker result before a composition coroutine can be cancelled by rotation.
@@ -164,7 +180,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                         (localError ?: state.error)?.let { message -> Surface(color=MaterialTheme.colorScheme.errorContainer,modifier=Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp)){Text(message,Modifier.weight(1f));TextButton({localError=null;action("app.bootstrap",JSONObject())}){Text("重新载入")}} }}
                         savedScreens.SaveableStateProvider(if(route=="reader")"reader-${state.selectedPaperId}" else route){when(route){
                             "library" -> LibraryPane(state,controller,action,{importPDF.launch(arrayOf("application/pdf"))})
-                            "aggregates" -> AggregatePane(state,action)
+                            "aggregates" -> AggregatePane(state,action,aggregateLink,aggregateLinkCurrent)
                             "reader" -> ReaderPane(state,controller,action)
                             "tasks" -> NonOccludingViewport{TasksPane(state,action)}
                             "session" -> NonOccludingViewport{SessionPane(state,selectedSessionID,controller,action)}
@@ -394,9 +410,10 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
  }
 }
 
-@Composable internal fun StaticDocument(body:String,fontSize:Int=18,initialScroll:Int=0,onScroll:(Int)->Unit={},images:AggregateImageAccess?=null){
+@Composable internal fun StaticDocument(body:String,fontSize:Int=18,initialScroll:Int=0,onScroll:(Int)->Unit={},images:AggregateImageAccess?=null,aggregateLink:AggregateLinkAction?=null,aggregateNonce:String?=null,aggregateCurrent:AggregateLinkCurrent?=null){
  val context=LocalContext.current
  val scrollValue=rememberUpdatedState(initialScroll);val scrollCallback=rememberUpdatedState(onScroll)
+ val linkCallback=rememberUpdatedState(aggregateLink);val linkNonce=rememberUpdatedState(aggregateNonce);val linkCurrent=rememberUpdatedState(aggregateCurrent)
  val restoring=remember{java.util.concurrent.atomic.AtomicBoolean(true)}
  val activeView=remember{java.util.concurrent.atomic.AtomicReference<WebView?>(null)}
  val activeDocument=remember{java.util.concurrent.atomic.AtomicReference<StreamedHtmlDocument?>(null)}
@@ -427,9 +444,31 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
     }
    }
    override fun shouldOverrideUrlLoading(view:WebView?,request:WebResourceRequest?):Boolean {
-    if(activeView.get()!==view)return true
+    val web=view?:return true
+    val owner=activeDocument.get()?:return true
+    if(activeView.get()!==web||web.tag!==owner)return true
     val u=request?.url?:return true
-    if(activeDocument.get()?.mayNavigateWithin(u.toString())==true)return false
+    if(owner.mayNavigateWithin(u.toString()))return false
+    val callback=linkCallback.value
+    if(callback!=null) {
+     if(!request.isForMainFrame||request.method!="GET"||u.scheme!="https"||u.encodedAuthority!="reader.invalid"||u.encodedQuery!=null||u.encodedFragment!=null)return true
+     val parts=u.pathSegments
+     val nonce=linkNonce.value?:return true
+     if(parts.size!=3||parts[0]!="aggregate-link"||parts[1]!=nonce||u.encodedPath!="/aggregate-link/$nonce/${parts[2]}")return true
+     val index=parts[2].toIntOrNull()?.takeIf{it>=0&&it.toString()==parts[2]}?:return true
+     callback(nonce,index){result->
+      // 异步结果可能来自后台线程；平台动作及当前页面核验统一回到此 View 的线程。
+      web.post {
+       if(activeView.get()===web&&activeDocument.get()===owner&&web.tag===owner&&web.isAttachedToWindow&&web.isShown&&owner.mayNavigateWithin(web.url)&&web.progress==100&&web.contentHeight>0&&linkNonce.value==nonce&&linkCallback.value!=null&&result.optString("status")=="link-ready"&&linkCurrent.value?.invoke(nonce,index)==true) {
+        when(result.optString("kind")) {
+         "anchor"->web.loadUrl(owner.url+"#"+result.getString("fragment"))
+         "external"->{val target=Uri.parse(result.getString("url"));if(target.scheme=="https"&&target.host!=null&&target.userInfo==null&&target.host!="reader.invalid")runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,target))}}
+        }
+       }
+      }
+     }
+     return true
+    }
     if(u.host=="reader.invalid")return true
     if(u.scheme=="https"&&u.host!=null&&u.userInfo==null){runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,u))}}
     return true

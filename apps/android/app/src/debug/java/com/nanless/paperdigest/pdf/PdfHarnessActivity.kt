@@ -18,7 +18,7 @@ class PdfHarnessActivity:FragmentActivity(){
   super.onCreate(savedInstanceState)
   enableEdgeToEdge()
   val fixture=JSONObject(assets.open("published/sample.json").bufferedReader().use{it.readText()}).getJSONObject("pdf")
-  val temporary=File(cacheDir,"public-pdf-harness.pdf")
+  val temporary=File(cacheDir.canonicalFile,"public-pdf-harness.pdf")
   assets.open("published/"+fixture.getString("src")).use{input->temporary.outputStream().use{input.copyTo(it)}}
   val doc=runBlocking{PdfRepository(this@PdfHarnessActivity).importFile(temporary)}
   temporary.delete()

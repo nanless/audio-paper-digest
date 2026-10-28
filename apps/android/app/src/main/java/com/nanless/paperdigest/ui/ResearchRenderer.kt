@@ -128,7 +128,7 @@ object ResearchRenderer {
     /** Owner checks bracket the real asynchronous renderer, including cancellation/late completion. */
     internal suspend fun renderAggregateBound(document:com.nanless.paperdigest.data.AggregateDocumentView,requireCurrent:()->Unit,render:suspend(String)->String):String {
         requireCurrent()
-        val rendered=render(document.images?.bodyHTML?:document.bodyHTML)
+        val rendered=render(document.linkHTML?:document.images?.bodyHTML?:document.bodyHTML)
         requireCurrent()
         return rendered
     }

@@ -119,6 +119,7 @@ class RootController private constructor(private val context: Context, private v
     }
     val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) }, borrowing=cloudCredentialBorrowing)
     private val aggregateViewRevision=AtomicLong(0)
+    override fun aggregateLinkIsCurrent(nonce:String,index:Int)=aggregateBrowser.linkIsCurrent(nonce,index)
     override fun captureAggregateView()=AggregateViewLease(aggregateViewRevision.get(),generation.get())
     override fun enterAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.enter()}
     override fun leaveAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.leave()}
@@ -138,6 +139,7 @@ class RootController private constructor(private val context: Context, private v
             override suspend fun read(id:String)=maintenance.withLock{library.aggregateDocument(id)}
             override suspend fun cached(id:String,sha:String)=maintenance.withLock{library.aggregateCachedDocument(id,sha)}
             override suspend fun images(id:String,rawHTMLSHA256:String,allowNetwork:Boolean)=maintenance.withLock{library.aggregateImages(id,rawHTMLSHA256,allowNetwork)}
+            override suspend fun link(document:AggregateDocumentView,href:String)=maintenance.withLock{library.aggregateLink(document,href)}
             override fun offlineMode()=personal.settings().optBoolean("offlineMode")
             override fun readingEpoch()=generation.get()
             override fun mayPresent(readingEpoch:Long):Boolean {val view=_state.value;return generation.get()==readingEpoch&&view.selectedPaperId==null&&view.viewedPaper==null&&view.pdfDocument==null}
@@ -152,7 +154,7 @@ class RootController private constructor(private val context: Context, private v
                     }
                 }
             }
-        },publish={value->_state.update{it.copy(aggregate=value)}},commitReading={live,commit->pdfAdmission.withLock{live()&&commit()}})
+        },publish={value->_state.update{it.copy(aggregate=value)}},commitReading={live,commit->pdfAdmission.withLock{live()&&commit()}},openLinkedPaper={paper,live->openPaper(paper.id,admissionGuard=live)})
     }
     private val cloudSelections = CloudRestoreSelections(cloud) { CloudSelectionContext(cloud.targetID, dispatch.epoch) }
     private fun cloudView(): JSONObject = cloud.state().put("selectionContext", cloudSelections.contextToken())
@@ -531,14 +533,15 @@ class RootController private constructor(private val context: Context, private v
         }
     }
 
-    private suspend fun openPaper(id: String, refresh: Boolean = false): JSONObject {
+    private suspend fun openPaper(id: String, refresh: Boolean = false, admissionGuard:(()->Boolean)?=null): JSONObject {
         val p = paper(id)
-        leaveAggregateView()
+        if(admissionGuard==null)leaveAggregateView()
         val admissionView=aggregateViewRevision.get()
         val captured = pdfAdmission.withLock {
-            if(aggregateViewRevision.get()!=admissionView)return JSONObject().put("status","not-adopted")
+            if(aggregateViewRevision.get()!=admissionView||admissionGuard?.invoke()==false)return JSONObject().put("status","not-adopted")
             stopPdfAcquisition()
-            if(aggregateViewRevision.get()!=admissionView)return JSONObject().put("status","not-adopted")
+            if(aggregateViewRevision.get()!=admissionView||admissionGuard?.invoke()==false)return JSONObject().put("status","not-adopted")
+            if(admissionGuard!=null)leaveAggregateView()
             // Serialize a real source switch against a new native acquisition admission.
             val changed = generation.incrementAndGet()
             offlineReading = null

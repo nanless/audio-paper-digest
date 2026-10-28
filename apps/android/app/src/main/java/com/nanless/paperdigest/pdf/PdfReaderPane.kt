@@ -142,10 +142,21 @@ fun PdfReaderPane(document: PdfDocumentRef, page: Int, onPageChanged: (Int)->Uni
         access==null -> Box(Modifier.weight(1f).fillMaxWidth()){if(failure==null)LinearProgressIndicator(Modifier.fillMaxWidth())}
         access?.encrypted==true -> PdfEncryptedPagePane(repo,document,page,marks,searchResults.getOrNull(searchIndex),compatibilityZoom,Modifier.weight(1f).fillMaxWidth(),{encryptedReady=it},::fail)
         else -> key(document.sha256){
-            AndroidFragment<DigestPdfFragment>(modifier=Modifier.weight(1f).fillMaxWidth(),arguments=bundleOf("id" to document.id,"file" to document.localPath,"sha" to document.sha256,"count" to document.pageCount,"name" to document.displayName),onUpdate={fragment->
-                native=fragment
-                fragment.bind(document,page,marks,pageChanged={pageCallback(it)},selected={value->selection=value.takeIf{it.text.isNotBlank()};selectedCallback(value)},failed={message->failure=message;errorCallback(message)})
-            })
+            AndroidFragment<DigestPdfFragment>(modifier=Modifier.weight(1f).fillMaxWidth(),arguments=bundleOf("id" to document.id,"file" to document.localPath,"sha" to document.sha256,"count" to document.pageCount,"name" to document.displayName),onUpdate={fragment->native=fragment})
+            // AndroidFragment.onUpdate runs when its fragment is made available,
+            // not on page/annotation recomposition. Keep the same native document
+            // and bind current inputs after each successful Compose update.
+            SideEffect {
+                native?.let { fragment ->
+                    fun current()=activeDocument.get()&&native===fragment&&fragment.isAdded&&
+                        fragment.arguments?.getString("id")==document.id&&fragment.arguments?.getString("sha")==document.sha256&&
+                        fragment.arguments?.getString("file")==document.localPath&&fragment.arguments?.getInt("count")==document.pageCount
+                    if(current())fragment.bind(document,page,marks,
+                        pageChanged={if(current())pageCallback(it)},
+                        selected={value->if(current()){selection=value.takeIf{it.text.isNotBlank()};selectedCallback(value)}},
+                        failed={message->if(current()){failure=message;errorCallback(message)}})
+                }
+            }
         }
         }
     }
@@ -176,8 +187,23 @@ class DigestPdfFragment:PdfViewerFragment(){
     private var contentSHA:String?=null
     private var pendingScroll:Int?=null
     private var readinessPost:Runnable?=null
+    private var laidOutWidth=0
+    private var laidOutHeight=0
+    private var applyingScroll=false
+    private var restoringPage:Int?=null
+    private var restoredPosition:Triple<Int,Int,Float>?=null
+    private var restoreConfirmation:Runnable?=null
+    private fun pageVisible(page:Int,first:Int,count:Int)=first>=0&&count>0&&page-1>=first&&page-1-first<count
     private val readinessLayout=View.OnLayoutChangeListener{view,_,_,_,_,_,_,_,_->
-        if(view===pdf)settleMeasuredDocument()
+        if(view===pdf){
+            // PdfView reports a viewport from onSizeChanged before its onLayout
+            // refits zoom/scroll. Keep the last logical page through that reflow.
+            val resized=laidOutWidth>0&&laidOutHeight>0&&
+                (view.width!=laidOutWidth||view.height!=laidOutHeight)
+            if(resized){cancelRestoreConfirmation();restoredPosition=null;restoringPage=requestedPage;if(pendingScroll==null)pendingScroll=requestedPage}
+            laidOutWidth=view.width;laidOutHeight=view.height
+            settleMeasuredDocument()
+        }
     }
     val documentReady:Boolean get()=loaded && pdf?.let{it.isAttachedToWindow&&it.width>0&&it.height>0}==true
     val loadedPageCount:Int get()=pdf?.pdfDocument?.pageCount ?: 0
@@ -193,9 +219,12 @@ class DigestPdfFragment:PdfViewerFragment(){
     private var searchSurface:View?=null
     private val searchLayout=View.OnLayoutChangeListener{_,_,_,_,_,_,_,_,_->if(loaded && !isTextSearchActive)applyMarks()}
     fun bind(document:PdfDocumentRef,page:Int,annotations:List<PdfAnnotation>,pageChanged:(Int)->Unit,selected:(PdfSelection)->Unit,failed:(String)->Unit){
+        // A delayed update cannot retarget an already-created native fragment.
+        val owner=arguments ?: return
+        if(owner.getString("id")!=document.id||owner.getString("sha")!=document.sha256||owner.getString("file")!=document.localPath||owner.getInt("count")!=document.pageCount)return
         reference=document;this.pageChanged=pageChanged;this.selected=selected;this.failed=failed;marks=annotations
         val target=page.coerceIn(1,document.pageCount)
-        if(requestedPage!=target){requestedPage=target;pendingScroll=target;settleMeasuredDocument()}
+        if(requestedPage!=target){cancelRestoreConfirmation();requestedPage=target;if(restoringPage!=null)restoringPage=target;pendingScroll=target;settleMeasuredDocument()}
         applyMarks()
     }
     override fun onViewCreated(view:View,savedInstanceState:Bundle?){
@@ -211,9 +240,26 @@ class DigestPdfFragment:PdfViewerFragment(){
     }
     override fun onPdfViewCreated(pdfView:PdfView){
         super.onPdfViewCreated(pdfView);pdf=pdfView
+        laidOutWidth=pdfView.width;laidOutHeight=pdfView.height
         pdfView.addOnLayoutChangeListener(readinessLayout)
         pdfView.addOnViewportChangedListener(object:PdfView.OnViewportChangedListener{
-            override fun onViewportChanged(firstVisiblePage:Int,visiblePagesCount:Int,pageLocations:SparseArray<RectF>,zoomLevel:Float){if(documentReady && visiblePagesCount>0 && firstVisiblePage>=0){val page=firstVisiblePage+1;if(page in 1..(reference?.pageCount ?: 0) && page!=requestedPage){requestedPage=page;pageChanged?.invoke(page)}}}
+            override fun onViewportChanged(firstVisiblePage:Int,visiblePagesCount:Int,pageLocations:SparseArray<RectF>,zoomLevel:Float){
+                if(pdf!==pdfView||applyingScroll||!documentReady||pdfView.pdfDocument!==contentDocument||reference?.sha256!=contentSHA||pdfView.width!=laidOutWidth||pdfView.height!=laidOutHeight)return
+                val restoring=restoringPage
+                if(restoring!=null){
+                    if(!pageVisible(restoring,firstVisiblePage,visiblePagesCount))return
+                    // Native metadata dispatches this callback before applying
+                    // its deferred scroll in the same Main stack. Confirm only
+                    // after that stack; do not publish an intermediate first page.
+                    confirmRestoreAfterViewport(pdfView)
+                    return
+                }
+                restoredPosition?.let{position->
+                    if(position.first==pdfView.scrollX&&position.second==pdfView.scrollY&&position.third==pdfView.zoom)return
+                    restoredPosition=null
+                }
+                if(documentReady && visiblePagesCount>0 && firstVisiblePage>=0){val page=firstVisiblePage+1;if(page in 1..(reference?.pageCount ?: 0) && page!=requestedPage){requestedPage=page;pageChanged?.invoke(page)}}
+            }
         })
         pdfView.addOnSelectionChangedListener(object:PdfView.OnSelectionChangedListener{
             override fun onSelectionChanged(newSelection:Selection?){
@@ -233,7 +279,7 @@ class DigestPdfFragment:PdfViewerFragment(){
         if(document.pageCount!=reference?.pageCount){failed?.invoke("PDF 实际页数与原件记录不符，未采用其他材料");return}
         val target=pdf ?: return;val sha=reference?.sha256
         readinessPost?.let(target::removeCallbacks)
-        loaded=false;contentDocument=document;contentSHA=sha;pendingScroll=requestedPage
+        cancelRestoreConfirmation();loaded=false;contentDocument=document;contentSHA=sha;pendingScroll=requestedPage;restoredPosition=null
         // The official callback precedes both PdfView.document assignment and visibility/layout.
         // One post covers assignment to an already measured view; real layout events cover a new
         // or temporarily zero-sized surface. Never scroll or report ready before positive geometry.
@@ -242,13 +288,38 @@ class DigestPdfFragment:PdfViewerFragment(){
     }
     private fun settleMeasuredDocument(){
         val target=pdf ?: return;val document=contentDocument ?: return
-        if(!isAdded||reference?.sha256!=contentSHA||target.pdfDocument!==document||!target.isAttachedToWindow||target.width<=0||target.height<=0){loaded=false;return}
+        if(!isAdded||reference?.sha256!=contentSHA||target.pdfDocument!==document||!target.isAttachedToWindow||target.width<=0||target.height<=0||target.width!=laidOutWidth||target.height!=laidOutHeight){loaded=false;return}
         loaded=true
         val page=pendingScroll;pendingScroll=null
-        if(page!=null)target.scrollToPage(page-1)
+        if(page!=null){
+            cancelRestoreConfirmation();restoringPage=page;restoredPosition=null;applyingScroll=true
+            try{target.scrollToPage(page-1)}finally{applyingScroll=false}
+            // Native scrolling is bounded at the document end: the target can
+            // be visible together with a preceding page. Deferred scrolls keep
+            // their target until that actual range is observed.
+            completeRestore(target,page,document,contentSHA,target.width,target.height)
+        }
         applyMarks()
     }
-    override fun onLoadDocumentError(error:Throwable){super.onLoadDocumentError(error);readinessPost?.let{pdf?.removeCallbacks(it)};readinessPost=null;contentDocument=null;contentSHA=null;pendingScroll=null;loaded=false;failed?.invoke("PDF 无法打开；原件保留，请检查密码或重新导入")}
+    private fun cancelRestoreConfirmation(){restoreConfirmation?.let{pdf?.removeCallbacks(it)};restoreConfirmation=null}
+    private fun completeRestore(target:PdfView,page:Int,document:PdfDocument,sha:String?,width:Int,height:Int){
+        if(!isAdded||pdf!==target||contentDocument!==document||target.pdfDocument!==document||contentSHA!=sha||reference?.sha256!=sha||restoringPage!=page||!documentReady||target.width!=width||target.height!=height||width!=laidOutWidth||height!=laidOutHeight)return
+        if(pageVisible(page,target.firstVisiblePage,target.visiblePagesCount)){
+            restoringPage=null;restoredPosition=Triple(target.scrollX,target.scrollY,target.zoom)
+        }
+    }
+    private fun confirmRestoreAfterViewport(target:PdfView){
+        if(restoreConfirmation!=null)return
+        val page=restoringPage ?: return;val document=contentDocument ?: return
+        val sha=contentSHA;val width=target.width;val height=target.height
+        lateinit var attempt:Runnable
+        attempt=Runnable{
+            if(restoreConfirmation===attempt){restoreConfirmation=null;completeRestore(target,page,document,sha,width,height)}
+        }
+        restoreConfirmation=attempt
+        if(!target.post(attempt))restoreConfirmation=null
+    }
+    override fun onLoadDocumentError(error:Throwable){super.onLoadDocumentError(error);cancelRestoreConfirmation();readinessPost?.let{pdf?.removeCallbacks(it)};readinessPost=null;contentDocument=null;contentSHA=null;pendingScroll=null;restoringPage=null;restoredPosition=null;loaded=false;failed?.invoke("PDF 无法打开；原件保留，请检查密码或重新导入")}
     private fun applyMarks(){if(!documentReady || isTextSearchActive)return;pdf?.setHighlights((compatibilityHighlights.ifEmpty{marks.flatMap{it.selection.bounds}}).map{Highlight(PdfRect(it.page-1,it.left,it.top,it.right,it.bottom),0x66FFCF4A)})}
     fun search():Boolean {
         if(!documentReady)return false
@@ -257,10 +328,10 @@ class DigestPdfFragment:PdfViewerFragment(){
         isTextSearchActive=true;nativeSearch=isTextSearchActive
         return nativeSearch
     }
-    fun showCompatibilityMatch(match:PdfSearchMatch){compatibilityHighlights=match.bounds;requestedPage=match.page;pendingScroll=match.page;settleMeasuredDocument()}
+    fun showCompatibilityMatch(match:PdfSearchMatch){compatibilityHighlights=match.bounds;cancelRestoreConfirmation();requestedPage=match.page;if(restoringPage!=null)restoringPage=match.page;pendingScroll=match.page;settleMeasuredDocument()}
     fun clearCompatibilitySearch(){compatibilityHighlights=emptyList();applyMarks()}
     fun zoomBy(factor:Float){if(documentReady)pdf?.let{it.zoom=(it.zoom*factor).coerceIn(it.minZoom,it.maxZoom)}}
-    override fun onDestroyView(){searchSurface?.removeOnLayoutChangeListener(searchLayout);searchSurface=null;pdf?.removeOnLayoutChangeListener(readinessLayout);readinessPost?.let{pdf?.removeCallbacks(it)};readinessPost=null;contentDocument=null;contentSHA=null;pendingScroll=null;hadNativeSelection=false;loaded=false;nativeSearch=false;compatibilityHighlights=emptyList();pdf=null;selected=null;pageChanged=null;failed=null;super.onDestroyView()}
+    override fun onDestroyView(){cancelRestoreConfirmation();searchSurface?.removeOnLayoutChangeListener(searchLayout);searchSurface=null;pdf?.removeOnLayoutChangeListener(readinessLayout);readinessPost?.let{pdf?.removeCallbacks(it)};readinessPost=null;contentDocument=null;contentSHA=null;pendingScroll=null;laidOutWidth=0;laidOutHeight=0;applyingScroll=false;restoringPage=null;restoredPosition=null;hadNativeSelection=false;loaded=false;nativeSearch=false;compatibilityHighlights=emptyList();pdf=null;selected=null;pageChanged=null;failed=null;super.onDestroyView()}
     override fun onRequestImmersiveMode(enterImmersive:Boolean){isToolboxVisible=false}
     override fun onLinkClicked(externalLink:androidx.pdf.content.ExternalLink):Boolean {
         val uri=externalLink.uri
