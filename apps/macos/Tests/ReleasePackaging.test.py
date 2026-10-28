@@ -123,7 +123,7 @@ class Packaging(unittest.TestCase):
     def test_joint_release_notes_bind_android_claims_to_actual_android_evidence(self):
         self.make_formal();self.prepare()
         notes=(self.output/'RELEASE_NOTES.md').read_text()
-        for required in ['同一 Release 附带 Android APK 时','独立 release 签名 APK，非 debug 包','android-build-info.json','versionCode','签名证书 SHA-256','最低/目标 SDK 和 ABI','模拟器验收不等于实体机或 Google Play','签名连续','保留本机资料','由用户在自己的设备本机配置','不承诺任意 HTML']:
+        for required in ['同一 Release 附带 Android APK 时','独立 release 签名 APK，非 debug 包','android-build-info.json','versionCode','签名证书 SHA-256','最低/目标 SDK 和 ABI','模拟器验收不等于实体机或 Google Play','签名连续','保留本机资料','由用户在自己的设备本机配置','不承诺任意 HTML','调试包或不同签名的旧包不能据此认定可直接覆盖','先在旧版完成并核验完整备份','未确认可恢复前不要卸载或清空资料','设备凭据须本机重新配置']:
             self.assertIn(required,notes)
         for unsupported in ['所有 Zotero HTML 均兼容','已通过实体机验收','已在 Google Play 发布','Android versionCode: 1']:
             self.assertNotIn(unsupported,notes)
