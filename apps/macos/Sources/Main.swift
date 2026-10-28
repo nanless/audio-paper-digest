@@ -66,6 +66,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var pdfView=PDFView(), currentPDFSHA="", currentPaperID="", currentPDFPath:URL?, currentPaper:[String:Any]=[:], currentArticle:[String:Any]=[:]
     var selectionSource:[String:Any]=[:], annotationsByID:[String:PDFAnnotation]=[:], jobs:[String:Task<[String:Any],Error>]=[:]
     var schedule:Timer?, lastSyncAttempt=Date.distantPast
+    var catalogSyncFlight:(id:UUID,task:Task<[String:Any],Error>)?
     var scheme:BundleScheme!
     var settingsWeb:WKWebView?
     var settingsPaneRequest:String?
@@ -241,7 +242,8 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
                 try requireMainContextAvailable()
                 try verifyArticleBinding(result,paper:paper);currentArticle=result;return result
             }
-            if ["library.sync","library.downloadPDF"].contains(command){return try await runJob(command,payload:payload){notify in try await self.library.handle(command:command,payload:payload,progress:notify)}}
+            if command=="library.sync"{return try await syncCatalog(payload:payload)}
+            if command=="library.downloadPDF"{return try await runJob(command,payload:payload){notify in try await self.library.handle(command:command,payload:payload,progress:notify)}}
             return try await library.handle(command:command,payload:payload)
         }
         switch command {
@@ -475,7 +477,24 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     }
     func configureSchedule(){schedule?.invalidate();let hours=max(1,min(168,store.setting("syncHours") as? Int ?? 12));schedule=Timer.scheduledTimer(withTimeInterval:Double(hours)*3600,repeats:true){[weak self]_ in Task{@MainActor in self?.syncNow()}}}
     @objc func didWake(){if Date().timeIntervalSince(lastSyncAttempt)>300{syncNow()}}
-    @objc func syncNow(){lastSyncAttempt=Date();Task{do{_=try await dispatch("library.sync",payload:[:]);emit("library.changed")}catch{emit("app.error",["message":error.localizedDescription])}}}
+    func syncCatalog(payload:[String:Any])async throws->[String:Any] {
+        if let flight=catalogSyncFlight{return try await flight.task.value}
+        let id=UUID();lastSyncAttempt=Date()
+        let task=Task{@MainActor in
+            defer{if self.catalogSyncFlight?.id==id{self.catalogSyncFlight=nil}}
+            return try await self.runJob("library.sync",payload:payload){notify in try await self.library.handle(command:"library.sync",payload:payload,progress:notify)}
+        }
+        catalogSyncFlight=(id,task)
+        return try await task.value
+    }
+    @objc func syncNow(){
+        guard catalogSyncFlight==nil else{return}
+        lastSyncAttempt=Date()
+        Task{
+            guard catalogSyncFlight==nil else{return}
+            do{_=try await dispatch("library.sync",payload:[:]);emit("library.changed")}catch{emit("app.error",["message":error.localizedDescription])}
+        }
+    }
     @objc func openSettings(){showSettingsWindow()}
     @objc func toggleSidebar(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"sidebar"])}
     @objc func togglePDF(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"pdf"])}
