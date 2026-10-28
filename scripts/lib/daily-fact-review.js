@@ -289,9 +289,33 @@ function withReadOnlyReaderCompletion(readerBound, paper, callback) {
     }
     const restoringSaved = stage.restoredReaderConstraints !== undefined;
     if (restoringSaved && !parent) fail('恢复型Reader完成核验缺少原父包');
+    let parentStage = restoringSaved ? recovered.savedParentStage || 'fullStageReanalysis' : null;
+    // Older first-child stages used the raw child text or the ordinary union.
+    // A later monotonic Reader correction also carried its authenticated core
+    // parent's guidance. Rebuild only that one existing normal rendering; a
+    // copied stage field or caller option cannot supply another candidate.
+    if (!restoringSaved && parent && recovered.savedParentStage === 'coreSummaryRepair'
+        && saved.coreOnlyFeedback(parent.feedback) && saved.readerOnlyFeedback(readerBound.feedback)) {
+        const ordinary = renderReaderFactReviewText(readerBound.feedback, parent.feedback, false, null);
+        const originalSha = stage.reviewFeedbackSha256;
+        if (![sha(readerBound.feedback.readerFeedback.trim()), sha(ordinary.trim())].includes(originalSha)) {
+            const coreProof = paper.analysisManifest.stages.coreSummaryRepair?.factReview;
+            if (!coreProof || daily.stableHash(validateProof(coreProof)) !== daily.stableHash(parent.proof))
+                fail('Reader完成核验的核心指导缺少真实已完成父包');
+            const withCore = renderReaderFactReviewText(readerBound.feedback, parent.feedback, false, 'coreSummaryRepair');
+            if (withCore === ordinary || withCore.length > 4000 || sha(withCore.trim()) !== originalSha)
+                fail('Reader完成核验的核心父指导不是唯一原正常完整渲染');
+            parentStage = 'coreSummaryRepair';
+        }
+    }
     return scope.run(parent, () => readerFactReviewScope(readerBound, paper, callback,
-        restoringSaved, restoringSaved ? recovered.savedParentStage || 'fullStageReanalysis' : null,
+        restoringSaved, parentStage,
         READ_ONLY_READER_COMPLETION));
+}
+function renderReaderFactReviewText(reader, previous, restoringSaved, parentStage) {
+    const guidance = [...new Set([reader.readerFeedback, restoringSaved ? previous?.readerFeedback : '', parentStage === 'coreSummaryRepair' ? previous?.coreFeedback : '', previous?.primaryFeedback || ''].filter(Boolean))].join('\n原主文事实约束仍适用，但本次只修Reader：\n');
+    const quotes = [...new Set([...reader.sourceQuotes, ...(previous?.sourceQuotes || [])])];
+    return `${guidance}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${quotes.join('\n')}`;
 }
 function readerFactReviewScope(readerBound, paper, callback, restoringSaved, parentStage = null, readOnly = null) {
     if (!accepted.has(readerBound)) fail('Reader独立反馈尚未在锁内核验');
@@ -337,9 +361,7 @@ function readerFactReviewScope(readerBound, paper, callback, restoringSaved, par
             fail('新Reader反馈遗漏旧Reader事实约束');
         parentStage = recovered.savedParentStage || 'fullStageReanalysis';
     }
-    const guidance = [...new Set([reader.readerFeedback, restoringSaved ? previous?.feedback.readerFeedback : '', parentStage === 'coreSummaryRepair' ? previous?.feedback.coreFeedback : '', previous?.feedback.primaryFeedback || ''].filter(Boolean))].join('\n原主文事实约束仍适用，但本次只修Reader：\n');
-    const quotes = [...new Set([...reader.sourceQuotes, ...(previous?.feedback.sourceQuotes || [])])];
-    const readerText = `${guidance}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${quotes.join('\n')}`;
+    const readerText = renderReaderFactReviewText(reader, previous?.feedback, restoringSaved, parentStage);
     const maximumRenderedChars = restoringSaved ? 8000 : 4000;
     if (readerText.length > maximumRenderedChars) fail(`Reader双反馈与来源引文合计超过${maximumRenderedChars}字符（实际${readerText.length}字符）`);
     return require('./reader-fact-table-claim-location').withVerified(paper, context.plan, () => scope.run(Object.freeze({ ...(previous || { feedback: reader, proof: null }), readerBound: freshBound, readerOnly: true, readerText,
