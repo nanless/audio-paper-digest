@@ -55,6 +55,18 @@ function main() {
             recordedAt: new Date().toISOString()
         };
         if (!dryRun) {
+            // 旧失败候选的次数属于旧窗口：重做前按既有 API 退休它，新稿从零计数，
+            // 旧候选、旧次数与旧费用原字节保留。
+            const repair = require('./lib/reader-repair');
+            let retired = false;
+            for (const name of fs.readdirSync(plan.readerAttemptsDir).filter(item => /^[a-f0-9]{64}\.json$/.test(item))) {
+                const candidateFile = path.join(plan.readerAttemptsDir, name);
+                let envelope;
+                try { envelope = JSON.parse(fs.readFileSync(candidateFile, 'utf8')); } catch (_) { continue; }
+                if (normalizedId(envelope.identity?.paperId) !== id) continue;
+                retired = repair.retireFailedCandidate(plan.readerAttemptsDir, envelope.identity) || retired;
+            }
+            if (retired) history.retiredFailedCandidate = true;
             paper.readerRevisionHistory = history;
             const manifest = paper.analysisManifest;
             if (manifest?.stages) { delete manifest.stages.apiReaderArticle; delete manifest.stages.imageSupplement; }
