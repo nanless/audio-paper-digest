@@ -123,7 +123,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     }
     func buildWindow() {
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1440,height:900),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.minSize=NSSize(width:1080,height:700);window.title="论文速递";window.titleVisibility = .hidden
+        window.minSize=NSSize(width:1080,height:700);window.title="论文速递工作台";window.titleVisibility = .hidden
         window.setFrameAutosaveName("PaperDigestMain");window.center();window.delegate=self
         let configuration=WKWebViewConfiguration();scheme=BundleScheme(root:Bundle.main.resourceURL!.appendingPathComponent("Web"))
         configuration.setURLSchemeHandler(scheme,forURLScheme:"paperapp")
@@ -143,7 +143,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         let menu=NSMenu();NSApp.mainMenu=menu
         func group(_ title:String)->NSMenu{let item=NSMenuItem();menu.addItem(item);let child=NSMenu(title:title);item.submenu=child;return child}
         func action(_ menu:NSMenu,_ title:String,_ selector:Selector,_ key:String="",_ modifiers:NSEvent.ModifierFlags = .command){let item=NSMenuItem(title:title,action:selector,keyEquivalent:key);item.target=self;item.keyEquivalentModifierMask=modifiers;menu.addItem(item)}
-        let app=group("论文速递");action(app,"关于论文速递",#selector(about));app.addItem(.separator());action(app,"设置…",#selector(openSettings),",");app.addItem(.separator());action(app,"隐藏论文速递",#selector(hideApp),"h");app.addItem(.separator());action(app,"退出论文速递",#selector(quit),"q")
+        let app=group("论文速递工作台");action(app,"关于论文速递工作台",#selector(about));app.addItem(.separator());action(app,"设置…",#selector(openSettings),",");app.addItem(.separator());action(app,"隐藏论文速递工作台",#selector(hideApp),"h");app.addItem(.separator());action(app,"退出论文速递工作台",#selector(quit),"q")
         let file=group("文件");action(file,"打开本地 PDF…",#selector(openLocal),"o");action(file,"同步已发布论文",#selector(syncNow),"r",[.command,.shift]);file.addItem(.separator());action(file,"导出当前研究…",#selector(exportResearch),"e");action(file,"备份个人资料…",#selector(backup));action(file,"恢复个人资料…",#selector(restore));file.addItem(.separator());action(file,"打印原文…",#selector(printPDF),"p");action(file,"关闭窗口",#selector(closeWindow),"w")
         let edit=group("编辑")
         for (title,selector,key) in [("撤销",Selector(("undo:")),"z"),("重做",Selector(("redo:")),"Z"),("剪切",#selector(NSText.cut(_:)),"x"),("复制",#selector(NSText.copy(_:)),"c"),("粘贴",#selector(NSText.paste(_:)),"v"),("全选",#selector(NSText.selectAll(_:)),"a")] {edit.addItem(withTitle:title,action:selector,keyEquivalent:key)}
@@ -508,7 +508,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func hideApp(){NSApp.hide(nil)}
     @objc func quit(){NSApp.terminate(nil)}
     @objc func closeWindow(){NSApp.keyWindow?.performClose(nil)}
-    @objc func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"论文速递",.version:"1.0.0",.credits:AboutLicenses.credits()])}
+    @objc func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"论文速递工作台",.version:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "1.0.1",.credits:AboutLicenses.credits()])}
     @objc func helpPage(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"help"])}
     @objc func revealData(){NSWorkspace.shared.activateFileViewerSelecting([directory])}
     @objc func openLocal(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try importLocalPDF()}catch{showError(error)}}}

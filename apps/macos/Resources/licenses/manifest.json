@@ -3,8 +3,8 @@
   "components": [
     {
       "id": "paper-digest",
-      "title": "论文速递",
-      "version": "1.0.0",
+      "title": "论文速递工作台",
+      "version": "1.0.1",
       "sourceURL": "https://github.com/nanless/audio-paper-digest",
       "path": "PaperDigest-MIT.txt",
       "bytes": 1056,

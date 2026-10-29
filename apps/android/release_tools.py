@@ -4,6 +4,7 @@ import argparse, contextlib, datetime, getpass, hashlib, importlib.util, json, o
 if os.environ.get('CODEX_SANDBOX'): raise SystemExit('normal_environment_required')
 P=pathlib.Path
 APP='com.nanless.paperdigest'
+LABEL='论文速递工作台'
 ICON_SHA='18b7f280a530e6a881bc7017a1f78d6ba2c1a65741dea6a04116782433e3fbfb'
 # Exact original and independently reviewed lossless AAPT2 encoding; unknown encodings stay closed.
 ICON_PACKAGED_SHAS={ICON_SHA,'60456a5becd90786a1aac02afdeb5fa1b2f82a4aab7bdb265a13bf80efb6d4be'}
@@ -62,14 +63,22 @@ class SDK:
  def identities(self):
   return {'buildTools':'36.0.0','aapt2':self.call('aapt2','version').strip(),'apksigner':self.call('apksigner','version').strip(),'tools':{n:file_sha(p) for n,p in [('apksigner',self.bin/'apksigner'),('zipalign',self.bin/'zipalign'),('aapt2',self.bin/'aapt2'),('apkanalyzer',self.analyzer)]}}
 
+def workbench_version(version,code):return not (version=='1.0.0' and type(code) is int and code in (1,2,3))
+
 def manifest_facts(text,version,code):
- root=ET.fromstring(text);app=root.find('application');sdk=root.find('uses-sdk')
+ try:root=ET.fromstring(text)
+ except Exception:raise ReleaseError('manifest_xml_invalid') from None
+ app=root.find('application');sdk=root.find('uses-sdk')
  require(app is not None and sdk is not None,'manifest_structure')
  require(root.get('package')==APP and root.get(ANDROID+'versionName')==version and root.get(ANDROID+'versionCode')==str(code),'apk_identity')
  require(sdk.get(ANDROID+'minSdkVersion')=='28' and sdk.get(ANDROID+'targetSdkVersion')=='37','apk_sdk')
  require(app.get(ANDROID+'debuggable','false')=='false' and app.get(ANDROID+'testOnly','false')=='false','debug_or_test_apk')
  require(app.get(ANDROID+'allowBackup')=='false' and app.get(ANDROID+'usesCleartextTraffic')=='false','application_security')
  require(app.get(ANDROID+'name')==APP+'.PaperDigestApplication','application_class')
+ # Preserve historical 1.0.0 receipts/fixtures; every new patch must carry the
+ # literal name in the decoded APK, not an unresolved/localized resource ref.
+ workbench=workbench_version(version,code)
+ if workbench:require(app.get(ANDROID+'label')==LABEL,'application_label')
  permission_nodes=[e for e in root if e.tag.startswith('uses-permission')];require(all(e.tag in {'uses-permission','uses-permission-sdk-23','uses-permission-sdk-m'} for e in permission_nodes),'unknown_permission_declaration')
  permissions={x.get(ANDROID+'name') for x in permission_nodes};require(permissions==PERMISSIONS and len(permission_nodes)==len(permissions),'permission_set_changed')
  facts=[]
@@ -78,15 +87,18 @@ def manifest_facts(text,version,code):
   if e.tag not in COMPONENTS:continue
   n=e.get(ANDROID+'name');require(n in COMPONENTS[e.tag],'unexpected_component')
   if n==APP+'.MainActivity':
+   if workbench:require(e.get(ANDROID+'label',app.get(ANDROID+'label'))==LABEL,'launcher_label')
    require(e.get(ANDROID+'icon',app.get(ANDROID+'icon'))==app.get(ANDROID+'icon'),'launcher_icon_override')
    require(e.get(ANDROID+'enabled','true')=='true' and app.get(ANDROID+'enabled','true')=='true','launcher_disabled')
-   require(any(any(x.get(ANDROID+'name')=='android.intent.action.MAIN' for x in f.findall('action')) and any(x.get(ANDROID+'name')=='android.intent.category.LAUNCHER' for x in f.findall('category')) for f in e.findall('intent-filter')),'launcher_intent_missing')
+   launchers=[f for f in e.findall('intent-filter') if any(x.get(ANDROID+'name')=='android.intent.action.MAIN' for x in f.findall('action')) and any(x.get(ANDROID+'name')=='android.intent.category.LAUNCHER' for x in f.findall('category'))]
+   require(launchers,'launcher_intent_missing')
+   if workbench:require(all(f.get(ANDROID+'label',e.get(ANDROID+'label',app.get(ANDROID+'label')))==LABEL for f in launchers),'launcher_label')
   exported=e.get(ANDROID+'exported','false');permission=e.get(ANDROID+'permission')
   if exported=='true':require(n==APP+'.MainActivity' or permission in {'android.permission.DUMP','android.permission.BIND_JOB_SERVICE'},'unprotected_exported_component')
   if e.tag=='provider':require(exported=='false','exported_provider')
   facts.append({'kind':e.tag,'name':n,'exported':exported=='true','permission':permission})
  require(any(x['name']==APP+'.MainActivity' and x['exported'] for x in facts),'launcher_missing')
- return {'applicationId':APP,'versionName':version,'versionCode':code,'minSdk':28,'targetSdk':37,'debuggable':False,'testOnly':False,'permissions':sorted(permissions),'components':facts,'iconRef':app.get(ANDROID+'icon'),'roundIconRef':app.get(ANDROID+'roundIcon')}
+ return {'applicationId':APP,'versionName':version,'versionCode':code,'minSdk':28,'targetSdk':37,'debuggable':False,'testOnly':False,'permissions':sorted(permissions),'components':facts,'iconRef':app.get(ANDROID+'icon'),'roundIconRef':app.get(ANDROID+'roundIcon'),**({'applicationLabel':app.get(ANDROID+'label'),'launcherLabel':LABEL,'securityResourceRefs':{key:app.get(ANDROID+key) for key in SECURITY_RESOURCES}} if workbench else {})}
 
 def safe_members(z,require_apk=True):
  rows=z.infolist();seen=set();total=0
@@ -137,6 +149,49 @@ def compiled_icon(apk,sdk,facts):
  require(adaptive.tag=='adaptive-icon' and adaptive.find('background').get(ANDROID+'drawable')==refs['color/icon_background'] and adaptive.find('foreground').get(ANDROID+'drawable')==refs['drawable/icon_foreground'],'adaptive_icon_reference')
  require(foreground.tag=='inset' and foreground.get(ANDROID+'drawable')==refs['drawable/pd_icon'] and abs(float(foreground.get(ANDROID+'inset','').rstrip('%'))-16)<0.001,'adaptive_icon_foreground')
  return {'pngPath':paths['drawable/pd_icon'],'adaptiveReferenceVerified':True,'insetPercent':16,'background':'#ff24282d'}
+
+# Closed policy for the actual compiled resources, independent of source XML.
+SECURITY_RESOURCES={'networkSecurityConfig':'xml/network_security_config','fullBackupContent':'xml/backup_rules','dataExtractionRules':'xml/data_extraction_rules'}
+BACKUP_DOMAINS=('root','file','database','sharedpref','external','device_root','device_file','device_database','device_sharedpref')
+SECURITY_EXCLUDES=''.join('<exclude domain="'+domain+'" path="."/>' for domain in BACKUP_DOMAINS)
+SECURITY_XML={
+ 'networkSecurityConfig':'<network-security-config><base-config cleartextTrafficPermitted="false"/><domain-config cleartextTrafficPermitted="true">'+''.join('<domain includeSubdomains="false">'+host+'</domain>' for host in ('localhost','127.0.0.1','::1'))+'</domain-config></network-security-config>',
+ 'fullBackupContent':'<full-backup-content>'+SECURITY_EXCLUDES+'</full-backup-content>',
+ 'dataExtractionRules':'<data-extraction-rules><cloud-backup disableIfNoEncryptionCapabilities="true">'+SECURITY_EXCLUDES+'</cloud-backup><device-transfer>'+SECURITY_EXCLUDES+'</device-transfer></data-extraction-rules>'}
+
+def security_xml_shape(text):
+ try:
+  require(isinstance(text,str) and len(text.encode('utf-8'))<=128*1024 and not re.search(r'<!\s*(?:DOCTYPE|ENTITY)',text,re.I),'compiled_security_xml_invalid')
+  root=ET.fromstring(text)
+  def shape(node):
+   require(not (node.tail or '').strip(),'compiled_security_xml_invalid')
+   return (node.tag,tuple(sorted(node.attrib.items())),(node.text or '').strip(),tuple(sorted(shape(child) for child in node)))
+  return shape(root)
+ except ReleaseError:raise
+ except Exception:raise ReleaseError('compiled_security_xml_invalid') from None
+
+def compiled_security_resources(apk,sdk,facts):
+ def tool(*args):
+  try:return sdk.call(*args)
+  except Exception:raise ReleaseError('compiled_security_tool_failed') from None
+ table=tool('aapt2','dump','resources',apk)
+ require(isinstance(table,str) and len(table)<=32*1024*1024,'compiled_security_resource_table')
+ # This is the AAPT2 dump schema used by compiled_icon. Require a single
+ # default-config XML file value, not an alias, qualifier, or extra value.
+ entries=list(re.finditer(r'^\s*resource (0x[0-9a-f]+) ([^\s]+)\n(.*?)(?=^\s*(?:resource |type |Package)|\Z)',table,re.M|re.S))
+ refs=facts.get('securityResourceRefs',{});bindings={};paths=set()
+ for key,name in SECURITY_RESOURCES.items():
+  matches=[entry for entry in entries if entry[2]==name]
+  require(len(matches)==1,'compiled_security_resource_missing_or_duplicate');entry=matches[0]
+  require(sum(other[1]==entry[1] for other in entries)==1 and refs.get(key)=='@ref/'+entry[1],'compiled_security_reference')
+  value=re.fullmatch(r'\s*\(\) \(file\) (res/[A-Za-z0-9_./-]+\.xml) type=XML\s*',entry[3])
+  require(value is not None,'compiled_security_config_override')
+  member=value[1]
+  require(not any(part in ('','.', '..') for part in member.split('/')) and member not in paths,'compiled_security_resource_path');paths.add(member)
+  decoded=tool('apkanalyzer','resources','xml','--file','/'+member,apk)
+  require(security_xml_shape(decoded)==security_xml_shape(SECURITY_XML[key]),'compiled_security_policy')
+  bindings[key]={'resourceName':name,'reference':refs[key],'apkPath':member,'policyVerified':True}
+ return {'contract':'android-compiled-security-resources-v1','resources':bindings}
 
 PDFBOX_ASSET_SOURCE={'group':'com.tom-roush','module':'pdfbox-android','version':'2.0.27.0','classifier':None,'type':'aar','extension':'aar','fileName':'pdfbox-android-2.0.27.0.aar','bytes':3254019,'sha256':'30277f879cfd571db2a137582c95516a0d4ea6778e945519bc58ca93d57d88c7'}
 RELEASE_PROFILE_OUTPUTS={'dexopt/baseline.prof':'binary_art_profile/release/compileReleaseArtProfile/baseline.prof','dexopt/baseline.profm':'binary_art_profile_metadata/release/compileReleaseArtProfile/baseline.profm'}
@@ -192,6 +247,7 @@ console.log(JSON.stringify({runtime,resources,packagedSources,licenseRecords:lic
 def inspect(apk,repo,sdk,version,code,materials,certificate=None):
  require(file_sha(regular(repo/'apps/android/app/src/main/res/drawable-nodpi/pd_icon.png'))==ICON_SHA,'c_icon_source_changed')
  apk=regular(apk);before=file_sha(apk);facts=manifest_facts(sdk.call('apkanalyzer','manifest','print',apk),version,code);sdk.call('zipalign','-c','-P','16','4',apk)
+ security_binding=compiled_security_resources(apk,sdk,facts) if workbench_version(version,code) else None
  icon_binding=compiled_icon(apk,sdk,facts)
  with zipfile.ZipFile(apk) as z,tempfile.TemporaryDirectory(prefix='paperdigest-apk-audit-') as tmp:
   rows=safe_members(z);assets=P(tmp).resolve()/'assets';assets.mkdir();natives=[];icon=[]
@@ -219,7 +275,7 @@ def inspect(apk,repo,sdk,version,code,materials,certificate=None):
  if certificate:
   signature=signature_facts(apk,sdk,certificate)
  require(file_sha(apk)==before,'audit_changed_apk')
- return {'sha256':before,'bytes':apk.stat().st_size,'manifest':facts,'assets':asset_info,'icon':{**icon[0],**icon_binding,'originalSourceSHA256':ICON_SHA},'nativeLibraries':natives,'signature':signature,'formalDeviceTested':False,'publicationEligible':False}
+ return {'sha256':before,'bytes':apk.stat().st_size,'manifest':facts,'assets':asset_info,'icon':{**icon[0],**icon_binding,'originalSourceSHA256':ICON_SHA},'nativeLibraries':natives,'signature':signature,'formalDeviceTested':False,'publicationEligible':False,**({'compiledSecurityResources':security_binding} if security_binding is not None else {})}
 
 def prepare(args):
  repo=args.repo.resolve();require(not args.output.exists(),'output_exists');require(re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}(?:-[A-Za-z0-9.-]+)?',args.version),'version_format')

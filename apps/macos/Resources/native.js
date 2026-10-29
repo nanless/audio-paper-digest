@@ -22,7 +22,7 @@ function isCurrent(v){return v.id===state.paper?.id&&v.generation===opening;}
 async function pdfAction(command,payload={}){const context=viewIdentity();try{const r=await call(command,payload);if(!isCurrent(context))return false;if(r.paperID&&r.paperID!==context.id)return false;state.pdfStatus=r;updatePDF();return r;}catch(e){if(isCurrent(context))error(e);return false;}}
 async function call(command,payload={}){return await window.webkit.messageHandlers.desktop.postMessage({command,payload});}
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,5000);}
-function error(e){toast(e?.message||String(e));console.error(e?.message||String(e));}
+function error(e){toast(e?.message||String(e));console.error('原生操作未完成；请在应用中查看安全诊断。');}
 function icons(){window.lucide?.createIcons();}
 function emit(name,detail){window.dispatchEvent(new CustomEvent(name,{detail}));}
 const app={call,state,toast,error,emit,openPaper,setView,exportArchiveMaterials,openOffline};

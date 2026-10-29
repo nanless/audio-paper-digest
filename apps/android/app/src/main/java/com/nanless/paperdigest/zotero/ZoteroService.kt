@@ -627,7 +627,13 @@ class ZoteroService(
     private suspend fun apiRequest(method:String,path:String,body:RequestBody?,headers:Map<String,String>):Request {
         beforeApi();require(path.startsWith("/")&&!path.startsWith("//"));val secret=try{secrets.load("zotero.primary")}catch(e:Exception){if(e is CancellationException)throw e;throw AppFailure("credentialsUnavailable","无法读取本机 Zotero key，请在设置中重新保存")}
         currentCoroutineContext().ensureActive();requireCredentialCurrent();require(!secret.isNullOrBlank()){ "请先保存 Zotero 专用 API key" }
-        return Request.Builder().url("https://api.zotero.org$path").header("Zotero-API-Version","3").header("Zotero-API-Key",secret).apply{headers.forEach{(k,v)->header(k,v)}}.method(method,body).build()
+        return try {
+            Request.Builder().url("https://api.zotero.org$path").header("Zotero-API-Version","3").header("Zotero-API-Key",secret).apply{headers.forEach{(k,v)->header(k,v)}}.method(method,body).build()
+        } catch (_:IllegalArgumentException) {
+            // OkHttp may include a rejected custom header's value in its exception.
+            // Never retain that message/cause for Root UI or durable archive journals.
+            throw AppFailure("credentialsUnavailable","Zotero 请求头无效，请在设置中重新保存 API key")
+        }
     }
     companion object {
         fun validKey(key:String)=key.matches(Regex("[23456789ABCDEFGHIJKLMNPQRSTUVWXYZ]{8}"))

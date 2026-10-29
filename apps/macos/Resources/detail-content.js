@@ -27,7 +27,7 @@ function mount(container,{call,close,showClose=true},kind){
  let active=true,busy=false,closing=false,pending=Promise.resolve();
  const current=()=>active&&mounted.get(container)===controller&&view.isConnected&&view.parentNode===container;
  const node=(tag,text,className)=>{const element=doc.createElement(tag);if(text!==undefined)element.textContent=text;if(className)element.className=className;return element;};
- const heading=node('h1',kind==='help'?'论文速递 · 研究工作台':'导出当前研究');view.append(heading);
+ const heading=node('h1',kind==='help'?'论文速递工作台 · 使用说明':'导出当前研究');view.append(heading);
  const status=node('p','','settings-help');status.dataset.detailStatus='';status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.setAttribute('aria-atomic','true');
  const footer=node('footer',undefined,'detail-actions'),done=node('button','完成','secondary-button');done.type='button';done.dataset.detailClose='';footer.append(done);
  const controls=()=>{view.setAttribute('aria-busy',String(busy||closing));view.querySelectorAll('button').forEach(button=>button.disabled=busy||closing||!active);};

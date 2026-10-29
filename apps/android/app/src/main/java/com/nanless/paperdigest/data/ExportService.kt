@@ -49,8 +49,8 @@ class ExportService(private val context: Context, private val store: PersonalSto
                 val completed=if(producer?.hasCompletionMaterials()==true)producer.verifiedCapture(check)else{
                     require(!java.nio.file.Files.exists(file.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)){"原准备材料未有完成回执，保留原件且未重新采集"}
                     phase("capturing");val result=BackupCodec.capture(store.directory,file,check)
-                    if(producer!=null)producer.recordVerifiedCapture(result,"application/octet-stream","论文速递-${now().replace(':','-')}.paperdigest",check)
-                    else ExportProducerReceipt.CompletedCapture(result.file,"application/octet-stream","论文速递-${now().replace(':','-')}.paperdigest",result.encodedBytes,result.sha256,result.fileCount)
+                    if(producer!=null)producer.recordVerifiedCapture(result,"application/octet-stream","论文速递工作台-${now().replace(':','-')}.paperdigest",check)
+                    else ExportProducerReceipt.CompletedCapture(result.file,"application/octet-stream","论文速递工作台-${now().replace(':','-')}.paperdigest",result.encodedBytes,result.sha256,result.fileCount)
                 }
                 check();phase("encoding");return registerCompleted(completed,documentID,check)
             }finally{if(producer==null)file.delete()}
@@ -61,7 +61,7 @@ class ExportService(private val context: Context, private val store: PersonalSto
             val s = store.snapshot()
             return outBytes(JSONObject().put("contract", "paperdigest-android-diagnostics-v1").put("generatedAt", now()).put("platform", "android")
                 .put("sdk", android.os.Build.VERSION.SDK_INT).put("sessionCount", s.getJSONArray("sessions").length()).put("jobCount", s.getJSONArray("jobs").length())
-                .put("noteCount", s.getJSONObject("notes").length()).toString(2).toByteArray(), "application/json", "论文速递-诊断.json")
+                .put("noteCount", s.getJSONObject("notes").length()).toString(2).toByteArray(), "application/json", "论文速递工作台-诊断.json")
         }
         if (sessionID != null && format in listOf("research-json", "research-md", "research-html")) {
             val original = historicalResearch(sessionID)
@@ -172,16 +172,16 @@ class ExportService(private val context: Context, private val store: PersonalSto
         }
         val publishedMetadata = article?.json()?.also { it.remove("html"); it.remove("markdown"); it.remove("plainText") }
         val originalRecords = publishedRecords(paper)
-        attachment("source-metadata", "论文速递｜来源与引用元数据", "application/json", JSONObject().put("contract", "paperdigest-source-archive-v1").put("paper", paper.json()).put("citation", article?.citation ?: paper.citation).put("publishedRecords", originalRecords).put("pdfReceipt", pdfReceipt?.copy() ?: JSONObject.NULL).put("publishedMetadata", publishedMetadata ?: JSONObject.NULL).put("articleRevisionSHA256", article?.revisionSHA256 ?: JSONObject.NULL).put("notices", JSONArray(article?.notices ?: emptyList<String>())).toString(2).toByteArray())
+        attachment("source-metadata", "论文速递工作台｜来源与引用元数据", "application/json", JSONObject().put("contract", "paperdigest-source-archive-v1").put("paper", paper.json()).put("citation", article?.citation ?: paper.citation).put("publishedRecords", originalRecords).put("pdfReceipt", pdfReceipt?.copy() ?: JSONObject.NULL).put("publishedMetadata", publishedMetadata ?: JSONObject.NULL).put("articleRevisionSHA256", article?.revisionSHA256 ?: JSONObject.NULL).put("notices", JSONArray(article?.notices ?: emptyList<String>())).toString(2).toByteArray())
         if (options.optBoolean("includePDF", true)) {
             require(pdf != null && pdf.isFile) { "完整存档需要实际 PDF 原文，请先下载或关闭此项" }
             materials += ZoteroMaterial("pdf", paper.title + ".pdf", "application/pdf", file = pdf, sha256 = BackupCodec.hash(pdf))
         }
         if (options.optBoolean("includeGuide", true)) {
             require(article != null && article.paperID == paper.id && article.completeOffline) { "导读尚未完整保存全部科学图，请先完成离线保存或关闭此项" }
-            attachment("guide", "论文速递｜图文导读", "text/html", htmlDocument(paper.titleZh, articleBody(article), article.notices).toByteArray())
+            attachment("guide", "论文速递工作台｜图文导读", "text/html", htmlDocument(paper.titleZh, articleBody(article), article.notices).toByteArray())
         }
-        if (includeAnalysis) attachment("analysis", "论文速递｜研究、原始输入与用量", "application/json", requireNotNull(research).toString(2).toByteArray())
+        if (includeAnalysis) attachment("analysis", "论文速递工作台｜研究、原始输入与用量", "application/json", requireNotNull(research).toString(2).toByteArray())
         if (includeNote) {
             val note = store.note(paper.id)
             val annotations = store.annotations(paper.id)
@@ -189,7 +189,7 @@ class ExportService(private val context: Context, private val store: PersonalSto
             val annotationLines = annotations.groupBy { (it.optString("groupID").takeIf { group -> group.isNotBlank() } ?: it.optString("id")) to it.optString("pdfSHA") }.values.joinToString("\n") { group -> group.map { "${it.optString("text")}\n${it.optString("comment", it.optString("note"))}" }.distinct().joinToString("\n") }
             val originals = JSONObject().put("contract", "paperdigest-notes-archive-v1").put("paperID", paper.id).put("note", note).put("annotations", JSONArray(annotations))
             val html = "<div><h1>${escape(paper.titleZh)}</h1><pre>${escape(text + "\n\n" + annotationLines)}</pre><h2>原笔记与逐项批注记录</h2><pre>${escape(originals.toString(2))}</pre></div>"
-            materials += ZoteroMaterial("note", "论文速递｜笔记与批注", "text/html", noteHTML = html, sha256 = sha256(html.toByteArray()))
+            materials += ZoteroMaterial("note", "论文速递工作台｜笔记与批注", "text/html", noteHTML = html, sha256 = sha256(html.toByteArray()))
         }
         val cited = citationPaper(paper, article)
         val bibliography = JSONObject().put("itemType", if (paper.sourceKind == "arxiv") "preprint" else if (paper.id.startsWith("conference:")) "conferencePaper" else "document").put("title", cited.title)

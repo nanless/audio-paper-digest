@@ -29,7 +29,7 @@ class Packaging(unittest.TestCase):
         if os.environ.get('CODEX_SANDBOX'):raise RuntimeError('请在本机正常开发环境执行测试')
         if platform.system()!='Darwin':raise unittest.SkipTest('真实codesign/ditto/DMG验收需要macOS，不伪造通过')
         cls.base=tempfile.TemporaryDirectory(prefix='paperdigest-release-test-template-');cls.template=pathlib.Path(cls.base.name)
-        repo=cls.template/'repo';repo.mkdir();app=cls.template/'论文速递.app';resources=app/'Contents/Resources'
+        repo=cls.template/'repo';repo.mkdir();app=cls.template/'论文速递工作台.app';resources=app/'Contents/Resources'
         cls.arch=platform.machine()
         cls.fixed={'Seed/assets/fixture.pdf':b'Explicit public fixture PDF bytes.','Seed/assets/fixture.png':b'Explicit public fixture image bytes.','Web/vendor/katex/katex.min.js':b'// Explicit pinned public fixture math library.','Web/vendor/katex/fonts/fixture.woff2':b'Explicit fixture font bytes.','Web/vendor/katex/LICENSE':b'Explicit public fixture MIT license.'}
         sample={'pdf':{'src':'fixture.pdf','sha256':sha(cls.fixed['Seed/assets/fixture.pdf'])},'figures':[{'src':'fixture.png','sha256':sha(cls.fixed['Seed/assets/fixture.png'])}]}
@@ -44,7 +44,7 @@ class Packaging(unittest.TestCase):
         files['apps/macos/build_resources.py']=SCRIPT.with_name('build_resources.py').read_bytes()
         for notice in (SCRIPT.parent/'Resources').rglob('*'):
             if notice.is_file():files['apps/macos/Resources/'+notice.relative_to(SCRIPT.parent/'Resources').as_posix()]=notice.read_bytes()
-        plist={'CFBundleIdentifier':'com.nanless.PaperDigest','CFBundleName':'论文速递','CFBundleExecutable':'PaperDigest','CFBundlePackageType':'APPL','CFBundleShortVersionString':'1.0.0','CFBundleVersion':'1','LSMinimumSystemVersion':'15.0'}
+        plist={'CFBundleIdentifier':'com.nanless.PaperDigest','CFBundleName':'论文速递工作台','CFBundleDisplayName':'论文速递工作台','CFBundleExecutable':'PaperDigest','CFBundlePackageType':'APPL','CFBundleShortVersionString':'1.0.1','CFBundleVersion':'1','LSMinimumSystemVersion':'15.0'}
         files['apps/macos/Info.plist']=plistlib.dumps(plist)
         for name,raw in files.items():write(repo/name,raw)
         success(['git','init','-q',repo]);success(['git','config','user.name','Isolated Release Fixture'],repo);success(['git','config','user.email','fixture@example.invalid'],repo);success(['git','add','.'],repo);success(['git','commit','-qm','Isolated public fixture'],repo)
@@ -87,7 +87,7 @@ class Packaging(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='paperdigest-release-test-');self.root=pathlib.Path(self.temp.name)
         self.repo=self.root/'repo';shutil.copytree(self.template/'repo',self.repo)
-        self.app=self.root/'论文速递.app';success(['/usr/bin/ditto',self.template/'论文速递.app',self.app])
+        self.app=self.root/'论文速递工作台.app';success(['/usr/bin/ditto',self.template/'论文速递工作台.app',self.app])
         self.record=self.root/'record.json';shutil.copy2(self.template/'record.json',self.record);self.output=self.root/'out'
         self.cache=self.root/'cache';shutil.copytree(self.template/'cache',self.cache)
 
@@ -114,6 +114,19 @@ class Packaging(unittest.TestCase):
 
     def test_01_real_signed_fixture_inspects_without_launching(self):
         r=self.call();self.assertEqual(r['architecture'],self.arch);self.assertFalse(r['publicationEligible']);self.assertEqual(r['sourceCommit'],self.commit)
+
+    def test_actual_bundle_branding_gate(self):
+        path=self.app/'Contents/Info.plist';original=plistlib.loads(path.read_bytes())
+        for field in ['CFBundleName','CFBundleDisplayName']:
+            for old in [None,'论文速递']:
+                value=copy.deepcopy(original)
+                if old is None:value.pop(field)
+                else:value[field]=old
+                path.write_bytes(plistlib.dumps(value));self.sign(self.app);self.make_record(self.app,self.record)
+                self.assertIn('显示名',self.call(expected=1))
+        path.write_bytes(plistlib.dumps(original));self.sign(self.app);self.make_record(self.app,self.record)
+        old=self.app.with_name('论文速递.app');self.app.rename(old);self.app=old
+        self.assertIn('文件名',self.call(expected=1))
 
     def test_02_zip_real_decode_signature_and_privacy(self):
         before=sha((self.app/'Contents/MacOS/PaperDigest').read_bytes());r=self.prepare();self.assertFalse(r['publicationEligible']);self.assertTrue(self.call('verify')['verified'])
@@ -221,7 +234,7 @@ class Packaging(unittest.TestCase):
 
     def test_28_complete_fixture_only_produces_nonexecuted_verify_tag_draft_plan(self):
         self.make_formal();self.prepare();status=self.root/'status.md';status.write_text(self.status('通过'));cloud=self.root/'cloud.md';cloud.write_text(self.cloud_status('通过'));r=self.call('publish-plan','--acceptance-status',status,'--cloud-acceptance',cloud,'--prerelease')
-        self.assertFalse(r['executed']);self.assertFalse(r['automaticTagCreation']);self.assertFalse(r['publicPublication']);self.assertIn('--verify-tag',r['argv']);self.assertIn('--draft',r['argv']);self.assertIn('--prerelease',r['argv']);self.assertEqual(r['argv'][3],'v1.0.0')
+        self.assertFalse(r['executed']);self.assertFalse(r['automaticTagCreation']);self.assertFalse(r['publicPublication']);self.assertIn('--verify-tag',r['argv']);self.assertIn('--draft',r['argv']);self.assertIn('--prerelease',r['argv']);self.assertEqual(r['argv'][3],'v1.0.1')
         self.assertEqual(success(['git','tag'],self.repo),b'')
 
     def test_29_duplicate_or_missing_acceptance_ids_refused(self):

@@ -20,7 +20,7 @@ class CloudTransferWorker(context: Context, parameters: WorkerParameters): Corou
     private fun notification(): ForegroundInfo {
         (applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel("cloud", "研究资料备份", NotificationManager.IMPORTANCE_LOW))
         val notification = NotificationCompat.Builder(applicationContext, "cloud").setSmallIcon(android.R.drawable.ic_menu_upload)
-            .setContentTitle("论文速递正在备份研究资料").setContentText("按原快照上传并逐块回读；停止后可从检查点续传")
+            .setContentTitle("论文速递工作台正在备份研究资料").setContentText("按原快照上传并逐块回读；停止后可从检查点续传")
             .setOngoing(true).addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)).build()
         return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(4318, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else ForegroundInfo(4318, notification)
     }

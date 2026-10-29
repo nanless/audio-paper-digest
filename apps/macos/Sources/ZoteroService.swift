@@ -178,7 +178,7 @@ actor ZoteroService {
     }
 
     /// Call only after the user's explicit Connect action. Zotero itself displays the approval dialog.
-    func authorize(appName: String = "论文速递") async throws -> Status {
+    func authorize(appName: String = "论文速递工作台") async throws -> Status {
         guard !operationInProgress else { throw ServiceError.invalid("归档进行中，请完成后再变更授权") }
         let current = try await status()
         guard current.writesSupported else { throw ServiceError.unsupported }
@@ -650,7 +650,7 @@ actor ZoteroService {
             key = matches.first?["key"] as? String
             if key == nil {
                 key = try await createObject(["itemType": "attachment", "parentItem": parent, "linkMode": "imported_file",
-                                              "title": material.role == "pdf" ? "原始论文 PDF" : material.role == "guide" ? "论文速递 · 图文导读" : "论文速递 · 原始书目与网站评估",
+                                              "title": material.role == "pdf" ? "原始论文 PDF" : material.role == "guide" ? "论文速递工作台 · 图文导读" : "论文速递工作台 · 原始书目与网站评估",
                                               "contentType": material.contentType, "filename": material.filename,
                                               "note": marker, "tags": [["tag": "论文速递"]]])
                 createdNow=true
@@ -732,7 +732,7 @@ actor ZoteroService {
         // Zotero derives a note title from its first visible line. This
         // create-only wrapper stays outside the original, hash-bound HTML.
         let label = role == "analysis" ? "个人解析" : "研究笔记"
-        let heading = ("论文速递 · " + label + " · " + journal.request.bibliography.title)
+        let heading = ("论文速递工作台 · " + label + " · " + journal.request.bibliography.title)
             .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
             .replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")

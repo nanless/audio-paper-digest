@@ -9,15 +9,15 @@
 | 你想完成什么 | 从这里开始 |
 |---|---|
 | 直接阅读已经发布的论文解读 | [论文速递网站](https://nanless.github.io/audio-paper-digest-blog/)；下载资料见[网页阅读说明](docs/blog-reading-tools.md) |
-| 在 Mac 上阅读、看原始 PDF、记笔记和开展个人研究 | [Mac 应用使用与构建](apps/macos/README.md) |
-| 在 Android 手机上阅读，或使用平板、折叠窗口 | [Android 应用使用与构建](apps/android/README.md) |
+| 在 Mac 上阅读、看原始 PDF、记笔记和开展个人研究 | [论文速递工作台（Mac）](apps/macos/README.md) |
+| 在 Android 手机上阅读，或使用平板、折叠窗口 | [论文速递工作台（Android）](apps/android/README.md) |
 | 维护网站，运行日更、会议或历史更新 | 继续阅读下面的生产任务入口，再按[操作手册](SKILL.md)执行 |
 
-应用读取网站已有的论文、图文导读和汇总/说明页，不会为了打开页面重跑论文分析。只有你主动发起新的个人研究或连接测试时，才使用该应用中配置的模型；真实用量与原回答分别保留。客户端的个人资料、模型配置和费用记录与仓库生产任务分开，不能互借授权或把恢复备份当成新请求许可。
+Mac 与 Android 客户端统一命名为 **论文速递工作台**，网站与内容生产流程仍使用原名称。应用读取网站已有的论文、图文导读和汇总/说明页，不会为了打开页面重跑论文分析。只有你主动发起新的个人研究或连接测试时，才使用该应用中配置的模型；真实用量与原回答分别保留。客户端的个人资料、模型配置和费用记录与仓库生产任务分开，不能互借授权或把恢复备份当成新请求许可。
 
 ![内容生产、两端阅读与个人资料的关系](docs/images/client-data-flow.svg)
 
-图中说明数据如何流动，不代表所有设备或发行条件均已验收。实际范围、原失败与后来补验分别见[Mac 验收状态](docs/mac-app-acceptance-status.md)和[Android 验收记录](docs/android-validation.md)。开发安装包、私有样稿和正式发行包也分别核对。
+图中说明数据如何流动，不代表所有设备或发行条件均已验收。实际范围、原失败与后来补验分别见[Mac 验收状态](docs/mac-app-acceptance-status.md)和[Android 验收记录](docs/android-validation.md)。开发安装包、私有样稿和正式发行包也分别核对。源码、Git 历史、安装包的检查范围及其限制见[机密审计与发布边界](docs/client-security-audit.md)。
 
 <a id="默认行为"></a>
 <a id="架构概览"></a>
@@ -30,7 +30,7 @@
 
 ## 第一次使用：运行生产任务
 
-1. 在 `/Users/francis7999/code/github_repos/audio-paper-digest` 核对目录和角色：`npm run workspace:role -- status`。三条流程都在此运行，角色保持 `daily`；历史入口使用已配置的跨角色开关。
+1. 在 `$HOME/code/github_repos/audio-paper-digest` 展开并核对真实目录和角色：`npm run workspace:role -- status`。三条流程都在此运行，角色保持 `daily`；历史入口使用已配置的跨角色开关。
 2. 按[安装与配置](docs/setup.md)安装依赖、填写项目 `.env` 并检查真实博客仓库。
 3. 主模型及启用的副模型统一使用项目指定的 `muse-spark-1.3-contributor`。Muse 和 arXiv 必须经项目 HTTP CONNECT 代理。
 4. 确认没有其他任务同时生成、审查或推送博客，且目标页面没有人工修改冲突，再选择下面的流程。

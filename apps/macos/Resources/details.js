@@ -60,7 +60,7 @@ async function start(){
  const result=await nativeCall('details.bootstrap');if(!active)return;
  presentationID=result.presentationID;if(typeof presentationID!=='string'||!presentationID)throw new Error('详情窗口身份不可用');
  kind=result.kind||'storage';if(!['storage','help','export','zotero','source-notices'].includes(kind))throw new Error('未知详情内容');
- document.title=result.title+' · 论文速递';$('details-title').textContent='论文速递 · '+result.title;$('detail-dialog').setAttribute('aria-label',result.title);
+ document.title=result.title+' · 论文速递工作台';$('details-title').textContent='论文速递工作台 · '+result.title;$('detail-dialog').setAttribute('aria-label',result.title);
  $('details-refresh').hidden=kind!=='storage';
  document.documentElement.style.colorScheme=result.appearance==='system'?'light dark':result.appearance||'light dark';
  const surface=$('detail-dialog');Object.defineProperty(surface,'open',{get:()=>active});surface.showModal=()=>{};surface.close=close;

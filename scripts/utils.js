@@ -978,7 +978,11 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                             raw
                         });
                     } else {
-                        const error = new Error(`响应无法解析为 JSON 或 SSE（HTTP ${res.statusCode}）：${err.message}; body=${raw.substring(0, 300)}`);
+                        // Public diagnostics must not echo parser excerpts or upstream bodies.
+                        // The complete original remains in non-enumerable llmResponse.raw.
+                        const status = Number.isInteger(res.statusCode) && res.statusCode >= 100 && res.statusCode <= 599
+                            ? `（HTTP ${res.statusCode}）` : '';
+                        const error = new Error(`响应无法解析为 JSON 或 SSE${status}`);
                         error.code = 'LLM_RESPONSE_PARSE_ERROR';
                         finish(reject, responseFailure(error));
                     }
@@ -1874,7 +1878,14 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
                     const statusLine = buffer.slice(0, buffer.indexOf('\r\n'));
                     if (!/^HTTP\/1\.[01]\s+200(?:\s|$)/.test(statusLine)) {
                         socket.destroy();
-                        done(new Error(`代理 CONNECT 连接失败：${statusLine}`));
+                        // A proxy can reflect credentials in its reason phrase. Keep
+                        // only a strictly parsed numeric status in the public error.
+                        const status = /^HTTP\/1\.[01][ \t]+([1-5]\d{2})(?:[ \t]|$)/.exec(statusLine)?.[1];
+                        const error = new Error(`代理 CONNECT 连接失败${status ? `（HTTP ${status}）` : ''}`);
+                        error.code = 'PROXY_CONNECT_REJECTED';
+                        if (status) error.statusCode = Number(status);
+                        Object.defineProperty(error, 'proxyStatusLine', { value: statusLine, enumerable: false });
+                        done(error);
                         return;
                     }
                     const tlsSocket = tls.connect({

@@ -6804,6 +6804,34 @@ def _publish_opencode_session_id():
     return _PUBLISH_OPENCODE_SESSION_ID
 
 
+class _PublishLLMRedirectError(urllib.error.HTTPError):
+    """Redirect denial without retaining a URL, headers or provider body."""
+
+    def __init__(self, code):
+        super().__init__('', code, '模型请求禁止自动重定向', {}, None)
+
+
+class _PublishLLMNoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never forward model credentials or payloads through an HTTP redirect."""
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        # Reject before the default handler parses Location (including malformed
+        # or unsupported targets). Its error paths can retain private URLs/body.
+        if fp is not None:
+            try:
+                fp.close()
+            except Exception:
+                # Response cleanup must not replace the fixed denial with peer text.
+                pass
+        raise _PublishLLMRedirectError(code) from None
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Also fail closed if a caller invokes the transformation hook directly.
+        self.http_error_302(req, fp, code, msg, headers)
+
+
 def _read_publish_http_error(exc):
     cached = getattr(exc, '_paper_digest_error_raw', None)
     if isinstance(cached, bytes):
@@ -7124,10 +7152,13 @@ def call_publish_llm_api(
             if _publish_llm_requires_proxy(endpoint, model):
                 proxy = get_required_fetch_proxy()
                 opener = urllib.request.build_opener(
-                    urllib.request.ProxyHandler({'http': proxy, 'https': proxy})
+                    urllib.request.ProxyHandler({'http': proxy, 'https': proxy}),
+                    _PublishLLMNoRedirectHandler(),
                 )
             else:
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({}), _PublishLLMNoRedirectHandler()
+                )
             with with_llm_usage_context({**(usage_context or {}), 'transportAttempt': attempt + 1}):
                 status, data = _open_publish_json_with_account_pool(
                     api_url=api_url,
@@ -7249,6 +7280,9 @@ def call_publish_llm_api(
                 f'  ⚠️  {context} 调用失败 (尝试 {attempt + 1}/{max_retries}, '
                 f'{time.monotonic() - started_at:.1f}s): HTTP {exc.code}{suffix}'
             )
+            if isinstance(exc, _PublishLLMRedirectError):
+                # An explicit redirect denial is terminal, not a transport retry.
+                break
         except (
             LlmUsagePersistenceError,
             LlmAccountPoolExhaustedError,

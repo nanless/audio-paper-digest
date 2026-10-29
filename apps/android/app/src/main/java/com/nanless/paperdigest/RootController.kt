@@ -1470,7 +1470,7 @@ class RootController private constructor(private val context: Context, private v
                         phase(if (format == "backup") "capturing" else "encoding")
                         if (retained != null) {
                             require(BackupCodec.hash(retained, check) == source.getString("originalSHA256")) { "原保留快照已变化，未替换为另一份材料" }
-                            val registered = exports.register(retained, "application/octet-stream", "论文速递-保留快照.paperdigest", pending.documentID, check)
+                            val registered = exports.register(retained, "application/octet-stream", "论文速递工作台-保留快照.paperdigest", pending.documentID, check)
                             require(registered.sha256 == source.getString("originalSHA256") && registered.file.length() == source.getLong("originalBytes")) { "保留快照在复制期间已变化，未将变动副本标为就绪。" }
                         } else {
                             exports.prepare(format, p, article, original, sessionID, pending.documentID,

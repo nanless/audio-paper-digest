@@ -25,7 +25,7 @@ assert_app_not_running() {
   local active_pids
   active_pids="$(/usr/bin/pgrep -x PaperDigest || true)"
   if [[ -n "$active_pids" ]]; then
-    echo "论文速递仍在运行（PID：$(echo "$active_pids" | tr '\n' ' ')）。请先在应用中保存并正常退出，再安装新版本；原安装未替换。" >&2
+    echo "论文速递工作台仍在运行（PID：$(echo "$active_pids" | tr '\n' ' ')）。请先在应用中保存并正常退出，再安装新版本；原安装未替换。" >&2
     return 1
   fi
 }
@@ -66,7 +66,7 @@ icon_source="$app_root/Assets/AppIcon.png"
 build_root="$app_root/.build"
 mkdir -p "$build_root"
 work="$(mktemp -d "$build_root/package.XXXXXX")"
-bundle="$work/论文速递.app"
+bundle="$work/论文速递工作台.app"
 resources="$bundle/Contents/Resources"
 mkdir -p "$bundle/Contents/MacOS" "$resources/Runtime" "$resources/Shared" "$resources/Assets" "$work/Sources" "$work/Build"
 cp "$icon_source" "$resources/Assets/AppIcon.png"
@@ -142,7 +142,7 @@ codesign --force --sign - --timestamp=none "$resources/Runtime/node"
 /usr/bin/python3 - "$work" "$app_root" "$repo_root" "$channel" <<'PY'
 import hashlib,json,pathlib,subprocess,sys,datetime
 work,app,repo=map(pathlib.Path,sys.argv[1:4]);channel=sys.argv[4]
-bundle=work/'论文速递.app';resources=bundle/'Contents/Resources'
+bundle=work/'论文速递工作台.app';resources=bundle/'Contents/Resources'
 # Check actual channel resources before signing; no signed-bundle removal.
 sys.path.insert(0,str(app));from build_resources import assert_no_scientific_seed,check_licenses
 check_licenses(resources/'Web')
@@ -165,12 +165,12 @@ PY
 plutil -lint "$bundle/Contents/Info.plist" > /dev/null
 codesign --force --sign - --timestamp=none --identifier com.nanless.PaperDigest "$bundle"
 codesign --verify --deep --strict "$bundle"
-target="$build_root/论文速递.app"
+target="$build_root/论文速递工作台.app"
 # A locally launched .build copy also needs its own resources until it exits.
 for active_pid in $(/usr/bin/pgrep -x PaperDigest || true); do
   active_executable="$(/bin/ps -p "$active_pid" -o comm= || true)"
   if [[ "$active_executable" == "$target/Contents/MacOS/PaperDigest" ]]; then
-    echo "当前构建目录中的论文速递仍在运行（PID：$active_pid）；原构建未替换，新候选保留于：$bundle" >&2
+    echo "当前构建目录中的论文速递工作台仍在运行（PID：$active_pid）；原构建未替换，新候选保留于：$bundle" >&2
     exit 1
   fi
 done
@@ -197,16 +197,16 @@ if [[ "$install_requested" == 1 ]]; then
   assert_app_not_running
   applications="$HOME/Applications"
   mkdir -p "$applications"
-  destination="$applications/论文速递.app"
+  destination="$applications/论文速递工作台.app"
   installation="$(mktemp -d "$applications/.paper-digest-install.XXXXXX")"
-  cp -R "$target" "$installation/论文速递.app"
-  codesign --verify --deep --strict "$installation/论文速递.app"
+  cp -R "$target" "$installation/论文速递工作台.app"
+  codesign --verify --deep --strict "$installation/论文速递工作台.app"
   if ! assert_app_not_running; then
     rm -rf "$installation"
     exit 1
   fi
   if [[ -e "$destination" ]]; then mv "$destination" "$installation/previous.app"; fi
-  if ! mv "$installation/论文速递.app" "$destination"; then
+  if ! mv "$installation/论文速递工作台.app" "$destination"; then
     if [[ -d "$installation/previous.app" ]]; then mv "$installation/previous.app" "$destination"; fi
     echo "安装未完成，原安装已保留。" >&2; exit 1
   fi

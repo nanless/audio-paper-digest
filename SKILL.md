@@ -12,7 +12,7 @@
 
 Reader 指面向初学研究者的解读长文；内部主分析、来源和发布凭证分别核验。常见术语见[写作约定](docs/writing-guide.md#术语先解释再统一称呼)。下列检查未通过时，先停止，不用生产任务测试配置。
 
-1. 核对 `pwd`，统一工作区为 `/Users/francis7999/code/github_repos/audio-paper-digest`，执行 `npm run workspace:role -- status`；角色保持 `daily`。历史操作通过已配置跨角色开关运行，不进入废弃工作区。
+1. 核对 `pwd`，将 `$HOME/code/github_repos/audio-paper-digest` 展开为真实绝对路径并确认当前工作区一致，执行 `npm run workspace:role -- status`；角色保持 `daily`。历史操作通过已配置跨角色开关运行，不进入废弃工作区。
 2. Node、Python 和依赖有效，项目 `.env` 权限为 `0600`。主模型及启用的副模型按项目配置统一为 `muse-spark-1.3-contributor`；Muse 和 arXiv 强制使用项目 HTTP CONNECT 代理。
 3. 确认真实博客仓库与目标页面没有人工修改冲突，检查其他生成、审查与发布进程，三流程错峰运行。
 4. 所有脚本、检查和测试在沙箱外执行，不绕过环境、角色或来源检查，不把 `data/`、日志、缓存、密钥纳入 Git。

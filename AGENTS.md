@@ -20,7 +20,7 @@
 
 ### 当前工作区（必须先核对 `pwd`）
 
-- 每日速递、新会议整理和历史博客维护统一在 `/Users/francis7999/code/github_repos/audio-paper-digest` 执行。当前角色保持 `daily`；本机 `.env` 的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 允许历史入口在此运行，反向放行仍然禁止。
+- 每日速递、新会议整理和历史博客维护统一在 `$HOME/code/github_repos/audio-paper-digest` 执行；开跑前展开并核对其真实绝对路径，不改变已绑定角色的工作区。当前角色保持 `daily`；本机 `.env` 的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 允许历史入口在此运行，反向放行仍然禁止。
 - 旧 `audio-paper-digest-rewrite-all` 工作区已废弃，不再进入、修改或启动任务；不从旧目录复制检查点或手工合并运行数据。
 - 当前任务的运行数据保存在本项目 `data/runtime/`。日更、会议、历史任务的生成、审查和推送必须错峰，由执行者检查运行进程并安排；共享博客锁继续防止并发修改。
 - 历史发布前先结束其他发布任务，同步代码仓库和博客仓库的最新远端 `main`，再以同步后的博客 Git 提交为依据生成审查与发布凭证。旧凭证不能因切换工作区而直接复用。

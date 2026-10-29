@@ -119,6 +119,14 @@ def physical_path(relative):
         return relative
     return 'Contents/Resources/' + relative
 
+def check_app_branding(plist, filename):
+    # Only the exact shipped version/build pair uses the original branding.
+    # Callers supply the actual bundle plist, never sidecar legacy assertions.
+    legacy = plist.get('CFBundleShortVersionString') == '1.0.0' and plist.get('CFBundleVersion') == '1'
+    expected = '论文速递' if legacy else '论文速递工作台'
+    require(plist.get('CFBundleDisplayName') == plist.get('CFBundleName') == expected, '实际包内应用显示名不匹配')
+    require(filename == expected + '.app', '实际应用文件名不匹配')
+
 def audit_app(app, repo, record, version=None):
     rows = inventory(app)
     by_path = {row['path']: row for row in rows if row['kind']=='file'}
@@ -140,6 +148,7 @@ def audit_app(app, repo, record, version=None):
     actual_version = plist.get('CFBundleShortVersionString', '')
     require(re.fullmatch(r'\d+\.\d+\.\d+', actual_version) and (version is None or version == actual_version), '请求版本与包内版本不一致')
     require(isinstance(plist.get('CFBundleVersion'), str) and re.fullmatch(r'\d+(?:\.\d+){0,2}', plist['CFBundleVersion']), '包内构建版本无效')
+    check_app_branding(plist, app.name)
     arch = metadata.get('architecture'); require(arch in ['arm64', 'x86_64'], '构建架构无效')
     require(record.get('architecture') == arch and metadata.get('signing') == record.get('signing') == 'ad-hoc; not notarized', '当前机制仅处理如实声明的本机ad-hoc未公证包')
     require(plist.get('LSMinimumSystemVersion') == '15.0', '最低系统声明发生变化，需更新发行核验规则')
@@ -255,12 +264,12 @@ def prepare(args):
             run(['/usr/bin/ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', copy, archive])
             if args.dmg:
                 os.symlink('/Applications', stage/'Applications')
-                run(['/usr/bin/hdiutil', 'create', '-volname', '论文速递 '+info['version'], '-srcfolder', stage, '-format', 'UDZO', '-ov', temporary/(prefix+'.dmg')])
+                run(['/usr/bin/hdiutil', 'create', '-volname', '论文速递工作台 '+info['version'], '-srcfolder', stage, '-format', 'UDZO', '-ov', temporary/(prefix+'.dmg')])
         # Decode the produced ZIP and verify its exact bundle, not merely its archive listing.
         verify_zip(archive, repo, info, app.name)
         build_info={'contract': CONTRACT, 'preparedAtUTC': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'publicationEligible': False, 'publicationState': 'local-candidate-only', 'bundleName': app.name, **info}
         write_json(temporary/'build-info.json', build_info)
-        notes=f'''# 论文速递 {info['version']} · 可校验安装包
+        notes=f'''# 论文速递工作台 {info['version']} · 可校验安装包
 
 本地准备工具不会创建或推送版本标签，也不会上传或公开 GitHub Release。是否已交付以远端实际状态及对应验收记录为准；打包成功不能替代完整验收。
 
@@ -418,7 +427,7 @@ def publish_plan(args, private_draft=False):
     require(args.repository=='nanless/audio-paper-digest','必须明确使用当前仓库')
     tag=verified_remote_tag('v'+info['version'],head) if private_draft else None
     assets=[str(args.prepared.resolve()/name) for name in sorted(load(args.prepared/'release-manifest.json')['assets'])]+[str(args.prepared.resolve()/'release-manifest.json'),str(args.prepared.resolve()/'SHA256SUMS')]
-    command=['gh','release','create','v'+info['version'],*assets,'--repo',args.repository,'--verify-tag','--target',head,'--title','论文速递 '+info['version'],'--notes-file',str(args.prepared.resolve()/'RELEASE_NOTES.md'),'--draft']
+    command=['gh','release','create','v'+info['version'],*assets,'--repo',args.repository,'--verify-tag','--target',head,'--title','论文速递工作台 '+info['version'],'--notes-file',str(args.prepared.resolve()/'RELEASE_NOTES.md'),'--draft']
     if private_draft:command[command.index('--repo')+1]='github.com/nanless/audio-paper-digest'
     if args.prerelease:command.append('--prerelease')
     return {'stage':'private-draft' if private_draft else 'fully-qualified-draft','remoteTag':tag,'executed':False,'automaticTagCreation':False,'publicPublication':False,'qualification':('84项前置验收通过，REL-03/04仅可通过或待验；只准创建私有草稿，不能公开' if private_draft else '原69项及新增云端与发行17项通过只是本地门，维护者仍须复核对应包的实际证据；命令仅创建草稿'),'requiresExistingRemoteTag':'v'+info['version'],'argv':command}

@@ -15,7 +15,7 @@ if [[ "${1:-}" == --device ]]; then
  [[ "$qa_state" == device ]] || { echo "指定设备未就绪，未开始测试。" >&2; exit 1; }
  if [[ "$qa_serial" == emulator-* ]]; then
   qa_avd="$(adb -s "$qa_serial" emu avd name | tr -d '\r' | sed '/^OK$/d')"
-  [[ "$qa_avd" == PaperDigest_QA_API35 || "$qa_avd" == PaperDigest_QA_API28 ]] || { echo "这不是论文速递独立验收设备，未开始测试。" >&2; exit 1; }
+  [[ "$qa_avd" == PaperDigest_QA_API35 || "$qa_avd" == PaperDigest_QA_API28 ]] || { echo "这不是论文速递工作台独立验收设备，未开始测试。" >&2; exit 1; }
  fi
  # AGP ConnectedDeviceProvider filters connected devices using this exact single serial.
  export ANDROID_SERIAL="$qa_serial"
@@ -25,6 +25,8 @@ for qa_argument in "$@"; do
  [[ "$qa_argument" == -* ]] || { echo "测试入口只接受 Gradle 选项；设备测试请使用 --device SERIAL，其他任务请使用 build.sh。" >&2; exit 1; }
 done
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/DeviceSelection.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/WorkbenchBranding.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/CompiledSecurityResources.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseBoundaries.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseKeystoreCanonical.test.py"

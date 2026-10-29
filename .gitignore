@@ -27,8 +27,9 @@ Thumbs.db
 *.swo
 *~
 
-# Claude Code 会话文件
+# 本机 AI 会话与记忆库，不进入 Git 或发行资产
 .claude/
+.dsh-meow/
 
 # Python 环境和缓存
 .venv/

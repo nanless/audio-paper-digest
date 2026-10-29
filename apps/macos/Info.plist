@@ -5,10 +5,10 @@
   <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
   <key>CFBundleExecutable</key><string>PaperDigest</string>
   <key>CFBundleIdentifier</key><string>com.nanless.PaperDigest</string>
-  <key>CFBundleName</key><string>论文速递</string>
-  <key>CFBundleDisplayName</key><string>论文速递</string>
+  <key>CFBundleName</key><string>论文速递工作台</string>
+  <key>CFBundleDisplayName</key><string>论文速递工作台</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleShortVersionString</key><string>1.0.1</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>

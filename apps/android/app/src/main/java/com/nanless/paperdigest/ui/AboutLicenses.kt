@@ -30,7 +30,7 @@ import java.io.ByteArrayInputStream
     val icon = remember(resources) { BitmapFactory.decodeResource(resources, R.drawable.pd_icon, BitmapFactory.Options().apply { inSampleSize = 4; inScaled = false }) }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         icon?.let { Image(it.asImageBitmap(), null, Modifier.size(76.dp).clip(RoundedCornerShape(18.dp))) }
-        Text("论文速递", style = MaterialTheme.typography.headlineMedium)
+        Text("论文速递工作台", style = MaterialTheme.typography.headlineMedium)
         Text("把每天的新论文，读成自己的理解。", style = MaterialTheme.typography.titleMedium)
         Text("版本 ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()

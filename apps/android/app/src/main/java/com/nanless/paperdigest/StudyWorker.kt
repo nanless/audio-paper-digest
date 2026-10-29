@@ -28,7 +28,7 @@ class StudyWorker(context: Context, parameters: WorkerParameters): CoroutineWork
         manager.createNotificationChannel(NotificationChannel("research", "论文研究任务", NotificationManager.IMPORTANCE_LOW))
         val cancel = WorkManager.getInstance(applicationContext).createCancelPendingIntent(id)
         val notification = NotificationCompat.Builder(applicationContext, "research").setSmallIcon(android.R.drawable.ic_menu_info_details)
-            .setContentTitle("论文速递正在分析原文").setContentText("原始材料和用量会保存在本机；可停止等待")
+            .setContentTitle("论文速递工作台正在分析原文").setContentText("原始材料和用量会保存在本机；可停止等待")
             .setOngoing(true).addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", cancel).build()
         return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(4317, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else ForegroundInfo(4317, notification)
     }

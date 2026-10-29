@@ -41,7 +41,7 @@ import UniformTypeIdentifiers
         if let initialPane{settingsPaneRequestID=UUID();settingsPaneRequest=initialPane}
         if let existing=settingsWindow {existing.makeKeyAndOrderFront(nil);applySettingsPaneRequest();return}
         let sheet=NSWindow(contentRect:NSRect(x:0,y:0,width:780,height:610),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false)
-        sheet.title="论文速递设置";sheet.minSize=NSSize(width:700,height:520);sheet.isReleasedWhenClosed=false;sheet.delegate=self
+        sheet.title="论文速递工作台设置";sheet.minSize=NSSize(width:700,height:520);sheet.isReleasedWhenClosed=false;sheet.delegate=self
         let config=WKWebViewConfiguration();config.setURLSchemeHandler(scheme,forURLScheme:"paperapp");config.userContentController.addScriptMessageHandler(self,contentWorld:.page,name:"desktop")
         let view=WKWebView(frame:sheet.contentView!.bounds,configuration:config);view.autoresizingMask=[.width,.height];view.navigationDelegate=self;sheet.contentView=view;settingsWeb=view;settingsWindow=sheet
         view.load(URLRequest(url:URL(string:"paperapp://app/settings.html")!));sheet.center();sheet.makeKeyAndOrderFront(nil)
@@ -217,7 +217,7 @@ import UniformTypeIdentifiers
         maintenanceBusy=true;defer{maintenanceBusy=false}
         guard jobs.isEmpty else{throw DesktopError.message("请待当前任务结束再备份，保证资料和任务检查点属于同一快照")}
         let payload=try BackupCodec.collect(sourceDirectory:directory)
-        let panel=NSSavePanel();panel.nameFieldStringValue="论文速递-"+ISO8601DateFormatter().string(from:Date()).replacingOccurrences(of:":",with:"-")+".paperdigest"
+        let panel=NSSavePanel();panel.nameFieldStringValue="论文速递工作台-"+ISO8601DateFormatter().string(from:Date()).replacingOccurrences(of:":",with:"-")+".paperdigest"
         guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消备份")}
         try requireDocumentContext(access,kinds:[.help])
         try Task.checkCancellation()
@@ -333,7 +333,7 @@ import UniformTypeIdentifiers
         let value=store?.value ?? [:],jobs=value["jobs"] as? [[String:Any]] ?? []
         let commands:Set<String>=["library.sync","library.article","library.downloadPDF","model.check","model.run","archive.materials","zotero.archive","zotero.resume","zotero.authorize","zotero.collections","zotero.status","storage.prepare","storage.openPackage","storage.cleanup","app.export","pdf.open"]
         let statuses:Set<String>=["queued","running","complete","completed","failed","cancelled","partial","pending","interrupted"]
-        var report:[String:Any]=["contract":"paperdigest-diagnostics-v2","app":"论文速递","version":"1.0.0","system":ProcessInfo.processInfo.operatingSystemVersionString,"counts":["jobs":jobs.count,"notes":(value["notes"] as? [String:Any])?.count ?? 0,"sessions":(value["sessions"] as? [Any])?.count ?? 0],"jobStates":jobs.map{row->[String:String] in let command=row["command"] as? String ?? "",status=row["status"] as? String ?? "";return ["command":commands.contains(command) ? command:"other","status":statuses.contains(status) ? status:"other"]},"credentialsIncluded":false,"personalTextIncluded":false]
+        var report:[String:Any]=["contract":"paperdigest-diagnostics-v2","app":"论文速递工作台","version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "1.0.1","system":ProcessInfo.processInfo.operatingSystemVersionString,"counts":["jobs":jobs.count,"notes":(value["notes"] as? [String:Any])?.count ?? 0,"sessions":(value["sessions"] as? [Any])?.count ?? 0],"jobStates":jobs.map{row->[String:String] in let command=row["command"] as? String ?? "",status=row["status"] as? String ?? "";return ["command":commands.contains(command) ? command:"other","status":statuses.contains(status) ? status:"other"]},"credentialsIncluded":false,"personalTextIncluded":false]
         var ui:[String:Any]=[:]
         for (name,view,owner) in [("main",web,window),("settings",settingsWeb,settingsWindow)] {
             guard let view else{continue}
@@ -354,6 +354,6 @@ import UniformTypeIdentifiers
         let report=await diagnosticsReport()
         try Task.checkCancellation()
         try requireDocumentContext(access,kinds:[.help])
-        let panel=NSSavePanel();panel.nameFieldStringValue="论文速递诊断.json";guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消导出")};try requireDocumentContext(access,kinds:[.help]);try Task.checkCancellation();try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)
+        let panel=NSSavePanel();panel.nameFieldStringValue="论文速递工作台诊断.json";guard try await documentPanel(panel,access:access,kinds:[.help]) == .OK,let url=panel.url else{throw DesktopOperationCancelled("已取消导出")};try requireDocumentContext(access,kinds:[.help]);try Task.checkCancellation();try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url,options:.atomic)
     }
 }

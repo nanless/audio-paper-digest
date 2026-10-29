@@ -175,7 +175,7 @@ actor CloudCredentialSession {
             let generation = cloudSessionCredentials.generation
             cloudBusy = true; emit("cloud.changed"); defer { cloudBusy = false; emit("cloud.changed") }
             let alert = NSAlert(); alert.messageText = memoryOnly ? "仅本次使用坚果云应用密码" : "保存坚果云应用专用密码"
-            alert.informativeText = memoryOnly ? "密码只保留在论文速递本次运行的内存中，退出或更换账号后清除；不读取或写入钥匙串，不进入网页、备份、诊断或仓库。设置后仍需单独检查连接。" : "请为论文速递单独生成应用密码。密码只保存在本应用的 macOS 钥匙串，不进入网页、备份、诊断或仓库。"
+            alert.informativeText = memoryOnly ? "密码只保留在论文速递工作台本次运行的内存中，退出或更换账号后清除；不读取或写入钥匙串，不进入网页、备份、诊断或仓库。设置后仍需单独检查连接。" : "请为论文速递工作台单独生成应用密码。密码只保存在本应用的 macOS 钥匙串，不进入网页、备份、诊断或仓库。"
             let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26)); field.placeholderString = "输入坚果云应用专用密码"; alert.accessoryView = field
             alert.addButton(withTitle: memoryOnly ? "仅本次使用" : "保存到钥匙串"); alert.addButton(withTitle: "取消")
             defer { field.stringValue = "" }

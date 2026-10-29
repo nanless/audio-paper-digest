@@ -249,8 +249,8 @@ private final class MockZotero: @unchecked Sendable {
             passed += 3
             for (role,original,label) in [("analysis",input.analysisHTML!,"个人解析"),("note",input.noteHTML!,"研究笔记")] {
                 let key=first.steps.first{$0.role==role}!.key!,actual=(backend.objects[key]!["data"] as! [String:Any])["note"] as! String
-                try require(actual.hasPrefix("<div><p>论文速递 · "+label+" · "+input.bibliography.title+"</p>") && actual.hasSuffix("<p>"+noteMarker(role,original)+"</p></div>") && actual.contains(original),"new note has human first line and original unchanged HTML/marker footer")
-                captureTitle("actual-new-"+role,actual,original,role,"论文速递 · "+label+" · "+input.bibliography.title)
+                try require(actual.hasPrefix("<div><p>论文速递工作台 · "+label+" · "+input.bibliography.title+"</p>") && actual.hasSuffix("<p>"+noteMarker(role,original)+"</p></div>") && actual.contains(original),"new note has human first line and original unchanged HTML/marker footer")
+                captureTitle("actual-new-"+role,actual,original,role,"论文速递工作台 · "+label+" · "+input.bibliography.title)
                 passed += 1
             }
             // Consume the ACTUAL journal+summary pair emitted by this service, rather
@@ -443,13 +443,13 @@ private final class MockZotero: @unchecked Sendable {
             let updated=try await service.archive(changed),newKey=updated.steps.first{$0.role=="analysis"}!.key!
             try require(updated.status=="complete" && backend.objects.count==count+1 && originals[newKey]==nil && originals.allSatisfy{key,value in (backend.objects[key]!["data"] as! [String:Any])["note"] as? String==value},"genuinely changed HTML creates exactly one new readable note while retaining old notes")
             let note=(backend.objects[newKey]!["data"] as! [String:Any])["note"] as! String
-            captureTitle("changed-content",note,changed.analysisHTML!,"analysis","论文速递 · 个人解析 · "+input.bibliography.title)
+            captureTitle("changed-content",note,changed.analysisHTML!,"analysis","论文速递工作台 · 个人解析 · "+input.bibliography.title)
             passed += 4
         }
         for mutation in ["body","marker","heading"] {
             let (service,backend,_)=try fixture();let first=try await service.archive(input)
             let key=first.steps.first{$0.role=="analysis"}!.key!,original=(backend.objects[key]!["data"] as! [String:Any])["note"] as! String
-            let edited=mutation=="body" ? original.replacingOccurrences(of:input.analysisHTML!,with:"<p>User-edited original analysis</p>") : mutation=="marker" ? original.replacingOccurrences(of:noteMarker("analysis",input.analysisHTML!),with:"") : original.replacingOccurrences(of:"论文速递 · 个人解析 · "+input.bibliography.title,with:"My personal readable title")
+            let edited=mutation=="body" ? original.replacingOccurrences(of:input.analysisHTML!,with:"<p>User-edited original analysis</p>") : mutation=="marker" ? original.replacingOccurrences(of:noteMarker("analysis",input.analysisHTML!),with:"") : original.replacingOccurrences(of:"论文速递工作台 · 个人解析 · "+input.bibliography.title,with:"My personal readable title")
             var object=backend.objects[key]!,data=object["data"] as! [String:Any];data["note"]=edited;object["data"]=data;backend.objects[key]=object
             let writes=backend.requests.filter{$0.0 != "GET"}.count,count=backend.objects.count,result=try await service.archive(input,resumeID:first.archiveID)
             try require((result.status=="complete") == (mutation=="heading"),"original HTML or missing marker fails; user wrapper-title edit stays permitted")
@@ -469,7 +469,7 @@ private final class MockZotero: @unchecked Sendable {
             let (service,backend,_)=try fixture();var unicode=input;unicode.bibliography.title="研究 & <script>alert(1)</script> \"MiCLA\" 'α' 😀\n第二行"
             let result=try await service.archive(unicode),key=result.steps.first{$0.role=="analysis"}!.key!,note=(backend.objects[key]!["data"] as! [String:Any])["note"] as! String
             try require(result.status=="complete" && note.contains("研究 &amp; &lt;script&gt;alert(1)&lt;/script&gt; &quot;MiCLA&quot; &#39;α&#39; 😀 第二行") && !note.contains("<script>"),"Unicode human title is escaped and whitespace normalized outside original HTML")
-            captureTitle("unicode-escape",note,input.analysisHTML!,"analysis","论文速递 · 个人解析 · 研究 & <script>alert(1)</script> \"MiCLA\" 'α' 😀 第二行")
+            captureTitle("unicode-escape",note,input.analysisHTML!,"analysis","论文速递工作台 · 个人解析 · 研究 & <script>alert(1)</script> \"MiCLA\" 'α' 😀 第二行")
             passed += 1
         }
         do {

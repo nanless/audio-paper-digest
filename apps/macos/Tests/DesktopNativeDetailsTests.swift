@@ -73,7 +73,7 @@ private struct NativeDetailNoCredentials:ZoteroCredentialStore {
     try check(app.storageDetailWindow?.title=="使用说明" && app.storageDetailWindow?.sheetParent===app.window,"help is real direct native sheet with its own title")
     try check((try await help.evaluateJavaScript("document.querySelectorAll('dialog,[data-dialog-surface]').length")) as? Int==0,"help has no hidden/nested modal facade")
     try check((try await help.evaluateJavaScript("[...document.querySelectorAll('button')].filter(b=>!b.hidden&&b.textContent==='完成').length")) as? Int==1,"help has one unified visible completion action")
-    try check((try await help.evaluateJavaScript("document.querySelector('#details-title').textContent")) as? String=="论文速递 · 使用说明","help toolbar reflects actual presentation kind")
+    try check((try await help.evaluateJavaScript("document.querySelector('#details-title').textContent")) as? String=="论文速递工作台 · 使用说明","help toolbar reflects actual presentation kind")
     for command in ["storage.status","app.export","archive.materials","zotero.authorize"]{try await rejects("help rejects foreign kind command "+command){_=try await app.storageDetailCommand(command,payload:["presentationID":id],source:help)}}
     try await blockedModel("help")
     let oldAccess=app.storageDetailDocumentAccess
