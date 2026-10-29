@@ -166,8 +166,9 @@ function current(paper, identity) {
         sourceDescriptor:record.sourceDescriptor,retainedAttempts:record.original.payload.attempts,
         retainedFullAttempts:record.original.payload.fullAttempts,
         retainedNoProgress:record.original.payload.noProgress,appliedAt:new Date().toISOString() };
+    // 原稿同时保留给 ordinal 来源衔接：活动候选仍是原稿，修正稿只作为本次解析输入。
     return { payload:{...structuredClone(record.original.payload),draft:structuredClone(record.draft),
-        rawDraft:JSON.stringify(record.draft)},proof };
+        rawDraft:JSON.stringify(record.draft)},baselineDraft:structuredClone(record.original.payload.draft),proof };
 }
 function execution(proof) {
     return proof ? {executionKind:'operator',operatorProvenance:proof,newReaderApiRequests:0,

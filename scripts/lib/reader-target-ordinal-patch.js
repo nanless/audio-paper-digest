@@ -368,10 +368,14 @@ function attachOrigin(capability,result,normalization){
     Object.defineProperty(result,originSymbol,{enumerable:true,value:{capability,records:structuredClone(result.ordinalPatchCompilations),normalization:structuredClone(normalization)}});
     return result;
 }
-function attachSavedOrigin({paper,identity,directory,draft,records},result,normalization){
+function attachSavedOrigin({paper,identity,directory,draft,records,activeCandidateFile},result,normalization){
     sourceScope(paper,identity,directory);
-    const current=repair.readFailedCandidateEnvelope(directory,identity);
-    if(!current||!isDeepStrictEqual(current.envelope.payload.draft,draft)
+    // 零请求人工修正会在活动候选之上产生新稿，运行期身份可能与候选身份不再逐字相等；
+    // 此时按人工记录已核验的活动候选文件复核，仍要求原稿、序号编译记录和论文身份一致。
+    const current=repair.readFailedCandidateEnvelope(directory,identity)
+        || (activeCandidateFile ? repair.readFailedCandidateEnvelope(directory,null,activeCandidateFile) : null);
+    const samePaper=current&&canonical(current.envelope.identity?.paperId)===canonical(paper.arxivId);
+    if(!current||!samePaper||!isDeepStrictEqual(current.envelope.payload.draft,draft)
         ||!isDeepStrictEqual(current.envelope.payload.ordinalPatchCompilations,records)||!records.length)fail('saved origin is not active candidate','run');
     for(const record of records)replay({paper,identity:record.identity,directory,requestId:record.requestId,pins:record.pins});
     const capability=Object.freeze({});caps.set(capability,{paper,identity:structuredClone(identity),directory,completionOnly:true});
@@ -441,6 +445,9 @@ function validateCompletion(paper){
 }
 function readVerifiedCompletion(paper){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
+    // 人工修正改写了正文，序号完成证明只对旧稿成立，已作为历史保存并明确由
+    // operatorProvenance 接替；此时不再把旧完成记录当作当前冷核依据。
+    if(stage?.ordinalPatchHistory?.reason==='operator-correction-supersedes-ordinal-completion')return null;
     const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
     if(!prov){if(marked)fail('completion marker lacks daily source','run');return null;}
     if(prov.contract!=='fresh-source-analysis-v1'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(prov.runId||'')){

@@ -9265,7 +9265,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         candidateDirectory, identity, recovered, paper);
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     ordinalPatchCompilations = recovered?.ordinalPatchCompilations || [];
-    const savedOrdinalOriginDraft = recovered?.draft ? structuredClone(recovered.draft) : null;
+    // 人工修正只改本次解析输入：活动候选仍是原稿，ordinal 来源衔接必须绑原稿，
+    // 否则会拿修正稿去和活动候选比对而被判成来源不符。
+    const savedOrdinalOriginDraft = operatorCorrection?.baselineDraft
+        ? structuredClone(operatorCorrection.baselineDraft)
+        : recovered?.draft ? structuredClone(recovered.draft) : null;
     for (const record of ordinalPatchCompilations) require('./lib/reader-target-ordinal-patch').replay({
         paper, identity: record.identity, directory: candidateDirectory, requestId: record.requestId, pins: record.pins });
     candidate = recovered?.draft || start.signedRecoveryDraft || null;
@@ -9369,7 +9373,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ...(operatorCorrection ? {operatorCorrectionProof:operatorCorrection.proof} : {}),
                 ...(recovered?.resolvedReaderCandidateReplayProof ? { resolvedReaderCandidateReplayProof: recovered.resolvedReaderCandidateReplayProof } : {}) };
             if (ordinalPatchCompilations.length) require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
-                paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations
+                paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations,
+                activeCandidateFile: operatorCorrection?.proof?.originalCandidateFile
             }, result, { issues: currentIssues, pixelFigureOrdinals });
             const retiredCandidate = operatorCorrection || recovered?.resolvedReaderCandidateReplayProof ? null : deferOrRetireReaderCandidate(
                 result, repair, candidateDirectory, identity
@@ -9462,7 +9467,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     imageEvidence, modelImagePreflightEvidenceSha256, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
                     providerImageExclusions, resumedCandidate: true, draftOrderMappings };
                 if (ordinalPatchCompilations.length) require('./lib/reader-target-ordinal-patch').attachSavedOrigin({
-                    paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations
+                    paper, identity, directory: candidateDirectory, draft: savedOrdinalOriginDraft, records: ordinalPatchCompilations,
+                    activeCandidateFile: operatorCorrection?.proof?.originalCandidateFile
                 }, result, { issues: currentIssues, pixelFigureOrdinals });
                 const retiredCandidate = deferOrRetireReaderCandidate(
                     result, repair, candidateDirectory, identity
@@ -10925,8 +10931,29 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     if (generated.metadataRecoveryProof) require('./lib/reader-request-diagnostics')
         .sealReaderVersionMetadataCompletion(paper, generated.metadataRecoveryProof);
     if (readerResult.ordinalPatchCompilations?.length) {
-        const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
-        manifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
+        // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
+        // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
+        const operatorSupersedes = options.execution?.operatorProvenance?.contract
+            === 'daily-reader-operator-correction-v1';
+        if (operatorSupersedes) {
+            const previous = paper.analysisManifest?.stages?.apiReaderArticle;
+            manifest.stages.apiReaderArticle.ordinalPatchHistory = {
+                contract: 'reader-target-ordinal-patch-v1',
+                reason: 'operator-correction-supersedes-ordinal-completion',
+                compilations: structuredClone(readerResult.ordinalPatchCompilations),
+                previousCompletionProof: previous?.ordinalCompletionProof || null,
+                previousStage: previous ? {
+                    articleSha256: previous.articleSha256,
+                    planSha256: previous.planSha256,
+                    ordinalPatchContract: previous.ordinalPatchContract || null,
+                    ordinalPatchCompilations: previous.ordinalPatchCompilations || []
+                } : null
+            };
+            delete manifest.contracts.readerTargetOrdinalPatch;
+        } else {
+            const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
+            manifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
+        }
     }
     return paper;
 }
@@ -19153,8 +19180,27 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 ...apiReaderOperatorExecution(readerResult.operatorCorrectionProof)
             });
             if (readerResult.ordinalPatchCompilations?.length) {
-                const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
-                analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
+                // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
+                // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
+                const previous = paper.analysisManifest?.stages?.apiReaderArticle;
+                if (readerResult.operatorCorrectionProof?.contract === 'daily-reader-operator-correction-v1') {
+                    analysisManifest.stages.apiReaderArticle.ordinalPatchHistory = {
+                        contract: 'reader-target-ordinal-patch-v1',
+                        reason: 'operator-correction-supersedes-ordinal-completion',
+                        compilations: structuredClone(readerResult.ordinalPatchCompilations),
+                        previousCompletionProof: previous?.ordinalCompletionProof || null,
+                        previousStage: previous ? {
+                            articleSha256: previous.articleSha256,
+                            planSha256: previous.planSha256,
+                            ordinalPatchContract: previous.ordinalPatchContract || null,
+                            ordinalPatchCompilations: previous.ordinalPatchCompilations || []
+                        } : null
+                    };
+                    delete analysisManifest.contracts.readerTargetOrdinalPatch;
+                } else {
+                    const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
+                    analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
+                }
             }
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             transferDeferredReaderCandidate(generatedReaderResult, paper);
