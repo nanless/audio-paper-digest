@@ -106,7 +106,12 @@ import Darwin
                 try expect(rejected && saved["status"] as? String=="failed" && error["category"] as? String==category && error["providerCode"] as? String==provider,"non-Go \(route) preserves accurate bounded category/provider detail")
                 try expect(saved["actualModel"] is NSNull,"failed HTTP response never invents actual model from requested model")
                 let message=error["message"] as? String ?? ""
-                try expect(message.count<=1500 && !message.contains("test-only-not-a-real-key") && message.contains("[redacted]"),"provider diagnostic redacts test credential and bounds message")
+                let httpStatus=route=="non-go-rate" ? 429:401
+                let safeNames=["quota":"额度或余额不足","authentication":"认证或权限失败","rate_limit":"请求频率受限"]
+                let expectedMessage=safeNames[category]!+"（HTTP \(httpStatus)）；实际请求记录保留，不会自动重发"
+                try expect(error["code"] as? String=="HTTP_\(httpStatus)" && message==expectedMessage && message.count<=1500,"provider diagnostic uses exact safe message and original HTTP status")
+                try expect(!message.contains("test-only-not-a-real-key") && !message.contains("Explicit loopback provider") && !message.contains(String(repeating:"x",count:64)),"provider diagnostic omits credential, upstream text and padding rather than partially replacing it")
+                try expect(saved["requestIssued"] as? Bool==true && saved["charge"] as? String=="amount_unknown" && saved["usage"] is NSNull,"failed provider request keeps issued charge semantics and does not invent usage")
             }
             try store.updateSettings(["endpoint":server+"/non-go-redact-boundary/v1","protocol":"chat"])
             let boundaryID=UUID().uuidString
@@ -115,7 +120,8 @@ import Darwin
             let boundaryError=store.session(boundaryID)?["error"] as? [String:Any] ?? [:]
             let boundaryMessage=boundaryError["message"] as? String ?? "",boundaryProvider=boundaryError["providerCode"] as? String ?? ""
             try expect(boundaryRejected && boundaryError["category"] as? String=="authentication","boundary diagnostic stays failed authentication")
-            try expect(!boundaryMessage.contains("test-") && !boundaryProvider.contains("test-") && boundaryMessage.count<=1500 && boundaryProvider.count<=120,"redact full dummy key before truncation; no stable secret prefix survives 1195/115 boundary")
+            try expect(boundaryError["code"] as? String=="HTTP_401" && boundaryMessage=="认证或权限失败（HTTP 401）；实际请求记录保留，不会自动重发" && boundaryProvider.isEmpty,"unrecognized provider code and message use fixed safe authentication diagnostic")
+            try expect(!boundaryMessage.contains("test-") && !boundaryProvider.contains("test-") && !boundaryMessage.contains(String(repeating:"x",count:64)) && boundaryMessage.count<=1500 && boundaryProvider.count<=120,"raw, encoded or padded provider diagnostics cannot survive the former 1195/115 truncation boundary")
             for mode in ["truncate-chat","truncate-responses"] {
                 try store.updateSettings(["endpoint":server+"/"+mode+"/v1","protocol":mode.hasSuffix("responses") ? "responses":"auto"])
                 let id=UUID().uuidString
