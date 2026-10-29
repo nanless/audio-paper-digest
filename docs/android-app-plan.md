@@ -54,4 +54,4 @@ Android 使用官方 Web API v3，由用户单独配置专用授权；不要求 
 
 Android 的实际测试环境为 API 28、API 35 模拟器，覆盖原生阅读、系统文件操作、不同窗口和字体、模型、Zotero、坚果云及跨端资料读取。1.0.1 已完成同签名从 1.0.0/code3 到 code4 的隔离覆盖升级，系统名称、原生空资料库和测试标记保留通过核对。具体范围见[验证说明](<android-validation.md>)和[86 项功能表](<android-feature-parity.md>)。
 
-正式 APK 与 Mac 安装包在同一仓库的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases) 提供。版本、来源、最低系统、架构、签名和 SHA 由实际发行文件记录；1.0.1 当前尚未公开。正式包不包含验收样稿、用户资料、签名私钥、运行配置或本地审查记录。
+正式 APK 与 Mac 安装包在同一仓库的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases) 提供。版本、来源、最低系统、架构、签名和 SHA 由实际发行文件记录；1.0.1 已公开为 [v1.0.1](https://github.com/nanless/audio-paper-digest/releases/tag/v1.0.1)。正式包不包含验收样稿、用户资料、签名私钥、运行配置或本地审查记录。

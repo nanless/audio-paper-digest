@@ -1,6 +1,6 @@
 # Android 验证说明
 
-更新于 2026-10-29。论文速递工作台 **1.0.1（构建号 4）** 已完成本地正式包核验、安全检查和同签名覆盖升级。应用标识为 `com.nanless.paperdigest`，支持 API 28 及以上，包含四种架构并符合 16 KiB 对齐要求。1.0.1 当前尚未公开，最终下载文件与校验值以本仓库的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases) 为准。
+更新于 2026-10-29。论文速递工作台 **1.0.1（构建号 4）** 已完成本地正式包核验、安全检查和同签名覆盖升级。应用标识为 `com.nanless.paperdigest`，支持 API 28 及以上，包含四种架构并符合 16 KiB 对齐要求。1.0.1 已与 Mac 安装包一同公开，见 [v1.0.1](https://github.com/nanless/audio-paper-digest/releases/tag/v1.0.1)。公开发布后逐件下载的 12 个附件大小与 SHA 与实际包一致。
 
 ## 当前结论
 

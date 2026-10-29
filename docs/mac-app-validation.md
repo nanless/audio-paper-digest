@@ -1,6 +1,6 @@
 # 论文速递工作台 Mac 版：验证范围
 
-当前维护版本为 1.0.1、构建号 1，面向 Apple Silicon 和 macOS 15 及以上，内置 Node 24.19.0。本地 ad-hoc 签名，未经过 Apple 公证。1.0.1 尚未公开，已公开版本见 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases)。
+当前维护版本为 1.0.1、构建号 1，面向 Apple Silicon 和 macOS 15 及以上，内置 Node 24.19.0。本地 ad-hoc 签名，未经过 Apple 公证。1.0.1 已公开，见 [v1.0.1](https://github.com/nanless/audio-paper-digest/releases/tag/v1.0.1)。
 
 ## 已完成的检查
 

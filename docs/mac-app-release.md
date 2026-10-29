@@ -1,6 +1,6 @@
 # 论文速递工作台 Mac 版：构建与发行
 
-本页说明版本 1.0.1 的本地准备和联合发行操作。1.0.1 尚未公开；既有公开版本保留在 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases)。
+本页说明版本 1.0.1 的本地准备和联合发行操作。1.0.1 已与 Android 安装包一同公开，见 [v1.0.1](https://github.com/nanless/audio-paper-digest/releases/tag/v1.0.1)；旧版本保留在同一发行页。
 
 | 项目 | 当前发行目标 |
 |---|---|
