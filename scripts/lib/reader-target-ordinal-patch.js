@@ -445,9 +445,6 @@ function validateCompletion(paper){
 }
 function readVerifiedCompletion(paper){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
-    // 人工修正改写了正文，序号完成证明只对旧稿成立，已作为历史保存并明确由
-    // operatorProvenance 接替；此时不再把旧完成记录当作当前冷核依据。
-    if(stage?.ordinalPatchHistory?.reason==='operator-correction-supersedes-ordinal-completion')return null;
     const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
     if(!prov){if(marked)fail('completion marker lacks daily source','run');return null;}
     if(prov.contract!=='fresh-source-analysis-v1'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(prov.runId||'')){
@@ -462,7 +459,17 @@ function readVerifiedCompletion(paper){
     if(!files.length){if(marked)fail('completion marker lacks stable source index','run');return null;}
     // Lookup is canonical paper in the actual source run, never current article
     // SHA. Removing both marker/proof and changing the article cannot bypass it.
-    if(files.some((name,index)=>Number(name.slice(-13,-5))!==index+1)||!marked)fail('completion index/marker removed','run');
+    if(files.some((name,index)=>Number(name.slice(-13,-5))!==index+1))fail('completion history has gaps','run');
+    // 人工修正改写正文后，旧完成证明只对旧稿成立；它必须仍指向最新完成文件，
+    // 由 operatorProvenance 接替当前冷核。删掉指针或改文件仍按原规则阻断。
+    const history=stage?.ordinalPatchHistory;
+    if(!marked&&history?.reason==='operator-correction-supersedes-ordinal-completion'){
+        const ref=history.previousCompletionProof;
+        if(!ref||!ref.path||!ref.sha256||path.resolve(ref.path)!==path.join(dir,files.at(-1))
+            ||!read(ref.path,ref.sha256).value)fail('superseded completion pointer differs','run');
+        return null;
+    }
+    if(!marked)fail('completion index/marker removed','run');
     const ref=stage.ordinalCompletionProof;if(!ref||path.resolve(ref.path)!==path.join(dir,files.at(-1)))fail('latest completion not selected','run');
     const saved=read(ref.path,ref.sha256).value;
     savedSourceScope(paper,saved.identity,attempts);
