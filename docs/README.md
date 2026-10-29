@@ -9,17 +9,17 @@
 | 你想了解什么 | 阅读位置 |
 |---|---|
 | 三条流程如何共用分析、Reader 和发布能力 | [三流程与共享核心](three-workflows.md) |
-| 当前流程逐步跟踪、已复现问题及改进顺序 | [三流程核读与改进计划](workflow-sharing-plan.md) |
-| 基于现有成果的 Mac 单栏阅读、按需双栏、个人 LLM 与 Zotero 存档 | [Mac 使用说明](../apps/macos/README.md)；设计背景见[工作台规划](desktop-research-workbench-plan.md) |
-| Mac 应用需求历史、现有结论和实现范围 | [完整需求整理](mac-app-requirements.md)与[应用构建及使用说明](../apps/macos/README.md) |
-| Mac 应用当前做到哪一步、哪些真实验收仍受阻 | [实施与测试记录](mac-app-validation.md)、[69项验收矩阵](mac-app-acceptance.md)、[五轮独立审查记录](mac-app-review-log.md) |
-| 当前 Mac 数据接入与 Zotero 完整归档的实际合同 | [已发布数据适配](mac-app-data.md)与[Zotero本机接口](mac-app-zotero.md) |
-| Mac完整研究资料保存到坚果云、版本续传与恢复 | [坚果云资料合同及新增17项验收](mac-app-cloud.md) |
-| 仓库Mac应用Release的ZIP/DMG、校验和与发布门槛 | [发行产物准备](mac-app-release.md) |
-| Android 使用、跨端功能与同一 Release 的实际范围 | [跨端规划](android-app-plan.md)、[Android构建说明](../apps/android/README.md)与[86项功能映射](android-feature-parity.md) |
-| Android的Zotero路线、坚果云与Mac资料互通 | [Zotero研究](android-zotero-research.md)、[完整备份合同](android-cloud-contract.md)与[原包互读向量](android-cloud-portable-fixtures.md) |
-| 两端如何读取网站已有目录、论文和汇总页面 | 当前实现见[已发布数据适配](mac-app-data.md)与两端使用说明；[静态数据合同](desktop-data-contract.md)中的 `desktop/v1` 是后续接口设计，不能当作当前线上格式 |
-| Mac 界面参考、单栏与 PDF 双栏、逐屏尺寸及视觉验收 | [界面设计研究](macos-interface-design-research.md) |
+| 三条流程的来源、共享算法、恢复与发布责任 | [流程与恢复规则](workflow-sharing-plan.md) |
+| Mac 阅读、PDF 对照、个人研究与 Zotero 存档 | [Mac 使用说明](../apps/macos/README.md)；设计背景见[工作台规划](desktop-research-workbench-plan.md) |
+| Mac 应用的功能与实现范围 | [需求说明](mac-app-requirements.md)与[构建及使用说明](../apps/macos/README.md) |
+| Mac 的测试范围和验收项目 | [验证说明](mac-app-validation.md)、[验收矩阵](mac-app-acceptance.md)、[审查说明](mac-app-review-log.md) |
+| Mac 数据接入与 Zotero 归档 | [网站数据适配](mac-app-data.md)与[Zotero 接口](mac-app-zotero.md) |
+| 坚果云同步、版本续传与资料恢复 | [云端资料与备份](mac-app-cloud.md) |
+| Mac ZIP/DMG、校验和与发行步骤 | [发行准备](mac-app-release.md) |
+| Android 使用、构建与跨端功能 | [功能说明](android-app-plan.md)、[构建说明](../apps/android/README.md)与[功能映射](android-feature-parity.md) |
+| Android 的 Zotero、坚果云与 Mac 资料互通 | [Zotero 接入](android-zotero-research.md)、[完整备份](android-cloud-contract.md)与[跨端格式](android-cloud-portable-fixtures.md) |
+| 两端如何读取网站目录和已发布页面 | 当前使用[网站数据适配](mac-app-data.md)；[静态数据接口](desktop-data-contract.md)中的 `desktop/v1` 是后续接口设计 |
+| Mac 界面、单栏阅读与 PDF 双栏 | [界面设计](macos-interface-design-research.md) |
 | Reader、SHA、CAS、检查点和凭证是什么 | [常见术语](writing-guide.md#术语先解释再统一称呼) |
 | 文档与论文讲解怎样写得清楚 | [写作约定](writing-guide.md) |
 
@@ -43,7 +43,7 @@
 | 停止正在运行的任务 | [停止说明](analysis-stop.md) |
 | 按报错定位恢复入口、费用落盘故障与本地冷核超时 | [故障排查](troubleshooting.md)、[异常响应记录](data-format.md#请求开始终态与异常响应保全) |
 | Reader 原付费稿核验、有界追加及已授权修正 | [Reader 恢复](reader-explicit-retry.md) |
-| 会议原额度耗尽后，明确获准的剩余集合追加 | [独立会议窗口](conference-workflow.md#原额度耗尽后的独立付费恢复)、[记录格式](data-format.md#会议独立追加窗口) |
+| 会议原窗口耗尽后，按持续授权登记剩余失败集合 | [会议后续窗口](conference-workflow.md#原额度耗尽后的独立付费恢复)、[记录格式](data-format.md#会议独立追加窗口) |
 | 会议博客完整审查后有正文、格式或图片拒稿 | [正常 Reader 维护与独立出版视图](conference-workflow.md#博客拒稿后的正常-reader-维护)、[维护记录](data-format.md#会议博客审查后的-reader-维护记录) |
 | 会议只做统一后处理、认证来源事实的零请求纠正 | [来源纠正](conference-workflow.md#认证来源事实的零请求纠正)；资源与核心清单分开，原失败、次数及费用保留 |
 | 旧数据、旧协议与旧提示词如何核验 | [兼容规则](compatibility.md)、[旧记录与独立人工审查](../manual/README.md) |
@@ -59,9 +59,9 @@
 | 数据、字段与发布凭证 | [数据格式](data-format.md) |
 | 三流程标签、多级路径、旧签名与站点版本同步 | [统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现) |
 | 词表的设计背景与历史决策 | [标签设计](tag-system-design.md) |
-| 日更耗时、长尾原因与已验证的提速 | [性能审计](daily-performance.md) |
-| 本轮仓库清理、文档调整与交叉审查记录 | [仓库维护审计](repository-maintenance-review.md) |
+| 日更耗时观测、性能诊断与优化范围 | [性能说明](daily-performance.md) |
+| 代码清理、兼容保留、文档与提示词维护 | [维护约定](repository-maintenance-review.md) |
 
-宣告完成前，必须核验对应发布提交的部署和全部目标页面；状态报告与 Git 推送成功均不能替代上线核验。视觉须按用户本次实际范围完成，或登记与当前发布绑定的有效豁免。
+完成验收包括对应发布提交的部署、全部目标页面及用户本次要求的视觉范围。状态报告和 Git 推送分别核验；省略视觉须登记与当前发布绑定的有效豁免。
 
-- [新人上手：三张图与常见故障入口](onboarding.md)
+- [新人上手：执行顺序与故障入口](onboarding.md)

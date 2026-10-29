@@ -1,8 +1,8 @@
-# Audio Paper Digest
+# 论文速递（Audio Paper Digest）
 
 <a id="你会得到什么"></a>
 
-从真实论文全文生成中文解读、八维评分、作者机构、资源状态、引用资料和博客页面。读者看到的解读长文称为 **Reader**；它与供程序解析的内部主分析分别保存和核验。
+从真实论文全文生成中文解读、八维评分、作者机构、资源状态、引用资料和博客页面。面向读者的解读长文称为 **Reader**；供程序解析的内部主分析另行保存和核验。
 
 ## 先选择你的使用方式
 
@@ -13,19 +13,18 @@
 | 在 Android 手机上阅读，或使用平板、折叠窗口 | [论文速递工作台（Android）](apps/android/README.md) |
 | 维护网站，运行日更、会议或历史更新 | 继续阅读下面的生产任务入口，再按[操作手册](SKILL.md)执行 |
 
-Mac 与 Android 客户端统一命名为 **论文速递工作台**，网站与内容生产流程仍使用原名称。应用读取网站已有的论文、图文导读和汇总/说明页，不会为了打开页面重跑论文分析。只有你主动发起新的个人研究或连接测试时，才使用该应用中配置的模型；真实用量与原回答分别保留。客户端的个人资料、模型配置和费用记录与仓库生产任务分开，不能互借授权或把恢复备份当成新请求许可。
+Mac 与 Android 客户端叫 **论文速递工作台**，网站和内容生产项目叫 **论文速递**。应用直接读取网站已经发布的论文、图文导读和汇总页面。个人模型只在你主动研究或测试连接时调用，原回答与实际用量分别保存。客户端个人资料、模型配置、费用和授权与网站生产任务分开；恢复备份沿用原记录，新增请求仍按当前任务授权执行。
 
 ![内容生产、两端阅读与个人资料的关系](docs/images/client-data-flow.svg)
 
-图中说明数据如何流动，不代表所有设备或发行条件均已验收。实际范围、原失败与后来补验分别见[Mac 验收状态](docs/mac-app-acceptance-status.md)和[Android 验收记录](docs/android-validation.md)。开发安装包、私有样稿和正式发行包也分别核对。源码、Git 历史、安装包的检查范围及其限制见[机密审计与发布边界](docs/client-security-audit.md)。
+Mac 1.0.1 面向 ARM64、macOS 15，采用本地签名，尚未通过 Apple 公证；Android 1.0.1 支持四种 ABI，沿用原签名和应用标识。安装方式与验证范围见 [Mac 说明](apps/macos/README.md)、[Android 说明](apps/android/README.md)；安全检查见[客户端安全说明](docs/client-security-audit.md)。
 
 <a id="默认行为"></a>
 <a id="架构概览"></a>
 
-内容生产默认使用 LLM/API，只维护三条生产流程：当天日更、官方会议整理、历史博客更新。它们共用分析引擎、Reader、评分、标签和页面展示，来源身份、处理范围与发布凭证各自保留。
+内容生产默认调用 LLM/API，有当天日更、官方会议整理、历史博客更新三条流程。它们共用分析、Reader、评分、标签和页面展示；各自核验来源、处理范围与发布记录。
 
 <a id="5-分钟开始"></a>
-
 <a id="第一次使用"></a>
 
 ## 第一次使用：运行生产任务
@@ -33,103 +32,80 @@ Mac 与 Android 客户端统一命名为 **论文速递工作台**，网站与�
 1. 在 `$HOME/code/github_repos/audio-paper-digest` 展开并核对真实目录和角色：`npm run workspace:role -- status`。三条流程都在此运行，角色保持 `daily`；历史入口使用已配置的跨角色开关。
 2. 按[安装与配置](docs/setup.md)安装依赖、填写项目 `.env` 并检查真实博客仓库。
 3. 主模型及启用的副模型统一使用项目指定的 `muse-spark-1.3-contributor`。Muse 和 arXiv 必须经项目 HTTP CONNECT 代理。
-4. 确认没有其他任务同时生成、审查或推送博客，且目标页面没有人工修改冲突，再选择下面的流程。
+4. 确认没有其他任务同时生成、审查或推送博客，目标页面没有人工修改冲突，再选择流程。
 
-执行前阅读 [AGENTS.md](AGENTS.md) 的强制约束。想理解文件、检查点和来源为何要这样组织，可读[三流程与共享核心](docs/three-workflows.md)；编辑文档和论文解读时遵循[写作约定](docs/writing-guide.md)。
+执行前阅读 [AGENTS.md](AGENTS.md)。文件、检查点和来源的关系见[三流程与共享核心](docs/three-workflows.md)；编辑文档和论文解读时遵循[写作约定](docs/writing-guide.md)。
 
 <a id="核心命令"></a>
 
 ## 选择任务
 
-| 你要做什么 | 从哪里开始 | 操作说明 |
+| 任务 | 入口 | 操作说明 |
 |---|---|---|
-| 运行北京时间当天的论文速递 | `npm run digest:prepare -- YYYY-MM-DD` | [操作手册](SKILL.md#1-日更) |
-| 开跑前只读体检（环境、账号、来源、磁盘、博客仓库） | `npm run doctor -- --offline`；需要探测 arXiv 时加 `--network` | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
-| 核对审查误报记录 | `npm run review:overrides -- --date DATE --file OVERRIDES.json`（只读，不放宽真实错误） | [发布后网页核验与收尾](docs/maintenance.md#发布后网页核验与收尾) |
-| 存储保留建议 | `npm run storage:report`（只读建议，清理仍先 `npm run storage:prune` 预览） | [存储保留建议](docs/maintenance.md#存储保留建议) |
-| 锁与文档漂移检查 | `npm run locks`、`npm run docs:check` | [锁视图与文档一致性](docs/maintenance.md#锁视图与文档一致性) |
-| 新人上手 | [三张图与故障入口](docs/onboarding.md) | [onboarding](docs/onboarding.md) |
-| 发布后核验与收尾 | `npm run verify:web -- --date DATE --deploy OID [--wait] [--receipt RECEIPT] [--allow-partial]`、`npm run publish:finish -- --date DATE` | [发布收尾](docs/maintenance.md#发布后网页核验与收尾) |
-| 表格/改动影响预检 | `npm run table:check -- --draft DRAFT.json`、`npm run impact -- scripts/x.js` | [表格与影响面预检](docs/maintenance.md#表格与影响面预检) |
-| 失败后不知道走哪个入口 | `npm run recover -- --date YYYY-MM-DD`（只读给出建议命令）；人工修正清单用 `npm run manifest:new -- --spec SPEC.json` | [恢复决策与清单生成](docs/maintenance.md#恢复决策与清单生成) |
-| 抓取前探测 arXiv 三入口 / 看账号池 / 查配置 | `npm run source:probe -- --date YYYY-MM-DD`、`npm run llm:accounts`、`npm run config:check` | [维护与验证](docs/maintenance.md#抓取前探测与配置检查) |
-| 运行中查看阶段、失败与费用 | `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒） | [维护与验证](docs/maintenance.md#运行前体检运行中状态与错误指引) |
-| 获取、筛选并整理官方会议 | 获取官方来源，再提取摘要证据、筛选并执行 `conference:process` | [会议流程](docs/conference-workflow.md) |
-| 从原文重新分析既有博客，保留已有 URL | 冻结页面清单，再建立历史来源与重写计划 | [历史更新](docs/history-rewrite.md) |
-| 发布已完成的历史重写结果 | `history:publication` 的 plan、generate、review、publish、status | [历史发布](docs/history-direct-publication.md) |
-| 只更新已发布完整日批的呈现 | 显式 `blog:generate -- --date YYYY-MM-DD --republish UUID`，再正常审查、推送 | [同来源重发布](docs/data-format.md#同来源同分析的日批重发布) |
-| 修改代码后做完整离线验证 | `npm run verify` | [维护与验证](docs/maintenance.md) |
+| 运行北京时间当天的论文速递 | `npm run digest:prepare -- YYYY-MM-DD` | [日更](SKILL.md#1-日更) |
+| 检查环境、账号、磁盘和博客仓库 | `npm run doctor -- --offline`；联网探测加 `--network` | [运行前体检](docs/maintenance.md#运行前体检运行中状态与错误指引) |
+| 抓取前探测来源、核对账号或配置 | `npm run source:probe -- --date YYYY-MM-DD`、`npm run llm:accounts`、`npm run config:check` | [探测与配置检查](docs/maintenance.md#抓取前探测与配置检查) |
+| 查看运行阶段、失败与费用 | `npm run digest:status -- --date YYYY-MM-DD --watch` | [运行中状态](docs/maintenance.md#运行前体检运行中状态与错误指引) |
+| 整理官方会议 | 获取官方来源、提取摘要证据、筛选，再执行 `conference:process` | [会议流程](docs/conference-workflow.md) |
+| 从原文更新既有博客并保留 URL | 冻结页面清单，建立来源与重写计划 | [历史更新](docs/history-rewrite.md) |
+| 发布已完成的历史结果 | `history:publication` 的 plan、generate、review、publish、status | [历史发布](docs/history-direct-publication.md) |
+| 只更新已发布完整日批的呈现 | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，再审查、推送 | [同来源重发布](docs/data-format.md#同来源同分析的日批重发布) |
+| 失败后选择恢复路线 | `npm run recover -- --date YYYY-MM-DD`；人工清单准备用 `npm run manifest:new -- --spec SPEC.json` | [恢复工具](docs/maintenance.md#恢复决策与清单生成) |
+| 核对表格或代码影响范围 | `npm run table:check -- --draft DRAFT.json`、`npm run impact -- scripts/x.js` | [定向预检](docs/maintenance.md#表格与影响面预检) |
+| 核对审查误报解释 | `npm run review:overrides -- --date DATE --file OVERRIDES.json` | [误报诊断](docs/maintenance.md#发布后网页核验与收尾) |
+| 发布后核验网页 | `npm run verify:web -- --date DATE --deploy OID`；`npm run publish:finish -- --date DATE` 打印后续清单 | [发布收尾](docs/maintenance.md#发布后网页核验与收尾) |
+| 查看锁、检查文档命令 | `npm run locks`、`npm run docs:check` | [锁与文档检查](docs/maintenance.md#锁视图与文档一致性) |
+| 查看存储保留建议 | `npm run storage:report`；清理先用 `npm run storage:prune` 预览 | [存储保留](docs/maintenance.md#存储保留建议) |
+| 修改代码后完整验证 | `npm run verify` | [维护与验证](docs/maintenance.md) |
 
-表中的阶段名用于选择入口，不是可直接复制的完整命令。会议和历史命令需要上一步实际生成的 ID、文件与参数；请进入对应操作说明。已有完整会议先核对原 process 是否已发布，再按[会议页面恢复](docs/conference-workflow.md#已有完整会议只更新页面)选择入口。
+阶段名用于选择入口。会议和历史命令还需填入上一步生成的真实 ID、文件和参数。已有完整会议先核对原 process 是否已经发布，再按[会议页面恢复](docs/conference-workflow.md#已有完整会议只更新页面)选择入口。第一次操作可先看[新人上手](docs/onboarding.md)。
 
 ## 运行一次日更
 
-安装和配置检查通过后，将下面日期替换为北京时间当天：
+安装和配置通过后，将日期替换为北京时间当天：
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
 ```
 
-这会继续执行候选抓取、筛选、官方来源封存、分析、Reader、评分与标签，以及博客生成、审查、推送。推送后还须完成部署、网页及视觉验收。`digest:api` 是等价别名。
+入口依次抓取、筛选、封存官方来源，完成分析、Reader、评分、标签，再生成、审查和推送博客。推送后继续完成部署、网页及视觉验收。`digest:api` 是等价别名。
 
-只有用户已明确取消视觉时，才增加 `--no-visuals`。该模式仍在真实发布后建立任务清单并登记当前发布的视觉豁免，不准备图片或生图。规划失败按[视觉恢复说明](docs/troubleshooting.md#11-视觉-pending-或-record-失败)处理。
+只有用户明确取消视觉时，才加 `--no-visuals`。程序仍在真实发布后建立任务清单并登记本次发布的豁免，不准备图片或生图。规划失败按[视觉恢复](docs/troubleshooting.md#11-视觉-pending-或-record-失败)处理。
 
-历史日期不能从日更抓取阶段重跑。日更抓取还须核验上次获取见证，完整覆盖来源窗口；只有正式已发布页参与去重，库内未发布论文仍可补更。细节见[抓取边界](docs/daily-fetch-boundary.md)。
+日更抓取只用于北京时间当天，须核验上次获取见证并完整覆盖来源窗口。仅正式已发布页面参与去重，库内未发布论文仍参加补更。历史日期沿用已有受控来源，见[抓取边界](docs/daily-fetch-boundary.md)。
 
 ## 失败后从哪里继续
 
-先保留原记录，等本轮所有论文处理和保存结束，再只继续可重试的失败集合；正常分析每次调用默认最多 3 轮，这是技术调度窗口，不是用户对整项任务的付费授权上限。已通过当前检查的成功项保留，原来源、草稿、次数和费用沿用。
-
-用户已明确持续授权当前任务的全部必要付费轮时，执行者按效率、效果和累计成本自主安排后续受控窗口，无需逐轮重新确认。每个窗口仍须按实现登记真实来源、原稿和请求上限，新增费用独立记录，不篡改原额度或清零历史。先复用合格稿与已通过阶段；没有正文进展的重复请求应停派查因，来源、身份和质量检查不因付费授权而降低。
+先等本轮全部论文处理和保存结束，再只续可重试失败集合。每次正常调用默认最多 3 轮，原来源、草稿、次数和费用保留。已有任务的持续付费授权覆盖必要后续窗口，由执行者按实际进展和成本登记，无需逐轮重新确认；技术窗口的限额仍分别核验，新增消费另记。持续无进展时先查原因，认证、配额、配置或保存故障先停止新派发并保存在途结果。
 
 | 停在哪里 | 下一步 |
 |---|---|
-| 日更分析或 Reader | 按[操作手册](SKILL.md)选择 deep、batch 或 Reader 刷新，继续原封存来源。 |
-| 会议处理 | 继续原 `conference:process`；实现变化或旧完成稿失败时使用对应[迁移与恢复](docs/conference-workflow.md#已有完整会议只更新页面)。原窗口额度耗尽时，在已有任务付费授权内走[独立付费恢复](docs/conference-workflow.md#原额度耗尽后的独立付费恢复)，核验并登记后续窗口，保留全部旧账；新窗口凭证或 UUID 不代表必须再次向用户询问。 |
-| 历史准备或分析 | 继续同一计划、来源获取序号和 `history:run`；已暂停时先按原控制协议恢复。 |
-| 博客正文或图片被拒 | 先完成整批正常审查并保留 findings；会议正文及未解决格式问题走[正常 Reader 维护](docs/conference-workflow.md#博客拒稿后的正常-reader-维护)，图片可先派生同 PDF 完整页展示再正常审查；review 不改最终文件。 |
-| 认证、配额、配置、存储或运行级故障 | 停止新派发，保存在途结果，排除原故障后从原阶段继续。 |
+| 日更分析或 Reader | 选择 deep、batch 或 Reader 刷新，继续同一封存来源，见[操作手册](SKILL.md)。 |
+| 会议处理或旧完成稿检查 | 继续原 process；实现变化时按[迁移与恢复](docs/conference-workflow.md#已有完整会议只更新页面)处理。原窗口耗尽后，在已有授权内登记[后续窗口](docs/conference-workflow.md#原额度耗尽后的独立付费恢复)，保留前序完整记录。 |
+| 历史准备或分析 | 继续同一计划、来源获取序号和 `history:run`；暂停任务先按原控制协议恢复。 |
+| 博客正文或图片被拒 | 先完成整批审查。会议正文及格式问题走[正常 Reader 维护](docs/conference-workflow.md#博客拒稿后的正常-reader-维护)；图片可用[同篇 PDF 出版视图](docs/conference-workflow.md#认证-pdf-的独立出版视图)后重新审查，语义错误仍须修正正文。 |
+| 运行级故障 | 停止新派发、保存结果、排除故障，再从原阶段继续，见[故障排查](docs/troubleshooting.md)。 |
 
-会议完成稿迁移和完整汇总共用最多5个工作线程，汇总每篇只进行一次完整来源、正文及页面核验。多轮正常恢复后只剩少量顽固稿时，可用[来源绑定人工收尾](docs/conference-workflow.md#最后失败集合的零请求-reader-修正)，保留全部付费稿与记录；完整失败集、原文证据、逐格表格和最终发布审查仍须通过。
+优先复用已通过的阶段和真实付费响应。人工修正绑定完整失败集合、原稿、真实来源和明确节点范围，中断沿同一清单继续；详见[Reader 恢复](docs/reader-explicit-retry.md)。科学表格保留真实条件、方法、指标及单位，图表、脚注和作者资源声明须有对应来源。正常解析、完整资格与最终博客审查始终保留。
 
-人工收尾中断后，沿同一清单继续已保存的真实完成子稿；不重新购买已通过阶段或重签清单。资源字段的恢复只取自同次已绑定预检及真实父稿，完整来源、评分和最终页面仍须正常通过，详见上述恢复说明。
+审查通过页按“相对路径 + 内容 SHA”复用，原合法协议和缓存记录保留。同字节内容拒稿只有旧、新协议均合法且确实变化时才能正常重审。最新失败和未完成事实纠错义务继续阻断完成与发布；共性误报须在生产停止后用真实原稿和正反例修复，再执行正常检查。规则见[发布记录](docs/data-format.md)与[执行约束](AGENTS.md)。
 
-会议博客审查先在原五个槽位中优先派发汇总，论文保持原相对顺序；完整审查结束后再统一处理失败。正常 Reader 维护保留原主文、核心、评分、标签与费用，先全批后仅失败集合续轮；必要新窗口已获持续授权。出版原页视图与原 Reader 独立，不能用换图代替真实语义纠错，详见[出版图片与正常复审](docs/conference-workflow.md#认证-pdf-的独立出版视图)。
-
-已通过的审查页永久按“相对路径 + 内容 SHA”复用；来源、当前批次和发布边界仍须核验。同字节内容拒稿不能靠反复调用再买一次响应：只有保存的旧、新协议均合法且确实变化，才可正常重审。会议后续整批可同时含旧协议的真实通过缓存与当前协议的失败；通过项须与 canonical 路径/页 SHA 缓存、自哈希和原记录精确一致，不能要求它们改签当前协议。原失败与费用不删除，详见[发布凭证](docs/data-format.md)。
-
-事实纠错的未完成义务和最新失败会阻断完成与发布，旧成功正文不能抵消它们。共性校验误报先用真实失败稿和封存来源复现，生产停止后修复规则、验证正反例，再交回正常完整检查。多轮后少量顽固稿才使用已授权、来源绑定的[受控修正](docs/reader-explicit-retry.md)，不手填通过、不清零预算。
-
-会议与历史 PDF 的多层表头和资源脚注，都从认证的同篇原 PDF 核验：表格保留完整分组、行条件和原单位；脚注核对同页同栏的作者声明、上标与网址。资源归属和网址可达状态分别检查；转述作者提供资源时仍须明确本次实际核验结果。新证据不会改写旧签名、自动恢复评分或增加模型额度。
-
-三条流程的结果表都须写清真实条件、方法、指标和单位，列数跟随原表；不从引文抽数字造“来源句／量化值”占位表，也不为凑宽表添加原表没有的列。新稿、旧签稿恢复和最终发布都执行同一语义检查，签名一致不能代替实际正文合格。缺少合格表格时按正常失败集合恢复，保留已通过阶段与原费用。
-
-会议需要先统一复验时，迁移加 `--postprocess-only`，保存检查结果后即返回。认证来源事实确需人工纠正时，资源归属与唯一核心句使用独立的零请求清单，保留最新主文、原稿和费用，正常完整校验后再采纳；见[来源纠正](docs/conference-workflow.md#认证来源事实的零请求纠正)。
-
-会议完成稿的迁移复验和完整汇总默认按 `--concurrency` 使用最多5个私有工作线程；迁移可加 `--postprocess-concurrency 1–5` 单独控制纯后处理，Reader/分析并发保持原值。普通 Reader 维护在同一篇同步冷核中合并重复历史材料扫描，公共修订读取器覆盖已付候选恢复的各次读取，首次和返回前仍完整重读，不跨异步恢复。这些纯后处理和冷核操作保留原来源、整篇资格及页面检查，禁止模型请求，最后正常保存状态。仅有资源脚注而没有表格的页面，也须在生成和出版冷核中重放真实PDF来源。
-
-完成稿的纯后处理与普通 Reader 维护初始化中的已完成保存稿暂存共用私有工作池；复杂页面在本次同步渲染内合并真实来源冷核，下一篇重新核验。费用保存失败会保全实际响应并停止新请求；服务传输重试用尽也先停止整批，详见[故障排查](docs/troubleshooting.md)。
-
-会议博客拒稿维护先完成全批，再续失败集合。符合原来源和上游条件的部分稿交正常入口复用已付结果，避免初始化重复恢复；默认保留原评分，只有真实未签发的资源重探回执可首次进入评分＋Reader。原稿、次数和费用保留，仍经完整校验和发布审查，见[会议维护](docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。
-
-整批 Manual 写作、旧拆分分析链和微信、飞书、小红书发布已退役。[manual/](manual/README.md)仅保留旧记录核验及独立人工审查；受控单篇人工修正与审查属于三条流程的恢复能力。新独立审查须实际使用 `gpt-6.1-sol/high` 并登记真实身份。
+整批 Manual 写作与微信、飞书、小红书发布已退役。[manual/](manual/README.md)保留旧记录核验和受控独立审查；新独立审查实际使用 `gpt-6.1-sol/high` 并登记真实身份。
 
 ## 怎样才算完成
 
-1. 正式分析、来源、Reader、评分和标签均通过当前检查。
+1. 正式分析、来源、Reader、评分和标签通过当前检查。
 2. 最终页面通过程序、正文、图片及 Hugo 审查，凭证覆盖完整目标集合。
-3. 仅推送凭证允许的精确差异，并核验远端 `main` 的提交 ID。
-4. 确认对应提交或保留已审页面字节的后续提交部署成功，逐页核验 HTTP 200、正式地址及标题，并保存证据。
-5. 完成视觉任务，或记录用户明确授权、仍与当前发布绑定的视觉处置；最后重新读取状态。
+3. 只推送凭证允许的精确差异，核验远端 `main` 提交 ID。
+4. 对应提交或保留已审页面字节的后续提交部署成功，逐页核验 HTTP 200、正式地址及标题，保存记录。
+5. 完成视觉任务，或登记用户明确授权、与当前发布绑定的有效豁免，最后重新读取状态。
 
-`digest:status` 是读取时的完整冷核报告，不能代替部署和网页检查。需要运行中观察时用 `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒刷新，适合分钟级进度，不做秒级轮询）。Git 推送成功、process complete 或暂存文件存在，都不足以宣告上线。
-
-会议维护的历史来源检查在同次调用内合并共享文件读取，并以四份原文件字节守卫减少父包重复解析；每次仍重读原字节，当前论文的来源、Reader 和页面检查保留。历史出版实现升级须显式重算并另存当前证明，不改旧来源、原稿或费用，详见[独立出版视图](docs/conference-workflow.md#认证-pdf-的独立出版视图)。
+`digest:status` 报告读取时的状态；部署、网页和视觉按上述步骤分别验收。运行中观察用 `--watch`（默认 10 秒），最终发布、图片登记或豁免发生变化后重新读取。
 
 ## 文档导航
 
-- [操作手册](SKILL.md)：运行顺序、恢复入口与完成要求。
-- [文档索引](docs/README.md)：按任务选择配置、来源、Reader、标签和故障说明。
-- [脚本索引](scripts/README.md)：从职责定位入口、共享模块和旧记录兼容代码。
-- [三流程与共享核心](docs/three-workflows.md)：共用哪些能力、哪些身份与凭证不能互换。
-- [写作约定](docs/writing-guide.md)：面向入门者组织术语、段落、图表和操作说明。
+- [操作手册](SKILL.md)：正常顺序、恢复入口和完成要求。
+- [文档索引](docs/README.md)：配置、来源、Reader、标签和故障说明。
+- [脚本索引](scripts/README.md)：入口、公共模块和旧记录兼容代码。
+- [三流程与共享核心](docs/three-workflows.md)：调用关系、来源与发布边界。
+- [写作约定](docs/writing-guide.md)：术语、段落、图表和操作说明。

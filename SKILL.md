@@ -1,4 +1,4 @@
-# Audio Paper Digest 操作手册
+# 论文速递操作手册
 
 本手册用于执行日更、官方会议和历史博客更新。先完成运行前检查，再进入对应流程；失败恢复与专项约束放在正常步骤之后。执行限制见 [AGENTS.md](AGENTS.md)，实际代码与 Prompt 对应见 [三流程表](docs/three-workflows.md)，配置参数见 [安装配置](docs/setup.md)。
 
@@ -63,7 +63,7 @@ conference:acquire → conference:discover → 全文证据与每会筛选
   → conference:publish:verify
 ```
 
-参数、官方会议来源、账本、导入、并发、来源升级与断点恢复见 [会议工作流](docs/conference-workflow.md)。唯一分析入口是 `conference:process`，内部调用公共 `analysis-engine.js`，不再提供独立execution/analyze/postprocess旧CLI。
+参数、官方来源、账本、导入、并发和恢复见[会议流程](docs/conference-workflow.md)。新会议统一从 `conference:process` 分析，内部调用公共 `analysis-engine.js`；页面维护使用下述 `conference:migrate-process`。
 
 会议 `conference:process` 外层并发默认1、`conference:migrate-process` 默认3，均可显式设置 `--concurrency N`（1–60）。Reader 仍受原 `PD_API_READER_CONCURRENCY` 限制，正常完整分析修订最多占用原主分析配置下的3槽，每篇内部并发仍为1；调度并发不改变来源计划、模型、请求额度或整批轮次。
 
@@ -137,7 +137,7 @@ npm run conference:migrate-process -- --apply --catalog CATALOG.json --report RE
 npm run conference:migrate-process -- --apply --catalog CATALOG.json --report REPORT.json --filter FILTER_UUID --from PROCESS_UUID --concurrency 5 --reader-review-feedback /absolute/process/review-reader-maintenance/BATCH_UUID/manifest.json --reader-review-window /absolute/process/review-reader-maintenance/BATCH_UUID/windows/WINDOW_UUID/manifest.json
 ```
 
-示例消费已核验并安装的真实清单，不能手填 UUID/CAS 或把 O 内准备器当公共 npm 命令。每窗固定最多3轮、Reader累计6次内容响应及2次全文，必要新窗已获持续授权；先全批后失败集合，保留原主文、核心、评分、标签、原候选和全部费用。完成后同次入口仍执行正常全会 stage 与汇总，再 generate/review/push/verify。pending 时不得另跑普通迁移使原基线漂移，详见[正常 Reader 维护](docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。
+示例中的清单路径取自本次任务已经核验并安装的材料。UUID 和 CAS 由真实准备流程生成；准备器属于内部模块，不是公共 npm 命令。每窗固定最多3轮、Reader累计6次内容响应及2次全文，必要新窗已获持续授权；先全批后失败集合，保留原主文、核心、评分、标签、原候选和全部费用。完成后同次入口仍执行正常全会 stage 与汇总，再 generate/review/push/verify。pending 时不得另跑普通迁移使原基线漂移，详见[正常 Reader 维护](docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。
 
 初始化可将符合原调度条件的普通 Reader-only partial 子稿交原正常入口统一恢复：要求原总轮数为3、显式无独立窗口、实际尝试少于3，并按正常入口确认同一父稿、来源、原标签及科学上游可复用。正常入口仍先在锁内重放保存稿和活跃付费候选，再决定是否增加尝试；其他模式、耗尽、原调度排除项或父预检不符仍走原初始化，不能把延后当通过。
 
@@ -188,7 +188,7 @@ PDF 表格的来源适配不改变这项原则。正常生成、候选恢复和�
 
 ### 日更耗时控制与尾部收尾
 
-10 月 16 日的逐阶段证据、返工原因和提速实测见 [性能审计](docs/daily-performance.md)。后续执行采用以下收尾顺序，不把同一顽固集合拆成反复试一篇、再看一篇的循环：
+按以下顺序处理尾部失败，集中核对完整集合并复用已经合格的结果。性能观测的方法和适用范围见[性能说明](docs/daily-performance.md)。
 
 1. 生产期间冻结共享实现；一次正常轮次结束后收集完整当前失败集合。把内容错误、来源/格式问题、系统校验误报、身份/父稿问题和服务故障分清，再选择已有恢复入口。系统规则不能由当前正文补丁改变时，不为同一误报反复追加模型请求。
 2. 恢复方案同时核对当前原稿 CAS、全部阻断问题、来源、父包/pending 义务、候选选择和原预算；identity/replay 工具只证明其声明的身份，不能当作实际下一请求的完整预检。正常执行的 `[reader-next-request-plan]` 报告真实 full/patch、问题集合指纹和剩余次数，但明确不是最终资格或请求许可，后续全部守卫继续生效。获准范围仅有局部响应时可在同一正常操作外使用 `withReaderLocalRequestsOnly` 减权，不能因预览预期为 patch 就容许实际 full。
@@ -217,7 +217,7 @@ Reader-only 纠错完成后，使用原父包与子包的实际签发上下文�
 
 表格按真实来源保留条件、方法、指标与单位，原表只有3或4列时不凑5列。禁止从任意引文抽数字合成“来源句／量化值一”结果表，参考文献编号、年份、页码不能充作实验结果，少量数字重叠不能决定原表身份。缺真实表交正常 Reader 修复；已存稿经当前完整校验报告实际失败集合后统一恢复，保留合格上游和原费用。
 
-这条语义检查同时适用于新响应和保存稿。日更、会议与历史共用保存稿资格门，旧正文、计划与阶段 SHA 一致也不能绕过；命中的 `reader_placeholder_result_table` 应作为当前失败保存，再集中正常恢复。来源身份重放不代替正文资格，也不应提前触发正文失败而中断全批检查。
+这条语义检查同时适用于新响应和保存稿。日更、会议与历史共用保存稿资格检查，旧正文、计划与阶段 SHA 一致也不能绕过；命中的 `reader_placeholder_result_table` 应作为当前失败保存，再集中正常恢复。来源身份重放不代替正文资格，也不应提前触发正文失败而中断全批检查。
 
 日更内嵌SVG的绘图定义缺失、成环，或封存几何证明不透明黑底与默认 HTML 黑字同色不可读时，发布器只可按同篇四份封存来源、唯一图号与完整图注，从原PDF派生完整原页并明确标示页码。独立派生证明进入生成清单及审查、推送重验；保留原Reader和原模型像素身份，新像素仍须正常图片审查，不猜补SVG或裁图边界。旧清单仅按原来源与原像素身份只读兼容，不能用缺少新字段为新的替代资产签发凭证。
 

@@ -323,7 +323,7 @@ Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点
 npm run conference:migrate-process -- --apply --catalog CATALOG.json --report REPORT.json --filter FILTER_UUID --from PROCESS_UUID --concurrency 5 --reader-review-feedback /absolute/process/review-reader-maintenance/BATCH_UUID/manifest.json
 ```
 
-命令消费已经核验、安装到该 process 私有根的清单；没有公共 npm 清单生成器。执行者可用经过审查的 O 内只读准备工具读取正式材料、输出完整字节树与安装计划，不能把准备结果当正常通过或让工具直接安装/发模型。字段与不可变材料见[数据格式](data-format.md#会议博客审查后的-reader-维护记录)。CLI 和直接库调用均拒绝混入 `--retry-failed`、旧 `--recovery-manifest`、人工清单、来源纠正或 `--postprocess-only`。
+命令读取已经核验、安装到该 process 私有根的清单。准备器是受控内部模块，不是公共 npm 命令；经过审查的只读工具可读取正式材料并输出完整字节树及安装计划。准备工具不直接安装或请求模型，准备结果仍需正常完整核验。字段与不可变材料见[数据格式](data-format.md#会议博客审查后的-reader-维护记录)。CLI 和直接库调用均拒绝混入 `--retry-failed`、旧 `--recovery-manifest`、人工清单、来源纠正或 `--postprocess-only`。
 
 正常维护默认 Reader-only，保护原主文、核心、评分、标签及费用；仅下文真实未签发资源恢复可首次进入评分＋Reader。原签稿 seed 在原父真实来源和签发上下文封存；新资源预检已进入子稿时，精简输入由私有父稿能力重新核验原父 seed，不把旧 Reader 当作与新资源匹配的完整子稿。能力绑定实际子运行、来源、修订、反馈与原父文件 SHA，普通 JSON 不能代替。已有付费候选须匹配唯一原输入显示身份；实现升级沿原恢复链迁移，保留响应、全文、传输及无进展计数。普通 Reader-only 的资源同步只正常检查投影和评分事实，不改原主文、解析、评分阶段及检查点；这项保留不禁止正常 Reader 请求。新 Reader 必须有本 child 的真实签发与反馈证明，不能用继承父 Reader 清义务。先完成整批正常一轮，再续真实失败集合；每篇成功立即保存，未全成功时旧 process complete 历史和父稿保持。服务、存储、身份故障停止派发并保留在途结果。
 
@@ -671,10 +671,10 @@ npm run conference:process -- --source-upgrade-promote \
 
 单个既有日批次可查 [`history:resume`](history-rewrite.md)。全历史会议页优先走 `history:conference-local-sources → history:inputs → history:conference-projections → history:plan` 后进入直接重写队列，不要求先跑旧账本或执行状态，也不把旧全文、任意路径或旧解读直接塞进正式分析。
 
-会议来源只读取本地来源清单已绑定的 metadata/PDF SHA 和冻结页面对应记录，本轮解读所需图片从 PDF 在系统临时目录准备。本地文件缺失或损坏只使该项失败，不转入来源对照表（crosswalk）或备用 arXiv 获取。arXiv 来源根据冻结页的单一 arXiv 线索，每个新的来源获取序号都重新获取官方文本、PDF、runtime metadata 和 manifest；同一获取序号恢复时，先核验并复用原四文件。只有明确命名的 arXiv 新获取失败交接才能进入来源对照表，不能任意调用备用链。只有当前官方 PDF 返回 404 后才可尝试同 ID 历史版本，文本须来自实际选中 PDF，引用使用核验的 `sourceVersion`，不能把获取序号当论文修订号或猜成 `v1`。
+会议来源只读取本地来源清单已绑定的 metadata/PDF SHA 和冻结页面对应记录，本轮解读所需图片从 PDF 在系统临时目录准备。本地文件缺失或损坏只使该项失败，不转入来源对照表（crosswalk）或备用 arXiv 获取。arXiv 来源根据冻结页的单一 arXiv 线索，每个新的来源获取序号都重新获取官方文本、PDF、runtime metadata 和 manifest；同一获取序号恢复时，先核验并复用原四文件。只有明确命名的 arXiv 新获取失败备用记录才能进入来源对照表，不能任意调用备用链。只有当前官方 PDF 返回 404 后才可尝试同 ID 历史版本，文本须来自实际选中 PDF，引用使用核验的 `sourceVersion`，不能把获取序号当论文修订号或猜成 `v1`。
 
 ICML/OpenReview 替代 PDF 默认拒绝，不能以相似题目替换来源。经用户授权的跨标题预印本例外仅为 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`，由代码白名单绑定 poster/forum、固定 SSRN 题目与作者、DOI 及 PDF、凭证和来源的 SHA。浏览器文件只经受控 `--import-file` 导入，记录 `networkResponseObserved: false`；计划、模型输入和页面都须显示不是会议 camera-ready 定稿，不能推广到其他论文。完整来源和发布要求见历史文档。
 
-当前历史直接发布已有计划、生成、独立审查和精确发布入口，维护旧 URL、会议汇总和任务页。`publish --apply` 在共享锁内完成交接、提交、推送和远端核验。具体参数及中断恢复见[历史直接发布](history-direct-publication.md)，不据旧分支的未完成说明跳过当前流程。
+历史直接发布依次完成计划、生成、独立审查和精确发布，保留旧 URL、会议汇总及任务页。`publish --apply` 在共享锁内写入文件、提交、推送并核远端。参数和中断恢复见[历史发布](history-direct-publication.md)。
 
 每篇仍只允许一个写入者，请求用量和检查点保留；来源、Reader 或标签规则变化按实际指纹及迁移要求处理，不无限复用旧通过。每次直接重写的质量审查都是正常阶段，不能当作可省略的试点。发布范围是否排除视觉或允许豁免取决于用户明确要求，命令示例不能代替用户授权或决定；Git 到达远端仍不能替代部署和页面核验。

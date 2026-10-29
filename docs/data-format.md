@@ -297,17 +297,23 @@ npm run digest:status -- --date YYYY-MM-DD
 
 `validate:data --allow-empty` 只用于明确没有运行数据的干净 checkout。状态报告反映读取时的状态，后续推送、登记或取消配图后须重新运行。
 
-`digest:status` 把结果写成 `data/current/digest-run-reports/<日期>.json`。这份报告的 `version` 现在是 **3**。**`version: 1` 是旧口径；`version: 2` 起改成下面这些说法；`version: 3` 又收紧了 `visuals.status`、`fetch.rawCandidateCount` 两处取值域，并新增 `readProblems`。**
+`digest:status` 将当前 **version 3** 报告保存为 `data/current/digest-run-reports/<日期>.json`。
 
-- `filter.pendingDecisions`：**还没拿到明确决定的候选数**（候选总数减去已决定数）。v1 里它取的是「已经有决定、但决定本身可重试」的条数，运行在写完全部决定之前被杀时会显示 0，把缺口藏起来。要判断「可重试」请看同一节点下的 `filter.retryableDecisions`（v1 没有这个字段）。
-- `analysis.expected` 与 `analysis.missing`：分母是筛选入选集大小，缺口是入选集里没有出现在分析结果中的篇数。`analysis.total` 的含义没变，仍是分析结果本身的条数。
-- `analysis` 未完成时的文案会区分两种情况：**逐篇复验不通过**（按当前词表和检查规则重新核验已保存记录，不等于当时那次运行失败）与**集合缺篇**。不能仅凭前者就整批重跑，也不能断言无需修复；应先定位来源、正文、标签或阶段指纹的具体失败，再选择必要的修复或重分析范围。
-- `blog.remoteOidVerified` 与 `blog.publicationVerified`：前者只说明远端 OID 与发布提交是否一致，后者是整份凭证是否通过校验。v1 把两者合成一个 `remoteVerified`，凭证因为别的原因失效时会被读成「没推到远端」。
-- `visuals.complete/total/pending/failed`：读不到长图清单时是 **`null`**，摘要打印 `?`。v1 用 `|| 0`，把「清单不存在」显示成「一张都没做」。
-- `cover.status`：由实际检查结果确定，检查不通过时不会说 `complete`。v1 直接镜像清单内层说法，出现过「封面 incomplete 但 status=complete」。
-- `visuals.status`：同样由实际检查结果确定（v3 起）。清单自称 `complete` 而资产校验或发布绑定已经失败时，这里说 `incomplete`；清单自己写的是 `pending`／`partial_failed` 就照说；清单根本不在才是 `missing`。v2 直接镜像清单内层的 `overallStatus`，当时的归档日期里有 29 天打出过 `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`（归档随日更增长，这里不写死当时的日期总数）。
-- `fetch.rawCandidateCount`：候选快照读不到时是 **`null`**，摘要打印 `?`（v3 起）。快照在、候选确实为空才是 `0`。v2 把两种情形都写成 `0`，于是出现过 `candidates=0` 同屏 `selected=53`。
-- `readProblems`：列出「文件存在但读不出来」的项，`kind` 为 `invalid-json` 或 `unreadable`（后者带 `code`，例如 `EISDIR`）。文件不存在不会进这个数组，也不算错误——那只是这一步还没跑。v2 把损坏与不存在都返回 `null`，运维分不出该重跑还是该修文件。
+| 字段 | 当前含义 |
+|---|---|
+| `filter.pendingDecisions` | 候选总数减已决定数，即尚无明确决定的数量。可重试决定另计 `filter.retryableDecisions`。 |
+| `analysis.expected` / `analysis.missing` | 入选集大小，以及其中未进入分析结果的篇数。`analysis.total` 是结果记录数。 |
+| `blog.remoteOidVerified` | 实际远端 OID 是否与发布提交一致。 |
+| `blog.publicationVerified` | 完整发布凭证是否通过核验；与远端提交分别报告。 |
+| `visuals.complete/total/pending/failed` | 长图实际计数；清单不可读时为 `null`，摘要显示 `?`。 |
+| `cover.status` | 按实际封面检查结果确定，检查失败不返回 `complete`。 |
+| `visuals.status` | 完成声明未通过资产或发布绑定时为 `incomplete`；原 `pending`/`partial_failed` 保留，清单不存在为 `missing`。 |
+| `fetch.rawCandidateCount` | 候选快照可读且为空才是 `0`；不可读为 `null`，摘要显示 `?`。 |
+| `readProblems` | 文件存在但无法读取的项目：`invalid-json` 或 `unreadable`，后者带实际错误 `code`。尚未生成的缺失文件不进入此数组。 |
+
+分析未完成时先区分“逐篇复验不通过”与“集合缺篇”。前者按当前词表、来源和阶段检查保存稿，应定位具体阻断再选择必要修复，不直接推断原运行失败或整批重跑。
+
+读取旧报告时保留原版本：v1 的 `pendingDecisions` 计可重试决定、无 `retryableDecisions`，远端与凭证合为 `remoteVerified`，缺失视觉计数可能为 0，封面状态直接取清单；v2 的 `visuals.status` 直接取 `overallStatus`，候选缺失与空集都可能为 0，不区分坏文件和缺失文件。旧字段用于解释当时报告，最终完成仍执行当前来源、发布、部署及页面核验。
 
 
 归档优先使用显式 `batchDate`，刷新时间和 `lastUpdated` 不改变批次归属；缺显式日期的旧记录才按已有时间字段处理。归档仅移动原字节，不重写原稿、费用或发布输入 SHA。异日刷新过的旧分析若曾按时间戳存到其他日期目录，上一发布证明只能按当前已审生成清单的输入 SHA 和原 `batchDate` 冷查找；目标文件已存在但损坏时必须拒绝，不能用其他目录掩盖损坏。

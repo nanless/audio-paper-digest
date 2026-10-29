@@ -1,97 +1,62 @@
-# Android 的 Zotero 接入研究与首版建议
+# Android 的 Zotero 接入与使用
 
-原始核查日期为2026-10-25，官方Android下载入口于2026-10-28补充核对。本页依据Zotero官方文档、团队公告、官方Android仓库和Android开发文档，说明接口能力与实现边界；资料研究本身没有登录账户、读取密钥或写入真实文库。实际开发结果另见[验收记录](android-validation.md)和[功能对齐表](android-feature-parity.md)，Mac已有归档要求见[原69项验收](mac-app-acceptance.md)。
+论文速递工作台通过 **Zotero Web API v3** 将所选论文与个人研究保存到文库。Android 独立配置专用授权，不要求 Mac 在线。Zotero 是可选连接；不配置它也可阅读论文、使用本机模型和备份研究资料。
 
-本轮主任务已采纳：首版保留完整 Zotero 存档目标，使用 **Zotero Web API v3**，由 Android 自己取得专属授权；用户可选择是否启用，系统分享另作快捷入口。这样不要求 Mac 在线，也不依赖官方 Android 应用公开本地写入服务。未完成时保持待实现或待验，不能把分享成功当完整归档。
+## 配置与归档
 
-## 官方 Android 应用当前能做什么
+1. 在 Zotero 创建本应用使用的专用 API key，按需要授权个人文库、笔记、写入及群组权限。在本应用的 Zotero 设置中填写授权，不填写 Zotero 登录密码。
+2. 主动检查连接。应用通过 `GET /keys/current` 核对当前账户和实际权限，读取可访问文库与分类。
+3. 选择目标和论文，预览来源、原 PDF、导读、研究与笔记。材料、目标或凭据变化后重新准备；确认页面反映本次实际选择。
+4. 确认归档后，应用保存对象 key 和检查点，逐项写入、下载并核对结果。在任务页查看完整、部分、取消或失败状态。
+5. 在其他 Zotero 客户端同步并下载附件。云端回读与另一客户端离线阅读分别完成，后者需要相应客户端的账户和附件设置。
 
-官方[Android 功能页](https://www.zotero.org/support/android)明确支持个人与群组文库同步、书目信息与分类管理、研究笔记、PDF 阅读和高亮/注记/图像/手写标注，以及从其他应用分享 URL、按标识符添加和给直接导入的 PDF 检索书目。浏览器自动取 PDF 仍受需要登录的文章限制。这说明 Android 已有可配合使用的正式客户端，不代表第三方应用获得了其全部内部能力。
+授权由 Android Keystore 的设备密钥加密保存在应用私有目录，排除系统备份。删除授权先撤销内存缓存，再处理持久化。本机凭据不可读、HTTP 401、权限不足、限流和网络失败分别显示；认证失败后由用户修正连接。
 
-必须区分稳定版、测试版和源码。原研究时上述功能页把EPUB及网页快照列为后续能力，而[官方团队2026-06-24公告](https://forums.zotero.org/discussion/132371/available-for-beta-testing-on-android-epub-snapshot-support)介绍的是测试版；当时不能据主分支承诺稳定版完整打开HTML。2026-10-29已补实际官网release渠道`1.0.0-247`：正式包及签名核验后在官方客户端实际打开同一MiCLA自包含导读，完全断网且冷启仍显示完整混合公式及Fig2，经独立实图核验。故本轮这个版本、这个实际归档已关闭HTML读取缺口，不需要临时新增PDF转换；不推广为任意HTML、EPUB或其他版本全部兼容。具体范围及原失败见[官方客户端实测](android-feature-parity.md#e12)。
+官方协议依据：[Web API 基础](https://www.zotero.org/support/dev/web_api/v3/basics)、[权限与 OAuth](https://www.zotero.org/support/dev/web_api/v3/oauth)、[字段与类型](https://www.zotero.org/support/dev/web_api/v3/types_and_fields)。当前使用专用 key；OAuth 应用注册和回调是独立的接入工作。
 
-截至2026-10-28，[官方Android下载页](https://www.zotero.org/download/android/)除Google Play外，也提供直接下载安装包的渠道；当日官网链接指向`1.0.0-247`通用APK。官方[GitHub Releases](https://github.com/zotero/zotero-android/releases)仍没有发布资产。验收使用官网或Google Play提供的稳定版，安装前记录实际下载版本；不从第三方镜像取包，也不以自行编译的主分支或测试版代替稳定版。
+## 保存哪些材料
 
-官方[数据/文件同步说明](https://www.zotero.org/support/sync)区分书目、笔记等数据同步与附件文件同步；个人文库可使用 Zotero Storage 或 WebDAV，群组文件不能使用 WebDAV。官方团队另确认了[Android 内配置 WebDAV 的入口](https://forums.zotero.org/discussion/125242/how-to-setup-webdav-server-on-ios-or-in-webbrowser)：文库层级返回顶层，进入设置和账户，再选择个人文库文件同步方式。不能根据旧讨论误报“Android 不支持 WebDAV”。
+| 材料 | 保存内容与核验 |
+|---|---|
+| 书目 | 原题、作者顺序、日期、摘要、DOI/arXiv/会议身份、URL 与标准标签，回读核对实际父项 |
+| 来源元数据 | 已确认机构、ORCID、许可、评分量表、分类、版本及网站修订，下载补充文件核 SHA |
+| 原 PDF | 指定版本原件，完成上传和登记后重新下载核 SHA |
+| 图文导读 | 自包含 HTML、图片、表格、公式、图注和修订，保留原材料身份 |
+| 所选研究 | 问题、输入、回答、模型、时间、物理页、版本及实际用量，独立于论文原摘要 |
+| 所选笔记 | 可编辑笔记及来源关系，核对父项、正文和版本 |
 
-## 本地端口不能从 Mac 搬到手机
+缺失元数据保持缺失。标准书目以外的信息使用补充材料，不写入不合法字段。个人回答与论文原文分别保存。
 
-官方[Local API](https://www.zotero.org/support/dev/web_api/v3/local_api)将 `localhost:23119/api/` 定位为桌面 Zotero、供同一台计算机使用的接口，并明确不应将端口转发暴露出去。本次没有找到官方 Android 对第三方提供等价本地读写服务的承诺；Android 的 localhost 指手机自己，不是用户的 Mac。
+## 文件后端与坚果云
 
-Mac 的本地许可、钥匙串条目、`Zotero-Server-ID`、本地对象版本与 Web API 的账户/API key/对象版本不是同一身份空间。Android 不复制旧许可、不把本地 user 0 当云端用户、不将 Mac 本地 key 当 Web API key。已有归档映射只能作为受保护历史材料；重新核对实际云账户、文库、对象和原附件后才能建立云端映射。
+Zotero 的书目、笔记同步和附件同步是不同服务。个人文库附件可用 Zotero Storage 或 WebDAV；**群组附件不使用 WebDAV**。官方说明见[数据与文件同步](https://www.zotero.org/support/sync)。
 
-## 系统分享能提供的最小能力
+Zotero Storage 空间不足时，本应用可请求用户明确确认，沿原归档改用已配置的坚果云附件连接。原父项、Storage 记录及成功材料保留，新附件按对应后端重新核验。更改连接或重启后需要再次确认；权限不足、目录不符或材料不全时保留原状态。
 
-核查官方 Android 源码时固定到提交 [`cbb929be2a6383906cce3d74408e24ca38f50be5`](https://github.com/zotero/zotero-android/commit/cbb929be2a6383906cce3d74408e24ca38f50be5)。以下是该源码的行为证据，不是已在用户手机测试的结论。
+Zotero 的附件目录与本应用的研究备份目录分开。本应用的 `PaperDigest` 目录保存整个研究空间的不可变版本，不能写入 Zotero 的 `zotero` 附件目录。其他 Zotero 客户端须独立设置相同 WebDAV 并同步下载；本应用不读取它们保存的密码。Zotero 数据库也不放进普通云同步目录，见[官方说明](https://www.zotero.org/support/kb/using_multiple_computers)。
 
-| 入口 | 官方源码证据 | 我们可以承诺到哪里 |
-|---|---|---|
-| 分享来源 URL | [Manifest](https://github.com/zotero/zotero-android/blob/cbb929be2a6383906cce3d74408e24ca38f50be5/app/src/main/AndroidManifest.xml)有单项 `ACTION_SEND`；[载入器](https://github.com/zotero/zotero-android/blob/cbb929be2a6383906cce3d74408e24ca38f50be5/app/src/main/java/org/zotero/android/screens/share/ShareRawAttachmentLoader.kt)接收 `EXTRA_TEXT` | 通过系统分享选择 Zotero，由用户在其界面确认保存；不承诺携带本站所有元数据 |
-| 分享已有 PDF | 同一载入器接收 `EXTRA_STREAM` URI；Manifest 有 PDF 的 `VIEW` | 使用应用自己的 FileProvider 临时只读 URI 与准确 MIME，保留原版本文件；待真实设备确认能导入 |
-| 同时发送 URL 与 PDF | 载入器先取文字中的首 URL，再处理文件流 | 不组合这两项来承诺“同一个导入同时保存全部材料”；PDF 分享使用文件流，避免附带含 URL 的 `EXTRA_TEXT` 抢先选择来源 |
-| 多文件/完整研究包 | 本次 Manifest 未见 `ACTION_SEND_MULTIPLE`；`*/*` 只表示宽泛匹配 | 未证实RIS/BibTeX/任意ZIP或六角色一键合并导入，不因宽泛MIME宣布支持 |
-| 直接打开原生指定条目 | 本次 Manifest 没有可据此保证任意条目定位的公开深链合同 | 可提供云端文库网页入口；原生条目跳转需另核官方协议及实际版本，不能绘制无效按钮 |
+## 取消、继续与远端修改
 
-[RootViewModel](https://github.com/zotero/zotero-android/blob/cbb929be2a6383906cce3d74408e24ca38f50be5/app/src/main/java/org/zotero/android/screens/root/RootViewModel.kt)在未登录时进入登录引导。分享链还须测试未安装、未登录、用户取消、手机旋转和进程被回收，不把选择分享目标当接收方已持久写入。
+归档记录长期保存操作身份、目标、对象 key、版本和材料。取消后继续同一操作，成功项不重建；丢失应答先查询原对象。官方写请求的 12 小时去重 token 只作辅助，长期恢复依赖本应用的记录。
 
-我们使用[Android 系统 Sharesheet](https://developer.android.com/develop/ui/compose/sharing/send)，文件按[FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider)授予单个 URI 的临时读取权。交出文件后只能显示“已交给 Zotero 处理”；Sharesheet 的返回不是父项、附件和笔记的持久化回执。
+更新前读取对象版本。HTTP 412、远端用户修改或附件删除会停止覆盖并提示差异；切换账户、文库、群组、分类或权限后，旧映射不能直接继续。部分写入保留已成功材料和断点。
 
-## 完整存档为什么建议使用 Web API
+文件上传按[官方协议](https://www.zotero.org/support/dev/web_api/v3/file_upload)依次授权、传输、登记和回读。协议使用 MD5 与毫秒时间，本应用另核 SHA-256。外域附件传输只使用核验后的 HTTPS 目标，不携带 Zotero API key；重定向不得泄漏认证信息。[写请求](https://www.zotero.org/support/dev/web_api/v3/write_requests)和[限流](https://www.zotero.org/support/dev/web_api/v3/basics#rate_limiting)返回的部分错误、Backoff 与等待时间分别处理。
 
-官方[Web API 基础](https://www.zotero.org/support/dev/web_api/v3/basics)支持第三方专属 API key，推荐通过请求头传递。本次官方仍记载 OAuth 1.0a；不能直接套用 OAuth2/PKCE 流程。[OAuth 说明](https://www.zotero.org/support/dev/web_api/v3/oauth)要求注册应用并取得客户端身份，用户可以批准文库/笔记/写入及群组权限。为尽快得到可验证首版，可先提供用户自行创建的专属 key 输入；不要求用户交出 Zotero 登录密码，不暗中读取官方应用保存的授权。
+## 官方 Android 客户端的阅读范围
 
-保存凭据时，[Android Keystore](https://developer.android.com/privacy-and-security/keystore)保护的是加密密钥，不是一个可以直接塞入任意 API 字符串的跨应用密码仓库。建议用不可导出的设备密钥加密 token，密文放应用私有目录，并按[Auto Backup 规则](https://developer.android.com/identity/data/autobackup)排除密文、设备密钥控制记录与传输凭据，避免换机后出现不可解密或串账户的授权假象。清除凭据须先退休内存缓存，再处理可能失败的持久化；本地无法读取和真实 HTTP401分开。
+已在官网稳定版 **1.0.0-247** 实际同步打开同一归档的 MiCLA 原始 PDF、导读与笔记，断网冷启动后仍可读取；指定导读的混合公式和方法图实际可见。因此这一归档不需要额外生成导读 PDF。其他 HTML、EPUB 或客户端版本按其实际支持范围使用。
 
-按[官方同步文档](https://www.zotero.org/support/dev/web_api/v3/syncing)，连接后先 `GET /keys/current`核账户ID和实际权限，读取可访问文库及分类。界面显示真实目标，不能把“key 格式看似正确”当授权成功，也不能把权限限定说成只有一个分类。只维护本应用归档所需的对象和映射，首版不必实现整个 Zotero 文库的双向同步客户端。
+安装官方客户端可使用 [Google Play 或官网 APK](https://www.zotero.org/download/android/)。官方[功能页](https://www.zotero.org/support/android)和[快照测试版公告](https://forums.zotero.org/discussion/132371/available-for-beta-testing-on-android-epub-snapshot-support)对应不同渠道，选择时核对实际版本。
 
-### 复用六角色材料，替换传输与回读适配器
+本应用自己的 PDF 摘录和批注绑定原 PDF SHA 与物理页，不直接修改官方数据库。当前不提供 Zotero 标注的双向编辑；官方标注同步由 Zotero 客户端负责。
 
-这里复用的是材料合同、来源绑定、选择预览、去重/冲突原则和 journal 状态机；不是将 Mac 的进程通信或授权实现原样搬过去。
+## 系统分享与 Mac 本地接口
 
-| 角色 | Android 需要保留的材料 | 完成证据 |
-|---|---|---|
-| 书目 | 实际条目类型、英文原题、作者顺序、日期、摘要、DOI/arXiv/会议身份、URL、标准标签 | 重新GET父项，核来源身份、字段与目标文库；未知字段不补造 |
-| 完整元数据 | 已确认机构、ORCID、许可、资源、原评分/量表/分类、版本与本站修订 | 结构化补充材料与必要说明保留，核实际下载字节及SHA |
-| 原 PDF | 指定版本的真实原件 | 存储附件已上传/登记；再次下载核SHA-256及实际可打开 |
-| 图文导读 | 自包含原HTML、原图/表/公式/图注与修订；必要时加可离线阅读的PDF派生件 | 两份按各自原始/派生身份核内容，真实稳定版Zotero Android断网后可读承诺的格式 |
-| 用户所选个人解析 | 原问题、原封存输入、回答、模型/时间/页码/版本及实际用量 | 原会话绑定不变；子笔记或附件真实回读，不把AI回答写入原摘要 |
-| 用户所选个人笔记 | 可编辑的私人笔记与必要来源关系 | 核父项、正文和版本；与正式论文正文区分 |
+系统分享将 URL 或单个 PDF 交给接收方处理，界面显示交出结果；完整书目和多角色附件归档使用本页的 Web API 流程。PDF 使用 FileProvider 的临时只读 URI，避免同时附带来源 URL 使接收方优先处理文字。当前不承诺 RIS、多附件或任意 ZIP 的一键导入。
 
-标准字段按[类型/字段及新项模板](https://www.zotero.org/support/dev/web_api/v3/types_and_fields)生成。作者机构等不能硬塞到不合法字段；标准书目之外的已确认信息用明确的补充材料保留。
+分享行为的源码依据固定在官方提交 [cbb929be](https://github.com/zotero/zotero-android/tree/cbb929be2a6383906cce3d74408e24ca38f50be5)，系统行为见 [Sharesheet](https://developer.android.com/develop/ui/compose/sharing/send) 与 [FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider)。
 
-稳定版HTML快照读取未证实时，导读PDF是用于移动端离线阅读的派生件，不能冒充原论文PDF。必须验证长公式、宽表和科学图完整；同时保存原HTML与原修订可追溯性。若不能完成这个实际阅读链，ZOT-07继续待验，不能仅因云端存在HTML就宣布齐全。
+Mac 的 `localhost:23119` 是同机桌面接口，不能移植为 Android 本地服务或向外转发。Mac 的许可、`Zotero-Server-ID` 与对象版本不作为 Android API 授权；导入的旧记录只作历史，建立 Web 映射时重新核对账户和对象。见 [Zotero Local API](https://www.zotero.org/support/dev/web_api/v3/local_api)。
 
-### 文件上传和恢复不是一次 POST
-
-依据[官方附件上传合同](https://www.zotero.org/support/dev/web_api/v3/file_upload)，先创建子附件，再请求上传授权，按返回的地址传文件，最后登记上传；已存在分支也须核实际关联。协议使用MD5与毫秒mtime，我们仍为每份材料另外保留SHA-256。附件外域上传不得携带Zotero API key；只接受经核验的HTTPS上传/下载目标，防止将通用网页地址获得认证头。不能机械套用“所有跨域都拒绝”的桌面本地传输使官方文件流永远失败，也不能无条件转发凭据跟随重定向。
-
-Zotero Storage 的文件额度与本应用坚果云备份是两笔独立的存储条件。达到配额、只有父项或部分子项成功时须保存真实部分状态，不能改成 linked URL 并宣称原文件存储完成。使用WebDAV的个人文库可能存在当前附件只在WebDAV的情况，应按该合同明确提示；不偷偷切换用户文件同步配置。完整首版建议先验明使用Zotero Storage的归档路线，再把其他文件后端作为单独接入条件，而不是借“支持WebDAV”假设所有Web API附件都可通用读取。
-
-[写请求合同](https://www.zotero.org/support/dev/web_api/v3/write_requests)中HTTP200仍可能逐项部分失败；更新要携带对象版本，412后重新读并保护用户编辑。写token的防重复窗口是12小时，不能代替长期journal。建议先原子持久化操作ID、目标和待创建key，再请求；丢应答先查询原key和材料身份，不换key重建。官方允许新项自带key并用version0表达未存在，冲突仍须核实，不能盲覆盖。
-
-任务完成后逐角色GET字段与文件，状态区分“云端已核验”与“官方 Android 客户端已同步并下载”。后一项必须在真实客户端打开验证。同步受[Backoff和429](https://www.zotero.org/support/dev/web_api/v3/basics#rate_limiting)约束，不能为重试连续创建对象；本地凭据不可用、云端拒绝、限流、网络、文件损坏和本地保存失败各自保留状态。
-
-### 笔记、PDF标注和坚果云分别归谁管理
-
-首版完整归档包括所选笔记、解析和可追溯摘录；不需要伪造“已实现所有Zotero标注的双向编辑”。本应用自己的PDF摘录/批注必须按Android功能表实现，绑定原PDF SHA与物理页；官方Zotero的标注同步由其客户端负责。若后续做双向标注，需要另外核官方schema、坐标/页标签、附件父项、冲突与删除规则，不能把另一份PDF里的屏幕坐标直接写回。
-
-论文速递的坚果云目录用于整个研究空间不可变备份，继续使用独立`PaperDigest`目录、目标UUID、8MiB分块、清单和回读；它不是Zotero自己的附件同步协议。不要读取Zotero的WebDAV密码，不向其`zotero`目录写本应用快照，不把Zotero数据库直接同步到普通网盘文件夹。Zotero也明确[不应将数据库放入普通云同步目录](https://www.zotero.org/support/kb/using_multiple_computers)。
-
-## 最小可用实现与真实验收顺序
-
-1. 先完成无凭据的系统URL/PDF分享，验证前述文字优先规则和真实接收界面。没有返回写入回执时只标“已交接”，不创建绿色完整归档记录。
-2. Web API专属key输入、加密存储、撤销/删除、重启后主动权限检查；真实只读文库与分类预览，未授权和群组只读目标都不能开始写入。
-3. 用用户选定真实论文与专门验收分类完成六角色材料准备，逐项显示缺口；首次实际上传/登记/GET字节回读。图文导读另在真实稳定版Android Zotero读取，必要的派生PDF独立核验。
-4. 从原journal测试取消、进程终止/重启、丢应答与续传；成功项不重建、原模型请求数不变。失败注入先在隔离服务完成，不为验收破坏用户现有文库或制造大量重复对象。
-5. 真实用户修改字段/标签/笔记或删除附件后，重新读和提示差异；版本/权限变化不覆写。换账户、群组或分类时旧目标锁定，不回落到默认文库。
-6. 在官方Android客户端和Mac客户端分别同步打开同一父项、原PDF、导读与笔记，明确本地/云端/另一客户端各自完成证据；测试断网后读取已下载材料。
-
-研究证明接口路线可行，没有证明上述真机操作已经通过。若实施窗口不能完成第3–6步，应向主任务报告Zotero完整接入待验，让其记录首版范围决定；不得把第1步升级为完整存档的验收结果。
-
-## 实施前仍需核实的事项
-
-- 官方Android稳定版实际版本及HTML快照/PDF派生件表现；本次文档与beta公告存在渠道差异，已经明确保留该边界。
-- 官方API文件上传、PDF/HTML MIME、图文资源与跨端查看在用户实际存储配额中的表现；群组权限与文件权限分别测。
-- 无凭据的系统分享是否接受所需引用文件类型、是否保留原导入意图经过登录流程；本次不承诺RIS/多附件一键完成。
-- OAuth正式应用注册与回调安全；最初采用专属key不代表永远不支持OAuth。
-- 官方Android仓库采用[AGPLv3](https://github.com/zotero/zotero-android/blob/cbb929be2a6383906cce3d74408e24ca38f50be5/COPYING)，Manifest及源码还引用第三方PDF组件。这里研究接口而非复制客户端代码或SDK；若复用任何代码/二进制，另核对应许可证和分发权。技术研究不是许可证许可结论。
+本应用采用公开接口，不复制官方 Android 客户端。其源码采用 [AGPLv3](https://github.com/zotero/zotero-android/blob/cbb929be2a6383906cce3d74408e24ca38f50be5/COPYING)，如后续复用代码或二进制，需单独核对相应授权。验证范围见[Android 验证说明](<android-validation.md>)和[功能表](<android-feature-parity.md>)。

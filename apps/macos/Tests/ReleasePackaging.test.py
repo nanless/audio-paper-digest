@@ -136,7 +136,7 @@ class Packaging(unittest.TestCase):
     def test_joint_release_notes_bind_android_claims_to_actual_android_evidence(self):
         self.make_formal();self.prepare()
         notes=(self.output/'RELEASE_NOTES.md').read_text()
-        for required in ['同一 Release 附带 Android APK 时','独立 release 签名 APK，非 debug 包','android-build-info.json','versionCode','签名证书 SHA-256','最低/目标 SDK 和 ABI','模拟器验收不等于实体机或 Google Play','签名连续','保留本机资料','由用户在自己的设备本机配置','不承诺任意 HTML','调试包或不同签名的旧包不能据此认定可直接覆盖','先在旧版完成并核验完整备份','未确认可恢复前不要卸载或清空资料','设备凭据须本机重新配置']:
+        for required in ['论文速递工作台 1.0.1','macOS 15 及以上','本地签名，未经过 Apple 公证','应用程序文件夹','Android 安装与升级','正式发行签名','android-build-info.json','Android 版本、系统要求、签名和验证范围见该版本的','https://github.com/nanless/audio-paper-digest/blob/main/apps/android/README.md','应用标识和签名一致','内部版本号递增','保留本机资料','由用户在设备上配置','Zotero HTML 与外部附件的支持格式见客户端说明','旧版是调试包或签名不同','先在旧版导出完整备份并确认可恢复，再卸载旧版','恢复资料后，在当前设备重新配置凭据','SHA256SUMS','ANDROID-SHA256SUMS','shasum -a 256']:
             self.assertIn(required,notes)
         for unsupported in ['所有 Zotero HTML 均兼容','已通过实体机验收','已在 Google Play 发布','Android versionCode: 1']:
             self.assertNotIn(unsupported,notes)
@@ -147,7 +147,11 @@ class Packaging(unittest.TestCase):
     def test_joint_release_notes_cannot_be_rewritten_after_manifest_sealing(self):
         self.make_formal();self.prepare()
         notes=self.output/'RELEASE_NOTES.md'
-        notes.write_text(notes.read_text().replace('模拟器验收不等于实体机或 Google Play','已通过实体机验收并在 Google Play'))
+        original=notes.read_text();needle='Android 版本、系统要求、签名和验证范围见该版本的'
+        self.assertIn(needle,original)
+        changed=original.replace(needle,'已通过实体机验收并在 Google Play 发布',1)
+        self.assertNotEqual(changed,original)
+        notes.write_text(changed)
         self.call('verify',expected=1)
 
     def test_03_dmg_actual_readonly_mount_and_applications_link(self):

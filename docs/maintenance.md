@@ -71,7 +71,7 @@ Git 证据索引不保存旧全文，也不授权新建旧任务。读取失败�
 
 三流程只从当前386项九维目录选择有证据的直接概念；总目录保留零计数节点，文章只显示选中项及祖先路径。词表原字节、分类证明和显示路径分别核验：保留旧SHA归档及原付费记录，严格纯追加只能只读重放，不因显示升级重新签名或追加模型次数。词表版本、站点成对资产及各发布边界见[标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
 
-Python标签正常化只对长度不超过256的内置不可变字符串使用最多8192项的有界LRU缓存；不缓存词表对象、来源或分类资格，每次调用仍完整核验当前词表，变更与坏数据照常阻断。此优化减少重复字符串处理，不改变标签选择、原SHA或检查标准，也不证明原生进程崩溃已根治。
+Python标签正常化只对长度不超过256的内置不可变字符串使用最多8192项的有界LRU缓存；不缓存词表对象、来源或分类资格，每次调用仍完整核验当前词表，变更与坏数据照常阻断。此优化减少重复字符串处理，不改变标签选择、原SHA或检查标准；原生进程崩溃仍按真实错误单独诊断。
 
 修改 `tag_presentation.py` 时，须同时检查日更单篇/汇总、会议单篇/汇总和历史单篇/汇总的实际输出及传递依赖指纹；路径包含当前部署前缀，文章块不能出现兄弟概念、空分面或全目录。站点目录资产上线与论文页面重新生成是两个验收对象：已有批次要改变呈现，须生成完整目标页面集合，按实际内容SHA复用或重做独立审查，再推送和逐页核验。不能只提交共享代码或词表快照就声称旧文章已更新。
 
@@ -178,8 +178,8 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ## 恢复决策与清单生成
 
-- `npm run recover -- --date YYYY-MM-DD`：只读采集已保存的分析失败、事实义务、页面审查问题及独立的批次审查问题，再按错误码汇总建议入口。日期须为真实日历日期。输出区分文件缺失、不可读、坏 JSON、形状错误、错批与无法确认日期的旧格式；存在坏资料时退出 2。文件缺失时仅提供 partial 预览，默认退出 0，`--strict` 退出 1，`--execute` 退出 2 且不派发。两份资料均可读时也只表示 `saved_records` 采集完成，`semanticCoverage: not_checked`、`scopeComplete: false`，不证明正式来源、完整失败集合或发布资格。`--execute --yes` 仍只调用既有入口并受原门禁约束。
-- `npm run manifest:new -- --spec SPEC.json [--fact-feedback-file FILE ...]`：SPEC 写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点），可多次传 `--spec`，或使用数组 / `{papers:[...]}` 覆盖完整当前失败集合。若本次恢复使用事实反馈，须传入同一组反馈文件；命令按正式入口的反馈验证及失败谓词核对集合、重复项与人数限制，dry-run 和 write 均先核对。候选须安全可读、唯一，并对应当前论文、来源运行及来源 SHA，不按修改时间挑稿，也不吞读取错误。输出明确 `candidateIdentity: not_checked`、`paidOrigin: not_checked`；本切片未完成完整当前输入身份比较及原付费链重放；正式采纳仍核真实当前来源、原材料与 patch，并执行正常 Reader 及整篇资格检查。默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`；材料准备成功不表示正式资格通过、不授模型请求权限，也不自动采纳。
+- `npm run recover -- --date YYYY-MM-DD`：只读采集已保存的分析失败、事实义务、页面审查问题及独立的批次审查问题，再按错误码汇总建议入口。日期须为真实日历日期。输出区分文件缺失、不可读、坏 JSON、形状错误、错批与无法确认日期的旧格式；存在坏资料时退出 2。文件缺失时仅提供 partial 预览，默认退出 0，`--strict` 退出 1，`--execute` 退出 2 且不派发。两份资料均可读时也只表示 `saved_records` 采集完成，`semanticCoverage: not_checked`、`scopeComplete: false`，不证明正式来源、完整失败集合或发布资格。`--execute --yes` 仍只调用既有入口并受原入口核验约束。
+- `npm run manifest:new -- --spec SPEC.json [--fact-feedback-file FILE ...]`：SPEC 写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点），可多次传 `--spec`，或使用数组 / `{papers:[...]}` 覆盖完整当前失败集合。若本次恢复使用事实反馈，须传入同一组反馈文件；命令按正式入口的反馈验证及失败谓词核对集合、重复项与人数限制，dry-run 和 write 均先核对。候选须安全可读、唯一，并对应当前论文、来源运行及来源 SHA，不按修改时间挑稿，也不吞读取错误。输出明确 `candidateIdentity: not_checked`、`paidOrigin: not_checked`；工具准备范围不含完整当前输入身份比较及原付费链重放；正式采纳仍核真实当前来源、原材料与 patch，并执行正常 Reader 及整篇资格检查。默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`；材料准备成功不表示正式资格通过、不授模型请求权限，也不自动采纳。
 - 错误码字典 `scripts/lib/error-codes.js` 与 `error-guidance` 的规则 id 对齐，供 `recover`、状态报告和文档共用。数字限流提示须为独立状态信号，不把论文编号、小数或相邻文字中的 429 当作状态；arXiv 文字信号按明确主机、独立词或已知代码识别，近似域名不作为官方来源提示。明确的 OAI/RSS 过期诊断保留优先级。文字匹配仅供辅助建议，不替代生产错误类型、来源验证或恢复权限。
 
 ## 表格与影响面预检
@@ -200,7 +200,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 锁视图与文档一致性
 
 - `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
-- `npm run docs:check`：检查 README/AGENTS/maintenance/scripts README 里的 `npm run <script>` 是否都存在于 package.json，文档漂移时非零退出；新增命令时应同步文档。
+- `npm run docs:check`：检查根 `README.md`、`AGENTS.md`、`scripts/README.md` 及 `docs/` 下全部 Markdown 中的 `npm run <script>` 是否存在于 `package.json`；未知命令返回非零。根 `SKILL.md`、`manual/`、原型文档及链接、参数另作定向检查。新增命令时同步对应文档。
 
 ## 存储保留建议
 

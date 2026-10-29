@@ -1,6 +1,8 @@
-# Android/Mac 便携合同样例与测试规格
+# Android 与 Mac：资料包样例和测试规格
 
-这些内容全部由固定公开文本、0–255字节模式及合成UUID组成，不来自用户资料，不含API key、应用密码、真实账号、真实论文或真实费用。它是待两端共同执行的规格，不是Android已通过的测试报告；研究来源真实性和真实网盘另验。完整边界见 [数据与网盘合同](android-cloud-contract.md)。
+本文提供固定合成数据，用于验证资料包的字节、路径、分块和恢复行为。输入由公开文本、固定字节模式和合成 UUID 组成。测试矩阵列出操作与预期结果，实际通过范围见[验证说明](<android-validation.md>)，完整字段与限制见[备份合同](<android-cloud-contract.md>)。
+
+P01/P02 的原代码块、字节配方与 SHA 保持固定。新备份排除两份本机响应完整性密钥，旧包仍完整解码并保留原件；密钥不安装到有效恢复目录，当前设备密钥保留。其余普通研究文件及隐藏文件按合同保留。
 
 ## 固定字节向量 P01
 
@@ -73,15 +75,15 @@ P02编码总长：`8389318 bytes`；完整SHA-256：`c085074731741f5a62b02949e4a
 ]
 ```
 
-## 待执行矩阵
+## 测试矩阵
 
-每个适用项都应由Mac与Android各自实现独立跑通，保留代码/样例SHA和实际结果。本文没有为任一Android项填通过。
+各端按以下操作核对结果，保留实现版本、样例 SHA、运行环境和实际输出。编号用于定位测试条件，具体执行范围见[功能表](<android-feature-parity.md>)。
 
 | ID | 修改/操作 | 必须观察到的结果 |
 |---|---|---|
 | B01 | P01逐文件导入→导出→再次导入 | 解码文件的路径/字节/SHA不变；新导出JSON排版可不同，不伪称续传原编码 |
 | B02 | P02传输及下载 | 正好两个块，第一块8388608字节；块SHA及总SHA匹配，原文件字节全保留 |
-| B03 | 改一个Base64解码字节，保持旧文件SHA | 在stage/install前拒绝，live目录不变 |
+| B03 | 改一个 Base64 解码字节，保持旧文件 SHA | 暂存或安装前拒绝，当前研究目录不变 |
 | B04 | 文件路径../x、/x、a//b、a/./b、a\b、控制字符、尾斜杠 | 全部拒绝；不在目标树外创建文件 |
 | B05 | personal.json重复、A/x与a/y、NFC/NFD同名、文件a与a/b共存 | 名称/目录片段/父文件冲突拒绝，不由平台文件系统决定 |
 | B06 | 缺personal.json、非对象、坏schema1、坏note revision | 恢复拒绝，原文件保留；不能仅用JSON可解析判断通过 |
@@ -90,10 +92,10 @@ P02编码总长：`8389318 bytes`；完整SHA-256：`c085074731741f5a62b02949e4a
 | B09 | RestoredPathRoots的大小写别名、重复或互相包含根 | 拒绝歧义；有效旧绝对路径只有绑定实际SHA才可重定位 |
 | C01 | PUT块成功但客户端丢回复，取消后重启 | 恢复同UUID/同编码；先GET核已有块，不覆盖、不重采集后续笔记 |
 | C02 | 在块GET回读中损坏1 byte | 停止，manifest不作为完整成功；本机pending仍在 |
-| C03 | manifest PUT丢回复 | 明确续原版本并GET清单及全部块；不创建第二个UUID冒充同次恢复 |
+| C03 | manifest PUT 丢失回复 | 继续原版本，GET 清单及全部块，不为同一次恢复另建 UUID |
 | C04 | checkpoint原子写失败 | 停止新网络派发，不以内存回执报成功 |
 | C05 | 修改待传快照/账号/目录/目标ID | 绑定校验拒绝；保留旧材料后才能创建新目标 |
-| C06 | manifest错月份、错UUID、非整秒毫秒、少/多/乱序/重复块、错总长 | 完整拒绝，不尝试恢复live |
+| C06 | manifest 错月份、错 UUID、非整秒毫秒、少/多/乱序/重复块、错总长 | 整体拒绝，不替换当前研究目录 |
 | C07 | HTTP401/403/429/503及Retry-After日期/秒数 | 正确分类；401不重试；限流停止派发且上传重启仍等待 |
 | C08 | 本机凭据异常含诱饵文本、缺密码、取消读密码 | 固定安全本机提示或取消；0HTTP；不泄露诱饵、不误当401 |
 | C09 | 固定HTTPS以外的地址、任意重定向、超限响应 | 凭据不转发，响应流及时停止，TLS不放宽 |
@@ -102,9 +104,9 @@ P02编码总长：`8389318 bytes`；完整SHA-256：`c085074731741f5a62b02949e4a
 | R01 | Mac→Android→Mac与反向全空间恢复 | 原文件/费用/来源/未知字段完整保留，本机cloud目标/凭据不被快照替换 |
 | R02 | 恢复前本机route-A，包里route-B，本机已有API key | 当前有效配置仍route-A；原personal字节旁存，恢复本身不发模型请求 |
 | R03 | 本机已派发请求X，旧包只有Y；同ID不同UTC时间 | 正常合并X/Y不清零；冲突整体拒绝，不重写原时间或用量 |
-| R04 | 下载结束后用户取消/安装第二次rename失败/服务初始化失败 | 当前live或回滚副本完整；终态为取消/失败，不仅按下载成功填complete |
+| R04 | 下载结束后用户取消、安装第二次重命名失败或服务初始化失败 | 当前研究目录或回滚副本完整，终态为取消或失败；下载完成后仍须完成确认与安装 |
 | R05 | 原pending/坏checkpoint/孤立snapshot，保留退出 | 全部原字节旁存；旧connection不覆盖，云端不删，损坏材料不保证可恢复 |
-| M01 | 旧桌面原input/response/完整性材料与Android response-integrity.android.key跨端往返 | SHA/HMAC原字节不改；未知或缺材料只读保留，不伪造封存输入/科学资格 |
+| M01 | 旧桌面与 Android 研究记录、两份本机响应完整性密钥的导出和恢复 | 新导出排除两个精确本机密钥路径及大小写别名；其他隐藏文件保留。旧包完整解码、原输入/响应/费用与原包不改；有效恢复目录保留当前设备密钥，不安装包内密钥。缺少本机证明的历史只读保留，不重新签署或自动复用 |
 | M02 | 中文/emoji/组合字符/斜杠/小数配置参与旧指纹 | 原输入不重编码重签；Foundation.sortedKeys不等同JCS，旧指纹验真需明确互认实现 |
 | M03 | Android实际提取器的新研究 | 不伪装PDFKit；新合同在Mac证据导出互认前明确待验，不偷偷复用旧desktop-study指纹 |
 | N01 | 两设备同一笔记revision并行编辑 | 各自快照不丢；显式选择恢复时点/冲突，不用时间戳静默覆盖 |
@@ -117,14 +119,14 @@ P02编码总长：`8389318 bytes`；完整SHA-256：`c085074731741f5a62b02949e4a
 
 后续自动化结果至少包含：实现/测试源提交，向量ID及SHA，操作方向，操作前后文件数与原字节核验，当前有效模型路由和请求连续性是否保留，取消/失败/成功终态，所用设备/Android API和签名包身份。真实网盘报告另记实际服务回读，禁止写账号、密码、稳定凭据指纹、研究正文或私有文件摘要到公开验收材料。
 
-P01/P02的合成字节与哈希生成核对只证明本文样例自洽；不代表Mac/Android已执行这些用例，更不代表真实云账号成功。
+样例生成检查核对固定字节与校验值；平台恢复、系统文件操作和真实网盘分别记录运行结果。
 
 ## 可复现的旧 Mac 离线包向量
 
-[offline-swift-vectors.json](../apps/android/app/src/test/resources/offline-swift-vectors.json)由[公开 Swift 生成器](../apps/android/app/src/test/fixtures/GenerateOfflineFixtures.swift)在全新临时目录调用现有 `DesktopStorage.register/verifyPackage/openPackage` 生成，未改 Mac 产品源码，也不读取用户缓存。它包含 v1、v2、缺 MathML 合同的旧 HTML，以及一张真实生成 PNG 加一页合法 PDF 的 v2，共4包；另有2份真正 Foundation JSON 字节向量，覆盖中文、emoji、斜杠、键排序和二进制小数。它们都是合成文献，不能当作 MiCLA 或其他真实论文验收。
+[offline-swift-vectors.json](<../apps/android/app/src/test/resources/offline-swift-vectors.json>)由[公开 Swift 生成器](<../apps/android/app/src/test/fixtures/GenerateOfflineFixtures.swift>)在全新临时目录调用现有 `DesktopStorage.register/verifyPackage/openPackage` 生成，未改 Mac 产品源码，也不读取用户缓存。它包含 v1、v2、缺 MathML 合同的旧 HTML，以及一张真实生成 PNG 加一页合法 PDF 的 v2，共4包；另有2份真正 Foundation JSON 字节向量，覆盖中文、emoji、斜杠、键排序和二进制小数。它们都是合成文献，不能当作 MiCLA 或其他真实论文验收。
 
 在仓库根目录以当前 Mac 构建所用 Swift 默认语言模式编译生成器，输入只需上述脚本、`apps/macos/Sources/BackupCodec.swift`、`DesktopStore.swift`、`DesktopStorage.swift`，链接 PDFKit/Security。运行时传仓库绝对路径和输出 JSON 路径。输出 JSON 含实际3份 Mac 源 SHA、每个原文件的 Base64/SHA，以及 Foundation 期望字节；PDF/PNG字节由本次生成，重新生成的日期和 PDF 元信息可能不同，不能据此重写既有包身份。
 
-Android 的 `OfflineStoreTest` 与 `OfflineStoreDeviceTest` 共享这同一公开资源。设备测试先读取并逐字节保护原包，再从实际匹配缓存正常新注册；断言新包不是复用任何 Mac 原包，输出的合成 packet 可交[原 Mac 反向读取器](../apps/android/app/src/test/fixtures/VerifyAndroidOfflinePacket.swift)。该读取器同样只与上述原3份 Mac 源编译，在私有临时目录核 Base64、SHA、路径白名单，执行原 verify/open，含图/PDF时另核真实页数和图 SHA，最后确认全部原文件没有被读取过程改写。它不安装应用、不调用网络或凭据。
+Android 的 `OfflineStoreTest` 与 `OfflineStoreDeviceTest` 共享这同一公开资源。设备测试先读取并逐字节保护原包，再从实际匹配缓存正常新注册；断言新包不是复用任何 Mac 原包，输出的合成 packet 可交[原 Mac 反向读取器](<../apps/android/app/src/test/fixtures/VerifyAndroidOfflinePacket.swift>)。该读取器同样只与上述原3份 Mac 源编译，在私有临时目录核 Base64、SHA、路径白名单，执行原 verify/open，含图/PDF时另核真实页数和图 SHA，最后确认全部原文件没有被读取过程改写。它不安装应用、不调用网络或凭据。
 
-2026-10-25 的 compile9 已在 API28/API35 分别完成原3包/2向量读取、Android新建无图无PDF包以及原Mac反向3文件验收；当时的向量尚无第4包。compile10 的两API进一步读取含图/PDF的第4包、正常新注册，原Mac实际verify/open均通过；5个原文件SHA不变、PDFKit实际1页、图SHA与资源数也通过。两轮证据分别保存，未据此宣称真实 MiCLA 或完整研究空间恢复通过；实际模型原材料、标注坐标与真实网盘仍按上表各自验收。
+API 28、API 35 已读取上述四份 Mac 合成包及两份 Foundation 向量，并正常新注册 Android 离线包。Android 生成包经 Mac 原读取器执行 verify/open，含图和 PDF 的包保留五个文件 SHA、实际一页 PDF 与图片身份。真实研究空间恢复、模型记录和网盘操作的验证范围另见[验证说明](<android-validation.md>)。

@@ -82,7 +82,7 @@ npm run history:plan -- --apply \
 
 `history:plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用生成来源清单时使用的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
 
-主评分行路线抓取失败时写入 v2 交接，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 交接。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
+主评分行路线抓取失败时写入 v2 备用记录，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 备用记录。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
 
 没有冻结历史页面对应关系的来源记录不进入抓取、crosswalk 或模型队列。反过来，没有可用来源的冻结论文页须出现在 `uncoveredFrozenPaperPages` 和 `paperPageCoverage`，记录页面与内容 SHA、范围及身份线索状态，并按范围和状态统计。`none/conflict/multiple` 是待处理问题，不能据此猜身份。`--apply` 还会保存与计划 SHA 绑定的不可变 `historical-direct-rewrite-unprojected-catalog-report-v1`，记录未找到对应冻结历史页面的来源所涉及的论文 ID、来源类型和原因；该报告不是待执行任务清单。
 
@@ -95,7 +95,7 @@ npm run history:sources -- --apply --plan /absolute/path/direct-rewrite-plan-v5.
   --queue all --generation 1 --max-papers 100 --arxiv-concurrency 3 --conference-concurrency 5
 ```
 
-arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。未显式选择 ID 的限量续跑会严格核验并跳过同一获取序号已有的 arXiv 四文件，会议项按稳定计划顺序继续检查。本地会议文件缺失或损坏只使对应项失败，不能进入 arXiv 备用获取或写入 crosswalk。只有新 arXiv 获取失败、由 scheduler/run 保存的有固定名称、保存后不再改写的交接文件可进入后文备用流程，其余会议来源继续处理。
+arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。未显式选择 ID 的限量续跑会严格核验并跳过同一获取序号已有的 arXiv 四文件，会议项按稳定计划顺序继续检查。本地会议文件缺失或损坏只使对应项失败，不能进入 arXiv 备用获取或写入 crosswalk。只有新 arXiv 获取失败、由 scheduler/run 保存的有固定名称、保存后不再改写的备用记录文件可进入后文备用流程，其余会议来源继续处理。
 
 每项结果在同一调度锁内更新带自哈希的 `historical-direct-source-status-v1`，另一进程的 `history:status` 可查看会议核验和 arXiv 文件状态。该记录也是分析的必需前提：`history:run --apply` 在任何来源抓取、PDF 提取或模型调用前，要求选中论文在同一计划及获取序号中均为 `ready`。缺记录、`handoff` 或 `failed` 都拒绝；后续仍核对实际来源字节，不能只信状态记录。
 
@@ -265,16 +265,16 @@ npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --
 
 ## arXiv 获取失败的备用处理
 
-仅当计划中已对应历史页的 arXiv 本次获取失败，scheduler/run 才保存 `historical-arxiv-fresh-failure-crosswalk-handoff-v1`。它绑定计划、catalog、inventory SHA、获取序号、失败摘要 SHA、冻结页面路径及 SHA、规范化 arXiv URL 和原始身份线索来源，不自行写 crosswalk。会议文件缺失或损坏不能生成这类交接，其他会议队列继续执行。
+仅当计划中已对应历史页的 arXiv 本次获取失败，scheduler/run 才保存 `historical-arxiv-fresh-failure-crosswalk-handoff-v1`。它绑定计划、catalog、inventory SHA、获取序号、失败摘要 SHA、冻结页面路径及 SHA、规范化 arXiv URL 和原始身份线索来源，不自行写 crosswalk。会议文件缺失或损坏不能生成这类备用记录，其他会议队列继续执行。
 
-`history:arxiv-batch` 必须显式指定一个或多个交接文件名，不枚举其他 `pending` 页面，也不能凭单一 ID 线索扩大选择。每个交接重新核对计划、清单、页面 SHA、规范化 arXiv URL 及非标题身份线索，只处理交接列出的页面键。该备用队列默认并发 2，范围 1–3。
+`history:arxiv-batch` 必须显式指定一个或多个备用记录文件名，不枚举其他 `pending` 页面，也不能凭单一 ID 线索扩大选择。每个备用记录重新核对计划、清单、页面 SHA、规范化 arXiv URL 及非标题身份线索，只处理备用记录列出的页面键。该备用队列默认并发 2，范围 1–3。
 
 ```bash
 npm run history:arxiv-batch -- --dry-run --crosswalk UUID --owner fallback.worker \
   --handoffs arxiv-fresh-failure-2609.03622-g000001-0123456789abcdef01234567.json --concurrency 2
 ```
 
-正常重写不调用任意 `crosswalk` 或单篇 `arxiv-source --crosswalk` 组合。备用批处理只有在核验本次获取失败的命名交接及冻结页面身份后才可写入；标题不能作为论文身份依据。
+正常重写不调用任意 `crosswalk` 或单篇 `arxiv-source --crosswalk` 组合。备用批处理只有在核验本次获取失败的命名备用记录及冻结页面身份后才可写入；标题不能作为论文身份依据。
 
 ## 已保存旧运行的恢复
 

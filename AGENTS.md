@@ -90,7 +90,7 @@ npm run digest:prepare -- YYYY-MM-DD
 `muse-spark-*` 模型使用 OpenAI Responses，`/v1` 转为 `/v1/responses`；兼容的 `mimo-v2.6-flash` 在 OpenCode Go 上走 OpenAI Chat Completions，基础端点原样使用。所有 Node LLM 请求必须经 `requestLlmJson()`；Python 发布请求必须经 `call_publish_llm_api()`。
 
 - Muse：强制使用项目 HTTP CONNECT 代理。每次请求创建独立连接对象，请求结束后销毁；这里的 `agent` 指 HTTP 连接对象。禁止静默改为直连。
-- Node CONNECT 与 TLS 握手共用 60 秒有效时间预算；长时间系统挂起或同步核验阻塞不按网络等待计时，连续短停顿仍累计。日志中的“挂起”不能单独证明系统睡眠；结合系统电源记录、进程执行和实际响应诊断。真实超时仍停止新派发并保存结果，不原样反复重启。
+- Node CONNECT 与 TLS 握手共用 60 秒有效时间预算；长时间系统挂起或同步核验阻塞不按网络等待计时，连续短停顿仍累计。诊断长停顿时结合系统电源记录、进程执行和实际响应，区分系统睡眠与本地核验阻塞。真实超时仍停止新派发并保存结果，不原样反复重启。
 - 请求开始与终态用同一 `eventId` 留账；终态或 Reader 采用记录保存失败停止新派发，保全真实已返回内容，不返还已发次数。私有异常响应目录受保护；完全无法保存时须明确报告，不能声称恢复材料已落盘，见[费用故障](docs/troubleshooting.md#费用记录保存失败)。
 - 兼容的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，按直连处理，不复用上面的代理设置。
 - OpenCode Go 账号池：同一池内所有 key 同权，不再区分主账号与 fallback。选择按账号 ID 的稳定排序做轮转（round-robin），跳过已排除账号和当前冷却未到期的账号；冷却到期后自动重新加入轮转。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才允许在同一逻辑请求内切换账号并保存冷却状态，同一逻辑请求内每个账号至多尝试一次。普通认证 401 会停止本次运行，不切换账号；普通 429、5xx、网络错误、输出截断和正文校验失败也不得切换。全部账号不可用时保存断点并停止新请求，避免整批论文反复遭遇同一服务故障。

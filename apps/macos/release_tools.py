@@ -269,27 +269,36 @@ def prepare(args):
         verify_zip(archive, repo, info, app.name)
         build_info={'contract': CONTRACT, 'preparedAtUTC': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'publicationEligible': False, 'publicationState': 'local-candidate-only', 'bundleName': app.name, **info}
         write_json(temporary/'build-info.json', build_info)
-        notes=f'''# 论文速递工作台 {info['version']} · 可校验安装包
+        notes=f'''# 论文速递工作台 {info['version']}
 
-本地准备工具不会创建或推送版本标签，也不会上传或公开 GitHub Release。是否已交付以远端实际状态及对应验收记录为准；打包成功不能替代完整验收。
+## macOS 安装
 
-- 架构：{info['architecture']}；最低 macOS 15。
-- 包内版本：{info['version']}，构建号 {info['bundleVersion']}。
-- 运行源码提交：{info['sourceCommit']}。
-- 发行候选对应提交：{info['releaseHead']}；允许的来源差异按核验记录分类，包括已提交文档、独立Android树与两份Mac发行验证文件；所有映射Mac输入仍须逐字一致。
-- 签名：本机 ad-hoc 开发签名，未 Apple 公证；没有宣称其他 Mac 可无阻碍安装。
-- ZIP 保留应用资源与签名；若包含 DMG，可将应用拖到 Applications。
-- 现有网站成果由客户端直接读取；个人资料与密钥不放入发行包。包内自带运行组件及许可。
-- 使用 SHA256SUMS 核对文件完整性；校验和不能替代 Apple 身份签名、完整验收或独立审查。
+- 适用架构：{info['architecture']}；系统要求：macOS 15 及以上。
+- 应用版本：{info['version']}，构建号 {info['bundleVersion']}。
+- 采用本地签名，未经过 Apple 公证。
+- 安装前先退出旧版客户端。使用 DMG 时，将应用拖到应用程序文件夹；使用 ZIP 时，解压后将应用移到应用程序文件夹。
+- 包内自带运行组件和许可，可直接阅读论文速递网站的内容。
 
-## 同一 Release 附带 Android APK 时
+## Android 安装与升级
 
-- Android 安装资产须为独立 release 签名 APK，非 debug 包。实际版本、versionCode、签名证书 SHA-256、最低/目标 SDK 和 ABI，以同次 android-build-info.json 及真实 APK 核验记录为准；本 Mac 打包工具不会替 Android 资产签发验收。
-- 模拟器验收不等于实体机或 Google Play 发布验证；仅声明本次实际覆盖的设备、系统与功能范围。Zotero、HTML 导出及外部附件的支持边界以对应验收记录为准，不承诺任意 HTML 或所有第三方客户端都兼容。
-- 升级须核对相同应用标识、签名连续和递增 versionCode，按本次验证的升级路径保留本机资料；不要通过卸载或清空资料代替升级。跨端功能和数据边界分别按各端记录核对。调试包或不同签名的旧包不能据此认定可直接覆盖；先在旧版完成并核验完整备份，未确认可恢复前不要卸载或清空资料，设备凭据须本机重新配置。
-- 模型、网盘和 Zotero 凭据由用户在自己的设备本机配置；安装包与 Release 附件不内置账号、口令、私钥、生产配置或私人研究材料。
+- 同一版本提供 Android APK 时，采用正式发行签名。Android 版本、系统要求、签名和验证范围见该版本的 android-build-info.json 与[Android 客户端说明](https://github.com/nanless/audio-paper-digest/blob/main/apps/android/README.md)。
+- 从应用标识和签名一致、内部版本号递增的正式版本升级时，直接覆盖安装，保留本机资料。
+- 若旧版是调试包或签名不同，先在旧版导出完整备份并确认可恢复，再卸载旧版。恢复资料后，在当前设备重新配置凭据。
+- Zotero HTML 与外部附件的支持格式见客户端说明，导出时请选择支持的格式。
 
-公开前须核对最终说明、全部适用验收、同一远端草稿及下载实包。本文只说明固定安装资产及签名范围，不提前宣告未完成条件通过。
+## 本机配置与资料
+
+模型、网盘和 Zotero 凭据由用户在设备上配置。个人研究资料、笔记和完整备份按私人文件保管，分享前检查内容。安装包与附件不内置用户账号、口令、私钥或私人研究材料。
+
+## 下载校验
+
+计算安装文件的 SHA-256，与同平台校验表中的同名条目对照：Mac 使用 SHA256SUMS，Android 使用 ANDROID-SHA256SUMS。例如：
+
+```bash
+shasum -a 256 {archive.name}
+```
+
+构建来源和签名信息分别记录在 build-info.json 与 android-build-info.json。
 '''
         (temporary/'RELEASE_NOTES.md').write_text(notes)
         assets={p.name:{'bytes':p.stat().st_size,'sha256':digest(p.read_bytes())} for p in sorted(temporary.iterdir()) if p.is_file()}

@@ -25,7 +25,7 @@ Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1�
 
 ## 官方会议
 
-使用 `conference:acquire/discover/filter/process`；`conference:publish:generate/review/push/verify`独立处理发布。旧execution/analyze/postprocess CLI已删除，不能绕过统一process来源/权限检查。参数见 [会议说明](../docs/conference-workflow.md)。博客完整审查后的已完成稿正常维护使用同一 migrate 入口的 `--reader-review-feedback`，另窗加 `--reader-review-window`，不混用 `--retry-failed` 或人工修正清单。
+依次使用 `conference:acquire`、`conference:discover`、筛选与 `conference:process`；发布使用 `conference:publish:generate`、`conference:publish:review`、`conference:publish:push`、`conference:publish:verify`。统一处理入口核验真实会议来源和权限。参数见 [会议说明](../docs/conference-workflow.md)。博客完整审查后的已完成稿正常维护使用同一 migrate 入口的 `--reader-review-feedback`，另窗加 `--reader-review-window`，不混用 `--retry-failed` 或人工修正清单。
 
 会议适配器负责将已认证的真实来源上下文保留到 Reader 完成及冷启动资格核验。恢复时先检查同一子运行已保存的新付费稿，满足真实签发与完整资格才零请求完成；继承父稿不算新修复。共享摘要修复的诊断记录按会议执行及规范 ID 隔离，不能套用日更 arXiv 路径或放宽修复标准。
 
@@ -33,7 +33,7 @@ Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1�
 
 ## 历史博客
 
-使用 `history:inputs/plan/sources/run/aggregate/publication`，范围和Source参数见 [历史说明](../docs/history-rewrite.md)。`history:resume`用于当前暂停计划或受限恢复已存在的旧来源任务，不创建旧任务或清零预算。必要来源取得、标签补充、状态和控制工具仍属于历史维护。
+使用 `history:inputs/plan/sources/run/aggregate/publication`，范围与来源参数见 [历史说明](../docs/history-rewrite.md)。`history:resume`用于当前暂停计划或受限恢复已存在的旧来源任务，不创建旧任务或清零预算。必要来源取得、标签补充、状态和控制工具仍属于历史维护。
 
 ## 共享支撑
 
@@ -436,16 +436,16 @@ npm run test:compat
 | `source-probe.js` | Node 入口：`npm run source:probe -- --date YYYY-MM-DD` 只读探测 arXiv Atom/官方 OAI/RSS 三入口并判断公告是否目标日；支持 `--json`，不抓取、不写 data/current。 |
 | `llm-accounts-report.js` | Node 入口：`npm run llm:accounts` 区分当前主副配置及历史观察记录，仅报告已有冷却，不探测余额或清理状态；只显示本次运行序号，不显示密钥或稳定指纹，支持 `--json`。 |
 | `config-check.js` | Node 入口：`npm run config:check` 只读检查 `.env` 必填/类型/范围与未登记变量；不写文件、不回显密钥，支持 `--json`。 |
-| `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 只读汇总当前失败集，按错误码给出唯一建议入口与可复制命令；默认只打印计划，`--execute --yes` 才调用既有入口。 |
-| `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 从 1–8 个节点替换生成 operator 修正记录与清单，自动计算 SHA/UUID；默认 dry-run，`--write` 才写 data/runtime。 |
+| `recover.js` | Node 入口：`npm run recover -- --date YYYY-MM-DD` 汇总已保存的失败、事实义务和审查问题，按错误码建议入口；默认只读。记录完整性与实际来源、完整失败集合、正式恢复权限分别核验；`--execute --yes` 仍受原入口检查约束，见[恢复工具](../docs/maintenance.md#恢复决策与清单生成)。 |
+| `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 准备每篇 1–8 个既有节点的修正记录和清单，计算 SHA/UUID。默认 dry-run，`--write` 才写 `data/runtime`；正式采纳另核完整当前输入、原付费链、真实来源与整篇质量，见[清单准备范围](../docs/maintenance.md#恢复决策与清单生成)。 |
 | `table-check.js` | Node 入口：`npm run table:check -- --draft DRAFT.json` 离线预检表格粘连复写/列数/单位声明，不写数据。 |
 | `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
 | `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核验汇总页/单篇 HTTP 200 与标题，写 data/current/web-verification-<date>.json；`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy。 |
 | `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印推送后收尾清单（状态、网页核验、视觉准备/豁免），不调用图像 API、不自动豁免。 |
-| `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` 只读核对误报记录（schema/页面 SHA/逐字 claim/可选审查凭证提交绑定），报告匹配、剩余 error、pending 与 overriddenFailedPages；仅全部 error 严格覆盖且无未解释 pending 页返回 0；批次 error 用 path:'batch'；执行/参数错误返回 2，不修改审查结果。 |
+| `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` 只读核对页面 SHA、逐字问题与误报解释。退出判断使用 `currentMatchVerdict`；旧 `overriddenFailedPages` 等字段只作兼容投影。诊断不修改审查结果或授予发布资格，完整范围见[误报记录](../docs/maintenance.md#发布后网页核验与收尾)。 |
 | `storage-report.js` | Node 入口：`npm run storage:report [--advice-only]` 打印“必须保留/可压缩/可删”建议，并只读运行 storage:status；不删除。 |
-| `locks.js` | Node 入口：`npm run locks` 只读列出目录/文件运行锁（含 `.analysis-runs`、`conference-processes` 嵌套锁）的持有者/时间/心跳，`--recover` 只预览疑似陈旧锁，不删除。 |
-| `docs-consistency.js` | Node 入口：`npm run docs:check` 检查文档中 `npm run <script>` 是否都在 package.json，防止文档漂移。 |
+| `locks.js` | Node 入口：`npm run locks` 在原有有界范围观察锁的持有者、时间和心跳，包含 `.analysis-runs`、`conference-processes` 及真实 Git common-dir 共享锁。先核 `scanComplete`、`scopes`、`problems`；部分观测退出 1。`--recover` 只预览，不删除；观察结果不授予持锁或回收权限。 |
+| `docs-consistency.js` | Node 入口：`npm run docs:check` 核对根 README、AGENTS、此索引和 `docs/` 全部 Markdown 中的 npm 脚本名。其他文档、命令参数及链接分别定向核对。 |
 | `doctor.js` | Node 入口：开跑前只读体检（Node/Python、依赖、`.env` 权限与模型配置、代理、工作区角色、磁盘占用、博客仓库、账号池、可选 arXiv 三入口探测）。支持 `--date YYYY-MM-DD`、`--offline`（默认）、`--network`、`--json`；不写文件、不发模型请求、不打印密钥；会警告主池与副模型池共用同一 key 值（只比较值）。 |
 | `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；`--watch` 循环打印阶段/失败/费用/账号/无进度快照，默认单次报告不变；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |

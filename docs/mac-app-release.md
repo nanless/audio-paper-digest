@@ -1,104 +1,109 @@
-# Mac应用发行产物准备
+# 论文速递工作台 Mac 版：构建与发行
 
-这套工具先把审定的 `.app` 制成可回读的本地产物，不创建 GitHub Release、不推标签、不上传文件。正式验收条件仍以[验收矩阵](mac-app-acceptance.md)及其实际状态为准。只要还有适用必测项未通过，不能把本地候选称作正式交付。
+本页说明版本 1.0.1 的本地准备和联合发行操作。1.0.1 尚未公开；既有公开版本保留在 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases)。
 
-当前包内版本为 `1.0.0`、构建号 `1`；发行版本必须与包内版本相同。不能仅给 ZIP 换个版本名。当前构建为单架构 Apple Silicon `arm64`、最低 macOS 15，使用本机 ad-hoc 开发签名，未经过 Apple 公证。2026-10-25检查时没有可用的 Developer ID 签名身份，仓库也没有既有 GitHub Release。此记录不承诺未来证书、其他架构或其他 Mac 的安装体验。
+| 项目 | 当前发行目标 |
+|---|---|
+| 应用 | 论文速递工作台.app |
+| 版本、构建号 | 1.0.1、1 |
+| 架构、最低系统 | arm64、macOS 15 |
+| 运行时 | 随包 Node 24.19.0 |
+| 签名 | 本地 ad-hoc 签名，未 Apple 公证 |
+| 资源通道 | release，不捆绑论文样稿 |
 
-## 检查与打包
+## 1. 构建与安装
 
-先完成业务修改、测试、独立审查与中文提交，再重新构建、安装并验收最终候选。不要把旧包的验收结论套到包含新业务源码的提交上。明确选定该次构建保留的 `signed-build.json`，不要仅根据文件时间挑最近一个。
+开发环境、官方 Node 运行时准备及 `PD_MAC_NODE_RUNTIME` 用法见[Mac 构建说明](../apps/macos/README.md#从源码构建)。默认 Node 若不是许可固定的 24.19.0，须显式指定正确运行时；不修改许可版本来容纳其他二进制。
 
-构建默认使用`release`通道：新用户从空目录主动同步网站成果，不内嵌科学样稿。`--channel private-qa`只用于保留原PDF、科学图及完整图文的私有验收。元数据记录实际通道；私有QA即使验收表全部通过，也不能生成正式发布计划。缺少通道字段的历史包仅可`inspect`，不能据其准备新发行产物。
+先完成代码和文档、正常测试与独立审查，提交后再构建。保存该次构建输出的 `signed-build.json` 路径，以下用变量 `BUILD_RECORD` 表示。选择与应用实际对应的记录，不按文件时间猜测。
 
-```bash
-apps/macos/release.sh inspect \
-  --app 'apps/macos/.build/论文速递.app' \
-  --build-record '/该次构建记录的绝对路径/signed-build.json' \
-  --version 1.0.0
+```sh
+npm --prefix apps/macos run build
+# 保存并正常退出旧应用后，按需执行安装：
+npm --prefix apps/macos run install:app
 ```
 
-`inspect`只读核对工作区、来源提交、清单、主程序、包内文件、实际签名、架构与最低系统。工作区须干净，包括文档。构建提交之后，只接受已提交的 `docs/*.md`、独立的 `apps/android/` 树，以及未打入应用的 `apps/macos/release_tools.py` 和 `apps/macos/Tests/ReleasePackaging.test.py` 两个发行验证文件。文档变化与其他运行外变化分别记录在 `documentationOnlyChanges`、`otherNonRuntimeChanges`，运行源码提交与最终发行提交也分别保留；Android代码不能冒称文档。
+构建输出为 `apps/macos/.build/论文速递工作台.app`；安装脚本写入 `~/Applications/论文速递工作台.app`。脚本检测到 `PaperDigest` 仍运行时拒绝替换，不强制退出。旧名称的应用包不自动删除，资料目录、应用标识与钥匙串服务保持兼容。
 
-这项放行仍逐项比较 Mac 清单中的原 Git 字节、当前检出字节和实际包内文件，并核完整原生源码、构建输入、签名和包文件集合。Mac 业务、资源、构建、依赖锁或其他测试文件变化仍要求重新构建。2026-10-25 新增的 Android 独立树、共享输入变更拒绝及验证文件分类已通过45项隔离测试和非作者复核；这不证明 Android APK 或真实业务验收已经通过。Android 仍按[自己的功能表](android-feature-parity.md)及最终安装包独立核验。
+正式包使用 `release` 通道。`private-qa` 含科学样稿，仅用于本机测试，不能生成正式发行计划。新构建使用新的未签名暂存目录，不从旧签名包删除资源。
 
-```bash
+## 2. 核对并准备 ZIP、DMG
+
+```sh
+apps/macos/release.sh inspect \
+  --app 'apps/macos/.build/论文速递工作台.app' \
+  --build-record "$BUILD_RECORD" \
+  --version 1.0.1
+
 apps/macos/release.sh prepare \
-  --app 'apps/macos/.build/论文速递.app' \
-  --build-record '/该次构建记录的绝对路径/signed-build.json' \
-  --version 1.0.0 \
-  --output 'apps/macos/.build/releases/1.0.0-arm64' \
+  --app 'apps/macos/.build/论文速递工作台.app' \
+  --build-record "$BUILD_RECORD" \
+  --version 1.0.1 \
+  --output 'apps/macos/.build/releases/1.0.1-arm64' \
   --dmg
 
 apps/macos/release.sh verify \
-  --prepared 'apps/macos/.build/releases/1.0.0-arm64'
+  --prepared 'apps/macos/.build/releases/1.0.1-arm64'
 ```
 
-输出目录必须尚不存在，失败不会覆盖先前产物或修改原应用。`--dmg`可省略；需要DMG时不在失败后悄悄降成ZIP。最终产物为：
+`inspect` 只读核对干净工作区、来源、实际输入、版本、签名、架构与最低系统。输出目录必须尚不存在，失败不覆盖原产物。`--dmg` 可省略；要求生成 DMG 时，失败不会自动改交 ZIP。
 
-- `PaperDigest-macOS-1.0.0-arm64.zip`：使用 macOS `ditto`保留应用结构、资源fork和签名，实际解包后再次核对全部文件、模式、资源fork及签名。
-- 同名 `.dmg`（显式要求时）：包含原应用和指向 `/Applications`的拖入目标；生成后先检查映像，再仅只读挂载自己生成的临时映像，核对内部实际应用和拖入目标，随后卸载。不会启动包内应用或打开 Finder 窗口。
-- `build-info.json`：仅含版本、架构、时间、Git身份、相对文件摘要及签名声明，不复制私有构建记录中的本机路径。
-- `RELEASE_NOTES.md`：如实写明本地候选、未公证及尚需正式验收，供维护者整理最终说明。
-- `release-manifest.json`和`SHA256SUMS`：分别核对每个资产及全部文件。校验和不替代Apple身份签名、来源审查或产品验收。
+| 输出 | 核对内容 |
+|---|---|
+| `PaperDigest-macOS-1.0.1-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
+| 同名 DMG | 应用与指向 `/Applications` 的拖入目标；检查映像并只读挂载回读 |
+| `build-info.json` | 版本、架构、时间、来源身份和相对文件摘要，无本机构建路径 |
+| `RELEASE_NOTES.md` | 按真实范围生成的版本、安装、签名与支持说明 |
+| `release-manifest.json`、`SHA256SUMS` | 完整附件集合与实际字节摘要 |
 
-应用包拒绝额外文件、越界清单、符号链接及 `.env`、`.qa`、个人资料、模型费用目录、归档journal等私人运行内容；根应用、目录及文件都拒绝私人下载位置、Finder注释或未知扩展属性，许可属性摘要与目录模式也参与往返比较。正式包拒绝Seed、改名论文原件及内嵌样稿图片；私有QA的未跟踪PDF和图片只允许Git中`sample.json`逐项列明的原路径和SHA。每个包还核随包许可清单、完整原文页面与实际Node版本；外层重新计算校验和不能改变签名包的通道或身份。
+打包和回读不启动应用。实际安装、图形首启与业务操作分别记录，1.0.1 新包的已执行范围见[验证说明](mac-app-validation.md)。
 
-KaTeX只读本机npm内容缓存，按Git锁文件的版本、官方归档路径及SHA512验证原tar，再逐项核对完整`dist`及LICENSE，不能凭应用清单自报信任额外文件。默认缓存为`~/.npm`；自定义缓存可显式设置`PD_RELEASE_NPM_CACHE`，不会联网补包或执行npm脚本。ZIP回读在解包前检查路径和链接，DMG回读只接受规定内容。工具不会读取生产`.env`、用户钥匙串或私人文库，也不调用模型。现有公开源码、锁定前端组件和完整许可继续保留；忽略的科学原件只用于显式私有QA。
+## 3. 来源、许可与隐私
 
-## 先准备草稿，再核验公开条件
+包内版本必须与发行版本相同。运行输入、原生源码、资源和实际包文件逐项核对；构建后的运行源码变化要求重新构建。工具仅允许明确的已提交 `docs/*.md`、独立 Android 树及两个指定发行验证文件作为非运行变更。其他说明文件也须遵守现有来源检查；例如两份 Mac README 修改后需正常重建，不因文字不执行就绕过检查。所有文档修改先提交，脏工作区不能准备发行。
 
-发行分为本地固定安装资产、远端私有草稿、核验后公开三个阶段。工具只生成上传或公开的参数，不执行这些写操作；新阶段会只读查询固定仓库的标签或草稿，并在公开计划检查时下载资产到独立临时目录。查询失败即停止，不根据手填远端回执放行。
+正式包拒绝额外文件、链接、路径越界、私人扩展属性、生产配置、凭据、个人资料和运行记录。样稿只在显式私有测试通道按固定路径及 SHA 接受。Node 实际版本与离线许可匹配，许可全文和归属保留原样。KaTeX 从本机 npm 缓存按锁定版本、官方归档位置及 SHA-512 核验；需要时用 `PD_RELEASE_NPM_CACHE` 指定缓存，不联网补包或执行 npm 脚本。
 
-先完成最终代码、正常测试、独立审查与两端安装验收，在同一干净提交 `H` 准备 Mac 和正式签名 Android 包，核对版本、签名和全部资产。Mac 记录运行源码和发行提交，Android 来源提交须等于 `H`；两端版本须一致。版本说明在打包前据实整理，清单与校验文件一起固定。此后不要手改已封存的版本说明、清单、源码或包。
+准备工具不读取生产 `.env`、用户钥匙串或私人文库，不调用模型。附件校验值证明下载字节，Apple 签名、公证及实际功能另有各自验证范围。
 
-本地验收必须保留各端全部86个原ID且唯一。创建私有草稿前，原69项、`CLOUD-01`至`CLOUD-12`以及`REL-01`、`REL-02`、`REL-05`共84项必须真实通过；只有依赖实际草稿的`REL-03`、`REL-04`可如实保留“待验”，也可已经通过。这两项若失败、受阻或不适用，仍拒绝；任何业务项待验也拒绝。这里没有通用的“允许未完成”开关，不得修改状态来替代实际验收。
+## 4. 私有草稿、下载核验与公开
 
-维护者先明确建立并核对远端版本标签。以下 Mac 单端入口只生成草稿计划：
+联合发行使用同一干净提交准备 Mac 与正式签名 Android 包，两端版本一致，Android 来源等于选定发行提交。先整理版本说明，再正常生成并固定附件、清单与校验文件；之后不手工修改已固定的文件。
 
-```bash
-apps/macos/release.sh private-draft-plan \
-  --prepared 'apps/macos/.build/releases/1.0.0-arm64' \
-  --acceptance-status '/实际验收快照/mac-status.md' \
-  --cloud-acceptance '/实际验收快照/mac-cloud.md' \
-  --repository nanless/audio-paper-digest
-```
+[原69项功能检查](mac-app-acceptance.md)和[新增17项](mac-app-cloud.md)保留全部原 ID，状态唯一。创建私有草稿前须有 84 项通过；仅依赖真实草稿的 `REL-03`、`REL-04` 可为待验。公开前全部 86 项必须通过，失败、受阻或不适用不能替代通过。
 
-两端同一 Release 使用 Android 工具的 `joint-private-draft-plan`，额外核 Android 正式签名包、两端来源与版本、资产名不冲突和各自完整状态：
+先明确建立并核对远端版本标签。单端 `private-draft-plan` 只生成草稿参数；两端联合使用 Android 工具，以下路径变量代表已正常生成的对应产物和实际验收快照：
 
-```bash
+```sh
 python3 apps/android/release_tools.py --repo "$PWD" joint-private-draft-plan \
-  --prepared '/已核Android签名产物' --certificate '正式证书SHA256' \
-  --mac '/已核Mac产物' \
-  --android-acceptance '/实际验收快照/android.md' \
-  --mac-acceptance '/实际验收快照/mac-status.md' \
-  --mac-cloud '/实际验收快照/mac-cloud.md'
+  --prepared "$ANDROID_PREPARED" --certificate "$ANDROID_CERTIFICATE_SHA256" \
+  --mac "$MAC_PREPARED" \
+  --android-acceptance "$ANDROID_ACCEPTANCE" \
+  --mac-acceptance "$MAC_ACCEPTANCE" --mac-cloud "$MAC_CLOUD_ACCEPTANCE"
 ```
 
-新入口真实只读查询固定的 `nanless/audio-paper-digest` 远端标签，轻量标签直接提交、附注标签剥离后的提交都必须精确等于 `H`。不存在、重复、错误标签或错误OID均拒绝。生成的创建参数必须同时包含`--draft`和`--verify-tag`，不会隐式创建标签或直接公开。原`publish-plan`及`joint-plan`保持兼容：仍要求全部86项通过，仍只生成草稿命令，不能拿它们绕过新阶段。
+工具只读查询固定仓库 `nanless/audio-paper-digest` 的标签，核对真实提交，生成带 `--draft`、`--verify-tag` 的参数。维护者复核后执行草稿命令，保留实际 Release ID；旧 `publish-plan`、`joint-plan` 同样只生成草稿计划，不能直接公开。
 
-维护者复核后执行草稿命令，保留真实 Release ID。核对该私有草稿、标签、说明、上传资产及下载实包后，才将`REL-04`登记为通过，再依据完整验收和固定输入关闭`REL-03`。这些晚到的状态可以写在仓库已忽略目录中的实际验收快照，保留原失败、真实证据和哈希；不要在固定 `H` 与最终公开之间先提交公开状态文档，否则现有严格来源检查会要求重新准备包。
+核对真实草稿、说明与全部上传附件后，完成 `REL-03`、`REL-04`，用同一固定输入生成公开参数：
 
-公开前使用同一签名产物与全部86项真实通过的快照，明确传入实际草稿ID：
-
-```bash
+```sh
 python3 apps/android/release_tools.py --repo "$PWD" joint-public-plan \
-  --prepared '/已核Android签名产物' --certificate '正式证书SHA256' \
-  --mac '/已核Mac产物' --draft-id 12345 \
-  --android-acceptance '/实际验收快照/android.md' \
-  --mac-acceptance '/实际验收快照/mac-status.md' \
-  --mac-cloud '/实际验收快照/mac-cloud.md'
+  --prepared "$ANDROID_PREPARED" --certificate "$ANDROID_CERTIFICATE_SHA256" \
+  --mac "$MAC_PREPARED" --draft-id "$RELEASE_ID" \
+  --android-acceptance "$ANDROID_ACCEPTANCE" \
+  --mac-acceptance "$MAC_ACCEPTANCE" --mac-cloud "$MAC_CLOUD_ACCEPTANCE"
 ```
 
-此阶段重新执行全部两端包与来源检查，真实查询指定ID，要求标签相符、`draft=true`、尚无公开时间、全部资产名/大小/ID/上传状态正确，说明与固定版本说明相符。随后按该草稿已核对的固定资产ID只读下载全部文件，不按标签重新选择另一个Release，以现有`verify-downloaded`逐字节比较并重新核验 Mac 包和 Android APK；下载后再次读取同一草稿和剥离标签OID，任何实质变化都拒绝。正常增加的下载计数不算资产变化。它只生成针对该固定 Release ID 的 `draft=false` 参数，不创建新草稿、不上传、不改标签，也不自动执行公开。
+公开计划重新核对包和来源，查询指定草稿 ID，按固定资产 ID 下载全部文件并比较真实字节，之后再次核对标签与草稿未变化。检查通过只生成针对同一 ID 的公开参数，不创建、上传或自动公开。维护者最终复核后执行，并核对公开状态、标签和附件。
 
-主任务在原授权范围内完成最终独立复核后，立即执行刚核验生成的公开参数，并核实同一ID的公开状态、标签和资产。发生变化就重新检查，不复用过期计划。公开后再提交公开验收文档，保留发行提交 `H`、实际记录与旧失败；这项顺序安排不放宽`source_state`、HEAD相等或任何业务验收条件。模拟器、签名和公证的实际范围须如实保留，不能把`prerelease`、私有草稿或下载SHA当作未测业务通过。
+晚到的草稿验收保存在受保护的实际快照中，最终公开后再提交公开状态说明；固定发行提交至公开之间不插入会破坏来源绑定的新提交。旧 v1.0.0 Release、标签及资产保持不变。
 
-命令与阶段依据 GitHub 官方[创建草稿](https://cli.github.com/manual/gh_release_create)、[下载资产](https://cli.github.com/manual/gh_release_download)及[按Release ID更新](https://docs.github.com/en/rest/releases/releases#update-a-release)的接口；工具输出参数不代表远端写操作已发生。
+## 5. 打包测试
 
-## 隔离回归
-
-```bash
+```sh
 bash scripts/python-runtime.sh apps/macos/Tests/ReleasePackaging.test.py
 ```
 
-测试只在系统临时目录建立无私人资料的Git仓库与明确标注的最小应用，编译真实Mach-O、实际ad-hoc签名，并执行真实ZIP解包和DMG只读挂载。它不启动真实应用，不访问用户文库、密钥或付费服务，不创建远端Release。测试覆盖正常产物、签名/源码/版本/架构错配、未验发布门、路径越界、包或校验和篡改、脏工作区及输出保护；隔离样本通过不代表真实最终包或69项已通过。
+该入口在系统临时目录中使用隔离仓库和最小应用，编译 Mach-O、实际签名、解包 ZIP、只读挂载 DMG，验证来源错配、路径、签名、清单与输出保护。它不启动用户应用、不访问私人资料，也不操作远端 Release。
+
+接口依据：[GitHub CLI 创建草稿](https://cli.github.com/manual/gh_release_create)、[下载附件](https://cli.github.com/manual/gh_release_download)、[按 Release ID 更新](https://docs.github.com/en/rest/releases/releases#update-a-release)。
