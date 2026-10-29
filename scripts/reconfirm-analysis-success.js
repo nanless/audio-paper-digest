@@ -28,7 +28,12 @@ function main() {
         }
         let reason = null;
         try {
-            reason = daily.withDailyFreshAnalysisContext(plan, () => engine.getInvalidAnalysisReason(paper));
+            reason = daily.withDailyFreshAnalysisContext(plan, () => {
+                if (!engine.hasValidAnalysisBody(paper)) return '分析正文未通过内容检查';
+                const diagnostics = engine.getApiReaderV3RecordDiagnostics(paper, {});
+                if (diagnostics.length) return `Reader 记录未通过核验：${JSON.stringify(diagnostics).slice(0, 300)}`;
+                return null;
+            });
         } catch (error) { reason = `复核异常：${error.message}`; }
         if (reason) { report.push({ id, refused: reason }); continue; }
         if (!dryRun) {
