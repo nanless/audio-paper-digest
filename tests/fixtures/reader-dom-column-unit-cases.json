@@ -1,1305 +1,1578 @@
 [
-  {
-    "name": "zero-padded bare values inherit their literal metric column",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "5.4"
-        ],
-        [
-          "System B",
-          "8.7"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
+ {
+  "name": "zero-padded bare values inherit their literal metric column",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "5.4"
     ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "05.40"
-          ],
-          [
-            "System B",
-            "8.7"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "05.40",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 2,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System B",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 2,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "8.7",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": [
-      [
-        1,
-        1,
-        "5.4",
-        "%"
-      ],
-      [
-        2,
-        1,
-        "8.7",
-        "%"
-      ]
+    [
+     "System B",
+     "8.7"
     ]
+   ]
   },
-  {
-    "name": "complete mean and uncertainty pair inherits same column unit",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "05.40"
+     ],
+     [
+      "System B",
+      "8.7"
+     ]
     ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": [
-      [
-        1,
-        1,
-        "74.98",
-        "%"
-      ],
-      [
-        1,
-        1,
-        "0.23",
-        "%"
-      ]
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "05.40",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 2,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System B",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 2,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "8.7",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
     ]
-  },
-  {
-    "name": "wrong row identity",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System Z",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "different metric",
-    "table": {
-      "header": [
-        "Method",
-        "CER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "missing unit",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "different unit",
-    "table": {
-      "header": [
-        "Method",
-        "WER (ms)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "scaled value",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "0.7498 ± 0.0023"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "changed uncertainty",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.24"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "ambiguous table",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      },
-      {
-        "ordinal": 2,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "duplicate source row",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 2,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 2,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "unbound caption",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 99: A different measured result."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "complex span",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 2,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "cell matrix mismatch",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "999",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "invalid DOM SHA",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "74.98 ± 0.23"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "forged",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "74.98±\\pm0.23"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "74.98±\\pm0.23",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": []
-  },
-  {
-    "name": "same row cannot borrow equal desired value from adjacent metric column",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)",
-        "CER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "5.4",
-          "5.4"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
-    ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)",
-            "CER (%)"
-          ],
-          [
-            "System A",
-            "6.4",
-            "5.4"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 2,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "CER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "6.4",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 2,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "5.4",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
-    ],
-    "expected": [
-      [
-        1,
-        2,
-        "5.4",
-        "%"
-      ]
+   }
+  ],
+  "expected": [
+   [
+    1,
+    1,
+    "5.4",
+    "%"
+   ],
+   [
+    2,
+    1,
+    "8.7",
+    "%"
+   ]
+  ]
+ },
+ {
+  "name": "complete mean and uncertainty pair inherits same column unit",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
     ]
+   ]
   },
-  {
-    "name": "duplicate metric headers are ambiguous even with equal numbers",
-    "table": {
-      "header": [
-        "Method",
-        "WER (%)",
-        "WER (%)"
-      ],
-      "rows": [
-        [
-          "System A",
-          "5.4",
-          "5.4"
-        ]
-      ]
-    },
-    "quotes": [
-      "Table 1: Literal held-out test measurements."
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
     ],
-    "tables": [
-      {
-        "ordinal": 1,
-        "recoveryStatus": "complete",
-        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "caption": "Table 1: Literal held-out test measurements.",
-        "matrix": [
-          [
-            "Method",
-            "WER (%)",
-            "WER (%)"
-          ],
-          [
-            "System A",
-            "5.4",
-            "5.4"
-          ]
-        ],
-        "cells": [
-          {
-            "row": 0,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "Method",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 0,
-            "column": 2,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "WER (%)",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 0,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "System A",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 1,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "5.4",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          },
-          {
-            "row": 1,
-            "column": 2,
-            "rowspan": 1,
-            "colspan": 1,
-            "text": "5.4",
-            "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          }
-        ]
-      }
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": [
+   [
+    1,
+    1,
+    "74.98",
+    "%"
+   ],
+   [
+    1,
+    1,
+    "0.23",
+    "%"
+   ]
+  ]
+ },
+ {
+  "name": "wrong row identity",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System Z",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
     ],
-    "expected": []
-  }
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "different metric",
+  "table": {
+   "header": [
+    "Method",
+    "CER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "missing unit",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "different unit",
+  "table": {
+   "header": [
+    "Method",
+    "WER (ms)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "scaled value",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "0.7498 ± 0.0023"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "changed uncertainty",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.24"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "ambiguous table",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   },
+   {
+    "ordinal": 2,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "duplicate source row",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 2,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 2,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "unbound caption",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 99: A different measured result."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "complex span",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 2,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "cell matrix mismatch",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "999",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "invalid DOM SHA",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "74.98 ± 0.23"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "forged",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "74.98±\\pm0.23"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "74.98±\\pm0.23",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "same row cannot borrow equal desired value from adjacent metric column",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)",
+    "CER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "5.4",
+     "5.4"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)",
+      "CER (%)"
+     ],
+     [
+      "System A",
+      "6.4",
+      "5.4"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 2,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "CER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "6.4",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 2,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "5.4",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": [
+   [
+    1,
+    2,
+    "5.4",
+    "%"
+   ]
+  ]
+ },
+ {
+  "name": "duplicate metric headers are ambiguous even with equal numbers",
+  "table": {
+   "header": [
+    "Method",
+    "WER (%)",
+    "WER (%)"
+   ],
+   "rows": [
+    [
+     "System A",
+     "5.4",
+     "5.4"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 1: Literal held-out test measurements."
+  ],
+  "tables": [
+   {
+    "ordinal": 1,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 1: Literal held-out test measurements.",
+    "matrix": [
+     [
+      "Method",
+      "WER (%)",
+      "WER (%)"
+     ],
+     [
+      "System A",
+      "5.4",
+      "5.4"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Method",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 2,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "WER (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "System A",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "5.4",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 2,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "5.4",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "bracketed citation header and doubled TeX row label keep their literal percent column",
+  "table": {
+   "header": [
+    "Case",
+    "mean Dkey",
+    "Ours (%)",
+    "Rano [3] (%)"
+   ],
+   "rows": [
+    [
+     "0.1<Dkey<0.2",
+     "0.14",
+     "4.09",
+     "12.78"
+    ]
+   ]
+  },
+  "quotes": [
+   "TABLE III: Restoration quality with an incorrect key, over 303 utterances. For incorrect keys, lower is better."
+  ],
+  "tables": [
+   {
+    "ordinal": 3,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "TABLE III: Restoration quality with an incorrect key, over 303 utterances. For incorrect keys, lower is better.",
+    "matrix": [
+     [
+      "Case",
+      "mean Dkey",
+      "Ours (%)",
+      "Rano [3] (%)"
+     ],
+     [
+      "0.1<Dkey<0.20.1<D_{\\mathrm{key}}<0.2",
+      "0.14",
+      "4.09",
+      "12.78"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Case",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "mean Dkey",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 2,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Ours (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 3,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Rano [3] (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "0.1<Dkey<0.20.1<D_{\\mathrm{key}}<0.2",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "0.14",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 2,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "4.09",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 3,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "12.78",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": [
+   [
+    1,
+    2,
+    "4.09",
+    "%"
+   ],
+   [
+    1,
+    3,
+    "12.78",
+    "%"
+   ]
+  ]
+ },
+ {
+  "name": "single TeX-annotated label is never folded into its bare digits",
+  "table": {
+   "header": [
+    "Condition",
+    "Accuracy (%)"
+   ],
+   "rows": [
+    [
+     "10",
+     "95"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 9: Condition grid with literal held-out accuracy."
+  ],
+  "tables": [
+   {
+    "ordinal": 9,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 9: Condition grid with literal held-out accuracy.",
+    "matrix": [
+     [
+      "Condition",
+      "Accuracy (%)"
+     ],
+     [
+      "\\mathrm{1010}",
+      "95"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Condition",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Accuracy (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "\\mathrm{1010}",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "95",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": []
+ },
+ {
+  "name": "real doubled TeX condition keeps its visible identity",
+  "table": {
+   "header": [
+    "Condition",
+    "Accuracy (%)"
+   ],
+   "rows": [
+    [
+     "0.1<Dkey<0.2",
+     "95"
+    ]
+   ]
+  },
+  "quotes": [
+   "Table 9: Condition grid with literal held-out accuracy."
+  ],
+  "tables": [
+   {
+    "ordinal": 9,
+    "recoveryStatus": "complete",
+    "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "caption": "Table 9: Condition grid with literal held-out accuracy.",
+    "matrix": [
+     [
+      "Condition",
+      "Accuracy (%)"
+     ],
+     [
+      "0.1<Dkey<0.20.1<D_{\\mathrm{key}}<0.2",
+      "95"
+     ]
+    ],
+    "cells": [
+     {
+      "row": 0,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Condition",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 0,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "Accuracy (%)",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 0,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "0.1<Dkey<0.20.1<D_{\\mathrm{key}}<0.2",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     },
+     {
+      "row": 1,
+      "column": 1,
+      "rowspan": 1,
+      "colspan": 1,
+      "text": "95",
+      "sourceDomSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    ]
+   }
+  ],
+  "expected": [
+   [
+    1,
+    1,
+    "95",
+    "%"
+   ]
+  ]
+ }
 ]

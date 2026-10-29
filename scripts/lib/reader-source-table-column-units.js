@@ -17,7 +17,17 @@ function rowIdentity(value) {
             (_whole, base, power) => base + power)
         .replace(/(?<![\p{L}\p{N}_])([A-Za-z])=([0-9]{1,6})\1\{=\}\2(?![\p{L}\p{N}._^\\({])/gu,
             (_whole, name, number) => `${name}=${number}`);
-    return compact(raw);
+    const folded = compact(raw);
+    // 原表行标签会把可见文本再附一遍同名 TeX 注释，例如 0.1<Dkey<0.2 后紧跟
+    // 0.1<D_{key}<0.2。只在“可见前缀 + 自带 TeX 标记的后缀”这一真实双写边界上
+    // 折叠，且两半去掉命令与花括号后必须逐字相同；单个 \mathrm{1010} 不折叠。
+    const plainOf = value => value.replace(/\\[A-Za-z]+/g, '').replace(/[{}]/g, '');
+    for (let index = 1; index < folded.length; index += 1) {
+        const visible = folded.slice(0, index), annotated = folded.slice(index);
+        if (visible.includes('\\') || !annotated.includes('\\')) continue;
+        if (plainOf(annotated) === visible) return visible;
+    }
+    return folded;
 }
 const decimal = value => {
     let [integer, fraction = ''] = value.replace(/^\+/, '').split('.');
@@ -211,7 +221,7 @@ function coverageFromTables(rendered, quotes, tables) {
     if (headers.length < 2 || !rows.length || rows.some(row => !Array.isArray(row) || row.length !== headers.length)) return [];
     for (let column = 1; column < headers.length; column++) {
         const header = compact(headers[column]).replace(/[↑↓]/g, '');
-        if (!/^[A-Za-z][A-Za-z0-9 ._-]*\(%\)$/.test(header)) continue;
+        if (!/^[A-Za-z][A-Za-z0-9 ._\-\[\]]*\(%\)$/.test(header)) continue;
         const candidates = (tables || []).filter(table => {
             if (table.recoveryStatus !== 'complete' || !/^[a-f0-9]{64}$/.test(table.sourceDomSha256 || '')
                 || !Array.isArray(table.matrix) || table.matrix.length < 2 || !Array.isArray(table.cells)
