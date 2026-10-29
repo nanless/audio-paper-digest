@@ -8354,6 +8354,18 @@ def _reader_dom_table_unit_coverage(rendered, quotes, tables):
     def numbers(value):
         match = re.fullmatch(r'([+-]?\d+(?:\.\d+)?)(?:±(\d+(?:\.\d+)?))?', compact(value))
         return [decimal(value) for value in match.groups() if value is not None] if match else None
+    def row_identity(value):
+        # 原表行标签会把可见文本再附一遍同名 TeX 注释；只在“可见前缀 + 带 TeX 标记
+        # 的后缀”边界上折叠，两半去掉命令与花括号后须逐字相同，单个 \mathrm{1010} 不折叠。
+        folded = compact(value)
+        plain = lambda text: re.sub(r'\\[A-Za-z]+', '', text).replace('{', '').replace('}', '')
+        for index in range(1, len(folded)):
+            visible, annotated = folded[:index], folded[index:]
+            if '\\' in visible or '\\' not in annotated:
+                continue
+            if plain(annotated) == visible:
+                return visible
+        return folded
     headers, rows = rendered.get('header', []), rendered.get('rows', [])
     if len(headers) < 2 or not rows or any(not isinstance(row, list) or len(row) != len(headers) for row in rows):
         return set()
@@ -8361,7 +8373,7 @@ def _reader_dom_table_unit_coverage(rendered, quotes, tables):
     result = set()
     for column in range(1, len(headers)):
         header = re.sub('[↑↓]', '', compact(headers[column]))
-        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9 ._-]*\(%\)', header):
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9 ._\-\[\]]*\(%\)', header):
             continue
         candidates = []
         for table in tables:
@@ -8386,10 +8398,10 @@ def _reader_dom_table_unit_coverage(rendered, quotes, tables):
         if len(header_cells) != 1 or compact(header_cells[0]['text']) != compact(source['matrix'][0][column]):
             continue
         for row, values in enumerate(rows):
-            row_name, rendered_values = compact(values[0]), numbers(values[column])
+            row_name, rendered_values = row_identity(values[0]), numbers(values[column])
             if not row_name or not rendered_values:
                 continue
-            matches = [(index + 1, value) for index, value in enumerate(source['matrix'][1:]) if compact(value[0]) == row_name]
+            matches = [(index + 1, value) for index, value in enumerate(source['matrix'][1:]) if row_identity(value[0]) == row_name]
             if len(matches) != 1:
                 continue
             source_row, source_values = matches[0]
