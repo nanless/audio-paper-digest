@@ -469,6 +469,15 @@ function readVerifiedCompletion(paper){
             ||!read(ref.path,ref.sha256).value)fail('superseded completion pointer differs','run');
         return null;
     }
+    // 显式正文重做会先把上一次完成证明写进 readerRevisionHistory；该证明必须
+    // 仍指向最新完成文件且字节相符，才承认它已被本次重做接替。
+    const revision=paper?.readerRevisionHistory;
+    if(!marked&&revision?.contract==='daily-reader-revision-history-v1'
+        &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
+        if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1))
+            ||!read(revision.completionProof.path,revision.completionProof.sha256).value)fail('revision completion pointer differs','run');
+        return null;
+    }
     if(!marked)fail('completion index/marker removed','run');
     const ref=stage.ordinalCompletionProof;if(!ref||path.resolve(ref.path)!==path.join(dir,files.at(-1)))fail('latest completion not selected','run');
     const saved=read(ref.path,ref.sha256).value;
