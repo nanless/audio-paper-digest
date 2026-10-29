@@ -460,15 +460,6 @@ function readVerifiedCompletion(paper){
     // Lookup is canonical paper in the actual source run, never current article
     // SHA. Removing both marker/proof and changing the article cannot bypass it.
     if(files.some((name,index)=>Number(name.slice(-13,-5))!==index+1))fail('completion history has gaps','run');
-    // 人工修正改写正文后，旧完成证明只对旧稿成立；它必须仍指向最新完成文件，
-    // 由 operatorProvenance 接替当前冷核。删掉指针或改文件仍按原规则阻断。
-    const history=stage?.ordinalPatchHistory;
-    if(!marked&&history?.reason==='operator-correction-supersedes-ordinal-completion'){
-        const ref=history.previousCompletionProof;
-        if(!ref||!ref.path||!ref.sha256||path.resolve(ref.path)!==path.join(dir,files.at(-1))
-            ||!read(ref.path,ref.sha256).value)fail('superseded completion pointer differs','run');
-        return null;
-    }
     // 显式正文重做会先把上一次完成证明写进 readerRevisionHistory；该证明必须
     // 仍指向最新完成文件且字节相符，才承认它已被本次重做接替。
     const revision=paper?.readerRevisionHistory;
@@ -476,6 +467,15 @@ function readVerifiedCompletion(paper){
         &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
         if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1))
             ||!read(revision.completionProof.path,revision.completionProof.sha256).value)fail('revision completion pointer differs','run');
+        return null;
+    }
+    // 人工修正改写正文后，旧完成证明只对旧稿成立；它必须仍指向最新完成文件，
+    // 由 operatorProvenance 接替当前冷核。删掉指针或改文件仍按原规则阻断。
+    const history=stage?.ordinalPatchHistory;
+    if(!marked&&history?.reason==='operator-correction-supersedes-ordinal-completion'){
+        const ref=history.previousCompletionProof;
+        if(!ref||!ref.path||!ref.sha256||path.resolve(ref.path)!==path.join(dir,files.at(-1))
+            ||!read(ref.path,ref.sha256).value)fail('superseded completion pointer differs','run');
         return null;
     }
     if(!marked)fail('completion index/marker removed','run');
