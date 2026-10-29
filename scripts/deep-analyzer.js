@@ -4176,7 +4176,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             '代码(?:开源|公开|可用|可运行|可下载|可访问|可达)',
             '(?:(?:模型)?权重(?:可下载|下载|可获取|公开|可用)|模型可下载)',
             '数据可获取',
-            '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可安装|可复现|可部署|可用)'
+            '(?:(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可安装|可复现|可部署|可用)|完整实验可运行)'
         ];
         const conceptProperty = '(?:' + conceptProperties.join('|') + ')';
         const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
@@ -4808,6 +4808,11 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const unsupportedReleaseJudgment = new RegExp('(?:不支持|不足以支持)'
             + '(?:作者|本文|本论文|本研究|本工作)?(?:已经|现已|已)(?:提供|发布|开放)'
             + '(?:完整)?(?:训练)?' + resource + '的(?:判断|结论|说法|声明)', 'gu');
+        // Only a closed evidence denial, never arbitrary “不是” clauses.
+        // Adjacent resource nouns may be unpunctuated, as in “代码权重”.
+        const notReleaseProof = new RegExp('不是(?:作者|本文|本论文|本研究|本工作)?的?'
+            + resource + '(?:(?:' + connector + ')?' + resource + '){0,3}'
+            + '(?:已经|现已|已)(?:公开|开源|发布|开放)的(?:证明|证据)', 'gu');
         const contains = span => matchIndex >= span.index && matchEnd <= span.index + span[0].length;
         const safeDenialIntroduction = span => {
             const before = value.slice(0, span.index);
@@ -4820,6 +4825,13 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             return !quoted && !/[“”‘’「」"'`]|(?:并非|不是|并不是|否认|否定|反驳|证伪|推翻|排除|不代表|不意味着)/u.test(prefix)
                 && !/^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?(?:说法|判断|否定)|上述(?:说法|判断|否定)|的(?:说法|判断|否定))(?:(?:本身|其实|实际)?(?:是|为))?|(?:是|为))(?:错误|不成立|不准确|不属实|不正确)/u.test(suffix);
         };
+        for (const span of value.matchAll(notReleaseProof)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,]/u).at(-1).trim();
+            const suffix = value.slice(span.index + span[0].length).replace(/^[\s，,]+/u, '');
+            if (contains(span) && safeDenialIntroduction(span)
+                && /^(?:(?:但|然而|不过)?\s*(?:这|此|该链接|该演示|这个演示)(?:只是|仅是|是)?(?:演示页|演示页面|链接)?\s*)?$/u.test(prefix)
+                && !/^(?:这(?:一|种|个)?|该|上述)?(?:证明|证据|说法|判断|否定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)|^(?:这(?:一|种|个)?|该|上述)?(?:证明|证据|说法|判断|否定)(?:并不|从未)成立/u.test(suffix)) return true;
+        }
         for (const pattern of [qualifiedLinkDenial, forbiddenDescription]) for (const span of value.matchAll(pattern)) {
             if (contains(span) && safeDenialIntroduction(span)) return true;
         }
@@ -5102,6 +5114,14 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
             if (contains(span) && safe(span) && /^\s*$/u.test(prefix)
                 && span[0].split('、').includes('代码')) return true;
+        }
+        // A scalar loss weight trades privacy for usable output speech, not
+        // downloadable model weights. Exempt only this closed output predicate;
+        // any adjoining model release/download assertion remains live.
+        if (type === 'model') for (const span of value.matchAll(/用部分隐私换回可用语音(?:的原因)?(?=[。！？!?；;，,、]|$)/gu)) {
+            const prefix = value.slice(0, span.index).split(/[。！？!?；;，,]/u).at(-1);
+            if (contains(span) && safe(span)
+                && /^(?:这正是)?(?:报告)?系统把锚权重提到\s*\d+(?:\.\d+)?\s*、\s*$/u.test(prefix)) return true;
         }
         // This closed prior-work clause owns its released weights; it does
         // not qualify a paper's own model or a following release assertion.
@@ -5427,6 +5447,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             // “不能否认作者已开源/代码可下载”是肯定；省略归属者也不能
             // 由后面的普通否定或概念守卫吞掉，明确的缺失否定仍保留。
             const assertionPrefix = segment.slice(0, localMatchIndex);
+            if (/(?:不是|并非|并不是)(?:不能(?:证明|说明|确认)|不是)[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:否认|否定)[^。！？!?；;，,]{0,16}(?:作者|本文|本论文|本研究|本工作)?[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)
                 && !/(?:尚未|并未|未曾|没有|未公开|未发布|未确认|未验证|未发现|未找到|不存在|尚无)/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:说|声称|断言|认为)(?:证据)?不支持(?:作者|本文|本论文|本研究|本工作)?$/u.test(assertionPrefix)) return true;

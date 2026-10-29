@@ -1411,6 +1411,30 @@ function hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText) {
     return false;
 }
 
+function sourceBoundPredictionRefinementDecline(results, sourceText) {
+    const source = String(sourceText || '');
+    const flat = source.replace(/\s+/gu, ' ');
+    if (!/results indicate that prediction refinement traded off the SEN of inhalation detection against PPV, thereby lowering the overall F1-score/iu.test(flat)
+        || !hasOwnSourceStatement(source, /results indicate that prediction refinement traded off the SEN of inhalation detection against PPV/iu)) return false;
+    const sourceTable = /Table 3\. Performance of the CNN-BiGRU model\.[\s\S]*?SEN: sensitivity, and PPV: positive predictive value\./u.exec(source)?.[0] || '';
+    if (!/Refinement Interval \(sec\) SEN PPV F1 Score/u.test(sourceTable) || !ownObservedSourceScope(sourceTable)) return false;
+    const raw = String(results || '');
+    const declined = /(?:开启提炼后吸气[^。；\n]{0,120})?(?:例如[ \t]*)?([0-9]+(?:\.[0-9]+)?)[ \t]*s[ \t]*间隔下[^。；\n]{0,100}?F1[ \t]*由[ \t]*([0-9]+(?:\.[0-9]+)?)[ \t]*降至[ \t]*([0-9]+(?:\.[0-9]+)?)/gu;
+    for (const match of raw.matchAll(declined)) {
+        const sentenceStart = Math.max(raw.lastIndexOf('。', match.index), raw.lastIndexOf('\n', match.index)) + 1;
+        const sentenceEnd = raw.indexOf('。', match.index + match[0].length);
+        const sentence = raw.slice(sentenceStart, sentenceEnd < 0 ? raw.length : sentenceEnd);
+        if (!ownObservedSourceScope(sentence) || /假定|设想|可能|预计|计划|第三方|外部团队|引用|引述|撤回|否认|不成立|并未|没有|尚未|未发生|(?:不|未)降至|阈值|参数/u.test(sentence)
+            || !(Number(match[2]) > Number(match[3]))) continue;
+        if (hasAdjacentAffirmativeEvidenceWithdrawal(raw, sentenceEnd < 0 ? raw.length : sentenceEnd,
+            /(?:上述|该|这一)(?:结果|下降|降分|结论|比较)/giu)) continue;
+        const escape = value => value.replace(/\./gu, '\\.');
+        const row = (state, value) => new RegExp(`(?:^|\\n)[ \\t]*${state} ${escape(match[1])} [0-9.]+ [0-9.]+ ${escape(value)}(?:\\n|$)`, 'u').test(sourceTable);
+        if (row('Off', match[2]) && row('On', match[3])) return true;
+    }
+    return false;
+}
+
 function hasTableBoundHigherMetricRegression(results, tables, sourceText) {
     const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const prose = String(results || '').split('\n').filter(line => !/^\s*\|/.test(line)).join('\n');
@@ -1928,7 +1952,8 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && /(?:蒸馏|候选)检查点[^。；\n]{0,70}[0-9]+(?:\.[0-9]+)?%[^。；\n]{0,40}比原始模型更偏/u.test(sentence)
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
-    const resultHasNegative = sourceBoundNotationRoundtripRegression(results, options.sourceText)
+    const resultHasNegative = sourceBoundPredictionRefinementDecline(results, options.sourceText)
+        || sourceBoundNotationRoundtripRegression(results, options.sourceText)
         || hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
         || tables.some(table => String(results).split(/\n\s*\n/u)
             .some(paragraph => sourceBackedSampleSizeBoundary(paragraph, table, options.sourceText, results)))
@@ -3312,6 +3337,65 @@ function sourceBoundCorrectionRateObservations(text, sourceText) {
     return observations;
 }
 
+// DNSMOS is not MOS embedded in a longer word, nor are its SIG/BAK/OVL
+// subscales free-standing metric aliases. Admit only the source-defined family.
+const CORE_SUMMARY_DNSMOS_PATTERN = /(?<![A-Za-z0-9_.-])DNSMOS(?:[ \t]+P\.835)?[ \t]+(?:SIG|BAK|OVL)(?:\/(?:SIG|BAK|OVL))*(?![A-Za-z0-9_.-]|[ \t]*(?:(?:的|为|是|作为|用作)[ \t]*)?(?:模型|方法|系统|基线|算法|网络|model\b|method\b|system\b|baseline\b|network\b))/iu;
+const CORE_SUMMARY_DNSMOS_DENIED = /假设|假想|假定|设想|如果|若(?:在|用|以)|可能|预计|预期|计划|未来实验|后续实验|建议|讨论|提及|引用|引述|转述|他人|第三方|外部团队|其他研究|先前(?:工作|研究)|相关(?:工作|研究)|并非|并未|不是|没有|不能|尚未|否认|否定|撤回|不成立|不正确|错误|有误|未报告|未观察|\b(?:if|suppose|assuming|hypothetical|planned|quoted|retracted|withdrawn|third[- ]party|external team|(?:previous|prior|related|other)\s+(?:work|stud(?:y|ies)|research)|not\s+(?:observed|reported|used))\b/iu;
+
+function hasAffirmativeDnsMosStatement(text, pattern, preceding = '', following = '') {
+    const raw = String(text || '');
+    const parts = raw.split(/[。！？!?\n]/u);
+    let offset = 0;
+    return parts.some(part => {
+        const start = offset;
+        offset += part.length + 1;
+        const previous = raw.slice(0, start).trimEnd().split(/[。！？!?\n]/u).at(-1) || preceding;
+        // A foreign/hypothetical heading cannot lend ownership to the next line.
+        const heading = /[:：]$|^\s*(?:#{1,6}\s|\*\*|__)/u.test(previous)
+            || previous.length <= 100 && CORE_SUMMARY_DNSMOS_DENIED.test(previous) ? previous : '';
+        return pattern.test(part) && !CORE_SUMMARY_DNSMOS_DENIED.test(heading + part)
+            && ownObservedSourceScope(heading + part)
+            && !hasAdjacentAffirmativeEvidenceWithdrawal(raw + '。' + following, start + part.length,
+                /(?:上述|以上|前述|该|此|这一)(?:DNSMOS)?(?:指标|测量|评测|结果|结论|边界|说法|表述)/giu);
+    });
+}
+
+function hasSourceDefinedDnsMos(sourceText) {
+    // P.835 contains a decimal point, so preserve English periods here.
+    const raw = String(sourceText || '');
+    const lines = raw.split(/\r?\n/u);
+    return lines.some((line, index) =>
+        /\bwe use the reference-free DNSMOS P\.835 \(SIG\/BAK\/OVL\)/iu.test(line)
+        && !CORE_SUMMARY_DNSMOS_DENIED.test((lines[index - 1] || '') + '\n' + line)
+        && ownObservedSourceScope(line)
+        && !/\b(?:withdrawn|revoked|false statement|not used)\b|撤回|不成立|有误/iu.test(lines[index + 1] || ''));
+}
+
+function hasSourceBoundDnsMosBoundary(summary, sourceText) {
+    if (!hasSourceDefinedDnsMos(sourceText)) return false;
+    // This is the actual three-category comparison, not a generic permission
+    // to treat any distribution noun as an applicability boundary.
+    const source = String(sourceText || '');
+    const tableMatch = /Table 1: Comparison of different systems on the DNS Challenge test set\.[\s\S]*?(?=\n3\.1 Architecture Overview)/u.exec(source);
+    const table = tableMatch?.[0] || '';
+    const tablePrefix = source.slice(0, tableMatch?.index || 0).trimEnd().split('\n').at(-1) || '';
+    if (CORE_SUMMARY_DNSMOS_DENIED.test(tablePrefix) || !ownObservedSourceScope(tablePrefix)
+        || !/With Reverb\s+Without Reverb\s+Real Recordings\s+(?:DNSMOS ↑[^\n]*\n){3}(?:SIG\s+BAK\s+OVL\s*){3}/u.test(table)
+        || CORE_SUMMARY_DNSMOS_DENIED.test(table)
+        || !ownObservedSourceScope(table)) return false;
+    const row = label => {
+        const rows = [...table.matchAll(new RegExp('(?:^|\\n)' + label + '\\n[✓✗]\\n((?:[0-9]+\\.[0-9]+(?:\\n|$)){9})', 'gu'))];
+        return rows.length === 1 ? rows[0][1].trim().split(/\s+/u).map(Number) : null;
+    };
+    const baseline = row('SELM[^\\n]*');
+    const measured = row('StreamSE \\(ℓ=0\\\\ell\\{=\\}0\\)');
+    if (!baseline || !measured || !(measured[6] < baseline[6] && measured[8] < baseline[8])) return false;
+    return hasAffirmativeDnsMosStatement(summary,
+        /结论限于DNSMOS感知的合成分布/u)
+        && hasAffirmativeDnsMosStatement(summary,
+            /真实录音(?:类)?(?:上)?[，,]?(?:零前视StreamSE的)?(?:DNSMOS[ \t]+)?SIG(?:和|与)(?:DNSMOS[ \t]+)?OVL仍落后于SELM(?![A-Za-z0-9_.-])/u);
+}
+
 function coreSummaryQuantitativeResultState(text, sourceText = null) {
     const correctionRates = sourceBoundCorrectionRateObservations(text, sourceText);
     const rawSentences = String(text || '').split(/[。！？!?\n]/);
@@ -3337,8 +3421,12 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
             ? measuredMetricText.replace(/(?<![A-Za-z0-9_])CCC(?![A-Za-z0-9_])|一致性相关系数/giu, ' ')
             : measuredMetricText;
         const hasRecognizedMetric = Boolean(sentence && (
-            CORE_SUMMARY_METRIC_PATTERN.test(admittedMetricText)
+            CORE_SUMMARY_METRIC_PATTERN.test(admittedMetricText.replace(
+                /(?<![A-Za-z0-9_.-])DNSMOS(?:[ \t]+P\.835)?(?:[ \t]+(?:SIG|BAK|OVL)(?:\/(?:SIG|BAK|OVL))*)?(?![A-Za-z0-9_.-])(?:[ \t]*(?:指标|分数|得分))?/giu, ' '))
             || CORE_SUMMARY_ADDITIONAL_METRIC_PATTERN.test(admittedMetricText)
+            || hasSourceDefinedDnsMos(sourceText) && hasAffirmativeDnsMosStatement(
+                rawSentence, CORE_SUMMARY_DNSMOS_PATTERN,
+                rawSentences[sentenceIndex - 1] || '', rawSentences[sentenceIndex + 1] || '')
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(admittedMetricText)
             || !/(?:假设|假想|如果|预计|预期|可能|计划|未来|引用|引述|转述|他人|第三方|其他研究|先前研究|相关工作|并非|并未|不是|没有|尚未|未报告|否认|撤回|不成立|错误说法)|\b(?:hypothetical|assuming|if|planned|quoted|third[- ]party|not reported)\b/iu.test(sentence)
                 && CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.test(sentence)
@@ -3412,6 +3500,9 @@ function coreSummaryQuantitativeResultState(text, sourceText = null) {
 
 function nearestCoreSummaryMetricLabel(segment, fromRight) {
     const candidates = [];
+    for (const match of String(segment || '').matchAll(new RegExp(CORE_SUMMARY_DNSMOS_PATTERN.source, 'giu'))) {
+        candidates.push({ index: match.index, value: 'dnsmos-' + match[0].split(/[ \t]+/u).at(-1).toLowerCase() });
+    }
     for (const match of String(segment || '').matchAll(new RegExp(CORE_SUMMARY_VERTEX_GESTURE_METRIC_PATTERN.source, 'giu'))) {
         const key = /(?:LVE|lip|唇)/iu.test(match[0]) ? 'lve'
             : /(?:MVE|mean|全脸)/iu.test(match[0]) ? 'mve'
@@ -3788,7 +3879,73 @@ function hasTypedNaturalProductHandoff(summary) {
 
 // Closed signal/representation handoffs. These are actual processing paths,
 // not a count of action words or a paper/model-name exception.
+function hasSourceBoundEditedWaveformOrCachedAvChain(summary, sourceText = '') {
+    const source = String(sourceText || '').replace(/\s+/gu, ' ');
+    // Method ownership must be checked before the narrow early return below.
+    // Do not ban bare 另一: another option/recording is part of the actual edit.
+    const foreignMethod = /独立方法|无关(?:模型|方法|系统)|(?:另一(?:个|种|套)?|其他|基线|对照)(?:的)?(?:模型|方法|系统)|\b(?:baseline|control|independent|unrelated)\s+(?:method|model|system)\b/iu;
+    const denied = /假设|假想|假定|设想|如果|预计|预期|计划|未来实验|建议|讨论|引用|引述|转述|他人|第三方|外部团队|其他团队|先前工作|先前研究|相关工作|并非|并未|不是|没有|不能|尚未|未曾|否认|否定|撤回|不成立|不正确|错误|有误|(?:不|未)(?:被|曾|实际|真正|直接|再|继续)*(?:输出|生成|得到|接收|送入|进入|统计|拼接|估计|重建)|\b(?:if|hypothetical(?:ly)?|quoted|third[- ]party|external team|(?:previous|prior|related|other)\s+(?:work|research)|withdrawn|revoked)\b/iu;
+    const forwardRevoked = /(?:下述|如下|以下|后述)(?:方法|流程|链|步骤|过程)[^。；]{0,50}(?:不成立|没有|并未|未执行|未发生|只是设计|只是示意|仅为示意|尚待实现|有待实现)/u;
+    const ownSource = pattern => {
+        const match = pattern.exec(source);
+        if (!match) return false;
+        // Start at a complete proposition, not an arbitrary character that
+        // might be a quotation mark belonging to the preceding model prompt.
+        const prior = source.slice(0, match.index);
+        const before = prior.split(/(?<=[.!?])\s+/u).at(-1) || '';
+        const previousHeading = /(?:previous work|prior research|hypothetical(?: method)?)[.:][^.!?]{0,160}$/iu.exec(prior.trimEnd())?.[0] || '';
+        const context = previousHeading + before + source.slice(match.index, match.index + match[0].length + 100);
+        return ownObservedSourceScope(context) && !denied.test(context) && !foreignMethod.test(context);
+    };
+    const editedSource = [
+        /The different-class variant replaces the query event with a recording from the alternative class/iu,
+        /Its matched same-class control inserts a different recording of the query class into exactly the same interval/iu,
+        /Both variants use the same donor-fitting, level-estimation, background-copying, and crossfade procedures/iu,
+        /Each waveform is queried in both option orders/iu,
+        /The answer-change gap[^.]{0,120}combines marginal correctness/iu,
+        /Selective accuracy measures whether a revised answer identifies the inserted class on eligible trials/iu
+    ].every(ownSource);
+    const cachedSource = [
+        /target-agnostic causal audio encoder that processes only the mixture/iu,
+        /encoder cache remains valid across target switches/iu,
+        /Frozen visual frontends provide lip features/iu,
+        /temporally aligned lip features are combined with the cached audio representation to form the attention memory/iu,
+        /A shared mask head produces a complex ratio mask[^.]{0,120}iSTFT with overlap-add reconstructs the waveform/iu
+    ].every(ownSource);
+    if (!editedSource && !cachedSource) return false;
+    const parts = String(summary || '').split(/[。！？!?\n]/u).map(part => part.trim()).filter(Boolean);
+    for (let index = 0; index < parts.length; index++) {
+        const first = parts[index], second = parts[index + 1] || '', third = parts[index + 2] || '';
+        const previous = parts[index - 1] || '';
+        const heading = /[:：]$|^\s*(?:#{1,6}\s|\*\*|__)/u.test(previous)
+            || previous.length <= 100 && (denied.test(previous) || foreignMethod.test(previous) || forwardRevoked.test(previous)) ? previous : '';
+        const withdrawn = next => {
+            const notice = normalizeLocalEvidenceHeading(next).replace(/^(?:\*\*|__)/u, '')
+                .replace(/^(?:不过|然而|但是|可是|但|实际上)[，,]?\s*/u, '');
+            return /^(?:上述|以上|前述|该|此|这一)(?:方法|流程|链|交接|处理|(?:音频)?表示|(?:共享)?缓存|解码器|掩膜|波形|回答)[^。]{0,60}(?:撤回|不成立|错误|未|不|没有|属于(?:基线|对照)|仅供展示|并非本文方法)/u.test(notice)
+                || /^(?:上述|以上|前述|该|此|这一)(?:方法|流程|链|交接|处理)[^。]{0,40}(?:属于|来自|仅供|仅为|只是)/u.test(notice) && foreignMethod.test(notice);
+        };
+        if (foreignMethod.test(heading + first + second + (cachedSource ? third : '')) || forwardRevoked.test(heading + first)) continue;
+        if (editedSource && !denied.test(heading + first + second) && !withdrawn(third)
+            && /不同类替换把该区间换成另一选项类别的录音从而改变正确答案/u.test(first)
+            && /同类替换用查询类别的另一段录音重写同一区间而保持正确答案/u.test(first)
+            && /两者共享区间、响度估计、供体适配和交叉淡化/u.test(first)
+            && /^替换后波形以两种选项顺序送入模型提问[，,]得到的回答进入统计/u.test(second)
+            && /回答变化率的配对差距把两类替换的差作为类别效应的度量/u.test(second)
+            && /选择性准确率在原始和同类输入都答对的合格试验上检查新回答是否指向插入类别/u.test(second)) return true;
+        if (cachedSource && !denied.test(heading + first + second + third) && !withdrawn(parts[index + 3] || '')
+            && /因果音频编码器只对混合频谱编码/u.test(first)
+            && /输出音频表示并维护与目标无关的共享缓存$/u.test(first)
+            && /^冻结视觉前端持续提取各人脸[^。]{0,30}唇动特征与身份向量并存入[^。]{0,30}滚动缓冲/u.test(second)
+            && /切换时取出所选脸对齐片段送解码器而不重算编码器$/u.test(second)
+            && /^解码器是唯一目标相关部分[，,]把缓存音频表示与所选唇动拼接投影为键值、把身份向量加入解码查询/u.test(third)
+            && /经[^。]{0,30}交叉注意力与共享掩膜头估计复数比掩膜[，,]再经逆变换重叠相加[^。]{0,30}重建波形$/u.test(third)) return true;
+    }
+    return false;
+}
+
 function hasTypedProcessingProductChain(summary, sourceText = '') {
+    if (hasSourceBoundEditedWaveformOrCachedAvChain(summary, sourceText)) return true;
     const denied = /(?:假设|假想|假定|设想|如果|可能|预计|预期|计划|未来|建议|讨论|提及|相关工作|先前工作|他人|独立方法|无关|另一|其他(?:模型|方法|系统|病人|数据|信号|样本)|并非|并未|不是|没有|不能|不会|尚未|未曾|不再|否认|否定|反驳|驳斥|引用|引述|转述)|(?:不|未|没)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:统计|计算|形成|生成|输出|送入|进入|作为|使用|采用|处理|池化|注入|承接|给出|锁定|确定|执行|发生|应用|实现|实施|进行|完成)|(?:丢弃|弃用|忽略)|(?:说法|表述|观点|判断|过程|流程)[^。；]{0,20}(?:错误|有误|不成立|不正确|未执行)/u;
     const typedSource = String(sourceText || '').replace(/\s+/gu, ' ');
     const typedContinuationDenied = text => /^(?:(?:上述|以上|前述|该|此|这一|这些)[^。]{0,75}(?:交接|衔接|轨迹|类别|处理链|层向量|主成分分析|典型相关分析|混合求解器|卷积)[^。]{0,60}(?:未|不|没有|撤回|错误|仅供展示|属于基线)|(?:后继验证|卷积|主成分分析|典型相关分析)[^。]{0,50}(?:另一|其他|独立|无关)[^。]{0,60}(?:轨迹|响应|向量|仅供展示))/u.test(String(text || ''));
@@ -4349,7 +4506,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary)) {
+        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary) && !hasSourceBoundDnsMosBoundary(summary, sourceText)) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (
