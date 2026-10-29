@@ -282,6 +282,15 @@ def validate_svg(raw):
                             if reference.startswith('url('):
                                 check_local_paint(reference)
                                 declaration = ''
+                        else:
+                            # 局部渐变/图案填充是图元本身；只放行已核对的本图
+                            # 填充引用，其他 url() 仍按外部资源拒绝。
+                            local_paint = re.fullmatch(
+                                r'\s*(?:fill|stroke)\s*:\s*(url\(#[A-Za-z_][\w.:-]*\))\s*',
+                                declaration)
+                            if local_paint:
+                                check_local_paint(local_paint.group(1))
+                                declaration = declaration.replace(local_paint.group(1), '')
                         declarations.append(declaration)
                     checked_value = ';'.join(declarations)
             if re.search(r'url\s*\(|@import|expression\s*\(|javascript\s*:|data\s*:|https?\s*:|file\s*:', checked_value, re.I):

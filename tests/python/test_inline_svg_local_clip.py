@@ -142,6 +142,35 @@ class LocalClipTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     renderer.validate_svg(invalid.encode())
 
+    def test_style_paint_admits_only_local_gradient_and_pattern_fill(self):
+        """图元用 style 写本图渐变/图案填充是真实像素，外部引用仍拒绝。"""
+        source = (
+            '<svg width="100" height="100" viewBox="0 0 100 100">'
+            '<defs><linearGradient id="shade1"><stop offset="0"/></linearGradient>'
+            '<pattern id="shade2"><rect width="4" height="4"/></pattern></defs>'
+            '<rect style="fill:url(#shade1);stroke:none" width="20" height="20"/>'
+            '<rect style="stroke: url(#shade2) ;fill:none" width="20" height="20"/>'
+            '</svg>'
+        )
+        for valid in [source, source.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ')]:
+            with self.subTest(source=valid):
+                self.assertEqual(renderer.validate_svg(valid.encode()), valid)
+        invalid_sources = [
+            source.replace('url(#shade1)', 'url(https://evil/#shade1)'),
+            source.replace('url(#shade1)', 'url(#missing)'),
+            source.replace('url(#shade1)', 'url(#shade1) url(https://evil)'),
+            source.replace('fill:url(#shade1)', 'background:url(#shade1)'),
+            source.replace('fill:url(#shade1)', 'fill:url(#shade1)!important'),
+            source.replace('url(#shade1)', 'url(#shade2)').replace(
+                '<pattern id="shade2"><rect width="4" height="4"/></pattern>', ''),
+            source.replace('style="fill:url(#shade1);stroke:none"',
+                           'style="fill:url(#shade1);mask:url(https://evil)"'),
+        ]
+        for invalid in invalid_sources:
+            with self.subTest(source=invalid):
+                with self.assertRaises(ValueError):
+                    renderer.validate_svg(invalid.encode())
+
 
 if __name__ == '__main__':
     unittest.main()
