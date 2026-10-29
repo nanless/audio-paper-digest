@@ -8994,6 +8994,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let draftOrderMappings = [];
     let mechanicalNoFigureCleanupChanged = false;
     const normalizeCandidate = () => {
+        const beforeDraftSha = candidate ? repair.hashDraft(candidate) : null;
         const state = {};
         try {
             normalizeApiReaderRecoveryDraftForSource(candidate, currentIssues, {
@@ -9004,6 +9005,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             candidate = state.draft;
             draftOrderMappings = state.draftOrderMappings;
             mechanicalNoFigureCleanupChanged = state.mechanicalNoFigureCleanupChanged;
+            // 序号补丁请求要求基稿与活动候选逐字一致；归一化只改了内存稿时必须写回，
+            // 否则下一次准备会以“exact active failed draft”拒绝。写回失败不改变主流程。
+            if (candidate && beforeDraftSha && ordinalPatchCompilations.length
+                && beforeDraftSha !== repair.hashDraft(candidate)) {
+                try {
+                    const active = repair.loadFailedCandidate(candidateDirectory, identity);
+                    if (active) repair.saveFailedCandidate(candidateDirectory, identity, {
+                        ...active, status: 'failed', draft: candidate,
+                        draftOrderMappings, issues: currentIssues
+                    });
+                } catch (_) { /* 保留原候选，后续 prepare 会照常给出可诊断的拒绝 */ }
+            }
         }
     };
 
