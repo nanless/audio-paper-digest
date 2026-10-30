@@ -125,7 +125,7 @@ P02编码总长：`8389318 bytes`；完整SHA-256：`c085074731741f5a62b02949e4a
 
 [offline-swift-vectors.json](<../apps/android/app/src/test/resources/offline-swift-vectors.json>)由[公开 Swift 生成器](<../apps/android/app/src/test/fixtures/GenerateOfflineFixtures.swift>)在全新临时目录调用现有 `DesktopStorage.register/verifyPackage/openPackage` 生成，未改 Mac 产品源码，也不读取用户缓存。它包含 v1、v2、缺 MathML 合同的旧 HTML，以及一张真实生成 PNG 加一页合法 PDF 的 v2，共4包；另有2份真正 Foundation JSON 字节向量，覆盖中文、emoji、斜杠、键排序和二进制小数。它们都是合成文献，不能当作 MiCLA 或其他真实论文验收。
 
-在仓库根目录以当前 Mac 构建所用 Swift 默认语言模式编译生成器，输入只需上述脚本、`apps/macos/Sources/BackupCodec.swift`、`DesktopStore.swift`、`DesktopStorage.swift`，链接 PDFKit/Security。运行时传仓库绝对路径和输出 JSON 路径。输出 JSON 含实际3份 Mac 源 SHA、每个原文件的 Base64/SHA，以及 Foundation 期望字节；PDF/PNG字节由本次生成，重新生成的日期和 PDF 元信息可能不同，不能据此重写既有包身份。
+在仓库根目录以当前 Mac 构建所用 Swift 默认语言模式编译生成器，输入只需上述脚本、`apps/macos/Sources/BackupCodec.swift`、`DesktopStore.swift`、`DesktopStorage.swift`，链接 PDFKit/Security。运行时传仓库绝对路径和输出 JSON 路径。输出 JSON 含实际3份 Mac 源 SHA、每个原文件的 Base64/SHA，以及 Foundation 期望字节；PDF/PNG字节由本次生成，重新生成的日期和 PDF 元数据可能不同，不能据此重写既有包身份。
 
 Android 的 `OfflineStoreTest` 与 `OfflineStoreDeviceTest` 共享这同一公开资源。设备测试先读取并逐字节保护原包，再从实际匹配缓存正常新注册；断言新包不是复用任何 Mac 原包，输出的合成 packet 可交[原 Mac 反向读取器](<../apps/android/app/src/test/fixtures/VerifyAndroidOfflinePacket.swift>)。该读取器同样只与上述原3份 Mac 源编译，在私有临时目录核 Base64、SHA、路径白名单，执行原 verify/open，含图/PDF时另核真实页数和图 SHA，最后确认全部原文件没有被读取过程改写。它不安装应用、不调用网络或凭据。
 

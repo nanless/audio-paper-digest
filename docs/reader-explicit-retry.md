@@ -485,7 +485,7 @@ v2 中当前裁剪器删去原表行列时，仅真实 `tableCorrections` 已授
 
 首次完成稿本来就来自旧日更批次人工修正、没有完成 API 父稿时，v2 可显式绑定 `legacyBatchRoot`，给出真实失败父快照及原用户授权文件的 SHA；原候选使用 `baselineCandidateFile` / `baselineCandidateEnvelopeSha256`，不能把仍活跃的付费档称作退休 API 稿。
 
-独立只读核验器须重放原失败父的完整评分检查点、原精确批次授权与清单、原付费档、原补丁及全部四源，逐字得到当前签名 Reader，保留原次数、费用和像素。
+独立只读校验器须重放原失败父的完整评分检查点、原精确批次授权与清单、原付费档、原补丁及全部四源，逐字得到当前签名 Reader，保留原次数、费用和像素。
 
 后续阶段将真实批次根保存为 `originBatchOperatorStage`，不补造 `originApiStage` 或旧人工历史，不恢复或退休原候选。
 
@@ -495,7 +495,7 @@ v2 的 `normalProducerProof` 不授权额外裁剪。未列入合法 `tableCorre
 
 个别原结构稿只有采用正常生产器既有的确定性表格处理选项，才能重放已经签名的完整父稿。
 
-此时可显式提供 `normalProducerProof`，合同为 `reader-observed-current-producer-replay-v1`、模式为 `observed-current-replay`：核验当前 producer 文件 SHA、原退休输入的真实 parser 身份和 draft SHA，并以可信祖先 Git blob 证明该 normal producer 选项原已存在。
+此时可显式提供 `normalProducerProof`，合同为 `reader-observed-current-producer-replay-v1`、模式为 `observed-current-replay`：核验当前 producer 文件 SHA、原退休输入的真实解析器身份和 draft SHA，并以可信祖先 Git blob 证明该 normal producer 选项原已存在。
 
 Git 见证不冒充原输入的完整实现闭包；若原闭包不可得，保留其原 SHA，不补签历史。
 

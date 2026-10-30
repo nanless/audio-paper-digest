@@ -104,7 +104,7 @@ npm run test:compat
 | `lib/scoring-third-party-resource-replay.js` | Node 库：精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
 | `lib/saved-scoring-audit-replay.js` | Node 库：持真实日更论文锁读取完整原包与唯一首评分费用，提供私有待验候选；正常资源重探、原完整评分指纹和请求体重放全通过后才恢复原检查点，不新增请求或额度。 |
 | `lib/daily-scoring-refresh-checkpoint.js` | Node 库：日更评分刷新在Reader前持锁保存新评分，按原四源、完整评分指纹、反馈与父稿冷核后只续Reader；待完成记录阻发布，漂移不重付评分。 |
-| `lib/daily-scoring-refresh-checkpoint-cli.js` | Python 日更发布在有同来源运行的私有保存稿时，经私有文件描述符调用同一恢复 helper 冷核；仅判断待完成状态，硬禁网络，不采纳评分或授予模型额度。 |
+| `lib/daily-scoring-refresh-checkpoint-cli.js` | Python 日更发布在有同来源运行的私有保存稿时，经私有文件描述符调用同一恢复辅助函数冷核；仅判断待完成状态，硬禁网络，不采纳评分或授予模型额度。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `prepare-reader-revision.js` | 按篇正文重做准备：写入 readerRevisionHistory、退休旧失败候选并清掉 Reader 阶段，供后续正常续跑；不改来源与费用。 |
@@ -167,12 +167,12 @@ npm run test:compat
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总，沿私有池每篇复用一次完整 `loadStage` 的结果。认证PDF多层/平表的新增失败后补证仍逐项重建完整原网格、条件与单位，不改变原成功证明。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
 | `lib/conference-recovery-grant.js` | 显式追加会议额度的不可变登记与私有运行能力，绑定原 process 完整失败集合、父子稿 CAS 和真实来源；同一许可中断重入，禁止 JSON 自授额度。 |
-| `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。合格普通 partial 的重复初始化恢复可交原正常入口；仅真实未签发、零尝试及一次资源重探回执允许首次评分＋Reader，固定预检与新评分检查点冷热重放，原阶段及费用保护，详见[维护边界](../docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。普通子稿的同步观察、读取和出版操作合并重复历史断言，首次及返回前完整重读，并核当前子稿/父稿/修订/种子/预检SHA及历史材料与暂存输出隔离；原完整loader、Reader/来源资格、渲染及字节核验照常执行，窗口/排除路径暂停作用域走原路，不跨异步、请求或成功保存。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。 |
+| `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。合格普通 partial 的重复初始化恢复可交原正常入口；仅真实未签发、零尝试及一次资源重探回执允许首次评分＋Reader，固定预检与新评分检查点冷热重放，原阶段及费用保护，详见[维护边界](../docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。普通子稿的同步观察、读取和出版操作合并重复历史断言，首次及返回前完整重读，并核当前子稿/父稿/修订/种子/预检SHA及历史材料与暂存输出隔离；原完整加载器、Reader/来源资格、渲染及字节核验照常执行，窗口/排除路径暂停作用域走原路，不跨异步、请求或成功保存。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。 |
 | `lib/conference-publication-figure-crop.js`、`lib/conference-publication-figure-crop-replay-cli.js` | 认证同 PDF 的独立出版派生及固定禁网 FD 冷核。正常发布仍要求真实当前父稿；库内 ForMaintenance 仅接受维护模块私有历史能力，重算原 PDF/像素和全部实物闭包，不授 current 发布或 Reader 通过。 |
 | `lib/conference-reader-publication-evidence.js` 的 `assertVerifiedPublicationReaderPdfSourcesUnchanged()` | 单次批核真实 WeakMap 来源句柄的共享原文件；先拒绝句柄、SHA 与读取策略冲突，再逐份完整读取唯一文件。无跨调用缓存，不替代来源、失败集合或当前状态资格。 |
 | `lib/conference-reader-review-maintenance.js` 的 `revalidateMaintenancePublicationSources()` | 持原 process 操作锁，硬禁模型，以正常来源和几何重算固定历史出版视图，另存当前 proof 与来源重验凭证；旧 outcome、PNG、原稿和费用不改。不新增公共 CLI，不授最终发布通过。 |
 | `conference_publication_figure_crop.py`、`reader_pdf_page_geometry.py` | 固定几何规则及唯一印刷图号/完整图注匹配；可派生精确图或完整原页。有限原页另需原认证 raw artifacts sourceRef/页能力与同页唯一印刷图号，完整图注 null/未完整抽取明确展示，普通裁切仍严格。共享几何内核不改旧日更 SVG 输出字节与 proof 合同，不接受用户自由矩形。 |
-| `conference_publication_figure_view.py`、`conference_publication_figure_view_replay.py` | 只消费真实 Node 重放结果，复用原生图片 parser 生成独立出版页，保留原 Reader/来源签名；私有 FD pure transform 只重算 raw→view 字节，不能单凭 JSON 自哈希签来源、审查或发布。 |
+| `conference_publication_figure_view.py`、`conference_publication_figure_view_replay.py` | 只消费真实 Node 重放结果，复用原生图片解析器生成独立出版页，保留原 Reader/来源签名；私有 FD pure transform 只重算 raw→view 字节，不能单凭 JSON 自哈希签来源、审查或发布。 |
 | `lib/conference-reader-recovery-window.js` | 同一已登记会议窗口的 Reader 6次内容/2次全文累计账本；请求前预留，保留不可变原请求和响应，冷核损坏或删账即阻断。生成须持论文锁；只读身份重放强制禁止模型。 |
 | `lib/conference-retained-source-replay.js` | 完整来源升级进程的只读逐篇来源回放：按每篇原分析绑定的计划凭证认证筛选、暂存、导入、原计划与原抽取，缓存不同计划的已认证句柄；单篇与汇总使用各自原来源。仅词表元数据能恢复到原凭证精确 SHA 时才在系统临时目录重放原计划，不改现有文件或重新提取、分析。 |
 | `lib/conference-reader-active-candidate-replay.js` | 在禁用新模型请求的私有临时目录中重放会议子运行已付费候选；核验唯一原请求、响应、用量、来源及归档 Prompt，私有范围内保留原模板声明并传递真实 PDF 能力。正常解析与整篇资格通过后交由适配器保存，不授予新请求或预算，不覆盖原稿。 |
@@ -325,7 +325,7 @@ npm run test:compat
 | `reader_pdf_page_asset.py` | Python 库：仅对缺失或循环绘图依赖的封存 SVG，从同一日更封存 PDF 的唯一图号及完整图注派生完整原页 PNG；保留 Reader 旧像素 SHA，以独立来源证明供发布、审查与推送重验。 |
 | `reader_damaged_raster_pdf_asset.py` | Python 库：仅承接显式单目标坏 PNG 出版恢复，重放原官方响应 SHA、截断 IDAT 结构回执、四源、唯一完整 PDF 图注及印刷号，派生明确标注的整页新像素；不改原 Reader 或来源，不放宽严格解码。 |
 | `reader_pdf_cell_evidence.py` | 按受控 PDF 提取和核验表格单元格证据。 |
-| `reader_pdf_visual_audit_cache.py` | Python 库：有界缓存旧 PDF 后端成功的纯视觉抽取；每次核对真实 PDF 和完整实现字节，返回独立副本；四份封存来源、当前绑定与逐格数字资格仍由原核验器每次重放。 |
+| `reader_pdf_visual_audit_cache.py` | Python 库：有界缓存旧 PDF 后端成功的纯视觉抽取；每次核对真实 PDF 和完整实现字节，返回独立副本；四份封存来源、当前绑定与逐格数字资格仍由原校验器每次重放。 |
 | `reader_sealed_pdf_column_units.py` | 核验受控 PDF 原表列单位证据，供 Node 和发布器重放。 |
 | `reader_sealed_pdf_quote_evidence.py` | 核验受控 PDF 精确引文，供 Node 和发布器重放；独立只读操作核对三阶段学习率的上标字形、完整引文范围及有限相邻归属，旧操作输出不变。 |
 | `reader_authenticated_pdf_hierarchical_table.py` | 从真实 PDF 完整表格的字形、列组、原行和条件带唯一映射展示子集；先闭合原表再选择，不猜单位，不制造 HTML DOM。 |

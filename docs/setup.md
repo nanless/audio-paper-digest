@@ -69,7 +69,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 ## 环境为什么只认项目 `.env`
 
-Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读取项目根目录 `.env`。它们先清理从 shell、IDE、Trae 或 Codex 继承的 `PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、渠道变量及大小写代理变量，再载入项目配置，并将文件权限收紧到 `0600`。
+Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读取项目根目录 `.env`。它们先清理从 shell、IDE、Trae 或 Codex 继承的 `PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、渠道变量及大小写代理变量，再加载项目配置，并将文件权限收紧到 `0600`。
 
 项目必需值不能只写在 `.zshrc`，也不能靠外层环境临时补齐。子进程须使用公共的最小环境构造函数，避免把模型或发布密钥传给 curl、Git hook、浏览器及无关命令。
 
