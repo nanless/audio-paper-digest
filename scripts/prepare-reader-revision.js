@@ -34,7 +34,28 @@ function main() {
             const completionDir = path.join(plan.readerAttemptsDir, 'ordinal-completions');
             const files = fs.existsSync(completionDir)
                 ? fs.readdirSync(completionDir).filter(name => name.startsWith(`${id}-`)).sort() : [];
-            if (!files.length) { report.push({ id, skipped: 'no ordinal completion' }); continue; }
+            if (!files.length) {
+                const stageNow = paper.analysisManifest?.stages?.apiReaderArticle;
+                if (stageNow && stageNow.status === 'complete') {
+                    // 没有完成文件的普通已签稿也可重做：登记历史、清阶段，不写完成指针。
+                    if (!dryRun) {
+                        paper.readerRevisionHistory = {
+                            contract: 'daily-reader-revision-history-v1', reason: 'explicit-reader-revision',
+                            completionProof: null, previousArticleSha256: stageNow.articleSha256 || null,
+                            previousPlanSha256: stageNow.planSha256 || null, recordedAt: new Date().toISOString()
+                        };
+                        delete paper.analysisManifest.stages.apiReaderArticle;
+                        delete paper.analysisManifest.contracts.apiReaderArticle;
+                        delete paper.analysisManifest.contracts.readerTargetOrdinalPatch;
+                        if (paper.analysisStageCheckpoints) delete paper.analysisStageCheckpoints.apiReaderArticle;
+                        for (const key of ['apiReaderArticle', 'apiReaderPlan', 'apiReaderArticleSha256', 'apiReaderPlanSha256']) delete paper[key];
+                    }
+                    report.push({ id, prepared: true, completion: null });
+                    continue;
+                }
+                report.push({ id, skipped: 'no ordinal completion' });
+                continue;
+            }
             const file = path.join(completionDir, files.at(-1));
             proof = { path: file, sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') };
         }
@@ -76,8 +97,10 @@ function main() {
                 delete manifest.contracts.readerTargetOrdinalPatch;
             }
             if (paper.analysisStageCheckpoints) { delete paper.analysisStageCheckpoints.apiReaderArticle; delete paper.analysisStageCheckpoints.imageSupplement; }
-            for (const key of ['apiReaderArticle', 'apiReaderPlan', 'apiReaderFigures', 'apiReaderAuthors',
-                'apiReaderResources', 'apiReaderArticleSha256', 'apiReaderPlanSha256']) delete paper[key];
+            // 只清正文与写作计划；资源身份、作者与图片仍属于本次封存来源，保留可复用，
+            // 否则重做时会被资源身份核验拒绝。
+            for (const key of ['apiReaderArticle', 'apiReaderPlan',
+                'apiReaderArticleSha256', 'apiReaderPlanSha256']) delete paper[key];
         }
         report.push({ id, prepared: true, completion: proof.sha256, article: articleSha });
     }
