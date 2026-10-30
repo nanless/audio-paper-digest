@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 旧已付费记录只读核验需要原 Git blob，当前工作树不保存旧 Prompt。
+          # 旧已付费记录只读核验需要原 Git blob，当前工作树不保存旧提示词。
           fetch-depth: 0
 
       - name: 配置 Node.js ${{ matrix.node-version }}

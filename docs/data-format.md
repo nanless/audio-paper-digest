@@ -2,7 +2,7 @@
 
 ## 本页目标
 
-本文说明各类文件保存什么、哪些值需要相互核对，以及失败后能否继续运行。字段的具体校验以程序为准；旧 Manual 记录的只读核验边界见 [兼容目录](../manual/README.md)。
+这一页回答三个问题：各类文件保存什么、哪些值需要相互核对、失败后能否继续运行。字段的具体校验以程序为准；旧 Manual 记录的只读核验边界见 [兼容目录](../manual/README.md)。
 
 第一次阅读时，沿“候选 → 筛选决定 → 入选集合 → 正式分析 → 页面清单 → 审查 → 发布”理解各文件的关系。箭头表示后一步必须能对应前一步的输入，不表示只凭前一步文件存在就能继续。常见术语解释见 [写作约定中的术语表](writing-guide.md#术语先解释再统一称呼)。
 
@@ -110,7 +110,13 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 ## 会议博客审查后的 Reader 维护记录
 
-已完成会议的正常付费维护使用 `conference-reader-review-maintenance-batch-v1`，与原失败迁移 grant、零请求人工清单分开。私有根为 `conference-processes/<processId>/review-reader-maintenance/<batchId>/`，不可变 manifest 绑定实际停稳完整 state、当前 canonical generation、完整正常 review batch 及各原失败的物理/语义 SHA；原 current complete 父包 analysis/run/source、PDF、来源快照及明确类型的 Reader 父稿表面逐一 CAS 对应。generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找回，不能拿私造的自洽归档充当正常审查已结束。规范发布目录中的这两种 generation 允许发布器原有的 `0600` 或 `0644`，仍拒绝符号链接、硬链接、重复身份及字节漂移；私有恢复副本继续严格要求 `0600`。通过页还须核正式永久 pass cache。
+已完成会议的正常付费维护使用 `conference-reader-review-maintenance-batch-v1`，与原失败迁移 grant、零请求人工清单分开。
+
+私有根为 `conference-processes/<processId>/review-reader-maintenance/<batchId>/`，不可变 manifest 绑定实际停稳完整 state、当前 canonical generation、完整正常 review batch 及各原失败的物理/语义 SHA；原 current complete 父包 analysis/run/source、PDF、来源快照及明确类型的 Reader 父稿表面逐一 CAS 对应。
+
+generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找回，不能拿私造的自洽归档充当正常审查已结束。
+
+规范发布目录中的这两种 generation 允许发布器原有的 `0600` 或 `0644`，仍拒绝符号链接、硬链接、重复身份及字节漂移；私有恢复副本继续严格要求 `0600`。通过页还须核正式永久 pass cache。
 
 `baseline-state.json`、`generation.json`、`review-batch.json`、`failures/`、`classifications/` 保留原材料。全部 text 及分类为 normal-reader 的 Markdown/图片构成完整唯一成员集；其余 markdown/image 失败仍完整分类并保留原 stage，不改名为 text。`raw-review-findings-v1` 只发送带待核验警示的真实意见，`corrective-assertion-v1` 另绑定旧节点与逐字来源。deferred-review/deferred-publication-format 明确 pending-new-page-review，不得带 repaired/passed，也不能授新模型或发布通过。
 
@@ -126,7 +132,17 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 采纳后的原父科学读取另使用不可序列化的私有句柄，绑定实际 canonical 子稿、修订、原父 CAS、完整维护登记和采纳材料。来源身份读取不执行反馈、seed 或 Reader 校验，也不能成为分析调度或出版通过证明；完整加载随后仍执行这些阶段。私有句柄仅供本次同源父科学回放，进入和退出均重核实际文件；不新增磁盘许可，不更改任何原次数或费用。当前页面证明可以由正常后处理更新，但必须仍绑定同一实际完整子稿。
 
-首轮签名稿的受控保存恢复记录为 `readerSavedStageRecovery`，合同 `conference-saved-maintenance-reader-completion-v1`。`saved-reader-stage-recovery/<原分析文件SHA>/` 不可变保留原 `analysis.json`、`run.json`、`source.json`、`reader-revision.json`、`reader-resource-preflight.json`、`review-reader-seed.json` 和 `receipt.json`。凭证绑定真实原父及预检、唯一中性投影、原新 Reader 阶段及恢复后正文、原请求正文 SHA 和三份真实费用事件；原外层、内容和全文次数保留，新增模型请求为零。正常请求正文在预算预留前只读重建；原保存阶段指纹与当前准备器指纹、实现 SHA 分开记录。单图输入另核正常来源重渲染与原封存 PNG 字节、原模型图片预检和图片证据，不能用新像素替代原请求。冷读取重放原包、费用与当前正文对应关系，再正常核验完整资格，不补造不存在的首次成功 raw archive。
+首轮签名稿的受控保存恢复记录为 `readerSavedStageRecovery`，合同 `conference-saved-maintenance-reader-completion-v1`。
+
+`saved-reader-stage-recovery/<原分析文件SHA>/` 不可变保留原 `analysis.json`、`run.json`、`source.json`、`reader-revision.json`、`reader-resource-preflight.json`、`review-reader-seed.json` 和 `receipt.json`。
+
+凭证绑定真实原父及预检、唯一中性投影、原新 Reader 阶段及恢复后正文、原请求正文 SHA 和三份真实费用事件；原外层、内容和全文次数保留，新增模型请求为零。
+
+正常请求正文在预算预留前只读重建；原保存阶段指纹与当前准备器指纹、实现 SHA 分开记录。
+
+单图输入另核正常来源重渲染与原封存 PNG 字节、原模型图片预检和图片证据，不能用新像素替代原请求。
+
+冷读取重放原包、费用与当前正文对应关系，再正常核验完整资格，不补造不存在的首次成功 raw archive。
 
 下一窗使用 `conference-reader-review-maintenance-window-v1`，位于 `windows/<windowId>/`，绑定本维护批完整实际失败 child、唯一前窗、原材料树/Reader账本与各物理 CAS，单窗3轮/6次内容/2次全文。中央 `conference-recovery-grants/<windowId>/registration.json` 使用独立维护窗口定位器，经私有能力复用现有累计账本；不改原 process 的失败状态或旧 grant 声明。必要窗口已获持续授权，新费用独立记账。
 
@@ -194,7 +210,17 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 ### 公式与图像的旧记录限制
 
-原始 TeX 在等号后截断时，不再根据公式名称或可见文本猜补，须去掉该展示公式并依据完整原文解释。旧实现曾猜补的一条 CTC 公式，以及 `2609.15067` 中曾按图片文件名写死的图注，若新结果仍包含相同表达，计划会自动保存 `structuredSourcePayload`：与既有结构化来源 SHA 对应的原始 JSON 内容。恢复与发布逐项核对全文 SHA、公式或图片位置、DOM SHA 和原始内容；输出自身哈希或布尔声明不能替代来源。现在每个展示公式都须有这份完整内容及匹配的来源身份。缺少它的旧 Reader 应从同一组封存来源正常重建；没有展示公式的记录不受此项影响。旧 `2609.27195` 中无像素证据的固定图中叙述须移除后重新核验。
+原始 TeX 在等号后截断时，不再根据公式名称或可见文本猜补，须去掉该展示公式并依据完整原文解释。
+
+旧实现曾猜补的一条 CTC 公式，以及 `2609.15067` 中曾按图片文件名写死的图注，若新结果仍包含相同表达，计划会自动保存 `structuredSourcePayload`：与既有结构化来源 SHA 对应的原始 JSON 内容。
+
+恢复与发布逐项核对全文 SHA、公式或图片位置、DOM SHA 和原始内容；输出自身哈希或布尔声明不能替代来源。
+
+现在每个展示公式都须有这份完整内容及匹配的来源身份。
+
+缺少它的旧 Reader 应从同一组封存来源正常重建；没有展示公式的记录不受此项影响。
+
+旧 `2609.27195` 中无像素证据的固定图中叙述须移除后重新核验。
 
 受影响的旧缓存不能直接复用；从封存来源正常重建 Reader，并重新生成和审查待发布页面。来源记录保持原字节，不手改计划补签，也不为此重新抓取历史日期来源。
 
@@ -218,7 +244,13 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 页面明确标示原 PDF 页，不冒充精确裁图或旧模型输入；生成、审查和推送均重算该证明。没有这两个新字段的旧清单只按原输入语义、原来源和原 Reader 像素路径及 SHA 只读核验；不能删新证明字段，把新的替代 PNG 伪装成旧格式。替换旧资产经原清单的精确 owned 文件安装事务处理，其他图片不进入删除范围。
 
-会议原 PDF 出版派生另保存于 `conference-publications/<conferenceId>/<processId>/figure-crop-derivations/`，原页视图位于 `figure-publication-views/`。`generation.figurePublicationView` 绑定完整原 rawFiles/rawImageFiles/原 bundle SHA、真实 Node derivation、原 generation 双 SHA、固定实现及实际 changedPages；新像素和出版 body SHA 不冒充原 Reader 签名。共享摘要显示对 `<unk>` 等论文控制词元作字面转义，原签摘要保持；合法完整图片 ALT 内的 Markdown 方括号转义仅在公式配对诊断副本中按字面处理，不改页面、ALT、URL 或图注，正文数学与 HTML 检查保持严格。完整页证明带目标印刷图号和 PDF 页码；正常模式核完整图注，有限源页模式须另核选中图的原认证 raw artifacts/ref/page/DOM/asset 能力，同页真实印刷图号唯一，completeTargetCaption:null 且 captionExtractionStatus 为 partial/unavailable，实际 sourceNote 明示未完整抽取；原 PDF、raw stage、原图、Reader 和费用保持。
+会议原 PDF 出版派生另保存于 `conference-publications/<conferenceId>/<processId>/figure-crop-derivations/`，原页视图位于 `figure-publication-views/`。
+
+`generation.figurePublicationView` 绑定完整原 rawFiles/rawImageFiles/原 bundle SHA、真实 Node derivation、原 generation 双 SHA、固定实现及实际 changedPages；新像素和出版 body SHA 不冒充原 Reader 签名。
+
+共享摘要显示对 `<unk>` 等论文控制词元作字面转义，原签摘要保持；合法完整图片 ALT 内的 Markdown 方括号转义仅在公式配对诊断副本中按字面处理，不改页面、ALT、URL 或图注，正文数学与 HTML 检查保持严格。
+
+完整页证明带目标印刷图号和 PDF 页码；正常模式核完整图注，有限源页模式须另核选中图的原认证 raw artifacts/ref/page/DOM/asset 能力，同页真实印刷图号唯一，completeTargetCaption:null 且 captionExtractionStatus 为 partial/unavailable，实际 sourceNote 明示未完整抽取；原 PDF、raw stage、原图、Reader 和费用保持。
 
 后续维护反馈的两阶段历史能力先验证原生批审查/父来源/真实当前后继，再通过库内 opaque 范围重算同 PDF 派生与全部实物闭包，以原生纯 FD 变换逐字对照 raw→view。缓存仍持真实 source assertUnchanged，不能只缓存 JSON 自哈希；它仅避免几何及纯 FD 重算，逐 child 仍可能重读完整批缓存与来源/页面/PNG 闭包，不承诺总 I/O 无重复；旧父不再 current 时也只认证历史意见材料，不授当前发布或新 Reader 成功。原日更 `reader-sealed-pdf-page-asset-v1` 字节及证明合同不因此改变。
 

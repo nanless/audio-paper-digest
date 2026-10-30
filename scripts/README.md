@@ -25,7 +25,7 @@ Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1�
 
 ## 官方会议
 
-依次使用 `conference:acquire`、`conference:discover`、筛选与 `conference:process`；发布使用 `conference:publish:generate`、`conference:publish:review`、`conference:publish:push`、`conference:publish:verify`。统一处理入口核验真实会议来源和权限。参数见 [会议说明](../docs/conference-workflow.md)。博客完整审查后的已完成稿正常维护使用同一 migrate 入口的 `--reader-review-feedback`，另窗加 `--reader-review-window`，不混用 `--retry-failed` 或人工修正清单。
+依次使用 `conference:acquire`、`conference:discover`、筛选与 `conference:process`；发布使用 `conference:publish:generate`、`conference:publish:review`、`conference:publish:push`、`conference:publish:verify`。统一处理入口核验真实会议来源和权限。参数见 [会议说明](../docs/conference-workflow.md)。博客完整审查后的已完成稿正常维护使用同一迁移入口的 `--reader-review-feedback`，另窗加 `--reader-review-window`，不混用 `--retry-failed` 或人工修正清单。
 
 会议适配器负责将已认证的真实来源上下文保留到 Reader 完成及冷启动资格核验。恢复时先检查同一子运行已保存的新付费稿，满足真实签发与完整资格才零请求完成；继承父稿不算新修复。共享摘要修复的诊断记录按会议执行及规范 ID 隔离，不能套用日更 arXiv 路径或放宽修复标准。
 
@@ -60,14 +60,14 @@ npm run test:compat
 
 ## 运行时文件逐项索引
 
-下面按职责分组，列出当前保留文件。表中的“内部库”和“旧恢复”不表示新任务可以绕过正常入口：新任务从上方三流程进入；旧记录仅沿原身份和预算核验或恢复。使用文件名可直接搜索定位。
+表中的“内部库”和“旧恢复”不表示新任务可以绕过正常入口：新任务从上方三流程进入；旧记录仅沿原身份和预算核验或恢复。使用文件名可直接搜索定位。
 
 ### 分析、调度与事实恢复
 
 | 文件 | 类型与职责 |
 |---|---|
 | `analysis-contract.js` | Node 共享：核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
-| `lib/experiment-source-setting-axes.js` | Node 库：以本文已执行的实验声明、完整原表和对应行身份核验扰动、融合调度与样本量设置轴，并核对同一原矩阵支持的样本量比较边界；不改数值、来源或费用额度，其他表格与整篇检查照常执行。 |
+| `lib/experiment-source-setting-axes.js` | Node 库：以该论文已执行的实验声明、完整原表和对应行身份核验扰动、融合调度与样本量设置轴，并核对同一原矩阵支持的样本量比较边界；不改数值、来源或费用额度，其他表格与整篇检查照常执行。 |
 | `analysis-engine.js` | Node 共享：用公共失败轮次调度，首轮全批、下一轮只失败集合，等待每轮结果和保存完成；管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
 | `analysis-waiver.js` | Node 库：核验用户针对当前日更批次的分析豁免，检查 deep、filtered、papers 三份文件的精确字节和逐篇来源 SHA；不修改分析正文。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
@@ -107,6 +107,8 @@ npm run test:compat
 | `lib/daily-scoring-refresh-checkpoint-cli.js` | Python 日更发布在有同来源运行的私有保存稿时，经私有文件描述符调用同一恢复 helper 冷核；仅判断待完成状态，硬禁网络，不采纳评分或授予模型额度。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
+| `prepare-reader-revision.js` | 按篇正文重做准备：写入 readerRevisionHistory、退休旧失败候选并清掉 Reader 阶段，供后续正常续跑；不改来源与费用。 |
+| `reconfirm-analysis-success.js` | 受控成功复核：仅在正文与 Reader 记录都通过当前校验时清除陈旧失败标记，否则拒绝。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。未指定并发时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`（默认5），`--concurrency N` 可覆写为1–60；总轮数使用 `batchMaxRounds`（默认3），`--rounds N` 可覆写为1–10。先全批再仅续明确可重试失败，诊断保存到 `analysis-batch-reports`；只读取封存 PDF/TXT，图片只为本次调用在系统临时目录中准备。 |
 | `waive-analysis-failures.js` | CLI：记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |
