@@ -9668,6 +9668,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     // 不可能成功；保留磁盘上的全部历史与次数，按正常全文重新生成。
                     console.log('    [deep] ℹ️  旧补丁链没有可用正文，保留历史与次数，按正常全文重新生成');
                     ordinalPatchCompilations = [];
+                } else if (String(options.reviewFeedback || '').trim()) {
+                    // 定向事实反馈要求按整篇重写核对正文；旧完成证明登记为重做历史后，
+                    // 新一次生成走正常全文，旧证明与费用仍可在冷核中重放。
+                    supersedeOrdinalCompletionBeforeInvalidation(paper, paper.analysisManifest, 'apiReaderArticle');
+                    ordinalPatchCompilations = [];
+                    console.log('    [deep] ℹ️  按定向事实反馈重写正文，旧序号完成证明已登记为重做历史');
                 } else {
                     throw readerRepairStopped(
                         'READER_ORDINAL_FULL_BASELINE_UNSUPPORTED',
