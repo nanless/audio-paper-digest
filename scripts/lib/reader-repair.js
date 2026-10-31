@@ -341,7 +341,7 @@ function isSafeExistingReaderPatchContext(draft, context, sourceBindingNeedsFull
         && (pointer.startsWith(other + '/') || other.startsWith(pointer + '/'))))) return false;
     return context.targets.every(target => {
         if (!target || typeof target.path !== 'string'
-            || !/^\/(?:readerTitle|oneSentenceThesis|sections\/(?:0|[1-9]\d*)\/body|(?:conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/explanation)?)$/u.test(target.path)) return false;
+            || !/^\/(?:readerTitle|oneSentenceThesis|sections\/(?:0|[1-9]\d*)\/body|conceptBridges\/(?:0|[1-9]\d*)\/explanation|figurePlacements\/(?:0|[1-9]\d*)\/(?:explanationQuote|leadQuote)|(?:tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/explanation)?)$/u.test(target.path)) return false;
         try {
             const actual = nodeAt(draft, target.path);
             return target.oldSha256 === hashDraft(actual) && hashDraft(target.value) === hashDraft(actual);
@@ -816,8 +816,11 @@ function nodeAt(draft, pointer) {
     if (pointer === '/tableBindings') return draft.tableBindings;
     if (pointer === '/formulaBindings') return draft.formulaBindings;
     if (pointer === '/figurePlacements') return draft.figurePlacements;
-    const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/(?:body|explanation))?$/.exec(pointer);
-    if (!match || (match[3] && !((match[1] === 'sections' && match[3] === '/body') || (match[1] === 'conceptBridges' && match[3] === '/explanation')))) throw new Error(`Reader patch path is not allowed: ${pointer}`);
+    const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/(?:body|explanation|explanationQuote|leadQuote))?$/.exec(pointer);
+    if (!match || (match[3] && !((match[1] === 'sections' && match[3] === '/body')
+        || (match[1] === 'conceptBridges' && match[3] === '/explanation')
+        || (match[1] === 'figurePlacements'
+            && (match[3] === '/explanationQuote' || match[3] === '/leadQuote'))))) throw new Error(`Reader patch path is not allowed: ${pointer}`);
     const list = draft[match[1]];
     const index = Number(match[2]);
     if (!Array.isArray(list) || index >= list.length || !own(list, index)) {
@@ -2133,7 +2136,11 @@ function verifiedReaderFactIssues(draft, claims) {
     for (const originalClaim of claims || []) {
         if (typeof originalClaim !== 'string') continue;
         const nodes = [...(draft?.sections || []).map((section, index) => ({ path: `/sections/${index}/body`, value: section?.body })),
-            ...(draft?.conceptBridges || []).map((bridge, index) => ({ path: `/conceptBridges/${index}/explanation`, value: bridge?.explanation }))];
+            ...(draft?.conceptBridges || []).map((bridge, index) => ({ path: `/conceptBridges/${index}/explanation`, value: bridge?.explanation })),
+            ...(draft?.figurePlacements || []).flatMap((figure, index) => [
+                { path: `/figurePlacements/${index}/leadQuote`, value: figure?.leadQuote },
+                { path: `/figurePlacements/${index}/explanationQuote`, value: figure?.explanationQuote }
+            ])];
         const proseNodes = nodes.map(node => {
             // 只看正文完整原句，不以来源引文、绑定元数据或零散术语授权改写。
             const mask = value => value.replace(/[^\n]/g, ' ');
