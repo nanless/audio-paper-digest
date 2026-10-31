@@ -9286,8 +9286,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ? { paidReaderResponseReplay: options.paidReaderResponseReplay } : {}) }
     );
     if (options.requireExistingSourceCandidate === true && (!recovered || contentMode !== READER_SOURCE_CONTENT_MODE)) {
-        throw Object.assign(new Error('原Reader来源模式恢复缺少同输入身份的真实失败候选，禁止首次生成或重置旧次数。'),
-            { code: 'READER_SOURCE_RECOVERY_CANDIDATE_MISSING', retryable: false });
+        // 已授权的定向事实反馈可能已经把旧候选耗尽或按正文重做退休。此时继续拒绝
+        // 首次生成会把义务永久锁死；保留原次数与历史，按反馈重新生成一篇新稿。
+        const activeFeedback = require('./lib/daily-fact-review').current(getPaperArxivId(paper));
+        if (!activeFeedback?.readerOnly || !String(options.reviewFeedback || '').trim()) {
+            throw Object.assign(new Error('原Reader来源模式恢复缺少同输入身份的真实失败候选，禁止首次生成或重置旧次数。'),
+                { code: 'READER_SOURCE_RECOVERY_CANDIDATE_MISSING', retryable: false });
+        }
+        console.log('    [deep] ℹ️ 原反馈恢复已无可用候选，按已授权反馈重新生成');
     }
     if (!inputProofOnly && !operatorCorrection) recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
         candidateDirectory, identity, recovered, paper);
