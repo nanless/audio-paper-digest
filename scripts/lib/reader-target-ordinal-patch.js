@@ -463,6 +463,17 @@ function readVerifiedCompletion(paper){
     // 显式正文重做会先把上一次完成证明写进 readerRevisionHistory；该证明必须
     // 仍指向最新完成文件且字节相符，才承认它已被本次重做接替。
     const revision=paper?.readerRevisionHistory;
+    if(!stage){
+        // 阶段被本次输入指纹失效清掉、正文即将重新生成：只要重做历史仍指向最新完成
+        // 文件，就承认旧完成证明已被这次重做接替，不把“阶段暂缺”当成手工删标记。
+        if(revision?.contract==='daily-reader-revision-history-v1'
+            &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
+            if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1))
+                ||!read(revision.completionProof.path,revision.completionProof.sha256).value)fail('revision completion pointer differs','run');
+            return null;
+        }
+        fail('completion index/marker removed','run');
+    }
     if(!marked&&revision?.contract==='daily-reader-revision-history-v1'
         &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
         if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1))
@@ -478,7 +489,7 @@ function readVerifiedCompletion(paper){
             ||!read(ref.path,ref.sha256).value)fail('superseded completion pointer differs','run');
         return null;
     }
-    if(!marked)fail('completion index/marker removed','run');
+    if(!marked||!stage)fail('completion index/marker removed','run');
     const ref=stage.ordinalCompletionProof;if(!ref||path.resolve(ref.path)!==path.join(dir,files.at(-1)))fail('latest completion not selected','run');
     const saved=read(ref.path,ref.sha256).value;
     savedSourceScope(paper,saved.identity,attempts);
