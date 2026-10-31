@@ -9659,9 +9659,22 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         // 上一轮若在封签前中断，先把挂起的归一化稿写回，保证本次 prepare 与实际候选一致。
         flushCandidateWriteBack();
         const ordinaryOrdinal = require('./lib/reader-target-ordinal-patch');
-        if (!repairContext && (ordinalPatchCompilations.length || ordinaryOrdinal.hasActiveCompletion(paper))) throw readerRepairStopped(
-            'READER_ORDINAL_FULL_BASELINE_UNSUPPORTED',
-            '原ordinary补丁链尚不能切换为新全文基线；保留全部历史，不派发全文或复用旧编译证明');
+        if (!repairContext) {
+            const readerBaseMissing = !String(paper.apiReaderArticle || '').trim();
+            const activeCompletion = ordinaryOrdinal.hasActiveCompletion(paper);
+            if (ordinalPatchCompilations.length || activeCompletion) {
+                if (readerBaseMissing && !activeCompletion) {
+                    // 旧补丁链已经没有可修补的正文（阶段正文丢失或被重置），继续打补丁
+                    // 不可能成功；保留磁盘上的全部历史与次数，按正常全文重新生成。
+                    console.log('    [deep] ℹ️  旧补丁链没有可用正文，保留历史与次数，按正常全文重新生成');
+                    ordinalPatchCompilations = [];
+                } else {
+                    throw readerRepairStopped(
+                        'READER_ORDINAL_FULL_BASELINE_UNSUPPORTED',
+                        '原ordinary补丁链尚不能切换为新全文基线；保留全部历史，不派发全文或复用旧编译证明');
+                }
+            }
+        }
         const ordinalCapability = fresh.isDailyFreshSourceScope() && identity.contentMode === READER_SOURCE_CONTENT_MODE
             && identity.model?.protocol === 'openai_responses'
             && ordinaryOrdinal.eligible(repairContext, { ...options, metadataOperation, conceptTermsContext })
