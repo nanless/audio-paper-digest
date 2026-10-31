@@ -8993,6 +8993,22 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let candidate = null;
     let draftOrderMappings = [];
     let mechanicalNoFigureCleanupChanged = false;
+    let pendingCandidateWriteBack = null;
+    let ordinalPatchActive = false;
+    const writeBackCandidateDraft = snapshot => {
+        try {
+            const active = repair.loadFailedCandidate(candidateDirectory, identity);
+            if (active) repair.saveFailedCandidate(candidateDirectory, identity, {
+                ...active, status: 'failed', draft: snapshot.draft,
+                draftOrderMappings: snapshot.draftOrderMappings, issues: snapshot.issues
+            });
+        } catch (_) { /* 保留原候选，后续 prepare 会照常给出可诊断的拒绝 */ }
+    };
+    const flushCandidateWriteBack = () => {
+        const snapshot = pendingCandidateWriteBack;
+        pendingCandidateWriteBack = null;
+        if (snapshot) writeBackCandidateDraft(snapshot);
+    };
     const normalizeCandidate = () => {
         const beforeDraftSha = candidate ? repair.hashDraft(candidate) : null;
         const state = {};
@@ -9007,15 +9023,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             mechanicalNoFigureCleanupChanged = state.mechanicalNoFigureCleanupChanged;
             // 序号补丁请求要求基稿与活动候选逐字一致；归一化只改了内存稿时必须写回，
             // 否则下一次准备会以“exact active failed draft”拒绝。写回失败不改变主流程。
+            // 但补丁能力绑定的是 prepare 那一刻的候选字节，封签前改写活动候选会让
+            // currentCandidate 立刻判“active candidate changed”（scope=run，整批中止）。
+            // 所以补丁链活跃期间先挂起，等封签结束再写回，供下一次 prepare 使用。
             if (candidate && beforeDraftSha && ordinalPatchCompilations.length
                 && beforeDraftSha !== repair.hashDraft(candidate)) {
-                try {
-                    const active = repair.loadFailedCandidate(candidateDirectory, identity);
-                    if (active) repair.saveFailedCandidate(candidateDirectory, identity, {
-                        ...active, status: 'failed', draft: candidate,
-                        draftOrderMappings, issues: currentIssues
-                    });
-                } catch (_) { /* 保留原候选，后续 prepare 会照常给出可诊断的拒绝 */ }
+                const snapshot = { draft: candidate, draftOrderMappings, issues: currentIssues };
+                if (ordinalPatchActive) pendingCandidateWriteBack = snapshot;
+                else writeBackCandidateDraft(snapshot);
             }
         }
     };
@@ -9641,6 +9656,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const fullRegenerationEvidence = fullRegenerationTableFeedback
             ? repair.budgetReaderRepairSourceEvidence(sourceEvidence, fullRegenerationTableFeedback, repairOptions)
             : sourceEvidence;
+        // 上一轮若在封签前中断，先把挂起的归一化稿写回，保证本次 prepare 与实际候选一致。
+        flushCandidateWriteBack();
         const ordinaryOrdinal = require('./lib/reader-target-ordinal-patch');
         if (!repairContext && (ordinalPatchCompilations.length || ordinaryOrdinal.hasActiveCompletion(paper))) throw readerRepairStopped(
             'READER_ORDINAL_FULL_BASELINE_UNSUPPORTED',
@@ -9650,6 +9667,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             && ordinaryOrdinal.eligible(repairContext, { ...options, metadataOperation, conceptTermsContext })
             ? ordinaryOrdinal.prepare({ paper, identity, directory: candidateDirectory, draft: candidate,
                 repairContext, options: { ...options, metadataOperation, conceptTermsContext } }) : null;
+        if (ordinalCapability) ordinalPatchActive = true;
         const ordinalUsageRecords = [];
         let ordinalCompiled = null;
         const recordReaderDisposition = value => {
@@ -9666,6 +9684,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                         compilationSha256: ordinalCompiled.compilation.sha256, sealSha256: sealed.sha256 } });
                 ordinalCompiled = null;
             }
+            // 封签结束后补丁能力不再生效，此时才把挂起的归一化稿写回活动候选，
+            // 供下一次 prepare 与失败保存使用。
+            ordinalPatchActive = false;
+            flushCandidateWriteBack();
             return captured.result;
         };
         let previousDraftPromptView = previousDraft;

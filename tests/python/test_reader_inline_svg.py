@@ -79,6 +79,17 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertIsInstance(renderer.validate_svg(svg(body)), str)
 
+    def test_latexml_mathml_layout_attributes_are_admitted(self):
+        raw = ('<svg id="figure" width="160" height="80" viewBox="0 0 160 80">'
+               '<math display="block"><mtable columnspacing="5pt" rowspacing="0pt"><mtr>'
+               '<mtd mathbackground="#E0FFE0"><mtext>p</mtext><mo stretchy="false">=</mo>'
+               '<mn>0.05</mn></mtd></mtr></mtable></math></svg>').encode()
+        projected = renderer.validate_svg(raw)
+        self.assertIn('mathbackground="#E0FFE0"', projected)
+        self.assertIn('columnspacing="5pt"', projected)
+        png = renderer.render_svg(raw)
+        self.assertEqual(png[:8], b'\x89PNG\r\n\x1a\n')
+
     def test_events_and_external_resources_remain_integrity_errors(self):
         for body in ('<span class="fas fa-fire" onclick="alert(1)"></span>',
                      '<span class="fas fa-fire" style="background:url(https://example.invalid/font)"></span>',

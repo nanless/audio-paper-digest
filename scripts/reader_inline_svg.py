@@ -29,7 +29,7 @@ ALLOWED_ATTRIBUTES = set(('id class style x y x1 y1 x2 y2 cx cy r rx ry dx dy d 
                           'clip-path clip-rule mask marker-start marker-mid marker-end offset '
                           'stop-color stop-opacity gradientunits gradienttransform patternunits '
                           'patterncontentunits patterntransform href title alt alttext display mathcolor '
-                          'mathvariant mathsize maxsize minsize lspace rspace intent encoding rowalign columnalign').split())
+                          'mathbackground mathvariant mathsize maxsize minsize lspace rspace columnspacing rowspacing intent encoding rowalign columnalign').split())
 
 
 
