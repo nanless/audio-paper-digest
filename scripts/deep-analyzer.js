@@ -7902,7 +7902,7 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                                 paper, binding, cell, renderedText, articleTables[index])
                             && !(sourceMathDisplay?.kind === 'numeric-style-duplicate'
                                 && sourceMathDisplay.displayText === renderedText))) {
-                        throw new Error('文章文字规范化后，表格单元格与绑定的原始来源不一致。');
+                        throw new Error(`文章文字规范化后，表格单元格与绑定的原始来源不一致（第 ${index + 1} 张表，第 ${cell.renderedRow + 1} 行，第 ${cell.renderedColumn + 1} 列：“${String(renderedText).slice(0, 60)}” 与来源“${String(cell.sourceText).slice(0, 60)}”）。`);
                     }
                     return { ...cell, renderedText };
                 })
@@ -13514,6 +13514,28 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
 }
 
 
+function supersedeOrdinalCompletionBeforeInvalidation(paper, manifest, recoveryStage) {
+    if (recoveryStage !== 'apiReaderArticle') return;
+    const stage = manifest?.stages?.apiReaderArticle;
+    const proof = stage?.ordinalCompletionProof;
+    if (!proof?.path || !proof?.sha256) return;
+    const previous = paper?.readerRevisionHistory;
+    if (previous?.contract === 'daily-reader-revision-history-v1'
+        && previous?.completionProof?.path === proof.path
+        && previous?.completionProof?.sha256 === proof.sha256) return;
+    // 指纹失效会清掉 Reader 阶段，旧完成证明只对旧稿成立；登记重做历史后，
+    // 序号完成检查承认它已被接替，新一次 Reader 也不再被旧补丁链拦成“不能切全文”。
+    paper.readerRevisionHistory = {
+        contract: 'daily-reader-revision-history-v1',
+        reason: 'explicit-reader-revision',
+        completionProof: { path: proof.path, sha256: proof.sha256 },
+        previousArticleSha256: stage.articleSha256 || null,
+        previousPlanSha256: stage.planSha256 || null,
+        previousOrdinalPatchCompilations: structuredClone(stage.ordinalPatchCompilations || []),
+        recordedAt: getBeijingISOString()
+    };
+}
+
 function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint, options = {}) {
     const physicalStage = physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints);
     const current = manifest.stages?.[physicalStage];
@@ -13534,6 +13556,9 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint, o
         delete paper.analysisCheckpoint;
     }
     const tagRecord = readTagStageRecord(manifest, checkpoints);
+    if (stagesToDelete.includes('apiReaderArticle')) {
+        supersedeOrdinalCompletionBeforeInvalidation(paper, manifest, 'apiReaderArticle');
+    }
     for (const recoveryStage of stagesToDelete) {
         const key = recoveryStage === 'tagSelection' ? tagRecord.stageKey : recoveryStage;
         delete manifest.stages[key];
@@ -18980,9 +19005,32 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         }));
     }
     if (isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
-        if (repairApiReaderArticleAndPlanBindings(paper, analysisManifest)) {
+        let bindingsAligned = false;
+        try {
+            bindingsAligned = repairApiReaderArticleAndPlanBindings(paper, analysisManifest);
+        } catch (error) {
+            // 已存正文与封存来源逐格对不上时不能继续当作通过稿；清除该阶段后
+            // 按正常 Reader 流程重新生成，而不是把一次内容缺陷升级成无请求的硬失败。
+            if (!String(error?.message || '').includes('表格单元格与绑定的原始来源不一致')) throw error;
+            console.log('    [deep] ⚠️ 已存读者文章无法与来源逐格对齐，清除该阶段并按正常流程重新生成');
+            supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
+            delete analysisManifest.stages.apiReaderArticle;
+            delete analysisManifest.stages.imageSupplement;
+            delete analysisManifest.contracts.apiReaderArticle;
+            delete paper.apiReaderArticle;
+            delete paper.apiReaderPlan;
+            delete paper.apiReaderFigures;
+            delete paper.apiReaderAuthors;
+            delete paper.apiReaderResources;
+            delete paper.apiReaderArticleSha256;
+            delete paper.apiReaderPlanSha256;
+            delete paper.analysisStageCheckpoints?.apiReaderArticle;
+            delete paper.analysisStageCheckpoints?.imageSupplement;
+        }
+        if (bindingsAligned) {
             console.log('    [deep] ✅ 已确定性对齐读者文章与计划标题排版');
         }
+        if (isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
         const articleSha = crypto.createHash('sha256')
             .update(String(paper.apiReaderArticle || '')).digest('hex');
         const planSha = paper.apiReaderPlan
@@ -19011,8 +19059,10 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     sourceDetails.structuredArtifacts?.payloadSha256,
                     crypto.createHash('sha256').update(rawTextForAnalysis).digest('hex'))
             ))) {
+            supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
             delete analysisManifest.stages.apiReaderArticle;
             delete analysisManifest.stages.imageSupplement;
+            delete analysisManifest.contracts.apiReaderArticle;
             delete paper.apiReaderArticle;
             delete paper.apiReaderPlan;
             delete paper.apiReaderFigures;
@@ -19022,6 +19072,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             delete paper.apiReaderPlanSha256;
             delete paper.analysisStageCheckpoints?.apiReaderArticle;
             delete paper.analysisStageCheckpoints?.imageSupplement;
+        }
         }
     }
     invalidateRecoveryStageIfChanged(
