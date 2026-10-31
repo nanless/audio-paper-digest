@@ -198,9 +198,14 @@ function protectedReaderUpstream(paper) {
         if (/^apiReader/.test(key)) delete copy.analysisManifest.contracts[key];
     // 资源宣称合同只属于 Reader；完成旧稿的当前来源审校时允许新增该合同。
     if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.readerResourceClaims;
+    if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.imageNarrative;
     delete copy.analysisManifest?.stages?.apiReaderArticle;
     delete copy.analysisManifest?.stages?.apiReaderTableAudit;
     delete copy.analysisManifest?.stages?.imageSupplement;
+    // 图片下载与图片清单由 Reader 插图阶段驱动，属于同一次纠错的合法产物。
+    delete copy.analysisManifest?.stages?.imageDownload;
+    delete copy.analysisStageCheckpoints?.imageDownload;
+    delete copy.imageManifest;
     if (copy.analysisStageCheckpoints) delete copy.analysisStageCheckpoints.apiReaderArticle;
     return copy;
 }
