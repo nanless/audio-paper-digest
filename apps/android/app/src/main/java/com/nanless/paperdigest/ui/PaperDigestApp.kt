@@ -58,6 +58,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     var aggregateSection by rememberSaveable { mutableStateOf("daily") }
     var aggregateSectionRequest by rememberSaveable { mutableIntStateOf(0) }
     var readerReturnID by rememberSaveable { mutableStateOf<String?>(null) }
+    var readerReturnLabel by rememberSaveable { mutableStateOf("返回来源汇总") }
     var readerReturnTitle by rememberSaveable { mutableStateOf("") }
     var pendingAggregateReturn by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedSessionID by rememberSaveable{mutableStateOf<String?>(null)}
@@ -96,6 +97,11 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                     scope.launch{if(route=="aggregates"&&revision==routeRevision&&sectionRequest==aggregateSectionRequest)controller.executeAggregateInView("aggregate.back",JSONObject(),lease)}
                 }
                 navigateCurrent("aggregates");return@action
+            }
+            "ui.aggregates.section" -> {
+                val section=payload.optString("section")
+                if(section in setOf("daily","conference","page","all")){aggregateSection=section;aggregateSectionRequest++}
+                return@action
             }
             "ui.reader.return" -> {
                 val id=readerReturnID?:return@action
@@ -156,7 +162,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                 val result=controller.executeAggregateInView("aggregate.link",obj("nonce" to nonce,"index" to index),renderedAggregateLease)
                 if(renderedRouteRevision!=routeRevision||route!="aggregates")return@launch
                 if(result.optString("kind")=="paper"&&result.optString("status")=="link-opened"&&controller.state.value.selectedPaperId==result.optString("paperID")) {
-                    readerReturnID=origin?.id;readerReturnTitle=origin?.let{it.titleZh.ifBlank{it.title}}.orEmpty()
+                    readerReturnID=origin?.id;readerReturnLabel=when(origin?.kind){"daily"->"返回日更汇总";"conference"->"返回会议汇总";else->"返回来源页面"};readerReturnTitle=origin?.let{it.titleZh.ifBlank{it.title}}.orEmpty()
                     navigateCurrent("reader")
                 }
                 else if(renderedAggregateLease==controller.captureAggregateView())reply(result)
@@ -228,7 +234,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                             "aggregates" -> AggregatePane(state,action,aggregateLink,aggregateLinkCurrent,aggregateSection,aggregateSectionRequest,pendingAggregateReturn==null)
                             "reader" -> Column(Modifier.fillMaxSize()) {
                                 if(readerReturnID!=null)Surface(color=MaterialTheme.colorScheme.surfaceContainer){Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-                                    TextButton({action("ui.reader.return",JSONObject())}){Icon(Icons.Outlined.ArrowBack,null);Spacer(Modifier.width(6.dp));Text("返回"+(if(aggregateSection=="conference")"会议汇总"else"日更汇总"))}
+                                    TextButton({action("ui.reader.return",JSONObject())}){Icon(Icons.Outlined.ArrowBack,null);Spacer(Modifier.width(6.dp));Text(readerReturnLabel)}
                                     Text(readerReturnTitle,Modifier.weight(1f).padding(end=12.dp),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,style=MaterialTheme.typography.labelMedium)
                                 }}
                                 Box(Modifier.weight(1f)){ReaderPane(state,controller,action)}

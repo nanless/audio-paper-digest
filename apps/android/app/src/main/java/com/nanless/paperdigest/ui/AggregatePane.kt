@@ -52,7 +52,7 @@ import org.json.JSONObject
                     Text(when(filter){"daily"->"每日论文速递";"conference"->"会议论文集";else->"网站页面"},style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
                 } }
                 item("scope"){Text("与网站同步浏览日更、会议论文集和说明。会议先列总览，再列各研究方向。",style=MaterialTheme.typography.bodySmall)}
-                item("filters") { FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) { for((key,label)in listOf("daily" to "日更","conference" to "会议论文集","page" to "关于与资源","all" to "全部")){val count=if(key=="all")records.size else records.count{workbenchAggregateInSection(it,key)};FilterChip(filter==key,{filter=key},label={Text("$label $count")})} } }
+                item("filters") { FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) { for((key,label)in listOf("daily" to "日更","conference" to "会议论文集","page" to "关于与资源","all" to "全部")){val count=if(key=="all")records.size else records.count{workbenchAggregateInSection(it,key)};FilterChip(filter==key,{filter=key;action("ui.aggregates.section",obj("section" to key))},label={Text("$label $count")})} } }
                 item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),label={Text("搜索汇总标题、日期与标签")},singleLine=true)}
                 item("status") {
                     Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {

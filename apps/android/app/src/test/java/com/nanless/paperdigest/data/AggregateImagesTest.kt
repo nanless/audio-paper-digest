@@ -194,6 +194,17 @@ class AggregateImagesTest {
         val f=fixture();val access=online(f);var networkFlag:Boolean?=null;val port=Port(f){networkFlag=it;access};port.offline=true;port.saved=true
         val b=browser(port);assertEquals("saved-document",b.execute("aggregate.select",JSONObject().put("id",f.descriptor.id)).getString("status"));assertEquals(false,networkFlag);assertEquals(access,b.state.document?.images)
     }
+    @Test fun normalOpenOfPrefetchedHtmlStillLoadsItsSourceBoundImages()=runBlocking {
+        val f=fixture();val access=online(f);val started=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>();var allowNetwork:Boolean?=null
+        val port=Port(f){allowed->allowNetwork=allowed;started.complete(Unit);release.await();access}.apply{saved=true}
+        val b=browser(port);val pending=async{b.execute("aggregate.select",JSONObject().put("id",f.descriptor.id))}
+        started.await();assertEquals(true,allowNetwork);assertTrue(b.state.document!!.fromCache)
+        assertEquals(f.raw,b.state.document!!.rawHTMLSHA256);assertFalse(b.state.loading)
+        release.complete(Unit);assertEquals("saved-document",pending.await().getString("status"));assertEquals(access,b.state.document?.images)
+        // Explicitly choosing a saved historical version never starts new image transport.
+        b.execute("aggregate.cached",JSONObject().put("id",f.descriptor.id).put("rawHTMLSHA256",f.raw))
+        assertEquals(false,allowNetwork)
+    }
     @Test fun imageFailureKeepsVerifiedOriginalTextWithExplicitError()=runBlocking {
         val f=fixture();val b=browser(Port(f){throw java.io.IOException("controlled image failure")})
         assertEquals("website-document",b.execute("aggregate.select",JSONObject().put("id",f.descriptor.id)).getString("status"));assertEquals(f.original.getString("bodyHTML"),b.state.document?.bodyHTML);assertNull(b.state.document?.images);assertNotNull(b.state.document?.imageError)

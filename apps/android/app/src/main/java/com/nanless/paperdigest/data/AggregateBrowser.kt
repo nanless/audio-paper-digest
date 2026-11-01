@@ -90,7 +90,7 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
             try{revisions=port.revisions(id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有挑选其他旧正文。"}
             if(!ready(token,stamp,epoch))return stale(token)
             change(token){it.copy(catalog=catalog,stamp=stamp,selected=descriptor,revisions=revisions,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode())}
-            if(revisions.isNotEmpty())return adopt(token,stamp,epoch,descriptor,port.cached(id,revisions.first().rawHTMLSHA256),true)
+            if(revisions.isNotEmpty())return adopt(token,stamp,epoch,descriptor,port.cached(id,revisions.first().rawHTMLSHA256),true,allowImageNetwork=!port.offlineMode())
             if(port.offlineMode()){change(token){it.copy(loading=false,error="离线模式下，此条目没有当前目录中已核验的保存正文。")};return response("offline")}
             // Ordinary public webpage read is automatic when no verified same-scope cache exists.
             if(!ready(token,stamp,epoch))return stale(token)
@@ -114,7 +114,7 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
             return adopt(token,stamp,epoch,selected,if(sha==null)port.read(id)else port.cached(id,sha),sha!=null)
         }catch(e:CancellationException){cancelled(token);throw e}catch(_:Exception){change(token){it.copy(loading=false,error="本次读取未完成；下方如有正文，仍是原保存版本，未声称刷新成功。")};restoreDocumentLinks(token);return response("failed")}
     }
-    private suspend fun adopt(token:Long,stamp:AggregateCatalogStamp,epoch:Long,descriptor:PublishedAggregate,value:JSONObject,cached:Boolean):JSONObject {
+    private suspend fun adopt(token:Long,stamp:AggregateCatalogStamp,epoch:Long,descriptor:PublishedAggregate,value:JSONObject,cached:Boolean,allowImageNetwork:Boolean=!cached):JSONObject {
         if(!ready(token,stamp,epoch))return stale(token)
         val base=AggregateDocumentView.verified(value,descriptor,cached)
         // Publish verified text and fresh link capability before waiting for optional image transport.
@@ -129,7 +129,7 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         if(!textAdopted)return stale(token)
         var images:AggregateImageAccess?=null;var imageError:String?=null
         try{
-            val candidate=port.images(descriptor.id,base.rawHTMLSHA256,!cached&&!port.offlineMode())
+            val candidate=port.images(descriptor.id,base.rawHTMLSHA256,allowImageNetwork&&!port.offlineMode())
             if(candidate!=null)require(candidate.plan.descriptor==descriptor&&candidate.plan.rawHTMLSHA256==base.rawHTMLSHA256&&candidate.plan.originalBodySHA256==base.bodySHA256){"图片与本次原网页修订不同"}
             images=candidate
         }catch(e:CancellationException){throw e}catch(_:Exception){imageError="图片保存或缓存核验未完成；下方仍保留原网页正文，没有改用其他图片修订。"}
