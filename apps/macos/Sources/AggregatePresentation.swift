@@ -101,18 +101,28 @@ extension LibraryService {
         _ = try aggregateOriginalRow(id: access.descriptor.id)
     }
     func aggregatePresentation(_ access: AggregateReadAccess, preferCached: Bool = false, downloadImages: Bool = true) async throws -> AggregatePresentationDocument {
-        try requireAggregateAccess(access)
-        try Task.checkCancellation()
-        // Strict cache replay occurs before fallback selection; corruption is never silently skipped.
-        let cached = try aggregateLatestVerifiedDocument(id: access.descriptor.id)
+        // The complete saved-page path is synchronous: repeated catalog, HTML
+        // and image-source checks share one private original-byte read scope.
+        let saved = try withCurrentAggregateReadScope { store,catalog -> (AggregateDocument?,AggregatePresentationDocument?) in
+            try PublishedAggregateReader.require(catalog.records.contains(access.descriptor),"原汇总目录已变化，请重新打开")
+            _ = try store.originalRow(for:access.descriptor)
+            try Task.checkCancellation()
+            // Corrupt same-scope HTML revisions still fail before any fallback.
+            guard let source=try store.latestVerifiedDocument(for:access.descriptor) else{return(nil,nil)}
+            guard preferCached else{return(source,nil)}
+            let images:AggregateResourceRender?,notice:String
+            do {
+                images=try store.latestResourceRendering(source:source) ?? store.importAndroidResourceRendering(source)
+                notice=images == nil ? "没有已核验的独立图片修订":"图片按独立保存时刻核验；未声称全部网页资源完整离线"
+            } catch is CancellationError {throw CancellationError()}
+            catch {images=nil;notice="图片资源核验未完成；保留只读正文，没有挑选其他资源修订"}
+            try Task.checkCancellation()
+            return(source,try AggregatePresentationDocument(source:source,access:access,stale:true,notice:"已打开本机核验快照；可重新读取网站获取最新正文",images:images,imageNotice:notice))
+        }
+        let cached=saved.0
         // Opening a saved page must not wait for the network. Replaying the exact
         // source bytes grants a saved snapshot, never a claim about today's site.
-        if preferCached, let cached {
-            let images = try await presentationImageResult(cached, allowNetwork: false)
-            try Task.checkCancellation(); try requireAggregateAccess(access)
-            return try AggregatePresentationDocument(source: cached, access: access, stale: true,
-                notice: "已打开本机核验快照；可重新读取网站获取最新正文", images: images.0, imageNotice: images.1)
-        }
+        if let ready=saved.1{return ready}
         do {
             let source = try await aggregateDocument(id: access.descriptor.id)
             try Task.checkCancellation(); try requireAggregateAccess(access)

@@ -360,6 +360,14 @@ actor LibraryService {
     func aggregateCatalog()throws->PublishedAggregateCatalog? {
         try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch)
     }
+    /// A synchronous current-source operation; neither the scoped store nor its
+    /// qualification may escape the closure or cross a network await.
+    func withCurrentAggregateReadScope<T>(_ body:(PublishedAggregateStore,PublishedAggregateCatalog)throws->T)throws->T {
+        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog=try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch) else{throw AggregateFailure.invalid("当前汇总目录未核验")}
+            return try body(store,catalog)
+        }
+    }
     func aggregateOriginalRow(id:String)throws->Data {
         try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
             guard let catalog=try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在")}
@@ -840,20 +848,27 @@ actor LibraryService {
     }
     func aggregatePresentationImages(_ source:AggregateDocument,allowNetwork:Bool) async throws->AggregateResourceRender? {
         let store=PublishedAggregateStore(directory:directory,siteBase:siteBaseURL)
-        let cached=try store.latestResourceRendering(source:source) ?? store.importAndroidResourceRendering(source)
+        let cached=try store.withVerifiedReadScope { scoped in
+            try scoped.latestResourceRendering(source:source) ?? scoped.importAndroidResourceRendering(source)
+        }
         if !allowNetwork{return cached}
         if let cached,cached.manifest.images.allSatisfy({$0.sha256 != nil}){return cached}
         return try await aggregateResourceRendering(source)
     }
     func aggregateResourceRendering(_ source:AggregateDocument) async throws->AggregateResourceRender {
         let store=PublishedAggregateStore(directory:directory,siteBase:siteBaseURL)
-        guard try aggregateCatalog()?.records.contains(source.descriptor)==true else{throw AggregateFailure.invalid("图片原目录已变化")}
-        let current=try store.cachedDocument(descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256)
-        try PublishedAggregateReader.require(current==source,"图片必须绑定已核验的原网页修订")
         let epoch=snapshot.validationEpoch,snapshotID=snapshot.summary.snapshotID
-        let plan=try store.imagePlan(source)
-        let cached=try store.latestResourceRendering(source:source) ?? store.importAndroidResourceRendering(source)
-        if let cached{try PublishedAggregateReader.require(cached.manifest.plan==plan,"已存图片与当前网页位置不符")}
+        // One synchronous admission replays the complete source catalog once.
+        // The scope ends before the first transport await and is never retained.
+        let (plan,cached)=try store.withVerifiedReadScope { scoped in
+            guard try scoped.load(activeSnapshotSHA256:snapshotID,validationEpoch:epoch)?.records.contains(source.descriptor)==true else{throw AggregateFailure.invalid("图片原目录已变化")}
+            let current=try scoped.cachedDocument(descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256)
+            try PublishedAggregateReader.require(current==source,"图片必须绑定已核验的原网页修订")
+            let plan=try scoped.imagePlan(source)
+            let cached=try scoped.latestResourceRendering(source:source) ?? scoped.importAndroidResourceRendering(source)
+            if let cached{try PublishedAggregateReader.require(cached.manifest.plan==plan,"已存图片与当前网页位置不符")}
+            return (plan,cached)
+        }
         let retained=Dictionary(uniqueKeysWithValues:(cached?.manifest.images ?? []).filter{$0.sha256 != nil}.map{($0.slot.index,$0)})
         let retainedByURL=plan.slots.reduce(into:[String:AggregateImageRecord]()){result,slot in
             if let address=slot.sourceURL,let record=retained[slot.index],result[address]==nil{result[address]=record}
@@ -895,7 +910,12 @@ actor LibraryService {
         }
         try Task.checkCancellation()
         guard snapshot.validationEpoch==epoch,snapshot.summary.snapshotID==snapshotID else{throw AggregateFailure.invalid("保存图片期间目录已变化")}
-        return try store.cacheResourceRendering(source:source,plan:plan,images:assets,missing:missing,observedAt:Self.now())
+        // Start a fresh complete scope after transport. A changed catalog or
+        // source still rejects; no pre-network qualification crosses the await.
+        return try store.withVerifiedReadScope { scoped in
+            guard try scoped.load(activeSnapshotSHA256:snapshotID,validationEpoch:epoch)?.records.contains(source.descriptor)==true else{throw AggregateFailure.invalid("保存图片时原目录已变化")}
+            return try scoped.cacheResourceRendering(source:source,plan:plan,images:assets,missing:missing,observedAt:Self.now())
+        }
     }
 
     static func extractArticle(_ raw: String, paper: Paper, pageURL: URL) throws -> Article {

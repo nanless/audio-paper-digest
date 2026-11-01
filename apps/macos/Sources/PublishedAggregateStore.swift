@@ -325,9 +325,9 @@ extension PublishedAggregateStore {
 extension PublishedAggregateStore {
     /// Strict same-HTML scope. Every peer is cold-verified; damaged peers cannot be skipped for an older render.
     func latestResourceRendering(source:AggregateDocument)throws->AggregateResourceRender? {
-        _=try imagePlan(source)
         let folder=try child(resourceFolder(source));try noLinks(folder)
         guard fm.fileExists(atPath:folder.path) else{return nil}
+        _=try imagePlan(source)
         let files=try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil)
         var latest:AggregateResourceRender?
         for file in files.sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) {
@@ -387,9 +387,9 @@ extension PublishedAggregateStore {
         let contract:String;let parserContract:String;let plan:AggregateImagePlan;let observedAt:String;let images:[AggregateImageRecord];let renderedBodySHA256:String;let completeOffline:Bool
     }
     func importAndroidResourceRendering(_ source:AggregateDocument)throws->AggregateResourceRender? {
-        let plan=try imagePlan(source)
         let folder=try child(["aggregate-resource-renders-android-v1",PublishedAggregateReader.sha(Data(source.descriptor.id.utf8)),source.descriptor.source.manifestSHA256,source.rawHTMLSHA256,AggregateResources.contract])
         guard fm.fileExists(atPath:folder.path)else{return nil};try noLinks(folder)
+        let plan=try imagePlan(source)
         let android=try androidSource(source.descriptor,rawSHA:source.rawHTMLSHA256)
         var selected:AndroidImageWitness?,selectedSHA:String?
         func time(_ value:String)throws->Date {let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds];if let date=formatter.date(from:value){return date};formatter.formatOptions=[.withInternetDateTime];guard let date=formatter.date(from:value)else{throw AggregateFailure.invalid("Android图片观察时间无效")};return date}
