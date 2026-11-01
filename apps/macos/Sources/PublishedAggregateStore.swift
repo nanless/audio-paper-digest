@@ -1,11 +1,66 @@
 import Foundation
 import Darwin
 
+#if PAPER_DIGEST_TESTS
+final class AggregateReadMetrics {
+    var fileReads = 0
+    var sourceParses = 0
+}
+#endif
+
 /// Sidecars activate only with the actual paper current.json snapshot; a legacy cache cannot grant a manifest.
 struct PublishedAggregateStore {
     let directory: URL
     let siteBase: URL
-    init(directory: URL, siteBase: URL = PublishedAggregateReader.site) { self.directory = directory; self.siteBase = siteBase }
+    /// This capability exists only during one synchronous closure. It never
+    /// suppresses the first full verification or the final original-byte guard.
+    private final class ReadScope {
+        struct Original { let url: URL; let limit: Int; let sha: String; let device: dev_t; let inode: ino_t }
+        let owner = pthread_self()
+        var active = true
+        var originals: [String: Original] = [:]
+        var catalogs: [String: PublishedAggregateCatalog] = [:]
+        var activations: [String: PublishedAggregateCatalog] = [:]
+        func requireActive() throws { try PublishedAggregateReader.require(pthread_equal(owner,pthread_self()) != 0 && active, "汇总同步读取范围已经结束或线程已变化，不能复用旧来源能力") }
+    }
+    private let readScope: ReadScope?
+    #if PAPER_DIGEST_TESTS
+    private var metrics: AggregateReadMetrics?
+    init(directory: URL, siteBase: URL = PublishedAggregateReader.site, metrics: AggregateReadMetrics) { self.directory=directory;self.siteBase=siteBase;self.readScope=nil;self.metrics=metrics }
+    #endif
+    init(directory: URL, siteBase: URL = PublishedAggregateReader.site) { self.directory = directory; self.siteBase = siteBase; self.readScope = nil }
+    private init(copying store: PublishedAggregateStore, scope: ReadScope?) {
+        directory=store.directory;siteBase=store.siteBase;readScope=scope
+        #if PAPER_DIGEST_TESTS
+        metrics=store.metrics
+        #endif
+    }
+    /// The non-async, nonescaping body cannot carry the scope across an await.
+    /// Even an escaped value copy is unusable once this closure has returned.
+    func withVerifiedReadScope<T>(_ body: (PublishedAggregateStore) throws -> T) throws -> T {
+        if let readScope { try readScope.requireActive(); return try body(self) }
+        let scope=ReadScope(),scoped=PublishedAggregateStore(copying:self,scope:scope)
+        defer { scope.active=false;scope.originals.removeAll();scope.catalogs.removeAll();scope.activations.removeAll() }
+        let result=try body(scoped)
+        // Re-read complete original bytes using the ordinary path/type/size and
+        // no-symlink checks; timestamps alone never validate this scope.
+        for original in scope.originals.values.sorted(by:{$0.url.path<$1.url.path}) {
+            let bytes=try read(original.url,limit:original.limit)
+            var identity=stat()
+            try PublishedAggregateReader.require(lstat(original.url.path,&identity)==0 && identity.st_dev==original.device && identity.st_ino==original.inode && PublishedAggregateReader.sha(bytes)==original.sha,"汇总来源在本次同步读取期间变化，未返回旧资格")
+        }
+        return result
+    }
+    private func recordScopedOriginal(_ url:URL,limit:Int,bytes:Data) throws {
+        guard let scope=readScope else{return};try scope.requireActive()
+        let root=try trustedSystemPath(directory).path+"/"
+        guard url.path.hasPrefix(root),let component=url.path.dropFirst(root.count).split(separator:"/").first,["index","aggregate-manifests","aggregate-index","aggregate-activations"].contains(String(component)) else{return}
+        let sha=PublishedAggregateReader.sha(bytes)
+        var identity=stat();try PublishedAggregateReader.require(lstat(url.path,&identity)==0 && identity.st_mode & S_IFMT == S_IFREG,"汇总原来源文件身份不可核验")
+        if let original=scope.originals[url.path] {
+            try PublishedAggregateReader.require(original.sha==sha && original.device==identity.st_dev && original.inode==identity.st_ino,"汇总来源在同步读取范围内变化")
+        } else {scope.originals[url.path] = .init(url:url,limit:limit,sha:sha,device:identity.st_dev,inode:identity.st_ino)}
+    }
     private let fm=FileManager.default
     /// Only macOS root-owned system aliases are translated; no cache subtree is resolved.
     private func trustedSystemPath(_ url: URL) throws -> URL {
@@ -46,6 +101,10 @@ struct PublishedAggregateStore {
         }
     }
     func read(_ url:URL,limit:Int)throws->Data {
+        try readScope?.requireActive()
+        #if PAPER_DIGEST_TESTS
+        metrics?.fileReads += 1
+        #endif
         let url=try trustedSystemPath(url)
         try noLinks(url)
         let fd=open(url.path,O_RDONLY|O_NOFOLLOW)
@@ -57,7 +116,7 @@ struct PublishedAggregateStore {
         }
         var extra:UInt8=0;var after=stat()
         try PublishedAggregateReader.require(Darwin.read(fd,&extra,1)==0 && fstat(fd,&after)==0 && before.st_dev==after.st_dev && before.st_ino==after.st_ino && before.st_size==after.st_size && before.st_mtimespec.tv_sec==after.st_mtimespec.tv_sec && before.st_mtimespec.tv_nsec==after.st_mtimespec.tv_nsec,"汇总缓存在读取时变化")
-        try noLinks(url);return result
+        try noLinks(url);try recordScopedOriginal(url,limit:limit,bytes:result);return result
     }
     private func immutable(_ data:Data,to url:URL)throws {
         let url=try trustedSystemPath(url)
@@ -101,21 +160,34 @@ struct PublishedAggregateStore {
     }
     /// Neither a matching manifest nor an orphan activation from a cancelled same-SHA sync can grant currentness.
     func load(activeSnapshotSHA256:String,validationEpoch:String?)throws->PublishedAggregateCatalog? {
+        try readScope?.requireActive()
         guard PublishedAggregateReader.validSHA(activeSnapshotSHA256),let validationEpoch,let identity=try? epoch(validationEpoch) else{return nil}
+        let activationKey=activeSnapshotSHA256+":"+identity
+        if let retained=readScope?.activations[activationKey]{return retained}
         let manifest=try child(["aggregate-manifests",activeSnapshotSHA256+".json"]),sidecar=try child(["aggregate-index",activeSnapshotSHA256+".json"]),marker=try child(["aggregate-activations",activeSnapshotSHA256,identity+".json"])
         guard fm.fileExists(atPath:manifest.path),fm.fileExists(atPath:sidecar.path),fm.fileExists(atPath:marker.path) else{return nil}
         let raw=try read(manifest,limit:2*1024*1024)
         try PublishedAggregateReader.require(PublishedAggregateReader.sha(raw)==activeSnapshotSHA256,"汇总原清单与当前目录不一致")
+        #if PAPER_DIGEST_TESTS
+        metrics?.sourceParses += 1
+        #endif
         let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
         let actual=try read(sidecar,limit:8*1024*1024),saved=try JSONDecoder().decode(PublishedAggregateCatalog.self,from:actual),activation=try JSONDecoder().decode(Activation.self,from:read(marker,limit:4096))
         try PublishedAggregateReader.require(saved==catalog && activation.contract=="published-aggregate-activation-v1" && activation.snapshotSHA256==activeSnapshotSHA256 && activation.validationEpoch==identity && activation.catalogSHA256==PublishedAggregateReader.sha(actual),"汇总sidecar或激活代与原来源不一致")
+        readScope?.catalogs[activeSnapshotSHA256]=catalog;readScope?.activations[activationKey]=catalog
         return catalog
     }
     private func sourceCatalog(snapshot:String)throws->PublishedAggregateCatalog {
+        try readScope?.requireActive()
         try PublishedAggregateReader.require(PublishedAggregateReader.validSHA(snapshot),"汇总来源清单身份无效")
+        if let catalog=readScope?.catalogs[snapshot]{return catalog}
         let raw=try read(try child(["aggregate-manifests",snapshot+".json"]),limit:2*1024*1024)
         try PublishedAggregateReader.require(PublishedAggregateReader.sha(raw)==snapshot,"汇总原清单已变化")
-        return try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
+        #if PAPER_DIGEST_TESTS
+        metrics?.sourceParses += 1
+        #endif
+        let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try child(["index",shard.sha256+".json"]),limit:shard.bytes)}
+        readScope?.catalogs[snapshot]=catalog;return catalog
     }
     func originalRow(for descriptor:PublishedAggregate)throws->Data {
         guard try sourceCatalog(snapshot:descriptor.source.manifestSHA256).records.contains(descriptor) else{throw AggregateFailure.invalid("汇总原目录身份未核验")}

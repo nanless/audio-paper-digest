@@ -361,8 +361,10 @@ actor LibraryService {
         try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch)
     }
     func aggregateOriginalRow(id:String)throws->Data {
-        guard let catalog=try aggregateCatalog(),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在")}
-        return try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).originalRow(for:descriptor)
+        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog=try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("汇总目录尚未同步或条目不存在")}
+            return try store.originalRow(for:descriptor)
+        }
     }
 
     func aggregateDocument(id:String) async throws->AggregateDocument {
@@ -376,8 +378,10 @@ actor LibraryService {
         return try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).cacheDocument(raw,descriptor:descriptor,responseURL:url,fetchedAt:Self.now())
     }
     func aggregateCachedDocument(id:String,rawHTMLSHA256:String)throws->AggregateDocument {
-        guard let catalog=try aggregateCatalog(),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("当前汇总目录未核验")}
-        return try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).cachedDocument(descriptor:descriptor,rawHTMLSHA256:rawHTMLSHA256)
+        try PublishedAggregateStore(directory:directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog=try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch),let descriptor=catalog.records.first(where:{$0.id==id}) else{throw AggregateFailure.invalid("当前汇总目录未核验")}
+            return try store.cachedDocument(descriptor:descriptor,rawHTMLSHA256:rawHTMLSHA256)
+        }
     }
 
     private func parsePaper(_ row: [String: Any]) throws -> Paper? {
@@ -1321,7 +1325,9 @@ private final class LibraryTransferCancellation: @unchecked Sendable {
 
 extension LibraryService {
     func aggregateLatestVerifiedDocument(id: String) throws -> AggregateDocument? {
-        guard let catalog = try aggregateCatalog(), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("当前汇总目录未核验") }
-        return try PublishedAggregateStore(directory: directory,siteBase:siteBaseURL).latestVerifiedDocument(for: descriptor)
+        try PublishedAggregateStore(directory: directory,siteBase:siteBaseURL).withVerifiedReadScope { store in
+            guard let catalog = try store.load(activeSnapshotSHA256:snapshot.summary.snapshotID,validationEpoch:snapshot.validationEpoch), let descriptor = catalog.records.first(where: { $0.id == id }) else { throw AggregateFailure.invalid("当前汇总目录未核验") }
+            return try store.latestVerifiedDocument(for: descriptor)
+        }
     }
 }
