@@ -47,7 +47,7 @@ export function mountLibrary(app) {
     document.head.append(style);
   }
   const filterBar = document.createElement('div'); filterBar.className = 'library-filters';
-  filterBar.innerHTML = `<label>任务<select id="library-task"><option value="">全部任务</option></select></label><label>方法<select id="library-method"><option value="">全部方法</option></select></label><label>来源<select id="library-source"><option value="">全部来源</option><option value="arxiv">arXiv</option><option value="conference">正式会议</option><option value="unknown">待核验来源</option></select></label><label>评分<select id="library-min-score"><option value="">不限</option>${[5,6,7,8,9].map(n=>`<option value="${n}">≥ ${n}</option>`).join('')}</select></label><label>网站日期<input id="library-date-from" type="date" aria-label="网站发布日期起点"></label><label>至<input id="library-date-until" type="date" aria-label="网站发布日期终点"></label><button id="library-clear-filters" type="button">清除筛选</button>`;
+  filterBar.innerHTML = `<label>来源<select id="library-source"><option value="">全部来源</option><option value="arxiv">arXiv</option><option value="conference">正式会议</option><option value="unknown">待核验来源</option></select></label><label>评分<select id="library-min-score"><option value="">不限</option>${[5,6,7,8,9].map(n=>`<option value="${n}">≥ ${n}</option>`).join('')}</select></label><label>网站日期<input id="library-date-from" type="date" aria-label="网站发布日期起点"></label><label>至<input id="library-date-until" type="date" aria-label="网站发布日期终点"></label><button id="library-clear-filters" type="button">清除筛选</button>`;
   $('library-view').querySelector('.library-controls').after(filterBar);
   const filterToggle=document.createElement('button');filterToggle.type='button';filterToggle.id='library-filter-toggle';filterToggle.className='library-filter-toggle';filterToggle.hidden=true;filterToggle.setAttribute('aria-expanded','false');filterToggle.onclick=()=>{filterBar.hidden=!filterBar.hidden;filterToggle.setAttribute('aria-expanded',String(!filterBar.hidden));};filterBar.before(filterToggle);
   const scope = document.createElement('p'); scope.className = 'library-query-scope'; scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
@@ -78,14 +78,6 @@ export function mountLibrary(app) {
     const hiddenSelected=[...selected].filter(id=>!matchingIDs.has(id)).length;
     $('library-selection-count').textContent = selected.size ? `已选 ${selected.size} 篇论文${hiddenSelected?'（'+hiddenSelected+' 篇不在当前筛选结果中）':''}` : '可多选论文，或右键打开操作菜单';
     for (const id of ['library-selection-favorite','library-selection-remove-favorite','library-selection-reading','library-selection-clear']) $(id).disabled = persistBusy || !selected.size || (favoriteTools.readOnly&&['library-selection-favorite','library-selection-remove-favorite'].includes(id));
-  }
-  function fillOptions() {
-    for (const key of ['task','method']) {
-      const select = $('library-' + key), previous = filters[key];
-      const values = [...new Set(catalog().map(p => p[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
-      select.innerHTML = `<option value="">全部${key==='task'?'任务':'方法'}</option>` + values.map(v=>`<option value="${escape(v)}">${escape(v)}</option>`).join('');
-      select.value = values.includes(previous) ? previous : ''; filters[key] = select.value;
-    }
   }
   async function persistedList(key, ids, remove = false) {
     if (persistBusy || !ids.length) return;
@@ -120,7 +112,7 @@ export function mountLibrary(app) {
       if(new Set(rows.map(paperID)).size!==rows.length)throw new Error('本机目录分页身份重复，请重新读取；上一份列表仍保留');
       if(generation!==refreshGeneration)return;
       if(app.state.personal===personalAtStart)app.state.personal=snapshot;app.state.summary=summary;app.state.catalog=rows;app.state.websiteTaxonomy=first.websiteTaxonomy||null;app.state.websiteTaxonomyNotice=first.websiteTaxonomyNotice||'';
-      loaded = true; fillOptions();catalogNotice.hidden=true;
+      loaded = true;catalogNotice.hidden=true;
       const ids = new Set(catalog().map(paperID)); for (const id of selected) if (!ids.has(id)) selected.delete(id);
       for (const id of expandedMetadata) if (!ids.has(id)) expandedMetadata.delete(id);
       counts(); await render();
@@ -141,11 +133,11 @@ export function mountLibrary(app) {
       if(lastView)viewStates.set(lastView,{page,query:$('search-input').value,sort:$('sort').value,filters:{...filters},selected:[...selected],scroll:wrap.scrollTop,filterOpen:!filterBar.hidden,taxonomy:favoriteTools.snapshot()});
       const saved=viewStates.get(view);page=saved?.page??0;selected.clear();for(const id of saved?.selected||[])selected.add(id);
       for(const key of Object.keys(filters))filters[key]=saved?.filters[key]||'';
-      for(const [id,key] of [['library-task','task'],['library-method','method'],['library-source','source'],['library-min-score','score'],['library-date-from','from'],['library-date-until','until']])$(id).value=filters[key];
+      for(const [id,key] of [['library-source','source'],['library-min-score','score'],['library-date-from','from'],['library-date-until','until']])$(id).value=filters[key];
       $('search-input').value=saved?.query||'';$('sort').value=saved?.sort||(view==='favorites'?'favorite-date':'date');
       favoriteTools.restore(saved?.taxonomy,view);lastView=view;filterBar.hidden=!(saved?.filterOpen??false);filterToggle.setAttribute('aria-expanded',String(!filterBar.hidden));restoredScroll=saved?.scroll??0;
     }
-    filterToggle.hidden=false;filterToggle.textContent='筛选'+(Object.values(filters).filter(Boolean).length?' · '+Object.values(filters).filter(Boolean).length:'');filterToggle.title='任务、方法、来源、评分与网站日期';scope.hidden=view==='favorites';
+    filterToggle.hidden=false;filterToggle.textContent='筛选'+(Object.values(filters).filter(Boolean).length?' · '+Object.values(filters).filter(Boolean).length:'');filterToggle.title='来源、评分与网站日期';scope.hidden=view==='favorites';
     favoriteSort.hidden=view!=='favorites';
     $('library-selection-remove-favorite').hidden=view!=='favorites';
     const invalidDates=!!(filters.from&&filters.until&&filters.from>filters.until);filterMessage.hidden=!invalidDates;for(const id of ['library-date-from','library-date-until'])$(id).setAttribute('aria-invalid',String(invalidDates));
@@ -222,7 +214,7 @@ export function mountLibrary(app) {
   $('paper-rows').addEventListener('contextmenu',event=>{const row=event.target.closest('[data-library-row]');if(!row)return;const paper=catalog().find(p=>paperID(p)===row.dataset.libraryRow);if(paper)openContext(event,paper);});
   $('search-input').oninput=()=>{page=0;clearTimeout(searchTimer);searchTimer=setTimeout(()=>render().catch(fail),220);};
   $('sort').onchange=()=>{page=0;render().catch(fail);};
-  for(const [id,key] of [['library-task','task'],['library-method','method'],['library-source','source'],['library-min-score','score'],['library-date-from','from'],['library-date-until','until']]) $(id).onchange=event=>{filters[key]=event.target.value;page=0;render().catch(fail);};
+  for(const [id,key] of [['library-source','source'],['library-min-score','score'],['library-date-from','from'],['library-date-until','until']]) $(id).onchange=event=>{filters[key]=event.target.value;page=0;render().catch(fail);};
   $('library-clear-filters').onclick=()=>{for(const key of Object.keys(filters))filters[key]='';for(const el of filterBar.querySelectorAll('select,input'))el.value='';$('search-input').value='';page=0;render().catch(fail);};
   $('reset-search').onclick=()=>{$('search-input').value='';page=0;render().catch(fail);};
   $('library-previous').onclick=()=>{page=Math.max(0,page-1);render().catch(fail);$('library-view').querySelector('.library-table-wrap').scrollTop=0;};
@@ -237,6 +229,6 @@ export function mountLibrary(app) {
   function invalidate(){refreshGeneration++;loading=null;renderSequence++;catalogNotice.hidden=true;}
   window.addEventListener('library.willChange',invalidate);
   window.addEventListener('personal.changed',()=>{invalidate();viewStates.clear();selected.clear();page=0;lastView=null;});
-  if(catalog().length){loaded=true;fillOptions();}
+  if(catalog().length){loaded=true;}
   return {render,refresh,invalidate};
 }

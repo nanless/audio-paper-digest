@@ -15,3 +15,5 @@
 .library-filter-message{margin:0 22px 10px;color:var(--red);font-size:12px}.library-filter-message button{font-size:11px;color:var(--accent);padding:2px 7px}#library-date-from[aria-invalid=true],#library-date-until[aria-invalid=true]{border-color:var(--red)}
 
 .library-query-scope.has-search-error{color:var(--red);font-size:11px;line-height:1.6}#library-query-retry{font-size:11px;color:var(--accent);padding:2px 6px}
+
+.library-table.lib-multi td{vertical-align:top}
