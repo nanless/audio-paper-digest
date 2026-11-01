@@ -119,17 +119,42 @@ class RootController private constructor(private val context: Context, private v
     }
     val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) }, borrowing=cloudCredentialBorrowing)
     private val aggregateViewRevision=AtomicLong(0)
+    private var publishedPreload:Job?=null
+    private var preloadedCatalog:AggregateCatalogStamp?=null
+    private fun cancelPublishedPreload(){publishedPreload?.cancel();publishedPreload=null}
+    private fun schedulePublishedPreload(){
+        val expected=library.aggregateStamp()
+        if(personal.settings().optBoolean("offlineMode")||preloadedCatalog==expected||publishedPreload?.isActive==true)return
+        publishedPreload=exportScope.launch {
+            try {
+                val catalog=maintenance.withLock{library.aggregateCatalog()}?:return@launch
+                val records=workbenchAggregateOrder(catalog.records)
+                val targets=(records.filter{it.kind=="daily"}.take(2)+records.filter{workbenchConferenceDirectory(it)}.take(1)+records.filter{it.kind=="conference"&&!workbenchConferenceTask(it)}.take(1)).distinctBy{it.id}
+                for(record in targets){
+                    ensureActive();if(library.aggregateStamp()!=expected||personal.settings().optBoolean("offlineMode"))return@launch
+                    try{library.preloadAggregateDocument(record.id,expected){commit->maintenance.withLock{ensureActive();commit()}}}
+                    catch(cancelled:CancellationException){throw cancelled}
+                    catch(_:Exception){/* Optional prefetch never grants display or overwrites the last readable version. */}
+                }
+                if(library.aggregateStamp()==expected)preloadedCatalog=expected
+            }catch(cancelled:CancellationException){throw cancelled}catch(_:Exception){/* Foreground reads retain their normal visible errors. */}
+        }
+    }
+    private val aggregateImageJobs=ConcurrentHashMap.newKeySet<Job>()
+    private fun cancelAggregateImages(){aggregateImageJobs.toList().forEach{it.cancel(CancellationException("已切换阅读，停止原页图片等待"))}}
     override fun aggregateLinkIsCurrent(nonce:String,index:Int)=aggregateBrowser.linkIsCurrent(nonce,index)
     override fun captureAggregateView()=AggregateViewLease(aggregateViewRevision.get(),generation.get())
     override fun enterAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.enter()}
-    override fun leaveAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.leave()}
-    override fun retireAggregateView(){aggregateViewRevision.incrementAndGet();aggregateBrowser.retire()}
+    override fun leaveAggregateView(){cancelPublishedPreload();cancelAggregateImages();aggregateViewRevision.incrementAndGet();aggregateBrowser.leave()}
+    override fun retireAggregateView(){cancelAggregateImages();aggregateViewRevision.incrementAndGet();aggregateBrowser.retire()}
     override suspend fun executeAggregateInView(command:String,payload:JSONObject,lease:AggregateViewLease):JSONObject {
         if(captureAggregateView()!=lease)return JSONObject().put("status","not-adopted")
+        if(command!="aggregate.list")cancelPublishedPreload()
+        if(command in setOf("aggregate.select","aggregate.back","aggregate.close","aggregate.list","aggregate.refresh","aggregate.cached","aggregate.link"))cancelAggregateImages()
         val viewGuard={aggregateViewRevision.get()==lease.navigationEpoch}
         val claimGuard={generation.get()==lease.readingEpoch}
         if(command in setOf("aggregate.close","aggregate.back"))return aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard)
-        return withContext(Dispatchers.IO){val result=aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard);refresh();result}
+        return withContext(Dispatchers.IO){val result=aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard);refresh();if(command=="aggregate.list"&&result.optString("status")=="index-ready")schedulePublishedPreload();result}
     }
     private val aggregateBrowser by lazy {
         AggregateBrowser(object:AggregateBrowsePort {
@@ -138,7 +163,10 @@ class RootController private constructor(private val context: Context, private v
             override suspend fun revisions(id:String)=maintenance.withLock{library.aggregateCachedRevisions(id)}
             override suspend fun read(id:String)=maintenance.withLock{library.aggregateDocument(id)}
             override suspend fun cached(id:String,sha:String)=maintenance.withLock{library.aggregateCachedDocument(id,sha)}
-            override suspend fun images(id:String,rawHTMLSHA256:String,allowNetwork:Boolean)=maintenance.withLock{library.aggregateImages(id,rawHTMLSHA256,allowNetwork)}
+            override suspend fun images(id:String,rawHTMLSHA256:String,allowNetwork:Boolean):AggregateImageAccess? {
+                val job=currentCoroutineContext()[Job]!!;aggregateImageJobs.add(job)
+                try{return maintenance.withLock{library.aggregateImages(id,rawHTMLSHA256,allowNetwork)}}finally{aggregateImageJobs.remove(job)}
+            }
             override suspend fun link(document:AggregateDocumentView,href:String)=maintenance.withLock{library.aggregateLink(document,href)}
             override fun offlineMode()=personal.settings().optBoolean("offlineMode")
             override fun readingEpoch()=generation.get()
@@ -321,6 +349,7 @@ class RootController private constructor(private val context: Context, private v
     override suspend fun execute(command: String, payload: JSONObject): JSONObject {
         // A pending credential mutation must not wait behind maintenance and then silently acquire a new lease.
         if (command in setOf("model.fresh.prepare", "model.fresh.check.prepare", "model.fresh.commit")) modelCredentialRevision.ready()
+        if(command in setOf("settings.save","app.restore.commit","cloud.restore.commit"))cancelPublishedPreload()
         if(command.startsWith("aggregate."))return executeAggregateInView(command,payload,captureAggregateView())
         // A cancelled search must not reset reader drafts or turn into a global task error.
         if (command == "library.search") return withContext(Dispatchers.IO) { maintenance.withLock { library.searchCached(payload.getString("query")) } }
@@ -343,7 +372,7 @@ class RootController private constructor(private val context: Context, private v
             _state.update { it.copy(error = null, notice = null) }
             val result = when (command) {
                 "app.bootstrap" -> { refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; JSONObject().put("ready", true) }
-                "library.sync" -> runTask(command) { maintenance.withLock { library.sync { _, _, message -> _state.update { it.copy(notice = message) } } } }
+                "library.sync" -> {cancelPublishedPreload();runTask(command) { maintenance.withLock { library.sync { _, _, message -> _state.update { it.copy(notice = message) } } } }.also{schedulePublishedPreload()}}
                 "paper.open" -> openPaper(payload.getString("paperID"), payload.optBoolean("refresh"))
                 "pdf.open" -> ownedPdfAcquisition(command, access, dispatchAtStart) {
                     val prepared = maintenance.withLock {

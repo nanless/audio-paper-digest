@@ -28,10 +28,10 @@ import java.time.ZoneOffset
 @Composable internal fun SettingsPane(state:UiState,controller:AppController,action:Action,restore:()->Unit,requestedPane:String?=null,requestID:Int=0){
  val savedPanes=rememberSaveableStateHolder()
  var showLicenses by rememberSaveable{mutableStateOf(false)}
- var pane by rememberSaveable{mutableStateOf("阅读")};var secret by remember{mutableStateOf<SecretKind?>(null)}
+ var pane by rememberSaveable{mutableStateOf("开始")};var secret by remember{mutableStateOf<SecretKind?>(null)}
  var handledRequest by rememberSaveable{mutableIntStateOf(-1)}
- LaunchedEffect(requestID,requestedPane){if(handledRequest!=requestID&&requestedPane in listOf("阅读","模型","资料","坚果云","Zotero","关于")){pane=requestedPane!!;handledRequest=requestID}}
- val categories=listOf("阅读","模型","资料","坚果云","Zotero","关于")
+ LaunchedEffect(requestID,requestedPane){if(handledRequest!=requestID&&requestedPane in listOf("开始","阅读","模型","资料","坚果云","Zotero","关于")){pane=requestedPane!!;handledRequest=requestID}}
+ val categories=listOf("开始","阅读","模型","资料","坚果云","Zotero","关于")
  var categoryMenu by remember{mutableStateOf(false)}
  BoxWithConstraints(Modifier.fillMaxSize()){
  val wide=maxWidth>=840.dp
@@ -39,16 +39,16 @@ import java.time.ZoneOffset
  if(wide)Column(Modifier.width(208.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
   Text("设置",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.padding(vertical=16.dp))
   categories.forEach{category->
-   NavigationDrawerItem(label={Text(category)},selected=pane==category,onClick={pane=category},icon={SettingsCategoryIcon(category)})
+   NavigationDrawerItem(label={Text(settingsCategoryLabel(category))},selected=pane==category,onClick={pane=category},icon={SettingsCategoryIcon(category)})
   }
  }
  Column(Modifier.weight(1f).fillMaxHeight()){
  if(!wide)Row(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){
   Text("设置",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.weight(1f))
   Box{
-   FilledTonalButton({categoryMenu=true},modifier=Modifier.semantics{contentDescription="选择设置分组：$pane"}){SettingsCategoryIcon(pane);Spacer(Modifier.width(8.dp));Text(pane);Icon(Icons.Outlined.ArrowDropDown,null)}
+   FilledTonalButton({categoryMenu=true},modifier=Modifier.semantics{contentDescription="选择设置分组：$pane"}){SettingsCategoryIcon(pane);Spacer(Modifier.width(8.dp));Text(settingsCategoryLabel(pane));Icon(Icons.Outlined.ArrowDropDown,null)}
    DropdownMenu(categoryMenu,{categoryMenu=false}){
-    categories.forEach{category->DropdownMenuItem(text={Text(category)},leadingIcon={SettingsCategoryIcon(category)},onClick={pane=category;categoryMenu=false})}
+    categories.forEach{category->DropdownMenuItem(text={Text(settingsCategoryLabel(category))},leadingIcon={SettingsCategoryIcon(category)},onClick={pane=category;categoryMenu=false})}
    }
   }
  }
@@ -56,6 +56,7 @@ import java.time.ZoneOffset
  Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal=16.dp,vertical=12.dp),horizontalAlignment=Alignment.CenterHorizontally){
  PaperPanel(Modifier.widthIn(max=760.dp)){
  when(pane){
+ "开始"->ConnectionSetupOverview(state,{pane=it})
  "阅读"->{Text("按你的节奏阅读",style=MaterialTheme.typography.titleLarge);FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(v,l)->FilterChip(state.settings.optString("appearance","system")==v,{action("settings.save",obj("changes" to obj("appearance" to v)))},label={Text(l)})}};Text("正文字号 · ${state.settings.optInt("font",18)}",style=MaterialTheme.typography.titleSmall);Slider(state.settings.optInt("font",18).coerceIn(14,30).toFloat(),{action("settings.save",obj("changes" to obj("font" to it.toInt())))},valueRange=14f..30f,steps=15);Row{Text("离线模式",Modifier.weight(1f));Switch(state.settings.optBoolean("offlineMode"),{action("settings.save",obj("changes" to obj("offlineMode" to it)))})};Text("离线模式读取已保存的导读与 PDF；未保存的资料会明确提示。");Row{Text("减少界面动画",Modifier.weight(1f));Switch(state.settings.optBoolean("reduceMotion"),{action("settings.save",obj("changes" to obj("reduceMotion" to it)))},modifier=Modifier.semantics{contentDescription="减少界面动画"})}
  var syncHours by rememberSaveable{mutableStateOf(state.settings.optInt("syncHours",12).toString())};var syncDirty by rememberSaveable{mutableStateOf(false)};var syncSaving by remember{mutableStateOf(false)};var syncError by remember{mutableStateOf<String?>(null)};val syncScope=rememberCoroutineScope()
  LaunchedEffect(state.settings.optInt("syncHours",12)){if(!syncDirty)syncHours=state.settings.optInt("syncHours",12).toString()}
@@ -89,8 +90,10 @@ import java.time.ZoneOffset
 
 @Composable private fun SecretDialog(kind:SecretKind,controller:AppController,close:()->Unit){
  var text by remember{mutableStateOf("")};var busy by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)};val scope=rememberCoroutineScope()
- fun save(value:String?){busy=true;scope.launch{try{controller.updateSecret(kind,value);text="";close()}catch(e:Exception){error=e.message}finally{busy=false}}}
- AlertDialog(onDismissRequest={if(!busy){text="";close()}},title={Text(when(kind){SecretKind.MODEL->"模型 API 密钥";SecretKind.CLOUD->"坚果云第三方应用密码";SecretKind.ZOTERO->"Zotero 专用 API key";SecretKind.ZOTERO_DAV->"Zotero WebDAV 独立应用密码"})},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("仅在本机加密保存，不进入设置、任务记录或研究备份。");CredentialPasswordField(text,{text=it});error?.let{Text(it,color=MaterialTheme.colorScheme.error)};TextButton({save(null)},enabled=!busy){Text("删除本机保存的密钥")}}},confirmButton={TextButton({save(text)},enabled=text.isNotBlank()&&!busy){Text("安全保存")}},dismissButton={TextButton(close,enabled=!busy){Text("取消")}})
+ fun save(value:String?){busy=true;scope.launch{try{controller.updateSecret(kind,value);text=""
+ if(value!=null&&kind in setOf(SecretKind.CLOUD,SecretKind.ZOTERO,SecretKind.ZOTERO_DAV))controller.execute(if(kind==SecretKind.CLOUD)"cloud.check"else"zotero.check",JSONObject())
+ close()}catch(e:Exception){error=e.message}finally{busy=false}}}
+ AlertDialog(onDismissRequest={if(!busy){text="";close()}},title={Text(when(kind){SecretKind.MODEL->"模型 API 密钥";SecretKind.CLOUD->"坚果云第三方应用密码";SecretKind.ZOTERO->"Zotero 专用 API key";SecretKind.ZOTERO_DAV->"Zotero WebDAV 独立应用密码"})},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("仅在本机加密保存，不进入设置、任务记录或研究备份。");CredentialPasswordField(text,{text=it});error?.let{Text(it,color=MaterialTheme.colorScheme.error)};TextButton({save(null)},enabled=!busy){Text("删除本机保存的密钥")}}},confirmButton={TextButton({save(text)},enabled=text.isNotBlank()&&!busy){Text(if(kind in setOf(SecretKind.CLOUD,SecretKind.ZOTERO,SecretKind.ZOTERO_DAV))"保存并检查连接"else"安全保存")}},dismissButton={TextButton(close,enabled=!busy){Text("取消")}})
 }
 
 
@@ -126,11 +129,20 @@ import java.time.ZoneOffset
  LaunchedEffect(actualContext){retireList()}
  DisposableEffect(listGate){onDispose{listGate.invalidate()}}
  var saving by remember{mutableStateOf(false)};val busy=cloud.optBoolean("busy")||saving||state.busy;val pending=cloud.optJSONObject("pending");val scope=rememberCoroutineScope()
- Text("坚果云资料",style=MaterialTheme.typography.titleLarge);Text("保存全部研究空间。独立目录与 Zotero 附件同步分开；资料上限 512 MiB，编码快照上限 750 MiB。自动任务由 Android 调度，可能延后；强制停止应用后不会继续。")
+ Text("WebDAV 备份（坚果云）",style=MaterialTheme.typography.titleLarge)
+ Text("把工作台的论文、笔记和研究记录备份到坚果云。服务器地址已内置，只需账号和第三方应用密码。")
+ val browser=androidx.compose.ui.platform.LocalUriHandler.current
+ TextButton({browser.openUri("https://www.jianguoyun.com/#/settings/security")}){Text("1. 打开坚果云，创建第三方应用密码 ↗")}
+ Text("在坚果云网页的账户信息 → 安全选项 → 第三方应用管理中添加应用，复制生成的应用密码。请勿填写登录密码。",style=MaterialTheme.typography.bodySmall)
+ Text("2. 填写账号，再安全保存应用密码",style=MaterialTheme.typography.titleMedium)
+ Text("保存全部研究空间。独立目录与 Zotero 附件同步分开；资料上限 512 MiB，编码快照上限 750 MiB。自动任务由 Android 调度，可能延后；强制停止应用后不会继续。")
  OutlinedTextField(account,{account=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("坚果云账号")},enabled=!busy,singleLine=true);OutlinedTextField(folder,{folder=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("备份目录")},supportingText={Text("例如 PaperDigest；不能使用 Zotero 的附件目录。")},enabled=!busy,singleLine=true)
  Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true;retireList()},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true;retireList()},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
- Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存设置")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
- OutlinedButton(password,enabled=!dirty&&!busy){Text("设置第三方应用密码…")};OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy){Text("检查连接与权限")}
+ Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null;password()}catch(e:Exception){error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&account.isNotBlank()&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存账号并填写应用密码…")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
+ OutlinedButton(password,enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("填写或更换应用密码并检查…")}
+ Text("3. 检查成功后，保存第一份备份",style=MaterialTheme.typography.titleMedium)
+ OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("重新检查连接与权限")}
+ Text(if(cloud.optString("account").isBlank())"尚未配置账号"else when(cloud.optString("credentialState")){"present"->"应用密码已保存；以最近一次连接检查结果为准";"missing"->"尚未保存应用密码";else->"账号已保存，连接待检查"},style=MaterialTheme.typography.bodySmall)
  cloud.optString("lastError").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
  if(pending!=null)Text(if(pending.optBoolean("damaged"))"未完成材料损坏或缺少检查点。可原样保留，但不能保证完整恢复。" else "有未完成的同一快照：${pending.optLong("fileCount")} 文件 / ${pending.optLong("encodedBytes")} 字节。继续不会创建新版本。")
  Button({action("cloud.upload",JSONObject())},enabled=!dirty&&!busy&&pending?.optBoolean("damaged")!=true){Text(if(pending==null)"保存完整快照" else "继续保存同一快照")}
@@ -159,4 +171,24 @@ private fun cloudReadableBytes(bytes:Long):String {
  val units=listOf("字节","KiB","MiB","GiB");var value=bytes.toDouble();var unit=0
  while(value>=1024&&unit<units.lastIndex){value/=1024;unit++}
  return if(unit==0)"$bytes 字节" else String.format(java.util.Locale.getDefault(),"%.1f %s",value,units[unit])
+}
+
+internal fun settingsCategoryLabel(category:String)=when(category){"开始"->"连接与开始";"坚果云"->"WebDAV 备份";"Zotero"->"Zotero 归档";else->category}
+
+@Composable internal fun ConnectionSetupOverview(state:UiState,open:(String)->Unit){
+ Text("连接你的研究资料",style=MaterialTheme.typography.titleLarge)
+ Text("阅读网站文章可以直接开始。建议连接以下服务，保存研究资料并把论文归档到自己的文库；两项可以独立使用。")
+ OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+  Text("WebDAV 备份（坚果云）",style=MaterialTheme.typography.titleMedium)
+  Text("备份整个工作台：论文、笔记、研究输入与回答。填写坚果云账号和应用密码即可，默认目录已准备好。")
+  Text(if(state.cloud.optString("account").isBlank())"尚未配置"else"账号已保存 · 可前往检查连接",style=MaterialTheme.typography.labelMedium)
+  Button({open("坚果云")}){Text("配置 WebDAV 备份")}
+ }}
+ OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+  Text("Zotero 归档",style=MaterialTheme.typography.titleMedium)
+  Text("把选定论文、PDF、导读和笔记放入 Zotero。使用专用 API key 和个人文库 ID，默认使用 Zotero Storage。")
+  Text(if(state.zotero.optString("libraryID").isBlank())"尚未配置"else if(state.zotero.optString("credentialState")=="confirmed")"连接已核验"else"目标已保存 · 连接待核验",style=MaterialTheme.typography.labelMedium)
+  Button({open("Zotero")}){Text("配置 Zotero 归档")}
+ }}
+ Text("Zotero 附件 WebDAV 是可选的附件同步方式；与工作台完整备份分别设置。",style=MaterialTheme.typography.bodySmall)
 }

@@ -130,6 +130,20 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         coroutineContext.ensureActive();require(snapshot.epoch==before.epoch){"保存期间目录验证代变化，旧原件保留但未采纳到新目录"}
         result
     }
+    /** Optional bounded public-HTML prefetch. Network never holds the workspace maintenance lock.
+     * Only the still-current native descriptor may be committed; no paper, image or model is opened. */
+    internal suspend fun preloadAggregateDocument(id:String,expected:AggregateCatalogStamp,commit:suspend (()->Unit)->Unit) {
+        if(personal.settings().optBoolean("offlineMode")||aggregateStamp()!=expected)return
+        val descriptor=aggregateCatalog()?.records?.firstOrNull{it.id==id}?:return
+        if(PublishedAggregateStore(directory).cachedRevisions(descriptor).isNotEmpty())return
+        val raw=kotlinx.coroutines.withTimeout(12_000){read(descriptor.sourceURL,16*1024*1024)}
+        coroutineContext.ensureActive()
+        commit {
+            require(!personal.settings().optBoolean("offlineMode")&&aggregateStamp()==expected){"预载期间目录或离线设置已变化"}
+            PublishedAggregateStore(directory).cacheDocument(raw,descriptor,descriptor.sourceURL,now())
+        }
+    }
+
     fun aggregateCachedDocument(id:String,rawHTMLSHA256:String):JSONObject {
         val before=snapshot
         val descriptor=aggregateCatalog()?.records?.firstOrNull{it.id==id}?:error("当前汇总目录尚未核验")

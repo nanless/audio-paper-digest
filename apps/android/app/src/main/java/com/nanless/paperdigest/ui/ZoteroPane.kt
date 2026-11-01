@@ -30,11 +30,16 @@ import kotlinx.coroutines.launch
  LaunchedEffect(z.toString()){
   if(!dirty){independentDraft=false;val type=z.optString("libraryType","users");val id=z.optString("libraryID");if(type!=libraryType||id!=libraryID){collections=emptyList();listedFor=null};libraryType=type;libraryID=id;collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername")}
  }
- Text("Zotero 完整存档",style=MaterialTheme.typography.titleLarge)
- Text("使用官方 Web API 保存书目和笔记，附件可选 Zotero Storage 或个人文库的 WebDAV。创建专用 API key，无需 Zotero 登录密码。完整研究空间备份在“坚果云”设置中独立配置。")
+ Text("Zotero 归档",style=MaterialTheme.typography.titleLarge)
+ val browser=androidx.compose.ui.platform.LocalUriHandler.current
+ Text("1. 在 Zotero 官网创建专用 API key",style=MaterialTheme.typography.titleMedium)
+ TextButton({browser.openUri("https://www.zotero.org/settings/keys/new")}){Text("打开 Zotero 授权页面 ↗")}
+ Text("选择自己的个人文库，允许读取和写入文库。页面会显示 userID，把它填写到下方文库 ID；复制 API key 后在下一步安全保存。无需填写 Zotero 登录密码。",style=MaterialTheme.typography.bodySmall)
+ Text("2. 保存目标文库，再安全保存 API key",style=MaterialTheme.typography.titleMedium)
+ Text("使用官方 Web API 保存书目和笔记，附件可选 Zotero Storage 或个人文库的 WebDAV。创建专用 API key，无需 Zotero 登录密码。完整研究空间备份在“WebDAV 备份”中独立配置。")
  FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){listOf("storage" to "Zotero Storage","webdav" to "WebDAV 附件").forEach{(v,l)->FilterChip(attachmentBackend==v,{attachmentBackend=v;if(v=="webdav")libraryType="users";dirty=true;collections=emptyList();listedFor=null},enabled=!busy,label={Text(l)})}}
  if(attachmentBackend=="webdav"){
-  Text("仅支持个人文库。填写 zotero 文件夹的上一级 HTTPS 地址；请先在服务端准备好 zotero 文件夹。账号和应用密码单独保存，绝不会自动复用研究空间备份密码。")
+  Text("仅支持个人文库。坚果云地址通常为 https://dav.jianguoyun.com/dav/ 。填写 zotero 文件夹的上一级 HTTPS 地址；请先在服务端准备好 zotero 文件夹。账号和应用密码单独保存，绝不会自动复用研究空间备份密码。")
   OutlinedTextField(davBaseURL,{davBaseURL=it;dirty=true},Modifier.fillMaxWidth(),enabled=!busy,label={Text("WebDAV 上一级地址（不含末段 zotero）")},singleLine=true)
   OutlinedTextField(davUsername,{davUsername=it;dirty=true},Modifier.fillMaxWidth(),enabled=!busy,label={Text("WebDAV 独立账号")},singleLine=true)
  }
@@ -52,7 +57,7 @@ import kotlinx.coroutines.launch
   }catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{listing=false}}
  },enabled=!dirty&&!busy&&libraryID.isNotEmpty()){Text(if(listing)"正在读取真实分类…" else "读取并选择分类…")}
  FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-  Button({val submitted=obj("libraryType" to libraryType,"libraryID" to libraryID,"collection" to collection,"attachmentBackend" to attachmentBackend,"davBaseURL" to davBaseURL,"davUsername" to davUsername);saving=true;scope.launch{try{controller.execute("zotero.save",submitted);if(libraryType==submitted.optString("libraryType")&&libraryID==submitted.optString("libraryID")&&collection==submitted.optString("collection")&&attachmentBackend==submitted.optString("attachmentBackend")&&davBaseURL==submitted.optString("davBaseURL")&&davUsername==submitted.optString("davUsername"))dirty=false;error=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy){Text("保存目标文库")}
+  Button({val submitted=obj("libraryType" to libraryType,"libraryID" to libraryID,"collection" to collection,"attachmentBackend" to attachmentBackend,"davBaseURL" to davBaseURL,"davUsername" to davUsername);saving=true;scope.launch{try{controller.execute("zotero.save",submitted);if(libraryType==submitted.optString("libraryType")&&libraryID==submitted.optString("libraryID")&&collection==submitted.optString("collection")&&attachmentBackend==submitted.optString("attachmentBackend")&&davBaseURL==submitted.optString("davBaseURL")&&davUsername==submitted.optString("davUsername"))dirty=false;error=null;password()}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&libraryID.isNotBlank()){Text("保存文库并填写 API key…")}
   TextButton({independentDraft=false;libraryType=z.optString("libraryType","users");libraryID=z.optString("libraryID");collection=z.optString("collection");attachmentBackend=z.optString("attachmentBackend","storage");davBaseURL=z.optString("davBaseURL");davUsername=z.optString("davUsername");dirty=false;error=null},enabled=dirty&&!busy){Text("撤销未保存更改")}
  }
  error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
@@ -66,6 +71,7 @@ import kotlinx.coroutines.launch
    Text("保存独立连接会结束本次共享授权；迁移记录继续前仍需重新确认坚果云。",style=MaterialTheme.typography.bodySmall)
   }else OutlinedButton(davPassword,enabled=!dirty&&!busy){Text("为已保存附件目标设置独立应用密码…")}
  }
+ Text("3. 连接检查通过后，在论文页选择归档",style=MaterialTheme.typography.titleMedium)
  Button({action("zotero.check",JSONObject())},enabled=!dirty&&!busy){Text("核验身份、目标与权限")}
  Text("许可状态：${when(z.optString("credentialState")){"confirmed"->"已核验";"missing"->"尚未保存";else->"需要主动核验"}}")
  z.optJSONObject("permissions")?.let{Text("最近核验：${it.optString("verifiedAt")}",style=MaterialTheme.typography.labelSmall)}

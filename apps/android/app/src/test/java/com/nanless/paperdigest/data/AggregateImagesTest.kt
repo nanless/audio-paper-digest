@@ -179,6 +179,17 @@ class AggregateImagesTest {
         val b=browser(Port(f){started.complete(Unit);release.await();access});val pending=async{b.execute("aggregate.select",JSONObject().put("id",f.descriptor.id))};started.await()
         b.execute("aggregate.back",JSONObject());release.complete(Unit);assertEquals("not-adopted",pending.await().getString("status"));assertNull(b.state.document);assertNull(b.state.selected)
     }
+    @Test fun verifiedTextAndCurrentLinksAreReadyBeforeSlowImageReply()=runBlocking {
+        val f=fixture();val access=online(f);val started=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>()
+        val b=browser(Port(f){started.complete(Unit);release.await();access})
+        val pending=async{b.execute("aggregate.select",JSONObject().put("id",f.descriptor.id))}
+        started.await()
+        assertEquals(f.original.getString("bodyHTML"),b.state.document?.bodyHTML)
+        assertFalse(b.state.loading);assertTrue(b.state.loadingImages)
+        assertNotNull(b.state.document?.linkNonce)
+        release.complete(Unit);assertEquals("website-document",pending.await().getString("status"))
+        assertFalse(b.state.loadingImages);assertEquals(access,b.state.document?.images)
+    }
     @Test fun savedOfflineDocumentRequestsOnlyCachedImages()=runBlocking {
         val f=fixture();val access=online(f);var networkFlag:Boolean?=null;val port=Port(f){networkFlag=it;access};port.offline=true;port.saved=true
         val b=browser(port);assertEquals("saved-document",b.execute("aggregate.select",JSONObject().put("id",f.descriptor.id)).getString("status"));assertEquals(false,networkFlag);assertEquals(access,b.state.document?.images)

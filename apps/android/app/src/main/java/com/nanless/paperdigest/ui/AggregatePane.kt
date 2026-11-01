@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -24,36 +25,39 @@ import org.json.JSONObject
 
 /** Website pages have their own navigation and typed state; no paper reader/actions are composed here. */
 @OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun AggregatePane(state:UiState,action:Action,openLink:AggregateLinkAction?=null,linkCurrent:AggregateLinkCurrent?=null) {
+@Composable internal fun AggregatePane(state:UiState,action:Action,openLink:AggregateLinkAction?=null,linkCurrent:AggregateLinkCurrent?=null,requestedSection:String="all",sectionRequest:Int=0,autoLoad:Boolean=true) {
     val aggregate=state.aggregate
-    var filter by rememberSaveable { mutableStateOf("all") }
+    var filter by rememberSaveable { mutableStateOf(requestedSection) }
+    LaunchedEffect(requestedSection,sectionRequest){filter=requestedSection}
+    val savedDocuments=rememberSaveableStateHolder()
     var query by rememberSaveable { mutableStateOf("") }
     var sourceInfo by rememberSaveable(aggregate.selected?.id) { mutableStateOf(false) }
     var savedVersions by rememberSaveable(aggregate.selected?.id) { mutableStateOf(false) }
     val listState=rememberLazyListState()
     var readingMenu by rememberSaveable(aggregate.selected?.id){mutableStateOf(false)}
-    LaunchedEffect(Unit){if(!aggregate.attemptedIndex)action("aggregate.list",JSONObject())}
+    LaunchedEffect(autoLoad){if(autoLoad&&!aggregate.attemptedIndex)action("aggregate.list",JSONObject())}
     LaunchedEffect(state.catalogSummary.optString("snapshotID")){
-        if(aggregate.attemptedIndex&&aggregate.catalogStale&&aggregate.selected==null)action("aggregate.list",JSONObject())
+        if(autoLoad&&aggregate.attemptedIndex&&aggregate.catalogStale&&aggregate.selected==null)action("aggregate.list",JSONObject())
     }
     LaunchedEffect(aggregate.selected?.id,aggregate.loading,aggregate.document,aggregate.error){if(aggregate.selected!=null&&!aggregate.loading&&aggregate.document==null&&aggregate.error==null)action("aggregate.select",obj("id" to aggregate.selected.id))}
     val selected=aggregate.selected
     NonOccludingViewport {
         val viewportHeight=maxHeight
         if(selected==null) {
-            val records=aggregate.catalog?.records.orEmpty().sortedWith(compareByDescending<PublishedAggregate>{it.displayDate.orEmpty()}.thenBy{it.titleZh}.thenBy{it.id})
-            val displayed=records.filter{record->(filter=="all"||record.kind==filter)&&(query.isBlank()||listOf(record.title,record.titleZh,record.summary,record.displayDate.orEmpty(),record.sourceURL).any{it.contains(query.trim(),true)}||record.categories.any{it.contains(query.trim(),true)}||record.tags.any{it.contains(query.trim(),true)})}
+            val records=remember(aggregate.catalog){workbenchAggregateOrder(aggregate.catalog?.records.orEmpty())}
+            val displayed=records.filter{record->workbenchAggregateInSection(record,filter)&&(query.isBlank()||listOf(record.title,record.titleZh,record.summary,record.displayDate.orEmpty(),record.sourceURL).any{it.contains(query.trim(),true)}||record.categories.any{it.contains(query.trim(),true)}||record.tags.any{it.contains(query.trim(),true)})}
             LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                 item("heading") { Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     IconButton({action("ui.library",JSONObject())}){Icon(Icons.Outlined.ArrowBack,"返回论文列表")}
-                    Text("网站汇总",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
+                    Text(when(filter){"daily"->"每日论文速递";"conference"->"会议论文集";else->"网站页面"},style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
                 } }
-                item("scope"){Text("按日期、会议和主题，阅读网站已经发布的内容。",style=MaterialTheme.typography.bodySmall)}
-                item("filters") { FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) { for((key,label)in listOf("all" to "全部","daily" to "日更汇总","conference" to "会议与专题","page" to "网站页面")){val count=if(key=="all")records.size else records.count{it.kind==key};FilterChip(filter==key,{filter=key},label={Text("$label $count")})} } }
+                item("scope"){Text("与网站同步浏览日更、会议论文集和说明。会议先列总览，再列各研究方向。",style=MaterialTheme.typography.bodySmall)}
+                item("filters") { FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) { for((key,label)in listOf("daily" to "日更","conference" to "会议论文集","page" to "关于与资源","all" to "全部")){val count=if(key=="all")records.size else records.count{workbenchAggregateInSection(it,key)};FilterChip(filter==key,{filter=key},label={Text("$label $count")})} } }
                 item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),label={Text("搜索汇总标题、日期与标签")},singleLine=true)}
                 item("status") {
                     Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                        if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取汇总目录…")}
+                        if(aggregate.loadingImages)Text("正文已就绪 · 图片正在后台读取",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)
+                if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取汇总目录…")}
                         aggregate.error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
                         if(aggregate.catalogStale)Text("目录有更新，请重新读取后打开页面。",color=MaterialTheme.colorScheme.tertiary)
                         FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
@@ -68,7 +72,7 @@ import org.json.JSONObject
                 if(displayed.isEmpty()&&!aggregate.loading)item("empty"){Text(if(aggregate.catalog==null)"同步来源后，即可查看已发布的汇总和网站页面。"else"当前筛选没有匹配的页面。")}
                 items(displayed,key={it.id}){record->OutlinedCard(onClick={action("aggregate.select",obj("id" to record.id))},enabled=!aggregate.loading&&!aggregate.catalogStale,modifier=Modifier.fillMaxWidth()){
                     Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                        Text(aggregateKindLabel(record.kind)+" · "+(record.displayDate?:"未标注发布日期"),style=MaterialTheme.typography.labelMedium)
+                        Text(aggregateRecordLabel(record)+" · "+(record.displayDate?:"未标注发布日期"),style=MaterialTheme.typography.labelMedium)
                         Text(record.titleZh.ifBlank{record.title},style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
                         if(record.summary.isNotBlank())Text(record.summary,style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         val tags=(record.categories+record.tags).distinct();if(tags.isNotEmpty())Text(tags.joinToString(" · "),style=MaterialTheme.typography.labelSmall,maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -115,7 +119,7 @@ import org.json.JSONObject
                 if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取正文…",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)}
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val doc=aggregate.document
-                    if(doc!=null)key(doc.descriptor.id,doc.rawHTMLSHA256){var scroll by rememberSaveable(doc.descriptor.id,doc.rawHTMLSHA256){mutableIntStateOf(0)};AggregateFormulaDocument(doc,state.settings.optInt("font",18),scroll,{scroll=it},openLink,linkCurrent)}
+                    if(doc!=null)savedDocuments.SaveableStateProvider("${doc.descriptor.id}:${doc.rawHTMLSHA256}"){var scroll by rememberSaveable(doc.descriptor.id,doc.rawHTMLSHA256){mutableIntStateOf(0)};AggregateFormulaDocument(doc,state.settings.optInt("font",18),scroll,{scroll=it},openLink,linkCurrent)}
                     else Text(if(aggregate.loading)"正在读取网站正文。"else"尚未取得可显示的网页正文。",Modifier.padding(16.dp))
                 }
             }
@@ -139,6 +143,11 @@ import org.json.JSONObject
         Text("选择这页以前保存的版本；这里不会自动获取网站新内容。")
         aggregate.revisions.forEachIndexed{index,revision->OutlinedButton({savedVersions=false;action("aggregate.cached",obj("id" to selected.id,"rawHTMLSHA256" to revision.rawHTMLSHA256))}){Text("版本 ${index+1} · "+aggregateLocalMoment(revision.fetchedAt)+(if(revision.rawHTMLSHA256==aggregate.document?.rawHTMLSHA256)" · 当前显示"else""))}}
     }},confirmButton={TextButton({savedVersions=false}){Text("关闭")}})
+}
+internal fun aggregateRecordLabel(record:PublishedAggregate)=when {
+    workbenchConferenceDirectory(record)->"全部会议目录"
+    record.kind=="conference"->if(workbenchConferenceTask(record))"研究方向"else"会议总览"
+    else->aggregateKindLabel(record.kind)
 }
 internal fun aggregateKindLabel(kind:String)=when(kind){"daily"->"日更汇总";"conference"->"会议与专题";"page"->"网站页面";else->"网站页面"}
 

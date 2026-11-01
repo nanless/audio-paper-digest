@@ -54,10 +54,16 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
 @Composable fun PaperDigestApp(controller: AppController) {
     val state by controller.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope(); val context = LocalContext.current
-    var route by rememberSaveable { mutableStateOf("library") }
+    var route by rememberSaveable { mutableStateOf("aggregates") }
+    var aggregateSection by rememberSaveable { mutableStateOf("daily") }
+    var aggregateSectionRequest by rememberSaveable { mutableIntStateOf(0) }
+    var readerReturnID by rememberSaveable { mutableStateOf<String?>(null) }
+    var readerReturnTitle by rememberSaveable { mutableStateOf("") }
+    var pendingAggregateReturn by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedSessionID by rememberSaveable{mutableStateOf<String?>(null)}
     var settingsPaneRequest by rememberSaveable{mutableStateOf<String?>(null)}
     var settingsRequestID by rememberSaveable{mutableIntStateOf(0)}
+    var setupReminder by rememberSaveable { mutableStateOf(true) }
     var localError by remember { mutableStateOf<String?>(null) }
     var exportDeliveryJSON by rememberSaveable { mutableStateOf<String?>(null) }
     var preparedRestoreJSON by rememberSaveable { mutableStateOf<String?>(null) }
@@ -82,11 +88,23 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
         if(viewSensitive&&(renderedRouteRevision!=routeRevision||(route=="aggregates"&&renderedAggregateLease!=controller.captureAggregateView())))return@action
         when(command) {
             "ui.reader" -> {navigateCurrent("reader");return@action}
-            "ui.aggregates" -> {navigateCurrent("aggregates");return@action}
+            "ui.aggregates" -> {
+                aggregateSection=payload.optString("section","all").takeIf{it in setOf("daily","conference","page","all")}?:"all"
+                aggregateSectionRequest++
+                if(route=="aggregates") {
+                    val lease=controller.captureAggregateView();val revision=routeRevision;val sectionRequest=aggregateSectionRequest
+                    scope.launch{if(route=="aggregates"&&revision==routeRevision&&sectionRequest==aggregateSectionRequest)controller.executeAggregateInView("aggregate.back",JSONObject(),lease)}
+                }
+                navigateCurrent("aggregates");return@action
+            }
+            "ui.reader.return" -> {
+                val id=readerReturnID?:return@action
+                pendingAggregateReturn=id;navigateCurrent("aggregates");return@action
+            }
             "ui.library" -> {navigateCurrent("library");return@action}
             "ui.tasks" -> {navigateCurrent("tasks");return@action}
             "ui.session.open" -> {val id=payload.getString("id");if(state.sessions.none{it.optString("id")==id})return@action;selectedSessionID=id;navigateCurrent("session");return@action}
-            "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in listOf("阅读","模型","资料","坚果云","Zotero")};settingsRequestID++;navigateCurrent("settings");return@action}
+            "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in listOf("开始","阅读","模型","资料","坚果云","Zotero")};settingsRequestID++;navigateCurrent("settings");return@action}
         }
         if(command.endsWith("restore.prepare")&&preparedRestoreJSON!=null){localError="请先确认或取消已校验的恢复材料";return@action}
         val guarded=command.startsWith("export.retained.") || command in setOf("pdf.open","pdf.studySource.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","export.delivery.prepare","export.pending.list","export.reconcile","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check")
@@ -98,6 +116,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             when(command) {
                 else -> {
                     val result=if(command.startsWith("aggregate."))controller.executeAggregateInView(command,payload,renderedAggregateLease)else controller.execute(command,payload)
+                    if(command in setOf("paper.open","pdf.import","storage.openPackage","pdf.studySource.open")&&result.optString("status")!="not-adopted"&&(command!="pdf.studySource.open"||result.optBoolean("opened"))) {readerReturnID=null;readerReturnTitle=""}
                     if(command in setOf("paper.open","pdf.import","storage.openPackage","pdf.studySource.open")&&renderedRouteRevision==routeRevision&&result.optString("status")!="not-adopted"&&(command!="pdf.studySource.open"||result.optBoolean("opened")))navigateCurrent("reader")
                     if(command=="export.prepare" || command=="retained.export.prepare") {
                         require(result.optString("preparation")=="ready" && result.optBoolean("ready")) {"原件尚未就绪，请到任务查看真实进度"}
@@ -118,15 +137,28 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             }
         } catch(e:CancellationException) { throw e } catch(e:Exception){localError=e.message ?: "操作未完成，已有资料保留"}finally{if(guarded)pendingActions.remove(command)}
     } }
+    LaunchedEffect(route,pendingAggregateReturn) {
+        val id=pendingAggregateReturn
+        if(route=="aggregates"&&id!=null) {
+            try {controller.executeAggregateInView("aggregate.select",obj("id" to id),controller.captureAggregateView())}
+            catch(cancelled:CancellationException){throw cancelled}
+            catch(error:Exception){localError=error.message?:"原汇总暂未能打开，请从日更或会议目录重试。"}
+            finally{if(pendingAggregateReturn==id)pendingAggregateReturn=null}
+        }
+    }
     val aggregateLinkCurrent:AggregateLinkCurrent={nonce,index->route=="aggregates"&&renderedRouteRevision==routeRevision&&renderedAggregateLease==controller.captureAggregateView()&&controller.aggregateLinkIsCurrent(nonce,index)}
     val aggregateLink:AggregateLinkAction=link@{nonce,index,reply->
         if(route!="aggregates"||renderedRouteRevision!=routeRevision||renderedAggregateLease!=controller.captureAggregateView())return@link
         scope.launch {
             try {
                 if(route!="aggregates"||renderedRouteRevision!=routeRevision||renderedAggregateLease!=controller.captureAggregateView())return@launch
+                val origin=controller.state.value.aggregate.selected
                 val result=controller.executeAggregateInView("aggregate.link",obj("nonce" to nonce,"index" to index),renderedAggregateLease)
                 if(renderedRouteRevision!=routeRevision||route!="aggregates")return@launch
-                if(result.optString("kind")=="paper"&&result.optString("status")=="link-opened"&&controller.state.value.selectedPaperId==result.optString("paperID"))navigateCurrent("reader")
+                if(result.optString("kind")=="paper"&&result.optString("status")=="link-opened"&&controller.state.value.selectedPaperId==result.optString("paperID")) {
+                    readerReturnID=origin?.id;readerReturnTitle=origin?.let{it.titleZh.ifBlank{it.title}}.orEmpty()
+                    navigateCurrent("reader")
+                }
                 else if(renderedAggregateLease==controller.captureAggregateView())reply(result)
             }catch(cancelled:CancellationException){throw cancelled}
             catch(error:Exception){if(renderedRouteRevision==routeRevision&&route=="aggregates")localError=error.message?:"链接未能打开，原网页保留。"}
@@ -138,7 +170,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             val originalBatch=controller.importPdfs(uris.toList())
             scope.launch {try {
                 val result=originalBatch.await()
-                if(result.optInt("completed")>0)navigateCurrent("reader")
+                if(result.optInt("completed")>0){readerReturnID=null;readerReturnTitle="";navigateCurrent("reader")}
                 if(result.optString("status")!="completed")localError=result.optString("message","所选 PDF 未全部接纳，请查看原批次记录")
             }catch(cancelled:CancellationException){throw cancelled}
              catch(error:Exception){localError=error.message?:"本批次未完成，请查看任务记录；原件保留"}}
@@ -154,19 +186,32 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     val savedScreens=rememberSaveableStateHolder()
     val scheme=paperColorScheme(dark)
     MaterialTheme(colorScheme=scheme,typography=paperTypography,shapes=paperShapes) {
-        val tabs=listOf("library" to "文献","reader" to "阅读","tasks" to "任务","settings" to "设置")
-        val icons=listOf(Icons.Outlined.LibraryBooks,Icons.Outlined.MenuBook,Icons.Outlined.Checklist,Icons.Outlined.Settings)
-        val navigate:(String)->Unit={next->if(renderedRouteRevision==routeRevision)navigateCurrent(next)}
+        val tabs=listOf("daily" to "日更","library" to "论文库","conference" to "会议","tasks" to "任务","settings" to "设置")
+        val icons=listOf(Icons.Outlined.Today,Icons.Outlined.LibraryBooks,Icons.Outlined.Groups,Icons.Outlined.Checklist,Icons.Outlined.Settings)
+        fun tabSelected(tab:String)=when(tab){"daily","conference"->route=="aggregates"&&aggregateSection==tab;"library"->route in setOf("library","reader","session");else->route==tab}
+        val navigate:(String)->Unit={next->if(renderedRouteRevision==routeRevision){
+            if(next in setOf("daily","conference"))action("ui.aggregates",obj("section" to next))else navigateCurrent(next)
+        }}
         BackHandler(route!="library"){
             if(route=="aggregates"&&state.aggregate.selected!=null)action("aggregate.back",JSONObject())
+            else if(route=="reader"&&readerReturnID!=null)action("ui.reader.return",JSONObject())
             else navigate(if(route=="session")"tasks"else"library")
         }
         BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             val wide=maxWidth>=840.dp
             Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                if(wide) NavigationRail(containerColor=MaterialTheme.colorScheme.background) { Spacer(Modifier.height(24.dp)); Icon(Icons.Outlined.AutoStories,null,Modifier.padding(20.dp).size(28.dp),tint=MaterialTheme.colorScheme.primary); tabs.forEachIndexed {i,t->NavigationRailItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }
-                Scaffold(Modifier.weight(1f),snackbarHost={SnackbarHost(snackbar)},bottomBar={if(!wide)NavigationBar(containerColor=MaterialTheme.colorScheme.surface,tonalElevation=0.dp) { tabs.forEachIndexed{i,t->NavigationBarItem((route==t.first||(route=="session"&&t.first=="reader")||(route=="aggregates"&&t.first=="library")),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }}) { padding ->
+                if(wide) NavigationRail(containerColor=MaterialTheme.colorScheme.background) { Spacer(Modifier.height(24.dp)); Icon(Icons.Outlined.AutoStories,null,Modifier.padding(20.dp).size(28.dp),tint=MaterialTheme.colorScheme.primary); tabs.forEachIndexed {i,t->NavigationRailItem(tabSelected(t.first),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }
+                Scaffold(Modifier.weight(1f),snackbarHost={SnackbarHost(snackbar)},bottomBar={if(!wide)NavigationBar(containerColor=MaterialTheme.colorScheme.surface,tonalElevation=0.dp) { tabs.forEachIndexed{i,t->NavigationBarItem(tabSelected(t.first),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }}) { padding ->
                     Column(Modifier.fillMaxSize().padding(padding)) {
+                        if(setupReminder&&route in setOf("library","aggregates")&&(state.cloud.optString("account").isBlank()||state.zotero.optString("libraryID").isBlank())) {
+                            Surface(color=MaterialTheme.colorScheme.secondaryContainer,modifier=Modifier.fillMaxWidth()) {
+                                Row(Modifier.padding(horizontal=12.dp,vertical=6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                    Text("首次使用：连接 WebDAV 备份或 Zotero，保存你的研究资料。",Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
+                                    TextButton({action("ui.settings",obj("pane" to "开始"))}){Text("简单配置")}
+                                    IconButton({setupReminder=false}){Icon(Icons.Outlined.Close,"稍后配置，本次先阅读")}
+                                }
+                            }
+                        }
                         if(state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         state.storageWarning?.let{warning->
                             Surface(color=MaterialTheme.colorScheme.tertiaryContainer,modifier=Modifier.fillMaxWidth()){
@@ -180,8 +225,14 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                         (localError ?: state.error)?.let { message -> Surface(color=MaterialTheme.colorScheme.errorContainer,modifier=Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp)){Text(message,Modifier.weight(1f));TextButton({localError=null;action("app.bootstrap",JSONObject())}){Text("重新载入")}} }}
                         savedScreens.SaveableStateProvider(if(route=="reader")"reader-${state.selectedPaperId}" else route){when(route){
                             "library" -> LibraryPane(state,controller,action,{importPDF.launch(arrayOf("application/pdf"))})
-                            "aggregates" -> AggregatePane(state,action,aggregateLink,aggregateLinkCurrent)
-                            "reader" -> ReaderPane(state,controller,action)
+                            "aggregates" -> AggregatePane(state,action,aggregateLink,aggregateLinkCurrent,aggregateSection,aggregateSectionRequest,pendingAggregateReturn==null)
+                            "reader" -> Column(Modifier.fillMaxSize()) {
+                                if(readerReturnID!=null)Surface(color=MaterialTheme.colorScheme.surfaceContainer){Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                                    TextButton({action("ui.reader.return",JSONObject())}){Icon(Icons.Outlined.ArrowBack,null);Spacer(Modifier.width(6.dp));Text("返回"+(if(aggregateSection=="conference")"会议汇总"else"日更汇总"))}
+                                    Text(readerReturnTitle,Modifier.weight(1f).padding(end=12.dp),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,style=MaterialTheme.typography.labelMedium)
+                                }}
+                                Box(Modifier.weight(1f)){ReaderPane(state,controller,action)}
+                            }
                             "tasks" -> NonOccludingViewport{TasksPane(state,action)}
                             "session" -> NonOccludingViewport{SessionPane(state,selectedSessionID,controller,action)}
                             "settings" -> NonOccludingViewport{SettingsPane(state,controller,action,{restore.launch(arrayOf("application/octet-stream","*/*"))},settingsPaneRequest,settingsRequestID)}
@@ -339,7 +390,7 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
     Surface(onClick={action("ui.aggregates",JSONObject())},shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer){
      Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){
       Icon(Icons.Outlined.Article,null,Modifier.size(24.dp),tint=MaterialTheme.colorScheme.onPrimaryContainer)
-      Text("网站汇总",style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.onPrimaryContainer,modifier=Modifier.weight(1f))
+      Text("日更、会议与网站页面",style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.onPrimaryContainer,modifier=Modifier.weight(1f))
       Icon(Icons.Outlined.ChevronRight,null,tint=MaterialTheme.colorScheme.onPrimaryContainer)
      }
     }
