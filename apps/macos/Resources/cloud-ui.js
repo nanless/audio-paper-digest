@@ -34,7 +34,7 @@ export function mountCloud(app){
  [data-setting-pane="cloud"] p{font-size:12px;line-height:1.7}
  </style>
  <h1>WebDAV 备份（坚果云）</h1>
- <p class="cloud-intro">保存整个工作台。账号、应用密码各设置一次，检查连接后即可备份。</p>
+ <p class="cloud-intro">保存整个工作台。填写账号与应用密码，检查连接后即可备份。</p>
  <p id="cloud-message" role="status" aria-live="polite"></p><p id="cloud-error" class="cloud-error" role="alert"></p>
  <section class="cloud-card cloud-connection" aria-label="坚果云连接设置">
  <h2>1. 填写账号并保存</h2>

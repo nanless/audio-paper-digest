@@ -155,7 +155,9 @@ internal fun aggregateKindLabel(kind:String)=when(kind){"daily"->"日更汇总";
 @Composable private fun AggregateFormulaDocument(document:AggregateDocumentView,fontSize:Int,scroll:Int,onScroll:(Int)->Unit,openLink:AggregateLinkAction?,linkCurrent:AggregateLinkCurrent?){
     val context=androidx.compose.ui.platform.LocalContext.current
     val current by rememberUpdatedState(document)
-    var rendered by remember(document){mutableStateOf<String?>(null)}
+    // The sealed, sanitized document is already readable. Formula enhancement must never hide it.
+    var rendered by remember(document){mutableStateOf(document.linkHTML?:document.images?.bodyHTML?:document.bodyHTML)}
+    var formatting by remember(document){mutableStateOf(true)}
     var failure by remember(document){mutableStateOf<String?>(null)}
     LaunchedEffect(document){
         val effect=kotlin.coroutines.coroutineContext
@@ -165,17 +167,17 @@ internal fun aggregateKindLabel(kind:String)=when(kind){"daily"->"日更汇总";
                 require(current===document){"汇总阅读已切换，未采用旧公式排版"}
             }
             rendered=html
+            formatting=false
         }catch(cancelled:CancellationException){throw cancelled}
         catch(error:Exception){
             effect.ensureActive()
-            if(current===document){failure="部分公式未完成排版，保留原式供核对。";rendered=document.linkHTML?:document.images?.bodyHTML?:document.bodyHTML}
+            if(current===document){formatting=false;failure="部分公式未完成排版，保留原式供核对。";rendered=document.linkHTML?:document.images?.bodyHTML?:document.bodyHTML}
         }
     }
     Column(Modifier.fillMaxSize()){
         failure?.let{Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
-        val html=rendered
-        if(html==null){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在排版公式…",style=MaterialTheme.typography.bodySmall)}
-        else Box(Modifier.weight(1f).fillMaxWidth()){StaticDocument(html,fontSize,scroll,onScroll,document.images,openLink,document.linkNonce,linkCurrent)}
+        if(formatting)Text("正文已就绪 · 正在优化公式排版…",style=MaterialTheme.typography.bodySmall)
+        Box(Modifier.weight(1f).fillMaxWidth()){StaticDocument(rendered,fontSize,scroll,onScroll,document.images,openLink,document.linkNonce,linkCurrent)}
     }
 }
 
