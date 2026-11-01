@@ -72,7 +72,7 @@ extension PaperDigestApp {
         },openWebsite:{[weak self] in
             guard let self,current() else { throw CancellationError() }
             _=try await self.dispatchAggregates("aggregates.website",payload:["id":session.aggregateID,"sessionID":session.id])
-        },appearance:aggregateReadingAppearance,failed:{[weak self] in
+        },appearance:aggregateReadingAppearance,initialScrollY:session.resumeScrollY,failed:{[weak self] in
             guard let self,current(),let source=self.web else{return}
             self.retireNativeAggregate()
             Task{[weak self,weak source] in
@@ -80,6 +80,7 @@ extension PaperDigestApp {
                 _=try? await source.callAsyncJavaScript("return window.paperDigestNativeAggregateFailed?.(sessionID,documentNonce) ?? false",arguments:["sessionID":session.id,"documentNonce":documentNonce],in:nil,contentWorld:.page)
             }
         })
+        session.resumeScrollY = nil
         aggregateNativeHost = host; pdfView.isHidden = true; host.attach(in:parent,frame:frame)
         return ["native":true]
     }

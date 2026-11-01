@@ -61,6 +61,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var nativeNotesRequestedVisible=false {didSet{if nativeNotesRequestedVisible{retireNativeAggregate()}}}
     var aggregateSession:AggregateViewSession?,aggregateOpenSequence=0,aggregateTransitionPending=false
     var aggregateNativeHost:NativeAggregateController?, aggregateNativeSequence:Int64=0
+    var aggregateScrollPositions: [String: Double] = [:]
+    var aggregatePreloadTask: Task<Void, Never>?
+    var aggregatePreloadID: UUID?
     var contextGeneration=0 {didSet{if oldValue != contextGeneration{nativeWorkspaceContextDidChange()}}}
     var pdfOwner="",pdfVersion=""
     var pdfView=PDFView(), currentPDFSHA="", currentPaperID="", currentPDFPath:URL?, currentPaper:[String:Any]=[:], currentArticle:[String:Any]=[:]
@@ -103,10 +106,13 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         return .terminateLater
     }
     func finishJobsForTermination() async {
+        let preload = aggregatePreloadTask, images = aggregateSession?.imageTask
+        cancelAggregatePreload(); aggregateSession?.cancelImages()
         let closing=Array(jobs.values)
         for(id,task) in jobs{task.cancel();model?.cancel(id)}
         await library?.cancelSync()
         for task in closing{_=try? await task.value}
+        await preload?.value; _ = try? await images?.value
         cloudSessionCredentials.clear();cloudArchive=nil;cloudAutomaticPausedInMemory=true
     }
     func flushEdits() async throws {
@@ -231,9 +237,10 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if command=="app.bootstrap" {
             let settings=model.configuration()
             _=try? await library.handle(command:"library.network",payload:["httpProxy":settings["httpProxy"] ?? ""])
-            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":"1.0.0","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"nativeAggregateHost":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
+            return ["personal":store.snapshot(),"settings":settings,"paper":currentPaper,"library":try await library.handle(command:"library.status",payload:[:]),"version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") ?? "development","initialView":"today","nativeTasks":true,"nativeNotes":true,"nativeSourceNotices":true,"nativeAggregateHost":true,"build":Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") ?? "development"]
         }
         if command.hasPrefix("library.") {
+            if ["library.article", "library.sync", "library.downloadPDF"].contains(command) { cancelAggregatePreload() }
             if command=="library.article",let id=payload["paperID"] as? String {
                 guard currentPaperID==id else{throw DesktopError.message("论文已切换")}
                 let generation=contextGeneration,paper=currentPaper
@@ -248,6 +255,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         }
         switch command {
         case "app.setPaper":
+            cancelAggregatePreload(); aggregateSession?.cancelImages()
             let next=payload["id"] as? String ?? ""
             contextGeneration+=1;pdfView.document=nil;pdfView.isHidden=true;currentPDFSHA="";currentPDFPath=nil;pdfOwner="";pdfVersion="";selectionSource=[:];currentArticle=[:];offlinePDF=nil;currentPDFReceipt=[:]
             try store.rememberPaper(payload);currentPaper=payload;currentPaperID=next;emit("paper.changed");return [:]
@@ -478,6 +486,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func configureSchedule(){schedule?.invalidate();let hours=max(1,min(168,store.setting("syncHours") as? Int ?? 12));schedule=Timer.scheduledTimer(withTimeInterval:Double(hours)*3600,repeats:true){[weak self]_ in Task{@MainActor in self?.syncNow()}}}
     @objc func didWake(){if Date().timeIntervalSince(lastSyncAttempt)>300{syncNow()}}
     func syncCatalog(payload:[String:Any])async throws->[String:Any] {
+        cancelAggregatePreload()
         if let flight=catalogSyncFlight{return try await flight.task.value}
         let id=UUID();lastSyncAttempt=Date()
         let task=Task{@MainActor in

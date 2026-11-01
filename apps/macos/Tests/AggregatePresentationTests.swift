@@ -5,11 +5,14 @@ actor AggregateFixtureTransport {
     var files: [String: Data]
     var failure = false
     var delayed = false
+    var requests: [String: Int] = [:]
     init(_ files: [String: Data]) { self.files = Dictionary(uniqueKeysWithValues: files.map { ("https://nanless.github.io" + $0.key, $0.value) }) }
     func setFailure(_ value: Bool) { failure = value }
     func replace(_ files: [String: Data]) { self.files = Dictionary(uniqueKeysWithValues: files.map { ("https://nanless.github.io" + $0.key, $0.value) }) }
     func setDelayed(_ value: Bool) { delayed = value }
+    func count(_ path: String) -> Int { requests["https://nanless.github.io" + path, default: 0] }
     func read(_ url: URL, _ limit: Int) async throws -> Data {
+        requests[url.absoluteString, default: 0] += 1
         if delayed { try await Task.sleep(nanoseconds: 100_000_000) }
         if failure { throw URLError(.notConnectedToInternet) }
         guard let data = files[url.absoluteString], data.count <= limit else { FileHandle.standardError.write(Data(("MISSING " + url.absoluteString + " keys=" + files.keys.sorted().joined(separator:",") + "\n").utf8)); throw URLError(.fileDoesNotExist) }
@@ -150,7 +153,39 @@ actor AggregateFixtureTransport {
         try expect(await rejects { _ = try await service.aggregatePresentation(access) },"retired access cannot borrow replacement manifest")
         let replacement = try await service.aggregateReadAccess(id:id);await transport.setFailure(true)
         try expect(await rejects { _ = try await service.aggregatePresentation(replacement) },"new witness plus network failure never opens old-manifest HTML")
+        try await progressiveReading(root.appendingPathComponent("progressive"))
         try await routingRegressions(root.appendingPathComponent("routing"))
         print("RESULT passed=\(checks) failed=0")
+    }
+    static func progressiveReading(_ root: URL) async throws {
+        var (_, _, _, files) = try fixture()
+        let path = "/audio-paper-digest-blog/ci-daily/", imagePath = "/audio-paper-digest-blog/images/controlled.png"
+        files[path] = Data(String(decoding: files[path]!, as: UTF8.self).replacingOccurrences(of: "https://example.org/image.png", with: imagePath).utf8)
+        files[imagePath] = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Xj8AAAAASUVORK5CYII=")!
+        let transport = AggregateFixtureTransport(files)
+        let service = try LibraryService(dataDirectory: root, transport: { url, limit in try await transport.read(url, limit) })
+        _ = try await service.sync()
+        let id = "page:" + path, access = try await service.aggregateReadAccess(id: id)
+        let first = try await service.aggregatePresentation(access, preferCached: true, downloadImages: false)
+        let firstHTMLReads = await transport.count(path), firstImageReads = await transport.count(imagePath)
+        try expect(firstHTMLReads == 1 && firstImageReads == 0, "first visible text never waits for image transport")
+        let saved = try await service.aggregatePresentation(access, preferCached: true, downloadImages: false)
+        let savedHTMLReads = await transport.count(path), savedImageReads = await transport.count(imagePath)
+        try expect(savedHTMLReads == 1 && savedImageReads == 0, "switching back replays saved bytes without HTML or image network")
+        try expect(saved.isStale && saved.validatedAt == nil && saved.source == first.source, "fast saved opening preserves exact source and makes no current-site claim")
+        let images = try await service.aggregatePresentationWithImages(access, document: saved)
+        try expect(await transport.count(imagePath) == 1, "image continuation downloads only after visible text")
+        try expect(images.source == saved.source && images.isStale && images.displayHTML.contains("data:image/png;base64,"), "image continuation keeps the visible HTML revision and stale status")
+        let cold = try LibraryService(dataDirectory: root, transport: { _, _ in throw URLError(.notConnectedToInternet) })
+        let coldAccess = try await cold.aggregateReadAccess(id: id)
+        let offline = try await cold.aggregatePresentation(coldAccess, preferCached: true, downloadImages: false)
+        try expect(offline.source == first.source && offline.isStale && offline.displayHTML.contains("data:image/png;base64,"), "cold saved reader shows verified text and images without network")
+        let other = try await service.aggregateReadAccess(id: "page:/audio-paper-digest-blog/ci-conference/")
+        try expect(await rejects { _ = try await service.aggregatePresentationWithImages(other, document: saved) }, "another page cannot hydrate this saved source")
+        _ = try await service.aggregatePresentation(access, downloadImages: false)
+        try expect(await transport.count(path) == 2, "explicit refresh still reads current website HTML")
+        let cancelled = Task { try Task.checkCancellation(); return try await service.aggregatePresentation(access, preferCached: true, downloadImages: false) }
+        cancelled.cancel()
+        try expect(await rejects { _ = try await cancelled.value }, "cancelled fast opening cannot become a saved success")
     }
 }

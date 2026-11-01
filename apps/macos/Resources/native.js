@@ -379,7 +379,7 @@ async function openAggregate(id,options={}){
    const session=await call('aggregates.open',{id});
    if(token!==opening||!aggregates.bind(session,request)){clearPreviousSource();await call('aggregates.leave',{id:session.id,sessionID:session.sessionID});return;}
    clearPreviousSource();
-   const result=await call('aggregates.document',{id:session.id,sessionID:session.sessionID});
+   const result=await call(options.refresh?'aggregates.refresh':'aggregates.document',{id:session.id,sessionID:session.sessionID});
    aggregates.render(result,request,session);
   }catch(e){aggregates.failure(e,id,request);}
  }catch(e){if(token===opening)error(e);}

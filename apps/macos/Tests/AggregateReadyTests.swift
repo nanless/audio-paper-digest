@@ -5,13 +5,25 @@ import WebKit
 
 private struct Failure: Error { let text: String }
 private actor FixtureTransport {
-    let files: [String: Data]
+    var files: [String: Data]
     var failBody = false
     var bodyRequests = 0
+    var holdImages = false
+    var imageRequests = 0
+    var imageWaiters: [CheckedContinuation<Void, Never>] = []
     init(_ files: [String: Data]) { self.files = files }
     func failingBody(_ value: Bool) { failBody = value }
-    func read(_ url: URL, limit: Int) throws -> Data {
+    func replaceBody(_ url: String, _ bytes: Data) { files[url] = bytes }
+    func holdingImages(_ value: Bool) { holdImages = value }
+    func releaseImage() { if !imageWaiters.isEmpty { imageWaiters.removeFirst().resume() } }
+    func read(_ url: URL, limit: Int) async throws -> Data {
         if url.absoluteString.hasSuffix("/ci-summary/") { bodyRequests += 1; if failBody { throw URLError(.notConnectedToInternet) } }
+        if url.absoluteString.contains("/images/ready-race-") {
+            imageRequests += 1
+            // Intentionally ignores cancellation until released, as a late native
+            // transport completion can. The production owner must reject it.
+            if holdImages { await withCheckedContinuation { imageWaiters.append($0) } }
+        }
         guard let data = files[url.absoluteString], data.count <= limit else { throw URLError(.fileDoesNotExist) }
         return data
     }
@@ -142,6 +154,63 @@ private actor FixtureTransport {
             session.access = nil; try await reject(payload); session.access = original
             session.document = nil; try await reject(payload); session.document = doc
             session.readyDisplaySHA = String(repeating: "c", count: 64); var changed = payload; changed["displayBodySHA256"] = session.readyDisplaySHA; try await reject(changed)
+        }
+        await run("image-free continuation retains the current ready nonce and source") {
+            let (session, _) = try await served(), nonce = session.readyNonce, source = session.document!.source
+            let result = try await app.dispatchAggregates("aggregates.images", payload: ["id":id,"sessionID":session.id])
+            try check(result["unchanged"] as? Bool == true && session.readyNonce == nonce && session.document!.source == source, "unchanged images replaced the ready document")
+        }
+        let repository = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let icon = try Data(contentsOf: repository.appendingPathComponent("apps/macos/Assets/AppIcon.png"))
+        func imageBody(_ suffix: String) -> Data { Data(("<html><body><div id='article-body' class='post-content'><p>受控先显正文</p><img src='"+base+"images/ready-race-"+suffix+".png' alt='独立界面图标，不是论文图片'/></div></body></html>").utf8) }
+        func waitForImages(_ count: Int) async throws {
+            let deadline = Date().addingTimeInterval(10)
+            while Date() < deadline { if await transport.imageRequests >= count { return }; try await Task.sleep(nanoseconds: 10_000_000) }
+            throw Failure(text:"image transport gate not entered")
+        }
+        await run("same-HTML refresh rejects delayed images and an old defer cannot clear the newer request") {
+            await transport.replaceBody(base+"ci-summary/", imageBody("same"))
+            await transport.replaceBody(base+"images/ready-race-same.png", icon)
+            let session = fresh(), payload: [String:Any] = ["id":id,"sessionID":session.id]
+            _ = try await app.dispatchAggregates("aggregates.refresh", payload:payload)
+            try check(!session.document!.displayHTML.contains("data:image/"), "text awaited image transport")
+            await transport.holdingImages(true)
+            let count = await transport.imageRequests
+            let old = Task { try await app.dispatchAggregates("aggregates.images", payload:payload) }
+            try await waitForImages(count+1)
+            let oldRequest = session.imageRequestID, oldNonce = session.readyNonce
+            let refreshed = try await app.dispatchAggregates("aggregates.refresh", payload:payload)
+            let newNonce = session.readyNonce
+            try check(oldNonce != newNonce && refreshed["documentReadyNonce"] as? String == newNonce, "same bytes reused old refresh nonce")
+            let newer = Task { try await app.dispatchAggregates("aggregates.images", payload:payload) }
+            try await waitForImages(count+2)
+            let newRequest = session.imageRequestID
+            try check(newRequest != nil && newRequest != oldRequest, "new image request not independently owned")
+            await transport.releaseImage()
+            var oldRejected = false
+            do { _ = try await old.value } catch { oldRejected = true }
+            try check(oldRejected && session.imageRequestID == newRequest && session.imageTask != nil && session.readyNonce == newNonce, "old completion overwrote refresh or cleared new image task")
+            await transport.releaseImage()
+            let imageResult = try await newer.value
+            try check(session.document!.displayHTML.contains("data:image/png;base64,") && imageResult["documentReadyNonce"] as? String == session.readyNonce && session.readyNonce != newNonce, "current images failed to install with a fresh nonce")
+            await transport.holdingImages(false)
+        }
+        await run("leaving a page cancels delayed images without reviving the retired session") {
+            await transport.replaceBody(base+"ci-summary/", imageBody("leave"))
+            await transport.replaceBody(base+"images/ready-race-leave.png", icon)
+            let session = fresh(), payload: [String:Any] = ["id":id,"sessionID":session.id]
+            _ = try await app.dispatchAggregates("aggregates.refresh", payload:payload)
+            await transport.holdingImages(true)
+            let count = await transport.imageRequests
+            let pending = Task { try await app.dispatchAggregates("aggregates.images", payload:payload) }
+            try await waitForImages(count+1)
+            _ = try await app.dispatchAggregates("aggregates.leave", payload:payload)
+            let replacement = fresh()
+            await transport.releaseImage()
+            var rejected = false
+            do { _ = try await pending.value } catch { rejected = true }
+            try check(rejected && app.aggregateSession === replacement && replacement.readyNonce == nil && replacement.document == nil, "retired image result revived a page")
+            await transport.holdingImages(false)
         }
         await run("no visible windows, credentials or extra paid services used") {
             try check(keyReads == 0 && !NSApp.windows.contains(where: { $0 !== window && $0.isVisible }) && !window.isKeyWindow, "test escaped isolated non-presented window")

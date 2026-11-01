@@ -100,14 +100,23 @@ extension LibraryService {
         guard let current = try aggregateCatalog(), current.records.contains(access.descriptor) else { throw AggregateFailure.invalid("原汇总目录已变化，请重新打开") }
         _ = try aggregateOriginalRow(id: access.descriptor.id)
     }
-    func aggregatePresentation(_ access: AggregateReadAccess) async throws -> AggregatePresentationDocument {
+    func aggregatePresentation(_ access: AggregateReadAccess, preferCached: Bool = false, downloadImages: Bool = true) async throws -> AggregatePresentationDocument {
         try requireAggregateAccess(access)
+        try Task.checkCancellation()
         // Strict cache replay occurs before fallback selection; corruption is never silently skipped.
         let cached = try aggregateLatestVerifiedDocument(id: access.descriptor.id)
+        // Opening a saved page must not wait for the network. Replaying the exact
+        // source bytes grants a saved snapshot, never a claim about today's site.
+        if preferCached, let cached {
+            let images = try await presentationImageResult(cached, allowNetwork: false)
+            try Task.checkCancellation(); try requireAggregateAccess(access)
+            return try AggregatePresentationDocument(source: cached, access: access, stale: true,
+                notice: "已打开本机核验快照；可重新读取网站获取最新正文", images: images.0, imageNotice: images.1)
+        }
         do {
             let source = try await aggregateDocument(id: access.descriptor.id)
             try Task.checkCancellation(); try requireAggregateAccess(access)
-            let images=try await presentationImageResult(source,allowNetwork:true)
+            let images=try await presentationImageResult(source,allowNetwork:downloadImages)
             try Task.checkCancellation();try requireAggregateAccess(access)
             return try AggregatePresentationDocument(source: source, access: access, stale: false, notice: "已读取并核对网站当前正文",images:images.0,imageNotice:images.1)
         } catch {
@@ -118,6 +127,17 @@ extension LibraryService {
             try Task.checkCancellation();try requireAggregateAccess(access)
             return try AggregatePresentationDocument(source: cached, access: access, stale: true, notice: "网站当前正文未能读取；显示本机已核验的旧快照，未声称当前版本",images:images.0,imageNotice:images.1)
         }
+    }
+    /// Continue the exact visible HTML revision. Image fetching never changes the
+    /// paper context or silently replaces this page with another network response.
+    func aggregatePresentationWithImages(_ access: AggregateReadAccess, document: AggregatePresentationDocument) async throws -> AggregatePresentationDocument {
+        try requireAggregateAccess(access)
+        let source = try aggregateCachedDocument(id: access.descriptor.id, rawHTMLSHA256: document.source.rawHTMLSHA256)
+        try PublishedAggregateReader.require(source == document.source, "图片续载与当前汇总正文不一致")
+        let images = try await presentationImageResult(source, allowNetwork: true)
+        try Task.checkCancellation(); try requireAggregateAccess(access)
+        return try AggregatePresentationDocument(source: source, access: access, stale: document.isStale,
+            notice: document.readNotice, images: images.0, imageNotice: images.1)
     }
     private func presentationImageResult(_ source:AggregateDocument,allowNetwork:Bool) async throws->(AggregateResourceRender?,String) {
         do{let images=try await aggregatePresentationImages(source,allowNetwork:allowNetwork);return(images,images==nil ? "没有已核验的独立图片修订":"图片按独立保存时刻核验；未声称全部网页资源完整离线")}

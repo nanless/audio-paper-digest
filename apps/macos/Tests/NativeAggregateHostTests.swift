@@ -85,7 +85,9 @@ private actor FixtureTransport {
             let opened = try await app.dispatchAggregates("aggregates.open",payload:["id":id])
             let session = app.aggregateSession!
             try check(opened["sessionID"] as? String == session.id,"not actual open")
-            let value = try await app.dispatchAggregates("aggregates.document",payload:["id":id,"sessionID":session.id])
+            let text = try await app.dispatchAggregates("aggregates.document",payload:["id":id,"sessionID":session.id])
+            let images = try await app.dispatchAggregates("aggregates.images",payload:["id":id,"sessionID":session.id])
+            let value = images["unchanged"] as? Bool == true ? text : images
             return (session,["id":id,"sessionID":session.id,"documentReadyNonce":value["documentReadyNonce"]!,"sequence":1])
         }
         func rejected(_ payload:[String:Any]) async throws {
@@ -413,13 +415,13 @@ private actor FixtureTransport {
             window.makeFirstResponder(controls.first!);NSApp.sendEvent(event(.shift,in:window));try check(owns(window.firstResponder,app.web),"toolbar head reverse Tab trapped focus")
         }
         await run("expanded readonly source is in the actual keyboard chain after native source action") {
-            let h=try await newFindHost();_=try await readyBody(h);let controls=toolbarControls(h),source=controls[2]
+            let h=try await newFindHost();_=try await readyBody(h);let controls=toolbarControls(h),source=controls.first{($0 as? NSButton)?.title=="来源与离线状态"}!
             let scroll=h.view.subviews.compactMap{$0 as? NSScrollView}.first!,text=scroll.documentView!
             try enterToolbarByMenu(h);window.makeFirstResponder(source)
             (source as! NSButton).performClick(nil);try check(!scroll.isHidden,"native source action did not expand")
             NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,text),"expanded source text unreachable by Tab")
             NSApp.sendEvent(event(.shift,in:window));try check(owns(window.firstResponder,source),"readonly source reverse Tab trapped focus")
-            NSApp.sendEvent(event([],in:window));NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,controls[3]),"source tail did not reach outline")
+            NSApp.sendEvent(event([],in:window));NSApp.sendEvent(event([],in:window));try check(owns(window.firstResponder,controls.first{$0 is NSPopUpButton}!),"source tail did not reach outline")
             window.makeFirstResponder(text);NSApp.sendEvent(escapeEvent(in:window));try check(owns(window.firstResponder,app.web),"readonly source Escape did not return navigation")
         }
         await run("toolbar skips disabled controls without hijacking body ordinary Tab") {
@@ -448,6 +450,37 @@ private actor FixtureTransport {
             app.storageDetailSession=StorageDetailSession(generation:app.contextGeneration,paperID:"",previousResponder:nil);try refused("source sheet");app.storageDetailSession=nil
         }
 
+        await run("returning to the same source revision restores the actual native body scroll") {
+            let host = try await newFindHost(), body = try await readyBody(host)
+            _ = try await body.callAsyncJavaScript("window.scrollTo(0,480);return true", arguments: [:], in: nil, contentWorld: .defaultClient)
+            let before = await host.scrollPosition() ?? 0
+            try check(before > 100, "native body did not scroll")
+            let session = app.aggregateSession!
+            _ = try await app.dispatchAggregates("aggregates.leave", payload: ["id":id,"sessionID":session.id])
+            let next = try await newFindHost(); _ = try await readyBody(next)
+            let deadline = Date().addingTimeInterval(5)
+            var restored = false
+            while Date() < deadline {
+                if let y = await next.scrollPosition(), abs(y - before) < 2 { restored = true; break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            try check(restored && next !== host, "new native host lost saved same-revision position")
+        }
+        await run("native refresh button requests explicit website refresh") {
+            let document = app.aggregateSession!.document!
+            app.retireAggregateContext()
+            var routes: [String] = []
+            let host = try NativeAggregateController(id:UUID(), binding:"refresh-ui", document:document, bundleWeb:resources, navigationSource:app.web, current:{true}, link:{_ in throw CancellationError()}, navigate:{kind,_ in routes.append(kind)}, openWebsite:{throw CancellationError()})
+            host.attach(in: window.contentView!, frame: NSRect(x:0,y:0,width:900,height:700))
+            defer { host.retire() }
+            _ = try await readyBody(host)
+            let refresh = host.view.subviews.compactMap{$0 as? NSButton}.first{$0.title=="重新读取网站"}
+            try check(refresh != nil && refresh!.isEnabled, "native refresh action missing")
+            refresh!.performClick(nil)
+            let deadline = Date().addingTimeInterval(5)
+            while routes.isEmpty && Date() < deadline { try await Task.sleep(nanoseconds:10_000_000) }
+            try check(routes == ["refresh"], "native refresh did not use explicit refresh navigation")
+        }
         app.retireAggregateContext();app.web.removeFromSuperview();window.close()
         try check(keyReads==0,"credentials read")
         print("RESULT \(passed) passed / \(failed) failed")

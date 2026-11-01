@@ -39,6 +39,7 @@ struct AggregateReadingAppearance:Equatable {
     private let status = NSTextField(wrappingLabelWithString: "")
     private let back = NSButton(title: "返回", target: nil, action: nil)
     private let website = NSButton(title: "打开原站", target: nil, action: nil)
+    private let refresh = NSButton(title: "重新读取网站", target: nil, action: nil)
     private let source = NSButton(title: "来源与离线状态", target: nil, action: nil)
     private let outline = NSPopUpButton(frame:.zero,pullsDown:true)
     private let sourceText = NSTextView()
@@ -75,7 +76,7 @@ struct AggregateReadingAppearance:Equatable {
     init(id: UUID, binding: String, document: AggregatePresentationDocument, bundleWeb: URL, navigationSource: WKWebView,
          current: @escaping () -> Bool, link: @escaping (Int) async throws -> [String: Any],
          navigate: @escaping (String, String?) async throws -> Void,
-         openWebsite: @escaping () async throws -> Void, appearance:AggregateReadingAppearance = .init(), failed:@escaping()->Void = {}) throws {
+         openWebsite: @escaping () async throws -> Void, appearance:AggregateReadingAppearance = .init(), initialScrollY: Double? = nil, failed:@escaping()->Void = {}) throws {
         self.id = id; self.binding = binding; self.navigationSource = navigationSource; self.current = current; self.readingAppearance=appearance; self.failed=failed; self.link = link; self.navigate = navigate; self.openWebsite = openWebsite
         let summary=Self.summary(document)
         shortStatus=summary.status;sourceContents=summary.source
@@ -95,6 +96,9 @@ struct AggregateReadingAppearance:Equatable {
         configuration.setURLSchemeHandler(scheme, forURLScheme: "paperapp")
         let initialAppearance=String(data:try JSONSerialization.data(withJSONObject:["scheme":appearance.scheme,"font":Double(appearance.font)]),encoding:.utf8)!
         configuration.userContentController.addUserScript(WKUserScript(source: "window.__nativeAggregateNonce='" + nonce + "';window.__nativeAggregateInitialAppearance="+initialAppearance+";\n" + katex + "\n" + renderer, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
+        if let y = initialScrollY, y.isFinite, y >= 0 {
+            configuration.userContentController.addUserScript(WKUserScript(source: "const restore=()=>window.scrollTo(0," + String(y) + ");if(document.readyState==='complete')restore();else window.addEventListener('load',restore,{once:true});", injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
+        }
         web = WKWebView(frame: .zero, configuration: configuration)
         container = AggregateContainerView(frame: .zero); view = container
         notice = document.readNotice
@@ -106,11 +110,12 @@ struct AggregateReadingAppearance:Equatable {
         status.stringValue = "正在呈现正文 · " + notice; status.font = .systemFont(ofSize: 12)
         back.target = self; back.action = #selector(goBack)
         website.target = self; website.action = #selector(goWebsite)
+        refresh.target = self; refresh.action = #selector(refreshWebsite)
         source.target = self; source.action = #selector(toggleSource)
         readBody.target = self; readBody.action = #selector(goBody); readBody.isEnabled = false
         readBody.setAccessibilityHelp("按 Control-Tab 阅读正文；正文中按 Control-Shift-Tab 返回页面导航；导航中再按 Control-Shift-Tab 进入页面操作。操作栏按 Tab 切换，Escape 返回页面导航。")
         readBody.toolTip = "阅读正文（Control-Tab）；返回导航或进入页面操作（Control-Shift-Tab）"
-        back.nextKeyView = website; website.nextKeyView = source; source.nextKeyView = readBody; readBody.nextKeyView = web; web.nextKeyView = navigationSource
+        back.nextKeyView = website; website.nextKeyView = refresh; refresh.nextKeyView = source; source.nextKeyView = readBody; readBody.nextKeyView = web; web.nextKeyView = navigationSource
         title.isSelectable=true;title.maximumNumberOfLines=0;title.lineBreakMode = .byWordWrapping
         status.maximumNumberOfLines=0;status.lineBreakMode = .byWordWrapping
         sourceText.isEditable=false;sourceText.isSelectable=true;sourceText.isRichText=false;sourceText.isHorizontallyResizable=false
@@ -122,7 +127,7 @@ struct AggregateReadingAppearance:Equatable {
         outline.target=self;outline.action=#selector(goOutline);outline.isEnabled=false;outline.setAccessibilityLabel("本页目录")
         source.nextKeyView=outline;outline.nextKeyView=readBody
         container.wantsLayer = true; container.updatePalette()
-        for child in [title, status, back, website, source, outline, readBody, sourceScroll, web] as [NSView] { container.addSubview(child) }
+        for child in [title, status, back, website, refresh, source, outline, readBody, sourceScroll, web] as [NSView] { container.addSubview(child) }
         container.changed = { [weak self] in self?.layout() }; applyNativeAppearance()
     }
     func attach(in parent: NSView, frame: NSRect) {
@@ -171,6 +176,12 @@ struct AggregateReadingAppearance:Equatable {
             _=try? await web.callAsyncJavaScript("return window.__nativeAggregateSetAppearance?.(nonce,scheme,font,version) ?? false",arguments:["nonce":nonce,"scheme":style.scheme,"font":Double(style.font),"version":version],in:nil,contentWorld:.defaultClient)
         }
     }
+    func scrollPosition() async -> Double? {
+        guard !retired, current(), web.url == documentURL else { return nil }
+        let value = try? await web.callAsyncJavaScript("return window.scrollY", arguments: [:], in: nil, contentWorld: .defaultClient)
+        guard !retired, current(), let y = value as? Double, y.isFinite, y >= 0 else { return nil }
+        return y
+    }
     private func requestReady(){
         if eventNonce==nil{eventNonce=UUID().uuidString.lowercased()}
         guard let lease=eventNonce else{return}
@@ -189,7 +200,7 @@ struct AggregateReadingAppearance:Equatable {
         let th=measured(title);title.frame=NSRect(x:padding,y:y,width:available,height:th);y+=th+6
         let sh=measured(status);status.frame=NSRect(x:padding,y:y,width:available,height:sh);y+=sh+8
         var x=padding
-        for button in [back,website,source,outline,readBody] as [NSControl]{
+        for button in [back,website,refresh,source,outline,readBody] as [NSControl]{
             let natural=button.fittingSize.width,w=min(available,max(92,natural+6))
             if x>padding && x+w>width-padding{y+=36;x=padding}
             button.frame=NSRect(x:x,y:y,width:w,height:30);x+=w+8
@@ -242,7 +253,7 @@ struct AggregateReadingAppearance:Equatable {
         return value===root || value.isDescendant(of:root)
     }
     private var toolbarResponders:[NSView] {
-        let candidates:[NSView]=[back,website,source]+(sourceScroll.isHidden ? []:[sourceText])+[outline,readBody]
+        let candidates:[NSView]=[back,website,refresh,source]+(sourceScroll.isHidden ? []:[sourceText])+[outline,readBody]
         return candidates.filter{!$0.isHiddenOrHasHiddenAncestor && $0.window===view.window && (($0 as? NSControl)?.isEnabled ?? true)}
     }
     private func toolbarOwnsResponder(_ value:NSResponder?)->Bool {toolbarResponders.contains{responder(value,isInside:$0)}}
@@ -316,6 +327,7 @@ struct AggregateReadingAppearance:Equatable {
     private func action(_ body: @escaping () async throws -> Void) {guard let lease=eventNonce else{return};Task { do { guard !retired, current(),eventNonce==lease else { return }; try await body() } catch { if !retired, current() { status.stringValue = "本次操作未完成，请重新打开页面" } } } }
     @objc private func goBack() { action { [self] in try await navigate("back", nil) } }
     @objc private func goWebsite() { action { [self] in try await openWebsite() } }
+    @objc private func refreshWebsite() { action { [self] in try await navigate("refresh", nil) } }
     @objc private func toggleSource() { guard !retired, eventNonce != nil, current() else { return }; sourceScroll.isHidden.toggle(); layout() }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping (Any?, String?) -> Void) {
         guard !retired, current(), message.webView === web, message.frameInfo.isMainFrame,
