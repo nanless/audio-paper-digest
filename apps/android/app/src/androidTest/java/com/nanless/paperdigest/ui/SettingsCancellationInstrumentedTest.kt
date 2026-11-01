@@ -1,6 +1,8 @@
 package com.nanless.paperdigest.ui
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.nanless.paperdigest.pdf.PdfSelection
@@ -26,7 +28,7 @@ class SettingsCancellationInstrumentedTest {
     }
     private fun open(pane:String):Controller {
         val controller=Controller()
-        compose.setContent{MaterialTheme{SettingsPane(controller.state.value,controller,{_,_->},{},pane,1)}}
+        compose.setContent{val state by controller.state.collectAsState();MaterialTheme{SettingsPane(state,controller,{_,_->},{},pane,1)}}
         compose.waitForIdle()
         return controller
     }

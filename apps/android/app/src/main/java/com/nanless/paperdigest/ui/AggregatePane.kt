@@ -57,8 +57,7 @@ import org.json.JSONObject
                 item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),label={Text("搜索汇总标题、日期与标签")},singleLine=true)}
                 item("status") {
                     Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                        if(aggregate.loadingImages)Text("正文已就绪 · 图片正在后台读取",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)
-                if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取汇总目录…")}
+                        if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取汇总目录…")}
                         aggregate.error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
                         if(aggregate.catalogStale)Text("目录有更新，请重新读取后打开页面。",color=MaterialTheme.colorScheme.tertiary)
                         FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
@@ -82,7 +81,7 @@ import org.json.JSONObject
             }
         } else {
             val noticeScroll=rememberScrollState()
-            LaunchedEffect(selected.id,aggregate.error,aggregate.cacheError,aggregate.catalogStale,aggregate.document?.imageError,aggregate.document?.images?.missingCount,aggregate.offlineMode){noticeScroll.scrollTo(0)}
+            LaunchedEffect(selected.id,aggregate.error,aggregate.cacheError,aggregate.catalogStale,aggregate.document?.imageError,aggregate.document?.images?.missingCount,aggregate.offlineMode,aggregate.loadingImages){noticeScroll.scrollTo(0)}
             Column(Modifier.fillMaxSize()) {
                 Surface(color=MaterialTheme.colorScheme.surface) {
                     Column {
@@ -105,11 +104,12 @@ import org.json.JSONObject
                         // Only exceptional short notices scroll; the document keeps its own weighted viewport.
                         Column(Modifier.fillMaxWidth().heightIn(max=viewportHeight*0.22f).verticalScroll(noticeScroll).padding(horizontal=16.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                             aggregate.error?.let{Text(if(aggregate.document==null)"网页暂时未能读取。请重试或查看来源提示。"else"本次读取未完成，保留已保存的正文。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
-                            aggregate.document?.imageError?.let{Text("图片读取未完成，正文仍可阅读。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
+                            if(!aggregate.loadingImages)aggregate.document?.imageError?.let{Text("图片读取未完成，正文仍可阅读。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
                             if(aggregate.cacheError!=null)Text("已保存版本暂不可读，请查看来源提示。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
                             val doc=aggregate.document
                             val missing=doc?.images?.missingCount?:doc?.resources?.size?:0
-                            if(missing>0)Text("还有 $missing 张图片未保存；中断后可能未继续获取。",color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)
+                            if(aggregate.loadingImages)Text("正文已就绪，图片正在后台读取，可继续阅读。",style=MaterialTheme.typography.bodySmall)
+                            else if(missing>0)Text("还有 $missing 张图片未保存，正文仍可阅读。",color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)
                             if(aggregate.catalogStale)Text("目录有更新，请在页面菜单中更新目录。",color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)
                             if(aggregate.offlineMode)Text("离线模式 · 只读已保存内容",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                             else if(doc?.fromCache==true)Text("正在阅读已保存版本",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
