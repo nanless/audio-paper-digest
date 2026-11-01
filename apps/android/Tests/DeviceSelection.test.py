@@ -20,7 +20,7 @@ class Selection(unittest.TestCase):
     def test_missing_selection_stops_before_adb_and_build(self):
         r,c,a=self.run_script(['--device']);self.assertNotEqual(0,r.returncode);self.assertIsNone(c);self.assertEqual('',a)
     def test_multiple_serials_are_not_an_implicit_all_devices_opt_in(self):
-        for serial in ['emulator-5580,emulator-5554','emulator-5580 emulator-5582']:
+        for serial in ['emulator-5580,emulator-5554','emulator-5580 emulator-5582','--all']:
             r,c,a=self.run_script(['--device'],{'ANDROID_SERIAL':serial});self.assertNotEqual(0,r.returncode);self.assertIsNone(c);self.assertEqual('',a)
     def test_explicit_qa_serial_is_the_only_gradle_target(self):
         r,c,a=self.run_script(['--device','emulator-5580','-Pexample=true']);self.assertEqual(0,r.returncode,r.stderr);self.assertEqual('emulator-5580',c['serial']);self.assertEqual([':app:connectedDebugAndroidTest','-Pexample=true'],c['args']);self.assertTrue(all(x.startswith('-s emulator-5580 ') for x in a.splitlines()))
@@ -42,4 +42,30 @@ class Selection(unittest.TestCase):
         r,c,a=self.run_script(['--device','emulator-5580'],{'CODEX_SANDBOX':'1'});self.assertNotEqual(0,r.returncode);self.assertIsNone(c);self.assertEqual('',a)
     def test_explicit_physical_serial_does_not_enumerate_or_select_another(self):
         r,c,a=self.run_script(['--device','explicit-physical-serial']);self.assertEqual(0,r.returncode,r.stderr);self.assertEqual('explicit-physical-serial',c['serial']);self.assertEqual('-s explicit-physical-serial get-state\n',a)
+class Installation(unittest.TestCase):
+    def run_script(self,args,overrides=None):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);shutil.copyfile(SOURCE.with_name('install.sh'),root/'install.sh')
+            apk=root/'app/build/outputs/apk/debug/app-debug.apk';apk.parent.mkdir(parents=True);apk.write_bytes(b'isolated-apk-fixture')
+            (root/'adb').write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$PD_ADB_LOG"\n[[ "$1" == -s ]] || exit 91\ncase "$3" in get-state) echo "${PD_STATE:-device}";;emu) echo "${PD_AVD:-PaperDigest_QA_API35}";echo OK;;install) echo Success;;*) exit 92;;esac\n')
+            (root/'adb').chmod(0o700)
+            env=dict(os.environ);env.update(PATH=str(root)+os.pathsep+env['PATH'],PD_ADB_LOG=str(root/'adb.log'),ANDROID_SERIAL='');env.update(overrides or {})
+            result=subprocess.run(['bash',str(root/'install.sh'),*args],env=env,text=True,capture_output=True)
+            return result,(root/'adb.log').read_text() if (root/'adb.log').exists() else ''
+    def test_missing_selection_never_chooses_an_old_qa_device(self):
+        r,a=self.run_script([]);self.assertNotEqual(0,r.returncode);self.assertEqual('',a)
+    def test_invalid_or_multiple_serials_stop_before_transport(self):
+        for serial in ['emulator-5554,emulator-5562','emulator-5554 emulator-5562','--all']:
+            r,a=self.run_script([serial]);self.assertNotEqual(0,r.returncode);self.assertEqual('',a)
+    def test_only_explicit_qa_serial_receives_install(self):
+        r,a=self.run_script(['emulator-5562']);self.assertEqual(0,r.returncode,r.stderr);self.assertTrue(all(line.startswith('-s emulator-5562 ') for line in a.splitlines()));self.assertIn(' install -r -t ',a)
+    def test_environment_selection_is_supported_without_enumeration(self):
+        r,a=self.run_script([],{'ANDROID_SERIAL':'explicit-phone'});self.assertEqual(0,r.returncode,r.stderr);self.assertEqual(2,len(a.splitlines()));self.assertNotIn('devices',a)
+    def test_offline_and_non_qa_emulators_never_install(self):
+        for overrides in [{'PD_STATE':'offline'},{'PD_AVD':'Personal_Research'}]:
+            r,a=self.run_script(['emulator-5562'],overrides);self.assertNotEqual(0,r.returncode);self.assertNotIn(' install ',a)
+    def test_extra_arguments_are_not_silently_ignored(self):
+        r,a=self.run_script(['emulator-5562','one.apk','two.apk']);self.assertNotEqual(0,r.returncode);self.assertEqual('',a)
+    def test_restricted_environment_never_reaches_transport(self):
+        r,a=self.run_script(['emulator-5562'],{'CODEX_SANDBOX':'1'});self.assertNotEqual(0,r.returncode);self.assertEqual('',a)
 if __name__=='__main__':unittest.main()

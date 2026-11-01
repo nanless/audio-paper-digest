@@ -6,7 +6,7 @@ if [[ "${1:-}" == --device ]]; then
  shift
  qa_serial="${ANDROID_SERIAL:-}"
  if [[ -n "${1:-}" && "${1:0:1}" != - ]]; then qa_serial="$1"; shift; fi
- [[ -n "$qa_serial" && "$qa_serial" =~ ^[A-Za-z0-9._:-]+$ ]] || { echo "设备测试须明确选择一个设备：test.sh --device SERIAL，或设置 ANDROID_SERIAL。" >&2; exit 1; }
+ [[ -n "$qa_serial" && "$qa_serial" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]] || { echo "设备测试须明确选择一个设备：test.sh --device SERIAL，或设置 ANDROID_SERIAL。" >&2; exit 1; }
  for qa_argument in "$@"; do
   [[ "$qa_argument" == -* ]] || { echo "测试入口只接受 Gradle 选项；其他构建任务请使用 build.sh。" >&2; exit 1; }
   case "$qa_argument" in --serial*|-Pandroid.injected.device.serial=*|-Dandroid.injected.device.serial=*) echo "设备已由 --device 或 ANDROID_SERIAL 唯一选定，请勿再附加设备覆盖参数。" >&2; exit 1;; esac

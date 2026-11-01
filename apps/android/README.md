@@ -46,6 +46,6 @@ Zotero Storage 空间不足时，可以明确确认改用本应用已配置的�
 ./apps/android/test.sh --device SERIAL
 ```
 
-安装脚本仅定向该设备，并核对模拟器名称 `PaperDigest_QA_API35` 或 `PaperDigest_QA_API28`；测试入口也只使用指定序列号。设备是否为空仍须执行者事先确认。请勿改用用户现有手机或研究模拟器，也不要向全部已连接设备派发测试。
+安装和设备测试都必须明确指定一个序列号，也可通过 `ANDROID_SERIAL` 指定；未选择设备时直接停止，不会默认安装到旧模拟器。安装脚本仅定向该设备，先检查设备就绪，再核对模拟器名称 `PaperDigest_QA_API35` 或 `PaperDigest_QA_API28`；测试入口也只使用指定序列号。设备是否为空仍须执行者事先确认。请勿改用用户现有手机或研究模拟器，也不要向全部已连接设备派发测试。
 
 正式发行核对源码、版本、签名、四种架构、16 KiB 对齐、许可、资源以及实际新装和覆盖升级。签名私钥与口令在仓库和发行包之外保存。下载入口使用本仓库实际发布的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases)。逐项功能与验证范围见[功能表](<../../docs/android-feature-parity.md>)。
