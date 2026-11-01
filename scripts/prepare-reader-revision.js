@@ -26,6 +26,14 @@ function main() {
     for (const id of ids) {
         const paper = papers.find(item => normalizedId(item) === id);
         if (!paper) { report.push({ id, skipped: 'paper missing' }); continue; }
+        // 未完成的事实反馈义务必须先在有反馈的生成里结束；直接重做会清掉
+        // 它依赖的 Reader 阶段与候选，让义务永远无法完成。
+        const pending = require('./lib/pending-fact-feedback');
+        if (Object.hasOwn(paper, pending.FIELD)) {
+            let done = false;
+            try { done = pending.completed(paper, plan); } catch (_) { done = false; }
+            if (!done) { report.push({ id, skipped: 'pending fact feedback' }); continue; }
+        }
         const stage = paper.analysisManifest?.stages?.apiReaderArticle;
         let proof = stage?.ordinalCompletionProof;
         if (!proof?.path || !proof?.sha256) {
