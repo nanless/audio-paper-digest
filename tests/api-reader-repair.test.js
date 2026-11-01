@@ -3534,3 +3534,23 @@ test('缺教学类型的结构化诊断拒绝损坏小节并只给出一个可�
     assert.equal(targets.length, 1);
     assert.throws(() => applyReaderPatch(two, patchFor(two, [['/sections/2', {...two.sections[2], kind:'related_work'}]]), targets.map(item => item.path)), /unauthorized/);
 });
+
+test('图片导读与图注文本可以作为普通补丁目标', () => {
+    const draft = fixture();
+    draft.figurePlacements = [{
+        figureOrdinal: 1, targetKind: 'result', marker: '[[FIGURE_1]]',
+        leadQuote: '这张图把早期优势画在同一纵轴上。',
+        explanationQuote: '从像素可见，右图顶部三条曲线终值更高。',
+        focusPoints: ['看横轴轮次']
+    }];
+    const explanation = '/figurePlacements/0/explanationQuote';
+    const lead = '/figurePlacements/0/leadQuote';
+    const patch = patchFor(draft, [[explanation, '从像素可见，右图顶部三条曲线终值约 81 到 83%。'], [lead, '这张图把早期优势画在同一纵轴上。']]);
+    const merged = applyReaderPatch(draft, patch, [explanation, lead]);
+    assert.equal(merged.figurePlacements[0].explanationQuote, '从像素可见，右图顶部三条曲线终值约 81 到 83%。');
+    assert.equal(merged.figurePlacements[0].leadQuote, '这张图把早期优势画在同一纵轴上。');
+    assert.equal(merged.figurePlacements[0].focusPoints.length, 1);
+    // 非字符串值必须被拒绝，不能把导读写成对象。
+    assert.throws(() => applyReaderPatch(draft,
+        patchFor(draft, [[explanation, { text: '对象值' }]]), [explanation]), /must be a string/);
+});

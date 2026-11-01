@@ -904,7 +904,9 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
                     + '下一次只能使用当前 repair target 中的 expected-current SHA。' };
             throw error;
         }
-        if ((item.path.endsWith('/body') || item.path.endsWith('/explanation') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
+        if ((item.path.endsWith('/body') || item.path.endsWith('/explanation')
+            || item.path.endsWith('/explanationQuote') || item.path.endsWith('/leadQuote')
+            || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
         if (['/sections', '/tableBindings', '/formulaBindings', '/conceptBridges'].includes(item.path) && !Array.isArray(item.value)) {
             throw new Error('Reader patch tableBindings replacement must be an array');
@@ -915,7 +917,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || item.value.length !== 0)) {
             throw new Error('无图清除只允许在本次没有可用像素时清空图绑定');
         }
-        if (item.path !== '/conceptBridges' && item.path !== '/sections' && item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body') && !item.path.endsWith('/explanation')
+        if (item.path !== '/conceptBridges' && item.path !== '/sections' && item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body') && !item.path.endsWith('/explanation') && !item.path.endsWith('/explanationQuote') && !item.path.endsWith('/leadQuote')
             && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
             && (!item.value || typeof item.value !== 'object' || Array.isArray(item.value))) {
             throw new Error('Reader patch node replacement must be an object');
