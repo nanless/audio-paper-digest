@@ -67,8 +67,12 @@ function writeFileAtomic(filePath, content, options = {}) {
         }
         fs.chmodSync(tmpPath, targetMode);
         fs.renameSync(tmpPath, filePath);
-        const dirFd = fs.openSync(dir, 'r');
-        try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+        // 目录项落盘是尽力而为：某些网络卷/FUSE 不支持目录 fsync，
+        // 此时改名已经成功，不能把一次成功的写入报成失败。
+        try {
+            const dirFd = fs.openSync(dir, 'r');
+            try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+        } catch (_) { /* ignore unsupported directory fsync */ }
     } catch (err) {
         if (fs.existsSync(tmpPath)) {
             fs.unlinkSync(tmpPath);
