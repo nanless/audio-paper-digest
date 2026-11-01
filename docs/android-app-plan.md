@@ -2,7 +2,7 @@
 
 “论文速递工作台”提供 Mac 与 Android 两个原生客户端，用于阅读网站已发布的论文解读、核对原始 PDF、保存个人研究，以及连接 Zotero 和坚果云。主项目与网站仍叫“论文速递”，日更、会议和历史文章继续由网站工作流生产。客户端安装、同步、阅读或换设备均不自动重新分析论文。
 
-当前客户端版本为 1.1.0。Android 支持 API 28 及以上系统；Mac 支持 macOS 15 及以上的 ARM64 设备，使用本地签名、未经 Apple 公证。下载安装与版本状态见[Android 验证说明](<android-validation.md>)和 [Mac 发行说明](<mac-app-release.md>)。
+当前公开客户端版本为 1.2.1；全站分类和两端界面的后续改进见 [1.3.0 审改记录](workbench-1.3.0-review.md)，尚未完成新版发行验收。Android 支持 API 28 及以上系统；Mac 支持 macOS 15 及以上的 ARM64 设备，使用本地签名、未经 Apple 公证。下载安装与版本状态见[Android 验证说明](<android-validation.md>)和 [Mac 发行说明](<mac-app-release.md>)。
 
 ## 两个原生界面，共用研究资料
 
