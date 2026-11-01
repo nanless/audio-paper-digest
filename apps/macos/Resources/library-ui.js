@@ -110,12 +110,12 @@ export function mountLibrary(app) {
       else scope.textContent = '已同时搜索论文元数据、本机缓存导读与自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
     } else scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
     if (sequence !== renderSequence) return;
-    const today = new Date(Date.now()+8*3600*1000).toISOString().slice(0,10);
+    const today = published().filter(p=>p.sourceKind!=='conference').map(p=>p.date||'').sort().at(-1)||new Date(Date.now()+8*3600*1000).toISOString().slice(0,10);
     const papers = catalog().filter(p => {
       const id = paperID(p);
       if (view==='favorites' && !favorites.has(id)) return false;
       if (view==='reading-list' && !reading.has(id)) return false;
-      if (view==='today' && p.date!==today) return false;
+      if (view==='today' && (p.date!==today||p.sourceKind==='conference')) return false;
       if (view==='conference' && p.sourceKind!=='conference') return false;
       if (filters.task && p.task!==filters.task || filters.method && p.method!==filters.method || filters.source && p.sourceKind!==filters.source) return false;
       if (filters.score && (p.score===null || p.score===undefined || Number(p.score)<Number(filters.score))) return false;
@@ -126,7 +126,7 @@ export function mountLibrary(app) {
     papers.sort((a,b)=>sort==='score'?(b.score??-Infinity)-(a.score??-Infinity)||a.id.localeCompare(b.id):sort==='title'?(a.titleZh||a.title).localeCompare(b.titleZh||b.title,'zh-CN')||a.id.localeCompare(b.id):(b.date||'').localeCompare(a.date||'')||a.id.localeCompare(b.id));
     const pageCount = Math.max(1,Math.ceil(papers.length/pageSize)); page = Math.min(page,pageCount-1);
     const visible = papers.slice(page*pageSize,(page+1)*pageSize);
-    $('library-title').textContent = {library:'全部论文',today:'今日更新',conference:'会议整理',favorites:'已收藏','reading-list':'待读'}[view];
+    $('library-title').textContent = {library:'全部论文',today:'日更速递',conference:'会议论文集',favorites:'已收藏','reading-list':'待读'}[view];
     $('library-subtitle').textContent = `${catalog().length.toLocaleString()} 篇本地目录论文 · ${app.state.summary?.recordCount?.toLocaleString() || '—'} 条网站页面记录 · 原有评分与分类`;
     $('paper-rows').innerHTML = visible.map(p=>{
       const id=paperID(p), author=(p.authors||[]).slice(0,2).join('、'), score=Number.isFinite(p.score)?p.score.toFixed(1):'—';
