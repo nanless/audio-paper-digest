@@ -17,7 +17,7 @@ Mac 与 Android 客户端叫 **论文速递工作台**，网站和内容生产�
 
 ![内容生产、两端阅读与个人资料的关系](docs/images/client-data-flow.svg)
 
-Mac 1.0.1 面向 ARM64、macOS 15，采用本地签名，尚未通过 Apple 公证；Android 1.0.1 支持四种 ABI，沿用原签名和应用标识。安装方式与验证范围见 [Mac 说明](apps/macos/README.md)、[Android 说明](apps/android/README.md)；安全检查见[客户端安全说明](docs/client-security-audit.md)。
+工作台 1.1.0 默认进入日更，会议有独立入口，支持返回原汇总、受控预载和分步连接配置，详见[本轮改动与验证](docs/workbench-1.1.0-review.md)。Mac 面向 ARM64、macOS 15，采用本地签名，尚未通过 Apple 公证；Android 支持四种 ABI，沿用原签名和应用标识。安装方式与验证范围见 [Mac 说明](apps/macos/README.md)、[Android 说明](apps/android/README.md)；安全检查见[客户端安全说明](docs/client-security-audit.md)。
 
 <a id="默认行为"></a>
 <a id="架构概览"></a>

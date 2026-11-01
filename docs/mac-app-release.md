@@ -1,11 +1,11 @@
 # 论文速递工作台 Mac 版：构建与发行
 
-本页说明版本 1.0.1 的本地准备和联合发行操作。1.0.1 已与 Android 安装包一同公开，见 [v1.0.1](https://github.com/nanless/audio-paper-digest/releases/tag/v1.0.1)；旧版本保留在同一发行页。
+本页说明版本 1.1.0 的本地准备和联合发行操作。下载与实际状态见 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)，本轮改动与检查范围见 [1.1.0 维护说明](workbench-1.1.0-review.md)。
 
 | 项目 | 当前发行目标 |
 |---|---|
 | 应用 | 论文速递工作台.app |
-| 版本、构建号 | 1.0.1、1 |
+| 版本、构建号 | 1.1.0、2 |
 | 架构、最低系统 | arm64、macOS 15 |
 | 运行时 | 随包 Node 24.19.0 |
 | 签名 | 本地 ad-hoc 签名，未 Apple 公证 |
@@ -33,30 +33,30 @@ npm --prefix apps/macos run install:app
 apps/macos/release.sh inspect \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.0.1
+  --version 1.1.0
 
 apps/macos/release.sh prepare \
   --app 'apps/macos/.build/论文速递工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.0.1 \
-  --output 'apps/macos/.build/releases/1.0.1-arm64' \
+  --version 1.1.0 \
+  --output 'apps/macos/.build/releases/1.1.0-arm64' \
   --dmg
 
 apps/macos/release.sh verify \
-  --prepared 'apps/macos/.build/releases/1.0.1-arm64'
+  --prepared 'apps/macos/.build/releases/1.1.0-arm64'
 ```
 
 `inspect` 只读核对干净工作区、来源、实际输入、版本、签名、架构与最低系统。输出目录必须尚不存在，失败不覆盖原产物。`--dmg` 可省略；要求生成 DMG 时，失败不会自动改交 ZIP。
 
 | 输出 | 核对内容 |
 |---|---|
-| `PaperDigest-macOS-1.0.1-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
+| `PaperDigest-macOS-1.1.0-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
 | 同名 DMG | 应用与指向 `/Applications` 的拖入目标；检查映像并只读挂载回读 |
 | `build-info.json` | 版本、架构、时间、来源身份和相对文件摘要，无本机构建路径 |
 | `RELEASE_NOTES.md` | 按真实范围生成的版本、安装、签名与支持说明 |
 | `release-manifest.json`、`SHA256SUMS` | 完整附件集合与实际字节摘要 |
 
-打包和回读不启动应用。实际安装、图形首启与业务操作分别记录，1.0.1 新包的已执行范围见[验证说明](mac-app-validation.md)。
+打包和回读不启动应用。实际安装、图形首启与业务操作分别记录，1.1.0 新包的已执行范围见[验证说明](mac-app-validation.md)。
 
 ## 3. 来源、许可与隐私
 
@@ -96,7 +96,7 @@ python3 apps/android/release_tools.py --repo "$PWD" joint-public-plan \
 
 公开计划重新核对包和来源，查询指定草稿 ID，按固定资产 ID 下载全部文件并比较真实字节，之后再次核对标签与草稿未变化。检查通过只生成针对同一 ID 的公开参数，不创建、上传或自动公开。维护者最终复核后执行，并核对公开状态、标签和附件。
 
-晚到的草稿验收保存在受保护的实际快照中，最终公开后再提交公开状态说明；固定发行提交至公开之间不插入会破坏来源绑定的新提交。旧 v1.0.0 Release、标签及资产保持不变。
+晚到的草稿验收保存在受保护的实际快照中，最终公开后再提交公开状态说明；固定发行提交至公开之间不插入会破坏来源绑定的新提交。旧 Release 的清理在新版安装、升级及下载核验完成后执行；保留 Git 历史、原签名和升级验证凭据。
 
 ## 5. 打包测试
 

@@ -6,6 +6,8 @@
 
 只使用应用，先读[Mac 使用说明](../apps/macos/README.md)或[Android 使用说明](../apps/android/README.md)，不必配置生产项目的 `.env`。维护网站时，先读[项目首页](../README.md)选择任务，再按[安装与配置](setup.md)准备环境。[操作手册](../SKILL.md)给出执行顺序，[AGENTS.md](../AGENTS.md)列出不能绕过的来源、预算与发布规则。
 
+工作台 1.1.0 的日更与会议导航、返回、预载和首次连接配置见[本轮改动与验证](workbench-1.1.0-review.md)。
+
 | 你想了解什么 | 阅读位置 |
 |---|---|
 | 三条流程如何共用分析、Reader 和发布能力 | [三流程与共享核心](three-workflows.md) |
