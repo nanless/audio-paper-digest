@@ -72,7 +72,10 @@ function writeFileAtomic(filePath, content, options = {}) {
         try {
             const dirFd = fs.openSync(dir, 'r');
             try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
-        } catch (_) { /* ignore unsupported directory fsync */ }
+        } catch (dirSyncError) {
+            // 只忽略"目录不支持 fsync"这一类：真正的 I/O 故障仍要暴露。
+            if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EACCES', 'EBADF'].includes(dirSyncError.code)) throw dirSyncError;
+        }
     } catch (err) {
         if (fs.existsSync(tmpPath)) {
             fs.unlinkSync(tmpPath);
