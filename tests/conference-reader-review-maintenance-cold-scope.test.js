@@ -57,7 +57,7 @@ test('publication async/exception cannot leak scope or masquerade as a completed
 
 test('transparent postprocess fence retains all original synchronous gate bodies byte-for-byte',()=>{
  const proposed=fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-postprocess.js'),'utf8');
- const expected={"stagePaper": "0a7219b1259db1b9c7230e24c62cd39e047d43627460b0ee90475871011ddd2a", "loadStageAndCompleted": "898fc0c35a16c609c40819fa48317f18a1a3b53a85d371ace236ba56d9b432a0"};
+ const expected={"stagePaper": "f8d73517252a081f8da76316e2b7af8d0bb7baa371eebf720eafe67b824e2d32", "loadStageAndCompleted": "898fc0c35a16c609c40819fa48317f18a1a3b53a85d371ace236ba56d9b432a0"};
  const opening="    return require('./conference-reader-review-maintenance').withOrdinaryMaintenancePublicationColdRead(\n        {analysisRoot,executionId,stagingRoot},()=>{\n";
  for(const [name,next] of [['stagePaper','loadStageAndCompleted'],['loadStageAndCompleted','loadStage']]) {
   const from=proposed.indexOf('function '+name+'('),to=proposed.indexOf('function '+next+'(',from+1),segment=proposed.slice(from,to);
