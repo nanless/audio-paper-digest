@@ -353,11 +353,11 @@ private actor CloudIndependentPublishGate {
             try require(await dav.records().allSatisfy{!["DELETE","MOVE","COPY"].contains($0.method)},"no deletion or version overwrite operation")
         }
         await check("two independent destination clients concurrently publish identical bytes without altering any prior version") {
-            let dav=CloudTestDAV(),initialLog=CloudCheckpointLog(),initial=try service(dav,initialLog)
+            let dav=CloudTestDAV(),clock=CloudTestClock(),initialLog=CloudCheckpointLog(),initial=try service(dav,initialLog,clock:clock)
             let original=try await initial.upload(encodedBackup:small),old=await dav.allFiles()
             let gate=CloudIndependentPublishGate(),leftLog=CloudCheckpointLog(),rightLog=CloudCheckpointLog(),leftID=UUID(),rightID=UUID()
             func client(_ destination:UUID,_ log:CloudCheckpointLog)throws->CloudArchiveService{
-                try CloudArchiveService(destinationID:destination,credentials:{.init(username:"fixture@example.invalid",password:"synthetic-app-password")},checkpointSink:{try await log.save($0)},transport:{request,limit in await gate.wait(request);return try await dav.request(request,limit:limit)},minimumRequestInterval:0)
+                try CloudArchiveService(destinationID:destination,credentials:{.init(username:"fixture@example.invalid",password:"synthetic-app-password")},checkpointSink:{try await log.save($0)},transport:{request,limit in await gate.wait(request);return try await dav.request(request,limit:limit)},now:{clock.now()},minimumRequestInterval:0)
             }
             let left=try client(leftID,leftLog),right=try client(rightID,rightLog)
             let leftTask=Task{try await left.upload(encodedBackup:small)},rightTask=Task{try await right.upload(encodedBackup:small)}
@@ -377,6 +377,7 @@ private actor CloudIndependentPublishGate {
             try require(leftCheckpoint?.destinationID==leftID && rightCheckpoint?.destinationID==rightID && leftCheckpoint?.manifestVerified==true && rightCheckpoint?.manifestVerified==true,"each independent client retains its own target/checkpoint and real final manifest")
             let leftBytes=try await left.download(reference:a.reference),rightBytes=try await right.download(reference:b.reference),oldBytes=try await initial.download(reference:original.reference)
             try require(leftBytes==small && rightBytes==small && oldBytes==small,"all three versions must GET back the original whole backup")
+            try require(Set([original.reference.month,a.reference.month,b.reference.month]).count==1,"all independent versions share the same fixed UTC test month")
             let listed=try await left.list(month:a.reference.month)
             try require(Set(listed.map{$0.reference.id})==Set([original.reference.id,a.reference.id,b.reference.id]),"shared month lists every completed independent version")
         }
