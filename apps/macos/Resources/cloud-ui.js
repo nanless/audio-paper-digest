@@ -19,22 +19,23 @@ export function mountCloud(app){
  [data-setting-pane="cloud"] .cloud-inline input{width:auto}
  [data-setting-pane="cloud"] .cloud-version{padding:14px 0;border-bottom:1px solid var(--line,#ddd)}
  [data-setting-pane="cloud"] .cloud-error{color:var(--danger,#a83f36);white-space:pre-wrap}
+ [data-setting-pane="cloud"] .cloud-setup-steps{font-size:13px;line-height:1.8;padding-left:22px}[data-setting-pane="cloud"] .cloud-setup-steps li{margin:8px 0}
  [data-setting-pane="cloud"] h2{font-size:17px;margin:0 0 10px}
  [data-setting-pane="cloud"] p{font-size:12px;line-height:1.7}
  </style>
- <h1>坚果云资料</h1><p>为全部研究资料保存独立版本：笔记、解析、原始用量、阅读进度、导读、原文与已有归档检查点。已有版本保留，恢复前还会保存当前资料副本。</p>
+ <h1>WebDAV 备份（坚果云）</h1><p>备份整个工作台；Zotero 论文归档请在左侧单独连接。</p><ol class="cloud-setup-steps"><li><strong>填写账号</strong>：使用坚果云登录邮箱，保存目录保留默认 PaperDigest 即可。</li><li><strong>保存应用密码</strong>：在坚果云账户的第三方应用管理中为工作台生成应用密码，再点击下方“保存应用密码到钥匙串”。不要填写登录密码。</li><li><strong>检查并备份</strong>：点击“检查连接”，成功后点击“立即保存全部资料”。</li></ol><p>地址已内置为 https://dav.jianguoyun.com/dav/，无需填写服务器。本版本支持坚果云 WebDAV。</p><p>为全部研究资料保存独立版本：笔记、解析、原始用量、阅读进度、导读、原文与已有归档检查点。已有版本保留，恢复前还会保存当前资料副本。</p>
  <p>上传内容包含私人研究材料；请使用你自己的坚果云账户。API 与 Zotero 密钥留在本机钥匙串；坚果云应用密码可仅本次保存在内存，或由你选择保存到钥匙串。密码均不随资料备份迁移。</p>
- <section class="cloud-card" aria-label="坚果云连接设置"><h2>独立保存目录</h2>
- <label>坚果云账号<input id="cloud-account" type="text" autocomplete="off" spellcheck="false" placeholder="坚果云登录邮箱"></label>
- <label>独立目录<input id="cloud-folder" type="text" value="PaperDigest" autocomplete="off" spellcheck="false"></label>
+ <section class="cloud-card" aria-label="坚果云连接设置"><h2>1. 账号与保存目录</h2>
+ <label>坚果云账号<input id="cloud-account" type="text" autocomplete="off" spellcheck="false" placeholder="例如 name@example.com"></label>
+ <label>保存目录（一般无需修改）<input id="cloud-folder" type="text" value="PaperDigest" autocomplete="off" spellcheck="false"></label>
  <p>目录使用1–64位英文字母、数字、点、下划线或短横线，以字母或数字开头，不含斜杠。请使用独立目录，不使用 Zotero 的标准附件目录 zotero。每台设备保留独立版本，不覆盖另一台设备的资料。</p>
  <label class="cloud-inline"><input id="cloud-automatic" type="checkbox">应用运行时定期保存</label>
  <label>保存间隔（小时）<input id="cloud-interval" type="number" min="6" max="168" step="1" value="24"></label>
  <p>默认24小时，可设6–168小时。退出应用后不会在后台继续；正在运行的任务须先保存完毕。单次完整资料上限512 MiB，编码备份上限750 MiB，超过限制会明确停止，不会省略文件。</p>
- <div class="cloud-actions"><button id="cloud-save" type="button">保存坚果云设置</button><button id="cloud-discard" type="button" aria-label="撤销坚果云未保存更改">撤销未保存更改</button><button id="cloud-session-password" type="button">仅本次使用应用密码…</button><button id="cloud-clear-session-password" type="button" disabled>清除本次密码</button><button id="cloud-set-password" type="button">保存应用密码到钥匙串…</button><button id="cloud-delete-password" type="button">移除本机应用密码</button><button id="cloud-check" type="button">检查连接</button></div>
- <p>使用坚果云单独生成的第三方应用密码，在原生安全输入窗口填写。仅本次使用不会读取或写入钥匙串，退出或更换账号后清除；清除本次密码会暂停自动备份，不移除钥匙串原条目。设置后仍须检查连接，不在本页面输入密码。</p>
+ <div class="cloud-actions"><button id="cloud-save" type="button">保存账号与目录</button><button id="cloud-discard" type="button" aria-label="撤销坚果云未保存更改">撤销未保存更改</button><button id="cloud-session-password" type="button">仅本次使用应用密码…</button><button id="cloud-clear-session-password" type="button" disabled>清除本次密码</button><button id="cloud-set-password" type="button">保存应用密码到钥匙串…</button><button id="cloud-delete-password" type="button">移除本机应用密码</button><button id="cloud-check" type="button">检查连接</button></div>
+ <p><strong>2. 应用密码与连接检查。</strong>使用坚果云单独生成的第三方应用密码，在原生安全输入窗口填写。仅本次使用不会读取或写入钥匙串，退出或更换账号后清除；清除本次密码会暂停自动备份，不移除钥匙串原条目。设置后仍须检查连接，不在本页面输入密码。</p>
  </section>
- <section class="cloud-card" aria-label="完整资料保存状态"><h2>全部研究资料</h2><p id="cloud-status" role="status"></p><p id="cloud-last"></p><p id="cloud-pending"></p>
+ <section class="cloud-card" aria-label="完整资料保存状态"><h2>3. 检查连接后，备份全部研究资料</h2><p id="cloud-status" role="status"></p><p id="cloud-last"></p><p id="cloud-pending"></p>
  <div class="cloud-actions"><button id="cloud-upload" type="button">立即保存全部资料</button><button id="cloud-cancel" type="button" disabled>取消当前传输</button><button id="cloud-archive-pending" type="button" hidden>保留快照并停止本次续传…</button><button id="cloud-reveal-transfers" type="button">在 Finder 查看保留的快照</button></div><p>明确停止本次续传时，原传输材料和检查点原样保留在本机，云端半成品不会自动删除。经过校验的完整 snapshot.paperdigest 文件可通过“文件→恢复个人资料…”取回当时研究资料；损坏或缺少的材料须手工核对，不能保证可恢复。新连接会另建版本，不冒充原续传。</p></section>
  <section class="cloud-card" aria-label="坚果云资料版本"><h2>查看与恢复版本</h2><p>版本按 UTC 月份归档，时间按本机时区显示。只查看指定月份的版本。恢复会先完整下载并校验，再由原生窗口确认；读取失败不代表云端没有资料。</p><label>备份月份（UTC）<input id="cloud-month" type="month"></label><button id="cloud-list" type="button">查看这个月的备份</button><div id="cloud-versions" aria-live="polite"></div></section>
  <p id="cloud-message" role="status" aria-live="polite"></p><p id="cloud-error" class="cloud-error" role="alert"></p>`;

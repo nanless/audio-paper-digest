@@ -60,6 +60,7 @@ for(const el of document.querySelectorAll('input,select')){
 }
 $('font').addEventListener('input',()=>$('font-label').value=$('font').value);
 document.querySelectorAll('[data-pane]').forEach(button=>button.onclick=()=>{const changed=button.getAttribute('aria-current')!=='page';document.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-current',b===button?'page':'false'));document.querySelectorAll('[data-setting-pane]').forEach(p=>{if(p.dataset.settingPane===button.dataset.pane)revealAccessiblePane(p);else p.hidden=true;});$('discard-settings').hidden=button.dataset.pane==='cloud';if(changed){const content=document.querySelector('.settings-content');if(content){content.scrollTop=0;content.scrollLeft=0;}}if(button.dataset.pane==='cloud')cloudUI?.refresh().catch(error);});
+document.querySelectorAll('[data-open-pane]').forEach(button=>button.onclick=()=>window.paperDigestShowSettingsPane(button.dataset.openPane));
 window.paperDigestShowSettingsPane=pane=>{if(typeof pane!=='string')return false;const button=[...document.querySelectorAll('[data-pane]')].find(button=>button.dataset.pane===pane);if(!button)return false;button.click();return true;};
 $('set-key').onclick=async()=>{credentialRevision++;try{state.settings=await call('model.setKey');fill();}catch(e){error(e);}finally{credentialRevision++;}};
 $('delete-key').onclick=async()=>{credentialRevision++;try{state.settings=await call('model.deleteKey');fill();}catch(e){error(e);}finally{credentialRevision++;}};

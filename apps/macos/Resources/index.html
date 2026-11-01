@@ -30,28 +30,18 @@
         </div>
         <div class="sidebar-content">
           <h2>论文速递</h2>
-          <nav><button class="nav-item" data-view="today"><i data-lucide="sun"></i><span>日更速递</span></button><button class="nav-item" data-view="conference"><i data-lucide="presentation"></i><span>会议论文集</span></button></nav>
-          <nav>
-            <button class="nav-item" data-view="library">
-              <i data-lucide="library"></i><span>全部论文</span
-              ><small id="library-count"></small></button
-            ><button class="nav-item" data-view="reading-list">
-              <i data-lucide="bookmark"></i><span>待读</span
-              ><small id="reading-count"></small></button
-            ><button class="nav-item" data-view="favorites">
-              <i data-lucide="star"></i><span>已收藏</span
-              ><small id="favorite-count"></small>
-            </button>
+          <nav aria-label="网站成果">
+            <button class="nav-item" data-view="today"><i data-lucide="sun"></i><span>日更速递</span></button>
+            <button class="nav-item" data-view="library"><i data-lucide="library"></i><span>全部论文</span><small id="library-count"></small></button>
+            <button class="nav-item" data-view="conference"><i data-lucide="presentation"></i><span>会议论文集</span></button>
           </nav>
           <h2 class="spaced">我的研究</h2>
-          <nav>
-            <button class="nav-item" data-view="reader">
-              <i data-lucide="book-open"></i><span>继续阅读</span></button
-            ><button class="nav-item" data-view="notes">
-              <i data-lucide="notebook-pen"></i><span>我的笔记</span></button
-            ><button class="nav-item" data-view="tasks">
-              <i data-lucide="activity"></i><span>后台任务</span>
-            </button>
+          <nav aria-label="个人资料">
+            <button class="nav-item" data-view="reading-list"><i data-lucide="bookmark"></i><span>待读</span><small id="reading-count"></small></button>
+            <button class="nav-item" data-view="favorites"><i data-lucide="star"></i><span>已收藏</span><small id="favorite-count"></small></button>
+            <button class="nav-item" data-view="reader"><i data-lucide="book-open"></i><span>继续阅读</span></button>
+            <button class="nav-item" data-view="notes"><i data-lucide="notebook-pen"></i><span>我的笔记</span></button>
+            <button class="nav-item" data-view="tasks"><i data-lucide="activity"></i><span>后台任务</span></button>
           </nav>
           <button class="nav-item" id="storage-button"><i data-lucide="hard-drive"></i><span>本机资料</span></button><div class="current-document">
             <span class="sidebar-caption">当前文献</span
