@@ -88,12 +88,45 @@ import java.time.ZoneOffset
  if(showLicenses)OfflineLicensesDialog{showLicenses=false}
 }
 
-@Composable private fun SecretDialog(kind:SecretKind,controller:AppController,close:()->Unit){
- var text by remember{mutableStateOf("")};var busy by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)};val scope=rememberCoroutineScope()
- fun save(value:String?){busy=true;scope.launch{try{controller.updateSecret(kind,value);text=""
- if(value!=null&&kind in setOf(SecretKind.CLOUD,SecretKind.ZOTERO,SecretKind.ZOTERO_DAV))controller.execute(if(kind==SecretKind.CLOUD)"cloud.check"else"zotero.check",JSONObject())
- close()}catch(e:Exception){error=e.message}finally{busy=false}}}
- AlertDialog(onDismissRequest={if(!busy){text="";close()}},title={Text(when(kind){SecretKind.MODEL->"模型 API 密钥";SecretKind.CLOUD->"坚果云第三方应用密码";SecretKind.ZOTERO->"Zotero 专用 API key";SecretKind.ZOTERO_DAV->"Zotero WebDAV 独立应用密码"})},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("仅在本机加密保存，不进入设置、任务记录或研究备份。");CredentialPasswordField(text,{text=it});error?.let{Text(it,color=MaterialTheme.colorScheme.error)};TextButton({save(null)},enabled=!busy){Text("删除本机保存的密钥")}}},confirmButton={TextButton({save(text)},enabled=text.isNotBlank()&&!busy){Text(if(kind in setOf(SecretKind.CLOUD,SecretKind.ZOTERO,SecretKind.ZOTERO_DAV))"保存并检查连接"else"安全保存")}},dismissButton={TextButton(close,enabled=!busy){Text("取消")}})
+@Composable internal fun SecretDialog(kind:SecretKind,controller:AppController,close:()->Unit){
+ var text by remember{mutableStateOf("")}
+ var busy by remember{mutableStateOf(false)}
+ var saved by remember{mutableStateOf(false)}
+ var error by remember{mutableStateOf<String?>(null)}
+ val scope=rememberCoroutineScope()
+ val verifies=kind in setOf(SecretKind.CLOUD,SecretKind.ZOTERO,SecretKind.ZOTERO_DAV)
+ suspend fun verifySaved(){
+  try {
+   controller.execute(if(kind==SecretKind.CLOUD)"cloud.check"else"zotero.check",JSONObject())
+   close()
+  }catch(cancelled:kotlinx.coroutines.CancellationException){throw cancelled}
+  catch(failure:Exception){error="凭据已安全保存，连接检查未通过："+(failure.message?:"请核对网络与目标权限。")}
+ }
+ fun retry(){busy=true;error=null;scope.launch{try{verifySaved()}finally{busy=false}}}
+ fun save(value:String?){
+  busy=true;error=null
+  scope.launch{
+   try {
+    controller.updateSecret(kind,value);text=""
+    if(value!=null&&verifies){saved=true;verifySaved()}else close()
+   }catch(cancelled:kotlinx.coroutines.CancellationException){throw cancelled}
+   catch(failure:Exception){error="凭据尚未确认保存："+(failure.message?:"请重试。")}
+   finally{busy=false}
+  }
+ }
+ AlertDialog(onDismissRequest={if(!busy){text="";close()}},
+ title={Text(when(kind){SecretKind.MODEL->"模型 API 密钥";SecretKind.CLOUD->"坚果云第三方应用密码";SecretKind.ZOTERO->"Zotero 专用 API key";SecretKind.ZOTERO_DAV->"Zotero WebDAV 独立应用密码"})},
+ text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)){
+  Text("仅在本机加密保存，不进入设置、任务记录或研究备份。")
+  if(saved){Text("凭据已安全保存，无需重新输入。可只重试连接检查，或关闭后稍后再检查。")
+   TextButton({saved=false;error=null},enabled=!busy){Text("更换刚才保存的凭据")}
+  }else CredentialPasswordField(text,{text=it},enabled=!busy)
+  error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+  TextButton({save(null)},enabled=!busy){Text("删除本机保存的密钥")}
+ }},
+ confirmButton={TextButton({if(saved)retry()else save(text)},enabled=!busy&&(saved||text.isNotBlank())){
+  Text(if(saved)"仅重试连接检查"else if(verifies)"保存并检查连接"else"安全保存")
+ }},dismissButton={TextButton({text="";close()},enabled=!busy){Text(if(saved)"关闭"else"取消")}})
 }
 
 
