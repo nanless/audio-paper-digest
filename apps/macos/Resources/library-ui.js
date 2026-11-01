@@ -53,7 +53,7 @@ export function mountLibrary(app) {
   const bar = document.createElement('div'); bar.className = 'library-selection-bar';
   bar.innerHTML = '<span id="library-selection-count">可多选论文，或右键打开操作菜单</span><button id="library-selection-favorite" type="button" disabled>收藏选中</button><button id="library-selection-classify" type="button" disabled>收藏并归类</button><button id="library-selection-remove-favorite" type="button" disabled hidden>取消收藏选中</button><button id="library-selection-reading" type="button" disabled>加入待读</button><button id="library-selection-clear" type="button" disabled>取消选择</button>';
   scope.after(bar);
-  const favoriteTools=mountFavoriteTools(app,{before:filterBar,onChange:()=>{page=0;return render();},selection:()=>[...selected]});
+  const favoriteTools=mountFavoriteTools(app,{before:filterBar,onChange:({resetPage=false}={})=>{if(resetPage)page=0;return render();},selection:()=>[...selected],assignmentFocusTarget:()=>$('library-selection-classify')});
   const favoriteSort=document.createElement('option');favoriteSort.value='favorite-date';favoriteSort.textContent='收藏时间（最近优先）';favoriteSort.hidden=true;$('sort').prepend(favoriteSort);
   const table = $('paper-rows').closest('table'); table.classList.add('lib-multi');
   const th = document.createElement('th'); th.innerHTML = '<input class="library-check" id="library-select-page" type="checkbox" aria-label="选择当前页全部论文">';
