@@ -107,7 +107,7 @@ npm run test:compat
 | `lib/daily-scoring-refresh-checkpoint-cli.js` | Python 日更发布在有同来源运行的私有保存稿时，经私有文件描述符调用同一恢复辅助函数冷核；仅判断待完成状态，硬禁网络，不采纳评分或授予模型额度。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
-| `prepare-reader-revision.js` | 按篇正文重做准备：写入 readerRevisionHistory、退休旧失败候选并清掉 Reader 阶段，供后续正常续跑；不改来源与费用。 |
+| `prepare-reader-revision.js` | 按篇正文重做准备：写入 readerRevisionHistory、退休旧失败候选并清掉 Reader 阶段，供后续正常续跑；不改来源与费用。带未完成事实反馈义务的稿子会跳过（`pending fact feedback`），已完成义务的稿子也会跳过（`fact feedback proof would be lost`）。 |
 | `reconfirm-analysis-success.js` | 受控成功复核：仅在正文与 Reader 记录都通过当前校验时清除陈旧失败标记，否则拒绝。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。未指定并发时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`（默认5），`--concurrency N` 可覆写为1–60；总轮数使用 `batchMaxRounds`（默认3），`--rounds N` 可覆写为1–10。先全批再仅续明确可重试失败，诊断保存到 `analysis-batch-reports`；只读取封存 PDF/TXT，图片只为本次调用在系统临时目录中准备。 |
