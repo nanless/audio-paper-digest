@@ -42,7 +42,7 @@ function writeFileAtomic(filePath, content, options = {}) {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
-    const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+    const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${require('crypto').randomUUID()}.tmp`);
     try {
         let previousMode;
         try {
@@ -56,9 +56,19 @@ function writeFileAtomic(filePath, content, options = {}) {
         // 这个选项保留原来「一律 0600」的约定：目标通常不存在，但残留的
         // 中间文件不该把它的权限位带进来。
         const targetMode = mode ?? previousMode ?? 0o600;
-        fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: targetMode });
+        // 临时文件独占创建并落盘后再改名：掉电或崩溃时宁可保留旧文件，
+        // 也不能留下截断的 JSON（分析结果与论文库都是已付费数据）。
+        const fd = fs.openSync(tmpPath, 'wx', targetMode);
+        try {
+            fs.writeFileSync(fd, content, 'utf8');
+            fs.fsyncSync(fd);
+        } finally {
+            fs.closeSync(fd);
+        }
         fs.chmodSync(tmpPath, targetMode);
         fs.renameSync(tmpPath, filePath);
+        const dirFd = fs.openSync(dir, 'r');
+        try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
     } catch (err) {
         if (fs.existsSync(tmpPath)) {
             fs.unlinkSync(tmpPath);
