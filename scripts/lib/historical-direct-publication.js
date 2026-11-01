@@ -1140,9 +1140,10 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
     if (!apply) return { status: 'dry-run', deltaCount: delta.length, baseHead: loaded.plan.blogBaseline.head };
     const preRemote = (dependencies.prePublishRemote || defaultPrePublishRemote)(blogRepo, remoteName);
     if (preRemote.branch !== undefined && preRemote.branch !== 'main') fail('发布要求博客位于 main 分支');
+    // 计划绑定的远端必须原样成立：远端前进（即便本地已同步）同样视为基线失效，
+    // 否则会在过期基线上提交并让发布凭证与远端父提交不一致。
     if (preRemote.remoteIdentitySha256 !== loaded.plan.blogBaseline.remoteIdentitySha256
-        || preRemote.remoteOid !== loaded.plan.blogBaseline.remoteOid
-            && preRemote.remoteOid !== preRemote.localHead) {
+        || preRemote.remoteOid !== loaded.plan.blogBaseline.remoteOid) {
         fail('保存发布基线后，远端提交已前进或远端身份已变化');
     }
     const commit = (dependencies.publishGit || defaultPublishGit)({ blogRepo, plan: loaded.plan, publicationId, message });
