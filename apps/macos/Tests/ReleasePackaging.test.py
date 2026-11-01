@@ -155,6 +155,20 @@ class Packaging(unittest.TestCase):
         self.assertIn('1.2.1 更新',notes);self.assertIn('网站已发布的九分面、多级论文分类',notes);self.assertIn('移除自建、重命名及手工归类入口',notes)
         self.assertNotIn('收藏支持自建多个分类',notes);self.assertTrue(self.call('verify')['verified'])
 
+    def test_130_release_notes_keep_resource_scope_and_original_security_limits(self):
+        self.make_formal()
+        plist_file=self.repo/'apps/macos/Info.plist';value=plistlib.loads(plist_file.read_bytes());value.update(CFBundleShortVersionString='1.3.0',CFBundleVersion='5');raw=plistlib.dumps(value)
+        write(plist_file,raw);write(self.app/'Contents/Info.plist',raw)
+        success(['git','add','.'],self.repo);success(['git','commit','-qm','Explicit 1.3.0 full website resources fixture'],self.repo)
+        commit=success(['git','rev-parse','HEAD'],self.repo).decode().strip()
+        self.change_metadata(lambda m:(m.update(sourceCommit=commit),next(x for x in m['files'] if x['path']=='Contents/Info.plist').update(bytes=len(raw),sha256=sha(raw))))
+        self.prepare();notes=(self.output/'RELEASE_NOTES.md').read_text()
+        for required in ['1.3.0 更新','全部论文与收藏','含零篇方向','同一导读独立满足组合条件','不新增自建分类','本地签名，未经过 Apple 公证','应用标识和签名一致','内部版本号递增','保留本机资料']:
+            self.assertIn(required,notes)
+        for unsupported in ['收藏支持自建多个分类','已通过实体机验收','已在 Google Play 发布','已通过 Apple 公证']:
+            self.assertNotIn(unsupported,notes)
+        self.assertTrue(self.call('verify')['verified'])
+
     def test_joint_release_notes_cannot_be_rewritten_after_manifest_sealing(self):
         self.make_formal();self.prepare()
         notes=self.output/'RELEASE_NOTES.md'
