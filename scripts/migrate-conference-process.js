@@ -607,14 +607,9 @@ function migrateAndRun(options, runtime = {}) {
             : await adoptCompletedGrantedChildren({ state, directory, shared }, deps);
         state = savedChildren.state;
         if (options.postprocessOnly) {
-            // 已保存子稿采纳失败不能被吞成成功：仍报告真实失败集，调用方才能重试。
-            if (savedChildren.failures.length) return { status: 'partial', postprocessOnly: true,
-                savedChildAdoptionBlocked: true, failures: savedChildren.failures, newApiRequests: 0,
-                processId: options.fromProcessId, generation: state.generation, stateSha256: state.stateSha256 };
             // Migration/state/receipt/source checks above are mandatory. This
             // mode never enters process dispatch, retry release or aggregation.
-            return { status: 'postprocessed_only', postprocessedOnly: true,
-                processId: options.fromProcessId, generation: state.generation,
+            const base = { postprocessOnly: true, processId: options.fromProcessId, generation: state.generation,
                 stateSha256: state.stateSha256, implementationSha256: state.authority.implementationSha256,
                 complete: Object.values(state.items).filter(item => item.status === 'complete').length,
                 pending: Object.values(state.items).filter(item => item.status !== 'complete').length,
@@ -623,6 +618,9 @@ function migrateAndRun(options, runtime = {}) {
                 adoptedSavedChildren: savedChildren.adopted, savedChildAdoptionFailures: savedChildren.failures,
                 sourceCorrectionsApplied: Boolean(options.sourceCorrections),
                 preservedFailedReaders: Boolean(options.preserveFailedReaders), newApiRequests: 0 };
+            // 已保存子稿采纳失败不能被吞成成功：仍报告真实失败集，调用方才能重试。
+            if (savedChildren.failures.length) return { ...base, status: 'partial', savedChildAdoptionBlocked: true };
+            return { ...base, status: 'postprocessed_only' };
         }
         if (savedChildren.failures.length) return { status: 'partial', processId: options.fromProcessId,
             savedChildAdoptionBlocked: true, failures: savedChildren.failures, newApiRequests: 0 };
