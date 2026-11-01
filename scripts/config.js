@@ -365,11 +365,15 @@ function applyEnvOverrides() {
         ANALYSIS_CONFIG.concurrency = analysisConcurrency;
     }
     // 分析重试次数
-    if (process.env.PD_ANALYSIS_MAX_RETRIES) {
-        const val = parseInt(process.env.PD_ANALYSIS_MAX_RETRIES, 10);
-        if (!Number.isNaN(val) && val >= 0) {
-            ANALYSIS_CONFIG.maxRetries = val;
+    if (process.env.PD_ANALYSIS_MAX_RETRIES !== undefined) {
+        const raw = String(process.env.PD_ANALYSIS_MAX_RETRIES);
+        const val = Number(raw);
+        // 旧写法等价于 batchMaxRounds = val + 1；允许 0..9，越界直接报错，
+        // 不再像以前那样静默接受任意大值（20 会变成 21 轮）。
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(val) || val < 0 || val > 9) {
+            throw new RangeError('PD_ANALYSIS_MAX_RETRIES 必须是 0..9 的整数');
         }
+        ANALYSIS_CONFIG.maxRetries = val;
     }
     ANALYSIS_CONFIG.batchMaxRounds = ANALYSIS_CONFIG.maxRetries + 1;
     const roundLimits = {
