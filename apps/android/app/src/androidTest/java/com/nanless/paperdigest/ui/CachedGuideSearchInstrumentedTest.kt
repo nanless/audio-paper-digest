@@ -29,7 +29,7 @@ class CachedGuideSearchInstrumentedTest {
  }
  private fun result(query:String,ids:List<String> = emptyList(),scanned:Int=2,unavailable:Int=0)=JSONObject().put("query",query).put("scope","cached-published-guides").put("cachedTextIDs",JSONArray(ids)).put("scannedArticles",scanned).put("unavailableArticles",unavailable)
  private fun mount(controller:Controller){compose.setContent{val state by controller.state.collectAsState();LibraryPane(state,controller,{_,_->error("Search must not dispatch writes")},{error("No imports")})}}
- private fun show(text:String){compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text));compose.onNodeWithText(text).assertExists()}
+ private fun show(text:String){compose.onNodeWithTag("library-results").performScrollToNode(hasText(text));compose.onNodeWithText(text).assertExists()}
  private fun query(value:String){compose.onNode(hasSetTextAction()).performTextReplacement(value);compose.waitForIdle()}
  @Test fun cachedHitsSupplementMetadataAndExistingFiltersStillApply(){
   val controller=Controller{result(it,listOf("cached"))};controller.state.value=controller.state.value.copy(personal=JSONObject().put("favorites",JSONArray(listOf("meta"))))
@@ -37,7 +37,7 @@ class CachedGuideSearchInstrumentedTest {
   compose.waitUntil(5000){compose.onAllNodes(hasText("已检查 2 份",substring=true)).fetchSemanticsNodes().isNotEmpty()}
   show("元数据命中");show("缓存正文命中");compose.onNodeWithText("其他论文").assertDoesNotExist()
   compose.onNodeWithText("收藏",useUnmergedTree=true).performClick();compose.onNodeWithText("元数据命中").assertExists();compose.onNodeWithText("缓存正文命中").assertDoesNotExist()
-  query("");compose.onNodeWithText("全部",useUnmergedTree=true).performClick();show("其他论文");assertEquals(listOf("needle"),controller.queries.toList())
+  query("");compose.onNodeWithText("全部",useUnmergedTree=true).performClick();query("");show("其他论文");assertEquals(listOf("needle"),controller.queries.toList())
  }
  private fun oldQueryDoesNotPublish(oldFailure:Boolean){
   val old=CompletableDeferred<JSONObject>();val current=CompletableDeferred<JSONObject>()

@@ -130,7 +130,7 @@ class RealAppInstrumentedTest {
   assertTrue(controller.state.value.papers.size>=15)
   val originalSessions=controller.state.value.sessions.size
   capture("library")
-  compose.onNodeWithText("搜索论文信息、笔记与本机已缓存导读").performTextInput("MiCLA");androidx.test.espresso.Espresso.closeSoftKeyboard();compose.waitForIdle()
+  compose.onNodeWithText("论文、作者、编号或笔记").performTextInput("MiCLA");androidx.test.espresso.Espresso.closeSoftKeyboard();compose.waitForIdle()
   val paper=controller.state.value.papers.first{it.title.contains("MiCLA")}
   waitText(paper.titleZh);compose.onNodeWithText(paper.titleZh).performScrollTo().assertIsDisplayed().performClick();compose.waitForIdle()
   try{compose.waitUntil(40000){controller.state.value.selectedPaperId==paper.id&&controller.state.value.article!=null}}catch(failure:Throwable){

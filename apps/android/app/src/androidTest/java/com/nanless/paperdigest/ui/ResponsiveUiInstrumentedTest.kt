@@ -69,9 +69,9 @@ class ResponsiveUiInstrumentedTest {
  @Test fun resultCanBeScrolledIntoTheVisibleWindowAndOpenedWhileImeRemainsOpen(){
   val controller=Controller();lateinit var view:View
   content{val rootView=LocalView.current;SideEffect{view=rootView};val observed by controller.state.collectAsState();LibraryPane(observed,controller,{c,p->if(c=="paper.open")controller.calls+=c to p},{})}
-  compose.onNodeWithText("搜索论文信息、笔记与本机已缓存导读").performClick().performTextInput("短屏目标")
+  compose.onNodeWithText("论文、作者、编号或笔记").performClick().performTextInput("短屏目标")
   compose.waitUntil(10000){ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime())==true}
-  compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(controller.target.titleZh))
+  compose.onNodeWithTag("library-results").performScrollToNode(hasText(controller.target.titleZh))
   val target=compose.onNodeWithText(controller.target.titleZh).assertIsDisplayed();val bounds=target.fetchSemanticsNode().boundsInRoot
   val visible=Rect();val location=IntArray(2);compose.runOnIdle{view.getWindowVisibleDisplayFrame(visible);view.getLocationOnScreen(location)}
   val hitLeft=maxOf(bounds.left+location[0],visible.left.toFloat());val hitRight=minOf(bounds.right+location[0],visible.right.toFloat())
@@ -83,16 +83,16 @@ class ResponsiveUiInstrumentedTest {
  }
  @Test fun filterAndScopePanelsKeepTheQueryAndDoNotRepeatSearchOrLoseFunctions(){
   val controller=Controller();content(scale=1f){val observed by controller.state.collectAsState();LibraryPane(observed,controller,{_,_->},{})}
-  compose.onNodeWithText("搜索论文信息、笔记与本机已缓存导读").performTextInput("短屏目标")
+  compose.onNodeWithText("论文、作者、编号或笔记").performTextInput("短屏目标")
   compose.waitUntil(10000){controller.calls.count{it.first=="library.search"}==1}
-  compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("筛选与排序 · 最新"));compose.onNodeWithText("筛选与排序 · 最新").performClick()
-  for(label in listOf("收藏","待读","离线","评分","来源","任务","方法","最低评分"))compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
-  compose.onNodeWithText("待读").performScrollTo().performClick()
+  compose.onNodeWithTag("library-results").performScrollToNode(hasText("筛选与排序 · 最新"));compose.onNodeWithText("筛选与排序 · 最新").performClick()
+  for(label in listOf("评分","网站导读发布日期"))compose.onNodeWithText(label).performScrollTo().assertIsDisplayed()
+  compose.onNode(hasText("来源",substring=true) and hasClickAction()).performScrollTo().assertIsDisplayed()
   compose.onNodeWithText("清除筛选（保留搜索和排序）").performScrollTo().performClick()
   compose.onNodeWithText("查看 1 篇结果").performScrollTo().performClick()
-  compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("检索范围与状态"));compose.onNodeWithText("检索范围与状态").performClick()
-  compose.onNodeWithText("尚无可检索的已保存导读；当前只匹配论文信息与笔记。").assertExists();compose.onNodeWithText("关闭").performClick()
-  compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("短屏目标"));compose.onNodeWithText("短屏目标").assertExists()
+  compose.onNodeWithContentDescription("目录与检索范围").performClick()
+  compose.onAllNodesWithText("尚无可检索的已保存导读；当前只匹配论文信息与笔记。").onLast().assertExists();compose.onNodeWithText("关闭").performClick()
+  compose.onNodeWithTag("library-results").performScrollToNode(hasText("短屏目标"));compose.onNodeWithText("短屏目标").assertExists()
   assertEquals(1,controller.calls.count{it.first=="library.search"})
  }
  @Test fun longSourceDetailsDoNotConsumeTheResearchViewportOrClearItsQuestion(){

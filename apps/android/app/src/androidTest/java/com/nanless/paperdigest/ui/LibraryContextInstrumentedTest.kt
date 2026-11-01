@@ -49,11 +49,11 @@ class LibraryContextInstrumentedTest {
         open();scroll("上下文论文 030");scroll("筛选与排序 · 最新")
         compose.onNodeWithText("筛选与排序 · 最新").performClick();compose.onNodeWithText("评分").performClick()
         compose.onNodeWithText("查看 120 篇结果").performScrollTo().performClick()
-        compose.onNodeWithText("文献资料库").assertIsDisplayed();assertEquals(0f,position(),0.05f)
+        compose.onAllNodesWithText("论文库").onFirst().assertIsDisplayed();assertEquals(0f,position(),0.05f)
     }
     @Test fun hiddenSelectionIsExplicitAndCanBeLimitedToTheCurrentResultBeforeBatchAdd(){
         val controller=open();compose.onNodeWithText("多选").performClick();scroll("加选匹配 120 篇");compose.onNodeWithText("加选匹配 120 篇").performClick()
-        scroll("搜索论文、作者与笔记");compose.onNodeWithText("搜索论文、作者与笔记").performTextInput("上下文论文 001")
+        scroll("论文、作者、编号或笔记");compose.onNodeWithText("论文、作者、编号或笔记").performTextInput("上下文论文 001");compose.onNode(hasSetTextAction()).performImeAction();androidx.test.uiautomator.UiDevice.getInstance(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()).waitForIdle(1500)
         scroll("已选 120 篇，其中 119 篇不在当前结果中");compose.onNodeWithText("已选 120 篇，其中 119 篇不在当前结果中").assertIsDisplayed()
         compose.onNodeWithText("仅保留当前结果内已选").performScrollTo().performClick()
         compose.onNodeWithText("加入待读").performScrollTo().performClick();compose.waitForIdle()
@@ -62,7 +62,7 @@ class LibraryContextInstrumentedTest {
     @Test fun emptyFavoritesExplainCollectionAndAnEmptySearchHasADirectRecovery(){
         val controller=open();compose.onNodeWithText("收藏").performScrollTo().performClick();scroll("还没有收藏");compose.onNodeWithText("还没有收藏").assertIsDisplayed()
         scroll("全部");compose.onNodeWithText("全部").performClick()
-        compose.onNodeWithText("搜索论文、作者与笔记").performTextInput("no-synthetic-match")
+        compose.onNodeWithText("论文、作者、编号或笔记").performTextInput("no-synthetic-match")
         compose.waitUntil(5000){controller.calls.contains("library.search")};compose.waitForIdle()
         scroll("清除搜索和筛选");compose.onNodeWithText("当前搜索或筛选没有匹配").assertExists();compose.onNodeWithText("清除搜索和筛选").performClick()
         compose.onNodeWithText("120 篇匹配").assertExists();compose.onNodeWithContentDescription("清除搜索").assertDoesNotExist()

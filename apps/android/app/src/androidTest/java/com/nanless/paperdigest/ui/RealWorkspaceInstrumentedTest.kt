@@ -62,7 +62,7 @@ class RealWorkspaceInstrumentedTest {
   requireQA();waitText("文献资料库")
   val sessions=controller.state.value.sessions.size
   val paper=controller.state.value.papers.first{it.title.contains("MiCLA")}
-  compose.onNodeWithText("搜索论文信息、笔记与本机已缓存导读").performTextInput("MiCLA");androidx.test.espresso.Espresso.closeSoftKeyboard();compose.waitForIdle();waitText(paper.titleZh);compose.onNodeWithText(paper.titleZh).performScrollTo().assertIsDisplayed().performClick();compose.waitForIdle()
+  compose.onNodeWithText("论文、作者、编号或笔记").performTextInput("MiCLA");androidx.test.espresso.Espresso.closeSoftKeyboard();compose.waitForIdle();waitText(paper.titleZh);compose.onNodeWithText(paper.titleZh).performScrollTo().assertIsDisplayed().performClick();compose.waitForIdle()
   waitReadingControls()
   compose.waitUntil(30000){controller.state.value.article?.paperID==paper.id}
   selectReadingMode("笔记");waitText("阅读笔记")
