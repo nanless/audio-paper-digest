@@ -40,6 +40,9 @@ import org.json.JSONObject
  var focus by rememberSaveable(paper.id){mutableStateOf("both")}
  var splitPercent by rememberSaveable(paper.id){mutableFloatStateOf(paperReading.optDouble("split",46.0).toFloat().takeIf{it.isFinite()}?.coerceIn(38f,62f)?:46f)}
  var export by remember(paper.id){mutableStateOf(false)};var zotero by remember(paper.id){mutableStateOf(false)}
+ var classifyFavorite by rememberSaveable(paper.id){mutableStateOf(false)}
+ val favoriteView=remember(state.personal){com.nanless.paperdigest.data.FavoriteCollections.view(state.personal)}
+ val favoriteIDs=remember(state.personal){state.personal.ids("favorites").toSet()}
  LaunchedEffect(state.pdfMode){phonePDF=state.pdfMode}
   LaunchedEffect(state.pdfReceipt.optString("sourceNavigationID")){
    if(state.pdfReceipt.optString("sourceNavigationID").isNotBlank()&&state.pdfMode){phonePDF=true;focus="pdf"}
@@ -62,7 +65,7 @@ import org.json.JSONObject
  val modes=if(pdfAvailable)listOf("导读","研究","笔记","PDF")else listOf("导读","研究","笔记")
  fun chooseMode(value:String){if(value=="PDF"){phonePDF=true;focus="pdf"}else{tab=value;phonePDF=false;focus="both"};modeMenu=false}
  fun togglePDF(){action(if(state.pdfMode)"pdf.close" else "pdf.open",JSONObject());phonePDF=!state.pdfMode;focus="both"}
- fun toggleList(key:String){val ids=state.personal.ids(key).toMutableList();if(!ids.remove(paper.id))ids+=paper.id;action("personal.setList",obj("key" to key,"ids" to JSONArray(ids)))}
+ fun toggleList(key:String){action("personal.list.edit",obj("key" to key,"action" to if(paper.id in state.personal.ids(key))"remove"else"add","ids" to JSONArray(listOf(paper.id))))}
  NonOccludingViewport(allowHingePair=pdfAvailable,preferHingePair=focus=="both",preferRightRegion=focus=="pdf"){
   val readerViewportWidth=maxWidth
   val readerViewportHeight=maxHeight
@@ -101,7 +104,9 @@ import org.json.JSONObject
      IconButton({export=true}){Icon(Icons.Outlined.MoreVert,"论文操作与导出")}
      DropdownMenu(export,{export=false}){
       DropdownMenuItem({Text("论文完整信息与来源…")},{export=false;showPaperInfo=true})
-      DropdownMenuItem({Text(if(paper.id in state.personal.ids("favorites"))"取消收藏" else "收藏这篇论文")},{export=false;toggleList("favorites")})
+      DropdownMenuItem({Text(if(paper.id in favoriteIDs)"取消收藏" else "收藏这篇论文")},{export=false;toggleList("favorites")},enabled=!favoriteView.readOnly)
+      DropdownMenuItem({Text(if(paper.id in favoriteIDs)"整理收藏分类…"else"收藏并分类…")},{export=false;classifyFavorite=true},enabled=!favoriteView.readOnly)
+      if(favoriteView.readOnly)DropdownMenuItem({Text("收藏分类需要更新版本")},{},enabled=false)
       DropdownMenuItem({Text(if(paper.id in state.personal.ids("reading"))"移出待读" else "加入待读")},{export=false;toggleList("reading")})
       DropdownMenuItem({Text("打开原来源页面")},{export=false;val u=android.net.Uri.parse(paper.sourceURL?:paper.blogURL);if(u.scheme=="https"&&u.host!=null&&u.userInfo==null)runCatching{readerContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,u))}})
       DropdownMenuItem({Text("刷新已发布导读")},{export=false;action("paper.open",obj("paperID" to paper.id,"refresh" to true))})
@@ -182,6 +187,7 @@ import org.json.JSONObject
   }},confirmButton={TextButton({showPaperInfo=false}){Text("关闭")}})
  }
  PdfOriginalOutputDialogs(pdfOutput)
+ if(classifyFavorite)FavoriteAssignmentDialog(favoriteView,favoriteIDs,listOf(paper.id),controller,{classifyFavorite=false},initialAddMissing=paper.id !in favoriteIDs)
  if(zotero)ZoteroArchiveDialog(state,action,{zotero=false})
 }
 
