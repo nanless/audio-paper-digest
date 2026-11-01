@@ -708,7 +708,7 @@ function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pl
                 pageApi.writeExact(path.join(directory, 'manifest.json'), canonicalBytes(projected.manifest));
                 rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
             }
-        });
+        }, { recoveryPolicy: analysisEngine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
     }
     if (projected.assignment.status !== 'assigned') return { status: 'blocked', assignment: projected.assignment };
     return { status: apply ? 'staged' : 'dry-run', manifest: projected.manifest, markdown: projected.pageBytes.toString('utf8') };
