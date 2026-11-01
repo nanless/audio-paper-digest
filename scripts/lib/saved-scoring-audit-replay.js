@@ -84,9 +84,16 @@ function protectedPaper(paper) {
     const result = clone(paper);
     // parsed 是评分阶段会重写的派生视图（含总分与分档）；原稿停在评分前、
     // 当前稿已是评分后，直接比较必然不等。正文本身仍由 analysis 逐字保护。
-    for (const key of ['analysisCheckpoint', 'apiReaderResources', 'error', 'parsed',
+    for (const key of ['analysisCheckpoint', 'apiReaderResources', 'error',
         'latestAnalysisAttemptAt', 'latestAnalysisAttemptError', 'latestAnalysisAttemptErrorCategory',
         'latestAnalysisAttemptErrorCode']) delete result[key];
+    // parsed 里的总分、分档与评分维度由评分阶段改写；其余字段仍是正文派生的
+    // 受保护视图，不能一并删掉（页面与状态报告都以它为权威）。
+    if (result.parsed && typeof result.parsed === 'object') {
+        delete result.parsed.score;
+        delete result.parsed.rankBucket;
+        delete result.parsed.dimensions;
+    }
     delete result.analysisStageCheckpoints?.scoringAudit;
     delete result.analysisManifest?.updatedAt;
     delete result.analysisManifest?.scoringResourceInputReplay;
