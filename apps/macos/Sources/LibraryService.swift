@@ -245,9 +245,11 @@ actor LibraryService {
         return value
     }
 
-    func list(query: String = "", source: String? = nil, minimumScore: Double? = nil, sort: Sort = .date, offset: Int = 0, limit: Int = 200) -> [Paper] {
+    private func matchingPapers(query:String,source:String?,minimumScore:Double?,sort:Sort,includeRetained:Bool=false)->[Paper] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        let filtered = snapshot.papers.filter { p in
+        var catalog=snapshot.papers
+        if includeRetained{let current=Set(catalog.map(\.id));catalog.append(contentsOf:(snapshot.retiredPapers ?? []).filter{!current.contains($0.id)})}
+        let filtered = catalog.filter { p in
             (source == nil || source == "all" || p.sourceKind == source) &&
             (minimumScore == nil || (p.score ?? -.infinity) >= minimumScore!) &&
             (needle.isEmpty || ([p.id, p.title, p.titleZh, p.task, p.method] + p.authors + p.tags).joined(separator: " ").folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains(needle))
@@ -259,7 +261,11 @@ actor LibraryService {
             }
             return a.id < b.id
         }
-        return Array(filtered.dropFirst(max(0, offset)).prefix(max(0, min(limit, 10000))))
+        return filtered
+    }
+
+    func list(query: String = "", source: String? = nil, minimumScore: Double? = nil, sort: Sort = .date, offset: Int = 0, limit: Int = 200) -> [Paper] {
+        Array(matchingPapers(query:query,source:source,minimumScore:minimumScore,sort:sort).dropFirst(max(0,offset)).prefix(max(0,min(limit,10000))))
     }
 
     func sync(progress: @escaping @Sendable (Progress) -> Void = { _ in }) async throws -> Summary {
@@ -1134,12 +1140,13 @@ actor LibraryService {
             let query = payload["query"] as? String ?? "", source = payload["source"] as? String
             let score = payload["minimumScore"] as? Double
             let sort = Sort(rawValue: payload["sort"] as? String ?? "date") ?? .date
-            let matches = list(query: query, source: source, minimumScore: score, sort: sort, limit: 10000)
+            let matches = matchingPapers(query:query,source:source,minimumScore:score,sort:sort,includeRetained:true)
+            let currentIDs=Set(snapshot.papers.map(\.id))
             let papers = Array(matches.dropFirst(max(0, payload["offset"] as? Int ?? 0)).prefix(max(0, min(10000, payload["limit"] as? Int ?? 200))))
             let rows = try papers.map { p -> [String: Any] in
-                var result = try Self.dictionary(p); result["paperID"] = p.id; result["blogURL"] = p.blogURL; result["pdfURL"] = p.pdfURL ?? NSNull(); return result
+                var result = try Self.dictionary(p); result["paperID"] = p.id; result["blogURL"] = p.blogURL; result["pdfURL"] = p.pdfURL ?? NSNull();result["localRetained"] = !currentIDs.contains(p.id); return result
             }
-            return ["papers": rows, "count": rows.count, "total": matches.count, "totalInLibrary": snapshot.papers.count, "offset": max(0, payload["offset"] as? Int ?? 0)]
+            return ["papers": rows, "count": rows.count, "total": matches.count, "totalInLibrary": snapshot.papers.count,"snapshotID":snapshot.summary.snapshotID,"retainedCount":(snapshot.retiredPapers ?? []).count, "offset": max(0, payload["offset"] as? Int ?? 0)]
         case "library.search": return ["ids": searchCachedText(payload["query"] as? String ?? ""), "scope": "仅本机已读取导读正文，不检索PDF原文"]
         case "library.citationFile":
             guard let id = payload["paperID"] as? String ?? payload["id"] as? String else { throw ServiceError.invalid("未选择论文。") }
