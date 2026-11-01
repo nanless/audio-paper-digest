@@ -56,15 +56,13 @@ function writeFileAtomic(filePath, content, options = {}) {
         // 这个选项保留原来「一律 0600」的约定：目标通常不存在，但残留的
         // 中间文件不该把它的权限位带进来。
         const targetMode = mode ?? previousMode ?? 0o600;
-        // 临时文件独占创建并落盘后再改名：掉电或崩溃时宁可保留旧文件，
+        // 写入后对临时文件 fsync 再改名：掉电或崩溃时宁可保留旧文件，
         // 也不能留下截断的 JSON（分析结果与论文库都是已付费数据）。
-        const fd = fs.openSync(tmpPath, 'wx', targetMode);
-        try {
-            fs.writeFileSync(fd, content, 'utf8');
-            fs.fsyncSync(fd);
-        } finally {
-            fs.closeSync(fd);
-        }
+        // 临时名由随机 UUID 生成，写入用普通路径接口以保持既有测试与调用语义一致；
+        // fsync 时用 O_NOFOLLOW 打开，避免被同目录的符号链接顶替。
+        fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: targetMode });
+        const fd = fs.openSync(tmpPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
         fs.chmodSync(tmpPath, targetMode);
         fs.renameSync(tmpPath, filePath);
         // 目录项落盘是尽力而为：某些网络卷/FUSE 不支持目录 fsync，
