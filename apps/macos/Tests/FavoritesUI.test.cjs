@@ -32,6 +32,10 @@ const server=http.createServer((req,res)=>{const name=decodeURIComponent(req.url
   window.uiPersonal=()=>personal;const{mountLibrary}=await import('/library-ui.js');window.uiLibrary=mountLibrary(uiApp);document.querySelector('#reader-view').hidden=true;document.querySelector('#library-view').hidden=false;await uiLibrary.render();
  });
  const sectionChecks=await page.evaluate(async()=>{const{favoriteSection}=await import('/favorites-ui.js');const now=new Date(2026,2,8,12),tomorrow=new Date(2026,2,9,0);return [favoriteSection(tomorrow,'relative',now),favoriteSection(tomorrow,'month',now),favoriteSection(new Date(2026,2,8,1),'relative',now),favoriteSection(new Date(2026,2,2,23),'relative',now),favoriteSection(new Date(2026,2,1,23),'relative',now)];});assert.deepEqual(sectionChecks,['较晚日期（请检查设备时间）','较晚日期（请检查设备时间）','今天收藏','近 7 天收藏','更早收藏']);
+ await page.setViewportSize({width:1000,height:700});
+ const firstTitle=await page.locator('[data-library-row] .paper-row-title').first().boundingBox();assert(firstTitle.y<440,'personal tools must leave room for reading rows');
+ assert.match(await page.locator('#library-subtitle').innerText(),/^4 篇收藏 · 1 篇收藏时间未知$/);assert.equal(await page.locator('#favorite-time-help').getAttribute('open'),null);
+ for(const id of ['favorite-folder-filter','favorite-grouping','favorite-manage-toggle']){assert.equal(await page.locator('#'+id).isVisible(),true);const rect=await page.locator('#'+id).boundingBox();assert(rect.y+rect.height<350);}
  const rows=()=>page.locator('#paper-rows tr[data-library-row]');
  assert.deepEqual(await rows().evaluateAll(els=>els.map(e=>e.dataset.libraryRow)),['paper:3','paper:2','paper:0','paper:1']);
  assert.match(await page.locator('#paper-rows').innerText(),/今天收藏[\s\S]*近 7 天收藏[\s\S]*更早收藏[\s\S]*收藏时间未知/);
