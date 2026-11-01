@@ -2,7 +2,7 @@
 
 “论文速递工作台”提供 Mac 与 Android 两个原生客户端，用于阅读网站已发布的论文解读、核对原始 PDF、保存个人研究，以及连接 Zotero 和坚果云。主项目与网站仍叫“论文速递”，日更、会议和历史文章继续由网站工作流生产。客户端安装、同步、阅读或换设备均不自动重新分析论文。
 
-当前客户端版本为 1.0.1。Android 支持 API 28 及以上系统；Mac 支持 macOS 15 及以上的 ARM64 设备，使用本地签名、未经 Apple 公证。下载安装与版本状态见[Android 验证说明](<android-validation.md>)和 [Mac 发行说明](<mac-app-release.md>)。
+当前客户端版本为 1.1.0。Android 支持 API 28 及以上系统；Mac 支持 macOS 15 及以上的 ARM64 设备，使用本地签名、未经 Apple 公证。下载安装与版本状态见[Android 验证说明](<android-validation.md>)和 [Mac 发行说明](<mac-app-release.md>)。
 
 ## 两个原生界面，共用研究资料
 
@@ -52,6 +52,6 @@ Android 使用官方 Web API v3，由用户单独配置专用授权；不要求 
 
 ## 验证与发行
 
-Android 的实际测试环境为 API 28、API 35 模拟器，覆盖原生阅读、系统文件操作、不同窗口和字体、模型、Zotero、坚果云及跨端资料读取。1.0.1 已完成同签名从 1.0.0/code3 到 code4 的隔离覆盖升级，系统名称、原生空资料库和测试标记保留通过核对。具体范围见[验证说明](<android-validation.md>)和[86 项功能表](<android-feature-parity.md>)。
+既有 Android 功能测试使用 API 28、API 35 模拟器，覆盖原生阅读、系统文件操作、不同窗口和字体、模型、Zotero、坚果云及跨端资料读取。本次 1.1.0 在隔离 API 35 模拟器完成原证书 code4 → code5 覆盖升级，33 个研究文件、笔记和待读保持；日更、会议、按钮和系统返回及干净首配通过。具体版本范围见[验证说明](<android-validation.md>)和[86 项功能表](<android-feature-parity.md>)。
 
-正式 APK 与 Mac 安装包在同一仓库的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases) 提供。版本、来源、最低系统、架构、签名和 SHA 由实际发行文件记录；1.0.1 已公开为 [v1.0.1](https://github.com/nanless/audio-paper-digest/releases/tag/v1.0.1)。正式包不包含验收样稿、用户资料、签名私钥、运行配置或本地审查记录。
+正式 APK 与 Mac 安装包在同一仓库的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases) 提供。版本、来源、最低系统、架构、签名和 SHA 由实际发行文件记录；当前为 [v1.1.0](https://github.com/nanless/audio-paper-digest/releases/tag/v1.1.0)。正式包不包含验收样稿、用户资料、签名私钥、运行配置或本地审查记录。

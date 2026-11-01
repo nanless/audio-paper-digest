@@ -2,7 +2,9 @@
 
 1.1.0（构建号 5）维护日更和会议导航、逐级返回、正文先显与后台补图、首次连接及凭据检查状态，具体范围见 [本轮改动与验证](workbench-1.1.0-review.md)。应用 ID、资料格式与正式签名保持兼容，实际安装包和远端状态以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。下文的 1.0.1 记录保留原范围，不作为新版包或新版远端下载的通过记录。
 
-更新于 2026-10-29。论文速递工作台 **1.0.1（构建号 4）** 已完成本地正式包核验、安全检查和同签名覆盖升级。应用标识为 `com.nanless.paperdigest`，支持 API 28 及以上，包含四种架构并符合 16 KiB 对齐要求。1.0.1 已与 Mac 安装包一同公开，见 [v1.0.1](https://github.com/nanless/audio-paper-digest/releases/tag/v1.0.1)。公开发布后逐件下载的 12 个附件大小与 SHA 与实际包一致。
+1.1.0 已于 2026-11-01 与 Mac 安装包[联合公开](https://github.com/nanless/audio-paper-digest/releases/tag/v1.1.0)。本次隔离 API 35 模拟器完成正式 1.0.1/code4 → 1.1.0/code5 原证书覆盖升级，33 个原研究文件 SHA、笔记、待读和首次安装时间保持；实际日更、会议、两种返回及干净首启和简单配置通过。公开后十二件附件无需登录下载，大小与 SHA 一致，APK 和 Mac 资产重验通过，详见[本轮正式发行检查](workbench-1.1.0-review.md#正式发行与升级检查)。
+
+历史记录（2026-10-29）：论文速递工作台 **1.0.1（构建号 4）** 当时完成本地正式包核验、安全检查和同签名覆盖升级。应用标识为 `com.nanless.paperdigest`，支持 API 28 及以上，包含四种架构并符合 16 KiB 对齐要求。其原十二件联合附件曾逐件下载核对大小与 SHA。旧 Release 条目现已清理，[v1.0.1 源码标签](https://github.com/nanless/audio-paper-digest/tree/v1.0.1)保留。
 
 ## 当前结论
 
@@ -53,6 +55,6 @@
 
 ## 发行状态
 
-本地 1.0.1 安装包和相关附件已完成安全核验，Android 实际覆盖升级已完成。正式发布前还需由统一发行流程绑定最终来源、生成说明与校验文件，核对远端版本、两端资产和下载文件。旧公开 1.0.0 保持原样，当前不以旧文件充当 1.0.1 下载。
+当前正式版本为 1.1.0，固定来源 `bb6cc329`。两端正式安装包、原签名、实际升级、远端标签、发行说明和十二件公开下载均已核验。1.0.0、1.0.1 的旧 Release 条目已移除，Git 标签、历史和原签名及升级验证凭据保留。
 
 使用入口见 [Android README](<../apps/android/README.md>)，数据限制见[备份合同](<android-cloud-contract.md>)，接口与附件后端见 [Zotero 说明](<android-zotero-research.md>)。
