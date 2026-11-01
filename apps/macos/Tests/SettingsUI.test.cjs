@@ -71,8 +71,17 @@ let browser,passed=0;
   await check('Zotero ordinary refresh stays unknown; explicit saved grant check does not request new authorization',async page=>{
     await page.locator('[data-pane=zotero]').click();await page.locator('#zotero-refresh').click();await page.waitForFunction(()=>document.querySelector('#zotero-auth-status').textContent.includes('尚未检查'));assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='zotero.checkAuthorization').length),0);await page.locator('#zotero-settings-check-saved').click();await page.waitForFunction(()=>document.querySelector('#zotero-auth-status').textContent.includes('已获持续授权'));assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='zotero.checkAuthorization').length),1);assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command==='zotero.authorize').length),0);
   });
+  await check('model first screen exposes credentials, paid check and direct single proxy field',async page=>{
+    await page.locator('[data-pane=model]').click();await page.setViewportSize({width:840,height:610});
+    assert.equal(await page.locator('#model-advanced').getAttribute('open'),null);
+    for(const id of ['endpoint','model','protocol','set-key','check-model']){assert.equal(await page.locator('#'+id).isVisible(),true);const rect=await page.locator('#'+id).boundingBox();assert(rect.y+rect.height<=610,id+' must be in initial viewport');}
+    assert.match(await page.locator('#check-model').innerText(),/可能计费/);assert.match(await page.locator('#model-proxy-status').innerText(),/尚未保存/);
+    await page.locator('[data-focus-setting=httpProxy]').click();assert.equal(await page.evaluate(()=>document.activeElement.id),'httpProxy');assert.equal(await page.locator('#httpProxy').count(),1);
+    await page.locator('#httpProxy').fill('http://127.0.0.1:8181');await page.evaluate(()=>window.paperDigestFlushSettings());await page.locator('[data-pane=model]').click();assert.match(await page.locator('#model-proxy-status').innerText(),/已保存代理/);
+    assert.equal(await page.evaluate(()=>fixture.calls.filter(c=>c.command.startsWith('model.')).length),0);
+  },{...initial,credentialState:'unknown',hasKey:null});
   await check('explicit Responses parameters persist as boolean and enum before check',async page=>{
-    await page.locator('[data-pane=model]').click();assert.equal(await page.locator('#responsesStream').isChecked(),false);assert.equal(await page.locator('#reasoningEffort').inputValue(),'default');
+    await page.locator('[data-pane=model]').click();await page.locator('#model-advanced summary').click();assert.equal(await page.locator('#responsesStream').isChecked(),false);assert.equal(await page.locator('#reasoningEffort').inputValue(),'default');
     await page.locator('#responsesStream').check();await page.locator('#reasoningEffort').selectOption('low');await page.locator('#check-model').click();await page.waitForFunction(()=>document.querySelector('#model-result').textContent.includes('reported-fixture'));
     assert.equal(await page.evaluate(()=>fixture.settings.responsesStream),true);assert.equal(await page.evaluate(()=>fixture.settings.reasoningEffort),'low');
     const calls=await page.evaluate(()=>fixture.calls);assert(calls.find(c=>c.command==='settings.save'&&c.payload.responsesStream===true));assert.equal(calls.filter(c=>c.command==='model.check').length,1);assert((await page.locator('#model-result').textContent()).includes('12'));

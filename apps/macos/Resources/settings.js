@@ -24,7 +24,7 @@ function ensureMounted(){
 
 function appearance(){document.documentElement.style.colorScheme=state.settings.appearance==='system'?'light dark':state.settings.appearance||'light dark';}
 function value(id){if(booleanKeys.includes(id))return $(id).checked;return numericKeys.includes(id)?Number($(id).value):$(id).value;}
-function fill(){for(const id of [...textKeys,...numericKeys])if(!dirty.has(id))$(id).value=state.settings[id]??defaults[id];for(const id of booleanKeys)if(!dirty.has(id))$(id).checked=!!state.settings[id];$('font-label').value=$('font').value;fillCredentialStatus();appearance();}
+function fill(){for(const id of [...textKeys,...numericKeys])if(!dirty.has(id))$(id).value=state.settings[id]??defaults[id];for(const id of booleanKeys)if(!dirty.has(id))$(id).checked=!!state.settings[id];$('font-label').value=$('font').value;fillCredentialStatus();if($('model-proxy-status'))$('model-proxy-status').textContent=state.settings.httpProxy?'本机已保存代理。':'当前尚未保存代理。';appearance();}
 function fillCredentialStatus(){$('key-status').textContent=state.settings.credentialState==='unavailable'?'未能读取钥匙串；可再次主动发送请求并在系统窗口决定是否允许':state.settings.credentialState==='unknown'||state.settings.hasKey==null?'密钥状态未检查；仅在发送新模型请求时访问钥匙串':state.settings.hasKey?'本次已确认密钥存在于 macOS 钥匙串；发送时仍遵循系统访问许可':'尚未保存 API 密钥';}
 function acceptSettings(settings,credentialAttempt){
  // A late passive/save receipt may update ordinary settings, never newer key status.
@@ -60,7 +60,7 @@ for(const el of document.querySelectorAll('input,select')){
 }
 $('font').addEventListener('input',()=>$('font-label').value=$('font').value);
 document.querySelectorAll('[data-pane]').forEach(button=>button.onclick=()=>{const changed=button.getAttribute('aria-current')!=='page';document.querySelectorAll('[data-pane]').forEach(b=>b.setAttribute('aria-current',b===button?'page':'false'));document.querySelectorAll('[data-setting-pane]').forEach(p=>{if(p.dataset.settingPane===button.dataset.pane)revealAccessiblePane(p);else p.hidden=true;});$('discard-settings').hidden=button.dataset.pane==='cloud';if(changed){const content=document.querySelector('.settings-content');if(content){content.scrollTop=0;content.scrollLeft=0;}}if(button.dataset.pane==='cloud')cloudUI?.refresh().catch(error);});
-document.querySelectorAll('[data-open-pane]').forEach(button=>button.onclick=()=>window.paperDigestShowSettingsPane(button.dataset.openPane));
+document.querySelectorAll('[data-open-pane]').forEach(button=>button.onclick=()=>{if(window.paperDigestShowSettingsPane(button.dataset.openPane)&&button.dataset.focusSetting)$(button.dataset.focusSetting)?.focus();});
 window.paperDigestShowSettingsPane=pane=>{if(typeof pane!=='string')return false;const button=[...document.querySelectorAll('[data-pane]')].find(button=>button.dataset.pane===pane);if(!button)return false;button.click();return true;};
 $('set-key').onclick=async()=>{credentialRevision++;try{state.settings=await call('model.setKey');fill();}catch(e){error(e);}finally{credentialRevision++;}};
 $('delete-key').onclick=async()=>{credentialRevision++;try{state.settings=await call('model.deleteKey');fill();}catch(e){error(e);}finally{credentialRevision++;}};
