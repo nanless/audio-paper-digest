@@ -23,6 +23,7 @@ export function mountCloud(app){
  [data-setting-pane="cloud"] .cloud-fields{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
  [data-setting-pane="cloud"] .cloud-fields label{margin:0}
  [data-setting-pane="cloud"] .cloud-primary{background:var(--accent,#3468cf);color:#fff;border-color:transparent}
+ [data-setting-pane="cloud"] button.cloud-primary:not(:disabled):hover{background:var(--accent,#3468cf);filter:brightness(.92)}
  [data-setting-pane="cloud"] .cloud-primary:disabled{background:var(--soft,#eceeed);color:var(--muted,#888);border-color:var(--line,#ddd)}
  [data-setting-pane="cloud"] .cloud-check-row{display:flex;gap:12px;align-items:center}
  [data-setting-pane="cloud"] .cloud-check-row h2{margin:0}

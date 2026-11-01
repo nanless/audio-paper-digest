@@ -72,8 +72,11 @@ class ReleaseTests(unittest.TestCase):
   p.write_text(''.join(rows).replace('通过','部分验证：通过',1));self.failcode('android_acceptance_incomplete',lambda:m.android_acceptance(p,ids))
   p.write_text(''.join(rows)+rows[0]);self.failcode('android_acceptance_incomplete',lambda:m.android_acceptance(p,ids))
   p.write_text(''.join(rows)+'| A-UNKNOWN-01 | original | condition | 通过 |\n');self.failcode('android_acceptance_incomplete',lambda:m.android_acceptance(p,ids))
- def test_unknown_current_partial_acceptance_not_release_qualified(self):
-  mac=m.mac_module(REPO);self.failcode('android_acceptance_incomplete',lambda:m.android_acceptance(REPO/'docs/android-feature-parity.md',{'A-'+n for n in mac.IDS|mac.CLOUD_IDS}))
+ def test_documented_baseline_has_complete_unique_original_acceptance_ids(self):
+  # The documented 1.0.1 baseline is now complete. Partial/unknown/duplicate
+  # statuses remain rejected by the independent synthetic cases above; a
+  # complete old table alone never proves a new APK or remote release.
+  mac=m.mac_module(REPO);m.android_acceptance(REPO/'docs/android-feature-parity.md',{'A-'+n for n in mac.IDS|mac.CLOUD_IDS})
  def test_external_command_failure_never_echoes_raw_bait(self):
   with patch.object(m.subprocess,'run',return_value=subprocess.CompletedProcess([],1,b'',b'synthetic-secret-bait')):
    self.failcode('safe_failure',lambda:m.run(['synthetic-tool'],'safe_failure'))

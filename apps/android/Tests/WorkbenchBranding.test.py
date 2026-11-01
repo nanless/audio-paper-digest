@@ -98,9 +98,9 @@ class WorkbenchBranding(unittest.TestCase):
             with patch.object(m, 'check_source'):
                 self.reject('application_label', lambda: m.verify(folder, REPO, sdk, '0' * 64))
 
-    def test_source_identity_version_and_provider_authorities_are_unchanged(self):
+    def test_source_release_version_and_stable_identity_and_provider_authorities(self):
         config = (ROOT / 'app/build.gradle.kts').read_text()
-        self.assertIn('versionCode = 4; versionName = "1.0.1"', config)
+        self.assertIn('versionCode = 5; versionName = "1.1.0"', config)
         self.assertIn('applicationId = "com.nanless.paperdigest"', config)
         self.assertIn('namespace = "com.nanless.paperdigest"', config)
         app = m.ET.parse(ROOT / 'app/src/main/AndroidManifest.xml').find('application')
