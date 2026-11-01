@@ -90,9 +90,11 @@ function protectedPaper(paper) {
     // parsed 里的总分、分档与评分维度由评分阶段改写；其余字段仍是正文派生的
     // 受保护视图，不能一并删掉（页面与状态报告都以它为权威）。
     if (result.parsed && typeof result.parsed === 'object') {
-        delete result.parsed.score;
-        delete result.parsed.rankBucket;
-        delete result.parsed.dimensions;
+        // 评分阶段会把总分、分档、机器摘要、置信度、文档类型与八维分数写回正文，
+        // 再由此重新解析出 parsed；这些字段在两次记录间必然不同，逐项剔除。
+        for (const key of ['score', 'rankBucket', 'machineSummary', 'confidence', 'documentType',
+            'scoreValidation', 'dimensions']) delete result.parsed[key];
+        for (const key of Object.keys(result.parsed)) if (/Score$/.test(key)) delete result.parsed[key];
     }
     delete result.analysisStageCheckpoints?.scoringAudit;
     delete result.analysisManifest?.updatedAt;
