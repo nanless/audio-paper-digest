@@ -76,7 +76,16 @@ test('existing supported loss-normalization alias uses same matrix; supplied-sou
  assert.equal(api.getInvalidAnalysisReason(main,parsed,{...options,sourceText:source}),null);
 }));
 
-const actualAvailable=fs.existsSync(path.join(ROOT,'data/runtime/daily-fresh-source-runs/cc02fdfc-2fc5-4eff-afff-b9e149c42137/sources/2610.32310/generation-000001/source.pdf'));
+const actualSealedSource=path.join(ROOT,'data/runtime/daily-fresh-source-runs/cc02fdfc-2fc5-4eff-afff-b9e149c42137/sources/2610.32310/generation-000001/source.pdf');
+// 这条本地集成用例还要求该篇仍是当前正式分析的成员：批次轮换后旧记录不再绑定
+// 当前封存来源计划，绑定检查会失败；此时跳过而不是误报实现回归。
+const boundToCurrentBatch=(()=>{try{
+    const deep=JSON.parse(fs.readFileSync(path.join(ROOT,'data/current/deep-analysis-result.json'),'utf8'));
+    const record=(deep.papers||[]).find(item=>String(item.arxivId||'').startsWith('2610.32310'));
+    return Boolean(record&&record.freshRewriteProvenance
+        && record.freshRewriteProvenance.runId==='cc02fdfc-2fc5-4eff-afff-b9e149c42137');
+}catch{return false;}})();
+const actualAvailable=fs.existsSync(actualSealedSource)&&boundToCurrentBatch;
 test('local integration: no source option and no fresh ALS invokes unchanged actual sealed daily source replay',{skip:!actualAvailable},safe(()=>{
  assert.equal(require(path.join(ROOT,'scripts/lib/fresh-analysis-context')).getFreshAnalysisContext(),null);
  api.testSetSource(api.testOriginalSource);
