@@ -58,6 +58,7 @@ async function installFixture(page, initial={}) {
         case 'personal.snapshot':return copy(b.personal);
         case 'personal.note':if(b.failNote)throw Error('Fixture note disk failure');b.personal.notes[payload.paperID]={text:payload.text,revision:payload.baseRevision+1};return copy(b.personal.notes[payload.paperID]);
         case 'personal.reading':{const owner=payload.paperID||b.selected.id,snapshot=copy(payload);if(b.holdReadingFor===owner)await new Promise(resolve=>b.pendingReadings.push(resolve));b.personal.readingState[owner]={...snapshot,updatedAt:new Date().toISOString()};return {};}
+        case 'personal.list.edit':{if(b.holdFavorite)await new Promise(resolve=>b.releaseFavorite=resolve);if(b.failFavorite)throw Error('Fixture favorite disk failure');const set=new Set(b.personal[payload.key]||[]);payload.ids.forEach(id=>payload.action==='remove'?set.delete(id):set.add(id));b.personal[payload.key]=[...set];return copy(b.personal);}
         case 'personal.setList':b.personal[payload.key]=payload.ids;return copy(b.personal);
         case 'pdf.open':return {page:b.personal.readingState?.[b.selected?.id]?.pdfPage||1,pageCount:13,scale:1,version:'2610.27491v1',sha256:'01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c'};
         case 'pdf.selection':return copy(b.selection||{});
@@ -161,7 +162,7 @@ if(require.main===module)(async()=>{
   });
   await check('full source export bound to current article identity/revision; absent during pending transition',async()=>{
     const current=await page.evaluate(()=>paperDigestArchiveHTML());assert.equal(current.paperID,primary.id);assert.equal(current.revision,revision);assert.ok(current.html.includes('43.2'));
-    await page.locator('#back').click();await page.evaluate(()=>__fixture.holdArticle=true);await page.locator('[data-library-open="'+papers[1].id+'"]').click();await page.waitForFunction(()=>!!__fixture.releaseArticle);
+    await page.locator('#back').click();await page.waitForSelector('#notes-view:not([hidden])');await page.locator('[data-view=library]').click();await page.evaluate(()=>__fixture.holdArticle=true);await page.locator('[data-library-open="'+papers[1].id+'"]').click();await page.waitForFunction(()=>!!__fixture.releaseArticle);
     assert.equal(await page.evaluate(()=>paperDigestArchiveHTML()),null);await page.evaluate(()=>{__fixture.holdArticle=false;__fixture.releaseArticle();});await page.waitForFunction(()=>paperDigestArchiveHTML()?.revision==='fixture-second-revision');const next=await page.evaluate(()=>paperDigestArchiveHTML());assert.equal(next.paperID,papers[1].id);assert.ok(!next.html.includes('43.2'));
   });
   await check('reader has no unexpected JavaScript errors; no Zotero permission or library writes invoked',async()=>{assert.deepEqual(pageErrors,[]);assert.deepEqual(await page.evaluate(()=>__unimplemented),[]);assert.equal(await page.evaluate(()=>__calls.filter(c=>/^zotero\.(authorize|archive|resume)$/.test(c.command)).length),0);});
