@@ -16,3 +16,5 @@
 .library-view.aggregate-list-selected .aggregate-rows{flex:1;min-height:0;overflow:auto}
 
 .aggregate-preview-text{flex:1;min-height:0;min-width:0;overflow:auto;margin:0;padding:20px 38px 70px;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--article-font,18px)/1.9 -apple-system,"PingFang SC",sans-serif;color:var(--ink);background:var(--surface)}
+
+.website-resource-hub{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:12px 0 20px}.website-resource-hub h3{flex-basis:100%;font-size:11px;font-weight:500;color:var(--muted);margin-bottom:1px}.website-resource-hub button{font-size:12px;border:1px solid var(--line);padding:6px 9px;background:var(--chrome)}.library-view.aggregate-pages-only .page-heading .eyebrow{display:none}.library-view.aggregate-pages-only .page-heading{padding-top:18px;padding-bottom:18px}

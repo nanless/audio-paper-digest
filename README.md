@@ -17,7 +17,7 @@ Mac 与 Android 客户端叫 **论文速递工作台**，网站和内容生产�
 
 ![内容生产、两端阅读与个人资料的关系](docs/images/client-data-flow.svg)
 
-工作台公开版本 1.2.1 沿用网站原有的多级论文分类，移除自建与手动归类入口，保留真实收藏时间分区，详见[改动与验证](docs/workbench-1.2.1-review.md)和[收藏说明](docs/favorite-collections.md)。1.3.0 正在扩展全站分类浏览并整理两端界面，范围和实际进度见[本轮审改记录](docs/workbench-1.3.0-review.md)。实际公开下载以发行页为准。Mac 面向 ARM64、macOS 15，采用本地签名，尚未通过 Apple 公证；Android 支持四种 ABI，沿用原签名和应用标识。安装方式与验证范围见 [Mac 说明](apps/macos/README.md)、[Android 说明](apps/android/README.md)；安全检查见[客户端安全说明](docs/client-security-audit.md)。
+工作台沿用网站原有的多级论文分类，移除自建与手动归类入口，保留真实收藏时间分区，详见[分类来源与验证](docs/workbench-1.2.1-review.md)和[收藏说明](docs/favorite-collections.md)。1.3.0 源码增加全站分类浏览并整理两端界面，范围和实际验收状态见[本轮审改记录](docs/workbench-1.3.0-review.md)。源码版本不能替代安装包发行状态，实际公开下载以[发行页](https://github.com/nanless/audio-paper-digest/releases)为准。Mac 面向 ARM64、macOS 15，采用本地签名，尚未通过 Apple 公证；Android 支持四种 ABI，沿用原签名和应用标识。安装方式与验证范围见 [Mac 说明](apps/macos/README.md)、[Android 说明](apps/android/README.md)；安全检查见[客户端安全说明](docs/client-security-audit.md)。
 
 <a id="默认行为"></a>
 <a id="架构概览"></a>

@@ -12,7 +12,8 @@
     <link rel="stylesheet" href="reader-notices.css" />
     <script src="vendor/lucide.min.js" defer></script>
     <script src="vendor/katex/katex.min.js" defer></script><link rel="stylesheet" href="vendor/katex/katex.min.css"><script src="native.js" type="module"></script>
-  </head>
+      <link rel="stylesheet" href="website-browser.css" />
+</head>
   <body>
     <div class="app-window" id="app-window">
       <aside class="sidebar" aria-label="资料导航">
@@ -33,6 +34,7 @@
           <nav aria-label="网站成果">
             <button class="nav-item" data-view="today"><i data-lucide="sun"></i><span>日更速递</span></button>
             <button class="nav-item" data-view="library"><i data-lucide="library"></i><span>全部论文</span><small id="library-count"></small></button>
+            <button class="nav-item" data-view="directions"><i data-lucide="network"></i><span>研究方向</span></button>
             <button class="nav-item" data-view="conference"><i data-lucide="presentation"></i><span>会议论文集</span></button>
           </nav>
           <h2 class="spaced">我的研究</h2>
@@ -43,14 +45,14 @@
             <button class="nav-item" data-view="notes"><i data-lucide="notebook-pen"></i><span>我的笔记</span></button>
             <button class="nav-item" data-view="tasks"><i data-lucide="activity"></i><span>后台任务</span></button>
           </nav>
-          <button class="nav-item" id="storage-button"><i data-lucide="hard-drive"></i><span>本机资料</span></button><div class="current-document">
+          <button class="nav-item" id="storage-button"><i data-lucide="hard-drive"></i><span>本机资料</span></button><div class="current-document" hidden>
             <span class="sidebar-caption">当前文献</span
             ><button data-view="reader">
               <i data-lucide="file-text"></i
               ><span id="sidebar-paper">尚未选择论文</span>
             </button>
           </div>
-          <div class="sidebar-outline" id="sidebar-outline">
+          <div class="sidebar-outline" id="sidebar-outline" hidden>
             <span class="sidebar-caption">文章目录</span>
             <div id="outline"></div>
           </div>
@@ -74,11 +76,11 @@
               <i data-lucide="panel-left"></i></button
             ><button class="icon-button" id="back" aria-label="返回上一页" title="返回上一页">
               <i data-lucide="chevron-left"></i></button
-            ><span class="toolbar-context" id="toolbar-context">继续阅读</span>
+            ><span class="toolbar-context" id="toolbar-context">资料库</span>
           </div>
           <div
             class="reader-tabs"
-            id="reader-tabs"
+            id="reader-tabs" hidden
             role="tablist"
             aria-label="研究内容"
           >
@@ -115,20 +117,20 @@
               aria-label="搜索论文"
             >
               <i data-lucide="search"></i></button
-            ><button class="icon-button document-action" id="save-offline" aria-label="保存完整离线资料" title="保存离线"><i data-lucide="download"></i></button><button class="icon-button document-action" id="refresh-reader" aria-label="重新读取网站当前导读"><i data-lucide="refresh-cw"></i></button><button
-              class="icon-button document-action"
+            ><button class="icon-button document-action" hidden id="save-offline" aria-label="保存完整离线资料" title="保存离线"><i data-lucide="download"></i></button><button class="icon-button document-action" hidden id="refresh-reader" aria-label="重新读取网站当前导读"><i data-lucide="refresh-cw"></i></button><button
+              class="icon-button document-action" hidden
               id="favorite"
               aria-label="收藏当前论文"
               aria-pressed="false"
             >
               <i data-lucide="star"></i></button
             ><button
-              class="toolbar-button document-action"
+              class="toolbar-button document-action" hidden
               id="pdf-toggle"
               aria-pressed="false"
             >
               <i data-lucide="panel-right"></i><span>打开 PDF</span></button
-            ><button class="toolbar-button document-action" id="archive-open">
+            ><button class="toolbar-button document-action" hidden id="archive-open">
               <span class="zotero-z">Z</span><span>存入 Zotero</span>
             </button>
           </div>
