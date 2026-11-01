@@ -27,7 +27,7 @@ class CachedGuideSearchInstrumentedTest {
   override suspend fun updateSecret(kind:SecretKind,value:String?){error("No credentials")}
   override suspend fun updatePdfSelection(selection:PdfSelection){error("No PDF")}
  }
- private fun result(query:String,ids:List<String> = emptyList(),scanned:Int=2,unavailable:Int=0)=JSONObject().put("query",query).put("scope","cached-published-guides").put("paperIDs",JSONArray(ids)).put("scannedArticles",scanned).put("unavailableArticles",unavailable)
+ private fun result(query:String,ids:List<String> = emptyList(),scanned:Int=2,unavailable:Int=0)=JSONObject().put("query",query).put("scope","cached-published-guides").put("cachedTextIDs",JSONArray(ids)).put("scannedArticles",scanned).put("unavailableArticles",unavailable)
  private fun mount(controller:Controller){compose.setContent{val state by controller.state.collectAsState();LibraryPane(state,controller,{_,_->error("Search must not dispatch writes")},{error("No imports")})}}
  private fun show(text:String){compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text));compose.onNodeWithText(text).assertExists()}
  private fun query(value:String){compose.onNode(hasSetTextAction()).performTextReplacement(value);compose.waitForIdle()}

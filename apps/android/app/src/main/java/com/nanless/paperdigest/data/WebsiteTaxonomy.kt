@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /** Website-owned classification display only. Never a paper/source or model capability. */
 class WebsiteTaxonomy private constructor(val nodes: Map<String, Node>, private val versions: Map<String, Map<String, Node>>, private val versionNames: Map<String,String>, private val raw: JSONObject) {
-    data class Node(val id:String,val facet:String,val label:String,val ancestors:List<String>,val active:Boolean)
+    data class Node(val id:String,val facet:String,val label:String,val ancestors:List<String>,val active:Boolean,val english:String="",val aliases:List<String> = emptyList(),val description:String="")
     data class Classification(val status:String,val concepts:List<Node>,val issuedConcepts:List<Node> = emptyList())
     fun json():JSONObject=raw.copy()
     fun classify(record:JSONObject):Classification {
@@ -75,7 +75,7 @@ class WebsiteTaxonomy private constructor(val nodes: Map<String, Node>, private 
             val entries=snapshot.getJSONArray("concepts");require(entries.length() in 1..10000);val nodes=linkedMapOf<String,Node>();val labelOwners=mutableMapOf<String,String>()
             for(i in 0 until entries.length()) {val r=entries.getJSONObject(i);val id=r.getString("id");val facet=r.getString("facet");val label=r.getString("zh");val ancestors=r.getJSONArray("ancestorIds").strings();val aliases=r.getJSONArray("aliases").strings();require(id.matches(Regex("[a-z][a-z0-9_]*\\.[a-z0-9][a-z0-9.-]*"))&&facet in facets&&id.startsWith("$facet.")&&label.isNotBlank()&&id !in nodes&&ancestors.size<=64&&ancestors.all{it.isNotBlank()}&&aliases.all{it.isNotBlank()});val labels=listOf(label,r.optString("en"))+aliases
                 labels.filter{it.isNotBlank()}.forEach { text->val normalized=java.text.Normalizer.normalize(text.trim(),java.text.Normalizer.Form.NFKC).lowercase(java.util.Locale.ROOT);val key=facet+"\u0000"+normalized;require(labelOwners[key]==null||labelOwners[key]==id){"网站分类别名存在歧义"};labelOwners[key]=id }
-                val status=r.optString("status","active");require(status in setOf("active","deprecated"));r.optJSONArray("parentIds")?.let{require(it.length()<=1)};nodes[id]=Node(id,facet,label,ancestors,status=="active")}
+                val status=r.optString("status","active");require(status in setOf("active","deprecated"));r.optJSONArray("parentIds")?.let{require(it.length()<=1)};nodes[id]=Node(id,facet,label,ancestors,status=="active",r.optString("en"),aliases.toList(),r.optString("definition",r.optString("description"))+" "+r.optString("scopeNote"))}
             nodes.values.forEach {node->val chain=ArrayList<String>();val seen=hashSetOf(node.id);var parent=node.ancestors.lastOrNull();while(parent!=null){val p=nodes[parent]?:error("网站分类父级缺失");require(p.facet==node.facet&&p.active&&seen.add(parent));chain.add(0,parent);parent=p.ancestors.lastOrNull()};require(chain==node.ancestors){"网站分类祖先路径不闭合"}}
             return nodes.toMap()
         }

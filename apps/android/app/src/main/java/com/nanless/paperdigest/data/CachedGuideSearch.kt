@@ -42,7 +42,7 @@ class CachedGuideSearch(private val directory: File) {
                 catch (_: Exception) { operation.ensureActive(); unavailable++ }
             }
         }
-        JSONObject().put("query", query).put("paperIDs", JSONArray(matches.sorted())).put("scannedArticles", scanned)
+        JSONObject().put("query", query).put("paperIDs", JSONArray(matches.sorted())).put("cachedTextIDs", JSONArray(matches.sorted())).put("scannedArticles", scanned)
             .put("unavailableArticles", unavailable).put("scope", "cached-published-guides")
     }
 

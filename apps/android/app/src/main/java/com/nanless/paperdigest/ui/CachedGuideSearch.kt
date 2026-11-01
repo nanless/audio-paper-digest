@@ -16,7 +16,7 @@ internal fun cachedGuideMatches(receipt:JSONObject,query:String):CachedGuideMatc
   val value=n.toLong();require(value in 0..Int.MAX_VALUE.toLong()&&n.toDouble()==value.toDouble()){"缓存检索数量无效"};return value.toInt()
  }
  val scanned=count("scannedArticles");val unavailable=count("unavailableArticles")
- val ids=receipt.optJSONArray("paperIDs")?:error("缓存检索未返回论文身份")
+ val ids=receipt.optJSONArray("cachedTextIDs") ?: receipt.optJSONArray("paperIDs")?.takeIf{it.length()==0} ?: error("缓存检索缺少明确的正文命中类型，未合并未经确认的结果")
  val matches=LinkedHashSet<String>()
  for(i in 0 until ids.length()){val id=ids.opt(i) as? String;require(!id.isNullOrBlank()){"缓存检索论文身份无效"};matches+=id}
  return CachedGuideMatches(query,matches,scanned,unavailable)

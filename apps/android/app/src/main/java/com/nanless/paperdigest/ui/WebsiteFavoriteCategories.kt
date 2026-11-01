@@ -15,43 +15,6 @@ import androidx.compose.ui.unit.dp
 import com.nanless.paperdigest.data.Paper
 import com.nanless.paperdigest.data.WebsiteTaxonomy
 
-internal class WebsiteFavoriteIndex(val taxonomy:WebsiteTaxonomy?,papers:List<Paper>) {
-    val paths=papers.associate { it.id to taxonomy?.paths(it).orEmpty() }
-    val counts=linkedMapOf<String,Int>().also { counts->paths.values.forEach { paths->paths.flatten().map {it.id}.toSet().forEach{counts[it]=(counts[it]?:0)+1} } }
-    val unclassified=paths.values.count{it.isEmpty()}
-    fun matches(id:String,category:String)=when(category){""->true;"unclassified"->paths[id].isNullOrEmpty();else->paths[id].orEmpty().any {path->path.any{it.id==category}}}
-    /** A classification and ordinary metadata constraints must be satisfied by the same guide. */
-    fun matchesCriteria(paper:Paper,category:String,source:String,minimum:String,query:String,personalSearchHit:Boolean):Boolean {
-        if(category=="unclassified"&&!paths[paper.id].isNullOrEmpty())return false
-        val records=WebsiteTaxonomy.records(paper)
-        if(records.isEmpty())return matches(paper.id,category)&&(source.isEmpty()||paper.sourceKind==source)&&(minimum.isEmpty()||(paper.score?:-1.0)>=(minimum.toDoubleOrNull()?:0.0))&&(personalSearchHit||matchesLibrarySearch(paper,query,null))
-        return records.any { row ->
-            val kind=row.optString("sourceKind",row.optJSONObject("citation")?.optString("sourceKind",paper.sourceKind)?:paper.sourceKind)
-            val score=Paper.score(row.opt("score"))
-            val concepts=taxonomy?.classify(row)?.concepts.orEmpty()
-            (source.isEmpty()||kind==source)&&(minimum.isEmpty()||(score?:-1.0)>=(minimum.toDoubleOrNull()?:0.0))&&
-                (category.isEmpty()||category=="unclassified"||concepts.any{it.id==category||category in it.ancestors})&&
-                (personalSearchHit||query.isBlank()||run {
-                    val needle=query.trim()
-                    val metadata=listOf(paper.id)+listOf("title","titleZh","originalTitle","summary","task","method","date","sourceKind","permalink","arxivId").map{row.optString(it)}+
-                        row.optJSONArray("tags")?.let{(0 until it.length()).map(it::optString)}.orEmpty()+
-                        row.optJSONObject("citation")?.optJSONArray("authors")?.let{(0 until it.length()).map(it::optString)}.orEmpty()+
-                        concepts.flatMap{(it.ancestors+it.id).map{node->taxonomy!!.nodes.getValue(node).label}}
-                    metadata.any{it.contains(needle,true)}
-                })
-        }
-    }
-    fun label(category:String)=when(category){""->"全部网站分类";"unclassified"->"网站分类未就绪";else->taxonomy?.nodes?.get(category)?.label?:"全部网站分类"}
-    fun explanation(paper:Paper):String=when(taxonomy?.status(paper)) {
-        "verified"->"网站未提供可显示的分类"
-        "withheld"->"网站暂缓展示该论文分类"
-        "legacy","missing"->"网站未提供已核验的多级分类；同步可检查最新资料"
-        "unknown-version","unbound-version"->"本机缺少该论文的分类词表版本，请同步网站资料"
-        "invalid-roles","invalid"->"网站分类来源暂不可验证，请同步后再查看"
-        else->"本机缺少网站分类资料，请同步已发布内容"
-    }
-}
-
 /** One website node at a time, including its descendants; counts deduplicate paper identities. */
 @OptIn(ExperimentalMaterial3Api::class,ExperimentalLayoutApi::class)
 @Composable internal fun WebsiteFavoriteCategoryPicker(index:WebsiteFavoriteIndex,selected:String,onSelect:(String)->Unit,close:()->Unit) {
