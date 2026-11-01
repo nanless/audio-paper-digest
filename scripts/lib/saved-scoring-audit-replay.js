@@ -82,7 +82,9 @@ function feePair(expected) {
 
 function protectedPaper(paper) {
     const result = clone(paper);
-    for (const key of ['analysisCheckpoint', 'apiReaderResources', 'error',
+    // parsed 是评分阶段会重写的派生视图（含总分与分档）；原稿停在评分前、
+    // 当前稿已是评分后，直接比较必然不等。正文本身仍由 analysis 逐字保护。
+    for (const key of ['analysisCheckpoint', 'apiReaderResources', 'error', 'parsed',
         'latestAnalysisAttemptAt', 'latestAnalysisAttemptError', 'latestAnalysisAttemptErrorCategory',
         'latestAnalysisAttemptErrorCode']) delete result[key];
     delete result.analysisStageCheckpoints?.scoringAudit;
