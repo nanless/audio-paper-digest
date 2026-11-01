@@ -30,9 +30,12 @@ function main() {
         // 它依赖的 Reader 阶段与候选，让义务永远无法完成。
         const pending = require('./lib/pending-fact-feedback');
         if (Object.hasOwn(paper, pending.FIELD)) {
+            // 无论义务是否已完成，重做都会删掉它赖以成立的 Reader 阶段。
+            // 已完成的义务只在成功分析里由引擎清除，这里一律拒绝并说明原因。
             let done = false;
             try { done = pending.completed(paper, plan); } catch (_) { done = false; }
-            if (!done) { report.push({ id, skipped: 'pending fact feedback' }); continue; }
+            report.push({ id, skipped: done ? 'fact feedback proof would be lost' : 'pending fact feedback' });
+            continue;
         }
         const stage = paper.analysisManifest?.stages?.apiReaderArticle;
         let proof = stage?.ordinalCompletionProof;
