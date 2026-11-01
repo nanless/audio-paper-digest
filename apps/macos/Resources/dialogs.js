@@ -1,9 +1,9 @@
 // Give newly revealed content a fresh visible accessibility container. Preserve
 // the actual input nodes and handlers; never recreate the guide/PDF iframe.
-export function revealAccessiblePane(pane,{focus=true}={}){
+export function revealAccessiblePane(pane,{focus=true,refresh=false}={}){
  if(!pane)return null;
  let visible=pane;
- if(pane.hidden){
+ if(pane.hidden||refresh){
   visible=pane.cloneNode(false);visible.hidden=false;
   visible.append(...pane.childNodes);pane.replaceWith(visible);
  }
