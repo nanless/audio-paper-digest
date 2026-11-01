@@ -20,11 +20,11 @@ enum FavoriteCollections {
         guard let text=raw as? String,text.range(of:"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$",options:.regularExpression) != nil else{return false}
         let fields=text.prefix(19).split(whereSeparator:{!$0.isNumber}).compactMap{Int($0)}
         guard fields.count==6,fields[0]>0,fields[1]>=1,fields[1]<=12,fields[2]>=1,fields[2]<=31,fields[3]<24,fields[4]<60,fields[5]<60 else{return false}
-        var calendar=Calendar(identifier:.gregorian);calendar.timeZone=TimeZone(secondsFromGMT:0)!
-        let components=DateComponents(year:fields[0],month:fields[1],day:fields[2],hour:fields[3],minute:fields[4],second:fields[5])
-        guard let date=calendar.date(from:components) else{return false}
-        let checked=calendar.dateComponents([.year,.month,.day,.hour,.minute,.second],from:date)
-        return checked==components
+        // ISO UTC uses the proleptic Gregorian calendar, including years before
+        // 1582. Foundation's historical cutover accepts Julian-only leap dates.
+        let year=fields[0],leap=year%4==0 && (year%100 != 0 || year%400==0)
+        let days=[31,leap ? 29:28,31,30,31,30,31,31,30,31,30,31]
+        return fields[2]<=days[fields[1]-1]
     }
     static func timestamp(_ date:Date)->String{
         let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.calendar=Calendar(identifier:.gregorian);formatter.timeZone=TimeZone(secondsFromGMT:0);formatter.dateFormat="yyyy-MM-dd'T'HH:mm:ss.SSS'Z'";return formatter.string(from:date)

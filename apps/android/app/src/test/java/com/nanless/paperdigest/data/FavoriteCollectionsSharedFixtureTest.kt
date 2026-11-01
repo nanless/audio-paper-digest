@@ -17,7 +17,7 @@ class FavoriteCollectionsSharedFixtureTest {
         return JSONObject(file.readText())
     }
     @Test fun bothNativeValidatorsAgreeWithAllSharedValidAndInvalidDocuments(){
-        val cases=fixture().getJSONArray("validationCases");assertEquals(44,cases.length())
+        val cases=fixture().getJSONArray("validationCases");assertEquals(46,cases.length())
         cases.objects().forEach { case->
             val name=case.getString("name");val personal=case.getJSONObject("personal");val expected=case.getBoolean("valid")
             assertEquals("PersonalStore: $name",expected,runCatching { PersonalStore.validate(personal.copy()) }.isSuccess)

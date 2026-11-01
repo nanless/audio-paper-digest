@@ -67,8 +67,8 @@ import Foundation
         try store.editList(["key":"reading","action":"add","ids":["two"]]);_=try store.saveNote(id:"old",text:"future notes still editable",baseRevision:1)
         check("future opaque extension unchanged",encoded(store.snapshot()["favoriteCollections"] as! [String:Any])==futureBytes)
         try store.restorePersonal(original)
-        for bad in ["2025-02-29T00:00:00Z","2024-02-30T00:00:00Z","2024-01-01T00:00:60Z","0000-01-01T00:00:00Z","2024-01-01T00:00:00+00:00"]{check("reject invalid UTC "+bad,!FavoriteCollections.validTime(bad))}
-        for good in ["2024-02-29T00:00:00Z","2024-02-29T00:00:00.123456789Z","2024-02-29T23:59:59.999999999Z"]{check("accept real UTC "+good,FavoriteCollections.validTime(good))}
+        for bad in ["1500-02-29T00:00:00Z","1900-02-29T00:00:00Z","2025-02-29T00:00:00Z","2024-02-30T00:00:00Z","2024-01-01T00:00:60Z","0000-01-01T00:00:00Z","2024-01-01T00:00:00+00:00"]{check("reject invalid UTC "+bad,!FavoriteCollections.validTime(bad))}
+        for good in ["1582-10-10T00:00:00Z","1600-02-29T00:00:00Z","2000-02-29T00:00:00Z","2024-02-29T00:00:00Z","2024-02-29T00:00:00.123456789Z","2024-02-29T23:59:59.999999999Z"]{check("accept real UTC "+good,FavoriteCollections.validTime(good))}
         for bad:Any in [true,"1",1.5,-1,2_147_483_648] {var malformed=original,m=metadata();m["revision"]=bad;malformed["favoriteCollections"]=m;rejected("invalid revision rejected"){try store.restorePersonal(malformed)}}
         var max=original,m=metadata();m["revision"]=2_147_483_647;max["favoriteCollections"]=m;try store.restorePersonal(max)
         let maxDisk=try Data(contentsOf:file);try store.editList(["key":"favorites","action":"add","ids":["old"]]);check("max revision noop accepted",revision()==2_147_483_647)
