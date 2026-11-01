@@ -86,7 +86,7 @@ import org.json.JSONObject
                 Surface(color=MaterialTheme.colorScheme.surface) {
                     Column {
                         Row(Modifier.fillMaxWidth().padding(horizontal=4.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
-                            IconButton({action("aggregate.back",JSONObject())}){Icon(Icons.Outlined.ArrowBack,"返回汇总列表")}
+                            IconButton({action("aggregate.back",JSONObject())}){Icon(Icons.Outlined.ArrowBack,aggregate.backTitle)}
                             Column(Modifier.weight(1f).clickable(onClickLabel="查看完整标题与来源"){sourceInfo=true}.padding(horizontal=4.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
                                 Text(selected.titleZh.ifBlank{selected.title},style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=if(viewportHeight<360.dp)1 else 2,overflow=TextOverflow.Ellipsis)
                                 Text(aggregateKindLabel(selected.kind),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)

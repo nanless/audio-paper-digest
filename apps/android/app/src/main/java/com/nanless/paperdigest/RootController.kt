@@ -150,10 +150,10 @@ class RootController private constructor(private val context: Context, private v
     override suspend fun executeAggregateInView(command:String,payload:JSONObject,lease:AggregateViewLease):JSONObject {
         if(captureAggregateView()!=lease)return JSONObject().put("status","not-adopted")
         if(command!="aggregate.list")cancelPublishedPreload()
-        if(command in setOf("aggregate.select","aggregate.back","aggregate.close","aggregate.list","aggregate.refresh","aggregate.cached","aggregate.link"))cancelAggregateImages()
+        if(command in setOf("aggregate.select","aggregate.resume","aggregate.back","aggregate.close","aggregate.list","aggregate.refresh","aggregate.cached","aggregate.link"))cancelAggregateImages()
         val viewGuard={aggregateViewRevision.get()==lease.navigationEpoch}
         val claimGuard={generation.get()==lease.readingEpoch}
-        if(command in setOf("aggregate.close","aggregate.back"))return aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard)
+        if(command=="aggregate.close")return aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard)
         return withContext(Dispatchers.IO){val result=aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard);refresh();if(command=="aggregate.list"&&result.optString("status")=="index-ready")schedulePublishedPreload();result}
     }
     private val aggregateBrowser by lazy {

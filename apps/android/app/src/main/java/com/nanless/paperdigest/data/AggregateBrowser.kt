@@ -18,7 +18,7 @@ data class AggregateDocumentView(val descriptor:PublishedAggregate,val bodyHTML:
         }
     }
 }
-data class AggregateBrowseState(val catalog:PublishedAggregateCatalog?=null,val stamp:AggregateCatalogStamp?=null,val selected:PublishedAggregate?=null,val document:AggregateDocumentView?=null,val revisions:List<AggregateCachedRevision> = emptyList(),val loading:Boolean=false,val attemptedIndex:Boolean=false,val catalogStale:Boolean=false,val error:String?=null,val cacheError:String?=null,val offlineMode:Boolean=false,val loadingImages:Boolean=false)
+data class AggregateBrowseState(val catalog:PublishedAggregateCatalog?=null,val stamp:AggregateCatalogStamp?=null,val selected:PublishedAggregate?=null,val document:AggregateDocumentView?=null,val revisions:List<AggregateCachedRevision> = emptyList(),val loading:Boolean=false,val attemptedIndex:Boolean=false,val catalogStale:Boolean=false,val error:String?=null,val cacheError:String?=null,val offlineMode:Boolean=false,val loadingImages:Boolean=false,val backTitle:String="返回汇总列表")
 
 /** Implemented by the native catalog. UI commands supply IDs/SHA only, never URLs, descriptors or files. */
 internal interface AggregateBrowsePort {
@@ -37,6 +37,11 @@ internal interface AggregateBrowsePort {
 /** Private native generation rejects late results, ABA selection and a switch back to a real paper. */
 internal class AggregateBrowser(private val port:AggregateBrowsePort,private val claimReading:suspend (()->Boolean)->Boolean,private val publish:(AggregateBrowseState)->Unit,private val commitReading:suspend (()->Boolean,()->Boolean)->Boolean={live,commit->live()&&commit()},private val openLinkedPaper:suspend (Paper,()->Boolean)->JSONObject={_,_->JSONObject().put("status","not-adopted")}) {
     private var links:AggregateLinkTable?=null
+    // Display IDs only. Every back/resume reloads the current native catalog and mints new links.
+    private var trail=emptyList<String>()
+    private data class SuspendedRoute(val id:String,val trail:List<String>,val stamp:AggregateCatalogStamp?)
+    private var suspendedRoute:SuspendedRoute?=null
+    private fun parentTitle():String=trail.lastOrNull()?.let{id->state.catalog?.records?.firstOrNull{it.id==id}?.let{"返回"+it.titleZh.ifBlank{it.title}}}?:"返回汇总列表"
     private val lock=Any();private var ticket=0L;private var readingEpoch:Long?=null;private var viewIsCurrent:()->Boolean={true}
     @Volatile var state=AggregateBrowseState();private set
     private fun begin(viewGuard:()->Boolean,initialGuard:()->Boolean={true},transform:(AggregateBrowseState)->AggregateBrowseState):Long=synchronized(lock){if(!viewGuard()||!initialGuard())return -1L;links=null;ticket++;viewIsCurrent=viewGuard;readingEpoch=null;state=transform(state);publish(state);ticket}
@@ -44,9 +49,11 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
     private fun change(token:Long,body:(AggregateBrowseState)->AggregateBrowseState):Boolean=synchronized(lock){if(ticket!=token||!viewIsCurrent())return false;state=body(state);publish(state);true}
     private fun ready(token:Long,stamp:AggregateCatalogStamp,epoch:Long)=current(token)&&port.stamp()==stamp&&port.mayPresent(epoch)
     private fun response(status:String)=JSONObject().put("status",status)
-    fun enter(){synchronized(lock){links=null;ticket++;readingEpoch=null;viewIsCurrent={true};state=state.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,attemptedIndex=false,error=null,cacheError=null);publish(state)}}
+    fun enter(){synchronized(lock){trail=emptyList();links=null;ticket++;readingEpoch=null;viewIsCurrent={true};state=state.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,attemptedIndex=false,error=null,cacheError=null);publish(state)}}
     fun retire(){synchronized(lock){links=null;ticket++;viewIsCurrent={true};state=state.copy(loading=false,loadingImages=false);publish(state)}}
-    fun leave(){synchronized(lock){links=null;viewIsCurrent={true};ticket++;readingEpoch=null;state=state.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null);publish(state)}}
+    fun leave(){synchronized(lock){
+        state.selected?.let{suspendedRoute=SuspendedRoute(it.id,trail.toList(),state.stamp)}
+        trail=emptyList();links=null;viewIsCurrent={true};ticket++;readingEpoch=null;state=state.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null);publish(state)}}
     private fun recordEpoch(token:Long,epoch:Long):Boolean=synchronized(lock){if(ticket!=token||!viewIsCurrent())return false;readingEpoch=epoch;true}
     fun observeNativeState(){
         val stamp=port.stamp()
@@ -57,16 +64,22 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
     }
     suspend fun execute(command:String,payload:JSONObject,viewGuard:()->Boolean={true},claimGuard:()->Boolean={true}):JSONObject {
         if(command=="aggregate.link")return followLink(payload,viewGuard,claimGuard)
-        val allowed=when(command){"aggregate.list","aggregate.back","aggregate.close"->emptySet();"aggregate.select","aggregate.refresh"->setOf("id");"aggregate.cached"->setOf("id","rawHTMLSHA256");else->throw IllegalArgumentException("未知汇总操作")}
+        val allowed=when(command){"aggregate.list","aggregate.back","aggregate.close"->emptySet();"aggregate.select","aggregate.resume","aggregate.refresh"->setOf("id");"aggregate.cached"->setOf("id","rawHTMLSHA256");else->throw IllegalArgumentException("未知汇总操作")}
         require(payload.keys().asSequence().toSet()==allowed){"汇总入口只接受原条目身份，不接受网页地址或正文"}
         if(command=="aggregate.close")return synchronized(lock){if(!viewGuard())response("not-adopted")else{leave();response("closed")}}
-        if(command=="aggregate.back"){val token=begin(viewGuard){it.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null)};return response(if(token<0)"not-adopted"else"list")}
+        if(command=="aggregate.back"){
+            val parent=synchronized(lock){if(!viewGuard())return response("not-adopted");trail.lastOrNull()?.let{it to trail.dropLast(1)}}
+            if(parent!=null)return select(parent.first,viewGuard,claimGuard,history=parent.second)
+            val token=begin(viewGuard){it.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null)};return response(if(token<0)"not-adopted"else"list")}
         if(command=="aggregate.list")return loadIndex(viewGuard,claimGuard)
         val id=payload.getString("id")
-        return if(command=="aggregate.select")select(id,viewGuard,claimGuard)else readSelection(id,if(command=="aggregate.cached")payload.getString("rawHTMLSHA256")else null,viewGuard)
+        return if(command in setOf("aggregate.select","aggregate.resume")){
+            val history=synchronized(lock){suspendedRoute?.takeIf{command=="aggregate.resume"&&it.id==id&&it.stamp==port.stamp()}?.trail.orEmpty()}
+            select(id,viewGuard,claimGuard,history=history)
+        }else readSelection(id,if(command=="aggregate.cached")payload.getString("rawHTMLSHA256")else null,viewGuard)
     }
     private suspend fun loadIndex(viewGuard:()->Boolean,claimGuard:()->Boolean):JSONObject {
-        val token=begin(viewGuard){it.copy(selected=null,document=null,revisions=emptyList(),loading=true,attemptedIndex=true,error=null,cacheError=null)}
+        val token=begin(viewGuard){trail=emptyList();suspendedRoute=null;it.copy(selected=null,document=null,revisions=emptyList(),loading=true,attemptedIndex=true,error=null,cacheError=null)}
         try {
             if(!claimReading{current(token)&&claimGuard()})return stale(token)
             if(!current(token))return response("not-adopted")
@@ -77,19 +90,20 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
             change(token){it.copy(catalog=catalog,stamp=stamp,loading=false,catalogStale=false,offlineMode=port.offlineMode())};return response("index-ready")
         }catch(e:CancellationException){cancelled(token);throw e}catch(_:Exception){change(token){it.copy(loading=false,error="汇总目录读取未完成，原资料保留。请重新读取目录。")};return response("failed")}
     }
-    private suspend fun select(id:String,viewGuard:()->Boolean,claimGuard:()->Boolean,initialGuard:()->Boolean={true}):JSONObject {
-        val token=begin(viewGuard,initialGuard){it.copy(selected=null,document=null,revisions=emptyList(),loading=true,attemptedIndex=true,error=null,cacheError=null)}
+    private suspend fun select(id:String,viewGuard:()->Boolean,claimGuard:()->Boolean,initialGuard:()->Boolean={true},history:List<String> = emptyList()):JSONObject {
+        val token=begin(viewGuard,initialGuard){trail=history.takeLast(24);suspendedRoute=null;it.copy(selected=null,document=null,revisions=emptyList(),loading=true,attemptedIndex=true,error=null,cacheError=null)}
         try {
             if(!claimReading{current(token)&&claimGuard()})return stale(token)
             if(!current(token))return response("not-adopted")
             val epoch=port.readingEpoch();if(!recordEpoch(token,epoch))return response("not-adopted");val stamp=port.stamp();val catalog=port.catalog()?:return needsSync(token)
             require(catalog.snapshotSHA256==stamp.snapshotSHA256)
             val descriptor=catalog.records.firstOrNull{it.id==id}?:return missing(token)
+            require(history.size<=24&&history.all{parent->catalog.records.any{it.id==parent}}){"原返回路径不属于当前目录"}
             if(!ready(token,stamp,epoch))return stale(token)
             var revisions=emptyList<AggregateCachedRevision>();var cacheError:String?=null
             try{revisions=port.revisions(id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有挑选其他旧正文。"}
             if(!ready(token,stamp,epoch))return stale(token)
-            change(token){it.copy(catalog=catalog,stamp=stamp,selected=descriptor,revisions=revisions,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode())}
+            change(token){it.copy(catalog=catalog,stamp=stamp,selected=descriptor,revisions=revisions,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode(),backTitle=parentTitle())}
             if(revisions.isNotEmpty())return adopt(token,stamp,epoch,descriptor,port.cached(id,revisions.first().rawHTMLSHA256),true,allowImageNetwork=!port.offlineMode())
             if(port.offlineMode()){change(token){it.copy(loading=false,error="离线模式下，此条目没有当前目录中已核验的保存正文。")};return response("offline")}
             // Ordinary public webpage read is automatic when no verified same-scope cache exists.
@@ -172,7 +186,10 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         return when(destination) {
             is AggregateLinkDestination.Anchor->response("link-ready").put("kind","anchor").put("fragment",destination.rawFragment)
             is AggregateLinkDestination.External->response("link-ready").put("kind","external").put("url",destination.url)
-            is AggregateLinkDestination.Aggregate->select(destination.id,viewGuard,claimGuard,live)
+            is AggregateLinkDestination.Aggregate->{
+                val history=synchronized(lock){(trail+source.document.descriptor.id).takeLast(24)}
+                select(destination.id,viewGuard,claimGuard,live,history)
+            }
             is AggregateLinkDestination.PublishedPaper->{
                 val result=openLinkedPaper(destination.paper,live)
                 if(result.optString("status")=="not-adopted")result else response("link-opened").put("kind","paper").put("paperID",destination.paper.id)

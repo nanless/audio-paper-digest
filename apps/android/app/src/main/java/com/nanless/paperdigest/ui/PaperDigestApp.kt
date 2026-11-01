@@ -146,7 +146,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     LaunchedEffect(route,pendingAggregateReturn) {
         val id=pendingAggregateReturn
         if(route=="aggregates"&&id!=null) {
-            try {controller.executeAggregateInView("aggregate.select",obj("id" to id),controller.captureAggregateView())}
+            try {controller.executeAggregateInView("aggregate.resume",obj("id" to id),controller.captureAggregateView())}
             catch(cancelled:CancellationException){throw cancelled}
             catch(error:Exception){localError=error.message?:"原汇总暂未能打开，请从日更或会议目录重试。"}
             finally{if(pendingAggregateReturn==id)pendingAggregateReturn=null}
