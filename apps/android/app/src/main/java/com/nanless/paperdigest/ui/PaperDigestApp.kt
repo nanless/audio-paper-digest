@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -375,6 +376,11 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
  val favoriteSections=remember(papers,favoriteView,favoriteMonthly,effectiveSort,filter,favoriteZone,favoriteToday){if(filter=="收藏"&&effectiveSort=="收藏时间")favoriteLibrarySections(papers,favoriteView,favoriteMonthly,favoriteZone,favoriteToday)else listOf(FavoriteLibrarySection("all","",papers))}
  val visibleIDs=remember(papers){papers.mapTo(HashSet()){it.id}}
  val hiddenPicked=picked.count{it !in visibleIDs}
+ val libraryScroll=rememberLazyListState()
+ val criteria=JSONArray(listOf(query,source,task,method,minimum,filter,effectiveSort,if(filter=="收藏")favoriteFolder else "",if(filter=="收藏")favoriteMonthly.toString()else "")).toString()
+ var appliedCriteria by rememberSaveable{mutableStateOf(criteria)}
+ // New user criteria start at the first result; returning from a paper keeps the saved anchor.
+ LaunchedEffect(criteria){if(appliedCriteria!=criteria){appliedCriteria=criteria;libraryScroll.scrollToItem(0)}}
  val options=remember(state.papers){Triple(state.papers.map{it.sourceKind}.distinct().sorted(),state.papers.map{it.task}.filter{it.isNotBlank()}.distinct().sorted(),state.papers.map{it.method}.filter{it.isNotBlank()}.distinct().sorted())}
  val localCount=remember(state.papers){state.papers.count{it.sourceKind=="local"}}
  val missingFromLatest=remember(state.catalogSummary){state.catalogSummary.ids("missingFromLatest").toSet()}
@@ -395,18 +401,18 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
   val libraryViewportHeight=maxHeight
   // Search, notices, filters and results all share ONE scroll viewport. When IME
   // leaves little height, the header can scroll away while actual results remain clickable.
-  LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(horizontal=16.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+  LazyColumn(Modifier.fillMaxSize(),state=libraryScroll,contentPadding=PaddingValues(horizontal=16.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
    item(key="library-heading"){
     Row(Modifier.fillMaxWidth().padding(top=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
      Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)){
-      Text("文献资料库",style=MaterialTheme.typography.headlineMedium)
-      Text("发现、阅读，积累自己的研究",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+      Text(when(filter){"收藏"->"我的收藏";"待读"->"待读清单";"离线"->"本机已保存";else->"文献资料库"},style=MaterialTheme.typography.headlineMedium)
+      Text(when(filter){"收藏"->"按收藏时间与分类整理论文";"待读"->"继续处理你计划阅读的论文";"离线"->"查看本机已保存的导读与材料";else->"发现、阅读，积累自己的研究"},style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
      }
      IconButton(importPDF){Icon(Icons.Outlined.FileOpen,"导入 PDF")}
      IconButton({action("library.sync",JSONObject())},enabled=!state.loading){Icon(Icons.Outlined.Sync,"同步已发布内容")}
     }
    }
-   item(key="library-catalog"){
+   if(filter=="全部")item(key="library-catalog"){
     Surface(onClick={action("ui.aggregates",JSONObject())},shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer){
      Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){
       Icon(Icons.Outlined.Article,null,Modifier.size(24.dp),tint=MaterialTheme.colorScheme.onPrimaryContainer)
@@ -416,7 +422,7 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
     }
    }
    item(key="library-search"){
-    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,shape=MaterialTheme.shapes.medium,placeholder={Text("搜索论文、作者与笔记",maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)},leadingIcon={Icon(Icons.Outlined.Search,null)},
+    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,shape=MaterialTheme.shapes.medium,placeholder={Text("搜索论文、作者与笔记",maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({query=""}){Icon(Icons.Outlined.Close,"清除搜索")}},
      keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(imeAction=androidx.compose.ui.text.input.ImeAction.Search),
      keyboardActions=androidx.compose.foundation.text.KeyboardActions(onSearch={keyboard?.hide()}))
    }
@@ -447,7 +453,7 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
      if(effectiveSort=="收藏时间")FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){
       FilterChip(!favoriteMonthly,{favoriteMonthly=false},label={Text("按近期分区")});FilterChip(favoriteMonthly,{favoriteMonthly=true},label={Text("按月份分区")})
      }
-     Text("新收藏按真实收藏时间排列；旧版没有保存时间的收藏单列，不使用论文发布日期代替。",style=MaterialTheme.typography.bodySmall)
+     Text("旧收藏的时间未知，单独列出；不以论文发布日期代替。",style=MaterialTheme.typography.bodySmall)
     }
    }
    if(choosing)item(key="library-selection"){
@@ -456,6 +462,7 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
      FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
       TextButton({picked=(picked+papers.map{it.id}).distinct()}){Text("加选匹配 ${papers.size} 篇")}
       TextButton({picked=emptyList()},enabled=picked.isNotEmpty()){Text("清空选择")}
+      if(hiddenPicked>0)TextButton({picked=picked.filter{it in visibleIDs}}){Text("仅保留当前结果内已选")}
       TextButton({action("personal.list.edit",obj("key" to "favorites","action" to "add","ids" to JSONArray(picked)))},enabled=picked.isNotEmpty()&&!favoriteView.readOnly){Text("收藏 ${picked.size} 篇")}
       TextButton({classifyIDs=picked.toList()},enabled=picked.isNotEmpty()&&!favoriteView.readOnly){Text(if(picked.any{it !in favoriteIDs})"收藏并分类…"else"加入分类…")}
       TextButton({action("personal.list.edit",obj("key" to "reading","action" to "add","ids" to JSONArray(picked)))},enabled=picked.isNotEmpty()){Text("加入待读")}
@@ -463,7 +470,12 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
      }
     }
    }
-   if(papers.isEmpty())item(key="library-empty"){EmptyPane(if(cachedSearch.loading)"正在查找本机导读" else if(cachedSearch.error!=null)"论文信息与笔记暂未匹配" else "这里还没有匹配的论文",if(query.isNotBlank())"当前筛选下未显示论文；缓存检查范围与未完成项可在“检索范围与状态”查看。" else "同步已发布资料，或导入本地 PDF。同步读取已有分析，不会重复请求模型。")}
+   if(papers.isEmpty())item(key="library-empty"){
+    val title=when{cachedSearch.loading->"正在查找本机导读";filter=="收藏"&&favoriteIDs.isEmpty()->"还没有收藏";filter=="收藏"->"当前分类或筛选下暂无收藏";filter=="待读"&&state.personal.ids("reading").isEmpty()->"待读清单为空";state.papers.isNotEmpty()->"当前搜索或筛选没有匹配";else->"这里还没有论文"}
+    val description=when{filter=="收藏"&&favoriteIDs.isEmpty()->"从论文操作菜单收藏一篇论文，或在资料库多选后收藏并分类。";filter=="待读"&&state.personal.ids("reading").isEmpty()->"在论文操作菜单或资料库多选后加入待读。";state.papers.isNotEmpty()->"已有资料仍然保留。可以调整搜索或筛选；未完成的缓存检索范围可在“目录与检索范围”查看。";else->"同步已发布资料，或导入本地 PDF。同步读取已有分析，不会重复请求模型。"}
+    EmptyPane(title,description)
+    if(state.papers.isNotEmpty()&&(query.isNotEmpty()||activeFilters>0)&&(filter!="收藏"||favoriteIDs.isNotEmpty()))TextButton({query="";source="";task="";method="";minimum="";favoriteFolder="";if(filter!="收藏")filter="全部"},Modifier.padding(horizontal=24.dp)){Text(if(filter=="收藏")"查看全部收藏"else"清除搜索和筛选")}
+   }
    favoriteSections.forEach{section->
    if(section.label.isNotEmpty())item(key="favorite-section-${section.key}"){Text("${section.label} · ${section.papers.size} 篇",style=MaterialTheme.typography.titleSmall,modifier=Modifier.padding(top=12.dp))}
    items(section.papers,key={it.id}){paper->OutlinedCard(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else action("paper.open",obj("paperID" to paper.id))},colors=CardDefaults.outlinedCardColors(containerColor=MaterialTheme.colorScheme.surfaceContainerLow),border=androidx.compose.foundation.BorderStroke(1.dp,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f)),modifier=Modifier.fillMaxWidth()){
