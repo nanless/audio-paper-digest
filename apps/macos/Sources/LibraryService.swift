@@ -434,7 +434,7 @@ actor LibraryService {
     }
 
     private static func websiteTagRecord(_ row:[String:Any])->[String:Any] {
-        let keys:Set<String>=["pageType","permalink","paperId","arxivId","identityStatus","sourceKind","title","titleZh","summary","date","score","citation","task","method","tags","categories","primaryTaskId","primaryMethodId","researchType","domainScope","primaryResearchRole","primaryScientificTopicId","primaryScientificTopicLabel","methodNotApplicable","methodNotApplicableReason"]
+        let keys:Set<String>=["pageType","permalink","paperId","arxivId","identityStatus","sourceKind","title","titleZh","originalTitle","summary","date","score","citation","task","method","tags","categories","primaryTaskId","primaryMethodId","researchType","domainScope","primaryResearchRole","primaryScientificTopicId","primaryScientificTopicLabel","methodNotApplicable","methodNotApplicableReason"]
         return row.filter{keys.contains($0.key)||$0.key.hasPrefix("tag")||$0.key.hasPrefix("taxonomy")}
     }
     private func readWebsiteTaxonomy()async throws->JSONValue {
@@ -1175,7 +1175,9 @@ actor LibraryService {
                 response["websiteTaxonomyNotice"] = snapshot.websiteTaxonomyNotice ?? (snapshot.websiteTaxonomy == nil ? "旧版目录缓存尚未保存网页分类；同步网站目录后可显示。" : "")
             }
             return response
-        case "library.search": return ["ids": searchCachedText(payload["query"] as? String ?? ""), "scope": "仅本机已读取导读正文，不检索PDF原文"]
+        case "library.search":
+            let hits=searchCachedText(payload["query"] as? String ?? "")
+            return ["ids":hits,"cachedTextIDs":hits,"scope":"仅本机已读取导读正文，不检索PDF原文"]
         case "library.citationFile":
             guard let id = payload["paperID"] as? String ?? payload["id"] as? String else { throw ServiceError.invalid("未选择论文。") }
             return try await citationFile(for: id, format: payload["format"] as? String ?? "json")

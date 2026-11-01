@@ -86,7 +86,8 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
     }
     static func testCatalogAndIncremental() async throws {
         let folder = try temporary(); defer { try? FileManager.default.removeItem(at: folder) }
-        let a = row("2501.00001", slug: "a", title: "Alpha", date: "2026-01-01", score: 8)
+        var a = row("2501.00001", slug: "a", title: "Alpha", date: "2026-01-01", score: 8)
+        a["originalTitle"]="Original earlier Alpha"
         let newer = row("2501.00001", slug: "a-new", title: "Alpha corrected", date: "2026-02-01", score: 9)
         let b = row("2501.00002", slug: "b", title: "Beta", date: "2026-01-02", score: 7)
         let summary: [String: Any] = ["permalink": "/blog/posts/summary/", "pageType": "daily-summary", "title": "汇总"]
@@ -95,6 +96,9 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(initial.recordCount == 4 && initial.paperCount == 2 && initial.shardCount == 2, "page/paper counts separated")
         let papers = await library.list(sort: .score)
         try expect(papers[0].title == "Alpha corrected" && papers[0].appearances.count == 2, "stable identity merges appearances and selects latest")
+        let originalPaper=await library.list().first(where:{$0.id=="arxiv:2501.00001"})!
+        let rawObject=try JSONSerialization.jsonObject(with:JSONEncoder().encode(originalPaper.websiteTagRecords!.first!)) as! [String:Any]
+        try expect((rawObject["originalTitle"] as? String)?.hasPrefix("Original ")==true,"website guide originalTitle preserved independently of representative")
         try expect(await library.list(query: "中文").count == 2, "Chinese metadata search")
         try expect(await library.list(query: "Author").count == 2, "author search")
         try expect(await library.list(minimumScore: 8).count == 1, "minimum score")
@@ -175,6 +179,9 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(article.markdown?.contains("data:image/png;base64,") == true && article.resources.count == 3, "three checksum-verified seed images embedded offline")
         try expect(article.completeOffline && article.plainText.contains("MiCLA"), "full seed text available without repository runtime")
         try expect(await library.searchCachedText("MiCLA").contains("arxiv:2610.27491"), "cached full text searchable")
+        let coldSearch=try LibraryService(dataDirectory:folder,seedDirectory:seed,transport:{_,_ in throw LibraryService.ServiceError.network("typed cached search must not network")})
+        let searched=try await coldSearch.handle(command:"library.search",payload:["query":"MiCLA"])
+        try expect(searched["cachedTextIDs"] as? [String]==searched["ids"] as? [String] && (searched["cachedTextIDs"] as? [String])?.contains("arxiv:2610.27491")==true,"cold persisted fulltext search declares typed cachedTextIDs and preserves legacy ids")
         let citationText=String(data:try JSONEncoder().encode(article.citationSidecar),encoding:.utf8) ?? ""
         let contextText=String(data:try JSONEncoder().encode(article.researchContext),encoding:.utf8) ?? ""
         try expect(citationText.contains("Oki Electric") && citationText.contains("Kohei Yamamoto"), "seed citation keeps actual author affiliation metadata")
