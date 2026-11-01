@@ -260,7 +260,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             contextGeneration+=1;pdfView.document=nil;pdfView.isHidden=true;currentPDFSHA="";currentPDFPath=nil;pdfOwner="";pdfVersion="";selectionSource=[:];currentArticle=[:];offlinePDF=nil;currentPDFReceipt=[:]
             try store.rememberPaper(payload);currentPaper=payload;currentPaperID=next;emit("paper.changed");return [:]
         case "personal.snapshot":return store.snapshot()
-        case "personal.setList":try store.setList(payload["key"] as? String ?? "",ids:payload["ids"] as? [String] ?? []);return store.snapshot()
+        case "personal.list.edit":try store.editList(payload);return store.snapshot()
+        case "personal.favorite.edit":try store.editFavorites(payload);return store.snapshot()
+        case "personal.setList":guard let key=payload["key"] as? String,let ids=payload["ids"] as? [String] else{throw DesktopError.message("资料清单无效")};try store.setList(key,ids:ids);return store.snapshot()
         case "personal.note":return try store.saveNote(id:payload["paperID"] as? String ?? currentPaperID,text:payload["text"] as? String ?? "",baseRevision:payload["baseRevision"] as? Int ?? 0)
         case "personal.reading":guard let owner=payload["paperID"] as? String,!owner.isEmpty,owner==currentPaperID || (store.value["personalPapers"] as? [String:[String:Any]])?[owner] != nil else{throw DesktopError.message("阅读身份缺失，未覆盖其他文献状态")};try store.saveReading(id:owner,state:payload);return [:]
         case "personal.annotations":return ["annotations":store.annotations(id:currentPaperID)]

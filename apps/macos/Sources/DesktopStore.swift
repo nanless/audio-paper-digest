@@ -58,6 +58,7 @@ enum DesktopKeychain {
     }
     static func validate(_ object:[String:Any]) throws {
         guard object["schema"] as? Int==1,object["notes"] is [String:[String:Any]],object["settings"] is [String:Any],object["favorites"] is [String],object["reading"] is [String],object["readingState"] is [String:[String:Any]],object["annotations"] is [String:[[String:Any]]],object["sessions"] is [[String:Any]],object["jobs"] is [[String:Any]] else{throw DesktopError.message("个人资料版本或结构不符，原文件已保留")}
+        try FavoriteCollections.validate(object["favoriteCollections"])
         for note in (object["notes"] as? [String:[String:Any]] ?? [:]).values {guard note["text"] is String,let revision=note["revision"] as? Int,revision>=0 else{throw DesktopError.message("笔记结构损坏，原文件已保留")}}
         if let raw=object["personalPapers"] {
             guard let papers=raw as? [String:[String:Any]],papers.count<=100000 else{throw DesktopError.message("个人文献索引损坏，原资料已保留")}
@@ -84,10 +85,28 @@ enum DesktopKeychain {
         let old=value; value["settings"]=settings
         do { try save() } catch { value=old; throw error }
     }
-    func setList(_ key:String, ids:[String]) throws {
-        guard ["favorites","reading"].contains(key),ids.count<=100000 else { throw DesktopError.message("资料清单无效") }
-        let old=value; value[key]=Array(Set(ids)).sorted()
-        do { try save() } catch { value=old; throw error }
+    private func persist(_ next:[String:Any]) throws {
+        guard !(next as NSDictionary).isEqual(to:value) else{return}
+        try FavoriteCollections.validate(next["favoriteCollections"])
+        let old=value;value=next
+        do{try save()}catch{value=old;throw error}
+    }
+    func setList(_ key:String, ids:[String],now:Date=Date()) throws {
+        guard ["favorites","reading"].contains(key) else{throw DesktopError.message("资料清单无效")}
+        guard ids.count<=100000 else{throw DesktopError.message("资料清单无效")}
+        let ids=Array(Set(ids)).sorted()
+        if key=="favorites"{try persist(FavoriteCollections.membership(value,ids:ids,now:now))}
+        else{var next=value;next[key]=ids;try persist(next)}
+    }
+    func editList(_ payload:[String:Any],now:Date=Date()) throws {
+        guard let key=payload["key"] as? String,["favorites","reading"].contains(key),let action=payload["action"] as? String,["add","remove","toggle"].contains(action) else{throw DesktopError.message("资料清单操作无效")}
+        let ids=Set(try FavoriteCollections.ids(payload["ids"]))
+        var current=Set(value[key] as? [String] ?? [])
+        if action=="add"{current.formUnion(ids)}else if action=="remove"{current.subtract(ids)}else{current.formSymmetricDifference(ids)}
+        try setList(key,ids:current.sorted(),now:now)
+    }
+    func editFavorites(_ payload:[String:Any],now:Date=Date())throws{
+        try persist(FavoriteCollections.edit(value,payload:payload,now:now))
     }
     func saveNote(id:String,text:String,baseRevision:Int) throws -> [String:Any] {
         guard !id.isEmpty,text.utf8.count<=2*1024*1024 else { throw DesktopError.message("笔记过长或文献身份缺失") }
