@@ -40,6 +40,7 @@ import org.json.JSONObject
         if(autoLoad&&aggregate.attemptedIndex&&aggregate.catalogStale&&aggregate.selected==null)action("aggregate.list",JSONObject())
     }
     LaunchedEffect(aggregate.selected?.id,aggregate.loading,aggregate.document,aggregate.error){if(aggregate.selected!=null&&!aggregate.loading&&aggregate.document==null&&aggregate.error==null)action("aggregate.select",obj("id" to aggregate.selected.id))}
+    LaunchedEffect(aggregate.preview){if(aggregate.preview!=null){readingMenu=false;sourceInfo=false;savedVersions=false}}
     val selected=aggregate.selected
     NonOccludingViewport {
         val viewportHeight=maxHeight
@@ -87,13 +88,13 @@ import org.json.JSONObject
                     Column {
                         Row(Modifier.fillMaxWidth().padding(horizontal=4.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
                             IconButton({action("aggregate.back",JSONObject())}){Icon(Icons.Outlined.ArrowBack,aggregate.backTitle)}
-                            Column(Modifier.weight(1f).clickable(onClickLabel="查看完整标题与来源"){sourceInfo=true}.padding(horizontal=4.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
+                            Column(Modifier.weight(1f).clickable(enabled=aggregate.preview==null,onClickLabel="查看完整标题与来源"){sourceInfo=true}.padding(horizontal=4.dp),verticalArrangement=Arrangement.spacedBy(2.dp)) {
                                 Text(selected.titleZh.ifBlank{selected.title},style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=if(viewportHeight<360.dp)1 else 2,overflow=TextOverflow.Ellipsis)
                                 Text(aggregateKindLabel(selected.kind),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             IconButton({action("aggregate.refresh",obj("id" to selected.id))},enabled=!aggregate.offlineMode&&!aggregate.loading&&!aggregate.catalogStale){Icon(Icons.Outlined.Refresh,"刷新网站正文")}
                             Box {
-                                IconButton({readingMenu=true}){Icon(Icons.Outlined.MoreVert,"页面操作、来源与已保存版本")}
+                                IconButton({readingMenu=true},enabled=aggregate.preview==null){Icon(Icons.Outlined.MoreVert,"页面操作、来源与已保存版本")}
                                 DropdownMenu(readingMenu,{readingMenu=false}) {
                                     DropdownMenuItem(text={Text("来源与提示")},leadingIcon={Icon(Icons.Outlined.Info,null)},onClick={readingMenu=false;sourceInfo=true})
                                     if(aggregate.revisions.isNotEmpty())DropdownMenuItem(text={Text("已保存版本（${aggregate.revisions.size}）")},leadingIcon={Icon(Icons.Outlined.History,null)},enabled=!aggregate.loading&&!aggregate.catalogStale,onClick={readingMenu=false;savedVersions=true})
@@ -116,16 +117,21 @@ import org.json.JSONObject
                     }
                 }
                 HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.5f))
-                if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取正文…",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)}
+                if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text(if(aggregate.preview!=null)"正在打开已保存页面…"else"正在读取正文…",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)}
+                if(aggregate.preview!=null)Text("先显示上次阅读文字，图文和链接加载后恢复。",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     val doc=aggregate.document
                     if(doc!=null)savedDocuments.SaveableStateProvider("${doc.descriptor.id}:${doc.rawHTMLSHA256}"){var scroll by rememberSaveable(doc.descriptor.id,doc.rawHTMLSHA256){mutableIntStateOf(0)};AggregateFormulaDocument(doc,state.settings.optInt("font",18),scroll,{scroll=it},openLink,linkCurrent)}
-                    else Text(if(aggregate.loading)"正在读取网站正文。"else"尚未取得可显示的网页正文。",Modifier.padding(16.dp))
+                    else if(aggregate.preview!=null){
+                        val preview=aggregate.preview
+                        val escaped=remember(preview){"<pre style='white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit'>"+android.text.Html.escapeHtml(preview.text)+"</pre>"}
+                        StaticDocument(escaped,state.settings.optInt("font",18))
+                    }else Text(if(aggregate.loading)"正在读取网站正文。"else"尚未取得可显示的网页正文。",Modifier.padding(16.dp))
                 }
             }
         }
     }
-    if(sourceInfo&&selected!=null)AlertDialog(onDismissRequest={sourceInfo=false},title={Text("来源与保存信息")},text={Column(Modifier.heightIn(max=480.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
+    if(sourceInfo&&selected!=null&&aggregate.preview==null)AlertDialog(onDismissRequest={sourceInfo=false},title={Text("来源与保存信息")},text={Column(Modifier.heightIn(max=480.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
         val doc=aggregate.document;val descriptor=doc?.descriptor?:selected
         Text(descriptor.titleZh.ifBlank{descriptor.title},style=MaterialTheme.typography.titleMedium)
         if(descriptor.title.isNotBlank()&&descriptor.title!=descriptor.titleZh)Text(descriptor.title)
@@ -139,7 +145,7 @@ import org.json.JSONObject
         Text("已保存的网页版本会保留；目录更新不代表旧正文已经重新读取。")
         Text("此页尚未保存全部网页资源，不是完整离线页面。")
     }},confirmButton={TextButton({sourceInfo=false}){Text("关闭")}})
-    if(savedVersions&&selected!=null)AlertDialog(onDismissRequest={savedVersions=false},title={Text("已保存版本")},text={Column(Modifier.heightIn(max=480.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
+    if(savedVersions&&selected!=null&&aggregate.preview==null)AlertDialog(onDismissRequest={savedVersions=false},title={Text("已保存版本")},text={Column(Modifier.heightIn(max=480.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
         Text("选择这页以前保存的版本；这里不会自动获取网站新内容。")
         aggregate.revisions.forEachIndexed{index,revision->OutlinedButton({savedVersions=false;action("aggregate.cached",obj("id" to selected.id,"rawHTMLSHA256" to revision.rawHTMLSHA256))}){Text("版本 ${index+1} · "+aggregateLocalMoment(revision.fetchedAt)+(if(revision.rawHTMLSHA256==aggregate.document?.rawHTMLSHA256)" · 当前显示"else""))}}
     }},confirmButton={TextButton({savedVersions=false}){Text("关闭")}})

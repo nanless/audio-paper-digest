@@ -11,7 +11,28 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
  const $=id=>document.getElementById(id);let sequence=0,indexSequence=0,active=null,frame=null,returnView='library';
  let interaction=0,focusAtRequest=0,movingHeadingFocus=false;
  let catalogCache=null,catalogPending=null,catalogRevision=0;const indexViews=new Map();
- function invalidateIndex(){indexSequence++;catalogRevision++;catalogCache=null;catalogPending=null;indexViews.clear();}
+ // Display-only text from accepted reads. This map never retains a session,
+ // source capability, nonce, HTML, image, link or a qualification result.
+ const readPreviews=new Map(),previewLimit=4*1024*1024;
+ let previewBytes=0,previewStamp=null,previewGeneration=0,previewContext=null;
+ function clearReadPreviews(){readPreviews.clear();previewBytes=0;previewStamp=null;previewGeneration++;previewContext=null;const shown=pane?.querySelector('[data-read-preview]');if(shown){shown.remove();const heading=pane.querySelector('h1');if(heading)heading.textContent='正在读取汇总页面';const status=pane.querySelector('.aggregate-status');if(status)status.textContent='目录或本机资料已变化，正在重新核验正文…';}}
+ function currentPreviewStamp(){const value=app.state.summary?.snapshotID;const stamp=typeof value==='string'&&/^[0-9a-f]{64}$/.test(value)?value:null;if(stamp!==previewStamp){clearReadPreviews();previewStamp=stamp;}return stamp;}
+ function previewKey(stamp,id){return stamp+'\n'+id;}
+ function previewText(value){if(typeof value.plainText==='string')return value.plainText.trim();const body=new DOMParser().parseFromString(value.displayHTML,'text/html').body;for(const node of body.querySelectorAll('script,style,iframe,object,embed,form,input,button,img,svg,video,audio,source,link,meta,base'))node.remove();for(const node of body.querySelectorAll('br'))node.replaceWith(body.ownerDocument.createTextNode('\n'));for(const node of body.querySelectorAll('p,div,section,article,li,tr,h1,h2,h3,h4,h5,h6,blockquote,pre,figcaption'))node.append(body.ownerDocument.createTextNode('\n\n'));return body.textContent.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g,'\n\n').trim();}
+ function cacheReadPreview(value,request,session,revision){
+  if(!current(request,session)||revision!==displayRevision)return;
+  const stamp=currentPreviewStamp(),context=previewContext;
+  if(!stamp||!context||context.request!==request||context.id!==session.id||context.stamp!==stamp||context.generation!==previewGeneration||value.descriptor?.source?.manifestSHA256!==stamp||typeof value.documentReadyNonce!=='string'||!/^[0-9a-f-]{36}$/.test(value.documentReadyNonce)||!/^[0-9a-f]{64}$/.test(value.displayBodySHA256||''))return;
+  const id=session.id,key=previewKey(stamp,id),old=readPreviews.get(key);if(old){previewBytes-=old.bytes;readPreviews.delete(key);}
+  const title=String(value.descriptor.titleZh||value.descriptor.title||'已读汇总'),content=previewText(value);
+  const bytes=new TextEncoder().encode(JSON.stringify({stamp,id,title,text:content})).byteLength;
+  if(!content||bytes>previewLimit)return;
+  while(readPreviews.size>=2||previewBytes+bytes>previewLimit){const oldest=readPreviews.keys().next().value;if(oldest===undefined)break;previewBytes-=readPreviews.get(oldest).bytes;readPreviews.delete(oldest);}
+  readPreviews.set(key,{stamp,id,title,text:content,bytes});previewBytes+=bytes;
+ }
+ function discardReadPreview(id){const stamp=currentPreviewStamp();if(!stamp)return;const key=previewKey(stamp,id),saved=readPreviews.get(key);if(saved){previewBytes-=saved.bytes;readPreviews.delete(key);}}
+ function readPreview(id){const stamp=currentPreviewStamp();if(!stamp)return null;const key=previewKey(stamp,id),saved=readPreviews.get(key);if(!saved)return null;readPreviews.delete(key);readPreviews.set(key,saved);return saved;}
+ function invalidateIndex(){clearReadPreviews();indexSequence++;catalogRevision++;catalogCache=null;catalogPending=null;indexViews.clear();}
  async function preload(){if(catalogCache)return catalogCache;if(catalogPending)return catalogPending;const revision=catalogRevision;const pending=app.call('aggregates.list').then(catalog=>{if(revision===catalogRevision){catalogCache=catalog;if((catalog.records||[]).length)app.call('aggregates.preload').catch(()=>{});}return catalog;}).finally(()=>{if(catalogPending===pending)catalogPending=null;});catalogPending=pending;return pending;}
  const interacted=()=>{if(!movingHeadingFocus)interaction++;};
  for(const type of ['keydown','pointerdown','focusin','click'])document.addEventListener(type,interacted,true);
@@ -30,7 +51,7 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
  const savedPositions=new Map();
  const positionKey=value=>value?.descriptor?.id&&/^[0-9a-f]{64}$/.test(value?.descriptor?.source?.manifestSHA256||'')&&/^[0-9a-f]{64}$/.test(value?.rawHTMLSHA256||'')?[value.descriptor.source.manifestSHA256,value.descriptor.id,value.rawHTMLSHA256].join(':'):null;
  function rememberPosition(){const key=positionKey(activeDocument);if(!key||frame?.dataset.documentLoaded!=='true')return;const y=frame.contentWindow?.scrollY;if(!Number.isFinite(y)||y<0)return;savedPositions.set(key,y);if(savedPositions.size>100)savedPositions.delete(savedPositions.keys().next().value);}
- async function nativeLayout(){const owned=nativeValue;if(!owned||!current(owned.request,owned.session)||app.state.nativeAggregateHost!==true)return;const issued=++nativeSequence;try{await app.call('aggregates.nativePresent',{...sessionPayload(owned.session),documentReadyNonce:owned.value.documentReadyNonce,sequence:issued});}catch(error){if(nativeValue!==owned||issued!==nativeSequence||!current(owned.request,owned.session))return;throw error;}}
+ async function nativeLayout(){const owned=nativeValue;if(!owned||!current(owned.request,owned.session)||app.state.nativeAggregateHost!==true)return;const issued=++nativeSequence;try{const result=await app.call('aggregates.nativePresent',{...sessionPayload(owned.session),documentReadyNonce:owned.value.documentReadyNonce,sequence:issued});return result?.native===true;}catch(error){if(nativeValue!==owned||issued!==nativeSequence||!current(owned.request,owned.session))return;throw error;}}
  const nativeModalLayout=()=>nativeLayout().catch(error=>{if(nativeValue&&current(nativeValue.request,nativeValue.session))app.error(error);});
  document.defaultView?.addEventListener('modal.changed',nativeModalLayout);
  const nativeModalObserver=typeof MutationObserver==='function'?new MutationObserver(nativeModalLayout):null;nativeModalObserver?.observe(document.body,{subtree:true,attributes:true,attributeFilter:['open']});
@@ -38,7 +59,7 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
  const nativeResize=typeof ResizeObserver==='function'?new ResizeObserver(()=>nativeLayout().catch(error=>{if(nativeValue&&current(nativeValue.request,nativeValue.session))app.error(error);})):null;nativeResize?.observe($('app-window').querySelector('.main-pane'));
  window.paperDigestNativeAggregateFailed=(sessionID,documentNonce)=>{if(active?.sessionID!==sessionID||app.state.view!=='aggregate'||nativeSavedValue?.value.documentReadyNonce!==documentNonce)return false;nativeValue=null;nativeSavedValue=null;failure(new Error('正文未能显示，请重新打开本页'),active.id,sequence);return true;};
  document.defaultView?.addEventListener('aggregates.layout',()=>{const saved=nativeSavedValue;if(!saved||!current(saved.request,saved.session))return;nativeValue=saved;freshPane();nativeLayout().catch(error=>{if(current(saved.request,saved.session))failure(error,saved.session.id,saved.request);});});
- window.paperDigestNativeAggregateNavigate=async(sessionID,kind,id)=>{if(active?.sessionID!==sessionID||app.state.view!=='aggregate')return false;if(kind==='back')await onBack(returnView);else if(kind==='refresh')await refreshDocument();else if(kind==='aggregate'&&typeof id==='string')await open(id);else if(kind==='paper'&&typeof id==='string')await onPaper(id);else return false;return true;};
+ window.paperDigestNativeAggregateNavigate=async(sessionID,kind,id)=>{if(active?.sessionID!==sessionID||app.state.view!=='aggregate'||activeDocument===null)return false;if(kind==='back')await onBack(returnView);else if(kind==='refresh')await refreshDocument();else if(kind==='aggregate'&&typeof id==='string')await open(id);else if(kind==='paper'&&typeof id==='string')await onPaper(id);else return false;return true;};
  const current=(request,session=active)=>request===sequence&&app.state.view==='aggregate'&&session===active;
  const sessionPayload=session=>({id:session.id,sessionID:session.sessionID});
  function freshPane(){const fresh=document.createElement('section');fresh.id='aggregate-view';fresh.className='view aggregate-view';fresh.setAttribute('role','region');fresh.setAttribute('aria-label','已发布汇总正文');pane.replaceWith(fresh);pane=fresh;frame=null;return fresh;}
@@ -50,9 +71,15 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
   });
  }
  function topBar(title,request,{focus=true}={}){const header=document.createElement('header');header.className='aggregate-heading';const leading=document.createElement('div');const heading=text('h1',title);heading.tabIndex=-1;leading.append(text('span','已发布成果','eyebrow'),heading);const actions=document.createElement('div');actions.className='aggregate-actions';actions.append(button('返回'+({today:'日更速递',conference:'会议论文集',pages:'网站页面'}[returnView]||'资料库'),()=>onBack(returnView)));header.append(leading,actions);pane.append(header);if(focus)focusHeading(request);return actions;}
- function loading(id,from){rememberPosition();activeDocument=null;const request=++sequence;focusAtRequest=interaction;active=null;if(from&&from!=='aggregate')returnView=from;freshPane();pane.dataset.aggregateID=id;topBar('正在读取汇总页面',request);const status=text('p','正在核对原始目录与网页正文…','aggregate-status');status.setAttribute('role','status');pane.append(status);return request;}
+ function loading(id,from,{preview=true}={}){
+  rememberPosition();activeDocument=null;nativeValue=null;nativeSavedValue=null;const request=++sequence;focusAtRequest=interaction;active=null;if(from&&from!=='aggregate')returnView=from;
+  const stamp=currentPreviewStamp(),saved=preview?readPreview(id):null;previewContext={request,id,stamp,generation:previewGeneration};
+  freshPane();pane.dataset.aggregateID=id;topBar(saved?saved.title:'正在读取汇总页面',request);const status=text('p',saved?'正在打开已保存页面…':'正在核对原始目录与网页正文…','aggregate-status');status.setAttribute('role','status');pane.append(status);
+  if(saved){const body=text('pre',saved.text,'aggregate-preview-text');body.dataset.readPreview='';body.tabIndex=0;body.setAttribute('role','document');body.setAttribute('aria-label','上次已读文字预览，正在核验完整正文');pane.append(body);}
+  return request;
+ }
  function bind(session,request){if(request!==sequence||app.state.view!=='aggregate')return false;active=session;return true;}
- function failure(error,id,request){if(request!==sequence||app.state.view!=='aggregate')return;nativeValue=null;freshPane();const actions=topBar('汇总页面暂不可读',request,{focus:app.state.nativeAggregateHost!==true});const message=text('p',error?.message||String(error),'aggregate-status');message.setAttribute('role','alert');pane.append(message);actions.append(button('重新读取',()=>open(id)));if(active)actions.append(button('打开原站',()=>app.call('aggregates.website',sessionPayload(active)).catch(app.error)));}
+ function failure(error,id,request){if(request!==sequence||app.state.view!=='aggregate')return;discardReadPreview(id);const hadDocument=activeDocument!==null;previewContext=null;activeDocument=null;nativeValue=null;nativeSavedValue=null;freshPane();const actions=topBar('汇总页面暂不可读',request,{focus:app.state.nativeAggregateHost!==true});const message=text('p',error?.message||String(error),'aggregate-status');message.setAttribute('role','alert');pane.append(message);actions.append(button('重新读取',()=>open(id)));if(active&&hadDocument)actions.append(button('打开原站',()=>app.call('aggregates.website',sessionPayload(active)).catch(app.error)));}
  function appearance(){if(!frame?.isConnected)return;const root=frame.contentDocument?.documentElement;if(!root)return;const settings=app.state.settings||{};root.style.colorScheme=['light','dark'].includes(settings.appearance)?settings.appearance:'light dark';root.style.setProperty('--font',Math.max(16,Math.min(24,Number(settings.font)||18))+'px');}
  async function activateLink(index,request,session){if(!current(request,session))return;try{const destination=await app.call('aggregates.link',{...sessionPayload(session),index});if(!current(request,session))return;if(destination.kind==='anchor'){frame?.contentDocument?.getElementById(destination.anchor)?.scrollIntoView();}else if(destination.kind==='aggregate')open(destination.id);else if(destination.kind==='paper')onPaper(destination.id);}catch(error){if(current(request,session))app.error(error);}}
  async function hydrateImages(value,request,session,revision){
@@ -67,7 +94,7 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
   if(!current(request,session))return false;
   if(value?.contract!=='published-aggregate-document-v1'||value.descriptor?.id!==session.id||value.sessionID!==session.sessionID||typeof value.displayHTML!=='string')throw new Error('汇总正文回执与当前页面不一致');
   const revision=++displayRevision;activeDocument=value;
-  if(app.state.nativeAggregateHost===true){freshPane();nativeValue={value,request,session};nativeSavedValue=nativeValue;nativeLayout().then(()=>{if(hydrate)hydrateImages(value,request,session,revision);}).catch(error=>{if(current(request,session))failure(error,session.id,request);});return true;}
+  if(app.state.nativeAggregateHost===true){freshPane();nativeValue={value,request,session};nativeSavedValue=nativeValue;nativeLayout().then(accepted=>{if(accepted)cacheReadPreview(value,request,session,revision);if(hydrate)hydrateImages(value,request,session,revision);}).catch(error=>{if(current(request,session))failure(error,session.id,request);});return true;}
   // Pure local display derivation; original receipt/raw/body/image identities are never rewritten.
   const displayHTML=prepareBody(value.displayHTML);if(!current(request,session))return false;
   freshPane();const descriptor=value.descriptor,actions=topBar(descriptor.titleZh||descriptor.title,request,{focus:false});
@@ -88,11 +115,11 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
   const readySHA=typeof value.displayBodySHA256==='string'&&/^[0-9a-f]{64}$/.test(value.displayBodySHA256)?value.displayBodySHA256:null;
   let readySent=false;
   frame.addEventListener('load',()=>{if(!current(request,session)||frame!==rendered||!rendered.isConnected||pane.hidden||pane.closest('[hidden],[inert]'))return;appearance();const doc=frame.contentDocument,body=doc?.querySelector('body > main');if(!doc||doc.readyState!=='complete'||!body||body.getAttribute('data-document-ready-nonce')!==(readyNonce||'')||body.getAttribute('data-display-body-sha256')!==(readySHA||''))return;entries.replaceChildren();for(const [i,heading]of [...doc.querySelectorAll('h2,h3')].entries()){if(!heading.id)heading.id='aggregate-heading-'+i;entries.append(button(heading.textContent,()=>{if(current(request,session))heading.scrollIntoView();}));}outline.hidden=!entries.childElementCount;doc.addEventListener('click',event=>{const anchor=event.target.closest('a');if(!anchor)return;event.preventDefault();const value=anchor.getAttribute('data-aggregate-link');if(value&&/^(?:0|[1-9][0-9]*)$/.test(value))activateLink(Number(value),request,session);});frame.dataset.documentLoaded='true';const restored=scrollY??savedPositions.get(positionKey(value));if(restored!==undefined&&restored!==null)frame.contentWindow?.scrollTo(0,restored);else focusHeading(request);frame.contentWindow?.addEventListener('scroll',()=>{if(current(request,session)&&frame===rendered)rememberPosition();},{passive:true});
-   if(readyNonce&&readySHA&&!readySent){readySent=true;app.call('aggregates.viewReady',{...sessionPayload(session),documentReadyNonce:readyNonce,displayBodySHA256:readySHA}).then(()=>{if(hydrate)hydrateImages(value,request,session,revision);}).catch(error=>{if(current(request,session)&&revision===displayRevision)app.error(error);});}else if(hydrate)hydrateImages(value,request,session,revision);
+   if(readyNonce&&readySHA&&!readySent){readySent=true;app.call('aggregates.viewReady',{...sessionPayload(session),documentReadyNonce:readyNonce,displayBodySHA256:readySHA}).then(result=>{if(result?.accepted===true)cacheReadPreview(value,request,session,revision);if(hydrate)hydrateImages(value,request,session,revision);}).catch(error=>{if(current(request,session)&&revision===displayRevision)app.error(error);});}else if(hydrate)hydrateImages(value,request,session,revision);
   });
   frame.srcdoc=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'"><title>${escape(descriptor.titleZh||descriptor.title)}</title><style>${frameCSS}</style></head><body><main data-document-ready-nonce="${escape(readyNonce||'')}" data-display-body-sha256="${escape(readySHA||'')}">${displayHTML}</main></body></html>`;pane.append(frame);return true;
  }
- async function leave(){rememberPosition();activeDocument=null;nativeValue=null;nativeSavedValue=null;const session=active;++sequence;if(session){await app.call('aggregates.leave',sessionPayload(session));if(active===session)active=null;}frame=null;}
+ async function leave(){previewContext=null;rememberPosition();activeDocument=null;nativeValue=null;nativeSavedValue=null;const session=active;++sequence;if(session){await app.call('aggregates.leave',sessionPayload(session));if(active===session)active=null;}frame=null;}
  async function renderIndex(view){
   const request=++indexSequence,kind={today:'daily',conference:'conference',pages:'page'}[view];$('library-view').classList.toggle('aggregate-pages-only',view==='pages');applyMode(view);
   if(!kind){index.hidden=true;return;}
@@ -104,5 +131,7 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
    query.oninput=()=>{page=0;draw();};draw();indexViews.set(view,{catalog,node:fresh,count:records.length});
   }catch(error){if(request===indexSequence&&app.state.view===view)index.replaceChildren(text('p','汇总目录暂不可读：'+(error?.message||String(error))));}
  }
+ document.defaultView?.addEventListener('library.willChange',invalidateIndex);
+ document.defaultView?.addEventListener('personal.changed',invalidateIndex);
  return {preload,invalidateIndex,refreshDocument,route:()=>active?{view:'aggregate',id:active.id,returnView}:null,returnView:()=>returnView,loading,bind,render,failure,leave,renderIndex,appearance,hide:()=>{pane.hidden=true;},show:()=>{pane.hidden=false;},isCurrent:request=>request===sequence&&app.state.view==='aggregate'};
 }

@@ -107,7 +107,7 @@ class RootController private constructor(private val context: Context, private v
             exportAttempts.clear()
             retainedAccess.retireAll(); retainedConfirmationClear()
             pdf.clearSessionPasswords()
-            leaveAggregateView()
+            leaveAggregateView();aggregateBrowser.invalidatePreviews()
             dispatch.rotate();cloudCredentialBorrowing.workspaceRestored();migrationConsents.clear();zotero.workspaceRestored();preparedReadings.clear()
             val restoreContext = currentCoroutineContext()
             RestorePolicy.install(staged, research, initialize = { personal.reload(); personal.retireRestoredDispatch(); library.reload() }, check = { restoreContext.ensureActive() })
@@ -363,10 +363,12 @@ class RootController private constructor(private val context: Context, private v
             else->null
         }
         if(cloudMutation!=null)retireBorrowedMigrationViews()
+        val pausePreviews=command in setOf("library.sync","app.restore.commit","cloud.restore.commit")
+        if(pausePreviews)aggregateBrowser.pausePreviews()
         try {
             cloud.drainCredentialBorrowers(cloudMutation) // Outside maintenance and Cloud operation mutex.
             return withContext(Dispatchers.IO) { executeBound(command, payload.copy(), access, dispatchAtStart,cloudMutation) }
-        } finally {cloud.endCredentialMutation(cloudMutation)}
+        } finally {cloud.endCredentialMutation(cloudMutation);if(pausePreviews)aggregateBrowser.resumePreviews()}
     }
     private suspend fun executeBound(command: String, payload: JSONObject, access: ReadingAccess, dispatchAtStart: String,cloudMutation:CloudCredentialMutation?=null): JSONObject {
         try {

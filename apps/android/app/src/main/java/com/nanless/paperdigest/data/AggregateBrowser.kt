@@ -2,23 +2,26 @@ package com.nanless.paperdigest.data
 
 import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import java.time.Instant
 
 /** Aggregate display identity only. Neither this stamp nor any UI DTO grants a paper capability. */
 data class AggregateCatalogStamp(val snapshotSHA256:String,val validationEpoch:String)
 data class AggregateResource(val sourceURL:String,val missingReason:String)
-data class AggregateDocumentView(val descriptor:PublishedAggregate,val bodyHTML:String,val rawHTMLSHA256:String,val bodySHA256:String,val rawHTMLBytes:Int,val fetchedAt:String,val resources:List<AggregateResource>,val notices:List<String>,val fromCache:Boolean,val images:AggregateImageAccess?=null,val imageError:String?=null,val linkHTML:String?=null,val linkNonce:String?=null) {
+data class AggregateDocumentView(val descriptor:PublishedAggregate,val bodyHTML:String,val rawHTMLSHA256:String,val bodySHA256:String,val rawHTMLBytes:Int,val fetchedAt:String,val resources:List<AggregateResource>,val notices:List<String>,val fromCache:Boolean,val images:AggregateImageAccess?=null,val imageError:String?=null,val linkHTML:String?=null,val linkNonce:String?=null,val plainText:String?=null) {
     companion object {
         internal fun verified(value:JSONObject,descriptor:PublishedAggregate,fromCache:Boolean):AggregateDocumentView {
             require(value.getString("contract")=="published-aggregate-document-v1"&&canonical(value.getJSONObject("descriptor"))==canonical(descriptor.json()))
             require(value.getString("responseURL")==descriptor.sourceURL&&value.get("completeOffline")==false)
             val raw=value.getString("rawHTMLSHA256");val body=value.getString("bodyHTML");val derived=value.getString("sanitizedBodySHA256")
             require(PublishedAggregateReader.validSHA(raw)&&PublishedAggregateReader.sha(body.toByteArray())==derived&&value.getInt("rawHTMLBytes") in 1..16*1024*1024);Instant.parse(value.getString("fetchedAt"))
-            return AggregateDocumentView(descriptor,body,raw,derived,value.getInt("rawHTMLBytes"),value.getString("fetchedAt"),value.getJSONArray("resources").objects().map{AggregateResource(it.getString("sourceURL"),it.getString("missingReason"))},value.getJSONArray("notices").strings(),fromCache)
+            return AggregateDocumentView(descriptor,body,raw,derived,value.getInt("rawHTMLBytes"),value.getString("fetchedAt"),value.getJSONArray("resources").objects().map{AggregateResource(it.getString("sourceURL"),it.getString("missingReason"))},value.getJSONArray("notices").strings(),fromCache,plainText=value.getString("plainText"))
         }
     }
 }
-data class AggregateBrowseState(val catalog:PublishedAggregateCatalog?=null,val stamp:AggregateCatalogStamp?=null,val selected:PublishedAggregate?=null,val document:AggregateDocumentView?=null,val revisions:List<AggregateCachedRevision> = emptyList(),val loading:Boolean=false,val attemptedIndex:Boolean=false,val catalogStale:Boolean=false,val error:String?=null,val cacheError:String?=null,val offlineMode:Boolean=false,val loadingImages:Boolean=false,val backTitle:String="返回汇总列表")
+/** Display-only text. It has no document, resource, link, PDF, model or export capability. */
+data class AggregateTextPreview(val pageID:String,val title:String,val text:String)
+data class AggregateBrowseState(val catalog:PublishedAggregateCatalog?=null,val stamp:AggregateCatalogStamp?=null,val selected:PublishedAggregate?=null,val document:AggregateDocumentView?=null,val revisions:List<AggregateCachedRevision> = emptyList(),val loading:Boolean=false,val attemptedIndex:Boolean=false,val catalogStale:Boolean=false,val error:String?=null,val cacheError:String?=null,val offlineMode:Boolean=false,val loadingImages:Boolean=false,val backTitle:String="返回汇总列表",val preview:AggregateTextPreview?=null)
 
 /** A current native cache-only selection, assembled and checked inside one synchronous source scope. */
 internal data class AggregateSavedSelection(val catalog:PublishedAggregateCatalog,val descriptor:PublishedAggregate,
@@ -41,6 +44,39 @@ internal interface AggregateBrowsePort {
 
 /** Private native generation rejects late results, ABA selection and a switch back to a real paper. */
 internal class AggregateBrowser(private val port:AggregateBrowsePort,private val claimReading:suspend (()->Boolean)->Boolean,private val publish:(AggregateBrowseState)->Unit,private val commitReading:suspend (()->Boolean,()->Boolean)->Boolean={live,commit->live()&&commit()},private val openLinkedPaper:suspend (Paper,()->Boolean)->JSONObject={_,_->JSONObject().put("status","not-adopted")}) {
+    companion object {internal const val PREVIEW_MAX_PAGES=2;internal const val PREVIEW_MAX_BYTES=4*1024*1024}
+    private data class SavedText(val stamp:AggregateCatalogStamp,val descriptor:PublishedAggregate,val rawSHA:String,val bodySHA:String,val preview:AggregateTextPreview,val bytes:Int)
+    private val previews=linkedMapOf<String,SavedText>()
+    private var previewPauses=0
+    private fun invalidatePreviewsLocked(){previews.clear();if(state.preview!=null){state=state.copy(preview=null,selected=null,document=null,revisions=emptyList());publish(state)}}
+    fun invalidatePreviews()=synchronized(lock){invalidatePreviewsLocked()}
+    fun pausePreviews()=synchronized(lock){previewPauses++;invalidatePreviewsLocked()}
+    fun resumePreviews()=synchronized(lock){require(previewPauses>0);previewPauses--}
+    private fun rememberText(document:AggregateDocumentView,stamp:AggregateCatalogStamp){
+        if(previewPauses>0)return
+        previews.entries.removeAll{it.value.stamp!=stamp}
+        val id=document.descriptor.id;val old=previews.remove(id)
+        if(old!=null&&old.rawSHA==document.rawHTMLSHA256&&old.bodySHA==document.bodySHA256){previews[id]=old;return}
+        if(document.bodyHTML.length>PREVIEW_MAX_BYTES*2)return
+        val text=document.plainText?.takeIf{it.isNotBlank()}?.trim()?:run {
+            val tree=Jsoup.parseBodyFragment(document.bodyHTML).body()
+            tree.select("script,style,noscript,iframe,object,embed,svg,img,video,audio,canvas").remove()
+            tree.select(".katex").forEach{if(it.selectFirst("math")!=null)it.select(".katex-html").remove()}
+            tree.select("math").toList().forEach{math->val tex=math.selectFirst("annotation[encoding=application/x-tex]")?.wholeText();math.replaceWith(org.jsoup.nodes.TextNode("[公式：${tex?:math.text()}]"))}
+            tree.wholeText().trim()
+        }
+        if(text.isEmpty())return
+        val descriptor=document.descriptor.copy(categories=document.descriptor.categories.toList(),tags=document.descriptor.tags.toList())
+        val bytes=text.toByteArray().size+descriptor.json().toString().toByteArray().size+128
+        if(bytes>PREVIEW_MAX_BYTES)return
+        while(previews.isNotEmpty()&&(previews.size>=PREVIEW_MAX_PAGES||previews.values.sumOf{it.bytes}+bytes>PREVIEW_MAX_BYTES))previews.remove(previews.keys.first())
+        previews[id]=SavedText(stamp,descriptor,document.rawHTMLSHA256,document.bodySHA256,AggregateTextPreview(id,descriptor.titleZh.ifBlank{descriptor.title},text),bytes)
+    }
+    private fun preview(id:String,stamp:AggregateCatalogStamp):SavedText? {
+        previews.entries.removeAll{it.value.stamp!=stamp}
+        if(previewPauses>0)return null
+        return previews.remove(id)?.also{previews[id]=it}
+    }
     private var links:AggregateLinkTable?=null
     // Display IDs only. Every back/resume reloads the current native catalog and mints new links.
     private var trail=emptyList<String>()
@@ -49,21 +85,29 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
     private fun parentTitle():String=trail.lastOrNull()?.let{id->state.catalog?.records?.firstOrNull{it.id==id}?.let{"返回"+it.titleZh.ifBlank{it.title}}}?:"返回汇总列表"
     private val lock=Any();private var ticket=0L;private var readingEpoch:Long?=null;private var viewIsCurrent:()->Boolean={true}
     @Volatile var state=AggregateBrowseState();private set
-    private fun begin(viewGuard:()->Boolean,initialGuard:()->Boolean={true},transform:(AggregateBrowseState)->AggregateBrowseState):Long=synchronized(lock){if(!viewGuard()||!initialGuard())return -1L;links=null;ticket++;viewIsCurrent=viewGuard;readingEpoch=null;state=transform(state);publish(state);ticket}
+    private fun begin(viewGuard:()->Boolean,initialGuard:()->Boolean={true},transform:(AggregateBrowseState)->AggregateBrowseState):Long=synchronized(lock){if(!viewGuard()||!initialGuard())return -1L;links=null;ticket++;viewIsCurrent=viewGuard;readingEpoch=null;state=transform(state.copy(preview=null));publish(state);ticket}
+    private fun withoutFailedPreview(value:AggregateBrowseState):AggregateBrowseState {
+        val preview=value.preview?:return value
+        previews.remove(preview.pageID)
+        return value.copy(preview=null,selected=null,document=null,revisions=emptyList())
+    }
     private fun current(token:Long)=synchronized(lock){ticket==token&&viewIsCurrent()}
     private fun change(token:Long,body:(AggregateBrowseState)->AggregateBrowseState):Boolean=synchronized(lock){if(ticket!=token||!viewIsCurrent())return false;state=body(state);publish(state);true}
     private fun ready(token:Long,stamp:AggregateCatalogStamp,epoch:Long)=current(token)&&port.stamp()==stamp&&port.mayPresent(epoch)
     private fun response(status:String)=JSONObject().put("status",status)
-    fun enter(){synchronized(lock){trail=emptyList();links=null;ticket++;readingEpoch=null;viewIsCurrent={true};state=state.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,attemptedIndex=false,error=null,cacheError=null);publish(state)}}
-    fun retire(){synchronized(lock){links=null;ticket++;viewIsCurrent={true};state=state.copy(loading=false,loadingImages=false);publish(state)}}
+    fun enter(){synchronized(lock){trail=emptyList();links=null;ticket++;readingEpoch=null;viewIsCurrent={true};state=state.copy(selected=null,document=null,preview=null,revisions=emptyList(),loading=false,loadingImages=false,attemptedIndex=false,error=null,cacheError=null);publish(state)}}
+    fun retire(){synchronized(lock){links=null;ticket++;viewIsCurrent={true};state=state.copy(preview=null,loading=false,loadingImages=false);publish(state)}}
     fun leave(){synchronized(lock){
         state.selected?.let{suspendedRoute=SuspendedRoute(it.id,trail.toList(),state.stamp)}
-        trail=emptyList();links=null;viewIsCurrent={true};ticket++;readingEpoch=null;state=state.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null);publish(state)}}
+        trail=emptyList();links=null;viewIsCurrent={true};ticket++;readingEpoch=null;state=state.copy(selected=null,document=null,preview=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null);publish(state)}}
     private fun recordEpoch(token:Long,epoch:Long):Boolean=synchronized(lock){if(ticket!=token||!viewIsCurrent())return false;readingEpoch=epoch;true}
     fun observeNativeState(){
         val stamp=port.stamp()
-        synchronized(lock){val epoch=readingEpoch
-            if(epoch!=null&&!port.mayPresent(epoch)){links=null;ticket++;readingEpoch=null;state=state.copy(selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null)}
+        synchronized(lock){
+            previews.entries.removeAll{it.value.stamp!=stamp}
+            if(state.preview!=null&&state.stamp!=stamp){links=null;ticket++;readingEpoch=null;state=state.copy(preview=null,selected=null,document=null,revisions=emptyList(),loading=false,loadingImages=false)}
+            val epoch=readingEpoch
+            if(epoch!=null&&!port.mayPresent(epoch)){links=null;ticket++;readingEpoch=null;state=state.copy(selected=null,document=null,preview=null,revisions=emptyList(),loading=false,loadingImages=false,error=null,cacheError=null)}
             state=state.copy(catalogStale=state.stamp!=null&&state.stamp!=stamp,offlineMode=port.offlineMode());publish(state)
         }
     }
@@ -100,7 +144,9 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         try {
             if(!claimReading{current(token)&&claimGuard()})return stale(token)
             if(!current(token))return response("not-adopted")
-            val epoch=port.readingEpoch();if(!recordEpoch(token,epoch))return response("not-adopted");val stamp=port.stamp();val saved=port.savedSelection(id);val catalog=saved?.catalog?:port.catalog()?:return needsSync(token)
+            val epoch=port.readingEpoch();if(!recordEpoch(token,epoch))return response("not-adopted");val stamp=port.stamp()
+            synchronized(lock){if(current(token)){preview(id,stamp)?.let{old->change(token){it.copy(stamp=stamp,selected=old.descriptor,document=null,preview=old.preview,revisions=emptyList(),loading=true,loadingImages=false,catalogStale=false,backTitle=parentTitle())}}}}
+            val saved=port.savedSelection(id);val catalog=saved?.catalog?:port.catalog()?:return needsSync(token)
             require(catalog.snapshotSHA256==stamp.snapshotSHA256)
             val descriptor=catalog.records.firstOrNull{it.id==id}?:return missing(token)
             require(history.size<=24&&history.all{parent->catalog.records.any{it.id==parent}}){"原返回路径不属于当前目录"}
@@ -111,18 +157,18 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
             if(!ready(token,stamp,epoch))return stale(token)
             change(token){it.copy(catalog=catalog,stamp=stamp,selected=descriptor,revisions=revisions,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode(),backTitle=parentTitle())}
             if(revisions.isNotEmpty())return adopt(token,stamp,epoch,descriptor,saved?.document?:port.cached(id,revisions.first().rawHTMLSHA256),true,allowImageNetwork=!port.offlineMode(),saved=saved)
-            if(port.offlineMode()){change(token){it.copy(loading=false,error="离线模式下，此条目没有当前目录中已核验的保存正文。")};return response("offline")}
+            if(port.offlineMode()){change(token){withoutFailedPreview(it).copy(loading=false,error="离线模式下，此条目没有当前目录中已核验的保存正文。")};return response("offline")}
             // Ordinary public webpage read is automatic when no verified same-scope cache exists.
             if(!ready(token,stamp,epoch))return stale(token)
             return adopt(token,stamp,epoch,descriptor,port.read(id),false)
-        }catch(e:CancellationException){cancelled(token);throw e}catch(_:Exception){change(token){it.copy(loading=false,error="网页读取未完成；没有改用其他保存修订。请重试或查看来源。")};return response("failed")}
+        }catch(e:CancellationException){cancelled(token);throw e}catch(_:Exception){change(token){withoutFailedPreview(it).copy(loading=false,error="网页读取未完成；没有改用其他保存修订。请重试或查看来源。")};return response("failed")}
     }
     private suspend fun readSelection(id:String,sha:String?,viewGuard:()->Boolean):JSONObject {
         val captured=synchronized(lock){
             val prior=state;val selected=prior.selected
             if(!viewGuard())return response("not-adopted")
             if(selected==null||selected.id!=id)return response("not-selected")
-            links=null;ticket++;viewIsCurrent=viewGuard;state=prior.copy(loading=true,error=null);publish(state);Triple(ticket,prior,readingEpoch)
+            links=null;ticket++;viewIsCurrent=viewGuard;state=prior.copy(document=if(prior.preview!=null)null else prior.document,preview=null,loading=true,error=null);publish(state);Triple(ticket,prior,readingEpoch)
         }
         val token=captured.first;val prior=captured.second;val selected=requireNotNull(prior.selected)
         try {
@@ -146,7 +192,8 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         val textAdopted=commitReading({ready(token,stamp,epoch)},{synchronized(lock){
             if(!ready(token,stamp,epoch))false else {
                 links=firstTable
-                change(token){it.copy(selected=descriptor,document=text,loading=false,loadingImages=needsImages,error=null,catalogStale=false,offlineMode=port.offlineMode())}
+                rememberText(text,stamp)
+                change(token){it.copy(selected=descriptor,document=text,preview=null,loading=false,loadingImages=needsImages,error=null,catalogStale=false,offlineMode=port.offlineMode())}
             }
         }})
         if(!textAdopted)return stale(token)
@@ -163,7 +210,7 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         var revisions=saved?.revisions?:emptyList();var cacheError=saved?.cacheError
         if(saved==null)try{revisions=port.revisions(descriptor.id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有自动改用其他修订。"}
         if(!ready(token,stamp,epoch))return stale(token)
-        val adopted=commitReading({ready(token,stamp,epoch)},{synchronized(lock){if(!ready(token,stamp,epoch))false else{links=table;change(token){it.copy(selected=descriptor,document=document,revisions=revisions,loading=false,loadingImages=false,error=null,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode())}}}});return if(adopted)response(if(cached)"saved-document"else"website-document")else stale(token)
+        val adopted=commitReading({ready(token,stamp,epoch)},{synchronized(lock){if(!ready(token,stamp,epoch))false else{links=table;rememberText(document,stamp);change(token){it.copy(selected=descriptor,document=document,preview=null,revisions=revisions,loading=false,loadingImages=false,error=null,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode())}}}});return if(adopted)response(if(cached)"saved-document"else"website-document")else stale(token)
     }
     fun linkIsCurrent(nonce:String,index:Int):Boolean=synchronized(lock){
         val table=links?:return false;val stamp=state.stamp?:return false;val epoch=readingEpoch?:return false
@@ -171,6 +218,7 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
     }
     /** A failed refresh keeps the old verified body, with a fresh presentation ticket. */
     private fun restoreDocumentLinks(token:Long)=synchronized(lock){
+        if(state.preview!=null)return@synchronized
         val document=state.document?:return@synchronized
         val stamp=state.stamp?:return@synchronized;val epoch=readingEpoch?:return@synchronized
         if(!ready(token,stamp,epoch)||state.loading||links!=null)return@synchronized
@@ -207,8 +255,8 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         }
     }
     private data class LinkSource(val ticket:Long,val table:AggregateLinkTable,val document:AggregateDocumentView,val stamp:AggregateCatalogStamp,val epoch:Long,val href:String)
-    private fun stale(token:Long):JSONObject {change(token){it.copy(loading=false,loadingImages=false,catalogStale=true,error="目录或阅读入口已变化；未把旧响应接到新页面。请重新读取目录。")};return response("not-adopted")}
-    private fun needsSync(token:Long):JSONObject {change(token){it.copy(loading=false,loadingImages=false,catalogStale=true,error="网站汇总目录尚未核验，请先同步已发布内容。")};return response("needs-sync")}
-    private fun missing(token:Long):JSONObject {change(token){it.copy(loading=false,error="此条目不在当前已核验的汇总目录中。请重新读取目录。")};return response("missing")}
-    private fun cancelled(token:Long){change(token){it.copy(loading=false,loadingImages=false,error="本次读取已停止；已保存的原修订保留。")};restoreDocumentLinks(token)}
+    private fun stale(token:Long):JSONObject {change(token){withoutFailedPreview(it).copy(loading=false,loadingImages=false,catalogStale=true,error="目录或阅读入口已变化；未把旧响应接到新页面。请重新读取目录。")};return response("not-adopted")}
+    private fun needsSync(token:Long):JSONObject {change(token){withoutFailedPreview(it).copy(loading=false,loadingImages=false,catalogStale=true,error="网站汇总目录尚未核验，请先同步已发布内容。")};return response("needs-sync")}
+    private fun missing(token:Long):JSONObject {change(token){withoutFailedPreview(it).copy(loading=false,error="此条目不在当前已核验的汇总目录中。请重新读取目录。")};return response("missing")}
+    private fun cancelled(token:Long){change(token){withoutFailedPreview(it).copy(loading=false,loadingImages=false,error="本次读取已停止；已保存的原修订保留。")};restoreDocumentLinks(token)}
 }

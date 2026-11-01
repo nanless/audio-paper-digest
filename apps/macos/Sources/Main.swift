@@ -38,7 +38,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var pdfObserversInstalled=false
     var directory:URL!, store:DesktopStore!, library:LibraryService!, zotero:ZoteroService!, model:ModelService!, storage:DesktopStorage!
     var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
-    var maintenanceBusy=false {didSet{if maintenanceBusy{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
+    var maintenanceBusy=false {didSet{if maintenanceBusy{if !oldValue{emit("library.willChange")};suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var cloudLocal:CloudLocalStore?,cloudArchive:CloudArchiveService?
     var cloudBusy=false,cloudCredentialState="unknown"
     var cloudAutomaticPausedInMemory=false
@@ -489,6 +489,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         cancelAggregatePreload()
         if let flight=catalogSyncFlight{return try await flight.task.value}
         let id=UUID();lastSyncAttempt=Date()
+        emit("library.willChange")
         let task=Task{@MainActor in
             defer{if self.catalogSyncFlight?.id==id{self.catalogSyncFlight=nil}}
             let result=try await self.runJob("library.sync",payload:payload){notify in try await self.library.handle(command:"library.sync",payload:payload,progress:notify)}

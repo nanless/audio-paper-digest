@@ -14,3 +14,5 @@
 .library-view.aggregate-list-selected .aggregate-index{display:flex;flex:1;min-height:0;flex-direction:column;margin-bottom:0;padding-bottom:20px;border:0}
 .library-view.aggregate-list-selected .aggregate-index>:not(.aggregate-rows){flex-shrink:0}
 .library-view.aggregate-list-selected .aggregate-rows{flex:1;min-height:0;overflow:auto}
+
+.aggregate-preview-text{flex:1;min-height:0;min-width:0;overflow:auto;margin:0;padding:20px 38px 70px;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--article-font,18px)/1.9 -apple-system,"PingFang SC",sans-serif;color:var(--ink);background:var(--surface)}

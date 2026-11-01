@@ -29,7 +29,7 @@ private actor CatalogHeldTransport {
     @MainActor static func main()async {
         _=NSApplication.shared;NSApp.setActivationPolicy(.prohibited)
         let receiver=WKWebView(frame:.zero)
-        receiver.loadHTMLString("<html><body><script>window.catalogChanges=0;window.addEventListener('library.changed',()=>window.catalogChanges++);window.catalogProbeReady=true;</script></body></html>",baseURL:nil)
+        receiver.loadHTMLString("<html><body><script>window.catalogChanges=0;window.catalogWillChanges=0;window.addEventListener('library.willChange',()=>window.catalogWillChanges++);window.addEventListener('library.changed',()=>window.catalogChanges++);window.catalogProbeReady=true;</script></body></html>",baseURL:nil)
         var ready=false
         for _ in 0..<500{if (try? await receiver.evaluateJavaScript("window.catalogProbeReady===true")) as? Bool==true{ready=true;break};try? await Task.sleep(nanoseconds:10_000_000)}
         guard ready else{print("CatalogScheduling receiver did not initialize");exit(1)}
@@ -40,13 +40,14 @@ private actor CatalogHeldTransport {
             do {
                 try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
                 let current=PaperDigestApp();app=current;current.directory=root;current.store=try DesktopStore(directory:root);current.web=receiver
-                _=try await receiver.evaluateJavaScript("window.catalogChanges=0")
+                _=try await receiver.evaluateJavaScript("window.catalogChanges=0;window.catalogWillChanges=0")
                 current.library=try LibraryService(dataDirectory:root,siteBaseURL:URL(string:"https://fixture.example/blog/")!,transport:{url,limit in try await gate.read(url,limit)})
                 current.model=ModelService(directory:root,store:current.store,keyProvider:{throw DesktopError.message("Synthetic catalog test forbids credentials")})
                 if mode=="automatic-then-manual"{current.syncNow()}else{manual=Task{@MainActor in try await current.dispatch("library.sync",payload:[:])}}
                 for _ in 0..<500{if await gate.started{break};try await Task.sleep(nanoseconds:2_000_000)}
                 guard await gate.started else{throw DesktopError.message("Synthetic transport not entered")}
                 let recordedAtManualStart=current.lastSyncAttempt>Date.distantPast
+                let changesBeforeResponse=(try await receiver.evaluateJavaScript("window.catalogWillChanges")) as? Int ?? -1
                 let initialIDs=Set(current.jobs.keys)
                 if mode=="wake"{current.didWake()}else if mode=="timer"{current.syncNow()}else if mode != "settings-only"{follower=Task{@MainActor in try await current.dispatch("library.sync",payload:[:])}}
                 // A bounded opportunity for the actual unawaited native callback task to start.
@@ -60,8 +61,8 @@ private actor CatalogHeldTransport {
                 let rows=(current.store.value["jobs"] as? [[String:Any]] ?? []).filter{$0["command"] as? String=="library.sync"}
                 let changes=(try await receiver.evaluateJavaScript("window.catalogChanges")) as? Int ?? -1
                 let fresh=try await current.library.handle(command:"library.list",payload:["query":"明确合成目录夹具"])
-                let passed=recordedAtManualStart && during==1 && rows.count==1 && manualCompleted && current.jobs.isEmpty && changes==1 && fresh["total"] as? Int==1
-                reports.append(["case":mode,"manualAttemptRecorded":recordedAtManualStart,"activeJobsAfterAutomaticCallback":during,"catalogJobRows":rows.count,"transportCalls":await gate.calls,"manualCompleted":manualCompleted,"libraryChangedEvents":changes,"freshQueryMatches":fresh["total"] ?? -1,"drained":current.jobs.isEmpty,"passed":passed])
+                let passed=changesBeforeResponse==1 && recordedAtManualStart && during==1 && rows.count==1 && manualCompleted && current.jobs.isEmpty && changes==1 && fresh["total"] as? Int==1
+                reports.append(["case":mode,"willChangeBeforeResponse":changesBeforeResponse,"manualAttemptRecorded":recordedAtManualStart,"activeJobsAfterAutomaticCallback":during,"catalogJobRows":rows.count,"transportCalls":await gate.calls,"manualCompleted":manualCompleted,"libraryChangedEvents":changes,"freshQueryMatches":fresh["total"] ?? -1,"drained":current.jobs.isEmpty,"passed":passed])
                 if !passed{failures+=1}
             }catch{failures+=1;reports.append(["case":mode,"passed":false,"fixedError":"fixture-or-execution-failed"])}
             await gate.release()

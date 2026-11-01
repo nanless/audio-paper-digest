@@ -374,7 +374,7 @@ async function openAggregate(id,options={}){
   openAggregate.unboundPaper=state.paper;
   if(options.recordHistory!==false)rememberRoute(returnRoute);updateBack();
   await setView('aggregate');if(token!==opening||state.view!=='aggregate')return;
-  const request=aggregates.loading(id,options.from||from);
+  const request=aggregates.loading(id,options.from||from,{preview:options.refresh!==true});
   try{
    const session=await call('aggregates.open',{id});
    if(token!==opening||!aggregates.bind(session,request)){clearPreviousSource();await call('aggregates.leave',{id:session.id,sessionID:session.sessionID});return;}
@@ -464,7 +464,7 @@ async function renderJobs(){
  $('task-list').querySelectorAll('[data-job-cloud]').forEach(b=>b.onclick=()=>call('settings.open',{pane:'cloud'}).catch(error));
  $('task-list').querySelectorAll('[data-job-paper]').forEach(b=>b.onclick=()=>{const p=state.catalog.find(p=>p.id===b.dataset.jobPaper)||state.personal.personalPapers?.[b.dataset.jobPaper];if(p)openPaper(p,{resume:true});else toast('原论文已不在当前目录，已保存的请求与费用仍完整保留在备份中');});
 }
-async function sync(){$('sync').disabled=true;try{await call('library.sync');aggregates.invalidateIndex();await library.refresh();await aggregates.renderIndex(state.view);toast('已核验并更新全部已发布论文目录');}catch(e){error(e);}finally{$('sync').disabled=false;}}
+async function sync(){$('sync').disabled=true;aggregates.invalidateIndex();try{await call('library.sync');await library.refresh();await aggregates.renderIndex(state.view);toast('已核验并更新全部已发布论文目录');}catch(e){error(e);}finally{$('sync').disabled=false;}}
 async function exportArchiveMaterials(){await saveNote();const html=originalFrameHTML(guideFrame);return await call('archive.materials',{guideHTML:html});}
 function exportDialog(){return call('details.show',{kind:'export'}).catch(error);}
 function help(){return call('details.show',{kind:'help'}).catch(error);}
