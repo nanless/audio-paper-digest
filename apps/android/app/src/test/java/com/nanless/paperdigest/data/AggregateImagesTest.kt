@@ -215,6 +215,49 @@ class AggregateImagesTest {
     }
 
 
+    @Test fun pureRenderMemoKeepsDifferentRecordsEvenWhenTheirImageShaIsShared()=runBlocking {
+        val f=fixture();val full=online(f);val changed=full.records.toMutableList()
+        changed[0]=AggregateImageRecord(changed[0].slot,missingReason="Controlled missing slot")
+        f.store.withSourceReadScope {
+            val one=f.store.cacheImageRendering(full.plan,full.records,"2026-11-01T00:00:01Z")
+            val two=f.store.cacheImageRendering(full.plan,changed,"2026-11-01T00:00:02Z")
+            assertEquals(0,one.missingCount);assertEquals(1,two.missingCount)
+            assertNotEquals(one.bodyHTML,two.bodyHTML)
+            assertEquals(1,f.store.cachedImageRendering(f.descriptor,f.raw,two.manifestSHA256).missingCount)
+        }
+    }
+    @Test fun aBadOlderImagePeerIsNotSkippedByTheScopedPlanAndRenderMemo()=runBlocking {
+        val f=fixture();val old=online(f)
+        f.store.cacheImageRendering(old.plan,old.records,java.time.Instant.now().plusSeconds(1).toString())
+        val file=java.io.File(f.root,"${AggregateImages.DIRECTORY}/${PublishedAggregateReader.sha(f.descriptor.id.toByteArray())}/${f.descriptor.source.manifestSHA256}/${f.raw}/${AggregateImages.CONTRACT}/${old.manifestSHA256}.json")
+        val original=file.readBytes()
+        try{assertTrue(runCatching{f.store.withSourceReadScope {
+            f.store.cachedImageRendering(f.descriptor,f.raw,old.manifestSHA256)
+            file.writeBytes(original+byteArrayOf(32))
+            f.store.latestImageRendering(f.descriptor,f.raw)
+        }}.isFailure)}finally{file.writeBytes(original)}
+    }
+    @Test fun imageBytesAreColdCheckedAfterAPlanAndRenderMemoHit()=runBlocking {
+        val f=fixture();val access=online(f);val sha=access.records.first().sha256!!
+        val file=java.io.File(f.root,"aggregate-image-bytes-v1/$sha");val original=file.readBytes()
+        f.store.withSourceReadScope {
+            f.store.cachedImageRendering(f.descriptor,f.raw,access.manifestSHA256)
+            try{
+                val changed=original.copyOf();changed[changed.lastIndex]=(changed.last().toInt() xor 1).toByte();file.writeBytes(changed)
+                assertTrue(runCatching{f.store.cachedImageRendering(f.descriptor,f.raw,access.manifestSHA256)}.isFailure)
+            }finally{file.writeBytes(original)}
+        }
+    }
+    @Test fun imageManifestChangedAfterItsLastReadCannotEscapeTheScope()=runBlocking {
+        val f=fixture();val access=online(f)
+        val file=java.io.File(f.root,"${AggregateImages.DIRECTORY}/${PublishedAggregateReader.sha(f.descriptor.id.toByteArray())}/${f.descriptor.source.manifestSHA256}/${f.raw}/${AggregateImages.CONTRACT}/${access.manifestSHA256}.json")
+        val original=file.readBytes()
+        try{assertTrue(runCatching{f.store.withSourceReadScope {
+            f.store.cachedImageRendering(f.descriptor,f.raw,access.manifestSHA256)
+            file.writeBytes(original+byteArrayOf(32))
+        }}.isFailure)}finally{file.writeBytes(original)}
+    }
+
     @Test fun imagePreparationCannotBeReplayedThroughAnotherStoreEvenWithEqualSourceHashes()=runBlocking {
         val f=fixture();val other=fixture();val prepared=AggregateImageLoader.prepare(f.store,f.descriptor,f.raw,true);var requests=0
         assertTrue(runCatching{AggregateImageLoader.readPrepared(other.store,prepared,{true},{_,_->requests++;png()})}.isFailure)

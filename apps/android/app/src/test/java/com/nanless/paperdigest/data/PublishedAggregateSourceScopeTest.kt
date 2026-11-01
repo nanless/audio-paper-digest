@@ -17,7 +17,7 @@ class PublishedAggregateSourceScopeTest {
    val shard=OfflineFoundationJSON.encode(rows);val hash=sha256(shard);val shardFile=File(root,"index/$hash.json").apply{parentFile.mkdirs();writeBytes(shard)}
    val manifest=OfflineFoundationJSON.encode(JSONObject().put("contract","paper-search-index-manifest-v1").put("recordCount",1).put("totalBytes",shard.size).put("shards",JSONArray().put(JSONObject().put("url","search-index/part-0001-${hash.take(12)}.json").put("sha256",hash).put("bytes",shard.size).put("recordCount",1))))
    val epoch=UUID.randomUUID().toString();val store=PublishedAggregateStore(root);val record=store.stage(manifest,epoch).records.single()
-   val html="<div id='article-body' class='post-content'><p>Original scope source</p><a href='#original'>Original link</a></div>".toByteArray()
+   val html="<div id='article-body' class='post-content'><p>Original scope source</p><a href='#original'>Original link</a><img src='https://arxiv.org/html/2610.00001v1/image.png' alt='Original image'/></div>".toByteArray()
    store.cacheDocument(html,record,record.sourceURL,"2026-10-31T00:00:00Z")
    test(store,record,epoch,shardFile,shard)
   }finally{root.deleteRecursively()}
@@ -72,6 +72,28 @@ class PublishedAggregateSourceScopeTest {
    assertNotNull(foreign.get());assertNotSame(owned,foreign.get())
    assertSame(owned,store.load(record.source.manifestSHA256,epoch))
   }
+ }
+
+ @Test fun imagePlanReuseStillReReadsOriginalHtmlBeforeTheScopeReturns()=fixture { store,record,_,file,_->
+  val raw=store.cachedRevisions(record).single().rawHTMLSHA256
+  val original=File(file.parentFile.parentFile,"aggregate-documents-android/${sha256(record.id.toByteArray())}/${record.source.manifestSHA256}/$raw/original.html")
+  val bytes=original.readBytes()
+  lateinit var first:AggregateImagePlan
+  assertTrue(runCatching{store.withSourceReadScope {
+   first=store.imagePlan(record,raw);assertSame(first,store.imagePlan(record,raw))
+   original.writeBytes(bytes+byteArrayOf(32))
+  }}.isFailure)
+  original.writeBytes(bytes)
+  assertNotSame(first,store.withSourceReadScope{store.imagePlan(record,raw)})
+ }
+ @Test fun aMutatedPlanCannotEscapeThePrivateSynchronousMemo()=fixture { store,record,_,_,_->
+  val raw=store.cachedRevisions(record).single().rawHTMLSHA256
+  assertTrue(runCatching{store.withSourceReadScope {
+   val plan=store.imagePlan(record,raw)
+   @Suppress("UNCHECKED_CAST") val slots=plan.slots as MutableList<AggregateImageSlot>
+   slots[0]=slots[0].copy(alternative="tampered plan")
+  }}.isFailure)
+  assertEquals("Original image",store.withSourceReadScope{store.imagePlan(record,raw)}.slots.first().alternative)
  }
 
 }

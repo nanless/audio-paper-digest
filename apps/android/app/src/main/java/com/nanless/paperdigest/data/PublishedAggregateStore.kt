@@ -19,10 +19,13 @@ class PublishedAggregateStore(private val directory:File) {
     companion object {private val immutablePublishLock=Any()}
     private data class SourceFile(val file:File,val limit:Int,val sha256:String)
     private data class ParsedSource(val catalog:PublishedAggregateCatalog,val shapeSHA256:String)
+    private data class ParsedImagePlan(val plan:AggregateImagePlan,val canonical:String)
     private class SourceReadScope {
         val owner=Thread.currentThread()
         val files=linkedMapOf<String,SourceFile>()
         val catalogs=linkedMapOf<String,ParsedSource>()
+        val plans=linkedMapOf<String,ParsedImagePlan>()
+        val renderedImages=java.util.IdentityHashMap<AggregateImagePlan,MutableMap<String,String>>()
     }
     @Volatile private var sourceReadScope:SourceReadScope?=null
     private fun ownedSourceReadScope()=sourceReadScope?.takeIf{it.owner===Thread.currentThread()}
@@ -34,20 +37,34 @@ class PublishedAggregateStore(private val directory:File) {
         try {
             val result=block()
             scope.catalogs.values.forEach{saved->require(PublishedAggregateReader.sha(OfflineFoundationJSON.encode(saved.catalog.json()))==saved.shapeSHA256){"读取期间原生目录对象变化"}}
-            scope.files.values.forEach{saved->require(PublishedAggregateReader.sha(read(saved.file,saved.limit))==saved.sha256){"读取期间汇总原来源字节变化"}}
+            scope.plans.values.forEach{saved->require(canonical(saved.plan.json())==saved.canonical){"读取期间原生图片计划变化"}}
+            scope.files.values.forEach{saved->require(PublishedAggregateReader.sha(readRaw(saved.file,saved.limit))==saved.sha256){"读取期间汇总原来源字节变化"}}
             return result
         }finally{sourceReadScope=null}
     }
-    private fun sourceBytes(file:File,limit:Int):ByteArray {
-        val bytes=read(file,limit);val scope=ownedSourceReadScope()?:return bytes
-        val proof=SourceFile(file,limit,PublishedAggregateReader.sha(bytes));val prior=scope.files.putIfAbsent(file.absolutePath,proof)
-        require(prior==null||prior.sha256==proof.sha256){"读取期间汇总原来源字节变化"}
-        return bytes
+    private fun sourceBytes(file:File,limit:Int)=read(file,limit)
+    private fun canonicalImagePlan(plan:AggregateImagePlan):String {
+        val known=ownedSourceReadScope()?.plans?.values?.firstOrNull{it.plan===plan}
+        return known?.canonical?:canonical(plan.json())
+    }
+    private fun renderedImageBodySHA(plan:AggregateImagePlan,records:List<AggregateImageRecord>):String {
+        val scope=ownedSourceReadScope()
+        // Only a private plan actually rebuilt from these original bytes may reuse a pure derivation.
+        if(scope==null||scope.plans.values.none{it.plan===plan})return PublishedAggregateReader.sha(AggregateImages.render(plan,records).toByteArray())
+        val key=canonical(JSONArray(records.map{it.json()}))
+        val known=scope.renderedImages.getOrPut(plan){linkedMapOf()}
+        return known.getOrPut(key){PublishedAggregateReader.sha(AggregateImages.render(plan,records).toByteArray())}
     }
     private fun noLinks(file:File){var path:File?=file.absoluteFile;while(path!=null){require(!Files.isSymbolicLink(path.toPath())){"汇总缓存不能含链接"};path=path.parentFile}}
     private fun child(vararg names:String):File {var result=directory;noLinks(result);for(name in names){require(name.isNotEmpty()&&name!="."&&name!=".."&&!name.contains('/')&&!name.contains('\\'));result=File(result,name);noLinks(result)};return result}
     private fun attrs(file:File)=Files.readAttributes(file.toPath(),BasicFileAttributes::class.java,NOFOLLOW_LINKS)
     private fun read(file:File,limit:Int):ByteArray {
+        val bytes=readRaw(file,limit);val scope=ownedSourceReadScope()?:return bytes
+        val proof=SourceFile(file,limit,PublishedAggregateReader.sha(bytes));val prior=scope.files.putIfAbsent(file.absolutePath,proof)
+        require(prior==null||prior.sha256==proof.sha256){"读取期间汇总原来源字节变化"}
+        return bytes
+    }
+    private fun readRaw(file:File,limit:Int):ByteArray {
         noLinks(file);val before=attrs(file);require(before.isRegularFile&&before.fileKey()!=null&&before.size() in 0..limit.toLong())
         val result=FileChannel.open(file.toPath(),READ,NOFOLLOW_LINKS).use{channel->val bytes=ByteArray(before.size().toInt());val buffer=ByteBuffer.wrap(bytes);while(buffer.hasRemaining()){require(channel.read(buffer)>0)};require(channel.read(ByteBuffer.allocate(1))==-1);bytes}
         noLinks(file);val after=attrs(file);require(before.fileKey()==after.fileKey()&&before.size()==after.size()&&before.lastModifiedTime()==after.lastModifiedTime());return result
@@ -76,7 +93,8 @@ class PublishedAggregateStore(private val directory:File) {
                             val buffer=ByteBuffer.wrap(bytes);while(buffer.hasRemaining())out.write(buffer);out.force(true)
                         }
                         pinned();require(attrs(file.parentFile).fileKey()==parentIdentity.fileKey()&&attrs(temporary).fileKey()==owned)
-                        require(read(temporary,maxOf(1,bytes.size)).contentEquals(bytes))
+                        // This private owned file is renamed below; guard the committed pathname, never a retired temporary name.
+                        require(readRaw(temporary,maxOf(1,bytes.size)).contentEquals(bytes))
                         // ATOMIC_MOVE supplies complete visibility, not no-replace. The trusted OS lock
                         // and second existence/CAS check serialize every cooperating Store publisher.
                         if(Files.exists(file.toPath(),NOFOLLOW_LINKS))require(read(file,maxOf(1,bytes.size)).contentEquals(bytes)){"原汇总缓存冲突，未覆盖"}
@@ -178,10 +196,16 @@ class PublishedAggregateStore(private val directory:File) {
         return AggregateImageBlob(sha,mime,bytes.size)
     }
     fun imagePlan(descriptor:PublishedAggregate,rawHTMLSHA256:String):AggregateImagePlan {
+        require(PublishedAggregateReader.validSHA(rawHTMLSHA256))
+        val key=canonical(descriptor.json())+"|"+rawHTMLSHA256
+        ownedSourceReadScope()?.plans?.get(key)?.let{return it.plan}
         val source=cachedDocument(descriptor,rawHTMLSHA256)
         val raw=read(child("aggregate-documents-android",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,rawHTMLSHA256,"original.html"),16*1024*1024)
-        return AggregateHtml.imagePlan(raw,descriptor,source.getString("responseURL"),source.getString("fetchedAt")).also{require(it.originalBodySHA256==source.getString("sanitizedBodySHA256"))}
+        val plan=AggregateHtml.imagePlan(raw,descriptor,source.getString("responseURL"),source.getString("fetchedAt")).also{require(it.originalBodySHA256==source.getString("sanitizedBodySHA256"))}
+        ownedSourceReadScope()?.plans?.put(key,ParsedImagePlan(plan,canonical(plan.json())))
+        return plan
     }
+
     private fun imageFolder(descriptor:PublishedAggregate,raw:String):Array<String> {
         require(PublishedAggregateReader.validSHA(raw))
         return arrayOf(AggregateImages.DIRECTORY,PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,raw,AggregateImages.CONTRACT)
@@ -197,6 +221,10 @@ class PublishedAggregateStore(private val directory:File) {
             while(count<size){buffer.clear();buffer.limit(minOf(buffer.capacity(),size-count));val n=channel.read(buffer);require(n>0);digest.update(buffer.array(),0,n);if(headerCount<header.size){val take=minOf(n,header.size-headerCount);buffer.array().copyInto(header,headerCount,0,take);headerCount+=take};count+=n}
             require(channel.read(ByteBuffer.allocate(1))==-1&&digest.digest().joinToString(""){"%02x".format(it.toInt()and 255)}==sha&&AggregateImages.rasterMIME(header)==record.mime){"图片真实字节或类型身份不一致"}
             noLinks(file);val after=attrs(file);require(before.fileKey()==after.fileKey()&&before.size()==after.size()&&before.lastModifiedTime()==after.lastModifiedTime())
+            ownedSourceReadScope()?.let{scope->
+                val proof=SourceFile(file,AggregateImages.MAX_IMAGE_BYTES,sha);val prior=scope.files.putIfAbsent(file.absolutePath,proof)
+                require(prior==null||prior.sha256==sha){"读取期间图片原字节变化"}
+            }
             channel.position(0)
             return object:java.io.FilterInputStream(java.nio.channels.Channels.newInputStream(channel)){
                 private var remaining=size
@@ -219,12 +247,12 @@ class PublishedAggregateStore(private val directory:File) {
     internal fun cachedImageRendering(descriptor:PublishedAggregate,rawHTMLSHA256:String,manifestSHA256:String):AggregateImageAccess {
         val plan=imagePlan(descriptor,rawHTMLSHA256);require(PublishedAggregateReader.validSHA(manifestSHA256))
         val bytes=read(child(*imageFolder(descriptor,rawHTMLSHA256),"$manifestSHA256.json"),4*1024*1024);require(PublishedAggregateReader.sha(bytes)==manifestSHA256)
-        val manifest=JSONObject(PublishedUtf8.decode(bytes));require(manifest.getString("contract")==AggregateImages.CONTRACT&&manifest.getString("parserContract")=="published-aggregate-jsoup-images-v1"&&manifest.get("completeOffline")==false&&canonical(manifest.getJSONObject("plan"))==canonical(plan.json()))
+        val manifest=JSONObject(PublishedUtf8.decode(bytes));require(manifest.getString("contract")==AggregateImages.CONTRACT&&manifest.getString("parserContract")=="published-aggregate-jsoup-images-v1"&&manifest.get("completeOffline")==false&&canonical(manifest.getJSONObject("plan"))==canonicalImagePlan(plan))
         java.time.Instant.parse(manifest.getString("observedAt"))
         // Declared per-reference budget is validated before any blob; every physical blob is then checked immediately.
         val records=AggregateImages.records(plan,manifest.getJSONArray("images"))
         records.filter{it.sha256!=null}.forEach{openVerifiedImage(it).close()}
-        require(PublishedAggregateReader.sha(AggregateImages.render(plan,records).toByteArray())==manifest.getString("renderedBodySHA256"))
+        require(renderedImageBodySHA(plan,records)==manifest.getString("renderedBodySHA256"))
         val origin=manifest.optJSONObject("importedFrom")?.let{AggregateImageImport(it.getString("platform"),it.getString("manifestSHA256"))}
         return AggregateImageAccess(manifestSHA256,plan,records,manifest.getString("observedAt"),::openVerifiedImage,origin)
     }
