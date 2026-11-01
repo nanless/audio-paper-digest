@@ -17,8 +17,9 @@ export function mountLibrary(app) {
   const views = new Set(['library', 'today', 'conference', 'favorites', 'reading-list']);
   const selected = new Set();
   const expandedMetadata = new Set();
+  const viewStates=new Map();let matchingIDs=new Set();
   const filters = {task: '', method: '', source: '', score: '', from: '', until: ''};
-  let page = 0, loaded = false, loading = null, renderSequence = 0, searchTimer;
+  let page = 0, loaded = false, loading = null, renderSequence = 0, searchTimer, refreshGeneration=0;
   let lastView, persistBusy = false, popup = null;
   const pageSize = 100;
   const fail = error => { if (typeof app.error === 'function') app.error(error); else app.toast(error?.message || String(error)); };
@@ -47,6 +48,7 @@ export function mountLibrary(app) {
   const filterToggle=document.createElement('button');filterToggle.type='button';filterToggle.id='library-filter-toggle';filterToggle.className='library-filter-toggle';filterToggle.hidden=true;filterToggle.setAttribute('aria-expanded','false');filterToggle.onclick=()=>{filterBar.hidden=!filterBar.hidden;filterToggle.setAttribute('aria-expanded',String(!filterBar.hidden));};filterBar.before(filterToggle);
   const scope = document.createElement('p'); scope.className = 'library-query-scope'; scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
   filterBar.after(scope);
+  const catalogNotice=document.createElement('p');catalogNotice.id='library-catalog-status';catalogNotice.className='library-query-scope';catalogNotice.hidden=true;catalogNotice.setAttribute('role','status');const catalogMessage=document.createElement('span'),catalogRetry=document.createElement('button');catalogRetry.type='button';catalogRetry.textContent='重新读取本机目录';catalogRetry.hidden=true;catalogRetry.onclick=()=>refresh();catalogNotice.append(catalogMessage,catalogRetry);scope.after(catalogNotice);
   const bar = document.createElement('div'); bar.className = 'library-selection-bar';
   bar.innerHTML = '<span id="library-selection-count">可多选论文，或右键打开操作菜单</span><button id="library-selection-favorite" type="button" disabled>收藏选中</button><button id="library-selection-classify" type="button" disabled>收藏并归类</button><button id="library-selection-remove-favorite" type="button" disabled hidden>取消收藏选中</button><button id="library-selection-reading" type="button" disabled>加入待读</button><button id="library-selection-clear" type="button" disabled>取消选择</button>';
   scope.after(bar);
@@ -60,7 +62,8 @@ export function mountLibrary(app) {
   const footer = $('library-view').querySelector('.library-footer'); footer.lastElementChild?.remove(); footer.append(pager);
   $('search-input').placeholder = '搜索论文、缓存导读或我的笔记';
   function updateSelection() {
-    $('library-selection-count').textContent = selected.size ? `已选 ${selected.size} 篇论文` : '可多选论文，或右键打开操作菜单';
+    const hiddenSelected=[...selected].filter(id=>!matchingIDs.has(id)).length;
+    $('library-selection-count').textContent = selected.size ? `已选 ${selected.size} 篇论文${hiddenSelected?'（'+hiddenSelected+' 篇不在当前筛选结果中）':''}` : '可多选论文，或右键打开操作菜单';
     for (const id of ['library-selection-favorite','library-selection-classify','library-selection-remove-favorite','library-selection-reading','library-selection-clear']) $(id).disabled = persistBusy || !selected.size || (favoriteTools.readOnly&&['library-selection-favorite','library-selection-classify','library-selection-remove-favorite'].includes(id));
   }
   function fillOptions() {
@@ -84,16 +87,33 @@ export function mountLibrary(app) {
     finally { persistBusy = false; updateSelection(); }
   }
   async function refresh() {
-    if (loading) return loading;
-    loading = (async()=>{
-      const [summary, result, snapshot] = await Promise.all([app.call('library.status', {}), app.call('library.list', {limit:10000}),app.call('personal.snapshot',{})]);app.state.personal=snapshot;
-      app.state.summary = summary; app.state.catalog = result.papers || [];
-      loaded = true; page = 0; fillOptions();
+    if (loading){try{return await loading;}catch{return;}}
+    const generation=refreshGeneration,personalAtStart=app.state.personal;
+    const flight=(async()=>{
+      catalogNotice.hidden=false;catalogRetry.hidden=true;catalogMessage.textContent='正在读取本机目录…';
+      const [summary, first, snapshot] = await Promise.all([app.call('library.status', {}), app.call('library.list', {limit:10000,offset:0}),app.call('personal.snapshot',{})]);
+      if(generation!==refreshGeneration)return;
+      const rows=[...(first.papers||[])],total=first.total??rows.length,stamp=first.snapshotID;
+      if(stamp!==undefined&&summary.snapshotID!==undefined&&stamp!==summary.snapshotID)throw new Error('目录摘要与列表发生变化，请重新读取；上一份列表仍保留');
+      if(!Number.isSafeInteger(total)||total<rows.length||total>1000000)throw new Error('本机目录分页总数无效，上一份列表仍保留');
+      while(rows.length<total){
+        catalogMessage.textContent=`正在读取本机目录：${rows.length.toLocaleString()} / ${total.toLocaleString()} 篇…`;
+        const next=await app.call('library.list',{limit:10000,offset:rows.length});
+        if(generation!==refreshGeneration)return;
+        if(next.total!==total || (stamp!==undefined&&next.snapshotID!==stamp))throw new Error('读取期间目录发生变化，请重新读取；上一份列表仍保留');
+        if(!Array.isArray(next.papers)||!next.papers.length||rows.length+next.papers.length>total)throw new Error('本机目录分页不完整，上一份列表仍保留');
+        rows.push(...next.papers);
+      }
+      if(new Set(rows.map(paperID)).size!==rows.length)throw new Error('本机目录分页身份重复，请重新读取；上一份列表仍保留');
+      if(generation!==refreshGeneration)return;
+      if(app.state.personal===personalAtStart)app.state.personal=snapshot;app.state.summary=summary;app.state.catalog=rows;
+      loaded = true; fillOptions();catalogNotice.hidden=true;
       const ids = new Set(catalog().map(paperID)); for (const id of selected) if (!ids.has(id)) selected.delete(id);
       for (const id of expandedMetadata) if (!ids.has(id)) expandedMetadata.delete(id);
       counts(); await render();
     })();
-    try { return await loading; } catch (error) { fail(error); } finally { loading = null; }
+    loading=flight;
+    try { return await flight; } catch (error) {if(generation===refreshGeneration){catalogNotice.hidden=false;catalogMessage.textContent=error.message||String(error);catalogRetry.hidden=false;fail(error);} } finally { if(loading===flight)loading = null; }
   }
   async function render() {
     counts();
@@ -101,7 +121,16 @@ export function mountLibrary(app) {
     if (!loaded && !catalog().length) { if (!loading) await refresh(); return; }
     loaded = true;
     const sequence = ++renderSequence, view = app.state.view || 'library';
-    if (lastView !== view) { page = 0; selected.clear(); favoriteTools.close(); if(view==='favorites')$('sort').value='favorite-date';else if($('sort').value==='favorite-date')$('sort').value='date';lastView = view;filterBar.hidden=view==='favorites';filterToggle.setAttribute('aria-expanded',String(!filterBar.hidden)); }
+    let restoredScroll=null;
+    if (lastView !== view) {
+      const wrap=$('library-view').querySelector('.library-table-wrap');
+      if(lastView)viewStates.set(lastView,{page,query:$('search-input').value,sort:$('sort').value,filters:{...filters},selected:[...selected],scroll:wrap.scrollTop,filterOpen:!filterBar.hidden});
+      const saved=viewStates.get(view);page=saved?.page??0;selected.clear();for(const id of saved?.selected||[])selected.add(id);
+      for(const key of Object.keys(filters))filters[key]=saved?.filters[key]||'';
+      for(const [id,key] of [['library-task','task'],['library-method','method'],['library-source','source'],['library-min-score','score'],['library-date-from','from'],['library-date-until','until']])$(id).value=filters[key];
+      $('search-input').value=saved?.query||'';$('sort').value=saved?.sort||(view==='favorites'?'favorite-date':'date');
+      favoriteTools.close();lastView=view;filterBar.hidden=!(saved?.filterOpen??(view!=='favorites'));filterToggle.setAttribute('aria-expanded',String(!filterBar.hidden));restoredScroll=saved?.scroll??0;
+    }
     filterToggle.hidden=view!=='favorites';filterToggle.textContent='论文筛选'+(Object.values(filters).filter(Boolean).length?'（'+Object.values(filters).filter(Boolean).length+' 项生效）':'（任务、来源、网站日期）');scope.hidden=view==='favorites';
     favoriteTools.render(view);favoriteSort.hidden=view!=='favorites';
     $('library-selection-remove-favorite').hidden=view!=='favorites';$('library-selection-classify').textContent=view==='favorites'?'归类选中':'收藏并归类';
@@ -116,24 +145,25 @@ export function mountLibrary(app) {
       else scope.textContent = '已同时搜索论文元数据、本机缓存导读与自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
     } else scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
     if (sequence !== renderSequence) return;
-    const today = published().filter(p=>p.sourceKind!=='conference').map(p=>p.date||'').sort().at(-1)||new Date(Date.now()+8*3600*1000).toISOString().slice(0,10);
+    const today = published().filter(p=>!p.localRetained&&p.sourceKind!=='conference').map(p=>p.date||'').sort().at(-1)||new Date(Date.now()+8*3600*1000).toISOString().slice(0,10);
     const papers = catalog().filter(p => {
       const id = paperID(p);
       if (view==='favorites' && (!favorites.has(id)||!favoriteTools.matches(id))) return false;
       if (view==='reading-list' && !reading.has(id)) return false;
-      if (view==='today' && (p.date!==today||p.sourceKind==='conference')) return false;
+      if (view==='today' && (p.localRetained||p.date!==today||p.sourceKind==='conference')) return false;
       if (view==='conference' && p.sourceKind!=='conference') return false;
       if (filters.task && p.task!==filters.task || filters.method && p.method!==filters.method || filters.source && p.sourceKind!==filters.source) return false;
       if (filters.score && (p.score===null || p.score===undefined || Number(p.score)<Number(filters.score))) return false;
       if (filters.from && p.date<filters.from || filters.until && p.date>filters.until) return false;
       return !needle || extraIDs.has(id) || fold([p.id,p.title,p.titleZh,p.task,p.method,...(p.authors||[]),...(p.tags||[])].join(' ')).includes(needle);
     });
+    matchingIDs=new Set(papers.map(paperID));
     const sort = $('sort').value;
     papers.sort((a,b)=>sort==='favorite-date'?(favoriteDate(personal(),paperID(b))?.getTime()??-Infinity)-(favoriteDate(personal(),paperID(a))?.getTime()??-Infinity)||paperID(a).localeCompare(paperID(b)):sort==='score'?(b.score??-Infinity)-(a.score??-Infinity)||a.id.localeCompare(b.id):sort==='title'?(a.titleZh||a.title).localeCompare(b.titleZh||b.title,'zh-CN')||a.id.localeCompare(b.id):(b.date||'').localeCompare(a.date||'')||a.id.localeCompare(b.id));
     const pageCount = Math.max(1,Math.ceil(papers.length/pageSize)); page = Math.min(page,pageCount-1);
     const visible = papers.slice(page*pageSize,(page+1)*pageSize);
     $('library-title').textContent = {library:'全部论文',today:'日更速递',conference:'会议论文集',favorites:'已收藏','reading-list':'待读'}[view];
-    $('library-subtitle').textContent = `${catalog().length.toLocaleString()} 篇本地目录论文 · ${app.state.summary?.recordCount?.toLocaleString() || '—'} 条网站页面记录 · 原有评分与分类`;
+    $('library-subtitle').textContent = `${(app.state.summary?.paperCount??catalog().length).toLocaleString()} 篇当前网站目录${catalog().some(p=>p.localRetained)?' · '+catalog().filter(p=>p.localRetained).length.toLocaleString()+' 篇本机保留':''} · ${app.state.summary?.recordCount?.toLocaleString() || '—'} 条网站页面记录`;
     let previousSection=null;
     $('paper-rows').innerHTML = visible.map(p=>{
       const id=paperID(p), author=(p.authors||[]).slice(0,2).join('、'), score=Number.isFinite(p.score)?p.score.toFixed(1):'—';
@@ -151,7 +181,7 @@ export function mountLibrary(app) {
     $('library-select-page').checked = visible.length>0 && visible.every(p=>selected.has(paperID(p)));
     $('library-select-page').indeterminate = visible.some(p=>selected.has(paperID(p))) && !$('library-select-page').checked;
     $('library-select-page').onchange = event => { visible.forEach(p=>event.target.checked?selected.add(paperID(p)):selected.delete(paperID(p))); render().catch(fail); };
-    updateSelection();
+    updateSelection();if(restoredScroll!==null)$('library-view').querySelector('.library-table-wrap').scrollTop=restoredScroll;
   }
   function closePopup() { popup?.remove(); popup=null; }
   function openContext(event, paper) {
@@ -181,6 +211,9 @@ export function mountLibrary(app) {
   document.addEventListener('pointerdown',event=>{if(popup&&!popup.contains(event.target))closePopup();});
   document.addEventListener('keydown',event=>{if(event.key==='Escape')closePopup();if(popup&&['ArrowDown','ArrowUp'].includes(event.key)){const buttons=[...popup.querySelectorAll('button')],index=buttons.indexOf(document.activeElement);event.preventDefault();buttons[(index+(event.key==='ArrowDown'?1:buttons.length-1))%buttons.length].focus();}});
   window.addEventListener('blur',closePopup);
+  function invalidate(){refreshGeneration++;loading=null;renderSequence++;catalogNotice.hidden=true;}
+  window.addEventListener('library.willChange',invalidate);
+  window.addEventListener('personal.changed',()=>{invalidate();viewStates.clear();selected.clear();page=0;lastView=null;});
   if(catalog().length){loaded=true;fillOptions();}
-  return {render,refresh};
+  return {render,refresh,invalidate};
 }

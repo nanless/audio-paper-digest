@@ -108,6 +108,16 @@ import Foundation
             check("shared edit error "+name,didError==fixture["expectedError"] as! Bool)
             if fixture["expectedUnchanged"] as? Bool==true{let afterDisk=try Data(contentsOf:file);check("shared edit unchanged "+name,encoded(store.snapshot())==before && afterDisk==beforeDisk)}
         }
+        let bulkIDs=(0..<10000).map{"synthetic:bulk-"+String($0)},bulkStart=Date()
+        try store.editList(["key":"favorites","action":"add","ids":bulkIDs],now:t1)
+        check("bulk add all IDs without dropping existing favorites",(store.snapshot()["favorites"] as! [String]).count==10001)
+        let firstBatchItems=items(),firstBatchTime=FavoriteCollections.timestamp(t1)
+        check("bulk add has one native operation timestamp",bulkIDs.allSatisfy{firstBatchItems[$0]?["addedAt"] as? String==firstBatchTime})
+        let missing=(0..<1000).map{"synthetic:assigned-"+String($0)}
+        try store.editFavorites(["action":"items.assign","expectedRevision":revision(),"ids":missing,"folderIDs":["11111111-1111-4111-8111-111111111111"],"mode":"add","addMissing":true],now:t2)
+        let batchItems=items(),expectedTime=FavoriteCollections.timestamp(t2)
+        check("bulk favorite and assign uses same native timestamp",missing.allSatisfy{batchItems[$0]?["addedAt"] as? String==expectedTime})
+        print("Bulk native favorite add10000 + favorite-and-classify1000: "+String(format:"%.3f",Date().timeIntervalSince(bulkStart))+"s (synthetic isolated profile; no latency assertion)")
         print("FavoriteCollections: \(passed) checks passed, \(failures.count) failed");for name in failures{print("FAIL: "+name)};if !failures.isEmpty{exit(1)}
     }
 }

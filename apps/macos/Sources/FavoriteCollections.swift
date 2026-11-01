@@ -68,7 +68,9 @@ enum FavoriteCollections {
         guard next.count<=100000,next.subtracting(previous).allSatisfy(validID) else{throw DesktopError.message("文献清单无效")}
         guard previous != next else{return root}
         for id in previous.subtracting(next){items.removeValue(forKey:id)}
-        for id in next.subtracting(previous){var item=items[id] ?? [:];item["addedAt"]=timestamp(now);item["folderIDs"]=[String]();items[id]=item}
+        let additions=next.subtracting(previous)
+        let addedAt=additions.isEmpty ? nil : timestamp(now)
+        for id in additions{var item=items[id] ?? [:];item["addedAt"]=addedAt!;item["folderIDs"]=[String]();items[id]=item}
         guard items.count<=100000 else{throw DesktopError.message("收藏记录已达 100000 条上限")}
         metadata["items"]=items;try advance(&metadata);result["favorites"]=next.sorted();result["favoriteCollections"]=metadata;return result
     }
@@ -93,8 +95,9 @@ enum FavoriteCollections {
             guard requested.allSatisfy({known.contains($0)}),let mode=payload["mode"] as? String,["add","remove","replace"].contains(mode) else{throw DesktopError.message("收藏分类选择无效，请重新载入")}
             if let flag=payload["addMissing"],CFGetTypeID(flag as CFTypeRef) != CFBooleanGetTypeID(){throw DesktopError.message("收藏并归类选项无效")}
             guard payload["addMissing"] as? Bool==true || selected.allSatisfy({favorites.contains($0)}) else{throw DesktopError.message("所选论文尚未全部收藏，请明确选择“收藏并归类”") }
+            let addedAt=selected.contains(where:{!favorites.contains($0)}) ? timestamp(now):nil
             for id in selected {
-                if !favorites.contains(id){guard payload["addMissing"] as? Bool==true else{continue};favorites.insert(id);var item=items[id] ?? [:];item["addedAt"]=timestamp(now);item["folderIDs"]=[String]();items[id]=item}
+                if !favorites.contains(id){guard payload["addMissing"] as? Bool==true else{continue};favorites.insert(id);var item=items[id] ?? [:];item["addedAt"]=addedAt!;item["folderIDs"]=[String]();items[id]=item}
                 var item=items[id] ?? ["addedAt":NSNull(),"folderIDs":[String]()]
                 let before=Set(item["folderIDs"] as! [String]),target=Set(requested)
                 let after=mode=="replace" ? target : mode=="add" ? before.union(target) : before.subtracting(target)

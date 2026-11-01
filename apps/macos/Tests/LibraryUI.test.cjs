@@ -22,6 +22,17 @@ await page.locator('#paper-rows tr[data-library-row]').first().click({button:'ri
 await page.evaluate(async()=>{testApp.state.view='favorites';await testLibrary.render();});assert.equal(await page.locator('#paper-rows tr[data-library-row]').count(),100);assert.equal(await page.locator('#library-title').innerText(),'已收藏');
 await page.evaluate(async()=>{testApp.state.view='reading-list';await testLibrary.render();});assert.equal(await page.locator('#paper-rows tr[data-library-row]').count(),1);
 await page.evaluate(async()=>{testApp.state.view='library';await testLibrary.render();});await page.setViewportSize({width:1000,height:760});const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);assert.equal(overflow,false);assert.equal(await page.locator('#paper-rows tr[data-library-row]').count(),100);
+// Each destination owns filters, selection, page and list scroll; a refresh clamps only when necessary.
+await page.locator('#library-selection-clear').click();await page.locator('#library-source').selectOption('arxiv');await page.locator('#library-next').click();
+await page.locator('[data-library-select]').first().check();const selectedID=await page.locator('[data-library-select]:checked').first().getAttribute('data-library-select');
+await page.evaluate(()=>document.querySelector('.library-table-wrap').scrollTop=320);const rememberedScroll=await page.locator('.library-table-wrap').evaluate(el=>el.scrollTop);
+await page.evaluate(async()=>{testApp.state.view='favorites';await testLibrary.render();});assert.equal(await page.locator('#library-source').inputValue(),'');assert.equal(await page.locator('#search-input').inputValue(),'');assert.equal(await page.locator('#sort').inputValue(),'favorite-date');
+await page.locator('#search-input').fill('favorite-own-query');await page.waitForTimeout(300);
+await page.evaluate(async()=>{testApp.state.view='reading-list';await testLibrary.render();});assert.equal(await page.locator('#search-input').inputValue(),'');
+await page.evaluate(async()=>{testApp.state.view='library';await testLibrary.render();});assert.equal(await page.locator('#library-source').inputValue(),'arxiv');assert.match(await page.locator('#library-page-label').innerText(),/^2 \/ /);assert.equal(await page.locator('[data-library-select]:checked').getAttribute('data-library-select'),selectedID);assert.equal(await page.locator('.library-table-wrap').evaluate(el=>el.scrollTop),rememberedScroll);
+await page.evaluate(()=>testLibrary.refresh());assert.match(await page.locator('#library-page-label').innerText(),/^2 \/ /);assert.equal(await page.locator('[data-library-select]:checked').getAttribute('data-library-select'),selectedID);
+await page.locator('#search-input').fill('no-visible-selection');await page.waitForTimeout(300);assert.match(await page.locator('#library-selection-count').innerText(),/1 篇不在当前筛选结果中/);
+await page.evaluate(async()=>{testApp.state.view='favorites';await testLibrary.render();});assert.equal(await page.locator('#search-input').inputValue(),'favorite-own-query');
 assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>Object.keys(localStorage).length),0);
-console.log('PASS Library UI: pagination, multi-select, native persistence, private/fulltext search, combined filters, context actions, view lists, desktop width, no localStorage');
+console.log('PASS Library UI: pagination, multi-select, native persistence, private/fulltext search, combined filters, context actions, independent view filters/page/selection/scroll, refresh continuity, hidden-selection notice, desktop width, no localStorage');
 await browser.close();server.close();})().catch(error=>{console.error(error);server.close();process.exitCode=1;});
