@@ -9,11 +9,6 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
 internal data class FavoriteLibrarySection(val key:String,val label:String,val papers:List<Paper>)
-internal fun favoriteMatchesFolder(paperID:String,view:FavoriteCollections.View,filter:String):Boolean {
-    val folders=view.items[paperID]?.folderIDs.orEmpty()
-    return when(filter){""->true;"unclassified"->folders.isEmpty();else->filter in folders}
-}
-
 /** Display projection only: publication dates never stand in for an unknown favorite timestamp. */
 internal fun favoriteLibrarySections(papers:List<Paper>,view:FavoriteCollections.View,monthly:Boolean,
     zone:ZoneId=ZoneId.systemDefault(),today:LocalDate=LocalDate.now(zone)):List<FavoriteLibrarySection> {

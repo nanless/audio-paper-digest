@@ -14,6 +14,7 @@ import org.json.JSONObject
 /** Each emitted JSON value is an immutable snapshot; services own the records. */
 data class UiState(
     val papers: List<Paper> = emptyList(),
+    val websiteTaxonomy: com.nanless.paperdigest.data.WebsiteTaxonomy? = null,
     val offlinePaperIDs: Set<String> = emptySet(),
     val selectedPaperId: String? = null,
     val viewedPaper: Paper? = null,

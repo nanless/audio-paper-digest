@@ -30,7 +30,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     private val current = File(directory, "current.json")
     private val syncMutex = Mutex()
     private val offlineIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    private data class CatalogState(val published: List<Paper>, val retired: List<Paper>, val summary: JSONObject, val epoch: String) {
+    private data class CatalogState(val published: List<Paper>, val retired: List<Paper>, val summary: JSONObject, val epoch: String, val taxonomy: WebsiteTaxonomy? = null) {
         val all = (published + retired).distinctBy { it.id }
     }
     @Volatile private var citationCache: PublishedCitationRepository? = null
@@ -44,6 +44,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         return if (personalPapers.isEmpty()) catalog.all else (catalog.published + personalPapers + catalog.retired).distinctBy { it.id }
     }
     fun summary(): JSONObject = snapshot.summary.copy()
+    fun websiteTaxonomy(): WebsiteTaxonomy? = snapshot.taxonomy
     suspend fun searchCached(query: String): JSONObject = CachedGuideSearch(File(directory, "articles")).search(query, papers())
     suspend fun publishedRecords(paper: Paper): JSONObject = PublishedRecordArchive(directory).read(paper)
     fun epoch(): String = snapshot.epoch
@@ -67,7 +68,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             }
             JsonReader(PublishedUtf8.reader(bounded)).use { reader ->
                 var format: String? = null; var epoch = ""; var summary: JSONObject? = null
-                var published: List<Paper>? = null; var retired = emptyList<Paper>()
+                var published: List<Paper>? = null; var retired = emptyList<Paper>(); var taxonomy: WebsiteTaxonomy? = null
                 val seen = mutableSetOf<String>()
                 reader.beginObject()
                 while (reader.hasNext()) {
@@ -76,6 +77,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                         "format" -> format = reader.nextString()
                         "validationEpoch" -> epoch = reader.nextString()
                         "summary" -> summary = readValue(reader, 0) as? JSONObject ?: error("目录摘要无效")
+                        "websiteTaxonomy" -> { val value = readValue(reader, 0); taxonomy = if(value is JSONObject)runCatching { WebsiteTaxonomy.parse(value) }.getOrNull() else null }
                         "papers", "retiredPapers" -> {
                             val entries = ArrayList<Paper>(); reader.beginArray()
                             while (reader.hasNext()) { require(entries.size < 100000); entries += Paper.fromOwnedCatalogJson(readValue(reader, 0) as? JSONObject ?: error("目录论文无效")) }
@@ -88,7 +90,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 }
                 reader.endObject(); require(reader.peek() == JsonToken.END_DOCUMENT) { "目录含额外内容" }
                 require(format == "mac-published-library-v1" && published != null && summary != null) { "目录协议或字段尚不支持" }
-                CatalogState(published!!, retired, summary!!, epoch)
+                CatalogState(published!!, retired, summary!!.also {if(taxonomy==null)it.put("websiteTaxonomyStatus","unavailable")}, epoch, taxonomy)
             }
         }
     }
@@ -227,6 +229,16 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         val operationContext = coroutineContext
         val previous = snapshot
         val previousByID = previous.all.associateBy { it.id }
+        // One paired website display catalog per sync; unavailable taxonomy never discards papers.
+        val refreshedTaxonomy = try {
+            val display = JSONObject().put("snapshot", JSONObject(PublishedUtf8.decode(read(SITE + "data/tag-catalog-snapshot.json", 2 * 1024 * 1024))))
+                .put("versions", JSONObject(PublishedUtf8.decode(read(SITE + "data/tag-catalog-versions.json", 8 * 1024 * 1024))))
+            WebsiteTaxonomy.parse(display)
+        } catch(cancelled:kotlinx.coroutines.CancellationException) { throw cancelled }
+          catch(_:Exception) { null }
+        operationContext.ensureActive()
+        val taxonomy = refreshedTaxonomy ?: previous.taxonomy
+        val taxonomyStatus = if(refreshedTaxonomy!=null)"ready"else if(taxonomy!=null)"cached-unavailable"else"unavailable"
         val source = if (legacyIndex) JSONObject().put("legacyPublishedIndexSHA256", snapshotID).put("legacyPublishedIndexBytes", index.size)
             else JSONObject().put("publishedSnapshotID", snapshotID)
         val all = linkedMapOf<String, Paper>(); val pages = mutableSetOf<String>()
@@ -238,9 +250,13 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             parsePaper(row)?.let { decoded ->
                 // Keep the old snapshot available until the transaction commits, without retaining a
                 // second equal citation/string tree for every paper. Every new row still passes parsing.
-                val p = decoded.copy(original = source).sharingCatalogValues(previousByID[decoded.id])
+                val p = decoded.copy(original = source.copy().put("websiteTagRecords", JSONArray(WebsiteTaxonomy.records(decoded)))).sharingCatalogValues(previousByID[decoded.id])
                 val old = all[p.id]
-                all[p.id] = if (old == null) p else (if (p.date > old.date) p else old).copy(appearances = (old.appearances + p.appearances).distinct().sorted())
+                all[p.id] = if (old == null) p else {
+                    val chosen = if(p.date > old.date)p else old
+                    chosen.copy(appearances = (old.appearances + p.appearances).distinct().sorted(),
+                        original = chosen.original!!.copy().put("websiteTagRecords", JSONArray(WebsiteTaxonomy.records(old) + WebsiteTaxonomy.records(p))))
+                }
             }
         }
         var shards = 0
@@ -285,7 +301,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         require(recordCount > 0) { "网站返回空目录，原资料库保留" }
         require(all.isNotEmpty()) { "目录没有可读取论文，原资料库保留" }
         val retired = (previous.retired + previous.published).filter { it.id !in all }.distinctBy { it.id }
-        val summary = JSONObject().put("paperCount", all.size).put("recordCount", recordCount).put("shardCount", shards).put("snapshotID", sha256(index)).put("syncedAt", now()).put("source", SITE).put("syncing", false).put("missingFromLatest", JSONArray(retired.map { it.id }))
+        val summary = JSONObject().put("paperCount", all.size).put("recordCount", recordCount).put("shardCount", shards).put("snapshotID", sha256(index)).put("syncedAt", now()).put("source", SITE).put("syncing", false).put("missingFromLatest", JSONArray(retired.map { it.id })).put("websiteTaxonomyStatus", taxonomyStatus)
         val epoch = UUID.randomUUID().toString()
         val published = all.values.sortedBy { it.id }
         operationContext.ensureActive()
@@ -301,9 +317,9 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             published.forEachIndexed { index, paper -> operationContext.ensureActive(); if (index > 0) writer.write(","); writer.write(paper.json().toString()) }
             writer.write("],\"retiredPapers\":[")
             retired.forEachIndexed { index, paper -> operationContext.ensureActive(); if (index > 0) writer.write(","); writer.write(paper.json().toString()) }
-            writer.write("]}"); writer.flush(); operationContext.ensureActive()
+            writer.write("]"); taxonomy?.let { writer.write(",\"websiteTaxonomy\":" + it.json().toString()) }; writer.write("}"); writer.flush(); operationContext.ensureActive()
         }
-        snapshot = CatalogState(published, retired, summary, epoch)
+        snapshot = CatalogState(published, retired, summary, epoch, taxonomy)
         summary.copy()
     } }
 
@@ -601,7 +617,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             require(hashes.size <= 1 && hashes.all { it.matches(Regex("[a-f0-9]{64}")) }) { "已发布 PDF 指纹无效或相互矛盾" }
             val pdfSHA = hashes.firstOrNull()
             return Paper(id, title, row.optString("titleZh", row.optString("title", title)), citation.optJSONArray("authors")?.strings() ?: emptyList(), row.optString("date"), Paper.score(row.opt("score")), row.optString("task"), row.optString("method"), row.optJSONArray("tags")?.strings() ?: emptyList(), kind, status, blog,
-                cleanHTTPS(citation.nullableString("sourceUrl") ?: citation.nullableString("url")), if (status == "verified") cleanHTTPS(citation.nullableString("pdfUrl")) else null, citation.nullableString("arxivId"), citation, pdfSHA, listOf(blog))
+                cleanHTTPS(citation.nullableString("sourceUrl") ?: citation.nullableString("url")), if (status == "verified") cleanHTTPS(citation.nullableString("pdfUrl")) else null, citation.nullableString("arxivId"), citation, pdfSHA, listOf(blog), original = JSONObject().put("websiteTagRecords", JSONArray().put(WebsiteTaxonomy.record(row))))
         }
         fun validatedSidecar(value: JSONObject, paper: Paper, context: Boolean): JSONObject {
             require(value.optString("contract") in if (context) setOf("researcher-sidecars-v1", "paper-research-context-v2") else setOf("researcher-sidecars-v1")) { "引用或上下文附加文件合同不受支持" }

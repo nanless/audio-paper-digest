@@ -32,10 +32,6 @@ class FavoriteLibrarySectionsTest {
         assertEquals("future",rows.single().key)
         assertEquals("future",favoriteLibrarySections(listOf(paper("future")),view("future" to "2026-11-03T00:00:00Z"),true,zone,today).single().key)
     }
-    @Test fun unclassifiedAndMultipleFolderMembershipAreIndependent(){
-        val view=FavoriteCollections.View(1,emptyList(),mapOf("multi" to FavoriteCollections.Item(null,setOf("a","b"))),false)
-        assertTrue(favoriteMatchesFolder("multi",view,"a"));assertTrue(favoriteMatchesFolder("multi",view,"b"));assertFalse(favoriteMatchesFolder("multi",view,"unclassified"));assertTrue(favoriteMatchesFolder("legacy",view,"unclassified"))
-    }
     @Test fun dateAndTimezoneChangesReclassifyTheSameMetadataAcrossDstCalendarDays(){
         val papers=listOf(paper("boundary"),paper("older"));val data=view("boundary" to "2026-10-27T04:00:00Z","older" to "2026-10-27T03:59:00Z")
         val newYork=ZoneId.of("America/New_York");val rows=favoriteLibrarySections(papers,data,false,newYork,LocalDate.of(2026,11,2))

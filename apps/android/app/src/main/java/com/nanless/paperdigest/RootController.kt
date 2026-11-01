@@ -247,7 +247,7 @@ class RootController private constructor(private val context: Context, private v
                 receipt.put("notices", JSONArray((notices + mismatchNotice).distinct()))
             }
             val viewed = offlineReading?.takeIf { old -> old.paper.id == it.selectedPaperId }?.paper ?: it.viewedPaper?.takeIf { old -> old.id == it.selectedPaperId } ?: current
-            val reading = it.copy(papers = papers, viewedPaper = viewed, article = article, pdfReceipt = receipt)
+            val reading = it.copy(papers = papers, websiteTaxonomy = library.websiteTaxonomy(), viewedPaper = viewed, article = article, pdfReceipt = receipt)
             reading.copy(readingMaterialID = readingID(reading), personal = p, settings = p.getJSONObject("settings").copy(), jobs = mergedJobs(p.getJSONArray("jobs").objects()),
             sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(), zotero = zotero.projectCredentialState(zoteroView), catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
     }
