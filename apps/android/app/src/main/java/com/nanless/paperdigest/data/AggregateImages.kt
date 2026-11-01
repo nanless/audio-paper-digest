@@ -92,15 +92,28 @@ class AggregateImageAccess internal constructor(
 }
 
 /** Sequential native downloads keep only SHA metadata between slots; no64MiB in-memory image collection. */
+internal sealed interface AggregateImagePreparation
 internal object AggregateImageLoader {
+    private data class PreparedRead(val store:PublishedAggregateStore,val cached:AggregateImageAccess?,val plan:AggregateImagePlan?):AggregateImagePreparation
+    /** All local source/HTML/image reads finish and close their byte guard before any network suspension. */
+    fun prepare(store:PublishedAggregateStore,descriptor:PublishedAggregate,raw:String,allowNetwork:Boolean):AggregateImagePreparation=store.withSourceReadScope {
+        val cached=store.latestImageRendering(descriptor,raw)?:store.importMacImageRendering(descriptor,raw)
+        if(!allowNetwork||cached?.missingCount==0)return@withSourceReadScope PreparedRead(store,cached,null)
+        val plan=store.imagePlan(descriptor,raw)
+        if(plan.slots.isEmpty())return@withSourceReadScope PreparedRead(store,cached,null)
+        require(cached==null||canonical(cached.plan.json())==canonical(plan.json())){"已有图片与当前网页位置不符"}
+        PreparedRead(store,cached,plan)
+    }
     suspend fun read(store:PublishedAggregateStore,descriptor:PublishedAggregate,raw:String,allowNetwork:Boolean,
         approved:(String)->Boolean,fetch:suspend (String,Int)->ByteArray,check:()->Unit={}):AggregateImageAccess? {
         kotlinx.coroutines.currentCoroutineContext().ensureActive();check()
-        val cached=store.latestImageRendering(descriptor,raw)?:store.importMacImageRendering(descriptor,raw)
+        return readPrepared(store,prepare(store,descriptor,raw,allowNetwork),approved,fetch,check)
+    }
+    suspend fun readPrepared(store:PublishedAggregateStore,prepared:AggregateImagePreparation,
+        approved:(String)->Boolean,fetch:suspend (String,Int)->ByteArray,check:()->Unit={}):AggregateImageAccess? {
         kotlinx.coroutines.currentCoroutineContext().ensureActive();check()
-        if(!allowNetwork||cached?.missingCount==0)return cached
-        val plan=store.imagePlan(descriptor,raw);if(plan.slots.isEmpty())return null
-        require(cached==null||canonical(cached.plan.json())==canonical(plan.json())){"已有图片与当前网页位置不符"}
+        require(prepared is PreparedRead&&prepared.store===store){"图片准备只能由同一原生保存器继续"}
+        val cached=prepared.cached;val plan=prepared.plan?:return cached
         val saved=cached?.records?.filter{it.sha256!=null}?.associateBy{it.slot.index}.orEmpty()
         val retainedBytes=saved.values.sumOf{requireNotNull(it.bytes)}
         require(retainedBytes<=AggregateImages.MAX_REFERENCED_BYTES)
@@ -137,6 +150,6 @@ internal object AggregateImageLoader {
             referenced+=blob.bytes;records+=AggregateImageRecord(slot,blob.sha256,blob.mime,blob.bytes)
         }
         kotlinx.coroutines.currentCoroutineContext().ensureActive();check()
-        return store.cacheImageRendering(plan,records,Instant.now().toString())
+        return store.withSourceReadScope{store.cacheImageRendering(plan,records,Instant.now().toString())}
     }
 }

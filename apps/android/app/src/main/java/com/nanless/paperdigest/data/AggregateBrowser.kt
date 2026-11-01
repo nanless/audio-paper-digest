@@ -20,10 +20,15 @@ data class AggregateDocumentView(val descriptor:PublishedAggregate,val bodyHTML:
 }
 data class AggregateBrowseState(val catalog:PublishedAggregateCatalog?=null,val stamp:AggregateCatalogStamp?=null,val selected:PublishedAggregate?=null,val document:AggregateDocumentView?=null,val revisions:List<AggregateCachedRevision> = emptyList(),val loading:Boolean=false,val attemptedIndex:Boolean=false,val catalogStale:Boolean=false,val error:String?=null,val cacheError:String?=null,val offlineMode:Boolean=false,val loadingImages:Boolean=false,val backTitle:String="返回汇总列表")
 
+/** A current native cache-only selection, assembled and checked inside one synchronous source scope. */
+internal data class AggregateSavedSelection(val catalog:PublishedAggregateCatalog,val descriptor:PublishedAggregate,
+    val revisions:List<AggregateCachedRevision>,val document:JSONObject?,val images:AggregateImageAccess?,val cacheError:String?,val imageError:String?)
+
 /** Implemented by the native catalog. UI commands supply IDs/SHA only, never URLs, descriptors or files. */
 internal interface AggregateBrowsePort {
     fun stamp():AggregateCatalogStamp
     suspend fun catalog():PublishedAggregateCatalog?
+    suspend fun savedSelection(id:String):AggregateSavedSelection?=null
     suspend fun revisions(id:String):List<AggregateCachedRevision>
     suspend fun read(id:String):JSONObject
     suspend fun cached(id:String,sha:String):JSONObject
@@ -95,16 +100,17 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         try {
             if(!claimReading{current(token)&&claimGuard()})return stale(token)
             if(!current(token))return response("not-adopted")
-            val epoch=port.readingEpoch();if(!recordEpoch(token,epoch))return response("not-adopted");val stamp=port.stamp();val catalog=port.catalog()?:return needsSync(token)
+            val epoch=port.readingEpoch();if(!recordEpoch(token,epoch))return response("not-adopted");val stamp=port.stamp();val saved=port.savedSelection(id);val catalog=saved?.catalog?:port.catalog()?:return needsSync(token)
             require(catalog.snapshotSHA256==stamp.snapshotSHA256)
             val descriptor=catalog.records.firstOrNull{it.id==id}?:return missing(token)
             require(history.size<=24&&history.all{parent->catalog.records.any{it.id==parent}}){"原返回路径不属于当前目录"}
             if(!ready(token,stamp,epoch))return stale(token)
-            var revisions=emptyList<AggregateCachedRevision>();var cacheError:String?=null
-            try{revisions=port.revisions(id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有挑选其他旧正文。"}
+            require(saved==null||saved.descriptor==descriptor){"缓存选择与当前目录条目不同"}
+            var revisions=saved?.revisions?:emptyList();var cacheError=saved?.cacheError
+            if(saved==null)try{revisions=port.revisions(id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有挑选其他旧正文。"}
             if(!ready(token,stamp,epoch))return stale(token)
             change(token){it.copy(catalog=catalog,stamp=stamp,selected=descriptor,revisions=revisions,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode(),backTitle=parentTitle())}
-            if(revisions.isNotEmpty())return adopt(token,stamp,epoch,descriptor,port.cached(id,revisions.first().rawHTMLSHA256),true,allowImageNetwork=!port.offlineMode())
+            if(revisions.isNotEmpty())return adopt(token,stamp,epoch,descriptor,saved?.document?:port.cached(id,revisions.first().rawHTMLSHA256),true,allowImageNetwork=!port.offlineMode(),saved=saved)
             if(port.offlineMode()){change(token){it.copy(loading=false,error="离线模式下，此条目没有当前目录中已核验的保存正文。")};return response("offline")}
             // Ordinary public webpage read is automatic when no verified same-scope cache exists.
             if(!ready(token,stamp,epoch))return stale(token)
@@ -128,30 +134,34 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
             return adopt(token,stamp,epoch,selected,if(sha==null)port.read(id)else port.cached(id,sha),sha!=null)
         }catch(e:CancellationException){cancelled(token);throw e}catch(_:Exception){change(token){it.copy(loading=false,error="本次读取未完成；下方如有正文，仍是原保存版本，未声称刷新成功。")};restoreDocumentLinks(token);return response("failed")}
     }
-    private suspend fun adopt(token:Long,stamp:AggregateCatalogStamp,epoch:Long,descriptor:PublishedAggregate,value:JSONObject,cached:Boolean,allowImageNetwork:Boolean=!cached):JSONObject {
+    private suspend fun adopt(token:Long,stamp:AggregateCatalogStamp,epoch:Long,descriptor:PublishedAggregate,value:JSONObject,cached:Boolean,allowImageNetwork:Boolean=!cached,saved:AggregateSavedSelection?=null):JSONObject {
         if(!ready(token,stamp,epoch))return stale(token)
         val base=AggregateDocumentView.verified(value,descriptor,cached)
         // Publish verified text and fresh link capability before waiting for optional image transport.
-        val firstTable=AggregateLinkTable.derive(base)
-        val text=base.copy(linkHTML=firstTable.html,linkNonce=firstTable.nonce)
+        saved?.images?.let{candidate->require(candidate.plan.descriptor==descriptor&&candidate.plan.rawHTMLSHA256==base.rawHTMLSHA256&&candidate.plan.originalBodySHA256==base.bodySHA256){"已保存图片与当前原网页身份不同"}}
+        val initial=base.copy(images=saved?.images,imageError=saved?.imageError)
+        val needsImages=saved==null || (allowImageNetwork&&!port.offlineMode()&&(saved.images?.missingCount?:base.resources.size)>0)
+        val firstTable=AggregateLinkTable.derive(initial)
+        val text=initial.copy(linkHTML=firstTable.html,linkNonce=firstTable.nonce)
         val textAdopted=commitReading({ready(token,stamp,epoch)},{synchronized(lock){
             if(!ready(token,stamp,epoch))false else {
                 links=firstTable
-                change(token){it.copy(selected=descriptor,document=text,loading=false,loadingImages=true,error=null,catalogStale=false,offlineMode=port.offlineMode())}
+                change(token){it.copy(selected=descriptor,document=text,loading=false,loadingImages=needsImages,error=null,catalogStale=false,offlineMode=port.offlineMode())}
             }
         }})
         if(!textAdopted)return stale(token)
-        var images:AggregateImageAccess?=null;var imageError:String?=null
+        if(!needsImages)return response(if(cached)"saved-document"else"website-document")
+        var images:AggregateImageAccess?=saved?.images;var imageError:String?=saved?.imageError
         try{
             val candidate=port.images(descriptor.id,base.rawHTMLSHA256,allowImageNetwork&&!port.offlineMode())
             if(candidate!=null)require(candidate.plan.descriptor==descriptor&&candidate.plan.rawHTMLSHA256==base.rawHTMLSHA256&&candidate.plan.originalBodySHA256==base.bodySHA256){"图片与本次原网页修订不同"}
-            images=candidate
+            images=candidate;imageError=null
         }catch(e:CancellationException){throw e}catch(_:Exception){imageError="图片保存或缓存核验未完成；下方仍保留原网页正文，没有改用其他图片修订。"}
         val original=base.copy(images=images,imageError=imageError)
         val table=AggregateLinkTable.derive(original)
         val document=original.copy(linkHTML=table.html,linkNonce=table.nonce)
-        var revisions=emptyList<AggregateCachedRevision>();var cacheError:String?=null
-        try{revisions=port.revisions(descriptor.id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有自动改用其他修订。"}
+        var revisions=saved?.revisions?:emptyList();var cacheError=saved?.cacheError
+        if(saved==null)try{revisions=port.revisions(descriptor.id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有自动改用其他修订。"}
         if(!ready(token,stamp,epoch))return stale(token)
         val adopted=commitReading({ready(token,stamp,epoch)},{synchronized(lock){if(!ready(token,stamp,epoch))false else{links=table;change(token){it.copy(selected=descriptor,document=document,revisions=revisions,loading=false,loadingImages=false,error=null,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode())}}}});return if(adopted)response(if(cached)"saved-document"else"website-document")else stale(token)
     }

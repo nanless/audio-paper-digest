@@ -118,6 +118,27 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         require(snapshot.epoch==current.epoch){"读取期间目录验证代变化，请重新读取汇总"}
         return result
     }
+    /** Current catalog, original row, saved HTML and cache-only images share one synchronous cold proof.
+     * No network/model operation can enter the source scope; the full original bytes are guarded on return. */
+    internal fun aggregateSavedSelection(id:String):AggregateSavedSelection? {
+        val before=snapshot;val store=PublishedAggregateStore(directory)
+        val selection=store.withSourceReadScope {
+            val catalog=store.load(before.summary.optString("snapshotID"),before.epoch)?:return@withSourceReadScope null
+            val descriptor=catalog.records.firstOrNull{it.id==id}?:return@withSourceReadScope null
+            var cacheError:String?=null
+            val revisions=try{store.cachedRevisions(descriptor)}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有挑选其他旧正文。";emptyList()}
+            val document=revisions.firstOrNull()?.let{store.cachedDocument(descriptor,it.rawHTMLSHA256)}
+            var imageError:String?=null
+            val images=if(document==null)null else try{
+                val raw=document.getString("rawHTMLSHA256")
+                store.latestImageRendering(descriptor,raw)?:store.importMacImageRendering(descriptor,raw)
+            }catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){imageError="图片保存或缓存核验未完成；保留原网页正文，没有改用其他图片修订。";null}
+            AggregateSavedSelection(catalog,descriptor,revisions,document,images,cacheError,imageError)
+        }
+        require(snapshot===before){"读取期间目录验证代变化，未采用旧缓存选择"}
+        return selection
+    }
+
     suspend fun aggregateDocument(id:String):JSONObject=withContext(Dispatchers.IO) {
         require(!personal.settings().optBoolean("offlineMode")){"当前为离线模式，请明确读取已保存的汇总修订"}
         val before=snapshot
@@ -134,13 +155,19 @@ class CatalogRepository(private val context: Context, private val personal: Pers
      * Only the still-current native descriptor may be committed; no paper, image or model is opened. */
     internal suspend fun preloadAggregateDocument(id:String,expected:AggregateCatalogStamp,commit:suspend (()->Unit)->Unit) {
         if(personal.settings().optBoolean("offlineMode")||aggregateStamp()!=expected)return
-        val descriptor=aggregateCatalog()?.records?.firstOrNull{it.id==id}?:return
-        if(PublishedAggregateStore(directory).cachedRevisions(descriptor).isNotEmpty())return
+        val store=PublishedAggregateStore(directory);val before=snapshot
+        val candidate=store.withSourceReadScope {
+            val catalog=store.load(before.summary.optString("snapshotID"),before.epoch)?:return@withSourceReadScope null
+            val descriptor=catalog.records.firstOrNull{it.id==id}?:return@withSourceReadScope null
+            descriptor to store.cachedRevisions(descriptor).isNotEmpty()
+        }?:return
+        if(candidate.second)return
+        val descriptor=candidate.first
         val raw=kotlinx.coroutines.withTimeout(12_000){read(descriptor.sourceURL,16*1024*1024)}
         coroutineContext.ensureActive()
         commit {
             require(!personal.settings().optBoolean("offlineMode")&&aggregateStamp()==expected){"预载期间目录或离线设置已变化"}
-            PublishedAggregateStore(directory).cacheDocument(raw,descriptor,descriptor.sourceURL,now())
+            store.cacheDocument(raw,descriptor,descriptor.sourceURL,now())
         }
     }
 
@@ -155,11 +182,16 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     /** Only an actually opened native aggregate ID/raw revision may fetch its source-bound images. */
     internal suspend fun aggregateImages(id:String,rawHTMLSHA256:String,allowNetwork:Boolean):AggregateImageAccess?=withContext(Dispatchers.IO) {
         if(allowNetwork)require(!personal.settings().optBoolean("offlineMode")){"当前为离线模式"}
-        val before=snapshot;val descriptor=aggregateCatalog()?.records?.firstOrNull{it.id==id}?:error("当前汇总目录尚未核验")
+        val before=snapshot;val store=PublishedAggregateStore(directory)
         val context=coroutineContext
         fun current(){context.ensureActive();require(snapshot.epoch==before.epoch&&snapshot.summary.optString("snapshotID")==before.summary.optString("snapshotID")){"图片读取期间目录已变化"}}
         current()
-        val result=AggregateImageLoader.read(PublishedAggregateStore(directory),descriptor,rawHTMLSHA256,allowNetwork,
+        val prepared=store.withSourceReadScope {
+            val descriptor=store.load(before.summary.optString("snapshotID"),before.epoch)?.records?.firstOrNull{it.id==id}?:error("当前汇总目录尚未核验")
+            AggregateImageLoader.prepare(store,descriptor,rawHTMLSHA256,allowNetwork)
+        }
+        current()
+        val result=AggregateImageLoader.readPrepared(store,prepared,
             approved={address->runCatching{approvedResource(URI(address))}.getOrDefault(false)},
             fetch={address,limit->fetchOverride?.invoke(address,limit)?:readExternal(address,limit)},check=::current)
         current();result

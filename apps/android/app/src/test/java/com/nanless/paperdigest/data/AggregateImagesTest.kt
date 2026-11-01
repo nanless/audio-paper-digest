@@ -215,6 +215,22 @@ class AggregateImagesTest {
     }
 
 
+    @Test fun imagePreparationCannotBeReplayedThroughAnotherStoreEvenWithEqualSourceHashes()=runBlocking {
+        val f=fixture();val other=fixture();val prepared=AggregateImageLoader.prepare(f.store,f.descriptor,f.raw,true);var requests=0
+        assertTrue(runCatching{AggregateImageLoader.readPrepared(other.store,prepared,{true},{_,_->requests++;png()})}.isFailure)
+        assertEquals(0,requests)
+    }
+
+    @Test fun preparedSelectionCannotInstallGenuineImagesFromADifferentRawRevision()=runBlocking {
+        val f=fixture();val other=fixture(markup(1));val access=online(other);val normal=Port(f){error("Must reject the prepared images before any further loading")}
+        val port=object:AggregateBrowsePort by normal {
+            override suspend fun savedSelection(id:String)=AggregateSavedSelection(requireNotNull(normal.catalog()),f.descriptor,listOf(AggregateCachedRevision(f.raw,"2026-10-24T00:00:00Z")),f.original,access,null,null)
+        }
+        val b=AggregateBrowser(port,{it()},{})
+        assertEquals("failed",b.execute("aggregate.select",JSONObject().put("id",f.descriptor.id)).getString("status"))
+        assertNull(b.state.document)
+    }
+
     @Test fun independentlyVerifiedLaterSameURLCacheFillsEarlierMissingSlotWithoutTransport()=runBlocking {
         val f=fixture("<img src='$url' alt='Earlier'/><img src='$url' alt='Later'/>")
         var initialRequests=0

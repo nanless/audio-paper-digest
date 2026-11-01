@@ -160,6 +160,7 @@ class RootController private constructor(private val context: Context, private v
         AggregateBrowser(object:AggregateBrowsePort {
             override fun stamp()=library.aggregateStamp()
             override suspend fun catalog()=maintenance.withLock{library.aggregateCatalog()}
+            override suspend fun savedSelection(id:String)=maintenance.withLock{library.aggregateSavedSelection(id)}
             override suspend fun revisions(id:String)=maintenance.withLock{library.aggregateCachedRevisions(id)}
             override suspend fun read(id:String)=maintenance.withLock{library.aggregateDocument(id)}
             override suspend fun cached(id:String,sha:String)=maintenance.withLock{library.aggregateCachedDocument(id,sha)}

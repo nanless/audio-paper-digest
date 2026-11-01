@@ -17,6 +17,33 @@ data class AggregateCachedRevision(val rawHTMLSHA256:String,val fetchedAt:String
 /** Original manifest + per-shard witness required. Scattered legacy caches never grant a retroactive manifest. */
 class PublishedAggregateStore(private val directory:File) {
     companion object {private val immutablePublishLock=Any()}
+    private data class SourceFile(val file:File,val limit:Int,val sha256:String)
+    private data class ParsedSource(val catalog:PublishedAggregateCatalog,val shapeSHA256:String)
+    private class SourceReadScope {
+        val owner=Thread.currentThread()
+        val files=linkedMapOf<String,SourceFile>()
+        val catalogs=linkedMapOf<String,ParsedSource>()
+    }
+    @Volatile private var sourceReadScope:SourceReadScope?=null
+    private fun ownedSourceReadScope()=sourceReadScope?.takeIf{it.owner===Thread.currentThread()}
+    /** Native synchronous read only: never spans a suspension, transport or another member.
+     * Original bytes are read completely on first use and again before returning the combined view. */
+    @Synchronized internal fun <T> withSourceReadScope(block:()->T):T {
+        if(sourceReadScope!=null){require(sourceReadScope?.owner===Thread.currentThread()){"来源读取范围不能跨线程"};return block()}
+        val scope=SourceReadScope();sourceReadScope=scope
+        try {
+            val result=block()
+            scope.catalogs.values.forEach{saved->require(PublishedAggregateReader.sha(OfflineFoundationJSON.encode(saved.catalog.json()))==saved.shapeSHA256){"读取期间原生目录对象变化"}}
+            scope.files.values.forEach{saved->require(PublishedAggregateReader.sha(read(saved.file,saved.limit))==saved.sha256){"读取期间汇总原来源字节变化"}}
+            return result
+        }finally{sourceReadScope=null}
+    }
+    private fun sourceBytes(file:File,limit:Int):ByteArray {
+        val bytes=read(file,limit);val scope=ownedSourceReadScope()?:return bytes
+        val proof=SourceFile(file,limit,PublishedAggregateReader.sha(bytes));val prior=scope.files.putIfAbsent(file.absolutePath,proof)
+        require(prior==null||prior.sha256==proof.sha256){"读取期间汇总原来源字节变化"}
+        return bytes
+    }
     private fun noLinks(file:File){var path:File?=file.absoluteFile;while(path!=null){require(!Files.isSymbolicLink(path.toPath())){"汇总缓存不能含链接"};path=path.parentFile}}
     private fun child(vararg names:String):File {var result=directory;noLinks(result);for(name in names){require(name.isNotEmpty()&&name!="."&&name!=".."&&!name.contains('/')&&!name.contains('\\'));result=File(result,name);noLinks(result)};return result}
     private fun attrs(file:File)=Files.readAttributes(file.toPath(),BasicFileAttributes::class.java,NOFOLLOW_LINKS)
@@ -81,15 +108,18 @@ class PublishedAggregateStore(private val directory:File) {
         val identity=runCatching{epoch(validationEpoch)}.getOrNull()?:return null
         val manifest=child("aggregate-manifests","$activeSnapshotSHA256.json");val sidecar=child("aggregate-index","$activeSnapshotSHA256.json");val marker=child("aggregate-activations",activeSnapshotSHA256,"$identity.json")
         if(!manifest.exists()||!sidecar.exists()||!marker.exists())return null
-        val raw=read(manifest,2*1024*1024);require(PublishedAggregateReader.sha(raw)==activeSnapshotSHA256)
-        val catalog=PublishedAggregateReader.read(raw,check){read(child("index","${it.sha256}.json"),it.bytes)}
-        val actual=read(sidecar,8*1024*1024);val activation=JSONObject(PublishedUtf8.decode(read(marker,4096)))
+        val catalog=sourceCatalog(activeSnapshotSHA256,check)
+        val actual=sourceBytes(sidecar,8*1024*1024);val activation=JSONObject(PublishedUtf8.decode(sourceBytes(marker,4096)))
         require(canonical(JSONObject(PublishedUtf8.decode(actual)))==canonical(catalog.json())&&activation.getString("contract")=="published-aggregate-activation-v1"&&activation.getString("snapshotSHA256")==activeSnapshotSHA256&&activation.getString("validationEpoch")==identity&&activation.getString("catalogSHA256")==PublishedAggregateReader.sha(actual)){"汇总sidecar/激活代与原清单不一致"}
         return catalog
     }
-    private fun sourceCatalog(snapshot:String):PublishedAggregateCatalog {
-        require(PublishedAggregateReader.validSHA(snapshot));val raw=read(child("aggregate-manifests","$snapshot.json"),2*1024*1024);require(PublishedAggregateReader.sha(raw)==snapshot)
-        return PublishedAggregateReader.read(raw){read(child("index","${it.sha256}.json"),it.bytes)}
+    private fun sourceCatalog(snapshot:String,check:()->Unit={}):PublishedAggregateCatalog {
+        require(PublishedAggregateReader.validSHA(snapshot));check()
+        ownedSourceReadScope()?.catalogs?.get(snapshot)?.let{saved->return saved.catalog}
+        val raw=sourceBytes(child("aggregate-manifests","$snapshot.json"),2*1024*1024);require(PublishedAggregateReader.sha(raw)==snapshot)
+        val catalog=PublishedAggregateReader.read(raw,check){sourceBytes(child("index","${it.sha256}.json"),it.bytes)}
+        ownedSourceReadScope()?.catalogs?.put(snapshot,ParsedSource(catalog,PublishedAggregateReader.sha(OfflineFoundationJSON.encode(catalog.json()))))
+        return catalog
     }
     fun originalRow(descriptor:PublishedAggregate):ByteArray {
         require(sourceCatalog(descriptor.source.manifestSHA256).records.contains(descriptor)){"汇总原目录身份未核验"}
@@ -199,8 +229,9 @@ class PublishedAggregateStore(private val directory:File) {
         return AggregateImageAccess(manifestSHA256,plan,records,manifest.getString("observedAt"),::openVerifiedImage,origin)
     }
     internal fun latestImageRendering(descriptor:PublishedAggregate,rawHTMLSHA256:String):AggregateImageAccess? {
-        imagePlan(descriptor,rawHTMLSHA256);val folder=child(*imageFolder(descriptor,rawHTMLSHA256))
+        val folder=child(*imageFolder(descriptor,rawHTMLSHA256))
         if(!Files.exists(folder.toPath(),NOFOLLOW_LINKS))return null
+        imagePlan(descriptor,rawHTMLSHA256)
         noLinks(folder);val before=attrs(folder);require(before.isDirectory&&before.fileKey()!=null)
         val files=Files.newDirectoryStream(folder.toPath()).use{it.toList().sortedBy{p->p.fileName.toString()}}
         var latest:AggregateImageAccess?=null
@@ -237,9 +268,10 @@ class PublishedAggregateStore(private val directory:File) {
         return cacheDocument(source.first,descriptor,source.second.getString("responseURL"),source.second.getString("fetchedAt"))
     }
     internal fun importMacImageRendering(descriptor:PublishedAggregate,raw:String):AggregateImageAccess? {
-        val plan=imagePlan(descriptor,raw)
+        require(PublishedAggregateReader.validSHA(raw))
         val folder=child("aggregate-resource-renders-macos-v1",PublishedAggregateReader.sha(descriptor.id.toByteArray()),descriptor.source.manifestSHA256,raw,AggregateImages.CONTRACT)
         if(!Files.exists(folder.toPath(),NOFOLLOW_LINKS))return null
+        val plan=imagePlan(descriptor,raw)
         val foreignSource=macSource(descriptor,raw).second
         noLinks(folder);val before=attrs(folder);require(before.isDirectory&&before.fileKey()!=null)
         val names=Files.newDirectoryStream(folder.toPath()).use{it.toList().map{p->p.fileName.toString()}.sorted()}

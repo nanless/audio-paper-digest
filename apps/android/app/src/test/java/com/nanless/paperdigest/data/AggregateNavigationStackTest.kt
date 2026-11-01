@@ -18,7 +18,7 @@ class AggregateNavigationStackTest {
    val rows=JSONArray(paths.mapIndexed{i,path->JSONObject().put("pageType",if(i==0)"page"else"conference").put("permalink","/audio-paper-digest-blog/$path").put("title",listOf("合成会议目录","合成会议总览","合成研究方向")[i]).put("date","2026-10-31")})
    val shard=OfflineFoundationJSON.encode(rows);val sha=sha256(shard);File(root,"index").mkdir();File(root,"index/$sha.json").writeBytes(shard)
    val manifest=OfflineFoundationJSON.encode(JSONObject().put("contract","paper-search-index-manifest-v1").put("recordCount",3).put("totalBytes",shard.size).put("shards",JSONArray().put(JSONObject().put("url","search-index/part-0001-${sha.take(12)}.json").put("sha256",sha).put("bytes",shard.size).put("recordCount",3))))
-   val store=PublishedAggregateStore(root);val catalog=store.stage(manifest,UUID.randomUUID().toString())
+   val store=PublishedAggregateStore(root);val activationEpoch=UUID.randomUUID().toString();val catalog=store.stage(manifest,activationEpoch)
    val ordered=paths.map{path->catalog.records.single{it.sourceURL==PublishedAggregateReader.SITE+path}}
    val saved=ordered.mapIndexed{i,record->
     val opening=if(i==0)"<div id='conference-directory' class='conference-directory'>"else"<div id='article-body' class='post-content'>"
@@ -29,6 +29,12 @@ class AggregateNavigationStackTest {
    val port=object:AggregateBrowsePort {
     override fun stamp()=stamp
     override suspend fun catalog()=catalog
+    override suspend fun savedSelection(id:String)=store.withSourceReadScope {
+     val current=store.load(catalog.snapshotSHA256,activationEpoch)!!;val descriptor=current.records.single{it.id==id}
+     val revisions=store.cachedRevisions(descriptor)
+     val document=store.cachedDocument(descriptor,revisions.first().rawHTMLSHA256)
+     AggregateSavedSelection(current,descriptor,revisions,document,store.latestImageRendering(descriptor,revisions.first().rawHTMLSHA256),null,null)
+    }
     override suspend fun revisions(id:String)=listOf(AggregateCachedRevision(saved.getValue(id).getString("rawHTMLSHA256"),"2026-10-31T00:00:00Z"))
     override suspend fun read(id:String)=error("No network")
     override suspend fun cached(id:String,sha:String)=store.cachedDocument(ordered.single{it.id==id},sha)
