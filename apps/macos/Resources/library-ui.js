@@ -39,7 +39,7 @@ export function mountLibrary(app) {
   if (!document.getElementById('library-native-style')) {
     const style = document.createElement('style'); style.id = 'library-native-style';
     style.textContent = `.library-filters{display:flex;gap:10px;flex-wrap:wrap;padding:0 40px 18px;align-items:center}.library-filters label{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted)}.library-filters select,.library-filters input{max-width:165px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:4px 7px;font:inherit}.library-filters input[type=date]{width:125px}.library-selection-bar{display:flex;align-items:center;gap:8px;margin:0 40px 13px;min-height:32px;font-size:12px}.library-selection-bar>span{color:var(--muted);margin-right:auto}.library-selection-bar button,.library-pagination button{border:1px solid var(--line);padding:5px 9px;font-size:12px}.library-table.lib-multi th:first-child{width:35px}.library-table.lib-multi th:nth-child(2){width:48%}.library-table.lib-multi th:nth-child(3){width:14%}.library-table.lib-multi th:nth-child(4){width:10%}.library-table.lib-multi th:nth-child(5){width:10%}.library-table.lib-multi th:nth-child(6){width:12%}.library-table.lib-multi td:first-child,.library-table.lib-multi th:first-child{padding-left:10px;padding-right:6px}.library-table.lib-multi tr.is-selected td{background:var(--accent-soft)}.library-pagination{display:flex;gap:9px;align-items:center;font-size:12px}.library-context{position:fixed;z-index:120;min-width:180px;max-width:280px;padding:5px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 30px #0003}.library-context button{display:flex;justify-content:flex-start;width:100%;padding:7px 10px;font-size:12px}.library-context hr{border:0;border-top:1px solid var(--line);margin:4px}.library-query-scope{font-size:11px;color:var(--muted);margin:0 40px 12px}.library-check{width:14px;height:14px;accent-color:var(--accent)}.library-paper-details{margin-top:6px;color:var(--muted);font-size:11px;font-weight:400;white-space:normal}.library-paper-details summary{cursor:pointer;width:fit-content;max-width:100%;overflow-wrap:anywhere;line-height:1.7}.library-paper-details summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:3px}.library-details-hint{margin-left:9px;opacity:.8}.library-paper-details[open]{border-left:2px solid var(--line);padding-left:10px}.library-paper-details dl{margin:9px 0 2px;max-width:100%;line-height:1.7}.library-paper-details dl>div{display:grid;grid-template-columns:58px minmax(0,1fr);gap:8px;margin:5px 0}.library-paper-details dt{font-weight:500}.library-paper-details dd{margin:0;overflow-wrap:anywhere;color:var(--ink)}@media(max-width:1250px){.library-filters{padding-left:30px;padding-right:30px;gap:8px}.library-selection-bar,.library-query-scope{margin-left:30px;margin-right:30px}}`;
-    style.textContent += '.library-filter-toggle{margin:0 40px 12px;padding:5px 8px;border:1px solid var(--line);font-size:12px}.favorite-tools{margin:0 40px 16px;padding:14px 16px;background:var(--surface);border:1px solid var(--line);border-radius:8px;font-size:12px}.favorite-toolbar,.favorite-folder-edit{display:flex;gap:10px;flex-wrap:wrap;align-items:end}.favorite-tools label{display:inline-flex;gap:6px;align-items:center}.favorite-tools select,.favorite-tools input:not([type=checkbox]){padding:6px;border:1px solid var(--line);border-radius:5px;background:var(--surface);color:var(--ink);max-width:230px}.favorite-tools button{border:1px solid var(--line);padding:6px 9px;font-size:12px}.favorite-tools p{margin:10px 0 0;line-height:1.7;color:var(--muted)}#favorite-error{color:var(--red)}#favorite-manager,#favorite-assign{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}#favorite-folder-checks{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0}.favorite-section th{padding:12px 10px!important;background:var(--accent-soft);text-align:left;font-size:12px}.favorite-row-meta{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:normal}.favorite-help{font-size:11px}@media(max-width:1250px){.favorite-tools{margin-left:30px;margin-right:30px}}';
+    style.textContent += '.library-filter-toggle{margin:0 40px 12px;padding:5px 8px;border:1px solid var(--line);font-size:12px}.favorite-tools{margin:0 40px 16px;padding:14px 16px;background:var(--surface);border:1px solid var(--line);border-radius:8px;font-size:12px}.favorite-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:end}.favorite-tools label{display:inline-flex;gap:6px;align-items:center}.favorite-tools select,.favorite-tools input:not([type=checkbox]){padding:6px;border:1px solid var(--line);border-radius:5px;background:var(--surface);color:var(--ink);max-width:230px}.favorite-tools button{border:1px solid var(--line);padding:6px 9px;font-size:12px}.favorite-tools p{margin:10px 0 0;line-height:1.7;color:var(--muted)}.favorite-section th{padding:12px 10px!important;background:var(--accent-soft);text-align:left;font-size:12px}.favorite-row-meta{display:block;color:var(--muted);font-size:11px;margin-top:5px;white-space:normal}@media(max-width:1250px){.favorite-tools{margin-left:30px;margin-right:30px}}';
     style.textContent += '.library-view.personal-list .page-heading{padding-top:12px;padding-bottom:10px;gap:12px}.library-view.personal-list .page-heading .eyebrow{display:none}.library-view.personal-list .page-heading h1{font-size:24px;line-height:1.25}.library-view.personal-list .page-heading p{font-size:12px;line-height:1.5;margin-top:4px}.library-view.personal-list .library-controls{padding-bottom:10px;gap:12px}.library-view.personal-list .favorite-tools{padding:8px 12px;margin-bottom:8px}.library-view.personal-list .library-selection-bar{min-height:28px;margin-bottom:6px}.library-view.personal-list .library-filter-toggle{margin-bottom:6px}#favorite-time-help{margin-left:auto;font-size:11px}#favorite-time-help summary{cursor:pointer;color:var(--muted)}#favorite-time-help[open]{flex-basis:100%;margin-left:0}#favorite-time-help p{margin-top:5px}';
     document.head.append(style);
   }
@@ -51,9 +51,9 @@ export function mountLibrary(app) {
   filterBar.after(scope);
   const catalogNotice=document.createElement('p');catalogNotice.id='library-catalog-status';catalogNotice.className='library-query-scope';catalogNotice.hidden=true;catalogNotice.setAttribute('role','status');const catalogMessage=document.createElement('span'),catalogRetry=document.createElement('button');catalogRetry.type='button';catalogRetry.textContent='重新读取本机目录';catalogRetry.hidden=true;catalogRetry.onclick=()=>refresh();catalogNotice.append(catalogMessage,catalogRetry);scope.after(catalogNotice);
   const bar = document.createElement('div'); bar.className = 'library-selection-bar';
-  bar.innerHTML = '<span id="library-selection-count">可多选论文，或右键打开操作菜单</span><button id="library-selection-favorite" type="button" disabled>收藏选中</button><button id="library-selection-classify" type="button" disabled>收藏并归类</button><button id="library-selection-remove-favorite" type="button" disabled hidden>取消收藏选中</button><button id="library-selection-reading" type="button" disabled>加入待读</button><button id="library-selection-clear" type="button" disabled>取消选择</button>';
+  bar.innerHTML = '<span id="library-selection-count">可多选论文，或右键打开操作菜单</span><button id="library-selection-favorite" type="button" disabled>收藏选中</button><button id="library-selection-remove-favorite" type="button" disabled hidden>取消收藏选中</button><button id="library-selection-reading" type="button" disabled>加入待读</button><button id="library-selection-clear" type="button" disabled>取消选择</button>';
   scope.after(bar);
-  const favoriteTools=mountFavoriteTools(app,{before:filterBar,onChange:({resetPage=false}={})=>{if(resetPage)page=0;return render();},selection:()=>[...selected],assignmentFocusTarget:()=>$('library-selection-classify')});
+  const favoriteTools=mountFavoriteTools(app,{before:filterBar,onChange:({resetPage=false}={})=>{if(resetPage)page=0;return render();}});
   const favoriteSort=document.createElement('option');favoriteSort.value='favorite-date';favoriteSort.textContent='收藏时间（最近优先）';favoriteSort.hidden=true;$('sort').prepend(favoriteSort);
   const table = $('paper-rows').closest('table'); table.classList.add('lib-multi');
   const th = document.createElement('th'); th.innerHTML = '<input class="library-check" id="library-select-page" type="checkbox" aria-label="选择当前页全部论文">';
@@ -65,7 +65,7 @@ export function mountLibrary(app) {
   function updateSelection() {
     const hiddenSelected=[...selected].filter(id=>!matchingIDs.has(id)).length;
     $('library-selection-count').textContent = selected.size ? `已选 ${selected.size} 篇论文${hiddenSelected?'（'+hiddenSelected+' 篇不在当前筛选结果中）':''}` : '可多选论文，或右键打开操作菜单';
-    for (const id of ['library-selection-favorite','library-selection-classify','library-selection-remove-favorite','library-selection-reading','library-selection-clear']) $(id).disabled = persistBusy || !selected.size || (favoriteTools.readOnly&&['library-selection-favorite','library-selection-classify','library-selection-remove-favorite'].includes(id));
+    for (const id of ['library-selection-favorite','library-selection-remove-favorite','library-selection-reading','library-selection-clear']) $(id).disabled = persistBusy || !selected.size || (favoriteTools.readOnly&&['library-selection-favorite','library-selection-remove-favorite'].includes(id));
   }
   function fillOptions() {
     for (const key of ['task','method']) {
@@ -107,7 +107,7 @@ export function mountLibrary(app) {
       }
       if(new Set(rows.map(paperID)).size!==rows.length)throw new Error('本机目录分页身份重复，请重新读取；上一份列表仍保留');
       if(generation!==refreshGeneration)return;
-      if(app.state.personal===personalAtStart)app.state.personal=snapshot;app.state.summary=summary;app.state.catalog=rows;
+      if(app.state.personal===personalAtStart)app.state.personal=snapshot;app.state.summary=summary;app.state.catalog=rows;app.state.websiteTaxonomy=first.websiteTaxonomy||null;app.state.websiteTaxonomyNotice=first.websiteTaxonomyNotice||'';
       loaded = true; fillOptions();catalogNotice.hidden=true;
       const ids = new Set(catalog().map(paperID)); for (const id of selected) if (!ids.has(id)) selected.delete(id);
       for (const id of expandedMetadata) if (!ids.has(id)) expandedMetadata.delete(id);
@@ -134,8 +134,8 @@ export function mountLibrary(app) {
       favoriteTools.close();lastView=view;filterBar.hidden=!(saved?.filterOpen??(view!=='favorites'));filterToggle.setAttribute('aria-expanded',String(!filterBar.hidden));restoredScroll=saved?.scroll??0;
     }
     filterToggle.hidden=view!=='favorites';filterToggle.textContent='论文筛选'+(Object.values(filters).filter(Boolean).length?'（'+Object.values(filters).filter(Boolean).length+' 项生效）':'（任务、来源、网站日期）');scope.hidden=view==='favorites';
-    favoriteTools.render(view);favoriteSort.hidden=view!=='favorites';
-    $('library-selection-remove-favorite').hidden=view!=='favorites';$('library-selection-classify').textContent=view==='favorites'?'归类选中':'收藏并归类';
+    favoriteSort.hidden=view!=='favorites';
+    $('library-selection-remove-favorite').hidden=view!=='favorites';
     const query = $('search-input').value.trim(), needle = fold(query), favorites = membership('favorites'), reading = membership('reading');
     let extraIDs = new Set();
     if (query) {
@@ -147,10 +147,11 @@ export function mountLibrary(app) {
       else scope.textContent = '已同时搜索论文元数据、本机缓存导读与自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
     } else scope.textContent = '搜索标题、作者、编号与标签；同时匹配已缓存导读和自己的笔记。PDF 原文请在阅读器中查找，不在此处的全文检索范围内。';
     if (sequence !== renderSequence) return;
+    if(view==='favorites')favoriteTools.prepare(catalog().filter(p=>favorites.has(paperID(p))),{query,filters,extraIDs});favoriteTools.render(view);
     const today = published().filter(p=>!p.localRetained&&p.sourceKind!=='conference').map(p=>p.date||'').sort().at(-1)||new Date(Date.now()+8*3600*1000).toISOString().slice(0,10);
     const papers = catalog().filter(p => {
       const id = paperID(p);
-      if (view==='favorites' && (!favorites.has(id)||!favoriteTools.matches(id))) return false;
+      if (view==='favorites') return favorites.has(id)&&favoriteTools.matches(id);
       if (view==='reading-list' && !reading.has(id)) return false;
       if (view==='today' && (p.localRetained||p.date!==today||p.sourceKind==='conference')) return false;
       if (view==='conference' && p.sourceKind!=='conference') return false;
@@ -175,7 +176,7 @@ export function mountLibrary(app) {
       const savedAt=view==='favorites'?favoriteDate(personal(),id):null;
       const section=view==='favorites'&&sort==='favorite-date'?favoriteSection(savedAt,favoriteTools.grouping):null;
       const sectionHTML=section&&section!==previousSection?`<tr class="favorite-section"><th colspan="6">${escape(section)}</th></tr>`:'';previousSection=section;
-      const favoriteMeta=view==='favorites'?`<span class="favorite-row-meta">收藏时间：${savedAt?escape(savedAt.toLocaleString()):'未知（旧版未记录）'} · ${escape(favoriteTools.labels(id).join('、')||'未分类')}</span>`:'';
+      const favoriteMeta=view==='favorites'?`<span class="favorite-row-meta">收藏时间：${savedAt?escape(savedAt.toLocaleString()):'未知（旧版未记录）'} · ${escape(favoriteTools.summary(p))}</span>`:'';
       return sectionHTML+`<tr data-library-row="${escape(id)}" class="${selected.has(id)?'is-selected':''}"><td><input class="library-check" type="checkbox" data-library-select="${escape(id)}" aria-label="选择 ${escape(p.titleZh||p.title)}" ${selected.has(id)?'checked':''}></td><td><button class="paper-title-button" data-library-open="${escape(id)}"><span class="paper-row-title">${escape(p.titleZh||p.title)}</span><span class="paper-row-meta">${escape(id.replace(/^arxiv:/,''))} · ${escape(author)}${(p.authors||[]).length>2?' 等':''}</span></button>${favoriteMeta}${paperDetails(p, expandedMetadata.has(id))}</td><td>${escape(p.task||'未分类')}</td><td>${escape(p.date||'未知')}</td><td class="numeric">${score}</td><td>${escape(state)}</td></tr>`;
     }).join('');
     $('library-empty').hidden = papers.length>0;
@@ -193,7 +194,7 @@ export function mountLibrary(app) {
     const id=paperID(paper); if(!selected.has(id)){selected.clear();selected.add(id);render().catch(fail);}
     popup=document.createElement('div');popup.className='library-context';popup.setAttribute('role','menu');
     const favorite=membership('favorites').has(id),reading=membership('reading').has(id);
-    const actions=[['打开导读',()=>app.openPaper(paper,{resume:true})], [favorite?'取消收藏':'收藏论文',()=>persistedList('favorites',[id],favorite)], [favorite?'设置收藏分类':'收藏并归类',()=>favoriteTools.assign([id],{favoriteAndAssign:!favorite})], [reading?'移出待读':'加入待读',()=>persistedList('reading',[id],reading)], ...(paper.blogURL?[['在浏览器打开网站',()=>app.call('app.external',{url:paper.blogURL})]]:[])];
+    const actions=[['打开导读',()=>app.openPaper(paper,{resume:true})], [favorite?'取消收藏':'收藏论文',()=>persistedList('favorites',[id],favorite)], [reading?'移出待读':'加入待读',()=>persistedList('reading',[id],reading)], ...(paper.blogURL?[['在浏览器打开网站',()=>app.call('app.external',{url:paper.blogURL})]]:[])];
     for(const [label,action] of actions){const button=document.createElement('button');button.type='button';button.textContent=label;button.setAttribute('role','menuitem');button.onclick=()=>{closePopup();Promise.resolve().then(action).catch(fail);};popup.append(button);}
     document.body.append(popup);popup.style.left=`${Math.max(8,Math.min(event.clientX,innerWidth-popup.offsetWidth-8))}px`;popup.style.top=`${Math.max(8,Math.min(event.clientY,innerHeight-popup.offsetHeight-8))}px`;popup.querySelector('button').focus();
   }
@@ -208,7 +209,6 @@ export function mountLibrary(app) {
   $('library-previous').onclick=()=>{page=Math.max(0,page-1);render().catch(fail);$('library-view').querySelector('.library-table-wrap').scrollTop=0;};
   $('library-next').onclick=()=>{page++;render().catch(fail);$('library-view').querySelector('.library-table-wrap').scrollTop=0;};
   $('library-selection-favorite').onclick=()=>persistedList('favorites',[...selected]);
-  $('library-selection-classify').onclick=()=>favoriteTools.assign([...selected],{favoriteAndAssign:app.state.view!=='favorites'});
   $('library-selection-remove-favorite').onclick=()=>persistedList('favorites',[...selected],true);
   $('library-selection-reading').onclick=()=>persistedList('reading',[...selected]);
   $('library-selection-clear').onclick=()=>{selected.clear();render().catch(fail);};

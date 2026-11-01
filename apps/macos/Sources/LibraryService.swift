@@ -34,6 +34,7 @@ actor LibraryService {
         var sourceVersion: String?
         var appearances: [String]
         var citation: JSONValue
+        var websiteTagRecords: [JSONValue]? = nil
         var pdfSHA256: String? = nil
         var paperID: String { id }
     }
@@ -135,6 +136,8 @@ actor LibraryService {
         var papers: [Paper]
         var retiredPapers: [Paper]? = nil
         var validationEpoch: String? = nil
+        var websiteTaxonomy: JSONValue? = nil
+        var websiteTaxonomyNotice: String? = nil
     }
     private struct Shard: Decodable, Sendable {
         var url: String
@@ -336,8 +339,10 @@ actor LibraryService {
             guard let paper = try parsePaper(record) else { continue }
             if var old = papersByID[paper.id] {
                 let appearances = Array(Set(old.appearances + paper.appearances)).sorted()
+                let tagRecords=(old.websiteTagRecords ?? [])+(paper.websiteTagRecords ?? [])
                 if paper.date > old.date { old = paper }
                 old.appearances = appearances
+                old.websiteTagRecords = tagRecords
                 papersByID[paper.id] = old
             } else { papersByID[paper.id] = paper }
         }
@@ -347,6 +352,11 @@ actor LibraryService {
         let missing = Set(snapshot.summary.missingFromLatest).union(previousIDs.subtracting(currentIDs)).subtracting(currentIDs)
         let summary = Summary(paperCount: papersByID.count, recordCount: records.count, shardCount: shardCount, snapshotID: Self.sha256(index), syncedAt: Self.now(), source: siteBaseURL.absoluteString, syncing: false, missingFromLatest: missing.sorted())
         var replacement = StoredSnapshot(summary: summary, papers: papersByID.values.sorted { $0.id < $1.id })
+        if records.contains(where:{($0["tagConcepts"] as? [Any])?.isEmpty==false || ($0["taxonomyConcepts"] as? [Any])?.isEmpty==false}) {
+            do { replacement.websiteTaxonomy=try await readWebsiteTaxonomy() }
+            catch is CancellationError { throw CancellationError() }
+            catch { replacement.websiteTaxonomy=snapshot.websiteTaxonomy;replacement.websiteTaxonomyNotice=snapshot.websiteTaxonomy == nil ? "网页分类词表暂不可读；论文目录已保留，未借用其他版本分类。" : "分类资源更新未完成，当前使用上次可核对的词表；不在该词表版本中的分类暂不可核验。" }
+        } else { replacement.websiteTaxonomyNotice="网站目录未提供可核对的多级分类。" }
         replacement.validationEpoch = UUID().uuidString
         replacement.retiredPapers = Dictionary((snapshot.papers + (snapshot.retiredPapers ?? [])).filter { !currentIDs.contains($0.id) }.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }).values.sorted { $0.id < $1.id }
         try Task.checkCancellation()
@@ -420,7 +430,20 @@ actor LibraryService {
                      authors: citation["authors"] as? [String] ?? [], date: row["date"] as? String ?? "", score: Self.publishedScore(row["score"]),
                      task: row["task"] as? String ?? "", method: row["method"] as? String ?? "", tags: row["tags"] as? [String] ?? [],
                      sourceKind: kind, identityStatus: status, pageType: pageType, blogURL: blog.absoluteString, sourceURL: source, pdfURL: pdf,
-                     sourceVersion: version?.isEmpty == false ? version : nil, appearances: [blog.absoluteString], citation: try JSONValue.from(citation), pdfSHA256: try Self.publishedPDFHash(row, citation: citation))
+                     sourceVersion: version?.isEmpty == false ? version : nil, appearances: [blog.absoluteString], citation: try JSONValue.from(citation), websiteTagRecords:[try JSONValue.from(Self.websiteTagRecord(row))], pdfSHA256: try Self.publishedPDFHash(row, citation: citation))
+    }
+
+    private static func websiteTagRecord(_ row:[String:Any])->[String:Any] {
+        let keys:Set<String>=["pageType","permalink","paperId","arxivId","identityStatus","sourceKind","title","titleZh","summary","date","score","citation","task","method","tags","categories","primaryTaskId","primaryMethodId","researchType","domainScope","primaryResearchRole","primaryScientificTopicId","primaryScientificTopicLabel","methodNotApplicable","methodNotApplicableReason"]
+        return row.filter{keys.contains($0.key)||$0.key.hasPrefix("tag")||$0.key.hasPrefix("taxonomy")}
+    }
+    private func readWebsiteTaxonomy()async throws->JSONValue {
+        let snapshotURL=try sameSite("data/tag-catalog-snapshot.json"),versionsURL=try sameSite("data/tag-catalog-versions.json")
+        let snapshotBytes=try await read(snapshotURL,limit:2*1024*1024),versionsBytes=try await read(versionsURL,limit:8*1024*1024)
+        guard let current=try JSONSerialization.jsonObject(with:snapshotBytes) as? [String:Any],let versions=try JSONSerialization.jsonObject(with:versionsBytes) as? [String:Any],current["contract"] as? String=="paper-tag-catalog-snapshot-v2",versions["contract"] as? String=="paper-tag-catalog-versions-v2",let hash=current["registrySha256"] as? String,hash.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,versions["currentSha256"] as? String==hash,current["concepts"] is [[String:Any]],versions["snapshots"] is [[String:Any]] else{throw ServiceError.invalid("网页分类显示资源缺失或当前词表不一致。")}
+        let snapshotHash=Self.sha256(snapshotBytes),versionsHash=Self.sha256(versionsBytes)
+        try atomicWrite(snapshotBytes,to:cacheURL("taxonomy",key:snapshotHash,extension:"json"));try atomicWrite(versionsBytes,to:cacheURL("taxonomy",key:versionsHash,extension:"json"))
+        return try JSONValue.from(["snapshot":current,"versions":versions,"snapshotSourceURL":snapshotURL.absoluteString,"versionsSourceURL":versionsURL.absoluteString,"snapshotContentSHA256":snapshotHash,"versionsContentSHA256":versionsHash])
     }
 
     /// Hugo publishes the structured score as a decimal string; older indexes may use a JSON number.
@@ -1146,7 +1169,12 @@ actor LibraryService {
             let rows = try papers.map { p -> [String: Any] in
                 var result = try Self.dictionary(p); result["paperID"] = p.id; result["blogURL"] = p.blogURL; result["pdfURL"] = p.pdfURL ?? NSNull();result["localRetained"] = !currentIDs.contains(p.id); return result
             }
-            return ["papers": rows, "count": rows.count, "total": matches.count, "totalInLibrary": snapshot.papers.count,"snapshotID":snapshot.summary.snapshotID,"retainedCount":(snapshot.retiredPapers ?? []).count, "offset": max(0, payload["offset"] as? Int ?? 0)]
+            var response:[String:Any] = ["papers": rows, "count": rows.count, "total": matches.count, "totalInLibrary": snapshot.papers.count,"snapshotID":snapshot.summary.snapshotID,"retainedCount":(snapshot.retiredPapers ?? []).count, "offset": max(0, payload["offset"] as? Int ?? 0)]
+            if (payload["offset"] as? Int ?? 0)==0 {
+                if let assets=snapshot.websiteTaxonomy{response["websiteTaxonomy"]=try Self.dictionary(assets)}else{response["websiteTaxonomy"]=NSNull()}
+                response["websiteTaxonomyNotice"] = snapshot.websiteTaxonomyNotice ?? (snapshot.websiteTaxonomy == nil ? "旧版目录缓存尚未保存网页分类；同步网站目录后可显示。" : "")
+            }
+            return response
         case "library.search": return ["ids": searchCachedText(payload["query"] as? String ?? ""), "scope": "仅本机已读取导读正文，不检索PDF原文"]
         case "library.citationFile":
             guard let id = payload["paperID"] as? String ?? payload["id"] as? String else { throw ServiceError.invalid("未选择论文。") }

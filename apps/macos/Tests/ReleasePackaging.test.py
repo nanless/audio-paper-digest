@@ -144,6 +144,17 @@ class Packaging(unittest.TestCase):
         self.assertNotIn('/explicit/private',notes)
         self.assertTrue(self.call('verify')['verified'])
 
+    def test_121_release_notes_use_official_hierarchy_without_personal_folder_promise(self):
+        self.make_formal()
+        plist_file=self.repo/'apps/macos/Info.plist';value=plistlib.loads(plist_file.read_bytes());value.update(CFBundleShortVersionString='1.2.1',CFBundleVersion='4');raw=plistlib.dumps(value)
+        write(plist_file,raw);write(self.app/'Contents/Info.plist',raw)
+        success(['git','add','.'],self.repo);success(['git','commit','-qm','Explicit 1.2.1 official classification fixture'],self.repo)
+        commit=success(['git','rev-parse','HEAD'],self.repo).decode().strip()
+        self.change_metadata(lambda m:(m.update(sourceCommit=commit),next(x for x in m['files'] if x['path']=='Contents/Info.plist').update(bytes=len(raw),sha256=sha(raw))))
+        self.prepare();notes=(self.output/'RELEASE_NOTES.md').read_text()
+        self.assertIn('1.2.1 更新',notes);self.assertIn('网站已发布的九分面、多级论文分类',notes);self.assertIn('移除自建、重命名及手工归类入口',notes)
+        self.assertNotIn('收藏支持自建多个分类',notes);self.assertTrue(self.call('verify')['verified'])
+
     def test_joint_release_notes_cannot_be_rewritten_after_manifest_sealing(self):
         self.make_formal();self.prepare()
         notes=self.output/'RELEASE_NOTES.md'
