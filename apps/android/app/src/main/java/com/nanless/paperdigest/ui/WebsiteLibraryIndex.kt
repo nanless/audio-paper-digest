@@ -65,7 +65,7 @@ internal class WebsiteLibraryIndex(val taxonomy:WebsiteTaxonomy?,private val sou
             val counted=eligible.filter{directionMatches(it,if(countFiltered)direction else direction.copy(ids=emptySet(),unclassified=false))}
             if(counted.isNotEmpty())countTotal++
             counted.flatMap{guide->WebsiteTaxonomy.facets.keys.flatMap{facet->ids(guide,facet,direction.primary).flatMap{id->listOf(id)+if(countSubtree)taxonomy!!.nodes.getValue(id).ancestors else emptyList()}}}.toSet().forEach{counts[it]=(counts[it]?:0)+1}
-            
+
             counted.flatMap{guide->WebsiteTaxonomy.facets.keys.filter{ids(guide,it,direction.primary).isNotEmpty()}}.toSet().forEach{facetCounts[it]=(facetCounts[it]?:0)+1}
             val missing=eligible.all{it.nodes.isEmpty()};if(missing)unclassified++
             val matched=eligible.filter{directionMatches(it,direction)}

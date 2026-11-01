@@ -59,6 +59,9 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
 @Composable fun PaperDigestApp(controller: AppController) {
     val state by controller.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope(); val context = LocalContext.current
+    val librarySearchMemo=remember(controller){CachedGuideSearchMemo()}
+    val websiteIndex=rememberWebsiteLibraryIndex(state.papers,state.websiteTaxonomy)
+    var libraryDirectoryRequest by rememberSaveable{mutableIntStateOf(0)}
     var route by rememberSaveable { mutableStateOf("aggregates") }
     var aggregateSection by rememberSaveable { mutableStateOf("daily") }
     var aggregateSectionRequest by rememberSaveable { mutableIntStateOf(0) }
@@ -113,6 +116,8 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                 pendingAggregateReturn=id;navigateCurrent("aggregates");return@action
             }
             "ui.library" -> {navigateCurrent("library");return@action}
+            "ui.library.directory" -> {libraryDirectoryRequest++;navigateCurrent("library");return@action}
+            "ui.resources" -> {navigateCurrent("resources");return@action}
             "ui.tasks" -> {navigateCurrent("tasks");return@action}
             "ui.session.open" -> {val id=payload.getString("id");if(state.sessions.none{it.optString("id")==id})return@action;selectedSessionID=id;navigateCurrent("session");return@action}
             "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in listOf("开始","阅读","模型","资料","坚果云","Zotero")};settingsRequestID++;navigateCurrent("settings");return@action}
@@ -199,7 +204,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     MaterialTheme(colorScheme=scheme,typography=paperTypography,shapes=paperShapes) {
         val tabs=listOf("daily" to "日更","library" to "论文库","conference" to "会议","tasks" to "任务","settings" to "设置")
         val icons=listOf(Icons.Outlined.Today,Icons.Outlined.LibraryBooks,Icons.Outlined.Groups,Icons.Outlined.Checklist,Icons.Outlined.Settings)
-        fun tabSelected(tab:String)=when(tab){"daily","conference"->route=="aggregates"&&aggregateSection==tab;"library"->route in setOf("library","reader","session");else->route==tab}
+        fun tabSelected(tab:String)=when(tab){"daily","conference"->route=="aggregates"&&aggregateSection==tab;"library"->route in setOf("library","reader","session","resources");else->route==tab}
         val navigate:(String)->Unit={next->if(renderedRouteRevision==routeRevision){
             if(next in setOf("daily","conference"))action("ui.aggregates",obj("section" to next))else navigateCurrent(next)
         }}
@@ -217,7 +222,7 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                         if(setupReminder&&route in setOf("library","aggregates")&&(state.cloud.optString("account").isBlank()||state.zotero.optString("libraryID").isBlank())) {
                             Surface(color=MaterialTheme.colorScheme.secondaryContainer,modifier=Modifier.fillMaxWidth()) {
                                 Row(Modifier.padding(horizontal=12.dp,vertical=6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                                    Text("首次使用：连接 WebDAV 备份或 Zotero，保存你的研究资料。",Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
+                                    Text("连接 WebDAV / Zotero，保存研究资料",Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
                                     TextButton({action("ui.settings",obj("pane" to "开始"))}){Text("简单配置")}
                                     IconButton({setupReminder=false}){Icon(Icons.Outlined.Close,"稍后配置，本次先阅读")}
                                 }
@@ -235,7 +240,8 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
 
                         (localError ?: state.error)?.let { message -> Surface(color=MaterialTheme.colorScheme.errorContainer,modifier=Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp)){Text(message,Modifier.weight(1f));TextButton({localError=null;action("app.bootstrap",JSONObject())}){Text("重新载入")}} }}
                         savedScreens.SaveableStateProvider(if(route=="reader")"reader-${state.selectedPaperId}" else route){when(route){
-                            "library" -> LibraryPane(state,controller,action,{importPDF.launch(arrayOf("application/pdf"))})
+                            "library" -> LibraryPane(state,controller,action,{importPDF.launch(arrayOf("application/pdf"))},websiteIndex,true,libraryDirectoryRequest,librarySearchMemo)
+                            "resources" -> WebsiteResourcesPane(state,action)
                             "aggregates" -> AggregatePane(state,action,aggregateLink,aggregateLinkCurrent,aggregateSection,aggregateSectionRequest,pendingAggregateReturn==null)
                             "reader" -> Column(Modifier.fillMaxSize()) {
                                 if(readerReturnID!=null)Surface(color=MaterialTheme.colorScheme.surfaceContainer){Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
@@ -349,188 +355,6 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
  }
 }
 
-@OptIn(ExperimentalMaterial3Api::class,ExperimentalLayoutApi::class)
-@Composable internal fun LibraryPane(state:UiState,controller:AppController,action:Action,importPDF:()->Unit){
- var source by rememberSaveable{mutableStateOf("")};var task by rememberSaveable{mutableStateOf("")};var method by rememberSaveable{mutableStateOf("")};var minimum by rememberSaveable{mutableStateOf("")};var choosing by rememberSaveable{mutableStateOf(false)};var picked by rememberSaveable{mutableStateOf(listOf<String>())}
- var query by rememberSaveable{mutableStateOf("")};var filter by rememberSaveable{mutableStateOf("全部")};var sort by rememberSaveable{mutableStateOf("最新")}
- var favoriteSort by rememberSaveable{mutableStateOf("收藏时间")};var favoriteCategory by rememberSaveable{mutableStateOf("")};var favoriteMonthly by rememberSaveable{mutableStateOf(false)}
- var showWebsiteCategories by rememberSaveable{mutableStateOf(false)}
- val favoriteView=remember(state.personal){FavoriteCollections.view(state.personal)}
- val favoriteIDs=remember(state.personal){state.personal.ids("favorites").toSet()}
- val effectiveSort=if(filter=="收藏")favoriteSort else sort
- val websiteFavorites=remember(state.papers,state.websiteTaxonomy,favoriteIDs){WebsiteFavoriteIndex(state.websiteTaxonomy,state.papers.filter{it.id in favoriteIDs})}
- LaunchedEffect(state.websiteTaxonomy){if(favoriteCategory !in setOf("","unclassified")&&state.websiteTaxonomy?.nodes?.containsKey(favoriteCategory)!=true)favoriteCategory=""}
- var showFilters by rememberSaveable{mutableStateOf(false)};var showSearchInfo by rememberSaveable{mutableStateOf(false)}
- val selected=remember(state.personal,filter){when(filter){"收藏"->state.personal.ids("favorites").toSet();"待读"->state.personal.ids("reading").toSet();else->emptySet<String>()}}
- val notes=if(query.isBlank())null else state.personal.optJSONObject("notes")
- var searchRetry by remember{mutableIntStateOf(0)}
- val cacheIdentity=remember(state.catalogSyncedAt,state.offlinePaperIDs){state.catalogSyncedAt to state.offlinePaperIDs}
- val cachedSearch=rememberCachedGuideSearch(controller,query,searchRetry,cacheIdentity)
- val cachedIDs=cachedSearch.result?.paperIDs?:emptySet()
- val catalogIDs=remember(state.papers){state.papers.mapTo(HashSet()){it.id}}
- val unknownCached=remember(catalogIDs,cachedIDs){cachedIDs.count{it !in catalogIDs}}
- val papers=remember(state.papers,source,task,method,minimum,filter,effectiveSort,query,selected,notes,state.offlinePaperIDs,cachedIDs,favoriteView,favoriteCategory,websiteFavorites){
-  val score=minimum.toDoubleOrNull()?:0.0
-  state.papers.filter{paper->
-   val membership=(filter !in listOf("收藏","待读")||paper.id in selected)&&(filter!="离线"||paper.id in state.offlinePaperIDs)
-   if(!membership)false
-   else if(filter=="收藏")websiteFavorites.matchesCriteria(paper,favoriteCategory,source,minimum,query,paper.id in cachedIDs||query.isNotBlank()&&notes?.optJSONObject(paper.id)?.optString("text").orEmpty().contains(query.trim(),true))
-   else (source.isEmpty()||paper.sourceKind==source)&&(task.isEmpty()||paper.task==task)&&(method.isEmpty()||paper.method==method)&&(minimum.isEmpty()||(paper.score?:-1.0)>=score)&&(matchesLibrarySearch(paper,query,notes)||paper.id in cachedIDs)
-  }.let{if(effectiveSort=="评分")it.sortedByDescending{p->p.score?:-1.0}else it.sortedByDescending{p->p.date}}
-
- }
- val favoriteZone=java.time.ZoneId.systemDefault();val favoriteToday=java.time.LocalDate.now(favoriteZone)
- val favoriteSections=remember(papers,favoriteView,favoriteMonthly,effectiveSort,filter,favoriteZone,favoriteToday){if(filter=="收藏"&&effectiveSort=="收藏时间")favoriteLibrarySections(papers,favoriteView,favoriteMonthly,favoriteZone,favoriteToday)else listOf(FavoriteLibrarySection("all","",papers))}
- val visibleIDs=remember(papers){papers.mapTo(HashSet()){it.id}}
- val hiddenPicked=picked.count{it !in visibleIDs}
- val libraryScroll=rememberLazyListState()
- val criteria=JSONArray(listOf(query,source,if(filter=="收藏")""else task,if(filter=="收藏")""else method,minimum,filter,effectiveSort,if(filter=="收藏")favoriteCategory else "",if(filter=="收藏")favoriteMonthly.toString()else "")).toString()
- var appliedCriteria by rememberSaveable{mutableStateOf(criteria)}
- // New user criteria start at the first result; returning from a paper keeps the saved anchor.
- LaunchedEffect(criteria){if(appliedCriteria!=criteria){appliedCriteria=criteria;libraryScroll.scrollToItem(0)}}
- val options=remember(state.papers){Triple(state.papers.map{it.sourceKind}.distinct().sorted(),state.papers.map{it.task}.filter{it.isNotBlank()}.distinct().sorted(),state.papers.map{it.method}.filter{it.isNotBlank()}.distinct().sorted())}
- val localCount=remember(state.papers){state.papers.count{it.sourceKind=="local"}}
- val missingFromLatest=remember(state.catalogSummary){state.catalogSummary.ids("missingFromLatest").toSet()}
- val keyboard=androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
- val activeFilters=listOf(source,if(filter=="收藏")""else task,if(filter=="收藏")""else method,minimum).count{it.isNotEmpty()}+(if(filter=="全部")0 else 1)+(if(filter=="收藏"&&favoriteCategory.isNotEmpty())1 else 0)
- val searchMessage=when{
-  query.isBlank()->"搜索论文信息、作者、分类及私人笔记；输入后会补查本机已保存导读。不搜索未下载正文或 PDF 全文。"
-  cachedSearch.loading->"正在补充检索本机已缓存导读；论文信息与笔记结果先显示。"
-  cachedSearch.error!=null->"缓存检索未完成：${cachedSearch.error}"
-  cachedSearch.result!=null->{val result=cachedSearch.result;buildString{
-   append(if(result.scanned==0)"尚无可检索的已保存导读；当前只匹配论文信息与笔记。" else "已检查 ${result.scanned} 份本机缓存导读，命中 ${result.paperIDs.size} 篇；不包含未下载正文或 PDF 全文。")
-   if(result.unavailable>0)append(" 另有 ${result.unavailable} 份缓存暂不可读或身份不匹配，尚未确认其中是否命中。")
-   if(unknownCached>0)append(" 其中 $unknownCached 个命中缺少当前论文目录信息，原缓存仍保留。")
-  }}
-  else->"当前匹配论文信息与笔记。"
- }
- NonOccludingViewport{
-  val libraryViewportHeight=maxHeight
-  // Search, notices, filters and results all share ONE scroll viewport. When IME
-  // leaves little height, the header can scroll away while actual results remain clickable.
-  LazyColumn(Modifier.fillMaxSize(),state=libraryScroll,contentPadding=PaddingValues(horizontal=16.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
-   item(key="library-heading"){
-    Row(Modifier.fillMaxWidth().padding(top=8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-     Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)){
-      Text(when(filter){"收藏"->"我的收藏";"待读"->"待读清单";"离线"->"本机已保存";else->"文献资料库"},style=MaterialTheme.typography.headlineMedium)
-      Text(when(filter){"收藏"->"按网站原有分类与收藏时间浏览";"待读"->"继续处理你计划阅读的论文";"离线"->"查看本机已保存的导读与材料";else->"发现、阅读，积累自己的研究"},style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
-     }
-     IconButton(importPDF){Icon(Icons.Outlined.FileOpen,"导入 PDF")}
-     IconButton({action("library.sync",JSONObject())},enabled=!state.loading){Icon(Icons.Outlined.Sync,"同步已发布内容")}
-    }
-   }
-   if(filter=="全部")item(key="library-catalog"){
-    Surface(onClick={action("ui.aggregates",JSONObject())},shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer){
-     Row(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){
-      Icon(Icons.Outlined.Article,null,Modifier.size(24.dp),tint=MaterialTheme.colorScheme.onPrimaryContainer)
-      Text("日更、会议与网站页面",style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.onPrimaryContainer,modifier=Modifier.weight(1f))
-      Icon(Icons.Outlined.ChevronRight,null,tint=MaterialTheme.colorScheme.onPrimaryContainer)
-     }
-    }
-   }
-   item(key="library-search"){
-    OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,shape=MaterialTheme.shapes.medium,placeholder={Text("搜索论文、作者与笔记",maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({query=""}){Icon(Icons.Outlined.Close,"清除搜索")}},
-     keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(imeAction=androidx.compose.ui.text.input.ImeAction.Search),
-     keyboardActions=androidx.compose.foundation.text.KeyboardActions(onSearch={keyboard?.hide()}))
-   }
-   item(key="library-status"){
-    FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
-     Text("${papers.size} 篇匹配",style=MaterialTheme.typography.labelLarge,modifier=Modifier.padding(vertical=12.dp))
-     OutlinedButton({showFilters=true}){Icon(Icons.Outlined.Tune,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text(if(activeFilters==0)"筛选与排序 · $effectiveSort" else "筛选 $activeFilters 项 · $effectiveSort")}
-     IconButton({showSearchInfo=true}){Icon(if(cachedSearch.error!=null)Icons.Outlined.ErrorOutline else Icons.Outlined.Info,if(cachedSearch.error!=null)"检索未完成，查看范围与状态" else "目录与检索范围")}
-     if(cachedSearch.loading)Text("正在检查导读…",style=MaterialTheme.typography.labelMedium,modifier=Modifier.padding(vertical=12.dp))
-     else if((cachedSearch.result?.unavailable?:0)>0||unknownCached>0)Text("部分缓存未核对",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.tertiary,modifier=Modifier.padding(vertical=12.dp))
-     TextButton({choosing=!choosing;if(!choosing)picked=emptyList()}){Text(if(choosing)"完成多选" else "多选")}
-    }
-    if(activeFilters>0)Text(listOf(filter.takeUnless{it=="全部"},source.takeIf{it.isNotEmpty()}?.let{"来源：$it"},task.takeIf{filter!="收藏"&&it.isNotEmpty()}?.let{"任务：$it"},method.takeIf{filter!="收藏"&&it.isNotEmpty()}?.let{"方法：$it"},minimum.takeIf{it.isNotEmpty()}?.let{"最低 $it 分"}).filterNotNull().joinToString(" · "),style=MaterialTheme.typography.labelSmall)
-    if(cachedSearch.error!=null)Text("缓存检查未完成，当前结果不包含未确认的导读命中。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
-   }
-   item(key="library-quick-filters"){
-    FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("全部","收藏","待读","离线").forEach{choice->FilterChip(filter==choice,{filter=choice},label={Text(choice)})}}
-   }
-   if(filter=="收藏")item(key="favorite-categories"){
-    Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
-     Text("我的收藏 · ${favoriteIDs.size} 篇",style=MaterialTheme.typography.titleMedium)
-     if(favoriteView.readOnly)Text("收藏数据由较新版本保存；现有收藏可阅读，编辑需更新应用。",style=MaterialTheme.typography.bodySmall)
-     OutlinedButton({showWebsiteCategories=true}){Text("浏览网站分类 · ${websiteFavorites.label(favoriteCategory)}")}
-     if(state.catalogSummary.optString("websiteTaxonomyStatus")=="cached-unavailable")Text("本次分类资料读取未完成，暂用上次保存的网站词表；仅显示原版本可核对的分类。可再次同步。",style=MaterialTheme.typography.bodySmall)
-     if(state.websiteTaxonomy==null)Text("本机缺少网站多级分类资料，请同步已发布内容。现有收藏与收藏时间不受影响。",style=MaterialTheme.typography.bodySmall)
-     if(effectiveSort=="收藏时间")FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){
-      FilterChip(!favoriteMonthly,{favoriteMonthly=false},label={Text("按近期分区")});FilterChip(favoriteMonthly,{favoriteMonthly=true},label={Text("按月份分区")})
-     }
-     Text("旧收藏的时间未知，单独列出；不以论文发布日期代替。",style=MaterialTheme.typography.bodySmall)
-    }
-   }
-   if(choosing)item(key="library-selection"){
-    Column(verticalArrangement=Arrangement.spacedBy(6.dp)){
-     Text("已选 ${picked.size} 篇"+if(hiddenPicked>0)"，其中 $hiddenPicked 篇不在当前结果中"else"",style=MaterialTheme.typography.labelMedium)
-     FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-      TextButton({picked=(picked+papers.map{it.id}).distinct()}){Text("加选匹配 ${papers.size} 篇")}
-      TextButton({picked=emptyList()},enabled=picked.isNotEmpty()){Text("清空选择")}
-      if(hiddenPicked>0)TextButton({picked=picked.filter{it in visibleIDs}}){Text("仅保留当前结果内已选")}
-      TextButton({action("personal.list.edit",obj("key" to "favorites","action" to "add","ids" to JSONArray(picked)))},enabled=picked.isNotEmpty()&&!favoriteView.readOnly){Text("收藏 ${picked.size} 篇")}
-      TextButton({action("personal.list.edit",obj("key" to "reading","action" to "add","ids" to JSONArray(picked)))},enabled=picked.isNotEmpty()){Text("加入待读")}
-      if(filter=="收藏")TextButton({action("personal.list.edit",obj("key" to "favorites","action" to "remove","ids" to JSONArray(picked)))},enabled=picked.isNotEmpty()&&!favoriteView.readOnly){Text("取消所选收藏")}
-     }
-    }
-   }
-   if(papers.isEmpty())item(key="library-empty"){
-    val title=when{cachedSearch.loading->"正在查找本机导读";filter=="收藏"&&favoriteIDs.isEmpty()->"还没有收藏";filter=="收藏"->"当前分类或筛选下暂无收藏";filter=="待读"&&state.personal.ids("reading").isEmpty()->"待读清单为空";state.papers.isNotEmpty()->"当前搜索或筛选没有匹配";else->"这里还没有论文"}
-    val description=when{filter=="收藏"&&favoriteIDs.isEmpty()->"从论文操作菜单收藏一篇论文，或在资料库多选后收藏；分类沿用网页。";filter=="待读"&&state.personal.ids("reading").isEmpty()->"在论文操作菜单或资料库多选后加入待读。";state.papers.isNotEmpty()->"已有资料仍然保留。可以调整搜索或筛选；未完成的缓存检索范围可在“目录与检索范围”查看。";else->"同步已发布资料，或导入本地 PDF。同步读取已有分析，不会重复请求模型。"}
-    EmptyPane(title,description)
-    if(state.papers.isNotEmpty()&&(query.isNotEmpty()||activeFilters>0)&&(filter!="收藏"||favoriteIDs.isNotEmpty()))TextButton({query="";source="";task="";method="";minimum="";favoriteCategory="";if(filter!="收藏")filter="全部"},Modifier.padding(horizontal=24.dp)){Text(if(filter=="收藏")"查看全部收藏"else"清除搜索和筛选")}
-   }
-   favoriteSections.forEach{section->
-   if(section.label.isNotEmpty())item(key="favorite-section-${section.key}"){Text("${section.label} · ${section.papers.size} 篇",style=MaterialTheme.typography.titleSmall,modifier=Modifier.padding(top=12.dp))}
-   items(section.papers,key={it.id}){paper->OutlinedCard(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else action("paper.open",obj("paperID" to paper.id))},colors=CardDefaults.outlinedCardColors(containerColor=MaterialTheme.colorScheme.surfaceContainerLow),border=androidx.compose.foundation.BorderStroke(1.dp,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f)),modifier=Modifier.fillMaxWidth()){
-    Column(Modifier.padding(18.dp)){
-     FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(2.dp)){
-      if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id})
-      Text(paper.date,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
-      paper.score?.let{PaperLabel("$it 分")}
-     }
-     if(paper.id in missingFromLatest)Text("未列入最新网站快照，保留本机资料（不表示撤稿）",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
-     Text(paper.titleZh,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=3,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.padding(vertical=8.dp))
-     if(paper.titleZh!=paper.title)Text(paper.title,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-     Text(paper.authors.take(3).joinToString(" · "),style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,modifier=Modifier.padding(top=8.dp))
-     FlowRow(Modifier.padding(top=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
-      if(paper.task.isNotBlank())PaperLabel(paper.task)
-      if(paper.method.isNotBlank())PaperLabel(paper.method)
-     }
-     Text(paperSourceLabel(paper),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=8.dp))
-     if(filter=="收藏"){
-      Text(favoriteAddedLabel(favoriteView.items[paper.id]?.addedAt,favoriteZone),style=MaterialTheme.typography.labelSmall,modifier=Modifier.padding(top=8.dp))
-      val paths=websiteFavorites.paths[paper.id].orEmpty()
-      if(paths.isEmpty())Text(websiteFavorites.explanation(paper),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-      else paths.forEach{path->Text(path.joinToString(" › "){it.label},style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary)}
-     }
-    }
-   }}
-   }
-  }
-  if(showFilters)ModalBottomSheet(onDismissRequest={showFilters=false},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)){
-   Column(Modifier.fillMaxWidth().heightIn(max=libraryViewportHeight).verticalScroll(rememberScrollState()).padding(start=20.dp,end=20.dp,bottom=24.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-    Text("筛选与排序",style=MaterialTheme.typography.titleLarge)
-    Text("${papers.size} 篇匹配 · 当前筛选 $activeFilters 项。关闭此面板不会清除搜索或多选。",style=MaterialTheme.typography.bodySmall)
-    FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("全部","收藏","待读","离线").forEach{choice->FilterChip(filter==choice,{filter=choice},label={Text(if(choice=="全部")"全部论文"else"仅$choice")})}}
-    Text("排序",style=MaterialTheme.typography.titleSmall)
-    FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){(if(filter=="收藏")listOf("收藏时间","最新","评分")else listOf("最新","评分")).forEach{choice->FilterChip(effectiveSort==choice,{if(filter=="收藏")favoriteSort=choice else sort=choice},label={Text(if(choice=="最新")"论文最新"else choice)})}}
-    FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-     FilterChoice("来源",options.first,source,{source=it});if(filter!="收藏"){FilterChoice("任务",options.second,task,{task=it});FilterChoice("方法",options.third,method,{method=it})};FilterChoice("最低评分",listOf("7","8","9"),minimum,{minimum=it})
-    }
-    TextButton({source="";task="";method="";minimum="";filter="全部";favoriteCategory=""},enabled=activeFilters>0){Text("清除筛选（保留搜索和排序）")}
-    Button({showFilters=false},Modifier.fillMaxWidth()){Text("查看 ${papers.size} 篇结果")}
-   }
-  }
-  if(showSearchInfo)AlertDialog(onDismissRequest={showSearchInfo=false},title={Text("目录与检索范围")},text={Column(Modifier.heightIn(max=libraryViewportHeight).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
-   Text(catalogMessage(state.catalogSummary,localCount));Text(searchMessage,color=if(cachedSearch.error!=null)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-   Text("论文信息与笔记匹配，以及本次已核验的缓存导读命中，合并后继续应用全部筛选与排序。未下载的正文和 PDF 全文不在检索范围内。")
-   if(cachedSearch.error!=null&&query.length<=256)TextButton({searchRetry++}){Text("重试本机导读检索")}
-  }},confirmButton={TextButton({showSearchInfo=false}){Text("关闭")}})
-  if(showWebsiteCategories)WebsiteFavoriteCategoryPicker(websiteFavorites,favoriteCategory,{favoriteCategory=it},{showWebsiteCategories=false})
- }
-}
-
 /** Register the real provider when this static document View joins its native window.
  * No synthetic tree, focus transfer, notification, script or renderer-private API is used. */
 private class StaticDocumentWebView(context:android.content.Context):WebView(context) {
@@ -632,7 +456,7 @@ private class StaticDocumentWebView(context:android.content.Context):WebView(con
  },onRelease={web->if(activeView.compareAndSet(web,null)){activeDocument.set(null);activeImages.set(null)};web.stopLoading();web.tag=null;web.destroy()},modifier=Modifier.fillMaxSize().clipToBounds())
 }
 
-@Composable private fun FilterChoice(label:String,options:List<String>,value:String,change:(String)->Unit){
+@Composable internal fun FilterChoice(label:String,options:List<String>,value:String,change:(String)->Unit){
  var open by remember{mutableStateOf(false)}
  Box{OutlinedButton({open=true}){Text(if(value.isEmpty())label else "$label：$value")};DropdownMenu(open,{open=false}){DropdownMenuItem({Text("全部")},{change("");open=false});options.forEach{option->DropdownMenuItem({Text(option)},{change(option);open=false})}}}
 }

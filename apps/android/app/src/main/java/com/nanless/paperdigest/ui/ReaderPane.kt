@@ -176,6 +176,7 @@ import org.json.JSONObject
     Text(paper.authors.joinToString(" · "))
     Text("目录日期：${paper.date.ifBlank{"未标注"}}\n打开时目录版本：${paper.sourceVersion?:"未标注"}\n当前目录版本：${latestCatalog?.sourceVersion?:"未标注"}\n来源编号：${paper.id}")
     paper.score?.let{Text("目录原评分：$it / 10（完整量表见原导读）")};paper.citation.optString("doi").takeIf{it.isNotBlank()}?.let{Text("DOI：$it")}
+    if(paper.appearances.size>1){Text("全部已发布导读",style=MaterialTheme.typography.titleSmall);paper.appearances.forEach{address->val safe=runCatching{com.nanless.paperdigest.data.CatalogRepository.sameSite(address)}.getOrNull();if(safe!=null)TextButton({try{readerContext.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(safe)))}catch(_:Exception){pdfError="此设备没有可打开网站的应用。"}}){Text(safe,maxLines=2,overflow=TextOverflow.Ellipsis)}}}
     Text("当前导读版本：${state.article?.sourceVersion?:"未标注"}\n导读修订 SHA：${state.article?.revisionSHA256?:"未标注"}")
     if(state.pdfMode)Text("当前PDF原版本：${state.pdfReceipt.optString("version").ifBlank{"未标注"}}\nPDF SHA：${document?.sha256?:"原件尚未载入"}")
     sourceNotices.forEach{notice->Surface(color=when(notice.tone){"error"->MaterialTheme.colorScheme.errorContainer;"warning"->MaterialTheme.colorScheme.tertiaryContainer;else->MaterialTheme.colorScheme.primaryContainer},modifier=Modifier.fillMaxWidth()){
