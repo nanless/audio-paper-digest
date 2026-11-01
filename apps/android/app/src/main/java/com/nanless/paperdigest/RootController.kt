@@ -428,6 +428,8 @@ class RootController private constructor(private val context: Context, private v
                     }
                 }
                 "personal.setList" -> maintenance.withLock { personal.setList(payload.getString("key"), payload.getJSONArray("ids").strings()); JSONObject().put("saved", true) }
+                "personal.list.edit" -> maintenance.withLock { personal.editList(payload.getString("key"),payload.getString("action"),FavoriteCollections.paperIDs(payload.getJSONArray("ids"))) }
+                "personal.favorite.edit" -> maintenance.withLock { personal.editFavorites(payload) }
                 "personal.note" -> maintenance.withLock { personal.saveNote(payload.getString("paperID"), payload.getString("text"), payload.getInt("baseRevision")) }
                 "personal.reading" -> maintenance.withLock {
                     val id = payload.getString("paperID"); val old = personal.snapshot().getJSONObject("readingState").optJSONObject(id)?.copy() ?: JSONObject()

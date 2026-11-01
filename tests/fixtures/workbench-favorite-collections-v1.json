@@ -1,0 +1,2251 @@
+{
+  "contract": "paperdigest-favorite-collections-fixtures-v1",
+  "scope": "Synthetic personal metadata only; no scientific sources, real accounts or paid requests. Both native validators and backup preflight must agree.",
+  "validationCases": [
+    {
+      "name": "legacy-without-extension",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        }
+      },
+      "expected": {
+        "editable": true,
+        "unknownTimeIDs": [
+          "synthetic:favorite-a"
+        ]
+      }
+    },
+    {
+      "name": "known-v1-and-unknown-fields",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true
+      }
+    },
+    {
+      "name": "null-time-is-unknown",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": null,
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true,
+        "unknownTimeIDs": [
+          "synthetic:favorite-a"
+        ]
+      }
+    },
+    {
+      "name": "missing-item-is-unknown",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {},
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true,
+        "unknownTimeIDs": [
+          "synthetic:favorite-a"
+        ]
+      }
+    },
+    {
+      "name": "legacy-orphan-does-not-restore-membership",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            },
+            "synthetic:favorite-b": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ]
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true,
+        "activeIDs": [
+          "synthetic:favorite-a"
+        ]
+      }
+    },
+    {
+      "name": "future-version-opaque-not-reset",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 2,
+          "newLayout": {
+            "opaque": [
+              1,
+              null,
+              true
+            ]
+          },
+          "revision": "future-owned"
+        }
+      },
+      "expected": {
+        "editable": false
+      }
+    },
+    {
+      "name": "utc-nine-fraction-end-of-day",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-12-31T23:59:59.999999999Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true
+      }
+    },
+    {
+      "name": "actual-leap-date",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2024-02-29T00:00:00Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true
+      }
+    },
+    {
+      "name": "case-sensitive-distinct-names",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "ASR",
+              "createdAt": "2026-11-01T09:00:00.000Z"
+            },
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "name": "asr",
+              "createdAt": "2026-11-01T09:00:00.000Z"
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true
+      }
+    },
+    {
+      "name": "id-255-utf8-bytes",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true
+      }
+    },
+    {
+      "name": "name-126-utf8-bytes",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true
+      }
+    },
+    {
+      "name": "max-revision-readable",
+      "valid": true,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 2147483647,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {
+        "editable": true
+      }
+    },
+    {
+      "name": "version-bool",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": true,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "version-string",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": "1",
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "version-fraction",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1.5,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "version-zero",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 0,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "revision-bool",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": false,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "revision-string",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": "7",
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "revision-fraction",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 0.5,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "revision-negative",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": -1,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "revision-overflow",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 2147483648,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "feb30",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-02-30T00:00:00Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "non-leap-feb29",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2025-02-29T00:00:00Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "year-zero",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "0000-01-01T00:00:00Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "leap-second",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-01-01T00:00:60Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "hour24",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-01-01T24:00:00Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "offset-not-utc-z",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-01-01T00:00:00+08:00",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "date-without-time",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-01-01",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "empty-name",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "noncanonical-trim",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": " abc ",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "noncanonical-nfc",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "é",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "name-control-c0",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "abc\nxyz",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "name-control-c1",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "abcxyz",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "name-over-128-bytes",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "duplicate-normalized-name",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            },
+            {
+              "id": "22222222-2222-4222-8222-222222222222",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z"
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "duplicate-folder-id",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            },
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "uuid-must-be-lowercase",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "dangling-folder",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "22222222-2222-4222-8222-222222222222"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "duplicate-item-folder",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111",
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "item-time-field-missing",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "blank-item-id",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "  ": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "id-over-256-utf8-bytes",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉汉": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "folder-created-time-null",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": null,
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    },
+    {
+      "name": "item-time-bool",
+      "valid": false,
+      "personal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": true,
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "expected": {}
+    }
+  ],
+  "editCases": [
+    {
+      "name": "assign-unfavorited-is-whole-operation-reject",
+      "initialPersonal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "command": "personal.favorite.edit",
+      "payload": {
+        "action": "items.assign",
+        "expectedRevision": 7,
+        "ids": [
+          "synthetic:favorite-a",
+          "synthetic:favorite-b"
+        ],
+        "folderIDs": [
+          "11111111-1111-4111-8111-111111111111"
+        ],
+        "mode": "add"
+      },
+      "now": "2026-11-02T00:00:00.000Z",
+      "expectedError": true,
+      "expectedUnchanged": true
+    },
+    {
+      "name": "missing-valid-folder-delete-is-noop",
+      "initialPersonal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "command": "personal.favorite.edit",
+      "payload": {
+        "action": "folder.delete",
+        "expectedRevision": 7,
+        "folderID": "22222222-2222-4222-8222-222222222222"
+      },
+      "now": "2026-11-02T00:00:00.000Z",
+      "expectedError": false,
+      "expectedUnchanged": true
+    },
+    {
+      "name": "stale-cas-still-rejects-noop",
+      "initialPersonal": {
+        "schema": 1,
+        "notes": {},
+        "settings": {},
+        "favorites": [
+          "synthetic:favorite-a"
+        ],
+        "reading": [],
+        "readingState": {},
+        "annotations": {},
+        "sessions": [],
+        "jobs": [],
+        "unknownTop": {
+          "keep": "shared-synthetic-fixture"
+        },
+        "favoriteCollections": {
+          "version": 1,
+          "revision": 7,
+          "folders": [
+            {
+              "id": "11111111-1111-4111-8111-111111111111",
+              "name": "语音识别",
+              "createdAt": "2026-11-01T09:00:00.000Z",
+              "unknownFolder": 17
+            }
+          ],
+          "items": {
+            "synthetic:favorite-a": {
+              "addedAt": "2026-11-01T09:00:00.000Z",
+              "folderIDs": [
+                "11111111-1111-4111-8111-111111111111"
+              ],
+              "unknownItem": {
+                "keep": true
+              }
+            }
+          },
+          "unknownMetadata": [
+            "keep"
+          ]
+        }
+      },
+      "command": "personal.favorite.edit",
+      "payload": {
+        "action": "folder.delete",
+        "expectedRevision": 6,
+        "folderID": "22222222-2222-4222-8222-222222222222"
+      },
+      "now": "2026-11-02T00:00:00.000Z",
+      "expectedError": true,
+      "expectedUnchanged": true
+    }
+  ]
+}

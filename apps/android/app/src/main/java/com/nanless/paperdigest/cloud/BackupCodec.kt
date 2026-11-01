@@ -201,6 +201,7 @@ object BackupCodec {
         require(obj.opt("notes") is JSONObject && obj.opt("settings") is JSONObject && obj.opt("favorites") is JSONArray && obj.opt("reading") is JSONArray && obj.opt("readingState") is JSONObject && obj.opt("annotations") is JSONObject && obj.opt("sessions") is JSONArray && obj.opt("jobs") is JSONArray) { "个人资料结构无效" }
         val notes = obj.getJSONObject("notes"); notes.keys().forEach { key -> val n = notes.getJSONObject(key); val revision = n.opt("revision"); require(n.opt("text") is String && revision is Number && revision.toDouble() >= 0 && revision.toDouble() == revision.toLong().toDouble()) { "笔记版本无效" } }
         for (key in listOf("favorites", "reading")) { val a = obj.getJSONArray(key); for (i in 0 until a.length()) require(a.get(i) is String) }
+        com.nanless.paperdigest.data.FavoriteCollections.validateOptional(obj)
         val readingStates = obj.getJSONObject("readingState"); readingStates.keys().forEach { require(readingStates.get(it) is JSONObject) }
         val annotations = obj.getJSONObject("annotations"); annotations.keys().forEach { owner -> val a = annotations.getJSONArray(owner); for (i in 0 until a.length()) require(a.get(i) is JSONObject) }
         if (obj.has("personalPapers")) {

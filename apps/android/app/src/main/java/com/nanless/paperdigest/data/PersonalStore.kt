@@ -109,10 +109,24 @@ class PersonalStore(val directory: File) {
     }
     @Synchronized fun list(key: String): List<String> { require(key in listOf("favorites", "reading")); return value.getJSONArray(key).strings() }
     @Synchronized fun setList(key: String, ids: List<String>) {
-        require(key in listOf("favorites", "reading") && ids.size <= 100000)
-        mutate { it.put(key, JSONArray(ids.distinct().sorted())) }
+        changeFavorites { FavoriteCollections.replaceList(it,key,ids) }
     }
     @Synchronized fun toggleList(key: String, id: String) { val old = list(key); setList(key, if (id in old) old - id else old + id) }
+    @Synchronized fun editList(key:String,action:String,ids:List<String>):JSONObject =
+        changeFavorites { FavoriteCollections.editList(it,key,action,ids) }
+    @Synchronized fun editFavorites(payload:JSONObject):JSONObject =
+        changeFavorites { FavoriteCollections.edit(it,payload) }
+    /** Membership and classification metadata commit once; a rejected file write leaves memory intact. */
+    private fun changeFavorites(change:(JSONObject)->JSONObject):JSONObject {
+        val replacement=value.copy()
+        val result=change(replacement)
+        if(result.getBoolean("changed")) {
+            validate(replacement)
+            JsonFiles.write(file,encodedForWrite(replacement))
+            value=replacement;startupPersistenceWarning=null
+        }
+        return result.copy()
+    }
     @Synchronized fun saveReading(id: String, reading: JSONObject) = mutate { it.getJSONObject("readingState").put(id, reading.copy().put("updatedAt", now())) }
     @Synchronized fun annotations(id: String): List<JSONObject> = value.getJSONObject("annotations").optJSONArray(id)?.objects()?.map { it.copy() } ?: emptyList()
     @Synchronized fun saveAnnotation(id: String, annotation: JSONObject, remove: Boolean = false): List<JSONObject> {
@@ -152,6 +166,7 @@ class PersonalStore(val directory: File) {
             require(o.get("schema") is Number && o.getInt("schema") == 1) { "个人资料版本尚不支持" }
             listOf("notes", "settings", "readingState", "annotations").forEach { o.getJSONObject(it) }
             listOf("favorites", "reading").forEach { require(o.getJSONArray(it).length() <= 100000); o.getJSONArray(it).strings() }
+            FavoriteCollections.validateOptional(o)
             listOf("sessions", "jobs").forEach { o.getJSONArray(it).objects() }
             o.getJSONObject("notes").let { notes -> notes.keys().forEach { id -> val n = notes.getJSONObject(id); n.getString("text"); require(n.get("revision") is Number && n.getInt("revision") >= 0) } }
             o.getJSONObject("readingState").let { states -> states.keys().forEach { states.getJSONObject(it) } }
