@@ -15,7 +15,7 @@ function paperDetails(paper, expanded, classificationGuides=[]) {
 }
 
 /** Published catalog view. All durable personal writes go through the native store. */
-export function mountLibrary(app) {
+export function mountLibrary(app, {onVisibilityChange}={}) {
   const $ = id => document.getElementById(id);
   const views = new Set(['library', 'directions', 'today', 'conference', 'favorites', 'reading-list']);
   const selected = new Set();
@@ -64,7 +64,7 @@ export function mountLibrary(app) {
   $('library-view').querySelector('.page-heading').after(browser);
   for(const node of [$('library-view').querySelector('.library-controls'),filterToggle,filterBar,filterMessage,scope,catalogNotice,bar,$('library-view').querySelector('.library-table-wrap'),$('library-view').querySelector('.library-footer')])results.append(node);
   results.querySelector('.library-controls').append(filterToggle);
-  const favoriteTools=mountWebsiteBrowser(app,{panelHost:browser,contextHost:results.querySelector('.library-controls'),onChange:({resetPage=false}={})=>{if(resetPage)page=0;return render();}});
+  const favoriteTools=mountWebsiteBrowser(app,{panelHost:browser,onVisibilityChange,contextHost:results.querySelector('.library-controls'),onChange:({resetPage=false}={})=>{if(resetPage)page=0;return render();}});
   const favoriteSort=document.createElement('option');favoriteSort.value='favorite-date';favoriteSort.textContent='收藏时间（最近优先）';favoriteSort.hidden=true;$('sort').prepend(favoriteSort);
   const table = $('paper-rows').closest('table'); table.classList.add('lib-multi');
   const th = document.createElement('th'); th.innerHTML = '<input class="library-check" id="library-select-page" type="checkbox" aria-label="选择当前页全部论文">';

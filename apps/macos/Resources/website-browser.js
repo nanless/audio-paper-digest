@@ -91,7 +91,7 @@ export function createWebsiteIndex(app) {
 }
 
 /** Complete read-only website directory, with separate expansion and selection. */
-export function mountWebsiteBrowser(app, {panelHost, contextHost, onChange}) {
+export function mountWebsiteBrowser(app, {panelHost, contextHost, onChange, onVisibilityChange}) {
   const index = createWebsiteIndex(app);
   const panel = document.createElement('aside'); panel.className = 'classification-panel'; panel.setAttribute('aria-label','网站研究方向目录');
   panel.innerHTML = `<header class="classification-panel-heading"><div><strong>研究方向</strong><span id="classification-total"></span></div><button type="button" id="classification-close" aria-label="收起研究方向目录">×</button></header><label class="classification-search"><span>查找方向</span><input id="classification-search" type="search" placeholder="名称、别名或编号" autocomplete="off"></label><div class="classification-tree-actions"><button type="button" id="classification-expand">展开全部</button><button type="button" id="classification-collapse">收起全部</button></div><div id="classification-tree" class="classification-tree"></div><footer class="classification-rules"><details id="classification-advanced"><summary>高级分类筛选</summary><label>匹配范围<select id="classification-scope"><option value="subtree">包括子类</option><option value="direct">仅直接标签</option></select></label><label>标签角色<select id="classification-role"><option value="any">全部角色</option><option value="primary">主要角色</option></select></label><label>研究类型<select id="classification-researchType"><option value="all">全部类型</option></select></label><label>研究范围<select id="classification-domainScope"><option value="all">全部范围</option></select></label><p>同一分面可选多个方向；不同分面同时满足。条件须由同一篇导读满足。</p></details><p>目录包含全部层级与零篇方向。</p></footer>`;
@@ -175,8 +175,11 @@ export function mountWebsiteBrowser(app, {panelHost, contextHost, onChange}) {
   $('classification-search').oninput=()=>{directoryQuery=$('classification-search').value;treeSignature='';render(view);};
   $('classification-expand').onclick=()=>{expanded=new Set(Object.keys(index.graph?.byId||{}));treeSignature='';render(view);};
   $('classification-collapse').onclick=()=>{expanded.clear();treeSignature='';render(view);};
-  $('classification-close').onclick=()=>{open=false;render(view);$('library-browse-classifications').focus();};
-  $('library-browse-classifications').onclick=()=>{open=!open;render(view);if(open)$('classification-search').focus();};
+  // The panel changes visibility without a library route or query. Let the
+  // native shell refresh its AX container after the live controls are visible.
+  function togglePanel(next){if(open===next)return;open=next;render(view);$(open?'classification-search':'library-browse-classifications').focus({preventScroll:true});onVisibilityChange?.(view);}
+  $('classification-close').onclick=()=>togglePanel(false);
+  $('library-browse-classifications').onclick=()=>togglePanel(!open);
   for(const field of ['scope','role','researchType','domainScope'])$('classification-'+field).onchange=event=>{selection[field]=event.target.value;changed();};
   $('favorite-grouping').onchange=()=>{grouping=$('favorite-grouping').value;changed();};
   function snapshot(){return {selection:structuredClone(selection),expanded:[...expanded],directoryQuery,currentNode,open,grouping,directoryScroll:$('classification-tree').scrollTop,advancedOpen:$('classification-advanced').open,descriptionOpen:$('classification-description').open};}
