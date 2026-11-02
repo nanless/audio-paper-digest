@@ -11100,7 +11100,9 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     }
     if (generated.metadataRecoveryProof) require('./lib/reader-request-diagnostics')
         .sealReaderVersionMetadataCompletion(paper, generated.metadataRecoveryProof);
-    if (readerResult.ordinalPatchCompilations?.length) {
+    if (readerResult.ordinalPatchCompilations?.length
+        || (options.execution?.operatorProvenance?.contract === 'daily-reader-operator-correction-v1'
+            && previousOrdinalProof)) {
         // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
         // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
         const operatorSupersedes = options.execution?.operatorProvenance?.contract
@@ -11110,7 +11112,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
             manifest.stages.apiReaderArticle.ordinalPatchHistory = {
                 contract: 'reader-target-ordinal-patch-v1',
                 reason: 'operator-correction-supersedes-ordinal-completion',
-                compilations: structuredClone(readerResult.ordinalPatchCompilations),
+                compilations: structuredClone(readerResult.ordinalPatchCompilations || []),
                 previousCompletionProof: previous?.ordinalCompletionProof || null,
                 previousStage: previous ? {
                     articleSha256: previous.articleSha256,
@@ -19306,6 +19308,12 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', readerResult.article, arxivId);
             enforceReaderResourceClaims(readerResourceClaimDraftFromArticle(readerResult.plan, readerResult.article),
                 verifiedReaderResources, rawTextForAnalysis);
+            const previousOperatorReaderStage = structuredClone(analysisManifest.stages.apiReaderArticle);
+            if (readerResult.operatorCorrectionProof?.contract === 'daily-reader-operator-correction-v1'
+                && !readerResult.ordinalPatchCompilations?.length
+                && (previousOperatorReaderStage?.ordinalCompletionProof || paper.readerRevisionHistory?.completionProof)) {
+                throw new Error('Zero-record operator replacement of an ordinary completion requires the authenticated Reader-only refresh finalizer');
+            }
             paper.apiReaderArticle = readerResult.article;
             paper.apiReaderPlan = readerResult.plan;
             paper.apiReaderFigures = readerResult.figures;
@@ -19430,7 +19438,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             if (readerResult.ordinalPatchCompilations?.length) {
                 // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
                 // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
-                const previous = paper.analysisManifest?.stages?.apiReaderArticle;
+                const previous = previousOperatorReaderStage;
                 if (readerResult.operatorCorrectionProof?.contract === 'daily-reader-operator-correction-v1') {
                     analysisManifest.stages.apiReaderArticle.ordinalPatchHistory = {
                         contract: 'reader-target-ordinal-patch-v1',
