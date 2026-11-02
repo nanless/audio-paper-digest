@@ -42,7 +42,7 @@ The [1.3.0 record](workbench-1.3.0-review.md) covers classification browsing, bo
 | Cross-platform backup format and actual validation | [Portable fixtures](android-cloud-portable-fixtures.md), [Android validation](android-validation.md) |
 | Client security and licensing | [Security record](client-security-audit.md), [Android license inventory](../apps/android/licenses.README.en.md) |
 | Proposed static data interface | [desktop/v1 contract](desktop-data-contract.md); this optional interface is not deployed |
-| Browser prototype | [Prototype guide](../prototypes/macos-research/README.en.md); its scope is separate from the released applications |
+| Shared test samples and display resources | [Preparation and use boundaries](../prototypes/macos-research/README.en.md) |
 
 ## Run a production task
 
@@ -96,8 +96,8 @@ These records explain the problems, changes, and actual verification at the time
 - Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).
-- Documentation and prompts: [2026-11-02 full-scope review](documentation-review-20261102.md).
-- Beginner explanations, complete bilingual guides, and diagrams: [2026-11-03 revision and review](documentation-rewrite-20261103.md).
+
+For current writing and documentation maintenance, use the [project writing guide](writing-guide.md), [technical writing methods](../skills/clear-technical-writing/SKILL.md), and [maintenance principles](repository-maintenance-review.md). Completed file-by-file editing reports remain in Git history so their old paths, line numbers, and test counts do not become current instructions.
 
 ## Establish completion
 

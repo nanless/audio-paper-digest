@@ -40,7 +40,7 @@
 | 跨端备份格式与实际验证 | [跨端格式](android-cloud-portable-fixtures.md)、[Android 验证](android-validation.md) |
 | 客户端安全与许可 | [安全说明](client-security-audit.md)、[Android 许可清单说明](../apps/android/licenses.README.md) |
 | 后续静态数据接口设计 | [desktop/v1 数据合同](desktop-data-contract.md)，当前并未部署该接口 |
-| 浏览器原型 | [原型说明](../prototypes/macos-research/README.md)，它与正式应用分别说明 |
+| 两端共用的测试样稿与显示资源 | [样稿准备与使用边界](../prototypes/macos-research/README.md) |
 
 ## 运行一项内容生产任务
 
@@ -94,8 +94,8 @@
 - 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
-- 文档与提示词：[2026年11月2日全范围审查](documentation-review-20261102.md)。
-- 初学者写作、完整双语与图示：[2026年11月3日整理与复审](documentation-rewrite-20261103.md)。
+
+写作和文档维护直接使用[项目写作约定](writing-guide.md)、[技术写作方法](../skills/clear-technical-writing/SKILL.md)与[维护约定](repository-maintenance-review.md)。已经结束的逐文件整理报告保留在 Git 历史中，避免过时的路径、行号和检查计数混入现行指南。
 
 ## 什么时候可以报告完成
 

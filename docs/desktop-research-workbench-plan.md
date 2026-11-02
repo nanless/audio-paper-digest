@@ -1,13 +1,13 @@
 # 桌面论文研究工作台规划
 
-本文说明论文速递工作台的产品目标、数据分层和设计取舍。现行应用支持阅读、同步、个人模型研究和 Zotero 存档，安装与实际使用见[Mac 说明](../apps/macos/README.md)及[Android 说明](../apps/android/README.md)。[浏览器原型](../prototypes/macos-research/index.html)保留为交互参考；`desktop/v1`、技术备选和后续扩展在下文按设计目标说明，具体功能范围以现行应用为准。
+本文说明论文速递工作台的产品目标、数据分层和设计取舍。现行应用支持阅读、同步、个人模型研究和 Zotero 存档，安装与实际使用见[Mac 说明](../apps/macos/README.md)及[Android 说明](../apps/android/README.md)。固定测试样稿与显示资源见[共享材料](../prototypes/macos-research/README.md)；`desktop/v1`、技术备选和后续扩展在下文按设计目标说明，具体功能范围以现行应用为准。
 
 本文保留最初设计中的扩展目标。阅读具体流程前，先区分以下状态，避免把目标当作已经交付的能力：
 
 | 范围 | 当前实现与后续目标 |
 |---|---|
 | 版本与验收 | 1.3.0 的实际包、升级及验证范围见[本轮记录](workbench-1.3.0-review.md)；下文设计场景不授予验收通过 |
-| PDF | Mac 使用 PDFKit，Android 使用 Jetpack PDF 与 PDFBox；PDF.js 只用于浏览器原型 |
+| PDF | Mac 使用 PDFKit，Android 使用 Jetpack PDF 与 PDFBox |
 | 模型材料 | 两端当前仅发送提取文字；图片、原生 PDF 上传、OCR 与外网检索属于后续能力设计 |
 | Zotero | Mac 使用 Zotero 10+ 本地写入 API，Android 使用 Web API v3；Zotero 9 插件兼容尚未实现 |
 | 数据与研究扩展 | 网站索引和 HTML 适配已经使用；`desktop/v1`、语义检索、多篇对照和自由画布仍为可选方案 |
@@ -63,7 +63,6 @@ Mac 应用直接消费已经发布的网站成果，默认单栏阅读，打开 
 | [LiquidText](https://www.liquidtext.net/features) | 摘录、工作区与文档来源之间的往返 | 每条证据和笔记能回到实际 PDF 位置；先做好双栏，后续再评估自由画布 |
 | [Elicit 图表提取](https://support.elicit.com/en/articles/14758168-extracting-data-from-a-table-or-figure-within-a-paper-in-column-answers) | 图表需要不同于正文的提取路径，复杂解析有额外消耗 | 文本先行，图表按需发送原页或裁图；显示证据与提取局限，不把破损表格当可靠数据 |
 | [Zotero 阅读器](https://www.zotero.org/support/pdf_reader)与[笔记](https://www.zotero.org/support/notes) | 原文标注与可编辑研究笔记 | 存档时兼顾附件、结构化笔记和真实位置；不把所有内容塞进一条不可维护的摘要 |
-| [PDF.js](https://mozilla.github.io/pdf.js/getting_started/) | 可嵌入 PDF 显示层与阅读器 | 使用成熟阅读能力，重点开发解析联动、证据与存档，不自行实现 PDF 格式解析 |
 | [Gemini PDF 文档](https://ai.google.dev/gemini-api/docs/document-processing)、[Claude PDF](https://platform.claude.com/docs/en/build-with-claude/pdf-support) | 部分提供商支持原生 PDF/视觉输入 | 模型适配器声明能力；不假设任意兼容端点都能接收 PDF 或看图 |
 | [Claude citations](https://platform.claude.com/docs/en/build-with-claude/citations) | 支持提供来源位置的结构化引用 | 优先利用真实引用字段，同时核验本地 PDF；页码引用不能自动变成精确高亮矩形 |
 
@@ -190,7 +189,7 @@ Mac 应用直接消费已经发布的网站成果，默认单栏阅读，打开 
 
 ### 7.1 提取与模型输入
 
-现行 Mac 用 PDFKit 显示原文、提取文字和定位；Android 用 Jetpack PDF 阅读器与 PDFBox 提取、查找及选区兼容路径，加密原件另走 PDFBox 显示。两端均绑定原 PDF SHA 与物理页。PDF.js 是浏览器原型的显示层，不是现行 Mac 的原文引擎。
+现行 Mac 用 PDFKit 显示原文、提取文字和定位；Android 用 Jetpack PDF 阅读器与 PDFBox 提取、查找及选区兼容路径，加密原件另走 PDFBox 显示。两端均绑定原 PDF SHA 与物理页。两端均使用各自的原文显示组件。
 
 后续若增加图块/裁图、OCR 或视觉解析，需保留实际输入与坐标转换，分别说明复杂多栏、扫描页、表格和公式的提取质量；不能全库自动开启。
 
@@ -250,7 +249,7 @@ PDF 全文解析是可选研究任务，按章节建立问题与证据，再综�
 
 ## 9. 后台架构与本地数据
 
-现行 Mac 使用 Swift/AppKit 原生窗口、菜单与设置，PDFKit 处理原文，受限 WKWebView 承载图文，应用随包提供 Node 服务。数据与任务服务独立，不要求用户安装 Node/Python、克隆生产仓库或准备 Hugo。浏览器原型中的 HTML/PDF.js 保留用于交互参考，实际构建见[Mac 说明](../apps/macos/README.md)。框架依据：[PDFView](https://developer.apple.com/documentation/pdfkit/pdfview)、[WKWebView](https://developer.apple.com/documentation/webkit/wkwebview)。
+现行 Mac 使用 Swift/AppKit 原生窗口、菜单与设置，PDFKit 处理原文，受限 WKWebView 承载图文，应用随包提供 Node 服务。数据与任务服务独立，不要求用户安装 Node/Python、克隆生产仓库或准备 Hugo。旧浏览器演示已退役，实际构建见[Mac 说明](../apps/macos/README.md)。框架依据：[PDFView](https://developer.apple.com/documentation/pdfkit/pdfview)、[WKWebView](https://developer.apple.com/documentation/webkit/wkwebview)。
 
 ```text
 现有三条生产流程 → 博客发布成果 → 静态索引/正文/资源导出
