@@ -96,6 +96,8 @@ import org.json.JSONObject
                             Box {
                                 IconButton({readingMenu=true},enabled=aggregate.preview==null){Icon(Icons.Outlined.MoreVert,"页面操作、来源与已保存版本")}
                                 DropdownMenu(readingMenu,{readingMenu=false}) {
+                                    ReaderTextSizeMenu(state.settings.optInt("font",18)){size->readingMenu=false;action("settings.save",obj("changes" to obj("font" to size)))}
+                                    HorizontalDivider()
                                     DropdownMenuItem(text={Text("来源与提示")},leadingIcon={Icon(Icons.Outlined.Info,null)},onClick={readingMenu=false;sourceInfo=true})
                                     if(aggregate.revisions.isNotEmpty())DropdownMenuItem(text={Text("已保存版本（${aggregate.revisions.size}）")},leadingIcon={Icon(Icons.Outlined.History,null)},enabled=!aggregate.loading&&!aggregate.catalogStale,onClick={readingMenu=false;savedVersions=true})
                                     if(aggregate.catalogStale)DropdownMenuItem(text={Text("更新目录")},enabled=!aggregate.loading,onClick={readingMenu=false;action("aggregate.list",JSONObject())})

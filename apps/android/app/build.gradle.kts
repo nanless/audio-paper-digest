@@ -6,7 +6,7 @@ android {
     compileSdk = 37
     ndkVersion = "27.2.12479018"
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
-    defaultConfig { applicationId = "com.nanless.paperdigest"; minSdk = 28; targetSdk = 37; versionCode = 10; versionName = "1.3.2"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }; externalNativeBuild { cmake { arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON" } } }
+    defaultConfig { applicationId = "com.nanless.paperdigest"; minSdk = 28; targetSdk = 37; versionCode = 11; versionName = "1.3.3"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"; ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }; externalNativeBuild { cmake { arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON" } } }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     testOptions { unitTests.isReturnDefaultValues = false }

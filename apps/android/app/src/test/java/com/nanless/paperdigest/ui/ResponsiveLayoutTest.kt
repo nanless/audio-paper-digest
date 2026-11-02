@@ -4,6 +4,10 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ResponsiveLayoutTest {
+ @Test fun phoneToolbarUsesOneRowAndTabletRetainsTabs(){
+  for(width in listOf(360f,411f,480f,599f))assertTrue(readerGeometry(width,800f,1f,false,46f).compactChrome)
+  assertFalse(readerGeometry(600f,800f,1f,false,46f).compactChrome)
+ }
  @Test fun noPdfNeverInventsAnEmptySecondPane(){for(width in listOf(320f,360f,600f,840f,1280f,2000f))assertFalse(readerGeometry(width,700f,1f,false,46f).canSplit)}
  @Test fun actualPaneWidthsRemainReadableAt200PercentFont(){
   for(scale in listOf(1f,1.3f,1.5f,2f))for(width in listOf(320f,360f,600f,840f,960f,972f,1280f))for(saved in listOf(-3f,38f,46f,54f,62f,150f,Float.NaN)){

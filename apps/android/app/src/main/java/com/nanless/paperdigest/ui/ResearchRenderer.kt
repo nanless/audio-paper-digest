@@ -139,6 +139,9 @@ object ResearchRenderer {
         }
         // Legacy/restored HTML is display data, never executable page markup.
         document.select("script,iframe,object,embed,link,meta,base,form,input,button,video,audio,source").remove()
+        // Restored page CSS must not override the phone reading shell. Strip it only
+        // from this display derivative; trusted bundled KaTeX CSS is added below.
+        if(display)document.select("style").remove()
         document.getAllElements().forEach{node->node.attributes().asList().forEach{attribute->
             if(attribute.key.startsWith("on",true)||attribute.key.equals("style",true)||attribute.key.equals("srcset",true))node.removeAttr(attribute.key)
         }}

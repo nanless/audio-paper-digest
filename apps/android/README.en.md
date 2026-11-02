@@ -4,7 +4,7 @@
 
 This native Android client reads the Paper Digest website's published paper catalog, illustrated explanations, daily digests, and conference overviews. It supports original PDFs, notes, offline reading, personal study, Zotero archiving, and Nutstore backup. Reading or synchronizing existing articles does not request new model analysis.
 
-The source version is **1.3.2, build 10**. Public package availability is determined by [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases). Android 9 / API 28 or later is supported, with `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` architectures. The application identifier remains `com.nanless.paperdigest`, and formal packages retain the previous signing identity. See [validation and release scope (Chinese)](../../docs/android-validation.md) and the [1.3.0 review (Chinese)](../../docs/workbench-1.3.0-review.md).
+The source version is **1.3.3, build 11**. Public package availability is determined by [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases). Android 9 / API 28 or later is supported, with `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` architectures. The application identifier remains `com.nanless.paperdigest`, and formal packages retain the previous signing identity. See [validation and release scope (Chinese)](../../docs/android-validation.md) and the [1.3.0 review (Chinese)](../../docs/workbench-1.3.0-review.md).
 
 Quoted interface labels below refer to the application's Chinese interface. Detailed linked documents are in Chinese unless stated otherwise.
 
@@ -17,6 +17,8 @@ Quoted interface labels below refer to the application's Chinese interface. Deta
 3. After entering from a daily or conference overview, return with the overview action or system Back. Conference catalog, overview, and topic pages support stepwise return. Position is retained for the same revision.
 
 While idle, at most four public overview HTML pages and two recent paper explanations preload. Opening an explanation shows verified text before optional images finish; user actions take priority over background synchronization and preloading. PDFs still download on demand, and offline mode does not use the network. Explicitly opening a saved historical version does not fetch additional images, avoiding material from another revision. See the [1.3.2 review (Chinese)](../../docs/android-1.3.2-review.md) for automatic updates, phone typography, and error recovery.
+
+Phone reading now uses compact typography: a 14 px body, an approximately 18 px main title, and tighter spacing and list indents. Use the paper or website page menu to decrease, increase, or reset text size without leaving the page. This shares the reading setting and preserves system font scaling; exports keep their separate layout. See the [1.3.3 typography review (Chinese)](../../docs/android-1.3.3-review.md).
 
 ### Configure a model and review the material
 

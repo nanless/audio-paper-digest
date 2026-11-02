@@ -67,6 +67,42 @@ class ResearchRendererInstrumentedTest {
   val html=ResearchRenderer.renderArticle(context,article);assertTrue(Jsoup.parseBodyFragment(html).select("img").isEmpty());assertTrue(html.contains("图片未核验离线保存"));assertTrue(html.contains("保留图注"))
  }}
 
+ @Test fun restoredPageCssCannotOverridePhoneDisplayButOriginalAndExportRemainUnchanged()=runBlocking {
+  val context=InstrumentationRegistry.getInstrumentation().targetContext
+  val original="<style>body,p{font-size:72px!important;line-height:4!important;--untrusted-reader-css:1}</style><p id='original' style='font-size:96px!important'>原导读正文</p><table><tr><td>原数值1.25</td></tr></table>"
+  val article=Article("test:legacy-css",original,"原导读正文","https://example.invalid/source","https://example.invalid/guide","a".repeat(64),"2026-11-03")
+  val before=article.json().toString();var readable:String?=null
+  val display=ResearchRenderer.renderArticleForDisplay(context,article){readable=it}
+  for(html in listOf(requireNotNull(readable),display)){
+   val doc=Jsoup.parseBodyFragment(html)
+   assertTrue(doc.select("style,[style]").isEmpty());assertFalse(html.contains("--untrusted-reader-css"))
+   assertEquals("原导读正文",doc.getElementById("original")!!.text());assertEquals("原数值1.25",doc.select("td").text())
+  }
+  // The existing export contract is deliberately independent of phone display CSS.
+  val exported=ResearchRenderer.renderArticle(context,article)
+  assertTrue(exported.contains("--untrusted-reader-css"));assertEquals(1,Jsoup.parseBodyFragment(exported).select("style").size)
+  assertEquals(before,article.json().toString());assertEquals(original,article.html)
+ }
+
+ @Test fun streamedArticleDropsOriginalCssBeforeAddingOnlyBundledFormulaStyles()=runBlocking {
+  val context=InstrumentationRegistry.getInstrumentation().targetContext
+  val streamed="<style>p,.katex{font-size:88px!important;--untrusted-stream-css:1}</style><p id='science' style='font-size:99px'>科学文字</p><math><semantics><mfrac><mi>x</mi><mi>y</mi></mfrac><annotation encoding='application/x-tex'>\\frac{x}{y}</annotation></semantics></math>"
+  val access=object:com.nanless.paperdigest.data.DocumentImageAccess{
+   override val bodyHTML=streamed
+   override val cspImageSource="https://reader.invalid/article-images/test-only/"
+   override fun open(url:String,isMainFrame:Boolean,method:String):Pair<String,java.io.InputStream>?=null
+  }
+  val article=Article("test:stream-css","<p>原储存HTML</p>","科学文字","https://example.invalid/source","https://example.invalid/guide","b".repeat(64),"2026-11-03",displayImages=access)
+  val before=article.json().toString();var readable:String?=null
+  val display=ResearchRenderer.renderArticleForDisplay(context,article){readable=it}
+  val initial=Jsoup.parseBodyFragment(requireNotNull(readable));assertTrue(initial.select("style,[style]").isEmpty());assertEquals(1,initial.select("math").size)
+  val doc=Jsoup.parseBodyFragment(display)
+  assertFalse(display.contains("--untrusted-stream-css"));assertFalse(doc.getElementById("science")!!.hasAttr("style"))
+  assertEquals("科学文字",doc.getElementById("science")!!.text());assertEquals(1,doc.select("math").size)
+  assertFalse(doc.select(".katex-html").isEmpty());assertTrue(display.contains("data:font/woff2;base64,"));assertEquals(1,doc.select("style").size)
+  assertEquals(before,article.json().toString());assertEquals(streamed,access.bodyHTML)
+ }
+
  private fun original640PngURI():String {
   // Keep the exact original pixel generator, but retire its large scratch buffers before render begins.
   val pixels=IntArray(640*640);val random=java.util.Random(17);for(i in pixels.indices)pixels[i]=0xff000000.toInt() or random.nextInt(0x1000000)

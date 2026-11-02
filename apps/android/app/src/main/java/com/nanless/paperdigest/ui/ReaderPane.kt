@@ -103,6 +103,8 @@ import org.json.JSONObject
     Box{
      IconButton({export=true}){Icon(Icons.Outlined.MoreVert,"论文操作与导出")}
      DropdownMenu(export,{export=false}){
+      ReaderTextSizeMenu(state.settings.optInt("font",18)){size->export=false;action("settings.save",obj("changes" to obj("font" to size)))}
+      HorizontalDivider()
       DropdownMenuItem({Text("论文完整信息与来源…")},{export=false;showPaperInfo=true})
       DropdownMenuItem({Text(if(paper.id in favoriteIDs)"取消收藏" else "收藏这篇论文")},{export=false;toggleList("favorites")},enabled=!favoriteView.readOnly)
       if(favoriteView.readOnly)DropdownMenuItem({Text("收藏编辑需要更新版本")},{},enabled=false)

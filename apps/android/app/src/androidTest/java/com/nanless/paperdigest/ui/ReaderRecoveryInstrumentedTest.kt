@@ -51,14 +51,18 @@ class ReaderRecoveryInstrumentedTest {
    assertTrue("Actual WebView visual state must be ready",painted.await(5,java.util.concurrent.TimeUnit.SECONDS))
    // Privileged read-only inspection after the original JS-disabled document loaded.
    val inspected=java.util.concurrent.CountDownLatch(1);var result:String?=null
-   instrument.runOnMainSync{assertFalse(view.settings.javaScriptEnabled);view.settings.javaScriptEnabled=true;view.evaluateJavascript("JSON.stringify({font:getComputedStyle(document.body).fontSize,padding:getComputedStyle(document.body).padding,head:document.head.innerHTML,table:document.querySelector('table')?{width:document.querySelector('table').clientWidth,scroll:document.querySelector('table').scrollWidth,whiteSpace:getComputedStyle(document.querySelector('th')||document.querySelector('td')).whiteSpace}:null})"){result=it;view.settings.javaScriptEnabled=false;inspected.countDown()}}
+   instrument.runOnMainSync{assertFalse(view.settings.javaScriptEnabled);view.settings.javaScriptEnabled=true;view.evaluateJavascript("JSON.stringify({font:getComputedStyle(document.body).fontSize,heading:document.querySelector('h1')?getComputedStyle(document.querySelector('h1')).fontSize:null,paragraph:document.querySelector('p')?getComputedStyle(document.querySelector('p')).fontSize:null,lineHeight:getComputedStyle(document.body).lineHeight,padding:getComputedStyle(document.body).padding,head:document.head.innerHTML,table:document.querySelector('table')?{width:document.querySelector('table').clientWidth,scroll:document.querySelector('table').scrollWidth,whiteSpace:getComputedStyle(document.querySelector('th')||document.querySelector('td')).whiteSpace}:null})"){result=it;view.settings.javaScriptEnabled=false;inspected.countDown()}}
    assertTrue(inspected.await(5,java.util.concurrent.TimeUnit.SECONDS))
    java.io.File(instrument.targetContext.getExternalFilesDir("qa"),"reader-review/$name.json").also{it.parentFile!!.mkdirs();it.writeText(result?:"null")}
    if(name.startsWith("phone-font")){
     val actual=org.json.JSONObject(org.json.JSONArray("[${requireNotNull(result)}]").getString(0));val table=actual.getJSONObject("table")
     assertEquals("Original column headings must not be collapsed into vertical fragments","nowrap",table.getString("whiteSpace"))
     assertTrue("Wide scientific table must scroll independently",table.getInt("scroll")>table.getInt("width"))
-    assertEquals("Phone body padding", "0px 14px",actual.getString("padding"))
+    assertEquals("Phone body padding", "0px 10px",actual.getString("padding"))
+    assertEquals("Compact body remains adjustable with the system font scale",if(name.contains("-100-"))"14px" else "28px",actual.getString("font"))
+    assertEquals("Paragraph must inherit the compact body size",actual.getString("font"),actual.getString("paragraph"))
+    val heading=actual.getString("heading").removeSuffix("px").toFloat()
+    assertTrue("Title must not dominate the phone viewport",heading<=(if(name.contains("-100-"))18.01f else 36.01f))
    }
   }
   val bitmap=requireNotNull(instrument.uiAutomation.takeScreenshot()){"系统未返回实际屏幕"}
@@ -142,6 +146,22 @@ class ReaderRecoveryInstrumentedTest {
   instrument.runOnMainSync{assertSame(owner,view.tag);assertEquals(200,view.settings.textZoom);assertFalse(view.settings.javaScriptEnabled)}
   capture("phone-font-input-200-wide-table",view)
   println("PD_READER_FONT_SCOPE actual WebView pixels with LocalDensity fontScale inputs 1.0/2.0; no global Android font setting changed; source document unchanged")
+ }
+ @Test fun readingMenuShrinksAndRestoresWithoutReplacingDocument(){
+  var font by mutableIntStateOf(18)
+  val marker="阅读中直接调整文字"
+  compose.setContent{MaterialTheme{Column{ReaderTextSizeMenu(font){font=it};Box(Modifier.weight(1f)){StaticDocument("<h1>$marker</h1><p>同一原文继续阅读，不重新下载正文。</p>",font)}}}}
+  val view=ready(marker);lateinit var owner:Any
+  instrument.runOnMainSync{owner=view.tag;assertEquals(100,view.settings.textZoom)}
+  compose.onNodeWithText("缩小文字").performClick();compose.waitForIdle()
+  instrument.runOnMainSync{assertSame(owner,view.tag);assertEquals(88,view.settings.textZoom)}
+  compose.onNodeWithText("缩小文字").performClick();compose.waitForIdle()
+  compose.onNodeWithText("缩小文字").assertIsNotEnabled()
+  instrument.runOnMainSync{assertSame(owner,view.tag);assertEquals(77,view.settings.textZoom)}
+  compose.onNodeWithText("放大文字").performClick();compose.waitForIdle()
+  instrument.runOnMainSync{assertSame(owner,view.tag);assertEquals(88,view.settings.textZoom)}
+  compose.onNodeWithText("恢复默认文字大小").performClick();compose.waitForIdle()
+  instrument.runOnMainSync{assertSame(owner,view.tag);assertEquals(100,view.settings.textZoom);assertFalse(view.settings.javaScriptEnabled)}
  }
  @Test fun isolatedFormulaRendererLossReleasesOnceAndCompletesFailure()=runBlocking {
   val created=CompletableDeferred<HeldWeb>();lateinit var client:android.webkit.WebViewClient;lateinit var parent:android.widget.FrameLayout

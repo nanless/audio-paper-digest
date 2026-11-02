@@ -16,7 +16,7 @@ internal fun readerGeometry(widthDp:Float,heightDp:Float,fontScale:Float,pdfAvai
  val minimum=if(canSplit)maxOf(38f,100f*pane/usable)else 38f
  val maximum=if(canSplit)minOf(62f,100f*(1f-pane/usable))else 62f
  val preferred=preferredSplit.takeIf{it.isFinite()}?:46f
- return ReaderGeometry(canSplit,height<480f||width<360f||scale>=1.5f,preferred.coerceIn(minimum,maximum),minimum,maximum,pane)
+ return ReaderGeometry(canSplit,height<480f||width<600f||scale>=1.5f,preferred.coerceIn(minimum,maximum),minimum,maximum,pane)
 }
 
 internal data class ViewportRegion(val left:Float,val top:Float,val right:Float,val bottom:Float){
