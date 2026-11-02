@@ -11052,10 +11052,16 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
                 } : null
             };
             delete manifest.contracts.readerTargetOrdinalPatch;
+            delete manifest.stages.apiReaderArticle.ordinalPatchContract;
+            delete manifest.stages.apiReaderArticle.ordinalPatchCompilations;
+            delete manifest.stages.apiReaderArticle.ordinalCompletionProof;
         } else {
             const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
             manifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
         }
+    }
+    if (manifest.stages.apiReaderArticle.operatorProvenance?.contract === 'daily-reader-operator-correction-v1') {
+        require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
     }
     return paper;
 }
@@ -19350,10 +19356,16 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                         } : null
                     };
                     delete analysisManifest.contracts.readerTargetOrdinalPatch;
+                    delete analysisManifest.stages.apiReaderArticle.ordinalPatchContract;
+                    delete analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations;
+                    delete analysisManifest.stages.apiReaderArticle.ordinalCompletionProof;
                 } else {
                     const proof = require('./lib/reader-target-ordinal-patch').sealCompletion(paper, readerResult);
                     analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
                 }
+            }
+            if (analysisManifest.stages.apiReaderArticle.operatorProvenance?.contract === 'daily-reader-operator-correction-v1') {
+                require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
             }
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             transferDeferredReaderCandidate(generatedReaderResult, paper);

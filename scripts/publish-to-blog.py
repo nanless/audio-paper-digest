@@ -11533,6 +11533,9 @@ def _has_source_bound_reader_patch_completion(paper):
     manifest = paper.get('analysisManifest') or {}
     contracts = manifest.get('contracts') or {}
     stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
+    if (stage.get('operatorProvenance') or {}).get('contract') == 'daily-reader-operator-correction-v1' \
+            or (stage.get('ordinalPatchHistory') or {}).get('reason') == 'operator-correction-supersedes-ordinal-completion':
+        return True
     if 'apiReaderFactFeedbackCorrection' in paper \
             or 'factReviewClaimLocationCorrection' in stage \
             or any(key in contracts for key in ('readerTargetOrdinalPatch', 'readerVersionMetadataRecovery')) \
@@ -11557,6 +11560,20 @@ def _has_source_bound_reader_patch_completion(paper):
     if not re.fullmatch(r'\d{4}\.\d{4,5}', paper_id):
         return True  # Actual daily records cannot hide their index by dropping ID.
     attempts = run_dir / 'reader-attempts'
+    # The retained paid candidate cannot be hidden by removing stage markers.
+    # This disables caching only; the Node bridge reopens and proves its bytes.
+    for candidate in attempts.glob('*.json'):
+        if not re.fullmatch(r'[a-f0-9]{64}\.json', candidate.name):
+            continue
+        try:
+            value = json.loads(_daily_fresh_read_private_file(candidate, '原付费Reader索引', 20 * 1024 * 1024))
+        except (OSError, ValueError, PublishDataValidationError):
+            return True
+        identity = value.get('identity') or {}
+        if re.sub(r'v\d+$', '', str(identity.get('paperId') or '')) == paper_id \
+                and identity.get('sourceSha256') == paper.get('sourceSha256') \
+                and (value.get('payload') or {}).get('ordinalPatchCompilations'):
+            return True
     metadata_directory = attempts / 'version-metadata-completion-index'
     metadata_index = metadata_directory / (paper_id + '.json')
     ordinal_index = attempts / 'ordinal-completions'
@@ -14547,6 +14564,7 @@ def generation_template_fingerprint():
         'lib/reader-tables.js': script_dir / 'lib' / 'reader-tables.js',
         'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
         'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
+        'lib/daily-reader-operator-correction.js': script_dir / 'lib' / 'daily-reader-operator-correction.js',
         'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
@@ -14715,6 +14733,7 @@ def review_protocol_fingerprint():
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
         'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
         'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
+        'lib/daily-reader-operator-correction.js': script_dir / 'lib' / 'daily-reader-operator-correction.js',
         'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
         'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
         'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',

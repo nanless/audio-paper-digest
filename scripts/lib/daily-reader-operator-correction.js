@@ -174,5 +174,107 @@ function execution(proof) {
     return proof ? {executionKind:'operator',operatorProvenance:proof,newReaderApiRequests:0,
         model:'operator-local',protocol:'local_operator'} : {};
 }
-module.exports={CONTRACT,withCorrections,current,execution,replay,isCurrentFailedPaper,largeBatchCorrectionLimit,
+// A retained paid candidate is an on-disk hint even if a caller strips all
+// operator JSON fields. It never grants completion or another request.
+function hasRetainedOrdinalCandidate(paper, directory) {
+    if (!fs.existsSync(directory)) return false;
+    return fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).some(name => {
+        const checked = require('./reader-repair').readFailedCandidateEnvelope(directory, null, path.join(directory, name));
+        const original = checked?.envelope;
+        return id(original?.identity) === id(paper) && original.identity.sourceSha256 === paper.sourceSha256
+            && original.identity.freshAnalysis?.runId === paper.freshRewriteProvenance?.runId
+            && original.identity.freshAnalysis?.sourceOnly === true
+            && original.payload.ordinalPatchCompilations?.length > 0;
+    });
+}
+function validateSavedCompletion(paper) {
+    const paperSha256 = require('./daily-fresh-source-plan').stableHash(paper);
+    const stage = paper?.analysisManifest?.stages?.apiReaderArticle, proof = stage?.operatorProvenance;
+    const fail = message => { throw new Error(`Daily operator completion refused: ${message}`); };
+    if (stage?.status !== 'complete' || stage.executionKind !== 'operator' || stage.model !== 'operator-local'
+        || stage.protocol !== 'local_operator' || stage.newReaderApiRequests !== 0
+        || proof?.contract !== 'daily-reader-operator-correction-v1' || proof.executionKind !== 'operator'
+        || proof.newReaderApiRequests !== 0 || proof.paperId !== id(paper)
+        || !/^[a-f0-9]{64}$/.test(proof.currentInputIdentitySha256 || '')) fail('actual local execution/provenance missing');
+    const daily = require('./daily-fresh-source-plan'), fresh = require('./fresh-analysis-context');
+    const runDir = path.join(require('../config').FILES.dailyFreshSourceRunsDir, proof.runId || '');
+    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(proof.runId || '')) fail('daily run differs');
+    const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
+    const snapshots = [];
+    const take = (file, digest) => { within(file, root); const snapshot = read(file);
+        if (snapshot.sha256 !== digest) fail('original file SHA differs'); snapshots.push(snapshot); return snapshot.value; };
+    const run = read(path.join(runDir, 'run.json'));
+    snapshots.push(run);
+    const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({ ...run.value, runDir }));
+    if (proof.runId !== plan.runId || proof.batchDate !== plan.batchDate || !daily.isPaperBoundToPlan(paper, plan)) fail('actual daily plan differs');
+    const manifest = take(proof.manifestFile, proof.manifestSha256);
+    const record = take(proof.correctionFile, proof.correctionSha256);
+    if (manifest.contract !== CONTRACT || manifest.runId !== plan.runId || manifest.batchDate !== plan.batchDate
+        || typeof manifest.authorization !== 'string' || !manifest.authorization.trim() || manifest.authorization !== proof.authorization
+        || !Array.isArray(manifest.correctionFiles) || !manifest.correctionFiles.length || manifest.correctionFiles.length > 15
+        || new Set(manifest.correctionFiles.map(file => path.resolve(file))).size !== manifest.correctionFiles.length
+        || !manifest.correctionFiles.some(file => path.resolve(file) === path.resolve(proof.correctionFile))
+        || record.runId !== plan.runId || record.batchDate !== plan.batchDate || id(record) !== id(paper)
+        || record.baselineCandidateFile !== proof.originalCandidateFile
+        || record.baselineCandidateEnvelopeSha256 !== proof.originalCandidateEnvelopeSha256
+        || record.baselineDraftSha256 !== proof.beforeDraftSha256) fail('original manifest/member/patch binding differs');
+    within(record.baselineCandidateFile, plan.readerAttemptsDir);
+    if (path.dirname(path.resolve(record.baselineCandidateFile)) !== path.resolve(plan.readerAttemptsDir)
+        || !/^[a-f0-9]{64}\.json$/.test(path.basename(record.baselineCandidateFile))) fail('original active candidate path differs');
+    const original = take(record.baselineCandidateFile, record.baselineCandidateEnvelopeSha256);
+    const checked = require('./reader-repair').readFailedCandidateEnvelope(plan.readerAttemptsDir, null, record.baselineCandidateFile);
+    if (!checked || !isDeepStrictEqual(checked.envelope, original)
+        || require('./reader-repair').hashDraft(original.identity) !== proof.originalIdentitySha256
+        || id(original.identity) !== id(paper) || original.identity.freshAnalysis?.sourceOnly !== true) fail('paid candidate identity differs');
+    const source = daily.readDailyFreshSource(plan, paper), descriptor = source.freshSourceDescriptor;
+    if (!isDeepStrictEqual(record.sourceDescriptor, descriptor) || !isDeepStrictEqual(proof.sourceDescriptor, descriptor)
+        || original.identity.sourceSha256 !== descriptor.sourceSha256
+        || ['runId', 'sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256', 'sourceGeneration', 'sourceManifestSha256']
+            .some(key => original.identity.freshAnalysis?.[key] !== descriptor[key])) fail('four sealed sources differ');
+    const payload = original.payload, repair = require('./reader-repair');
+    for (const [key, field] of [['attempts', 'retainedAttempts'], ['fullAttempts', 'retainedFullAttempts'], ['noProgress', 'retainedNoProgress']]) {
+        if (!Number.isSafeInteger(payload[key]) || payload[key] < 0 || payload[key] !== proof[field]) fail('retained counters differ');
+    }
+    if (stage.attempts !== payload.attempts || (stage.fullAttempts !== undefined && stage.fullAttempts !== payload.fullAttempts)
+        || (stage.transportFailures || 0) !== (payload.transportFailures || 0)
+        || stage.imageEvidenceSha256 !== daily.stableHash(payload.imageEvidence)
+        || stage.modelImagePreflightEvidenceSha256 !== repair.hashDraft(payload.ephemeralImageEvidence)) fail('paid request/image ledger differs');
+    const records = payload.ordinalPatchCompilations || [], history = stage.ordinalPatchHistory;
+    if (records.length && (history?.contract !== 'reader-target-ordinal-patch-v1'
+        || history.reason !== 'operator-correction-supersedes-ordinal-completion'
+        || !isDeepStrictEqual(history.compilations, records))) fail('original ordinal compilation history differs');
+    const draft = replay(record, original);
+    if (repair.hashDraft(draft) !== proof.afterDraftSha256) fail('bounded patch endpoint differs');
+    require('./analysis-stop-control').withModelRequestsForbidden(() => daily.withDailyFreshAnalysisContext(plan,
+        () => fresh.withFreshPaperContext(paper, () => {
+            let lastPaid;
+            for (const entry of records) lastPaid = require('./reader-target-ordinal-patch').replay({ paper, identity: entry.identity,
+                directory: plan.readerAttemptsDir, requestId: entry.requestId, pins: entry.pins });
+            const deep = require('../deep-analyzer');
+            if (records.length && (!lastPaid || !isDeepStrictEqual(lastPaid.after, payload.draft)
+                || repair.hashDraft(lastPaid.after) !== record.baselineDraftSha256)) fail('last paid compilation differs from the original candidate');
+            const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
+                arxivId: paper.arxivId, requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
+                requireSourceBindings: true, allowDeterministicQuoteRepair: true, allowDeterministicUnsupportedClaimPruning: true,
+                enforceResourceAvailabilityClaims: true, verifiedResourceIdentity: paper.apiReaderResources,
+                sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+                availableFigureOrdinals: payload.imageEvidence.filter(image => image.kind === 'figure' && image.status === 'ready').map(image => image.ordinal)
+            });
+            for (const figure of paper.apiReaderFigures || []) {
+                const image = payload.imageEvidence.find(item => item.kind === 'figure' && item.status === 'ready' && item.ordinal === figure.ordinal);
+                if (!image || image.url !== figure.url || image.sha256 !== figure.assetSha256 || image.sourceSha256 !== image.sha256) fail('paid figure/source bytes differ');
+            }
+            const final = deep.replayApiReaderFinalDisplay(parsed, source, paper.apiReaderFigures, paper.arxivId);
+            if (final.article !== paper.apiReaderArticle || !isDeepStrictEqual(final.plan, paper.apiReaderPlan)
+                || !isDeepStrictEqual(final.figures, paper.apiReaderFigures)
+                || sha(final.article) !== paper.apiReaderArticleSha256 || daily.stableHash(final.plan) !== paper.apiReaderPlanSha256
+                || stage.articleSha256 !== paper.apiReaderArticleSha256 || stage.planSha256 !== paper.apiReaderPlanSha256
+                || stage.figuresSha256 !== daily.stableHash(paper.apiReaderFigures)) fail('normal parser/final article/plan/figures differ');
+        })));
+    for (const snapshot of snapshots) unchanged(snapshot);
+    if (!isDeepStrictEqual(source, daily.readDailyFreshSource(plan, paper))) fail('sealed source changed during replay');
+    if (daily.stableHash(paper) !== paperSha256) fail('paper/stage changed during read-only replay');
+    return true;
+}
+module.exports={CONTRACT,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
     inspectDailyOperatorTail,assertCompleteOperatorTail};

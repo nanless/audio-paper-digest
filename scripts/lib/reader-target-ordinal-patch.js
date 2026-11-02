@@ -457,6 +457,21 @@ function readVerifiedCompletion(paper){
     if(!actualDaily){if(marked)fail('ordinary completion cannot leave canonical daily source','run');return null;}
     if(!/^\d{4}\.\d{4,5}$/.test(canonical(paper)))fail('actual daily source lacks canonical paper ID','run');
     const attempts=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId,'reader-attempts'),dir=completionDirectory(attempts),files=completionFiles(dir,paper);
+    const operator=require('./daily-reader-operator-correction'),history=stage?.ordinalPatchHistory;
+    const operatorCompletion=stage?.operatorProvenance?.contract==='daily-reader-operator-correction-v1'
+        ||history?.reason==='operator-correction-supersedes-ordinal-completion'
+        ||(!files.length&&operator.hasRetainedOrdinalCandidate(paper,attempts));
+    if(operatorCompletion){
+        if(marked)fail('operator completion retains ordinary completion markers','run');
+        const ref=history?.previousCompletionProof;
+        if(files.length){
+            if(files.some((name,index)=>Number(name.slice(-13,-5))!==index+1)||!ref||!ref.path||!ref.sha256
+                ||path.resolve(ref.path)!==path.join(dir,files.at(-1))||!read(ref.path,ref.sha256).value)
+                fail('superseded completion pointer differs','run');
+        }else if(ref!==null&&ref!==undefined)fail('operator claims absent ordinary completion','run');
+        operator.validateSavedCompletion(paper);
+        return null;
+    }
     if(!files.length){if(marked)fail('completion marker lacks stable source index','run');return null;}
     // Lookup is canonical paper in the actual source run, never current article
     // SHA. Removing both marker/proof and changing the article cannot bypass it.
@@ -483,7 +498,6 @@ function readVerifiedCompletion(paper){
     }
     // 人工修正改写正文后，旧完成证明只对旧稿成立；它必须仍指向最新完成文件，
     // 由 operatorProvenance 接替当前冷核。删掉指针或改文件仍按原规则阻断。
-    const history=stage?.ordinalPatchHistory;
     if(!marked&&history?.reason==='operator-correction-supersedes-ordinal-completion'){
         const ref=history.previousCompletionProof;
         if(!ref||!ref.path||!ref.sha256||path.resolve(ref.path)!==path.join(dir,files.at(-1))
