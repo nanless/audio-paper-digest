@@ -7020,10 +7020,11 @@ def _normalize_api_reader_explicit_symbol_projection(value):
             output = output[:start] + visible + output[index + len(match[0]):]
 
     def arrow(match):
-        if continuation(match.string, match.end()) or match[1] != ('↑' if match[2] == 'uparrow' else '↓'):
+        command = match[2] or match[3]
+        if continuation(match.string, match.end()) or match[1] != ('↑' if command == 'uparrow' else '↓'):
             return match[0]
         return match[1]
-    output = re.sub(r'([↑↓])\\(uparrow|downarrow)(?![A-Za-z])', arrow, output)
+    output = re.sub(r'([↑↓])(?:\\(uparrow|downarrow)(?![A-Za-z])|\{\\(uparrow|downarrow)\}(?=[ \t]*(?:[|\n]|$)))', arrow, output)
     return re.sub(r'([+/])\\;\1\\;', r'\1', output)
 
 
@@ -7079,6 +7080,13 @@ def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
         ) else match[0],
         value,
     )
+    if explicit_cells:
+        # Match only the whole original cell's explicit operator duplicate.
+        # Preserve the literal s/ms suffix; never infer a unit from a caption.
+        value = re.sub(
+            rf'(^|[|\n])([ \t]*)({scalar})[ \t]*±[ \t]*\\pm[ \t]*({uncertainty})([ \t]+)(ms|s)(?=[ \t]*(?:[|\n]|$))',
+            lambda match: match[1] + match[2] + match[3] + ' ± ' + match[4] + match[5] + match[6], value,
+        )
     # 与 Node 相同：同一均值与误差之间的 ± 和明确 \pm 是同一运算符。
     def mean_uncertainty(match):
         tail = match.string[match.end():].lstrip()
@@ -7939,8 +7947,76 @@ def _reader_html_blank_span_keys(paper, article, rendered_tables):
         return set()
 
 
+def _verify_reader_paired_dom_bindings(paper):
+    """Reject-only actual-source replay for complete paired-arrow/unit DOM views."""
+    bindings = [b for b in (paper.get('apiReaderPlan') or {}).get('tableBindings', [])
+                if isinstance(b, dict) and b.get('sourceType') == 'artifact_table'
+                and not b.get('pdfCellConfirmation') and not b.get('sealedPdfTableEvidence')]
+    proof = paper.get('freshRewriteProvenance') or {}
+    if not bindings or proof.get('contract') != 'fresh-source-analysis-v1':
+        return
+    run_id = proof.get('runId')
+    if proof != (paper.get('analysisManifest') or {}).get('freshRewriteProvenance') or not isinstance(run_id, str) \
+            or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('配对DOM显示缺少真实日更来源身份。')
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    # Component selection only: historical publication keeps its own complete
+    # source route; the daily top-level plan gate still requires its real run.
+    run_file = run_dir / 'run.json'
+    if not run_file.exists() and not run_file.is_symlink():
+        return
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, '配对DOM来源根目录')
+    _daily_fresh_safe_directory(run_dir, '配对DOM运行目录')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    _daily_fresh_read_bundle_source_identity(run_dir, paper_id, proof, paper)
+    _, runtime = _daily_fresh_read_canonical_json(run_dir / 'sources' / paper_id / 'generation-000001' / 'source-runtime.json',
+        '配对DOM结构化来源', 64 * 1024 * 1024)
+    artifacts = runtime['structuredArtifacts']
+    def has_pair(text):
+        return re.search(r'[↑↓]\{\\(?:uparrow|downarrow)\}', text) or re.fullmatch(
+            r'[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[ \t]*±[ \t]*\\pm[ \t]*(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[ \t]+(?:ms|s)[ \t]*', text)
+    if not any(has_pair(c['text']) for t in artifacts['tables'] for c in t['cells']):
+        return
+    source = paper['analysisManifest']['sourceAcquisition']
+    payload = _reader_source_payload_artifacts(paper['apiReaderPlan'].get('structuredSourcePayload'),
+        source['structuredArtifactsSha256'], paper['sourceSha256'])
+    if payload != {key: value for key, value in artifacts.items() if key != 'payloadSha256'}:
+        raise PublishDataValidationError('配对DOM显示与完整封存结构化来源不一致。')
+    displayed = _api_reader_markdown_tables(paper.get('apiReaderArticle') or '')
+    for binding in bindings:
+        originals = [t for t in artifacts['tables'] if t.get('ordinal') == binding.get('sourceTableOrdinal')]
+        index = binding.get('tableIndex')
+        if len(originals) != 1 or type(index) is not int or index < 1 or index > len(displayed):
+            raise PublishDataValidationError('配对DOM显示不能定位完整原表。')
+        table = originals[0]
+        view = displayed[index - 1]
+        matrix = [view['header'], *view['rows']]
+        cells = binding.get('cellBindings')
+        if table.get('recoveryStatus') != 'complete' or binding.get('sourceTableDomSha256') != table.get('sourceDomSha256') \
+                or binding.get('sourceQuotes') != [] or len(matrix) != len(table['matrix']) \
+                or any(len(row) != len(table['matrix'][r]) for r, row in enumerate(matrix)) \
+                or not isinstance(cells, list) or len(cells) != sum(map(len, table['matrix'])):
+            raise PublishDataValidationError('配对DOM显示必须保留全部原表行列。')
+        seen = set()
+        for cell in cells:
+            r, c = cell.get('sourceRow'), cell.get('sourceColumn')
+            if type(r) is not int or type(c) is not int or r < 0 or c < 0 or (r, c) in seen \
+                    or r >= len(table['matrix']) or c >= len(table['matrix'][r]):
+                raise PublishDataValidationError('配对DOM显示的原坐标不完整。')
+            owners = [item for item in table['cells'] if item['row'] <= r < item['row'] + item['rowspan']
+                      and item['column'] <= c < item['column'] + item['colspan']]
+            if len(owners) != 1 or cell.get('renderedRow') != r or cell.get('renderedColumn') != c \
+                    or table['matrix'][r][c] != owners[0]['text'] or cell.get('sourceText') != owners[0]['text'] \
+                    or cell.get('sourceDomSha256') != owners[0]['sourceDomSha256'] \
+                    or cell.get('renderedText') != _normalize_api_reader_display_artifacts(owners[0]['text']) \
+                    or matrix[r][c] != cell.get('renderedText'):
+                raise PublishDataValidationError('配对DOM显示的原文、数值单位、坐标或DOM身份不一致。')
+            seen.add((r, c))
+
+
 def _verify_reader_scientific_dom_bindings(paper):
     """New scientific displays retain the actual complete sealed DOM grid."""
+    _verify_reader_paired_dom_bindings(paper)
     displayed = _api_reader_markdown_tables(paper.get('apiReaderArticle') or '')
     marked = [binding for binding in (paper.get('apiReaderPlan') or {}).get('tableBindings', [])
               if isinstance(binding, dict) and binding.get('sourceType') == 'artifact_table'
@@ -11287,7 +11363,8 @@ def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
     return artifacts
 
 
-def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
+def _daily_fresh_read_bundle_source_identity(run_dir, paper_id, proof, paper):
+    """Read/authenticate actual four-source bytes; never grants publication status."""
     source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
     _daily_fresh_safe_directory(run_dir / 'sources', 'daily sealed source 根目录')
     _daily_fresh_safe_directory(run_dir / 'sources' / paper_id, f'{paper_id} source 目录')
@@ -11385,11 +11462,7 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
             != proof.get('sourceSha256')
     ):
         raise PublishDataValidationError(f'{paper_id} daily fresh provenance 未闭合到 canonical/analysis manifest')
-    _validate_current_model_text_reuse_for_publish(
-        paper, {**details, 'title': runtime.get('title'), 'sourceVersion': runtime.get('sourceVersion')}, paper_id,
-        sealed_bundle_root=run_dir / 'sources',
-    )
-    return {'files': tuple(
+    files = {'files': tuple(
         (source_dir / name, len(raw), _daily_fresh_sha256(raw), maximum)
         for name, raw, maximum in (
             ('source.txt', text, 64 * 1024 * 1024),
@@ -11397,6 +11470,15 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
             ('source-runtime.json', runtime_bytes, 64 * 1024 * 1024),
             ('source-manifest.json', manifest_bytes, 1024 * 1024),
         ))}
+    return files, {**details, 'title': runtime.get('title'), 'sourceVersion': runtime.get('sourceVersion')}
+
+
+def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
+    files, details = _daily_fresh_read_bundle_source_identity(run_dir, paper_id, proof, paper)
+    _validate_current_model_text_reuse_for_publish(
+        paper, details, paper_id, sealed_bundle_root=run_dir / 'sources',
+    )
+    return files
 
 
 

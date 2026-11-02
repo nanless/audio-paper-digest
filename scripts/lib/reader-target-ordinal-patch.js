@@ -472,28 +472,59 @@ function readVerifiedCompletion(paper){
         operator.validateSavedCompletion(paper);
         return null;
     }
-    if(!files.length){if(marked)fail('completion marker lacks stable source index','run');return null;}
+    if(!files.length){
+        if(marked||paper?.readerRevisionHistory?.completionProof)fail('completion marker lacks stable source index','run');
+        return null;
+    }
     // Lookup is canonical paper in the actual source run, never current article
     // SHA. Removing both marker/proof and changing the article cannot bypass it.
     if(files.some((name,index)=>Number(name.slice(-13,-5))!==index+1))fail('completion history has gaps','run');
     // 显式正文重做会先把上一次完成证明写进 readerRevisionHistory；该证明必须
     // 仍指向最新完成文件且字节相符，才承认它已被本次重做接替。
     const revision=paper?.readerRevisionHistory;
+    function verifyRevisionPointer(){
+        if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1)))fail('revision completion pointer differs','run');
+        const saved=read(revision.completionProof.path,revision.completionProof.sha256).value;
+        if(saved.contract!==COMPILATION_CONTRACT||saved.kind!=='normal-final-completion'
+            ||saved.paperId!==canonical(paper)||saved.sequence!==files.length
+            ||!isDeepStrictEqual(saved.freshRewriteProvenance,prov)
+            ||revision.previousArticleSha256!==saved.articleSha256
+            ||revision.previousPlanSha256!==saved.planSha256)fail('revision completion history differs','run');
+        const readerFeedback=stage?.contentMode==='reader-source-signed-revision-v1'
+            &&stage?.factReview?.contract===require('./daily-fact-review').CONTRACT;
+        if(revision.reason==='stage-invalidated'||readerFeedback){
+            if(readerFeedback){
+                const pendingModule=require('./pending-fact-feedback'),feedbackModule=require('./saved-fact-feedback');
+                let bound;
+                if(Object.hasOwn(paper,pendingModule.FIELD))bound=pendingModule.read(paper);
+                else{
+                    const daily=require('./daily-fresh-source-plan'),facts=require('./daily-fact-review');
+                    const plan=daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({...actualRun,runDir:path.dirname(runFile)}));
+                    const recovered=feedbackModule.readSavedFeedback(paper,plan);
+                    const feedback=recovered?.readerFeedback||recovered?.feedback;
+                    if(feedback)bound=facts.validateFeedback(feedback,plan,paper);
+                }
+                if(!bound||!feedbackModule.readerOnlyFeedback(bound.feedback)
+                    ||!isDeepStrictEqual(bound.proof,stage.factReview))fail('revision Reader feedback differs','run');
+            }
+            if(!isDeepStrictEqual(revision.previousOrdinalPatchCompilations,saved.records))
+                fail('revision completion history differs','run');
+        }
+        savedSourceScope(paper,saved.identity,attempts);
+    }
     if(!stage){
         // 阶段被本次输入指纹失效清掉、正文即将重新生成：只要重做历史仍指向最新完成
         // 文件，就承认旧完成证明已被这次重做接替，不把“阶段暂缺”当成手工删标记。
         if(revision?.contract==='daily-reader-revision-history-v1'
             &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
-            if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1))
-                ||!read(revision.completionProof.path,revision.completionProof.sha256).value)fail('revision completion pointer differs','run');
+            verifyRevisionPointer();
             return null;
         }
         fail('completion index/marker removed','run');
     }
     if(!marked&&revision?.contract==='daily-reader-revision-history-v1'
         &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
-        if(path.resolve(revision.completionProof.path)!==path.join(dir,files.at(-1))
-            ||!read(revision.completionProof.path,revision.completionProof.sha256).value)fail('revision completion pointer differs','run');
+        verifyRevisionPointer();
         return null;
     }
     // 人工修正改写正文后，旧完成证明只对旧稿成立；它必须仍指向最新完成文件，

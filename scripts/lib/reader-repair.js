@@ -25,6 +25,7 @@ const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', '
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
     'readerRecoveryEpochSha256']);
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const compiledReaderFactIssues = new WeakMap();
 const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 // 按 Unicode 码点比较，结果与 Python 的 sorted() 一致。
@@ -1401,7 +1402,8 @@ function collectDraftIssues(draft, parserError, options = {}) {
             && issue.requiredCount === parserError.requiredCount
             && issue.actualCount === parserError.actualCount);
     const preciseFactError = parserError?.code === 'READER_VERIFIED_FACT_CLAIM'
-        && parserIssues.length > 0 && parserIssues.every(issue => issue?.code === 'reader_verified_fact_claim');
+        && parserIssues.length > 0 && parserIssues.every(issue =>
+            ['reader_verified_fact_claim', 'reader_verified_compiled_table_claim'].includes(issue?.code));
     if (parserError && !hasSameCountIssue && !languageError && !preciseFactError) {
         if (orderError.ignoreMessageForRepair) {
             issues.push(orderError.summary);
@@ -2190,6 +2192,67 @@ function verifiedReaderFactIssues(draft, claims) {
     return issues;
 }
 
+// Full parsing has already authenticated source cells and rendered every table.
+// This only locates a rejected rendered table in its unchanged raw marker slot;
+// it neither repairs source characters nor confers PDF/qualification authority.
+function verifiedCompiledReaderTableFactIssues(draft, claims, parsed) {
+    const deep = require('../deep-analyzer');
+    const proof = deep.readParsedReaderFactContext(parsed, draft);
+    if (!proof || !Array.isArray(draft?.tableBindings)) return [];
+    const { extractMarkdownTables } = require('../analysis-contract');
+    const locations = locateReaderDraftTables(draft);
+    if (locations.length !== draft.tableBindings.length
+        || draft.tableBindings.some((binding, index) => binding?.tableIndex !== index + 1)) return [];
+    let compiled;
+    try {
+        compiled = require('./reader-table-pdf-evidence').withArtifacts(proof.structuredArtifacts,
+            proof.paperId.replace(/^arxiv:/, ''), () => require('./reader-tables').compileReaderTableSelections(
+                draft.sections, draft.tableBindings, proof.structuredArtifacts));
+    } catch (_) { return []; }
+    const rendered = extractMarkdownTables(parsed.article);
+    const compiledTables = compiled.sections.flatMap(section => extractMarkdownTables(section.body));
+    if (rendered.length !== locations.length || compiledTables.length !== rendered.length
+        || !Array.isArray(parsed.plan?.tableBindings)
+        || parsed.plan.tableBindings.length !== rendered.length) return [];
+    // Refuse reorder/prune/normalization ambiguities instead of guessing indexes.
+    if (rendered.some((table, index) => table.markdown !== compiledTables[index].markdown)) return [];
+    const issues = [];
+    for (const claim of claims || []) {
+        if (typeof claim !== 'string' || claim.length < 12 || claim.length > 3000
+            || parsed.article.split(claim).length !== 2) continue;
+        const claimTables = extractMarkdownTables(claim);
+        if (claimTables.length !== 1 || claimTables[0].markdown !== claim.trim()) continue;
+        const matches = rendered.flatMap((table, index) => table.markdown.includes(claim) ? [index] : []);
+        if (matches.length !== 1) continue;
+        const index = matches[0], location = locations[index], binding = draft.tableBindings[index];
+        const marker = `[[TABLE_${index + 1}]]`;
+        const ordinal = binding?.selection?.sourceTableOrdinal ?? binding?.completeTable?.sourceTableOrdinal;
+        const sourceTables = (proof.structuredArtifacts.tables || []).filter(table => table.ordinal === ordinal);
+        const compiledBinding = compiled.tableBindings[index], parsedBinding = parsed.plan.tableBindings[index];
+        const coordinates = value => (value?.cellBindings || []).map(cell =>
+            [cell.renderedRow, cell.renderedColumn, cell.sourceRow, cell.sourceColumn]);
+        if ((!binding.selection && !binding.completeTable) || location.marker !== marker
+            || !/^\/sections\/\d+\/body$/.test(location.path) || sourceTables.length !== 1
+            || draft.sections.reduce((n, section) => n + String(section.body || '').split(marker).length - 1, 0) !== 1
+            || String(nodeAt(draft, location.path)).split(/\n\s*\n/).filter(block => block.trim() === marker).length !== 1
+            || parsedBinding?.sourceType !== 'artifact_table'
+            || compiledBinding?.tableIndex !== index + 1 || compiledBinding.sourceTableOrdinal !== ordinal
+            || hashDraft(coordinates(compiledBinding)) !== hashDraft(coordinates(parsedBinding))
+            || parsedBinding.tableIndex !== index + 1 || parsedBinding.sourceTableOrdinal !== ordinal
+            || parsedBinding.sourceTableDomSha256 !== sourceTables[0].sourceDomSha256
+            || parsedBinding.renderedTableSha256 !== shaText(rendered[index].markdown)) continue;
+        const issue = { code: 'reader_verified_compiled_table_claim', path: location.path,
+            bindingPath: `/tableBindings/${index}`, tableIndex: index + 1,
+            sourceTableOrdinal: ordinal, sourceTableDomSha256: sourceTables[0].sourceDomSha256,
+            claim, draftSha256: hashDraft(draft),
+            bodySha256: hashDraft(nodeAt(draft, location.path)), bindingSha256: hashDraft(binding),
+            message: '完整解析后的受拒原表已唯一对应当前source_table与TABLE标记；只成对修复此绑定及承载正文，保留同表完整比较与负面结果。' };
+        compiledReaderFactIssues.set(issue, { parsed, issueSha256: hashDraft(issue) });
+        issues.push(issue);
+    }
+    return issues;
+}
+
 
 function assertReaderFactLocalCoverage(draft, claims) {
     const issues = verifiedReaderFactIssues(draft, claims);
@@ -2251,6 +2314,30 @@ function readerFactLocalSelectionIssues(draft, issues, allowedPaths, claims) {
 }
 
 function buildRepairTargets(draft, issues, options = {}) {
+    if (issues.some(issue => issue?.code === 'reader_verified_fact_unlocated')) return [];
+    const compiledFacts = issues.filter(issue => issue?.code === 'reader_verified_compiled_table_claim');
+    if (compiledFacts.length) {
+        if (Array.isArray(options.readerFactLocalPaths)) return [];
+        const blocking = issues.filter(issue => issue?.diagnosticOnly !== true);
+        if (blocking.some(issue => !['reader_verified_fact_claim', 'reader_verified_compiled_table_claim'].includes(issue?.code))) return [];
+        const paths = new Set();
+        for (const issue of compiledFacts) {
+            const proof = compiledReaderFactIssues.get(issue);
+            if (!proof || proof.issueSha256 !== hashDraft(issue)
+                || !require('../deep-analyzer').readParsedReaderFactContext(proof.parsed, draft)
+                || issue.draftSha256 !== hashDraft(draft)
+                || issue.bodySha256 !== hashDraft(nodeAt(draft, issue.path))
+                || issue.bindingSha256 !== hashDraft(nodeAt(draft, issue.bindingPath))) return [];
+            paths.add(issue.bindingPath); paths.add(issue.path);
+        }
+        for (const issue of blocking.filter(issue => issue.code === 'reader_verified_fact_claim')) {
+            if (!verifiedReaderFactIssues(draft, [issue.claim]).some(current => current.path === issue.path)) return [];
+            paths.add(issue.path);
+        }
+        if (!paths.size || paths.size > 8) return [];
+        return [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+            repairInstruction: '只在这组已有绑定和承载正文中修复已拒表格显示，保留每项正确方法、条件、数字、单位、区间及负面证据；其他表与标记保持。若原DOM字符有错，用同一封存全文或实际PDF连续原文完整支持的source_quotes写实际Markdown并同步绑定；PDF引文仍须正常核验，不能猜重复值的半值、改正负号、删表或换无关原表。' }));
+    }
     if (Array.isArray(options.readerFactLocalPaths)) {
         issues = readerFactLocalSelectionIssues(draft, issues, options.readerFactLocalPaths, options.readerFactLocalClaims || []);
         if (issues.some(issue => issue?.diagnosticOnly !== true
@@ -3802,7 +3889,7 @@ function compileConceptTermsPatch(draft, response, context) {
         path: `/conceptBridges/${index}`, oldSha256: hashDraft(draft.conceptBridges[index]), value })) };
 }
 
-module.exports = { READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, verifiedCompiledReaderTableFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

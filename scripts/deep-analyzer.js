@@ -7164,10 +7164,54 @@ function assertReaderResultTableSemantics(draft) {
     });
 }
 
+// Only an actual successful full parse in the same live source scope may locate
+// a fact claim inside a compiled TABLE marker. Serialized results are not proof.
+const parsedReaderFactContexts = new WeakMap();
+function currentReaderFactDailySource() {
+    const fresh = require('./lib/fresh-analysis-context');
+    const context = require('./lib/direct-rewrite-analysis-context').getDirectRewriteAnalysisContext();
+    const dailyContext = fresh.getFreshAnalysisContext();
+    if (!fresh.isDailyFreshSourceScope() || !context || context.route !== 'arxiv-fresh-fetch'
+        || context.runId !== dailyContext.runId
+        || context.paperId !== `arxiv:${dailyContext.paperId}`) return null;
+    // A self-consistent direct JSON constructor is not a daily source capability.
+    // Re-read the actual run and all four sealed source files before mint/read.
+    const source = fresh.readFreshSource(dailyContext.runDir, dailyContext.paperId, dailyContext);
+    const descriptor = source?.freshSourceDescriptor;
+    if (!descriptor || descriptor.paperId !== dailyContext.paperId
+        || descriptor.runId !== context.runId || descriptor.sourceGeneration !== context.sourceGeneration
+        || descriptor.sourceManifestSha256 !== context.sourceManifestSha256
+        || descriptor.sourceSha256 !== context.sourceSha256
+        || descriptor.structuredArtifactsSha256 !== context.structuredArtifactsSha256
+        || descriptor.sourceSnapshotSha256 !== context.sourceSnapshotSha256
+        || source.text !== context.sourceDetails.text
+        || stableFingerprint(source.structuredArtifacts) !== stableFingerprint(context.sourceDetails.structuredArtifacts)) return null;
+    return { context, dailyContext, source };
+}
+function readParsedReaderFactContext(parsed, draft) {
+    const proof = parsedReaderFactContexts.get(parsed);
+    if (!proof) return null;
+    const current = currentReaderFactDailySource();
+    if (!current || current.context !== proof.context || current.dailyContext !== proof.dailyContext
+        || proof.draftSha256 !== require('./lib/reader-repair').hashDraft(draft)
+        || proof.parsedSha256 !== require('./lib/reader-repair').hashDraft(parsed)) return null;
+    return { structuredArtifacts: current.source.structuredArtifacts,
+        paperId: current.context.paperId, sourceSha256: current.context.sourceSha256,
+        sourceSnapshotSha256: current.context.sourceSnapshotSha256 };
+}
 function parseApiReaderArticleResult(raw, options = {}) {
-    return require('./lib/reader-table-pdf-evidence').withArtifacts(options.structuredArtifacts,
+    const result = require('./lib/reader-table-pdf-evidence').withArtifacts(options.structuredArtifacts,
         options.arxivId, () => withReaderSourceQuoteEvidence(options.structuredArtifacts,
             options.arxivId, () => parseApiReaderArticleResultUnchecked(raw, options)));
+    const draft = require('./lib/reader-repair').parseRecoveryDraft(raw);
+    const current = currentReaderFactDailySource();
+    if (current && draft && options.sourceText === current.source.text
+        && stableFingerprint(options.structuredArtifacts) === stableFingerprint(current.source.structuredArtifacts)) {
+        parsedReaderFactContexts.set(result, { context: current.context, dailyContext: current.dailyContext,
+            draftSha256: require('./lib/reader-repair').hashDraft(draft),
+            parsedSha256: require('./lib/reader-repair').hashDraft(result) });
+    }
+    return result;
 }
 function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     let value;
@@ -9415,9 +9459,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', parsed.article, getPaperArxivId(paper));
         } catch (error) {
-            error.readerIssues = repair.verifiedReaderFactIssues(repair.parseRecoveryDraft(raw),
-                require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper)));
-            if (error.readerIssues.length) error.code = 'READER_VERIFIED_FACT_CLAIM';
+            const draft = repair.parseRecoveryDraft(raw);
+            const claims = require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper));
+            error.readerIssues = [...repair.verifiedReaderFactIssues(draft, claims),
+                ...repair.verifiedCompiledReaderTableFactIssues(draft, claims, parsed)];
+            const remaining = claims.filter(claim => parsed.article.includes(claim));
+            if (remaining.length && remaining.every(claim => error.readerIssues.some(issue => issue.claim === claim))) {
+                error.code = 'READER_VERIFIED_FACT_CLAIM';
+            } else {
+                error.code = 'READER_VERIFIED_FACT_UNLOCATED';
+                error.readerIssues = [{ path: null, code: 'reader_verified_fact_unlocated',
+                    message: '已拒事实仍在完整解析正文中，但无法绑定唯一现有正文与来源节点；停止局部修复，不授权通用正文回退。' }];
+            }
             throw error;
         }
         return parsed;
@@ -10874,6 +10927,21 @@ async function finalizeConferenceLocalSourceCorrection(paper, sourceDetails) {
 
 async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options) {
     const manifest = paper.analysisManifest, analysis = String(paper.analysis || '');
+    const previousReaderStage = structuredClone(manifest.stages.apiReaderArticle);
+    const previousOrdinalProof = previousReaderStage?.ordinalCompletionProof;
+    const replacesOrdinalCompletion = !generated.ordinalPatchCompilations?.length && previousOrdinalProof;
+    if (replacesOrdinalCompletion) {
+        const history = paper.readerRevisionHistory;
+        if (history?.contract !== 'daily-reader-revision-history-v1'
+            || !require('node:util').isDeepStrictEqual(history.completionProof, previousOrdinalProof)
+            || history.previousArticleSha256 !== previousReaderStage.articleSha256
+            || history.previousPlanSha256 !== previousReaderStage.planSha256
+            || !require('node:util').isDeepStrictEqual(history.previousOrdinalPatchCompilations,
+                previousReaderStage.ordinalPatchCompilations || [])) {
+            throw new Error('Reader replacement lacks the exact original ordinal completion history');
+        }
+        require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
+    }
     const arxivId = getPaperArxivId(paper), sourceText = String(sourceDetails.text || '');
     const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
     const injectedReaderResult = injectApiReaderFigures(
@@ -11038,7 +11106,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         const operatorSupersedes = options.execution?.operatorProvenance?.contract
             === 'daily-reader-operator-correction-v1';
         if (operatorSupersedes) {
-            const previous = paper.analysisManifest?.stages?.apiReaderArticle;
+            const previous = previousReaderStage;
             manifest.stages.apiReaderArticle.ordinalPatchHistory = {
                 contract: 'reader-target-ordinal-patch-v1',
                 reason: 'operator-correction-supersedes-ordinal-completion',
@@ -11060,7 +11128,11 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
             manifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
         }
     }
-    if (manifest.stages.apiReaderArticle.operatorProvenance?.contract === 'daily-reader-operator-correction-v1') {
+    if (replacesOrdinalCompletion) {
+        delete manifest.contracts.readerTargetOrdinalPatch;
+    }
+    if (replacesOrdinalCompletion
+        || manifest.stages.apiReaderArticle.operatorProvenance?.contract === 'daily-reader-operator-correction-v1') {
         require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
     }
     return paper;
@@ -13604,6 +13676,23 @@ function supersedeOrdinalCompletionBeforeInvalidation(paper, manifest, recoveryS
         previousOrdinalPatchCompilations: structuredClone(stage.ordinalPatchCompilations || []),
         recordedAt: getBeijingISOString()
     };
+}
+
+// Reader-only feedback may replace an ordinary completed Reader. Register the
+// exact authenticated parent history before taking the protected upstream view;
+// the normal generator then encounters the same pointer and remains idempotent.
+function prepareReaderOrdinalFeedbackSupersession(paper) {
+    const stage = paper?.analysisManifest?.stages?.apiReaderArticle;
+    if (!stage?.ordinalCompletionProof) return false;
+    const facts = require('./lib/daily-fact-review');
+    if (!facts.current(getPaperArxivId(paper))?.readerOnly
+        || !require('./analysis-engine').paperAnalysisLockHeld(paper)
+        || !require('./lib/fresh-analysis-context').isDailyFreshSourceScope()) {
+        throw new Error('Reader ordinal supersession requires locked actual daily Reader feedback');
+    }
+    require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
+    supersedeOrdinalCompletionBeforeInvalidation(paper, paper.analysisManifest, 'apiReaderArticle');
+    return true;
 }
 
 function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint, options = {}) {
@@ -21215,6 +21304,7 @@ module.exports = {
     updateOpensourceFromDemoLinks,
     auditTypeAwareScoringDetailed,
     parseApiReaderArticleResult,
+    readParsedReaderFactContext,
     normalizeReaderConceptBridgeTerms,
     normalizeShiftedReaderConceptBridgeMarkers,
     normalizeDuplicateReaderConceptBridgeMarkers,
@@ -21273,6 +21363,7 @@ module.exports = {
     hasReviewedReaderFactLocalSeed,
     buildCoreSummaryBindingBody,
     finalizeApiReaderRefresh,
+    prepareReaderOrdinalFeedbackSupersession,
     replayApiReaderFinalDisplay, finalizeConferenceLocalSourceCorrection,
     deriveConferenceLocalOfficialImageSupplement,
     finalizeOperatorApiReaderArticleFromSource,

@@ -125,7 +125,62 @@ function withArtifacts(artifacts, paperId, callback) {
         return needsGrid && canonical ? grid.withArtifacts(artifacts, actualPaperId, callback) : callback();
     });
 }
+function assertSavedPairedDomBindings(paper) {
+    const bindings = (paper?.apiReaderPlan?.tableBindings || []).filter(binding =>
+        binding?.sourceType === 'artifact_table' && !binding.pdfCellConfirmation && !binding.sealedPdfTableEvidence);
+    const provenance = paper?.freshRewriteProvenance;
+    // Old ordinary/PDF views retain their route. Actual daily source identity,
+    // rather than a removable cell marker, selects this reject-only replay.
+    if (!bindings.length || provenance?.contract !== 'fresh-source-analysis-v1') return;
+    const fresh = require('./fresh-analysis-context');
+    if (!isDeepStrictEqual(provenance, paper.analysisManifest?.freshRewriteProvenance)
+        || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) throw new Error('Paired DOM display lacks sealed daily identity');
+    const runDir = path.join(require('../config').FILES.dailyFreshSourceRunsDir, provenance.runId);
+    const runFile = path.join(runDir, 'run.json');
+    // Non-daily historical routes keep their complete original verifier. This
+    // is only a reject-only component; the daily plan gate still rejects a
+    // missing/replaced run, and a present malformed/symlink run is never skipped.
+    try { require('node:fs').lstatSync(runFile); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    const run = require('./reader-proof-read-scope').readReaderProofJson(runFile).value;
+    if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT) throw new Error('Paired DOM display run contract differs');
+    const source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
+    const hasPair = text => /[↑↓]\{\\(?:uparrow|downarrow)\}/.test(text)
+        || /^[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[ \t]*±[ \t]*\\pm[ \t]*(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[ \t]+(?:ms|s)[ \t]*$/.test(text);
+    if (!source.structuredArtifacts.tables.some(table => table.cells.some(cell => hasPair(cell.text)))) return;
+    const descriptor = source.freshSourceDescriptor, acquisition = paper.analysisManifest?.sourceAcquisition;
+    if (paper.sourceSha256 !== descriptor.sourceSha256 || acquisition?.sourceSha256 !== descriptor.sourceSha256
+        || acquisition.structuredArtifactsSha256 !== descriptor.structuredArtifactsSha256
+        || ['runId', 'sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256', 'sourceGeneration', 'sourceManifestSha256']
+            .some(key => provenance[key] !== descriptor[key])
+        || paper.apiReaderPlan.structuredSourcePayload !== require('../deep-analyzer').readerStructuredSourcePayload(source.structuredArtifacts))
+        throw new Error('Paired DOM display four-source identity differs');
+    const rendered = require('../analysis-contract').extractMarkdownTables(paper.apiReaderArticle || '');
+    const normalize = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
+    for (const binding of bindings) {
+        const originals = source.structuredArtifacts.tables.filter(table => table.ordinal === binding.sourceTableOrdinal);
+        const table = originals[0], view = rendered[binding.tableIndex - 1], seen = new Set();
+        const matrix = view && [view.header, ...view.rows];
+        if (originals.length !== 1 || table.recoveryStatus !== 'complete'
+            || binding.sourceTableDomSha256 !== table.sourceDomSha256 || binding.sourceQuotes?.length !== 0
+            || !matrix || matrix.length !== table.matrix.length
+            || matrix.some((row, index) => row.length !== table.matrix[index].length)
+            || !Array.isArray(binding.cellBindings) || binding.cellBindings.length !== table.matrix.reduce((n, row) => n + row.length, 0)
+            || binding.cellBindings.some(cell => {
+                const r = cell.sourceRow, c = cell.sourceColumn, key = `${r}:${c}`;
+                const owners = table.cells.filter(item => r >= item.row && r < item.row + item.rowspan
+                    && c >= item.column && c < item.column + item.colspan);
+                if (!Number.isSafeInteger(r) || !Number.isSafeInteger(c) || r < 0 || c < 0 || seen.has(key)
+                    || cell.renderedRow !== r || cell.renderedColumn !== c || owners.length !== 1
+                    || table.matrix[r]?.[c] !== owners[0].text || cell.sourceText !== owners[0].text
+                    || cell.sourceDomSha256 !== owners[0].sourceDomSha256
+                    || cell.renderedText !== normalize(owners[0].text) || matrix[r]?.[c] !== cell.renderedText) return true;
+                seen.add(key); return false;
+            })) throw new Error('Paired DOM display must retain every complete original cell, coordinate and literal value');
+    }
+}
 function assertSavedScientificDomBindings(paper) {
+    assertSavedPairedDomBindings(paper);
     const rendered = require('../analysis-contract').extractMarkdownTables(paper?.apiReaderArticle || '');
     const marked = (paper?.apiReaderPlan?.tableBindings || []).filter(binding =>
         binding?.sourceType === 'artifact_table' && !binding.pdfCellConfirmation && !binding.sealedPdfTableEvidence && (

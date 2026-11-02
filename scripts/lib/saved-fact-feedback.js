@@ -199,6 +199,7 @@ function protectedReaderUpstream(paper) {
     // 资源宣称合同只属于 Reader；完成旧稿的当前来源审校时允许新增该合同。
     if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.readerResourceClaims;
     if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.imageNarrative;
+    if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.readerTargetOrdinalPatch;
     delete copy.analysisManifest?.stages?.apiReaderArticle;
     delete copy.analysisManifest?.stages?.apiReaderTableAudit;
     delete copy.analysisManifest?.stages?.imageSupplement;
@@ -254,6 +255,7 @@ function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = n
 
 async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null, parentUpstreamProof = null) {
     const target = structuredClone(paper);
+    require('../deep-analyzer').prepareReaderOrdinalFeedbackSupersession(target);
     require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
         'apiReaderArticle', feedbackSha256);
     const before = protectedReaderUpstream(target);
@@ -433,4 +435,4 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     return facts.withFactReview(parentBound, refresh);
 }
 module.exports = { recoverArchivedCompletedReader, hasSavedProof, readSavedFeedback, withRecoveredFeedback, coreOnlyFeedback,
-    readerOnlyFeedback, completedReaderUpstream, analyzeWithRecoveredFeedback };
+    readerOnlyFeedback, completedReaderUpstream, analyzeWithRecoveredFeedback, protectedReaderUpstream };

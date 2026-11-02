@@ -96,8 +96,9 @@ function normalizeExplicitReaderSymbolProjection(value) {
         output = output.slice(0, start) + visible + output.slice(index + match[0].length);
         index = start;
     }
-    return output.replace(/([↑↓])\\(uparrow|downarrow)(?![A-Za-z])/g,
-        (whole, visible, command, offset, input) => {
+    return output.replace(/([↑↓])(?:\\(uparrow|downarrow)(?![A-Za-z])|\{\\(uparrow|downarrow)\}(?=[ \t]*(?:[|\n]|$)))/g,
+        (whole, visible, plainCommand, bracedCommand, offset, input) => {
+            const command = plainCommand || bracedCommand;
             if (hasContinuation(input, offset + whole.length)
                 || visible !== (command === 'uparrow' ? '↑' : '↓')) return whole;
             return visible;
@@ -137,6 +138,13 @@ function normalizeReaderSourceDisplayArtifacts(value) {
     ).replace(
         /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*((?:\d+(?:\.\d+)?|\.\d+))\s*\\mathbf\{\1\}\s*\\scriptscriptstyle\{\s*\\pm\s*\2\s*\}(?![A-Za-z0-9.])/g,
         (_whole, mean, uncertainty) => `${mean} ± ${uncertainty}`
+    );
+    // Only an entire cell may carry this literal s/ms suffix. The explicit
+    // duplicate is the operator, never either number or the unit; no caption
+    // unit is propagated and seconds/milliseconds are never converted.
+    output = output.replace(
+        /(^|[|\n])([ \t]*)([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))[ \t]*±[ \t]*\\pm[ \t]*([0-9]+(?:\.[0-9]+)?|\.[0-9]+)([ \t]+)(ms|s)(?=[ \t]*(?:[|\n]|$))/g,
+        (_whole, boundary, space, mean, uncertainty, gap, unit) => `${boundary}${space}${mean} ± ${uncertainty}${gap}${unit}`
     );
     // 同一均值/误差之间的可见 ± 与明确 \pm 是同一个运算符的两种显示。
     // 只规范完整数值对；不删数值、不改符号，续尾有下标、幂或未知命令时保留原样。
