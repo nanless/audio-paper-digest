@@ -90,6 +90,11 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
         if(next=="aggregates")controller.enterAggregateView()
         routeRevision++;route=next
     }
+    val readingViewOwner=remember(controller){Any()}
+    DisposableEffect(controller,route,state.selectedPaperId) {
+        controller.readingViewVisible(readingViewOwner,route=="reader"&&state.selectedPaperId!=null)
+        onDispose{controller.readingViewVisible(readingViewOwner,false)}
+    }
     DisposableEffect(controller){onDispose{controller.retireAggregateView()}}
     val action: Action = action@{ command,payload ->
         val viewSensitive=command.startsWith("aggregate.")||command.startsWith("ui.")||command in setOf("paper.open","storage.openPackage","pdf.studySource.open")

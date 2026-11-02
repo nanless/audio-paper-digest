@@ -51,6 +51,8 @@ enum class SecretKind { MODEL, ZOTERO, ZOTERO_DAV, CLOUD }
 data class AggregateViewLease(val navigationEpoch:Long,val readingEpoch:Long)
 
 interface AppController {
+    /** Display-only ownership; retaining a selected paper does not mean its reader is visible. */
+    fun readingViewVisible(owner:Any,visible:Boolean) {}
     /** Synchronous display-effect guard; never accepts a URL or grants a source capability. */
     fun aggregateLinkIsCurrent(nonce:String,index:Int):Boolean=false
     fun captureAggregateView():AggregateViewLease=AggregateViewLease(0,0)

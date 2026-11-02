@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.ui
 
 import androidx.compose.ui.test.*
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -31,6 +32,8 @@ class WorkbenchNavigationInstrumentedTest {
         val catalog=PublishedAggregateCatalog(source.manifestSHA256,3,listOf(daily,conference,directory))
         override val state=MutableStateFlow(UiState(papers=listOf(paper),personal=JSONObject().put("notes",JSONObject()).put("annotations",JSONObject()),aggregate=AggregateBrowseState(catalog=catalog,attemptedIndex=true)))
         val calls=mutableListOf<String>()
+        val readerOwners=mutableSetOf<Any>()
+        override fun readingViewVisible(owner:Any,visible:Boolean){if(visible)readerOwners.add(owner)else readerOwners.remove(owner)}
         override fun leaveAggregateView(){state.value=state.value.copy(aggregate=state.value.aggregate.copy(selected=null,document=null))}
         override fun enterAggregateView()=leaveAggregateView()
         override fun aggregateLinkIsCurrent(nonce:String,index:Int)=state.value.aggregate.document?.linkNonce==nonce&&index==0
@@ -105,13 +108,15 @@ class WorkbenchNavigationInstrumentedTest {
     }
 
     @Test fun paperLinkHasVisibleReturnToExactDailyAndSystemBackAlsoReturns(){
-        val controller=Controller();compose.setContent{PaperDigestApp(controller)}
+        val controller=Controller();val shown=mutableStateOf(true);compose.setContent{if(shown.value)PaperDigestApp(controller)}
         compose.onNodeWithText("合成日更").performScrollTo().performClick()
         compose.waitUntil(5000){controller.state.value.aggregate.selected?.id==controller.daily.id}
         val device=UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         touchPaperLink(device)
         compose.waitUntil(15000){controller.state.value.selectedPaperId==controller.paper.id}
+        compose.waitUntil(5000){controller.readerOwners.size==1}
         compose.onNodeWithText("返回日更汇总").assertIsDisplayed().performClick()
+        compose.waitUntil(5000){controller.readerOwners.isEmpty()}
         compose.waitUntil(15000){controller.state.value.aggregate.selected?.id==controller.daily.id}
         compose.onNodeWithText("合成日更").assertExists()
         touchPaperLink(device)
@@ -120,7 +125,19 @@ class WorkbenchNavigationInstrumentedTest {
         compose.waitForIdle()
         device.pressBack()
         compose.waitUntil(15000){controller.state.value.aggregate.selected?.id==controller.daily.id}
+        compose.waitUntil(5000){controller.readerOwners.isEmpty()}
         assertEquals(1,controller.calls.count{it=="aggregate.select"});assertEquals(2,controller.calls.count{it=="aggregate.resume"})
+        touchPaperLink(device)
+        compose.waitUntil(5000){controller.readerOwners.size==1}
+        compose.onNodeWithText("论文库").performClick()
+        compose.waitUntil(5000){controller.readerOwners.isEmpty()}
+        assertEquals("The library keeps the selected paper without marking its reader visible",controller.paper.id,controller.state.value.selectedPaperId)
+        compose.onNodeWithText("日更").performClick()
+        compose.onNodeWithText("合成日更").performScrollTo().performClick()
+        touchPaperLink(device)
+        compose.waitUntil(5000){controller.readerOwners.size==1}
+        compose.runOnIdle{shown.value=false}
+        compose.waitUntil(5000){controller.readerOwners.isEmpty()}
     }
 
 }

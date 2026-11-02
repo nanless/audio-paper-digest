@@ -142,4 +142,30 @@ class RootArticleLoadingInstrumentedTest {
             assertFalse(f.root.performAutomaticCatalogSync());assertEquals(2,f.indexRequests.get());assertArrayEquals(before,current.readBytes())
         }finally{f.close()}
     }
+    @Test fun retainedPaperAllowsAutomaticRefreshOnlyAfterEveryVisibleReaderOwnerLeaves()=runBlocking {
+        val f=Fixture();val activity=Any();val firstReader=Any();val secondReader=Any()
+        // The fixture deliberately disables WorkManager registration; attach only this synthetic
+        // lifecycle owner so the real explicit worker admission observes a foreground Activity.
+        @Suppress("UNCHECKED_CAST")
+        val foreground=RootController::class.java.getDeclaredField("foregroundOwners").also{it.isAccessible=true}.get(f.root)as MutableSet<Any>
+        try {
+            f.root.execute("paper.open",JSONObject().put("paperID","arxiv:2601.00002"))
+            f.root.execute("settings.save",JSONObject().put("changes",JSONObject().put("appearance","light")))
+            val selected=f.root.state.value.selectedPaperId;val body=f.root.state.value.article!!.html
+            val current=f.root.personal.directory.resolve("PublishedLibrary/current.json")
+            val aged=JSONObject(current.readText());aged.getJSONObject("summary").put("syncedAt","2020-01-01T00:00:00Z")
+            JsonFiles.write(current,aged);f.repository.reload();f.root.execute("app.bootstrap")
+            foreground.add(activity);f.root.readingViewVisible(firstReader,true);f.root.readingViewVisible(secondReader,true)
+            assertFalse(f.root.performAutomaticCatalogSync());assertEquals(1,f.indexRequests.get())
+            f.root.readingViewVisible(firstReader,false)
+            assertFalse(f.root.performAutomaticCatalogSync());assertEquals(1,f.indexRequests.get())
+            f.root.readingViewVisible(secondReader,false)
+            assertTrue(withTimeout(10_000){f.root.performAutomaticCatalogSync()});assertEquals(2,f.indexRequests.get())
+            assertEquals(selected,f.root.state.value.selectedPaperId);assertEquals(body,f.root.state.value.article!!.html)
+            assertFalse(f.root.performAutomaticCatalogSync());assertEquals(2,f.indexRequests.get())
+        }finally{
+            foreground.remove(activity);f.root.readingViewVisible(firstReader,false);f.root.readingViewVisible(secondReader,false);f.close()
+        }
+    }
+
 }

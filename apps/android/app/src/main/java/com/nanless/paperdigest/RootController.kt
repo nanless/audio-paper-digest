@@ -130,6 +130,7 @@ class RootController private constructor(private val context: Context, private v
     private val automaticCatalogPolicy=CatalogRefreshPolicy()
     private val foregroundOperations=AtomicInteger(0)
     private val foregroundOwners=java.util.Collections.newSetFromMap(ConcurrentHashMap<Any,Boolean>())
+    private val readingViewOwners=java.util.Collections.newSetFromMap(ConcurrentHashMap<Any,Boolean>())
     private var scheduledCatalogSettings:CatalogRefreshSettings?=null
     private var preloadedCatalog:AggregateCatalogStamp?=null
     private fun cancelPublishedPreload(){publishedPreload.get()?.cancel()}
@@ -145,6 +146,11 @@ class RootController private constructor(private val context: Context, private v
     }
     private fun foregroundCommand(command:String)=command !in setOf("app.bootstrap","personal.reading","zotero.state","cloud.state")
 
+    override fun readingViewVisible(owner:Any,visible:Boolean) {
+        if(visible)readingViewOwners.add(owner)
+        else if(readingViewOwners.remove(owner)&&readingViewOwners.isEmpty())scheduleAutomaticCatalogCheck()
+    }
+
     fun foregroundStarted(owner:Any) {
         if(!installBackground||!foregroundOwners.add(owner))return
         scheduleAutomaticCatalogCheck()
@@ -157,7 +163,7 @@ class RootController private constructor(private val context: Context, private v
         return Triple(settings,summary.optString("snapshotID") !in setOf("","unsynced","bundled-sample")&&summary.optInt("paperCount")>0,summary.nullableString("syncedAt"))
     }
     private fun scheduleAutomaticCatalogCheck() {
-        if(!installBackground||foregroundOwners.isEmpty()||foregroundOperations.get()>0||active.isNotEmpty()||_state.value.selectedPaperId!=null||articleReadJob.get()?.isCompleted==false)return
+        if(!installBackground||foregroundOwners.isEmpty()||foregroundOperations.get()>0||active.isNotEmpty()||readingViewOwners.isNotEmpty()||articleReadJob.get()?.isCompleted==false)return
         val input=automaticCatalogInputs()
         if(!automaticCatalogPolicy.eligible(input.first,input.second,input.third,System.currentTimeMillis()))return
         lateinit var work:Job
@@ -177,7 +183,7 @@ class RootController private constructor(private val context: Context, private v
         try {
             if(initialDelayMillis>0)delay(initialDelayMillis)
             if(initialDelayMillis>0&&foregroundOwners.isEmpty())return@withContext false
-            if(foregroundOwners.isNotEmpty()&&_state.value.selectedPaperId!=null)return@withContext false
+            if(foregroundOwners.isNotEmpty()&&readingViewOwners.isNotEmpty())return@withContext false
             if(foregroundOperations.get()>0||active.isNotEmpty()||articleReadJob.get()?.isCompleted==false||publishedPreload.get()?.isCompleted==false)return@withContext false
             if(!catalogSyncAdmission.tryLock())return@withContext false
             admitted=true
