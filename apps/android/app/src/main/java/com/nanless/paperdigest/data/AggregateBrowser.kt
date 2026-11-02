@@ -132,7 +132,11 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         try {
             if(!claimReading{current(token)&&claimGuard()})return stale(token)
             if(!current(token))return response("not-adopted")
-            val epoch=port.readingEpoch();if(!recordEpoch(token,epoch))return response("not-adopted");val stamp=port.stamp();val catalog=port.catalog()
+            val epoch=port.readingEpoch();if(!recordEpoch(token,epoch))return response("not-adopted");val stamp=port.stamp()
+            // Even a failed first local read records its display epoch, so a later automatic sync
+            // can invalidate that empty/error screen. This stamp is not a document/link capability.
+            change(token){it.copy(stamp=stamp)}
+            val catalog=port.catalog()
             if(!ready(token,stamp,epoch))return stale(token)
             if(catalog==null){change(token){it.copy(catalog=null,stamp=stamp,loading=false,catalogStale=false,offlineMode=port.offlineMode(),error="网站汇总目录尚未核验，请先同步已发布内容。")};return response("needs-sync")}
             require(catalog.snapshotSHA256==stamp.snapshotSHA256)

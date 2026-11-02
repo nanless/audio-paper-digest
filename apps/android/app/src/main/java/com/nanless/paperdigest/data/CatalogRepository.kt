@@ -323,13 +323,15 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         summary.copy()
     } }
 
-    suspend fun article(paper: Paper, refresh: Boolean = false): Article = withContext(Dispatchers.IO) {
+    suspend fun article(paper: Paper, refresh: Boolean = false, onReadable: (Article) -> Unit = {}): Article = withContext(Dispatchers.IO) {
         require(paper.blogURL.isNotEmpty()) { "本地导入论文没有网站导读，可打开 PDF 后创建本机研究" }
         val file = File(directory, "articles/${sha256(paper.blogURL.toByteArray())}.json")
         val previous = if (file.isFile) Article.fromJson(JSONObject(JsonFiles.read(file, 100 * 1024 * 1024L).toString(Charsets.UTF_8))) else null
         val parserCurrent = previous?.let { it.markdown != null || it.mathMLContract == "published-html-mathml-v1" } ?: false
         val sourceMatches = previous?.let { it.paperID == paper.id && it.blogURL == paper.blogURL && it.sourceURL == (paper.sourceURL ?: paper.blogURL) && it.pdfURL == paper.pdfURL && it.sourceVersion == paper.sourceVersion } ?: false
-        if (!refresh && previous != null && parserCurrent && sourceMatches && previous.catalogEpoch == epoch() && age(previous.fetchedAt) < 21600 && resourcesValid(previous)) return@withContext hydrate(previous)
+        if (!refresh && previous != null && parserCurrent && sourceMatches && previous.completeOffline && previous.catalogEpoch == epoch() && age(previous.fetchedAt) < 21600 && resourcesValid(previous)) return@withContext hydrateReading(previous)
+        if (previous != null && parserCurrent && sourceMatches) onReadable(hydrateReading(previous.copy(isStale = true,
+            notices = (previous.notices + "先显示已保存导读，正在后台核对网站当前版本。").distinct())))
         if (!refresh && previous == null && epoch() == "bundled-sample") seedArticle(paper)?.let { JsonFiles.write(file, it.json()); offlineIds += paper.id; return@withContext hydrate(it) }
         try {
             require(!personal.settings().optBoolean("offlineMode")) { "当前为离线模式" }
@@ -345,6 +347,14 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                     result = result.copy(notices = result.notices + "引用原件下载页面尚未封存；其他导读内容保持原样。")
                 }
             } finally { citationRepository.releasePage(page) }
+            // The sealed, sanitized body is useful before any optional scientific image or sidecar.
+            // Save this partial version too: cancelling a prefetch must not discard readable text.
+            result = result.copy(resources = Jsoup.parseBodyFragment(result.html).select("img").map { image ->
+                ArticleResource(image.attr("src"), missingReason = "图片正在后台准备")
+            }, completeOffline = false)
+            previous?.let { preserve(it) }
+            coroutineContext.ensureActive(); JsonFiles.write(file, result.json()); offlineIds += paper.id
+            onReadable(hydrateReading(result))
             val images = mutableListOf<ArticleResource>(); val notices = result.notices.toMutableList()
             val doc = Jsoup.parseBodyFragment(result.html)
             var total = 0
@@ -354,10 +364,11 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 try {
                     val data = readExternal(url, 16 * 1024 * 1024)
                     total += data.size; require(total <= 64 * 1024 * 1024) { "图片总量超过 64 MiB" }
-                    val mime = imageMime(data)
+                    imageMime(data)
                     val hash = sha256(data); val local = File(directory, "assets/$hash")
                     JsonFiles.write(local, data)
-                    image.attr("src", "data:$mime;base64," + java.util.Base64.getEncoder().encodeToString(data))
+                    // Persistent scientific HTML keeps the declared source address, never Base64 copies.
+                    image.attr("data-source-url", url).attr("loading", "lazy")
                     images += ArticleResource(url, localPath = local.absolutePath, sha256 = hash)
                 } catch (e: Exception) {
                     coroutineContext.ensureActive()
@@ -382,11 +393,11 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             result = result.copy(html = doc.body().html(), resources = images, completeOffline = images.all { it.localPath != null }, notices = notices.distinct(), researchContext = context, original = original)
             if (result.catalogEpoch != epoch()) result = result.copy(isStale = true, notices = result.notices + "读取期间目录发生更新，请刷新核验当前修订")
             previous?.let { preserve(it) }; preserve(result)
-            coroutineContext.ensureActive(); JsonFiles.write(file, result.json()); offlineIds += paper.id; hydrate(result)
+            coroutineContext.ensureActive(); JsonFiles.write(file, result.json()); offlineIds += paper.id; hydrateReading(result)
         } catch (e: Exception) {
             coroutineContext.ensureActive()
             val old = previous ?: throw e
-            hydrate(old.copy(isStale = true, completeOffline = resourcesValid(old), notices = (old.notices + (if (parserCurrent) emptyList() else listOf("这份旧 HTML 未经过公式结构保真读取，部分 MathML 可能缺失；原稿保留，请联网刷新。")) + "网站当前修订复验未完成，正在读取 ${old.fetchedAt} 保存的旧导读；原文版本 ${old.sourceVersion ?: "未标注"}。").distinct()))
+            hydrateReading(old.copy(isStale = true, completeOffline = resourcesValid(old), notices = (old.notices + (if (parserCurrent) emptyList() else listOf("这份旧 HTML 未经过公式结构保真读取，部分 MathML 可能缺失；原稿保留，请联网刷新。")) + "网站当前修订复验未完成，正在读取 ${old.fetchedAt} 保存的旧导读；原文版本 ${old.sourceVersion ?: "未标注"}。").distinct()))
         }
     }
 
@@ -521,6 +532,8 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         return seeded.copy(original = seeded.json().put("citationSidecar", validatedSidecar(sample.getJSONObject("citation"), paper, false)))
     }
     private fun resourcesValid(article: Article): Boolean = article.resources.all { r -> r.localPath != null && r.sha256 != null && runCatching { StoragePaths.resolve(r.localPath, personal.directory, r.sha256, 16 * 1024 * 1024L); true }.getOrDefault(false) }
+    private fun hydrateReading(article: Article): Article = if (article.markdown != null) hydrate(article) else
+        PublishedSourceWarning.present(article.copy(inlineImages = emptyMap(), displayImages = ArticleImageAccess(article, personal.directory)))
     private fun hydrate(article: Article): Article {
         val map = linkedMapOf<String, String>(); var total = 0; val ambiguous = mutableSetOf<String>()
         article.resources.forEach { r ->
@@ -548,7 +561,8 @@ class CatalogRepository(private val context: Context, private val personal: Pers
                 map[value] = "data:${imageMime(bytes)};base64," + java.util.Base64.getEncoder().encodeToString(bytes)
             }
         }
-        return PublishedSourceWarning.present(article.copy(inlineImages = map))
+        // Exported/backup HTML must be self-contained; a UI-only random image route cannot escape.
+        return PublishedSourceWarning.present(article.copy(inlineImages = map, displayImages = null))
     }
     private suspend fun read(url: String, limit: Int): ByteArray {
         fetchOverride?.let { return it(url, limit).also { b -> require(b.size <= limit) } }
@@ -558,6 +572,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         return response.bytes
     }
     private suspend fun readExternal(initial: String, limit: Int): ByteArray {
+        fetchOverride?.let { return it(initial, limit).also { bytes -> require(bytes.size <= limit) } }
         var url = initial
         repeat(6) {
             val uri = URI(url)

@@ -12,7 +12,6 @@ import okio.BufferedSink
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.net.InetAddress
 import java.net.Proxy
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -83,7 +82,7 @@ internal class ZoteroDavNetworkTransport internal constructor(private val calls:
     companion object {
         internal fun hardenedClient(dns:Dns=Dns.SYSTEM):OkHttpClient=OkHttpClient.Builder().proxy(Proxy.NO_PROXY).followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
             .authenticator(Authenticator.NONE).proxyAuthenticator(Authenticator.NONE)
-            .dns(object:Dns{override fun lookup(hostname:String):List<InetAddress>{val found=dns.lookup(hostname);davRequire(found.isNotEmpty()&&found.all(SafeHttp::isPublic),"target");return found}})
+            .dns(SafeHttp.PublicDns(false,dns))
             .connectTimeout(30,TimeUnit.SECONDS).readTimeout(180,TimeUnit.SECONDS).callTimeout(180,TimeUnit.SECONDS).build()
     }
 }

@@ -95,7 +95,8 @@ data class Article(val paperID: String, val html: String, val plainText: String,
     val revisionSHA256: String, val fetchedAt: String, val sourceVersion: String? = null, val completeOffline: Boolean = false,
     val notices: List<String> = emptyList(), val isStale: Boolean = false, val citation: JSONObject = JSONObject(),
     val resources: List<ArticleResource> = emptyList(), val catalogEpoch: String = "", val researchContext: JSONObject? = null, val pdfURL: String? = null,
-    val markdown: String? = null, val mathMLContract: String? = null, val original: JSONObject? = null, val inlineImages: Map<String, String> = emptyMap()) {
+    val markdown: String? = null, val mathMLContract: String? = null, val original: JSONObject? = null, val inlineImages: Map<String, String> = emptyMap(),
+    val displayImages: DocumentImageAccess? = null) {
     fun json() = (original?.copy() ?: JSONObject()).put("paperID", paperID).put("html", html).put("plainText", plainText).put("sourceURL", sourceURL)
         .put("blogURL", blogURL).put("revisionSHA256", revisionSHA256).put("fetchedAt", fetchedAt).put("sourceVersion", sourceVersion ?: JSONObject.NULL)
         .put("completeOffline", completeOffline).put("notices", JSONArray(notices)).put("isStale", isStale).put("citation", citation.copy())

@@ -10,6 +10,7 @@ if [[ "${1:-}" == --device ]]; then
  for qa_argument in "$@"; do
   [[ "$qa_argument" == -* ]] || { echo "测试入口只接受 Gradle 选项；其他构建任务请使用 build.sh。" >&2; exit 1; }
   case "$qa_argument" in --serial*|-Pandroid.injected.device.serial=*|-Dandroid.injected.device.serial=*) echo "设备已由 --device 或 ANDROID_SERIAL 唯一选定，请勿再附加设备覆盖参数。" >&2; exit 1;; esac
+  case "$qa_argument" in -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=*) [[ "$qa_argument" == -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true ]] || { echo "设备测试结束后必须保留应用和验收资料，不接受自动卸载选项。" >&2; exit 1; };; esac
  done
  qa_state="$(adb -s "$qa_serial" get-state 2>/dev/null)" || { echo "指定设备不可用，未开始测试。" >&2; exit 1; }
  [[ "$qa_state" == device ]] || { echo "指定设备未就绪，未开始测试。" >&2; exit 1; }
@@ -19,7 +20,8 @@ if [[ "${1:-}" == --device ]]; then
  fi
  # AGP ConnectedDeviceProvider filters connected devices using this exact single serial.
  export ANDROID_SERIAL="$qa_serial"
- exec "$app_root/build.sh" :app:connectedDebugAndroidTest "$@"
+ # AGP otherwise uninstalls the target and deletes its data after connected tests.
+ exec "$app_root/build.sh" :app:connectedDebugAndroidTest "$@" -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
 fi
 for qa_argument in "$@"; do
  [[ "$qa_argument" == -* ]] || { echo "测试入口只接受 Gradle 选项；设备测试请使用 --device SERIAL，其他任务请使用 build.sh。" >&2; exit 1; }
@@ -28,6 +30,7 @@ bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/DeviceSelectio
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/WorkbenchBranding.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/CompiledSecurityResources.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"
+bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/AndroidReleaseStages.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseBoundaries.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseKeystoreCanonical.test.py"
 bash "$app_root/../../scripts/python-runtime.sh" "$app_root/Tests/ReleaseCompiledIcon.test.py"

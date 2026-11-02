@@ -15,9 +15,9 @@ import androidx.work.WorkerParameters
 class StudyWorker(context: Context, parameters: WorkerParameters): CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
         val sessionID = inputData.getString("sessionID") ?: return Result.failure()
-        val controller = (applicationContext as PaperDigestApplication).controller
         return try {
             setForeground(notification())
+            val controller = (applicationContext as PaperDigestApplication).awaitController()
             controller.performStudy(sessionID, inputData.getString("workspaceEpoch") ?: return Result.failure())
             Result.success()
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }

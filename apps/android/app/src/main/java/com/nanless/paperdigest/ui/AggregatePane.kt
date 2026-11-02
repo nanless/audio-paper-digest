@@ -171,14 +171,14 @@ internal fun aggregateKindLabel(kind:String)=when(kind){"daily"->"日更汇总";
         try{
             val html=ResearchRenderer.renderAggregateHTML(context,document){
                 effect.ensureActive()
-                require(current===document){"汇总阅读已切换，未采用旧公式排版"}
+                if(current!=document)throw CancellationException("汇总阅读已切换，未采用旧公式排版")
             }
             rendered=html
             formatting=false
         }catch(cancelled:CancellationException){throw cancelled}
         catch(error:Exception){
             effect.ensureActive()
-            if(current===document){formatting=false;failure="部分公式未完成排版，保留原式供核对。";rendered=document.linkHTML?:document.images?.bodyHTML?:document.bodyHTML}
+            if(current==document){formatting=false;failure="部分公式未完成排版，保留原式供核对。";rendered=document.linkHTML?:document.images?.bodyHTML?:document.bodyHTML}
         }
     }
     Column(Modifier.fillMaxSize()){

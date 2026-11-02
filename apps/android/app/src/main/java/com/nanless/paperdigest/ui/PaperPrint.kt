@@ -169,6 +169,7 @@ internal class PaperPrintOperation(
         fun clean(block: () -> Unit) { try { block() } catch (error: Exception) { if (failure == null) failure = error else failure?.addSuppressed(error) } }
         clean { delegate?.let { delegate = null; delegateFinishCount++; it.onFinish() } }
         adapter = null
+        clean { (webView.parent as? android.view.ViewGroup)?.removeView(webView) }
         clean { webView.stopLoading() }; clean { webView.webViewClient = WebViewClient() }
         clean { webView.removeAllViews() }; clean { webView.destroy() }
         if (cancelPending && !handedOff) continuation?.takeIf { it.isActive }?.cancel(kotlinx.coroutines.CancellationException("已取消打开打印预览；未打印或保存文件"))

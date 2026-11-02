@@ -4,7 +4,7 @@
 
 This native Android client reads the Paper Digest website's published paper catalog, illustrated explanations, daily digests, and conference overviews. It supports original PDFs, notes, offline reading, personal study, Zotero archiving, and Nutstore backup. Reading or synchronizing existing articles does not request new model analysis.
 
-The source version is **1.3.0, build 8**. Public package availability is determined by [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases). Android 9 / API 28 or later is supported, with `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` architectures. The application identifier remains `com.nanless.paperdigest`, and formal packages retain the previous signing identity. See [validation and release scope (Chinese)](../../docs/android-validation.md) and the [1.3.0 review (Chinese)](../../docs/workbench-1.3.0-review.md).
+The source version is **1.3.1, build 9**. Public package availability is determined by [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases). Android 9 / API 28 or later is supported, with `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` architectures. The application identifier remains `com.nanless.paperdigest`, and formal packages retain the previous signing identity. See [validation and release scope (Chinese)](../../docs/android-validation.md) and the [1.3.0 review (Chinese)](../../docs/workbench-1.3.0-review.md).
 
 Quoted interface labels below refer to the application's Chinese interface. Detailed linked documents are in Chinese unless stated otherwise.
 
@@ -12,11 +12,11 @@ Quoted interface labels below refer to the application's Chinese interface. Deta
 
 ### Synchronize and open a paper
 
-1. A new installation opens “日更” (Daily Digest). Synchronize to obtain the website catalog. Bottom navigation provides Daily Digest, Library, Conferences, Tasks, and Settings. Conferences include the complete catalog, each conference overview, and research directions.
+1. A new installation opens “日更” (Daily Digest) and obtains the website catalog automatically. Returning to the app checks for updates at the configured interval; manual synchronization remains available in the menu. Bottom navigation provides Daily Digest, Library, Conferences, Tasks, and Settings. Conferences include the complete catalog, each conference overview, and research directions.
 2. Open a paper to see its explanation, original, study responses, and notes in Reading. Phones primarily use one column. With a PDF open and enough available width, side-by-side or focused layouts are available. Wide tables and long formulas scroll locally rather than shrinking the whole article.
 3. After entering from a daily or conference overview, return with the overview action or system Back. Conference catalog, overview, and topic pages support stepwise return. Position is retained for the same revision.
 
-While idle, at most four public overview HTML pages preload so text can appear before images. PDFs still download on demand. Explicitly opening a saved historical version does not fetch additional images, avoiding material from another revision.
+While idle, at most four public overview HTML pages and two recent paper explanations preload. Opening an explanation shows verified text before optional images finish; user actions take priority over background synchronization and preloading. PDFs still download on demand, and offline mode does not use the network. Explicitly opening a saved historical version does not fetch additional images, avoiding material from another revision. See the [1.3.1 review (Chinese)](../../docs/android-1.3.1-review.md) for automatic updates, phone typography, and error recovery.
 
 ### Configure a model and review the material
 

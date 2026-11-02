@@ -22,6 +22,7 @@ import com.nanless.paperdigest.pdf.PdfReaderPane
 import com.nanless.paperdigest.data.studyAnswerPositionIdentity
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -274,12 +275,33 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  remove?.let{a->AlertDialog(onDismissRequest={remove=null},title={Text("删除这个标注？")},text={Text("删除这组标注的 $removeCount 个原页位置及批注。导出完整备份后可从备份恢复。")},confirmButton={TextButton({action("pdf.removeAnnotation",obj("id" to a.optString("id")));remove=null}){Text("删除")}},dismissButton={TextButton({remove=null}){Text("取消")}})}
 }
 
-@Composable private fun ArticleDocument(article:com.nanless.paperdigest.data.Article,font:Int,scroll:Int,onScroll:(Int)->Unit){
+@Composable internal fun ArticleDocument(article:com.nanless.paperdigest.data.Article,font:Int,scroll:Int,onScroll:(Int)->Unit){
  val context=LocalContext.current
- var html by remember(article.revisionSHA256,article.html,article.markdown){mutableStateOf<String?>(null)}
- var error by remember(article.revisionSHA256,article.html,article.markdown){mutableStateOf<String?>(null)}
- LaunchedEffect(article.revisionSHA256,article.html,article.markdown){try{html=ResearchRenderer.renderArticle(context,article)}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}}
- when{error!=null->EmptyPane("导读未能完整显示",error!!+" 请对照 PDF 原文；原始资料仍保留。");html!=null->StaticDocument(html!!,font,scroll,onScroll);else->LinearProgressIndicator(Modifier.fillMaxWidth())}
+ val current by rememberUpdatedState(article)
+ // Image hydration may replace the native capability, but not the scientific revision.
+ // Keep the accepted body and its matching image scope together until the next body is ready.
+ val revision=article.revisionSHA256.ifBlank{article.html}
+ var presentation by remember(article.paperID,revision,article.markdown){mutableStateOf<Pair<String,com.nanless.paperdigest.data.DocumentImageAccess?>?>(null)}
+ var error by remember(article.paperID,revision,article.markdown){mutableStateOf<String?>(null)}
+ LaunchedEffect(article){
+  val effect=kotlin.coroutines.coroutineContext
+  fun requireCurrent(){effect.ensureActive();if(current!=article)throw kotlinx.coroutines.CancellationException("导读已切换，未采用旧排版")}
+  var readableBody:String?=null
+  try{
+   val rendered=ResearchRenderer.renderArticleForDisplay(context,article){readable->
+    readableBody=readable
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){requireCurrent();if(presentation==null)presentation=readable to article.displayImages}
+   }
+   requireCurrent();presentation=rendered to article.displayImages;error=null
+  }catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;requireCurrent();readableBody?.let{presentation=it to article.displayImages};error=e.message}
+ }
+ Column(Modifier.fillMaxSize()){
+  if(error!=null&&presentation!=null)Text("部分公式未完成排版，已保留原式和正文。",Modifier.padding(horizontal=14.dp),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.tertiary)
+  Box(Modifier.weight(1f)){
+   val shown=presentation
+   when{shown!=null->StaticDocument(shown.first,font,scroll,onScroll,shown.second);error!=null->EmptyPane("导读未能完整显示",error!!+" 请对照 PDF 原文；原始资料仍保留。");else->LinearProgressIndicator(Modifier.fillMaxWidth())}
+  }
+ }
 }
 
 internal fun annotationGroups(rows:List<JSONObject>):List<List<JSONObject>> = rows.withIndex().groupBy { indexed ->

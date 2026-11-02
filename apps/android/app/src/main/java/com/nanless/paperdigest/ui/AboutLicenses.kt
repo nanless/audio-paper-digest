@@ -44,6 +44,8 @@ import java.io.ByteArrayInputStream
     var web by remember { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(false) }
+    var rendererFailed by remember { mutableStateOf(false) }
+    var retry by remember { mutableIntStateOf(0) }
     val background = MaterialTheme.colorScheme.surface.toArgb()
     val textZoom = (100 * LocalDensity.current.fontScale).toInt().coerceIn(50, 300)
     Dialog(close, DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -58,14 +60,18 @@ import java.io.ByteArrayInputStream
                 HorizontalDivider()
                 if (error) Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Text("这份离线许可暂时无法打开。", Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
-                    TextButton({ error = false; web?.loadUrl(OfflineLicenseRoute.INDEX) }) { Text("返回目录") }
+                    TextButton({ error = false;if(rendererFailed){retry++;rendererFailed=false}else web?.loadUrl(OfflineLicenseRoute.INDEX) }) { Text("返回目录") }
                 }
-                AndroidView(modifier = Modifier.weight(1f).fillMaxWidth(), factory = { context ->
-                    WebView(context).apply {
+                if(!rendererFailed)key(retry){AndroidView(modifier = Modifier.weight(1f).fillMaxWidth(), factory = { context ->
+                    StaticDocumentWebView(context).apply {
                         web = this
                         setBackgroundColor(background)
                         settings.apply { javaScriptEnabled = false; allowFileAccess = false; allowContentAccess = false; blockNetworkLoads = true; domStorageEnabled = false; builtInZoomControls = true; displayZoomControls = false; this.textZoom = textZoom }
                         webViewClient = object : WebViewClient() {
+                            override fun onRenderProcessGone(view:WebView,detail:android.webkit.RenderProcessGoneDetail):Boolean {
+                                if(web===view){web=null;canGoBack=false;rendererFailed=true;error=true}
+                                (view as? StaticDocumentWebView)?.release();return true
+                            }
                             private fun denied(code: Int) = WebResourceResponse("text/plain", "utf-8", code, if (code == 404) "Not Found" else "Forbidden", emptyMap(), ByteArrayInputStream(byteArrayOf()))
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = request == null || OfflineLicenseRoute.assetPath(request.url.toString(), request.method) == null
                             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse {
@@ -82,8 +88,8 @@ import java.io.ByteArrayInputStream
                     }
                 }, update = { view -> view.setBackgroundColor(background); view.settings.textZoom = textZoom }, onRelease = { view ->
                     if (web === view) web = null
-                    view.stopLoading(); view.webViewClient = WebViewClient(); view.destroy()
-                })
+                    view.release()
+                })}
             }
         }
     }

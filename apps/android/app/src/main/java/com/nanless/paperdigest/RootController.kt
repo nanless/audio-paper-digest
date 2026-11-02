@@ -25,18 +25,22 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 
 /** The Application owns one controller for UI and workers; maintenance never opens a second store. */
 class RootController private constructor(private val context: Context, private val installBackground: Boolean,
-    private val exportStoreFactory: ((File, File) -> PendingExportStore)?, secretStore: SecretStore?): AppController {
+    private val exportStoreFactory: ((File, File) -> PendingExportStore)?, secretStore: SecretStore?, catalogFactory:((Context,PersonalStore)->CatalogRepository)?): AppController {
     internal constructor(context: Context, installBackground: Boolean = true, exportStoreFactory: ((File, File) -> PendingExportStore)? = null) :
-        this(context, installBackground, exportStoreFactory, null)
+        this(context, installBackground, exportStoreFactory, null, null)
     internal constructor(context: Context, installBackground: Boolean, secretStore: SecretStore) :
-        this(context, installBackground, null, secretStore)
+        this(context, installBackground, null, secretStore, null)
+    internal constructor(context:Context,installBackground:Boolean,secretStore:SecretStore,catalogFactory:(Context,PersonalStore)->CatalogRepository):
+        this(context,installBackground,null,secretStore,catalogFactory)
     private val research = RootResearchDirectory.resolve(context.noBackupFilesDir)
     val personal = PersonalStore(research)
-    private val library = CatalogRepository(context, personal)
+    private val library = catalogFactory?.invoke(context,personal)?:CatalogRepository(context, personal)
     private val offline = OfflineStore(research)
     @Volatile private var offlineReading: OfflineStore.Opened? = null
     private data class PreparedReading(val token: String, val paperID: String, val options: JSONObject, val roles: String)
@@ -119,13 +123,91 @@ class RootController private constructor(private val context: Context, private v
     }
     val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) }, borrowing=cloudCredentialBorrowing)
     private val aggregateViewRevision=AtomicLong(0)
-    private var publishedPreload:Job?=null
+    private val publishedPreload=AtomicReference<Job?>(null)
+    private val automaticCatalogJob=AtomicReference<Job?>(null)
+    private val articleReadJob=AtomicReference<Job?>(null)
+    private val catalogSyncAdmission=Mutex()
+    private val automaticCatalogPolicy=CatalogRefreshPolicy()
+    private val foregroundOperations=AtomicInteger(0)
+    private val foregroundOwners=java.util.Collections.newSetFromMap(ConcurrentHashMap<Any,Boolean>())
+    private var scheduledCatalogSettings:CatalogRefreshSettings?=null
     private var preloadedCatalog:AggregateCatalogStamp?=null
-    private fun cancelPublishedPreload(){publishedPreload?.cancel();publishedPreload=null}
+    private fun cancelPublishedPreload(){publishedPreload.get()?.cancel()}
+    private suspend fun drainBackground(reference:AtomicReference<Job?>) {
+        val job=reference.get()?:return
+        if(job===currentCoroutineContext()[Job])return
+        job.cancelAndJoin();reference.compareAndSet(job,null)
+    }
+    private suspend fun giveForegroundPriority() {
+        drainBackground(automaticCatalogJob)
+        drainBackground(publishedPreload)
+        drainBackground(articleReadJob)
+    }
+    private fun foregroundCommand(command:String)=command !in setOf("app.bootstrap","personal.reading","zotero.state","cloud.state")
+
+    fun foregroundStarted(owner:Any) {
+        if(!installBackground||!foregroundOwners.add(owner))return
+        scheduleAutomaticCatalogCheck()
+    }
+    fun foregroundStopped(owner:Any) { foregroundOwners.remove(owner) }
+
+    /** Foreground and WorkManager share one admission. Cancellation drains the actual transport. */
+    private fun automaticCatalogInputs():Triple<CatalogRefreshSettings,Boolean,String?> {
+        val settings=CatalogRefreshSettings.from(personal.settings());val summary=library.summary()
+        return Triple(settings,summary.optString("snapshotID") !in setOf("","unsynced","bundled-sample")&&summary.optInt("paperCount")>0,summary.nullableString("syncedAt"))
+    }
+    private fun scheduleAutomaticCatalogCheck() {
+        if(!installBackground||foregroundOwners.isEmpty()||foregroundOperations.get()>0||active.isNotEmpty()||_state.value.selectedPaperId!=null||articleReadJob.get()?.isCompleted==false)return
+        val input=automaticCatalogInputs()
+        if(!automaticCatalogPolicy.eligible(input.first,input.second,input.third,System.currentTimeMillis()))return
+        lateinit var work:Job
+        work=exportScope.launch(start=CoroutineStart.LAZY){performAutomaticCatalogSync(1_500,work)}
+        if(automaticCatalogJob.compareAndSet(null,work))work.start()else work.cancel()
+    }
+    private fun foregroundFinished(command:String) {
+        if(foregroundOperations.decrementAndGet()==0&&command!="jobs.cancel")scheduleAutomaticCatalogCheck()
+    }
+    internal suspend fun performAutomaticCatalogSync(initialDelayMillis:Long=0,registeredOwner:Job?=null):Boolean=withContext(Dispatchers.IO) {
+        val job=registeredOwner?:currentCoroutineContext()[Job]!!
+        if(registeredOwner==null){if(!automaticCatalogJob.compareAndSet(null,job))return@withContext false}
+        else if(automaticCatalogJob.get()!==registeredOwner)return@withContext false
+        var admitted=false
+        var previewsPaused=false
+        var attempt:Long?=null
+        try {
+            if(initialDelayMillis>0)delay(initialDelayMillis)
+            if(initialDelayMillis>0&&foregroundOwners.isEmpty())return@withContext false
+            if(foregroundOwners.isNotEmpty()&&_state.value.selectedPaperId!=null)return@withContext false
+            if(foregroundOperations.get()>0||active.isNotEmpty()||articleReadJob.get()?.isCompleted==false||publishedPreload.get()?.isCompleted==false)return@withContext false
+            if(!catalogSyncAdmission.tryLock())return@withContext false
+            admitted=true
+            val input=automaticCatalogInputs()
+            attempt=automaticCatalogPolicy.begin(input.first,input.second,input.third,System.currentTimeMillis())?:return@withContext false
+            currentCoroutineContext().ensureActive()
+            aggregateBrowser.pausePreviews();previewsPaused=true
+            runTask("library.sync.automatic") { maintenance.withLock {
+                currentCoroutineContext().ensureActive()
+                require(!personal.settings().optBoolean("offlineMode")){"当前为离线模式"}
+                library.sync { _,_,message->_state.update{it.copy(notice=message)} }
+            } }
+            automaticCatalogPolicy.completed()
+            schedulePublishedPreload()
+            true
+        } catch(cancelled:CancellationException) {
+            automaticCatalogPolicy.cancelled(attempt);throw cancelled
+        } catch(_:Exception) {
+            _state.update{it.copy(notice="自动检查暂未完成，已保存的目录仍可阅读；可稍后重试同步。")}
+            false
+        } finally {
+            if(previewsPaused)aggregateBrowser.resumePreviews()
+            if(admitted)catalogSyncAdmission.unlock()
+            automaticCatalogJob.compareAndSet(job,null)
+        }
+    }
     private fun schedulePublishedPreload(){
         val expected=library.aggregateStamp()
-        if(personal.settings().optBoolean("offlineMode")||preloadedCatalog==expected||publishedPreload?.isActive==true)return
-        publishedPreload=exportScope.launch {
+        if(personal.settings().optBoolean("offlineMode")||preloadedCatalog==expected||publishedPreload.get()?.isCompleted==false)return
+        val work=exportScope.launch(start=CoroutineStart.LAZY) {
             try {
                 val catalog=maintenance.withLock{library.aggregateCatalog()}?:return@launch
                 val records=workbenchAggregateOrder(catalog.records)
@@ -136,9 +218,22 @@ class RootController private constructor(private val context: Context, private v
                     catch(cancelled:CancellationException){throw cancelled}
                     catch(_:Exception){/* Optional prefetch never grants display or overwrites the last readable version. */}
                 }
+                val retired=library.summary().ids("missingFromLatest").toSet()
+                val latest=library.papers().asSequence().filter{it.sourceKind!="local"&&it.blogURL.isNotBlank()&&it.id !in retired}
+                    .sortedByDescending{it.date}.take(2).toList()
+                for(paper in latest){
+                    ensureActive();if(library.aggregateStamp()!=expected||personal.settings().optBoolean("offlineMode"))return@launch
+                    try { maintenance.withLock {
+                        ensureActive();require(library.aggregateStamp()==expected&&!personal.settings().optBoolean("offlineMode"))
+                        library.article(paper)
+                    } }catch(cancelled:CancellationException){throw cancelled}catch(_:Exception){/* Explicit reads keep their own visible errors. */}
+                }
                 if(library.aggregateStamp()==expected)preloadedCatalog=expected
             }catch(cancelled:CancellationException){throw cancelled}catch(_:Exception){/* Foreground reads retain their normal visible errors. */}
+            finally{publishedPreload.compareAndSet(currentCoroutineContext()[Job],null)}
         }
+        val old=publishedPreload.get()
+        if(old?.isCompleted==false||!publishedPreload.compareAndSet(old,work))work.cancel()else work.start()
     }
     private val aggregateImageJobs=ConcurrentHashMap.newKeySet<Job>()
     private fun cancelAggregateImages(){aggregateImageJobs.toList().forEach{it.cancel(CancellationException("已切换阅读，停止原页图片等待"))}}
@@ -149,12 +244,17 @@ class RootController private constructor(private val context: Context, private v
     override fun retireAggregateView(){cancelAggregateImages();aggregateViewRevision.incrementAndGet();aggregateBrowser.retire()}
     override suspend fun executeAggregateInView(command:String,payload:JSONObject,lease:AggregateViewLease):JSONObject {
         if(captureAggregateView()!=lease)return JSONObject().put("status","not-adopted")
+        foregroundOperations.incrementAndGet()
+        try {
+        giveForegroundPriority()
+        if(captureAggregateView()!=lease)return JSONObject().put("status","not-adopted")
         if(command!="aggregate.list")cancelPublishedPreload()
         if(command in setOf("aggregate.select","aggregate.resume","aggregate.back","aggregate.close","aggregate.list","aggregate.refresh","aggregate.cached","aggregate.link"))cancelAggregateImages()
         val viewGuard={aggregateViewRevision.get()==lease.navigationEpoch}
         val claimGuard={generation.get()==lease.readingEpoch}
         if(command=="aggregate.close")return aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard)
         return withContext(Dispatchers.IO){val result=aggregateBrowser.execute(command,payload.copy(),viewGuard,claimGuard);refresh();if(command=="aggregate.list"&&result.optString("status")=="index-ready")schedulePublishedPreload();result}
+        }finally{foregroundFinished(command)}
     }
     private val aggregateBrowser by lazy {
         AggregateBrowser(object:AggregateBrowsePort {
@@ -173,6 +273,7 @@ class RootController private constructor(private val context: Context, private v
             override fun readingEpoch()=generation.get()
             override fun mayPresent(readingEpoch:Long):Boolean {val view=_state.value;return generation.get()==readingEpoch&&view.selectedPaperId==null&&view.viewedPaper==null&&view.pdfDocument==null}
         },claimReading={live->
+            drainBackground(articleReadJob)
             pdfAdmission.withLock {
                 if(!live())false else {
                     stopPdfAcquisition()
@@ -219,8 +320,9 @@ class RootController private constructor(private val context: Context, private v
     })
     init {
         cloudCredentialBorrowing.attachDrain{zotero.cancelAndDrainBorrowed()}
+        refresh()
         if (installBackground) CloudWorkerRuntime.install({ cloud }, { service, expected -> runTask("cloud.automatic") { service.upload(automatic = true, expectedDestinationID = expected) } })
-        refresh(); if (installBackground) { scheduleCloud(cloud.state()); scheduleCatalog() }
+        if (installBackground) { scheduleCloud(cloud.state()); scheduleCatalog() }
         exportScope.launch { try { reconcilePendingExports() } catch (_: Exception) { /* Independent pending-list error is already visible. */ } }
     }
 
@@ -352,6 +454,10 @@ class RootController private constructor(private val context: Context, private v
         if (command in setOf("model.fresh.prepare", "model.fresh.check.prepare", "model.fresh.commit")) modelCredentialRevision.ready()
         if(command in setOf("settings.save","app.restore.commit","cloud.restore.commit"))cancelPublishedPreload()
         if(command.startsWith("aggregate."))return executeAggregateInView(command,payload,captureAggregateView())
+        val prioritized=foregroundCommand(command)
+        if(prioritized)foregroundOperations.incrementAndGet()
+        try {
+        if(prioritized)withContext(Dispatchers.IO){giveForegroundPriority()}
         // A cancelled search must not reset reader drafts or turn into a global task error.
         if (command == "library.search") return withContext(Dispatchers.IO) { maintenance.withLock { library.searchCached(payload.getString("query")) } }
         val current = _state.value
@@ -369,13 +475,20 @@ class RootController private constructor(private val context: Context, private v
             cloud.drainCredentialBorrowers(cloudMutation) // Outside maintenance and Cloud operation mutex.
             return withContext(Dispatchers.IO) { executeBound(command, payload.copy(), access, dispatchAtStart,cloudMutation) }
         } finally {cloud.endCredentialMutation(cloudMutation);if(pausePreviews)aggregateBrowser.resumePreviews()}
+        }finally{if(prioritized)foregroundFinished(command)}
     }
     private suspend fun executeBound(command: String, payload: JSONObject, access: ReadingAccess, dispatchAtStart: String,cloudMutation:CloudCredentialMutation?=null): JSONObject {
         try {
             _state.update { it.copy(error = null, notice = null) }
             val result = when (command) {
                 "app.bootstrap" -> { refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; JSONObject().put("ready", true) }
-                "library.sync" -> {cancelPublishedPreload();runTask(command) { maintenance.withLock { library.sync { _, _, message -> _state.update { it.copy(notice = message) } } } }.also{schedulePublishedPreload()}}
+                "library.sync" -> {
+                    if(!catalogSyncAdmission.tryLock())JSONObject().put("status","sync-in-progress")
+                    else try {
+                        runTask(command) { maintenance.withLock { library.sync { _, _, message -> _state.update { it.copy(notice = message) } } } }
+                            .also{automaticCatalogPolicy.completed();schedulePublishedPreload()}
+                    }finally{catalogSyncAdmission.unlock()}
+                }
                 "paper.open" -> openPaper(payload.getString("paperID"), payload.optBoolean("refresh"))
                 "pdf.open" -> ownedPdfAcquisition(command, access, dispatchAtStart) {
                     val prepared = maintenance.withLock {
@@ -585,7 +698,7 @@ class RootController private constructor(private val context: Context, private v
             return result
         } catch (cancelled: CancellationException) {
             refresh()
-            if (!command.startsWith("export.retained.") && command !in setOf("export.prepare", "retained.export.prepare", "export.save", "pdf.import", "pdf.open", "pdf.annotation.open", "pdf.studySource.open")) {
+            if (!command.startsWith("export.retained.") && command !in setOf("app.bootstrap", "personal.reading", "paper.open", "export.prepare", "retained.export.prepare", "export.save", "pdf.import", "pdf.open", "pdf.annotation.open", "pdf.studySource.open")) {
                 _state.update { it.copy(error = "已取消；已有完整资料和已产生的用量记录保留") }
             }
             throw cancelled
@@ -600,6 +713,8 @@ class RootController private constructor(private val context: Context, private v
         val p = paper(id)
         if(admissionGuard==null)leaveAggregateView()
         val admissionView=aggregateViewRevision.get()
+        drainBackground(articleReadJob)
+        val ready=CompletableDeferred<Unit>()
         val captured = pdfAdmission.withLock {
             if(aggregateViewRevision.get()!=admissionView||admissionGuard?.invoke()==false)return JSONObject().put("status","not-adopted")
             stopPdfAcquisition()
@@ -609,12 +724,41 @@ class RootController private constructor(private val context: Context, private v
             val changed = generation.incrementAndGet()
             offlineReading = null
             _state.update { it.copy(selectedPaperId = id, viewedPaper = Paper.fromJson(p.json()), article = null, pdfDocument = null, pdfMode = false, pdfSelection = null, pdfReceipt = JSONObject(), loading = p.blogURL.isNotEmpty()) }
+            if(p.blogURL.isEmpty())ready.complete(Unit)
+            else {
+                val producer=exportScope.launch(start=CoroutineStart.LAZY) {
+                    fun publish(article:Article) {
+                        _state.update { current ->
+                            if(generation.get()!=changed||current.selectedPaperId!=id)current
+                            else current.copy(article=article,loading=false).let{it.copy(readingMaterialID=readingID(it))}
+                        }
+                    }
+                    try {
+                        ensureActive();if(generation.get()!=changed)throw CancellationException("阅读入口已变化")
+                        val article=maintenance.withLock { library.article(p,refresh,onReadable={value->publish(value);ready.complete(Unit)}) }
+                        publish(article);ready.complete(Unit)
+                    }catch(cancelled:CancellationException){ready.cancel(cancelled)}
+                    catch(error:Exception){
+                        if(!ready.isCompleted)ready.completeExceptionally(error)
+                        else _state.update{if(generation.get()==changed&&it.selectedPaperId==id)it.copy(notice="导读补充未完成，已显示的内容仍可阅读。")else it}
+                    }
+                }
+                // A LAZY producer cancelled before start never enters its body/finally.
+                producer.invokeOnCompletion { cause ->
+                    if(!ready.isCompleted)when(cause){
+                        is CancellationException->ready.cancel(cause)
+                        null->ready.completeExceptionally(IllegalStateException("尚未取得可读正文，请重新打开导读"))
+                        else->ready.completeExceptionally(cause)
+                    }
+                    articleReadJob.compareAndSet(producer,null)
+                    _state.update{if(generation.get()==changed&&it.selectedPaperId==id)it.copy(loading=false)else it}
+                }
+                articleReadJob.set(producer);producer.start()
+            }
             changed
         }
-        if (p.blogURL.isNotEmpty()) try {
-            val a = maintenance.withLock { library.article(p, refresh) }
-            if (captured == generation.get()) _state.update { it.copy(article = a, loading = false) }else return JSONObject().put("status","not-adopted")
-        } catch (e: Exception) { if (captured != generation.get())return JSONObject().put("status","not-adopted");_state.update { it.copy(loading = false) }; throw e }
+        ready.await()
+        if(captured!=generation.get())return JSONObject().put("status","not-adopted")
         return p.json()
     }
     private suspend fun currentPDF(p: Paper): Pair<File, String> {
@@ -1288,14 +1432,16 @@ class RootController private constructor(private val context: Context, private v
         if (!installBackground) return
         CloudScheduler.update(context, cloud.targetID, profile)
     }
-    private fun scheduleCatalog() {
+    @Synchronized private fun scheduleCatalog() {
         if (!installBackground) return
-        val manager = WorkManager.getInstance(context); val settings = personal.settings()
-        if (settings.optBoolean("offlineMode")) { manager.cancelUniqueWork("paperdigest-published-catalog"); return }
-        val hours = settings.optLong("syncHours", 12).coerceIn(1, 168)
-        val request = PeriodicWorkRequestBuilder<CatalogSyncWorker>(hours, TimeUnit.HOURS).setInitialDelay(hours, TimeUnit.HOURS)
+        val settings=CatalogRefreshSettings.from(personal.settings())
+        if(scheduledCatalogSettings==settings)return
+        val manager = WorkManager.getInstance(context)
+        if (settings.offline) { manager.cancelUniqueWork("paperdigest-published-catalog");scheduledCatalogSettings=settings;return }
+        val request = PeriodicWorkRequestBuilder<CatalogSyncWorker>(settings.hours, TimeUnit.HOURS)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresBatteryNotLow(true).setRequiresStorageNotLow(true).build()).build()
         manager.enqueueUniquePeriodicWork("paperdigest-published-catalog", ExistingPeriodicWorkPolicy.UPDATE, request)
+        scheduledCatalogSettings=settings
     }
     private fun validateSettings(changes: JSONObject) {
         changes.keys().forEach { key ->

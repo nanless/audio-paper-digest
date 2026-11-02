@@ -37,8 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.nanless.paperdigest.data.AggregateImageAccess
-import com.nanless.paperdigest.data.ExportService
+import com.nanless.paperdigest.data.DocumentImageAccess
 import com.nanless.paperdigest.data.Paper
 import com.nanless.paperdigest.data.FavoriteCollections
 import com.nanless.paperdigest.pdf.PdfReaderPane
@@ -357,7 +356,16 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
 
 /** Register the real provider when this static document View joins its native window.
  * No synthetic tree, focus transfer, notification, script or renderer-private API is used. */
-private class StaticDocumentWebView(context:android.content.Context):WebView(context) {
+internal class StaticDocumentWebView(context:android.content.Context):WebView(context) {
+ private var released=false
+ fun release(){
+  if(released)return
+  released=true
+  (parent as? android.view.ViewGroup)?.removeView(this)
+  runCatching{stopLoading()};runCatching{webViewClient=WebViewClient()}
+  tag=null
+  runCatching{removeAllViews()};runCatching{destroy()}
+ }
  override fun onAttachedToWindow(){
   super.onAttachedToWindow()
   val accessibility=context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
@@ -365,28 +373,40 @@ private class StaticDocumentWebView(context:android.content.Context):WebView(con
  }
 }
 
-@Composable internal fun StaticDocument(body:String,fontSize:Int=18,initialScroll:Int=0,onScroll:(Int)->Unit={},images:AggregateImageAccess?=null,aggregateLink:AggregateLinkAction?=null,aggregateNonce:String?=null,aggregateCurrent:AggregateLinkCurrent?=null){
+@Composable internal fun StaticDocument(body:String,fontSize:Int=18,initialScroll:Int=0,onScroll:(Int)->Unit={},images:DocumentImageAccess?=null,aggregateLink:AggregateLinkAction?=null,aggregateNonce:String?=null,aggregateCurrent:AggregateLinkCurrent?=null){
  val context=LocalContext.current
  val scrollValue=rememberUpdatedState(initialScroll);val scrollCallback=rememberUpdatedState(onScroll)
  val linkCallback=rememberUpdatedState(aggregateLink);val linkNonce=rememberUpdatedState(aggregateNonce);val linkCurrent=rememberUpdatedState(aggregateCurrent)
  val restoring=remember{java.util.concurrent.atomic.AtomicBoolean(true)}
  val activeView=remember{java.util.concurrent.atomic.AtomicReference<WebView?>(null)}
  val activeDocument=remember{java.util.concurrent.atomic.AtomicReference<StreamedHtmlDocument?>(null)}
- val activeImages=remember{java.util.concurrent.atomic.AtomicReference<Pair<StreamedHtmlDocument,AggregateImageAccess>?>(null)}
+ val activeImages=remember{java.util.concurrent.atomic.AtomicReference<Pair<StreamedHtmlDocument,DocumentImageAccess>?>(null)}
+ var rendererFailed by remember{mutableStateOf(false)}
+ var retry by remember{mutableIntStateOf(0)}
  val background=MaterialTheme.colorScheme.surface.toArgb();val foreground=MaterialTheme.colorScheme.onSurface.toArgb();val link=MaterialTheme.colorScheme.primary.toArgb()
- val zoom=(fontSize.coerceIn(14,30)/18f*LocalDensity.current.fontScale*100).toInt().coerceAtLeast(50)
+ val zoom=readerTextZoom(fontSize,LocalDensity.current.fontScale)
  // The shared head is small; body remains the immutable renderer result, never concatenated/replaced.
  val document=remember(body,background,foreground,link,images){
-  var head=ExportService.htmlDocumentHead("",background,foreground,link)
-  if(images!=null){require(head.contains("img-src data:;"));head=head.replace("img-src data:;","img-src ${images.cspImageSource};")}
+  val head=readerDocumentHead(background,foreground,link,images?.cspImageSource?:"data:")
   StreamedHtmlDocument(head,body,"</body></html>")
  }
- AndroidView(factory={StaticDocumentWebView(it).apply {
+ if(rendererFailed){Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+  Text("正文显示进程已结束，原资料仍保留。可重新显示，或返回列表。")
+  OutlinedButton({retry++;rendererFailed=false}){Text("重新显示正文")}
+ };return}
+ key(retry){AndroidView(factory={StaticDocumentWebView(it).apply {
   activeView.set(this)
   outlineProvider=android.view.ViewOutlineProvider.BOUNDS;clipToOutline=true
   settings.apply{javaScriptEnabled=false;allowFileAccess=false;allowContentAccess=false;blockNetworkLoads=true;domStorageEnabled=false;builtInZoomControls=true;displayZoomControls=false;if(android.os.Build.VERSION.SDK_INT>=33)setAlgorithmicDarkeningAllowed(false) else if(android.os.Build.VERSION.SDK_INT>=29)forceDark=android.webkit.WebSettings.FORCE_DARK_OFF}
   setOnScrollChangeListener { _,_,y,_,_->if(activeView.get()===this&&!restoring.get()&&tag===activeDocument.get())scrollCallback.value(y) }
   webViewClient=object:WebViewClient(){
+   override fun onRenderProcessGone(view:WebView,detail:android.webkit.RenderProcessGoneDetail):Boolean{
+    if(activeView.compareAndSet(view,null)){
+     activeDocument.set(null);activeImages.set(null);rendererFailed=true
+    }
+    (view as? StaticDocumentWebView)?.release()
+    return true
+   }
    override fun onPageFinished(view:WebView?,url:String?){
     val web=view?:return
     val owner=activeDocument.get()?:return
@@ -453,7 +473,7 @@ private class StaticDocumentWebView(context:android.content.Context):WebView(con
   if(web.tag!==document){
    restoring.set(true);web.stopLoading();activeImages.set(images?.let{document to it});activeDocument.set(document);web.tag=document;web.loadUrl(document.url)
   }
- },onRelease={web->if(activeView.compareAndSet(web,null)){activeDocument.set(null);activeImages.set(null)};web.stopLoading();web.tag=null;web.destroy()},modifier=Modifier.fillMaxSize().clipToBounds())
+ },onRelease={web->if(activeView.compareAndSet(web,null)){activeDocument.set(null);activeImages.set(null)};web.release()},modifier=Modifier.fillMaxSize().clipToBounds())}
 }
 
 @Composable internal fun FilterChoice(label:String,options:List<String>,value:String,change:(String)->Unit){

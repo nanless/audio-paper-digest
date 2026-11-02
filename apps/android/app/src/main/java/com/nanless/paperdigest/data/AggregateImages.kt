@@ -77,15 +77,15 @@ object AggregateImages {
 class AggregateImageAccess internal constructor(
     val manifestSHA256:String,val plan:AggregateImagePlan,val records:List<AggregateImageRecord>,val observedAt:String,
     private val openVerified:(AggregateImageRecord)->InputStream,val importedFrom:AggregateImageImport?=null,
-) {
+) : DocumentImageAccess {
     private val scope=UUID.randomUUID().toString()
-    val bodyHTML=AggregateImages.render(plan,records,scope)
-    val cspImageSource="https://reader.invalid/aggregate-images/$scope/"
+    override val bodyHTML=AggregateImages.render(plan,records,scope)
+    override val cspImageSource="https://reader.invalid/aggregate-images/$scope/"
     val savedCount=records.count{it.sha256!=null}
     val missingCount=records.size-savedCount
     private val byURL=records.filter{it.sha256!=null}.associateBy{cspImageSource+it.sha256}
     fun canServe(url:String,isMainFrame:Boolean,method:String)=!isMainFrame&&method=="GET"&&byURL.containsKey(url)
-    fun open(url:String,isMainFrame:Boolean,method:String):Pair<String,InputStream>? {
+    override fun open(url:String,isMainFrame:Boolean,method:String):Pair<String,InputStream>? {
         if(!canServe(url,isMainFrame,method))return null
         val record=byURL.getValue(url);return requireNotNull(record.mime) to openVerified(record)
     }

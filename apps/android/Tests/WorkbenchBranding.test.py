@@ -100,7 +100,7 @@ class WorkbenchBranding(unittest.TestCase):
 
     def test_source_release_version_and_stable_identity_and_provider_authorities(self):
         config = (ROOT / 'app/build.gradle.kts').read_text()
-        self.assertIn('versionCode = 8; versionName = "1.3.0"', config)
+        self.assertIn('versionCode = 9; versionName = "1.3.1"', config)
         self.assertIn('applicationId = "com.nanless.paperdigest"', config)
         self.assertIn('namespace = "com.nanless.paperdigest"', config)
         app = m.ET.parse(ROOT / 'app/src/main/AndroidManifest.xml').find('application')

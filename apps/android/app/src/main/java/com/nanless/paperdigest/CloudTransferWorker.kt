@@ -11,9 +11,8 @@ import androidx.work.*
 /** Manual uploads retain their immutable snapshot and checkpoint if the OS stops this worker. */
 class CloudTransferWorker(context: Context, parameters: WorkerParameters): CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
-        val controller = (applicationContext as PaperDigestApplication).controller
         val expectedDestination = inputData.getString("destinationID") ?: return Result.failure()
-        return try { setForeground(notification()); controller.performCloudUpload(id.toString(), inputData.getString("workspaceEpoch") ?: return Result.failure(), expectedDestination); Result.success() }
+        return try { setForeground(notification()); val controller=(applicationContext as PaperDigestApplication).awaitController(); controller.performCloudUpload(id.toString(), inputData.getString("workspaceEpoch") ?: return Result.failure(), expectedDestination); Result.success() }
         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (_: Exception) { Result.failure() }
     }

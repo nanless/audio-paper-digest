@@ -104,17 +104,57 @@ object ResearchRenderer {
 
     suspend fun render(context: Context, markdown: String): String = renderPrepared(context,withContext(Dispatchers.Default){prepare(markdown)})
 
-    suspend fun renderArticle(context:Context,article:Article):String = withContext(Dispatchers.Default) {
-        if(!article.markdown.isNullOrEmpty()) {
+    /** Export/printing stay self-contained. Native display is the only stream-URL consumer. */
+    suspend fun renderArticle(context:Context,article:Article):String = renderArticleBody(context,article,false,null)
+    suspend fun renderArticleForDisplay(context:Context,article:Article,onReadable:suspend(String)->Unit):String = renderArticleBody(context,article,true,onReadable)
+    private suspend fun renderArticleBody(context:Context,article:Article,display:Boolean,onReadable:(suspend(String)->Unit)?):String = withContext(Dispatchers.Default) {
+        if(article.displayImages==null&&!article.markdown.isNullOrEmpty()) {
             val compact=compactVerifiedImageData(article.markdown,article.inlineImages)
-            return@withContext renderPrepared(context,prepare(compact.markdown,compact.images))
+            val prepared=prepare(compact.markdown,compact.images)
+            onReadable?.invoke(prepared.html)
+            return@withContext renderPrepared(context,prepared)
         }
-        val document=Jsoup.parseBodyFragment(article.html)
-        val verified=article.inlineImages.values.toSet()
-        document.select("img").forEach{image->
-            val original=image.attr("src").ifBlank{image.attr("data-source-url")};val inline=article.inlineImages[original]?:original.takeIf{it in verified}
-            if(inline!=null){image.attr("src",inline).removeAttr("srcset").attr("loading","lazy")}
-            else image.replaceWith(org.jsoup.nodes.Element("span").attr("role","note").attr("data-source-url",original).text("[图片未核验离线保存：${image.attr("alt")}]"))
+        // A native, verified stream capability owns its sanitized local image URLs.
+        // Only the legacy/export branch expands verified bytes into inline data.
+        val document=Jsoup.parseBodyFragment(article.displayImages?.bodyHTML?:article.html)
+        if(!display&&article.displayImages!=null){
+            var total=0L
+            document.select("img[src]").forEach{image->
+                val source=image.attr("src")
+                val material=withContext(Dispatchers.IO){
+                    val resource=requireNotNull(article.displayImages.open(source,false,"GET")){"已保存图片暂不可读，未将本机地址写入导出"}
+                    val bytes=resource.second.use{input->
+                        val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(16*1024)
+                        while(true){val count=input.read(buffer);if(count<0)break
+                            require(out.size().toLong()+count<=16L*1024*1024){"导出原图超过单图安全上限"}
+                            out.write(buffer,0,count)
+                        };out.toByteArray()
+                    }
+                    resource.first to bytes
+                }
+                total+=material.second.size;require(total<=64L*1024*1024){"导出原图超过完整材料安全上限"}
+                require(material.first in setOf("image/png","image/jpeg","image/webp","image/gif","image/svg+xml")){"导出原图类型无效"}
+                image.attr("src","data:${material.first};base64,"+java.util.Base64.getEncoder().encodeToString(material.second))
+            }
+        }
+        // Legacy/restored HTML is display data, never executable page markup.
+        document.select("script,iframe,object,embed,link,meta,base,form,input,button,video,audio,source").remove()
+        document.getAllElements().forEach{node->node.attributes().asList().forEach{attribute->
+            if(attribute.key.startsWith("on",true)||attribute.key.equals("style",true)||attribute.key.equals("srcset",true))node.removeAttr(attribute.key)
+        }}
+        if(article.displayImages==null){
+            val verified=article.inlineImages.values.toSet()
+            document.select("img").forEach{image->
+                val original=image.attr("src").ifBlank{image.attr("data-source-url")};val inline=article.inlineImages[original]?:original.takeIf{it in verified}
+                if(inline!=null){image.attr("src",inline).removeAttr("srcset").attr("loading","lazy")}
+                else image.replaceWith(org.jsoup.nodes.Element("span").attr("role","note").attr("data-source-url",original).text("[图片未核验离线保存：${image.attr("alt")}]"))
+            }
+        }
+        if(onReadable!=null){
+            val readable=document.clone()
+            // Initial native MathML stays readable without a second, unstyled KaTeX text copy.
+            readable.select(".katex").filter{it.selectFirst("math")!=null}.forEach{it.select(".katex-html").remove()}
+            onReadable(readable.body().html())
         }
         renderHTMLMath(context,document)
     }
@@ -221,19 +261,34 @@ object ResearchRenderer {
         ("<style>"+css+".katex-display{overflow-x:auto;overflow-y:hidden;padding:.3em 0}</style>").also{bundledStyle=it}
     }
 
-    private suspend fun renderFormulae(context:Context,formulae:List<Formula>):List<String> {
+    internal suspend fun renderFormulae(context:Context,formulae:List<Formula>,webFactory:(Context)->WebView={WebView(it)}):List<String> {
         val katex = withContext(Dispatchers.IO) { context.assets.open("katex/katex.min.js").bufferedReader().use { it.readText() } }
         val source = JSONArray(formulae.map { JSONObject().put("tex", it.tex).put("display", it.display) }).toString()
             .replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
         val results = withContext(Dispatchers.Main) {
             withTimeoutOrNull(15_000) {
                 suspendCancellableCoroutine<List<String>> { continuation ->
-                    val web = WebView(context.applicationContext)
+                    val web = webFactory(context.applicationContext)
                     web.settings.apply { javaScriptEnabled = true; allowFileAccess = false; allowContentAccess = false; blockNetworkLoads = true; domStorageEnabled = false }
                     var finished = false
-                    fun destroy() { web.stopLoading(); web.destroy() }
+                    var disposed = false
+                    fun destroy() {
+                        if(disposed)return
+                        disposed=true
+                        (web.parent as? android.view.ViewGroup)?.removeView(web)
+                        runCatching{web.stopLoading()};runCatching{web.webViewClient=WebViewClient()}
+                        runCatching{web.removeAllViews()};runCatching{web.destroy()}
+                    }
                     continuation.invokeOnCancellation { android.os.Handler(android.os.Looper.getMainLooper()).post { if (!finished) { finished = true; destroy() } } }
                     web.webViewClient = object : WebViewClient() {
+                        override fun onRenderProcessGone(view:WebView,detail:android.webkit.RenderProcessGoneDetail):Boolean {
+                            if(view===web){
+                                val pending=!finished&&continuation.isActive
+                                finished=true;destroy()
+                                if(pending)continuation.resumeWithException(IllegalStateException("公式显示进程已结束，保留原式；可返回后重新打开"))
+                            }
+                            return true
+                        }
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse = WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(byteArrayOf()))
                         override fun onPageFinished(view: WebView?, url: String?) {
                             if (finished || !continuation.isActive) return

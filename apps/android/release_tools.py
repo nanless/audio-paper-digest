@@ -450,6 +450,128 @@ def verify_downloaded(args):
   result=verify(a,args.repo,SDK(args.sdk),args.certificate);mac_module(args.repo).verify(m,args.repo)
  return {'downloadedAssetsSHAExact':True,'androidAPKReverified':True,'macArtifactsReverified':True,'assets':len(expected),'publicationEligible':False,'remoteTagOIDChecked':False,'apkSHA256':result['apkSHA256']}
 
+def android_release_files(folder):
+ # Android-only publication has exactly four payload/record assets and two checksums/manifest files.
+ # Check the original path before resolving it; a symlinked prepared directory cannot qualify.
+ folder=P(folder).absolute();info=load(regular(folder/'android-build-info.json'))
+ require(info.get('contract')=='paperdigest-android-signed-v1','signed_record')
+ version=info.get('versionName');code=info.get('versionCode')
+ require(isinstance(version,str) and re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',version) and type(code) is int and code>0,'android_release_identity')
+ apk=f'paperdigest-android-{version}-{code}-universal.apk'
+ names={apk,'android-build-info.json','android-source-inputs.json','android-runtime-materials.json'}
+ manifest=load(regular(folder/'android-release-manifest.json'))
+ require(manifest.get('contract')=='paperdigest-android-release-v1' and isinstance(manifest.get('assets'),dict) and set(manifest['assets'])==names,'android_asset_set')
+ names|={'android-release-manifest.json','ANDROID-SHA256SUMS'}
+ require({p.name for p in folder.iterdir()}==names,'android_asset_set')
+ files={name:regular(folder/name) for name in sorted(names)}
+ for name,item in manifest['assets'].items():
+  require(isinstance(item,dict) and type(item.get('bytes')) is int and item['bytes']>=0 and isinstance(item.get('sha256'),str) and re.fullmatch('[a-f0-9]{64}',item['sha256']),'android_asset_record')
+  require(files[name].stat().st_size==item['bytes'] and file_sha(files[name])==item['sha256'],'asset_changed')
+ sums=''.join(f"{item['sha256']}  {name}\n" for name,item in sorted(manifest['assets'].items()))
+ require(files['ANDROID-SHA256SUMS'].read_bytes()==sums.encode('utf-8'),'checksum_file_changed')
+ return files
+
+def android_file_snapshot(paths):
+ return {str(regular(p)):{'bytes':regular(p).stat().st_size,'sha256':file_sha(regular(p))} for p in paths}
+
+def android_qualification(args,private_draft):
+ files=android_release_files(args.prepared)
+ paths=[*files.values(),regular(args.android_acceptance),regular(args.notes_file)]
+ before=android_file_snapshot(paths);inputs=load(files['android-source-inputs.json'])
+ with open(regular(args.notes_file),'rb') as reader:notes=reader.read(1024*1024+1)
+ require(0<len(notes)<=1024*1024 and b'\0' not in notes,'android_notes_required')
+ text=notes.decode('utf-8','strict');require(re.search(r'[\u3400-\u9fff]',text),'android_chinese_notes_required')
+ verified=verify(args.prepared,args.repo,SDK(args.sdk),args.certificate)
+ require(verified.get('verified') is True and verified.get('sourceCommit')==inputs.get('sourceCommit') and re.fullmatch('[a-f0-9]{40}',verified['sourceCommit']),'android_release_source')
+ mac=mac_module(args.repo)
+ android_acceptance(regular(args.android_acceptance),{'A-'+item for item in mac.IDS|mac.CLOUD_IDS},private_draft=private_draft)
+ def unchanged():
+  require(android_file_snapshot(android_release_files(args.prepared).values())=={str(p):before[str(p)] for p in files.values()},'qualification_changed')
+  check_source(args.repo,inputs)
+  require(android_file_snapshot(paths)==before,'qualification_changed')
+ unchanged()
+ return verified,files,text,before[str(regular(args.notes_file))],mac,unchanged
+
+def android_verified_remote_tag(mac,verified):
+ tag=mac.verified_remote_tag('v'+verified['version'],verified['sourceCommit'])
+ require(tag.get('annotated') is True and tag.get('tag')=='v'+verified['version'] and tag.get('commitOID')==verified['sourceCommit'],'annotated_remote_tag_required')
+ # The shared helper binds the peeled commit. Also bind the annotation object itself:
+ # replacing an annotated tag with another annotation for the same commit is a CAS change.
+ ref='refs/tags/'+tag['tag']
+ raw=mac.run(['git','ls-remote','--tags','https://github.com/nanless/audio-paper-digest.git',ref,ref+'^{}']).decode('ascii')
+ rows=[line.split('\t') for line in raw.splitlines()]
+ require(len(rows)==2 and all(len(row)==2 and re.fullmatch('[a-f0-9]{40}',row[0]) and row[1] in {ref,ref+'^{}'} for row in rows),'annotated_remote_tag_required')
+ refs={name:oid for oid,name in rows}
+ require(len(refs)==2 and refs.get(ref+'^{}')==verified['sourceCommit'],'annotated_remote_tag_required')
+ return {**tag,'tagObjectOID':refs[ref]}
+
+def android_private_draft_plan(args):
+ verified,files,notes,note_record,mac,unchanged=android_qualification(args,True)
+ tag=android_verified_remote_tag(mac,verified)
+ unchanged()
+ return {'executed':False,'automaticTagCreation':False,'publicPublication':False,'stage':'android-private-draft',
+         'sourceCommit':verified['sourceCommit'],'version':verified['version'],'versionCode':verified['versionCode'],
+         'remoteTag':tag,'remoteTagOIDChecked':True,'assets':6,'notes':{'path':str(regular(args.notes_file)),**note_record},
+         'downloadVerificationRequired':True,'qualification':'Android 84项前置验收通过；仅A-REL-03/04可待验。只生成私有草稿命令，尚未创建或公开；Mac不在本次发行范围。',
+         'argv':['gh','release','create',tag['tag'],*[str(p) for p in files.values()],
+                 '--repo','github.com/nanless/audio-paper-digest','--verify-tag','--target',verified['sourceCommit'],
+                 '--title','论文速递工作台 Android '+verified['version'],'--notes-file',str(regular(args.notes_file)),'--draft']}
+
+def verify_android_downloaded(args):
+ # No network: the downloaded six files must equal the selected original release, then pass the real APK verifier.
+ files=android_release_files(args.prepared);before=android_file_snapshot(files.values())
+ inputs=load(files['android-source-inputs.json']);check_source(args.repo,inputs)
+ require({p.name for p in args.downloaded.iterdir()}==set(files),'download_asset_set')
+ for name,p in files.items():
+  actual=regular(args.downloaded/name)
+  require(actual.stat().st_size==before[str(p)]['bytes'] and file_sha(actual)==before[str(p)]['sha256'],'download_sha_mismatch')
+ with tempfile.TemporaryDirectory(prefix='paperdigest-android-download-check-') as tmp:
+  target=P(tmp).resolve()
+  for name in files:shutil.copyfile(regular(args.downloaded/name),target/name)
+  # Recheck the copied bytes, so a replacement between comparison and copying is also rejected.
+  require({name:{'bytes':(target/name).stat().st_size,'sha256':file_sha(target/name)} for name in files}=={name:before[str(p)] for name,p in files.items()},'download_sha_mismatch')
+  result=verify(target,args.repo,SDK(args.sdk),args.certificate)
+ check_source(args.repo,inputs)
+ require(android_file_snapshot(android_release_files(args.prepared).values())==before,'qualification_changed')
+ require(result.get('verified') is True and result.get('sourceCommit')==inputs.get('sourceCommit'),'android_release_source')
+ return {'downloadedAssetsSHAExact':True,'androidAPKReverified':True,'assets':6,'sourceCommit':result['sourceCommit'],
+         'publicationEligible':False,'remoteTagOIDChecked':False,'apkSHA256':result['apkSHA256']}
+
+def android_public_plan(args):
+ # Read only: never upload, create a release/tag, or execute the returned PATCH.
+ require(type(args.draft_id) is int and args.draft_id>0,'draft_id_required')
+ verified,files,notes,note_record,mac,unchanged=android_qualification(args,False)
+ tag=android_verified_remote_tag(mac,verified);endpoint='repos/nanless/audio-paper-digest/releases/'+str(args.draft_id)
+ expected={name:{'bytes':p.stat().st_size,'sha256':file_sha(p)} for name,p in files.items()}
+ def draft():
+  record=json.loads(run(['gh','api','--hostname','github.com',endpoint],'draft_read_failed'))
+  require(type(record.get('id')) is int and record['id']==args.draft_id and record.get('tag_name')==tag['tag'] and record.get('target_commitish')==verified['sourceCommit'] and record.get('draft') is True and record.get('published_at') is None and record.get('prerelease') is False,'existing_private_draft_required')
+  require(record.get('body')==notes,'draft_notes_changed')
+  assets=record.get('assets');require(isinstance(assets,list) and len(assets)==6,'draft_asset_set')
+  require(all(isinstance(a,dict) and type(a.get('id')) is int and a['id']>0 and a.get('name') in expected and type(a.get('size')) is int and a['size']==expected[a['name']]['bytes'] and a.get('state')=='uploaded' and (a.get('digest') is None or a['digest']=='sha256:'+expected[a['name']]['sha256']) for a in assets),'draft_asset_record')
+  require(len({a['name'] for a in assets})==6 and len({a['id'] for a in assets})==6,'draft_asset_set')
+  stable={k:record.get(k) for k in ['id','tag_name','draft','published_at','name','body','prerelease','target_commitish','updated_at']}
+  stable['assets']=sorted([{k:a.get(k) for k in ['id','name','size','state','updated_at','digest']} for a in assets],key=lambda a:a['name'])
+  return stable
+ original=draft()
+ with tempfile.TemporaryDirectory(prefix='paperdigest-android-private-download-') as tmp:
+  downloaded=P(tmp).resolve()
+  for asset in original['assets']:
+   argv=['gh','api','--hostname','github.com','-H','Accept: application/octet-stream','repos/nanless/audio-paper-digest/releases/assets/'+str(asset['id'])]
+   try:
+    with open(downloaded/asset['name'],'xb') as output:result=subprocess.run(argv,stdout=output,stderr=subprocess.PIPE,timeout=1200)
+   except (OSError,subprocess.TimeoutExpired):raise ReleaseError('draft_download_failed') from None
+   require(result.returncode==0 and (downloaded/asset['name']).stat().st_size==asset['size'],'draft_download_failed')
+  download=verify_android_downloaded(argparse.Namespace(**{**vars(args),'downloaded':downloaded}))
+ require(canonical(draft())==canonical(original),'draft_changed_during_verification')
+ require(android_verified_remote_tag(mac,verified)==tag,'remote_tag_changed')
+ unchanged()
+ return {'executed':False,'publicPublication':False,'stage':'android-publish-verified-existing-draft','draftID':args.draft_id,
+         'sourceCommit':verified['sourceCommit'],'version':verified['version'],'versionCode':verified['versionCode'],
+         'remoteTag':tag,'downloadVerification':download,'notes':{'path':str(regular(args.notes_file)),**note_record},
+         'qualification':'Android全部86项公开前准入通过；同一私有草稿、固定6附件、远端注释标签和下载实包已核对。尚未执行公开，Latest及匿名下载须在公开后另验；Mac不在本次发行范围。',
+         'argv':['gh','api','--hostname','github.com','--method','PATCH',endpoint,'-F','draft=false']}
+
 def main():
  require(not os.environ.get('CODEX_SANDBOX'),'normal_environment_required')
  parser=SafeParser(description=__doc__);parser.add_argument('--repo',type=P,required=True);parser.add_argument('--sdk',type=P,default=P('/opt/homebrew/share/android-commandlinetools'));sub=parser.add_subparsers(dest='command',required=True)
@@ -463,6 +585,12 @@ def main():
    for flag in ['android-acceptance','mac-acceptance','mac-cloud']:p.add_argument('--'+flag,type=P,required=True)
   if name=='joint-public-plan':p.add_argument('--draft-id',type=int,required=True)
   if name=='verify-downloaded':p.add_argument('--downloaded',type=P,required=True)
+ for name in ['android-private-draft-plan','android-public-plan','verify-android-downloaded']:
+  p=sub.add_parser(name);p.add_argument('--prepared',type=P,required=True);p.add_argument('--certificate',required=True)
+  if name=='verify-android-downloaded':p.add_argument('--downloaded',type=P,required=True)
+  else:
+   p.add_argument('--android-acceptance',type=P,required=True);p.add_argument('--notes-file',type=P,required=True)
+  if name=='android-public-plan':p.add_argument('--draft-id',type=int,required=True)
  args=parser.parse_args();args.repo=args.repo.resolve()
  if args.command=='prepare':result=prepare(args)
  elif args.command=='sign':result=sign(args)
@@ -470,6 +598,9 @@ def main():
  elif args.command=='verify':result=verify(args.prepared,args.repo,SDK(args.sdk),args.certificate)
  elif args.command in {'joint-plan','joint-private-draft-plan'}:result=joint_plan(args,private_draft=args.command=='joint-private-draft-plan')
  elif args.command=='joint-public-plan':result=joint_public_plan(args)
+ elif args.command=='android-private-draft-plan':result=android_private_draft_plan(args)
+ elif args.command=='android-public-plan':result=android_public_plan(args)
+ elif args.command=='verify-android-downloaded':result=verify_android_downloaded(args)
  else:result=verify_downloaded(args)
  print(json.dumps(result,ensure_ascii=False,sort_keys=True))
 if __name__=='__main__':

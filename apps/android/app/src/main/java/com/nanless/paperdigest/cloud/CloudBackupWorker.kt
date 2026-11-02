@@ -36,8 +36,9 @@ object CloudScheduler {
 }
 class CloudBackupWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
-        val provider = CloudWorkerRuntime.current() ?: return Result.failure(workDataOf("error" to "application_not_initialized"))
         return try {
+            (applicationContext as com.nanless.paperdigest.PaperDigestApplication).awaitController()
+            val provider = CloudWorkerRuntime.current() ?: return Result.failure(workDataOf("error" to "application_not_initialized"))
             val service = provider.service(applicationContext)
             val expectedID = inputData.getString("destinationID") ?: return Result.failure(workDataOf("error" to "target_changed"))
             if (service.targetID != expectedID) return Result.failure(workDataOf("error" to "target_changed"))

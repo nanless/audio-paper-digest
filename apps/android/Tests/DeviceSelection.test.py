@@ -23,7 +23,9 @@ class Selection(unittest.TestCase):
         for serial in ['emulator-5580,emulator-5554','emulator-5580 emulator-5582','--all']:
             r,c,a=self.run_script(['--device'],{'ANDROID_SERIAL':serial});self.assertNotEqual(0,r.returncode);self.assertIsNone(c);self.assertEqual('',a)
     def test_explicit_qa_serial_is_the_only_gradle_target(self):
-        r,c,a=self.run_script(['--device','emulator-5580','-Pexample=true']);self.assertEqual(0,r.returncode,r.stderr);self.assertEqual('emulator-5580',c['serial']);self.assertEqual([':app:connectedDebugAndroidTest','-Pexample=true'],c['args']);self.assertTrue(all(x.startswith('-s emulator-5580 ') for x in a.splitlines()))
+        r,c,a=self.run_script(['--device','emulator-5580','-Pexample=true']);self.assertEqual(0,r.returncode,r.stderr);self.assertEqual('emulator-5580',c['serial']);self.assertEqual([':app:connectedDebugAndroidTest','-Pexample=true','-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true'],c['args']);self.assertTrue(all(x.startswith('-s emulator-5580 ') for x in a.splitlines()))
+    def test_automatic_uninstall_cannot_delete_the_selected_qa_app_data(self):
+        r,c,a=self.run_script(['--device','emulator-5580','-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=false']);self.assertNotEqual(0,r.returncode);self.assertIsNone(c);self.assertEqual('',a)
     def test_passthrough_device_override_cannot_escape_selection(self):
         for override in ['--serial=emulator-5554','--serial','-Pandroid.injected.device.serial=emulator-5554']:
             r,c,a=self.run_script(['--device','emulator-5580',override]);self.assertNotEqual(0,r.returncode);self.assertIsNone(c);self.assertEqual('',a)

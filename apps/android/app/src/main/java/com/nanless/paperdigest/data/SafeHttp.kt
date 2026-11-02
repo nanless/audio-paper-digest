@@ -17,6 +17,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URI
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -29,20 +30,31 @@ data class HttpBytes(val code: Int, val headers: Map<String, String>, val bytes:
 data class HttpFile(val code: Int, val headers: Map<String, String>, val bytes: Long, val sha256: String?)
 
 /** Redirects are evaluated by the caller; credentials never follow them automatically. */
-class SafeHttp private constructor(private val proxy: String?, private val localModel: Boolean, timeoutMs: Long, private val downloadCalls:Call.Factory?) {
+class SafeHttp private constructor(private val proxy: String?, private val localModel: Boolean, timeoutMs: Long, private val downloadCalls:Call.Factory?, dns: Dns = Dns.SYSTEM, networkDispatcher: okhttp3.Dispatcher? = null) {
     constructor(proxy:String?=null,localModel:Boolean=false,timeoutMs:Long=180000):this(proxy,localModel,timeoutMs,null)
     /** JVM tests can own only a download callback; ordinary/model requests retain the real original client. */
     internal constructor(downloadCalls:Call.Factory):this(null,false,180000,downloadCalls)
+    /** Exercise the real asynchronous transport against a deterministic DNS failure, without sockets. */
+    internal constructor(dns: Dns, dispatcher: okhttp3.Dispatcher):this(null,false,1000,null,dns,dispatcher)
+    internal class PublicDns(private val localModel: Boolean, private val delegate: Dns = Dns.SYSTEM): Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val addresses = try { delegate.lookup(hostname) }
+            catch (error: UnknownHostException) { throw error }
+            catch (error: RuntimeException) { throw UnknownHostException("网络地址解析未完成").apply { initCause(error) } }
+            if (!(localModel && hostname.lowercase() in setOf("localhost", "127.0.0.1", "::1")) &&
+                (addresses.isEmpty() || !addresses.all(::isPublic))) {
+                // OkHttp treats unchecked DNS exceptions as programming errors and rethrows them
+                // from its dispatcher. A rejected VPN/fake-IP answer must be a normal IO failure.
+                throw UnknownHostException("服务解析到私网或保留地址，已停止连接")
+            }
+            return addresses
+        }
+    }
     private val client = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false)
         .connectTimeout(30, TimeUnit.SECONDS).callTimeout(timeoutMs.coerceIn(1000, 600000), TimeUnit.MILLISECONDS)
         .readTimeout(timeoutMs.coerceIn(1000, 600000), TimeUnit.MILLISECONDS)
-        .dns(object: Dns { override fun lookup(hostname: String): List<InetAddress> {
-            val addresses = Dns.SYSTEM.lookup(hostname)
-            if (!(localModel && hostname.lowercase() in setOf("localhost", "127.0.0.1", "::1"))) {
-                require(addresses.isNotEmpty() && addresses.all(::isPublic)) { "服务解析到私网或保留地址，已停止连接" }
-            }
-            return addresses
-        } }).apply {
+        .dns(PublicDns(localModel, dns)).apply {
+            if (networkDispatcher != null) dispatcher(networkDispatcher)
             if (!proxy.isNullOrBlank()) {
                 val uri = URI(proxy)
                 require(uri.scheme == "http" && uri.host != null && uri.userInfo == null && uri.port in 1..65535 && uri.rawQuery == null && uri.fragment == null && uri.path in listOf("", "/")) { "代理须为不含密码的 HTTP CONNECT 地址" }
@@ -58,7 +70,7 @@ class SafeHttp private constructor(private val proxy: String?, private val local
         continuation.invokeOnCancellation { call.cancel() }
         call.enqueue(object: Callback {
             override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) continuation.resumeWithException(AppFailure("transport", "连接未完成；保留已有结果，请检查网络或代理。"))
+                if (continuation.isActive) continuation.resumeWithException(connectionFailure(e))
             }
             override fun onResponse(call: Call, response: Response) {
                 try {
@@ -204,6 +216,9 @@ class SafeHttp private constructor(private val proxy: String?, private val local
     }
 
     companion object {
+        private fun connectionFailure(error: IOException) = if (error is UnknownHostException)
+            AppFailure("dns", "网络地址解析未完成，请检查网络或 VPN 的 DNS 设置；已保存内容仍可阅读。")
+        else AppFailure("transport", "连接未完成；保留已有结果，请检查网络或代理。")
         fun isPublic(address: InetAddress): Boolean {
             if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress || address.isMulticastAddress) return false
             val b = address.address.map { it.toInt() and 255 }

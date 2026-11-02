@@ -76,7 +76,8 @@ class AggregateLinksTest {
     private inner class Port(val fixture:Fixture):AggregateBrowsePort {
         var epoch=0L;var present=true;var stampValue=AggregateCatalogStamp(fixture.catalog.snapshotSHA256,UUID.randomUUID().toString());var reads=0;var links=0;var online=false;var failRead=false;var hold:CompletableDeferred<Unit>?=null;var entered:CompletableDeferred<Unit>?=null
         override fun stamp()=stampValue
-        override suspend fun catalog()=fixture.catalog
+        var failCatalog=false
+        override suspend fun catalog():PublishedAggregateCatalog {if(failCatalog)error("Synthetic first catalog read failed");return fixture.catalog}
         override suspend fun revisions(id:String)=listOf(AggregateCachedRevision(fixture.document.rawHTMLSHA256,fixture.document.fetchedAt))
         override suspend fun read(id:String):JSONObject {reads++;if(failRead)error("Controlled failed refresh");return fixture.store.cachedDocument(fixture.document.descriptor,fixture.document.rawHTMLSHA256)}
         override suspend fun cached(id:String,sha:String)=fixture.store.cachedDocument(fixture.document.descriptor,sha)
@@ -90,6 +91,17 @@ class AggregateLinksTest {
         assertEquals("saved-document",browser.execute("aggregate.select",JSONObject().put("id",port.fixture.document.descriptor.id)).getString("status"));return browser
     }
     private fun payload(browser:AggregateBrowser,index:Int=1)=JSONObject().put("nonce",browser.state.document!!.linkNonce).put("index",index)
+    @Test fun firstCatalogFailureRecordsOnlyDisplayStampAndANewSyncCanRefreshTheEmptyView()=runBlocking {
+        val port=Port(fixture());val browser=AggregateBrowser(port,{live->live()},{})
+        port.failCatalog=true
+        assertEquals("failed",browser.execute("aggregate.list",JSONObject()).getString("status"))
+        assertEquals(port.stampValue,browser.state.stamp);assertNull(browser.state.document)
+        assertFalse(browser.linkIsCurrent("forged",0))
+        port.stampValue=port.stampValue.copy(validationEpoch=UUID.randomUUID().toString())
+        browser.observeNativeState();assertTrue(browser.state.catalogStale)
+        port.failCatalog=false
+        assertEquals("index-ready",browser.execute("aggregate.list",JSONObject()).getString("status"));assertFalse(browser.state.catalogStale)
+    }
     @Test fun browserSendsOnlyNativePaperAndFinalGuardToAdmission()=runBlocking {
         val port=Port(fixture());var opened=0;val browser=opened(port){paper,live->assertEquals(port.fixture.paper.id,paper.id);assertTrue(live());opened++;JSONObject()}
         val result=browser.execute("aggregate.link",payload(browser));assertEquals("paper",result.getString("kind"));assertEquals(1,opened);assertEquals(0,port.reads)
