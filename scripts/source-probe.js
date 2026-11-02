@@ -38,7 +38,7 @@ function render(result) {
         lines.push(`${icon} ${check.label}：${check.detail}${check.hint ? `\n   ↳ ${check.hint}` : ''}`);
     }
     const failed = result.checks.filter(check => check.ok === 'fail').length;
-    lines.push(failed ? `结论：${failed} 个入口不可用；先处理网络/代理后再抓取。` : '结论：入口可用；如公告未生成则等待或改用官方 OAI。');
+    lines.push(failed ? `结论：${failed} 个入口不可用；先处理网络/代理后再抓取。` : '结论：入口可用；目标日公告未生成时仍须等待，官方 OAI 恢复也须核验该日公告覆盖。');
     return lines.join('\n');
 }
 

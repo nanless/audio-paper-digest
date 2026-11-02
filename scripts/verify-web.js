@@ -340,7 +340,7 @@ function parseVerifyArgs(argv = []) {
     return options;
 }
 
-const USAGE = '用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--receipt RECEIPT.json] [--wait] [--allow-degraded] [--allow-partial] [--json]';
+const USAGE = '用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--receipt RECEIPT.json] [--wait] [--wait-seconds N] [--poll-interval-ms N] [--timeout-ms N] [--allow-degraded] [--allow-partial] [--json]';
 
 // 可测 CLI：所有副作用（目录、fetch、gh、时钟、输出）都从 deps 注入。
 async function runVerifyWebCli(argv = [], deps = {}) {

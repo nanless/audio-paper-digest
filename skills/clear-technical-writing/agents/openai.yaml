@@ -1,0 +1,4 @@
+interface:
+  display_name: "把技术写清楚"
+  short_description: "写清技术说明与研究解读，保留事实、条件和约束，减少黑话与套话"
+  default_prompt: "使用 $clear-technical-writing 改写或审阅这份内容，解释清楚，并核对事实、条件、术语和实现是否一致。"

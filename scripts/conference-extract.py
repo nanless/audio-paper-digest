@@ -10,13 +10,12 @@ from conference_extractor import ConferenceExtractionError, parse_args, run_extr
 
 def main(argv=None):
     # 先挡掉沙箱内的直接调用，连命令行参数都还没解析。下面那次按模式区分的
-    # 检查会给写操作补上 history 角色，同时允许从已经过角色校验的流程里做
-    # 固定版本的只读重放。
+    # 检查保留直接入口的角色要求，同时允许已经过角色校验的流程做固定版本只读重放。
     require_external_runtime("conference-extraction-replay")
     mode, manifest_name, source_root = parse_args(list(sys.argv[1:] if argv is None else argv))
     # 校验模式也用作已过角色校验的 Node 生产流程内部的固定版本只读重放。
-    # apply 和 dry-run 仍是 history 的直接入口；npm 包装层还会把每种模式都
-    # 绑到 history 上。
+    # apply 和 dry-run 的直接角色要求不变；新会议 npm 包装层显式启用会议模式并核 daily，
+    # 旧历史调用仍受自己的角色检查，不能从注释推导跨角色权限。
     require_external_runtime(
         "conference-extract.py" if mode != "verify" else "conference-extraction-replay"
     )

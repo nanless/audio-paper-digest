@@ -1,0 +1,71 @@
+# 例子与方法来源
+
+以下例子说明编辑判断，不代表任何真实项目的测量记录。实际编辑只能使用当前来源和用户提供的信息。
+
+## 具体信息来自哪里
+
+原句：“持续优化协同机制，全面赋能业务增长。”
+
+若材料只提供这一句，不能补出审批人、耗时或增长率。可以要求补充实际改动，也可以删去没有信息的效果判断。若材料另有“把订单和库存放到同一后台，销售可以直接查库存”，就写这些已提供的动作和用途。
+
+“赋能”改成“助力”，“闭环”改成“体系”，句子仍然可能没有信息。
+
+## 语言简化保留确定程度
+
+原句：“这项变化可能与缓存命中率下降有关，原因尚未确认。”
+
+可以写：“原因还未确认，可能与缓存命中率下降有关。”
+
+不能写：“缓存命中率下降导致了这项变化。”相关性、可能性和确认状态都被改动了。
+
+原句：“计划在下一版支持导出，目前尚未完成测试。”
+
+不能写成“下一版支持导出”或“导出已经可用”。计划不是承诺，更不是当前结果。
+
+## 专业词需要解释，不能随意换名
+
+“控制器根据输出误差调整输入，这种方式称为闭环控制”给出了术语的作用。“打造闭环生态”若没有具体对象和流程，则没有提供同样的信息。
+
+一篇文章已经把“检查点”定义为保存的阶段输入和结果，后文不要轮换成“缓存”“备份”“快照”来避免重复；这些名称可能有不同的技术身份。
+
+## 保留必要计算
+
+教学假设：错误率从 20% 降到 15%。绝对变化为 5 个百分点，相对下降为 `(20 − 15) / 20 = 25%`，分母是原错误率。不能压成“错误率下降了 5%”。
+
+数值的单位、正负号、样本范围和比较对象，与数字本身同样重要。把完整计算过程写清楚有助于初学者判断，而不属于应删的冗余。
+
+## 进度与完成状态
+
+“已完成修改，正在检查保存后的版本”表达了当前动作，不保证修改已经正确。
+
+“博客已推送，网站是否上线还需核验”比“发布闭环已完成”更能帮助用户判断。实际已部署并逐页验证后，再说明页面已经上线。
+
+结果汇报中的数量来自实际记录。不要把有限抽查写成全部通过，不用一串内部标识代替结果；需要排障或复核时再给文件位置、版本或日志依据。
+
+## 格式按内容选择
+
+三个真正独立的参数应保留为三项，不为消除“三段式”而删掉一项。执行顺序用编号，字段属性适合表格，一段连续推导则保留为段落。
+
+长短句、破折号、转折词或弯引号本身不能判断作者身份。连贯、准确、符合读者任务，比刻意制造句式差异更重要。
+
+## 来源与取舍
+
+本 skill 综合下列社区规则中适合清楚表达的方法，重新组织为事实保护、技术解释、编辑和审计工作方式。参考资料不是需要逐一运行的外部依赖。
+
+| 来源 | 采用的方法与边界 |
+|---|---|
+| [blader/humanizer](https://github.com/blader/humanizer/blob/main/SKILL.md) | 检查铺垫、重复、假对比和读者错位；保留有信息的真实比较 |
+| [syw2039/humanizer-zh](https://github.com/syw2039/humanizer-zh/blob/main/SKILL.md) | 先保护事实，再按中文文体调整，不编造作者经历 |
+| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh/blob/main/SKILL.md) | 用可修改与应保留的边界防止误伤条件、归因和确定程度 |
+| [holygeek00/humanizer-zh-cn](https://github.com/holygeek00/humanizer-zh-cn/blob/main/SKILL.md) | 找回主体、动作、对象、结果和依据，不做同义词替换游戏 |
+| [ZeddYu/humanizer_zh](https://github.com/ZeddYu/humanizer_zh/blob/main/SKILL.md) | 区分场景与文体；不把示例中新出现的数字移进实际稿件 |
+| [nothing0here/humanizer-zh](https://github.com/nothing0here/humanizer-zh/blob/main/SKILL.md) | 检查职场套话、欧化句式、名词化；不借例子补造事实 |
+| [hardikpandya/stop-slop](https://github.com/hardikpandya/stop-slop/blob/main/SKILL.md) | 删除无信息的强调和舞台式铺垫；不照搬绝对的词类与标点禁令 |
+| [obra/the-elements-of-style](https://github.com/obra/the-elements-of-style/blob/main/skills/writing-clearly-and-concisely/SKILL.md) | 具体语言、段落主题和紧邻的相关成分；不把英文语法套在中文上 |
+| [mlwelles/technical-writing-density](https://github.com/mlwelles/technical-writing-density/blob/main/skills/technical-writing-density/SKILL.md) | 简洁以信息密度为准，保留理由、约束和消歧说明 |
+| [ashgreat/humanizer](https://github.com/ashgreat/humanizer/blob/main/SKILL.md) | 减少学术浮词和过度碎段；不把特定语料的统计当作普遍结论 |
+| [harshaneel/humanize](https://github.com/harshaneel/humanize/blob/main/plugins/humanize/skills/humanize/SKILL.md) | 参考重读与自查，不采用检测追分、强制句长变化或假亲历框架 |
+| [apoapostolov/humanizer](https://github.com/apoapostolov/humanizer/blob/main/skills/humanizer/SKILL.md) | 按范围选择修改深度、保护作者声音、不叠加反复全文改写 |
+| [apoapostolov/simple-english](https://github.com/apoapostolov/humanizer/blob/main/skills/simple-english/SKILL.md) | 条件在动作前、名称一致；不机械替换情态词，不宣称满足正式标准 |
+
+本 skill 不使用作者身份检测或检测器分数作为目标，也不要求上传文稿到外部服务。原 skill 的示例、效果声明或工具调用，都不能代替当前任务自己的事实核验和授权。

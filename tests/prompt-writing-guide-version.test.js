@@ -65,7 +65,8 @@ test('讲解增强保留机器章节、Reader来源声明及普通局部补丁�
     const headings = text => [...text.matchAll(/^## (.+)$/gm)].map(item => item[1]);
     assert.deepEqual(headings(analysis), headings(oldAnalysis));
     const oldArticle = block(evidence.readPromptEvidenceBytes(predecessors.apiReaderArticle.path).toString());
-    const article = loadPrompt(registry.currentTextStagePromptPath('apiReaderArticle'));
+    // 本用例核验当时写作升级的原 v9；后续范围消歧由独立迁移测试覆盖。
+    const article = loadPrompt(registry.promptFilePathForContract('apiReaderArticle', 'analysis-prompt-text-v9'));
     // 完整表结构、坐标、标记与JSON schema示例后的协议逐字保留；新教学规则不重写它们。
     assert.equal(article.slice(article.indexOf('四种表格记录方式')), oldArticle.slice(oldArticle.indexOf('四种表格记录方式')));
     const repair = loadPrompt(registry.currentTextStagePromptPath('apiReaderRepair'));

@@ -9,7 +9,7 @@
 1. 先读对应流程和当前实现，确认要改的是入口、共享模块还是旧记录兼容读取器。
 2. 列出受影响的调用方、来源记录、阶段指纹和测试；先保留工作树里其他人的改动。
 3. 用临时目录中的样例复现问题，修改后验证真实正例和相关负例。付费原稿回放另存带 SHA 的运行证据，不塞进依赖当前日期的普通单测。
-4. 定向检查通过、实现稳定后，运行一次完整 `npm run verify`；分套件或分片通过不能代替完整汇总。
+4. 按改动影响安排检查。只改说明文字时，核对命令、链接、事实与格式，不启动论文重分析或全批重跑。实现改动的定向检查通过、版本稳定后，运行一次完整 `npm run verify`；分套件或分片通过不能代替完整汇总。
 5. 交叉审查事实、来源、预算和发布边界，再核对 Markdown、链接与文档命令，使用具体中文提交并及时推送。
 
 完整语法检查排除客户端固定的构建、SDK 缓存和验收副本目录（两端 `.build`、`.qa`，以及 Android 的 Gradle/CMake 输出）。这些目录中的历史项目副本不属于当前正式源码；客户端正式资源、构建脚本、测试，以及其他位置同名的 `build` 或 `.qa` 目录仍正常检查。排除路径由 `verify-project.js` 明确登记，不随任意 `.gitignore` 规则变化。
@@ -28,9 +28,9 @@
 | 日更来源的文本与 PDF | `scripts/lib/daily-fresh-source-plan.js`、`scripts/lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
-| 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |
+| 分析结构或评分 | `analysis-contract.js`、当前 `deep-analysis-v7.md` 及评分提示词 | Node/Python 解析器和发布器 |
 | 分类词表与多级路径 | `config/tag-catalog.json`、`lib/tag-rules.js`、`tag_catalog.py`、`tag_presentation.py` | 主分析/标签Prompt、旧SHA归档与双运行时证明、三种单篇/汇总渲染、站点版本目录及 `tag_catalog_publication.py` 发布守卫 |
-| Reader 写作、图表或修复 | 当前登记的 `api-reader-article-v9.md`、`api-reader-repair-v13.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
+| Reader 写作、图表或修复 | 当前登记的 `api-reader-article-v10.md`、`api-reader-repair-v13.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
@@ -59,7 +59,7 @@
 5. 重试反馈能定位问题并限制修改范围，不使整篇内容无故变化。
 6. 读者正文没有模板句、证据 ID 或流程说明。
 
-工作树只保留当前登记的 18 份正文；实际路径和对应协议以 `scripts/lib/prompt-text-versions.js` 为准，不能只从文件名推断协议。主分析 v6、评分 v5、核心摘要 v7、Reader 文章 v9、局部修复 v13、结构修复路径 v3，以及 3 份事实/术语专项修复模板见 [Prompt 索引](../prompts/README.md)。新建分析默认使用当前模板；已有付费候选的恢复先核验其原阶段和请求身份，不能因模板升级直接换版或重新计数。
+工作树只保留当前登记的 18 份正文；实际路径和对应协议以 `scripts/lib/prompt-text-versions.js` 为准，不能只从文件名推断协议。主分析 v7、评分 v5、核心摘要 v7、Reader 文章 v10、局部修复 v13、结构修复路径 v3，以及 3 份事实/术语专项修复模板见 [Prompt 索引](../prompts/README.md)。新建分析默认使用当前模板；已有付费候选的恢复先核验其原阶段和请求身份，不能因模板升级直接换版或重新计数。
 
 筛选使用 `filter-v5.md`，明确实际音频输入与评测、音乐生成输入、口语轮次控制和说话人分段错误的相关范围，并区分实际声音方法或系统的贡献与固定现成基准验证；推理采样、解码等贡献不要求新增训练模块。通用理论、表示、算法或采样与音频线索交界的候选，按当前关键词规则先核验官方方法和实验材料再筛选。旧会议筛选仍核验原声明版本、原模板 SHA 和原正文，通过 Git 证据读取器取回旧字节，不能与新版正文混用。提示词正文版本不代替 Reader 文章等内容协议。
 
@@ -167,7 +167,9 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 运行中用 `npm run digest:status -- --date YYYY-MM-DD --watch`（默认 10 秒刷新，`--interval N` 可调，`--json --watch` 每行一个 JSON）查看阶段、数量、失败列表、最近日志、账号池可用数、本次费用和无进度提示；默认不带 `--watch` 时输出与原来一致。费用按日期聚合 `data/runtime/llm-usage`，不联网、不推算未记录的费用。
 
-轻量监控遇到审查记录的 `postPublishVisuals: required` 时，同时等待长图和封面，不使用生成清单的发布前视觉标志省略其中一项。该字段只接受已知的单篇或旧维护不适用模式来略过视觉，未知值仍显示视觉待办；旧审查记录没有该字段时沿用原生成标志。监控不核验完整图片资产、视觉豁免或部署网页，最终完成仍按正常状态及上线核验判断。
+轻量监控遇到审查记录的 `postPublishVisuals: required` 时，仍按两类任务清单推导内部 `visual` 阶段，不使用生成清单的发布前标志省略其中一项；人类可见名称为“发布收尾”。该字段只接受已知的单篇或旧维护不适用模式，旧审查记录缺该字段时沿用原生成标志，未知值不表示完成。
+
+这个视图不核验完整图片资产、当前发布豁免或部署网页，因此默认不生图的批次也可能停留在“发布收尾”。建议从 `./run-daily-digest.sh DATE --from visual` 继续，由正常日更入口重核发布并按持续设置登记不生图，不执行图片准备或生图。该提示不授予任何完成资格；最终仍查看普通 `digest:status` 的实际豁免核验，再核对部署和全部目标页面。
 
 主要生产入口（fetch、deep、batch、reanalyze、Reader 刷新与博客三阶段）在打印原错误后会追加 `[下一步]` 指引（原因、建议步骤、可复制命令、文档位置），不吞原堆栈、不改变退出码。各阶段还可写人话摘要到 `logs/summaries/<YYYY-MM-DD>-summary.log`（Node `writeStageSummary` 与 Python `write_stage_summary` 同格式、自动脱敏、目录 0700/文件 0600）；摘要写入失败只告警，不影响业务。
 
@@ -193,9 +195,15 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 发布后网页核验与收尾
 
 - `npm run blog:push -- --date DATE --dry-run`：只列出审查凭证允许的精确文件清单，不 commit/push。
-- `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态/标题并写 `data/current/web-verification-<date>.json`；`--deploy` 查询对应提交的 Pages workflow（仓库可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖，默认 `nanless/audio-paper-digest-blog`；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`）；`--wait` 最多等待 120 秒直到 completed，无 gh/进行中默认判失败，`--allow-degraded` 可显式放宽。`--json` 在等待时输出 JSONL（部署快照行 + summary + 最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy/generationManifestSha256/publicationOid；页面重定向必须回到期望 URL，标题须为具体页面（汇总页还需含日期）。默认要求部署证据：无 `--deploy`、`--limit` 抽样或部署未成功时 artifact 标记 partial 并返回非零，只有显式 `--allow-partial` 才放宽页面/抽样 partial；`--allow-degraded` 只放宽部署不可得/进行中，不降低页面与凭证证据要求。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
+- `npm run verify:web -- --date DATE [--limit N] [--deploy OID] [--wait] [--allow-degraded]`：按生成清单批量请求汇总页与单篇，记录 HTTP 状态、最终 URL 和标题，原子写入 `data/current/web-verification-<date>.json`。`--deploy` 查询对应提交的 Pages workflow，默认仓库为 `nanless/audio-paper-digest-blog`，可用 `PAPER_DIGEST_BLOG_REPO_RUN` 覆盖；站点 URL 来自 `PAPER_DIGEST_BLOG_URL`。
+
+  `--wait` 默认最多等待 120 秒，默认每 10000 毫秒轮询；可用 `--wait-seconds N` 与 `--poll-interval-ms N` 调整。无 gh、部署仍在进行或部署证据不可得时，默认不能完成验收。`--json` 在等待时输出 JSONL（部署快照行、summary、最终结果）；保存文件含 schemaVersion、createdAt、partial、deploy、generationManifestSha256 和 publicationOid。存在 `blog-review-receipt-<date>.json` 时自动绑定其清单 SHA 与发布 OID，`--receipt` 可显式指定。
+
+  页面检查仅要求 HTTP 200、最终 URL 去掉查询参数、片段和末尾斜杠后与期望地址一致、标题包含站点标记，且汇总标题含日期、单篇标题去掉站点标记后长度大于 4。它不核对准确论文标题、H1、canonical 或完整正文；这些须在最终全页核验中另查，不能将该命令通过解释为全部内容正确。
+
+  默认要求完整页面与部署证据：无 `--deploy`、`--limit` 抽样或部署未成功时标记 partial 并返回非零。`--allow-partial` 只放宽页面/抽样 partial 的退出判断；`--allow-degraded` 只放宽部署不可得或进行中的退出判断，不降低页面与凭证要求，也不把诊断记录升级为完整验收。
 - `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]`：只读核对误报解释，按页面 SHA 与逐字 claim 匹配，不修改失败文件或凭证，也不授予正式审查或发布资格。诊断报告 v2 的 `matched` 统计实际命中的解释条目，`matchedIssues` 与 `matches` 记录本次问题位置；`inputDeclaredOverridden` 单列原输入的旧标记，`sourceFailureSha256` 绑定原文件字节。严格退出码由 `currentMatchVerdict` 决定：仍有 error 或未完整解释的失败页退出 1，诊断无阻断退出 0，执行或参数错误退出 2。旧 `pendingBlockedFiles`、`overriddenFailedPages`、`wouldPass` 及 `legacyProjection` 保留旧投影，不能作为新退出依据。此变化会使只靠输入旧 `overridden` 标记的旧调用返回非零。`receiptCheck` 仅报告参考提交字段是否相等，`receiptContractVerified` 始终为 false；字段冲突退出 2，缺字段明确告警。失败文件显式日期冲突同样退出 2；旧文件缺日期时 `failureDateCheck` 明确未比对，`formalScopeVerified` 始终为 false。同一失败页中原有的 `overridden` 位置也须由本次匹配覆盖，不能用另一条新解释掩盖。`--json` 的正常诊断输出为单份 JSON，告警写入 stderr。
-- `npm run publish:finish -- --date DATE`：打印推送后收尾清单（digest:status、网页核验、视觉 prepare/豁免），不调用图像 API、不自动登记豁免。
+- `npm run publish:finish -- --date DATE`：打印推送后收尾清单，包括正式状态、网页核验及当前发布的不生图登记。登记缺失时只提示重建发布后任务清单，再执行豁免；不提示图片准备，也不自行登记或调用图像 API。
 
 `verify:web` 的完整部署结果还要求明确的 `jobVerified: true`。缺 runId、jobs 查询失败或超时、无法解析响应等均保留为未核验，不以 run 的成功结论替代 job 证据。此时结果仍为 `partial:true`；同时显式使用 `--allow-degraded --allow-partial` 只允许诊断命令退出成功，不会把证据升级为完整验收。实际 job 失败、取消或跳过继续返回失败。
 

@@ -44,6 +44,6 @@
 
 [ZoteroService](../apps/macos/Sources/ZoteroService.swift)提供 `zotero.status`、`zotero.checkAuthorization`、`zotero.collections`、`zotero.authorize`、`zotero.archive` 和 `zotero.resume`。状态读取、许可请求、归档与续传分别处理。
 
-已有已安装版本完成原生授权、真实书目和附件写入、逐项回读及 Zotero 中打开材料；模拟服务用于权限、冲突、篡改、丢失应答和部分失败测试。1.0.1 的实际检查范围见[验证说明](mac-app-validation.md)，项目清单见[验收矩阵](mac-app-acceptance.md)。
+已有已安装版本完成原生授权、真实书目和附件写入、逐项回读及 Zotero 中打开材料；模拟服务用于权限、冲突、篡改、丢失应答和部分失败测试。各次真实服务操作保留原版本范围，1.3.0 复用未变化服务的证据，没有重新写入真实文库；具体范围见[验证说明](mac-app-validation.md)和[本轮记录](workbench-1.3.0-review.md#正式发行与升级检查)，项目清单见[验收矩阵](mac-app-acceptance.md)。
 
 官方协议：[Local API](https://www.zotero.org/support/dev/web_api/v3/local_api)、[Write Requests](https://www.zotero.org/support/dev/web_api/v3/write_requests)、[File Uploads](https://www.zotero.org/support/dev/web_api/v3/file_upload)。

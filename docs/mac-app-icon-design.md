@@ -24,6 +24,6 @@
 | 浅深背景、灰度 | 透明外沿干净，颜色不是唯一识别依据 |
 | 实际 ICNS、Finder、Dock | 尺寸齐全、视觉体量适当，显示与源资产一致 |
 
-修改应保留现有视觉身份，并对实际资产做独立视觉检查。1.0.1 新包的静态资产检查与应用启动后的呈现分别说明，详见[验证范围](mac-app-validation.md)。
+修改应保留现有视觉身份，并对实际资产做独立视觉检查。图标文件与 ICNS 的静态检查、应用启动后的 Finder/Dock 呈现分别记录。1.0.1 的历史范围与 1.3.0 正式包操作见[验证范围](mac-app-validation.md)，不能用静态校验推定系统呈现已实测。
 
 设计参考：[Apple App icons](https://developer.apple.com/design/human-interface-guidelines/app-icons)、[Icon Composer](https://developer.apple.com/icon-composer/)、[Zotero 品牌资源](https://www.zotero.org/support/brand)。

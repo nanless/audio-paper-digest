@@ -442,6 +442,28 @@ describe('digest-live-status 最近日志日期过滤', () => {
 });
 
 describe('digest-live-status 单屏合成', () => {
+    it('发布收尾建议沿日更默认登记豁免，并提示轻量状态的限制', t => {
+        const { paths } = temporaryRoot(t);
+        baseBatchFiles(paths);
+        writeJson(paths.deepAnalysisResult, completedDeep());
+        writeJson(path.join(paths.currentDir, `blog-generation-manifest-${DATE}.json`), {
+            date: DATE, files: [{ path: 'content/posts/a.md' }],
+            visualSummaryRequired: true, digestCoverRequired: true
+        });
+        writeJson(path.join(paths.currentDir, `blog-review-receipt-${DATE}.json`), {
+            date: DATE, strictReview: true, files: [{ path: 'content/posts/a.md' }],
+            publicationCommit: 'a'.repeat(40), remoteVerifiedOid: 'a'.repeat(40)
+        });
+        const status = buildLiveStatus({ date: DATE, paths, nowMs: NOW_MS, latestLog: null });
+        assert.strictEqual(status.stage, 'visual');
+        assert.strictEqual(status.stageLabel, '发布收尾');
+        assert.deepStrictEqual(status.suggestions, [
+            `./run-daily-digest.sh ${DATE} --from visual`,
+            `npm run digest:status -- --date ${DATE}`
+        ]);
+        assert.match(formatLiveStatus(status), /轻量查询不核验发布豁免/);
+    });
+
     it('合成阶段、数量、当前论文、失败、账号池、费用与无进度秒数', t => {
         const { paths } = prepareRoot(t);
         const status = buildLiveStatus({

@@ -6,12 +6,12 @@
 
 - **选什么、怎样解释**：筛选、全文主分析、Reader 长文与评分。
 - **检查和补足什么**：资源、表格、方法、标签、摘要、结构和 Reader 受限修复。
-- **怎样呈现及定向纠错**：图片/长图/封面规划，以及三份只用于已绑定范围的事实或术语修复模板。
+- **怎样呈现及定向纠错**：论文原图补充，以及三份只用于已绑定范围的事实或术语修复模板。长图和封面模板保留给用户以后明确要求生图时使用；当前日更按持续要求不生图。
 
 | 阶段 | 当前文件 |
 |---|---|
 | 论文筛选 | [filter-v5.md](filter-v5.md) |
-| 全文主分析 | [deep-analysis-v6.md](deep-analysis-v6.md) |
+| 全文主分析 | [deep-analysis-v7.md](deep-analysis-v7.md) |
 | 审校重写 | [gap-fill-v4.md](gap-fill-v4.md) |
 | 资源核验 | [opensource-scan-v3.md](opensource-scan-v3.md) |
 | 表格修复 | [table-fill-v2.md](table-fill-v2.md) |
@@ -20,7 +20,7 @@
 | 核心摘要 | [core-summary-repair-v7.md](core-summary-repair-v7.md) |
 | 结构修复 | [structure-repair-v3.md](structure-repair-v3.md) |
 | 评分 | [scoring-audit-v5.md](scoring-audit-v5.md) |
-| Reader长文 | [api-reader-article-v9.md](api-reader-article-v9.md) |
+| Reader 长文 | [api-reader-article-v10.md](api-reader-article-v10.md) |
 | Reader受限修复 | [api-reader-repair-v13.md](api-reader-repair-v13.md) |
 | 图片补充 | [image-supplement-v3.md](image-supplement-v3.md) |
 | 长图规划 | [visual-summary-v2.md](visual-summary-v2.md) |
@@ -35,7 +35,11 @@
 
 写作采用[共同约定](../docs/writing-guide.md)与[Reader 说明](../docs/reader-writing.md)：面向入门者讲清概念、一次计算与完整数据流，在结果附近交代比较条件，公式和图表解释具体作用，段落之间留空行。长文、机器分析、受限纠错和视觉规划各守原输出结构；筛选、标签与评分不因语言规范改为自由长文。JSON 正文字符串用合法 `\n\n` 转义表示空行，原表、TeX、引用、字段与标记按各自协议保留。
 
-当前主分析使用 v6，Reader 写作使用 v9，局部修复使用 v13，核心摘要修复使用 v7。摘要中的比较可以取自同一原表不同方法行的同一指标，须逐项核对完整表头、对象、条件、单位和精度；不同指标或条件分别说明。旧模板及旧稿仍按原路径、原 Git 对象和原 SHA 核验，版本更新保留旧稿、请求次数、费用和恢复范围。首围栏外的说明供维护者阅读，不会发送给模型。
+当前主分析使用 v7，Reader 写作使用 v10，局部修复使用 v13，核心摘要修复使用 v7。摘要选择少量关键结果组，每组仍保留可比较的双方数值、单位、条件及必要成本；不能把结果组数理解为数字个数上限。比较可以取自同一原表不同方法行的同一指标，须逐项核对完整表头、对象、条件、单位和精度；不同指标或条件分别说明。
+
+Reader 首次写作使用本次提供的全文和实际收到的图像。只有受控恢复请求实际给出独立封存 PDF 原字符全文，并明确允许相应引文操作时，才使用 `pdfSourceQuotes`；字段示例、路径或先前有过的 PDF 证明都不能代替本次材料及范围。原表的选择、完整展示、普通全文引文与独立 PDF 引文仍分别核验，详见 [Reader 来源规则](../docs/reader-writing.md#表格和公式)。
+
+旧模板及旧稿仍按原路径、原 Git 对象和原 SHA 核验，版本更新保留旧稿、请求次数、费用和恢复范围。首围栏外的说明供维护者阅读，不会发送给模型，但也参与整文件身份核验。
 
 主分析和标签修复共用当前386项词表，只输出本篇有证据的直接标签。父级路径由发布器统一推导，不要求模型另写全目录或把祖先放进直接集合；原3–5项、主任务/主方法及JSON/四行结构保持不变。新版目录中的零计数方向仍可在总目录保留，不能因此强行给论文贴标签。
 

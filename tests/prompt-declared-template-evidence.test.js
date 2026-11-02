@@ -4,12 +4,13 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const evidence = require('../scripts/lib/prompt-evidence'), history = require('../scripts/lib/prompt-history');
+const versions = require('../scripts/lib/prompt-text-versions');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'declared-prompt-proof-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     execFileSync('git', ['init', '-q', '-b', 'main', root]);
-    const relative = 'prompts/api-reader-article-v9.md', old = Buffer.from('~~~text\nOriginal paid instruction.\n~~~\nOriginal tail.\n');
+    const relative = versions.currentTextStagePromptPath('apiReaderArticle'), old = Buffer.from('~~~text\nOriginal paid instruction.\n~~~\nOriginal tail.\n');
     const current = Buffer.from('~~~text\nCurrent writing instruction.\n~~~\nCurrent tail.\n');
     const filename = path.join(root, relative), indexFile = path.join(root, 'scripts/lib/git-prompt-evidence-index.json');
     fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.mkdirSync(path.dirname(indexFile), { recursive: true });
@@ -26,7 +27,7 @@ function fixture(t) {
 
 test('显式原模板身份只读恢复同路径真实Git字节，新请求仍读取当前工作树', t => {
     const f = fixture(t), declared = evidence.declaredStagePromptTemplateEvidence('apiReaderArticle', f.template, { root: f.root });
-    assert.equal(declared.contract, 'analysis-prompt-text-v9');
+    assert.equal(declared.contract, versions.currentPromptTextContract('apiReaderArticle'));
     assert.equal(declared.path, f.relative); assert.equal(declared.fileSha256, sha(f.old));
     assert.deepEqual(declared.bytes, f.old);
     assert.deepEqual(evidence.readPromptEvidenceBytes(f.relative, { root: f.root }), f.current);

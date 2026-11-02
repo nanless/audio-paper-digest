@@ -30,7 +30,7 @@ PDF 公开地址见 [资产说明](assets/README.md)。使用项目已有封存 
 
 ## 测试
 
-首次执行 `npm install --ignore-scripts` 安装固定版本的 Playwright。浏览器可使用本机 Chrome，或按 Playwright 官方说明准备 Chromium。保持预览服务运行，再执行 `npm test`。
+首次执行 `npm ci --ignore-scripts` 按锁文件安装 Playwright。浏览器可使用本机 Chrome，或执行 `npx playwright install chromium` 准备与该版本匹配的 Chromium。保持预览服务运行，再执行 `npm test`。
 
 测试可通过 `MAC_PROTOTYPE_PLAYWRIGHT` 指定已有 Playwright 模块路径，通过 `MAC_PROTOTYPE_BROWSER` 指定 Chrome 可执行文件，通过 `MAC_PROTOTYPE_URL` 指定本机预览地址。结果和截图写入已忽略的 `.qa/`，使用独立浏览器上下文，不改用户原型中的笔记。
 

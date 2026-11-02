@@ -64,7 +64,7 @@ Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://git
 
 ## 从源码构建
 
-需要 macOS 15+、Xcode Command Line Tools 和根项目支持的开发用 Node。**打包用 Node 必须与离线许可固定版本 24.19.0 完全一致**，不能直接采用任意 24.x 版本。
+需要 macOS 15+、Xcode Command Line Tools 和根项目支持的开发用 Node。完整测试还需要 Google Chrome，部分界面测试使用它的固定安装路径。**打包用 Node 必须与离线许可固定版本 24.19.0 完全一致**，不能直接采用任意 24.x 版本。
 
 从 [Node 官方 24.19.0 下载目录](https://nodejs.org/dist/v24.19.0/)准备 `node-v24.19.0-darwin-arm64`，按官方校验文件核对下载归档后解压。将 `PD_MAC_NODE_RUNTIME` 指向自己的 `bin/node`；以下假定解压到 `~/Tools/`：
 
@@ -72,14 +72,13 @@ Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://git
 cd apps/macos
 export PD_MAC_NODE_RUNTIME="$HOME/Tools/node-v24.19.0-darwin-arm64/bin/node"
 npm ci
-# 没有 Chrome 时安装测试浏览器：npx playwright install chromium
 npm test
 npm run build
 # 保存并正常退出旧应用后安装到 ~/Applications：
 npm run install:app
 ```
 
-测试浏览器可通过 `PD_MAC_BROWSER` 指定。科学排版测试需要按[样稿准备说明](../../prototypes/macos-research/README.md)准备公开 MiCLA PDF 和三张原图，校验值以受控样稿清单为准；这些本机测试资产不进入正式包。
+部分界面测试可通过 `PD_MAC_BROWSER` 指定浏览器；完整 `npm test` 仍含直接使用 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` 的入口，单独安装 Playwright Chromium 或设置该变量不能替代这一前提。科学排版测试需要按[样稿准备说明](../../prototypes/macos-research/README.md)准备公开 MiCLA PDF 和三张原图，校验值以受控样稿清单为准；这些本机测试资产不进入正式包。
 
 默认构建使用 `release` 通道，输出 `.build/论文速递工作台.app`，不捆绑论文样稿。`--channel private-qa` 用于含样稿的本机测试，不能作为正式发行包。构建会检查 Node 的版本、架构、最低系统、外部动态库依赖及对应许可。安装脚本检测到 `PaperDigest` 进程仍在运行时拒绝替换，不强制结束应用。
 

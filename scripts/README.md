@@ -78,7 +78,7 @@ npm run test:compat
 | `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，初次明确付费轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出；后续局部或缺正文恢复使用单独的有界追加清单，原账和累计上限继续核验。无清单、坏绑定、仍有次数或成功稿拒绝。见 恢复说明。 |
 | `lib/daily-arxiv-oai-source.js`、`lib/daily-arxiv-announcement-source.js` | 日更显式 `--official-oai-recovery` 的官方元数据恢复与公告核验。仅同一类别、同一固定窗口内日期查询和类别列表均真实 HTTP 429 时启用；封存两种 OAI 格式的完整 XML 分页及目标日 RSS，按共同身份核对完整集合，版本时间以 Raw 为准，标题、摘要及有序作者以结构化格式为准。恢复、数据校验和下一日边界均重读原字节重建实际候选，保留原批次、已完成来源和原失败，见[补抓边界](../docs/daily-fetch-boundary.md#两条-atom-查询均限流时的官方-oai-恢复)。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
-| `deep-analyzer.js` | Node 核心：获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
+| `deep-analyzer.js` | Node 核心：按各流程来源适配读取单篇全文，执行多阶段分析、评分审计、API Reader 写作和论文图规划。日更恢复读取本批封存来源，不重新抓取。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
@@ -124,7 +124,7 @@ npm run test:compat
 | `evaluate-keyword-prefilter.js` | 只读取人工判定的样例和历史入选记录，用当前关键词预筛规则检查是否通过预筛。裁决后的正样本召回与原始命中率分开统计，已裁决负样本误放单列；缺少有效样本或存在误放时非零退出，读取及格式错误不按空样本处理。 |
 | `fetch-huggingface-papers.js` | Node 模块/入口：通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
 | `fetch-papers.js` | Node 模块/入口：负责 arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选；独立使用抓取模块也需要项目 Python 3.11+ 运行器来严格解析 Atom。 |
-| `full-fetch.js` | Node 入口：按顺序执行默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。旧结果首遍用ID索引，初始化按映射合并，内存只保留每篇最新尝试；逐次失败、检查点及费用仍持久保存。 |
+| `full-fetch.js` | Node 入口：先核已发布基线与抓取边界，再归档、抓取、按已发布页面去重、筛选、封存入选论文来源、深度分析，并逐篇保存结果。旧结果首遍用ID索引，初始化按映射合并，内存只保留每篇最新尝试；逐次失败、检查点及费用仍持久保存。 |
 | `lib/arxiv-metadata-source.js` | Node 库：通过项目 HTTP CONNECT 获取单篇 arXiv Atom 元数据，核验原始响应 SHA，并提取白名单中的标题、摘要、作者与类别。现行 v1 先严格校验 XML，再按既有规则保留字段中的实体和作者空白，以按原规则重新计算并核验旧封存 SHA；正常日更抓取使用解码后的 XML 字段。 |
 | `lib/daily-arxiv-prefix-source.js` | Node 库：日期查询终止于 HTTP 429 时，使用同一官方 Atom 类别列表完整覆盖固定窗口，保存旧见证、分页端点、响应 SHA 和首页重放证明；当前恢复、只读校验及下次补抓共用覆盖核验。 |
 | `lib/daily-fetch-boundary.js` | Node 库：从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见边界说明。 |
@@ -185,7 +185,7 @@ npm run test:compat
 | `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；显式新会议模式随真实 daily 包装层运行，原 history 调用保持原角色检查。先消费实际 Reader 维护 pending 门，再输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与模型请求。Python 调用者一次核完整会议及维护历史，期限3600秒、输出限2 MiB；页面渲染按共享角色预算执行；普通资源30秒期限保持。 |
 | `lib/conference-publication-author-source.js` | Node 库：只读核验官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；原2.3.0凭证严格复用已有保留来源读取器，其它版本仍走当前严格核验。不新建来源、不重抽 PDF 或请求模型。 |
 | `lib/conference-queue.js` | 会议队列状态、领取与并发保护；调用统一 process。 |
-| `lib/conference-run.js` | Node 库：固定会议成员、分片、分类策略、选择策略版本和逐篇状态。通用状态接口拒绝直接写 `completed`；聚合发布接口还要求一项尚未实现的认证完成证明，因此不能据此宣布会议可以发布。 |
+| `lib/conference-run.js` | Node 库：固定会议成员、分片、分类策略、选择策略版本和逐篇状态。通用状态接口拒绝直接写 `completed`；本旧底层聚合发布接口因尚缺认证完成证明而保持禁用，不授发布资格。现行会议通过 `conference:process` 与独立 `conference:publish:*` 入口处理。 |
 | `lib/conference-source-context.js` | Node 库：生产入口只接受当前进程实际核验并登记的计划对象，再核验完整上游证明并读取会议全文；不导出 ledger/run 测试捷径。 |
 | `lib/conference-source-ledger.js` | Node 库：管理会议来源身份、四类文件 SHA 和审查证据；文件不可变保存，读取时重新核验本地来源。标题不能作为论文身份。 |
 | `lib/conference-source-upgrade.js` | 会议来源能力升级的身份和已有分析绑定检查。 |
@@ -433,7 +433,7 @@ npm run test:compat
 | `plan-post-publish-visuals.py` | Python 入口：博客远端发布核验通过后调用共用视觉规划接口。 |
 | `visual-summary-integration.js` | Node 共享：在同一发布证明下协调论文长图与汇总封面。 |
 | `visual-summary-state.js` | Node 入口/状态机：规划、校验、登记和归档 TOP 10 论文长图。当前 v3 只使用已核验 Reader 的 thesis 与完整章节；日更核对官方论文图身份后返回空引用路径，不取旧缓存。QA 记录对应章节的 SHA，不回退到正式分析摘要。 |
-| `waive-post-publish-visuals.js` | Node 入口：用户明确取消生图时，记录与当前发布绑定的视觉豁免。 |
+| `waive-post-publish-visuals.js` | Node 入口：落实用户以后日更不再生图的持续设置，记录与当前发布及两类任务清单绑定的视觉豁免；不取消论文原图审查。 |
 
 ### 环境、文件、日志与验证
 
@@ -448,8 +448,8 @@ npm run test:compat
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 准备每篇 1–8 个既有节点的修正记录和清单，计算 SHA/UUID。默认 dry-run，`--write` 才写 `data/runtime`；正式采纳另核完整当前输入、原付费链、真实来源与整篇质量，见[清单准备范围](../docs/maintenance.md#恢复决策与清单生成)。 |
 | `table-check.js` | Node 入口：`npm run table:check -- --draft DRAFT.json` 离线预检表格粘连复写/列数/单位声明，不写数据。 |
 | `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
-| `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核验汇总页/单篇 HTTP 200 与标题，写 data/current/web-verification-<date>.json；`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy。 |
-| `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印推送后收尾清单（状态、网页核验、视觉准备/豁免），不调用图像 API、不自动豁免。 |
+| `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json；不比较准确论文标题、H1、canonical 或完整正文，具体条件见[收尾说明](../docs/maintenance.md#发布后网页核验与收尾)。`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy。 |
+| `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印正式状态、网页核验及当前发布不生图登记的收尾步骤；登记缺失时提示重建清单后豁免，不引导图片准备，不自动登记或调用图像 API。 |
 | `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` 只读核对页面 SHA、逐字问题与误报解释。退出判断使用 `currentMatchVerdict`；旧 `overriddenFailedPages` 等字段只作兼容投影。诊断不修改审查结果或授予发布资格，完整范围见[误报记录](../docs/maintenance.md#发布后网页核验与收尾)。 |
 | `storage-report.js` | Node 入口：`npm run storage:report [--advice-only]` 打印“必须保留/可压缩/可删”建议，并只读运行 storage:status；不删除。 |
 | `locks.js` | Node 入口：`npm run locks` 在原有有界范围观察锁的持有者、时间和心跳，包含 `.analysis-runs`、`conference-processes` 及真实 Git common-dir 共享锁。先核 `scanComplete`、`scopes`、`problems`；部分观测退出 1。`--recover` 只预览，不删除；观察结果不授予持锁或回收权限。 |

@@ -49,7 +49,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | 分析、Reader 或表格问题 | 完成本轮并保存结果，再用 `npm run recover -- --date DATE` 查看已保存问题及建议，按[恢复说明](reader-explicit-retry.md)选择正常入口。工具建议仍须经过来源、完整失败集合和预算核验。 |
 | 已授权的少量节点人工修正 | `npm run manifest:new -- --spec SPEC.json` 先预览；准备材料与正式采纳分开，原稿、来源、节点范围及付费历史按[人工修正规则](reader-explicit-retry.md#少量顽固稿的来源绑定人工修正)核验。 |
 | 博客审查失败 | 先完成整批审查，查看失败文件，回到生成或正常 Reader 维护。`review:overrides` 只核对误报解释，正式审查与发布继续核验。 |
-| 推送前核对差异 | `npm run blog:push -- --date DATE --dry-run`；核对后用同命令去掉 `--dry-run` 正常推送。 |
+| 推送前核对差异 | `npm run blog:push -- --date DATE --dry-run`；该预览会拒绝审查清单外的改动，且不证明正式推送已获准或远端已验证。发现其他改动时先核对归属，保留无关工作，再按正常凭证和精确差异规则推送。 |
 | 推送后部署与网页 | `npm run verify:web -- --date DATE --deploy OID`。`npm run publish:finish -- --date DATE` 仅打印后续清单，执行者按清单继续。 |
 
-任务已有持续付费授权时，执行者登记必要后续窗口，无需逐轮重新询问；每个窗口保留真实来源、限额、旧次数和全部费用。视觉豁免须有用户明确授权并绑定当前发布。完整要求见[操作手册](../SKILL.md)和[执行约束](../AGENTS.md)。
+任务已有持续付费授权时，执行者登记必要后续窗口，无需逐轮重新询问；每个窗口保留真实来源、限额、旧次数和全部费用。日更不生图已获用户持续授权，无须每批再问；豁免仍须绑定当前发布。完整要求见[操作手册](../SKILL.md)和[执行约束](../AGENTS.md)。

@@ -2,7 +2,9 @@
 
 本文面向项目维护者和论文解读的作者。目标是让刚接触项目的读者能找到入口、理解步骤，并知道结论的依据。日更、会议、历史更新及其文档采用同一套表达原则。
 
-操作与来源规则仍以 [操作手册](../SKILL.md)、[执行约束](../AGENTS.md)和各流程实现为准。论文正文的结构、证据与恢复要求见 [Reader 写作](reader-writing.md)；本页解释怎样把内容组织得清楚、自然。
+操作与来源规则仍以 [操作手册](../SKILL.md)、[执行约束](../AGENTS.md)和各流程实现为准。论文正文的结构、证据与恢复要求见 [Reader 写作](reader-writing.md)；本页解释怎样把内容组织得清楚、自然。通用方法已整理为可复用的 [clear-technical-writing skill](../skills/clear-technical-writing/SKILL.md)，技术解释、审计步骤和例子分别放在其参考文件中。本页继续维护项目特有的来源、评分、图表与流程要求。
+
+仓库中的 `skills/clear-technical-writing/` 是可随项目审阅的版本；本机安装副本位于 `~/.codex/skills/clear-technical-writing/`。本次更新后两份内容一致，后续修改须同步安装副本，不能假定仓库改动会自动更新本机。
 
 ## 先确定读者要完成什么
 

@@ -88,7 +88,7 @@ arXiv ID：{arxivId}
 
 表格的来源与数字
 
-`tableBindings` 按最终正文的表格顺序逐项对应。原表数字只走已有 `selection` 或完整原表声明 `completeTable`；不要把 DOM 数字抄入手写表后伪用 `source_quotes`。`selection` 仍只允许 `eligible:true`；`completeTable` 不选子集，只展示所指定原表的完整矩阵，是否可安全展示仍由原始 DOM、数字单位与正文检查决定。没有真实原表时，不得发明序号；全文连续原句中的数字可按已有 `source_quotes` 整理。不能计算差值、换算数字、补单位、猜表头或把来源校验失败说成作者没有报告。
+`tableBindings` 按最终正文的表格顺序逐项对应。原表数字只走已有 `selection` 或完整原表声明 `completeTable`；不要把 DOM 数字抄入手写表后伪用 `source_quotes`。`selection` 仍只允许 `eligible:true`；`completeTable` 不选子集，只展示所指定原表的完整矩阵，是否可安全展示仍由原始 DOM、数字单位与正文检查决定。没有真实原表时，不得发明序号；全文连续原句中的数字可按已有 `source_quotes` 整理。下文另有独立 PDF 引文的受控恢复规则；它只在本次实际提供相应材料并明确允许的范围内适用，不能把任意 DOM 数字改装成引文表。不能计算差值、换算数字、补单位、猜表头或把来源校验失败说成作者没有报告。
 
 表格数字和单位保留原文的写法、千分位和精度：44,000 不要改成 44000，100% 不要改成 100，19.44 不要四舍五入成 19。叙述数量用阿拉伯数字，数字和拉丁单位之间留一个空格。原文转换后出现字符粘连或 TeX 重复时，不要猜新数值，改用能核验来源的同实验表或清楚的连续原句。
 
@@ -98,8 +98,14 @@ arXiv ID：{arxivId}
    - 完整原表声明（`reader-complete-table-declaration-v1`）：正文只在模型自己选择的合法小节中独占一段写 `[[TABLE_<tableIndex>]]`，记录恰好为 `{"tableIndex":1,"completeTable":{"sourceTableOrdinal":2}}`（序号按真实证据替换）。不写 Markdown、不填行列或数字、不附带 `selection`、`sourceType`、`cellBindings`、`sourceQuotes`。程序保留该原表全部行列、双层表头及合并单元格投影，生成既有 `artifact_table` 来源记录后照常严格核验。必须保留表格前后的比较问题、结果及限制；不能把标记放入 `tableMarker` 等未知字段。
    - `selection`：正文独占一段写 `[[TABLE_<tableIndex>]]`，不手写该表的 Markdown。记录只含 `tableIndex` 和 `selection:{sourceTableOrdinal,sourceRows,sourceColumns}`。行列从 0 开始编号，只能选择证据实际给出的行列；`sourceRows` 第一项是明确的表头行，之后是数据行，不得重复或越界。代码会据此生成原表、坐标对应关系和 SHA。占位符编号是正文表序，不是原表编号；不要附带手写值、`sourceType`、`cellBindings` 或 `sourceQuotes`。
    - `artifact_table` 是保留的兼容模式。在 `sections[].body` 里写完整 Markdown 表，不用 `TABLE` 占位符。记录恰好包含 `tableIndex,sourceType,sourceTableOrdinal,cellBindings,sourceQuotes`；`sourceType` 为 `artifact_table`，`sourceQuotes` 是空数组。每个 `cellBindings` 项恰好包含 `renderedRow,renderedColumn,sourceRow,sourceColumn` 四个坐标，逐格记录完整对应关系。
-   - `source_quotes` 用来直接整理原文句子。在 `sections[].body` 里写完整 Markdown 表，不用 `TABLE` 占位符。记录恰好包含 `tableIndex,sourceType,sourceTableOrdinal,cellBindings,sourceQuotes`；`sourceType` 为 `source_quotes`，`sourceTableOrdinal` 为 `null`，`cellBindings=[]` 必须为空。`sourceQuotes` 是逐字连续原句组成的字符串数组。`value`、`quoteIndex`、`renderedText` 这类字段不能发明；引用只用来核验来源，不生成表格。
+   - `source_quotes` 用来直接整理原文句子。在 `sections[].body` 里写完整 Markdown 表，不用 `TABLE` 占位符。默认记录恰好包含 `tableIndex,sourceType,sourceTableOrdinal,cellBindings,sourceQuotes`；`sourceType` 为 `source_quotes`，`sourceTableOrdinal` 为 `null`，`cellBindings=[]` 必须为空。`sourceQuotes` 是逐字连续原句组成的字符串数组。`value`、`quoteIndex`、`renderedText` 这类字段不能发明；引用只用来核验来源，不生成表格。
    `source_quotes` 里的原句必须覆盖每个数字单元格的全部数字和单位。原文数值带单位时，单位留在同一单元格，不要拆成独立列再跨列补全；原文是裸数值就不要自己添单位，指标单位按原文写在表头或相邻说明里。格式示例：正文 `| 条件 | 指标 | 基线 | 本方法 | 比较对象 |\n| --- | --- | --- | --- | --- |\n| [原文条件] | [指标名] | [原值及单位] | [原值及单位] | [原文对象] |`；来源记录 `{"tableIndex":1,"sourceType":"source_quotes","sourceTableOrdinal":null,"cellBindings":[],"sourceQuotes":["[覆盖这些数字与单位的原文连续句]"]}`。方括号中的文字只是格式示例，不能照抄。正文不再放 `TABLE` 占位符。
+
+独立 PDF 引文只用于明确允许的恢复
+
+只有本次请求实际给出了独立的官方封存 PDF 原字符全文，并且当前恢复操作明确允许 PDF 引文时，`source_quotes` 才可在上述字段外增加 `pdfSourceQuotes` 字符串数组。每条必须逐字来自本次给出的该 PDF 原文，长度为 12–4000 字符，最多 64 条；只能合并空白，不能去连字符、改标点、裁数字、改正负号、精度或单位。`sourceQuotes` 继续对应本次常规全文证据，不能把另一份 PDF 文本冒充它；两数组至少一项非空。
+
+首次普通写作、只提供图注或图片像素、只出现 PDF 路径、字段示例或本地程序标记，都不表示已经提供这份 PDF 引文材料。未提供原字符全文或没有本次操作授权时，不输出 `pdfSourceQuotes`，也不猜引文。不能输出程序专用的 `sealedPdfQuoteEvidence` 或其他来源证明。此方式仍须完整覆盖原实验的条件、方法、指标、数值和单位，只能改本次获准的绑定及对应正文；不能新增授权节点、借引文删掉负结果，或把校验失败写成作者未报告。
 
 记录与正文的对应关系
 

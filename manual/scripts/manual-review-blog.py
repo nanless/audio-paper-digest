@@ -46,12 +46,12 @@ def _sha256(path):
 def _parse_args(module, argv=None):
     parser = argparse.ArgumentParser(
         prog='manual-review-blog.py',
-        description='模型审查不可用时，核对完整人工审查记录并签发发布凭证。',
+        description='核对已授权的独立人工审查记录并签发发布凭证，仍执行完整程序检查。',
         allow_abbrev=False,
     )
     parser.add_argument('--date', required=True, metavar='YYYY-MM-DD')
     parser.add_argument('--attestation', required=True,
-                        help='人工语义审查声明的 JSON 文件；所有检查结果必须为 true')
+                        help='人工语义审查声明 JSON；须包含真实逐页、逐图记录，并由程序独立核验')
     parser.add_argument('--include-id', action='append', metavar='ARXIV_ID',
                         help='只为指定论文的单篇试发布结果签发人工审查凭证')
     args = parser.parse_args(argv)

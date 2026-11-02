@@ -12,7 +12,7 @@
 npm install
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-cp env.example .env
+test -e .env || cp env.example .env
 ```
 
 Node 版本须满足 `>=20.18.1 <21 || >=22.3.0`。Python 须为 3.11 或更高版本，并使用 OpenSSL 提供 TLS；macOS 自带的 Python 3.9/LibreSSL 不受支持。npm 中的 Python 命令（包括三流程博客发布、视觉辅助和独立人工审查）通过 `scripts/python-runtime.sh` 选择 Python，优先使用项目 `.venv`，其次是 `python3.11`，最后才检查 `python3`。项目使用 Node 内置测试框架，Python 依赖用于博客生成、Hugo 构建检查和视觉辅助。

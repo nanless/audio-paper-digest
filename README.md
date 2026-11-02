@@ -109,4 +109,4 @@ npm run digest:prepare -- YYYY-MM-DD
 - [文档索引](docs/README.md)：配置、来源、Reader、标签和故障说明。
 - [脚本索引](scripts/README.md)：入口、公共模块和旧记录兼容代码。
 - [三流程与共享核心](docs/three-workflows.md)：调用关系、来源与发布边界。
-- [写作约定](docs/writing-guide.md)：术语、段落、图表和操作说明。
+- [写作 skill](skills/clear-technical-writing/SKILL.md)与[项目写作约定](docs/writing-guide.md)：事实保护、技术解释、审计、术语和图表。

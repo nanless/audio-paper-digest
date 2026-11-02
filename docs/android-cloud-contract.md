@@ -43,11 +43,12 @@ noBackupFilesDir/
     archived-UUID/ …
   PaperDigestSecrets/         ← Keystore 包装后的本机凭据，不进入研究快照
   PaperDigestDevice/          ← 设备派发 epoch、模型密钥端点绑定，不进入研究快照
+  PaperDigestTransfers/       ← 导入、导出与交付暂存，不进入研究快照
 ```
 
 研究目录不能放在系统可能回收的 `cacheDir`。使用内部 app 专用目录，不需要申请读写整个共享存储；卸载仍可能删除 app 专用资料，因此必须提供用户主动导出及云端完整备份。[Android app 专用存储](https://developer.android.com/training/data-storage/app-specific)
 
-研究、凭据、云账号、设备标识和待传材料均位于 `noBackupFilesDir`。应用设置 `allowBackup=false`，并提供系统备份与设备迁移的排除规则；正式包核对编译后的实际 XML。更换设备后，重新设置本机凭据和云目标，再主动导入研究快照。[Android Auto Backup](https://developer.android.com/identity/data/autobackup)
+研究、凭据、云账号、设备标识和传输暂存均位于 `noBackupFilesDir`；只有 `PaperDigest/` 研究树进入本应用的完整备份。应用设置 `allowBackup=false`，并提供系统备份与设备迁移的排除规则；正式包核对编译后的实际 XML。更换设备后，重新设置本机凭据和云目标，再主动导入研究快照。[Android Auto Backup](https://developer.android.com/identity/data/autobackup)
 
 用户从系统文件选择器提供的 `content://` PDF，先有界复制成内部研究目录下的普通文件，验证实际 PDF 与 SHA，再分配 `local:<原PDF SHA>`。不把 URI 假写成绝对文件路径；不在恢复时凭旧设备路径访问外部文件。备份导入/导出用 `ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`，将得到的流复制到内部暂存后完整校验，取消选择不创建成功任务。[Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files)
 
@@ -218,4 +219,4 @@ Android 在 API 28、API 35 模拟器上验证了系统保存、重新选择、�
 
 模型记录的文件恢复与模型证据合同验证分别处理：原合同受支持且输入、响应、来源与完整性条件全部满足时才可复用。未知或外端合同保留为历史，不改签为本机新研究。PDF 坐标按原物理页、裁切框和旋转转换，不使用屏幕像素代替。
 
-多设备采用不可变版本与显式恢复时点，当前不自动合并并行编辑；强制停止应用后也不保证后台任务继续运行。发行记录分别写明两端实际版本、来源、最低系统、签名及文件校验值。当前 1.1.0 已完成正式包核验、Android 原证书覆盖升级和两端公开下载检查，实际范围见[验证说明](<android-validation.md>)。
+多设备采用不可变版本与显式恢复时点，当前不自动合并并行编辑；强制停止应用后也不保证后台任务继续运行。发行记录分别写明两端实际版本、来源、最低系统、签名及文件校验值。1.1.0 的正式包、覆盖升级和下载检查保留其历史范围；当前 1.3.0 的正式升级与下载、以及复用 1.2.1 备份四腿的范围，见[验证说明](<android-validation.md>)和[1.3.0 发行记录](workbench-1.3.0-review.md#正式发行与升级检查)。

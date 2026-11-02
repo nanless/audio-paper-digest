@@ -2,7 +2,7 @@
 
 本页保留 Mac 版 69 项功能要求和原 ID。逐项状态见[当前状态](mac-app-acceptance-status.md)，已执行环境和实际范围见[验证说明](mac-app-validation.md)，新增云端与发行项目见[17项检查](mac-app-cloud.md)。源码、隔离测试、原生操作、真实服务和安装包分别记录结果。
 
-产品范围见[功能说明](mac-app-requirements.md)，设计依据见[界面设计](macos-interface-design-research.md)，数据适配见[数据合同](desktop-data-contract.md)。维护至少完成五轮有实质改进、测试、独立审查及必要复验；实际未解决的问题按影响范围继续处理。
+产品范围见[功能说明](mac-app-requirements.md)，设计依据见[界面设计](macos-interface-design-research.md)，现行数据适配见[数据与恢复](mac-app-data.md)。[desktop/v1 数据合同](desktop-data-contract.md)是尚未部署的可选接口设计。维护至少完成五轮有实质改进、测试、独立审查及必要复验；实际未解决的问题按影响范围继续处理。
 
 ## 1. 交付范围和判定方式
 

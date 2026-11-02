@@ -25,7 +25,7 @@
 | 两端如何读取网站目录和已发布页面 | 当前使用[网站数据适配](mac-app-data.md)；[静态数据接口](desktop-data-contract.md)中的 `desktop/v1` 是后续接口设计 |
 | Mac 界面、单栏阅读与 PDF 双栏 | [界面设计](macos-interface-design-research.md) |
 | Reader、SHA、CAS、检查点和凭证是什么 | [常见术语](writing-guide.md#术语先解释再统一称呼) |
-| 文档与论文讲解怎样写得清楚 | [写作约定](writing-guide.md) |
+| 文档与论文讲解怎样写得清楚 | [把技术写清楚 skill](../skills/clear-technical-writing/SKILL.md)、[项目写作约定](writing-guide.md) |
 
 ## 运行一项任务
 
@@ -65,7 +65,8 @@
 | 词表的设计背景与历史决策 | [标签设计](tag-system-design.md) |
 | 日更耗时观测、性能诊断与优化范围 | [性能说明](daily-performance.md) |
 | 代码清理、兼容保留、文档与提示词维护 | [维护约定](repository-maintenance-review.md) |
+| 本轮全部文档与提示词的发现、修改及覆盖 | [2026年11月2日审查记录](documentation-review-20261102.md) |
 
-完成验收包括对应发布提交的部署、全部目标页面及用户本次要求的视觉范围。状态报告和 Git 推送分别核验；省略视觉须登记与当前发布绑定的有效豁免。
+完成验收包括对应发布提交的部署和全部目标页面。日更持续遵循用户“以后不再生图”的要求，登记与当前发布绑定的有效豁免；论文原图仍正常核验和审查。只有用户另行明确改变要求，才执行对应生图任务。状态报告、Git 推送和网页上线分别核验。
 
 - [新人上手：执行顺序与故障入口](onboarding.md)

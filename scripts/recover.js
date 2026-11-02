@@ -221,7 +221,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
         else if (value === '--help') options.help = true;
         else throw new Error(`未知参数：${value}`);
     }
-    if (options.help) { console.log('用法: node scripts/recover.js --date YYYY-MM-DD [--json] [--execute --yes]'); return 0; }
+    if (options.help) { console.log('用法: node scripts/recover.js [--date YYYY-MM-DD] [--json] [--strict] [--execute --yes]'); return 0; }
     const date = parseRecoveryDate(options.date || beijingDate());
     const snapshot = collectSavedRecoveryState(date, dependencies);
     const { failures } = snapshot;

@@ -31,7 +31,7 @@ const STAGE_LABELS = {
     pages: '页面生成',
     review: '博客审查',
     push: '推送发布',
-    visual: '视觉长图',
+    visual: '发布收尾',
     complete: '已完成'
 };
 
@@ -593,7 +593,7 @@ function suggestCommands(stage, date, details = {}) {
         case 'push':
             return [`npm run blog:push -- --date ${date}`, watchCommand];
         case 'visual':
-            return [`npm run visual:prepare -- --date ${date}`, watchCommand];
+            return [`./run-daily-digest.sh ${date} --from visual`, statusCommand];
         case 'complete':
         default:
             return [statusCommand];
@@ -805,6 +805,9 @@ function formatLiveStatus(status) {
             `  连续无进度=${status.secondsSinceProgress === null ? '未知' : `${status.secondsSinceProgress} 秒`}`
             + `${status.stalled ? `  ⚠ 超过 ${status.stallThresholdSeconds} 秒，可能卡在模型请求或网络等待` : ''}`
         );
+    }
+    if (status.stage === 'visual') {
+        lines.push('  注意: 轻量查询不核验发布豁免；日更默认不生图，请用普通 digest:status 确认，确需收尾时按下方入口继续。');
     }
     if (status.latestLog) {
         const time = status.latestLog.timestamp ? `[${status.latestLog.timestamp}] ` : '';

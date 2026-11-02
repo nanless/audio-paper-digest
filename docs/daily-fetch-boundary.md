@@ -89,7 +89,7 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD --official-oai-recovery
-# 用户已取消视觉时继续保留该选择
+# 日更默认不生图；旧参数仍兼容，无须额外添加
 npm run digest:prepare -- YYYY-MM-DD --official-oai-recovery --no-visuals
 ```
 
