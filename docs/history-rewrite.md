@@ -78,7 +78,7 @@ npm run history:plan -- --apply \
 
 `history:inputs --name` 可指定不可变来源清单的文件名，但不能使用 `current.json`。这个名字专供当前清单指针使用；程序在创建输出目录前拒绝该保留名，防止指针覆盖清单自身。
 
-`history:conference-projections` 记录论文与历史会议页面的对应关系。它核对冻结页面、论文信息和 PDF 的 SHA；如果完整 inline TeX 曾被 Hugo 确定性省略，还会检查论文信息中对应省略形式的指纹。任一形式对应多个会议论文身份时都会拒绝，不能用标题相似度选择。这种页面对应关系不赋予旧 crosswalk 身份确认权限。
+`history:conference-projections` 记录论文与历史会议页面的对应关系。程序名中的 projection 在这里就是这份对应记录：一篇论文可能对应多个旧页面，后续必须全部覆盖。它核对冻结页面、论文信息和 PDF 的 SHA；如果完整 inline TeX 曾被 Hugo 确定性省略，还会检查论文信息中对应省略形式的指纹。任一形式对应多个会议论文身份时都会拒绝，不能用标题相似度选择。这种页面对应关系不赋予旧 crosswalk 身份确认权限。
 
 `history:plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用生成来源清单时使用的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
 
@@ -143,7 +143,13 @@ npm run history:run -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json
   --queue all --generation 1 --max-papers 50 --concurrency 3
 ```
 
-分析并发默认 3，范围 1–8，每篇内部分析引擎并发为 1。本次选定集合先统一走正常首轮，每篇本轮只进入一次流水线；全部在途结果、registry和恢复记录保存后，才按公共总轮配置（默认3，范围1–10）继续可重试失败子集。成功暂存项不再请求模型，失败项仍保持原来源和同一 Reader 候选身份，不以尝试数递增自动创建新 epoch 或追加费用许可。正式分析、API Reader 和来源证明全部完成且对应同一来源快照后，论文才标为 `staged`。暂存目录的 `historical-direct-paper-page-staging-v1` 为每个冻结单篇路径记录新 Markdown、逐页 SHA，以及来源、分析、Reader、页面对应关系和渲染实现的绑定。它不读取旧 crosswalk、旧隔离分析任务、旧标签分配或旧博客正文作为创作输入。
+分析并发默认 3，范围 1–8，每篇内部分析引擎并发为 1。程序先让本次选定集合走完正常首轮，每篇本轮只进入一次流水线；全部在途结果、执行登记 `registry` 和恢复记录保存后，才按公共总轮配置继续可重试失败子集。总轮数默认 3，范围 1–10。
+
+成功暂存项不再请求模型。失败项继续使用原来源和同一 Reader 候选身份，不会因尝试数递增而自动建立新的候选计数周期 `epoch`，也不会自动追加费用许可。
+
+只有正式分析、API Reader 和来源证明全部完成，且对应同一来源快照，论文才标为 `staged`，表示单篇页面已暂存，尚未发布。暂存目录的 `historical-direct-paper-page-staging-v1` 为每个冻结单篇路径记录新 Markdown、逐页 SHA，以及来源、分析、Reader、页面对应关系和渲染实现的绑定。
+
+创作输入不能来自旧 crosswalk、旧隔离分析任务、旧标签分配或旧博客正文。
 
 暂存目录按 `runId/sourceIdentity/renderer-<renderer SHA>/` 隔离。Reader SHA、历史页面对应关系或单页内容与原记录不同，都会阻止恢复。已 `staged` 但渲染 SHA 不是当前实现的项，在状态中不计为当前完成，并重新进入无显式 ID 的限量队列。执行器核验已封存来源和分析后重新生成页面，不重复调用模型、不增加分析尝试次数，也不覆盖或删除旧渲染目录。汇总读取页面时再次要求全部成员使用当前渲染实现。
 
@@ -169,7 +175,9 @@ npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v5.json --ph
 
 Node 历史分析读取错误代码和作用范围，识别账号池耗尽、认证失效等影响本轮运行的故障，停止领取新论文并保存暂停原因。普通论文正文错误、未标记为影响整轮运行的网络错误或输出截断，不作为账号故障暂停整批。异常退出前等待所有已开始的论文处理结束，再释放操作锁；暂停和运行级故障也阻止开始新的失败轮。
 
-同一计划 SHA 与获取序号的 `history:run --apply` 全程持有跨进程操作锁，覆盖执行记录的创建、重读、更新及最终计数，第二个执行器不能并发写同一记录。最终选篇、来源 `ready` 检查和官方元数据预检也在该锁内进行，防止预检和实际执行选了不同批次。
+同一计划 SHA 与获取序号的 `history:run --apply` 全程持有跨进程操作锁。锁覆盖执行记录的创建、重读、更新及最终计数，因此第二个执行器不能同时写同一记录。
+
+最终选篇、来源 `ready` 检查和官方元数据预检也在锁内进行，保证预检与实际执行检查的是同一批论文。锁用于协调写入者，不替代对来源文件字节的核验。
 
 来源和分析每项完成后分别在 stderr 输出 `historical-direct-source-progress-v1` 与 `historical-direct-rewrite-progress-v1`。最终 stdout JSON 报告选择、已处理/剩余数量、`registryCounts`、`pauseFile` 和 `operationLockTarget`。更新时间取实际状态转换时刻，最近失败包含 `analysis_partial`，错误摘要保留脱敏后的开头和末端根因。`completedThisRun` 是已处理尝试数，不是成功数；进度日志不能代替当前暂存、审查及发布证明。
 

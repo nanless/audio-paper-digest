@@ -12140,7 +12140,8 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
             analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js')
         } : {}),
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE,
-            ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT].includes(declaredPromptTextContract)
+            ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
+                ANALYSIS_PROMPT_TEXT_V5_CONTRACT].includes(declaredPromptTextContract)
                 && ['revision', 'structureRepair'].includes(stage)
                 ? REPAIR_MAX_TOKENS
                 : ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT,

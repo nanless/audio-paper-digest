@@ -2,6 +2,8 @@
 
 Mac 与 Android 的论文速递工作台使用共同的资料包和坚果云版本格式。本文说明字段、大小限制、传输顺序、恢复保护与兼容范围；实际验证和发行状态见[验证说明](<android-validation.md>)。Android 的 Zotero 归档使用 Web API v3，Mac 本地归档记录作为历史保留，两端分别配置授权。
 
+这里的“合同”指两端程序必须共同遵守的文件格式和检查规则。例如，一端写出的备份，另一端必须按相同的文件清单、大小和内容指纹检查，不能只因文件扩展名相同就接受。本文适合维护备份实现或排查兼容问题的读者；日常保存、下载和恢复从下方操作说明进入。
+
 操作入口见 [Mac 坚果云说明](<mac-app-cloud.md>)，固定合成数据与正反例见[兼容性样例](<android-cloud-portable-fixtures.md>)。备份保存研究材料，不搬运设备凭据和本机完整性密钥；多设备采用独立版本与明确恢复，不提供实时自动合并。
 
 ## 1. 共用什么，哪些由设备自己管理
@@ -67,6 +69,8 @@ noBackupFilesDir/
 
 上限为原文件合计 **536870912 bytes（512 MiB）**、整个 JSON 编码 **786432000 bytes（750 MiB）**，以及100000个文件条目。每个文件也受剩余总额约束；先检查输入大小，再流式/有界解码，不能先无限分配 Base64 对象。超限整体拒绝，不能删除图片、账本、旧导读或隐藏文件后把子集叫完整成功。Android 应避免同时保留多份750 MiB字符串、Base64副本及全部解码字节，可在私有临时文件逐项校验并保持同一最终编码字节。
 
+Base64 把文件字节表示为可放入 JSON 的文字，因此编码后的文件会比原材料大。两个大小上限分别检查，不能互相替代。SHA-256 是依据实际内容计算的指纹，用来发现内容变化；它不能证明论文结论正确，也不提供账号授权。
+
 解析顺序必须保留这些检查：
 
 1. 验合同、条目数量、原根路径；拒绝空段、`.`、`..`、反斜杠、控制字符、绝对条目路径和尾斜杠。
@@ -117,11 +121,11 @@ noBackupFilesDir/
 
 Android 手动保存和后台保存必须汇合到同一执行路径，顺序与Mac一致：
 
-1. 主动连接检查；flush笔记/设置/批注；核无其他活跃任务，短维护窗口冻结完整研究目录。
-2. 采集、校验并把最终编码保存至研究目录之外，原子保存目标ID、编码长度/SHA、文件数等 pending；此后上传只读这份固定文件。
-3. 原子保存随机快照身份及分块 checkpoint，然后才创建远端目录。`MKCOL 405` 本身不证明目录存在，必须用精确 `PROPFIND Depth:0` 证实 collection。
+1. 主动检查连接，将尚未落盘的笔记、设置和批注保存到文件；确认没有其他活跃任务，在短暂维护期间停止改动完整研究目录。
+2. 采集、校验并把最终编码保存至研究目录之外，原子保存目标ID、编码长度/SHA、文件数等待传记录（`pending`）。原子保存指一次完整替换，不能让后续读取看到只写了一部分的状态；此后上传只读这份固定文件。
+3. 同样以原子保存方式记录随机快照身份及分块进度检查点（`checkpoint`），然后才创建远端目录。`MKCOL 405` 本身不证明目录存在，必须用精确 `PROPFIND Depth:0` 证实它确实是目录（WebDAV 的 `collection`）。
 4. 对每一块，先 GET 已存在对象；缺失时 PUT 加 `If-None-Match:*`，随后 GET 回读原字节。已有对象、412或丢应答均不能直接覆盖；若字节不同即停止并保留材料。
-5. 每个已核块的检查点必须先持久化再继续。全部块完成后才 create-only 写 manifest、GET核完整合同，最后持久化 `manifestVerified`；本机写入失败不报成功。
+5. 每个已核块的检查点必须先保存到文件再继续。全部块完成后，才以“只创建、不覆盖”的方式写入 `manifest.json`，再用 GET 回读并核对完整格式，最后保存 `manifestVerified`；本机写入失败不报成功。
 6. 即使旧 checkpoint 写着完成，重试也须回读远端 manifest 和全部块；原目标、快照、创建时间、分块、总SHA/长度都不能换。后来的本地编辑只属于下一份快照。
 
 暂停/取消保留原 snapshot 和 checkpoint，取消是独立终态。更换账号或目录时生成新的本机 `destinationID`，不能让同一旧许可把待传材料投向新目标。存在未完成/损坏/孤立材料时，先由用户明确“保留并结束本次续传”；整体移动保留所有原文件、旧 connection 另存不覆盖、暂停自动任务，云端半成品和旧完成版本均不删。仅完整并正常校验的保留包才可恢复，不能承诺损坏包一定救回。
@@ -149,7 +153,7 @@ SHA和HMAC核验用于完整性与原材料绑定；当前云包经HTTPS传输�
 
 600 次为各端本机预算，Mac 按同目标服务实例的运行期计数；两台设备独立计数，没有跨设备额度锁。服务返回的 429/503 与等待时间仍须服从。上传冷却保存在原检查点，重启后继续等待；账号或凭据哈希不得作为跨设备身份。
 
-两端拒绝任意重定向，包括同域重定向；TLS正常验证，不接受自签异常或关闭主机核验。Basic认证只发固定HTTPS来源，无cookie/全局凭据缓存；HTTP正文、底层异常、账号和密码不写可分享日志。Android 使用声明式网络安全配置关闭明文连接，HTTP 客户端禁止自动重定向并限制响应流大小与超时，XML 解析关闭实体。[Android网络安全配置](https://developer.android.com/privacy-and-security/security-config)
+两端的坚果云连接拒绝任意重定向，包括同域重定向；正常验证 TLS 证书，不接受异常自签名证书，也不关闭主机名核验。Basic 认证只发给固定 HTTPS 来源，不使用 cookie 或全局凭据缓存；HTTP 正文、底层异常、账号和密码不写入可分享日志。Android 的这条云传输路径不允许明文 HTTP，客户端禁止自动重定向并限制响应流大小与超时，XML 解析关闭实体。此限制针对云传输，不能据此推断本机模型服务也禁止回环地址的 HTTP。[Android网络安全配置](https://developer.android.com/privacy-and-security/security-config)
 
 ## 7. 跨设备恢复不搬运本机授权
 
@@ -163,7 +167,13 @@ SHA和HMAC核验用于完整性与原材料绑定；当前云包经HTTPS传输�
 
 本机Keystore若要求用户认证，后台不能偷偷绕过或持续弹窗；暂停并显示可在前台处理的本机许可提示。首次导入另一台设备的快照也不能自动把未知模型端点和本机已有密钥组合发送请求。
 
-恢复按以下顺序执行：下载全部块 → 核每块与整体 SHA → 检查资料包和个人数据 → 建立暂存目录并回读 → 派生本机保护策略 → 显示所选时点和影响 → 用户确认 → 原空间移入恢复前副本 → 安装暂存目录并初始化服务。取消、其他任务活跃或校验失败时保持当前资料不变；安装或初始化失败回滚，恢复前副本保留。目录替换在同一内部文件系统完成，不依赖系统文件提供方支持原子重命名。
+恢复分为检查、确认和替换三个阶段，顺序不能倒置：
+
+1. 下载全部块，核对每块和整体 SHA，再检查资料包及个人数据。
+2. 建立暂存目录并逐项回读，派生保护本机设置与授权的恢复策略。向用户显示所选版本的时点及替换影响，等待用户确认。
+3. 确认后，把原空间移入恢复前副本，安装暂存目录并初始化服务。
+
+取消、其他任务活跃或校验失败时保持当前资料不变；安装或初始化失败回滚，恢复前副本保留。目录替换在同一内部文件系统完成，不依赖系统文件提供方支持原子重命名。
 
 ## 8. 模型配置、已派发请求和真实费用
 
@@ -180,6 +190,8 @@ maxTokens timeoutMs dailyRequests
 
 每日准入按UTC日计算，保留当前设备的 `dailyRequests`，并把恢复得到的已派发历史纳入计数，防止恢复旧包清零。此做法是保守防回退，既不是重算账单，也不是实时全设备原子配额。两台同时离线发请求时没有统一服务器锁，不能承诺全账号始终只发某个精确总数。
 
+因此，请求连续性记录回答的是“哪些请求已经发出，恢复后不能再当作未发出”；费用记录回答的是“服务实际返回了多少用量，金额是否已知”。前者防止恢复旧版本绕过本机次数限制，不能代替后者计算真实账单。
+
 Android新模型请求也必须先封存精确输入并持久化pending/requestIssued记录，后发网络；同一次发起和终态使用同一事件ID。中断/未知费用保留未知，不自动重发付费请求，不把token估算为实际费用，复用结果不再加一次真实调用。原用量事件、完整provider usage、实际模型/协议、截断及失败响应、父会话、起止时间和金额未知状态都必须保留。Mac 的请求与账本实现见 [llm-worker.cjs](<../apps/macos/llm-worker.cjs>)及其调用的共享模块；Android 使用独立 Kotlin 实现，保持同样的记录与恢复规则。
 
 历史 `desktop-study-v3/v4` 指纹覆盖论文身份、实际 messages、model/endpoint/protocol、问题、证据、来源和输出预算；v4 另含 stream/reasoning，并绑定 `extractor=pdfkit-physical-pages-v1`。Android 使用实际提取器身份，不重新编码或重签旧输入。Mac 的 `exportEvidence` 按其支持的合同验证指纹；外端或未知合同作为历史保留，只有双方明确支持并通过原材料核验时才可导出相应证据或复用。
@@ -190,14 +202,14 @@ Android新模型请求也必须先封存精确输入并持久化pending/requestI
 |---|---|---|
 | 文献身份 | 原 `paperID`；arXiv、完整conference ID及 `local:<PDF SHA>` | 不把会议ID强转arXiv，不因标题相同合并论文 |
 | 笔记 | `notes[paperID]={text,revision,updatedAt}`；按baseRevision CAS，最大2 MiB文本 | 保留修订号和原更新时间；本机CAS不能自动解决另一设备同号并行编辑 |
-| 收藏/待读 | `favorites` / `reading` 的ID列表 | 恢复保持所选时点；不要声称快照替换会自动union两台列表 |
+| 收藏/待读 | `favorites` / `reading` 的ID列表 | 恢复保持所选时点，不自动合并两台设备的列表 |
 | 阅读状态 | `readingState[paperID]`，guideScroll/pdfPage/question/scope/mode及附加字段 | 原字段保留；像素滚动值跨屏幕仅作提示，物理PDF页码不改编号 |
-| PDF标注 | id/text/page/rect/pdfSHA/createdAt，可含comment/updatedAt；page为从1开始物理页 | `rect`是PDFKit页坐标的NSRect字符串；不可写Android屏幕像素，必须有cropbox/rotation/坐标转换互认测试 |
+| PDF标注 | id/text/page/rect/pdfSHA/createdAt，可含comment/updatedAt；page为从1开始物理页 | `rect`是PDFKit页坐标的NSRect字符串；不可写Android屏幕像素，必须验证页面裁切框（crop box）、旋转与坐标转换的两端一致性 |
 | 本地PDF | `personalPapers`内id/title/sourceKind/localPDFPath/pdfSHA等 | 私有路径通过原SHA受控重定位；找不到文件保留缺失状态，不改PDF SHA补洞 |
 | 网站导读 | Article保留paperID、原html/markdown/plainText、revisionSHA256、resources、sourceVersion、citation/researchContext、notices | 渲染净化在展示副本进行；旧来源或未核版本警告不能因移动平台隐藏 |
 | 离线研究包 | `Offline/<内容ID>/manifest.json`；`paperdigest-offline-package-v1/v2`、paper/article/PDF/images及各SHA | 保留packageID与原文件，重新核全部资源；没有PDF的阅读包不能冒充完整原文材料 |
 | 任务 | 原id/command/status/identity/material/result及时间；最多1000条的Mac显示存储策略 | 崩溃重启把运行态按真实中断处理；不得自动重发模型/Zotero/付费或恢复操作 |
-| Zotero材料 | app自己保存的journal、材料与目标绑定 | Android走Web API v3；Mac本地journal作为不透明历史保留。Android Web journal须独立核目标/权限，不将Mac本地许可变成Web API key或自动续传 |
+| Zotero材料 | 应用自己保存的操作记录（journal）、材料与目标绑定 | Android走Web API v3；Mac本地操作记录按原样保留为历史。Android Web API 的操作记录须独立核对目标与权限，不将Mac本地许可变成Web API key或自动续传 |
 
 Mac重新装载标注时只显示与当前PDF SHA一致的标注；定位回答中的 `[p.N]` 也必须属于当次已封存pages且PDF SHA/来源版本一致。不能因为Android重新分页/屏幕适配就把N解释为阅读器屏幕页。
 

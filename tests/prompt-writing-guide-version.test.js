@@ -24,7 +24,7 @@ const predecessors = {
 };
 
 test('写作升级仍恰18份当前模板，三份旧原路径及完整Git字节保持可核验', t => {
-    const current = fs.readdirSync(path.join(root, 'prompts')).filter(name => name.endsWith('.md') && name !== 'README.md').sort();
+    const current = fs.readdirSync(path.join(root, 'prompts')).filter(name => name.endsWith('.md') && !/^README(?:\.en)?\.md$/.test(name)).sort();
     assert.equal(current.length, 18);
     assert.deepEqual(current, registry.CURRENT_PROMPT_FILES.map(file => path.basename(file)).sort());
     const empty = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'writing-prompt-history-'));
@@ -89,7 +89,9 @@ test('两轮升级以外的14份运行Prompt及两份冻结Manual要求字节保
     const changed = new Set(Object.keys(predecessors).map(stage => registry.currentTextStagePromptPath(stage)));
     changed.add(registry.currentTextStagePromptPath('coreSummaryRepair'));
     for (const file of registry.CURRENT_PROMPT_FILES.filter(file => !changed.has(file))) {
-        assert.deepEqual(fs.readFileSync(path.join(root, file)), execFileSync('git', ['show', `${base}:${file}`], { cwd: root }));
+        const historical = Object.entries(registry.FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES)
+            .find(([stage]) => registry.currentTextStagePromptPath(stage) === file)?.[1].path || file;
+        assert.deepEqual(evidence.readPromptEvidenceBytes(historical), execFileSync('git', ['show', `${base}:${historical}`], { cwd: root }));
     }
     for (const [file, expected] of [
         ['manual/docs/editorial-reference-contract.md', 'dc7d5c7c8bf0ed58b23ba7285d3d9b431e6542911c0717cf7e5472ad1c12edee'],

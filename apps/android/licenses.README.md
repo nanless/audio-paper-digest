@@ -1,20 +1,24 @@
 # Android 离线开源许可资料
 
+[English](licenses.README.en.md)
+
 应用内“开源许可”页面提供运行依赖、字体、数据及其来源说明，可离线阅读。[许可目录](<licenses/index.html>)列出各项全文；[完整清单](<licenses/manifest.json>)记录材料与来源，[界面索引](<licenses/index.json>)供应用展示，原文保存在 `licenses/texts/`。阅读页不联网、不执行脚本。
 
-当前 `releaseRuntimeClasspath` 包含 123 条解析记录、120 个唯一物料，重复的三条记录保留。清单还绑定 KaTeX 字体、PDFBox 资源和公共后缀数据。来源字段分别记录缓存原字节、官方获取记录、源码头部和必要抽取；来源 URL 用于追溯材料。
+`releaseRuntimeClasspath` 是正式应用运行时需要的依赖集合。当前解析结果有 123 条记录、120 个不同物料；同一物料重复出现的三条记录仍保留，不能为了让列表简短而删除。清单还包括 KaTeX 字体、PDFBox 资源和公共后缀数据。来源字段分别记录缓存原字节、官方获取记录、源码头部和必要抽取；来源 URL 用于追溯材料。
 
 ## 固定材料
 
-构建时核对实际运行依赖、完整文件集合、每份文件的大小与 SHA-256。固定值与[资源准备代码](<prepare-assets.mjs>)一致：
+构建时先核对实际依赖是否仍是已经审查的集合，再核对许可目录是否完整，以及每份文件的大小与 SHA-256。SHA-256 是按文件内容计算的指纹：字节变化时可以被检查出来，但指纹本身不等于授权结论。固定值与[资源准备代码](<prepare-assets.mjs>)一致：
 
 | 材料 | SHA-256 |
 |---|---|
 | [manifest.json](<licenses/manifest.json>) | `b00a26f828bf9ddbca32caa2078ec75ffc3b1d04b281812dcfd6c0d2c788ac9d` |
 | [bundle-files.json](<licenses/bundle-files.json>) | `b112c4d21a03940be8b52b470412ee7e390d1b0c3985c8215e9cb623f8dcecf4` |
-| 规范化运行物料多重集 | `56423d42321b81dc83f6ff384b728d1b29e0ebe326e05faf5a5ec2980c392d3f` |
+| 运行依赖列表的规范化指纹，保留重复项 | `56423d42321b81dc83f6ff384b728d1b29e0ebe326e05faf5a5ec2980c392d3f` |
 
 许可目录共 632 个文件。文件清单本身由构建代码中的固定值约束；运行物料的字段、排序和重复规则见完整清单的 `runtimeMaterialFingerprint`。
+
+因此，更新依赖不是只改版本号或重新计算一个指纹：新二进制、字体或数据的来源及许可也要重新核对，再一起更新清单和构建固定值。下面的更新规则保护原授权文本，不能用翻译或排版整理改变它们。
 
 ## 更新规则
 

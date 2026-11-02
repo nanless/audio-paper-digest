@@ -29,7 +29,9 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 `data/runtime/llm-usage/` 中 Node/Python 的 `request_started` 与真实终态请求事件共用 `eventId`。只有开始记录的请求仍是未知消费，不能按零消费处理；旧终态协议继续只读兼容。终态或 Reader 采用事件保存失败停止新请求，费用统计不能把缺失事件补成成功。
 
-账本故障时的实际响应使用独立 `llm-response-recovery-v1` 保存在 `data/runtime/llm-response-recovery/`，绑定原安全事件、响应及文件 SHA。它属于受保护运行证据，不能上传或清理，也不能直接提供来源、完成或发布资格；恢复须走原受控入口。完整故障处理见[费用记录保存失败](troubleshooting.md#费用记录保存失败)。
+账本保存故障时，程序尝试将实际返回的响应另存到 `data/runtime/llm-response-recovery/`，使用独立的 `llm-response-recovery-v1`，记录它与原安全事件、响应和文件 SHA 的对应关系。若独立响应文件也无法保存，须明确报告；不能声称恢复材料已经落盘。
+
+这些文件用于证明当时实际收到什么，属于受保护运行证据，不能上传或清理。它们不直接授予来源、完成或发布资格；恢复仍须走原受控入口，详见[费用记录保存失败](troubleshooting.md#费用记录保存失败)。
 
 ## `data/current/` 核心文件
 
@@ -128,9 +130,13 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 登记以 `registration.json` 和 `registered-state.json` 绑定 state 的 `readerReviewMaintenanceObligations`；只追加义务，不把原 complete 论文伪装失败。`progress.json` 持久保存真实 child、尝试、轮次意图和逐篇成功，成功稿先保存再处理兄弟失败。原签稿 seed 由真实父来源上下文重建为 child 的 `review-reader-seed.json`，revision 固定绑定 manifest/member/反馈 SHA；继承 Reader 或同反馈 SHA 的别篇稿不能清义务。
 
+### 精简输入为什么还要核验真实父稿
+
 精简修订输入另使用进程内 `parentSeedHandle`，不写入 JSON。该私有能力绑定实际子运行目录、修订和来源文件 SHA、原父三份文件 CAS、反馈和 seed；每次读取都复核这些身份及原受保护表面。已存在候选时须按完整逻辑身份唯一匹配原精简或完整显示，只有原恢复协议允许的实现字段可迁移，原请求和失败计数保留；无匹配不得新建输入绕账。Reader 定稿中的资源可达性同步仍检查同源证据与评分事实，但此维护分支保留原上游字节，不改变普通日更、历史或会议恢复的默认行为。
 
 采纳后的原父科学读取另使用不可序列化的私有句柄，绑定实际 canonical 子稿、修订、原父 CAS、完整维护登记和采纳材料。来源身份读取不执行反馈、seed 或 Reader 校验，也不能成为分析调度或出版通过证明；完整加载随后仍执行这些阶段。私有句柄仅供本次同源父科学回放，进入和退出均重核实际文件；不新增磁盘许可，不更改任何原次数或费用。当前页面证明可以由正常后处理更新，但必须仍绑定同一实际完整子稿。
+
+### 响应已返回但保存中断时保留什么
 
 首轮签名稿的受控保存恢复记录为 `readerSavedStageRecovery`，合同 `conference-saved-maintenance-reader-completion-v1`。
 
@@ -149,6 +155,8 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 未签发准备的恢复位于本维护根 `unissued-preflight-recoveries/<executionId>/`。`before/` 保留原五份准备文件和 `member-progress.json`，`new-preflight.json` 保存正常探测快照，`receipt.json` 使用 `conference-reader-unissued-preflight-recovery-v1`，绑定维护清单、父 CAS、原文件 SHA、新预检 SHA、探测次数及是否恢复 Reader-only。只有原始 pending、generation 0、零尝试、无修订、seed、候选和请求材料时可使用；资源模式在真实 child 的认证 PDF 来源作用域内派生。
 
 若新快照已封存但回执未写，恢复须先核原六文件归档、当前五文件、原失败及父稿和来源 CAS，再重放原快照，不覆盖它或重新探测。正常生成的回执以 `resumedSavedPreflightFileSha256` 绑定该快照，`normalProbeInvocations` 保留原探测次数，`normalProbeInvocationsThisResume: 0` 记录本次零新探测。已有回执恢复仍核对前后字节及真实来源作用域；这些记录不授予 Reader 通过，不改旧证明、失败、次数或费用。
+
+### 什么时候才能正式采用新稿
 
 全部新稿正常完整资格及 stage 通过后，`adoption.json` 与 `adoption-after-state.json` 不可变绑定原 baseline、实际登记前后状态和全 child/page CAS，锁内原子采纳后正常重做汇总。pending 发布门同时核 state 定位器和私有实物，缺目录/旧成功/旧 passed 缓存都不能清义务。操作命令见[正常 Reader 维护](conference-workflow.md#博客拒稿后的正常-reader-维护)。
 
@@ -198,7 +206,9 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 `source_quotes` 表格的列头单位也属于数值证据。裸单元格数字须由同一指标、同一局部分句的明确单位声明支持，不能借另一指标或另一句话中的百分号、秒或毫秒；单元格已明确写出的单位继续按原数字引文规则核验。仅有共享表头而无法逐值定位时，要求按原文修复来源记录或明确单元格单位，不自动转换数值。旧成功记录和 Python 发布同样执行这项检查；`artifact_table` 仍按原表 DOM 逐格核验。
 
-正常 `selection` 编译的 PDF 显示子表可另存 `sealedPdfTableSelection`（`reader-compiled-pdf-table-selection-v1`）。热解析须持真实编译器产物；保存及出版冷核先重读同篇四源、完整原 DOM 和独立 PDF 网格证明，再重编译原选择并逐格核对行列、来源文本、DOM SHA 和显示值。普通手写 `artifact_table`、克隆对象或自报投影不能取得此能力；旧完整原表与 legacy PDF 证明保持原规则。
+`selection` 用来声明从原表选择哪些行和列。正常编译得到的 PDF 显示子表，可以另存 `sealedPdfTableSelection`（`reader-compiled-pdf-table-selection-v1`）。这里的子表是显示视图，原完整表和来源文件不改写。
+
+生成时的热解析必须持有真实编译器产物。保存后及出版时的冷核，则从磁盘重新读取同篇四源、完整原 DOM 和独立 PDF 网格证明，再重新编译原选择，逐格核对行列、来源文本、DOM SHA 和显示值。普通手写 `artifact_table`、克隆对象或自报投影不能取得此能力；旧完整原表与 legacy PDF 证明保持原规则。
 
 核心摘要的定量来源分类不把 TeX 下标、形式定义编号、公式编号或 `Suppose` 构造例当成实测结果。该规则只作用于来源分类视图，不改封存原文、原摘要或响应；同句真实指标与测量值仍须保留并正常核验。理论论文若没有可核定量结果，摘要仍须明确写出缺失说明，不能把反射参数、集合编号改称性能指标。
 
@@ -208,7 +218,13 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 ### 表格数量、单位与来源证明
 
-同一完整 DOM 表中的显示副本只按已实现的严格形式处理。科学计数副本须逐项匹配系数、指数、符号与精度；箭头只合并可见符号和同方向的显式 TeX 副本；不确定度只合并相邻的可见 `±` 与显式 `\pm`，尾部仅保留原格明确的 `s` 或 `ms`，不换算单位，也不把表注单位推广到其他列。裸重复数、错方向、不同精度及多余数字或单位继续拒绝。
+原 HTML 有时把同一个符号的可见文字与 TeX 注解连续显示，造成一格看起来重复。程序只处理同一完整 DOM 表中已经实现的严格形式，同时保留原来源字节：
+
+- 科学计数副本逐项匹配系数、指数、符号与精度。
+- 箭头只合并可见符号和同方向的显式 TeX 副本。
+- 不确定度只合并相邻的可见 `±` 与显式 `\pm`；尾部仅保留原格明确的 `s` 或 `ms`，不换算单位，也不把表注单位推广到其他列。
+
+裸重复数、错方向、不同精度及多余数字或单位继续拒绝。以上处理是去掉已证明同值的显示副本，不是通用 TeX 清洗。
 
 这些显示处理不改来源字节。对启用新形式的实际日更 DOM 路径，保存及出版冷核重读本篇真实运行与四份来源，核对完整结构化内容、整表行列、每格原文、坐标、唯一归属及 DOM SHA；删除格标记或载荷不能代替真实来源。旧普通选择表和认证 PDF 仍走各自原核验路径。这个组件不独立授予来源能力；缺失或伪造日更运行身份仍由完整来源计划和出版门拒绝。
 

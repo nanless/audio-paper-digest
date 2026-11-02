@@ -4,6 +4,16 @@
 
 主要问题集中在四处：旧版本验收被写成当前状态，规划能力和已实现功能混在一起，维护说明没有跟上恢复及发布实现，提示词中少数限制存在歧义。修改后继续由其他审查者对照代码复审；准确且清楚的内容保留。
 
+## 怎样阅读这份历史记录
+
+本页保留 2026年11月2日那轮审查的范围、问题与验证结果。文中的“当前”指该轮审查时的版本，源码行号也对应当时读取的位置；后续提示词或界面已经更新时，使用现行[文档导航](README.md)选择操作入口。
+
+每条问题前的编号用于定位原始记录，不是新的技术概念。“从原文件重新核验”表示重读真实保存材料；“版本绑定”表示稿件、提示词和请求记录必须与其原版本一致。遇到其他内部称呼，可查[术语说明](writing-guide.md#术语先解释再统一称呼)。本页的源代码路径帮助维护者复核依据，初学者可以先读结论，再按需要查看代码。
+
+本轮对本页的编辑改善阅读说明与段落，保留原始费用、失败和通过记录。发现汇总计数写错时，按原日志更正并在下段说明；旧检查不追认为 2026年11月3日的新验证。
+
+2026年11月3日计数更正：原文把文档定向测试记为6项，但保存的 `documentation-regression-tests-final.log` 明确记录5项全部通过。因此那组修复定向检查合计为89项，不是90项。原日志与旧汇总文件保留不变；这处记录错误不改变当时最终提交12项 CI 全部通过的事实。
+
 ## 范围与判断方法
 
 基线为 `466d14345595a2692c30ed9d9c84f898283e5898`。初始清单包含 371 个已跟踪文本文件：64 份自有说明文档、18 份版本化提示词、262 份受保护许可文本、24 份受保护文本夹具和 3 份执行配置。扩展文件名检查后另纳入根目录 `LICENSE` 与一张文档 SVG，原始清单保留不改。新 skill 的 5 个文件和本报告另行审阅，不冒充原基线文件。
@@ -53,7 +63,7 @@
 - **PIPE-015**：本次已授权模板升级后当前引用仍v6/v9。 位置：[docs/maintenance.md](../docs/maintenance.md)。依据：[scripts/lib/prompt-text-versions.js](../scripts/lib/prompt-text-versions.js) 第 173 行；[scripts/lib/prompt-text-versions.js](../scripts/lib/prompt-text-versions.js) 第 177 行。
 - **PIPE-016**：新严格DOM投影的来源冷核与组件范围未说明。 位置：[docs/data-format.md](../docs/data-format.md)。依据：[scripts/lib/reader-table-pdf-evidence.js](../scripts/lib/reader-table-pdf-evidence.js) 第 128 行；[scripts/lib/reader-source-display.js](../scripts/lib/reader-source-display.js) 第 4 行。
 - **PIPE-017**：新分析授权标题可能误读为须逐篇再次询问。 位置：[docs/conference-workflow.md](../docs/conference-workflow.md)。依据：[scripts/conference-process.js](../scripts/conference-process.js) 第 11 行；[scripts/migrate-conference-process.js](../scripts/migrate-conference-process.js) 第 15 行；[scripts/lib/conference-run.js](../scripts/lib/conference-run.js) 第 472 行。
-- **PIPE-018**：轻量watch不读豁免，默认不生图仍可能显示视觉待办；原文已说明不核验。 位置：[docs/maintenance.md](../docs/maintenance.md)。依据：[scripts/lib/digest-live-status.js](../scripts/lib/digest-live-status.js) 第 481 行；[scripts/digest-run-report.js](../scripts/digest-run-report.js) 第 87 行。
+- **PIPE-018**：轻量进度查询不核验豁免，因此默认不生图时也可能显示尚待收尾；说明中保留了这一实际限制。 位置：[docs/maintenance.md](../docs/maintenance.md)。依据：[scripts/lib/digest-live-status.js](../scripts/lib/digest-live-status.js) 第 481 行；[scripts/digest-run-report.js](../scripts/digest-run-report.js) 第 87 行。
 
 交叉复审的三个新增问题修后已由原复审者复核：
 
@@ -87,8 +97,8 @@
 
 - **P-DOC-001**：只列两种source-cell-math-display，遗漏实际同系数/指数/精度科学计数双写kind。 说明文字已按真实代码同步，未改校验器。 依据：[scripts/lib/source-cell-math-display.js](../scripts/lib/source-cell-math-display.js) 第 18 行；[scripts/lib/reader-table-pdf-evidence.js](../scripts/lib/reader-table-pdf-evidence.js) 第 184 行。
 - **P-DOC-002**：表格写作路线仅突出selection与连续引文，未清楚区分现成completeTable和独立pdfSourceQuotes；复杂表的入口容易误解。 说明文字已按真实代码同步，未改校验器。 依据：[原 Reader v9](https://github.com/nanless/audio-paper-digest/blob/466d14345595a2692c30ed9d9c84f898283e5898/prompts/api-reader-article-v9.md#L99) 第 99 行；[scripts/lib/reader-repair.js](../scripts/lib/reader-repair.js) 第 3214 行；[scripts/deep-analyzer.js](../scripts/deep-analyzer.js) 第 2320 行。
-- **P-TEXT-003**：核心摘要只提取最重要1–2个结果数字可能被误读为限制比较对或成本数字；同段仍要求对象与范围。 主分析新v7，只改一句并验证所有其它原字节相同。 依据：[prompts/core-summary-repair-v7.md](../prompts/core-summary-repair-v7.md) 第 39 行；[scripts/analysis-contract.js](../scripts/analysis-contract.js) 第 1 行。
-- **P-TEXT-004**：四种表型限定字段为HTML引文版，未说明只有运行时真实PDF全文证据明确提供时，恢复可额外含pdfSourceQuotes；当前修复动态协议已独立说明，不能把该能力泛化到首次请求。 Reader新v10，3处限定消歧，HTML/常规全文与独立PDF分开，不授新scope。 依据：[scripts/lib/reader-repair.js](../scripts/lib/reader-repair.js) 第 3214 行；[scripts/lib/reader-repair.js](../scripts/lib/reader-repair.js) 第 3304 行；[scripts/deep-analyzer.js](../scripts/deep-analyzer.js) 第 2320 行。
+- **P-TEXT-003**：核心摘要只提取最重要的1–2个结果数字可能被误读为限制比较对或成本数字；同段仍要求对象与范围。 主分析新v7，只改一句并验证所有其它原字节相同。 依据：[prompts/core-summary-repair-v7.md](../prompts/core-summary-repair-v7.md) 第 39 行；[scripts/analysis-contract.js](../scripts/analysis-contract.js) 第 1 行。
+- **P-TEXT-004**：四种表型限定字段为HTML引文版，未说明只有运行时真实PDF全文证据明确提供时，恢复可额外含pdfSourceQuotes；当前修复动态协议已独立说明，不能把该能力泛化到首次请求。 当时新增 Reader v10，在3处澄清使用条件，区分 HTML／常规全文与独立 PDF，不增加修改范围。 依据：[scripts/lib/reader-repair.js](../scripts/lib/reader-repair.js) 第 3214 行；[scripts/lib/reader-repair.js](../scripts/lib/reader-repair.js) 第 3304 行；[scripts/deep-analyzer.js](../scripts/deep-analyzer.js) 第 2320 行。
 - **P-DOC-005**：数值、资源、图像、核心摘要规则按历史案例不断追加，重复限定掩盖一般规则，部分短段是技术碎片。 保留全部历史案例约束；按表格选择任务组织一般路线，并将同一恢复动作/设置判据的碎段接成连续段落。 依据：[docs/reader-writing.md](../docs/reader-writing.md) 第 240 行；[docs/reader-writing.md](../docs/reader-writing.md) 第 274 行；[docs/reader-writing.md](../docs/reader-writing.md) 第 300 行。
 
 ## 提示词升级与原记录保护
@@ -126,7 +136,7 @@
 - 一项坏 JSON 渲染测试拿当前 v10 输出与历史 v9 原请求比较。现显式重建原 v9，保留原长度和发送 SHA；另测当前 v10 只替换诊断视图、保全来源并满足原上下文上限。
 - 两组付费恢复测试原本验证“只变实现”，却通过当前登记同时改变了模板。现历史场景明确原 v9 上下文；另以真实 v10 输入证明正常守卫仍拒绝未经恢复授权的模板迁移，原候选、次数和费用字节不变。
 
-修后定向结果为文档 6 项、语义表格 5 项、隔离仓库事实检查 10 项、JSON 渲染 35 项、两组付费恢复 29 项和 Python 证据 5 项通过。生产代码在这次修复中只补同步 Python 的两条现用路径，没有新增跳过检查、重签旧稿或清零次数的入口。新 skill 的审计参考也补入跨语言登记互核与隔离测试历史对象保护的检查方法。
+修后定向结果为文档 5 项、语义表格 5 项、隔离仓库事实检查 10 项、JSON 渲染 35 项、两组付费恢复 29 项和 Python 证据 5 项通过。生产代码在这次修复中只补同步 Python 的两条现用路径，没有新增跳过检查、重签旧稿或清零次数的入口。新 skill 的审计参考也补入跨语言登记互核与隔离测试历史对象保护的检查方法。
 
 ## 各文件的处理结论
 
@@ -210,21 +220,21 @@
 
 ### 18份现用提示词
 
-- [prompts/api-reader-article-v10.md](../prompts/api-reader-article-v10.md)：只澄清独立PDF原字符全文与恢复操作明确允许的共同条件；原JSON示例/占位符/其它全部字节不变。
+- [prompts/api-reader-article-v10.md](https://github.com/nanless/audio-paper-digest/blob/aaaa700db16a9ad318be1a6886d2256ad90db9eb/prompts/api-reader-article-v10.md)：只澄清独立PDF原字符全文与恢复操作明确允许的共同条件；原JSON示例/占位符/其它全部字节不变。
 - [prompts/api-reader-concept-terms-v1.md](../prompts/api-reader-concept-terms-v1.md)：仅唯一术语长度阻断，terms叶路径、2–48字符、完整原SHA、既有解释/来源只读；不扩大为概念解释改写。
 - [prompts/api-reader-fact-local-v3.md](../prompts/api-reader-fact-local-v3.md)：句子替换JSON的path/oldSHA/claimSHA/start不变；禁换行/表图公式链接；全部错误须实际纠正且句外保护。
 - [prompts/api-reader-repair-v13.md](../prompts/api-reader-repair-v13.md)：核对1–8旧SHA绑定目标、原子操作优先、非授权节点保护、术语叶/原句范围；operationProtocol实际附加复杂及PDF来源规则，未发现需要为语言统一升版的冲突。
 - [prompts/core-summary-repair-v7.md](../prompts/core-summary-repair-v7.md)：核心摘要单节320–600中文字符/6–9句；同表跨方法同指标比较、完整单位精度和不补算；保护其余12节。
-- [prompts/deep-analysis-v7.md](../prompts/deep-analysis-v7.md)：只将结果数字数目消歧为结果组，保护比较值及成本；其余全部字节不变。
+- [prompts/deep-analysis-v7.md](https://github.com/nanless/audio-paper-digest/blob/aaaa700db16a9ad318be1a6886d2256ad90db9eb/prompts/deep-analysis-v7.md)：只将结果数字数目消歧为结果组，保护比较值及成本；其余全部字节不变。
 - [prompts/digest-cover-v2.md](../prompts/digest-cover-v2.md)：仅用户显式恢复生图才可调用；给定题目/分数/标签/计数原样、最多10篇、独立素材不插博客；当前持续不生图不触发模板变更。
 - [prompts/filter-v5.md](../prompts/filter-v5.md)：两行固定结论/解析兼容；实际声音方法或评测优先，音乐动作输入及说话人错误/口语交互保留，纯文本/固定通用基准排除。
-- [prompts/gap-fill-v4.md](../prompts/gap-fill-v4.md)：完整13节审校，机器17键、四行标签、2表12行8指标列及全部缺陷归属；确认不将后续Reader协议混入主分析表约束。
+- [prompts/gap-fill-v4.md](https://github.com/nanless/audio-paper-digest/blob/aaaa700db16a9ad318be1a6886d2256ad90db9eb/prompts/gap-fill-v4.md)：完整13节审校，机器17键、四行标签、2表12行8指标列及全部缺陷归属；确认不将后续Reader协议混入主分析表约束。
 - [prompts/image-supplement-v3.md](../prompts/image-supplement-v3.md)：副模型只插图，4张/允许章节/稳定段ID/本次像素/不改已有正文；replacement等item字段实际仅忽略，顶层仍仅insertions。
 - [prompts/method-fill-v3.md](../prompts/method-fill-v3.md)：仅方法概述和架构600中文字；组件输入输出/未披露不补造/无像素不猜关系；完整单节输出。
 - [prompts/opensource-scan-v3.md](../prompts/opensource-scan-v3.md)：逐字HTTPS URL与第三方归属，未提及/尚未网络核实不能写已验证；固定开源详情标题，未发现需升级的事实问题。
 - [prompts/primary-fact-local-repair-v1.md](../prompts/primary-fact-local-repair-v1.md)：主文from/to受限段落；保护核心摘要、评分、标签及非授权字节；全文反馈不能扩权。
 - [prompts/scoring-audit-v5.md](../prompts/scoring-audit-v5.md)：严格嵌套JSON、8维顺序上限/开源6固定分值、证据ID/类型上限/单缺陷单归属；理论证明与资源可达性分开。
-- [prompts/structure-repair-v3.md](../prompts/structure-repair-v3.md)：文件v3/合同analysis-prompt-text-v4为真实登记，非错版；13节顺序/保留合格事实和评分/只扩反馈缺项；不改表数/来源。
+- [prompts/structure-repair-v3.md](https://github.com/nanless/audio-paper-digest/blob/aaaa700db16a9ad318be1a6886d2256ad90db9eb/prompts/structure-repair-v3.md)：文件v3/合同analysis-prompt-text-v4为真实登记，非错版；13节顺序/保留合格事实和评分/只扩反馈缺项；不改表数/来源。
 - [prompts/table-fill-v2.md](../prompts/table-fill-v2.md)：仅实验结果；2表/12数据行/8指标列、识别列除外；至少3数据行2核对数字、保留负结果及未知值，不冒充Reader矩阵协议。
 - [prompts/tag-repair-v3.md](../prompts/tag-repair-v3.md)：primaryTaskId/primaryMethodId/conceptIds恰3键；3–5active直接概念，祖先由程序推导；任务/方法易混边界完整。
 - [prompts/visual-summary-v2.md](../prompts/visual-summary-v2.md)：仅用户显式恢复生图才可调用；4章解释图不冒充原图、本次referenceImages像素范围、220–360字符与给定数字；当前持续不生图不触发模板变更。

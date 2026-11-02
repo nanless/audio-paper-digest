@@ -1,72 +1,104 @@
 # 文档导航
 
-这里既有网站生产流程，也有两端应用的使用和验收说明。先按你要做的事选择入口，不必先通读所有协议。日更、官方会议和历史博客更新是三条生产流程，默认调用 LLM/API；打开已发布内容和恢复个人资料不会自动重跑这些流程。
+**中文** · [English](README.en.md)
 
-## 第一次使用
+这里收录论文速递网站、内容生产流程和两端阅读应用的说明。先按要完成的任务选择入口，再读相关细节；不必先通读全部协议。文档中的命令、来源和发布限制以实际程序与 [AGENTS.md](../AGENTS.md)为依据。
 
-只使用应用，先读[Mac 使用说明](../apps/macos/README.md)或[Android 使用说明](../apps/android/README.md)，不必配置生产项目的 `.env`。维护网站时，先读[项目首页](../README.md)选择任务，再按[安装与配置](setup.md)准备环境。[操作手册](../SKILL.md)给出执行顺序，[AGENTS.md](../AGENTS.md)列出不能绕过的来源、预算与发布规则。
+## 第一次接触项目
 
-工作台 1.1.0 的日更与会议导航、返回、预载和首次连接配置见[导航改动与验证](workbench-1.1.0-review.md)。收藏沿用网站多级分类、按收藏时间分区的当前说明见[收藏说明](favorite-collections.md)，本次纠正范围见[1.2.1 审改记录](workbench-1.2.1-review.md)。
+[项目导读](project-guide.md)先解释论文来源、分析、解读、博客和阅读应用的关系。[项目首页](../README.md)帮助选择任务，[新人上手](onboarding.md)给出一次当天日更的准备、运行、结果与故障入口。
 
-工作台 [1.3.0 已公开](https://github.com/nanless/audio-paper-digest/releases/tag/v1.3.0)：全站完整多级分类、两端界面与资源入口、八轮审改及最终正式包和匿名下载结果见 [1.3.0 记录](workbench-1.3.0-review.md)。历史验收保留各自原范围。
+只阅读内容时，使用[网站](https://nanless.github.io/audio-paper-digest-blog/)或安装 [Mac](../apps/macos/README.md)、[Android](../apps/android/README.md)工作台，不需要配置生产项目的 `.env`。日更、官方会议和历史博客更新是三条默认调用语言模型服务（LLM/API）的内容生产流程；阅读已有内容和恢复个人资料不会自动运行它们。
 
-| 你想了解什么 | 阅读位置 |
+遇到陌生简称，可查[术语说明](writing-guide.md#术语先解释再统一称呼)。编辑文档时，结合[把技术写清楚](../skills/clear-technical-writing/SKILL.md)与[项目写作约定](writing-guide.md)，保留真实条件、证据和执行范围。
+
+## 阅读论文与使用工作台
+
+| 想做什么 | 阅读位置 |
 |---|---|
-| 三条流程如何共用分析、Reader 和发布能力 | [三流程与共享核心](three-workflows.md) |
-| 三条流程的来源、共享算法、恢复与发布责任 | [流程与恢复规则](workflow-sharing-plan.md) |
-| Mac 阅读、PDF 对照、个人研究与 Zotero 存档 | [Mac 使用说明](../apps/macos/README.md)；设计背景见[工作台规划](desktop-research-workbench-plan.md) |
-| Mac 应用的功能与实现范围 | [需求说明](mac-app-requirements.md)与[构建及使用说明](../apps/macos/README.md) |
-| Mac 的测试范围和验收项目 | [验证说明](mac-app-validation.md)、[验收矩阵](mac-app-acceptance.md)、[审查说明](mac-app-review-log.md) |
-| Mac 数据接入与 Zotero 归档 | [网站数据适配](mac-app-data.md)与[Zotero 接口](mac-app-zotero.md) |
-| 坚果云同步、版本续传与资料恢复 | [云端资料与备份](mac-app-cloud.md) |
-| Mac ZIP/DMG、校验和与发行步骤 | [发行准备](mac-app-release.md) |
-| Android 使用、构建与跨端功能 | [功能说明](android-app-plan.md)、[构建说明](../apps/android/README.md)与[功能映射](android-feature-parity.md) |
-| Android 的 Zotero、坚果云与 Mac 资料互通 | [Zotero 接入](android-zotero-research.md)、[完整备份](android-cloud-contract.md)与[跨端格式](android-cloud-portable-fixtures.md) |
-| 两端如何读取网站目录和已发布页面 | 当前使用[网站数据适配](mac-app-data.md)；[静态数据接口](desktop-data-contract.md)中的 `desktop/v1` 是后续接口设计 |
-| Mac 界面、单栏阅读与 PDF 双栏 | [界面设计](macos-interface-design-research.md) |
-| Reader、SHA、CAS、检查点和凭证是什么 | [常见术语](writing-guide.md#术语先解释再统一称呼) |
-| 文档与论文讲解怎样写得清楚 | [把技术写清楚 skill](../skills/clear-technical-writing/SKILL.md)、[项目写作约定](writing-guide.md) |
+| 下载原论文、导读和引用资料 | [网页阅读资料](blog-reading-tools.md) |
+| 安装并使用 Mac 应用 | [Mac 使用说明](../apps/macos/README.md) |
+| 安装并使用 Android 应用 | [Android 使用说明](../apps/android/README.md) |
+| 理解收藏、网站分类和时间分区 | [收藏说明](favorite-collections.md) |
+| 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
+| 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-## 运行一项任务
+1.3.0 的分类浏览、两端界面、正式包、升级与公开下载范围，见[1.3.0 记录](workbench-1.3.0-review.md)。其他版本的验收保留各自的时间、环境和范围，不能据此推定当前包重新完成了全部真实服务测试。
+
+### 查应用实现、备份与存档
+
+| 主题 | 阅读位置 |
+|---|---|
+| Mac 功能要求 | [需求说明](mac-app-requirements.md) |
+| Mac 数据读取和个人模型记录 | [网站数据与恢复](mac-app-data.md) |
+| Mac Zotero 连接、归档与续传 | [Zotero 接口](mac-app-zotero.md) |
+| Mac 云端版本备份与恢复 | [云端资料与备份](mac-app-cloud.md) |
+| Mac 测试、逐项状态与验收 | [验证说明](mac-app-validation.md)、[验收矩阵](mac-app-acceptance.md)、[当前状态](mac-app-acceptance-status.md)、[审查说明](mac-app-review-log.md) |
+| Mac 安装包和图标 | [发行准备](mac-app-release.md)、[图标说明](mac-app-icon-design.md)、[图标源资产](../apps/macos/Assets/README.md) |
+| Android 产品与实现范围 | [功能说明](android-app-plan.md) |
+| Android Zotero 与完整备份 | [Zotero 接入](android-zotero-research.md)、[完整备份](android-cloud-contract.md) |
+| 跨端备份格式与实际验证 | [跨端格式](android-cloud-portable-fixtures.md)、[Android 验证](android-validation.md) |
+| 客户端安全与许可 | [安全说明](client-security-audit.md)、[Android 许可清单说明](../apps/android/licenses.README.md) |
+| 后续静态数据接口设计 | [desktop/v1 数据合同](desktop-data-contract.md)，当前并未部署该接口 |
+| 浏览器原型 | [原型说明](../prototypes/macos-research/README.md)，它与正式应用分别说明 |
+
+## 运行一项内容生产任务
+
+维护网站时，先按[安装与配置](setup.md)准备环境，再按[操作手册](../SKILL.md)进入对应流程。三条流程怎样调用共同代码、保存不同来源，见[三流程与共享核心](three-workflows.md)；责任与设计取舍见[流程维护说明](workflow-sharing-plan.md)。
 
 | 任务 | 操作说明 |
 |---|---|
-| 当天日更、日更阶段恢复 | [操作手册](../SKILL.md#1-日更)、[补抓边界](daily-fetch-boundary.md)、[锁内来源检查](locked-source-validation.md) |
-| 官方会议获取、筛选、分析、发布 | [会议流程](conference-workflow.md) |
-| 从原文重新分析历史博客并保留 URL | [历史来源与重写](history-rewrite.md) |
-| 历史结果的最终审查、发布和网页验收 | [历史发布](history-direct-publication.md) |
-| 下载原文、导读和引用资料 | [博客阅读资料](blog-reading-tools.md) |
+| 当天日更与阶段恢复 | [日更操作](../SKILL.md#1-日更)、[补抓边界](daily-fetch-boundary.md)、[锁内来源核验](locked-source-validation.md) |
+| 官方会议获取、筛选、分析与发布 | [会议流程](conference-workflow.md) |
+| 从原文更新旧博客并保留地址 | [历史来源与更新](history-rewrite.md) |
+| 历史结果的审查、发布和网页验收 | [历史发布](history-direct-publication.md) |
+| 只更新完整日批的页面呈现 | [同来源同分析的重发布](data-format.md#同来源同分析的日批重发布) |
 
 ## 处理失败与旧记录
 
-先保留失败、来源、检查点和费用。正常分析先完成整轮，再仅续可重试失败集合；不会因为增加轮数而自动获得新的 Reader 额度。
+先保留失败、来源、阶段结果和费用。正常分析完成整轮后，才只续可重试的失败论文；增加外层轮数不自动增加解读写作的请求额度。
 
-| 问题 | 权威说明 |
+| 问题 | 说明与入口 |
 |---|---|
-| 批次轮数、失败集合与人工接手建议 | [共享批次规则](three-workflows.md#全批轮次与失败集合) |
-| 停止正在运行的任务 | [停止说明](analysis-stop.md) |
-| 按报错定位恢复入口、费用落盘故障与本地冷核超时 | [故障排查](troubleshooting.md)、[异常响应记录](data-format.md#请求开始终态与异常响应保全) |
-| Reader 原付费稿核验、有界追加及已授权修正 | [Reader 恢复](reader-explicit-retry.md) |
-| 会议原窗口耗尽后，按持续授权登记剩余失败集合 | [会议后续窗口](conference-workflow.md#原额度耗尽后的独立付费恢复)、[记录格式](data-format.md#会议独立追加窗口) |
-| 会议博客完整审查后有正文、格式或图片拒稿 | [正常 Reader 维护与独立出版视图](conference-workflow.md#博客拒稿后的正常-reader-维护)、[维护记录](data-format.md#会议博客审查后的-reader-维护记录) |
-| 会议只做统一后处理、认证来源事实的零请求纠正 | [来源纠正](conference-workflow.md#认证来源事实的零请求纠正)；资源与核心清单分开，原失败、次数及费用保留 |
-| 旧数据、旧协议与旧提示词如何核验 | [兼容规则](compatibility.md)、[旧记录与独立人工审查](../manual/README.md) |
+| 批次轮数与人工接手建议 | [共享批次规则](three-workflows.md#全批轮次与失败集合) |
+| 停止正在运行的分析 | [停止说明](analysis-stop.md) |
+| 按报错查原因与继续方法 | [故障排查](troubleshooting.md) |
+| 费用记录保存失败 | [请求开始、终态与异常响应](data-format.md#请求开始终态与异常响应保全) |
+| 解读长文的原付费稿复验、追加窗口或人工修正 | [解读恢复](reader-explicit-retry.md) |
+| 会议原窗口耗尽 | [会议后续窗口](conference-workflow.md#原额度耗尽后的独立付费恢复)、[记录格式](data-format.md#会议独立追加窗口) |
+| 会议博客正文或图片被拒 | [正常解读维护](conference-workflow.md#博客拒稿后的正常-reader-维护)、[维护记录](data-format.md#会议博客审查后的-reader-维护记录) |
+| 会议只做后处理或按真实来源零请求纠正 | [来源纠正](conference-workflow.md#认证来源事实的零请求纠正)，资源与核心清单分别核对 |
+| 旧数据、旧协议和原提示词 | [兼容规则](compatibility.md)、[旧记录与独立人工审查](../manual/README.md) |
 
-## 维护代码与查阅协议
+持续付费授权允许执行者登记必要后续窗口，原来源、次数和费用仍分别保留。旧来源核验、只读重放或历史审查记录，不能自行授予新的模型请求或发布权限。
 
-| 要修改或核对什么 | 权威说明 |
+## 修改代码、写作或查协议
+
+| 想核对什么 | 阅读位置 |
 |---|---|
-| 命令、入口与公共模块 | [脚本索引](../scripts/README.md)、[三流程对应表](three-workflows.md) |
-| 修改、定向检查、完整验证和提交 | [维护指南](maintenance.md) |
-| 当前 18 份提示词与旧记录原字节核验 | [Prompt 索引](../prompts/README.md)、[Prompt 修改](maintenance.md#prompt-修改) |
-| Reader 的结构、表格、公式与解释要求 | [Reader 写作](reader-writing.md) |
-| 数据、字段与发布凭证 | [数据格式](data-format.md) |
-| 三流程标签、多级路径、旧签名与站点版本同步 | [统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现) |
-| 词表的设计背景与历史决策 | [标签设计](tag-system-design.md) |
-| 日更耗时观测、性能诊断与优化范围 | [性能说明](daily-performance.md) |
-| 代码清理、兼容保留、文档与提示词维护 | [维护约定](repository-maintenance-review.md) |
-| 本轮全部文档与提示词的发现、修改及覆盖 | [2026年11月2日审查记录](documentation-review-20261102.md) |
+| 当前命令、入口与公共模块 | [脚本索引](../scripts/README.md)、[三流程表](three-workflows.md) |
+| 修改、验证、中文提交与推送 | [维护指南](maintenance.md) |
+| 当前 18 份提示词和旧原字节 | [提示词索引](../prompts/README.md)、[提示词修改](maintenance.md#prompt-修改) |
+| 解读长文的结构与来源要求 | [解读写作](reader-writing.md) |
+| 怎样解释、分段、用图和维护双语 | [写作约定](writing-guide.md)、[写作 skill](../skills/clear-technical-writing/SKILL.md) |
+| 字段、清单与发布凭证 | [数据格式](data-format.md) |
+| 多级分类、旧签名与站点目录同步 | [统一分类规则](tag-display-policy.md#三条流程共用的目录与呈现) |
+| 分类词表的设计背景 | [标签设计](tag-system-design.md) |
+| 耗时测量与优化范围 | [性能说明](daily-performance.md) |
+| 兼容保留与文档维护原则 | [维护约定](repository-maintenance-review.md) |
 
-完成验收包括对应发布提交的部署和全部目标页面。日更持续遵循用户“以后不再生图”的要求，登记与当前发布绑定的有效豁免；论文原图仍正常核验和审查。只有用户另行明确改变要求，才执行对应生图任务。状态报告、Git 推送和网页上线分别核验。
+## 阅读历史评审记录
 
-- [新人上手：执行顺序与故障入口](onboarding.md)
+历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
+
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)。
+- 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
+- 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
+- 文档与提示词：[2026年11月2日全范围审查](documentation-review-20261102.md)。
+- 初学者写作、完整双语与图示：[2026年11月3日整理与复审](documentation-rewrite-20261103.md)。
+
+## 什么时候可以报告完成
+
+完成内容生产任务，还须核验对应提交的部署和全部目标页面。状态报告、Git 推送与网页上线分别判断。
+
+日更持续遵循用户“以后不再生图”的要求，登记与当前发布绑定的有效豁免；原论文图仍正常核验和审查。只有用户另行明确改变要求，才执行该批次对应生图任务。

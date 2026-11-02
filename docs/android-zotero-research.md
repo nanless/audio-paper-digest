@@ -4,6 +4,8 @@
 
 ## 配置与归档
 
+这里的 API key 是授予本应用的专用访问密钥，不是 Zotero 登录密码。后文的“对象 key”则是某条书目、附件或笔记的编号，不能用来代替访问密钥。先完成连接和权限检查，再准备本次归档材料，最后确认写入。
+
 1. 在 Zotero 创建本应用使用的专用 API key，按需要授权个人文库、笔记、写入及群组权限。在本应用的 Zotero 设置中填写授权，不填写 Zotero 登录密码。
 2. 主动检查连接。应用通过 `GET /keys/current` 核对当前账户和实际权限，读取可访问文库与分类。
 3. 选择目标和论文，预览来源、原 PDF、导读、研究与笔记。材料、目标或凭据变化后重新准备；确认页面反映本次实际选择。
@@ -25,6 +27,8 @@
 | 所选研究 | 问题、输入、回答、模型、时间、物理页、版本及实际用量，独立于论文原摘要 |
 | 所选笔记 | 可编辑笔记及来源关系，核对父项、正文和版本 |
 
+书目是父项，PDF、导读等材料分别作为其下的附件或笔记。应用把每项材料保存后再读回来比较，称为“回读”；只创建了父项而附件失败时，结果是部分完成。这样可以沿原编号补齐材料，而不重复创建一篇论文。
+
 缺失元数据保持缺失。标准书目以外的信息使用补充材料，不写入不合法字段。个人回答与论文原文分别保存。
 
 ## 文件后端与坚果云
@@ -37,11 +41,11 @@ Zotero 的附件目录与本应用的研究备份目录分开。本应用的 `Pa
 
 ## 取消、继续与远端修改
 
-归档记录长期保存操作身份、目标、对象 key、版本和材料。取消后继续同一操作，成功项不重建；丢失应答先查询原对象。官方写请求的 12 小时去重 token 只作辅助，长期恢复依赖本应用的记录。
+归档记录长期保存操作身份、目标、对象 key、版本和材料。取消后继续同一操作，成功项不重建；丢失应答时，不能推断服务没有保存，必须先查询原对象。官方写请求的 12 小时去重标记（token）只作辅助，长期恢复依赖本应用保存的记录。
 
 更新前读取对象版本。HTTP 412、远端用户修改或附件删除会停止覆盖并提示差异；切换账户、文库、群组、分类或权限后，旧映射不能直接继续。部分写入保留已成功材料和断点。
 
-文件上传按[官方协议](https://www.zotero.org/support/dev/web_api/v3/file_upload)依次授权、传输、登记和回读。协议使用 MD5 与毫秒时间，本应用另核 SHA-256。外域附件传输只使用核验后的 HTTPS 目标，不携带 Zotero API key；重定向不得泄漏认证信息。[写请求](https://www.zotero.org/support/dev/web_api/v3/write_requests)和[限流](https://www.zotero.org/support/dev/web_api/v3/basics#rate_limiting)返回的部分错误、Backoff 与等待时间分别处理。
+文件上传按[官方协议](https://www.zotero.org/support/dev/web_api/v3/file_upload)依次授权、传输、登记和回读。协议使用 MD5 与毫秒时间，本应用另核 SHA-256；两种摘要都用于对应原文件，不能把它们当作账号授权。外域附件传输只使用核验后的 HTTPS 目标，不携带 Zotero API key；重定向不得泄漏认证信息。[写请求](https://www.zotero.org/support/dev/web_api/v3/write_requests)和[限流](https://www.zotero.org/support/dev/web_api/v3/basics#rate_limiting)返回的部分错误、退避要求（Backoff）与等待时间分别处理。
 
 ## 官方 Android 客户端的阅读范围
 
@@ -53,7 +57,7 @@ Zotero 的附件目录与本应用的研究备份目录分开。本应用的 `Pa
 
 ## 系统分享与 Mac 本地接口
 
-系统分享将 URL 或单个 PDF 交给接收方处理，界面显示交出结果；完整书目和多角色附件归档使用本页的 Web API 流程。PDF 使用 FileProvider 的临时只读 URI，避免同时附带来源 URL 使接收方优先处理文字。当前不承诺 RIS、多附件或任意 ZIP 的一键导入。
+系统分享只是将 URL 或单个 PDF 交给接收方处理，界面显示交出结果；它不能替接收方证明已经完整保存。完整书目及不同用途附件的归档使用本页的 Web API 流程。PDF 使用 FileProvider 提供的临时只读地址（URI），避免同时附带来源 URL 使接收方优先处理文字。当前不承诺 RIS、多附件或任意 ZIP 的一键导入。
 
 分享行为的源码依据固定在官方提交 [cbb929be](https://github.com/zotero/zotero-android/tree/cbb929be2a6383906cce3d74408e24ca38f50be5)，系统行为见 [Sharesheet](https://developer.android.com/develop/ui/compose/sharing/send) 与 [FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider)。
 

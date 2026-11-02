@@ -69,7 +69,9 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 ## 环境为什么只认项目 `.env`
 
-Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读取项目根目录 `.env`。它们先清理从 shell、IDE、Trae 或 Codex 继承的 `PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、渠道变量及大小写代理变量，再加载项目配置，并将文件权限收紧到 `0600`。
+模型、代理和发布路径都从本项目根目录 `.env` 读取。这样可以避免同一条命令因启动终端或编辑器不同而误用另一套配置。Node 由 `scripts/env-loader.js` 加载，Python 由 `scripts/project_env.py` 加载。
+
+加载器先清理从 shell、IDE、Trae 或 Codex 继承的 `PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、渠道变量及大小写代理变量，再读取项目配置，并将文件权限收紧到 `0600`。该权限表示只有文件所有者可读写。
 
 项目必需值不能只写在 `.zshrc`，也不能靠外层环境临时补齐。子进程须使用公共的最小环境构造函数，避免把模型或发布密钥传给 curl、Git hook、浏览器及无关命令。
 
@@ -107,7 +109,9 @@ npm run validate:data -- --allow-empty
 
 ## 常用容量参数
 
-默认值通常足以开始。调整前先区分“同时处理多少篇”“本次最多几轮”和“每篇请求预算”；三者不互相增加额度。模型专属兼容项在表中明确标出。
+调整前先分清三种限制：并发决定同时处理多少篇；轮数决定本次完整一轮结束后是否再处理失败论文；每篇预算决定这篇论文可以使用多少次响应和多少输出。增加并发或轮数，都不会给已耗尽的候选增加额度。
+
+默认值通常足以开始。下表保留变量原名，供写入 `.env` 时使用；模型专属兼容项在表中明确标出。
 
 | 变量 | 默认值 |
 |---|---:|

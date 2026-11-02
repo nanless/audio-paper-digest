@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1050" viewBox="0 0 640 1050" role="img" aria-labelledby="title description"><title id="title">从论文原文到可阅读的解读</title><desc id="description">三条流程分别取得真实来源，共用分析与写作，生成页面后独立审查，再推送、部署并核验网页。日更默认不生图，原论文图仍核验。</desc>
+<defs><style>text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK SC",Arial,sans-serif;fill:#183247}.title{font-size:26px;font-weight:700}.head{font-size:23px;font-weight:650}.body{font-size:20px}.note{font-size:18px;fill:#425b70}.bus{fill:none;stroke:#59778e;stroke-width:2.5}.line{fill:none;stroke:#59778e;stroke-width:2.5;marker-end:url(#arrow)}.return{fill:none;stroke:#2d776c;stroke-width:2.5;stroke-dasharray:8 6;marker-end:url(#returnarrow)}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#59778e"/></marker><marker id="returnarrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#2d776c"/></marker></defs>
+<rect width="640" height="1050" rx="18" fill="#f5f8fb"/>
+<text x="32" y="48" class="title">从论文原文到可阅读的解读</text>
+<text x="32" y="82" class="note">箭头表示内容与来源记录传递</text>
+<rect x="32" y="108" width="576" height="190" rx="14" fill="#eaf1fc" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="144" class="head">1  取得本次真实来源</text>
+<text x="54" y="180" class="body">当天日更：入选论文的官方正文与 PDF</text>
+<text x="54" y="209" class="body">官方会议：会议身份、元数据与 PDF</text>
+<text x="54" y="238" class="body">历史更新：固定页面范围后准备原文</text>
+<text x="54" y="267" class="body">三条流程的来源证明不能互换</text>
+<path d="M320 300V348" class="line"/>
+<text x="340" y="330" class="note">内容与身份</text>
+<rect x="32" y="354" width="576" height="138" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="390" class="head">2  共同分析与解读</text>
+<text x="54" y="426" class="body">保存内部分析、评分、分类和论文解读长文</text>
+<text x="54" y="455" class="body">表格、公式和配图仍逐项核对真实来源</text>
+<path d="M320 496V544" class="line"/>
+<text x="340" y="526" class="note">已核验结果</text>
+<rect x="32" y="550" width="576" height="140" rx="14" fill="#edf6f2" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="586" class="head">3  生成页面并独立审查</text>
+<text x="54" y="622" class="body">读取最终文件，检查正文、图片与来源</text>
+<text x="54" y="651" class="body">保存与页面内容和博客提交对应的凭证</text>
+<path d="M320 694V742" class="line"/>
+<text x="340" y="724" class="note">凭证允许的差异</text>
+<rect x="32" y="748" width="576" height="166" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="784" class="head">4  推送、部署与网页核验</text>
+<text x="54" y="820" class="body">核验远端提交，再确认对应版本部署成功</text>
+<text x="54" y="849" class="body">逐页核验正式地址、HTTP 200 和准确标题</text>
+<text x="54" y="878" class="body">保存核验记录后，才能报告已经上线</text>
+<text x="36" y="958" class="note">日更默认不生图；原论文图照常核验和展示。</text>
+<text x="36" y="988" class="note">每一步的检查都保留，前一步不替代后一步。</text>
+</svg>

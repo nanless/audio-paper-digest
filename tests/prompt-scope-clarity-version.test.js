@@ -14,11 +14,17 @@ const originals = {
     apiReaderArticle: { path: 'prompts/api-reader-article-v9.md', contract: 'analysis-prompt-text-v9',
         sha256: 'a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8', blob: '2dc5d6d8348a960bd272415fb861aa48e88b7609' }
 };
-test('only two current prompts advance; exact old paths, whole bytes and templates remain readable from Git', () => {
-    assert.equal(versions.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v7.md');
-    assert.equal(versions.currentTextStagePromptPath('apiReaderArticle'), 'prompts/api-reader-article-v10.md');
+// This test preserves the earlier scope-clarity upgrade as a historical pair;
+// later writing changes have their own current-version regression tests.
+const scopePath = stage => versions.promptFilePathForContract(stage,
+    stage === 'primaryAnalysis' ? 'analysis-prompt-text-v7' : 'analysis-prompt-text-v10');
+const beforeTerminology = file => Object.entries(versions.FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES)
+    .find(([stage]) => versions.currentTextStagePromptPath(stage) === file)?.[1].path || file;
+test('the two scope-clarity versions preserve exact old paths, whole bytes and templates from Git', () => {
+    assert.equal(scopePath('primaryAnalysis'), 'prompts/deep-analysis-v7.md');
+    assert.equal(scopePath('apiReaderArticle'), 'prompts/api-reader-article-v10.md');
     assert.equal(versions.CURRENT_PROMPT_FILES.length, 18);
-    assert.deepEqual(fs.readdirSync(path.join(root, 'prompts')).filter(n => n.endsWith('.md') && n !== 'README.md').sort(),
+    assert.deepEqual(fs.readdirSync(path.join(root, 'prompts')).filter(n => n.endsWith('.md') && !/^README(?:\.en)?\.md$/.test(n)).sort(),
         versions.CURRENT_PROMPT_FILES.map(file => path.basename(file)).sort());
     for (const [stage, old] of Object.entries(originals)) {
         assert.equal(versions.promptFilePathForContract(stage, old.contract), old.path);
@@ -29,21 +35,21 @@ test('only two current prompts advance; exact old paths, whole bytes and templat
         assert.deepEqual(history.promptBytesForSha256(stage, old.sha256), bytes);
         const templateSha256 = history.promptTemplateSha256(bytes.toString(), old.contract);
         assert.deepEqual(history.historicalPromptTemplateBytesForSha256(templateSha256, old.contract), bytes);
-        const newer = evidence.readPromptEvidenceBytes(versions.currentTextStagePromptPath(stage));
+        const newer = evidence.readPromptEvidenceBytes(scopePath(stage));
         assert.notEqual(sha(newer), old.sha256);
         assert.deepEqual(variables(first(newer.toString())), variables(first(bytes.toString())));
         assert.throws(() => evidence.readPromptEvidenceBytes(old.path, { expectedSha256: '0'.repeat(64) }));
         assert.throws(() => versions.promptFilePathForContract(stage, 'analysis-prompt-text-v99'));
     }
-    const changed = new Set(Object.keys(originals).map(stage => versions.currentTextStagePromptPath(stage)));
-    for (const file of versions.CURRENT_PROMPT_FILES.filter(file => !changed.has(file))) {
-        assert.deepEqual(fs.readFileSync(path.join(root, file)), execFileSync('git',
+    const changed = new Set(Object.keys(originals).map(scopePath));
+    for (const file of versions.CURRENT_PROMPT_FILES.map(beforeTerminology).filter(file => !changed.has(file))) {
+        assert.deepEqual(evidence.readPromptEvidenceBytes(file), execFileSync('git',
             ['show', `e8b6261475dfd4c61611e78d7fae3acedb9b241d:${file}`], { cwd: root }));
     }
 });
 test('summary result-group clarification preserves every other byte and the complete analysis schema', () => {
     const old = evidence.readPromptEvidenceBytes(originals.primaryAnalysis.path).toString();
-    const current = fs.readFileSync(path.join(root, versions.currentTextStagePromptPath('primaryAnalysis')), 'utf8');
+    const current = evidence.readPromptEvidenceBytes(scopePath('primaryAnalysis')).toString();
     const before = '这里只提取最重要的 1–2 个结果数字，表格放在实验结果中，不重复整张表。';
     const after = '这里只选最重要的 1–2 组关键结果；一组比较须保留双方数值、单位、精度和条件，必要的成本数值也要保留，不能为限制数字个数删去比较对象或开销。表格放在实验结果中，不重复整张表。';
     assert.equal(current.split(after).length, 2);
@@ -53,7 +59,7 @@ test('summary result-group clarification preserves every other byte and the comp
 });
 test('independent PDF quotes require actual supplied characters and explicit recovery scope; the ordinary schema stays intact', () => {
     const old = evidence.readPromptEvidenceBytes(originals.apiReaderArticle.path).toString();
-    const current = fs.readFileSync(path.join(root, versions.currentTextStagePromptPath('apiReaderArticle')), 'utf8');
+    const current = evidence.readPromptEvidenceBytes(scopePath('apiReaderArticle')).toString();
     const sectionStart = '\n独立 PDF 引文只用于明确允许的恢复\n';
     const sectionEnd = '\n记录与正文的对应关系\n';
     assert.equal(current.split(sectionStart).length, 2);
@@ -70,6 +76,6 @@ test('independent PDF quotes require actual supplied characters and explicit rec
     assert.equal(reverted, old);
     const args = Object.fromEntries(variables(first(current)).map(key => [key, '真实输入_' + key]));
     args.sourceEvidence = '原文中的 {title} 与 \\alpha 不接受二次替换。';
-    const rendered = loadPrompt(versions.currentTextStagePromptPath('apiReaderArticle'), args);
+    const rendered = loadPrompt(scopePath('apiReaderArticle'), args);
     assert.ok(rendered.includes(args.sourceEvidence));
 });

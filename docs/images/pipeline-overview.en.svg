@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1050" viewBox="0 0 640 1050" role="img" aria-labelledby="title description"><title id="title">From paper sources to published explanations</title><desc id="description">Three workflows verify their own sources, share analysis and writing, review generated pages, then push, deploy and verify them. Daily image generation is waived; original paper figures remain checked.</desc>
+<defs><style>text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK SC",Arial,sans-serif;fill:#183247}.title{font-size:26px;font-weight:700}.head{font-size:23px;font-weight:650}.body{font-size:20px}.note{font-size:18px;fill:#425b70}.bus{fill:none;stroke:#59778e;stroke-width:2.5}.line{fill:none;stroke:#59778e;stroke-width:2.5;marker-end:url(#arrow)}.return{fill:none;stroke:#2d776c;stroke-width:2.5;stroke-dasharray:8 6;marker-end:url(#returnarrow)}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#59778e"/></marker><marker id="returnarrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#2d776c"/></marker></defs>
+<rect width="640" height="1050" rx="18" fill="#f5f8fb"/>
+<text x="32" y="48" class="title">From paper sources to published explanations</text>
+<text x="32" y="82" class="note">Arrows carry content and source records</text>
+<rect x="32" y="108" width="576" height="190" rx="14" fill="#eaf1fc" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="144" class="head">1  Verify the actual sources</text>
+<text x="54" y="180" class="body">Daily: official text and PDFs of selected papers</text>
+<text x="54" y="209" class="body">Conference: official identity, metadata and PDF</text>
+<text x="54" y="238" class="body">Historical: fixed page scope, then original papers</text>
+<text x="54" y="267" class="body">Source credentials stay specific to each workflow</text>
+<path d="M320 300V348" class="line"/>
+<text x="340" y="330" class="note">Content + identity</text>
+<rect x="32" y="354" width="576" height="138" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="390" class="head">2  Shared analysis and writing</text>
+<text x="54" y="426" class="body">Keep analysis, assessment, tags and explanations</text>
+<text x="54" y="455" class="body">Check tables, equations and figures against sources</text>
+<path d="M320 496V544" class="line"/>
+<text x="340" y="526" class="note">Verified results</text>
+<rect x="32" y="550" width="576" height="140" rx="14" fill="#edf6f2" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="586" class="head">3  Generate and independently review pages</text>
+<text x="54" y="622" class="body">Read final files; review text, figures and sources</text>
+<text x="54" y="651" class="body">Bind review records to page bytes and blog commits</text>
+<path d="M320 694V742" class="line"/>
+<text x="340" y="724" class="note">Receipt-authorized changes</text>
+<rect x="32" y="748" width="576" height="166" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
+<text x="54" y="784" class="head">4  Push, deploy and verify the web pages</text>
+<text x="54" y="820" class="body">Verify the remote commit and its deployment</text>
+<text x="54" y="849" class="body">Check every URL, HTTP 200 response and title</text>
+<text x="54" y="878" class="body">Save verification before reporting the site live</text>
+<text x="36" y="958" class="note">Daily: no generated images; original figures remain.</text>
+<text x="36" y="988" class="note">Each operation retains its own required checks.</text>
+</svg>

@@ -75,14 +75,26 @@ class PromptEvidenceTest(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, check=True).stdout
         self.assertEqual(set(json.loads(output)), set(evidence.CURRENT_PROMPT_FILES))
 
-    def test_scope_clarity_upgrade_preserves_real_retired_git_bytes(self):
+    def test_writing_upgrades_preserve_real_retired_git_bytes(self):
         for retired, whole_sha, current in (
             ('prompts/deep-analysis-v6.md',
              'b36705353d116b99cde778625f21b14334378dff54b83474de29f9a83e04f0ff',
-             'prompts/deep-analysis-v7.md'),
+             'prompts/deep-analysis-v8.md'),
             ('prompts/api-reader-article-v9.md',
              'a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8',
-             'prompts/api-reader-article-v10.md'),
+             'prompts/api-reader-article-v11.md'),
+            ('prompts/deep-analysis-v7.md',
+             'b8856b5e510d17f610f98b2292329553f8f8df361be23db66d5140df45639b22',
+             'prompts/deep-analysis-v8.md'),
+            ('prompts/api-reader-article-v10.md',
+             '676bd4cd5cfd6486a9ae1c8737e02cbc2db0695880985dd3119d3869d1811026',
+             'prompts/api-reader-article-v11.md'),
+            ('prompts/gap-fill-v4.md',
+             'b1b3619eeb05e568253c30b67f34fb692aeb6dcace9abc875c9e26276427cc84',
+             'prompts/gap-fill-v5.md'),
+            ('prompts/structure-repair-v3.md',
+             'fcb0890e1176bc9dc10a7600b5c553ba901fbaafc18bf97f5cb7f2fd754bbb88',
+             'prompts/structure-repair-v4.md'),
         ):
             with self.subTest(retired=retired):
                 original = evidence.read_prompt_evidence_bytes(retired, whole_sha)

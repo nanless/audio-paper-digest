@@ -1,6 +1,8 @@
 # 脚本索引
 
-只维护日更、官方会议与历史博客更新。命令权威来源是根 `package.json`，源代码和Prompt分工见 [三流程对应表](../docs/three-workflows.md)。
+[English](README.en.md)
+
+只维护日更、官方会议与历史博客更新。命令权威来源是根 `package.json`，源代码和提示词分工见 [三流程对应表](../docs/three-workflows.md)。
 
 | 流程 | 当前入口/适配 | 共用核心 |
 |---|---|---|
@@ -43,7 +45,7 @@ Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1�
 
 Reader 局部补丁被拒绝后，下一次局部请求仍携带最多3000字符的拒绝诊断；归一化继续重建当前问题和修复目标。传输中断通过候选中的独立 `patchRejectionFeedback` 字段保留诊断，补丁成功应用后清除。旧诊断不授予目标或 SHA，以本次目标清单为准；原请求次数、停滞判断及 `lastContentError` 的预算规则不变。
 
-环境、路径、模型/代理、账号池、标签词表、运行锁、费用、不可变Source、论文图临时处理、来源表格/公式/作者核验以及视觉规划/登记/豁免仍是三流程依赖。图片生成须由内置工具完成；本项目没有图像API生成器。
+环境、路径、模型/代理、账号池、标签词表、运行锁、费用、不可变来源文件、论文图临时处理、来源表格/公式/作者核验以及视觉规划/登记/豁免仍是三流程依赖。只有用户另行要求的生图任务才由内置工具完成；本项目没有图像 API 生成器，日更持续不生图。
 
 `manual/scripts` 是共享兼容边界，只保留旧来源/签名/正文与Prompt合同核验、单页独立人工审查。完整作者/任务/spec生产、社交发布、backfill及实验/视觉调试入口已删除。新独立审查实际配置 `gpt-6.1-sol/high`，按 `manual_agent_policy.py` 登记真实 v4 身份，不能用旧模型声明签发新审查。
 
@@ -64,6 +66,8 @@ npm run test:compat
 
 ## 运行时文件逐项索引
 
+先按任务找到入口，再查它调用的内部库。表中的“来源能力”指程序实际核验文件后取得、限本次作用域使用的私有对象；复制 JSON、填写 SHA 或直接调用低层函数，不能代替这一步。“冷核”是重新读取保存文件再检查，“采纳”是检查通过后由正常事务写入正式记录。
+
 表中的“内部库”和“旧恢复”不表示新任务可以绕过正常入口：新任务从上方三流程进入；旧记录仅沿原身份和预算核验或恢复。使用文件名可直接搜索定位。
 
 ### 分析、调度与事实恢复
@@ -75,7 +79,7 @@ npm run test:compat
 | `analysis-engine.js` | Node 共享：用公共失败轮次调度，首轮全批、下一轮只失败集合，等待每轮结果和保存完成；管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
 | `analysis-waiver.js` | Node 库：核验用户针对当前日更批次的分析豁免，检查 deep、filtered、papers 三份文件的精确字节和逐篇来源 SHA；不修改分析正文。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
-| `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，初次明确付费轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出；后续局部或缺正文恢复使用单独的有界追加清单，原账和累计上限继续核验。无清单、坏绑定、仍有次数或成功稿拒绝。见 恢复说明。 |
+| `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑。完整条件见本表后的同名说明。 |
 | `lib/daily-arxiv-oai-source.js`、`lib/daily-arxiv-announcement-source.js` | 日更显式 `--official-oai-recovery` 的官方元数据恢复与公告核验。仅同一类别、同一固定窗口内日期查询和类别列表均真实 HTTP 429 时启用；封存两种 OAI 格式的完整 XML 分页及目标日 RSS，按共同身份核对完整集合，版本时间以 Raw 为准，标题、摘要及有序作者以结构化格式为准。恢复、数据校验和下一日边界均重读原字节重建实际候选，保留原批次、已完成来源和原失败，见[补抓边界](../docs/daily-fetch-boundary.md#两条-atom-查询均限流时的官方-oai-恢复)。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `deep-analyzer.js` | Node 核心：按各流程来源适配读取单篇全文，执行多阶段分析、评分审计、API Reader 写作和论文图规划。日更恢复读取本批封存来源，不重新抓取。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
@@ -87,11 +91,11 @@ npm run test:compat
 | `lib/analysis-batch-report.js` | Node共享：将 Reader 刷新固定范围、来源引用、轮次和人工建议保存为私有诊断；不签来源、成功正文或发布凭证，不授权新请求。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
 | `lib/analysis-stage-request-guard.js` | 独立会议恢复跨轮保存失败非 Reader 阶段的请求禁令，覆盖正常和自定义模型入口；保留纯检查及原付费重验，不新增额度。Reader 仍使用自己的累计账本。 |
-| `lib/conference-reader-operator-correction.js` | 只在原会议许可最后失败集合中安装有界人工 Reader 补丁；核原完整包、候选、响应、预算、资产及真实 PDF，硬禁模型/网络，保存独立原包和可冷重放凭证。同批已保存断点以真实 receipt/before/canonical 重放原资格，原清单不重签。资源阶段遗留父指针仅按同次认证预检、真实父稿及必要评分检查点恢复私有视图；空主文仅可投影同执行三 SHA 一致且科学上游完整的评分检查点，原失败包不改。 |
+| `lib/conference-reader-operator-correction.js` | 只在原会议许可最后的失败集合中安装有界人工 Reader 补丁；核原完整包、候选、响应、预算、资产及真实 PDF，硬禁模型/网络，保存独立原包和可冷重放凭证。同批已保存断点以真实 receipt/before/canonical 重放原资格，原清单不重签。资源阶段遗留父指针仅按同次认证预检、真实父稿及必要评分检查点恢复私有视图；空主文仅可投影同执行三 SHA 一致且上游科学内容与阶段记录完整的评分检查点，原失败包不改。 |
 | `lib/reader-single-source-table-append.js` | 纯数据验证固定形状的唯一原表追加：绑定六文件及 PDF 原字节、来源窗口、既有第11节尾部和第二绑定，保护所有原内容；输出仅为候选数据，不授予来源、资格或付费权限。会议私有 v2 成员加载后仍走正常完整解析及冷核。 |
 | `lib/conference-reader-resolved-origin.js` | 只读认证外层未保存的唯一最新退休付费 Reader：登记账本、真实请求/响应/费用、原Prompt、迁移链、正常归一与同源输入逐项闭合。私有来源句柄仅供最终失败集v1局部修正及reader-only请求前单篇减权，不复活候选或授予新额度。 |
 | `lib/conference-source-resource-correction.js`、`lib/conference-source-resource-correction-apply.js` | 认证来源事实的零请求恢复：资源归属和唯一核心句采用独立物理合同，保留最新主文及真实 Reader 父稿，正常解析、整篇热/冷核和暂存后在全部论文锁内原子采纳；不改变原费用或预算。迁移须显式 `--postprocess-only --source-corrections FILE`，见[来源纠正](../docs/conference-workflow.md#认证来源事实的零请求纠正)。 |
-| `lib/conference-complete-stage-pool.js`、`lib/conference-complete-stage-worker.js` | 会议完成稿迁移及完整汇总的私有并行核验，默认沿用 `--concurrency` 且最多5个真实工作线程；迁移可另设 `--postprocess-concurrency 1–5`，仅控制完成稿暂存和完整汇总私有池。省略时保持原行为；`--concurrency` 仍独立控制 Reader/分析调度，新参数不改变模型并发、阶段上限、次数或费用。实际worker入口固定核验daily角色，不能直接作为主程序启动。各线程从归档重建原来源/计划能力，禁止模型并执行原整篇资格及暂存；汇总只读模式每篇正常 `loadStage` 一次。真实固定 PDF 提取器及会议渲染子进程超时，在完整首轮结束后仅该集合串行正常重试一次，保留原错误、不递归、不增加分析次数或费用。主线程持实际操作锁重读完整成员、状态、页面、资产和原包SHA，私有批能力不能由JSON或子集伪造，最后统一CAS保存，不另设生产CLI。 |
+| `lib/conference-complete-stage-pool.js`、`lib/conference-complete-stage-worker.js` | 会议完成稿迁移及完整汇总的私有并行核验，默认沿用 `--concurrency` 且最多5个真实工作线程。完整条件见本表后的同名说明。 |
 | `lib/conference-analysis-adapter.js` 的 `replaySavedConferenceReaderRevision()` | 在正常适配器内纯恢复已有普通/追加Reader子稿，实际来源及论文锁内硬禁模型；公共完整修订读取器统一在每次同步读取内合并普通维护的重复历史核验，锁前、锁内及后续读取各自返回前重验，不跨异步；窗口继续原完整核验。不准备新子稿、预检或额度，未合格时不写尝试、失败或费用，合格后正常保存、封存，再由迁移做页面核验及CAS采纳。 |
 | `lib/conference-reader-operator-apply.js` | 持真实论文锁执行正常 Reader 解析与整篇资格，CAS 保存子稿、离开热作用域后冷核，再正常暂存并原子采纳完整集合；保留原次数及费用，不启动新付费轮。 |
 | `lib/cancelled-reader-final-checkpoint.js` | 确认最终正文仅被已取消步骤阻挡时，在原完整性、来源和反馈核验通过后从真实检查点继续，不重新生成已完成内容。 |
@@ -116,6 +120,18 @@ npm run test:compat
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。未指定并发时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`（默认5），`--concurrency N` 可覆写为1–60；总轮数使用 `batchMaxRounds`（默认3），`--rounds N` 可覆写为1–10。先全批再仅续明确可重试失败，诊断保存到 `analysis-batch-reports`；只读取封存 PDF/TXT，图片只为本次调用在系统临时目录中准备。 |
 | `waive-analysis-failures.js` | CLI：记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |
+
+
+
+**`batch-analyze.js` 的完整操作边界**
+
+正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，初次明确付费轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出；后续局部或缺正文恢复使用单独的有界追加清单，原账和累计上限继续核验。无清单、坏绑定、仍有次数或成功稿拒绝。见 恢复说明。
+
+
+**`lib/conference-complete-stage-pool.js`、`lib/conference-complete-stage-worker.js` 的完整操作边界**
+
+会议完成稿迁移及完整汇总的私有并行核验，默认沿用 `--concurrency` 且最多5个真实工作线程；迁移可另设 `--postprocess-concurrency 1–5`，仅控制完成稿暂存和完整汇总私有池。省略时保持原行为；`--concurrency` 仍独立控制 Reader/分析调度，新参数不改变模型并发、阶段上限、次数或费用。实际worker入口固定核验daily角色，不能直接作为主程序启动。各线程从归档重建原来源/计划能力，禁止模型并执行原整篇资格及暂存；汇总只读模式每篇正常 `loadStage` 一次。真实固定 PDF 提取器及会议渲染子进程超时，在完整首轮结束后仅该集合串行正常重试一次，保留原错误、不递归、不增加分析次数或费用。主线程持实际操作锁重读完整成员、状态、页面、资产和原包SHA，私有批能力不能由JSON或子集伪造，最后统一CAS保存，不另设生产CLI。
+
 
 ### 日更抓取与筛选
 
@@ -171,7 +187,7 @@ npm run test:compat
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总，沿私有池每篇复用一次完整 `loadStage` 的结果。认证PDF多层/平表的新增失败后补证仍逐项重建完整原网格、条件与单位，不改变原成功证明。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
 | `lib/conference-recovery-grant.js` | 显式追加会议额度的不可变登记与私有运行能力，绑定原 process 完整失败集合、父子稿 CAS 和真实来源；同一许可中断重入，禁止 JSON 自授额度。 |
-| `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。合格普通 partial 的重复初始化恢复可交原正常入口；仅真实未签发、零尝试及一次资源重探回执允许首次评分＋Reader，固定预检与新评分检查点冷热重放，原阶段及费用保护，详见[维护边界](../docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。普通子稿的同步观察、读取和出版操作合并重复历史断言，首次及返回前完整重读，并核当前子稿/父稿/修订/种子/预检SHA及历史材料与暂存输出隔离；原完整加载器、Reader/来源资格、渲染及字节核验照常执行，窗口/排除路径暂停作用域走原路，不跨异步、请求或成功保存。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。 |
+| `lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` | 已完成会议博客真实拒稿的独立正常 Reader 批。完整条件见本表后的同名说明。 |
 | `lib/conference-publication-figure-crop.js`、`lib/conference-publication-figure-crop-replay-cli.js` | 认证同 PDF 的独立出版派生及固定禁网 FD 冷核。正常发布仍要求真实当前父稿；库内 ForMaintenance 仅接受维护模块私有历史能力，重算原 PDF/像素和全部实物闭包，不授 current 发布或 Reader 通过。 |
 | `lib/conference-reader-publication-evidence.js` 的 `assertVerifiedPublicationReaderPdfSourcesUnchanged()` | 单次批核真实 WeakMap 来源句柄的共享原文件；先拒绝句柄、SHA 与读取策略冲突，再逐份完整读取唯一文件。无跨调用缓存，不替代来源、失败集合或当前状态资格。 |
 | `lib/conference-reader-review-maintenance.js` 的 `revalidateMaintenancePublicationSources()` | 持原 process 操作锁，硬禁模型，以正常来源和几何重算固定历史出版视图，另存当前 proof 与来源重验凭证；旧 outcome、PNG、原稿和费用不改。不新增公共 CLI，不授最终发布通过。 |
@@ -191,10 +207,27 @@ npm run test:compat
 | `lib/conference-source-upgrade.js` | 会议来源能力升级的身份和已有分析绑定检查。 |
 | `lib/conference-staging.js` | Node 库：将认证的会议入选集与人工复核的提取结果一一核验，生成导入清单和凭证；排除项和身份别名都不能进入。 |
 | `lib/official-conference-acquisition.js` | Node 库：按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
-| `migrate-conference-process.js` | CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。可用 `--concurrency 1 --postprocess-concurrency 5` 保持逐篇 Reader 恢复，同时在硬禁模型的完成稿暂存与完整汇总阶段使用最多5个工作线程；未传后者时完全沿用原并发。`--reader-review-feedback ABS` 独立维护完整博客拒稿，另窗用 `--reader-review-window ABS`；入口含直接库调用均先核互斥选项，pending 普通迁移在 grant 安装前拒绝。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。`--postprocess-only --preserve-failed-readers` 仅供人工准备保留原失败稿，不能混入重试或许可，不授资格。明确获准的额外付费清单使用 `--retry-failed --recovery-manifest ABSOLUTE_PATH`，同一许可最多3轮，详见[会议追加恢复](../docs/conference-workflow.md#原额度耗尽后的独立付费恢复)。 |
+| `migrate-conference-process.js` | CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。完整条件见本表后的同名说明。 |
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
-| `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 核验并安装原单篇和汇总暂存文件；同批图片更新仅在旧清单精确归属及原字节匹配时，保留不可变旧图后CAS原子替换，已是新字节时复用；generate 可显式加 `--figure-crop-manifest ABS --figure-crop-base-sha SEMANTIC_SHA` 创建独立出版视图，review/push 只能重放 generation 已绑定视图；review 共用正文模型、目标图多模态及 Markdown/Hugo 审查，优先派汇总且默认并发仍5；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 重验线上页面、引用文件和图片。已有 publish 的 ID 不因重复 generate 更新。部署工作流、页面标题及浏览器实际效果另行核验。 |
+| `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。完整条件见本表后的同名说明。 |
 | `recover-conference-process-locks.js` | CLI：只在操作者确认本工作区、且锁的持有进程 PID 已经退出时，按文件锁协议恢复旧操作锁；活锁和不完整的锁一律跳过。 |
+
+
+
+**`lib/conference-reader-review-maintenance.js`、`lib/conference-reader-review-maintenance-evidence.js` 的完整操作边界**
+
+已完成会议博客真实拒稿的独立正常 Reader 批；核 canonical generation/完整审查/失败/永久通过缓存、真实父稿/source/CAS，默认原始待核验意见。合格普通 partial 的重复初始化恢复可交原正常入口；仅真实未签发、零尝试及一次资源重探回执允许首次评分＋Reader，固定预检与新评分检查点冷热重放，原阶段及费用保护，详见[维护边界](../docs/conference-workflow.md#博客拒稿后的正常-reader-维护)。普通子稿的同步观察、读取和出版操作合并重复历史断言，首次及返回前完整重读，并核当前子稿/父稿/修订/种子/预检SHA及历史材料与暂存输出隔离；原完整加载器、Reader/来源资格、渲染及字节核验照常执行，窗口/排除路径暂停作用域走原路，不跨异步、请求或成功保存。成功即时保存，全批后失败集合续轮，独立窗口另记旧材料与费用；两阶段私有历史出版能力只认证旧意见像素/文字。pending 阻断发布与普通迁移，全成功正常采纳、stage、汇总。纯 evidence 模块不签发能力。
+
+
+**`migrate-conference-process.js` 的完整操作边界**
+
+CLI：显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。可用 `--concurrency 1 --postprocess-concurrency 5` 保持逐篇 Reader 恢复，同时在硬禁模型的完成稿暂存与完整汇总阶段使用最多5个工作线程；未传后者时完全沿用原并发。`--reader-review-feedback ABS` 独立维护完整博客拒稿，另窗用 `--reader-review-window ABS`；入口含直接库调用均先核互斥选项，pending 普通迁移在 grant 安装前拒绝。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。`--postprocess-only --preserve-failed-readers` 仅供人工准备保留原失败稿，不能混入重试或许可，不授资格。明确获准的额外付费清单使用 `--retry-failed --recovery-manifest ABSOLUTE_PATH`，同一许可最多3轮，详见[会议追加恢复](../docs/conference-workflow.md#原额度耗尽后的独立付费恢复)。
+
+
+**`publish-conference.py` 的完整操作边界**
+
+CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 核验并安装原单篇和汇总暂存文件；同批图片更新仅在旧清单精确归属及原字节匹配时，保留不可变旧图后CAS原子替换，已是新字节时复用；generate 可显式加 `--figure-crop-manifest ABS --figure-crop-base-sha SEMANTIC_SHA` 创建独立出版视图，review/push 只能重放 generation 已绑定视图；review 共用正文模型、目标图多模态及 Markdown/Hugo 审查，优先派汇总且默认并发仍5；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 重验线上页面、引用文件和图片。已有 publish 的 ID 不因重复 generate 更新。部署工作流、页面标题及浏览器实际效果另行核验。
+
 
 ### 历史页面、来源与受限旧恢复
 
@@ -347,7 +380,7 @@ npm run test:compat
 | `lib/reader-signed-draft.js` | Node 库：日更封存来源的已签 Reader 逆算入口；保留原 fresh 准入及正文、计划、图片 SHA 精确往返要求，不写文件或调用模型。 |
 | `lib/reader-signed-draft-surface.js` | Node 库：纯表示逆算，恢复完整术语组合和原图引用；不授予来源、API 作者身份、修改许可或发布资格。 |
 | `lib/conference-reader-signed-draft.js` | Node 库：只读核验真实完整会议父包及计划/PDF 后逆算 Reader，分别报告精确往返、纯格式差异和阻断；保留逐节点差异，不把可恢复草稿视为通过稿。 |
-| `lib/daily-reader-signed-correction.js` | 已完成日更 Reader 的显式尾修：v1 保留有界中文词替换，v2 仅允许严格事实反馈原句内的逐字范围修正。原退休付费稿和既有人工历史须逐步重放到当前正文、计划与图片，绑定完整父稿 CAS、四源及完整小尾集合，沿用原次数与像素，经正常解析和引擎保存；预览不登记义务，执行才保存 pending，不复活候选或授予请求。 |
+| `lib/daily-reader-signed-correction.js` | 已完成日更 Reader 的显式尾修：v1 保留有界中文词替换，v2 仅允许严格事实反馈原句内的逐字范围修正。原退休付费稿和既有人工历史须逐步重放到当前正文、计划与图片，绑定完整父稿 CAS、四源及完整的少量剩余失败集合，沿用原次数与像素，经正常解析和引擎保存；预览不登记义务，执行才保存 pending，不复活候选或授予请求。 |
 | `lib/daily-reader-signed-fact-patch.js` | 签名 Reader v2 的纯范围核验：逐字绑定当前受拒原句、UTF-16 起止位置和原节点 SHA；仅1–8个既有正文/解释/同源表绑定节点。raw/display 差异只接受真实正常排版投影，句外、公式、原图及新节点不可改；来源资格仍由正常 Reader 解析器核验。 |
 | `lib/daily-reader-legacy-batch-root.js` | 只读核验旧日更批次人工修正根：真实失败父检查点、原授权及清单、原付费候选和原补丁必须逐字重放到当前签名 Reader；保留真实 operator 身份、四源、原费用和次数，不伪造完成 API 父稿或改变活跃候选状态。 |
 | `lib/reader-signed-raw-claim-display.js` | 签名范围的原句显示映射：仅同一原节点的唯一原句与实际偏移可使用公共定量诊断及正常排版；用完整节点的位置标记重放证明显示范围，拒绝借另一句、引用或代码的数字证据。 |
@@ -389,7 +422,7 @@ npm run test:compat
 | 文件 | 类型与职责 |
 |---|---|
 | `lib/filter-prompt.js` | 日更和会议共用的筛选模板渲染；各适配器显式传入已冻结的模板路径及原来源字段，保留旧请求文本与 SHA。 |
-| `lib/prompt-history.js` | Node 库：按原记录整文件或首围栏模板 SHA 读取、核验 Git 历史原字节；查不到返回 `null`，不把当前正文伪装成旧版本。 |
+| `lib/prompt-history.js` | Node 库：按原记录整文件或首围栏模板 SHA 读取、核验 Git 历史原字节。默认 Git 证据路线中，未登记的 SHA 查不到时返回 `null`；已登记的原 Git 对象缺失或字节不符时停止核验，不把当前正文伪装成旧版本。 |
 | `lib/prompt-evidence.js` | Node 库：受控读取当前 Prompt 或索引声明的 Git blob，严格核验原路径、OID、整文件 SHA 与可选声明 SHA；不写旧正文。 |
 | `lib/git-prompt-evidence-index.json` | 只读元数据：仅保存历史 Prompt 的原路径、Git blob OID 与整文件 SHA，没有旧正文。 |
 | `lib/prompt-rendering-contract.js` | Node 库：识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
@@ -448,7 +481,7 @@ npm run test:compat
 | `manifest-new.js` | Node 入口：`npm run manifest:new -- --spec SPEC.json` 准备每篇 1–8 个既有节点的修正记录和清单，计算 SHA/UUID。默认 dry-run，`--write` 才写 `data/runtime`；正式采纳另核完整当前输入、原付费链、真实来源与整篇质量，见[清单准备范围](../docs/maintenance.md#恢复决策与清单生成)。 |
 | `table-check.js` | Node 入口：`npm run table:check -- --draft DRAFT.json` 离线预检表格粘连复写/列数/单位声明，不写数据。 |
 | `impact.js` | Node 入口：`npm run impact -- <file-or-dir>` 静态列出改动影响的入口、测试与重验范围。 |
-| `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json；不比较准确论文标题、H1、canonical 或完整正文，具体条件见[收尾说明](../docs/maintenance.md#发布后网页核验与收尾)。`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy。 |
+| `verify-web.js` | Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json。完整条件见本表后的同名说明。 |
 | `publish-finish.js` | Node 入口：`npm run publish:finish -- --date DATE` 打印正式状态、网页核验及当前发布不生图登记的收尾步骤；登记缺失时提示重建清单后豁免，不引导图片准备，不自动登记或调用图像 API。 |
 | `review-overrides-cli.js` | Node 入口：`npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]` 只读核对页面 SHA、逐字问题与误报解释。退出判断使用 `currentMatchVerdict`；旧 `overriddenFailedPages` 等字段只作兼容投影。诊断不修改审查结果或授予发布资格，完整范围见[误报记录](../docs/maintenance.md#发布后网页核验与收尾)。 |
 | `storage-report.js` | Node 入口：`npm run storage:report [--advice-only]` 打印“必须保留/可压缩/可删”建议，并只读运行 storage:status；不删除。 |
@@ -508,3 +541,8 @@ npm run test:compat
 | `validate-data-files.js` | 只读核验当前数据、跨文件论文集合、评分及兼容结果的来源记录。 |
 | `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据检查；`--quick` 仅语法与数据，不是完整验收。 |
 | `workspace-role.js` | 入口与共享运行检查：用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。`PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 只放行 daily 工作区执行 history 命令（读进程环境或工作区 `.env`，放行时打印提示）；反向和 realpath 不符照旧拒绝。 |
+
+
+**`verify-web.js` 的完整操作边界**
+
+Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json；不比较准确论文标题、H1、canonical 或完整正文，具体条件见[收尾说明](../docs/maintenance.md#发布后网页核验与收尾)。`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 schemaVersion/createdAt/partial/deploy。

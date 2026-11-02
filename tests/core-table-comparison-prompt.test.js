@@ -44,7 +44,8 @@ test('核心v7只纠正表格比较的取证说明，保留原首围栏其余字
     assert.match(after, /不要增删末尾的零、舍入/);
     assert.throws(() => registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v99'), /没有登记/);
     assert.deepEqual(history.promptBytesForSha256('coreSummaryRepair', oldSha), old);
-    const templates = fs.readdirSync(path.join(root, 'prompts')).filter(f => f.endsWith('.md') && f !== 'README.md');
+    const templates = fs.readdirSync(path.join(root, 'prompts')).filter(f => f.endsWith('.md')
+        && !['README.md', 'README.en.md'].includes(f));
     assert.equal(templates.length, 18); assert.equal(registry.CURRENT_PROMPT_FILES.length, 18);
 });
 

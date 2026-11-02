@@ -168,17 +168,24 @@ const FROZEN_PRE_SCOPE_CLARITY_PROMPT_FILES = Object.freeze({
     primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V6_CONTRACT, path: 'prompts/deep-analysis-v6.md' }),
     apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V9_CONTRACT, path: 'prompts/api-reader-article-v9.md' }),
 });
+// 面向初学者的术语说明调整前，原稿继续按其声明和 Git 字节重放。
+const FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES = Object.freeze({
+    primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V7_CONTRACT, path: 'prompts/deep-analysis-v7.md' }),
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V10_CONTRACT, path: 'prompts/api-reader-article-v10.md' }),
+    revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/gap-fill-v4.md' }),
+    structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/structure-repair-v3.md' }),
+});
 const PROMPT_FILE_VERSIONS = Object.freeze({
     ...FROZEN_V4_MIXED_PROMPT_FILES,
-    primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V7_CONTRACT, path: 'prompts/deep-analysis-v7.md' }),
-    revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/gap-fill-v4.md' }),
+    primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V8_CONTRACT, path: 'prompts/deep-analysis-v8.md' }),
+    revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/gap-fill-v5.md' }),
     methodRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/method-fill-v3.md' }),
     tagSelection: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/tag-repair-v3.md' }),
-    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V10_CONTRACT, path: 'prompts/api-reader-article-v10.md' }),
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V11_CONTRACT, path: 'prompts/api-reader-article-v11.md' }),
     apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V13_CONTRACT, path: 'prompts/api-reader-repair-v13.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
     coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V7_CONTRACT, path: 'prompts/core-summary-repair-v7.md' }),
-    structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/structure-repair-v3.md' }),
+    structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/structure-repair-v4.md' }),
 });
 
 // v1 路径反查阶段名。会议实现清单只记路径，需要据此换成当前版本的正文。
@@ -232,6 +239,8 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (previousWriting?.contract === declared) return previousWriting.path;
     const previousScope = FROZEN_PRE_SCOPE_CLARITY_PROMPT_FILES[stage];
     if (previousScope?.contract === declared) return previousScope.path;
+    const previousTerminology = FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES[stage];
+    if (previousTerminology?.contract === declared) return previousTerminology.path;
     const archivedV2 = FROZEN_V2_PROMPT_FILES[stage];
     if (declared === ANALYSIS_PROMPT_TEXT_V2_CONTRACT && archivedV2) return archivedV2.path;
     // 核心摘要 v3 沿用 v2 正文，仅恢复读取使用这个别名；不改旧 Manual 混合组合。
@@ -283,6 +292,7 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (predecessor && !known.includes(predecessor.contract)) known.push(predecessor.contract);
     if (previousWriting && !known.includes(previousWriting.contract)) known.push(previousWriting.contract);
     if (previousScope && !known.includes(previousScope.contract)) known.push(previousScope.contract);
+    if (previousTerminology && !known.includes(previousTerminology.contract)) known.push(previousTerminology.contract);
     if (entry && !known.includes(entry.contract)) known.push(entry.contract);
     throw new Error(`阶段 ${stage} 的提示词版本 ${declared} 没有登记；只认识 ${known.join(' 和 ')}。`);
 }
@@ -325,6 +335,7 @@ module.exports = {
     FROZEN_PRE_PLAIN_CHINESE_MIXED_PROMPT_FILES,
     FROZEN_PRE_WRITING_GUIDE_PROMPT_FILES,
     FROZEN_PRE_SCOPE_CLARITY_PROMPT_FILES,
+    FROZEN_PRE_OPTIONAL_ENGLISH_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     promptTextContractForStage,
     currentPromptTextContract,

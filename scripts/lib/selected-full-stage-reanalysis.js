@@ -15,10 +15,10 @@ function fail(message) { const error = new Error(message); error.code = 'FULL_ST
 function bindings() {
     const versions = require('./prompt-text-versions').PROMPT_FILE_VERSIONS;
     const result = {};
-    for (const [stage, expected] of Object.entries({ primaryAnalysis: 'prompts/deep-analysis-v7.md',
-        apiReaderArticle: 'prompts/api-reader-article-v10.md', apiReaderRepair: 'prompts/api-reader-repair-v13.md',
-        revision: 'prompts/gap-fill-v4.md', methodRepair: 'prompts/method-fill-v3.md',
-        coreSummaryRepair: 'prompts/core-summary-repair-v7.md', structureRepair: 'prompts/structure-repair-v3.md' })) {
+    for (const [stage, expected] of Object.entries({ primaryAnalysis: 'prompts/deep-analysis-v8.md',
+        apiReaderArticle: 'prompts/api-reader-article-v11.md', apiReaderRepair: 'prompts/api-reader-repair-v13.md',
+        revision: 'prompts/gap-fill-v5.md', methodRepair: 'prompts/method-fill-v3.md',
+        coreSummaryRepair: 'prompts/core-summary-repair-v7.md', structureRepair: 'prompts/structure-repair-v4.md' })) {
         if (versions[stage]?.path !== expected) fail('全阶段重跑必须使用当前已改进中文提示词');
         result[stage] = { ...versions[stage], fileSha256: crypto.createHash('sha256')
             .update(fs.readFileSync(path.resolve(__dirname, '../..', expected))).digest('hex') };

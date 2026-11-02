@@ -2,7 +2,9 @@
 
 ## 受众与原则
 
-本文供修改默认 API、共享发布、提示词、数据格式或文档的维护者使用。先定位配置或接口的实际实现，再同步使用这些配置或接口的程序、测试与说明。旧记录核验与独立人工审查见 [manual/README.md](../manual/README.md)。
+本文供修改默认 API、共享发布、提示词、数据格式或文档的维护者使用。维护时先找到一条配置或规则在哪里生效，再确认哪些程序读取它；只改一份说明，不能证明 Node 与 Python 两端都已经使用新规则。
+
+先定位配置或接口的实际实现，再同步使用这些配置或接口的程序、测试与说明。旧记录核验与独立人工审查见 [manual/README.md](../manual/README.md)。
 
 ## 一次修改怎样完成
 
@@ -28,9 +30,9 @@
 | 日更来源的文本与 PDF | `scripts/lib/daily-fresh-source-plan.js`、`scripts/lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
-| 分析结构或评分 | `analysis-contract.js`、当前 `deep-analysis-v7.md` 及评分提示词 | Node/Python 解析器和发布器 |
+| 分析结构或评分 | `analysis-contract.js`、当前 `deep-analysis-v8.md` 及评分提示词 | Node/Python 解析器和发布器 |
 | 分类词表与多级路径 | `config/tag-catalog.json`、`lib/tag-rules.js`、`tag_catalog.py`、`tag_presentation.py` | 主分析/标签Prompt、旧SHA归档与双运行时证明、三种单篇/汇总渲染、站点版本目录及 `tag_catalog_publication.py` 发布守卫 |
-| Reader 写作、图表或修复 | 当前登记的 `api-reader-article-v10.md`、`api-reader-repair-v13.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
+| Reader 写作、图表或修复 | 当前登记的 `api-reader-article-v11.md`、`api-reader-repair-v13.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
@@ -59,7 +61,9 @@
 5. 重试反馈能定位问题并限制修改范围，不使整篇内容无故变化。
 6. 读者正文没有模板句、证据 ID 或流程说明。
 
-工作树只保留当前登记的 18 份正文；实际路径和对应协议以 `scripts/lib/prompt-text-versions.js` 为准，不能只从文件名推断协议。主分析 v7、评分 v5、核心摘要 v7、Reader 文章 v10、局部修复 v13、结构修复路径 v3，以及 3 份事实/术语专项修复模板见 [Prompt 索引](../prompts/README.md)。新建分析默认使用当前模板；已有付费候选的恢复先核验其原阶段和请求身份，不能因模板升级直接换版或重新计数。
+工作树只保留当前登记的 18 份正文；实际路径和对应协议以 `scripts/lib/prompt-text-versions.js` 为准，不能只从文件名推断协议。例如，当前结构修复文件名为 v4，登记的正文协议却是 `analysis-prompt-text-v5`；正文审校也采用该协议。
+
+当前模板包括主分析文件 `deep-analysis-v8.md`、正文审校文件 `gap-fill-v5.md`、评分 v5、核心摘要 v7、Reader 文章文件 `api-reader-article-v11.md`、局部修复 v13、结构修复文件 `structure-repair-v4.md`，以及 3 份事实/术语专项修复模板，见 [Prompt 索引](../prompts/README.md)。新建分析默认使用当前模板；已有付费候选的恢复先核验其原阶段和请求身份，不能因模板升级直接换版或重新计数。
 
 筛选使用 `filter-v5.md`，明确实际音频输入与评测、音乐生成输入、口语轮次控制和说话人分段错误的相关范围，并区分实际声音方法或系统的贡献与固定现成基准验证；推理采样、解码等贡献不要求新增训练模块。通用理论、表示、算法或采样与音频线索交界的候选，按当前关键词规则先核验官方方法和实验材料再筛选。旧会议筛选仍核验原声明版本、原模板 SHA 和原正文，通过 Git 证据读取器取回旧字节，不能与新版正文混用。提示词正文版本不代替 Reader 文章等内容协议。
 
@@ -83,6 +87,8 @@ Python标签正常化只对长度不超过256的内置不可变字符串使用�
 
 组件消融不要求正文使用“消融”一词。对明确的同组件“无X时／有X后”实测对照，Node 分析与 Python 发布共同核验比较问题、同张结果表中的数值和本篇来源的连续陈述；假设、未来计划、否定或他人实验不能充当已完成证据。回归同时保存真实失败检查点及原封存全文，按 SHA 核验后保持原字节重放，不以构造正例代替真实故障。
 
+### 原表显示与单位证明
+
 偏好向量表的分组列单位须同时核对完整原DOM网格、唯一的两层列路径，以及封存PDF中完整表头和每一行的连续原字符。原HTML的重复数学显示仅在PDF逐行确认后可用于显示投影，原来源文件不改。均值差合并格须保留原跨度与同指标单位；正常读取和保存稿冷核使用同一规则，错列、缺行、错单位、伪造PDF引文和作用域内来源漂移仍拒绝。
 
 封存 PDF 中的累计配置表和组件/参数消融表，只有完整表头、逐字表注、全部行身份及实际分隔线共同闭合时，才能使用对应的独立列单位证明。累计损失的数学字形还须核对原字体与下标位置，不能把普通字母猜成公式。正常排版在同一格的均值与不确定度两侧增加空格时，只允许合并这些空格；均值、误差项、符号与精度均保留。新增规则须验证真实完整表及错误数值、缺行、分带变化、伪造引文和保存后的来源冷核。
@@ -101,6 +107,8 @@ Reader-only 完成判据必须重放真实父子反馈组合，不能把已通�
 ## 修改数据格式与校验规则
 
 主分析与博客发布分别执行 Node 和 Python 校验。修复来源绑定的列类型、表后边界或负面证据误报时，两端须用同一份真实保存稿与封存来源验证；先收集完整批次的实际阻断，再统一修复。正向的耗时、能耗“降幅”本身不代表负面结果，不能用这个词替代具名对照、指标方向及原文中的实测结论。专项检查通过只证明该项规则，不代替正常生成、审查和发布资格。
+
+### 旧输入清洗是否损坏字符
 
 请求清洗使用 `model-text-unicode-scalars-v1`，保留数学字母、生僻姓名等合法非 BMP 字符，仍替换孤立 UTF-16 代理字符。受影响输入的阶段指纹包含清洗版本；旧结果在生产恢复、提升、暂存及日更发布前，须从已核验来源证明输入没有受旧清洗影响，或按原来源完整重分析。新版标记不能代替 TXT、PDF、runtime、manifest 与来源 SHA 核验。重分析前保留带 SHA 的旧正文和阶段快照，不改封存来源字节。
 
@@ -182,8 +190,16 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ## 恢复决策与清单生成
 
+### 先读失败记录，再选择正式入口
+
 - `npm run recover -- --date YYYY-MM-DD`：只读采集已保存的分析失败、事实义务、页面审查问题及独立的批次审查问题，再按错误码汇总建议入口。日期须为真实日历日期。输出区分文件缺失、不可读、坏 JSON、形状错误、错批与无法确认日期的旧格式；存在坏资料时退出 2。文件缺失时仅提供 partial 预览，默认退出 0，`--strict` 退出 1，`--execute` 退出 2 且不派发。两份资料均可读时也只表示 `saved_records` 采集完成，`semanticCoverage: not_checked`、`scopeComplete: false`，不证明正式来源、完整失败集合或发布资格。`--execute --yes` 仍只调用既有入口并受原入口核验约束。
+
+### 准备人工修正材料，不能据此采纳
+
 - `npm run manifest:new -- --spec SPEC.json [--fact-feedback-file FILE ...]`：SPEC 写 `{paperId, replacements:[{path,value}]}`（1–8 个既有节点），可多次传 `--spec`，或使用数组 / `{papers:[...]}` 覆盖完整当前失败集合。若本次恢复使用事实反馈，须传入同一组反馈文件；命令按正式入口的反馈验证及失败谓词核对集合、重复项与人数限制，dry-run 和 write 均先核对。候选须安全可读、唯一，并对应当前论文、来源运行及来源 SHA，不按修改时间挑稿，也不吞读取错误。输出明确 `candidateIdentity: not_checked`、`paidOrigin: not_checked`；工具准备范围不含完整当前输入身份比较及原付费链重放；正式采纳仍核真实当前来源、原材料与 patch，并执行正常 Reader 及整篇资格检查。默认 dry-run，`--write` 才生成 `data/runtime/operator-corrections-<date>-<uuid>/`；材料准备成功不表示正式资格通过、不授模型请求权限，也不自动采纳。
+
+### 错误码与文字建议的用途
+
 - 错误码字典 `scripts/lib/error-codes.js` 与 `error-guidance` 的规则 id 对齐，供 `recover`、状态报告和文档共用。数字限流提示须为独立状态信号，不把论文编号、小数或相邻文字中的 429 当作状态；arXiv 文字信号按明确主机、独立词或已知代码识别，近似域名不作为官方来源提示。明确的 OAI/RSS 过期诊断保留优先级。文字匹配仅供辅助建议，不替代生产错误类型、来源验证或恢复权限。
 
 ## 表格与影响面预检
@@ -202,7 +218,13 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
   页面检查仅要求 HTTP 200、最终 URL 去掉查询参数、片段和末尾斜杠后与期望地址一致、标题包含站点标记，且汇总标题含日期、单篇标题去掉站点标记后长度大于 4。它不核对准确论文标题、H1、canonical 或完整正文；这些须在最终全页核验中另查，不能将该命令通过解释为全部内容正确。
 
   默认要求完整页面与部署证据：无 `--deploy`、`--limit` 抽样或部署未成功时标记 partial 并返回非零。`--allow-partial` 只放宽页面/抽样 partial 的退出判断；`--allow-degraded` 只放宽部署不可得或进行中的退出判断，不降低页面与凭证要求，也不把诊断记录升级为完整验收。
+
+### 解释疑似误报，不改正式结论
+
 - `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]`：只读核对误报解释，按页面 SHA 与逐字 claim 匹配，不修改失败文件或凭证，也不授予正式审查或发布资格。诊断报告 v2 的 `matched` 统计实际命中的解释条目，`matchedIssues` 与 `matches` 记录本次问题位置；`inputDeclaredOverridden` 单列原输入的旧标记，`sourceFailureSha256` 绑定原文件字节。严格退出码由 `currentMatchVerdict` 决定：仍有 error 或未完整解释的失败页退出 1，诊断无阻断退出 0，执行或参数错误退出 2。旧 `pendingBlockedFiles`、`overriddenFailedPages`、`wouldPass` 及 `legacyProjection` 保留旧投影，不能作为新退出依据。此变化会使只靠输入旧 `overridden` 标记的旧调用返回非零。`receiptCheck` 仅报告参考提交字段是否相等，`receiptContractVerified` 始终为 false；字段冲突退出 2，缺字段明确告警。失败文件显式日期冲突同样退出 2；旧文件缺日期时 `failureDateCheck` 明确未比对，`formalScopeVerified` 始终为 false。同一失败页中原有的 `overridden` 位置也须由本次匹配覆盖，不能用另一条新解释掩盖。`--json` 的正常诊断输出为单份 JSON，告警写入 stderr。
+
+### 检查推送后的收尾步骤
+
 - `npm run publish:finish -- --date DATE`：打印推送后收尾清单，包括正式状态、网页核验及当前发布的不生图登记。登记缺失时只提示重建发布后任务清单，再执行豁免；不提示图片准备，也不自行登记或调用图像 API。
 
 `verify:web` 的完整部署结果还要求明确的 `jobVerified: true`。缺 runId、jobs 查询失败或超时、无法解析响应等均保留为未核验，不以 run 的成功结论替代 job 证据。此时结果仍为 `partial:true`；同时显式使用 `--allow-degraded --allow-partial` 只允许诊断命令退出成功，不会把证据升级为完整验收。实际 job 失败、取消或跳过继续返回失败。

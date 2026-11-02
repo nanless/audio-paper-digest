@@ -10,7 +10,7 @@
 
 网页的单篇分类和汇总逐篇分类使用同一套分面卡片与树形层级。汇总中的规范 Markdown 分类块须按完整名称、概念链接及祖先路径逐字重放后才转换为卡片；异常标记、额外正文或不符路径保留原内容，不猜测删除。源 Markdown 保留原有可离线阅读的路径格式。
 
-日更汇总的“热门方向”把每篇已核验的主任务沿当前词表追溯到最上级，按该根方向统计，每篇只计一次；排行榜同样显示最上级任务并提供概念链接。方法、条件和补充任务不参加这项计数。此展示投影不改变论文直接分类、汇总完整主任务元数据、分类签名或原始评分。
+日更汇总的“热门方向”把每篇已核验的主任务沿当前词表追溯到最上级，按该根方向统计，每篇只计一次；排行榜同样显示最上级任务并提供概念链接。方法、条件和补充任务不参加这项计数。这里的展示投影只是按原分类生成页面上需要的显示内容，不会改写论文直接分类、汇总完整主任务元数据、分类签名或原始评分。
 
 例如，一篇论文直接选择一个细分任务及其方法，卡片可以显示该任务的祖先路径；这些祖先并没有因此变成直接标签。假设本期两篇论文的主任务归于同一根方向，该方向的热门计数为 2；两篇各有多个方法标签，也不会增加这项计数。这只是口径示例，不是某期真实统计。
 
@@ -48,9 +48,21 @@
 
 | 流程 | 多级呈现实际调用 | 已有页面的受控更新位置 |
 |---|---|---|
-| 日更 | `publish-to-blog.py` 的单篇与汇总调用 `render_paper_tag_hierarchy()`，再调用共享 `tag_presentation.py` | 已发布完整日批显式使用 `blog:generate -- --date DATE --republish UUID` → `blog:review -- --date DATE` → `blog:push -- --date DATE`；保留本批来源和正式结果 |
-| 官方会议 | `conference-page-render.py` 生成单篇；`lib/conference-postprocess.js` 对汇总成员批量调用同一共享渲染器 | 原 process 未发布时，正常恢复或显式实现迁移重验单篇暂存和完整汇总，再走 `conference:publish:generate/review/push/verify`；已有 `publish.json` 的 ID 不会因重复 generate 更新，转按已有 URL 的历史维护入口处理，详见[只更新会议页面](conference-workflow.md#已有完整会议只更新页面) |
-| 历史更新 | arXiv单篇通过公共日更发布器、真实会议身份通过 `historical-page-render.py`；`lib/historical-direct-aggregate.js` 对每日、会议及会议任务汇总成员批量调用共享标签渲染器 | 同计划 `history:run` 重暂存旧实现页面，`history:aggregate` 重建对应汇总，再走 `history:publication` 的生成、审查与发布；冻结URL和原来源不变 |
+| 日更 | `publish-to-blog.py` 的单篇与汇总调用 `render_paper_tag_hierarchy()`，再调用共享 `tag_presentation.py` | 见下方“日更已有页面的更新步骤”。 |
+| 官方会议 | `conference-page-render.py` 生成单篇；`lib/conference-postprocess.js` 对汇总成员批量调用同一共享渲染器 | 见下方“官方会议已有页面的更新步骤”。 |
+| 历史更新 | arXiv单篇通过公共日更发布器、真实会议身份通过 `historical-page-render.py`；`lib/historical-direct-aggregate.js` 对每日、会议及会议任务汇总成员批量调用共享标签渲染器 | 见下方“历史更新已有页面的更新步骤”。 |
+
+### 日更已有页面的更新步骤
+
+已发布完整日批显式使用 `blog:generate -- --date DATE --republish UUID` → `blog:review -- --date DATE` → `blog:push -- --date DATE`；保留本批来源和正式结果
+
+### 官方会议已有页面的更新步骤
+
+原 process 未发布时，正常恢复或显式实现迁移重验单篇暂存和完整汇总，再走 `conference:publish:generate/review/push/verify`；已有 `publish.json` 的 ID 不会因重复 generate 更新，转按已有 URL 的历史维护入口处理，详见[只更新会议页面](conference-workflow.md#已有完整会议只更新页面)
+
+### 历史更新已有页面的更新步骤
+
+同计划 `history:run` 重暂存旧实现页面，`history:aggregate` 重建对应汇总，再走 `history:publication` 的生成、审查与发布；冻结URL和原来源不变
 
 审计时同时核对页首的直接概念和最终渲染路径：祖先仅作导航，不能通过向 `tags` 追加父级来制造多级效果。站点总目录始终保留零计数方向，不能将文章的“仅选中项”规则用于裁剪总目录。
 

@@ -64,8 +64,8 @@ test('original v9 full canonical prompt renderer preserves the exact recorded pr
     const marker='上一版完整 JSON 草稿（首次生成时为“无”）：\n\n';const offset=result.originalPrompt.indexOf(marker)+marker.length;assert.ok(offset>=marker.length);const observedPrompt=result.originalPrompt.slice(0,offset)+observedView+result.originalPrompt.slice(offset+raw.length);assert.equal(observedPrompt.length,192959);assert.equal(sha(observedPrompt),fixture.nativeSendPromptSha256);
     const vars=fixture.nativeFullPromptVariables;assert.equal(vars.sourceEvidence.length,174837);assert.equal(sha(vars.sourceEvidence),fixture.nativeSourceEvidenceSha256);assert.ok(result.originalPrompt.includes(vars.sourceEvidence)&&result.prompt.includes(vars.sourceEvidence));assert.equal(result.previousDraft,raw);assert.equal(fixture.nativePromptReconstruction.originalSignedDisplayMatchesActiveIdentity,true);
 });
-test('current registered v10 full renderer preserves real evidence and the diagnostic-only context limit',()=>{
-    assert.equal(require(path.join(ROOT,'scripts/lib/prompt-text-versions')).currentTextStagePromptPath('apiReaderArticle'),'prompts/api-reader-article-v10.md');
+test('current registered v11 full renderer preserves real evidence and the diagnostic-only context limit',()=>{
+    assert.equal(require(path.join(ROOT,'scripts/lib/prompt-text-versions')).currentTextStagePromptPath('apiReaderArticle'),'prompts/api-reader-article-v11.md');
     const result=nativeFullPrompt();assert.notEqual(result.originalPrompt,fixture.nativeOriginalPrompt);
     assert.ok(result.originalPrompt.includes('独立 PDF 引文只用于明确允许的恢复'));
     assert.ok(result.originalPrompt.includes(fixture.nativeFullPromptVariables.sourceEvidence)&&result.prompt.includes(fixture.nativeFullPromptVariables.sourceEvidence));

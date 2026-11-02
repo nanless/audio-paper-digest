@@ -9,7 +9,7 @@ const { readPromptEvidenceBytes } = require('../scripts/lib/prompt-evidence');
 
 const root = path.resolve(__dirname, '..');
 
-test('工作树只保留十八份当前Prompt与索引，退休全文不回流', () => {
+test('工作树只保留十八份当前Prompt与中英文索引，退休全文不回流', () => {
     const current = registry.CURRENT_PROMPT_FILES;
     assert.ok(Object.isFrozen(current));
     assert.equal(current.length, 18);
@@ -19,7 +19,7 @@ test('工作树只保留十八份当前Prompt与索引，退休全文不回流',
         'prompts/api-reader-fact-local-v3.md', 'prompts/api-reader-concept-terms-v1.md'];
     assert.deepEqual([...current].sort(), expected.sort());
     assert.deepEqual(fs.readdirSync(path.join(root, 'prompts')).sort(),
-        [...current.map(file => path.basename(file)), 'README.md'].sort());
+        [...current.map(file => path.basename(file)), 'README.md', 'README.en.md'].sort());
     const retiredManual = path.join(root, 'manual/prompts');
     if (fs.existsSync(retiredManual)) {
         assert.deepEqual(fs.readdirSync(retiredManual).filter(file => /\.(?:md|txt)$/i.test(file)), []);
