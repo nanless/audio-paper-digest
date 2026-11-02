@@ -7,12 +7,15 @@ function installTmpOnlyWriteGuard(directory,options={}){
  const native={};for(const name of Object.keys(fs))if(typeof fs[name]==='function')native[name]=fs[name].bind(fs);
  const promises=fs.promises,pnative={};for(const name of Object.keys(promises))if(typeof promises[name]==='function')pnative[name]=promises[name].bind(promises);
  const root=native.realpathSync(directory),tmp=native.realpathSync(os.tmpdir()),fds=new Map();
+ const normalizationLinks=new Map();
  if(!(root.startsWith(tmp+path.sep)&&native.lstatSync(root).isDirectory()))throw Error('Guard root must be a dedicated existing systemtmp directory');
  const violation=target=>Object.assign(new Error('TEST_TMP_WRITE_GUARD: refused mutation outside dedicated tmp: '+String(target)),{code:'TEST_TMP_WRITE_GUARD'});
  const inside=p=>p===root||p.startsWith(root+path.sep);
  const pathname=value=>value instanceof URL?fileURLToPath(value):Buffer.isBuffer(value)?value.toString():String(value);
  function assertPath(value){
   const p=path.resolve(pathname(value));if(!inside(p))throw violation(p);
+  for(const [source,link]of normalizationLinks)if(p===source||p===link.destination
+   ||source.startsWith(p+path.sep)||link.destination.startsWith(p+path.sep))throw violation('pending immutable link '+p);
   let ancestor=p;
   let existing;
   while(true){try{existing=native.lstatSync(ancestor);break;}catch(error){
@@ -60,6 +63,37 @@ function installTmpOnlyWriteGuard(directory,options={}){
  }
  for(const name of ['linkSync','link'])fs[name]=()=>{throw violation('hardlinks are unsupported in guarded tests');};
  promises.link=async()=>{throw violation('hardlinks are unsupported in guarded tests');};
+ // Explicit opt-in for the real immutable writer's synchronous publish/cleanup
+ // pair. No writable shared inode or general hardlink capability is granted.
+ if(options.allowNormalizationImmutableLinks===true){
+  const host=require('node:crypto').createHash('sha256').update(os.hostname()).digest('hex').slice(0,16);
+  const finalName=/^[a-f0-9]{64}(?:\.parent|-[a-f0-9]{64}(?:\.applied)?)\.json$/;
+  fs.linkSync=function(a,b){
+   const source=assertPath(a),destination=assertPath(b),dir=path.dirname(source),final=path.basename(destination);
+   const prefix='.'+final+'.'+host+'.'+process.pid+'.',name=path.basename(source);
+   if(path.dirname(destination)!==dir||path.basename(dir)!=='normalizations'||native.realpathSync(dir)!==dir
+    ||!finalName.test(final)||!name.startsWith(prefix)||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/.test(name.slice(prefix.length)))throw violation('unsupported immutable link shape');
+   const stat=native.lstatSync(source);
+   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||(stat.mode&0o777)!==0o600||native.realpathSync(source)!==source)throw violation('unsafe immutable source');
+   try{native.lstatSync(destination);throw violation('immutable destination already exists');}catch(error){if(error.code!=='ENOENT')throw error;}
+   native.linkSync(source,destination);
+   const left=native.lstatSync(source),right=native.lstatSync(destination);
+   if(!left.isFile()||!right.isFile()||left.isSymbolicLink()||right.isSymbolicLink()
+    ||left.dev!==stat.dev||left.ino!==stat.ino||right.dev!==stat.dev||right.ino!==stat.ino||left.nlink!==2||right.nlink!==2)throw violation('immutable link changed during publication');
+   normalizationLinks.set(source,{destination,dev:stat.dev,ino:stat.ino});
+  };
+  const guardedUnlink=fs.unlinkSync;
+  fs.unlinkSync=function(value,...args){
+   const source=path.resolve(pathname(value)),link=normalizationLinks.get(source);
+   if(!link)return guardedUnlink(value,...args);
+   if(args.length||native.realpathSync(path.dirname(source))!==path.dirname(source))throw violation('immutable cleanup directory changed');
+   for(const file of [source,link.destination]){const stat=native.lstatSync(file);
+    if(!stat.isFile()||stat.isSymbolicLink()||stat.dev!==link.dev||stat.ino!==link.ino||stat.nlink!==2||(stat.mode&0o777)!==0o600)throw violation('immutable cleanup identity changed');}
+   native.unlinkSync(source);normalizationLinks.delete(source);
+   const after=native.lstatSync(link.destination);
+   if(after.dev!==link.dev||after.ino!==link.ino||after.nlink!==1||!after.isFile()||after.isSymbolicLink())throw violation('immutable final identity changed');
+  };
+ }
  const symlinkTarget=(source,dest)=>{assertPath(dest);assertPath(path.isAbsolute(pathname(source))?source:path.resolve(path.dirname(pathname(dest)),pathname(source)));};
  fs.symlinkSync=function(a,b,...args){symlinkTarget(a,b);return native.symlinkSync(a,b,...args);};
  fs.symlink=function(a,b,...args){symlinkTarget(a,b);return native.symlink(a,b,...args);};

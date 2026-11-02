@@ -3444,7 +3444,16 @@ function loadFailedCandidate(directory, identity) {
     return readFailedCandidateEnvelope(directory, identity)?.envelope.payload || null;
 }
 
-function saveFailedCandidate(directory, identity, payload) {
+function saveFailedCandidate(directory, identity, payload, options = {}) {
+    const assertExpectedEnvelope = () => {
+        if (options.expectedEnvelopeSha256 === undefined) return;
+        if (!/^[a-f0-9]{64}$/.test(options.expectedEnvelopeSha256)
+            || readFailedCandidateEnvelope(directory, identity)?.envelopeSha256 !== options.expectedEnvelopeSha256) {
+            const error = new Error('Reader candidate normalization CAS changed');
+            error.code = 'READER_NORMALIZATION_CAS_CHANGED'; error.scope = 'run'; error.retryable = false; throw error;
+        }
+    };
+    assertExpectedEnvelope();
     assertSafeJson(identity);
     assertSafeJson(payload);
     if (payload.status !== 'failed') throw new Error('Reader candidate cannot certify success');
@@ -3518,6 +3527,7 @@ function saveFailedCandidate(directory, identity, payload) {
         fs.fsyncSync(fd);
         fs.closeSync(fd); fd = undefined;
         assertSafeDirectory(directory);
+        assertExpectedEnvelope();
         fs.renameSync(temporary, filename);
     } finally {
         if (fd !== undefined) fs.closeSync(fd);

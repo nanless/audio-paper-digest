@@ -259,6 +259,7 @@ npm run test:compat
 |---|---|
 | `lib/reader-next-request-plan.js` | 从正常 Reader 循环的实际候选、问题与原预算记录下一次全文或局部路由；诊断不是最终预检或请求许可，显式仅局部作用域只能减权，保留原计数与全部后续守卫。 |
 | `lib/reader-candidate-transactions.js` | Node 库：在内存中跟踪分析结果对应的待保存文章，复制结果时同步这层对应关系；不加载分析器、不读写文件、不改变日志。文章实际保存后的检查和恢复稿停用仍由分析器负责。 |
+| `lib/reader-candidate-normalization.js` | Node 库：普通补丁前将确定性草稿转换按真实活跃父包 CAS 保存，另存不可覆盖的原包和转换记录；活跃补丁能力期间延后写回，保存故障停止派发，不增加次数或改变费用。 |
 | `lib/reader-compatible-candidate-replay.js` | Node 库：在统一恢复中用真实迁移链或最后付费请求、响应及生产逐字回放收敛同输入候选；不按文件时间选稿，不改次数和费用，无法证明仍拒绝。 |
 | `lib/reader-concept-term-display.js` | Node 库：核对术语与完整解释的显示身份；支持同一确定小计数和排版规则下的“二次/2 次、六维/6 维”，保护代码内部、英文词内及完整数字边界，拒绝缺词、不同数字与显示等价的重复术语；与 Python 发布检查使用同一边界。 |
 | `lib/reader-contract.js` | Node 库：规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
@@ -278,6 +279,7 @@ npm run test:compat
 | `lib/reader-proof-read-scope.js` | Node 库：在一次恢复准备期间复用未变化的证明文件读取；每次核对文件状态，结束即清空，完整恢复链仍重新核验。 |
 | `lib/reader-recovery-revision.js` | Node 库：显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不会产出成功凭证。 |
 | `lib/reader-target-ordinal-patch.js` | Node 库：普通已有节点补丁的上下文承诺、短序号回复与严格 SHA 编译、正常费用封存及保存稿冷重放；日更冷核重建已认证的同步来源作用域，保留 PDF 表格证明与脚注。首版仅用于 Responses，其他协议保留原路径，不授额度或完成资格。 |
+| `lib/reader-pdf-selection-replay-cli.js` | 私有只读文件描述符桥：在禁止网络的子进程中，供 Python 出版冷核重放正常表编译器的选行列投影；原完整 DOM、PDF 及逐格显示证明仍由实际来源作用域核验，不返回写入或来源能力。 |
 | `lib/reader-repair.js` | Node 库：保存未通过检查的文章草稿，核对允许修改字段的 SHA，并应用经校验的局部修改。表格数量预估仅供参考；合法原表行列示例只进入对应错误的修复反馈，不改来源证据与候选输入身份。补表时仍核验原表选择或完整逐字引文，最终文章须通过完整解析检查。严格只有 kind/heading/body 的超节稿可用同 kind 连续索引分组计划，由程序保留全部原标题、正文与来源绑定；唯一已知续文字段可用v2原字段引用计划，全部原段及空串逐项保留；未知字段继续完整重排。各请求共用原有尝试额度。 |
 | `lib/reader-malformed-previous-draft-view.js` | Node 库：仅在正常全文提示词超限且旧响应无法解析为 JSON 时，生成保留原 SHA、解析错误和逐字片段的发送诊断；完整旧响应和来源证据保持，合法稿件与局部补丁不裁剪，不增加预算。 |
 | `lib/reader-fact-table-claim-location.js` | Node 库：显式绑定原反馈、父稿、已付候选、四源及错位与保留位置，纠正一项完整原表的错误全局禁留范围；仅零请求重验旧稿，沿正常解析、收尾和出版冷核，不覆盖旧义务、次数或费用。 |
@@ -457,6 +459,7 @@ npm run test:compat
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |
 | `lib/workflow-error-policy.js` | 公共失败分类、嵌套存储错误检测和正式分析错误字段投影；会议保留旧导出，历史直接调用，运行级范围不会在适配时丢失；不调度、不增加重试预算。 |
 | `lib/core-summary-semantic-replay-cli.js` | Node 只读子进程：Python 发布检查核对封存原文 SHA 后，通过私有受限文件描述符复用当前分析侧的详细核心摘要语义规则；显式 stage-binding 模式重验完整核心阶段及原付费/operator 证明，禁止语义豁免、模型或网络请求。 |
+| `lib/core-symbolic-source-numerals.js` | 核心摘要来源分类的纯文本视图：只剥确定类型的 TeX 下标及形式编号，保留实测数值和普通括号量值；不改变封存来源、摘要、付费响应或完成状态。 |
 | `lib/direct-rewrite-analysis-context.js` | Node 库：用 AsyncLocalStorage 隔离历史重写和日更的来源文件，让旧正文和缓存进不了分析，Reader 图片只能用临时文件；论文历史版本的身份 SHA 随来源记录进入所有分析阶段。 |
 | `lib/explicit-reader-retry-round.js` | Node 库：为已核验且用完原有额度的失败长文执行明确的新一轮重试，核对论文锁、四份封存来源、实际输入和原稿 SHA；完整保留旧稿与旧次数，发送请求前登记新轮费用预算。重复运行只接续剩余额度，不授予发布资格。 |
 | `lib/fresh-analysis-context.js` | Node 库：隔离全新重写运行的来源文件与深度分析上下文，重新核验来源 SHA；拒绝旧生成正文和其他运行的检查点。 |

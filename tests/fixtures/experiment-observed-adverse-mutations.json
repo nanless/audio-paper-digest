@@ -1,0 +1,346 @@
+{
+  "listening": [
+    {
+      "name": "无来源",
+      "target": "emptySource"
+    },
+    {
+      "name": "无展示表",
+      "target": "noTables"
+    },
+    {
+      "name": "正文归属或否定如果",
+      "target": "resultPrefix",
+      "new": "如果",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "正文归属或否定假设",
+      "target": "resultPrefix",
+      "new": "假设",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "正文归属或否定计划",
+      "target": "resultPrefix",
+      "new": "计划",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "正文归属或否定并非",
+      "target": "resultPrefix",
+      "new": "并非",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "正文归属或否定未观察到",
+      "target": "resultPrefix",
+      "new": "未观察到",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "正文归属或否定他人报告",
+      "target": "resultPrefix",
+      "new": "他人报告",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "正文归属或否定相关工作：",
+      "target": "resultPrefix",
+      "new": "相关工作：",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "正文归属或否定引用：",
+      "target": "resultPrefix",
+      "new": "引用：",
+      "marker": "只重建在 60 对上的"
+    },
+    {
+      "name": "来源归属或假设If",
+      "target": "sourcePrefix",
+      "new": "If ",
+      "marker": "Listeners rated the reconstruction-only decoder below"
+    },
+    {
+      "name": "来源归属或假设Previous work:",
+      "target": "sourcePrefix",
+      "new": "Previous work:\n",
+      "marker": "Listeners rated the reconstruction-only decoder below"
+    },
+    {
+      "name": "来源归属或假设Quoted statement:",
+      "target": "sourcePrefix",
+      "new": "Quoted statement:\n",
+      "marker": "Listeners rated the reconstruction-only decoder below"
+    },
+    {
+      "name": "来源归属或假设Hypothetical example:",
+      "target": "sourcePrefix",
+      "new": "Hypothetical example:\n",
+      "marker": "Listeners rated the reconstruction-only decoder below"
+    },
+    {
+      "name": "正文引用code",
+      "target": "resultWrap",
+      "new": "code"
+    },
+    {
+      "name": "来源引用code",
+      "target": "sourceWrap",
+      "new": "code"
+    },
+    {
+      "name": "正文引用quote",
+      "target": "resultWrap",
+      "new": "quote"
+    },
+    {
+      "name": "来源引用quote",
+      "target": "sourceWrap",
+      "new": "quote"
+    },
+    {
+      "name": "正文引用blockquote",
+      "target": "resultWrap",
+      "new": "blockquote"
+    },
+    {
+      "name": "来源引用blockquote",
+      "target": "sourceWrap",
+      "new": "blockquote"
+    },
+    {
+      "name": "交换正文数值",
+      "target": "results",
+      "old": "听感均值 41.3 反而低于输入的 47.6",
+      "new": "听感均值 47.6 反而低于输入的 41.3"
+    },
+    {
+      "name": "错研究组",
+      "target": "results",
+      "old": "Study 1 均值 ↑",
+      "new": "Study 2 均值 ↑"
+    },
+    {
+      "name": "错条件",
+      "target": "results",
+      "old": "| 只重建 |",
+      "new": "| 其他模型 |"
+    },
+    {
+      "name": "错来源组",
+      "target": "source",
+      "old": "Study 1 (N=8N=8)",
+      "new": "Study 2 (N=8N=8)"
+    },
+    {
+      "name": "错来源值",
+      "target": "source",
+      "old": "Unprocessed\n47.6",
+      "new": "Unprocessed\n45.6"
+    },
+    {
+      "name": "源无表",
+      "target": "source",
+      "old": "Table 1: Listening results",
+      "new": "Removed listening results"
+    },
+    {
+      "name": "方向改高",
+      "target": "results",
+      "old": "反而低于输入的",
+      "new": "反而高于输入的"
+    },
+    {
+      "name": "只有超时",
+      "target": "results",
+      "old": "听感均值 41.3 反而低于输入的 47.6",
+      "new": "64采样缓冲出现21次超时"
+    },
+    {
+      "name": "只剩较低为好指标",
+      "target": "results",
+      "old": "听感均值 41.3 反而低于输入的 47.6",
+      "new": "STFT L1 41.3 反而低于输入的 47.6"
+    },
+    {
+      "name": "源否定",
+      "target": "source",
+      "old": "Listeners rated the reconstruction-only decoder below",
+      "new": "Listeners did not rate the reconstruction-only decoder below"
+    }
+  ],
+  "duration": [
+    {
+      "name": "无来源",
+      "target": "emptySource"
+    },
+    {
+      "name": "无展示表",
+      "target": "noTables"
+    },
+    {
+      "name": "正文归属或否定如果",
+      "target": "resultPrefix",
+      "new": "如果",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "正文归属或否定假设",
+      "target": "resultPrefix",
+      "new": "假设",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "正文归属或否定计划",
+      "target": "resultPrefix",
+      "new": "计划",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "正文归属或否定并非",
+      "target": "resultPrefix",
+      "new": "并非",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "正文归属或否定未观察到",
+      "target": "resultPrefix",
+      "new": "未观察到",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "正文归属或否定他人报告",
+      "target": "resultPrefix",
+      "new": "他人报告",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "正文归属或否定相关工作：",
+      "target": "resultPrefix",
+      "new": "相关工作：",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "正文归属或否定引用：",
+      "target": "resultPrefix",
+      "new": "引用：",
+      "marker": "时长方面仅英语"
+    },
+    {
+      "name": "来源归属或假设If",
+      "target": "sourcePrefix",
+      "new": "If ",
+      "marker": "Rendered duration, which no gate checks,"
+    },
+    {
+      "name": "来源归属或假设Previous work:",
+      "target": "sourcePrefix",
+      "new": "Previous work:\n",
+      "marker": "Rendered duration, which no gate checks,"
+    },
+    {
+      "name": "来源归属或假设Quoted statement:",
+      "target": "sourcePrefix",
+      "new": "Quoted statement:\n",
+      "marker": "Rendered duration, which no gate checks,"
+    },
+    {
+      "name": "来源归属或假设Hypothetical example:",
+      "target": "sourcePrefix",
+      "new": "Hypothetical example:\n",
+      "marker": "Rendered duration, which no gate checks,"
+    },
+    {
+      "name": "正文引用code",
+      "target": "resultWrap",
+      "new": "code"
+    },
+    {
+      "name": "来源引用code",
+      "target": "sourceWrap",
+      "new": "code"
+    },
+    {
+      "name": "正文引用quote",
+      "target": "resultWrap",
+      "new": "quote"
+    },
+    {
+      "name": "来源引用quote",
+      "target": "sourceWrap",
+      "new": "quote"
+    },
+    {
+      "name": "正文引用blockquote",
+      "target": "resultWrap",
+      "new": "blockquote"
+    },
+    {
+      "name": "来源引用blockquote",
+      "target": "sourceWrap",
+      "new": "blockquote"
+    },
+    {
+      "name": "交换误差",
+      "target": "results",
+      "old": "分别短 13.0%、24.1% 和 38.2%",
+      "new": "分别短 38.2%、24.1% 和 13.0%"
+    },
+    {
+      "name": "错误语言",
+      "target": "results",
+      "old": "| hi | 12.4",
+      "new": "| ja | 12.4"
+    },
+    {
+      "name": "改长方向",
+      "target": "results",
+      "old": "分别短 13.0%",
+      "new": "分别长 13.0%"
+    },
+    {
+      "name": "非负偏差",
+      "target": "results",
+      "old": "| fr | 17.4 | -13.0%",
+      "new": "| fr | 17.4 | +13.0%"
+    },
+    {
+      "name": "目标时长错值",
+      "target": "source",
+      "old": "(20-min Target)",
+      "new": "(10-min Target)"
+    },
+    {
+      "name": "错来源语言",
+      "target": "source",
+      "old": "hi\n12.4",
+      "new": "ja\n12.4"
+    },
+    {
+      "name": "源无表",
+      "target": "source",
+      "old": "TABLE III: Pilot Measurement",
+      "new": "Removed pilot measurement"
+    },
+    {
+      "name": "源正文反向",
+      "target": "source",
+      "old": "% short for French, Japanese, and Hindi.",
+      "new": "% longer for French, Japanese, and Hindi."
+    },
+    {
+      "name": "源正文数值错误",
+      "target": "source",
+      "old": "but 13%, 24%, and 38% short",
+      "new": "but 14%, 24%, and 38% short"
+    },
+    {
+      "name": "展示表数值错误",
+      "target": "results",
+      "old": "| fr | 17.4 |",
+      "new": "| fr | 18.4 |"
+    }
+  ]
+}

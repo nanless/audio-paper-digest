@@ -7,6 +7,12 @@ const path = require('node:path');
 const legacy = require('./reader-pdf-cell-evidence');
 const grid = require('./reader-sealed-pdf-table-evidence');
 const saved = new AsyncLocalStorage();
+const SELECTION_CONTRACT = 'reader-compiled-pdf-table-selection-v1';
+const stable = value => {
+    const sort = item => Array.isArray(item) ? item.map(sort) : item && typeof item === 'object'
+        ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sort(item[key])])) : item;
+    return require('node:crypto').createHash('sha256').update(JSON.stringify(sort(value))).digest('hex');
+};
 function sealedEvidence(table) {
     if (legacy.evidence(table)) return null;
     const actual = grid.evidence(table);
@@ -46,9 +52,69 @@ function displayCellMatches(table, row, column, text, normalize = value => value
     const proof = sourceMathDisplay(table, row, column);
     return Boolean(proof && normalize(text) === normalize(proof.displayText));
 }
-function bindingEvidence(table) {
+function selectionProjection(table, binding, artifacts, proof) {
+    const selection = require('./reader-tables').readCompiledReaderTableSelection(binding, artifacts);
+    if (!selection || !proof || legacy.supported(table)
+        || artifacts.tables.filter(item => item.ordinal === binding.sourceTableOrdinal).length !== 1
+        || !artifacts.tables.includes(table) || binding.sourceTableOrdinal !== table.ordinal) return null;
+    // An identity view already passed the historical complete-table protocol.
+    // Preserve its exact saved bytes; only a genuine projection needs this new proof.
+    if (selection.sourceRows.length === table.matrix.length
+        && selection.sourceColumns.length === table.matrix[0].length
+        && selection.sourceRows.every((row, index) => row === index)
+        && selection.sourceColumns.every((column, index) => column === index)) return null;
+    return { contract: SELECTION_CONTRACT, version: 1, tableIndex: binding.tableIndex,
+        sourceTableOrdinal: table.ordinal, sourceTableDomSha256: table.sourceDomSha256,
+        sourceTableSha256: proof.sourceTableSha256, pdfEvidenceSha256: proof.evidenceSha256,
+        ...selection, cellBindingsSha256: stable(binding.cellBindings) };
+}
+function compiledSelectionEvidence(table, binding, artifacts) {
+    return selectionProjection(table, binding, artifacts, sealedEvidence(table));
+}
+// Pure replay, not a source capability: both callers first authenticate the full
+// four-source PDF grid. This never enrolls a serialized binding in a live scope.
+function validateSavedSelectionBinding(binding, artifacts, proof) {
+    const candidates = artifacts?.tables?.filter(table => table.ordinal === binding.sourceTableOrdinal) || [];
+    const table = candidates[0], selection = binding.sealedPdfTableSelection;
+    if (binding.sourceType !== 'artifact_table' || binding.pdfCellConfirmation !== undefined
+        || candidates.length !== 1 || !proof || !isDeepStrictEqual(proof, binding.sealedPdfTableEvidence)
+        || binding.sourceTableDomSha256 !== table.sourceDomSha256) {
+        throw new Error('Compiled PDF selection lacks its exact full source/grid identity');
+    }
+    const compiled = require('./reader-tables').renderReaderTableSelection({ tableIndex: binding.tableIndex,
+        selection: { sourceTableOrdinal: binding.sourceTableOrdinal,
+            sourceRows: selection?.sourceRows, sourceColumns: selection?.sourceColumns } }, artifacts);
+    const expected = selectionProjection(table, compiled.binding, artifacts, proof);
+    if (!expected || !isDeepStrictEqual(expected, selection)
+        || !Array.isArray(binding.cellBindings) || binding.cellBindings.length !== compiled.binding.cellBindings.length
+        || binding.cellBindings.some((cell, index) => {
+            const position = compiled.binding.cellBindings[index];
+            const original = table.cells.filter(value => value.row === position.sourceRow
+                && value.column === position.sourceColumn);
+            return !cell || Object.keys(cell).sort().join(',')
+                    !== 'renderedColumn,renderedRow,renderedText,sourceColumn,sourceDomSha256,sourceRow,sourceText'
+                || typeof cell.renderedText !== 'string'
+                || Object.keys(position).some(key => cell[key] !== position[key]) || original.length !== 1
+                || cell.sourceText !== original[0].text || cell.sourceDomSha256 !== original[0].sourceDomSha256;
+        })) {
+        throw new Error('Compiled PDF selection cannot replay its original compiler coordinates');
+    }
+    return true;
+}
+function compiledSelectionDisplayMatches(table, binding, rows, artifacts) {
+    const selection = compiledSelectionEvidence(table, binding, artifacts);
+    if (!selection) return false;
+    const { sourceRows, sourceColumns } = selection;
+    return Array.isArray(rows) && rows.length === sourceRows.length
+        && rows.every((row, r) => Array.isArray(row) && row.length === sourceColumns.length
+            && row.every((text, c) => text === table.matrix[sourceRows[r]][sourceColumns[c]]
+                || text === displayCell(table, sourceRows[r], sourceColumns[c])));
+}
+function bindingEvidence(table, binding, artifacts) {
     const old = legacy.evidence(table), exact = old ? null : sealedEvidence(table);
-    return old ? { pdfCellConfirmation: old } : exact ? { sealedPdfTableEvidence: exact } : {};
+    const selection = exact && binding && artifacts ? compiledSelectionEvidence(table, binding, artifacts) : null;
+    return old ? { pdfCellConfirmation: old } : exact ? { sealedPdfTableEvidence: exact,
+        ...(selection ? { sealedPdfTableSelection: selection } : {}) } : {};
 }
 function withArtifacts(artifacts, paperId, callback) {
     return legacy.withArtifacts(artifacts, paperId, () => {
@@ -61,6 +127,10 @@ function withArtifacts(artifacts, paperId, callback) {
 }
 function withSavedPaper(paper, callback) {
     const bindings = paper?.apiReaderPlan?.tableBindings || [];
+    if (bindings.some(binding => binding.sealedPdfTableSelection !== undefined
+        && (!binding.sealedPdfTableEvidence || binding.pdfCellConfirmation !== undefined))) {
+        throw new Error('Compiled PDF selection requires its original independent full-grid evidence');
+    }
     if (!bindings.some(binding => binding.sealedPdfTableEvidence !== undefined)) return legacy.withSavedPaper(paper, callback);
     const provenance = paper.freshRewriteProvenance, acquisition = paper.analysisManifest?.sourceAcquisition;
     if (!provenance || !isDeepStrictEqual(provenance, paper.analysisManifest?.freshRewriteProvenance)
@@ -83,9 +153,15 @@ function withSavedPaper(paper, callback) {
         generation: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
         sourceSnapshotSha256: descriptor.sourceSnapshotSha256 });
     const proofs = new Map(results.filter(result => result.eligible).map(result => [result.sourceTableOrdinal, result.evidence]));
+    return saved.run({ artifacts: source.structuredArtifacts, proofs, selectionBindings: new WeakMap() }, () => {
     for (const binding of bindings.filter(binding => binding.sealedPdfTableEvidence !== undefined)) {
         const candidates = source.structuredArtifacts.tables.filter(table => table.ordinal === binding.sourceTableOrdinal);
         const table = candidates[0], proof = proofs.get(binding.sourceTableOrdinal);
+        if (binding.sealedPdfTableSelection !== undefined) {
+            validateSavedSelectionBinding(binding, source.structuredArtifacts, proof);
+            saved.getStore().selectionBindings.set(binding, JSON.stringify(binding));
+            continue;
+        }
         const seen = new Set();
         const completeCells = table && Array.isArray(binding.cellBindings) && binding.cellBindings.every(cell => {
             const key = `${cell.sourceRow}:${cell.sourceColumn}`;
@@ -103,7 +179,8 @@ function withSavedPaper(paper, callback) {
             || !completeCells || seen.size !== table.matrix.length * table.matrix[0].length)
             throw new Error('Sealed PDF grid must replay the exact complete table, source and PDF-origin proof');
     }
-    return saved.run({ artifacts: source.structuredArtifacts, proofs }, () => legacy.withSavedPaper(paper, callback));
+    return legacy.withSavedPaper(paper, callback);
+    });
 }
 function savedCellMatches(binding, cell, displayed) {
     if (!binding?.sealedPdfTableEvidence) return legacy.savedCellMatches(binding, cell, displayed);
@@ -112,8 +189,10 @@ function savedCellMatches(binding, cell, displayed) {
     const tables = context.artifacts.tables.filter(table => table.ordinal === binding.sourceTableOrdinal);
     if (tables.length !== 1) return false;
     const originals = tables[0].cells.filter(item => item.row === cell.sourceRow && item.column === cell.sourceColumn);
+    const selection = binding.sealedPdfTableSelection !== undefined;
     return originals.length === 1 && originals[0].sourceDomSha256 === cell.sourceDomSha256 && originals[0].text === cell.sourceText
-        && cell.sourceRow === cell.renderedRow && cell.sourceColumn === cell.renderedColumn
+        && (selection ? context.selectionBindings.get(binding) === JSON.stringify(binding) && binding.cellBindings.includes(cell)
+            : cell.sourceRow === cell.renderedRow && cell.sourceColumn === cell.renderedColumn)
         && require('../deep-analyzer').normalizeReaderSourceCell(displayed)
             === require('../deep-analyzer').normalizeReaderSourceCell(proof.displayMatrix[cell.sourceRow]?.[cell.sourceColumn]);
 }
@@ -138,5 +217,6 @@ function appendSourceOriginNotes(article, bindings) {
     }
     return lines.join('\n');
 }
-module.exports = { evidence, sealedEvidence, bindingEvidence, displayCell, displayMatrix, displayCellMatches,
-    withArtifacts, withSavedPaper, savedCellMatches, appendSourceOriginNotes };
+module.exports = { SELECTION_CONTRACT, evidence, sealedEvidence, bindingEvidence,
+    compiledSelectionEvidence, compiledSelectionDisplayMatches, displayCell, displayMatrix, displayCellMatches,
+    validateSavedSelectionBinding, withArtifacts, withSavedPaper, savedCellMatches, appendSourceOriginNotes };

@@ -8,6 +8,20 @@ const READER_SOURCE_TABLE_ISSUE_CODE = 'reader_source_table_unrenderable';
 const sha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
+// Only the normal selection renderer can mint this capability. A copied binding,
+// caller-supplied artifact_table or serialized declaration is not a compiler result.
+const compiledReaderSelections = new WeakMap();
+function readCompiledReaderTableSelection(binding, artifacts) {
+    const record = compiledReaderSelections.get(binding);
+    if (!record || record.artifacts !== artifacts) return null;
+    if (artifacts.tables.filter(table => table.ordinal === record.table.ordinal).length !== 1
+        || !artifacts.tables.includes(record.table)
+        || JSON.stringify(record.table) !== record.tableBytes
+        || JSON.stringify(binding) !== record.bindingBytes) {
+        throw new Error('Reader compiled selection source or coordinate capability changed');
+    }
+    return { sourceRows: [...record.sourceRows], sourceColumns: [...record.sourceColumns] };
+}
 
 // 这段逻辑与 Reader 最终粘贴检查共用：后续显示清理会改动字节时，
 // 选择环节不能承诺与原表单元格逐字节一致。
@@ -677,11 +691,15 @@ function renderReaderTableSelection(binding, artifacts) {
         return text;
     }));
     const row = cells => `| ${cells.join(' | ')} |`;
-    return {
+    const rendered = {
         markdown: [row(matrix[0]), row(matrix[0].map(() => '---')), ...matrix.slice(1).map(row)].join('\n'),
         binding: { tableIndex: binding.tableIndex, sourceType: 'artifact_table', sourceTableOrdinal,
             cellBindings, sourceQuotes: [] }
     };
+    compiledReaderSelections.set(rendered.binding, { artifacts, table,
+        tableBytes: JSON.stringify(table), bindingBytes: JSON.stringify(rendered.binding),
+        sourceRows: [...sourceRows], sourceColumns: [...sourceColumns] });
+    return rendered;
 }
 
 function repairUniqueReaderTableSelectionHeader(binding, artifacts) {
@@ -769,5 +787,5 @@ module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CON
     hasSourceBoundRepeatedNumericVector, hasSourceBoundRepeatedRangeChain,
     findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     effectiveReaderTableRows, effectiveReaderTableHeaderRows, putReaderTableHeaderFirst,
-    renderReaderTableSelection, repairUniqueReaderTableSelectionHeader,
+    renderReaderTableSelection, readCompiledReaderTableSelection, repairUniqueReaderTableSelectionHeader,
     compileReaderTableSelections };

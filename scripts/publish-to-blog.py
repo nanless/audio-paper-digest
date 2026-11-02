@@ -5469,6 +5469,7 @@ def _run_core_summary_node_replay(paper, summary, source_text, *, stage_replay):
     implementations = (
         _sha256_file(cli),
         _sha256_file(SHARED_SCRIPTS_DIR / 'analysis-contract.js'),
+        _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'core-symbolic-source-numerals.js'),
         _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'analysis-section-titles.js'),
     )
     key = (_javascript_string_sha256(summary), _javascript_string_sha256(source_text), implementations)
@@ -7942,6 +7943,10 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
     """Replay the independent PDF protocol against all four official sealed sources."""
     from reader_sealed_pdf_table_evidence import CONTRACT, prove_pdf_bytes
     bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
+    if any(isinstance(binding, dict) and 'sealedPdfTableSelection' in binding
+           and ('sealedPdfTableEvidence' not in binding or 'pdfCellConfirmation' in binding)
+           for binding in bindings):
+        raise PublishDataValidationError('PDF 选择投影必须保留独立完整原表证明。')
     marked = [binding for binding in bindings if 'sealedPdfTableEvidence' in binding]
     if not marked:
         return {}
@@ -7984,14 +7989,38 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
             raise PublishDataValidationError('独立 PDF 表格证明不能由封存原文件完整重放。')
         matrix = table['matrix']
         cells = binding.get('cellBindings') or []
-        if len(cells) != sum(map(len, matrix)):
+        selected = 'sealedPdfTableSelection' in binding
+        if selected:
+            # The Python side has authenticated all four source files and the
+            # full PDF grid above. Replay the exact same normal JS compiler;
+            # a JSON projection alone is never a source capability.
+            node = shutil.which('node')
+            if not node:
+                raise PublishDataValidationError('PDF 选择投影冷核需要正常 Node 运行时。')
+            encoded = json.dumps({'artifacts': artifacts, 'binding': binding, 'proof': saved},
+                                 ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            with tempfile.NamedTemporaryFile(prefix='pd-reader-pdf-selection-', suffix='.json') as selection_input:
+                selection_input.write(encoded); selection_input.flush(); selection_input.seek(0)
+                replay = _run_bounded_subprocess(
+                    [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-pdf-selection-replay-cli.js'),
+                     str(selection_input.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
+                    env=build_child_process_env(), timeout_seconds=30,
+                    max_output_bytes=1024 * 1024, pass_fds=(selection_input.fileno(),))
+            try:
+                accepted = json.loads(replay.stdout)
+            except (ValueError, TypeError):
+                accepted = None
+            if (replay.returncode != 0 or replay.timed_out or replay.output_truncated
+                    or accepted != {'contract': 'reader-pdf-selection-replay-result-v1', 'valid': True}):
+                raise PublishDataValidationError('PDF 选择投影未通过正常来源编译程序重放。')
+        if not selected and len(cells) != sum(map(len, matrix)):
             raise PublishDataValidationError('独立 PDF 表格必须保留完整原表。')
         seen, values = set(), {}
         for cell in cells:
             row, column = cell.get('sourceRow'), cell.get('sourceColumn')
             if (type(row) is not int or type(column) is not int or not 0 <= row < len(matrix)
                     or not 0 <= column < len(matrix[row])
-                    or cell.get('renderedRow') != row or cell.get('renderedColumn') != column
+                    or (not selected and (cell.get('renderedRow') != row or cell.get('renderedColumn') != column))
                     or (row, column) in seen):
                 raise PublishDataValidationError('独立 PDF 原表坐标不可重排、重复或越界。')
             originals = [item for item in table['cells'] if item['row'] == row and item['column'] == column]
@@ -7999,7 +8028,8 @@ def _verify_reader_sealed_pdf_grid_bindings(paper):
                     or cell.get('sourceDomSha256') != originals[0]['sourceDomSha256']):
                 raise PublishDataValidationError('独立 PDF 单元格未对应封存原 DOM。')
             seen.add((row, column))
-            values[(row, column)] = saved['displayMatrix'][row][column]
+            rendered_key = (cell.get('renderedRow'), cell.get('renderedColumn')) if selected else (row, column)
+            values[rendered_key] = saved['displayMatrix'][row][column]
         if binding['tableIndex'] in result:
             raise PublishDataValidationError('独立 PDF 表格绑定序号重复。')
         result[binding['tableIndex']] = values
@@ -8634,7 +8664,7 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
             'tableIndex', 'sourceType', 'sourceTableOrdinal',
             'renderedTableSha256', 'cellBindings', 'sourceQuotes',
         }
-        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}, required | {'authenticatedPdfTableEvidence'}, required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}):
+        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}, required | {'authenticatedPdfTableEvidence'}, required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence', 'sealedPdfTableSelection'}):
             raise PublishDataValidationError(f'表格来源记录 tableBindings[{index - 1}] 格式无效、缺少必要字段，或含有不允许的字段。')
         if 'authenticatedPdfTableEvidence' in binding:
             proof = binding['authenticatedPdfTableEvidence']
@@ -8654,7 +8684,7 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
             raise PublishDataValidationError(f'第 {index} 个表格的序号、保存正文中的表格或渲染 SHA 与来源记录不一致。')
         rendered_rows = [rendered['header'], *rendered['rows']]
         if binding.get('sourceType') == 'artifact_table':
-            if set(binding) not in (required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}) \
+            if set(binding) not in (required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence', 'sealedPdfTableSelection'}) \
                     or not isinstance(binding.get('sourceTableOrdinal'), int) \
                     or isinstance(binding.get('sourceTableOrdinal'), bool) \
                     or binding['sourceTableOrdinal'] < 1 \
@@ -14456,6 +14486,8 @@ def generation_template_fingerprint():
         'publication_local_replay.py': script_dir / 'publication_local_replay.py',
         'publication_replay_policy.json': script_dir / 'publication_replay_policy.json',
         'lib/reader-resource-claims-replay-cli.js': script_dir / 'lib' / 'reader-resource-claims-replay-cli.js',
+        'lib/reader-pdf-selection-replay-cli.js': script_dir / 'lib' / 'reader-pdf-selection-replay-cli.js',
+        'lib/reader-tables.js': script_dir / 'lib' / 'reader-tables.js',
         'lib/reader-request-diagnostics.js': script_dir / 'lib' / 'reader-request-diagnostics.js',
         'lib/reader-target-ordinal-patch.js': script_dir / 'lib' / 'reader-target-ordinal-patch.js',
         'lib/reader-fact-table-claim-location.js': script_dir / 'lib' / 'reader-fact-table-claim-location.js',
@@ -14483,6 +14515,7 @@ def generation_template_fingerprint():
         'lib/experiment-source-setting-axes.js': script_dir / 'lib' / 'experiment-source-setting-axes.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
         'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
+        'lib/core-symbolic-source-numerals.js': script_dir / 'lib' / 'core-symbolic-source-numerals.js',
         'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',

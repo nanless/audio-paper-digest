@@ -2934,7 +2934,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 throw new Error(`读者文章 tableBindings[${index}] 原始表绑定不完整`);
             }
             const pdfEvidence = require('./lib/reader-table-pdf-evidence').evidence(sourceTable);
-            if (pdfEvidence && (renderedRows.length !== sourceTable.matrix.length
+            const compiledPdfSelection = pdfEvidence && require('./lib/reader-table-pdf-evidence')
+                .compiledSelectionDisplayMatches(sourceTable, binding, renderedRows, structuredArtifacts);
+            if (pdfEvidence && !compiledPdfSelection && (renderedRows.length !== sourceTable.matrix.length
                 || renderedRows.some(row => row.length !== sourceTable.matrix[0].length)
                 || binding.cellBindings.length !== sourceTable.matrix.length * sourceTable.matrix[0].length
                 || binding.cellBindings.some(cell => cell.renderedRow !== cell.sourceRow
@@ -2987,7 +2989,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 sourceType: binding.sourceType,
                 sourceTableOrdinal: binding.sourceTableOrdinal,
                 sourceTableDomSha256: sourceTable.sourceDomSha256,
-                ...require('./lib/reader-table-pdf-evidence').bindingEvidence(sourceTable),
+                ...require('./lib/reader-table-pdf-evidence').bindingEvidence(sourceTable, binding, structuredArtifacts),
                 renderedTableSha256,
                 cellBindings,
                 sourceQuotes: []
@@ -4124,6 +4126,17 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // A closed, owner-free instruction enumerates concepts, not resources
         // presently supplied by the paper. Only the exact list span is exempt.
         const property = '(?:代码可运行|(?:模型)?权重可下载|数据可获取|(?:端到端)?系统可运行)';
+        const pendingThreeProperties = /((?:模型)?权重可(?:下载|获取)[、，,]代码可运行[、，,](?:端到端)?系统可(?:实时)?运行)是(?:三|3)件独立的事[，,](?:需要|仍需)分别验证/gu;
+        for (const list of value.matchAll(pendingThreeProperties)) {
+            const before = value.slice(0, list.index);
+            const prefix = before.split(/[。！？!?；;，,]/u).at(-1);
+            const suffix = value.slice(list.index + list[0].length);
+            const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+                before.lastIndexOf(open) > before.lastIndexOf(close))
+                || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
+            if (!prefix.trim() && !quoted && /^[。！？!?；;]?\s*$/u.test(suffix)
+                && matchIndex >= list.index && matchEnd <= list.index + list[1].length) return true;
+        }
         const closedLists = [
             new RegExp('复现(?:时)?(?:应|要|需)把(' + property + '(?:[、和与及]' + property + '){1,2})分开表述', 'gu'),
             new RegExp('复现(?:时)?(?:要|应|需)(?:先)?分清(?:三|3)件事[：:](' + property + '(?:[、和与及]' + property + '){2})[，,](?:它们|三者|这三项)是(?:相互)?独立的', 'gu')
@@ -4805,6 +4818,13 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const forbiddenDescription = new RegExp('(?:不能|不应|不得|不可)(?:把|将)'
             + '(?:它|该链接|该地址|该资源|该状态|这个链接|这个地址|这个资源)(?:直接)?(?:写成|表述为)'
             + describedClaim + '(?:' + connector + describedClaim + '){0,3}', 'gu');
+        // A closed direct prohibition can omit the object (“不能表述为作者模型
+        // 已开源…”). Exempt only the coordinated claim span, never a later
+        // affirmative, quotation, denial revocation or double negative.
+        const directDescribedClaim = '(?:作者|本文|本论文|本研究|本工作)的?' + resource
+            + '(?:已经|现已|已|当前)?(?:开源|公开|发布|开放|可下载|可获取|可用)';
+        const directForbiddenDescription = new RegExp('(?:不能|不应|不得|不可)(?:直接)?(?:表述为|写成)'
+            + directDescribedClaim + '(?:' + connector + directDescribedClaim + '){0,3}', 'gu');
         const unsupportedReleaseJudgment = new RegExp('(?:不支持|不足以支持)'
             + '(?:作者|本文|本论文|本研究|本工作)?(?:已经|现已|已)(?:提供|发布|开放)'
             + '(?:完整)?(?:训练)?' + resource + '的(?:判断|结论|说法|声明)', 'gu');
@@ -4831,6 +4851,12 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             if (contains(span) && safeDenialIntroduction(span)
                 && /^(?:(?:但|然而|不过)?\s*(?:这|此|该链接|该演示|这个演示)(?:只是|仅是|是)?(?:演示页|演示页面|链接)?\s*)?$/u.test(prefix)
                 && !/^(?:这(?:一|种|个)?|该|上述)?(?:证明|证据|说法|判断|否定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)|^(?:这(?:一|种|个)?|该|上述)?(?:证明|证据|说法|判断|否定)(?:并不|从未)成立/u.test(suffix)) return true;
+        }
+        for (const span of value.matchAll(directForbiddenDescription)) {
+            const rawTail = value.slice(span.index + span[0].length).trimStart();
+            const tail = rawTail.replace(/^[，,。；;]+/u, '');
+            if (contains(span) && /^(?:[。！？!?；;，,]|$)/u.test(rawTail) && safeDenialIntroduction(span)
+                && !/^(?:(?:但|然而|不过)[，,]?\s*)?(?:上述|以上|前述|该|此|这一)?(?:说法|判断|否定|声明|限定)?(?:本身|其实|实际)?(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定|不成立|错误|不正确|不属实)/u.test(tail)) return true;
         }
         for (const pattern of [qualifiedLinkDenial, forbiddenDescription]) for (const span of value.matchAll(pattern)) {
             if (contains(span) && safeDenialIntroduction(span)) return true;
@@ -5556,7 +5582,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 && /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源)(?:都|均|全部)?(?:已经|现已|已|当前已?|目前已?)?(?:(?:公开|开源)(?:可用|可下载|可获取)?|发布|提供|可用|可下载|可获取)[。！？!?]?$/u.test(next);
             // Only a closed, adjacent explicit retraction may refer back to
             // these new nonclaim spans; no general cross-sentence inference.
-            const withdrawn = /(?:不能(?:仅)?据此|需要另行(?:确认|核对)|论文(?:正文)?称|是[三3]回事)/u.test(clause)
+            const withdrawn = /(?:不能(?:仅)?据此|(?:不能|不应|不得|不可)(?:直接)?(?:表述为|写成)|需要另行(?:确认|核对)|是(?:三|3)件独立的事[，,](?:需要|仍需)分别验证|论文(?:正文)?称|是[三3]回事)/u.test(clause)
                 && /^(?:上述|这一|这种|该)(?:说法|判断|结论|声明|否定|区分|限定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定|不成立)[。！？!?]?$/u.test(next);
             return collective || withdrawn ? clause + next : clause;
         });
@@ -7548,14 +7574,16 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             const original = options.structuredArtifacts.tables.find(item => item.ordinal === binding.sourceTableOrdinal);
             const rows = table && [table.header, ...table.rows];
             const confirmed = require('./lib/reader-table-pdf-evidence');
-            if (!rows || rows.length !== original.matrix.length
+            const compiledPdfSelection = confirmed.compiledSelectionDisplayMatches(
+                original, binding, rows, options.structuredArtifacts);
+            if (!compiledPdfSelection && (!rows || rows.length !== original.matrix.length
                 || rows.some(row => row.length !== original.matrix[0].length)
                 || binding.cellBindings.length !== rows.length * rows[0].length
                 || binding.cellBindings.some(cell => cell.sourceRow !== cell.renderedRow
                     || cell.sourceColumn !== cell.renderedColumn)
                 || rows.some((row, ri) => row.some((value, ci) => (
                     value !== original.matrix[ri][ci] && value !== confirmed.displayCell(original, ri, ci)
-                )))) {
+                ))))) {
                 throw new Error('PDF逐格显示校正只接受原表双写或已确认的完整值，不能修补模型错值或改变坐标');
             }
         }
@@ -8993,24 +9021,15 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let candidate = null;
     let draftOrderMappings = [];
     let mechanicalNoFigureCleanupChanged = false;
-    let pendingCandidateWriteBack = null;
     let ordinalPatchActive = false;
-    const writeBackCandidateDraft = snapshot => {
-        try {
-            const active = repair.loadFailedCandidate(candidateDirectory, identity);
-            if (active) repair.saveFailedCandidate(candidateDirectory, identity, {
-                ...active, status: 'failed', draft: snapshot.draft,
-                draftOrderMappings: snapshot.draftOrderMappings, issues: snapshot.issues
-            });
-        } catch (_) { /* 保留原候选，后续 prepare 会照常给出可诊断的拒绝 */ }
-    };
-    const flushCandidateWriteBack = () => {
-        const snapshot = pendingCandidateWriteBack;
-        pendingCandidateWriteBack = null;
-        if (snapshot) writeBackCandidateDraft(snapshot);
-    };
+    let candidateNormalizationEnabled = false;
+    const candidateNormalizationWriter = require('./lib/reader-candidate-normalization').createWriter({
+        directory: candidateDirectory, identity, isActive: () => ordinalPatchActive });
+    const flushCandidateWriteBack = () => candidateNormalizationWriter.flush();
     const normalizeCandidate = () => {
         const beforeDraftSha = candidate ? repair.hashDraft(candidate) : null;
+        const activeBefore = candidateNormalizationEnabled && candidate
+            ? repair.readFailedCandidateEnvelope(candidateDirectory, identity) : null;
         const state = {};
         try {
             normalizeApiReaderRecoveryDraftForSource(candidate, currentIssues, {
@@ -9022,15 +9041,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             draftOrderMappings = state.draftOrderMappings;
             mechanicalNoFigureCleanupChanged = state.mechanicalNoFigureCleanupChanged;
             // 序号补丁请求要求基稿与活动候选逐字一致；归一化只改了内存稿时必须写回，
-            // 否则下一次准备会以“exact active failed draft”拒绝。写回失败不改变主流程。
+            // 否则首次准备也会以“exact active failed draft”拒绝。原包不可覆盖归档，
+            // CAS 在 rename 前再核；保存失败按运行故障停止，不改次数和费用。
             // 但补丁能力绑定的是 prepare 那一刻的候选字节，封签前改写活动候选会让
             // currentCandidate 立刻判“active candidate changed”（scope=run，整批中止）。
             // 所以补丁链活跃期间先挂起，等封签结束再写回，供下一次 prepare 使用。
-            if (candidate && beforeDraftSha && ordinalPatchCompilations.length
-                && beforeDraftSha !== repair.hashDraft(candidate)) {
-                const snapshot = { draft: candidate, draftOrderMappings, issues: currentIssues };
-                if (ordinalPatchActive) pendingCandidateWriteBack = snapshot;
-                else writeBackCandidateDraft(snapshot);
+            if (candidate && beforeDraftSha && activeBefore
+                && beforeDraftSha !== repair.hashDraft(candidate)
+                && (ordinalPatchActive || repair.hashDraft(activeBefore.envelope.payload.draft) === beforeDraftSha)) {
+                candidateNormalizationWriter.queue({ expectedEnvelopeSha256: activeBefore.envelopeSha256,
+                    draft: candidate, draftOrderMappings, issues: currentIssues });
             }
         }
     };
@@ -9345,6 +9365,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     attemptErrorHistory.push(...currentIssues.map(issueFeedback));
     validationFeedback = buildAttemptFeedback();
     previousDraft = recovered?.rawDraft || start.previousDraft;
+    candidateNormalizationEnabled = !inputProofOnly && !operatorCorrection;
     let providerImageExclusions = normalizeProviderImageExclusions(recovered?.providerImageExclusions, allImageInputs);
     let activeImageInputs; let imageEvidence;
     const refreshActiveImageState = () => {
@@ -9423,6 +9444,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             return result;
         }
         catch (error) {
+            if (['READER_NORMALIZATION_NOT_PERSISTED', 'READER_NORMALIZATION_CAS_CHANGED'].includes(error?.code)) throw error;
             if (ordinalPatchCompilations.length && error?.scope === 'run') throw error;
             if (operatorCorrection) throw Object.assign(new Error('人工修正未通过完整 Reader 解析，保留原稿并停止新的 Reader 请求', {cause:error}),
                 {code:'READER_OPERATOR_CORRECTION_REJECTED',retryable:false,readerIssues:error.readerIssues});
@@ -9497,6 +9519,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             normalizeCandidate();
         } catch (error) {
             normalizationError = error;
+            if (error?.scope === 'run') throw error;
             lastError = error;
             currentIssues = collectReaderDraftIssues(candidate, error);
         }
@@ -10124,7 +10147,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 throw error;
             }
             const preservePaidCandidateOnLedgerFailure = storageError => {
-                try { repair.saveFailedCandidate(candidateDirectory, identity, {
+                if (storageError.code === 'READER_NORMALIZATION_NOT_PERSISTED'
+                    && !/^[a-f0-9]{64}$/.test(storageError.normalizationExpectedEnvelopeSha256 || '')) throw storageError;
+                try {
+                    const expectedEnvelopeSha256 = storageError.normalizationExpectedEnvelopeSha256;
+                    const preservedPayload = expectedEnvelopeSha256
+                        ? repair.readFailedCandidateEnvelope(candidateDirectory, identity)?.envelope.payload : null;
+                    repair.saveFailedCandidate(candidateDirectory, identity, {
+                    ...(preservedPayload || {}),
                     status: 'failed', draft: candidate,
                     rawDraft: candidate ? JSON.stringify(candidate) : originalPaidResponse,
                     draftOrderMappings, readerRecoveryRevisions, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
@@ -10135,13 +10165,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                     lastContentError: { code: storageError.code,
                         requestKind: repairContext ? 'patch' : 'full', responseRecovery: storageError.responseRecovery || null }
-                }); } catch (candidateSaveError) {
+                }, expectedEnvelopeSha256 ? { expectedEnvelopeSha256 } : {}); } catch (candidateSaveError) {
                     storageError.candidateSaveFailed = true;
                     Object.defineProperty(storageError, 'candidateSaveError', { value: candidateSaveError, enumerable: false });
                 }
                 throw storageError;
             };
-            if (error?.code === 'LLM_USAGE_NOT_PERSISTED' || ordinalCapability && error?.scope === 'run')
+            if (error?.code === 'READER_NORMALIZATION_CAS_CHANGED') throw error;
+            if (error?.code === 'LLM_USAGE_NOT_PERSISTED'
+                || error?.code === 'READER_NORMALIZATION_NOT_PERSISTED'
+                || ordinalCapability && error?.scope === 'run')
                 preservePaidCandidateOnLedgerFailure(error);
             try {
                 recordReaderDisposition({ ...dispositionBase, disposition: 'rejected',

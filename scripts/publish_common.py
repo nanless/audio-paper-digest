@@ -4463,6 +4463,129 @@ def _unquoted_observed_comparison(text, index, body):
                               r'[^。；\n]{0,30}(?:撤回|错误|不成立|未观测|未进行))'), continuation, re.I))
 
 
+def _observed_adverse_comparison(text, index, body):
+    # A complete quoted source can contain nested quote pairs of its own.
+    raw = str(text or '')
+    previous = raw[:index].rstrip(_JS_WHITESPACE).split('\n')[-1]
+    return (not re.search(r'^\s*[“"]', raw)
+            and not re.search(r'(?:^|[.!?]\s+)(?:quoted statement|quotation|hypothetical example)[.:：]?$', previous, re.I)
+            and _unquoted_observed_comparison(raw, index, body))
+
+
+def _source_bound_listening_score_regression(results, tables, source_text):
+    """Require the observed listening contrast and its same-study source/display rows."""
+    source = str(source_text or '')
+    captions = list(re.finditer(r'^Table\s+[0-9]+: Listening results for cross-content transfer \(similarity to the reference, 0[–-]100\)\.$', source, re.M))
+    if len(captions) != 1 or not _observed_adverse_comparison(source, captions[0].start(), captions[0][0]):
+        return False
+    caption = captions[0]
+    tail = source[caption.end():caption.start() + 4500]
+    end = tail.find('\nIn Study 1,')
+    if end < 0:
+        return False
+    lines = [line.strip(_JS_WHITESPACE) for line in tail[:end].split('\n') if line.strip(_JS_WHITESPACE)]
+    header = lines.index('Condition') if 'Condition' in lines else -1
+    if (header < 2 or not re.search(r'^Study 1 \(N=', lines[header - 2])
+            or not re.search(r'^Study 3 \(N=', lines[header - 1])
+            or lines[header:header + 6] != ['Condition', 'Mean', 'SD', '95% CI', 'Mean', 'SD']):
+        return False
+    cells = lines[header + 6:]
+    if len(cells) != 18 or cells[0] != 'Adversarially fine-tuned' or cells[6] != 'Unprocessed' or cells[12] != 'Reconstruction only':
+        return False
+    def scalar(value):
+        return float(value) if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', value) else None
+    input_score, reconstruction = scalar(cells[7]), scalar(cells[13])
+    if input_score is None or reconstruction is None or reconstruction >= input_score:
+        return False
+    observed = r'Listeners rated the reconstruction-only decoder below the unprocessed input, although[^\n]*\.'
+    if not any(caption.start() < match.start() < caption.start() + 4500
+               and _observed_adverse_comparison(source, match.start(), match[0]) for match in re.finditer(observed, source)):
+        return False
+    def clean(value):
+        return re.sub(r'[*_`]', '', str(value or '')).strip(_JS_WHITESPACE)
+    bound = False
+    for table in tables:
+        columns = [i for i, value in enumerate(table['header']) if re.fullmatch(r'Study\s+1\s+均值\s*↑', clean(value))]
+        identity = [i for i, value in enumerate(table['header']) if clean(value) == '条件']
+        if len(columns) != 1 or len(identity) != 1:
+            continue
+        first = [row for row in table['rows'] if clean(row[identity[0]]) == '只重建']
+        second = [row for row in table['rows'] if clean(row[identity[0]]) == '未处理输入']
+        if (len(first) == len(second) == 1 and scalar(clean(first[0][columns[0]])) == reconstruction
+                and scalar(clean(second[0][columns[0]])) == input_score):
+            bound = True
+    if not bound:
+        return False
+    for fragment in re.finditer(r'[^。；\n]+', str(results)):
+        match = re.search(r'只重建[^。；\n]{0,160}?听感均值\s*([0-9]+(?:\.[0-9]+)?)\s*反而低于输入的\s*([0-9]+(?:\.[0-9]+)?)', fragment[0])
+        if (match and float(match[1]) == reconstruction and float(match[2]) == input_score
+                and _observed_adverse_comparison(results, fragment.start(), fragment[0])):
+            return True
+    return False
+
+
+def _source_bound_rendered_duration_shortfall(results, tables, source_text):
+    """A measured target shortfall, bound by locale, not a minus sign or a plan."""
+    source = str(source_text or '')
+    captions = list(re.finditer(r'^TABLE\s+[IVXLCDM0-9]+: Pilot Measurement: Five Published Stories \(([0-9]+(?:\.[0-9]+)?)-min Target\)$', source, re.M))
+    if len(captions) != 1 or not _observed_adverse_comparison(source, captions[0].start(), captions[0][0]):
+        return False
+    caption = captions[0]
+    target = float(caption[1])
+    if target <= 0:
+        return False
+    tail = source[caption.end():caption.start() + 3500]
+    end = tail.find('\nV-C Behavioral telemetry')
+    if end < 0:
+        return False
+    lines = [line.strip(_JS_WHITESPACE) for line in tail[:end].split('\n') if line.strip(_JS_WHITESPACE)]
+    if lines[:6] != ['Lang.', 'Rendered (min)', 'Error', 'LUFS', 'TP (dBTP)', 'LRA (LU)'] or len(lines) != 36:
+        return False
+    def scalar(value):
+        normalized = value.replace('−', '-').replace('\\%', '%')
+        match = re.fullmatch(r'([+-]?[0-9]+(?:\.[0-9]+)?)(%?)(?:([+-]?[0-9]+(?:\.[0-9]+)?)(%?))?', normalized)
+        if not match or match[3] and (float(match[1]) != float(match[3]) or match[2] != match[4]):
+            return None
+        return float(match[1])
+    rows = {}
+    for i in range(6, len(lines), 6):
+        if lines[i] not in ['en', 'de', 'fr', 'hi', 'ja'] or lines[i] in rows or any(scalar(value) is None for value in lines[i + 1:i + 6]):
+            return False
+        rows[lines[i]] = [scalar(lines[i + 1]), scalar(lines[i + 2])]
+    observed = (r'Rendered duration, which no gate checks, was within [0-9]+% of target for English and German but '
+                r'([0-9]+)%, ([0-9]+)%, and ([0-9]+)% short for French, Japanese, and Hindi\.')
+    order = ['fr', 'ja', 'hi']
+    if not any(match.start() < caption.start() < match.start() + 2500
+               and _observed_adverse_comparison(source, match.start(), match[0])
+               and all(rows[language][0] < target and rows[language][1] < 0
+                       and int(-rows[language][1] + 0.5) == int(match[i + 1]) for i, language in enumerate(order))
+               for match in re.finditer(observed, source)):
+        return False
+    def clean(value):
+        return re.sub(r'[*_`]', '', str(value or '')).strip(_JS_WHITESPACE)
+    bound = False
+    for table in tables:
+        def find(pattern):
+            return [i for i, value in enumerate(table['header']) if re.fullmatch(pattern, clean(value))]
+        identity, duration, error = find(r'语言'), find(r'渲染时长\s*\(min\)'), find(r'时长误差\s*↓')
+        if any(len(columns) != 1 for columns in [identity, duration, error]) or len(table['rows']) != 5:
+            continue
+        def matches(language, values):
+            selected = [row for row in table['rows'] if clean(row[identity[0]]) == language]
+            return (len(selected) == 1 and scalar(clean(selected[0][duration[0]])) == values[0]
+                    and clean(selected[0][error[0]]).endswith('%') and scalar(clean(selected[0][error[0]])) == values[1])
+        if all(matches(language, values) for language, values in rows.items()):
+            bound = True
+    if not bound:
+        return False
+    for fragment in re.finditer(r'[^。；\n]+', str(results)):
+        match = re.search(r'法语、日语、印地语分别短\s*([0-9]+(?:\.[0-9]+)?)%、\s*([0-9]+(?:\.[0-9]+)?)%\s*和\s*([0-9]+(?:\.[0-9]+)?)%', fragment[0])
+        if (match and '时长' in fragment[0] and all(float(match[i + 1]) == -rows[language][1] for i, language in enumerate(order))
+                and _observed_adverse_comparison(results, fragment.start(), fragment[0])):
+            return True
+    return False
+
+
 def _source_bound_folded_objective_regression(results, tables, source_text):
     source = str(source_text or '')
     observed = (r'^Table\s+[IVXLCDM0-9]+ compares eight models that all route and meet timing on the same engine\. '
@@ -4795,7 +4918,7 @@ def _validate_experiment_table_evidence_depth(
         and all(re.search(r'distilled checkpoints[^\n]{0,140}(?<![0-9.])' + re.escape(number) + r'%[^\n]{0,140}scored worse on the bias benchmark than the original variants', source_text, re.I)
                 for number in re.findall(r'([0-9]+(?:\.[0-9]+)?)%', sentence))
         for sentence in re.split(r'[。；\n]', results))
-    result_has_negative = _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
+    result_has_negative = _source_bound_listening_score_regression(results, tables, complete_source_text) or _source_bound_rendered_duration_shortfall(results, tables, complete_source_text) or _source_bound_notation_roundtrip_regression(results, complete_source_text) or any(_source_backed_sample_size_boundary(paragraph, table, complete_source_text, results) for table in tables for paragraph in re.split(r'\n\s*\n', results)) or _has_source_backed_quality_audibility_tradeoff(results, tables, source_text) or _has_source_backed_net_interval_negative(results, tables, complete_source_text) or _source_bound_matched_acoustic_gap(results, tables, complete_source_text) or _source_bound_folded_objective_regression(results, tables, complete_source_text) or _source_bound_deadline_f1_comparison(results, tables, complete_source_text) or contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'

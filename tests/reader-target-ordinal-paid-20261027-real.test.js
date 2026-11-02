@@ -26,7 +26,7 @@ for(const name of ['deep-analyzer.js','analysis-engine.js','publish-to-blog.py',
 if(process.env.TEST_METADATA_PUBLICATION_SOURCE)fs.copyFileSync(process.env.TEST_METADATA_PUBLICATION_SOURCE,path.join(workspace,'scripts/lib/reader-request-diagnostics.js'));
 process.env.NODE_PATH=path.join(project,'node_modules');require('node:module').Module._initPaths();
 const guardPath=path.join(project,'tests/helpers/isolated-tmp-write-guard.cjs');
-assert.equal(sha(fs.readFileSync(guardPath)),'3e0d04767bab55d468dbe123c64f3bdccd730bb39ca3851bf241ce6e44bc8a66');
+assert.equal(sha(fs.readFileSync(guardPath)),'83911c6b829bcdb0c94bcea82cd86818eee3f9fa4a30289e5ef561398d7518b1');
 const oldTransport=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(project,'tests/fixtures/reader-transport-continuation-2610-34220.json.gz'))));
 const originalCanonicalParent=path.join(project,'data/runtime/daily-fresh-source-runs',oldTransport.runId,'reader-attempts/explicit-retry-rounds',oldTransport.parentReceipt.basename);
 const canonicalParent=fs.existsSync(originalCanonicalParent)?originalCanonicalParent:path.join(project,'tests/fixtures/reader-transport-continuation-2610-34220.json.gz');
@@ -34,7 +34,7 @@ const canonicalBefore=fs.readFileSync(canonicalParent);
 const canonicalUsage=path.join(project,'data/runtime/llm-usage'),canonicalUsageMtime=fs.existsSync(canonicalUsage)?fs.statSync(canonicalUsage).mtimeMs:null;
 const readOnlyPythonNames=['reader_sealed_pdf_table_evidence.py','reader_sealed_pdf_quote_evidence.py','reader_sealed_pdf_column_units.py','reader_authenticated_pdf_hierarchical_table.py','reader_authenticated_pdf_footnote_evidence.py'];
 for(const name of readOnlyPythonNames)assert.equal(sha(fs.readFileSync(path.join(workspace,'scripts',name))),sha(fs.readFileSync(path.join(project,'scripts',name))));
-const writeGuard=require(guardPath).installTmpOnlyWriteGuard(workspace,{readOnlyPythonScripts:readOnlyPythonNames.map(name=>path.join(workspace,'scripts',name))});
+const writeGuard=require(guardPath).installTmpOnlyWriteGuard(workspace,{allowNormalizationImmutableLinks:true,readOnlyPythonScripts:readOnlyPythonNames.map(name=>path.join(workspace,'scripts',name))});
 Object.assign(process.env,{TMPDIR:workspace,TMP:workspace,TEMP:workspace,PYTHONDONTWRITEBYTECODE:'1',PYTHONPYCACHEPREFIX:path.join(workspace,'pycache')});
 assert.throws(()=>fs.writeFileSync(canonicalParent,canonicalBefore),/TEST_TMP_WRITE_GUARD/);
 assert.deepEqual(fs.readFileSync(canonicalParent),canonicalBefore);

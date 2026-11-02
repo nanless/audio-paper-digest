@@ -1692,6 +1692,99 @@ function unquotedObservedComparison(text, index, body) {
         && !/^(?:(?:this|that|the above)\s+(?:comparisons?|results?|claims?|experiments?|ablations?|tests?)[^.!?]{0,80}(?:withdrawn|revoked|false|incorrect|not (?:performed|observed))|(?:上述|以上|前述|该|此)(?:比较|结果|说法|结论|实验|消融)[^。；\n]{0,30}(?:撤回|错误|不成立|未观测|未进行))/iu.test(continuation);
 }
 
+// Retained adverse outcomes need the observed comparison and its same-group
+// source/display table, not a bare low number, minus sign or timeout keyword.
+function observedAdverseComparison(text, index, body) {
+    // Nested quotations in a complete source can close a naive last-quote
+    // check. A wholly quoted document never supplies this observed profile.
+    const raw = String(text || ''), previous = raw.slice(0, index).trimEnd().split('\n').at(-1) || '';
+    return !/^\s*[“"]/u.test(raw)
+        && !/(?:^|[.!?]\s+)(?:quoted statement|quotation|hypothetical example)[.:：]?$/iu.test(previous)
+        && unquotedObservedComparison(raw, index, body);
+}
+
+function sourceBoundListeningScoreRegression(results, tables, sourceText) {
+    const source = String(sourceText || '');
+    const captions = [...source.matchAll(/^Table\s+[0-9]+: Listening results for cross-content transfer \(similarity to the reference, 0[–-]100\)\.$/gmu)];
+    if (captions.length !== 1 || !observedAdverseComparison(source, captions[0].index, captions[0][0])) return false;
+    const tail = source.slice(captions[0].index + captions[0][0].length, captions[0].index + 4500);
+    const end = tail.indexOf('\nIn Study 1,');
+    if (end < 0) return false;
+    const lines = tail.slice(0, end).split('\n').map(line => line.trim()).filter(Boolean);
+    const header = lines.indexOf('Condition');
+    if (header < 2 || !/^Study 1 \(N=/.test(lines[header - 2]) || !/^Study 3 \(N=/.test(lines[header - 1])
+        || lines.slice(header, header + 6).join('|') !== 'Condition|Mean|SD|95% CI|Mean|SD') return false;
+    const cells = lines.slice(header + 6);
+    if (cells.length !== 18 || cells[0] !== 'Adversarially fine-tuned' || cells[6] !== 'Unprocessed' || cells[12] !== 'Reconstruction only') return false;
+    const scalar = value => /^[0-9]+(?:\.[0-9]+)?$/.test(value) ? Number(value) : NaN;
+    const input = scalar(cells[7]), reconstruction = scalar(cells[13]);
+    if (!Number.isFinite(input) || !Number.isFinite(reconstruction) || reconstruction >= input) return false;
+    const observed = /Listeners rated the reconstruction-only decoder below the unprocessed input, although[^\n]*\./gu;
+    if (![...source.matchAll(observed)].some(match => match.index > captions[0].index
+        && match.index - captions[0].index < 4500 && observedAdverseComparison(source, match.index, match[0]))) return false;
+    const clean = value => String(value || '').replace(/[*_`]/gu, '').trim();
+    const bound = tables.some(table => {
+        const columns = table.header.flatMap((value, i) => /^Study\s+1\s+均值\s*↑$/u.test(clean(value)) ? [i] : []);
+        const identity = table.header.flatMap((value, i) => clean(value) === '条件' ? [i] : []);
+        if (columns.length !== 1 || identity.length !== 1) return false;
+        const a = table.rows.filter(row => clean(row[identity[0]]) === '只重建');
+        const b = table.rows.filter(row => clean(row[identity[0]]) === '未处理输入');
+        return a.length === 1 && b.length === 1 && scalar(clean(a[0][columns[0]])) === reconstruction
+            && scalar(clean(b[0][columns[0]])) === input;
+    });
+    if (!bound) return false;
+    return [...String(results).matchAll(/[^。；\n]+/gu)].some(fragment => {
+        const match = /只重建[^。；\n]{0,160}?听感均值\s*([0-9]+(?:\.[0-9]+)?)\s*反而低于输入的\s*([0-9]+(?:\.[0-9]+)?)/u.exec(fragment[0]);
+        return match && Number(match[1]) === reconstruction && Number(match[2]) === input
+            && observedAdverseComparison(results, fragment.index, fragment[0]);
+    });
+}
+
+function sourceBoundRenderedDurationShortfall(results, tables, sourceText) {
+    const source = String(sourceText || '');
+    const captions = [...source.matchAll(/^TABLE\s+[IVXLCDM0-9]+: Pilot Measurement: Five Published Stories \(([0-9]+(?:\.[0-9]+)?)-min Target\)$/gmu)];
+    if (captions.length !== 1 || !observedAdverseComparison(source, captions[0].index, captions[0][0])) return false;
+    const target = Number(captions[0][1]);
+    if (!(target > 0)) return false;
+    const tail = source.slice(captions[0].index + captions[0][0].length, captions[0].index + 3500);
+    const end = tail.indexOf('\nV-C Behavioral telemetry');
+    if (end < 0) return false;
+    const lines = tail.slice(0, end).split('\n').map(line => line.trim()).filter(Boolean);
+    if (lines.slice(0, 6).join('|') !== 'Lang.|Rendered (min)|Error|LUFS|TP (dBTP)|LRA (LU)' || lines.length !== 36) return false;
+    const scalar = value => {
+        const normalized = value.replace(/−/gu, '-').replace(/\\%/gu, '%');
+        const match = /^([+-]?[0-9]+(?:\.[0-9]+)?)(%?)(?:([+-]?[0-9]+(?:\.[0-9]+)?)(%?))?$/u.exec(normalized);
+        return match && (!match[3] || Number(match[1]) === Number(match[3]) && match[2] === match[4]) ? Number(match[1]) : NaN;
+    };
+    const rows = new Map();
+    for (let i = 6; i < lines.length; i += 6) {
+        if (!/^(?:en|de|fr|hi|ja)$/u.test(lines[i]) || rows.has(lines[i]) || !lines.slice(i + 1, i + 6).every(value => Number.isFinite(scalar(value)))) return false;
+        rows.set(lines[i], [scalar(lines[i + 1]), scalar(lines[i + 2])]);
+    }
+    const observed = /Rendered duration, which no gate checks, was within [0-9]+% of target for English and German but ([0-9]+)%, ([0-9]+)%, and ([0-9]+)% short for French, Japanese, and Hindi\./gu;
+    const order = ['fr', 'ja', 'hi'];
+    if (![...source.matchAll(observed)].some(match => match.index < captions[0].index && captions[0].index - match.index < 2500
+        && observedAdverseComparison(source, match.index, match[0])
+        && order.every((language, i) => rows.get(language)[0] < target && rows.get(language)[1] < 0 && Math.round(-rows.get(language)[1]) === Number(match[i + 1])))) return false;
+    const clean = value => String(value || '').replace(/[*_`]/gu, '').trim();
+    const bound = tables.some(table => {
+        const find = expression => table.header.flatMap((value, i) => expression.test(clean(value)) ? [i] : []);
+        const identity = find(/^语言$/u), duration = find(/^渲染时长\s*\(min\)$/u), error = find(/^时长误差\s*↓$/u);
+        if ([identity, duration, error].some(columns => columns.length !== 1) || table.rows.length !== 5) return false;
+        return [...rows].every(([language, values]) => {
+            const matches = table.rows.filter(row => clean(row[identity[0]]) === language);
+            return matches.length === 1 && scalar(clean(matches[0][duration[0]])) === values[0]
+                && /%$/u.test(clean(matches[0][error[0]])) && scalar(clean(matches[0][error[0]])) === values[1];
+        });
+    });
+    if (!bound) return false;
+    return [...String(results).matchAll(/[^。；\n]+/gu)].some(fragment => {
+        const match = /法语、日语、印地语分别短\s*([0-9]+(?:\.[0-9]+)?)%、\s*([0-9]+(?:\.[0-9]+)?)%\s*和\s*([0-9]+(?:\.[0-9]+)?)%/u.exec(fragment[0]);
+        return match && /时长/u.test(fragment[0]) && order.every((language, i) => Number(match[i + 1]) === -rows.get(language)[1])
+            && observedAdverseComparison(results, fragment.index, fragment[0]);
+    });
+}
+
 function sourceBoundFoldedObjectiveRegression(results, tables, sourceText) {
     const source = String(sourceText || '');
     // Method identities come from the observed comparison and the explicit
@@ -1952,7 +2045,9 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         && /(?:蒸馏|候选)检查点[^。；\n]{0,70}[0-9]+(?:\.[0-9]+)?%[^。；\n]{0,40}比原始模型更偏/u.test(sentence)
         && [...sentence.matchAll(/([0-9]+(?:\.[0-9]+)?)%/gu)].every(match =>
             new RegExp(`distilled checkpoints[^\\n]{0,140}(?<![0-9.])${match[1].replace('.', '\\.')}%[^\\n]{0,140}scored worse on the bias benchmark than the original variants`, 'i').test(sourceText)));
-    const resultHasNegative = sourceBoundPredictionRefinementDecline(results, options.sourceText)
+    const resultHasNegative = sourceBoundListeningScoreRegression(results, tables, options.sourceText)
+        || sourceBoundRenderedDurationShortfall(results, tables, options.sourceText)
+        || sourceBoundPredictionRefinementDecline(results, options.sourceText)
         || sourceBoundNotationRoundtripRegression(results, options.sourceText)
         || hasSourceBackedQualityAudibilityTradeoff(results, tables, sourceText)
         || tables.some(table => String(results).split(/\n\s*\n/u)
@@ -2889,7 +2984,7 @@ function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null)
         // is not an observation by this paper. Do not let adjacent PDF columns
         // supply its missing result role.
         let observedSentence = sentence;
-        if (/^\s*(?:(?:prior|previous|earlier|related)\s+(?:work|research|stud(?:y|ies))\b|(?:hypothetical(?:ly)?|assuming|if)\b|(?:we|the authors)\s+(?:plan|hypothesi[sz]e|assume)\b)/iu.test(sentence)) {
+        if (/^\s*(?:(?:prior|previous|earlier|related)\s+(?:work|research|stud(?:y|ies))\b|(?:hypothetical(?:ly)?|assuming|suppose|if)\b|(?:we|the authors)\s+(?:plan|hypothesi[sz]e|assume)\b)/iu.test(sentence)) {
             // A real observation can follow the earlier/hypothetical clause in
             // the same PDF sentence. Only an explicit own evaluation plus an
             // observed predicate establishes that turn, never a metric alone.
@@ -2900,7 +2995,8 @@ function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null)
         }
         // These are input controls, including when PDF columns put an unrelated
         // metric name on the same extracted line. Keep any actual outcome values.
-        const resultSentence = observedSentence
+        const resultSentence = require('./lib/core-symbolic-source-numerals').stripDefinedGeometryNumerals(
+            stripSymbolicPatternRelation(observedSentence))
             // Page/DOI metadata, symbolic sample indices and channel-format
             // labels are not measured outcomes, even after PDF columns merge.
             // Remove only these typed tokens; a real result in the same clause
