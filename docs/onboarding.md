@@ -14,14 +14,14 @@ npm run digest:prepare -- YYYY-MM-DD
 ```text
 抓取 arXiv/HuggingFace → 筛选 → 封存官方来源
   → 分析、Reader、评分与标签 → 生成博客 → 审查 → 推送
-  → 准备视觉输入；用户已明确取消视觉时登记本次发布的豁免
+  → 自动登记与本次发布绑定的不生图记录
 ```
 
 推送后，由执行者继续完成：
 
 1. 确认对应提交的 GitHub Pages 构建和部署成功。
 2. 核验全部目标页面的正式地址、HTTP 200 和标题。
-3. 使用内置 `image_gen` 生成所需长图及封面，逐图检查后登记；已明确取消视觉且豁免有效时省略此步。
+3. 日更默认不生图，入口自动登记与本次发布绑定的有效豁免；论文原图仍正常展示与审查。只有用户另行明确要求生图时，才使用内置 `image_gen` 生成长图及封面，逐图检查后登记。
 4. 重新读取 `npm run digest:status -- --date YYYY-MM-DD`。
 
 运行中可用 `npm run digest:status -- --date DATE --watch` 观察进度。`doctor --offline` 不联网；`npm run source:probe -- --date DATE` 会联网探测 arXiv 的 Atom、官方 OAI 和 RSS，不写抓取数据或调用模型。`digest:api` 与 `digest:prepare` 等价。

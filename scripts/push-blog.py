@@ -229,7 +229,7 @@ def main():
                 if not module.git_push(date_str, paths):
                     raise module.PublishDataValidationError('Git 提交或推送未完成')
                 if visual_capable:
-                    print('🎨 全部博客已发布并通过远端 OID 校验，开始建立发布后视觉任务')
+                    print('全部博客已推送并核对远端提交，正在建立本次发布的图片任务记录；日更入口随后登记不生图。')
                     visual_planned = module.plan_post_publish_visual_assets(date_str)
                     if require_visual_plan and not visual_planned:
                         print('\n❌ 博客已发布并验证远端 OID，但发布后视觉任务规划失败')
@@ -274,7 +274,7 @@ def main():
     write_stage_summary('推送', 'ok', f'发布 {len(paths)} 个已审查页面，远端 OID 已核验',
                         elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
     if visual_planned:
-        print('\n🎉 全部博客推送完成；TOP 10 论文长图与汇总图任务已建立！')
+        print('\n全部博客推送完成，发布记录已建立；日更入口继续登记本次不生图并核验上线。')
     elif visual_planned is False:
         print('\n🎉 全部博客推送完成；发布后视觉任务尚待重试。')
     elif include_id:

@@ -7,14 +7,14 @@ const assert = require('node:assert/strict');
 const scriptPath = path.resolve(__dirname, '../run-daily-digest.sh');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-test('日更只保留 API、博客三阶段和视觉阶段顺序', () => {
+test('日更按 API、博客三阶段和发布后不生图登记的顺序执行', () => {
     const expected = [
         'node scripts/full-fetch.js --date "$target_date"',
         'bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"',
         'bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"',
         'bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-visual-plan',
         'bash scripts/python-runtime.sh scripts/plan-post-publish-visuals.py --date "$target_date"',
-        'node scripts/visual-summary-state.js prepare --date "$target_date"'
+        'node scripts/waive-post-publish-visuals.js --date "$target_date"'
     ];
     let previous = -1;
     for (const command of expected) {
@@ -24,12 +24,12 @@ test('日更只保留 API、博客三阶段和视觉阶段顺序', () => {
     }
 });
 
-test('默认论文速递脚本不调用图像 API，并明确要求 Codex 继续完成图片生成、检查和登记', () => {
+test('日更默认不准备或生成长图封面，仍要求部署和逐页验收', () => {
     assert.doesNotMatch(source, /OPENAI_API_KEY|images\/generations|images\/edits|image_gen\.py/);
-    assert.match(source, /digest:prepare 仅完成博客发布与视觉输入准备；退出成功不代表整条论文速递完成/);
-    assert.match(source, /Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面/);
-    assert.match(source, /npm run visual:status/);
-    assert.match(source, /npm run cover:status/);
+    assert.doesNotMatch(source, /visual-summary-state\.js prepare|必须继续生成/);
+    assert.match(source, /以后日更不再生图/);
+    assert.match(source, /GitHub Pages 构建和部署成功/);
+    assert.match(source, /HTTP 200 与标题/);
 });
 
 test('默认论文速递脚本要求显式日期并支持从 review 续跑', () => {
@@ -99,6 +99,8 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     let commands = fs.readFileSync(logPath, 'utf8');
     assert.match(commands, /python3\.11 scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
     assert.doesNotMatch(commands, /plan-post-publish-visuals\.py/);
+    assert.match(commands, /waive-post-publish-visuals\.js/);
+    assert.doesNotMatch(commands, /visual-summary-state\.js prepare/);
 
     fs.writeFileSync(logPath, '');
     result = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'visual'], {
@@ -108,6 +110,8 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     commands = fs.readFileSync(logPath, 'utf8');
     assert.match(commands, /python3\.11 scripts\/plan-post-publish-visuals\.py --date 2026-07-13/);
     assert.doesNotMatch(commands, /push-blog\.py/);
+    assert.match(commands, /waive-post-publish-visuals\.js/);
+    assert.doesNotMatch(commands, /visual-summary-state\.js prepare/);
 });
 
 test('已退役 Manual 和旧写作阶段在业务调用前被拒绝', () => {
@@ -121,23 +125,32 @@ test('已退役 Manual 和旧写作阶段在业务调用前被拒绝', () => {
 });
 
 
-test('显式取消视觉仍按发布版本登记豁免，并跳过实际图片准备', () => {
+test('默认日更和兼容 no-visuals 参数均按发布版本登记不生图，登记失败则保留失败', () => {
     const dir=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'daily-digest-waiver-'));
     const log=path.join(dir,'commands.log');
     try {
         for(const command of ['python3.11','node']){
             const fake=path.join(dir,command);
-            fs.writeFileSync(fake,`#!/bin/sh\nprintf '%s %s\\n' '${command}' "$*" >> '${log}'\n`);
+            fs.writeFileSync(fake,`#!/bin/sh\nprintf '%s %s\\n' '${command}' "$*" >> '${log}'\ncase "$*" in *waive-post-publish-visuals.js*) exit "\${TEST_WAIVER_EXIT:-0}";; esac\n`);
             fs.chmodSync(fake,0o755);
         }
-        const result=spawnSync('bash',[scriptPath,'2026-07-13','--from','push','--no-visuals'],{
-            cwd:path.dirname(scriptPath),env:{...process.env,PATH:`${dir}:${process.env.PATH||''}`,PD_PYTHON_RUNTIME_DISABLE_VENV:'1'},encoding:'utf8'});
-        assert.equal(result.status,0,result.stderr);
-        const commands=fs.readFileSync(log,'utf8');
-        assert.match(commands,/scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
-        assert.match(commands,/scripts\/waive-post-publish-visuals\.js --date 2026-07-13 --reason/);
-        assert.doesNotMatch(commands,/visual-summary-state\.js prepare/);
-        assert.match(result.stdout,/当前发布版本的视觉豁免/);
+        const env={...process.env,PATH:`${dir}:${process.env.PATH||''}`,PD_PYTHON_RUNTIME_DISABLE_VENV:'1'};
+        for(const extra of [[],['--no-visuals']]) {
+            fs.writeFileSync(log,'');
+            const result=spawnSync('bash',[scriptPath,'2026-07-13','--from','push',...extra],{
+                cwd:path.dirname(scriptPath),env,encoding:'utf8'});
+            assert.equal(result.status,0,result.stderr);
+            const commands=fs.readFileSync(log,'utf8');
+            assert.match(commands,/scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
+            assert.match(commands,/scripts\/waive-post-publish-visuals\.js --date 2026-07-13 --reason 用户已明确要求以后日更不再生图/);
+            assert.doesNotMatch(commands,/visual-summary-state\.js prepare/);
+            assert.match(result.stdout,/当前发布版本的视觉豁免/);
+        }
+        const failed=spawnSync('bash',[scriptPath,'2026-07-13','--from','push'],{
+            cwd:path.dirname(scriptPath),env:{...env,TEST_WAIVER_EXIT:'29'},encoding:'utf8'});
+        assert.equal(failed.status,29,failed.stderr);
+        assert.match(failed.stderr,/阶段失败: 登记日更不生图/);
+        assert.doesNotMatch(failed.stdout,/已登记当前发布版本的视觉豁免/);
     }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 

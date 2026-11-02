@@ -27,7 +27,7 @@ Node CONNECT/TLS 使用与模型请求相同的有效时间计量，握手总预
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
-# 仅用户已明确取消视觉时：npm run digest:prepare -- YYYY-MM-DD --no-visuals
+# 日更默认不生图；旧 --no-visuals 参数仍兼容，无须每次添加
 # digest:api 完全等价
 ```
 
@@ -35,7 +35,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 上一已发布批次的原分析输入字节不可重放时，先保留失败。若更早的完整五文件及其真实发布页面仍可核验，可用 `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` 显式登记恢复，再将输出的绝对清单路径传给同日日更的 `--fetch-witness-recovery-manifest`。该路径扩大来源重叠范围，最新已发布与去重基线不变；旧漂移稿不取得原稿资格，来源、次数及费用不重置。恢复与后续冷核必须重放封存材料，详见[显式旧检查点恢复](docs/daily-fetch-boundary.md#published-input-drift-recovery)。
 
-入口执行候选抓取、关键词预筛、LLM 筛选、当次官方 HTML/PDF 封存、分析、Reader、评分、标签、生成、审查与推送；最后继续完成部署、网页及视觉验收。
+用户于 2026-11-02 持续要求以后日更不再生图。入口执行候选抓取、关键词预筛、LLM 筛选、当次官方 HTML/PDF 封存、分析、Reader、评分、标签、生成、审查与推送；真实发布后自动登记本次不生图，最后继续完成部署和网页验收。论文原图仍正常核验、展示和审查。
 
 当次封存位于 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`；分析只读其中 TXT、PDF、元数据和清单。图片仅在当前调用的系统临时目录准备。来源缺失或 SHA 不符须在模型请求前停止。
 
@@ -249,9 +249,9 @@ npm run blog:push -- --date YYYY-MM-DD
 
 推送仅提交凭证允许的精确差异，并核对远端main OID。宣告完成前，还须确认对应提交或保留本批已审字节的后续提交已成功build/deploy，逐页HTTP200、正式URL与标题一致，并保存核验记录。
 
-视觉只在远端验证后规划。实际生成由内置image_gen完成，项目脚本只规划/登记/核验；调用前用 `visual:prepare` 输出的绝对参考路径，逐图目检后 `record --qa-attested true`。只有用户明确取消且记录仍有效的本次发布豁免，才省略视觉。
+日更默认不生成长图和封面，持续遵循用户“以后日更不再生图”的要求；不运行 `visual:prepare`，不因旧模板要求恢复生图。仅在用户另行明确改变要求时，才用内置 `image_gen` 及正常参考路径、逐图目检、`record --qa-attested true` 流程生成并登记。
 
-`--no-visuals` 只读核对发布和已签 Reader 身份、建立任务清单并登记当前发布豁免，不执行图片准备或生图。临时图片模式包含合法内联 SVG 的来源及渲染身份校验，但返回空参考图片列表，不取回像素或缓存。规划失败先按[恢复说明](docs/troubleshooting.md#11-视觉-pending-或-record-失败)恢复任务清单，再登记豁免，不重复发布字节未变的博客。
+日更入口自动只读核对发布和已签 Reader 身份、建立任务清单并登记当前发布豁免，不执行图片准备或生图；`--no-visuals` 保留兼容，无须添加。临时图片模式包含合法内联 SVG 的来源及渲染身份校验，但返回空参考图片列表，不取回像素或缓存。规划失败先按[恢复说明](docs/troubleshooting.md#11-视觉-pending-或-record-失败)恢复任务清单，再登记豁免，不重复发布字节未变的博客。
 
 ```bash
 npm run digest:status -- --date YYYY-MM-DD

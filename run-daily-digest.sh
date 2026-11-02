@@ -2,8 +2,8 @@
 # 日更唯一入口：共享 LLM/API 流程，单篇人工修正通过受控恢复入口处理。
 #
 # 本脚本负责项目脚本能自动跑完的所有阶段：
-# 抓取/筛选/深度分析 → 博客生成 → 审查 → 推送 → 发布后视觉任务规划与参考图准备。
-# 最后的论文长图与汇总封面必须由 Codex 内置 image_gen 生成，项目脚本不得调用图像 API。
+# 抓取/筛选/深度分析 → 博客生成 → 审查 → 推送 → 登记本次发布不生图。
+# 用户已持续取消日更长图与封面；论文原图的来源、展示和审查照常核验。
 
 set -eu
 
@@ -17,10 +17,10 @@ usage() {
 某一阶段失败后，修复问题并用 --from 从该阶段续跑：
   ./run-daily-digest.sh 2026-07-23 --from review
 
-脚本成功结束表示博客已推送且视觉输入已准备好；Codex 必须继续使用内置
-image_gen 生成并登记 TOP 10 论文长图和汇总封面，直到 visual:status 和
-cover:status 均为 complete。还须确认对应提交的 GitHub Pages 构建和部署成功，
-逐页检查正式地址、HTTP 200 与标题，再重新读取 digest:status。
+日更默认不生成长图和封面，--no-visuals 保留为兼容参数，无须每次添加。
+脚本在真实发布后登记与本次提交绑定的不生图记录。成功结束后，还须确认
+对应提交的 GitHub Pages 构建和部署成功，逐页检查正式地址、HTTP 200 与标题，
+再重新读取 digest:status。论文原图仍正常展示和审查。
 EOF
 }
 
@@ -70,7 +70,7 @@ fi
 shift
 
 start_stage="fetch"
-no_visuals=0
+no_visuals_option_seen=0
 official_oai_recovery=0
 fetch_witness_recovery_manifest=""
 if [ "${PD_DAILY_API_MODE:-1}" != "1" ]; then
@@ -91,11 +91,11 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --no-visuals)
-      if [ "$no_visuals" -eq 1 ]; then
+      if [ "$no_visuals_option_seen" -eq 1 ]; then
         echo "--no-visuals 不能重复使用" >&2
         exit 2
       fi
-      no_visuals=1
+      no_visuals_option_seen=1
       shift
       ;;
     --official-oai-recovery)
@@ -200,17 +200,8 @@ if [ "$start_index" -le 7 ]; then
 else
   run_stage 8 "规划发布后视觉任务" bash scripts/python-runtime.sh scripts/plan-post-publish-visuals.py --date "$target_date"
 fi
-if [ "$no_visuals" -eq 1 ]; then
-  run_stage 8 "登记用户授权的本次视觉豁免" node scripts/waive-post-publish-visuals.js --date "$target_date" --reason "用户明确要求本次完整日更不执行视觉任务，保留与当前已验证发布版本绑定的豁免。"
-  echo "==> 已登记当前发布版本的视觉豁免；继续完成部署与逐页上线核验。"
-else
-  run_stage 8 "准备论文关键图输入" node scripts/visual-summary-state.js prepare --date "$target_date"
-  echo "==> digest:prepare 仅完成博客发布与视觉输入准备；退出成功不代表整条论文速递完成。"
-  echo "==> Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面。"
-  echo "==> 若用户明确取消视觉，改运行 digest:waive-visuals，禁止调用 image_gen 或伪造 complete。"
-  echo "==> 最终检查: npm run visual:status -- --date ${target_date}"
-  echo "==> 最终检查: npm run cover:status -- --date ${target_date}"
-fi
+run_stage 8 "登记日更不生图" node scripts/waive-post-publish-visuals.js --date "$target_date" --reason "用户已明确要求以后日更不再生图，本次发布沿用该持续设置。"
+echo "==> 已登记当前发布版本的视觉豁免；继续完成部署与逐页上线核验。"
 
 echo "==> 还须确认对应提交的 GitHub Pages 构建、部署成功，并逐页核对正式地址、HTTP 200 与标题。"
-echo "==> 完成图片登记或后续推送后重新读取: npm run digest:status -- --date ${target_date}"
+echo "==> 登记不生图或后续推送后重新读取: npm run digest:status -- --date ${target_date}"

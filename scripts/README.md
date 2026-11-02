@@ -15,7 +15,9 @@
 
 三流程先统一跑本次选定全批，整轮保存后只续可重试失败集合，默认总共3轮。公共轮次、Reader原预算及人工建议的区别见 [共享规则](../docs/three-workflows.md#全批轮次与失败集合)。
 
-默认 LLM/API 日更的 `digest:prepare` 是完整入口；用户明确取消视觉时可加 `--no-visuals`，推送后只建立豁免所需清单并登记当前发布版本的声明，跳过实际参考图准备和生成；抓取调用 `full-fetch --require-previously-fetched`，以核验旧检查点派生重叠见证并检查各源实际命中；页内/窗口完整覆盖和仅已发布去重仍保留；`deep`、`batch`、`reanalyze`、`reanalyze:selected`、`api:reader:refresh` 只消费正式日更来源封存，不重新获取历史来源。Reader重试、已付费稿恢复和人工修正保留原稿、预算与费用，见 [恢复说明](../docs/reader-explicit-retry.md)。
+默认 LLM/API 日更的 `digest:prepare` 是完整入口。日更持续不生图，推送后自动建立豁免所需清单并登记当前发布版本的不生图记录，不准备参考图或生成图片；旧 `--no-visuals` 参数仍兼容，无须添加。
+
+抓取调用 `full-fetch --require-previously-fetched`，以核验旧检查点派生重叠见证并检查各源实际命中；页内/窗口完整覆盖和仅已发布去重仍保留；`deep`、`batch`、`reanalyze`、`reanalyze:selected`、`api:reader:refresh` 只消费正式日更来源封存，不重新获取历史来源。Reader重试、已付费稿恢复和人工修正保留原稿、预算与费用，见 [恢复说明](../docs/reader-explicit-retry.md)。
 
 `prepare-daily-fetch-witness-recovery.js`（`fetch:witness:prepare`）仅为已发布原输入字节失配登记私有旧窗口恢复材料；`lib/daily-fetch-witness-recovery.js` 在归档前 CAS 激活，并在生产边界、来源检查点及下一日冷核重放。最新发布去重与较早真实五文件来源单列，不恢复丢失原字节、不修改旧正文或费用。参数及边界见[显式旧窗口恢复](../docs/daily-fetch-boundary.md#published-input-drift-recovery)。
 

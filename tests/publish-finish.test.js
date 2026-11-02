@@ -20,7 +20,7 @@ test('豁免必须严格绑定版本/清单/发布 OID/视觉清单', () => {
     assert.strictEqual(finish.validateWaiver({ ...base, visualManifestSha256: '' }, ctx), false);
 });
 
-test('收尾清单提示 digest:status、verify:web 与视觉步骤', () => {
+test('收尾清单提示状态、网页核验与不生图恢复，不引导默认生图', () => {
     const lines = [];
     const original = console.log;
     console.log = line => lines.push(String(line));
@@ -28,7 +28,10 @@ test('收尾清单提示 digest:status、verify:web 与视觉步骤', () => {
     const text = lines.join('\n');
     assert.match(text, /digest:status/);
     assert.match(text, /verify:web/);
-    assert.match(text, /visual:prepare/);
+    assert.match(text, /visual:post-publish/);
+    assert.match(text, /digest:waive-visuals/);
+    assert.match(text, /以后日更不再生图/);
+    assert.doesNotMatch(text, /visual:prepare|交给生图工具|qa-attested/);
     assert.ok(!/image_gen|生图 API/.test(text));
 });
 

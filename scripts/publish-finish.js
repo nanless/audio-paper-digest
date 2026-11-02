@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// push 成功后的收尾清单：提示视觉准备/QA/豁免检查与 digest:status；不调用图像 API、不自动登记豁免。
+// push 成功后的收尾清单：提示日更不生图登记与最终核验；不调用图像 API、不自动登记豁免。
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -71,7 +71,7 @@ function main(argv = process.argv.slice(2)) {
             return 1;
         }
     } else {
-        console.log('3) 视觉：若上次 push 提示规划失败，先 npm run visual:post-publish -- --date ' + date + ' 重规划；成功后 npm run visual:prepare -- --date ' + date + '，把绝对 referencedImagePaths 交给生图工具；逐图 QA 后 record --qa-attested true。');
+        console.log('3) 日更默认不生图：若发布任务记录缺失，先 npm run visual:post-publish -- --date ' + date + '；成功后 npm run digest:waive-visuals -- --date ' + date + ' --reason "用户已明确要求以后日更不再生图，本次发布沿用该持续设置。"。');
         if (fs.existsSync(visualManifest)) console.log(`   已有视觉清单：${visualManifest}`);
     }
     console.log('4) 完成后重新运行 digest:status，并以部署/网页核验结果作为最终验收。');

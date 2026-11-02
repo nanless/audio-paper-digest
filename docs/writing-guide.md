@@ -45,6 +45,21 @@
 
 Markdown 的段落、标题、列表、代码块、表格和图示之间留一行空白。列表中的独立说明可以分段；不要依靠连续空格制造换行，也不要在同一个超宽表格单元格里塞入整段操作手册。
 
+## 向用户说明进展和结果
+
+先说用户关心的结果：完成了什么、还剩什么、当前在等什么。把运行细节翻译成实际动作。内部日志可以记录来源指纹、候选身份和发布凭证；面向用户的进度说明只在这些细节影响判断、排障或复核时展开。
+
+| 容易让人费解的说法 | 更直接的说明 |
+|---|---|
+| Reader-only 尾集已闭合，待冷核采纳 | 最后几篇已完成修改，正在核验保存后的版本 |
+| 远端 OID 一致，部署门尚未通过 | 博客已推送，网站是否上线还需核验 |
+| PDF quote 未唯一匹配，ordinal 修复阻断 | 一段表格引文无法在 PDF 中准确定位，正在对照原表核对 |
+| 全链路恢复完成 | 21 篇已通过检查并发布，22 个网页均能正常打开 |
+
+最后一行的数量只是说明表达方式，实际汇报必须使用当次真实结果。不能把“已提出修法”说成“已修好”，把“已推送”说成“已上线”，或把“本地检查通过”说成“网页核验完成”。需要解释失败时，写出失败影响和下一步，不把内部错误代码当作解释。
+
+解释论文也遵循同一原则：先说明方法处理什么输入、在哪一步做什么、得到什么结果，再给术语名称。对初学者需要的推导、条件和例子充分展开；压缩的是套话和重复，不是讲解深度。
+
 ## 术语先解释，再统一称呼
 
 第一次出现术语时，先说明它在本场景中的作用，再给名称或缩写。后文沿用同一名称。专有名词、命令、文件名和协议字段保持原样，不为语言变化轮换同义词。
@@ -143,7 +158,7 @@ flowchart LR
 
 ## 参考方法与本项目的取舍
 
-以下资料于 2026-10-17 查阅。这里只吸收适合技术说明的编辑方法，没有安装或执行外部 skill。
+基础写作资料于 2026-10-17 查阅；下列 13 份社区 skill 的正文及部分相关参考文件于 2026-11-02 重新查阅。这里只吸收适合技术说明的编辑方法，没有安装外部 skill，也没有运行它们的脚本或上传文稿到检测服务。此清单覆盖本项目引用的四份和本次补查的九份，不声称穷尽所有同名分支。
 
 | 资料 | 本项目采用的方法 |
 |---|---|
@@ -153,9 +168,31 @@ flowchart LR
 | [Microsoft：表格](https://learn.microsoft.com/en-us/style-guide/scannable-content/tables) | 用可比较的属性组织表格，给出明确列名 |
 | [Google：技术图示](https://developers.google.com/tech-writing/two/illustrations) | 先明确图意，控制单图信息量，复杂关系分层展开 |
 | [Google：数学记号](https://developers.google.com/style/mathematical-notation) | 变量、运算和渲染各自清楚；论文 TeX 继续服从本项目来源规则 |
-| [blader/humanizer](https://github.com/blader/humanizer/blob/main/SKILL.md) | 查找重复铺垫、空泛强调和面向错误读者的解释，保留原意 |
-| [syw2039/humanizer-zh](https://github.com/syw2039/humanizer-zh/blob/main/SKILL.md) | 先核对事实与文体，再调整中文段落和语气 |
-| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh/blob/main/SKILL.md) | 把语言模式作为检查线索，保留条件、归因与确定程度 |
-| [harshaneel/humanize](https://github.com/harshaneel/humanize/tree/main/plugins/humanize/skills/humanize) | 参考自查与重读方法，不采用英语句长配额和标点禁令 |
 
-社区清单用于帮助编辑。单个词、破折号或三项列表不能判定作者身份；本项目不把检测器分数当成写作目标。最终按事实准确、推理完整、术语一致和读者能否独立理解来评价。
+### 社区 skill 各自解决什么问题
+
+| 来源 | 可以借鉴的方法 | 本项目的取舍 |
+|---|---|---|
+| [blader/humanizer](https://github.com/blader/humanizer/blob/main/SKILL.md) | 检查假对比、预告式开头、结尾复读、空泛强调及重复解释已知背景 | 保留真实比较；不把中文标点、技术连字符或一个词当作错误 |
+| [syw2039/humanizer-zh](https://github.com/syw2039/humanizer-zh/blob/main/SKILL.md) | 先记录不能改变的事实，再按中文文体调整；按需匹配作者样本 | 不强加口语、情绪或个人经历；继续保留条件、否定与不确定性 |
+| [op7418/Humanizer-zh](https://github.com/op7418/Humanizer-zh/blob/main/SKILL.md) | 用“该改／应保留”的成对例子约束编辑；特别检查中文长定语、空动词和归因 | 作为中文技术说明的重要参考；不因命中词表就强改通顺原文 |
+| [holygeek00/humanizer-zh-cn](https://github.com/holygeek00/humanizer-zh-cn/blob/main/SKILL.md) | 追问谁做、做什么、作用对象、结果与依据，恢复被黑话遮住的信息 | “赋能”改成“助力”仍没有信息；原文没有答案时不补造答案 |
+| [ZeddYu/humanizer_zh](https://github.com/ZeddYu/humanizer_zh/blob/main/SKILL.md) | 区分技术报告、调研、博客、项目介绍等场景；检查假具体与口吻错位 | 采用其不编造原则；示例中新出现的数字、案例不能移入实际稿件 |
+| [nothing0here/humanizer-zh](https://github.com/nothing0here/humanizer-zh/blob/main/SKILL.md) | 检查职场黑话、欧化句式、连环“的”、名词化和装饰性清单 | 不从示例推导未经提供的业务效果、职责或亲历细节 |
+| [hardikpandya/stop-slop](https://github.com/hardikpandya/stop-slop/blob/main/SKILL.md) | 删除暖场、空洞强调、假想敌、伪金句和无信息的商业用语 | 不照搬“删除所有副词／被动句／三项列表”；“可能、仅、必须”可承载关键事实 |
+| [obra/writing-clearly-and-concisely](https://github.com/obra/the-elements-of-style/blob/main/skills/writing-clearly-and-concisely/SKILL.md) | 一段一个主题，具体名词与动作，删无用词，把相关成分放近 | 英文语法规则不直接套在中文上；简洁不要求句句短、篇篇短 |
+| [mlwelles/technical-writing-density](https://github.com/mlwelles/technical-writing-density/blob/main/skills/technical-writing-density/SKILL.md) | 判断删句是否丢失理由、约束或消歧信息；区分顺序、并列与属性比较 | 技术完整性优先于缩字；参数、步骤、错误码仍用合适的列表或表格 |
+| [ashgreat/humanizer](https://github.com/ashgreat/humanizer/blob/main/SKILL.md) | 减少学术浮词和过度碎段，让研究对象、方法、结果和证据直接出现 | 其语料来自特定学科，不外推检测效果；论文导读不把作者结果写成“我们发现” |
+| [harshaneel/humanize](https://github.com/harshaneel/humanize/blob/main/plugins/humanize/skills/humanize/SKILL.md) | 参考写后重读、自查残留模板和统一术语的方法 | 不采用检测器优化、英语句长配额、故意不连贯或看似亲历的表达框架 |
+| [apoapostolov/humanizer](https://github.com/apoapostolov/humanizer/blob/main/skills/humanizer/SKILL.md) | 按用户要求、读者、文体、作者样本选择轻改、重写或审阅；修改后核对事实 | 不把多套 skill 串成全文反复改写；已经清楚的段落可以不动，不使用检测追分模式 |
+| [apoapostolov/simple-english](https://github.com/apoapostolov/humanizer/blob/main/skills/simple-english/SKILL.md) | 操作前写清条件，一条指令一个动作，同一对象沿用同一名称 | 只参考清晰说明的方法；不把英语词数限制或情态词替换套到论文上，不宣称符合正式标准 |
+
+### 冲突时怎样选择
+
+这些 skill 的目标并不完全相同。有的重视作者口吻，有的控制技术说明的句式，有的试图降低检测器分数。按以下顺序取舍：事实与证据、用户要求和修改范围、读者与文体、术语和逻辑完整性、语言自然程度。不能为了后面的目标破坏前面的要求。
+
+识别黑话时，先找它指向的实际信息，再决定怎么改。“闭环控制”是技术术语；“打造业务闭环”若不说明具体流程，才需要追问。首次出现的专业术语解释清楚后可以继续使用，不用几个口语近义词轮换指代。
+
+每次修改先确定读者和要回答的问题，核对来源中的主张、数值、归因、否定和适用条件，再按内容组织段落。完成后对照原文检查是否增加、遗漏或强化结论，并重读相邻段落的衔接。用一次有目标的编辑解决问题，不为“更像人”反复全文重写或增加付费轮次。
+
+社区清单用于帮助编辑。单个词、破折号、三项列表或编辑器自动生成的弯引号不能判定作者身份；本项目不把检测器分数当成写作目标。最终按事实准确、推理完整、术语一致和读者能否独立理解来评价。

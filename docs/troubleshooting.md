@@ -184,7 +184,16 @@ Hugo 内存异常时，先检查是否有遗留并行进程，核对目标仓库
 
 ## 11. 视觉 pending 或 record 失败
 
-先确认发布提交已在远端验证，再运行：
+日更默认不生图。先确认发布提交已在远端验证；任务清单缺失或失效时重建清单，然后登记当前发布的不生图记录：
+
+```bash
+npm run visual:post-publish -- --date YYYY-MM-DD
+npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户已明确要求以后日更不再生图，本次发布沿用该持续设置。"
+```
+
+清单仍有效时直接登记即可。保留已有发布凭证，不重发字节未变的博客，不运行 `visual:prepare`。登记后核验部署与网页，再重新读取 `digest:status`。
+
+只有用户另行明确要求生图的批次，才使用以下准备和登记步骤：
 
 ```bash
 npm run visual:prepare -- --date YYYY-MM-DD
@@ -198,7 +207,7 @@ npm run cover:status -- --date YYYY-MM-DD
 
 封存 HTML 中的内联 SVG 使用原页面加元素锚点的地址，例如 `https://arxiv.org/html/论文ID#元素ID`。这类地址须通过已签 Reader 的内联 SVG 来源与渲染证明校验，不能按普通图片地址一律拒绝锚点，也不能为通过检查而删掉锚点、改写正式图片记录或恢复旧缓存。临时图片模式的视觉规划只核对身份并返回空引用，不重新抓图。
 
-博客已推送但视觉规划失败时，保留原发布凭证，修复后只重跑 `visual:post-publish`。用户已经明确取消视觉时，规划恢复后运行 `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户明确要求本批次不执行发布后视觉任务"`，使豁免绑定当前发布和任务清单，再核验部署、网页并重新读取 `digest:status`；不必重新生成、审查或推送字节未变的博客。
+博客已推送但视觉规划失败时，保留原发布凭证，修复后只重跑 `visual:post-publish`。默认日更继续按本节开头登记不生图；不必重新生成、审查或推送字节未变的博客。
 
 ## 12. 状态报告与现实不一致
 
