@@ -75,6 +75,25 @@ class PromptEvidenceTest(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, check=True).stdout
         self.assertEqual(set(json.loads(output)), set(evidence.CURRENT_PROMPT_FILES))
 
+    def test_scope_clarity_upgrade_preserves_real_retired_git_bytes(self):
+        for retired, whole_sha, current in (
+            ('prompts/deep-analysis-v6.md',
+             'b36705353d116b99cde778625f21b14334378dff54b83474de29f9a83e04f0ff',
+             'prompts/deep-analysis-v7.md'),
+            ('prompts/api-reader-article-v9.md',
+             'a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8',
+             'prompts/api-reader-article-v10.md'),
+        ):
+            with self.subTest(retired=retired):
+                original = evidence.read_prompt_evidence_bytes(retired, whole_sha)
+                self.assertEqual(hashlib.sha256(original).hexdigest(), whole_sha)
+                self.assertNotIn(retired, evidence.CURRENT_PROMPT_FILES)
+                self.assertIn(current, evidence.CURRENT_PROMPT_FILES)
+                self.assertNotEqual(original, evidence.read_prompt_evidence_bytes(current))
+                self.assertFalse((ROOT / retired).exists())
+                with self.assertRaises(ValueError):
+                    evidence.read_prompt_evidence_bytes(retired, 'f' * 64)
+
 
 if __name__ == '__main__':
     unittest.main()

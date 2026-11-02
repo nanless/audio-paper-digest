@@ -2,12 +2,27 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),zlib=require('node:zlib'),crypto=require('node:crypto');
 const ROOT=path.resolve(__dirname,'..'),tmp=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'reader-fact-location-tests-')));
 const fixture=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,'fixtures/reader-fact-table-claim-location-real.json.gz'))));
+// The retained paid fixture is immutable. Later retired current templates must
+// also exist in this isolated repository when the normal fingerprint reader
+// follows their registered original paths. Read only their real Git objects,
+// and authenticate the registered whole-file SHA before seeding the test root.
+const promptGitBlobs={...fixture.promptGitBlobs};
+const promptIndex=JSON.parse(fs.readFileSync(path.join(ROOT,'scripts/lib/git-prompt-evidence-index.json'),'utf8'));
+for(const[relative,wholeSha256]of Object.entries(promptIndex.retiredPaths)){
+ const entry=promptIndex.blobs[wholeSha256];assert.ok(entry.paths.includes(relative));
+ if(Object.hasOwn(promptGitBlobs,entry.blobOid))continue;
+ const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('GIT_')));
+ Object.assign(env,{GIT_TERMINAL_PROMPT:'0',GIT_NO_LAZY_FETCH:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'});
+ const bytes=require('node:child_process').execFileSync('git',['--no-lazy-fetch','--no-replace-objects','-C',ROOT,'cat-file','blob',entry.blobOid],{env,timeout:10000,maxBuffer:8*1024*1024,stdio:['ignore','pipe','pipe']});
+ assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),wholeSha256);
+ promptGitBlobs[entry.blobOid]=bytes.toString('base64');
+}
 // Dedicated-root mutation guard is installed before every production import.
-require('./helpers/isolated-tmp-write-guard.cjs').installTmpOnlyWriteGuard(tmp,{readOnlyPythonScripts:[path.join(tmp,'scripts/reader_sealed_pdf_quote_evidence.py'),path.join(tmp,'scripts/reader_sealed_pdf_table_evidence.py'),path.join(tmp,'scripts/reader_pdf_cell_evidence.py')],readOnlyPythonStdinScripts:[path.join(tmp,'scripts/reader_pdf_cell_evidence.py')],readOnlyGitBlobOids:Object.keys(fixture.promptGitBlobs),readOnlyNodeScripts:[path.join(tmp,'scripts/lib/reader-resource-claims-replay-cli.js')]});
+require('./helpers/isolated-tmp-write-guard.cjs').installTmpOnlyWriteGuard(tmp,{readOnlyPythonScripts:[path.join(tmp,'scripts/reader_sealed_pdf_quote_evidence.py'),path.join(tmp,'scripts/reader_sealed_pdf_table_evidence.py'),path.join(tmp,'scripts/reader_pdf_cell_evidence.py')],readOnlyPythonStdinScripts:[path.join(tmp,'scripts/reader_pdf_cell_evidence.py')],readOnlyGitBlobOids:Object.keys(promptGitBlobs),readOnlyNodeScripts:[path.join(tmp,'scripts/lib/reader-resource-claims-replay-cli.js')]});
 function write(file,bytes){fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,bytes,{mode:0o600});}
 function copy(source,dest){const st=fs.lstatSync(source);if(st.isDirectory()){fs.mkdirSync(dest,{recursive:true});for(const name of fs.readdirSync(source))copy(path.join(source,name),path.join(dest,name));}else if(st.isFile())write(dest,fs.readFileSync(source));}
 for(const name of ['scripts','manual','config','prompts'])if(fs.existsSync(path.join(ROOT,name)))copy(path.join(ROOT,name),path.join(tmp,name));
-for(const[oid,encoded]of Object.entries(fixture.promptGitBlobs)){const bytes=Buffer.from(encoded,'base64'),object=Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes]);assert.equal(crypto.createHash('sha1').update(object).digest('hex'),oid);write(path.join(tmp,'.git/objects',oid.slice(0,2),oid.slice(2)),zlib.deflateSync(object));}
+for(const[oid,encoded]of Object.entries(promptGitBlobs)){const bytes=Buffer.from(encoded,'base64'),object=Buffer.concat([Buffer.from('blob '+bytes.length+'\0'),bytes]);assert.equal(crypto.createHash('sha1').update(object).digest('hex'),oid);write(path.join(tmp,'.git/objects',oid.slice(0,2),oid.slice(2)),zlib.deflateSync(object));}
 write(path.join(tmp,'.git/HEAD'),'ref: refs/heads/test\n');write(path.join(tmp,'.git/config'),'[core]\nrepositoryformatversion = 0\nbare = false\n');fs.mkdirSync(path.join(tmp,'.git/refs/heads'),{recursive:true});
 write(path.join(tmp,'package.json'),JSON.stringify({type:'commonjs'}));
 write(path.join(tmp,'.paper-digest-workspace-role.json'),JSON.stringify({contract:'paper-digest-workspace-role-v1',version:1,role:'daily',workspaceRealpath:tmp}));

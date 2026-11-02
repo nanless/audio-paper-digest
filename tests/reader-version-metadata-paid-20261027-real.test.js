@@ -3,6 +3,16 @@ process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS='1';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const os=require('node:os'),zlib=require('node:zlib'),crypto=require('node:crypto'),Module=require('node:module');
 const ROOT=path.resolve(__dirname,'..'),sha=x=>crypto.createHash('sha256').update(x).digest('hex');
+// This paid compatibility case keeps its actual v9 prompt. Read only its
+// pinned Git blob before installing the no-child-process/write guard.
+const originalArticlePath='prompts/api-reader-article-v9.md';
+const originalArticleSha='a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8';
+const originalArticleOid='2dc5d6d8348a960bd272415fb861aa48e88b7609';
+const originalArticleBytes=require('node:child_process').execFileSync('git',
+ ['--no-lazy-fetch','--no-replace-objects','-C',ROOT,'cat-file','blob',originalArticleOid],
+ {env:{...Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('GIT_'))),GIT_NO_LAZY_FETCH:'1',GIT_TERMINAL_PROMPT:'0'},
+ timeout:10000,maxBuffer:8*1024*1024,stdio:['ignore','pipe','pipe']});
+assert.equal(sha(originalArticleBytes),originalArticleSha);
 const temp=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'version-metadata-cold-private-'));
 // Install before the first project import or compiled private source.
 const guard=require('./helpers/isolated-tmp-write-guard.cjs').installTmpOnlyWriteGuard(temp,{readOnlyPythonScripts:[
@@ -66,9 +76,22 @@ assert.equal(sha(promptBytes),'359415b9b35ba1f94d3a5288f22abba444dd7cc80c62287f3
 const historicalPrompts=new Map(JSON.parse(promptBytes).rows.map(row=>{const bytes=Buffer.from(row.rawBase64,'base64');assert.equal(sha(bytes),row.sha256);
  const index=JSON.parse(fs.readFileSync(path.join(ROOT,'scripts/lib/git-prompt-evidence-index.json')));
  assert.equal(index.retiredPaths[row.relative],row.sha256);assert.equal(index.blobs[row.sha256].blobOid,row.blobOid);return[row.relative,{bytes,sha256:row.sha256}];}));
+const originalArticleIndex=JSON.parse(fs.readFileSync(path.join(ROOT,'scripts/lib/git-prompt-evidence-index.json')));
+assert.equal(originalArticleIndex.retiredPaths[originalArticlePath],originalArticleSha);
+assert.equal(originalArticleIndex.blobs[originalArticleSha].blobOid,originalArticleOid);
+historicalPrompts.set(originalArticlePath,{bytes:originalArticleBytes,sha256:originalArticleSha});
 const promptEvidence=require(path.join(ROOT,'scripts/lib/prompt-evidence')),normalPromptRead=promptEvidence.readPromptEvidenceBytes;
 promptEvidence.readPromptEvidenceBytes=function(relative,options={}){const original=historicalPrompts.get(relative);if(!original)return normalPromptRead(relative,options);
  if(options.expectedSha256!==undefined&&options.expectedSha256!==null)assert.equal(options.expectedSha256,original.sha256);return Buffer.from(original.bytes);};
+const versions=require(path.join(ROOT,'scripts/lib/prompt-text-versions'));
+const currentArticlePath=versions.currentTextStagePromptPath('apiReaderArticle');
+const normalPromptPath=versions.currentTextStagePromptPath,normalPromptContract=versions.currentPromptTextContract;
+assert.equal(require(path.join(ROOT,'scripts/lib/prompt-history')).promptTemplateSha256(originalArticleBytes.toString()),current.identity.promptSha256);
+let historicalArticleContext=true;
+// Test-process-only historical writing context, not a production migration
+// allowance. The real current registry remains covered by the refusal below.
+test.mock.method(versions,'currentTextStagePromptPath',stage=>historicalArticleContext&&stage==='apiReaderArticle'?originalArticlePath:normalPromptPath(stage));
+test.mock.method(versions,'currentPromptTextContract',stage=>historicalArticleContext&&stage==='apiReaderArticle'?'analysis-prompt-text-v9':normalPromptContract(stage));
 function compile(relative){const file=path.join(ROOT,relative);let source=fs.readFileSync(path.join(ROOT,relative),'utf8');
  if(relative==='scripts/analysis-engine.js')source=source.replace("return path.join(__dirname, '..', 'data', 'current', '.analysis-runs', id);",`return path.join(${JSON.stringify(temp)}, '.analysis-runs', id);`);
 if(relative==='scripts/deep-analyzer.js'){
@@ -149,7 +172,27 @@ test('real four sources and source/paper lock bind a create-only origin; missing
  assert.throws(()=>diagnostics.prepareReaderVersionMetadataOrigin({directory:attempts,paper,identity:current.identity,candidateFile,usageFiles:originalFees}));
 });
 
-test('real public implementation migration preserves original v4/counters/parent/sidecar before current-CAS origin creation',async()=>{
+test('actual current prompt refuses unapproved paid-candidate migration without changing original candidate or ledgers',async()=>{
+ await inSource(async details=>{
+  const before=new Map([candidateFile,...fs.readdirSync(path.join(attempts,'explicit-retry-rounds')).map(name=>path.join(attempts,'explicit-retry-rounds',name)),
+   ...fs.readdirSync(Config.FILES.llmUsageDir).map(name=>path.join(Config.FILES.llmUsageDir,name))].map(file=>[file,fs.readFileSync(file)]));
+  historicalArticleContext=false;
+  try{
+   const evidence=deep.buildApiReaderEvidenceContext(whole,details.text,details.structuredArtifacts,paper.arxivId,null,paper.apiReaderResources,false);
+   const actual=(await deep.prepareApiReaderRetryIdentity(paper,whole,evidence,{sourceText:details.text,structuredArtifacts:details.structuredArtifacts})).identity;
+   assert.equal(actual.promptSha256,deep.runtimePromptTemplateSha256(currentArticlePath));
+   assert.notEqual(actual.promptSha256,current.identity.promptSha256);
+   assert.throws(()=>require(path.join(ROOT,'scripts/lib/reader-recovery-revision')).loadReaderRecoveryRevision(attempts,actual,
+    {allowNewImplementationAllowance:false,ephemeralImageEvidenceSha256:repair.hashDraft(current.payload.ephemeralImageEvidence)}),
+    {code:'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY'});
+   for(const[file,bytes]of before)assert.deepEqual(fs.readFileSync(file),bytes);
+   assert.equal(fs.existsSync(path.join(attempts,repair.hashDraft(actual)+'.json')),false);
+   assert.equal(transportCalls,0);
+  }finally{historicalArticleContext=true;}
+ });
+});
+
+test('original v9 prompt with current public implementation preserves v4/counters/parent/sidecar before current-CAS origin creation',async()=>{
  await inSource(async details=>{
   // Reflect the private implementation bytes for fingerprints only. All
   // source/fee reads remain actual isolated files; no production code is edited.

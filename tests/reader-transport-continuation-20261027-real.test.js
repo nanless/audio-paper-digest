@@ -7,6 +7,20 @@ const fixture = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(__dirname,
     'fixtures/reader-transport-continuation-2610-34220.json.gz'))));
 const fixtureIdentity = JSON.parse(Buffer.from(fixture.candidate.rawBase64, 'base64')).identity;
 const fixtureModel = fixtureIdentity.model;
+const versions = require('../scripts/lib/prompt-text-versions');
+const originalArticlePath = 'prompts/api-reader-article-v9.md';
+const originalArticleBytes = require('../scripts/lib/prompt-evidence').readPromptEvidenceBytes(originalArticlePath,
+    { expectedSha256: 'a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8' });
+assert.equal(require('../scripts/lib/prompt-history').promptTemplateSha256(originalArticleBytes.toString()), fixtureIdentity.promptSha256);
+const normalPromptPath = versions.currentTextStagePromptPath, normalPromptContract = versions.currentPromptTextContract;
+const currentArticlePath = normalPromptPath('apiReaderArticle');
+let historicalArticleContext = true;
+// Only this isolated test process reconstructs the real v9 writing context;
+// production still refuses the current prompt transition without recovery.
+test.mock.method(versions, 'currentTextStagePromptPath', stage => historicalArticleContext && stage === 'apiReaderArticle'
+    ? originalArticlePath : normalPromptPath(stage));
+test.mock.method(versions, 'currentPromptTextContract', stage => historicalArticleContext && stage === 'apiReaderArticle'
+    ? 'analysis-prompt-text-v9' : normalPromptContract(stage));
 // The real candidate's route is semantic identity, not an implementation
 // field. Pin this isolated test before any project module captures its config.
 test.mock.method(require('../scripts/env-loader'), 'loadProjectEnv', () => {
@@ -219,7 +233,24 @@ async function currentIdentity(f) {
     assert.notEqual(prepared.identity.parserImplementationSha256, f.identity.parserImplementationSha256);
     return prepared.identity;
 }
-for (const installFirst of [true, false]) test('真实四源和当前正常identity派生/公共迁移：' + (installFirst ? '安装后迁移' : '先迁移再安装')
+test('真实current提示词与旧paid v9不混用：拒绝未授权迁移且原候选/预算/费用不变', async t => {
+    const f = setup(t), before = f.allPreserved();
+    await f.scope(async () => {
+        historicalArticleContext = false;
+        try {
+            const identity = await currentIdentity(f);
+            assert.equal(identity.promptSha256, require('../scripts/deep-analyzer').runtimePromptTemplateSha256(currentArticlePath));
+            assert.notEqual(identity.promptSha256, f.identity.promptSha256);
+            assert.throws(() => require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(f.directory, identity,
+                { allowNewImplementationAllowance: false, ephemeralImageEvidenceSha256: repair.hashDraft(f.envelope.payload.ephemeralImageEvidence) }),
+            { code: 'READER_PROMPT_CHANGE_REQUIRES_CONTROLLED_RECOVERY' });
+            assert.deepEqual(f.allPreserved(), before);
+            assert.equal(fs.existsSync(path.join(f.directory, repair.hashDraft(identity) + '.json')), false);
+            assert.equal(fs.readdirSync(f.rounds).some(name => name.endsWith('.transport-continuation.json')), false);
+        } finally { historicalArticleContext = true; }
+    });
+});
+for (const installFirst of [true, false]) test('真实四源、原v9与当前实现identity派生/公共迁移：' + (installFirst ? '安装后迁移' : '先迁移再安装')
     + '保留同窗，synthetic body只验证实际物理接线', async t => {
     const f = setup(t), body = syntheticBody(f);
     await f.scope(async () => {

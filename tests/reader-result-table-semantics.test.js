@@ -73,13 +73,13 @@ test('会议归一不会从引文抽数字造表、凭重叠选表或搬到结�
 });
 
 test('两份当前 Prompt 实际首围栏要求语义结果且旧模板仍有原 Git 字节证明', () => {
-    for (const [stage, oldSha] of [
-        ['apiReaderArticle', 'e294f105592995d6dbe494e47b111e588fc61d96c87e3a905a8d32686b87cc83'],
-        ['apiReaderRepair', '55aa1eb2d663b69bcaff0df77ec371fdc9764173449279b0139c85be0cba68f5']
+    for (const [stage, oldSha, oldPath] of [
+        ['apiReaderArticle', 'e294f105592995d6dbe494e47b111e588fc61d96c87e3a905a8d32686b87cc83', 'prompts/api-reader-article-v9.md'],
+        ['apiReaderRepair', '55aa1eb2d663b69bcaff0df77ec371fdc9764173449279b0139c85be0cba68f5', 'prompts/api-reader-repair-v13.md']
     ]) {
         const file = prompts.currentTextStagePromptPath(stage);
         const bytes = fs.readFileSync(path.resolve(__dirname, '..', file));
-        const old = evidence.historicalPromptEvidenceBytesForSha256(oldSha, { relativePath: file });
+        const old = evidence.historicalPromptEvidenceBytesForSha256(oldSha, { relativePath: oldPath });
         assert.equal(sha(old), oldSha);
         assert.notEqual(sha(bytes), oldSha);
         const block = bytes.toString().match(/~~~[^\n]*\n([\s\S]*?)\n~~~/)?.[1];

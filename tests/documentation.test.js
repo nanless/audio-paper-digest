@@ -122,7 +122,10 @@ test('现行三流程与旧记录核验各有唯一导航入口', () => {
     assert.match(docsIndex, /默认[^\n]*LLM\/API/);
     assert.match(docsIndex, /manual\/README\.md/);
     assert.match(docsIndex, /\]\(writing-guide\.md\)/);
-    assert.match(manualReadme, /只有.*明确/);
+    assert.match(manualReadme, /按 \[持续授权\]/);
+    assert.match(manualReadme, /无需逐篇再问/);
+    assert.match(manualReadme, /真实来源、原失败稿、修改范围、费用和失败记录仍须绑定并保留/);
+    assert.match(manualReadme, /manualHandoff.*仅给出建议.*不自动取得来源能力或增加机器请求额度/);
     assert.match(manualReadme, /整批 Manual.*已退役/);
     assert.match(manualReadme, /npm run blog:manual-review/);
     assert.doesNotMatch(manualReadme, /npm run digest:manual/);

@@ -2,6 +2,17 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),zlib=require('node:zlib'),crypto=require('node:crypto');
 const ROOT=process.env.MALFORMED_VIEW_ROOT||process.cwd(),workspace=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'malformed-reader-view-tests-')));
 const fixture=JSON.parse(zlib.gunzipSync(fs.readFileSync(process.env.MALFORMED_VIEW_FIXTURE||path.join(ROOT,'tests/fixtures/reader-malformed-previous-draft-view-real.json.gz'))));
+// The recorded full prompt belongs to this exact v9 template, not whatever
+// template new requests currently select. Authenticate its immutable original
+// bytes before installing the child-process/write guard; no product is loaded.
+const historicalPromptPath='prompts/api-reader-article-v9.md',historicalPromptSha256='a2630453bfbd506619b7b3e80ece91ffc9f53951b80bab043cc6d889731d7ff8';
+const promptIndex=JSON.parse(fs.readFileSync(path.join(ROOT,'scripts/lib/git-prompt-evidence-index.json'),'utf8'));
+assert.equal(promptIndex.retiredPaths[historicalPromptPath],historicalPromptSha256);
+const historicalPromptEntry=promptIndex.blobs[historicalPromptSha256];assert.ok(historicalPromptEntry.paths.includes(historicalPromptPath));
+const gitEnv=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('GIT_')));
+Object.assign(gitEnv,{GIT_TERMINAL_PROMPT:'0',GIT_NO_LAZY_FETCH:'1',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'});
+const historicalPromptBytes=require('node:child_process').execFileSync('git',['--no-lazy-fetch','--no-replace-objects','-C',ROOT,'cat-file','blob',historicalPromptEntry.blobOid],{env:gitEnv,timeout:10000,maxBuffer:8*1024*1024,stdio:['ignore','pipe','pipe']});
+assert.equal(crypto.createHash('sha256').update(historicalPromptBytes).digest('hex'),historicalPromptSha256);
 require(path.join(ROOT,'tests/helpers/isolated-tmp-write-guard.cjs')).installTmpOnlyWriteGuard(workspace);
 const api=require(process.env.MALFORMED_VIEW_MODULE||path.join(ROOT,'scripts/lib/reader-malformed-previous-draft-view'));
 const raw=fixture.rawDraft,sha=x=>crypto.createHash('sha256').update(x).digest('hex'),before=JSON.stringify(fixture);
@@ -28,22 +39,38 @@ test('supplementary Unicode boundaries preserve complete scalar pairs',()=>{cons
 test('one real raw character change changes the full raw SHA',()=>{const changed=raw.slice(0,-1)+' ';const d=decode(invoke({raw:changed,jsonText:extract(changed)}));assert.notEqual(d.rawSha256,decode(invoke()).rawSha256);});
 test('unknown native error location remains blocked instead of guessing',()=>{const value='garbage'.repeat(5000);assert.equal(invoke({raw:value,jsonText:value}),null);});
 
-function nativeFullPrompt(changes={}) {
+function nativeFullPrompt(changes={},historical=false) {
     const deep=require(path.join(ROOT,'scripts/deep-analyzer')),utils=require(path.join(ROOT,'scripts/utils'));
+    const versions=require(path.join(ROOT,'scripts/lib/prompt-text-versions'));
+    // Run the canonical loader body unchanged. Only its historical byte reader
+    // is supplied from the already authenticated Git object; this is a render
+    // fixture, not a source/declaration capability or a production override.
+    const loadHistoricalPrompt=new Function('require','path','fs','__dirname','return ('+utils.loadPrompt.toString()+');')(id=>{
+        assert.equal(id,'./lib/prompt-evidence.js');return {readPromptEvidenceBytes:relative=>{assert.equal(relative,historicalPromptPath);return Buffer.from(historicalPromptBytes);}};
+    },path,fs,path.join(workspace,'scripts'));
+    const promptPathForStage=historical ? stage=>{assert.equal(stage,'apiReaderArticle');return versions.promptFilePathForContract(stage,'analysis-prompt-text-v9');} : deep.currentTextStagePromptPath;
     const code=fs.readFileSync(path.join(ROOT,'scripts/deep-analyzer.js'),'utf8'),a=code.indexOf('        let previousDraftPromptView = previousDraft;'),z=code.indexOf('        const selectedInputs = repairContext',a);
     assert.ok(a>=0&&z>a);const snippet=code.slice(a,z).replace("        let prompt = buildReaderPrompt('');","        let prompt = buildReaderPrompt('');\n        const originalPrompt = prompt;");
     const vars={...fixture.nativeFullPromptVariables,...changes},issues=fixture.nativeCurrentIssues;
     const names=['require','conceptTermsContext','repairContext','options','paper','mechanicalContract','repair','numericSpellingGuidance','repairReviewFeedbackPrefix','savedInputContinuity','currentIssues','ordinalCapability','ordinaryOrdinal','fullRegenerationEvidence','validationFeedback','fullRegenerationTableFeedback','previousDraft','naturalResourceProse','patchRejectionFeedback','loadPrompt','currentTextStagePromptPath','API_READER_CONTEXT_MAX_CHARS','extractJsonObjectText','candidate','getPaperArxivId','readerVerifiedTableIndexExamples','sourceEvidence','issueFeedback'];
-    const values=[id=>require(id.startsWith('./')?path.join(ROOT,'scripts',id):id),null,null,{structuredArtifacts:{}},{title:vars.title,arxivId:vars.arxivId},vars.mechanicalContract,require(path.join(ROOT,'scripts/lib/reader-repair')),'','',null,issues,null,null,vars.sourceEvidence,vars.validationFeedback,'',vars.previousDraft,fixture.nativeNaturalResourceProse,'',utils.loadPrompt,deep.currentTextStagePromptPath,fixture.contextMaxChars,extract,null,deep.getPaperArxivId,deep.readerVerifiedTableIndexExamples,vars.sourceEvidence,issue=>issue.message];
+    const values=[id=>require(id.startsWith('./')?path.join(ROOT,'scripts',id):id),null,null,{structuredArtifacts:{}},{title:vars.title,arxivId:vars.arxivId},vars.mechanicalContract,require(path.join(ROOT,'scripts/lib/reader-repair')),'','',null,issues,null,null,vars.sourceEvidence,vars.validationFeedback,'',vars.previousDraft,fixture.nativeNaturalResourceProse,'',historical?loadHistoricalPrompt:utils.loadPrompt,promptPathForStage,fixture.contextMaxChars,extract,null,deep.getPaperArxivId,deep.readerVerifiedTableIndexExamples,vars.sourceEvidence,issue=>issue.message];
     return new Function(...names,snippet+'\nreturn {prompt,originalPrompt,previousDraftPromptView,previousDraft};')(...values);
 }
-test('actual full canonical prompt renderer fits while preserving all real source evidence',()=>{
-    const result=nativeFullPrompt();assert.equal(result.originalPrompt,fixture.nativeOriginalPrompt);assert.equal(result.originalPrompt.length,247157);assert.equal(decode(result.previousDraftPromptView).nativeParseError,nativeParseError(extract(raw)));assert.equal(result.prompt.length,result.originalPrompt.length-raw.length+result.previousDraftPromptView.length);assert.ok(result.prompt.length<=240000);
+test('original v9 full canonical prompt renderer preserves the exact recorded prompt and real source evidence',()=>{
+    const result=nativeFullPrompt({},true);assert.equal(result.originalPrompt,fixture.nativeOriginalPrompt);assert.equal(result.originalPrompt.length,247157);assert.equal(decode(result.previousDraftPromptView).nativeParseError,nativeParseError(extract(raw)));assert.equal(result.prompt.length,result.originalPrompt.length-raw.length+result.previousDraftPromptView.length);assert.ok(result.prompt.length<=240000);
     // Preserve the recorded Node22 observation; different V8 native error suffixes
     // legitimately change the current diagnostic and therefore its actual hash.
     const observedView=result.previousDraftPromptView.replace(JSON.stringify(nativeParseError(extract(raw))),JSON.stringify(observedNode22ParseError));
     const marker='上一版完整 JSON 草稿（首次生成时为“无”）：\n\n';const offset=result.originalPrompt.indexOf(marker)+marker.length;assert.ok(offset>=marker.length);const observedPrompt=result.originalPrompt.slice(0,offset)+observedView+result.originalPrompt.slice(offset+raw.length);assert.equal(observedPrompt.length,192959);assert.equal(sha(observedPrompt),fixture.nativeSendPromptSha256);
     const vars=fixture.nativeFullPromptVariables;assert.equal(vars.sourceEvidence.length,174837);assert.equal(sha(vars.sourceEvidence),fixture.nativeSourceEvidenceSha256);assert.ok(result.originalPrompt.includes(vars.sourceEvidence)&&result.prompt.includes(vars.sourceEvidence));assert.equal(result.previousDraft,raw);assert.equal(fixture.nativePromptReconstruction.originalSignedDisplayMatchesActiveIdentity,true);
+});
+test('current registered v10 full renderer preserves real evidence and the diagnostic-only context limit',()=>{
+    assert.equal(require(path.join(ROOT,'scripts/lib/prompt-text-versions')).currentTextStagePromptPath('apiReaderArticle'),'prompts/api-reader-article-v10.md');
+    const result=nativeFullPrompt();assert.notEqual(result.originalPrompt,fixture.nativeOriginalPrompt);
+    assert.ok(result.originalPrompt.includes('独立 PDF 引文只用于明确允许的恢复'));
+    assert.ok(result.originalPrompt.includes(fixture.nativeFullPromptVariables.sourceEvidence)&&result.prompt.includes(fixture.nativeFullPromptVariables.sourceEvidence));
+    assert.equal(result.previousDraft,raw);assert.equal(decode(result.previousDraftPromptView).rawSha256,sha(raw));
+    assert.equal(result.prompt.length,result.originalPrompt.length-raw.length+result.previousDraftPromptView.length);assert.ok(result.prompt.length<=240000);
 });
 test('only previousDraft render variable changes in the actual full prompt',()=>{
     const result=nativeFullPrompt(),vars=fixture.nativeFullPromptVariables;const marker='上一版完整 JSON 草稿（首次生成时为“无”）：\n\n';const start=result.originalPrompt.indexOf(marker)+marker.length;assert.ok(start>=marker.length);const end=start+raw.length;assert.equal(result.originalPrompt.slice(start,end),raw);assert.equal(result.prompt,result.originalPrompt.slice(0,start)+result.previousDraftPromptView+result.originalPrompt.slice(end));
