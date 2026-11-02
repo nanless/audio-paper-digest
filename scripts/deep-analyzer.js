@@ -3096,7 +3096,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         tableBindings,
         formulaBindings,
         ...((tableBindings.some(binding => binding.pdfCellConfirmation || binding.sealedPdfTableEvidence
-            || binding.sealedPdfQuoteEvidence)
+            || binding.sealedPdfQuoteEvidence || (binding.cellBindings || []).some(cell =>
+                require('./lib/source-cell-math-display').strictSourceCellMathDisplay(cell.sourceText)?.kind
+                    === 'scientific-notation-duplicate'))
             || tableBindings.some((binding,index) => binding.sourceType === 'source_quotes'
                 && require('./lib/reader-source-table-column-units').coverage(renderedTables[index], binding.sourceQuotes).length > 0)
             || formulaBindings.some(binding => readerFormulaNeedsSourcePayload(binding.latex)))
@@ -7928,7 +7930,7 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                             && !require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, renderedText)
                             && !require('./lib/reader-dom-span-projection').savedCellMatches(
                                 paper, binding, cell, renderedText, articleTables[index])
-                            && !(sourceMathDisplay?.kind === 'numeric-style-duplicate'
+                            && !(['numeric-style-duplicate', 'scientific-notation-duplicate'].includes(sourceMathDisplay?.kind)
                                 && sourceMathDisplay.displayText === renderedText))) {
                         throw new Error(`文章文字规范化后，表格单元格与绑定的原始来源不一致（第 ${index + 1} 张表，第 ${cell.renderedRow + 1} 行，第 ${cell.renderedColumn + 1} 列：“${String(renderedText).slice(0, 60)}” 与来源“${String(cell.sourceText).slice(0, 60)}”）。`);
                     }
@@ -8914,6 +8916,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-fact-table-claim-location.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-display.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/source-cell-math-display.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-scientific-quote-coverage.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-metric-units.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-quote-evidence.js'), 'utf8'),

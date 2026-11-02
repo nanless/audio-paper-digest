@@ -33,7 +33,7 @@ function sourceMathDisplay(table, row, column) {
     const proof = require('./source-cell-math-display').strictSourceCellMathDisplay(cell.text);
     // Nested powers are a publication view only: keep their canonical Reader
     // rendering unchanged so an old paid draft still replays byte for byte.
-    return proof?.kind === 'numeric-style-duplicate' ? proof : null;
+    return ['numeric-style-duplicate', 'scientific-notation-duplicate'].includes(proof?.kind) ? proof : null;
 }
 function displayCell(table, row, column) {
     const proof = sealedEvidence(table);
@@ -125,7 +125,57 @@ function withArtifacts(artifacts, paperId, callback) {
         return needsGrid && canonical ? grid.withArtifacts(artifacts, actualPaperId, callback) : callback();
     });
 }
+function assertSavedScientificDomBindings(paper) {
+    const rendered = require('../analysis-contract').extractMarkdownTables(paper?.apiReaderArticle || '');
+    const marked = (paper?.apiReaderPlan?.tableBindings || []).filter(binding =>
+        binding?.sourceType === 'artifact_table' && !binding.pdfCellConfirmation && !binding.sealedPdfTableEvidence && (
+        // Reject-only detection uses the actual displayed table. Folding here
+        // grants nothing: original source bytes and coordinates are checked below.
+        /[0-9.]×10[+−-]?[0-9]+/.test(String(rendered[binding.tableIndex - 1]?.markdown || '')
+            .normalize('NFKC').replace(/[\s*_`]/g, ''))
+        || (binding.cellBindings || []).some(cell => require('./source-cell-math-display')
+            .strictSourceCellMathDisplay(cell.sourceText)?.kind === 'scientific-notation-duplicate'
+            // The display-side trigger cannot be removed by replacing all raw
+            // sourceText values with their already-rendered Unicode surfaces.
+            || /^[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)×10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+$/.test(cell.renderedText || ''))));
+    if (!marked.length) return;
+    const provenance = paper.freshRewriteProvenance;
+    if (provenance?.contract !== 'fresh-source-analysis-v1'
+        || !isDeepStrictEqual(provenance, paper.analysisManifest?.freshRewriteProvenance)
+        || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) throw new Error('Scientific DOM display lacks the actual sealed source');
+    const fresh = require('./fresh-analysis-context');
+    const runDir = path.join(require('../config').FILES.dailyFreshSourceRunsDir, provenance.runId);
+    const run = require('./reader-proof-read-scope').readReaderProofJson(path.join(runDir, 'run.json')).value;
+    if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT) throw new Error('Scientific DOM display run contract differs');
+    const source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
+    const descriptor = source.freshSourceDescriptor, acquisition = paper.analysisManifest?.sourceAcquisition;
+    if (paper.sourceSha256 !== descriptor.sourceSha256 || acquisition?.sourceSha256 !== descriptor.sourceSha256
+        || acquisition.structuredArtifactsSha256 !== descriptor.structuredArtifactsSha256
+        || ['runId', 'sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256', 'sourceGeneration', 'sourceManifestSha256']
+            .some(key => provenance[key] !== descriptor[key])
+        || paper.apiReaderPlan.structuredSourcePayload !== require('../deep-analyzer').readerStructuredSourcePayload(source.structuredArtifacts))
+        throw new Error('Scientific DOM display four-source identity differs');
+    for (const binding of marked) {
+        const tables = source.structuredArtifacts.tables.filter(table => table.ordinal === binding.sourceTableOrdinal);
+        const table = tables[0], seen = new Set();
+        if (binding.sourceType !== 'artifact_table' || tables.length !== 1 || table.recoveryStatus !== 'complete'
+            || binding.sourceTableDomSha256 !== table.sourceDomSha256 || binding.sourceQuotes?.length !== 0
+            || binding.cellBindings.length !== table.matrix.reduce((count, row) => count + row.length, 0)
+            || binding.cellBindings.some(cell => {
+                const key = `${cell.sourceRow}:${cell.sourceColumn}`;
+                const originals = table.cells.filter(item => item.row === cell.sourceRow && item.column === cell.sourceColumn);
+                if (!Number.isSafeInteger(cell.sourceRow) || !Number.isSafeInteger(cell.sourceColumn)
+                    || cell.sourceRow < 0 || cell.sourceColumn < 0 || seen.has(key)
+                    || cell.renderedRow !== cell.sourceRow || cell.renderedColumn !== cell.sourceColumn
+                    || originals.length !== 1 || originals[0].rowspan !== 1 || originals[0].colspan !== 1
+                    || table.matrix[cell.sourceRow]?.[cell.sourceColumn] !== cell.sourceText
+                    || originals[0].text !== cell.sourceText || originals[0].sourceDomSha256 !== cell.sourceDomSha256) return true;
+                seen.add(key); return false;
+            })) throw new Error('Scientific DOM display must retain the exact complete original table and cell coordinates');
+    }
+}
 function withSavedPaper(paper, callback) {
+    assertSavedScientificDomBindings(paper);
     const bindings = paper?.apiReaderPlan?.tableBindings || [];
     if (bindings.some(binding => binding.sealedPdfTableSelection !== undefined
         && (!binding.sealedPdfTableEvidence || binding.pdfCellConfirmation !== undefined))) {

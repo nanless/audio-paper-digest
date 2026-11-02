@@ -7939,6 +7939,61 @@ def _reader_html_blank_span_keys(paper, article, rendered_tables):
         return set()
 
 
+def _verify_reader_scientific_dom_bindings(paper):
+    """New scientific displays retain the actual complete sealed DOM grid."""
+    displayed = _api_reader_markdown_tables(paper.get('apiReaderArticle') or '')
+    marked = [binding for binding in (paper.get('apiReaderPlan') or {}).get('tableBindings', [])
+              if isinstance(binding, dict) and binding.get('sourceType') == 'artifact_table'
+              and not binding.get('pdfCellConfirmation') and not binding.get('sealedPdfTableEvidence') and (any(
+                  (strict_source_cell_math_display(cell.get('sourceText')) or {}).get('kind') == 'scientific-notation-duplicate'
+                  or re.fullmatch(r'[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)×10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+', str(cell.get('renderedText') or ''))
+                  for cell in binding.get('cellBindings', []) if isinstance(cell, dict))
+                  or (type(binding.get('tableIndex')) is int and 1 <= binding['tableIndex'] <= len(displayed)
+                      and re.search(r'[0-9.]×10[+−-]?[0-9]+', re.sub(r'[\s*_`]', '', unicodedata.normalize(
+                          'NFKC', displayed[binding['tableIndex'] - 1]['markdown'])))))]
+    if not marked:
+        return
+    proof = paper.get('freshRewriteProvenance') or {}
+    run_id = proof.get('runId')
+    if proof.get('contract') != 'fresh-source-analysis-v1' or not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('科学计数显示缺少真实封存来源。')
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, '科学计数来源根目录')
+    _daily_fresh_safe_directory(run_dir, '科学计数运行目录')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    _, runtime = _daily_fresh_read_canonical_json(run_dir / 'sources' / paper_id / 'generation-000001' / 'source-runtime.json',
+        '科学计数结构化来源', 64 * 1024 * 1024)
+    source = paper['analysisManifest']['sourceAcquisition']
+    artifacts = _reader_source_payload_artifacts(paper['apiReaderPlan'].get('structuredSourcePayload'),
+        source['structuredArtifactsSha256'], paper['sourceSha256'])
+    if artifacts != {key: value for key, value in runtime['structuredArtifacts'].items() if key != 'payloadSha256'}:
+        raise PublishDataValidationError('科学计数显示与真实封存结构化来源不一致。')
+    for binding in marked:
+        tables = [table for table in artifacts['tables'] if table.get('ordinal') == binding.get('sourceTableOrdinal')]
+        if len(tables) != 1 or binding.get('sourceType') != 'artifact_table' or binding.get('sourceQuotes') != []:
+            raise PublishDataValidationError('科学计数显示必须绑定唯一完整原表。')
+        table = tables[0]
+        cells = binding.get('cellBindings') or []
+        if table.get('recoveryStatus') != 'complete' or binding.get('sourceTableDomSha256') != table.get('sourceDomSha256') \
+                or len(cells) != sum(len(row) for row in table['matrix']):
+            raise PublishDataValidationError('科学计数显示必须保留原表全部单元格和DOM身份。')
+        seen = set()
+        for cell in cells:
+            row, column = cell.get('sourceRow'), cell.get('sourceColumn')
+            original = [item for item in table['cells'] if item.get('row') == row and item.get('column') == column]
+            if type(row) is not int or type(column) is not int or row < 0 or column < 0 \
+                    or row >= len(table['matrix']) or column >= len(table['matrix'][row]) or (row, column) in seen \
+                    or cell.get('renderedRow') != row or cell.get('renderedColumn') != column or len(original) != 1 \
+                    or original[0].get('rowspan') != 1 or original[0].get('colspan') != 1 \
+                    or original[0].get('text') != cell.get('sourceText') \
+                    or table['matrix'][row][column] != cell.get('sourceText') \
+                    or original[0].get('sourceDomSha256') != cell.get('sourceDomSha256'):
+                raise PublishDataValidationError('科学计数显示的原始单元格、完整坐标或DOM身份不一致。')
+            seen.add((row, column))
+
+
 def _verify_reader_sealed_pdf_grid_bindings(paper):
     """Replay the independent PDF protocol against all four official sealed sources."""
     from reader_sealed_pdf_table_evidence import CONTRACT, prove_pdf_bytes
@@ -8607,6 +8662,8 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
     if stage.get('tableBindingCount') != len(table_bindings) \
             or stage.get('formulaBindingCount') != len(formula_bindings):
         raise PublishDataValidationError('读者文章的表格或公式来源记录条数与阶段记录不一致。')
+
+    _verify_reader_scientific_dom_bindings(paper)
 
     pdf_values = {}
     if any(isinstance(b, dict) and 'pdfCellConfirmation' in b for b in table_bindings):

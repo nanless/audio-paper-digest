@@ -7831,6 +7831,14 @@ def strict_source_cell_math_display(value):
     text = value
     number = r'(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)'
     scalar = rf'[+−-]?{number}'
+    # The whole original cell must contain two byte-identical coefficients and
+    # explicit exponents. Preserve precision/signs; never infer a bare split.
+    scientific = re.fullmatch(rf'({scalar})×10([+−-]?[0-9]{{1,6}})\1\\times[ \t]*10\^\{{\2\}}', text)
+    if scientific:
+        superscript = str.maketrans('+-−0123456789', '⁺⁻⁻⁰¹²³⁴⁵⁶⁷⁸⁹')
+        return {'contract': 'source-cell-math-display-v1', 'kind': 'scientific-notation-duplicate',
+                'sourceText': value, 'sourceTextSha256': hashlib.sha256(value.encode('utf-8')).hexdigest(),
+                'displayText': scientific[1] + '×10' + scientific[2].translate(superscript)}
     # This exact flattened unit has two literal U+200B characters. Its second
     # scalar must preserve every numeric byte; no original MathML is inferred.
     unit_duplicate = re.fullmatch(rf'({scalar})\u200bm\u200bs\1ms', text)
