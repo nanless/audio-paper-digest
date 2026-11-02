@@ -5675,8 +5675,10 @@ has_dataset: 否
         // 新请求按当前版本写指纹；旧记录没有版本字段时仍按 v1 的冻结路径重算。
         const deep = require('../scripts/deep-analyzer.js');
         assert.strictEqual(deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT, 'analysis-prompt-text-v2');
-        assert.strictEqual(deep.currentPromptTextContract('revision'), 'analysis-prompt-text-v4');
+        assert.strictEqual(deep.currentPromptTextContract('revision'), 'analysis-prompt-text-v5');
         assert.strictEqual(deep.currentTextStagePromptPath('revision'), 'prompts/gap-fill-v5.md');
+        assert.strictEqual(deep.promptFilePathForContract('revision', 'analysis-prompt-text-v4'),
+            'prompts/gap-fill-v4.md');
         assert.strictEqual(deep.promptFilePathForContract('revision', ''), 'prompts/gap-fill.md');
         assert.strictEqual(
             deep.promptFilePathForContract('revision', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
