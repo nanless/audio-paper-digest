@@ -7,6 +7,7 @@ const path = require('node:path');
 const YAML = require('yaml');
 const CONTRACT = 'daily-fetch-boundary-v1';
 const CONTINUITY_CONTRACT = 'daily-fetch-continuity-v1';
+const RECOVERY_CONTINUITY_CONTRACT = 'daily-fetch-continuity-recovery-v1';
 const CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'];
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function strictInstant(value) {
@@ -43,8 +44,13 @@ function overlapStart(continuity) {
 }
 function validateContinuity(boundary) {
     const c = boundary.continuity;
+    if (c?.contract === RECOVERY_CONTINUITY_CONTRACT) {
+        require('./daily-fetch-witness-recovery').verifyBoundary(boundary);
+        return;
+    }
     const fail = () => { throw new Error('日更旧获取见证与受控重叠边界不一致'); };
     if (!c || c.contract !== CONTINUITY_CONTRACT || c.required !== true
+        || Object.hasOwn(c, 'sourceCheckpointDate') || Object.hasOwn(c, 'recovery')
         || !/^[a-f0-9]{64}$/.test(c.archiveCheckpointSha256 || '')
         || !validDate(c.overlapCutoffDate || '') || c.overlapCutoffDate > boundary.lastDigestDate) fail();
     strictInstant(c.originalSince);
@@ -194,6 +200,9 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
     const fail = () => { throw new Error('上一已发布 v7 抓取窗口的来源或发布证明不完整，拒绝缩短补抓范围'); };
     try { validateDailyFetchBoundary(checkpoint.fetchBoundary); } catch { fail(); }
     const boundary = checkpoint.fetchBoundary;
+    if (boundary.continuity?.contract === RECOVERY_CONTINUITY_CONTRACT) {
+        require('./daily-fetch-witness-recovery').verifyActivation(boundary);
+    }
     const categories = CATEGORIES;
     const covered = (entry, hf = false, categoryId = null) => {
         const provider = entry?.health?.provider;
@@ -291,6 +300,13 @@ function deriveContinuity(prior, lastDigestDate) {
 function validateDailyFetchContinuityCheckpoint(boundary, checkpointBytes) {
     validateDailyFetchBoundary(boundary);
     if (!boundary.continuity) return true;
+    if (boundary.continuity.contract === RECOVERY_CONTINUITY_CONTRACT) {
+        const replay = require('./daily-fetch-witness-recovery').verifyBoundary(boundary);
+        if (!Buffer.isBuffer(checkpointBytes) || !checkpointBytes.equals(replay.checkpointBytes)) {
+            throw new Error('恢复旧获取见证与封存检查点的原字节不同');
+        }
+        return true;
+    }
     if (!Buffer.isBuffer(checkpointBytes) || hash(checkpointBytes) !== boundary.continuity.archiveCheckpointSha256) {
         throw new Error('旧获取见证所绑定的抓取检查点字节 SHA 不一致');
     }
@@ -307,7 +323,7 @@ function validateDailyFetchContinuityCheckpoint(boundary, checkpointBytes) {
     return true;
 }
 function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__dirname, '../../data'),
-    requirePreviouslyFetched = false } = {}) {
+    requirePreviouslyFetched = false, fetchWitnessRecoveryManifest = null } = {}) {
     if (typeof requirePreviouslyFetched !== 'boolean') throw new TypeError('requirePreviouslyFetched 必须是布尔值');
     strictInstant(until);
     const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -346,6 +362,12 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
             conservativeSubmissionMonthStart: `20${id.slice(0, 2)}-${id.slice(2, 4)}-01T00:00:00.000Z` };
     });
     if (new Set(papers.map(p => p.arxivId)).size !== papers.length) throw new Error('上一日更论文身份重复');
+    if (fetchWitnessRecoveryManifest !== null) {
+        if (!requirePreviouslyFetched) throw new Error('显式旧获取见证恢复必须同时要求实际遇到旧见证');
+        return require('./daily-fetch-witness-recovery').resolveBoundary({ blogRepo, dataRoot, until,
+            manifestPath: fetchWitnessRecoveryManifest, latest: { date, head, indexPath,
+                indexSha256: hash(indexBytes), papers } });
+    }
     const previous = verifiedPreviousWindow(dataRoot, date, papers, indexPath, hash(indexBytes));
     const prior = previous?.until ? previous : null;
     if (requirePreviouslyFetched && !prior) throw new Error('要求旧获取见证时必须有完整已发布 v7 抓取证明，不能从月首推测旧获取状态');
@@ -381,4 +403,41 @@ function readCommittedPublishedPaperIds(blogRepo) {
     return ids;
 }
 module.exports = { CONTRACT, CONTINUITY_CONTRACT, resolveDailyFetchBoundary, validateDailyFetchBoundary,
-    validateDailyFetchContinuityCheckpoint, hasVerifiedFetchContinuity, readCommittedPublishedPaperIds };
+    validateDailyFetchContinuityCheckpoint, hasVerifiedFetchContinuity, readCommittedPublishedPaperIds,
+    RECOVERY_CONTINUITY_CONTRACT, verifiedPreviousWindow, deriveContinuity, overlapStart, stableSha,
+    readPublishedDigest };
+
+// This observer reads immutable Git objects, never a caller-provided page snapshot.
+function readPublishedDigest(blogRepo, date, head = null) {
+    if (!validDate(date)) throw new Error('已发布来源日期非法');
+    const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 32 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'] });
+    head ||= git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}').toString().trim();
+    if (!/^[a-f0-9]{40}$/.test(head)) throw new Error('已发布 Git 身份非法');
+    git('merge-base', '--is-ancestor', head, 'HEAD');
+    const indexPath = `content/posts/${date}.md`, indexBytes = git('show', `${head}:${indexPath}`);
+    const meta = frontmatter(indexBytes);
+    if (meta.date !== date || meta.paper_digest_pipeline_owned !== true
+        || meta.paper_digest_page_type !== 'index' || meta.draft !== false) throw new Error('已发布来源汇总身份非法');
+    const pagePaths = [...new Set([...indexBytes.toString().matchAll(/\]\([^\n)]*\/posts\/([^/)]+)\)/g)]
+        .map(m => `content/posts/${m[1]}.md`))].filter(name => name.startsWith(`content/posts/${date}-`)).sort();
+    if (!pagePaths.length || Number(indexBytes.toString().match(/共分析 \*\*(\d+)\*\* 篇论文/)?.[1]) !== pagePaths.length) {
+        throw new Error('已发布来源汇总与论文集合不一致');
+    }
+    const papers = pagePaths.map(name => {
+        const bytes = git('show', `${head}:${name}`), p = frontmatter(bytes), id = normalizedId(p.paper_digest_arxiv_id);
+        const month = Number(id.slice(2, 4));
+        if (!/^\d{4}\.\d{4,5}$/.test(id) || p.date !== date || p.draft !== false
+            || month < 1 || month > 12
+            || p.paper_digest_pipeline_owned !== true || p.paper_digest_page_type !== 'paper') throw new Error('已发布来源论文身份非法');
+        const citationPath = `static/data/papers/${date}/${id.replace('.', '-')}/citation.json`;
+        const citation = git('show', `${head}:${citationPath}`);
+        if (normalizedId(JSON.parse(citation)) !== id || p.paper_digest_sidecars?.['citation.json']?.sha256 !== hash(citation)) {
+            throw new Error('已发布来源引用身份不一致');
+        }
+        return { arxivId: id, path: name, sha256: hash(bytes), citationPath, citationSha256: hash(citation),
+            conservativeSubmissionMonthStart: `20${id.slice(0, 2)}-${id.slice(2, 4)}-01T00:00:00.000Z` };
+    });
+    if (new Set(papers.map(p => p.arxivId)).size !== papers.length) throw new Error('已发布来源论文重复');
+    return { date, head, indexPath, indexSha256: hash(indexBytes), papers };
+}

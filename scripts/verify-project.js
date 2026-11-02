@@ -14,6 +14,15 @@ const EXCLUDED_DIRECTORIES = new Set([
     'node_modules', '.venv', 'data', 'logs', '.git', '__pycache__', '.pytest_cache',
     '.agents', '.codex', 'tmp', '_understanding', 'output'
 ]);
+// Fixed client build/acceptance outputs contain copied projects and bundled
+// runtimes. Only these exact roots are generated; an arbitrary directory named
+// build or .qa elsewhere must still receive normal source coverage.
+const GENERATED_CLIENT_DIRECTORIES = new Set([
+    'apps/macos/.build', 'apps/macos/.qa',
+    'apps/android/.build', 'apps/android/.qa', 'apps/android/.gradle', 'apps/android/.kotlin',
+    'apps/android/build', 'apps/android/app/build',
+    'apps/android/app/.cxx', 'apps/android/app/.externalNativeBuild'
+]);
 
 function parseOptions(args) {
     const options = { quick: false, allowEmpty: false, help: false, suite: 'all', shard: null };
@@ -74,7 +83,8 @@ function collectSourceFiles(root = PROJECT_ROOT) {
             if (entry.isSymbolicLink()) continue;
             const fullPath = path.join(directory, entry.name);
             if (entry.isDirectory()) {
-                if (!EXCLUDED_DIRECTORIES.has(entry.name)) visit(fullPath);
+                const relative = path.relative(root, fullPath).split(path.sep).join('/');
+                if (!EXCLUDED_DIRECTORIES.has(entry.name) && !GENERATED_CLIENT_DIRECTORIES.has(relative)) visit(fullPath);
             } else if (entry.isFile()) {
                 const extension = path.extname(entry.name);
                 const group = { '.js': 'javascript', '.cjs': 'javascript', '.mjs': 'javascript', '.py': 'python', '.sh': 'shell' }[extension];

@@ -51,6 +51,7 @@ Mac 与 Android 客户端叫 **论文速递工作台**，网站和内容生产�
 | 发布已完成的历史结果 | `history:publication` 的 plan、generate、review、publish、status | [历史发布](docs/history-direct-publication.md) |
 | 只更新已发布完整日批的呈现 | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，再审查、推送 | [同来源重发布](docs/data-format.md#同来源同分析的日批重发布) |
 | 失败后选择恢复路线 | `npm run recover -- --date YYYY-MM-DD`；人工清单准备用 `npm run manifest:new -- --spec SPEC.json` | [恢复工具](docs/maintenance.md#恢复决策与清单生成) |
+| 已发布原输入不可重放，登记更早完整检查点的重叠恢复 | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` | [显式旧检查点恢复](docs/daily-fetch-boundary.md#published-input-drift-recovery) |
 | 核对表格或代码影响范围 | `npm run table:check -- --draft DRAFT.json`、`npm run impact -- scripts/x.js` | [定向预检](docs/maintenance.md#表格与影响面预检) |
 | 核对审查误报解释 | `npm run review:overrides -- --date DATE --file OVERRIDES.json` | [误报诊断](docs/maintenance.md#发布后网页核验与收尾) |
 | 发布后核验网页 | `npm run verify:web -- --date DATE --deploy OID`；`npm run publish:finish -- --date DATE` 打印后续清单 | [发布收尾](docs/maintenance.md#发布后网页核验与收尾) |

@@ -10,7 +10,7 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--official-oai-recovery]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--official-oai-recovery] [--fetch-witness-recovery-manifest ABSOLUTE_PATH]
 
 运行 LLM/API 抓取、筛选、深度分析和博客审查。已退役整批 Manual 写作链；
 单篇受控人工修正与独立审查仍可用于三个流程的失败恢复。
@@ -72,6 +72,7 @@ shift
 start_stage="fetch"
 no_visuals=0
 official_oai_recovery=0
+fetch_witness_recovery_manifest=""
 if [ "${PD_DAILY_API_MODE:-1}" != "1" ]; then
   echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
   exit 2
@@ -105,6 +106,17 @@ while [ "$#" -gt 0 ]; do
       official_oai_recovery=1
       shift
       ;;
+    --fetch-witness-recovery-manifest)
+      if [ -n "$fetch_witness_recovery_manifest" ] || [ "$#" -lt 2 ]; then
+        echo "--fetch-witness-recovery-manifest 须提供且只提供一次绝对路径。" >&2
+        exit 2
+      fi
+      case "$2" in
+        /*) fetch_witness_recovery_manifest="$2" ;;
+        *) echo "旧获取见证恢复清单必须使用绝对路径。" >&2; exit 2 ;;
+      esac
+      shift 2
+      ;;
     --manual)
       echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
       exit 2
@@ -131,6 +143,10 @@ esac
 
 if [ "$official_oai_recovery" -eq 1 ] && [ "$start_index" -ne 1 ]; then
   echo "--official-oai-recovery 仅适用于抓取阶段。" >&2
+  exit 2
+fi
+if [ -n "$fetch_witness_recovery_manifest" ] && [ "$start_index" -ne 1 ]; then
+  echo "--fetch-witness-recovery-manifest 仅适用于抓取阶段。" >&2
   exit 2
 fi
 
@@ -171,6 +187,9 @@ run_stage() {
 if [ "$start_index" -eq 1 ]; then
   fetch_options=(--require-previously-fetched)
   if [ "$official_oai_recovery" -eq 1 ]; then fetch_options+=(--official-oai-recovery); fi
+  if [ -n "$fetch_witness_recovery_manifest" ]; then
+    fetch_options+=(--fetch-witness-recovery-manifest "$fetch_witness_recovery_manifest")
+  fi
   run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js --date "$target_date" "${fetch_options[@]}"
 fi
 

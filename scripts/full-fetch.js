@@ -254,6 +254,10 @@ function resolvePinnedFetchBoundary(blogRepo, now, checkpoint = null, publishedI
 
 function verifyPreviousFetchWitnessArchive(boundary) {
     if (!boundary.continuity) return true;
+    if (boundary.continuity.contract === 'daily-fetch-continuity-recovery-v1') {
+        require('./lib/daily-fetch-witness-recovery').verifyBoundary(boundary);
+        return true;
+    }
     const candidates = [path.join(Config.ARCHIVE_DIR, boundary.lastDigestDate, 'fetch-checkpoint.json'),
         Config.FILES.fetchCheckpoint];
     for (const filename of candidates) {
@@ -1306,12 +1310,13 @@ function parseFullFetchArgs(argv = []) {
             if (options[key]) throw new Error(`参数不得重复：${flag}`);
             options[key] = true; index -= 1; continue;
         }
-        if (!value || !['--date', '--refilter', '--refilter-reason'].includes(flag)) {
-            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--official-oai-recovery] [--refilter ARXIV_ID --refilter-reason 复核原因]');
+        if (!value || !['--date', '--refilter', '--refilter-reason', '--fetch-witness-recovery-manifest'].includes(flag)) {
+            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--official-oai-recovery] [--fetch-witness-recovery-manifest ABSOLUTE_PATH] [--refilter ARXIV_ID --refilter-reason 复核原因]');
         }
         if (flag === '--refilter') (options.refilterIds ||= []).push(value);
         else {
-            const key = flag === '--date' ? 'date' : 'refilterReason';
+            const key = flag === '--date' ? 'date' : flag === '--fetch-witness-recovery-manifest'
+                ? 'fetchWitnessRecoveryManifest' : 'refilterReason';
             if (options[key] !== undefined) throw new Error(`参数不得重复：${flag}`);
             options[key] = value;
         }
@@ -1322,6 +1327,15 @@ function parseFullFetchArgs(argv = []) {
             || Number.isNaN(Date.parse(`${date}T00:00:00Z`))
             || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
             throw new Error('抓取日期必须是有效的 YYYY-MM-DD 公历日期');
+        }
+    }
+    if (options.fetchWitnessRecoveryManifest !== undefined) {
+        if (!path.isAbsolute(options.fetchWitnessRecoveryManifest)) {
+            throw new Error('旧获取见证恢复清单必须使用绝对路径');
+        }
+        if (options.requirePreviouslyFetched !== true || options.refilterIds !== undefined
+                || options.refilterReason !== undefined) {
+            throw new Error('旧获取见证恢复须保留完整连续性核验，不能与指定复筛混用');
         }
     }
     validateRefilterOptions(options);
@@ -1513,8 +1527,16 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     const historicalExistingIds = new Set(historicalDedupIds);
     console.log(`正式已发布独立论文页共 ${existingIds.size} 篇；库内未发布记录仍参加补更筛选\n`);
     const fetchBoundary = resolvePinnedFetchBoundary(blogRepo, batchStartedAt,
-        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds, { requirePreviouslyFetched: options.requirePreviouslyFetched === true });
+        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds, {
+            requirePreviouslyFetched: options.requirePreviouslyFetched === true,
+            fetchWitnessRecoveryManifest: options.fetchWitnessRecoveryManifest
+        });
     verifyPreviousFetchWitnessArchive(fetchBoundary);
+    if (fetchBoundary.continuity?.contract === 'daily-fetch-continuity-recovery-v1') {
+        await require('./lib/daily-fetch-witness-recovery').activateBoundary(fetchBoundary, {
+            dataRoot: Config.DATA_DIR, blogRepo
+        });
+    }
     batchStartedAt = normalizeToBeijingISOString(fetchBoundary.until);
     if (fetchBoundary.continuity) console.log(`连续性补抓：保留原边界 ${fetchBoundary.continuity.originalSince}，重叠起点 ${fetchBoundary.since}；所有来源实际遇旧见证后才筛选和分析。`);
     const candidateFingerprints = buildCandidateFingerprints(historicalExistingIds, publishedIds, fetchBoundary);

@@ -86,6 +86,29 @@ test('源码遍历跳过调查与生成片段，仍覆盖其他源码且不跨�
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 });
 
+test('只排除固定客户端构建与验收副本，其他同名目录和正式客户端源码仍检查', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-client-outputs-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const generated = ['apps/macos/.build', 'apps/macos/.qa', 'apps/android/.build',
+        'apps/android/.qa', 'apps/android/.gradle', 'apps/android/.kotlin', 'apps/android/build',
+        'apps/android/app/build', 'apps/android/app/.cxx', 'apps/android/app/.externalNativeBuild'];
+    for (const name of generated) {
+        const dir = path.join(root, name, 'copied-project/scripts');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'old.js'), '<<<<<<< old acceptance copy\n');
+    }
+    const kept = ['apps/macos/Resources/native.js', 'apps/macos/build.sh',
+        'apps/android/scripts/package.js', 'apps/android/app/src/main/assets/reader.js',
+        'apps/android/app/src/test/build/helper.js', 'custom-source/build/worker.py',
+        'build/formal.js', '.qa/formal.js', 'nested/apps/macos/.qa/formal.js'];
+    for (const name of kept) {
+        fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+        fs.writeFileSync(path.join(root, name), '');
+    }
+    const files = collectSourceFiles(root);
+    assert.deepEqual([...files.javascript, ...files.python, ...files.shell].sort(), kept.sort());
+});
+
 test('普通、CommonJS 和 ESM 文件都纳入语法检查；模块语法错误会使检查失败', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-module-syntax-'));
     try {

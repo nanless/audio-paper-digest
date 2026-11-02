@@ -17,6 +17,8 @@
 
 默认 LLM/API 日更的 `digest:prepare` 是完整入口；用户明确取消视觉时可加 `--no-visuals`，推送后只建立豁免所需清单并登记当前发布版本的声明，跳过实际参考图准备和生成；抓取调用 `full-fetch --require-previously-fetched`，以核验旧检查点派生重叠见证并检查各源实际命中；页内/窗口完整覆盖和仅已发布去重仍保留；`deep`、`batch`、`reanalyze`、`reanalyze:selected`、`api:reader:refresh` 只消费正式日更来源封存，不重新获取历史来源。Reader重试、已付费稿恢复和人工修正保留原稿、预算与费用，见 [恢复说明](../docs/reader-explicit-retry.md)。
 
+`prepare-daily-fetch-witness-recovery.js`（`fetch:witness:prepare`）仅为已发布原输入字节失配登记私有旧窗口恢复材料；`lib/daily-fetch-witness-recovery.js` 在归档前 CAS 激活，并在生产边界、来源检查点及下一日冷核重放。最新发布去重与较早真实五文件来源单列，不恢复丢失原字节、不修改旧正文或费用。参数及边界见[显式旧窗口恢复](../docs/daily-fetch-boundary.md#published-input-drift-recovery)。
+
 Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1–60，`--rounds N` 范围1–10。仅明确可重试失败进入下一轮；同次正常轮不改 Reader epoch。强制重分析首次按单篇执行已授权重置，后续失败轮保持原候选、次数及费用。
 
 独立核心摘要恢复使用 `reanalyzeSelected(ids, { coreFeedbackFiles })`，模型前在锁内保存原包及未完成义务。已清理检查点的完成稿先核验原完整上游，再仅在核心恢复中保留原阶段；不伪造中间稿或重签旧指纹，核心以外十二节受保护，随后正常评分及必要 Reader。旧入口误失效后的 `coreInputRecovery` 仅允许当前失败整对象及真实父文件双 SHA 绑定的精确恢复，保留原失败、待办和费用，见[核心恢复](../docs/reader-explicit-retry.md#已完成稿的独立核心摘要恢复)。
