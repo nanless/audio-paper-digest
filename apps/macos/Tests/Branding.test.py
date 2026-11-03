@@ -100,7 +100,7 @@ class Branding(unittest.TestCase):
             after = check_licenses(web)
             expected = copy.deepcopy(before)
             own = next(row for row in expected['components'] if row['id'] == 'paper-digest')
-            own.update(title='论文速递工作台', version='1.3.0')
+            own.update(title='论文速递工作台', version='1.3.1')
             self.assertEqual(after, expected)
             for path, raw in originals.items():
                 self.assertEqual((web / 'licenses' / path).read_bytes(), raw)
