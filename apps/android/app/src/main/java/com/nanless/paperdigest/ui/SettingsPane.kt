@@ -60,8 +60,8 @@ import java.time.ZoneOffset
  "阅读"->{Text("按你的节奏阅读",style=MaterialTheme.typography.titleLarge);FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){listOf("system" to "跟随系统","light" to "浅色","dark" to "深色").forEach{(v,l)->FilterChip(state.settings.optString("appearance","system")==v,{action("settings.save",obj("changes" to obj("appearance" to v)))},label={Text(l)})}};Text("正文大小 · ${(state.settings.optInt("font",18) / 18f * 100).toInt()}%",style=MaterialTheme.typography.titleSmall);Text("默认使用紧凑排版，同时跟随系统字体大小；阅读页菜单也可直接缩小或放大。",style=MaterialTheme.typography.bodySmall);Slider(state.settings.optInt("font",18).coerceIn(14,30).toFloat(),{action("settings.save",obj("changes" to obj("font" to it.toInt())))},valueRange=14f..30f,steps=15);Row{Text("离线模式",Modifier.weight(1f));Switch(state.settings.optBoolean("offlineMode"),{action("settings.save",obj("changes" to obj("offlineMode" to it)))})};Text("离线模式读取已保存的导读与 PDF；未保存的资料会明确提示。");Row{Text("减少界面动画",Modifier.weight(1f));Switch(state.settings.optBoolean("reduceMotion"),{action("settings.save",obj("changes" to obj("reduceMotion" to it)))},modifier=Modifier.semantics{contentDescription="减少界面动画"})}
  var syncHours by rememberSaveable{mutableStateOf(state.settings.optInt("syncHours",12).toString())};var syncDirty by rememberSaveable{mutableStateOf(false)};var syncSaving by remember{mutableStateOf(false)};var syncError by remember{mutableStateOf<String?>(null)};val syncScope=rememberCoroutineScope()
  LaunchedEffect(state.settings.optInt("syncHours",12)){if(!syncDirty)syncHours=state.settings.optInt("syncHours",12).toString()}
- OutlinedTextField(syncHours,{syncHours=it.filter(Char::isDigit);syncDirty=true},label={Text("已发布目录同步间隔（1–168 小时）")},singleLine=true)
- Button({val submitted=syncHours;syncSaving=true;syncScope.launch{try{controller.execute("settings.save",obj("changes" to obj("syncHours" to submitted.toInt())));if(syncHours==submitted)syncDirty=false;syncError=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;syncError=e.message}finally{syncSaving=false}}},enabled=syncDirty&&!syncSaving&&(syncHours.toIntOrNull()?:0)in 1..168){Text("保存目录同步间隔")};syncError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+ OutlinedTextField(syncHours,{syncHours=it.filter(Char::isDigit);syncDirty=true},label={Text("后台目录同步间隔（1–168 小时）")},singleLine=true)
+ Button({val submitted=syncHours;syncSaving=true;syncScope.launch{try{controller.execute("settings.save",obj("changes" to obj("syncHours" to submitted.toInt())));if(syncHours==submitted)syncDirty=false;syncError=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;syncError=e.message}finally{syncSaving=false}}},enabled=syncDirty&&!syncSaving&&(syncHours.toIntOrNull()?:0)in 1..168){Text("保存后台同步间隔")};syncError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
  Text("首次打开会自动同步网站目录；之后回到应用时按间隔检查更新，并预加载近期内容。Android 后台同步可能因电量与网络延后；离线模式不会联网。同步只读取已发布内容，不调用模型。",style=MaterialTheme.typography.bodySmall)}
  "模型"->ModelSettings(state,controller,{secret=SecretKind.MODEL})
  "资料"->{Text("完整研究资料",style=MaterialTheme.typography.titleLarge);Text("备份包含已保存论文、导读、PDF、笔记、标注、研究输入与原始用量；密钥留在本机。恢复前会校验原件并保留恢复前副本。")
@@ -157,6 +157,9 @@ import java.time.ZoneOffset
  LaunchedEffect(actualContext){retireList()}
  DisposableEffect(listGate){onDispose{listGate.invalidate()}}
  var saving by remember{mutableStateOf(false)};val busy=cloud.optBoolean("busy")||saving||state.busy;val pending=cloud.optJSONObject("pending");val scope=rememberCoroutineScope()
+ val transferID=cloud.optString("activeJobID")
+ val configured=cloud.optString("account").isNotBlank()&&cloud.optString("credentialState") !in setOf("missing","unavailable")
+ val targetChanged=account.trim()!=cloud.optString("account")||folder!=cloud.optString("folder","PaperDigest")
  Text("WebDAV 备份（坚果云）",style=MaterialTheme.typography.titleLarge)
  Text("把工作台的论文、笔记和研究记录备份到坚果云。服务器地址已内置，只需账号和第三方应用密码。")
  val browser=androidx.compose.ui.platform.LocalUriHandler.current
@@ -166,15 +169,21 @@ import java.time.ZoneOffset
  Text("保存全部研究空间。独立目录与 Zotero 附件同步分开；资料上限 512 MiB，编码快照上限 750 MiB。自动任务由 Android 调度，可能延后；强制停止应用后不会继续。")
  OutlinedTextField(account,{account=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("坚果云账号")},enabled=!busy,singleLine=true);OutlinedTextField(folder,{folder=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("备份目录")},supportingText={Text("例如 PaperDigest；不能使用 Zotero 的附件目录。")},enabled=!busy,singleLine=true)
  Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true;retireList()},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true;retireList()},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
- Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null;password()}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&account.isNotBlank()&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存账号并填写应用密码…")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
+ Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null;if(targetChanged)password()}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&account.isNotBlank()&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text(if(targetChanged)"保存账号并填写应用密码…" else "保存备份设置")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
  OutlinedButton(password,enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("填写或更换应用密码并检查…")}
- Text("3. 检查成功后，保存第一份备份",style=MaterialTheme.typography.titleMedium)
+ Text("3. 同步个人资料或保存完整备份",style=MaterialTheme.typography.titleMedium)
+ Button({action("cloud.syncPersonal",JSONObject())},enabled=!dirty&&!busy&&!state.settings.optBoolean("offlineMode")&&cloud.optString("account").isNotBlank()){
+     Text("一键同步 WebDAV")
+ }
+ Text("双向同步收藏、待读、笔记、批注和阅读进度。",style=MaterialTheme.typography.bodySmall)
  OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("重新检查连接与权限")}
  Text(if(cloud.optString("account").isBlank())"尚未配置账号"else when(cloud.optString("credentialState")){"present"->"应用密码已保存；以最近一次连接检查结果为准";"missing"->"尚未保存应用密码";else->"账号已保存，连接待检查"},style=MaterialTheme.typography.bodySmall)
- cloud.optString("lastError").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
  if(pending!=null)Text(if(pending.optBoolean("damaged"))"未完成材料损坏或缺少检查点。可原样保留，但不能保证完整恢复。" else "有未完成的同一快照：${pending.optLong("fileCount")} 文件 / ${pending.optLong("encodedBytes")} 字节。继续不会创建新版本。")
- Button({action("cloud.upload",JSONObject())},enabled=!dirty&&!busy&&pending?.optBoolean("damaged")!=true){Text(if(pending==null)"保存完整快照" else "继续保存同一快照")}
- if(busy&&cloud.optString("activeJobID").isNotEmpty())OutlinedButton({action("jobs.cancel",obj("id" to cloud.optString("activeJobID")))}){Text("取消当前传输（保留续传）")}
+ Button({action("cloud.upload",JSONObject())},enabled=configured&&transferID.isEmpty()&&!dirty&&!busy&&pending?.optBoolean("damaged")!=true){Text(if(pending==null)"保存完整快照" else "继续保存同一快照")}
+ if(transferID.isNotEmpty()){
+  Text(if(cloud.optString("transferStatus")=="queued")"备份等待系统调度或网络可用。" else "正在保存完整快照。")
+  OutlinedButton({action("jobs.cancel",obj("id" to transferID))}){Text("取消备份（保留续传）")}
+ }
  if(pending!=null)TextButton({confirm=true},enabled=!busy&&!dirty){Text("保留快照并停止本次续传…")}
  cloud.optJSONObject("lastBackup")?.let{Text("最近完整保存：${it.optString("createdAt")} · ${it.optLong("encodedBytes")} 字节",style=MaterialTheme.typography.bodySmall)};if(cloud.optBoolean("automaticPaused"))Text("自动备份已暂停：请检查上述原因后显式重新启用。",color=MaterialTheme.colorScheme.error)
  HorizontalDivider();Text("已保存版本",style=MaterialTheme.typography.titleMedium);Text("版本按 UTC 月份归档，时间显示为本机时区。列表不会自动联网；目标或月份变化后请重新读取。")

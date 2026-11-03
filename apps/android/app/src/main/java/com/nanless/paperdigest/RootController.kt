@@ -2,6 +2,10 @@ package com.nanless.paperdigest
 
 import android.content.Context
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.SystemClock
 import androidx.work.*
 import com.nanless.paperdigest.cloud.*
 import com.nanless.paperdigest.protocols.ClientProtocols
@@ -14,6 +18,7 @@ import com.nanless.paperdigest.ui.*
 import com.nanless.paperdigest.zotero.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
@@ -106,6 +111,7 @@ class RootController private constructor(private val context: Context, private v
             snapshot
         }
         override suspend fun restore(staged: BackupCodec.Staged) = maintenance.withLock {
+            if (installBackground) reconcileCloudTransfers()
             require(active.isEmpty()) { "请先结束当前任务再恢复完整资料" }
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("status") in listOf("queued", "running") }) { "请先停止或完成已排队的任务，再恢复研究资料" }
             currentCoroutineContext().ensureActive()
@@ -129,6 +135,50 @@ class RootController private constructor(private val context: Context, private v
     private val articleReadJob=AtomicReference<Job?>(null)
     private val catalogSyncAdmission=Mutex()
     private val automaticCatalogPolicy=CatalogRefreshPolicy()
+    private val foregroundCatalogIntervalMillis = 60_000L
+    @Volatile private var lastCatalogCheckElapsed: Long? = null
+
+    private fun catalogProbeDue(): Boolean {
+        val last = lastCatalogCheckElapsed ?: return true
+        return SystemClock.elapsedRealtime() - last >= foregroundCatalogIntervalMillis
+    }
+
+    private fun catalogCheckCompleted() {
+        lastCatalogCheckElapsed = SystemClock.elapsedRealtime()
+        automaticCatalogPolicy.completed()
+        _state.update { it.copy(catalogCheckedAt = now()) }
+    }
+
+    private fun observeCatalogConnectivity() {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            private var validatedNetwork: Network? = null
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    if (validatedNetwork == network) validatedNetwork = null
+                    return
+                }
+                if (validatedNetwork == network) return
+                validatedNetwork = network
+                lastCatalogCheckElapsed = null
+                automaticCatalogPolicy.completed()
+                exportScope.launch { scheduleAutomaticCatalogCheck() }
+            }
+
+            override fun onLost(network: Network) {
+                if (validatedNetwork == network) validatedNetwork = null
+            }
+        }
+        // The application owns this controller for the lifetime of the process.
+        runCatching { connectivity.registerDefaultNetworkCallback(callback) }
+        exportScope.launch {
+            while (isActive) {
+                delay(foregroundCatalogIntervalMillis)
+                scheduleAutomaticCatalogCheck()
+            }
+        }
+    }
     private val foregroundOperations=AtomicInteger(0)
     private val foregroundOwners=java.util.Collections.newSetFromMap(ConcurrentHashMap<Any,Boolean>())
     private val readingViewOwners=java.util.Collections.newSetFromMap(ConcurrentHashMap<Any,Boolean>())
@@ -164,9 +214,9 @@ class RootController private constructor(private val context: Context, private v
         return Triple(settings,summary.optString("snapshotID") !in setOf("","unsynced","bundled-sample")&&summary.optInt("paperCount")>0,summary.nullableString("syncedAt"))
     }
     private fun scheduleAutomaticCatalogCheck() {
-        if(!installBackground||foregroundOwners.isEmpty()||foregroundOperations.get()>0||active.isNotEmpty()||readingViewOwners.isNotEmpty()||articleReadJob.get()?.isCompleted==false)return
+        if(!installBackground||foregroundOwners.isEmpty()||foregroundOperations.get()>0||active.isNotEmpty()||readingViewOwners.isNotEmpty()||_state.value.aggregate.selected!=null||articleReadJob.get()?.isCompleted==false)return
         val input=automaticCatalogInputs()
-        if(!automaticCatalogPolicy.eligible(input.first,input.second,input.third,System.currentTimeMillis()))return
+        if(!automaticCatalogPolicy.eligible(input.first,input.second,input.third,System.currentTimeMillis(),catalogProbeDue()))return
         lateinit var work:Job
         work=exportScope.launch(start=CoroutineStart.LAZY){performAutomaticCatalogSync(1_500,work)}
         if(automaticCatalogJob.compareAndSet(null,work))work.start()else work.cancel()
@@ -184,12 +234,20 @@ class RootController private constructor(private val context: Context, private v
         try {
             if(initialDelayMillis>0)delay(initialDelayMillis)
             if(initialDelayMillis>0&&foregroundOwners.isEmpty())return@withContext false
-            if(foregroundOwners.isNotEmpty()&&readingViewOwners.isNotEmpty())return@withContext false
-            if(foregroundOperations.get()>0||active.isNotEmpty()||articleReadJob.get()?.isCompleted==false||publishedPreload.get()?.isCompleted==false)return@withContext false
+            if(foregroundOwners.isNotEmpty()&&(readingViewOwners.isNotEmpty()||_state.value.aggregate.selected!=null))return@withContext false
+            if(foregroundOperations.get()>0||active.isNotEmpty()||articleReadJob.get()?.isCompleted==false)return@withContext false
             if(!catalogSyncAdmission.tryLock())return@withContext false
             admitted=true
             val input=automaticCatalogInputs()
-            attempt=automaticCatalogPolicy.begin(input.first,input.second,input.third,System.currentTimeMillis())?:return@withContext false
+            val now = System.currentTimeMillis()
+            val probe = initialDelayMillis > 0 && catalogProbeDue()
+            val fullSync = CatalogRefreshPolicy.due(input.second,input.third,input.first.hours,now)
+            attempt=automaticCatalogPolicy.begin(input.first,input.second,input.third,now,probe)?:return@withContext false
+            if (!fullSync && !library.hasPublishedCatalogUpdate()) {
+                catalogCheckCompleted()
+                return@withContext true
+            }
+            drainBackground(publishedPreload)
             currentCoroutineContext().ensureActive()
             aggregateBrowser.pausePreviews();previewsPaused=true
             runTask("library.sync.automatic") { maintenance.withLock {
@@ -197,13 +255,13 @@ class RootController private constructor(private val context: Context, private v
                 require(!personal.settings().optBoolean("offlineMode")){"当前为离线模式"}
                 library.sync { _,_,message->_state.update{it.copy(notice=message)} }
             } }
-            automaticCatalogPolicy.completed()
+            catalogCheckCompleted()
             schedulePublishedPreload()
             true
         } catch(cancelled:CancellationException) {
             automaticCatalogPolicy.cancelled(attempt);throw cancelled
         } catch(_:Exception) {
-            _state.update{it.copy(notice="自动检查暂未完成，已保存的目录仍可阅读；可稍后重试同步。")}
+            _state.update{it.copy(notice="自动检查暂未完成，已保存的目录仍可阅读；联网恢复后会自动检查。")}
             false
         } finally {
             if(previewsPaused)aggregateBrowser.resumePreviews()
@@ -294,7 +352,34 @@ class RootController private constructor(private val context: Context, private v
         },publish={value->_state.update{it.copy(aggregate=value)}},commitReading={live,commit->pdfAdmission.withLock{live()&&commit()}},openLinkedPaper={paper,live->openPaper(paper.id,admissionGuard=live)})
     }
     private val cloudSelections = CloudRestoreSelections(cloud) { CloudSelectionContext(cloud.targetID, dispatch.epoch) }
-    private fun cloudView(): JSONObject = cloud.state().put("selectionContext", cloudSelections.contextToken())
+    private fun cloudView(snapshot: JSONObject = personal.snapshot()): JSONObject {
+        val result = cloud.state().put("selectionContext", cloudSelections.contextToken())
+        val transfers = snapshot.getJSONArray("jobs").objects().filter { row ->
+            row.optString("kind") in setOf("cloud.upload", "cloud.automatic") &&
+                row.optString("status") in setOf("queued", "running")
+        }
+        val transfer = transfers.firstOrNull { it.optString("status") == "running" } ?: transfers.firstOrNull()
+        if (transfer != null) result.put("activeJobID", transfer.getString("id")).put("transferStatus", transfer.getString("status"))
+        return result
+    }
+
+    /** Called under maintenance. A job row alone cannot authorize a new upload. */
+    private suspend fun reconcileCloudTransfers() {
+        val manager = WorkManager.getInstance(context)
+        val jobs = personal.snapshot().getJSONArray("jobs").objects()
+        for (row in jobs) {
+            val kind = row.optString("kind")
+            val id = row.optString("id")
+            if (kind !in setOf("cloud.upload", "cloud.automatic") ||
+                row.optString("status") !in setOf("queued", "running") || active.containsKey(id)) continue
+            val workID = runCatching { UUID.fromString(id) }.getOrNull()
+            val work = if (kind == "cloud.upload" && workID != null) manager.getWorkInfoByIdFlow(workID).first() else null
+            if (work == null || work.state.isFinished) {
+                personal.upsertJob(row.copy().put("status", "interrupted").put("endedAt", now())
+                    .put("message", "系统备份任务已结束或不存在。原材料保留，可重新选择继续备份。"))
+            }
+        }
+    }
     private val zotero = ZoteroService(research, secrets, ZoteroMaterialProvider { options ->
         maintenance.withLock {
             val bound = readingRequests[options.getString("readingRequestID")] ?: error("存档准备已失效，请重新核验当前阅读材料")
@@ -329,7 +414,7 @@ class RootController private constructor(private val context: Context, private v
         cloudCredentialBorrowing.attachDrain{zotero.cancelAndDrainBorrowed()}
         refresh()
         if (installBackground) CloudWorkerRuntime.install({ cloud }, { service, expected -> runTask("cloud.automatic") { service.upload(automatic = true, expectedDestinationID = expected) } })
-        if (installBackground) { scheduleCloud(cloud.state()); scheduleCatalog() }
+        if (installBackground) { scheduleCloud(cloud.state()); scheduleCatalog(); observeCatalogConnectivity() }
         exportScope.launch { try { reconcilePendingExports() } catch (_: Exception) { /* Independent pending-list error is already visible. */ } }
     }
 
@@ -358,7 +443,7 @@ class RootController private constructor(private val context: Context, private v
             val viewed = offlineReading?.takeIf { old -> old.paper.id == it.selectedPaperId }?.paper ?: it.viewedPaper?.takeIf { old -> old.id == it.selectedPaperId } ?: current
             val reading = it.copy(papers = papers, websiteTaxonomy = library.websiteTaxonomy(), viewedPaper = viewed, article = article, pdfReceipt = receipt)
             reading.copy(readingMaterialID = readingID(reading), personal = p, settings = p.getJSONObject("settings").copy(), jobs = mergedJobs(p.getJSONArray("jobs").objects()),
-            sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(), zotero = zotero.projectCredentialState(zoteroView), catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
+            sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(p), zotero = zotero.projectCredentialState(zoteroView), catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
     }
     private fun paper(id: String): Paper = library.papers().firstOrNull { it.id == id } ?: throw AppFailure("missing", "论文不在已保存资料库中")
     private fun selected(): Paper = offlineReading?.takeIf { it.paper.id == _state.value.selectedPaperId }?.paper ?: _state.value.viewedPaper?.takeIf { it.id == _state.value.selectedPaperId } ?: paper(_state.value.selectedPaperId ?: throw AppFailure("missing", "请先选择论文"))
@@ -488,12 +573,12 @@ class RootController private constructor(private val context: Context, private v
         try {
             _state.update { it.copy(error = null, notice = null) }
             val result = when (command) {
-                "app.bootstrap" -> { refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; JSONObject().put("ready", true) }
+                "app.bootstrap" -> { if (installBackground) maintenance.withLock { reconcileCloudTransfers() }; refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; JSONObject().put("ready", true) }
                 "library.sync" -> {
                     if(!catalogSyncAdmission.tryLock())JSONObject().put("status","sync-in-progress")
                     else try {
                         runTask(command) { maintenance.withLock { library.sync { _, _, message -> _state.update { it.copy(notice = message) } } } }
-                            .also{automaticCatalogPolicy.completed();schedulePublishedPreload()}
+                            .also{catalogCheckCompleted();schedulePublishedPreload()}
                     }finally{catalogSyncAdmission.unlock()}
                 }
                 "paper.open" -> openPaper(payload.getString("paperID"), payload.optBoolean("refresh"))
@@ -959,15 +1044,18 @@ class RootController private constructor(private val context: Context, private v
         catch (e: Exception) { personal.upsertJob(studyJob(row, personal.session(id)).put("status", if (e is CancellationException) "cancelled" else "failed").put("endedAt", now()).put("message", "研究未完成；可能已有实际消费，请检查记录，未自动重发")); throw e }
         finally { active.remove(id); refresh() }
     }
-    suspend fun performCloudUpload(id: String, workspaceEpoch: String, expectedDestinationID: String) {
+    suspend fun performCloudUpload(id: String, workspaceEpoch: String, expectedDestinationID: String, enterForeground: suspend () -> Unit = {}) {
         val job = currentCoroutineContext()[Job]!!
         val row = maintenance.withLock {
             dispatch.requireCurrent(workspaceEpoch)
             val original = personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id }?.copy() ?: error("备份任务不存在")
+            require(!active.containsKey(id)) { "原备份任务正在运行" }
+            require(original.optString("kind") == "cloud.upload" && original.optString("status") in setOf("queued", "running")) { "原备份任务已结束" }
             personal.upsertJob(original.put("status", "running").put("startedAt", now())); active[id] = job; original
         }
         try {
             refresh()
+            enterForeground()
             withContext(CoroutineName(id)) { cloud.upload(expectedDestinationID = expectedDestinationID) }
             val latest = personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id } ?: row
             personal.upsertJob(latest.put("status", "completed").put("endedAt", now()).put("message", "原快照所有分块及完成清单已回读核验"))
@@ -1413,12 +1501,44 @@ class RootController private constructor(private val context: Context, private v
         "cloud.state" -> cloudView()
         "cloud.save" -> cloud.save(payload.getString("account"), payload.optString("folder", "PaperDigest"), payload.optBoolean("automatic"), payload.optInt("intervalHours", 24),cloudMutation)
         "cloud.check" -> runTask(command) { cloud.check() }
+        "cloud.syncPersonal" -> runTask(command) {
+            require(payload.length() == 0) { "同步入口只使用已保存的 WebDAV 连接" }
+            require(!personal.settings().optBoolean("offlineMode")) { "离线模式已开启" }
+            val result = cloud.syncPersonal(
+                capture = { maintenance.withLock { personal.snapshot() } },
+                commit = { before, plan -> maintenance.withLock {
+                    currentCoroutineContext().ensureActive()
+                    val current = personal.snapshot()
+                    require(PersonalWebDavSync.unchanged(before, current)) { "同步期间本机资料已编辑，请再同步一次" }
+                    personal.replaceValidated(PersonalWebDavSync.apply(current, plan))
+                } }
+            )
+            _state.update { it.copy(notice = "WebDAV 同步完成 · 收藏 ${result.getInt("favorites")} 篇" +
+                if (result.getInt("conflicts") > 0) " · ${result.getInt("conflicts")} 项编辑冲突，两端版本已保留" else "") }
+            result
+        }
         "cloud.upload" -> maintenance.withLock {
+            val profile = cloud.state()
+            require(profile.optString("account").isNotBlank()) { "请先保存坚果云账号" }
+            require(profile.optString("credentialState") !in setOf("missing", "unavailable")) { "请先安全保存坚果云应用密码" }
+            reconcileCloudTransfers()
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("kind") == "cloud.upload" && it.optString("status") in listOf("queued", "running") }) { "已有备份任务，请先等待或停止后续传" }
             val id = UUID.randomUUID(); val work = OneTimeWorkRequestBuilder<CloudTransferWorker>().setId(id).setInputData(workDataOf("destinationID" to cloud.targetID, "workspaceEpoch" to dispatch.epoch))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresStorageNotLow(true).build()).build()
-            personal.upsertJob(JSONObject().put("id", id.toString()).put("kind", command).put("paperID", "").put("status", "queued").put("createdAt", now()).put("message", "等待网络可用后继续原快照备份"))
-            WorkManager.getInstance(context).enqueueUniqueWork("paperdigest-cloud-manual-${cloud.targetID}", ExistingWorkPolicy.KEEP, work)
+            val row = JSONObject().put("id", id.toString()).put("kind", command).put("paperID", "")
+                .put("status", "queued").put("createdAt", now()).put("message", "等待网络可用后继续原快照备份")
+            personal.upsertJob(row)
+            // Confirm the same UUID before reporting success. Activity cancellation must not
+            // turn an already-enqueued request into a second, independently dispatched one.
+            withContext(NonCancellable) {
+                try {
+                    WorkManager.getInstance(context).enqueue(work).await()
+                } catch (error: Exception) {
+                    personal.upsertJob(row.copy().put("status", "interrupted").put("endedAt", now())
+                        .put("message", "系统未确认接收备份任务。原材料保留，可重新选择继续备份。"))
+                    throw AppFailure("backupQueue", "系统未确认接收备份任务，请重试。")
+                }
+            }
             JSONObject().put("queued", true).put("jobID", id.toString()).put("message", "备份已加入后台任务，完整回读通过后才会标为完成")
         }
         "cloud.list" -> cloudSelections.list(payload.getString("month"))

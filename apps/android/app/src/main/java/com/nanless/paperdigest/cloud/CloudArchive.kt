@@ -213,6 +213,56 @@ class CloudArchive(
             result.sortedWith(compareByDescending<Triple<Long, String, T>> { it.first }.thenBy { it.second }).map { it.third }
         }
     }
+    internal suspend fun personalDocuments(): Map<String, ByteArray> = operation {
+        val directory = "/dav/$folder/${PersonalWebDavSync.DIRECTORY}/"
+        val response = requestResponse("PROPFIND", directory, PROP,
+            mapOf("Depth" to "1", "Content-Type" to "application/xml; charset=utf-8"), setOf(207, 404), LISTING)
+        if (response.status == 404) return@operation emptyMap()
+        val members = listing(response.body)
+        require(members.any { it.path == directory && it.collection } && members.size <= 25)
+        var total = 0L
+        members.filter { it.path != directory }.associate { member ->
+            require(!member.collection && member.path.startsWith(directory))
+            val name = member.path.removePrefix(directory)
+            val id = name.removeSuffix(".json")
+            require(name == "$id.json" && PersonalWebDavSync.validDevice(id))
+            val bytes = request("GET", member.path, accepted = setOf(200), limit = PersonalWebDavSync.LIMIT)
+            total += bytes.size
+            require(total <= 32L * 1024 * 1024) { "云端同步资料超过读取上限" }
+            id to bytes
+        }
+    }
+
+    internal suspend fun writePersonalDocument(bytes: ByteArray, expected: ByteArray?, directoryExists: Boolean) = operation {
+        require(bytes.size in 1..PersonalWebDavSync.LIMIT)
+        val directory = "/dav/$folder/${PersonalWebDavSync.DIRECTORY}/"
+        if (!directoryExists) {
+            for (path in listOf("/dav/$folder/", directory)) {
+                request("MKCOL", path, accepted = setOf(201, 405))
+                requireCollection(request("PROPFIND", path, PROP,
+                    mapOf("Depth" to "0", "Content-Type" to "application/xml; charset=utf-8"), setOf(207), LISTING), path)
+            }
+        }
+        val path = "$directory$destinationID.json"
+        val original = requestResponse("GET", path, accepted = setOf(200, 404), limit = PersonalWebDavSync.LIMIT)
+        val changed = "此设备的云端同步记录已变化，请重新同步"
+        require(if (expected == null) original.status == 404 else original.status == 200 && original.body.contentEquals(expected)) { changed }
+        val headers = mutableMapOf("Content-Type" to "application/json")
+        if (original.status == 404) {
+            headers["If-None-Match"] = "*"
+        } else {
+            val etag = original.headers.entries.firstOrNull { it.key.equals("ETag", true) }?.value
+            require(etag != null && etag.length in 2..1024 && etag.first() == '"' && etag.last() == '"' &&
+                etag.substring(1, etag.lastIndex).all { it.code in 0x21..0x7e && it != '"' }) {
+                "WebDAV 服务未提供可安全更新的版本标记，本机资料已保留"
+            }
+            headers["If-Match"] = etag
+        }
+        val written = requestResponse("PUT", path, bytes, headers, setOf(200, 201, 204, 412))
+        require(written.status != 412) { changed }
+        if (!request("GET", path, accepted = setOf(200), limit = bytes.size).contentEquals(bytes)) throw CloudFailure("integrity")
+    }
+
     suspend fun download(reference: CloudReference, target: File, expected: CloudSnapshotIdentity? = null): CloudManifest = operation {
         require(!target.exists()); val base = path(reference)
         val raw = request("GET", base + "manifest.json", accepted = setOf(200), limit = MANIFEST)

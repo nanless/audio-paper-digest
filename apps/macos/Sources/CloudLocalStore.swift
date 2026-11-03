@@ -21,6 +21,7 @@ import Foundation
         var lastAttemptAt: Date?
         var lastBackup: Completed?
         var automaticPaused: Bool?
+        var retryAfter: Date?
     }
     struct Pending: Codable, Sendable {
         let contract: String
@@ -66,11 +67,19 @@ import Foundation
         let account = account.trimmingCharacters(in: .whitespacesAndNewlines)
         if account != next.account || folder != next.folder {
             guard try !hasPendingMaterials() else { throw DesktopError.message("原快照尚未完成，请先续传或原样保留材料，再更换账号或目录") }
-            next.destinationID = UUID(); next.lastBackup = nil; next.lastAttemptAt = nil; next.automaticPaused = nil
+            next.destinationID = UUID(); next.lastBackup = nil; next.lastAttemptAt = nil; next.automaticPaused = nil; next.retryAfter = nil
         }
         next.account = account; next.folder = folder; next.automatic = automatic; next.intervalHours = intervalHours
         try Self.validate(next)
         guard !account.isEmpty || !automatic else { throw DesktopError.message("请先保存坚果云账号再开启自动备份") }
+        try write(next, relative: "profile.json"); profile = next
+    }
+    func recordCooldown(_ until: Date, destinationID: UUID) throws {
+        guard profile.destinationID == destinationID else {
+            throw DesktopError.message("云端连接目标已变化，未修改当前连接的重试时间")
+        }
+        if let previous = profile.retryAfter, previous >= until { return }
+        var next = profile; next.retryAfter = until
         try write(next, relative: "profile.json"); profile = next
     }
     func recordAttempt() throws {

@@ -44,7 +44,14 @@ private actor IntegrationDAV {
         switch method {
         case "MKCOL":return response(201)
         case "PROPFIND":
-            return response(207,Data("<d:multistatus xmlns:d=\"DAV:\"><d:response><d:href>\(path)</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>".utf8))
+            let children = files.keys.filter { $0.hasPrefix(path) && $0.hasSuffix("/manifest.json") }
+                .map { String($0.dropLast("manifest.json".count)) }
+                .filter { !$0.dropFirst(path.count).dropLast().contains("/") }
+                .sorted()
+            let entries = ([path] + children).map {
+                "<d:response><d:href>\($0)</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"
+            }.joined()
+            return response(207, Data("<d:multistatus xmlns:d=\"DAV:\">\(entries)</d:multistatus>".utf8))
         case "PUT":
             guard request.value(forHTTPHeaderField:"If-None-Match")=="*",let body=request.httpBody else{throw DesktopError.message("Fixture requires immutable writes")}
             if files[path] != nil{return response(412)};files[path]=body;return response(201)
@@ -418,8 +425,47 @@ private actor IntegrationDAV {
         let rawFee=Data("explicit immutable local usage fixture; amount unknown".utf8),feeDirectory=restoreApp.directory.appendingPathComponent("ModelUsage")
         try fm.createDirectory(at:feeDirectory,withIntermediateDirectories:true);try rawFee.write(to:feeDirectory.appendingPathComponent("fixture-original-event.txt"))
         let beforeRestorePersonal=try Data(contentsOf:restoreApp.directory.appendingPathComponent("personal.json"))
+        func listSelection(_ app: PaperDigestApp) async throws -> [String: Any] {
+            let result = try await app.dispatchCloud("cloud.list", payload: ["month": remote.month])
+            guard let rows = result["snapshots"] as? [[String: Any]],
+                  let row = rows.first(where: { $0["id"] as? String == remote.id.uuidString }),
+                  let token = row["restoreToken"] as? String else { throw DesktopError.message("Fixture selection not found") }
+            return ["restoreToken": token]
+        }
+        let supersededSelection = try await listSelection(restoreApp)
+        let restoreSelection = try await listSelection(restoreApp)
+        let requestsAfterList = await restoreDAV.count()
+        try await rejected("another native list retires old restore tokens") { _ = try await restoreApp.dispatchCloud("cloud.restore", payload: supersededSelection) }
+        try await rejected("month and ID alone cannot authorize cloud restore") { _ = try await restoreApp.dispatchCloud("cloud.restore", payload: ["month": remote.month, "id": remote.id.uuidString]) }
+        try check(await restoreDAV.count() == requestsAfterList, "unissued and superseded selections never reach transport")
+        let (manifestPath, manifestBytes) = cloudFiles.first { $0.key.hasSuffix("/manifest.json") }!
+        var changedManifestBytes = manifestBytes
+        changedManifestBytes.append(0x20)
+        await restoreDAV.install(manifestPath, changedManifestBytes)
+        do {
+            _ = try await restoreApp.dispatchCloud("cloud.restore", payload: restoreSelection)
+            throw DesktopError.message("Changed manifest was accepted")
+        } catch CloudArchiveService.CloudError.selectionChanged {
+            try check(await restoreDAV.records().dropFirst(requestsAfterList) == ["GET " + manifestPath], "same UUID with different manifest bytes is rejected before chunk download")
+        }
+        try check(restoreApp.window.attachedSheet == nil && !restoreApp.maintenanceBusy, "changed manifest cannot prompt or enter restore maintenance")
+        await restoreDAV.install(manifestPath, manifestBytes)
+
+        let credentialsApp = try makeApp("restore-credential-generation"), credentialsDAV = IntegrationDAV()
+        credentialsApp.cloudArchive = try service(credentialsApp, credentialsDAV)
+        for (path, data) in cloudFiles { await credentialsDAV.install(path, data) }
+        let oldCredentialSelection = try await listSelection(credentialsApp)
+        _ = try await credentialsApp.dispatchCloud("cloud.clearSessionPassword", payload: [:])
+        let credentialRequests = await credentialsDAV.count()
+        try await rejected("clear credentials retires the previous native selection") { _ = try await credentialsApp.dispatchCloud("cloud.restore", payload: oldCredentialSelection) }
+        try check(await credentialsDAV.count() == credentialRequests, "credential change rejects restore before transport")
+        credentialsApp.cloudArchive = try service(credentialsApp, credentialsDAV)
+        let oldTargetSelection = try await listSelection(credentialsApp)
+        _ = try await credentialsApp.dispatchCloud("cloud.save", payload: ["account": "new-target@example.invalid", "folder": "PaperDigestFixture", "automatic": false, "intervalHours": 24])
+        try await rejected("new destination rejects old native selection") { _ = try await credentialsApp.dispatchCloud("cloud.restore", payload: oldTargetSelection) }
+
         var firstRestoreError:Error?
-        let restoring=Task{@MainActor in do{return try await restoreApp.dispatchCloud("cloud.restore",payload:["month":remote.month,"id":remote.id.uuidString])}catch{firstRestoreError=error;throw error}}
+        let restoring=Task{@MainActor in do{return try await restoreApp.dispatchCloud("cloud.restore",payload:restoreSelection)}catch{firstRestoreError=error;throw error}}
         try await wait("own restore confirmation"){if let error=firstRestoreError{throw error};return restoreApp.window.attachedSheet != nil}
         let restoreJobID=restoreApp.cloudActiveJobID!
         try check(restoreApp.maintenanceBusy && restoreApp.jobs.keys.allSatisfy{$0==restoreJobID},"downloaded restore enters maintenance with only its own job")
@@ -429,7 +475,7 @@ private actor IntegrationDAV {
         try check((restoreApp.store.snapshot()["notes"] as! [String:[String:Any]])["fixture-paper"]?["text"] as? String=="newer-live-note" && !restoreApp.maintenanceBusy && !restoreApp.cloudBusy && restoreApp.jobs.isEmpty,"cancelled cloud restore preserves latest note and releases own maintenance/job flags")
         try check((restoreApp.store.snapshot()["jobs"] as! [[String:Any]]).first{$0["id"] as? String==restoreJobID}?["status"] as? String=="cancelled","cancelled restore task reaches cancelled rather than download-complete")
         var secondRestoreError:Error?
-        let restoreAgain=Task{@MainActor in do{return try await restoreApp.dispatchCloud("cloud.restore",payload:["month":remote.month,"id":remote.id.uuidString])}catch{secondRestoreError=error;throw error}}
+        let restoreAgain=Task{@MainActor in do{return try await restoreApp.dispatchCloud("cloud.restore",payload:restoreSelection)}catch{secondRestoreError=error;throw error}}
         try await wait("own successful restore confirmation"){if let error=secondRestoreError{throw error};return restoreApp.window.attachedSheet != nil}
         let successJobID=restoreApp.cloudActiveJobID!
         restoreApp.window.endSheet(restoreApp.window.attachedSheet!,returnCode:.alertFirstButtonReturn)
@@ -449,21 +495,21 @@ private actor IntegrationDAV {
         try check(try RequestBudgetContinuity.count(on:today,directory:restoreApp.directory,sessions:restoreApp.store.snapshot()["sessions"] as! [[String:Any]])==1,"actual committed cloud restore retains issued request floor despite older snapshot sessions")
         try check(try restoreApp.cloudLocalStore().profile.account=="fixture@example.invalid","shared restore cannot overwrite current device cloud destination with snapshot settings")
 
-        let failedApp=try makeApp("failed-restore"),failedDAV=IntegrationDAV();failedApp.cloudArchive=try service(failedApp,failedDAV);await failedDAV.failDownloads();try note(failedApp.store,"unchanged-on-download-failure")
-        try await rejected("failed actual download cannot create restore success"){_=try await failedApp.dispatchCloud("cloud.restore",payload:["month":remote.month,"id":remote.id.uuidString])}
+        let failedApp=try makeApp("failed-restore"),failedDAV=IntegrationDAV();failedApp.cloudArchive=try service(failedApp,failedDAV);for(path,data) in cloudFiles{await failedDAV.install(path,data)};let failedSelection=try await listSelection(failedApp);await failedDAV.failDownloads();try note(failedApp.store,"unchanged-on-download-failure")
+        try await rejected("failed actual download cannot create restore success"){_=try await failedApp.dispatchCloud("cloud.restore",payload:failedSelection)}
         try check((failedApp.store.snapshot()["jobs"] as! [[String:Any]]).first{$0["command"] as? String=="cloud.restore"}?["status"] as? String=="failed" && !failedApp.cloudBusy && !failedApp.maintenanceBusy && failedApp.jobs.isEmpty && failedApp.window.attachedSheet==nil,"download failure stays failed without maintenance or a confirmation sheet")
         try check((failedApp.store.snapshot()["notes"] as! [String:[String:Any]])["fixture-paper"]?["text"] as? String=="unchanged-on-download-failure","failed download leaves live note unchanged")
 
         let concurrent=try makeApp("concurrent-restore"),concurrentDAV=IntegrationDAV();concurrent.cloudArchive=try service(concurrent,concurrentDAV);for(path,data) in cloudFiles{await concurrentDAV.install(path,data)}
         try note(concurrent.store,"protected-by-other-job");concurrent.jobs["other"]=Task{try await Task.sleep(nanoseconds:60_000_000_000);return [:]}
-        try await rejected("downloaded restore refuses commit while another real job remains"){_=try await concurrent.dispatchCloud("cloud.restore",payload:["month":remote.month,"id":remote.id.uuidString])}
+        try await rejected("downloaded restore refuses commit while another real job remains"){_=try await concurrent.dispatchCloud("cloud.restore",payload:try await listSelection(concurrent))}
         try check(Set(concurrent.jobs.keys)==Set(["other"]),"restore rejection does not consume the unrelated task")
         try check(!concurrent.maintenanceBusy && !concurrent.cloudBusy && concurrent.window.attachedSheet==nil && (concurrent.store.snapshot()["notes"] as! [String:[String:Any]])["fixture-paper"]?["text"] as? String=="protected-by-other-job","other-job rejection is atomic before native confirmation and live replacement")
         concurrent.jobs["other"]?.cancel();concurrent.jobs.removeAll()
 
         let corruptApp=try makeApp("corrupt-floor-restore"),corruptDAV=IntegrationDAV();corruptApp.cloudArchive=try service(corruptApp,corruptDAV);for(path,data) in cloudFiles{await corruptDAV.install(path,data)}
         try note(corruptApp.store,"protected-corrupt-floor");try Data("bad continuity fixture".utf8).write(to:corruptApp.directory.appendingPathComponent(RequestBudgetContinuity.filename))
-        try await rejected("corrupt original floor blocks actual cloud commit"){_=try await corruptApp.dispatchCloud("cloud.restore",payload:["month":remote.month,"id":remote.id.uuidString])}
+        try await rejected("corrupt original floor blocks actual cloud commit"){_=try await corruptApp.dispatchCloud("cloud.restore",payload:try await listSelection(corruptApp))}
         try check(!corruptApp.maintenanceBusy && !corruptApp.cloudBusy && corruptApp.window.attachedSheet==nil && (corruptApp.store.snapshot()["notes"] as! [String:[String:Any]])["fixture-paper"]?["text"] as? String=="protected-corrupt-floor","corrupt-floor restore failure leaves live research and releases maintenance")
 
         // Real production settings HTML/modules and native IPC, never the

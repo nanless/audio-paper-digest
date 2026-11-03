@@ -22,8 +22,8 @@ class Branding(unittest.TestCase):
         check_app_branding(info, '论文速递工作台.app')
         self.assertEqual(info['CFBundleIdentifier'], 'com.nanless.PaperDigest')
         self.assertEqual(info['CFBundleExecutable'], 'PaperDigest')
-        self.assertEqual(info['CFBundleShortVersionString'], '1.3.0')
-        self.assertEqual(info['CFBundleVersion'], '5')
+        self.assertEqual(info['CFBundleShortVersionString'], '1.3.7')
+        self.assertEqual(info['CFBundleVersion'], '15')
 
     def test_actual_plist_missing_or_old_branding_is_rejected(self):
         original = plistlib.loads((APP / 'Info.plist').read_bytes())
@@ -100,7 +100,7 @@ class Branding(unittest.TestCase):
             after = check_licenses(web)
             expected = copy.deepcopy(before)
             own = next(row for row in expected['components'] if row['id'] == 'paper-digest')
-            own.update(title='论文速递工作台', version='1.3.0')
+            own.update(title='论文速递工作台', version='1.3.7')
             self.assertEqual(after, expected)
             for path, raw in originals.items():
                 self.assertEqual((web / 'licenses' / path).read_bytes(), raw)

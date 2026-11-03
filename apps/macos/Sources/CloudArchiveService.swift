@@ -57,11 +57,15 @@ public actor CloudArchiveService {
         public let chunkCount: Int
     }
     public enum CloudError: Error, LocalizedError, Sendable, Equatable {
-        case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing, localOnlySecret
+        case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing, localOnlySecret, selectionChanged
+        case personalDocumentChanged, personalDocumentUnsafe
         case credentialsUnavailable, authentication, forbidden, transport, redirect, oversizedResponse, busy, checkpointStore
         case httpStatus(Int), throttled(Date)
         public var errorDescription: String? {
             switch self {
+            case .personalDocumentChanged: return "此设备的云端同步记录已变化，请重新同步"
+            case .personalDocumentUnsafe: return "WebDAV 服务未提供可安全更新的版本标记，本机资料已保留"
+            case .selectionChanged: return "云端版本清单已变化，请重新读取该月份后选择要恢复的版本"
             case .invalidConfiguration: return "坚果云配置无效；请使用单级英文目录和应用专用密码"
             case .invalidBackup: return "研究备份无效或超过完整备份上限（原资料512MiB、编码750MiB）"
             case .localOnlySecret: return "旧快照含本机专用校验密钥，已停止上传；原快照与检查点保留在本机，请先原样保留后新建备份"
@@ -95,6 +99,7 @@ public actor CloudArchiveService {
     private let destinationID: UUID
     private let credentials: @Sendable () async throws -> Credentials
     private let checkpointSink: CheckpointSink
+    private let cooldownSink: @Sendable (Date) async throws -> Void
     private let transport: Transport
     private let now: @Sendable () -> Date
     private let sleep: @Sendable (TimeInterval) async throws -> Void
@@ -113,10 +118,13 @@ public actor CloudArchiveService {
                 now: @escaping @Sendable () -> Date = { Date() },
                 sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
                     try await Task.sleep(for: .seconds(seconds))
-                }, minimumRequestInterval: TimeInterval = 3.1) throws {
+                }, minimumRequestInterval: TimeInterval = 3.1,
+                initialRetryAfter: Date? = nil,
+                cooldownSink: @escaping @Sendable (Date) async throws -> Void = { _ in }) throws {
         guard Self.validFolder(folder), minimumRequestInterval.isFinite, minimumRequestInterval >= 0, transport != nil || minimumRequestInterval >= 3.1 else { throw CloudError.invalidConfiguration }
         self.folder = folder; self.destinationID = destinationID
         self.credentials = credentials; self.checkpointSink = checkpointSink
+        self.retryAfter = initialRetryAfter; self.cooldownSink = cooldownSink
         self.transport = transport ?? { request, limit in try await CloudBoundedRequest.perform(request, limit: limit) }
         self.now = now; self.sleep = sleep; self.minimumRequestInterval = minimumRequestInterval
     }
@@ -208,6 +216,9 @@ public actor CloudArchiveService {
         return manifest.info
     }
     public func list(month: String) async throws -> [SnapshotInfo] {
+        try await listIdentities(month: month).map(\.info)
+    }
+    func listIdentities(month: String) async throws -> [(info: SnapshotInfo, manifestSHA: String)] {
         try begin(); defer { end() }
         guard Self.validMonth(month) else { throw CloudError.invalidConfiguration }
         let path = "/dav/\(folder)/\(month)/"
@@ -216,21 +227,80 @@ public actor CloudArchiveService {
                                          limit: Self.listingLimit, accepted: [207,404])
         if response.response.statusCode == 404 { return [] }
         let references = try CloudDAVListing.parse(response.data, path: path, month: month)
-        var snapshots: [SnapshotInfo] = []
+        var snapshots: [(info: SnapshotInfo, manifestSHA: String)] = []
         // A partial UUID directory has no manifest and is deliberately not success.
         // Rate budget exhaustion throws; never return an apparently complete prefix.
         for reference in references {
             if let bytes = try await optionalGet(snapshotPath(reference) + "manifest.json", limit: Self.manifestLimit) {
-                snapshots.append(try Self.decodeManifest(bytes, reference: reference).info)
+                snapshots.append((try Self.decodeManifest(bytes, reference: reference).info, Self.hash(bytes)))
             }
         }
-        return snapshots.sorted { $0.createdAt == $1.createdAt ? $0.reference.id.uuidString < $1.reference.id.uuidString : $0.createdAt > $1.createdAt }
+        return snapshots.sorted { $0.info.createdAt == $1.info.createdAt ? $0.info.reference.id.uuidString < $1.info.reference.id.uuidString : $0.info.createdAt > $1.info.createdAt }
     }
+    func personalDocuments() async throws -> [String: Data] {
+        try begin(); defer { end() }
+        let path = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
+        let response = try await request("PROPFIND", path: path, body: Self.propfind,
+            headers: ["Depth":"1", "Content-Type":"application/xml; charset=utf-8"],
+            limit: Self.listingLimit, accepted: [207,404])
+        if response.response.statusCode == 404 { return [:] }
+        let devices = try CloudDAVListing.personalDevices(response.data, path: path)
+        var result: [String: Data] = [:]
+        var total = 0
+        for id in devices {
+            let bytes = try await request("GET", path: path + id + ".json", limit: PersonalWebDavSync.limit, accepted: [200]).data
+            total += bytes.count
+            guard total <= 32 * 1024 * 1024 else { throw CloudError.oversizedResponse }
+            result[id] = bytes
+        }
+        return result
+    }
+
+    func writePersonalDocument(_ bytes: Data, expected: Data?, directoryExists: Bool) async throws {
+        try begin(); defer { end() }
+        let directory = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
+        guard (1...PersonalWebDavSync.limit).contains(bytes.count) else { throw CloudError.oversizedResponse }
+        if !directoryExists {
+            try await ensureCollection("/dav/\(folder)/")
+            try await ensureCollection(directory)
+        }
+        let path = directory + destinationID.uuidString.lowercased() + ".json"
+        let current = try await request("GET", path: path, limit: PersonalWebDavSync.limit, accepted: [200,404])
+        let missing = current.response.statusCode == 404
+        guard (missing ? nil : current.data) == expected else { throw CloudError.personalDocumentChanged }
+        var headers = ["Content-Type": "application/json"]
+        if missing {
+            headers["If-None-Match"] = "*"
+        } else {
+            guard let tag = current.response.value(forHTTPHeaderField: "ETag"),
+                  Self.strongETag(tag) else { throw CloudError.personalDocumentUnsafe }
+            headers["If-Match"] = tag
+        }
+        let written = try await request("PUT", path: path, body: bytes, headers: headers,
+                                        limit: 64 * 1024, accepted: [200,201,204,412])
+        guard written.response.statusCode != 412 else { throw CloudError.personalDocumentChanged }
+        guard try await request("GET", path: path, limit: bytes.count, accepted: [200]).data == bytes else {
+            throw CloudError.integrity
+        }
+    }
+
+    private static func strongETag(_ value: String) -> Bool {
+        let bytes = value.utf8
+        guard (2...1024).contains(bytes.count), bytes.first == 0x22, bytes.last == 0x22 else { return false }
+        return bytes.dropFirst().dropLast().allSatisfy { $0 == 0x21 || (0x23...0x7E).contains($0) }
+    }
+
     public func download(reference: SnapshotReference) async throws -> Data {
+        try await download(reference: reference, expectedManifestSHA: nil)
+    }
+    func download(reference: SnapshotReference, expectedManifestSHA: String?) async throws -> Data {
         try begin(); defer { end() }
         guard Self.validReference(reference) else { throw CloudError.invalidConfiguration }
         let base = snapshotPath(reference)
         let bytes = try await request("GET", path: base + "manifest.json", limit: Self.manifestLimit, accepted: [200]).data
+        if let expectedManifestSHA, Self.hash(bytes) != expectedManifestSHA {
+            throw CloudError.selectionChanged
+        }
         let manifest = try Self.decodeManifest(bytes, reference: reference)
         var data = Data(); data.reserveCapacity(manifest.encodedBytes)
         for chunk in manifest.chunks {
@@ -246,7 +316,7 @@ public actor CloudArchiveService {
     private func end() { active = false; currentCheckpoint = nil }
     private func save(_ state: UploadCheckpoint) async throws {
         do { try await checkpointSink(state); currentCheckpoint = state }
-        catch { throw CloudError.checkpointStore }
+        catch { try Self.preserveCancellation(error); throw CloudError.checkpointStore }
     }
     private func ensureCollection(_ path: String) async throws {
         _ = try await request("MKCOL", path: path, limit: 64 * 1024, accepted: [201,405])
@@ -329,7 +399,10 @@ public actor CloudArchiveService {
     }
     private func recordCooldown(_ until: Date) async throws {
         retryAfter = until
+        var cooldownSaved = true
+        do { try await cooldownSink(until) } catch { try Self.preserveCancellation(error); cooldownSaved = false }
         if var state = currentCheckpoint { state.retryAfter = until; try await save(state) }
+        guard cooldownSaved else { throw CloudError.checkpointStore }
     }
     private func snapshotPath(_ reference: SnapshotReference) -> String { "/dav/\(folder)/\(reference.month)/\(reference.id.uuidString.lowercased())/" }
     private static func validFolder(_ value: String) -> Bool {
@@ -394,13 +467,17 @@ public actor CloudArchiveService {
         return manifest
     }
     private static func parseRetryAfter(_ value: String?, now: Date) -> Date {
-        if let value, let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 {
-            return now.addingTimeInterval(max(1,seconds))
-        }
-        if let value {
+        if let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty {
+            // Delay-seconds is decimal digits. Bound the resulting date to the
+            // same four-digit year range as the absolute HTTP date.
+            let maximum = Date(timeIntervalSince1970: 253_402_300_799)
+            if value.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
+               let seconds = UInt64(value), Double(seconds) <= maximum.timeIntervalSince(now) {
+                return now.addingTimeInterval(max(1, Double(seconds)))
+            }
             let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX"); formatter.timeZone = TimeZone(secondsFromGMT:0)
             formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-            if let date = formatter.date(from:value), date > now { return date }
+            if let date = formatter.date(from:value), date > now, date <= maximum { return date }
         }
         return now.addingTimeInterval(60)
     }
@@ -484,6 +561,29 @@ private final class CloudDAVListing: NSObject, XMLParserDelegate {
         let members = try read(data)
         guard members.count == 1, members[0].collection, members[0].success,
               try collectionPath(checkedPath(members[0].href)) == path else { throw CloudArchiveService.CloudError.incompleteListing }
+    }
+    static func personalDevices(_ data: Data, path: String) throws -> [String] {
+        let members = try read(data)
+        guard members.count <= 25 else { throw CloudArchiveService.CloudError.incompleteListing }
+        var root = false, ids = Set<String>()
+        for member in members {
+            let raw = try checkedPath(member.href)
+            guard member.success else { throw CloudArchiveService.CloudError.incompleteListing }
+            if member.collection && collectionPath(raw) == path {
+                guard !root else { throw CloudArchiveService.CloudError.incompleteListing }
+                root = true
+                continue
+            }
+            guard !member.collection, raw.hasPrefix(path), raw.hasSuffix(".json") else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+            let id = String(raw.dropFirst(path.count).dropLast(5))
+            guard PersonalWebDavSync.validDevice(id), ids.insert(id).inserted else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+        }
+        guard root else { throw CloudArchiveService.CloudError.incompleteListing }
+        return ids.sorted()
     }
     static func parse(_ data: Data, path: String, month: String) throws -> [CloudArchiveService.SnapshotReference] {
         let members = try read(data)

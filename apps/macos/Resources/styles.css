@@ -825,6 +825,12 @@ kbd {
   display: flex;
   flex-direction: column;
 }
+.library-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
 .library-controls {
   display: flex;
   gap: 20px;

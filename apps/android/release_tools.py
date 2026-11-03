@@ -392,23 +392,23 @@ def joint_plan(args,private_draft=False):
 def joint_public_plan(args):
  # Only read the existing draft and download it; no tag/upload/publication occurs here.
  require(type(args.draft_id) is int and args.draft_id>0,'draft_id_required')
- paths=[args.android_acceptance,args.mac_acceptance,args.mac_cloud,
-        args.prepared/'android-release-manifest.json',args.mac/'release-manifest.json']
- before={str(p):file_sha(regular(p)) for p in paths}
- plan=joint_plan(args) # All 86 IDs on each platform must be actual passes.
+ files=joint_release_files(args)
+ paths=[args.android_acceptance,args.mac_acceptance,args.mac_cloud,*files.values()]
+ before=android_file_snapshot(paths)
+ joint_plan(args) # All 86 IDs on each platform must be actual passes.
  mac=mac_module(args.repo);info=load(args.mac/'build-info.json');tag='v'+info['version']
- tag_record=mac.verified_remote_tag(tag,info['releaseHead'])
+ identity={'version':info['version'],'sourceCommit':info['releaseHead']}
+ tag_record=android_verified_remote_tag(mac,identity)
  endpoint='repos/nanless/audio-paper-digest/releases/'+str(args.draft_id)
- expected={}
- for folder,manifest in [(args.prepared,'android-release-manifest.json'),(args.mac,'release-manifest.json')]:
-  for name in list(load(folder/manifest)['assets'])+[manifest,'ANDROID-SHA256SUMS' if manifest.startswith('android') else 'SHA256SUMS']:
-   require(name not in expected,'joint_asset_collision');p=regular(folder/name);expected[name]=p.stat().st_size
+ expected={name:before[str(p)] for name,p in files.items()}
  def draft():
   record=json.loads(run(['gh','api','--hostname','github.com',endpoint],'draft_read_failed'))
   require(type(record.get('id')) is int and record['id']==args.draft_id and record.get('tag_name')==tag and record.get('draft') is True and record.get('published_at') is None,'existing_private_draft_required')
+  require(record.get('target_commitish')==info['releaseHead'] and record.get('prerelease') is False,'draft_source_or_channel')
   assets=record.get('assets');require(isinstance(assets,list) and len(assets)==len(expected),'draft_asset_set')
-  require(all(isinstance(a,dict) and type(a.get('id')) is int and a['id']>0 and a.get('name') in expected and type(a.get('size')) is int and a['size']==expected[a['name']] and a.get('state')=='uploaded' for a in assets),'draft_asset_record')
+  require(all(isinstance(a,dict) and type(a.get('id')) is int and a['id']>0 and a.get('name') in expected and type(a.get('size')) is int and a['size']==expected[a['name']]['bytes'] and a.get('state')=='uploaded' for a in assets),'draft_asset_record')
   require(len({a['name'] for a in assets})==len(expected) and len({a['id'] for a in assets})==len(expected),'draft_asset_set')
+  require(all(a.get('digest') in (None,'sha256:'+expected[a['name']]['sha256']) for a in assets),'draft_asset_digest')
   require(isinstance(record.get('body'),str) and record['body'].rstrip('\n')==(args.mac/'RELEASE_NOTES.md').read_text().rstrip('\n'),'draft_notes_changed')
   stable={k:record.get(k) for k in ['id','tag_name','draft','published_at','name','body','prerelease','target_commitish','updated_at']}
   stable['assets']=sorted([{k:a.get(k) for k in ['id','name','size','state','updated_at','digest']} for a in assets],key=lambda a:a['name'])
@@ -425,30 +425,45 @@ def joint_public_plan(args):
      result=subprocess.run(argv,stdout=output,stderr=subprocess.PIPE,timeout=1200)
    except (OSError,subprocess.TimeoutExpired):raise ReleaseError('draft_download_failed') from None
    require(result.returncode==0 and (downloaded/asset['name']).stat().st_size==asset['size'],'draft_download_failed')
-  download=verify_downloaded(argparse.Namespace(**{**vars(args),'downloaded':downloaded}))
+  download=verify_joint_download(args,downloaded,files,before)
  require(canonical(draft())==canonical(original),'draft_changed_during_verification')
- require(mac.verified_remote_tag(tag,info['releaseHead'])==tag_record,'remote_tag_changed')
- require(before=={str(p):file_sha(regular(p)) for p in paths},'qualification_changed')
+ require(android_verified_remote_tag(mac,identity)==tag_record,'remote_tag_changed')
+ require(files==joint_release_files(args) and before==android_file_snapshot(paths),'qualification_changed')
+ head,_=mac.source_state(args.repo.resolve(),info['sourceCommit'])
+ require(head==info['releaseHead'],'joint_release_source_changed')
  return {'executed':False,'publicPublication':False,'stage':'publish-verified-existing-draft','draftID':args.draft_id,
          'remoteTag':tag_record,'downloadVerification':download,'sourceCommit':info['releaseHead'],
          'qualification':'两端全部86项通过；同一私有草稿、远端标签和下载实包已核对；命令尚未执行',
          'argv':['gh','api','--hostname','github.com','--method','PATCH',endpoint,'-F','draft=false']}
 
+def joint_release_files(args):
+ files={}
+ for folder,manifest,checksums in [(args.prepared,'android-release-manifest.json','ANDROID-SHA256SUMS'),(args.mac,'release-manifest.json','SHA256SUMS')]:
+  for name in [*load(regular(folder/manifest))['assets'],manifest,checksums]:
+   require(P(name).name==name and name not in ('','.','..'),'asset_name')
+   require(name not in files,'joint_asset_collision')
+   files[name]=regular(folder/name)
+ return files
+
 def verify_downloaded(args):
- # Caller downloads with gh into a fresh directory. This function performs no network request.
- groups=[(args.prepared,'android-release-manifest.json'),(args.mac,'release-manifest.json')];expected={}
- for folder,manifest in groups:
-  names=list(load(folder/manifest)['assets'])+[manifest,'ANDROID-SHA256SUMS' if manifest.startswith('android') else 'SHA256SUMS']
-  for name in names:require(name not in expected,'joint_asset_collision');expected[name]=folder/name
- require(set(p.name for p in args.downloaded.iterdir())==set(expected),'download_asset_set')
- for name,original in expected.items():require(file_sha(regular(args.downloaded/name))==file_sha(regular(original)),'download_sha_mismatch')
+ # Copy into a private directory and check the bytes that the platform verifiers actually read.
+ files=joint_release_files(args);before=android_file_snapshot(files.values())
+ result=verify_joint_download(args,args.downloaded,files,before)
+ require(files==joint_release_files(args) and before==android_file_snapshot(files.values()),'qualification_changed')
+ return result
+
+def verify_joint_download(args,downloaded,files,before):
+ require({p.name for p in downloaded.iterdir()}==set(files),'download_asset_set')
  with tempfile.TemporaryDirectory(prefix='paperdigest-release-download-check-') as tmp:
   a=P(tmp)/'android';m=P(tmp)/'mac';a.mkdir();m.mkdir()
-  for folder,manifest in groups:
-   target=a if manifest.startswith('android') else m
-   for name in list(load(folder/manifest)['assets'])+[manifest,'ANDROID-SHA256SUMS' if target==a else 'SHA256SUMS']:shutil.copyfile(args.downloaded/name,target/name)
+  for name,original in files.items():
+   target=(a if original.parent==args.prepared.resolve() else m)/name
+   source=regular(downloaded/name);expected=before[str(original)]
+   require(source.stat().st_size==expected['bytes'],'download_sha_mismatch')
+   shutil.copyfile(source,target)
+   require(target.stat().st_size==expected['bytes'] and file_sha(target)==expected['sha256'],'download_sha_mismatch')
   result=verify(a,args.repo,SDK(args.sdk),args.certificate);mac_module(args.repo).verify(m,args.repo)
- return {'downloadedAssetsSHAExact':True,'androidAPKReverified':True,'macArtifactsReverified':True,'assets':len(expected),'publicationEligible':False,'remoteTagOIDChecked':False,'apkSHA256':result['apkSHA256']}
+ return {'downloadedAssetsSHAExact':True,'androidAPKReverified':True,'macArtifactsReverified':True,'assets':len(files),'publicationEligible':False,'remoteTagOIDChecked':False,'apkSHA256':result['apkSHA256']}
 
 def android_release_files(folder):
  # Android-only publication has exactly four payload/record assets and two checksums/manifest files.

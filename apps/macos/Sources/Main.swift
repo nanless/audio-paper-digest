@@ -40,6 +40,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     var terminationPending=false {didSet{if terminationPending{suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:false)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var maintenanceBusy=false {didSet{if maintenanceBusy{if !oldValue{emit("library.willChange")};suspendNativeAggregate();nativeNotesRequestedVisible=false;retireNativeNotes(restoreFocus:true)}else if oldValue{emit("nativeNotes.layout");restoreNativeAggregateLayout()}}}
     var cloudLocal:CloudLocalStore?,cloudArchive:CloudArchiveService?
+    var cloudRestoreSelections: [UUID: CloudRestoreSelection] = [:]
     var cloudBusy=false,cloudCredentialState="unknown"
     var cloudAutomaticPausedInMemory=false
     var cloudActiveJobID:String?,cloudLastError:String?
@@ -115,9 +116,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         await preload?.value; _ = try? await images?.value
         cloudSessionCredentials.clear();cloudArchive=nil;cloudAutomaticPausedInMemory=true
     }
-    func flushEdits() async throws {
+    func flushEdits(syncCommit: Bool = false) async throws {
         guard let web=web else{return}
-        _=try await web.callAsyncJavaScript("return window.paperDigestFlushPendingNote ? await window.paperDigestFlushPendingNote() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)
+        _=try await web.callAsyncJavaScript("return window.paperDigestFlushPendingNote ? await window.paperDigestFlushPendingNote(syncCommit) : {saved:true}",arguments:["syncCommit":syncCommit],in:nil,contentWorld:.page)
         if let detail=storageDetailWeb{_=try await detail.callAsyncJavaScript("return window.paperDigestFlushDetails ? await window.paperDigestFlushDetails() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)}
         if let settings=settingsWeb{_=try await settings.callAsyncJavaScript("return window.paperDigestFlushSettings ? await window.paperDigestFlushSettings() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)}
     }
@@ -365,7 +366,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func runJob(_ command:String,payload:[String:Any],identifier:String=UUID().uuidString,material:[String:Any]?=nil,operation:@escaping(@escaping @Sendable([String:Any])->Void) async throws->[String:Any]) async throws->[String:Any] {
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未启动新任务")}
         let isZotero=command.hasPrefix("zotero."),isCloud=command.hasPrefix("cloud.")
-        let cloudTitle=["cloud.check":"检查坚果云连接","cloud.upload":"备份完整研究空间","cloud.list":"读取云端备份版本","cloud.restore":"恢复云端研究空间"][command] ?? "坚果云资料"
+        let cloudTitle=["cloud.syncPersonal":"同步个人资料到 WebDAV","cloud.check":"检查坚果云连接","cloud.upload":"备份完整研究空间","cloud.list":"读取云端备份版本","cloud.restore":"恢复云端研究空间"][command] ?? "坚果云资料"
         var row:[String:Any]=["id":identifier,"command":command,"paperID":(isZotero || isCloud || command=="aggregates.document") ? "":currentPaperID,"title":isCloud ? cloudTitle:isZotero ? (command=="zotero.resume" ? "继续 Zotero 归档":"Zotero 操作"):(currentPaper["titleZh"] ?? currentPaper["title"] ?? command),"status":"running","startedAt":ISO8601DateFormatter().string(from:Date()),"message":"正在执行"]
         if command=="aggregates.document"{row["title"]="读取网站汇总"}
         if isCloud {

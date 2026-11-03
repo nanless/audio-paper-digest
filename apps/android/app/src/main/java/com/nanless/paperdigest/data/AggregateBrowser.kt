@@ -79,6 +79,7 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
         return previews.remove(id)?.also{previews[id]=it}
     }
     private var links:AggregateLinkTable?=null
+    private var lastUnchangedCheck: Pair<Pair<PublishedAggregate, String>, Instant>? = null
     // Display IDs only. Every back/resume reloads the current native catalog and mints new links.
     private var trail=emptyList<String>()
     private data class SuspendedRoute(val id:String,val trail:List<String>,val stamp:AggregateCatalogStamp?)
@@ -161,7 +162,34 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
             if(saved==null)try{revisions=port.revisions(id)}catch(e:CancellationException){throw e}catch(_:Exception){cacheError="保存修订清单核验未完成；没有挑选其他旧正文。"}
             if(!ready(token,stamp,epoch))return stale(token)
             change(token){it.copy(catalog=catalog,stamp=stamp,selected=descriptor,revisions=revisions,cacheError=cacheError,catalogStale=false,offlineMode=port.offlineMode(),backTitle=parentTitle())}
-            if(revisions.isNotEmpty())return adopt(token,stamp,epoch,descriptor,saved?.document?:port.cached(id,revisions.first().rawHTMLSHA256),true,allowImageNetwork=!port.offlineMode(),saved=saved)
+            if (revisions.isNotEmpty()) {
+                val cached = saved?.document ?: port.cached(id, revisions.first().rawHTMLSHA256)
+                val cachedResult = adopt(token, stamp, epoch, descriptor, cached, true,
+                    allowImageNetwork = !port.offlineMode(), saved = saved)
+                val fetchedAt = Instant.parse(cached.getString("fetchedAt"))
+                val now = Instant.now()
+                val identity = descriptor to cached.getString("rawHTMLSHA256")
+                val lastChecked = synchronized(lock) {
+                    lastUnchangedCheck?.takeIf { it.first == identity }?.second ?: fetchedAt
+                }
+                if (port.offlineMode() || !ready(token, stamp, epoch) ||
+                    (!lastChecked.isAfter(now) && lastChecked.plusSeconds(6 * 3600).isAfter(now))) return cachedResult
+                return try {
+                    val fresh = port.read(id)
+                    if (!ready(token, stamp, epoch)) return stale(token)
+                    val checked = AggregateDocumentView.verified(fresh, descriptor, false)
+                    if (checked.rawHTMLSHA256 == state.document?.rawHTMLSHA256) {
+                        synchronized(lock) {
+                            if (ready(token, stamp, epoch)) lastUnchangedCheck = identity to now
+                        }
+                        cachedResult
+                    } else adopt(token, stamp, epoch, descriptor, fresh, false)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    cachedResult
+                }
+            }
             if(port.offlineMode()){change(token){withoutFailedPreview(it).copy(loading=false,error="离线模式下，此条目没有当前目录中已核验的保存正文。")};return response("offline")}
             // Ordinary public webpage read is automatic when no verified same-scope cache exists.
             if(!ready(token,stamp,epoch))return stale(token)

@@ -12,7 +12,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 | Item | Supported configuration |
 |---|---|
-| Source version | 1.3.0, build 5; see the release page for available public packages |
+| Source version | 1.3.7, build 15; see the release page for available public packages |
 | Operating system | macOS 15 or later |
 | Processor | Apple Silicon, arm64; the current package does not contain both Intel and Apple Silicon architectures |
 | Signing | Local ad-hoc signing; not notarized by Apple |
@@ -112,10 +112,12 @@ npm run install:app
 
 Some interface tests accept `PD_MAC_BROWSER`. The complete `npm test` still includes tests using `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` directly. Installing Playwright Chromium or setting that variable alone does not meet the complete test prerequisite. Scientific-layout tests require the public MiCLA PDF and three original figures, prepared using the [sample instructions (Chinese)](../../prototypes/macos-research/README.md). Expected checksums come from the controlled sample manifest. These local assets are not included in a formal package.
 
-The default build uses the `release` channel and produces `.build/论文速递工作台.app` without paper samples. `--channel private-qa` includes samples for local testing and cannot serve as a formal release. The build checks Node's version, architecture, minimum OS, external dynamic-library dependencies, and matching license. Installation refuses to replace an application while `PaperDigest` is running; it does not force the process to quit.
+The default build uses the `release` channel and produces `.build/论文速递工作台.app` without paper samples. `--channel private-qa` includes samples for local testing in an isolated data directory. The channel rejects `--install`. The build checks Node's version, architecture, minimum OS, external dynamic-library dependencies, and matching license. Installation refuses to replace an application while `PaperDigest` is running; it does not force the process to quit.
 
 The application identifier `com.nanless.PaperDigest`, executable `PaperDigest`, Keychain service, and data root `~/Library/Application Support/PaperDigest/` remain compatible. About provides the bundled third-party license texts. Runtime updates require matching license material through the maintenance process; original license text must not be edited to bypass version checks.
 
 AppKit provides native windows, WebKit lays out explanations, and PDFKit displays original papers. These components work within the application; users do not set up a web server.
 
 Further documentation, in Chinese: [data and recovery](../../docs/mac-app-data.md), [validation scope](../../docs/mac-app-validation.md), and [release operations](../../docs/mac-app-release.md).
+
+In the library or WebDAV settings, click **一键同步 WebDAV** on either device. Use the same saved Nutstore account and folder on both devices. Sync covers favorites and their dates, the reading list, notes, annotations, and reading progress for published papers. Concurrent edits to one note or annotation set are kept on their respective devices until you reconcile them. Use the full backup for files and research history.

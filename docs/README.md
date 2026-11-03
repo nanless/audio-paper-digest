@@ -37,6 +37,7 @@
 | Mac 安装包和图标 | [发行准备](mac-app-release.md)、[图标说明](mac-app-icon-design.md)、[图标源资产](../apps/macos/Assets/README.md) |
 | Android 产品与实现范围 | [功能说明](android-app-plan.md) |
 | Android Zotero 与完整备份 | [Zotero 接入](android-zotero-research.md)、[完整备份](android-cloud-contract.md) |
+| 两端全资料同步设计与验收 | [同步与冲突处理](workbench-full-webdav-sync.md) |
 | 跨端备份格式与实际验证 | [跨端格式](android-cloud-portable-fixtures.md)、[Android 验证](android-validation.md) |
 | 客户端安全与许可 | [安全说明](client-security-audit.md)、[Android 许可清单说明](../apps/android/licenses.README.md) |
 | 后续静态数据接口设计 | [desktop/v1 数据合同](desktop-data-contract.md)，当前并未部署该接口 |

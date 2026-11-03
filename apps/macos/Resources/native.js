@@ -13,7 +13,7 @@ import {mountReaderNotices} from './reader-notices.js';
 installDialogs();
 const $=id=>document.getElementById(id),esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const state={paper:null,article:null,personal:{},settings:{},summary:{},catalog:[],view:'library',mode:'guide',pdf:false,pdfStatus:{},noteDirty:false,nativeSourceNotices:false};
-let library,zotero,storageUI,noteTimer,readingTimer,opening=0,guideFrame,noteSaving,annotationSaving;
+let library,zotero,storageUI,noteTimer,readingTimer,opening=0,guideFrame,noteSaving,annotationSaving,noteEditorRevision=0;
 const annotationDrafts=new Map();let annotationTimer,pdfRequest=0,pdfPending=null,settingsReload=0,settingsEvents=0,previewRequest=0;
 const readingWrites=new Map();
 let fontTarget=null,fontSaving=null,fontRevision=0;
@@ -176,7 +176,15 @@ function originalFrameHTML(frame){
  if(entry)for(const anchor of copy.querySelectorAll('a[href]')){const href=anchor.getAttribute('href'),prefix=`paperapp://app/reader-link/${entry.token}/`;if(href?.startsWith(prefix)){const record=entry.links.get(href.slice(prefix.length));if(record)anchor.setAttribute('href',record.href);}}
  return copy.innerHTML;
 }
-window.paperDigestFlushPendingNote=async()=>{if(fontSaving)await fontSaving;await saveNote();await saveAnnotations();if(state.paper)await saveReading();return {saved:true};};
+window.paperDigestFlushPendingNote=async(syncCommit=false)=>{
+ if(fontSaving)await fontSaving;
+ await saveNote();await saveAnnotations();
+ if(state.paper){
+  const snapshot=readingSnapshot(),saved=state.personal.readingState?.[snapshot.paperID];
+  if(!syncCommit||Object.entries(snapshot).some(([key,value])=>saved?.[key]!==value))await saveReading();
+ }
+ return {saved:true};
+};
 window.paperDigestArchiveHTML=()=>{if(!state.paper||!state.article||guideFrame?.dataset.paperID!==state.paper.id||guideFrame?.dataset.revision!==state.article.revisionSHA256)return null;return {paperID:state.paper.id,revision:state.article.revisionSHA256,html:originalFrameHTML(guideFrame)};};
 // Restore the first saved guide position only after its requested PDF layout settles.
 let initialGuideRestore=null;
@@ -275,7 +283,7 @@ function readingSnapshot(extra={}){return {paperID:state.paper?.id,question:$('q
 async function saveReading(extra={}){if(!state.paper)return;const snapshot=readingSnapshot(extra),revision=(readingWrites.get(snapshot.paperID)||0)+1;readingWrites.set(snapshot.paperID,revision);await call('personal.reading',snapshot);if(readingWrites.get(snapshot.paperID)!==revision)return;state.personal={...state.personal,readingState:{...(state.personal.readingState||{}),[snapshot.paperID]:{...snapshot,updatedAt:new Date().toISOString()}}};}
 async function saveNote(){
  if(noteSaving)return await noteSaving;
- noteSaving=(async()=>{while(state.paper&&state.noteDirty){clearTimeout(noteTimer);const id=state.paper.id,text=$('note-editor').value,previous=state.personal.notes?.[id]||{};const saved=await call('personal.note',{paperID:id,text,baseRevision:previous.revision||0});state.personal={...state.personal,notes:{...(state.personal.notes||{}),[id]:saved}};if(state.paper?.id===id&&$('note-editor').value===text){state.noteDirty=false;$('note-status').textContent='已保存到本机';}else if(state.paper?.id!==id)break;}})();
+ noteSaving=(async()=>{while(state.paper&&state.noteDirty){clearTimeout(noteTimer);const id=state.paper.id,text=$('note-editor').value;const saved=await call('personal.note',{paperID:id,text,baseRevision:noteEditorRevision});state.personal={...state.personal,notes:{...(state.personal.notes||{}),[id]:saved}};if(state.paper?.id===id)noteEditorRevision=saved.revision;if(state.paper?.id===id&&$('note-editor').value===text){state.noteDirty=false;$('note-status').textContent='已保存到本机';}else if(state.paper?.id!==id)break;}})();
  try{return await noteSaving;}finally{noteSaving=null;}
 }
 function restoreDraft(p){
@@ -285,7 +293,7 @@ function restoreDraft(p){
  $('range-from').value=saved.from||1;$('range-to').value=saved.to||3;
  document.querySelector('.page-range').hidden=$('evidence-scope').value!=='range';$('pdf-chapter').hidden=$('evidence-scope').value!=='chapter';
  setReadingSplit(saved.split);state.pdfStatus.page=saved.pdfPage||1;
- $('note-editor').value=state.personal.notes?.[p.id]?.text||'';state.noteDirty=false;
+ const note=state.personal.notes?.[p.id];$('note-editor').value=note?.text||'';noteEditorRevision=note?.revision||0;state.noteDirty=false;
  $('sidebar-paper').textContent=p.titleZh||p.title;$('note-context').textContent=p.titleZh||p.title;
  updateFavoriteButton();updateNote();return saved;
 }
@@ -518,3 +526,32 @@ document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{if(b.dataset.
 for(const id of ['question','evidence-scope','range-from','range-to','pdf-chapter'])for(const event of ['input','change'])$(id).addEventListener(event,scheduleReading);
 $('splitter').addEventListener('pointerup',scheduleReading);$('splitter').addEventListener('keyup',scheduleReading);
 document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',scheduleReading));
+
+const syncPersonalButton = $('sync-personal');
+if (syncPersonalButton) syncPersonalButton.onclick = async () => {
+ syncPersonalButton.disabled = true;
+ try {
+  const cloud = await call('cloud.state');
+  if (!cloud.account) { await call('settings.open', {pane:'cloud'}); return; }
+  const result = await call('cloud.syncPersonal');
+  if (result.cancelled) return;
+  toast('WebDAV 同步完成 · 收藏 '+result.favorites+' 篇'+(result.conflicts?' · '+result.conflicts+' 项冲突，两端版本已保留':''));
+ } catch (e) { error(e); }
+ finally { syncPersonalButton.disabled = false; }
+};
+window.addEventListener('personal.synced', async () => {
+ const owner=viewIdentity(),revision=noteEditorRevision;
+ try {
+  const personal=await call('personal.snapshot');
+  state.personal=personal;
+  if(owner.id&&isCurrent(owner)&&!state.noteDirty&&!noteSaving&&noteEditorRevision===revision){
+   const note=personal.notes?.[owner.id],editor=$('note-editor'),text=note?.text||'';
+   noteEditorRevision=note?.revision||0;
+   if(editor.value!==text){editor.value=text;updateNote();}
+   $('note-status').textContent='已与本机资料同步';
+  }
+  updateFavoriteButton();
+  if(state.view==='notes'&&!nativeNotesUI?.enabled)renderNotes();
+  await library?.refresh();
+ } catch (e) { error(e); }
+});

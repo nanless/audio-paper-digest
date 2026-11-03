@@ -133,6 +133,48 @@ private actor CloudTestDAV {
         }.joined()+"</d:multistatus>").utf8)
     }
 }
+/// A personal record is mutable only when the request's conditional header
+/// still matches the origin at PUT time.
+private actor CloudPersonalDAV {
+    private var bytes: Data?
+    private let tag: String?
+    private let competingWrite: Data?
+    private(set) var requests: [String] = []
+    private(set) var condition: String?
+    init(bytes: Data?, tag: String?, competingWrite: Data? = nil) {
+        self.bytes = bytes; self.tag = tag; self.competingWrite = competingWrite
+    }
+    func request(_ request: URLRequest, _ limit: Int) throws -> CloudArchiveService.Response {
+        let method = request.httpMethod ?? "GET"
+        guard let url = request.url, url.host == "dav.jianguoyun.com",
+              url.path.contains("/personal-sync-v1/") else { throw CloudTestError(message: "Unsafe fixture request") }
+        requests.append(method)
+        let status: Int, data: Data
+        switch method {
+        case "GET":
+            status = bytes == nil ? 404 : 200; data = bytes ?? Data()
+        case "PUT":
+            let match = request.value(forHTTPHeaderField: "If-Match")
+            let create = request.value(forHTTPHeaderField: "If-None-Match")
+            condition = match ?? create
+            if let competingWrite {
+                bytes = competingWrite
+                status = 412
+            } else if bytes == nil ? create == "*" && match == nil : match != nil && match == tag && create == nil {
+                bytes = request.httpBody
+                status = 204
+            } else {
+                status = 412
+            }
+            data = Data()
+        default: throw CloudTestError(message: "Unexpected fixture verb")
+        }
+        let headers = tag.map { ["ETag": $0] } ?? [:]
+        return .init(data: data, response: HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!)
+    }
+    func material() -> Data? { bytes }
+}
+
 #if PAPER_DIGEST_TESTS
 private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
     struct Reply: Sendable { let status: Int; let headers: [String:String]; let chunks: [Data]; let redirect: Bool }
@@ -472,6 +514,16 @@ private actor CloudIndependentPublishGate {
             await dav.add(.init("PROPFIND","/dav/",status:403));try await rejects(.forbidden) { try await s.probe() }
             try require(await dav.records().count==1,"one actual HTTP403 response")
         }
+        await check("cancelled checkpoint save remains cancellation without sending an upload") {
+            let dav = CloudTestDAV()
+            let s = try CloudArchiveService(destinationID: UUID(), credentials: { .init(username:"fixture", password:"fixture") },
+                checkpointSink: { _ in throw CancellationError() }, transport: { try await dav.request($0, limit: $1) },
+                minimumRequestInterval: 0)
+            try await rejectsCancellation { _ = try await s.upload(encodedBackup: small) }
+            try require(await dav.records().isEmpty, "no upload sent after cancelled checkpoint")
+            try await s.probe()
+            try require(await dav.records().count == 1, "cancelled checkpoint releases the operation gate")
+        }
         await check("401 stops immediately and does not switch credentials or auto retry") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
             await dav.add(.init("PROPFIND","/dav/",status:401))
@@ -500,9 +552,11 @@ private actor CloudIndependentPublishGate {
             formatter.locale=Locale(identifier:"en_US_POSIX");formatter.timeZone=TimeZone(secondsFromGMT:0);formatter.dateFormat="EEE, dd MMM yyyy HH:mm:ss zzz"
             await dav.add(.init("PROPFIND","/dav/",status:503,headers:["Retry-After":formatter.string(from:until)]))
             try await rejects(.throttled(until)) { try await s.probe() }
-            let other=try service(dav,log,clock:clock)
-            await dav.add(.init("PROPFIND","/dav/",status:429,headers:["Retry-After":"invalid"]))
-            try await rejects(.throttled(clock.now().addingTimeInterval(60))) { try await other.probe() }
+            for value in ["invalid", "1e20", "1.5", "99999999999999999999", "1000000000000", ""] {
+                let other=try service(dav,log,clock:clock)
+                await dav.add(.init("PROPFIND","/dav/",status:429,headers:value.isEmpty ? [:] : ["Retry-After":value]))
+                try await rejects(.throttled(clock.now().addingTimeInterval(60))) { try await other.probe() }
+            }
         }
         await check("serial actor gate rejects overlapping operations across await without touching old versions") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
@@ -660,6 +714,98 @@ private actor CloudIndependentPublishGate {
             try require(CloudInterceptProtocol.recorded().first?.value(forHTTPHeaderField:"Cookie")==nil,"ephemeral request does not add cookie")
         }
         #endif
+        func personalService(_ server: CloudPersonalDAV) throws -> CloudArchiveService {
+            try CloudArchiveService(destinationID: UUID(), credentials: { .init(username: "fixture", password: "fixture") },
+                checkpointSink: { _ in }, transport: { try await server.request($0, $1) }, minimumRequestInterval: 0)
+        }
+        let earlier = Data("old private record fixture".utf8), later = Data("new private record fixture".utf8)
+        await check("personal record creation is conditional and reads back exact bytes") {
+            let server = CloudPersonalDAV(bytes: nil, tag: nil)
+            try await personalService(server).writePersonalDocument(later, expected: nil, directoryExists: true)
+            let condition = await server.condition, requests = await server.requests
+            try require(condition == "*" && requests == ["GET", "PUT", "GET"], "create guard and GET readback")
+            try require(await server.material() == later, "new content preserved")
+        }
+        await check("personal record replacement uses exact strong ETag and reads back") {
+            let tag = #""strong-revision""#
+            let server = CloudPersonalDAV(bytes: earlier, tag: tag)
+            try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true)
+            let condition = await server.condition, requests = await server.requests
+            try require(condition == tag && requests == ["GET", "PUT", "GET"], "update guard and GET readback")
+            try require(await server.material() == later, "updated content preserved")
+        }
+        await check("missing, weak, malformed and unsupported personal ETags never issue PUT") {
+            let oversizedTag = "\"" + String(repeating: "a", count: 1023) + "\""
+            let unsafeTags: [String?] = [nil, #"W/"weak""#, "not-quoted", #""tag","another""#, #""非 ASCII""#, oversizedTag]
+            for tag in unsafeTags {
+                let server = CloudPersonalDAV(bytes: earlier, tag: tag)
+                try await rejects(.personalDocumentUnsafe) { try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true) }
+                try require(await server.requests == ["GET"], "unsafe validator did not write")
+                try require(await server.material() == earlier, "old bytes remain")
+            }
+        }
+        await check("personal update detects changed preflight material before PUT") {
+            let server = CloudPersonalDAV(bytes: later, tag: #""current""#)
+            try await rejects(.personalDocumentChanged) { try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true) }
+            try require(await server.requests == ["GET"], "changed material did not write")
+        }
+        await check("personal creation and update surface a competing write without readback success") {
+            let competing = Data("other device update".utf8)
+            for initial in [nil, earlier] as [Data?] {
+                let tag = #""preflight""#
+                let server = CloudPersonalDAV(bytes: initial, tag: tag, competingWrite: competing)
+                try await rejects(.personalDocumentChanged) { try await personalService(server).writePersonalDocument(later, expected: initial, directoryExists: true) }
+                let condition = await server.condition, requests = await server.requests
+                try require(condition == (initial == nil ? "*" : tag) && requests == ["GET", "PUT"], "412 retires guarded write")
+                try require(await server.material() == competing, "competing material remains intact")
+            }
+        }
+        await check("probe and list cooldowns survive rebuilding the local profile and service") {
+            for status in [429, 503] {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-cooldown-" + UUID().uuidString)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                let data = root.appendingPathComponent("PaperDigest")
+                let local = try await CloudLocalStore(dataDirectory: data)
+                try await local.save(account: "isolated@example.invalid", folder: "PaperDigest", automatic: false, intervalHours: 24)
+                let profile = await local.profile
+                let clock = CloudTestClock(), dav = CloudTestDAV(), credentials = CloudCredentialFixture(.ready)
+                let until = clock.now().addingTimeInterval(180)
+                func client(_ store: CloudLocalStore) async throws -> CloudArchiveService {
+                    let saved = await store.profile
+                    return try CloudArchiveService(folder: saved.folder, destinationID: saved.destinationID,
+                        credentials: { try await credentials.credentials() }, checkpointSink: { _ in },
+                        transport: { try await dav.request($0, limit: $1) }, now: { clock.now() },
+                        minimumRequestInterval: 0, initialRetryAfter: saved.retryAfter,
+                        cooldownSink: { try await store.recordCooldown($0, destinationID: saved.destinationID) })
+                }
+                let first = try await client(local)
+                await dav.add(.init("PROPFIND", status == 429 ? "/dav/" : "/2026-10/", status: status, headers: ["Retry-After": "180"]))
+                try await rejects(.throttled(until)) {
+                    if status == 429 { try await first.probe() }
+                    else { _ = try await first.list(month: "2026-10") }
+                }
+                let reopened = try await CloudLocalStore(dataDirectory: data)
+                try require(await reopened.profile.retryAfter == until, "deadline persisted across profile reconstruction")
+                let restarted = try await client(reopened)
+                await credentials.set(.unavailable)
+                let before = await dav.records().count
+                try await rejects(.throttled(until)) { _ = try await restarted.list(month: "2026-10") }
+                try require(await dav.records().count == before, "cooldown rejects before credentials or HTTP")
+                await credentials.set(.ready)
+                clock.advance(181)
+                _ = try await restarted.list(month: "2026-10")
+                try require(await dav.records().count == before + 1, "request allowed after cooldown")
+                try await reopened.save(account: "other@example.invalid", folder: "PaperDigest", automatic: false, intervalHours: 24)
+                do {
+                    try await reopened.recordCooldown(until, destinationID: profile.destinationID)
+                    throw CloudTestError(message: "retired target overwrote new cooldown")
+                } catch is DesktopError { }
+                let changed = try await CloudLocalStore(dataDirectory: data)
+                let target = await changed.profile
+                try require(target.destinationID != profile.destinationID && target.retryAfter == nil, "new destination does not inherit old cooldown")
+            }
+        }
         print("CloudArchiveService: \(passed) passed, \(failures.count) failed")
         if !failures.isEmpty { exit(1) }
     }

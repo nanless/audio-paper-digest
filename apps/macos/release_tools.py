@@ -191,6 +191,8 @@ def audit_app(app, repo, record, version=None):
     require(tracked_sources and tracked_sources.issubset(source_files), '构建清单遗漏原生源码')
     tracked_build = {'apps/macos/build.sh', 'apps/macos/Info.plist', 'apps/macos/llm-worker.cjs'}
     if channel!='legacy-private-qa':tracked_build.add('apps/macos/build_resources.py')
+    if git(repo, 'ls-tree', '--name-only', metadata['sourceCommit'], 'apps/macos/finalize_build.py').strip():
+        tracked_build.add('apps/macos/finalize_build.py')
     require(tracked_build.issubset(source_files), '构建清单遗漏构建、配置或模型组件')
     permitted = physical | {'Contents/MacOS/PaperDigest', 'Contents/Resources/build-metadata.json', 'Contents/_CodeSignature/CodeResources'}
     require(set(by_path) == permitted, '应用包含未列明的额外文件或缺少签名文件')

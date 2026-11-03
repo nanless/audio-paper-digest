@@ -10,7 +10,7 @@
 
 | 项目 | 支持范围 |
 |---|---|
-| 源码版本 | 1.3.0，构建号 5；公开安装包状态以发行页为准 |
+| 源码版本 | 1.3.7，构建号 15；公开安装包状态以发行页为准 |
 | 系统 | macOS 15 及以上 |
 | 处理器 | Apple Silicon（arm64）；当前发行包不同时包含 Intel 与 Apple Silicon 两种架构 |
 | 签名 | 本地临时签名（ad-hoc），未通过 Apple 公证 |
@@ -108,10 +108,12 @@ npm run install:app
 
 部分界面测试可通过 `PD_MAC_BROWSER` 指定浏览器；完整 `npm test` 仍含直接使用 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` 的入口，单独安装 Playwright Chromium 或设置该变量不能替代这一前提。科学排版测试需要按[样稿准备说明](../../prototypes/macos-research/README.md)准备公开 MiCLA PDF 和三张原图，校验值以受控样稿清单为准；这些本机测试资产不进入正式包。
 
-默认构建使用 `release` 通道，输出 `.build/论文速递工作台.app`，不捆绑论文样稿。`--channel private-qa` 用于含样稿的本机测试，不能作为正式发行包。构建会检查 Node 的版本、架构、最低系统、外部动态库依赖及对应许可。安装脚本检测到 `PaperDigest` 进程仍在运行时拒绝替换，不强制结束应用。
+默认构建使用 `release` 通道，输出 `.build/论文速递工作台.app`，不捆绑论文样稿。`--channel private-qa` 用于含样稿的本机测试，请在隔离资料目录中单独运行。该通道不接受 `--install`。构建会检查 Node 的版本、架构、最低系统、外部动态库依赖及对应许可。安装脚本检测到 `PaperDigest` 进程仍在运行时拒绝替换，不强制结束应用。
 
 应用标识 `com.nanless.PaperDigest`、可执行文件 `PaperDigest`、钥匙串服务及资料根 `~/Library/Application Support/PaperDigest/` 保持兼容。关于窗口提供随包第三方许可全文；更新运行时须同时按维护流程准备匹配许可，不能修改原许可正文来绕过版本检查。
 
 原生窗口由 AppKit 提供，WebKit 排版导读，PDFKit 负责原文阅读。这些组件随应用工作，不要求使用者自行搭建网页服务。
 
 更多信息：[数据与恢复](../../docs/mac-app-data.md) · [验证范围](../../docs/mac-app-validation.md) · [发行操作](../../docs/mac-app-release.md)。
+
+在论文库或连接设置点击 **一键同步 WebDAV**。两端使用同一个已保存的坚果云账号和目录。同步包括网站论文的收藏及收藏时间、待读、笔记、批注和阅读进度。两端各自改过同一条笔记或同一篇论文的批注时，原版本留在各自设备上。文件和研究历史可用完整备份保存。

@@ -41,6 +41,7 @@ data class UiState(
     val error: String? = null,
     val notice: String? = null,
     val catalogSyncedAt: String? = null,
+    val catalogCheckedAt: String? = null,
     val catalogSummary: JSONObject = JSONObject(),
     val storageWarning: String? = null,
     val aggregate: AggregateBrowseState = AggregateBrowseState(),

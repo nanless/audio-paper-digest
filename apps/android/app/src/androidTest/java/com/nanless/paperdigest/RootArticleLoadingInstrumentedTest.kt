@@ -169,4 +169,49 @@ class RootArticleLoadingInstrumentedTest {
         }
     }
 
+    @Test fun cloudForegroundFailureTerminatesTheOriginalQueuedRecordBeforeNetwork()=runBlocking {
+        val f=Fixture()
+        try {
+            val id=java.util.UUID.randomUUID().toString()
+            val dispatch=WorkspaceDispatch(f.temporary.resolve("PaperDigestDevice"))
+            f.root.personal.upsertJob(JSONObject().put("id",id).put("kind","cloud.upload")
+                .put("paperID","").put("status","queued").put("createdAt","2026-11-03T00:00:00Z"))
+            val preflightFailure=IllegalStateException("Synthetic foreground admission failure")
+            val preflightStarted=CompletableDeferred<Unit>()
+            val releasePreflight=CompletableDeferred<Unit>()
+            val original=async {
+                runCatching {
+                    f.root.performCloudUpload(id,dispatch.epoch,f.root.cloud.targetID) {
+                        preflightStarted.complete(Unit)
+                        releasePreflight.await()
+                        throw preflightFailure
+                    }
+                }.exceptionOrNull()
+            }
+            try {
+                withTimeout(10_000) { preflightStarted.await() }
+                assertEquals(id,f.root.state.value.cloud.getString("activeJobID"))
+                assertEquals("running",f.root.state.value.cloud.getString("transferStatus"))
+                var duplicateEntered=false
+                assertTrue(runCatching {
+                    f.root.performCloudUpload(id,dispatch.epoch,f.root.cloud.targetID) { duplicateEntered=true }
+                }.isFailure)
+                assertFalse(duplicateEntered)
+                assertEquals("running",f.root.state.value.cloud.getString("transferStatus"))
+            } finally { releasePreflight.complete(Unit) }
+            val failure=withTimeout(10_000) { original.await() }
+            assertSame(preflightFailure,failure)
+            val row=f.root.personal.snapshot().getJSONArray("jobs").objects().single { it.getString("id")==id }
+            assertEquals("failed",row.getString("status"))
+            assertTrue(row.has("endedAt"))
+            assertTrue(f.root.state.value.cloud.optString("activeJobID").isEmpty())
+            assertTrue(f.root.cloud.state().isNull("pending"))
+            var entered=false
+            assertTrue(runCatching {
+                f.root.performCloudUpload(id,dispatch.epoch,f.root.cloud.targetID) { entered=true }
+            }.isFailure)
+            assertFalse(entered)
+        }finally{f.close()}
+    }
+
 }
