@@ -16012,6 +16012,23 @@ async function fetchArxivText(arxivId) {
     return (await fetchArxivTextDetailed(arxivId)).text;
 }
 
+const ARXIV_PDF_TRANSIENT_CODES = new Set([
+    'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
+    'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT'
+]);
+
+function arxivPdfTransportFailure(error, candidate, phase) {
+    const details = [error, error?.cause, error?.cause?.cause];
+    const transient = details.find(item => item?.name === 'TimeoutError' || ARXIV_PDF_TRANSIENT_CODES.has(item?.code));
+    const reason = transient?.name === 'TimeoutError' ? 'TIMEOUT' : transient?.code;
+    const code = reason || details.find(item => typeof item?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(item.code))?.code
+        || 'ARXIV_PDF_FETCH_FAILED';
+    const failure = new Error(`arXiv PDF ${candidate} ${phase} failed [${code}]`, { cause: error });
+    failure.code = code;
+    return { failure, transient: Boolean(transient) };
+}
+
 // 历史全新重写的来源采集总会留下原始官方 PDF，HTML 路径正常时也一样。这里刻意绕过
 // 普通的全新来源缓存，用和上面全文抓取器相同的、强制走 arXiv CONNECT 的 dispatcher。
 async function fetchArxivPdfUncached(arxivId, options = {}) {
@@ -16025,30 +16042,52 @@ async function fetchArxivPdfUncached(arxivId, options = {}) {
         throw new Error('arXiv PDF preferred source ID belongs to another paper or is malformed');
     }
     const candidates = [...new Set([normalized, preferred, ...getArxivHtmlIds(normalized)].filter(Boolean))];
-    const fetchImpl = options.fetchImpl || fetch; let currentPdfStatus = null;
+    const fetchImpl = options.fetchImpl || fetch;
+    const pause = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    let currentPdfStatus = null;
+    let retryAvailable = true;
     for (const candidate of candidates) {
         const requestedUrl = `https://arxiv.org/pdf/${candidate}.pdf`;
-        const response = await fetchImpl(requestedUrl, {
-            headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-            signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
-            dispatcher: options.dispatcher || getArxivFetchDispatcher()
-        });
-        if (!response.ok) {
-            if (candidate === normalized) currentPdfStatus = response.status;
-            if (response.status === 404) continue;
-            throw new Error(`arXiv PDF ${candidate} download failed: HTTP ${response.status}`);
+        const dispatcher = options.dispatcher || getArxivFetchDispatcher();
+        while (true) {
+            let phase = 'request';
+            let response, bytes;
+            try {
+                response = await fetchImpl(requestedUrl, {
+                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+                    signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
+                    dispatcher
+                });
+                phase = 'response';
+                if (response.ok) {
+                    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+                    if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
+                        throw new Error(`arXiv PDF ${candidate} returned unexpected Content-Type ${contentType}`);
+                    }
+                    phase = 'body';
+                    bytes = await readResponseBufferWithLimit(response, ARXIV_PDF_MAX_BYTES);
+                }
+            } catch (error) {
+                if (phase === 'response' || error?.code === 'RESPONSE_TOO_LARGE') throw error;
+                const { failure, transient } = arxivPdfTransportFailure(error, candidate, phase);
+                if (!retryAvailable || !transient) throw failure;
+                retryAvailable = false;
+                console.log(`    [deep] ${failure.message}，同一官方 PDF 地址重试一次`);
+                await pause(750);
+                continue;
+            }
+            if (!response.ok) {
+                if (candidate === normalized) currentPdfStatus = response.status;
+                if (response.status === 404) break;
+                throw new Error(`arXiv PDF ${candidate} download failed: HTTP ${response.status}`);
+            }
+            if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+                throw new Error(`arXiv PDF ${candidate} returned an invalid PDF header`);
+            }
+            const actualUrl = String(response.url || requestedUrl);
+            return { bytes, url: actualUrl, sourceId: candidate, fetchedAt: new Date().toISOString(),
+                currentPdfUnavailable: candidate !== normalized, currentPdfStatus };
         }
-        const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-        if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-            throw new Error(`arXiv PDF ${candidate} returned unexpected Content-Type ${contentType}`);
-        }
-        const bytes = await readResponseBufferWithLimit(response, ARXIV_PDF_MAX_BYTES);
-        if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-            throw new Error(`arXiv PDF ${candidate} returned an invalid PDF header`);
-        }
-        const actualUrl = String(response.url || requestedUrl);
-        return { bytes, url: actualUrl, sourceId: candidate, fetchedAt: new Date().toISOString(),
-            currentPdfUnavailable: candidate !== normalized, currentPdfStatus };
     }
     throw new Error(`arXiv PDF ${normalized} download failed: HTTP ${currentPdfStatus || 404}`);
 }
