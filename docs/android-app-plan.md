@@ -58,4 +58,4 @@ Android 使用官方 Web API v3，由用户单独配置专用授权；不要求 
 
 既有 Android 功能测试使用 API 28、API 35 模拟器，覆盖原生阅读、系统文件操作、不同窗口和字体、模型、Zotero、坚果云及跨端资料读取。历史 1.1.0 的 code4→5、33 个研究文件保持按原范围保留；本次 1.3.0 的 code7→8、61 份原文件与六对象保持、全站分类及界面增量分别按自己的正式记录核验，不把历史操作写成新包重测。具体版本范围见[验证说明](<android-validation.md>)和[86 项功能表](<android-feature-parity.md>)。
 
-正式 APK 与 Mac 安装包在同一仓库的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases) 提供。版本、来源、最低系统、架构、签名和 SHA 由实际发行文件记录；当前为 [v1.3.0](https://github.com/nanless/audio-paper-digest/releases/tag/v1.3.0)。正式包不包含验收样稿、用户资料、签名私钥、运行配置或本地审查记录。
+正式 APK 与 Mac 安装包在同一仓库的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases) 提供。版本、来源、最低系统、架构、签名和 SHA 由实际发行文件记录；两端联合发行的验收记录见 [1.3.0](https://github.com/nanless/audio-paper-digest/releases/tag/v1.3.0)。正式包不包含验收样稿、用户资料、签名私钥、运行配置或本地审查记录。

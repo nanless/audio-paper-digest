@@ -2,7 +2,7 @@
 
 论文速递工作台的 Android 实现对应 Mac 的 69 项功能与 17 项云端、发行要求。`A-` 编号保持原对应关系。下表保留每项要求，验证范围在表后说明；操作与版本状态见[Android 验证说明](<android-validation.md>)。
 
-当前公开版本为 [1.3.0](https://github.com/nanless/audio-paper-digest/releases/tag/v1.3.0)，最终来源 `a39fa8d0`。全站多级分类、两端自适应界面、正式升级与十二件匿名下载结果见 [1.3.0 检查记录](workbench-1.3.0-review.md#正式发行与升级检查)。下表保留原功能 ID 和 1.0.1 历史矩阵；未变化服务按实际影响复用原证据，不把旧版远端结果当作新版发行凭据。
+本表的两端联合发行基线为 [1.3.0](https://github.com/nanless/audio-paper-digest/releases/tag/v1.3.0)，最终来源 `a39fa8d0`。全站多级分类、两端自适应界面、正式升级与十二件匿名下载结果见 [1.3.0 检查记录](workbench-1.3.0-review.md#正式发行与升级检查)。下表保留原功能 ID 和 1.0.1 历史矩阵；未变化服务按实际影响复用原证据，不把旧版远端结果当作新版发行凭据。
 
 历史 1.0.1 基线的 **86 项全部通过**：code4 当时完成正式包安全核验、同签名覆盖升级及两端联合公开后的逐件下载核对。旧 Release 条目已清理，[v1.0.1 源码标签](https://github.com/nanless/audio-paper-digest/tree/v1.0.1)保留。
 
