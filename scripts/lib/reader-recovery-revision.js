@@ -616,7 +616,8 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
                 : pruneUniquelyUnboundReaderMarkdownTables(updated.draft);
             if (prunedUnboundTables > 0) {
                 updated.draftOrderMappings = [...(updated.draftOrderMappings || []), {
-                    contract: 'conference-reader-prune-unbound-tables-v1',
+                    ...require('./protocol-codec').recordHeader('conference-reader-prune-unbound-tables',
+                        'conference-reader-prune-unbound-tables'),
                     changed: true,
                     removedTables: prunedUnboundTables
                 }];

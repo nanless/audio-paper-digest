@@ -153,13 +153,30 @@ test('公开记录权威字段不可覆盖，坏状态和SHA以及保存后状�
         contract: '伪造', id: '伪造', requestSha256: '伪造'
     });
     const loaded = diagnostics.readCoreSummaryDiagnostic(root, diagnostic.id, identity);
-    assert.equal(loaded.disposition.contract, 'core-summary-request-diagnostics-v1');
+    const codec = require('../scripts/lib/protocol-codec');
+    const family = 'core-summary-request-diagnostics';
+    assert.ok(codec.isCurrentHeader(loaded.disposition, family));
     assert.equal(loaded.disposition.id, diagnostic.id);
     assert.equal(loaded.disposition.requestSha256, diagnostic.requestSha256);
     const file = path.join(root, 'request-diagnostics', `${diagnostic.id}.disposition.json`);
     fs.writeFileSync(file, JSON.stringify({ ...loaded.disposition, status: 'complete' }));
     assert.throws(() => diagnostics.readCoreSummaryDiagnostic(root, diagnostic.id, identity),
         /当前来源或输入不一致|结果记录格式无效/);
+    const originalHeader = codec.historicalHeader(family, 'bound-request-response-and-disposition');
+    const toOriginal = ({ contract, schemaFingerprint, ...body }) => ({ ...originalHeader, ...body });
+    const request = JSON.stringify(toOriginal(loaded.request));
+    const response = toOriginal({ ...loaded.response, requestSha256: sha256(request) });
+    const disposition = toOriginal({ ...loaded.disposition, requestSha256: sha256(request) });
+    const directory = path.dirname(file);
+    fs.writeFileSync(path.join(directory, diagnostic.id + '.request.json'), request);
+    fs.writeFileSync(path.join(directory, diagnostic.id + '.response.json'), JSON.stringify(response));
+    fs.writeFileSync(file, JSON.stringify(disposition));
+    const before = snapshot(root);
+    assert.deepEqual(diagnostics.readCoreSummaryDiagnostic(root, diagnostic.id, identity).response, response);
+    assert.equal(diagnostics.latestCoreSummaryDiagnosticId(root, identity), diagnostic.id);
+    assert.deepEqual(snapshot(root), before);
+    fs.writeFileSync(file, JSON.stringify({ ...disposition, ...codec.recordHeader(family, family) }));
+    assert.throws(() => diagnostics.readCoreSummaryDiagnostic(root, diagnostic.id, identity), /当前来源或输入不一致/);
 });
 
 

@@ -8809,7 +8809,8 @@ function normalizeApiReaderRecoveryDraftForSource(draft, issues, options = {}, s
                         : pruneUniquelyUnboundReaderMarkdownTables(candidate);
                     if (prunedUnboundTables > 0) {
                         draftOrderMappings.push({
-                            contract: 'conference-reader-prune-unbound-tables-v1',
+                            ...require('./lib/protocol-codec').recordHeader('conference-reader-prune-unbound-tables',
+                                'conference-reader-prune-unbound-tables'),
                             changed: true,
                             removedTables: prunedUnboundTables
                         });

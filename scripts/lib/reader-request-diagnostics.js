@@ -91,7 +91,12 @@ function guarded(action) {
 }
 const beginReaderRepairDiagnostic = (root, context, options) => guarded(() => begin(root, context, options));
 const saveReaderRepairResponse = (diagnostic, raw) => guarded(() => response(diagnostic, raw));
-const CORE_CONTRACT = 'core-summary-request-diagnostics-v1';
+const coreCodec = require('./protocol-codec');
+const CORE_CONTRACT = 'core-summary-request-diagnostics';
+function coreDiagnosticHeader(value) {
+    if (!coreCodec.hasValidHeader(value, CORE_CONTRACT)) throw new Error('摘要修复记录格式无效');
+    return coreCodec.recordHeader(value.contract, CORE_CONTRACT, value.schemaFingerprint);
+}
 function beginCoreSummaryDiagnostic(root, context) {
     return guarded(() => {
         if (!context || typeof context.prompt !== 'string'
@@ -104,17 +109,18 @@ function beginCoreSummaryDiagnostic(root, context) {
         }
         const id = crypto.randomUUID();
         const dir = directory(root);
+        const header = coreCodec.recordHeader(CORE_CONTRACT, CORE_CONTRACT);
         const receipt = write(dir, `${id}.request.json`, { ...context,
-            contract: CORE_CONTRACT, id, at: new Date().toISOString(),
+            ...header, id, at: new Date().toISOString(),
             promptSha256: sha(context.prompt) });
-        return { id, directory: dir, requestSha256: receipt.sha256, contract: CORE_CONTRACT };
+        return { id, directory: dir, requestSha256: receipt.sha256, ...header };
     });
 }
 function saveCoreSummaryResponse(record, rawResponse) {
     return guarded(() => {
         if (typeof rawResponse !== 'string') throw new Error('摘要修复记录只保存真实响应');
         return write(record.directory, `${record.id}.response.json`, {
-            contract: CORE_CONTRACT, id: record.id, requestSha256: record.requestSha256,
+            ...coreDiagnosticHeader(record), id: record.id, requestSha256: record.requestSha256,
             at: new Date().toISOString(), outputTextSha256: sha(rawResponse), rawResponse
         });
     });
@@ -126,7 +132,7 @@ function saveCoreSummaryDisposition(record, disposition) {
                 && !/^[a-f0-9]{64}$/.test(String(disposition.outputTextSha256))))
             throw new Error('摘要修复结果记录格式无效');
         return write(record.directory, `${record.id}.disposition.json`, {
-            ...disposition, contract: CORE_CONTRACT, id: record.id,
+            ...disposition, ...coreDiagnosticHeader(record), id: record.id,
             requestSha256: record.requestSha256, at: new Date().toISOString()
         });
     });
@@ -156,8 +162,10 @@ function readCoreSummaryDiagnostic(root, id, expectedIdentity) {
         };
         const request = read('request'); const response = read('response');
         const disposition = read('disposition');
+        const header = coreDiagnosticHeader(request.value);
         if (!['rejected', 'validated'].includes(disposition.value.status)
-            || [request, response, disposition].some(item => item.value.contract !== CORE_CONTRACT || item.value.id !== id)
+            || [request, response, disposition].some(item =>
+                JSON.stringify(coreDiagnosticHeader(item.value)) !== JSON.stringify(header) || item.value.id !== id)
             || JSON.stringify(request.value.identity) !== JSON.stringify(expectedIdentity)
             || request.value.promptSha256 !== sha(request.value.prompt)
             || request.value.identity.inputAnalysisSha256 !== sha(request.value.inputAnalysis)
@@ -190,7 +198,7 @@ function latestCoreSummaryDiagnosticId(root, expectedIdentity) {
             } finally { fs.closeSync(fd); }
             if (JSON.stringify(request.identity) !== JSON.stringify(expectedIdentity)) continue;
             const id = name.slice(0, -'.request.json'.length);
-            if (request.contract !== CORE_CONTRACT || request.id !== id
+            if (!coreCodec.hasValidHeader(request, CORE_CONTRACT) || request.id !== id
                 || request.promptSha256 !== sha(request.prompt)
                 || request.identity.inputAnalysisSha256 !== sha(request.inputAnalysis)
                 || request.identity.sourceTextSha256 !== sha(request.sourceText)

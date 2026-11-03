@@ -480,6 +480,32 @@
           "variant": "same-source-current-resource-identity"
         }
       ]
+    },
+    {
+      "name": "core-summary-request-diagnostics",
+      "currentVariant": "bound-request-response-and-disposition",
+      "currentSchema": {
+        "purpose": "bound-request-response-and-disposition"
+      },
+      "historical": [
+        {
+          "tag": "core-summary-request-diagnostics-v1",
+          "variant": "bound-request-response-and-disposition"
+        }
+      ]
+    },
+    {
+      "name": "conference-reader-prune-unbound-tables",
+      "currentVariant": "same-draft-unbound-table-pruning-audit",
+      "currentSchema": {
+        "purpose": "same-draft-unbound-table-pruning-audit"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-prune-unbound-tables-v1",
+          "variant": "same-draft-unbound-table-pruning-audit"
+        }
+      ]
     }
   ]
 }
