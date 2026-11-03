@@ -41,7 +41,7 @@ enum PersonalWebDavSync {
 
     private static func project(_ personal: Object) throws -> Projection {
         var result: Projection = [:]
-        let favorites = try FavoriteCollections.editable(personal["favoriteCollections"])
+        let favorites = try FavoriteCollections.editable(personal["favoriteCollections"], root: personal)
         let items = favorites["items"] as? [String: Object] ?? [:]
         for field in sets {
             var rows: Object = [:]
@@ -234,7 +234,7 @@ enum PersonalWebDavSync {
             }
             result[field] = rows
         }
-        var favorites = try FavoriteCollections.editable(result["favoriteCollections"])
+        var favorites = try FavoriteCollections.editable(result["favoriteCollections"], root: result)
         var items = favorites["items"] as! [String: Object]
         let originalItems = try encoded(items)
         let mergedFavorites = merged["favorites"]!
