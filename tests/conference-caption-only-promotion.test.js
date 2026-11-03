@@ -48,13 +48,14 @@ function provenance(t) {
   env:{PAPER_ANALYZER_MODEL:'muse-spark-1.3-contributor',PAPER_ANALYZER_ENDPOINT:'https://example.invalid/v1'}
  }),catalogSha256:H('catalog'),tagCatalogVersion:'paper-tag-catalog-v2',tagCatalogSha256:H('old-registry'),implementationSha256:origin};
  const paperId='conference:interspeech:2026:conference-paper-id:du26b_interspeech';
- const parent={contract:api.CONTRACT,version:api.PROCESS_VERSION,authority,items:{[paperId]:{analysisRunId:'33333333-3333-4333-8333-333333333333',status:'pending',sourceIdentity:'conference-paper-id:du26b_interspeech'}},status:'running'};
- parent.processId=api.deterministicUuid(H(authority),api.CONTRACT);parent.stateSha256=H(parent);
+ const processHeader=require('../scripts/lib/protocol-codec').historicalHeader('conference-process','tag-catalog');
+ const parent={...processHeader,authority,items:{[paperId]:{analysisRunId:'33333333-3333-4333-8333-333333333333',status:'pending',sourceIdentity:'conference-paper-id:du26b_interspeech'}},status:'running'};
+ parent.processId=api.deterministicUuid(H(authority),processHeader.contract);parent.stateSha256=H(parent);
  const newer={...authority,tagCatalogVersion:'paper-tag-catalog-v2',tagCatalogSha256:H('a3'),implementationSha256:H('current')};
  const extraction=require('../scripts/lib/conference-extraction-receipt');
  const targetExtractor={...require('../scripts/lib/protocol-codec').registeredHeaders('conference-source-upgrade-extractor-target').find(x=>Object.hasOwn(x,'version')),backendVersion:extraction.BACKEND_VERSION};
  const plan={targetExtractor,contract:'conference-source-upgrade-plan-v2',version:2,authority:newer,fromProcessId:parent.processId,originalStateSha256:parent.stateSha256,sourceImplementationSha256:origin,papers:[{paperId,previousExecutionId:parent.items[paperId].analysisRunId,previousStatus:'pending'}]};plan.planSha256=H(plan);
- const child={contract:api.CONTRACT,version:api.PROCESS_VERSION,processId:api.deterministicUuid(plan.planSha256,'conference-source-upgrade-process-v1'),authority:newer,items:structuredClone(parent.items),status:'running',sourceUpgradePromotion:{originalProcessId:parent.processId,sourceImplementationSha256:origin,planSha256:plan.planSha256}};
+ const child={...processHeader,processId:api.deterministicUuid(plan.planSha256,'conference-source-upgrade-process-v1'),authority:newer,items:structuredClone(parent.items),status:'running',sourceUpgradePromotion:{originalProcessId:parent.processId,sourceImplementationSha256:origin,planSha256:plan.planSha256}};
  const save=(state,p)=>{const dir=path.join(root,state.processId);fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'state.json'),JSON.stringify(state),{mode:0o600});if(p)fs.writeFileSync(path.join(dir,'source-upgrade-plan.json'),JSON.stringify(p),{mode:0o600});return dir;};
  const childDir=save(child,plan);save(parent);
  // 这些是仅测试上级记录关系的合成样本，不代替完整进程、来源或发布资格核验。
@@ -77,7 +78,7 @@ test('重新签名的计划不能改动父成员状态或来源身份',t=>{
 });
 test('父级提升的递归会检查自己的计划，并能发现父级成环',t=>{
  const f=provenance(t);assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi,new Set([f.child.processId])),/来源升级恢复路径重复引用同一任务，或超过 64 层/);
- const secondPlan={contract:'conference-source-upgrade-plan-v2',version:2,authority:f.child.authority,fromProcessId:f.child.processId,originalStateSha256:H('child issued state'),sourceImplementationSha256:f.origin,papers:structuredClone(f.plan.papers)};
+ const secondPlan={targetExtractor:structuredClone(f.plan.targetExtractor),contract:'conference-source-upgrade-plan-v2',version:2,authority:f.child.authority,fromProcessId:f.child.processId,originalStateSha256:H('child issued state'),sourceImplementationSha256:f.origin,papers:structuredClone(f.plan.papers)};
  f.child.stateSha256=secondPlan.originalStateSha256;f.save(f.child,f.plan);secondPlan.planSha256=H(secondPlan);
  const second={...structuredClone(f.child),processId:api.deterministicUuid(secondPlan.planSha256,'conference-source-upgrade-process-v1'),sourceUpgradePromotion:{originalProcessId:f.child.processId,sourceImplementationSha256:f.origin,planSha256:secondPlan.planSha256}};
  const dir=f.save(second,secondPlan);assert.equal(recovery.sourceImplementation(second,dir,f.focusedApi),f.origin);

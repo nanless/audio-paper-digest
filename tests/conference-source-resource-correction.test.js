@@ -807,7 +807,7 @@ function publicationBridgeHarness() {
         analysisFileSha256:id,runFileSha256:id+'run',sourceFileSha256:'same-source',directory:'/analysis/'+id,source:{sourceDetails:{text:'source'}},readerReview:{scientificReplayHandle:Object.freeze({})}});
     const original=mk(parentId,parent),loaded=mk(childId,child);loaded.parent=original;
     const active={cold:true,receipt:{provenance:{sourceIdentity:{executionId:parentId}},real:'original receipt'},
-        batch:{policy:{kind:'source_core_correction'},formats:{recordsFormat:codec.historicalHeader(api.CORE_CONTRACT,'exact-original-source-member')}},row:{record:{childExecutionId:parentId}}};
+        batch:{policy:{kind:'source_core_correction'},formats:{recordsFormat:codec.historicalHeader('conference-source-core-correction','exact-original-source-member')}},row:{record:{childExecutionId:parentId}}};
     const controls={registered:true,whole:true,pins:true,canonical:true},pdf={actualChild:childId};
     const presented=()=>({...structuredClone(child),paper_id:child.id});
     const env={clone:structuredClone,sha,stable:hash,isDeepStrictEqual:require('node:util').isDeepStrictEqual,
