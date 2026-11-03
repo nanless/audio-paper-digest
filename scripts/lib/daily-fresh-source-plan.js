@@ -576,6 +576,41 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
     return output;
 }
 
+// Only the default locked daily analysis path can retry the exact prior
+// final-qualification failure before the writer considers new stage inputs.
+function savedOrdinaryReaderCheckpoint(plan, paper) {
+    const rejection = '读者文章与论文来源及分析记录的对应关系未通过核验。';
+    const engine = require('../analysis-engine.js');
+    if (!engine.paperAnalysisLockHeld(paper) || paper.latestAnalysisAttemptError !== rejection
+        || paper.error !== rejection || paper.latestAnalysisAttemptRetryable !== true
+        || paper.latestAnalysisAttemptErrorCode !== null || paper.latestAnalysisAttemptErrorScope !== null
+        || paper.latestAnalysisAttemptErrorCategory !== null || paper.latestAnalysisAttemptErrorStatus !== null
+        || Object.hasOwn(paper, require('./pending-fact-feedback').FIELD)
+        || require('./daily-fact-review').current(paper.arxivId)
+        || paper.analysisManifest?.stages?.apiReaderArticle?.status !== 'complete'
+        || typeof paper.analysisCheckpoint !== 'string' || !paper.analysisCheckpoint.trim()
+        || paper.analysis || paper.analysisStageCheckpoints?.apiReaderArticle !== paper.analysisCheckpoint
+        || !recoveryEntryPlans.has(plan)) return null;
+    const readCanonical = () => engine.readJsonFileStrict(Config.FILES.deepAnalysisResult);
+    const snapshot = readCanonical();
+    const lockedPlan = requireLockedDailyFreshSourceRecoveryPlan(snapshot, { entryPlan:plan, paper });
+    const stored = snapshot.papers.find(item => normalizedId(item) === normalizedId(paper));
+    const paperSha = stableHash(paper);
+    if (!stored || stableHash(stored) !== paperSha || !isPaperReusableForAnalysis(stored,lockedPlan)) return null;
+    const ordinal = require('./reader-target-ordinal-patch');
+    if (!ordinal.hasArchivedOrdinaryCompletion(stored)) return null;
+    const candidate = { ...structuredClone(stored), analysis:stored.analysisCheckpoint };
+    if (engine.getIncompleteAnalysisContentReason(candidate) !== null) return null;
+    const current = readCanonical();
+    requireLockedDailyFreshSourceRecoveryPlan(current, { entryPlan:plan, paper });
+    const latest = current.papers.find(item => normalizedId(item) === normalizedId(paper));
+    if (!latest || stableHash(latest) !== paperSha || stableHash(paper) !== paperSha)
+        fail('正式 Reader 恢复前的锁内论文记录发生变化');
+    // The analysis engine owns all final checks and clears the latest error
+    // only after this exact saved output has passed those checks again.
+    return candidate;
+}
+
 function createDailyAnalyzeFn(plan, options = {}) {
     if (options.readerFactLocalRevision !== undefined && typeof options.readerFactLocalRevision !== 'boolean')
         fail('Reader事实局部模式必须为布尔值');
@@ -585,11 +620,15 @@ function createDailyAnalyzeFn(plan, options = {}) {
     const analyze = options.analyze || require('../deep-analyzer.js').analyzePaperDeep;
     if (typeof analyze !== 'function') fail('需要每日分析器');
     return async paper => {
-        const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper, { coreSummaryDiagnosticId: options.coreSummaryDiagnosticIds?.[normalizedId(paper)],
+        const result = await withDailyFreshPaperSource(plan, paper, () => {
+            const saved = Object.keys(options).length === 0 ? savedOrdinaryReaderCheckpoint(plan, paper) : null;
+            if (saved) return saved;
+            return analyze(paper, { coreSummaryDiagnosticId: options.coreSummaryDiagnosticIds?.[normalizedId(paper)],
             paidCoreLiteralCorrection: options.paidCoreLiteralCorrectionHandles?.[normalizedId(paper)],
             resolvedReaderCandidate: options.resolvedReaderCandidates?.[normalizedId(paper)],
             naturalResourceProse: options.naturalResourceProse === true,
-            readerFactLocalRevision: options.readerFactLocalRevision === true }), options);
+            readerFactLocalRevision: options.readerFactLocalRevision === true });
+        }, options);
         // 来源上下文会在引擎保存输出之前去掉图片字节和路径字段，避免分析器改动后，
         // 默认流程悄悄重建 data/current 下的图片缓存。
         return result;

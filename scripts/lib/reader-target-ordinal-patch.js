@@ -422,7 +422,7 @@ function sealCompletion(paper,result){
     return ref;
 }
 function validateCompletion(paper){
-    const checked=readVerifiedCompletion(paper);if(!checked)return true;
+    const checked=readVerifiedCompletion(paper);if(!checked||checked.archivedOrdinary)return true;
     const daily=require('./daily-fresh-source-plan'),paperSha256=stableSha(paper);
     const runReference=daily.dailyFreshSourceReference(checked.plan);
     // The sealed record supplies the actual run, not a caller-authored scope.
@@ -483,8 +483,15 @@ function matchesArchivedOrdinaryCompletion(paper, attempts, actualRun, runFile) 
             || !Array.isArray(payload.draftOrderMappings) || payload.draftOrderMappings.length > 2
             || new Set(payload.draftOrderMappings.map(mapping => mapping?.contract)).size !== payload.draftOrderMappings.length
             || payload.draftOrderMappings.some(mapping => {
-                const codec = require('./protocol-codec'), draftSha = repair.hashDraft(payload.draft);
-                return !(codec.hasValidHeader(mapping, 'reader-draft-order') && mapping.outputSha256 === draftSha
+                const codec = require('./protocol-codec');
+                // The order map records one transformation within the attempt
+                // history. The archive's final draft is independently parsed
+                // below and must match the actual article/plan/figures.
+                return !(codec.hasValidHeader(mapping, 'reader-draft-order') && mapping.changed === true
+                        && SHA.test(mapping.inputSha256) && SHA.test(mapping.outputSha256)
+                        && mapping.inputSha256 !== mapping.outputSha256
+                        && ['sections', 'tables', 'conceptBridges', 'conceptMarkerLocations']
+                            .every(key => Array.isArray(mapping[key]))
                     || codec.hasValidHeader(mapping, 'reader-table-narrative-labels') && mapping.changed === true
                         && SHA.test(mapping.beforeDraftSha256) && SHA.test(mapping.afterDraftSha256)
                         && Array.isArray(mapping.removals) && mapping.removals.length > 0
@@ -567,10 +574,13 @@ function readVerifiedCompletion(paper, planning=false){
     const unfinishedPlanning=planning&&!marked&&stage?.status!=='complete'
         &&!stage?.ordinalPatchHistory&&!Object.hasOwn(paper,'readerRevisionHistory')
         &&!Object.hasOwn(paper,'apiReaderArticle')&&!Object.hasOwn(paper,'apiReaderPlan');
-    const operatorCompletion=operator.hasOperatorProofMarker(stage?.operatorProvenance)
-        ||history?.reason==='operator-correction-supersedes-ordinal-completion'
-        ||(!unfinishedPlanning&&!files.length&&operator.hasRetainedOrdinalCandidate(paper,attempts)
-            &&(marked||!matchesArchivedOrdinaryCompletion(paper,attempts,actualRun,runFile)));
+    const explicitOperator=operator.hasOperatorProofMarker(stage?.operatorProvenance)
+        ||history?.reason==='operator-correction-supersedes-ordinal-completion';
+    const retainedCandidate=!explicitOperator&&!unfinishedPlanning&&!files.length
+        &&operator.hasRetainedOrdinalCandidate(paper,attempts);
+    if(retainedCandidate&&!marked&&matchesArchivedOrdinaryCompletion(paper,attempts,actualRun,runFile))
+        return {archivedOrdinary:true};
+    const operatorCompletion=explicitOperator||retainedCandidate;
     if(operatorCompletion){
         if(marked)fail('operator completion retains ordinary completion markers','run');
         const ref=history?.previousCompletionProof;
@@ -687,4 +697,5 @@ function replayNormalCompletion(paper,{source,last,saved}){
 }
 
 module.exports={CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
-    recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>Boolean(readVerifiedCompletion(paper,true)),compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
+    recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
+    hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
