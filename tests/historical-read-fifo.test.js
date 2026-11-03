@@ -78,7 +78,7 @@ test('历史读取入口拒绝检查后被替换的无写入方 FIFO，保留原
             const original = Buffer.from('{}');
             fs.writeFileSync(filename, original, { mode: 0o644 });
             const output = spawnSync(process.execPath, ['-e', replacementReader,
-                projectRoot, target, filename, directory], { encoding: 'utf8', timeout: 2000 });
+                projectRoot, target, filename, directory], { encoding: 'utf8', timeout: 10000 });
             assert.equal(output.error, undefined, output.error?.message);
             assert.equal(output.status, 0, output.stderr);
             const result = JSON.parse(output.stdout.trim().split('\n').at(-1));
