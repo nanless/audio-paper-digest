@@ -33,6 +33,7 @@ if __name__ == '__main__':
 
 REF_CONTRACT = 'daily-render-observation-ref'
 RECORD_CONTRACT = 'daily-hugo-render-observation'
+LAYOUT_PROFILE = 'single-theme-baseof-layoutdir'
 CONFIG_NAMES = ('hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json',
                 'config.yaml', 'config.yml', 'config.toml', 'config.json')
 _CURRENT = contextvars.ContextVar('daily_hugo_capture_session', default=None)
@@ -401,7 +402,7 @@ def _profile(binding, limits):
         return
     if set(plan) != {'status', 'profile', 'rootLayouts', 'effectiveBaseof', 'themeLayouts', 'configPath', 'configSha256'}:
         _fail('Invalid supported layout facts', 'invalid')
-    if plan['profile'] != 'single-theme-baseof-layoutdir-v1' or not isinstance(plan['themeLayouts'], list) or len(plan['themeLayouts']) > 1:
+    if plan['profile'] != LAYOUT_PROFILE or not isinstance(plan['themeLayouts'], list) or len(plan['themeLayouts']) > 1:
         _fail('Unsupported layout facts must be decided before capture', 'invalid')
     repo = _absolute(binding['blogRoot'])
     if _absolute(plan['rootLayouts']) != repo / 'layouts':

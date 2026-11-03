@@ -108,7 +108,7 @@ class CaptureTest(unittest.TestCase):
             generationManifestSha256='a' * 64, baseHead='b' * 40,
             reviewProtocolFingerprint='c' * 64, files=self.files,
             pages=[{'path': r['path'], 'sha256': r['sha256']} for r in self.files],
-            layoutPlan=dict(status='supported', profile='single-theme-baseof-layoutdir-v1',
+            layoutPlan=dict(status='supported', profile=capture.LAYOUT_PROFILE,
                             rootLayouts=str(self.layouts), effectiveBaseof=str(self.base), themeLayouts=[],
                             configPath=str(self.repo / 'hugo.toml'),
                             configSha256=sha((self.repo / 'hugo.toml').read_bytes())),

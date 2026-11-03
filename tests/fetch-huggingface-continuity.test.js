@@ -12,7 +12,9 @@ const stable = value => Array.isArray(value) ? value.map(stable) : value && type
 const WITNESS_ID = '2610.09000', WITNESS_AT = '2026-10-09T20:00:00.000Z';
 function boundaryFixture(reason = null) {
     const originalSince = '2026-10-11T14:00:00.000Z';
-    const checkpoint = { sourceContractVersion: 7, batchDate: '2026-10-11', fetchBoundary: { until: originalSince },
+    const originalBoundaryContract = 'daily-fetch-boundary-v1';
+    const checkpoint = { sourceContractVersion: 7, batchDate: '2026-10-11',
+        fetchBoundary: { contract: originalBoundaryContract, until: originalSince },
         arxiv: Object.fromEntries(Config.ARXIV_CATEGORIES.map(({ id }) => [id, { papers: [] }])),
         huggingface: { papers: reason === 'no-previous-records' ? []
             : [{ arxivId: WITNESS_ID, ...(reason ? {} : { hfSelectedAt: WITNESS_AT }) }] } };
@@ -21,7 +23,7 @@ function boundaryFixture(reason = null) {
     const hf = reason ? { status: 'not-applicable', reason }
         : { status: 'expected', arxivId: WITNESS_ID, selectedAt: WITNESS_AT, cutoffDate: '2026-10-10' };
     const cutoffDate = reason ? '2026-10-11' : hf.cutoffDate;
-    const body = { contract: 'daily-fetch-boundary-v1', lastDigestDate: '2026-10-11',
+    const body = { contract: originalBoundaryContract, lastDigestDate: '2026-10-11',
         since: reason ? originalSince : '2026-10-09T16:00:00.000Z', until: '2026-10-15T06:00:00.000Z',
         provenance: { archiveProofs: ['fetch-checkpoint.json', 'raw-candidates.json', 'filtered-papers.json',
             'deep-analysis-result.json', 'blog-generation-manifest-2026-10-11.json'].map(file => ({ file,

@@ -12897,7 +12897,7 @@ def _daily_render_layout_profile(repo, page_artifacts):
         daily_hugo_capture.validate_site_url(cfg.get('baseurl', ''), policy)
     except (ValueError, TypeError, AttributeError):
         return unsupported('没有受支持的 HTTPS 站点边界')
-    return ({'status': 'supported', 'profile': 'single-theme-baseof-layoutdir-v1',
+    return ({'status': 'supported', 'profile': daily_hugo_capture.LAYOUT_PROFILE,
              'rootLayouts': str(roots[0]), 'themeLayouts': list(map(str, themes)),
              'effectiveBaseof': str(baseof), 'configPath': str(config),
              'configSha256': hashlib.sha256(raw).hexdigest()}, policy)
