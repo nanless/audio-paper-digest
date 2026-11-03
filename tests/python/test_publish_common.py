@@ -24,6 +24,7 @@ from tag_catalog import (
 from tag_stage_record import (tag_stage_record_declaration, TAG_STAGE_RECORD_CONTRACT,
                               TAG_STAGE_BINDING_FIELDS as CURRENT_TAG_STAGE_BINDING_FIELDS,
                               LEGACY_TAG_STAGE_BINDING_FIELDS, read_tag_stage_record)
+from tag_catalog import tag_catalog_identity
 from publish_common import (  # noqa: E402
     LlmAccountPoolConfigError,
     PublishLLMUnavailable,
@@ -150,7 +151,7 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
     masked_output_analysis_sha256 = hashlib.sha256(
         _mask_classification_fields(output_analysis).encode('utf-8')).hexdigest()
     binding = {
-        'registryVersion': _PUBLISH_TAG_CATALOG['version'],
+        'registryVersion': tag_catalog_identity(_PUBLISH_TAG_CATALOG),
         'registrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
         'projectionContract': prompt_text_contract,
         'projectionSha256': tag_prompt_text_sha256(
@@ -223,7 +224,7 @@ def rebind_tag_stage_record(stage, *, registry_sha256=None, annotation=None,
         annotation = copy.deepcopy(annotation)
         if annotation.get('toRegistrySha256') == cross_end_fixture()['currentRegistrySha256']:
             annotation['toRegistrySha256'] = _PUBLISH_TAG_CATALOG['registrySha256']
-            annotation['toRegistryVersion'] = _PUBLISH_TAG_CATALOG['version']
+            annotation['toRegistryVersion'] = tag_catalog_identity(_PUBLISH_TAG_CATALOG)
         stage['registryUpgradeFrom'] = annotation
     if projection_sha256 is not None:
         stage['projectionSha256'] = projection_sha256
@@ -3532,7 +3533,7 @@ primary_method_tag: #基准测试
             'contract': 'paper-tag-catalog-upgrade-v2', 'version': 2,
             'fromRegistrySha256': from_sha, 'fromRegistryVersion': snapshot['version'],
             'toRegistrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
-            'toRegistryVersion': _PUBLISH_TAG_CATALOG['version'],
+            'toRegistryVersion': tag_catalog_identity(_PUBLISH_TAG_CATALOG),
             'changeLevel': _classify_registry_change(
                 snapshot, _PUBLISH_TAG_CATALOG)['changeLevel'],
             'reasons': ['definition-updated', 'scope-note-updated'],
@@ -3703,7 +3704,7 @@ primary_method_tag: #基准测试
             'contract': 'paper-taxonomy-registry-upgrade-v1', 'version': 1,
             'fromRegistrySha256': from_sha, 'fromRegistryVersion': snapshot['version'],
             'toRegistrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
-            'toRegistryVersion': _PUBLISH_TAG_CATALOG['version'],
+            'toRegistryVersion': tag_catalog_identity(_PUBLISH_TAG_CATALOG),
             'changeLevel': _classify_registry_change(
                 snapshot, _PUBLISH_TAG_CATALOG)['changeLevel'],
             'reasons': ['definition-updated', 'scope-note-updated'],
@@ -3714,7 +3715,7 @@ primary_method_tag: #基准测试
         saved = copy.deepcopy((paper, manifest))
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
         self.assertEqual((paper, manifest), saved)
-        stage['registryVersion'] = _PUBLISH_TAG_CATALOG['version']
+        stage['registryVersion'] = tag_catalog_identity(_PUBLISH_TAG_CATALOG)
         rebind_tag_stage_record(stage)
         with self.assertRaisesRegex(PublishDataValidationError, '与旧词表快照不一致'):
             _validate_tag_stage_record(paper, manifest, paper['arxivId'])
@@ -3744,7 +3745,7 @@ primary_method_tag: #基准测试
                 'fromRegistrySha256': from_sha,
                 'fromRegistryVersion': snapshot['version'],
                 'toRegistrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
-                'toRegistryVersion': _PUBLISH_TAG_CATALOG['version'],
+                'toRegistryVersion': tag_catalog_identity(_PUBLISH_TAG_CATALOG),
                 'changeLevel': 'additive',
                 'reasons': ['definition-updated', 'scope-note-updated'],
                 'note': '明确确认 ITN 从口语识别结果恢复为书面文本的定义修正。',
@@ -3786,7 +3787,7 @@ primary_method_tag: #基准测试
                 PublishDataValidationError,
                 '标签阶段记录中的 registryVersion 与当前词表、提示文本或标签选择协议不一致。'):
             _validate_tag_stage_record(paper, manifest, paper['arxivId'])
-        stage['registryVersion'] = _PUBLISH_TAG_CATALOG['version']
+        stage['registryVersion'] = tag_catalog_identity(_PUBLISH_TAG_CATALOG)
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
     def test_tag_stage_upgrade_rejects_invalid_snapshots_annotations_and_concepts(self):
@@ -3953,9 +3954,9 @@ primary_method_tag: #基准测试
                     'contract': 'paper-taxonomy-registry-upgrade-v1',
                     'version': 1,
                     'fromRegistrySha256': snapshot_sha,
-                    'fromRegistryVersion': current['version'],
+                    'fromRegistryVersion': tag_catalog_identity(current),
                     'toRegistrySha256': current['registrySha256'],
-                    'toRegistryVersion': current['version'],
+                    'toRegistryVersion': tag_catalog_identity(current),
                     'changeLevel': 'destructive',
                     'reasons': ['concept-removed'],
                     'note': '人工确认（这个变更不可确认）',
@@ -3986,11 +3987,11 @@ primary_method_tag: #基准测试
         self.assertFalse(any(c.get('broaderId') == 'task.wake-word'
                              for c in synthetic_old['concepts']),
                          '构造测试用旧词表时，只能移除没有下级概念的 task.wake-word')
-        # 写入词表文件时只保留 version、facets、concepts 三个字段。
+        # 写回文件时保留格式声明、维度及概念。
         # registrySha256 是加载后附加的元数据，写回文件会先被词表字段校验拒绝，
         # 快照读取因此返回 None。
         synthetic_old = {k: synthetic_old[k]
-                         for k in ('version', 'facets', 'concepts') if k in synthetic_old}
+                         for k in ('contract', 'schemaFingerprint', 'facets', 'concepts') if k in synthetic_old}
         synthetic_bytes = json.dumps(synthetic_old, ensure_ascii=False, indent=2).encode('utf-8')
         synthetic_sha = hashlib.sha256(synthetic_bytes).hexdigest()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -4005,9 +4006,9 @@ primary_method_tag: #基准测试
                     'contract': 'paper-taxonomy-registry-upgrade-v1',
                     'version': 1,
                     'fromRegistrySha256': synthetic_sha,
-                    'fromRegistryVersion': current['version'],
+                    'fromRegistryVersion': tag_catalog_identity(current),
                     'toRegistrySha256': current['registrySha256'],
-                    'toRegistryVersion': current['version'],
+                    'toRegistryVersion': tag_catalog_identity(current),
                     'changeLevel': 'additive',
                     'reasons': ['concept-added'],
                     'note': '构造只增加概念的词表更新，核对确认字段只能用于破坏性变更',

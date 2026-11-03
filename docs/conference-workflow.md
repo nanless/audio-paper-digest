@@ -151,59 +151,32 @@ npm run conference:evidence -- apply \
 
 ```bash
 npm run conference:filter -- spec --catalog NAME.json --report REPORT.json \
-  --evidence-run EVIDENCE_RUN_UUID --output CONFERENCE-FILTER-V6.json
+  --evidence-run EVIDENCE_RUN_UUID --output CONFERENCE-FILTER.json
 npm run conference:filter -- prepare --catalog NAME.json --report REPORT.json \
-  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V6.json
+  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER.json
 npm run conference:filter:run -- --apply --catalog NAME.json --report REPORT.json \
-  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V6.json \
+  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER.json \
   --filter UUID --owner filter.worker --limit 1
 npm run conference:filter -- status --filter UUID
 npm run conference:filter -- apply --filter UUID --decision DECISION.json --owner OPERATOR
 ```
 
-新任务只使用 v6 配置；模型请求记录使用 `conference-filter-llm-request-v3`。旧 v5 配置只供原 UUID 的已有任务恢复，核验原记录后仍按原格式继续，不能用它创建新任务。新旧词表字段不能同时出现，即使值相同或为空。决定、选择回执、选择凭据和锁记录仍使用各自的版本 5，不能把它们当成任务版本 6。
+新建筛选配置使用 `conference-filter-spec`，模型请求使用 `conference-filter-llm-request`。两者各有格式声明和结构指纹。筛选决定、入选回执和操作锁也分别声明各自的格式。已有筛选任务先核验原记录，再沿用原任务编号继续。不同格式的词表字段不能混用。
 
-每会配置位于 `data/runtime/conference-filter-specs/`，只能由 `spec` 从同会认证的 discovery 双文件及完整摘要证据运行生成，不能跨会议共享。以下字段示例中的占位 SHA 须按相应文件原字节或规范化对象真实计算，不能直接通过校验：
+`spec` 从同一场会议的候选目录、核对报告和完整摘要证据生成配置，默认保存到 `data/runtime/conference-filter-specs/`。生成后可以检查以下内容。
 
-```json
-{
-  "contract": "conference-filter-spec-v6",
-  "version": 6,
-  "filterPolicySha256": "<64-hex-current-policy-sha256>",
-  "promptSha256": "<64-hex-current-prompt-sha256>",
-  "model": "muse-spark-1.3-contributor",
-  "endpointProtocol": "openai-responses",
-  "endpointIdentitySha256": "<64-hex-current-normalized-endpoint-identity-sha256>",
-  "tagCatalogSha256": "<64-hex-current-tag-catalog-file-sha256>",
-  "evidenceCatalogContract": "conference-filter-evidence-catalog-v1",
-  "discovery": {
-    "contract": "conference-discovery-catalog-v2",
-    "conferenceId": "iwslt-2026",
-    "catalogSha256": "<64-hex-discovery-catalog-file-sha256>",
-    "reportSha256": "<64-hex-discovery-report-sha256>",
-    "candidateSetSha256": "<64-hex-normalized-filter-candidate-set-sha256>"
-  },
-  "evidence": {
-    "runId": "<evidence-run-uuid-v4>",
-    "catalogSha256": "<64-hex-evidence-catalog-sha256>",
-    "reportSha256": "<64-hex-evidence-report-sha256>",
-    "stateSha256": "<64-hex-evidence-state-sha256>",
-    "memberSetSha256": "<64-hex-evidence-member-set-sha256>",
-    "locator": {
-      "contract": "abstract-locator-v1",
-      "implementationSha256": "<64-hex-registered-default-locator-sha256>"
-    }
-  }
-}
-```
+- `filterPolicySha256` 和 `promptSha256` 分别对应筛选规则和提示词。
+- `tagCatalogSha256` 对应本次使用的词表原文件。
+- `discovery` 对应该会议的候选目录、核对报告及完整候选集合。
+- `evidence` 对应保存摘要证据的那次运行。它记录完整成员集合、来源记录及摘要定位规则。AAAI 使用登记过的专用定位规则。
 
-AAAI 的 `locator` 还须精确包含 `"profile":"aaai-2026-bare-introduction-v1"` 及其登记的实现 SHA。旧 AAAI 默认绑定、未登记的 profile/hash、不同证据运行或不完整论文集合，均在 prepare/runner 和模型请求前拒绝。旧 `conference-filter-spec-v4`、无摘要证据的配置或共享配置不能继续使用，须按会议重新 prepare。
+来源证据缺失、摘要定位规则不匹配或候选集合不完整时，须重新准备该会议的配置，再发起模型请求。
 
-`spec` 自动读取项目配置中的模型、协议和端点，当前新请求统一使用 `muse-spark-1.3-contributor`、OpenAI Responses 和项目 HTTP CONNECT 代理；不要复制示例手写生产配置。
+`spec` 自动读取项目配置中的模型、协议和端点，当前新请求统一使用 `muse-spark-1.3-contributor`、OpenAI Responses 和项目 HTTP CONNECT 代理。运行时用 `spec` 生成实际配置。
 
-`endpointIdentitySha256` 由 `endpointIdentitySha256(endpoint, model)` 对公共路由规范化后的 API URL 的 UTF-8 字节计算，不含 API key。占位值不代替当前端点计算。
+`endpointIdentitySha256` 由 `endpointIdentitySha256(endpoint, model)` 对公共路由规范化后的 API URL 的 UTF-8 字节计算，不含 API key。
 
-已有筛选任务保留当时的模型、协议和全部请求证据；端点、协议或模型改变须新建筛选任务，不能为了套用当前示例改写旧 spec。仅重生成已有合格页面不重新筛选。
+已有筛选任务保留当时的模型、协议和全部请求证据；端点、协议或模型改变须新建筛选任务，原筛选配置按登记时的格式保留。仅重生成已有合格页面不重新筛选。
 
 ### 筛选健康检查、并发与恢复
 
@@ -244,11 +217,11 @@ npm run conference:process -- --status --verify-files \
   --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID
 ```
 
-入口只接受 complete、非空、来自 `official-proceedings` discovery 的选择，每个 included 成员必须是唯一 `exact` PDF。自动来源验收使用 `conference-deterministic-source-seal-v1`，表示程序按官方 metadata 的 `pdfFile` 核验文件，不表示人工审阅。程序内部依次安排提取、暂存、导入和计划，再完成共享深度分析、评分、解读、标签和单篇暂存页。
+入口只接受 complete、非空、来自 `official-proceedings` discovery 的选择，每个 included 成员必须是唯一 `exact` PDF。自动来源核验使用 `conference-deterministic-source-seal`，按官方元数据中的 `pdfFile` 对应论文与文件。人工审阅另有独立记录。程序内部依次安排提取、暂存、导入和计划，再完成共享深度分析、评分、解读、标签和单篇暂存页。
 
 每篇仍按固定 PyMuPDF 提取，重新核对提取请求、元数据、PDF、文本、结构化证据、回执及验证记录的 SHA。进程 UUID 由入选集合、词表原文件和实现指纹确定；每篇分析 UUID 再由进程 UUID 和完整 `paperId` 确定。状态保存在 `data/runtime/conference-processes/<process-uuid>/state.json`。
 
-新进程和完成凭证各自使用 v2 格式，词表身份字段为 `tagCatalogVersion`、`tagCatalogSha256`。已有 v1 记录先按原对象完整核验，再继续原 UUID，保留创建时的词表字段和值；读取不会给旧记录换格式或重算原身份。工作区盘点同时识别两版，但盘点通过不能代替正式完成及发布检查。队列和分析配置仍使用各自独立的版本。
+新进程与完成凭证各自保存格式名和结构指纹，词表身份分别记录在 `tagCatalogVersion` 和 `tagCatalogSha256`。恢复旧任务时，程序按原格式完整核验记录，再沿用原任务编号和原词表。队列和分析配置各有独立格式。正式完成与发布仍需逐项检查。
 
 `--concurrency` 默认 1，范围 1–60，覆盖单篇处理生命周期；每篇进入分析引擎时内部并发为 1，单篇本轮不会自行重复跑整条流水线。初始有资格的成员先统一完成正常首轮，全部在途结果保存后只续可重试失败项。
 
@@ -602,7 +575,7 @@ Reader 更新后，旧派生父 CAS 不会自动获得 current 出版权限；�
 
 Hugo 和正文审查的页面集合只包含单篇及汇总 Markdown。研究工作区的四份 sidecar 不冒充 HTML 页，仍完整保留在 generation、review、Git 精确差异及线上字节验收集合中；例如本会 1355 个页面与 5416 份 sidecar 分别核对，不能以总文件数代替 HTML 页面数。
 
-新 v2 发布在推送博客和图床后，自动 GET 已审页面和全部图片，通过后才保存发布完成记录。页面检查 HTTP 200、HTML 类型、最终 URL 与唯一正式地址一致，以及已审正文、图片顺序和表格单元格的对应关系；含公式时还检查数学脚本存在。
+推送博客和图床后，发布程序自动读取已审页面和全部图片。核验通过后才保存发布完成记录。页面检查 HTTP 200、HTML 类型、最终 URL 与唯一正式地址一致，以及已审正文、图片顺序和表格单元格的对应关系；含公式时还检查数学脚本存在。
 
 图片检查 PNG 类型、实际字节 SHA 和可解码性，允许通过安全核验的重定向，不套用页面最终 URL 必须等于正式地址的条件。线上核验默认并发 4，`PD_CONFERENCE_ONLINE_VERIFY_CONCURRENCY` 范围 1–16。
 
@@ -610,15 +583,11 @@ GET 使用项目 HTTP CONNECT，逐跳核验公网地址并限制响应。全链
 
 `status` 报告已保存的线上检查快照；显式 `verify` 会记录一次新的 intent/result 并重新 GET，最新 pending 或失败不能被旧通过掩盖。已有 publish 的重复 `push` 只读 status，不代替新的线上重验。旧的仅提交发布记录仍须单独补充网页核验。新补充核验保存为 `verification.json`；已有补充凭证按原文件核验，原记录字节保留。
 
-读取已发布凭证时，不带 `contentReview` 的 v2 审查记录按旧格式识别：`conference-blog-review-v1` 的 version 2 中途增加过 `contentReview` 要求，早期代码写过不带的 v2 记录，自哈希、文件清单、`generationSha256` 和 HTML 检查的页面集合都对得上，是那段代码的合法输出文件。
+早期会议发布只保存 HTML 检查结果，部分凭证没有 `contentReview`。读取这些已发布凭证时，程序按原格式核验自带校验值、文件清单、对应生成记录及 HTML 页面集合。正文与图片审查的结果须另行核对。
 
-当前发布器给每个 v2 generation 都写 `contentReview`，缺字段不可能由当前代码产生，所以只在读取已发布凭证时按旧格式放行。
+新发布及待推送凭证须包含通过的 `contentReview`。逐页记录必须与本次生成的页面及文件校验值对应。审查的格式指纹绑定当时使用的审查代码、模型和 Hugo 运行环境，读取已发布凭证时保留原指纹。待推送的批次须使用当前指纹。
 
-新发布和待推送的凭证仍必须带一份通过的 `contentReview`；带 `contentReview` 但没通过、逐页记录不符、或 HTML 检查的页面集合不完整或不一致的记录一律拒绝。
-
-正文审查协议指纹绑定的是当时的审查代码、模型与 Hugo 运行时，读取已发布凭证时不要求历史批次协议等于当前指纹；待推送的批次协议仍须为当前值。
-
-按路径与 SHA 复用的逐页通过记录保留原独立协议和自哈希，不改签为新协议：跨协议复用须核验原 `conference-page-content-review-v1` 完整通过记录、自哈希、合法协议、精确路径及页面 SHA，并与原内容寻址通过缓存一致；缺失、篡改或仅有旧无签名字段的混合协议记录均拒绝。同协议旧 v2 凭证仍按其原格式识别。
+复用曾经通过的单页审查时，须核对原记录的格式、自带校验值、文件路径和文件字节，并确认它与保存的通过记录一致。原记录按原格式保存。
 
 这里的 complete 范围是 `mechanical-html+remote-oid+online-urls`。该验收不查询 GitHub Pages workflow 的 build/deploy，不另查页面标题，也不执行浏览器中的 MathJax/KaTeX 或人工看图。
 
