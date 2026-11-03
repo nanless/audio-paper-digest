@@ -29,16 +29,16 @@ class SafeHttpDnsTest {
         }
         assertEquals(listOf(public), SafeHttp.PublicDns(false, answers(public)).lookup("published.example.invalid"))
     }
-    @Test fun publishedSiteAcceptsOnlyTheActiveVpnFakeIpRangeForItsFixedHost() {
+    @Test fun onlyTheDedicatedPublisherClientAcceptsSyntheticRoutesForItsFixedHost() {
         val fakeIp = ip(198, 18, 0, 15)
         val publisher = "nanless.github.io"
-        var vpnActive = false
-        val dns = SafeHttp.PublicDns(false, answers(fakeIp)) { vpnActive }
-        assertThrows(UnknownHostException::class.java) { dns.lookup(publisher) }
-        vpnActive = true
+        assertThrows(UnknownHostException::class.java) {
+            SafeHttp.PublicDns(false, answers(fakeIp)).lookup(publisher)
+        }
+        val dns = SafeHttp.PublicDns(false, answers(fakeIp), publisherOnly = true)
         assertEquals(listOf(fakeIp), dns.lookup(publisher))
         assertThrows(UnknownHostException::class.java) { dns.lookup("example.invalid") }
-        val mixed = SafeHttp.PublicDns(false, answers(fakeIp, ip(192, 168, 1, 1))) { true }
+        val mixed = SafeHttp.PublicDns(false, answers(fakeIp, ip(192, 168, 1, 1)), publisherOnly = true)
         assertThrows(UnknownHostException::class.java) { mixed.lookup(publisher) }
     }
     @Test fun onlyExplicitLocalModelHostKeepsItsExistingLoopbackAllowance() {

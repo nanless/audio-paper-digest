@@ -1,8 +1,6 @@
 package com.nanless.paperdigest.data
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.util.JsonReader
 import android.util.JsonToken
 import java.io.InputStream
@@ -31,15 +29,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     private val directory = File(personal.directory, "PublishedLibrary").also { it.mkdirs() }
     private val current = File(directory, "current.json")
     private val syncMutex = Mutex()
-    private val publishedHttp by lazy {
-        val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        SafeHttp.publishedSite {
-            val network = connectivity?.activeNetwork
-            network != null && connectivity.getNetworkCapabilities(network)
-                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-        }
-    }
-
+    private val publishedHttp by lazy { SafeHttp.publishedSite() }
     private val offlineIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private data class CatalogState(val published: List<Paper>, val retired: List<Paper>, val summary: JSONObject, val epoch: String, val taxonomy: WebsiteTaxonomy? = null) {
         val all = (published + retired).distinctBy { it.id }
