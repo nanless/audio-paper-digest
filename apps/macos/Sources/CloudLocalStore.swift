@@ -217,6 +217,7 @@ extension CloudLocalStore.Profile {
         lastAttemptAt=try values.decodeIfPresent(Date.self,forKey:.lastAttemptAt)
         lastBackup=try values.decodeIfPresent(CloudLocalStore.Completed.self,forKey:.lastBackup)
         automaticPaused=try values.decodeIfPresent(Bool.self,forKey:.automaticPaused)
+        retryAfter=try values.decodeIfPresent(Date.self,forKey:.retryAfter)
     }
 }
 

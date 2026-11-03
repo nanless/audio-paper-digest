@@ -136,7 +136,8 @@
           "intervalHours",
           "lastAttemptAt",
           "lastBackup",
-          "automaticPaused"
+          "automaticPaused",
+          "retryAfter"
         ],
         "storage": "outside-portable-research-data",
         "intervalHours": [
@@ -148,6 +149,31 @@
         {
           "tag": "paperdigest-cloud-profile-v1",
           "variant": "mac-device-destination"
+        },
+        {
+          "tag": "paperdigest-cloud-profile",
+          "variant": "mac-device-destination",
+          "header": {
+            "contract": "paperdigest-cloud-profile",
+            "schemaFingerprint": "c8763049af6a9920041dc2d2176cfc85fc51ae9ff94afaf492675d3bd6d18e1a"
+          },
+          "schema": {
+            "fields": [
+              "destinationID",
+              "account",
+              "folder",
+              "automatic",
+              "intervalHours",
+              "lastAttemptAt",
+              "lastBackup",
+              "automaticPaused"
+            ],
+            "storage": "outside-portable-research-data",
+            "intervalHours": [
+              6,
+              168
+            ]
+          }
         }
       ]
     },
