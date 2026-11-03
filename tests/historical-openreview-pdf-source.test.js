@@ -51,6 +51,40 @@ test('保存按论坛 ID 命名的 PDF 与附有自身 SHA 的凭证，权限为
     const second = await run(); assert.equal(second.status, 'recovered'); assert.equal(calls, 1);
 });
 
+test('用 Git 原写入器封存的收据以旧头逐字恢复，不重新获取 PDF', async t => {
+    const originalCommit = 'd0b1d8b5a9444c2a0929bb31bae7f7a0ed2829a3';
+    const Module = require('node:module');
+    const { execFileSync } = require('node:child_process');
+    const root = path.resolve(__dirname, '..');
+    function loadOriginal(name, originalPoster) {
+        const relative = `scripts/lib/${name}.js`;
+        const filename = path.join(root, relative);
+        const original = new Module(filename, module);
+        original.filename = filename;
+        original.paths = Module._nodeModulePaths(path.dirname(filename));
+        const load = original.require.bind(original);
+        original.require = id => id === './historical-icml-poster-authority.js' && originalPoster
+            ? originalPoster : load(id);
+        const source = execFileSync('git', ['show', `${originalCommit}:${relative}`], { cwd: root, encoding: 'utf8' });
+        original._compile(source, filename);
+        return original.exports;
+    }
+    const originalPoster = loadOriginal('historical-icml-poster-authority');
+    const originalOpenReview = loadOriginal('historical-openreview-pdf-source', originalPoster);
+    const f = fixture(t);
+    const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
+        pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
+    const sealed = await originalOpenReview.sealOpenreviewPdf(options, { fetchPdf: async () => download(f) });
+    assert.equal(sealed.receipt.contract, 'historical-openreview-pdf-source-v1');
+    const receiptBytes = fs.readFileSync(sealed.receiptFile);
+    const pdfBytes = fs.readFileSync(sealed.pdfFile);
+    const recovered = await api.sealOpenreviewPdf(options, { fetchPdf: async () => { assert.fail('must not fetch'); } });
+    assert.equal(recovered.status, 'recovered');
+    assert.deepEqual(recovered.receipt, sealed.receipt);
+    assert.deepEqual(fs.readFileSync(sealed.receiptFile), receiptBytes);
+    assert.deepEqual(fs.readFileSync(sealed.pdfFile), pdfBytes);
+});
+
 test('已有凭证对应的 PDF 缺失时，在联网前拒绝恢复', async t => {
     const f = fixture(t); const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
@@ -113,7 +147,7 @@ test('拒绝非 PDF 内容类型、超大响应、重定向记录不连续及论
     broken.receiptSha256 = api.stableHash(broken);
     assert.throws(() => api.normalizeReceipt(broken), /not continuous/);
     fs.appendFileSync(f.snapshotFile, ' ');
-    await assert.rejects(api.sealOpenreviewPdf(base, { fetchPdf: async () => download(f) }), /differs from authenticated forum authority|changed/);
+    await assert.rejects(api.sealOpenreviewPdf(base, { fetchPdf: async () => download(f) }), /differs from authenticated forum authority|changed|不能从同一实际快照唯一重放/);
 });
 
 test('命令行校验显式的身份和来源参数，根目录仍可覆写', t => {

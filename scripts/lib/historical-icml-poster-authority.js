@@ -9,8 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const protocols = require('./protocol-codec');
 
-const CONTRACT = 'historical-icml-official-poster-snapshot-v1';
-const VERSION = 1;
+const CONTRACT = 'historical-icml-official-poster-snapshot';
 const DAILY_BINDING_CONTRACT = 'historical-daily-icml-poster-binding';
 const PDF_DESCRIPTOR_CONTRACT = 'historical-icml-local-forum-pdf';
 const SOURCE_KIND = 'retained-local-icml-miniconf-raw-snapshot';
@@ -159,16 +158,17 @@ function authorityFromLoaded(loaded) {
         posterIds.add(record.posterId); forumIds.add(record.forumId);
     }
     records.sort((left, right) => Number(left.posterId) - Number(right.posterId));
-    const body = { contract: CONTRACT, version: VERSION, sourceKind: SOURCE_KIND,
+    const body = { ...protocols.recordHeader(CONTRACT, CONTRACT), sourceKind: SOURCE_KIND,
         snapshot: { absolutePath: loaded.filename, sha256: loaded.sha256, records: records.length },
         records, recordSetSha256: stableHash(records) };
     return { ...body, authoritySha256: stableHash(body) };
 }
 
 function normalizeAuthority(value) {
-    exact(value, ['contract', 'version', 'sourceKind', 'snapshot', 'records', 'recordSetSha256',
+    const header = readHeader(value, CONTRACT);
+    exact(value, [...Object.keys(header), 'sourceKind', 'snapshot', 'records', 'recordSetSha256',
         'authoritySha256'], 'ICML poster authority');
-    if (value.contract !== CONTRACT || value.version !== VERSION || value.sourceKind !== SOURCE_KIND
+    if (value.sourceKind !== SOURCE_KIND
         || !plain(value.snapshot) || !Array.isArray(value.records)) fail('ICML poster authority 的外层结构非法');
     exact(value.snapshot, ['absolutePath', 'sha256', 'records'], 'ICML poster authority snapshot');
     if (!path.isAbsolute(value.snapshot.absolutePath) || !validSha(value.snapshot.sha256)
@@ -191,7 +191,7 @@ function normalizeAuthority(value) {
             || forumIds.has(record.forumId)) fail('ICML poster authority 的记录绑定非法');
         previous = numericPoster; posterIds.add(record.posterId); forumIds.add(record.forumId); return clone(record);
     });
-    const body = { contract: CONTRACT, version: VERSION, sourceKind: SOURCE_KIND,
+    const body = { ...header, sourceKind: SOURCE_KIND,
         snapshot: clone(value.snapshot), records, recordSetSha256: value.recordSetSha256 };
     if (!validSha(value.recordSetSha256) || value.recordSetSha256 !== stableHash(records)
         || !validSha(value.authoritySha256) || value.authoritySha256 !== stableHash(body)) {
@@ -217,15 +217,26 @@ function handleData(handle) {
 }
 
 function replayPosterAuthority(handle) {
-    const stored = handleData(handle); const loaded = readStrictJson(stored.snapshotFile, 'ICML raw poster snapshot');
-    const authority = normalizeAuthority(authorityFromLoaded(loaded));
+    const stored = handleData(handle);
+    // This handle was built only after strict parsing and validation of these exact bytes.
+    const loaded = readStableFile(stored.snapshotFile, 'ICML raw poster snapshot', MAX_SNAPSHOT_BYTES);
     if (loaded.dev !== stored.dev || loaded.ino !== stored.ino
-        || stableHash(authority) !== stableHash(stored.authority)) fail('ICML raw poster snapshot changed after authentication');
+        || loaded.sha256 !== stored.authority.snapshot.sha256) fail('ICML raw poster snapshot changed after authentication');
     return handle;
 }
 
-function authorityHandleSnapshot(handle) {
-    replayPosterAuthority(handle); return clone(handleData(handle).authority);
+function authorityHandleSnapshot(handle, expectedSha256 = null) {
+    replayPosterAuthority(handle);
+    const current = handleData(handle).authority;
+    if (expectedSha256 === null || expectedSha256 === current.authoritySha256) return clone(current);
+    if (!validSha(expectedSha256)) fail('ICML 原快照凭证 SHA 非法');
+    const { contract, schemaFingerprint, authoritySha256, ...fields } = current;
+    const matches = protocols.registeredHeaders(CONTRACT).map(header => {
+        const body = { ...header, ...fields };
+        return { ...body, authoritySha256: stableHash(body) };
+    }).filter(value => value.authoritySha256 === expectedSha256);
+    if (matches.length !== 1) fail('ICML 原快照凭证 SHA 不能从同一实际快照唯一重放');
+    return clone(matches[0]);
 }
 
 function lookupByPoster(handle, posterId) {
@@ -364,7 +375,7 @@ function normalizeDailyPageBinding(value) {
 function bindDailyPage(options = {}) {
     return buildDailyPageBinding(options, protocols.recordHeader(DAILY_BINDING_CONTRACT, DAILY_BINDING_CONTRACT));
 }
-function buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage = null,
+function buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage = null, expectedAuthoritySha256 = null,
     blogBasePath = '/audio-paper-digest-blog' } = {}, header) {
     replayPosterAuthority(authorityHandle);
     if (typeof blogBasePath !== 'string' || !/^\/[A-Za-z0-9._/-]*[A-Za-z0-9._-]$/u.test(blogBasePath)
@@ -380,7 +391,8 @@ function buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage = 
         const recovered = summarySectionBinding({ blogRoot, summaryPage, childPage: child, blogBasePath });
         posterId = recovered.posterId; summary = recovered.summary; mapping = SUMMARY_SECTION_MAPPING;
     }
-    const record = lookupByPoster(authorityHandle, posterId); const authority = handleData(authorityHandle).authority;
+    const record = lookupByPoster(authorityHandle, posterId);
+    const authority = authorityHandleSnapshot(authorityHandle, expectedAuthoritySha256);
     const body = { ...header, mapping, page: child,
         poster: { posterId: record.posterId, forumId: record.forumId, officialUrl: record.officialUrl,
             openreviewUrl: record.openreviewUrl, authoritySha256: authority.authoritySha256,
@@ -391,7 +403,8 @@ function buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage = 
 function replayDailyPageBinding({ binding, authorityHandle, blogRoot, page, summaryPage = null,
     blogBasePath = '/audio-paper-digest-blog' } = {}) {
     const normalized = normalizeDailyPageBinding(binding);
-    const rebuilt = buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage, blogBasePath },
+    const rebuilt = buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage, blogBasePath,
+        expectedAuthoritySha256: normalized.poster.authoritySha256 },
         readHeader(normalized, DAILY_BINDING_CONTRACT));
     if (stableHash(rebuilt) !== stableHash(normalized)) fail('每日 ICML 绑定无法再重放');
     return normalized;
@@ -414,7 +427,7 @@ function normalizePdfDescriptor(value) {
 function verifyLocalForumPdf(options = {}) {
     return buildLocalForumPdfDescriptor(options, protocols.recordHeader(PDF_DESCRIPTOR_CONTRACT, PDF_DESCRIPTOR_CONTRACT));
 }
-function buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId = null, forumId = null } = {}, header) {
+function buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId = null, forumId = null, expectedAuthoritySha256 = null } = {}, header) {
     replayPosterAuthority(authorityHandle);
     if ((posterId === null) === (forumId === null)) fail('请恰好提供一个 posterId 或 forumId');
     const record = posterId !== null ? lookupByPoster(authorityHandle, posterId) : lookupByForum(authorityHandle, forumId);
@@ -422,7 +435,7 @@ function buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId = nul
     if (path.dirname(filename) !== root) fail('ICML 本地 PDF 路径逃出了其根目录');
     const loaded = readStableFile(filename, 'ICML local forum PDF', MAX_PDF_BYTES);
     if (loaded.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail('ICML 本地 forum 文件不是 PDF');
-    const authority = handleData(authorityHandle).authority;
+    const authority = authorityHandleSnapshot(authorityHandle, expectedAuthoritySha256);
     const body = { ...header,
         posterId: record.posterId, forumId: record.forumId, absolutePath: filename,
         bytes: loaded.bytes.length, sha256: loaded.sha256, authoritySha256: authority.authoritySha256,
@@ -432,14 +445,15 @@ function buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId = nul
 
 function replayLocalForumPdfDescriptor({ descriptor, authorityHandle, pdfRoot } = {}) {
     const normalized = normalizePdfDescriptor(descriptor);
-    const rebuilt = buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId: normalized.posterId },
+    const rebuilt = buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId: normalized.posterId,
+        expectedAuthoritySha256: normalized.authoritySha256 },
         readHeader(normalized, PDF_DESCRIPTOR_CONTRACT));
     if (stableHash(rebuilt) !== stableHash(normalized)) fail('ICML local PDF descriptor no longer replays');
     return normalized;
 }
 
 module.exports = {
-    CONTRACT, VERSION, DAILY_BINDING_CONTRACT, PDF_DESCRIPTOR_CONTRACT, SOURCE_KIND, DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING,
+    CONTRACT, DAILY_BINDING_CONTRACT, PDF_DESCRIPTOR_CONTRACT, SOURCE_KIND, DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING,
     HistoricalIcmlPosterAuthorityError, stableHash, loadPosterAuthority, normalizeAuthority,
     authorityHandleSnapshot, replayPosterAuthority, lookupByPoster, lookupByForum,
     bindDailyPage, normalizeDailyPageBinding, replayDailyPageBinding,

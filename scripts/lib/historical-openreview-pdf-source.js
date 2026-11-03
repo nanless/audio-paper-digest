@@ -10,8 +10,8 @@ const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.j
 const posterApi = require('./historical-icml-poster-authority.js');
 const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 
-const CONTRACT = 'historical-openreview-pdf-source-v1';
-const VERSION = 1;
+const protocols = require('./protocol-codec');
+const CONTRACT = 'historical-openreview-pdf-source';
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 const REQUEST_TIMEOUT_MS = 180000;
@@ -195,10 +195,12 @@ function pathsFor({ pdfRoot, receiptRoot, forumId, create = false } = {}) {
 }
 
 function normalizeReceipt(value) {
-    const fields = ['contract', 'version', 'forumId', 'posterId', 'forumUrl', 'requestedUrl', 'finalUrl', 'redirects',
+    if (!protocols.hasValidHeader(value, CONTRACT)) fail('receipt 外层结构非法');
+    const header = protocols.recordHeader(value.contract, CONTRACT, value.schemaFingerprint);
+    const fields = [...Object.keys(header), 'forumId', 'posterId', 'forumUrl', 'requestedUrl', 'finalUrl', 'redirects',
         'responseStatus', 'contentType', 'fetchedAt', 'authoritySha256', 'recordBindingSha256', 'pdf', 'receiptSha256'];
     if (!plain(value) || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')
-        || value.contract !== CONTRACT || value.version !== VERSION || !FORUM_ID_RE.test(String(value.forumId || ''))
+        || !FORUM_ID_RE.test(String(value.forumId || ''))
         || !/^[1-9]\d*$/.test(String(value.posterId || '')) || value.forumUrl !== `https://openreview.net/forum?id=${value.forumId}`
         || !Array.isArray(value.redirects) || value.responseStatus !== 200 || !validPdfContentType(value.contentType)
         || !Number.isFinite(Date.parse(value.fetchedAt)) || new Date(value.fetchedAt).toISOString() !== value.fetchedAt
@@ -233,8 +235,17 @@ function readReceipt(receiptFile, allowRecoveryLink = false) {
     return receipt;
 }
 
-function replayReceipt({ receiptFile, pdfFile, record, authoritySha256, allowRecoveryLinks = false } = {}) {
+function replayReceipt({ receiptFile, pdfFile, record, authoritySha256, authorityHandle, allowRecoveryLinks = false } = {}) {
     const receipt = readReceipt(receiptFile, allowRecoveryLinks);
+    if (authorityHandle) {
+        const root = posterApi.authorityHandleSnapshot(authorityHandle, receipt.authoritySha256);
+        if (protocols.isCurrentHeader(root, posterApi.CONTRACT) !== protocols.isCurrentHeader(receipt, CONTRACT)) {
+            fail('OpenReview 收据与根快照使用了不同的格式');
+        }
+        const actual = posterApi.lookupByForum(authorityHandle, receipt.forumId);
+        if (stableHash(record) !== stableHash(actual)) fail('OpenReview 收据未绑定实际论坛记录');
+        authoritySha256 = root.authoritySha256;
+    }
     if (receipt.forumId !== record.forumId || receipt.posterId !== record.posterId
         || receipt.authoritySha256 !== authoritySha256 || receipt.recordBindingSha256 !== record.recordBindingSha256
         || receipt.pdf.absolutePath !== pdfFile) fail('receipt differs from authenticated forum authority');
@@ -263,9 +274,13 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
         || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > MAX_REDIRECTS
         || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) fail('封存器参数非法');
     const authorityHandle = posterApi.loadPosterAuthority({ snapshotFile });
-    const authority = posterApi.authorityHandleSnapshot(authorityHandle);
+    let authority = posterApi.authorityHandleSnapshot(authorityHandle);
     const record = posterApi.lookupByForum(authorityHandle, forumId);
     const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: apply });
+    if (apply && fs.existsSync(paths.receiptFile)) {
+        const saved = readReceipt(paths.receiptFile, true);
+        authority = posterApi.authorityHandleSnapshot(authorityHandle, saved.authoritySha256);
+    }
     const requestedUrl = pdfUrlForForum(record.forumId);
     const plan = { forumId: record.forumId, posterId: record.posterId, forumUrl: record.openreviewUrl,
         requestedUrl, pdfFile: paths.pdfFile, receiptFile: paths.receiptFile,
@@ -274,14 +289,15 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
     if (fs.existsSync(paths.receiptFile)) {
         // 先验证原凭证的论坛、authority 和完整 PDF 字节，再清理已退出写者的临时硬链接。
         // 普通读取仍要求单链接；未知或存活写者的链接不能自动接纳。
-        replayReceipt({ ...paths, record, authoritySha256: authority.authoritySha256, allowRecoveryLinks: true });
+        replayReceipt({ ...paths, record, authorityHandle, allowRecoveryLinks: true });
         recoverImmutableFileLink(paths.receiptFile, rejectImmutable, 1024 * 1024);
         recoverImmutableFileLink(paths.pdfFile, rejectImmutable, MAX_PDF_BYTES);
         return { status: 'recovered', ...plan, receipt: replayReceipt({ ...paths, record,
-            authoritySha256: authority.authoritySha256 }) };
+            authorityHandle }) };
     }
     const fetchPdf = dependencies.fetchPdf || ((options) => defaultFetchPdf(options, dependencies));
     const downloaded = await fetchPdf({ url: requestedUrl, forumId: record.forumId, maxBytes, maxRedirects, timeoutMs });
+    posterApi.replayPosterAuthority(authorityHandle);
     if (!plain(downloaded) || !Buffer.isBuffer(downloaded.bytes) || downloaded.bytes.length < 5
         || downloaded.bytes.length > maxBytes || downloaded.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
         fail('downloaded OpenReview response is not a bounded PDF');
@@ -293,7 +309,7 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
     const fetchedAt = observedAt || new Date().toISOString();
     if (!Number.isFinite(Date.parse(fetchedAt)) || new Date(fetchedAt).toISOString() !== fetchedAt) fail('observedAt 非法');
     const pdfBody = { absolutePath: paths.pdfFile, bytes: downloaded.bytes.length, sha256: sha256(downloaded.bytes) };
-    const body = { contract: CONTRACT, version: VERSION, forumId: record.forumId, posterId: record.posterId,
+    const body = { ...protocols.recordHeader(CONTRACT, CONTRACT), forumId: record.forumId, posterId: record.posterId,
         forumUrl: record.openreviewUrl, requestedUrl: downloaded.requestedUrl, finalUrl: downloaded.finalUrl,
         redirects: clone(downloaded.redirects || []), responseStatus: downloaded.responseStatus,
         contentType: String(downloaded.contentType || ''), fetchedAt, authoritySha256: authority.authoritySha256,
@@ -307,11 +323,11 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
         if (error.code !== 'IMMUTABLE_FILE_CONTENT_CONFLICT') throw error;
         receiptStatus = 'recovered';
     }
-    const replayed = replayReceipt({ ...paths, record, authoritySha256: authority.authoritySha256 });
+    const replayed = replayReceipt({ ...paths, record, authorityHandle });
     return { status: pdfStatus === 'recovered' && receiptStatus === 'recovered' ? 'recovered' : 'created',
-        ...plan, receipt: replayed };
+        ...plan, authoritySha256: replayed.authoritySha256, receipt: replayed };
 }
 
-module.exports = { CONTRACT, VERSION, MAX_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, RECEIPT_NAME_RE,
+module.exports = { CONTRACT, MAX_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, RECEIPT_NAME_RE,
     HistoricalOpenreviewPdfSourceError, stableHash, pdfUrlForForum, validateDownloadUrl, validPdfContentType, normalizeReceipt,
     readReceipt, replayReceipt, defaultFetchPdf, sealOpenreviewPdf };

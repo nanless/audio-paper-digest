@@ -218,8 +218,7 @@ function dailyIcmlPosterEntries({ conferenceManifest, inventory, blogRoot } = {}
     }
     if (snapshotFile === null) return { entries: [], bindings: [], routableBindings: [], authoritySha256: null };
     const handle = icmlPosterApi.loadPosterAuthority({ snapshotFile });
-    const authority = icmlPosterApi.authorityHandleSnapshot(handle);
-    if (authority.authoritySha256 !== authoritySha256) fail('ICML poster 来源的 authority SHA 无法重放');
+    icmlPosterApi.authorityHandleSnapshot(handle, authoritySha256);
     const history = conferencePageMappingsApi.normalizeInventory(inventory);
     const summaries = new Map(inventory.pages.filter(page => page?.kind === 'daily-summary')
         .map(page => [page.scope?.key, page]));
@@ -228,7 +227,7 @@ function dailyIcmlPosterEntries({ conferenceManifest, inventory, blogRoot } = {}
         if (page.scope.type !== 'daily' || page.identityHints?.status !== 'none') continue;
         let binding;
         try { binding = icmlPosterApi.bindDailyPage({ authorityHandle: handle, blogRoot, page,
-            summaryPage: summaries.get(page.scope.key) || null }); }
+            summaryPage: summaries.get(page.scope.key) || null, expectedAuthoritySha256: authoritySha256 }); }
         catch (error) {
             if (error?.code === 'HISTORICAL_ICML_POSTER_AUTHORITY_INTEGRITY') continue;
             throw error;

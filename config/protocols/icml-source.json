@@ -1,0 +1,160 @@
+{
+  "protocols": [
+    {
+      "name": "historical-icml-official-poster-snapshot",
+      "currentVariant": "complete-official-poster-snapshot",
+      "currentSchema": {
+        "fields": [
+          "sourceKind",
+          "snapshot",
+          "records",
+          "recordSetSha256",
+          "authoritySha256"
+        ],
+        "hashDomain": "complete-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-icml-official-poster-snapshot-v1",
+          "variant": "original-complete-official-poster-snapshot",
+          "header": {
+            "contract": "historical-icml-official-poster-snapshot-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-openreview-pdf-source",
+      "currentVariant": "observed-openreview-pdf",
+      "currentSchema": {
+        "fields": [
+          "forumId",
+          "posterId",
+          "forumUrl",
+          "requestedUrl",
+          "finalUrl",
+          "redirects",
+          "responseStatus",
+          "contentType",
+          "fetchedAt",
+          "authoritySha256",
+          "recordBindingSha256",
+          "pdf",
+          "receiptSha256"
+        ],
+        "hashDomain": "complete-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-openreview-pdf-source-v1",
+          "variant": "original-observed-openreview-pdf",
+          "header": {
+            "contract": "historical-openreview-pdf-source-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-icml-alternate-pdf-source",
+      "currentVariant": "observed-fixed-alternate-pdf",
+      "currentSchema": {
+        "fields": [
+          "profileId",
+          "forumId",
+          "posterId",
+          "title",
+          "authors",
+          "sourceDoi",
+          "authoritySha256",
+          "recordBindingSha256",
+          "sourceIdentityBindingSha256",
+          "pdf",
+          "receiptSha256"
+        ],
+        "hashDomain": "complete-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-icml-alternate-pdf-source-v1",
+          "variant": "original-observed-fixed-alternate-pdf",
+          "header": {
+            "contract": "historical-icml-alternate-pdf-source-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-icml-alternate-pdf-import",
+      "currentVariant": "reviewed-operator-alternate-pdf",
+      "currentSchema": {
+        "fields": [
+          "profileId",
+          "forumId",
+          "posterId",
+          "title",
+          "authors",
+          "sourceDoi",
+          "sourceValidation",
+          "authoritySha256",
+          "recordBindingSha256",
+          "sourceIdentityBindingSha256",
+          "pdf",
+          "receiptSha256"
+        ],
+        "hashDomain": "complete-record-with-actual-header",
+        "sourceValidationMethod": "pdf-text-profile-markers"
+      },
+      "historical": [
+        {
+          "tag": "historical-icml-alternate-pdf-import-v1",
+          "variant": "original-reviewed-operator-alternate-pdf",
+          "header": {
+            "contract": "historical-icml-alternate-pdf-import-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-conference-local-sources",
+      "currentVariant": "bound-local-conference-sources",
+      "currentSchema": {
+        "fields": [
+          "records",
+          "summary",
+          "manifestSha256"
+        ],
+        "hashDomain": "complete-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-conference-local-sources-v2",
+          "variant": "original-bound-local-conference-sources",
+          "header": {
+            "contract": "historical-conference-local-sources-v2",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "pdf-text-profile-markers",
+      "currentVariant": "fixed-pdf-text-markers",
+      "currentSchema": {
+        "proof": "fixed alternate profile title, authors, date and cross-page markers"
+      },
+      "historical": [
+        {
+          "tag": "pdf-text-profile-markers-v2",
+          "variant": "fixed-pdf-text-markers",
+          "header": {
+            "method": "pdf-text-profile-markers-v2"
+          }
+        }
+      ]
+    }
+  ]
+}

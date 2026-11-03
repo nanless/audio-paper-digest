@@ -265,7 +265,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/historical-arxiv-batch.js` | Node 库：备用路线只读取命名、不可变的新 arXiv 获取失败交接文件。核验其中的历史清单、页面 SHA 和非标题链接后，仅对其列出的页面，在确认处理状态仍与决定中的原状态一致后保存处理决定；不扫描 pending hint。 |
 | `lib/historical-arxiv-publication-metadata.js` | Node 库：为历史直接重写计划的每篇 arXiv 论文封存仅用于发布的 Atom 附件。读取时核验原始 Atom、元数据、摘要 SHA、精确 `vN` 查询或无版本 ID 的观察时间窗，以及原来源获取序号、清单与快照；不修改四份原来源文件。 |
 | `lib/historical-conference-crawl-authority.js` | Node 库：只读复验已签存的会议身份凭证，核对原会议 ID、元数据及 PDF，包括 ICASSP、ICLR 的本地来源；不签发新凭证。 |
-| `lib/historical-conference-local-sources.js` | Node 库：生成 `historical-conference-local-sources-v2`。除既有会议元数据和 PDF 外，还按认证 ICML poster→OpenReview forum ID 合并 ICML 来源；只读已有目录及运行目录中的新文件，新 PDF 必须对应唯一 OpenReview/替代来源凭证。逐项记录元数据、论文记录、PDF 获取与来源 SHA；缺 PDF 时明确标为 unavailable。 |
+| `lib/historical-conference-local-sources.js` | Node 库：生成 `historical-conference-local-sources`。除既有会议元数据和 PDF 外，还按认证 ICML poster→OpenReview forum ID 合并 ICML 来源；只读已有目录及运行目录中的新文件，新 PDF 必须对应唯一 OpenReview/替代来源凭证。逐项记录元数据、论文记录、PDF 获取与来源 SHA；缺 PDF 时明确标为 unavailable。 |
 | `lib/historical-conference-page-projections.js` | Node 库：读取历史清单、页面标题和已保留的会议来源，核对文件 SHA 后确定论文对应哪些页面。页面文件参与校验，旧正文不作为重写输入。 |
 | `lib/historical-daily-primary-arxiv-binding.js` | Node 库：核验冻结 Daily 页的 SHA，仅接受唯一合法评分元数据行中的规范 `[arxiv]` 主身份；保存对应字节区间和行哈希，拒绝把正文引用链接当成论文主身份。 |
 | `lib/historical-direct-aggregate.js` | Node 库：根据直接重写记录和页面对应记录重建日汇总、会议汇总及会议任务私有页面，不读取旧正文。页面对应记录 v3 用冻结链接确定任务成员，无论文汇总记录为 `retain-unchanged`，并核验全部历史页面覆盖。`reader-facing-v3` 只按主任务统计热门方向，保留双语链接标题、八维评分、分档、文档类型、arXiv、作者机构与资源状态；采用旧 arXiv `vN` 时，排行榜与条目均显示当前稿不可用和实际官方链接。 |

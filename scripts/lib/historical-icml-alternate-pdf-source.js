@@ -10,10 +10,13 @@ const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.j
 const posterApi = require('./historical-icml-poster-authority.js');
 const pdfLayout = require('./pdf-layout.js');
 
-const CONTRACT = 'historical-icml-alternate-pdf-source-v1';
-const VERSION = 1;
-const IMPORT_CONTRACT = 'historical-icml-alternate-pdf-import-v1';
-const IMPORT_VERSION = 1;
+const protocols = require('./protocol-codec');
+const CONTRACT = 'historical-icml-alternate-pdf-source';
+const IMPORT_CONTRACT = 'historical-icml-alternate-pdf-import';
+function receiptHeader(value, family) {
+    if (!protocols.hasValidHeader(value, family)) fail('备用 PDF receipt 格式非法');
+    return protocols.recordHeader(value.contract, family, value.schemaFingerprint);
+}
 const IMPORT_METHOD = 'operator-browser-download';
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
@@ -178,10 +181,10 @@ function validateProfileUrl(rawUrl, profile) {
     return parsed.toString();
 }
 
-function authenticateSourceIdentity({ snapshotFile, forumId } = {}) {
+function authenticateSourceIdentity({ snapshotFile, forumId, expectedAuthoritySha256 = null } = {}) {
     const profile = profileForForum(forumId);
     const authorityHandle = posterApi.loadPosterAuthority({ snapshotFile });
-    const authority = posterApi.authorityHandleSnapshot(authorityHandle);
+    const authority = posterApi.authorityHandleSnapshot(authorityHandle, expectedAuthoritySha256);
     const authorityRecord = posterApi.lookupByForum(authorityHandle, forumId);
     if (authorityRecord.forumId !== profile.forumId || authorityRecord.posterId !== profile.posterId) {
         fail('备用来源配置与已认证的 poster/forum 授权不一致');
@@ -311,15 +314,16 @@ function validateRedirects(redirects, profile, requestedUrl, finalUrl) {
 }
 
 function normalizeReceipt(value) {
-    if (value?.contract === IMPORT_CONTRACT) return normalizeImportReceipt(value);
-    const fields = ['contract', 'version', 'profileId', 'forumId', 'posterId', 'forumUrl', 'title', 'authors',
+    if (protocols.registeredHeaders(IMPORT_CONTRACT).some(header => header.contract === value?.contract)) return normalizeImportReceipt(value);
+    const header = receiptHeader(value, CONTRACT);
+    const fields = [...Object.keys(header), 'profileId', 'forumId', 'posterId', 'forumUrl', 'title', 'authors',
         'sourceKind', 'sourceTitle', 'sourceAuthors', 'sourceDoi', 'versionRelation', 'provenanceStatement',
         'openreviewResponseBytes', 'requestedUrl', 'finalUrl', 'redirects',
         'responseStatus', 'contentType', 'fetchedAt', 'snapshotSha256', 'authoritySha256', 'recordBindingSha256',
         'sourceIdentityBindingSha256', 'pdf', 'receiptSha256'];
     exact(value, fields, 'alternate PDF receipt');
     const profile = profileForForum(value.forumId);
-    if (value.contract !== CONTRACT || value.version !== VERSION || value.profileId !== profile.profileId
+    if (value.profileId !== profile.profileId
         || value.posterId !== profile.posterId || value.forumUrl !== `https://openreview.net/forum?id=${profile.forumId}`
         || value.title !== profile.title || stableHash(value.authors) !== stableHash(profile.authors)
         || value.sourceKind !== profile.sourceKind || value.sourceTitle !== profile.sourceTitle
@@ -348,7 +352,8 @@ function normalizeReceipt(value) {
 }
 
 function normalizeImportReceipt(value) {
-    const fields = ['contract', 'version', 'profileId', 'forumId', 'posterId', 'forumUrl', 'title', 'authors',
+    const header = receiptHeader(value, IMPORT_CONTRACT);
+    const fields = [...Object.keys(header), 'profileId', 'forumId', 'posterId', 'forumUrl', 'title', 'authors',
         'sourceKind', 'sourceTitle', 'sourceAuthors', 'sourceDoi', 'versionRelation', 'provenanceStatement',
         'openreviewResponseBytes', 'sourceUrl', 'acquisitionMethod', 'networkResponseObserved', 'importedAt',
         'sourceValidation', 'snapshotSha256', 'authoritySha256', 'recordBindingSha256',
@@ -356,7 +361,6 @@ function normalizeImportReceipt(value) {
     exact(value, fields, 'imported alternate PDF receipt');
     const profile = profileForForum(value.forumId);
     if (profile.forumId !== 'n1mAjfRDZ6'
-        || value.contract !== IMPORT_CONTRACT || value.version !== IMPORT_VERSION
         || value.profileId !== profile.profileId || value.posterId !== profile.posterId
         || value.forumUrl !== `https://openreview.net/forum?id=${profile.forumId}`
         || value.title !== profile.title || stableHash(value.authors) !== stableHash(profile.authors)
@@ -374,7 +378,10 @@ function normalizeImportReceipt(value) {
     exact(value.sourceValidation, ['method', 'extractedTextSha256', 'extractedTextChars', 'matchedMarkers'],
         'imported alternate PDF source validation');
     const expectedMarkers = clone(profile.importPdfMarkers);
-    if (value.sourceValidation.method !== 'pdf-text-profile-markers-v2'
+    const method = header.schemaFingerprint
+        ? protocols.declaredSchema(header.contract, IMPORT_CONTRACT, header.schemaFingerprint).sourceValidationMethod
+        : protocols.historicalHeader('pdf-text-profile-markers', 'fixed-pdf-text-markers', null).method;
+    if (value.sourceValidation.method !== method
         || !SHA_RE.test(String(value.sourceValidation.extractedTextSha256 || ''))
         || !Number.isSafeInteger(value.sourceValidation.extractedTextChars)
         || value.sourceValidation.extractedTextChars < 1000
@@ -408,8 +415,13 @@ function readReceipt(receiptFile) {
 }
 
 function replayReceipt({ receiptFile, pdfFile, identity } = {}) {
-    posterApi.authorityHandleSnapshot(identity.authorityHandle);
     const receipt = readReceipt(receiptFile);
+    const root = posterApi.authorityHandleSnapshot(identity.authorityHandle, receipt.authoritySha256);
+    const family = protocols.hasValidHeader(receipt, IMPORT_CONTRACT) ? IMPORT_CONTRACT : CONTRACT;
+    if (root.authoritySha256 !== identity.authority.authoritySha256
+        || protocols.isCurrentHeader(root, posterApi.CONTRACT) !== protocols.isCurrentHeader(receipt, family)) {
+        fail('备用 PDF 收据与根快照使用了不同的格式');
+    }
     const profile = identity.profile;
     if (receipt.profileId !== profile.profileId || receipt.forumId !== profile.forumId
         || receipt.posterId !== profile.posterId || receipt.snapshotSha256 !== identity.authority.snapshot.sha256
@@ -448,8 +460,10 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
     if (typeof apply !== 'boolean' || !Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES
         || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > MAX_REDIRECTS
         || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) fail('封存器参数非法');
-    const identity = authenticateSourceIdentity({ snapshotFile, forumId });
-    const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: apply });
+    const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: false });
+    const oldReceipt = apply && fs.existsSync(paths.receiptFile) ? readReceipt(paths.receiptFile) : null;
+    const identity = authenticateSourceIdentity({ snapshotFile, forumId, expectedAuthoritySha256: oldReceipt?.authoritySha256 });
+    if (apply) pathsFor({ pdfRoot, receiptRoot, forumId, create: true });
     const plan = { profileId: identity.profile.profileId, forumId: identity.profile.forumId,
         posterId: identity.profile.posterId, title: identity.profile.title, authors: clone(identity.profile.authors),
         forumUrl: identity.authorityRecord.openreviewUrl, sourceKind: identity.profile.sourceKind,
@@ -481,7 +495,7 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
     const fetchedAt = observedAt || new Date().toISOString();
     if (!Number.isFinite(Date.parse(fetchedAt)) || new Date(fetchedAt).toISOString() !== fetchedAt) fail('observedAt 非法');
     const pdfBody = { absolutePath: paths.pdfFile, bytes: downloaded.bytes.length, sha256: sha256(downloaded.bytes) };
-    const body = { contract: CONTRACT, version: VERSION, profileId: identity.profile.profileId,
+    const body = { ...protocols.recordHeader(CONTRACT, CONTRACT), profileId: identity.profile.profileId,
         forumId: identity.profile.forumId, posterId: identity.profile.posterId,
         forumUrl: identity.authorityRecord.openreviewUrl, title: identity.profile.title,
         authors: clone(identity.profile.authors), sourceKind: identity.profile.sourceKind,
@@ -528,7 +542,7 @@ async function validateImportedPdf(bytes, profile, dependencies = {}) {
     if (markers.some(marker => !searchable.includes(normalizedSearchText(marker)))) {
         fail('imported PDF does not contain every fixed title, author, date, and cross-page text marker');
     }
-    return { method: 'pdf-text-profile-markers-v2', extractedTextSha256: sha256(Buffer.from(text, 'utf8')),
+    return { method: protocols.declaredSchema(IMPORT_CONTRACT, IMPORT_CONTRACT).sourceValidationMethod, extractedTextSha256: sha256(Buffer.from(text, 'utf8')),
         extractedTextChars: text.length, matchedMarkers: markers };
 }
 
@@ -538,11 +552,13 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
         || !Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES) {
         fail('导入封存器参数非法');
     }
-    const identity = authenticateSourceIdentity({ snapshotFile, forumId });
+    const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: false });
+    const oldReceipt = apply && fs.existsSync(paths.receiptFile) ? readReceipt(paths.receiptFile) : null;
+    const identity = authenticateSourceIdentity({ snapshotFile, forumId, expectedAuthoritySha256: oldReceipt?.authoritySha256 });
     if (identity.profile.forumId !== 'n1mAjfRDZ6') {
         fail('operator import is allowed only for the reviewed n1mAjfRDZ6 prior-preprint profile');
     }
-    const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: apply });
+    if (apply) pathsFor({ pdfRoot, receiptRoot, forumId, create: true });
     const plan = { profileId: identity.profile.profileId, forumId: identity.profile.forumId,
         posterId: identity.profile.posterId, title: identity.profile.title, authors: clone(identity.profile.authors),
         forumUrl: identity.authorityRecord.openreviewUrl, sourceKind: identity.profile.sourceKind,
@@ -567,7 +583,7 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
     const observed = importedAt || new Date().toISOString();
     if (!Number.isFinite(Date.parse(observed)) || new Date(observed).toISOString() !== observed) fail('importedAt 非法');
     const pdfBody = { absolutePath: paths.pdfFile, bytes: imported.bytes.length, sha256: imported.sha256 };
-    const body = { contract: IMPORT_CONTRACT, version: IMPORT_VERSION, profileId: identity.profile.profileId,
+    const body = { ...protocols.recordHeader(IMPORT_CONTRACT, IMPORT_CONTRACT), profileId: identity.profile.profileId,
         forumId: identity.profile.forumId, posterId: identity.profile.posterId,
         forumUrl: identity.authorityRecord.openreviewUrl, title: identity.profile.title,
         authors: clone(identity.profile.authors), sourceKind: identity.profile.sourceKind,
@@ -589,8 +605,8 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
         ...plan, receipt: replayed };
 }
 
-module.exports = { CONTRACT, VERSION, MAX_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, RECEIPT_NAME_RE,
-    IMPORT_CONTRACT, IMPORT_VERSION, IMPORT_METHOD,
+module.exports = { CONTRACT, MAX_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, RECEIPT_NAME_RE,
+    IMPORT_CONTRACT, IMPORT_METHOD,
     HistoricalIcmlAlternatePdfSourceError, stableHash, profileForForum, validateProfileUrl,
     authenticateSourceIdentity, validPdfContentType, normalizeReceipt, readReceipt, replayReceipt,
     defaultFetchPdf, validateImportedPdf, sealImportedAlternatePdf, sealAlternatePdf };

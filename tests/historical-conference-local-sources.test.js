@@ -49,16 +49,22 @@ function build(f, overrides = {}) {
         icmlFreshPdfRoot: f.icmlFreshPdfs, openreviewReceiptRoot: f.openreviewReceipts,
         alternateReceiptRoot: f.alternateReceipts, ...overrides });
 }
-function writeOpenreviewReceipt(f, forumId) {
+function writeOpenreviewReceipt(f, forumId, original = false) {
     const bytes = pdf(); const pdfFile = path.join(f.icmlFreshPdfs, `${forumId}.pdf`);
     fs.writeFileSync(pdfFile, bytes, { mode: 0o600 });
     const handle = posterApi.loadPosterAuthority({ snapshotFile: f.snapshotFile });
-    const authority = posterApi.authorityHandleSnapshot(handle); const record = posterApi.lookupByForum(handle, forumId);
+    const protocols = require('../scripts/lib/protocol-codec');
+    const authority = posterApi.authorityHandleSnapshot(handle);
+    const record = posterApi.lookupByForum(handle, forumId);
+    const { contract, schemaFingerprint, authoritySha256, ...rootFields } = authority;
+    const oldRoot = { contract: 'historical-icml-official-poster-snapshot-v1', version: 1, ...rootFields };
+    const header = original ? { contract: 'historical-openreview-pdf-source-v1', version: 1 }
+        : protocols.recordHeader(openreviewApi.CONTRACT, openreviewApi.CONTRACT);
     const requestedUrl = `https://openreview.net/pdf?id=${forumId}`;
-    const body = { contract: openreviewApi.CONTRACT, version: openreviewApi.VERSION, forumId,
+    const body = { ...header, forumId,
         posterId: record.posterId, forumUrl: record.openreviewUrl, requestedUrl, finalUrl: requestedUrl,
         redirects: [], responseStatus: 200, contentType: 'application/pdf', fetchedAt: '2026-09-08T00:00:00.000Z',
-        authoritySha256: authority.authoritySha256, recordBindingSha256: record.recordBindingSha256,
+        authoritySha256: original ? posterApi.stableHash(oldRoot) : authoritySha256, recordBindingSha256: record.recordBindingSha256,
         pdf: { absolutePath: pdfFile, bytes: bytes.length, sha256: digest(bytes) } };
     const receipt = openreviewApi.normalizeReceipt({ ...body, receiptSha256: openreviewApi.stableHash(body) });
     const receiptFile = path.join(f.openreviewReceipts, `openreview-${forumId}.json`);
@@ -67,7 +73,7 @@ function writeOpenreviewReceipt(f, forumId) {
 }
 test('buildLocalSourcesManifest 只保留稳定的来源坐标和本地 PDF 描述符', t => {
     const f = fixture(t); const manifest = build(f);
-    assert.equal(manifest.contract, 'historical-conference-local-sources-v2');
+    assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(manifest, api.CONTRACT), true);
     assert.equal(manifest.summary.canonicalPapers, 6); assert.equal(manifest.summary.sourceRecords, 7);
     assert.equal(manifest.summary.directRewriteEligible, 5); assert.equal(manifest.summary.unavailableOnly, 1);
     assert.deepEqual(manifest.records.map(item => item.paperId), [
@@ -116,6 +122,20 @@ test('新增覆盖要求且只绑定一份获取凭证', t => {
 
     fs.writeFileSync(path.join(f.alternateReceipts, `alternate-${f.rawOnlyId}.json`), '{}\n');
     assert.throws(() => build(f), /both OpenReview and alternate PDF receipts/);
+});
+test('现行来源清单保留嵌套旧收据，同时按同一原始快照核验新根摘要', t => {
+    const f = fixture(t); const proof = writeOpenreviewReceipt(f, f.rawOnlyId, true);
+    const originalBytes = fs.readFileSync(proof.receiptFile);
+    const manifest = build(f);
+    const source = manifest.records.find(item => item.paperId.endsWith(`:${f.rawOnlyId}`)).sources[0];
+    assert.notEqual(source.metadata.posterBinding.authoritySha256, proof.receipt.authoritySha256);
+    assert.ok(source.metadata.posterBinding.authoritySchemaFingerprint);
+    assert.deepEqual(api.validateSource(source, `conference:icml:2026:openreview-forum-id:${f.rawOnlyId}`), source);
+    assert.deepEqual(fs.readFileSync(proof.receiptFile), originalBytes);
+    const { receiptSha256, ...body } = proof.receipt;
+    body.authoritySha256 = source.metadata.posterBinding.authoritySha256;
+    fs.writeFileSync(proof.receiptFile, api.prettyBytes({ ...body, receiptSha256: openreviewApi.stableHash(body) }));
+    assert.throws(() => build(f), /不同的格式/);
 });
 test('新增覆盖拒绝没有凭证的字节和与保留字节冲突的内容', t => {
     const f = fixture(t); fs.writeFileSync(path.join(f.icmlFreshPdfs, `${f.rawOnlyId}.pdf`), pdf(), { mode: 0o600 });

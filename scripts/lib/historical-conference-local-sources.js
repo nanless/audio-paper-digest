@@ -13,8 +13,8 @@ const openreviewPdfApi = require('./historical-openreview-pdf-source.js');
 const alternatePdfApi = require('./historical-icml-alternate-pdf-source.js');
 const { writeImmutableFile } = require('./immutable-file.js');
 
-const CONTRACT = 'historical-conference-local-sources-v2';
-const VERSION = 2;
+const protocols = require('./protocol-codec');
+const CONTRACT = 'historical-conference-local-sources';
 const ICML_POSTER_SOURCE_SET = 'workspace-icml-official-poster-2026';
 const ICML_POSTER_PROVENANCE = 'retained-local-icml-miniconf-snapshot';
 const RETAINED_LOCAL_SOURCE_KIND = 'retained-local-no-network-receipt';
@@ -202,7 +202,7 @@ function receiptProof(receiptFile, receiptSha256) {
     const loaded = readStableFile(receiptFile, 'PDF acquisition receipt', 1024 * 1024);
     return { absolutePath: loaded.absolute, fileSha256: loaded.sha256, selfSha256: receiptSha256 };
 }
-function posterReceiptAcquisition({ record, authority, pdf, openreviewReceiptRoot, alternateReceiptRoot }) {
+function posterReceiptAcquisition({ record, authority, authorityHandle, pdf, openreviewReceiptRoot, alternateReceiptRoot }) {
     const openRoot = plannedDirectory(openreviewReceiptRoot, 'OpenReview receipt root');
     const alternateRoot = plannedDirectory(alternateReceiptRoot, 'alternate receipt root');
     const openFile = path.join(openRoot, `openreview-${record.forumId}.json`);
@@ -213,9 +213,8 @@ function posterReceiptAcquisition({ record, authority, pdf, openreviewReceiptRoo
     if (pdf.availability !== 'available') fail(`${record.forumId} 有 receipt 但没有可用的新抓 PDF`);
     if (hasOpen) {
         const receipt = openreviewPdfApi.replayReceipt({ receiptFile: openFile, pdfFile: pdf.absolutePath,
-            record, authoritySha256: authority.authoritySha256 });
+            record, authorityHandle });
         if (receipt.forumId !== record.forumId || receipt.posterId !== record.posterId
-            || receipt.authoritySha256 !== authority.authoritySha256
             || receipt.recordBindingSha256 !== record.recordBindingSha256
             || receipt.pdf.absolutePath !== pdf.absolutePath || receipt.pdf.bytes !== pdf.bytes
             || receipt.pdf.sha256 !== pdf.sha256) fail('OpenReview receipt 与选定的新抓 PDF authority 不一致');
@@ -223,12 +222,12 @@ function posterReceiptAcquisition({ record, authority, pdf, openreviewReceiptRoo
             versionRelation: OPENREVIEW_VERSION_RELATION, sourceTitle: null, sourceAuthors: null, sourceDoi: null,
             provenanceStatement: OPENREVIEW_PROVENANCE_STATEMENT, openreviewResponseBytes: true };
     }
+    const saved = alternatePdfApi.readReceipt(alternateFile);
     const identity = alternatePdfApi.authenticateSourceIdentity({ snapshotFile: authority.snapshot.absolutePath,
-        forumId: record.forumId });
+        forumId: record.forumId, expectedAuthoritySha256: saved.authoritySha256 });
     const receipt = alternatePdfApi.replayReceipt({ receiptFile: alternateFile, pdfFile: pdf.absolutePath, identity });
     if (receipt.forumId !== record.forumId || receipt.posterId !== record.posterId
         || receipt.snapshotSha256 !== authority.snapshot.sha256
-        || receipt.authoritySha256 !== authority.authoritySha256
         || receipt.recordBindingSha256 !== record.recordBindingSha256
         || receipt.pdf.absolutePath !== pdf.absolutePath || receipt.pdf.bytes !== pdf.bytes
         || receipt.pdf.sha256 !== pdf.sha256) fail('备用 receipt 与选定的新抓 PDF authority 不一致');
@@ -237,7 +236,7 @@ function posterReceiptAcquisition({ record, authority, pdf, openreviewReceiptRoo
         sourceAuthors: clone(receipt.sourceAuthors), sourceDoi: receipt.sourceDoi,
         provenanceStatement: receipt.provenanceStatement, openreviewResponseBytes: receipt.openreviewResponseBytes };
 }
-function selectPosterPdf({ record, retainedRoot, freshRoot, authority, openreviewReceiptRoot,
+function selectPosterPdf({ record, retainedRoot, freshRoot, authority, authorityHandle, openreviewReceiptRoot,
     alternateReceiptRoot }) {
     const retained = hashAvailablePdf(path.join(retainedRoot, `${record.forumId}.pdf`));
     const fresh = hashAvailablePdf(path.join(freshRoot, `${record.forumId}.pdf`));
@@ -256,7 +255,7 @@ function selectPosterPdf({ record, retainedRoot, freshRoot, authority, openrevie
     }
     const selected = fresh.availability === 'missing' ? retained : fresh;
     const acquisition = selected === fresh
-        ? posterReceiptAcquisition({ record, authority, pdf: selected, openreviewReceiptRoot, alternateReceiptRoot })
+        ? posterReceiptAcquisition({ record, authority, authorityHandle, pdf: selected, openreviewReceiptRoot, alternateReceiptRoot })
         : retainedAcquisition(selected);
     return { ...selected, acquisition };
 }
@@ -295,10 +294,10 @@ function posterManifestSources({ authorityHandle, pdfRoot, freshPdfRoot, openrev
     const items = authority.records.map(record => {
         const externalId = { scheme: 'openreview-forum-id', value: record.forumId };
         const paperId = identityApi.canonicalConferenceId({ slug: 'icml', year: 2026 }, externalId);
-        const pdf = selectPosterPdf({ record, retainedRoot: root, freshRoot, authority,
+        const pdf = selectPosterPdf({ record, retainedRoot: root, freshRoot, authority, authorityHandle,
             openreviewReceiptRoot: openRoot, alternateReceiptRoot: alternateRoot });
         if (pdf.availability === 'available') availablePdf += 1; else unavailablePdf += 1;
-        const posterBinding = { authorityContract: authority.contract, authoritySha256: authority.authoritySha256,
+        const posterBinding = { authorityContract: authority.contract, authoritySchemaFingerprint: authority.schemaFingerprint, authoritySha256: authority.authoritySha256,
             recordBindingSha256: record.recordBindingSha256, posterId: record.posterId,
             officialUrl: record.officialUrl, openreviewUrl: record.openreviewUrl };
         return { paperId, source: bindSource({ paperId, provenance: ICML_POSTER_PROVENANCE,
@@ -313,9 +312,14 @@ function posterManifestSources({ authorityHandle, pdfRoot, freshPdfRoot, openrev
 }
 function validatePosterBinding(value, paperId) {
     if (value === null) return null;
-    if (!plain(value) || Object.keys(value).sort().join('\0') !== [
-        'authorityContract', 'authoritySha256', 'recordBindingSha256', 'posterId', 'officialUrl', 'openreviewUrl'
-    ].sort().join('\0') || value.authorityContract !== icmlPosterApi.CONTRACT
+    const family = icmlPosterApi.CONTRACT;
+    let header;
+    try { header = protocols.recordHeader(value?.authorityContract, family, value?.authoritySchemaFingerprint); }
+    catch { fail('本地来源 manifest 的 poster 绑定格式错误'); }
+    const fields = ['authorityContract', 'authoritySha256', 'recordBindingSha256', 'posterId', 'officialUrl', 'openreviewUrl'];
+    if (header.schemaFingerprint) fields.push('authoritySchemaFingerprint');
+    if (!plain(value) || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')
+        || header.schemaFingerprint !== value.authoritySchemaFingerprint
         || !SHA_RE.test(String(value.authoritySha256 || '')) || !SHA_RE.test(String(value.recordBindingSha256 || ''))
         || !/^[1-9]\d*$/.test(String(value.posterId || ''))
         || value.officialUrl !== `https://icml.cc/virtual/2026/poster/${value.posterId}`) {
@@ -327,7 +331,24 @@ function validatePosterBinding(value, paperId) {
     }
     return clone(value);
 }
-function validateAcquisition(value, paperId, pdf, posterBinding = null) {
+function matchesReceiptAuthority(receipt, posterBinding, metadata, family) {
+    if (!posterBinding) return false;
+    if (!posterBinding.authoritySchemaFingerprint) {
+        return receipt.authoritySha256 === posterBinding.authoritySha256 && !protocols.isCurrentHeader(receipt, family);
+    }
+    if (!metadata) return false;
+    const handle = icmlPosterApi.loadPosterAuthority({ snapshotFile: metadata.absolutePath });
+    const current = icmlPosterApi.authorityHandleSnapshot(handle);
+    const receiptRoot = icmlPosterApi.authorityHandleSnapshot(handle, receipt.authoritySha256);
+    const record = icmlPosterApi.lookupByForum(handle, receipt.forumId);
+    return current.authoritySha256 === posterBinding.authoritySha256 && current.snapshot.sha256 === metadata.sha256
+        && current.schemaFingerprint === posterBinding.authoritySchemaFingerprint
+        && protocols.isCurrentHeader(receiptRoot, icmlPosterApi.CONTRACT) === protocols.isCurrentHeader(receipt, family)
+        && record.recordIndex === metadata.recordIndex && record.posterId === posterBinding.posterId
+        && record.recordBindingSha256 === receipt.recordBindingSha256
+        && record.recordBindingSha256 === posterBinding.recordBindingSha256;
+}
+function validateAcquisition(value, paperId, pdf, posterBinding = null, metadata = null) {
     if (pdf.availability !== 'available') {
         if (value !== null) fail('不可用的本地 PDF 不得声明获取来源');
         return null;
@@ -364,7 +385,7 @@ function validateAcquisition(value, paperId, pdf, posterBinding = null) {
         const forumId = String(paperId).match(/^conference:icml:2026:openreview-forum-id:([A-Za-z0-9_-]{6,128})$/)?.[1];
         if (!forumId || path.basename(value.receipt.absolutePath) !== `openreview-${forumId}.json`
             || receipt.receiptSha256 !== value.receipt.selfSha256 || receipt.forumId !== forumId
-            || receipt.posterId !== posterBinding?.posterId || receipt.authoritySha256 !== posterBinding?.authoritySha256
+            || receipt.posterId !== posterBinding?.posterId || !matchesReceiptAuthority(receipt, posterBinding, metadata, openreviewPdfApi.CONTRACT)
             || receipt.recordBindingSha256 !== posterBinding?.recordBindingSha256
             || receipt.pdf.absolutePath !== pdf.absolutePath || receipt.pdf.bytes !== pdf.bytes
             || receipt.pdf.sha256 !== pdf.sha256) fail('OpenReview 获取 receipt 与 manifest 绑定不一致');
@@ -380,9 +401,11 @@ function validateAcquisition(value, paperId, pdf, posterBinding = null) {
         fail('备用 PDF 的获取描述符发生变化');
     }
     const receipt = alternatePdfApi.readReceipt(value.receipt.absolutePath);
+    const family = protocols.hasValidHeader(receipt, alternatePdfApi.IMPORT_CONTRACT)
+        ? alternatePdfApi.IMPORT_CONTRACT : alternatePdfApi.CONTRACT;
     if (path.basename(value.receipt.absolutePath) !== `alternate-${forumId}.json`
         || receipt.receiptSha256 !== value.receipt.selfSha256 || receipt.forumId !== forumId
-        || receipt.posterId !== posterBinding?.posterId || receipt.authoritySha256 !== posterBinding?.authoritySha256
+        || receipt.posterId !== posterBinding?.posterId || !matchesReceiptAuthority(receipt, posterBinding, metadata, family)
         || receipt.recordBindingSha256 !== posterBinding?.recordBindingSha256
         || receipt.pdf.absolutePath !== pdf.absolutePath || receipt.pdf.bytes !== pdf.bytes
         || receipt.pdf.sha256 !== pdf.sha256 || receipt.sourceKind !== value.sourceKind
@@ -434,7 +457,7 @@ function validateSource(source, paperId) {
             || !path.isAbsolute(source.pdf.absolutePath)))) {
         fail('不可用的本地 PDF 条目格式错误');
     }
-    const acquisition = validateAcquisition(source.pdf.acquisition, paperId, source.pdf, posterBinding);
+    const acquisition = validateAcquisition(source.pdf.acquisition, paperId, source.pdf, posterBinding, source.metadata);
     const pdfBindingBody = { paperId, sourceSet: source.sourceSet, availability: source.pdf.availability,
         absolutePath: source.pdf.absolutePath, bytes: source.pdf.bytes, sha256: source.pdf.sha256,
         acquisition,
@@ -450,7 +473,7 @@ function validateSource(source, paperId) {
     return clone(source);
 }
 function assertManifest(value) {
-    if (!plain(value) || value.contract !== CONTRACT || value.version !== VERSION || !Array.isArray(value.records)
+    if (!plain(value) || !protocols.hasValidHeader(value, CONTRACT) || !Array.isArray(value.records)
         || !plain(value.summary) || !SHA_RE.test(String(value.manifestSha256 || ''))) fail('local source manifest has an invalid envelope');
     const body = clone(value); delete body.manifestSha256;
     if (value.manifestSha256 !== stableHash(body)) fail('本地来源 manifest 的 SHA 发生变化');
@@ -534,7 +557,7 @@ function buildLocalSourcesManifest({ dataRoot, iclrAcceptedRoot, icmlPosterSnaps
         sourceRecords: records.reduce((count, record) => count + record.sources.length, 0),
         directRewriteEligible: records.filter(record => record.sources.some(source => source.pdf.availability === 'available')).length,
         unavailableOnly: records.filter(record => record.sources.every(source => source.pdf.availability !== 'available')).length };
-    const body = { contract: CONTRACT, version: VERSION, records, summary };
+    const body = { ...protocols.recordHeader(CONTRACT, CONTRACT), records, summary };
     return assertManifest({ ...body, manifestSha256: stableHash(body) });
 }
 function writeManifest({ root, outputName, manifest }) {
@@ -546,7 +569,7 @@ function writeManifest({ root, outputName, manifest }) {
     return { filename, status, manifestSha256: normalized.manifestSha256, summary: clone(normalized.summary) };
 }
 
-module.exports = { CONTRACT, VERSION, ICML_POSTER_SOURCE_SET, ICML_POSTER_PROVENANCE, SAFE_JSON_NAME,
+module.exports = { CONTRACT, ICML_POSTER_SOURCE_SET, ICML_POSTER_PROVENANCE, SAFE_JSON_NAME,
     HistoricalConferenceLocalSourcesError, stableHash, prettyBytes, externalIdFor, hashAvailablePdf,
     localSourceSets, posterManifestSources, validateAcquisition, validateSource,
     buildLocalSourcesManifest, assertManifest, writeManifest };
