@@ -200,6 +200,10 @@ async function reanalyzeSelected(ids, options = {}) {
         }
         fullStageOptions = { ...fullStageOptions, originalFeedbacks };
     }
+    const combinedReaderFacts = id => {
+        const feedback = feedbacks.get(id);
+        return Boolean(feedback?.primaryFeedback?.trim() && feedback.readerFeedback?.trim());
+    };
     let retiredReaderCandidates = 0;
     try {
         const names = fullStageOptions ? [] : fs.readdirSync(dailySourcePlan.readerAttemptsDir)
@@ -212,6 +216,7 @@ async function reanalyzeSelected(ids, options = {}) {
                 && !options.coreSummaryDiagnosticIds?.[normalizedId(envelope.identity?.paperId)]
                 && !coreFeedbacks.has(normalizedId(envelope.identity?.paperId))
                 && !readerFeedbacks.has(normalizedId(envelope.identity?.paperId))
+                && !combinedReaderFacts(normalizedId(envelope.identity?.paperId))
                 && readerRepair.retireFailedCandidate(dailySourcePlan.readerAttemptsDir, envelope.identity)) {
                 retiredReaderCandidates += 1;
             }
@@ -240,7 +245,7 @@ async function reanalyzeSelected(ids, options = {}) {
         const aid = normalizedId(p);
         if (idSet.has(aid)) {
             const cleanPaper = dailyFreshSources.prepareDailyPaper(
-                fullStageOptions || options.resolvedReaderCandidates?.[aid] || options.coreSummaryDiagnosticIds?.[aid] || coreFeedbacks.has(aid) || readerFeedbacks.has(aid) ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
+                fullStageOptions || options.resolvedReaderCandidates?.[aid] || options.coreSummaryDiagnosticIds?.[aid] || coreFeedbacks.has(aid) || readerFeedbacks.has(aid) || combinedReaderFacts(aid) ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
             );
             toReanalyze.push(cleanPaper);
         }
@@ -348,7 +353,7 @@ async function reanalyzeSelected(ids, options = {}) {
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    !firstPreparation || options.resolvedReaderCandidates?.[normalizedId(paper)] || options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                    !firstPreparation || options.resolvedReaderCandidates?.[normalizedId(paper)] || options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) || combinedReaderFacts(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
                 ),
                 skip: false
             };

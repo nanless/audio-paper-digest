@@ -421,6 +421,49 @@ function sealCompletion(paper,result){
     // changing the snapshot after it was written.
     return ref;
 }
+function recoverCombinedFeedbackCompletionStage(paper) {
+    const engine = require('../analysis-engine'), facts = require('./daily-fact-review');
+    const fresh = require('./fresh-analysis-context'), deep = require('../deep-analyzer');
+    const manifest = paper.analysisManifest, primary = manifest?.stages?.primaryAnalysis;
+    const active = facts.current(canonical(paper));
+    if (manifest?.stages?.apiReaderArticle || paper.readerRevisionHistory
+        || paper.latestAnalysisAttemptError !== 'Reader ordinal patch refused: completion index/marker removed'
+        || paper.latestAnalysisAttemptErrorCode !== 'READER_TARGET_ORDINAL_REJECTED'
+        || paper.latestAnalysisAttemptErrorScope !== 'run' || paper.latestAnalysisAttemptRetryable !== false
+        || !engine.paperAnalysisLockHeld(paper) || !fresh.isDailyFreshSourceScope()
+        || !active?.feedback?.primaryFeedback?.trim() || !active.feedback.readerFeedback?.trim()
+        || active.readerOnly || active.coreOnly || active.scoringOnly
+        || primary?.status !== 'complete' || !primary.primaryLocalFactRepair
+        || !isDeepStrictEqual(primary.factReview, active.proof)
+        || (paper.analysisFactReviewObligation && !isDeepStrictEqual(paper.analysisFactReviewObligation, active.proof))
+        || typeof paper.analysisCheckpoint !== 'string'
+        || manifest.stages.scoringAudit?.status !== 'complete'
+        || sha(paper.analysisCheckpoint) !== manifest.stages.scoringAudit.outputAnalysisSha256)
+        return null;
+    const snapshots = (paper.analysisStaleSnapshots || []).filter(snapshot =>
+        snapshot.invalidatedStage === 'primaryAnalysis'
+        && snapshot.replacementFingerprint === active.proof.feedbackSha256
+        && deep.validateStaleAnalysisSnapshot(snapshot)
+        && sha(snapshot.payload.analysisCheckpoint) === active.proof.coreAnalysisSha256);
+    if (snapshots.length !== 1) return null;
+    fresh.assertFreshPaper(paper);
+    const directory = path.join(require('../config').FILES.dailyFreshSourceRunsDir,
+        paper.freshRewriteProvenance.runId, 'reader-attempts');
+    const dir = completionDirectory(directory), files = completionFiles(dir, paper);
+    if (!files.length || files.some((name, index) => Number(name.slice(-13, -5)) !== index + 1)) return null;
+    const file = path.join(dir, files.at(-1)), checked = read(file), saved = checked.value;
+    if (!format.isCompilation(saved) || saved.kind !== 'normal-final-completion'
+        || saved.articleSha256 !== paper.apiReaderArticleSha256 || saved.planSha256 !== paper.apiReaderPlanSha256
+        || typeof paper.apiReaderArticle !== 'string' || sha(paper.apiReaderArticle) !== saved.articleSha256
+        || !paper.apiReaderPlan || stableSha(paper.apiReaderPlan) !== saved.planSha256
+        || saved.stage?.ordinalPatchContract !== manifest.contracts?.readerTargetOrdinalPatch) return null;
+    const original = structuredClone(paper);
+    const stage = { ...saved.stage, ordinalCompletionProof: { path: file, sha256: checked.sha256 } };
+    original.analysisManifest.stages.apiReaderArticle = stage;
+    validateCompletion(original);
+    return stage;
+}
+
 function validateCompletion(paper){
     const checked=readVerifiedCompletion(paper);if(!checked||checked.archivedOrdinary)return true;
     const daily=require('./daily-fresh-source-plan'),paperSha256=stableSha(paper);
@@ -737,6 +780,6 @@ function replayNormalCompletion(paper,{source,last,saved}){
 function hasReplayedArchivedSignedFactRevision(paper) {
     return readVerifiedCompletion(paper)?.signedFactRevision === true;
 }
-module.exports={hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
+module.exports={recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
     hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};

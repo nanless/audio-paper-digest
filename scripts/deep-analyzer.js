@@ -17789,6 +17789,22 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     }
     if (!fullStageReanalysis) require('./lib/primary-local-validation-replay').replaySaved(paper,
         directSource || conferenceSource || require('./lib/model-text-sanitization').currentModelInputSource(paper), module.exports);
+    const combinedFacts = require('./lib/daily-fact-review').current(arxivId);
+    if (!fullStageReanalysis && combinedFacts?.feedback?.primaryFeedback?.trim()
+        && combinedFacts.feedback.readerFeedback?.trim() && !combinedFacts.readerOnly
+        && require('./analysis-engine').paperAnalysisLockHeld(paper)
+        && require('./lib/fresh-analysis-context').isDailyFreshSourceScope()) {
+        const ordinal = require('./lib/reader-target-ordinal-patch');
+        const current = paper.analysisManifest?.stages?.apiReaderArticle;
+        if (current?.ordinalCompletionProof) {
+            ordinal.validateCompletion(paper);
+            supersedeOrdinalCompletionBeforeInvalidation(paper, paper.analysisManifest, 'apiReaderArticle');
+        } else if (!current) {
+            const original = ordinal.recoverCombinedFeedbackCompletionStage(paper);
+            if (original) supersedeOrdinalCompletionBeforeInvalidation(
+                paper, { stages: { apiReaderArticle: original } }, 'apiReaderArticle');
+        }
+    }
     const completedCoreRecoveryActive = !fullStageReanalysis && prepareCompletedCoreRecovery(paper,
         directSource || require('./lib/model-text-sanitization').currentModelInputSource(paper));
     const previousScore = Number.parseFloat(paper?.parsed?.score);
