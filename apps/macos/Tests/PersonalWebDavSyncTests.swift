@@ -104,6 +104,14 @@ import Foundation
         } catch let error as DesktopError {
             guard case .message(let message) = error, message.contains("未确认") else { throw error }
         }
+        var fields = local([a])
+        fields.removeValue(forKey: "schema")
+        let currentRoot = try ClientProtocols.record("paperdigest-personal-library", fields: fields)
+        let currentSync = try PersonalWebDavSync.plan(local: currentRoot, device: mac, remote: [:])
+        let currentFavorites = currentSync.personal["favoriteCollections"] as! [String: Any]
+        precondition(currentFavorites["contract"] is String && currentFavorites["version"] == nil)
+        let repeated = try PersonalWebDavSync.plan(local: currentSync.personal, device: mac, remote: [mac:currentSync.upload!])
+        precondition(repeated.upload == nil && repeated.personal["favorites"] as? [String] == [a])
         print("WebDAV 双端合并、取消收藏、研究资料与冲突测试通过")
     }
 }
