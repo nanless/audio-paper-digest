@@ -982,7 +982,7 @@ npm run conference:migrate-process -- --apply \
 
 #### 没跑满三轮但已有跨运行失败历史时
 
-默认仍核对同一许可已完成3轮。少量顽固稿已跨正常执行重试，而当前窗口因同组无进展或全文次数耗尽在首轮正常停止时，可在人工清单显式声明 `normalHistoryAdmission.contract: historical-normal-terminal-v1`。
+默认仍核对同一许可已完成3轮。少量顽固稿已跨正常执行重试，而当前窗口因同组无进展或全文次数耗尽在首轮正常停止时，可在人工清单显式声明 `normalHistoryAdmission` 的 `historical-normal-terminal` 格式，并填写登记的结构指纹。
 
 其 `members` 必须精确覆盖完整当前失败集，每项绑定 `paperId`、当前 `executionId`、直接前驱 `priorExecutionId`，以及两份完整材料树的 `currentMaterialsSha256`、`priorMaterialsSha256`。
 
@@ -1014,7 +1014,7 @@ npm run conference:migrate-process -- --apply \
 
 #### 版本字段错误及原表占位符恢复
 
-完整付费响应仅因 JSON `version: 4` 被拒、原候选仍为 `draft: null` 时，成员可另显式声明 `version: 1`、`correctionKind: paid-raw-json-schema-v1`。`rawJsonSchemaCorrection` 绑定 `originalRawSha256`、固定 `originalVersion: 4`、只改为版本3后的 `projectedDraftSha256`，以及本窗最新真实全文的 `requestId`、`responseFileSha256`；原 `rawDraft` 必须逐字等于该实际响应。
+完整付费响应仅因 JSON `version: 4` 被拒、原候选仍为 `draft: null` 时，成员可在当前人工修正格式内声明 `correctionKind: paid-raw-json-schema`。`rawJsonSchemaCorrection` 绑定 `originalRawSha256`、固定 `originalVersion: 4`、只改为版本3后的 `projectedDraftSha256`，以及本窗最新真实全文的 `requestId`、`responseFileSha256`；原 `rawDraft` 必须逐字等于该实际响应。
 
 原候选及其 null、请求和费用原样保留，只在私有来源作用域内投影版本字段，再应用旧 SHA 绑定的局部补丁；版本节点计入总共1–8个已有节点，不能通过此声明重造原稿或放宽日更入口。
 
@@ -1058,7 +1058,7 @@ npm run conference:migrate-process -- --apply \
 
 #### 唯一缺表的专用结构修正
 
-唯一缺表的受控结构修正另声明成员 `version: 2`、`correctionKind: single-source-table-append-v2`，不能借 v1 新增节点。
+唯一缺表的受控结构修正在当前人工修正格式内声明 `correctionKind: single-source-table-append`。普通节点补丁禁止新增节点。
 
 该子类型只接受原14节、1表/1绑定、4图、0公式的真实活跃候选：在既有 `/sections/10/body` 尾部追加一张五列表及导读和解释，并在末尾追加第二个绑定。
 

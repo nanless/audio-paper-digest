@@ -2001,9 +2001,9 @@ require(${JSON.stringify(path.join(__dirname, '..', 'scripts/lib/conference-read
         'page-null-metadata': /会议论文页面的标签分配记录格式版本无效。/,
         'page-null-file-sha': /会议论文页面的标签分配文件哈希格式无效。/,
         'page-old-assignment': /会议论文页面的标签分配记录格式版本无效。/,
-        'page-legacy-new-assignment': /旧版会议论文页面的标签分配记录格式版本无效。/,
-        'page-legacy-unknown-assignment': /旧版会议论文页面的标签分配记录格式版本无效。/,
-        'page-legacy-partial-assignment': /旧版会议论文页面的标签分配记录格式版本无效。/,
+        'page-legacy-new-assignment': /旧版会议论文页面的标签分配记录格式版本无效。|conference-tag-assignment 的格式声明无效/,
+        'page-legacy-unknown-assignment': /旧版会议论文页面的标签分配记录格式版本无效。|conference-tag-assignment 的格式声明无效/,
+        'page-legacy-partial-assignment': /旧版会议论文页面的标签分配记录格式版本无效。|conference-tag-assignment 的格式声明无效/,
         'missing-metadata': /新版会议汇总缺少标签记录或层级字段。/,
         'missing-hierarchy': /新版会议汇总缺少标签记录或层级字段。/,
         'null-metadata': /新版会议汇总的标签记录格式无效。/,
@@ -2011,7 +2011,8 @@ require(${JSON.stringify(path.join(__dirname, '..', 'scripts/lib/conference-read
     };
     for (const [name] of variants.slice(1, -1)) {
         if (name === 'page-current') continue;
-        assert.match(formats[name].error, specificErrors[name] || /不能混用|格式版本不受支持|格式版本不一致|格式声明无效/);
+        assert.match(formats[name].error, specificErrors[name]
+            || /不能混用|格式版本不受支持|格式版本不一致|格式声明无效|保存格式不受支持|标签字段与保存格式不一致/, name);
     }
     for (const saved of originalPageFiles) assert.deepEqual(fs.readFileSync(saved.filename), saved.bytes);
     assert.deepEqual(fs.readFileSync(path.join(aggregateDirectory, 'manifest.json')), originalAggregateBytes);
