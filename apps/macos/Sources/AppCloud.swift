@@ -254,12 +254,17 @@ struct CloudRestoreSelection {
                         try await service.writePersonalDocument(bytes, expected: remote[device], directoryExists: !remote.isEmpty)
                     }
                     try Task.checkCancellation()
+                    try await self.flushEdits(syncCommit: true)
+                    try Task.checkCancellation()
+                    try self.requireMainContextAvailable()
+                    try self.cloudConfirmCredential(target: credentialTarget, generation: credentialGeneration)
                     let current = self.store.snapshot()
                     guard try PersonalWebDavSync.unchanged(before, current) else {
                         throw DesktopError.message("同步期间本机资料已编辑，请再同步一次")
                     }
                     let merged = PersonalWebDavSync.apply(plan, to: current)
                     try self.store.restorePersonal(merged)
+                    if self.nativeNotesRequestedVisible { self.nativeNotesController?.reload() }
                     self.emit("personal.synced")
                     return ["favorites": (merged["favorites"] as? [String] ?? []).count, "conflicts": plan.conflicts]
                 }

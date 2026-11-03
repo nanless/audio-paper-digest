@@ -116,9 +116,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         await preload?.value; _ = try? await images?.value
         cloudSessionCredentials.clear();cloudArchive=nil;cloudAutomaticPausedInMemory=true
     }
-    func flushEdits() async throws {
+    func flushEdits(syncCommit: Bool = false) async throws {
         guard let web=web else{return}
-        _=try await web.callAsyncJavaScript("return window.paperDigestFlushPendingNote ? await window.paperDigestFlushPendingNote() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)
+        _=try await web.callAsyncJavaScript("return window.paperDigestFlushPendingNote ? await window.paperDigestFlushPendingNote(syncCommit) : {saved:true}",arguments:["syncCommit":syncCommit],in:nil,contentWorld:.page)
         if let detail=storageDetailWeb{_=try await detail.callAsyncJavaScript("return window.paperDigestFlushDetails ? await window.paperDigestFlushDetails() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)}
         if let settings=settingsWeb{_=try await settings.callAsyncJavaScript("return window.paperDigestFlushSettings ? await window.paperDigestFlushSettings() : {saved:true}",arguments:[:],in:nil,contentWorld:.page)}
     }

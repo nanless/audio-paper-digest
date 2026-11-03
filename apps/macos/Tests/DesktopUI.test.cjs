@@ -56,7 +56,7 @@ async function installFixture(page, initial={}) {
         case 'pdf.highlight':b.annotations=[{id:'fixture-annotation',page:5,text:'Explicit PDF selection fixture',pdfSHA:'01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c'}];return {};
         case 'pdf.removeAnnotation':b.annotations=[];return {};
         case 'personal.snapshot':return copy(b.personal);
-        case 'personal.note':if(b.failNote)throw Error('Fixture note disk failure');b.personal.notes[payload.paperID]={text:payload.text,revision:payload.baseRevision+1};return copy(b.personal.notes[payload.paperID]);
+        case 'personal.note':if(b.failNote)throw Error('Fixture note disk failure');if(b.strictNoteRevision&&payload.baseRevision!==(b.personal.notes[payload.paperID]?.revision||0))throw Error('Fixture note changed');b.personal.notes[payload.paperID]={text:payload.text,revision:payload.baseRevision+1};return copy(b.personal.notes[payload.paperID]);
         case 'personal.reading':{const owner=payload.paperID||b.selected.id,snapshot=copy(payload);if(b.holdReadingFor===owner)await new Promise(resolve=>b.pendingReadings.push(resolve));b.personal.readingState[owner]={...snapshot,updatedAt:new Date().toISOString()};return {};}
         case 'personal.list.edit':{if(b.holdFavorite)await new Promise(resolve=>b.releaseFavorite=resolve);if(b.failFavorite)throw Error('Fixture favorite disk failure');const set=new Set(b.personal[payload.key]||[]);payload.ids.forEach(id=>payload.action==='remove'?set.delete(id):set.add(id));b.personal[payload.key]=[...set];return copy(b.personal);}
         case 'personal.setList':b.personal[payload.key]=payload.ids;return copy(b.personal);
@@ -150,6 +150,43 @@ if(require.main===module)(async()=>{
     await page.evaluate(()=>__fixture.failNote=true);await page.locator('#note-editor').fill('Unsaved fixture edit');await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Fixture note disk failure'));
     assert.ok(!(await page.locator('#note-status').innerText()).includes('已保存'));assert.ok(!(await page.evaluate(()=>__fixture.personal.notes['arxiv:2610.27491'].text)).includes('Unsaved'));
     await page.evaluate(()=>__fixture.failNote=false);await page.locator('#note-editor').fill('Recovered fixture note');await page.waitForFunction(()=>__fixture.personal.notes['arxiv:2610.27491'].text==='Recovered fixture note');
+  });
+  await check('post-sync flush writes newly changed reading fields without rewriting untouched progress',async()=>{
+    const result=await page.evaluate(async()=>{
+      await paperDigestFlushPendingNote();
+      const count=()=>__calls.filter(c=>c.command==='personal.reading').length;
+      const initial=count();await paperDigestFlushPendingNote(true);const unchanged=count();
+      document.querySelector('#question').value='Reading draft during WebDAV';
+      await paperDigestFlushPendingNote(true);
+      return {initial,unchanged,changed:count(),question:__calls.filter(c=>c.command==='personal.reading').at(-1).payload.question};
+    });
+    assert.equal(result.unchanged,result.initial);
+    assert.equal(result.changed,result.initial+1);
+    assert.equal(result.question,'Reading draft during WebDAV');
+  });
+  await check('personal sync refreshes the open clean editor and keeps stale dirty text bound to its original revision',async()=>{
+    const id='arxiv:2610.27491';
+    await page.evaluate(id=>{
+      __fixture.strictNoteRevision=true;
+      __fixture.personal.notes[id]={text:'Remote note before local typing',revision:8};
+      window.dispatchEvent(new Event('personal.synced'));
+    },id);
+    await page.waitForFunction(()=>document.querySelector('#note-editor').value==='Remote note before local typing');
+    await page.locator('#note-editor').fill('Local draft waiting for an explicit resolution');
+    const result=await page.evaluate(async id=>{
+      __fixture.personal.notes[id]={text:'Different remote note',revision:9};
+      window.dispatchEvent(new Event('personal.synced'));
+      await new Promise(resolve=>setTimeout(resolve,0));
+      let rejection;
+      try{await paperDigestFlushPendingNote(true);}catch(e){rejection=e.message;}
+      const attempted=__calls.filter(c=>c.command==='personal.note').at(-1).payload.baseRevision;
+      const stored=__fixture.personal.notes[id].text,draft=document.querySelector('#note-editor').value;
+      // Fixture reset only. Existing draft can then be saved normally.
+      __fixture.personal.notes[id]={text:'Remote note before local typing',revision:8};
+      await paperDigestFlushPendingNote(true);
+      return {attempted,stored,draft,rejection};
+    },id);
+    assert.deepEqual(result,{attempted:8,stored:'Different remote note',draft:'Local draft waiting for an explicit resolution',rejection:'Fixture note changed'});
   });
   await check('annotation controls display source identity and remove only selected annotation',async()=>{
     await page.locator('#highlight-selection').click();await page.waitForSelector('[data-annotation-remove="fixture-annotation"]');assert.match(await page.locator('#annotation-list').innerText(),/物理页 5/);assert.match(await page.locator('#annotation-list').innerText(),/01eea4603740/);await page.locator('[data-annotation-remove]').click();await page.waitForFunction(()=>document.querySelectorAll('[data-annotation-remove]').length===0);
