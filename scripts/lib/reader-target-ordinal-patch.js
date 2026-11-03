@@ -448,7 +448,7 @@ function validateCompletion(paper){
             fail('cold completion paper/run/source/records changed during replay','run');
     }
 }
-function readVerifiedCompletion(paper){
+function readVerifiedCompletion(paper, planning=false){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
     const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchSchemaFingerprint!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
     if(!prov){if(marked)fail('completion marker lacks daily source','run');return null;}
@@ -462,9 +462,14 @@ function readVerifiedCompletion(paper){
     if(!/^\d{4}\.\d{4,5}$/.test(canonical(paper)))fail('actual daily source lacks canonical paper ID','run');
     const attempts=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId,'reader-attempts'),dir=completionDirectory(attempts),files=completionFiles(dir,paper);
     const operator=require('./daily-reader-operator-correction'),history=stage?.ordinalPatchHistory;
+    // 生成规划可能遇到已付费但仍未成稿的候选。只有正式稿核验才能把
+    // 留存候选当作标记可能被删除的线索；显式证明和磁盘索引始终核验。
+    const unfinishedPlanning=planning&&!marked&&stage?.status!=='complete'
+        &&!stage?.ordinalPatchHistory&&!Object.hasOwn(paper,'readerRevisionHistory')
+        &&!Object.hasOwn(paper,'apiReaderArticle')&&!Object.hasOwn(paper,'apiReaderPlan');
     const operatorCompletion=operator.hasOperatorProofMarker(stage?.operatorProvenance)
         ||history?.reason==='operator-correction-supersedes-ordinal-completion'
-        ||(!files.length&&operator.hasRetainedOrdinalCandidate(paper,attempts));
+        ||(!unfinishedPlanning&&!files.length&&operator.hasRetainedOrdinalCandidate(paper,attempts));
     if(operatorCompletion){
         if(marked)fail('operator completion retains ordinary completion markers','run');
         const ref=history?.previousCompletionProof;
@@ -581,4 +586,4 @@ function replayNormalCompletion(paper,{source,last,saved}){
 }
 
 module.exports={CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
-    recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>Boolean(readVerifiedCompletion(paper)),compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
+    recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>Boolean(readVerifiedCompletion(paper,true)),compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
