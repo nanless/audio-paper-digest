@@ -7,7 +7,9 @@ const { Worker } = require('node:worker_threads');
 const MAX_STAGE_WORKERS = 5;
 const aggregateBatches = new WeakMap();
 const workerStageTimeouts = new WeakSet();
-const LOCAL_TIMEOUT = 'conference-fixed-local-python-timeout-v1';
+const formats = require('./protocol-codec');
+const { hasExactLocalHeader } = require('./python-json-packet-bridge');
+const LOCAL_TIMEOUT = 'conference-fixed-local-python-timeout';
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
 const LOCAL_EXTRACTORS = Object.freeze(['reader_sealed_pdf_quote_evidence.py',
     'reader_authenticated_pdf_hierarchical_table.py', 'reader_authenticated_pdf_footnote_evidence.py']);
@@ -25,7 +27,7 @@ function localTimeoutEvidence(error) {
     if (nested) {
         if (!verifiedNestedTimeout(nested)) return null;
         const sha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-        return {contract:LOCAL_TIMEOUT,program:LOCAL_RENDERER,wrapperSha256:sha(wrapper),
+        return {...formats.recordHeader(LOCAL_TIMEOUT, LOCAL_TIMEOUT),program:LOCAL_RENDERER,wrapperSha256:sha(wrapper),
             programSha256:sha(path.join(PROJECT_ROOT,'scripts',LOCAL_RENDERER)),nestedReplay:{...nested}};
     }
     if (!(error instanceof Error) || error.code !== 'ETIMEDOUT' || error.syscall !== 'spawnSync bash'
@@ -44,26 +46,25 @@ function localTimeoutEvidence(error) {
         && /^conference-page-render-[A-Za-z0-9]{6}$/u.test(path.basename(temporary));
     if (!extractor && !renderer) return null;
     const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
-    return { contract: LOCAL_TIMEOUT, program: path.basename(program),
+    return { ...formats.recordHeader(LOCAL_TIMEOUT, LOCAL_TIMEOUT), program: path.basename(program),
         wrapperSha256: sha(fs.readFileSync(wrapper)), programSha256: sha(fs.readFileSync(program)) };
 }
 function verifiedNestedTimeout(proof) {
-    if(proof?.contract==='publication-fixed-render-deadline-v1') {
-        const keys=['contract','renderer','rendererSha256','signal','timeoutSeconds','returncode'];
+    if(formats.hasValidHeader(proof, 'publication-fixed-render-deadline')) {
+        const keys=['renderer','rendererSha256','signal','timeoutSeconds','returncode'];
         const policy=require('../publication_replay_policy.json'),budgets=new Set([policy.ordinaryConferenceSeconds,
             policy.sourceReplaySeconds+policy.renderOverheadSeconds]);
         for(let count=1;count<=policy.maxAggregatePapers;count++)for(let sources=0;sources<=count;sources++)
             budgets.add(policy.renderOverheadSeconds+sources*policy.sourceReplaySeconds+(count-sources)*policy.simpleReplaySeconds);
-        if(Object.keys(proof).sort().join(',')!==keys.sort().join(',')||proof.renderer!==LOCAL_RENDERER
+        if(!hasExactLocalHeader(proof, 'publication-fixed-render-deadline', keys)||proof.renderer!==LOCAL_RENDERER
             ||proof.signal!=='SIGALRM'||proof.returncode!==1||!budgets.has(proof.timeoutSeconds))return false;
         const sha=require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(PROJECT_ROOT,'scripts',LOCAL_RENDERER))).digest('hex');
         if(proof.rendererSha256!==sha)throw integrity('本地页面总期限的固定渲染实现已变化');
         return true;
     }
-    const keys=['contract','renderer','worker','workerSha256','rendererSha256','timedOut','outputTruncated',
+    const keys=['renderer','worker','workerSha256','rendererSha256','timedOut','outputTruncated',
         'returncode','timeoutSeconds','stdoutSha256','stderrSha256','stdoutBytes','stderrBytes'];
-    if (!proof || Object.keys(proof).sort().join(',')!==keys.sort().join(',')
-        || proof.contract!=='publication-local-replay-failure-v1' || proof.renderer!==LOCAL_RENDERER
+    if (!hasExactLocalHeader(proof, 'publication-local-replay-failure', keys) || proof.renderer!==LOCAL_RENDERER
         || !['reader-resource-claims-replay-cli.js','core-summary-semantic-replay-cli.js'].includes(proof.worker)
         || proof.timedOut!==true || proof.outputTruncated!==false || !Number.isInteger(proof.returncode) || proof.returncode===0
         || ![30,180,require('../publication_replay_policy.json').sourceReplaySeconds].includes(proof.timeoutSeconds)
@@ -77,8 +78,9 @@ function verifiedNestedTimeout(proof) {
 function verifiedLocalTimeout(error) {
     const proof = error?.localTimeout;
     const nested = proof && Object.hasOwn(proof,'nestedReplay');
-    if ((!nested && error?.code !== 'ETIMEDOUT') || error?.scope === 'run' || proof?.contract !== LOCAL_TIMEOUT
-        || Object.keys(proof).sort().join(',') !== (nested?'contract,nestedReplay,program,programSha256,wrapperSha256':'contract,program,programSha256,wrapperSha256')
+    const fields = ['program', 'programSha256', 'wrapperSha256', ...(nested ? ['nestedReplay'] : [])];
+    if ((!nested && error?.code !== 'ETIMEDOUT') || error?.scope === 'run'
+        || !hasExactLocalHeader(proof, LOCAL_TIMEOUT, fields)
         || ![...LOCAL_EXTRACTORS, LOCAL_RENDERER].includes(proof.program)) return false;
     if(nested&&(proof.program!==LOCAL_RENDERER||!verifiedNestedTimeout(proof.nestedReplay)))return false;
     const sha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');

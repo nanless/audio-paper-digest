@@ -26,10 +26,11 @@ function nestedReplayFixture(kind='worker') {
     const fs=require('node:fs'),crypto=require('node:crypto'),bridge=require('../scripts/lib/python-json-packet-bridge');
     const root=path.resolve(__dirname,'..'),hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     const worker='reader-resource-claims-replay-cli.js',renderer='conference-page-render.py';
-    const proof=kind==='deadline'?{contract:'publication-fixed-render-deadline-v1',renderer,
+    const {recordHeader}=require('../scripts/lib/protocol-codec');
+    const proof=kind==='deadline'?{...recordHeader('publication-fixed-render-deadline','publication-fixed-render-deadline'),renderer,
         rendererSha256:hash(path.join(root,'scripts',renderer)),signal:'SIGALRM',
         timeoutSeconds:require('../scripts/publication_replay_policy.json').ordinaryConferenceSeconds}:
-        {contract:'publication-local-replay-failure-v1',renderer,worker,
+        {...recordHeader('publication-local-replay-failure','publication-local-replay-failure'),renderer,worker,
         workerSha256:hash(path.join(root,'scripts/lib',worker)),rendererSha256:hash(path.join(root,'scripts',renderer)),
         timedOut:true,outputTruncated:false,returncode:-15,timeoutSeconds:require('../scripts/publication_replay_policy.json').sourceReplaySeconds,
         stdoutSha256:'a'.repeat(64),stderrSha256:'b'.repeat(64),stdoutBytes:0,stderrBytes:10};
@@ -53,7 +54,7 @@ test('当前会议实现闭包真实纳入私有pool与Worker文件字节，旧v
     assert.notEqual(before, after);
 });
 test('only private bridge FD timeout identity enters nested local retry; bare error fields and exit1 do not',()=>{
-    const h=nestedReplayFixture();assert.equal(h.serialized.localTimeout.nestedReplay.contract,'publication-local-replay-failure-v1');
+    const h=nestedReplayFixture();assert.equal(h.serialized.localTimeout.nestedReplay.contract,'publication-local-replay-failure');
     assert.equal(h.serialized.code,undefined,'preserve true exit1 rather than inventing native ETIMEDOUT');
     const forged=Object.assign(Error('synthetic exit1'),{status:1,localReplayTimeout:h.proof,localTimeout:h.serialized.localTimeout});
     assert.equal(pool.serializeError(forged).localTimeout,undefined);
@@ -73,7 +74,7 @@ test('copied nested timeout with changed fixed implementation SHA stops instead 
     assert.equal(h.attempts[0],1);assert.deepEqual(h.events,[]);
 });
 test('real private-FD renderer deadline is deferred once; SIGTERM/unknown budget never gains local retry',async()=>{
-    const fixture=nestedReplayFixture('deadline');assert.equal(fixture.serialized.localTimeout.nestedReplay.contract,'publication-fixed-render-deadline-v1');
+    const fixture=nestedReplayFixture('deadline');assert.equal(fixture.serialized.localTimeout.nestedReplay.contract,'publication-fixed-render-deadline');
     const h=timeoutHarness({timeouts:[0],serializedNestedTimeout:fixture.serialized});
     await pool.runStagePool(items(3),{concurrency:2,init:h.init,onResult:(_item,_value,error)=>assert.ifError(error)},h.dependencies);
     assert.deepEqual([...h.attempts.slice(0,3)],[2,1,1]);

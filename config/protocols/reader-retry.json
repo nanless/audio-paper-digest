@@ -506,6 +506,59 @@
           "variant": "same-draft-unbound-table-pruning-audit"
         }
       ]
+    },
+    {
+      "name": "conference-fixed-local-python-timeout",
+      "currentVariant": "authenticated-fixed-local-execution-timeout",
+      "currentSchema": {
+        "purpose": "authenticated-fixed-local-execution-timeout"
+      },
+      "historical": [
+        {
+          "tag": "conference-fixed-local-python-timeout-v1",
+          "variant": "authenticated-fixed-local-execution-timeout"
+        }
+      ]
+    },
+    {
+      "name": "publication-local-replay-failure",
+      "currentVariant": "fixed-worker-failure-on-private-renderer-fd",
+      "currentSchema": {
+        "purpose": "fixed-worker-failure-on-private-renderer-fd"
+      },
+      "historical": [
+        {
+          "tag": "publication-local-replay-failure-v1",
+          "variant": "fixed-worker-failure-on-private-renderer-fd"
+        }
+      ]
+    },
+    {
+      "name": "publication-fixed-render-deadline",
+      "currentVariant": "authenticated-renderer-alarm",
+      "currentSchema": {
+        "purpose": "authenticated-renderer-alarm"
+      },
+      "historical": [
+        {
+          "tag": "publication-fixed-render-deadline-v1",
+          "variant": "authenticated-renderer-alarm"
+        }
+      ]
+    },
+    {
+      "name": "sealed-pdf-cell-confirmation",
+      "currentVariant": "source-bound-complete-cell-proof",
+      "currentSchema": {
+        "purpose": "source-bound-complete-cell-proof",
+        "extractor": "actual-pinned-rule-file"
+      },
+      "historical": [
+        {
+          "tag": "sealed-pdf-cell-confirmation-v1",
+          "variant": "source-bound-complete-cell-proof"
+        }
+      ]
     }
   ]
 }

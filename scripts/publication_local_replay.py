@@ -51,7 +51,7 @@ class LocalReplayFailure(PublishDataValidationError):
 
     def protocol(self, renderer):
         worker = ROOT / 'lib' / self.worker
-        return {'contract': 'publication-local-replay-failure-v1',
+        return {**record_header('publication-local-replay-failure', 'publication-local-replay-failure'),
                 'renderer': Path(renderer).name, 'worker': self.worker,
                 'workerSha256': _sha(worker.read_bytes()) if self.worker in _WORKERS else None,
                 'rendererSha256': _sha(Path(renderer).read_bytes()),
@@ -119,7 +119,7 @@ def render_process_guard(seconds, *, renderer=None):
         if renderer is not None:
             filename = Path(renderer)
             if filename.parent.resolve() == ROOT and filename.name in {'conference-page-render.py', 'historical-page-render.py'}:
-                _deadlines[error] = {'contract': 'publication-fixed-render-deadline-v1',
+                _deadlines[error] = {**record_header('publication-fixed-render-deadline', 'publication-fixed-render-deadline'),
                     'renderer': filename.name, 'rendererSha256': _sha(filename.read_bytes()),
                     'signal': 'SIGALRM', 'timeoutSeconds': seconds}
         raise error

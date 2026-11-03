@@ -3,11 +3,17 @@
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const child = require('node:child_process');
 const crypto = require('node:crypto');
+const formats = require('./protocol-codec');
 const policy = require('../publication_replay_policy.json');
 const localReplayFailures = new WeakMap();
 const scripts = path.resolve(__dirname, '..');
 const MAX_PACKET_BYTES = 64 * 1024 * 1024;
 const TIMEOUT_MS = 60 * 1000;
+function hasExactLocalHeader(value, family, fields) {
+    if (!formats.hasValidHeader(value, family)) return false;
+    const header = formats.recordHeader(value.contract, family, value.schemaFingerprint);
+    return Object.keys(value).sort().join(',') === [...Object.keys(header), ...fields].sort().join(',');
+}
 function sourceReplay(paper) {
     return paper && (require('./conference-source-correction-format').locatorFamily(paper.conferenceSourceCorrection)
         || (paper.apiReaderPlan?.tableBindings || []).some(b => b && Object.hasOwn(b,'authenticatedPdfTableEvidence'))
@@ -60,18 +66,18 @@ function runPythonJsonPacket(packet, { script, inputFlag, prefix, cleanup = 'str
                 const allowed = ['reader-resource-claims-replay-cli.js','core-summary-semantic-replay-cli.js'];
                 const fixedRenderer = ['conference-page-render.py','historical-page-render.py']
                     .some(name => script === path.join(scripts,name));
-                if (proof?.contract === 'publication-fixed-render-deadline-v1' && fixedRenderer
-                    && Object.keys(proof).sort().join(',') === 'contract,renderer,rendererSha256,signal,timeoutSeconds'
+                if (hasExactLocalHeader(proof, 'publication-fixed-render-deadline',
+                    ['renderer','rendererSha256','signal','timeoutSeconds']) && fixedRenderer
                     && proof.renderer === path.basename(script) && proof.rendererSha256 === hash(script)
                     && proof.signal === 'SIGALRM' && proof.timeoutSeconds === timeout / 1000 - policy.transportGraceSeconds
                     && error.status === 1 && !error.signal) {
                     localReplayFailures.set(error,Object.freeze({...proof,returncode:error.status}));
                 }
-                if (proof?.contract === 'publication-local-replay-failure-v1' && proof.renderer === path.basename(script)
-                    && Object.keys(proof).sort().join(',') === ['contract','renderer','rendererSha256','worker','workerSha256',
+                if (hasExactLocalHeader(proof, 'publication-local-replay-failure',
+                    ['renderer','rendererSha256','worker','workerSha256',
                         'timedOut','outputTruncated','returncode','timeoutSeconds','stdoutSha256','stderrSha256',
-                        'stdoutBytes','stderrBytes'].sort().join(',')
-                    && fixedRenderer
+                        'stdoutBytes','stderrBytes'])
+                    && proof.renderer === path.basename(script) && fixedRenderer && error.status === 1 && !error.signal
                     && proof.rendererSha256 === hash(script) && allowed.includes(proof.worker)
                     && proof.workerSha256 === hash(path.join(scripts,'lib',proof.worker))
                     && proof.timedOut === true && proof.outputTruncated === false
@@ -97,4 +103,4 @@ function runPythonJsonPacket(packet, { script, inputFlag, prefix, cleanup = 'str
         }
     }
 }
-module.exports = { runPythonJsonPacket, getVerifiedLocalReplayTimeout, renderTimeout };
+module.exports = { runPythonJsonPacket, getVerifiedLocalReplayTimeout, renderTimeout, hasExactLocalHeader };

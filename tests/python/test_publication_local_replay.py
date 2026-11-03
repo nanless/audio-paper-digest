@@ -170,7 +170,8 @@ class PublicationLocalReplayTests(unittest.TestCase):
                     replay.emit_replay_failure(error, renderer)
                 channel.seek(0)
                 proof = json.load(channel)
-                self.assertEqual(proof['contract'], 'publication-fixed-render-deadline-v1')
+                self.assertEqual({key: proof[key] for key in ('contract', 'schemaFingerprint')},
+                                 replay.record_header('publication-fixed-render-deadline', 'publication-fixed-render-deadline'))
                 self.assertEqual(proof['signal'], 'SIGALRM')
                 self.assertEqual(proof['timeoutSeconds'], 0.01)
                 with self.assertRaisesRegex(ValueError, '未登记'):

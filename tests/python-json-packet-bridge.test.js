@@ -115,11 +115,13 @@ test('只有真实私有FD中的固定worker超时能进入typed错误，stderr�
         rendererSha256:hash(renderer),worker,workerSha256:hash(path.join(scripts,'lib',worker)),
         timedOut:true,outputTruncated:false,returncode:-15,timeoutSeconds:180,
         stdoutSha256:empty,stderrSha256:empty,stdoutBytes:0,stderrBytes:0};
-    for (const [channel, delta, expected] of [['private',{},true],['stderr',{},false],
+    for (const [channel, delta, expected, terminal] of [['private',{},true],['stderr',{},false],
+        ['private',{},false,{status:2}], ['private',{},false,{signal:'SIGTERM'}],
+        ['private',{schemaFingerprint:'0'.repeat(64)},false],
         ['private',{timedOut:false},false],['private',{worker:'unknown.js'},false],
         ['private',{rendererSha256:'0'.repeat(64)},false],['private',{extra:'unknown'},false]]) {
         const error = Object.assign(new Error('fixed renderer exited'),{status:1,stderr:Buffer.from(JSON.stringify(proof)),
-            localReplayTimeout:proof});
+            localReplayTimeout:proof,...terminal});
         assert.throws(() => bridge.runPythonJsonPacket({}, {script:renderer,inputFlag:'--packet-file',prefix:'typed-replay-fixture-'},
             {execFileSync:(_p,_args,options)=>{
                 if(channel==='private')fs.writeSync(options.stdio[3],JSON.stringify({...proof,...delta}));
