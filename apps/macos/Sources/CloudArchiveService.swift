@@ -97,6 +97,7 @@ public actor CloudArchiveService {
     private let destinationID: UUID
     private let credentials: @Sendable () async throws -> Credentials
     private let checkpointSink: CheckpointSink
+    private let cooldownSink: @Sendable (Date) async throws -> Void
     private let transport: Transport
     private let now: @Sendable () -> Date
     private let sleep: @Sendable (TimeInterval) async throws -> Void
@@ -115,10 +116,13 @@ public actor CloudArchiveService {
                 now: @escaping @Sendable () -> Date = { Date() },
                 sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
                     try await Task.sleep(for: .seconds(seconds))
-                }, minimumRequestInterval: TimeInterval = 3.1) throws {
+                }, minimumRequestInterval: TimeInterval = 3.1,
+                initialRetryAfter: Date? = nil,
+                cooldownSink: @escaping @Sendable (Date) async throws -> Void = { _ in }) throws {
         guard Self.validFolder(folder), minimumRequestInterval.isFinite, minimumRequestInterval >= 0, transport != nil || minimumRequestInterval >= 3.1 else { throw CloudError.invalidConfiguration }
         self.folder = folder; self.destinationID = destinationID
         self.credentials = credentials; self.checkpointSink = checkpointSink
+        self.retryAfter = initialRetryAfter; self.cooldownSink = cooldownSink
         self.transport = transport ?? { request, limit in try await CloudBoundedRequest.perform(request, limit: limit) }
         self.now = now; self.sleep = sleep; self.minimumRequestInterval = minimumRequestInterval
     }
@@ -384,7 +388,10 @@ public actor CloudArchiveService {
     }
     private func recordCooldown(_ until: Date) async throws {
         retryAfter = until
+        var cooldownSaved = true
+        do { try await cooldownSink(until) } catch { cooldownSaved = false }
         if var state = currentCheckpoint { state.retryAfter = until; try await save(state) }
+        guard cooldownSaved else { throw CloudError.checkpointStore }
     }
     private func snapshotPath(_ reference: SnapshotReference) -> String { "/dav/\(folder)/\(reference.month)/\(reference.id.uuidString.lowercased())/" }
     private static func validFolder(_ value: String) -> Bool {

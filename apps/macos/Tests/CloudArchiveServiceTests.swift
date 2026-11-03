@@ -727,6 +727,52 @@ private actor CloudIndependentPublishGate {
                 try require(await server.material() == competing, "competing material remains intact")
             }
         }
+        await check("probe and list cooldowns survive rebuilding the local profile and service") {
+            for status in [429, 503] {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-cooldown-" + UUID().uuidString)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+                defer { try? FileManager.default.removeItem(at: root) }
+                let data = root.appendingPathComponent("PaperDigest")
+                let local = try await CloudLocalStore(dataDirectory: data)
+                try await local.save(account: "isolated@example.invalid", folder: "PaperDigest", automatic: false, intervalHours: 24)
+                let profile = await local.profile
+                let clock = CloudTestClock(), dav = CloudTestDAV(), credentials = CloudCredentialFixture(.ready)
+                let until = clock.now().addingTimeInterval(180)
+                func client(_ store: CloudLocalStore) async throws -> CloudArchiveService {
+                    let saved = await store.profile
+                    return try CloudArchiveService(folder: saved.folder, destinationID: saved.destinationID,
+                        credentials: { try await credentials.credentials() }, checkpointSink: { _ in },
+                        transport: { try await dav.request($0, limit: $1) }, now: { clock.now() },
+                        minimumRequestInterval: 0, initialRetryAfter: saved.retryAfter,
+                        cooldownSink: { try await store.recordCooldown($0, destinationID: saved.destinationID) })
+                }
+                let first = try await client(local)
+                await dav.add(.init("PROPFIND", status == 429 ? "/dav/" : "/2026-10/", status: status, headers: ["Retry-After": "180"]))
+                try await rejects(.throttled(until)) {
+                    if status == 429 { try await first.probe() }
+                    else { _ = try await first.list(month: "2026-10") }
+                }
+                let reopened = try await CloudLocalStore(dataDirectory: data)
+                try require(await reopened.profile.retryAfter == until, "deadline persisted across profile reconstruction")
+                let restarted = try await client(reopened)
+                await credentials.set(.unavailable)
+                let before = await dav.records().count
+                try await rejects(.throttled(until)) { _ = try await restarted.list(month: "2026-10") }
+                try require(await dav.records().count == before, "cooldown rejects before credentials or HTTP")
+                await credentials.set(.ready)
+                clock.advance(181)
+                _ = try await restarted.list(month: "2026-10")
+                try require(await dav.records().count == before + 1, "request allowed after cooldown")
+                try await reopened.save(account: "other@example.invalid", folder: "PaperDigest", automatic: false, intervalHours: 24)
+                do {
+                    try await reopened.recordCooldown(until, destinationID: profile.destinationID)
+                    throw CloudTestError(message: "retired target overwrote new cooldown")
+                } catch is DesktopError { }
+                let changed = try await CloudLocalStore(dataDirectory: data)
+                let target = await changed.profile
+                try require(target.destinationID != profile.destinationID && target.retryAfter == nil, "new destination does not inherit old cooldown")
+            }
+        }
         print("CloudArchiveService: \(passed) passed, \(failures.count) failed")
         if !failures.isEmpty { exit(1) }
     }

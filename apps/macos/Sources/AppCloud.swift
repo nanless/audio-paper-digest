@@ -91,6 +91,7 @@ struct CloudRestoreSelection {
         state["credentialMode"] = available ? "memory" : "keychain"
         if let cloudActiveJobID { state["activeJobID"] = cloudActiveJobID }
         if let cloudLastError { state["lastError"] = cloudLastError }
+        else if let until = profile.retryAfter, until > Date() { state["lastError"] = CloudArchiveService.CloudError.throttled(until).localizedDescription }
         else if !cloudAutomaticPermitted(profile: profile) { state["lastError"] = "自动备份已暂停，请主动检查连接后继续" }
         do {
             if let pending = try local.pending() { state["pending"] = ["createdAt": pending.createdAt, "encodedBytes": pending.encodedBytes, "fileCount": pending.fileCount] }
@@ -122,7 +123,11 @@ struct CloudRestoreSelection {
             credentials: { try await access.credentials() }, checkpointSink: { [weak self] checkpoint in
                 guard let owner = self else { throw DesktopError.message("应用已退出，未保存续传记录") }
                 try await owner.saveCloudCheckpoint(checkpoint, destinationID: profile.destinationID)
-            }, transport: cloudServiceTransportOverride, minimumRequestInterval: cloudServiceTransportOverride == nil ? 3.1 : 0)
+            }, transport: cloudServiceTransportOverride, minimumRequestInterval: cloudServiceTransportOverride == nil ? 3.1 : 0,
+            initialRetryAfter: profile.retryAfter, cooldownSink: { [weak self] until in
+                guard let owner = self else { throw DesktopError.message("应用已退出，未保存云端重试时间") }
+                try await owner.saveCloudCooldown(until, destinationID: profile.destinationID)
+            })
         cloudArchive = service; return service
     }
     func cloudCredentialContextCurrent(target: CloudSessionCredentials.Target, generation: UUID) -> Bool {
@@ -138,6 +143,10 @@ struct CloudRestoreSelection {
     func cloudSessionValue(target: CloudSessionCredentials.Target, generation: UUID) throws -> CloudArchiveService.Credentials? {
         guard cloudCredentialContextCurrent(target: target, generation: generation) else { throw CloudArchiveService.CloudError.credentialsUnavailable }
         return try cloudSessionCredentials.credentials(for: target, generation: generation)
+    }
+    func saveCloudCooldown(_ until: Date, destinationID: UUID) throws {
+        try cloudLocalStore().recordCooldown(until, destinationID: destinationID)
+        emit("cloud.changed")
     }
     func saveCloudCheckpoint(_ checkpoint: CloudArchiveService.UploadCheckpoint, destinationID: UUID) throws {
         try cloudLocalStore().saveCheckpoint(checkpoint, destinationID: destinationID, sha256: checkpoint.sha256)
@@ -365,6 +374,7 @@ struct CloudRestoreSelection {
         guard !cloudBusy, !maintenanceBusy, !terminationPending, !cloudAutomaticPausedInMemory,
               jobs.isEmpty, !storageDetailsActive,
               let local = try? cloudLocalStore(), local.profile.automatic, cloudAutomaticPermitted(profile: local.profile),
+              (local.profile.retryAfter ?? .distantPast) <= Date(),
               Date().timeIntervalSince(local.profile.lastAttemptAt ?? .distantPast) >= Double(local.profile.intervalHours) * 3600 else { return }
         do { _ = try await dispatchCloud("cloud.upload", payload: [:]) }
         catch { emit("cloud.changed") }
