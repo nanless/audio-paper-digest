@@ -183,9 +183,9 @@ class JointReleaseStages(unittest.TestCase):
   for folder,manifest,assets,checksums in [(self.a,'android-release-manifest.json',['app.apk'],'ANDROID-SHA256SUMS'),(self.b,'release-manifest.json',['package.zip','build-info.json','RELEASE_NOTES.md'],'SHA256SUMS')]:
    (folder/manifest).write_text(json.dumps({'assets':{name:{'bytes':(folder/name).stat().st_size,'sha256':m.file_sha(folder/name)} for name in assets}}));(folder/checksums).write_text('explicit fixture checksums')
   self.expected={p.name:p for folder in [self.a,self.b] for p in folder.iterdir()}
-  self.record={'id':77,'tag_name':'v1.0.0','draft':True,'published_at':None,'body':'Fixed reviewed scope\n','name':'reviewed title','prerelease':False,'updated_at':'fixed','assets':[{'id':i+1,'name':n,'size':p.stat().st_size,'state':'uploaded','download_count':0} for i,(n,p) in enumerate(sorted(self.expected.items()))]}
+  self.record={'id':77,'tag_name':'v1.0.0','draft':True,'published_at':None,'body':'Fixed reviewed scope\n','name':'reviewed title','prerelease':False,'target_commitish':self.head,'updated_at':'fixed','assets':[{'id':i+1,'name':n,'size':p.stat().st_size,'state':'uploaded','download_count':0} for i,(n,p) in enumerate(sorted(self.expected.items()))]}
   self.args=types.SimpleNamespace(prepared=self.a,mac=self.b,repo=REPO,sdk=self.p/'unused-sdk',certificate='0'*64,android_acceptance=self.astatus,mac_acceptance=self.mstatus,mac_cloud=self.cloud,draft_id=77)
-  self.remote=(self.head+'\trefs/tags/v1.0.0\n').encode();self.api_reads=0;self.after=None;self.corrupt=None;self.omit=None
+  self.remote=('1'*40+'\trefs/tags/v1.0.0\n'+self.head+'\trefs/tags/v1.0.0^{}\n').encode();self.api_reads=0;self.after=None;self.corrupt=None;self.omit=None
   def macrun(argv):self.commands.append(argv);return self.remote
   def androidrun(argv,code,env=None):
    self.commands.append(argv)
@@ -232,7 +232,7 @@ class JointReleaseStages(unittest.TestCase):
   result=m.joint_public_plan(self.args)
   self.assertEqual(['gh','api','--hostname','github.com','--method','PATCH','repos/nanless/audio-paper-digest/releases/77','-F','draft=false'],result['argv'])
   self.assertTrue(result['downloadVerification']['downloadedAssetsSHAExact']);self.assertEqual(len(self.expected),result['downloadVerification']['assets']);self.assertFalse(result['executed']);self.assertFalse(result['publicPublication']);self.assertEqual(2,self.api_reads)
-  self.assertFalse(any(c[:2]==['gh','release'] for c in self.commands));self.assertEqual(2,sum(c[:2]==['git','ls-remote'] for c in self.commands))
+  self.assertFalse(any(c[:2]==['gh','release'] for c in self.commands));self.assertEqual(4,sum(c[:2]==['git','ls-remote'] for c in self.commands))
   self.assertEqual({'repos/nanless/audio-paper-digest/releases/assets/'+str(a['id']) for a in self.record['assets']},{c[6] for c in self.commands if c[:6]==['gh','api','--hostname','github.com','-H','Accept: application/octet-stream']})
  def test_public_pending_either_platform_cannot_read_or_publish_draft(self):
   for p in [self.astatus,self.cloud]:
@@ -242,6 +242,27 @@ class JointReleaseStages(unittest.TestCase):
   original=dict(self.record)
   for change in [{'id':78},{'tag_name':'v2.0.0'},{'draft':False},{'published_at':'already public'}]:
    self.record={**original,**change};self.reject(lambda:m.joint_public_plan(self.args))
+ def test_wrong_draft_source_channel_or_digest_is_rejected(self):
+  original=json.loads(json.dumps(self.record))
+  for change in [{'target_commitish':'main'},{'prerelease':True}]:
+   self.record={**original,**change};self.reject(lambda:m.joint_public_plan(self.args))
+  self.record=original;self.record['assets'][0]['digest']='sha256:'+'0'*64
+  self.reject(lambda:m.joint_public_plan(self.args))
+ def test_lightweight_tag_and_replaced_annotation_are_rejected(self):
+  annotated=self.remote
+  self.remote=(self.head+'\trefs/tags/v1.0.0\n').encode()
+  self.reject(lambda:m.joint_public_plan(self.args))
+  self.remote=annotated
+  self.after=lambda _:setattr(self,'remote',b'2'*40+annotated[40:])
+  self.reject(lambda:m.joint_public_plan(self.args))
+ def test_replacement_during_copy_is_rejected_before_platform_verification(self):
+  original=m.shutil.copyfile
+  def changed_copy(source,target):
+   original(source,target)
+   target.write_bytes(b'X'*target.stat().st_size)
+  with patch.object(m.shutil,'copyfile',side_effect=changed_copy):
+   self.reject(lambda:m.joint_public_plan(self.args))
+   self.assertEqual(1,m.verify.call_count) # Only the original prepared release was verified.
  def test_missing_duplicate_wrongsize_or_unuploaded_asset_is_rejected(self):
   original=json.loads(json.dumps(self.record))
   for change in ['missing','duplicate','size','state']:
@@ -265,6 +286,10 @@ class JointReleaseStages(unittest.TestCase):
   self.after=lambda record:record.update(name='changed title');self.reject(lambda:m.joint_public_plan(self.args))
  def test_current_head_change_retains_original_source_gate(self):
   with patch.object(self.mac,'source_state',return_value=('2'*40,[])):self.reject(lambda:m.joint_public_plan(self.args))
+ def test_clean_head_change_after_download_is_rejected(self):
+  self.mac.source_state.side_effect=lambda *_:('2'*40 if self.api_reads>1 else self.head,[])
+  with self.assertRaisesRegex(m.ReleaseError,'joint_release_source_changed'):
+   m.joint_public_plan(self.args)
  def test_final_negative_draft_id_is_not_a_free_form_api_target(self):
   self.args.draft_id=-1;self.reject(lambda:m.joint_public_plan(self.args));self.assertEqual([],self.commands)
 
