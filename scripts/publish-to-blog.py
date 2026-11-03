@@ -11993,8 +11993,9 @@ def _assert_no_pending_daily_scoring_refresh(papers):
     node = shutil.which('node')
     if not node:
         raise PublishDataValidationError('日更评分保存稿冷核需要 Node.js')
+    family = 'daily-scoring-refresh-publication-check'
     payload = _daily_fresh_compact_json_bytes({
-        'contract': 'daily-scoring-refresh-publication-check-v1', 'papers': selected,
+        **public_protocols.record_header(family, family), 'papers': selected,
     })
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError('日更评分保存稿冷核输入超过上限')

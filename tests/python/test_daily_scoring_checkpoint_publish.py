@@ -124,6 +124,24 @@ class DailyScoringCheckpointPublishTest(unittest.TestCase):
                 with self.assertRaisesRegex(PublishDataValidationError, '评分刷新后的 Reader 尚未完成'):
                     publisher.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
 
+    def test_bridge_checks_current_and_original_headers_over_the_same_input(self):
+        family = 'daily-scoring-refresh-publication-check'
+        current = publisher.public_protocols.record_header(family, family)
+        original = publisher.public_protocols.historical_header(family, 'private-owner-check', None)
+        cases = ((current, True), (original, True),
+                 ({**current, 'schemaFingerprint': '0' * 64}, False),
+                 ({**original, 'schemaFingerprint': current['schemaFingerprint']}, False))
+        script = self.workspace / 'scripts/lib/daily-scoring-refresh-checkpoint-cli.js'
+        with verified_input() as (_, _data, payload):
+            for header, verified in cases:
+                with self.subTest(header=header), tempfile.TemporaryFile() as private:
+                    private.write(json.dumps({**header, 'papers': payload['papers']}).encode())
+                    private.flush(); private.seek(0)
+                    result = subprocess.run(['node', str(script), str(private.fileno())],
+                        cwd=self.workspace, pass_fds=(private.fileno(),), capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode, 0 if verified else 1)
+                    self.assertEqual(json.loads(result.stdout), {'verified': verified})
+
     def test_bridge_rejects_sandbox_and_wrong_role_before_accepting_private_input(self):
         script = self.workspace / 'scripts/lib/daily-scoring-refresh-checkpoint-cli.js'
         for extra in ({'CODEX_SANDBOX': 'test-runtime-rejection'},

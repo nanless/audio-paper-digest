@@ -26,8 +26,11 @@ try {
     const bytes = fs.readFileSync(fd);
     if (bytes.length !== stat.size) throw new Error('Private input changed');
     const input = JSON.parse(bytes.toString('utf8'));
-    if (!input || Object.keys(input).sort().join(',') !== 'contract,papers'
-        || input.contract !== 'daily-scoring-refresh-publication-check-v1'
+    const codec = require('./protocol-codec');
+    const family = 'daily-scoring-refresh-publication-check';
+    if (!codec.hasValidHeader(input, family)) throw new Error('Invalid publication checkpoint format');
+    const header = codec.recordHeader(input.contract, family, input.schemaFingerprint);
+    if (Object.keys(input).sort().join(',') !== [...Object.keys(header), 'papers'].sort().join(',')
         || !Array.isArray(input.papers) || !input.papers.length || input.papers.length > 10000
         || input.papers.some(paper => !paper || typeof paper !== 'object' || Array.isArray(paper)))
         throw new Error('Invalid publication checkpoint check');
