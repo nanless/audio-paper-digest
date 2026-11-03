@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,7 +15,12 @@ from types import SimpleNamespace
 
 SOURCE = Path(os.environ.get('SOURCE_PUBLISHER_PATH',
     str(Path(__file__).resolve().parents[2] / 'scripts/publish-to-blog.py')))
-NAMES = {'_validate_tag_display_policy', '_historical_tag_prompt_text_sha256',
+sys.path.insert(0, str(SOURCE.parent))
+import protocol_codec as public_protocols
+import blog_record_format as blog_formats
+from tag_catalog import tag_catalog_identity
+
+NAMES = {'_tag_snapshot_body', '_validate_tag_display_policy', '_historical_tag_prompt_text_sha256',
     '_select_tag_display_version', 'build_tag_catalog_snapshot', 'tag_catalog_snapshot_bytes',
     '_validate_tag_catalog_snapshot', '_validate_tag_version_catalog', '_is_tag_catalog_file_path',
     '_read_tag_catalog_file', 'tag_catalog_file_contents', '_legacy_tag_catalog_file_contents',
@@ -57,23 +63,26 @@ class TagVersionFilesTests(unittest.TestCase):
         self.error = ValidationError
         self.env = {'Path': Path, 'json': json, 're': re, 'hashlib': hashlib,
             'PublishDataValidationError': ValidationError, 'BLOG_REPO': str(self.repo),
-            'TAG_CATALOG_SNAPSHOT_CONTRACT': 'paper-tag-catalog-snapshot-v2',
+            'public_protocols': public_protocols, 'tag_catalog_identity': tag_catalog_identity,
+            'blog_formats': blog_formats,
+            'TAG_CATALOG_SNAPSHOT_CONTRACT': public_protocols.contract('paper-tag-catalog-snapshot'),
             'LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT': 'paper-taxonomy-registry-snapshot-v1',
-            'TAG_CATALOG_VERSIONS_CONTRACT': 'paper-tag-catalog-versions-v2',
+            'TAG_CATALOG_VERSIONS_CONTRACT': public_protocols.contract('paper-tag-catalog-versions'),
             'LEGACY_TAG_CATALOG_VERSIONS_CONTRACT': 'paper-taxonomy-version-catalog-v1',
-            'TAG_PRESENTATION_POLICY_CONTRACT': 'paper-tag-presentation-policy-v2',
+            'TAG_PRESENTATION_POLICY_CONTRACT': public_protocols.contract('paper-tag-presentation-policy'),
             'LEGACY_TAG_PRESENTATION_POLICY_CONTRACT': 'paper-taxonomy-presentation-selection-v1',
             'TAG_DISPLAY_POLICY_PATH': self.root / 'absent-approved-policy.json',
             'VISUAL_SUMMARY_KINDS': set(), 'RESEARCHER_SIDECAR_FILENAMES': set()}
         self.env['_atomic_write_bytes'] = self.write
         self.env['_sha256_file'] = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-        self.env['_PAGE_TAG_CATALOG'] = {'registrySha256': 'b'*64, 'version': 'v2', 'concepts': [
+        self.env['_PAGE_TAG_CATALOG'] = {'registrySha256': 'b'*64, 'version': 'paper-tag-catalog-v2', 'concepts': [
             {'id': 'task.child', 'facet': 'task', 'preferredLabel': {'zh': '新名字', 'en': 'new'},
              'aliases': [], 'broaderId': None, 'status': 'active',
              'definition': '原登记定义', 'scopeNote': '原登记排除说明'}]}
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), self.env)
         self.current = self.call('build_tag_catalog_snapshot')
         self.old = json.loads(json.dumps(self.current))
+        self.old.pop('schemaFingerprint', None)
         self.old.update(registrySha256='a'*64, registryVersion='v1',
                         contract='paper-taxonomy-registry-snapshot-v1')
         self.old['concepts'][0]['zh'] = '旧名字'
@@ -261,7 +270,8 @@ class TagVersionFilesTests(unittest.TestCase):
         # 先准备第三个版本，这样替换一次之后 data/static 里的词表
         # 会短暂不一致，而原来那个完整阶段仍然完好。
         self.env['_PAGE_TAG_CATALOG']['registrySha256'] = 'c'*64
-        self.env['_PAGE_TAG_CATALOG']['version'] = 'v3'
+        del self.env['_PAGE_TAG_CATALOG']['version']
+        self.env['_PAGE_TAG_CATALOG'].update(public_protocols.record_header('paper-tag-catalog', 'paper-tag-catalog'))
         self.env['_PAGE_TAG_CATALOG']['concepts'][0]['preferredLabel']['zh'] = '最新名字'
         paths = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo)
         records = [{'path': path.relative_to(self.stage).as_posix(), 'delete': False,
@@ -284,7 +294,7 @@ class TagVersionFilesTests(unittest.TestCase):
         original = (self.repo / 'data/taxonomy-registry.json').read_bytes()
         assets = self.call('tag_catalog_file_contents', self.repo)
         catalog = json.loads(assets['data/tag-catalog-versions.json'])
-        self.assertEqual(catalog['contract'], 'paper-tag-catalog-versions-v2')
+        self.assertTrue(public_protocols.is_current_header(catalog, 'paper-tag-catalog-versions'))
         self.assertEqual(catalog['snapshots'][0], self.old)
         self.assertEqual(json.loads(assets['data/tag-catalog-history/'+'a'*64+'.json']), self.old)
         self.call('export_tag_catalog_files', self.repo)

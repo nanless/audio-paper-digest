@@ -448,8 +448,10 @@ class PresentationPolicyTests(unittest.TestCase):
         issued = {item['registrySha256']: item for item in versions['snapshots']}
         self.assertEqual(issued[self.preferred['registrySha256']], self.preferred)
         display = json.loads((self.repo/'data/tag-catalog-snapshot.json').read_text())
-        self.assertEqual(display, dict(self.preferred, contract='paper-tag-catalog-snapshot-v2'))
-        self.assertEqual(issued['b'*64]['contract'], 'paper-tag-catalog-snapshot-v2')
+        protocols = self.env['public_protocols']
+        header = protocols.record_header('paper-tag-catalog-snapshot', 'paper-tag-catalog-snapshot')
+        self.assertEqual(display, {**self.preferred, **header})
+        self.assertTrue(protocols.is_current_header(issued['b'*64], 'paper-tag-catalog-snapshot'))
         self.assertEqual(self.policy['preferredSnapshotSha256'], PREFERRED[self.preferred['registrySha256']][0])
         self.assertEqual(self.policy['preferredProjectionSha256'], PREFERRED[self.preferred['registrySha256']][1])
         self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
@@ -459,7 +461,7 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual((self.repo / relative).read_bytes(),
                          (self.repo/'data/taxonomy-snapshots'/(self.preferred['registrySha256']+'.json')).read_bytes())
         self.env['_PAGE_TAG_CATALOG']['registrySha256'] = '1'*64
-        self.env['_PAGE_TAG_CATALOG']['version'] = 'unknown-registry-version'
+        self.env['_PAGE_TAG_CATALOG']['version'] = 'paper-taxonomy-v1'
         with self.assertRaisesRegex(self.error, '概念身份不一致'):
             self.call('tag_catalog_file_contents', self.repo)
 

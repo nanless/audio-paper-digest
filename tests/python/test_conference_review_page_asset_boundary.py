@@ -32,12 +32,12 @@ class ConferenceReviewPageAssetBoundaryTests(unittest.TestCase):
                  for kind, digit in [('paper', '1'), ('aggregate', '2')]]
         sidecars = [{'kind': 'sidecar', 'path': f'static/data/papers/example/{name}', 'sourceSha256': '3' * 64}
                     for name in ['citation.bib', 'citation.ris', 'context.json', 'paper.json']]
-        generation = {'version': 2, 'conferenceId': 'interspeech-2026', 'processId': 'process',
+        generation = {'contract': 'conference-blog-generation-v1', 'version': 2, 'conferenceId': 'interspeech-2026', 'processId': 'process',
                       'baseHead': 'a' * 40, 'files': pages + sidecars, 'imageFiles': [], 'generationSha256': '4' * 64}
         protocol = M.content_review_protocol(M.load_publish_to_blog())
         receipt = {'contract': 'conference-blog-review-v1', 'version': 2,
                    **{key: generation[key] for key in ['conferenceId', 'processId', 'baseHead', 'files', 'imageFiles', 'generationSha256']},
-                   'hugo': {'status': 'passed', 'contract': M.GATE_CONTRACT,
+                   'hugo': {'status': 'passed', **M.mechanical_gate_header(),
                             'implementationSha256': M.gate_fingerprint(),
                             'pages': [{'path': page['path'], 'sourceSha256': page['sourceSha256']} for page in pages]},
                    'contentReview': {'status': 'passed', 'protocol': protocol,

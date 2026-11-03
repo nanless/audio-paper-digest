@@ -15,7 +15,7 @@ private actor AppDocsPublishedFixture {
    let citation:[String:Any]=["paperKey":"arxiv:2610.27491","identityStatus":"verified","verified":true,"complete":false,"authors":["Kohei Yamamoto","Kosuke Okusa"],"title":"MiCLA integration fixture","arxivId":"2610.27491v1","sourceKind":"arxiv","sourceUrl":"https://arxiv.org/abs/2610.27491v1","pdfUrl":"https://arxiv.org/pdf/2610.27491v1.pdf"]
    return try JSONSerialization.data(withJSONObject:[["permalink":"/blog/posts/evidence/","pageType":"paper","title":"MiCLA integration fixture","date":"2026-10-24","sourceKind":"arxiv","identityStatus":"verified","arxivId":"2610.27491","citation":citation]])
   }
-  if url.lastPathComponent=="citation.json" {return try JSONSerialization.data(withJSONObject:["contract":"researcher-sidecars-v1","arxivId":"2610.27491v1","title":"MiCLA integration fixture","authors":["Kohei Yamamoto","Kosuke Okusa"]])}
+  if url.lastPathComponent=="citation.json" {return try JSONSerialization.data(withJSONObject:["contract":"researcher-sidecars-v1","schemaVersion":1,"arxivId":"2610.27491v1","title":"MiCLA integration fixture","authors":["Kohei Yamamoto","Kosuke Okusa"]])}
   if url.lastPathComponent=="citation.bib" {return Data("@article{MiCLA_fixture, title={MiCLA integration fixture}, eprint={2610.27491}}\n".utf8)}
   if url.lastPathComponent=="citation.ris" {return Data("TY  - JOUR\nTI  - MiCLA integration fixture\nER  - \n".utf8)}
   if url.path.contains("/posts/evidence") {return Data(("<html><body><div id='article-body' class='post-content'>"+body+"</div><a href='/blog/files/citation.json'>JSON</a><a href='/blog/files/citation.bib'>BibTeX</a><a href='/blog/files/citation.ris'>RIS</a></body></html>").utf8)}
