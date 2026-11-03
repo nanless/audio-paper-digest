@@ -2,8 +2,8 @@
 // This proves provenance of a paid failed draft; it never grants publishability or attempts.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const child = require('node:child_process'), Module = require('node:module');
-const CONTRACT = 'reader-historical-draft-normalizer-replay-v2';
-const LEGACY_CONTRACT = 'reader-historical-draft-normalizer-replay-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = codec.contract('reader-historical-draft-normalizer-replay');
 const { loadHistoricalMarkdownClosure } = require('./reader-historical-markdown-closure');
 const analysisPath = 'scripts/analysis-contract.js';
 const repository = path.resolve(__dirname, '../..');
@@ -135,7 +135,7 @@ function replayHistoricalDraftNormalizer(draft, requestIdentity, source, expecte
         throw error;
     }
     if (repair.hashDraft(result?.draft || result) !== expectedSavedDraftSha256) return null;
-    const proof = { contract: CONTRACT, purpose: 'paid-failed-draft-provenance-only', gitCommitOid: selected.commit,
+    const proof = { ...codec.recordHeader(CONTRACT, CONTRACT), purpose: 'paid-failed-draft-provenance-only', gitCommitOid: selected.commit,
         normalizerBlobOid: selected.program.blobOid, normalizerSha256: selected.program.sha256,
         sourceSha256: requestIdentity.sourceSha256, inputDraftSha256: repair.hashDraft(draft),
         outputDraftSha256: expectedSavedDraftSha256, markdownClosure: selected.markdown.proof,
@@ -148,11 +148,12 @@ function replayHistoricalDraftNormalizer(draft, requestIdentity, source, expecte
     } };
 }
 function assertHistoricalNormalizerProof(proof) {
-    const legacy = proof?.contract === LEGACY_CONTRACT;
-    const keys = ['contract', 'purpose', 'gitCommitOid', 'normalizerBlobOid', 'normalizerSha256',
+    if (!codec.hasValidHeader(proof, CONTRACT)) throw new Error('Historical normalizer replay proof is invalid');
+    const header = codec.recordHeader(proof.contract, CONTRACT, proof.schemaFingerprint);
+    const legacy = codec.format(proof.contract, CONTRACT, proof.schemaFingerprint) === 'original-git-object';
+    const keys = [...Object.keys(header), 'purpose', 'gitCommitOid', 'normalizerBlobOid', 'normalizerSha256',
         'sourceSha256', 'inputDraftSha256', 'outputDraftSha256', 'dependencies', ...(legacy ? [] : ['markdownClosure'])];
-    if (!proof || ![CONTRACT, LEGACY_CONTRACT].includes(proof.contract)
-        || Object.keys(proof).sort().join(',') !== keys.sort().join(',') || proof.purpose !== 'paid-failed-draft-provenance-only'
+    if (Object.keys(proof).sort().join(',') !== keys.sort().join(',') || proof.purpose !== 'paid-failed-draft-provenance-only'
         || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(proof.gitCommitOid || '')
         || !Array.isArray(proof.dependencies) || proof.dependencies.length !== dependencies.length + 1)
         throw new Error('Historical normalizer replay proof is invalid');
@@ -169,10 +170,10 @@ function assertHistoricalNormalizerProof(proof) {
             throw new Error('Historical dependency bytes changed before migration');
         if (record.path === analysisPath) {
             const markdown = loadHistoricalMarkdownClosure(actual);
-            // Legacy v1 proof bytes remain unchanged: the enclosing immutable
+            // Original proof bytes remain unchanged: the enclosing immutable
             // candidate/archive SHA authenticates its original schema. Rebuild
             // the closure only in memory from the already-bound full Git blob.
-            // A v2 proof cannot drop closure evidence and use this branch.
+            // A closure-bearing proof cannot drop evidence and use this branch.
             if (!markdown || !legacy && JSON.stringify(markdown.proof) !== JSON.stringify(proof.markdownClosure))
                 throw new Error('Historical Markdown closure proof is invalid');
         }

@@ -173,11 +173,16 @@ test('Git返回同OID而不同blob字节必须在闭包装载前拒绝',t=>{
     assert.throws(()=>historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved)),/blob bytes do not match/);
 });
 
-test('旧v1凭证按原整blob在内存核闭包且不补字段，新v2删closure不得降级',()=>{
+test('旧凭证按原 Git 字节核验，当前凭证不可删除依赖证明',()=>{
     const f=fixture(),replay=historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved));
-    assert.equal(replay.proof.contract,'reader-historical-draft-normalizer-replay-v2');
+    const codec=require('../scripts/lib/protocol-codec');
+    assert.equal(codec.isCurrentHeader(replay.proof,historical.CONTRACT),true);
+    const previous=structuredClone(replay.proof);
+    delete previous.schemaFingerprint;
+    previous.contract='reader-historical-draft-normalizer-replay-v2';
+    historical.assertHistoricalNormalizerProof(previous);
     // 模拟此前保存的原v1字段集合；外层候选/迁移SHA仍由调用方先核验。
-    const legacy=structuredClone(replay.proof);legacy.contract='reader-historical-draft-normalizer-replay-v1';
+    const legacy=structuredClone(previous);legacy.contract='reader-historical-draft-normalizer-replay-v1';
     delete legacy.markdownClosure;const original=JSON.stringify(legacy);
     historical.assertHistoricalNormalizerProof(legacy);assert.equal(JSON.stringify(legacy),original);
     assert.equal(Object.hasOwn(legacy,'markdownClosure'),false);

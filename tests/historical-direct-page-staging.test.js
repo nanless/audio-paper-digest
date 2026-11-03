@@ -80,7 +80,7 @@ function fixture(t) {
         sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
         sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
         sourceTextSha256: sourceDescriptor.textSha256, generation: 1 };
-    const publicationSource = { contract: api.PUBLICATION_SOURCE_CONTRACT, version: 1,
+    const publicationSource = { ...require('../scripts/lib/protocol-codec').recordHeader(api.PUBLICATION_SOURCE_CONTRACT, 'historical-direct-publication-source'),
         paperId: item.paperId, sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
         sourceTextSha256: sourceDescriptor.textSha256, abstract, abstractSha256: sha(abstract), metadataSidecar };
     return { root, item, analysis, sourceDescriptor, publicationSource, artifact,
@@ -194,7 +194,7 @@ test('标题不同的先期预印本会加上可见的顶部声明，其字节�
         sourceDoi: '10.2139/ssrn.6288899',
         receipt: { selfSha256: receiptSelfSha256 }
     };
-    const disclosureBody = { contract: 'historical-author-prior-preprint-disclosure-v1', version: 1, paperId,
+    const disclosureBody = { ...require('../scripts/lib/protocol-codec').recordHeader('historical-author-prior-preprint-disclosure', 'historical-author-prior-preprint-disclosure'), paperId,
         icmlTitle: 'Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future',
         preprintTitle: acquisition.sourceTitle, doi: acquisition.sourceDoi,
         versionRelation: acquisition.versionRelation, sourceKind: acquisition.sourceKind,
@@ -261,6 +261,6 @@ test('先期预印本暂存拒绝缺失的路径声明和未闭合的 front matt
     f.item.route = { kind: 'conference-local-pdf', writerInputs: [{ pdf: { acquisition: {
         versionRelation: 'author-prior-preprint-with-different-title', sourceTitle: 'title', sourceDoi: 'doi'
     } } }] };
-    assert.throws(() => api.priorPreprintDisclosureProof(f.item), /早期预印本说明 必须是对象/);
+    assert.throws(() => api.priorPreprintDisclosureProof(f.item), /不支持的格式：historical-author-prior-preprint-disclosure/);
     assert.throws(() => api.injectTopDisclosure('---\ntitle: broken\nbody', '> warning'), /Hugo 页头缺少结束标记/);
 });

@@ -766,6 +766,20 @@
       "currentVariant":"source-bound-existing-term-leaves",
       "currentSchema":{"fields":["draftSha256","termReplacements"],"requiresAllAuthorizedLeaves":true,"maxTargets":8,"minChars":2,"maxChars":48},
       "historical":[{"tag":1,"variant":"source-bound-existing-term-leaves","header":{"version":1}}]
+    },
+    {
+      "name": "reader-historical-draft-normalizer-replay",
+      "currentVariant": "original-markdown-closure",
+      "currentSchema": {
+        "fields": ["purpose", "gitCommitOid", "normalizerBlobOid", "normalizerSha256", "sourceSha256",
+          "inputDraftSha256", "outputDraftSha256", "markdownClosure", "dependencies"],
+        "purpose": "paid-failed-draft-provenance-only",
+        "checks": ["original Git objects", "exact dependency bytes", "DOM tables only"]
+      },
+      "historical": [
+        {"tag": "reader-historical-draft-normalizer-replay-v1", "variant": "original-git-object"},
+        {"tag": "reader-historical-draft-normalizer-replay-v2", "variant": "original-markdown-closure"}
+      ]
     }
   ]
 }

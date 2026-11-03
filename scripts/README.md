@@ -299,7 +299,7 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 | `lib/reader-concept-term-display.js` | Node 库：核对术语与完整解释的显示身份；支持同一确定小计数和排版规则下的“二次/2 次、六维/6 维”，保护代码内部、英文词内及完整数字边界，拒绝缺词、不同数字与显示等价的重复术语；与 Python 发布检查使用同一边界。 |
 | `lib/reader-contract.js` | Node 库：规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
 | `lib/reader-draft-order.js` | Node 库：调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
-| `lib/reader-historical-draft-normalizer-replay.js` | 核真实请求绑定的 Git 程序、完整依赖 blob 与纯闭包证明，逐字回放旧失败稿付费来源；v2 显式记录闭包，旧 v1 原字节只读核验，不恢复发布资格或增加预算。 |
+| `lib/reader-historical-draft-normalizer-replay.js` | 核真实请求绑定的 Git 程序、完整依赖 blob 与纯闭包证明，逐字回放旧失败稿付费来源；新证明记录原程序实际用到的 Markdown 函数和依赖，旧证明按原格式只读核验。复验只证明付费稿的来历。 |
 | `lib/reader-historical-markdown-closure.js` | 从原 Git analysis-contract blob 精确提取固定 SHA 的 6 个表头正则和 7 个纯函数，在无 require 的隔离上下文中装载；保留逐声明字节边界与哈希，不导入旧 Manual/生产依赖。 |
 | `lib/reader-paid-resolved-render.js` | Node 库：通过正常论文锁校验原付费稿与当前文章的对应关系，重算排版；另有当前唯一已签单次修订的硬禁模型表格重渲染，核对原派发、父 seed、反馈、用量和固定旧版本逐字重放，保留原费用、图片、表外文字与其他阶段；保存前再次核对原档和代码。 |
 | `lib/reader-paid-resolved-replay-worker.js` | Node 内部子进程：在无生产密钥且禁止网络的独立进程中运行固定旧渲染器，验证原响应能逐字恢复当前文章及计划；不直接接受发布任务。 |

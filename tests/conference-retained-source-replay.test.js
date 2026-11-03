@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const api = require('../scripts/lib/conference-process');
+const protocol = require('../scripts/lib/protocol-codec');
+const { tagCatalogIdentity } = require('../scripts/lib/tag-catalog');
 const replayApi = require('../scripts/lib/conference-retained-source-replay');
 const extraction = require('../scripts/lib/conference-extraction-receipt');
 const extractionFixture = require('./helpers/conference-extraction-fixture');
@@ -62,7 +64,7 @@ function mixedFixture(t, { reader = false } = {}) {
     const planHandles = ['a'.repeat(64), 'b'.repeat(64)].map(implementation => {
         const names = api.namesFor({ authority: { ...context.authority, implementationSha256: implementation } });
         const members = sealed.map(({ paperId, sourceIdentity, receiptName }) => ({ paperId, sourceIdentity, receiptName }));
-        const manifest = { contract: deps.staging.EXTRACTION_CONTRACT, version: deps.staging.VERSION,
+        const manifest = { ...protocol.recordHeader(deps.staging.EXTRACTION_CONTRACT, 'conference-reviewed-extraction'),
             conference: { id: 'icassp-2026', year: 2026 }, review: { actor: 'fixture-reviewer', reviewedAt: now },
             members, membersSha256: api.stableHash(members) };
         const staged = deps.staging.bindInputs({ selectionHandle, discoveryHandle, extractionManifest: manifest,
@@ -83,9 +85,8 @@ function mixedFixture(t, { reader = false } = {}) {
         const imported = deps.importer.loadImportHandle(path.join(files.conferenceSourceLedgerDir, names.ledger),
             path.join(files.conferenceSourceLedgerDir, names.importReceipt), stagingHandle);
         const identities = deps.importer.importHandleSnapshot(imported).verifiedMembers;
-        const protocol = require('../scripts/lib/protocol-codec');
         const plan = { ...protocol.recordHeader(deps.plan.PLAN_CONTRACT, 'conference-run-plan'), ledgerName: names.ledger,
-            tagMetadata: { version: 'paper-tag-catalog-v2', sha256: extractionFixture.sha256(fs.readFileSync(files.tagCatalogFile)) },
+            tagMetadata: { version: tagCatalogIdentity(JSON.parse(fs.readFileSync(files.tagCatalogFile))), sha256: extractionFixture.sha256(fs.readFileSync(files.tagCatalogFile)) },
             selectionPolicy: { ...protocol.recordHeader(deps.plan.SELECTION_CONTRACT, 'conference-selected-members'), identities,
                 selectedMemberSetSha256: api.stableHash(identities.map(item => item.paperId)) },
             shards: [{ shardId: 'all', paperIds: identities.map(item => item.paperId) }] };
@@ -229,7 +230,8 @@ test('保留来源只接受真实完成父稿到Reader子稿的连续链，父�
     const f = mixedFixture(t, { reader: true }), item = f.items[0];
     const parent = f.deps.adapter.loadConferenceAnalysis({ analysisRoot: f.deps.files.conferenceAnalysisDir,
         executionId: item.analysisRunId });
-    const executionId = f.deps.adapter.readerRevisionExecutionId(parent.run.executionId, parent.analysisFileSha256);
+    const originalRevisionHeader = protocol.historicalHeader('conference-reader-source-revision', 'authenticated-reader-child');
+    const executionId = f.deps.adapter.readerRevisionExecutionId(parent.run.executionId, parent.analysisFileSha256, originalRevisionHeader);
     f.deps.adapter.prepareConferenceAnalysis({ analysisRoot: f.deps.files.conferenceAnalysisDir, executionId,
         planHandle: f.plans[0].handle, sourceRoot: f.plans[0].cacheRoot, paperId: item.paperId });
     const directory = path.join(f.deps.files.conferenceAnalysisDir, executionId);
@@ -238,7 +240,7 @@ test('保留来源只接受真实完成父稿到Reader子稿的连续链，父�
     fs.writeFileSync(path.join(directory, 'analysis.json'), JSON.stringify(child));
     // This fixture proves source/receipt ancestry, not a publishable Reader;
     // its abbreviated parent therefore requires normal analysis.
-    const body = { contract: 'conference-reader-source-revision-v1', version: 1, mode: 'normal-analysis', maxAttempts: 3,
+    const body = { ...originalRevisionHeader, mode: 'normal-analysis', maxAttempts: 3,
         executionId, parentExecutionId: parent.run.executionId, parentAnalysisFileSha256: parent.analysisFileSha256,
         parentRunFileSha256: parent.runFileSha256, paperId: item.paperId,
         sourceSnapshotSha256: parent.run.sourceSnapshotSha256, seededAnalysisSha256: api.stableHash(child) };
@@ -260,11 +262,12 @@ test('保留来源只接受真实完成父稿到Reader子稿的连续链，父�
     // 此处只隔离外层process promotion审批（该层另有完整测试），原父子分析/计划/来源仍由真实loader核验。
     const processDirectory = path.join(path.dirname(f.deps.files.conferenceAnalysisDir), 'process'); fs.mkdirSync(processDirectory);
     const authority = { ...f.context.authority, implementationSha256: 'a'.repeat(64),
-        tagCatalogVersion: 'paper-tag-catalog-v2', tagCatalogSha256: extractionFixture.sha256(fs.readFileSync(f.deps.files.tagCatalogFile)) };
-    const state = { version: 2, processId: '33333333-3333-4333-8333-333333333333', status: 'partial', authority,
+        deepExecutionConfig: api.currentDeepExecutionConfigIdentity(f.deps),
+        tagCatalogVersion: tagCatalogIdentity(JSON.parse(fs.readFileSync(f.deps.files.tagCatalogFile))), tagCatalogSha256: extractionFixture.sha256(fs.readFileSync(f.deps.files.tagCatalogFile)) };
+    const state = { ...protocol.recordHeader('conference-process', 'conference-process'), processId: '33333333-3333-4333-8333-333333333333', status: 'partial', authority,
         sourceUpgradePromotion: { original: true }, items: { [revised.paperId]: revised, [f.items[1].paperId]:
             { ...f.items[1], status: 'analysis_partial', readerRefreshRequired: true } } };
-    const receiptBody = { contract: 'conference-process-completion-receipt-v2', version: 2, processId: state.processId,
+    const receiptBody = { ...protocol.recordHeader('conference-process-completion-receipt', 'conference-process-completion-receipt'), processId: state.processId,
         authority, sourceUpgradePromotion: state.sourceUpgradePromotion,
         planReceiptSha256: f.deps.plan.planHandleSnapshot(f.plans[0].handle).receipt.receiptSha256,
         items: f.items.map(({ paperId, analysisRunId, sourceProof, analysisProof }) => ({ paperId, analysisRunId, sourceProof, analysisProof })) };
@@ -314,7 +317,7 @@ const retainedModuleForTest=new retainedFormalForTest(retainedPathForTest,module
 retainedModuleForTest._compile(fs.readFileSync(retainedPathForTest,'utf8')+'\nmodule.exports.__sourceOnlyTest={sourceIdentityReaderRevision,completionItemProjections};',retainedPathForTest);
 const sourceOnlyTestApi=retainedModuleForTest.exports.__sourceOnlyTest;
 test('source-only loader routes actual contract, ordinary/unknown through strict identity and grant through original full loader',()=>{
- let contract='conference-reader-source-revision-v1',identity=0,full=0;const deps={files:{conferenceAnalysisDir:'/synthetic'},adapter:{RECOVERY_WINDOW_CONTRACT:'conference-reader-recovery-window-v1',loadConferenceAnalysis(){return{directory:'/synthetic/execution'};},readJsonRecord(){return{value:{contract}};},loadConferenceReaderRevisionIdentity(){identity++;if(contract!=='conference-reader-source-revision-v1')throw Error('unknown ordinary contract');return{kind:'identity'};},loadConferenceReaderRevision(){full++;throw Error('strict original grant/seed');}}};
+ let contract='conference-reader-source-revision-v1',identity=0,full=0;const deps={files:{conferenceAnalysisDir:'/synthetic'},adapter:{RECOVERY_WINDOW_CONTRACT:'conference-reader-recovery-window-v1',loadConferenceAnalysis(){return{directory:'/synthetic/execution'};},readJsonRecord(){return{value:{contract,version:1}};},loadConferenceReaderRevisionIdentity(){identity++;if(contract!=='conference-reader-source-revision-v1')throw Error('unknown ordinary contract');return{kind:'identity'};},loadConferenceReaderRevision(){full++;throw Error('strict original grant/seed');}}};
  assert.equal(sourceOnlyTestApi.sourceIdentityReaderRevision('execution',deps).kind,'identity');assert.equal(identity,1);assert.equal(full,0);
  contract='unknown';assert.throws(()=>sourceOnlyTestApi.sourceIdentityReaderRevision('execution',deps),/unknown/);assert.equal(full,0);
  contract='conference-reader-recovery-window-v1';assert.throws(()=>sourceOnlyTestApi.sourceIdentityReaderRevision('execution',deps),/strict original grant/);assert.equal(full,1);

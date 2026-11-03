@@ -2168,7 +2168,7 @@ async function deferredReaderSaveFixture(t, mode) {
                         readerMaxAttempts: 1, readerRecordDisposition: () => {},
                         readerCallModel: async () => { modelCalls++; return JSON.stringify(signed.draft); }
                     });
-                    assert.equal(transactions.hasDeferredReaderCandidate(generated), true);
+                    assert.equal(transactions.hasDeferredReaderCandidate(generated), true, JSON.stringify(generated.issues || []));
                     const base = validAnalysisPaper(id, { title: 'Deferred Reader save fixture' });
                     const record = { ...base, ...signed.paper, directPaperId: paperId, analysis: base.analysis,
                         apiReaderArticle: generated.article, apiReaderPlan: generated.plan, apiReaderFigures: [] };
@@ -2179,15 +2179,25 @@ async function deferredReaderSaveFixture(t, mode) {
                             { ...base.analysisManifest.stages[name], ...signed.paper.analysisManifest.stages[name] }])) };
                     record.analysisManifest.stages.scoringAudit = { ...base.analysisManifest.stages.scoringAudit,
                         scoringContract: 'api-scoring-audit-v2', outputAnalysisSha256: sha(record.analysis), stabilityWarning: false };
+                    const protocols = require('../scripts/lib/reader-stage-protocols');
+                    const readerStage = record.analysisManifest.stages.apiReaderArticle;
+                    for (const field of protocols.flatFields) delete readerStage[field];
+                    Object.assign(readerStage, protocols.stageFields(generated.plan, generated.qualityMetrics),
+                        require('../scripts/lib/reader-content-mode').fields('source-only'),
+                        { qualityMetrics: generated.qualityMetrics });
+                    Object.assign(record.analysisManifest.contracts, {
+                        apiReaderArticle: generated.plan.contract,
+                        apiReaderSourceBindings: generated.plan.sourceBindingsContract
+                    });
                     signedFixture.sign(record);
-                    assert.equal(engine.isSuccessfulAnalysisRecord(record), true);
+                    assert.equal(engine.isSuccessfulAnalysisRecord(record), true, engine.getIncompleteAnalysisContentReason(record));
                     if (mode === 'partial') record.analysisManifest.stages.apiReaderArticle.status = 'partial';
                     return deep.transferDeferredReaderCandidate(generated, record);
                 },
                 onPaperResultLocked: async (paper, event) => {
                     callbackCalls++; lockedPaper = paper; eventResult = event;
                     assert.equal(engine.paperAnalysisLockHeld(paper), true);
-                    assert.equal(transactions.hasDeferredReaderCandidate(paper), true);
+                    assert.equal(transactions.hasDeferredReaderCandidate(paper), true, event.error);
                     assert.equal(transactions.hasDeferredReaderCandidate(event.result), false);
                     return options.onPaperResultLocked(paper, event);
                 }
@@ -2436,7 +2446,7 @@ function historicalResourceClaimsPaper(input) {
     paper.analysisManifest.stages.apiReaderArticle.planSha256 = paper.apiReaderPlanSha256;
     const contract = require('../scripts/deep-analyzer').API_READER_RESOURCE_CLAIMS_CONTRACT;
     paper.analysisManifest.contracts.readerResourceClaims = contract;
-    paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = contract;
+    paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsProtocol = require('../scripts/lib/reader-resource-claims-format').header();
     assert.equal(require('../scripts/analysis-contract').validateCoreSummarySemanticContract(paper.analysis), null);
     assert.equal(paper.apiReaderPlan.tableBindings.length, 0);
     assert.equal(paper.apiReaderResources.resources.length, 0);

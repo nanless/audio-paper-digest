@@ -224,7 +224,7 @@ function normalizeRendererResult(value, page) {
     const assets = typeof value === 'string' ? [] : value?.assets;
     if (typeof markdown !== 'string' || !markdown.trim() || !Array.isArray(assets)) fail(`页面 ${page.pageKey} 的生成结果必须包含非空 Markdown 正文和资源数组。`);
     return { markdown, assets: assets.map((asset, index) => {
-        if (!asset || typeof asset.path !== 'string' || !/^(?:static\/images\/papers|static\/data\/papers)\/[A-Za-z0-9._/-]+$/.test(asset.path)
+        if (!asset || typeof asset.path !== 'string' || !/^static\/(?:images|data|client)\/papers\/[A-Za-z0-9._/-]+$/.test(asset.path)
             || path.posix.normalize(asset.path) !== asset.path || asset.path.split('/').includes('..')
             || typeof asset.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.base64)) {
             fail(`页面 ${page.pageKey} 中索引为 ${index} 的资源路径或 base64 数据不安全：格式无效。`);
@@ -236,12 +236,13 @@ function normalizeRendererResult(value, page) {
 
 const CONFERENCE_SIDECAR_NAMES = Object.freeze(['citation.bib', 'citation.json', 'citation.ris', 'rethink-context.json']);
 function conferenceWorkbenchRoot(item, page, workbenchHeader) {
-    const domain=workbenchHeader.contract === protocols.contract('researcher-workbench') ? 'client' : 'data';
+    const domain = workbenchHeader?.contract === protocols.contract('researcher-workbench') ? 'client' : 'data';
     return `static/${domain}/papers/${page.cohortDate}/conference-${sha256(item.paperId).slice(0, 24)}/`;
 }
+const isWorkbenchAsset = asset => /^static\/(?:data|client)\//.test(asset.record.path);
 function validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page, markdown, assets }) {
     if (item.route.kind !== 'conference-local-pdf') return;
-    const data = assets.filter(asset => asset.record.path.startsWith('static/data/') || asset.record.path.startsWith('static/client/'));
+    const data = assets.filter(isWorkbenchAsset);
     const marker = markdown.match(/^paper_digest_workbench_contract:\s*"?([a-z0-9.-]+)"?\s*$/m);
     const marked = !!marker;
     // 已保存的旧渲染结果无工作区声明；兼容核验不把它们冒充新导出。
@@ -494,16 +495,20 @@ function validateManifest({ value, item, sourceDescriptor, publicationSource, ar
         assets.add(asset.path);
         assetBytes.push({ record: asset, bytes: bytes.bytes });
     }
-    for (const page of value.pages) {
-        const prefix = conferenceWorkbenchRoot(item, page);
-        validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page,
-            markdown: pageMarkdown.get(page.pageKey),
-            assets: assetBytes.filter(asset => !asset.record.path.startsWith('static/data/')
-                || asset.record.path.startsWith(prefix)) });
-    }
-    if (item.route.kind === 'conference-local-pdf' && assetBytes.some(asset => asset.record.path.startsWith('static/data/')
-        && !value.pages.some(page => CONFERENCE_SIDECAR_NAMES.some(name => asset.record.path === conferenceWorkbenchRoot(item, page) + name)))) {
-        fail('会议页面清单包含不属于本篇真实身份或日期的附属文件。');
+    if (item.route.kind === 'conference-local-pdf') {
+        const workbench = { contract: protocols.contract('researcher-workbench') };
+        const allowed = new Set();
+        for (const page of value.pages) {
+            const roots = [conferenceWorkbenchRoot(item, page), conferenceWorkbenchRoot(item, page, workbench)];
+            for (const root of roots) for (const name of CONFERENCE_SIDECAR_NAMES) allowed.add(root + name);
+            validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page,
+                markdown: pageMarkdown.get(page.pageKey),
+                assets: assetBytes.filter(asset => isWorkbenchAsset(asset)
+                    && roots.some(root => asset.record.path.startsWith(root))) });
+        }
+        if (assetBytes.some(asset => isWorkbenchAsset(asset) && !allowed.has(asset.record.path))) {
+            fail('会议页面清单包含不属于本篇真实身份或日期的附属文件。');
+        }
     }
     return clone(value);
 }
