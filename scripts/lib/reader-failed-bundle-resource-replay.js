@@ -24,7 +24,14 @@ function assertSource(paper, source) {
 }
 function prepareRecoveryReaderResources(paper, source, options = {}) {
     const deep = require('../deep-analyzer'), daily = require('./daily-fresh-source-plan');
-    if (!assertSource(paper, source) || require('../analysis-engine').hasValidIntegratedApiReaderRecords(paper)) return null;
+    if (!assertSource(paper, source)) return null;
+    if (options.completedCoreOperator === true) {
+        if (!require('./daily-reader-operator-correction').hasActiveSourceOnlyCorrection(paper)
+            || !require('./daily-fact-review').current(paper.arxivId)?.coreOnly
+            || require('./reader-repair').shaText(paper.analysis || '')
+                !== paper.analysisManifest?.stages?.scoringAudit?.outputAnalysisSha256)
+            throw new Error('原资源证明恢复须在实际人工修正和已评分核心检查点作用域内执行');
+    } else if (require('../analysis-engine').hasValidIntegratedApiReaderRecords(paper)) return null;
     const review = String(options.reviewFeedback || '').trim();
     if (review) {
         try { if (deep.prepareApiReaderRevisionSeed(paper, source.text, review)) return null; }

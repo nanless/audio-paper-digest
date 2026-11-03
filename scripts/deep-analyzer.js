@@ -10997,6 +10997,10 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const manifest = paper.analysisManifest, analysis = String(paper.analysis || '');
     const previousReaderStage = structuredClone(manifest.stages.apiReaderArticle);
     const previousOrdinalProof = previousReaderStage?.ordinalCompletionProof;
+    const operatorSupersedes = require('./lib/daily-reader-operator-correction').hasOperatorProof(options.execution?.operatorProvenance);
+    const previousOperatorCompletionProof = operatorSupersedes && generated.ordinalPatchCompilations?.length
+        ? previousOrdinalProof || require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
+        : previousOrdinalProof;
     const replacesOrdinalCompletion = !generated.ordinalPatchCompilations?.length && previousOrdinalProof;
     if (replacesOrdinalCompletion) {
         const history = paper.readerRevisionHistory;
@@ -11168,14 +11172,13 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
             && previousOrdinalProof)) {
         // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
         // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
-        const operatorSupersedes = require('./lib/daily-reader-operator-correction').hasOperatorProof(options.execution?.operatorProvenance);
         if (operatorSupersedes) {
             const previous = previousReaderStage;
             manifest.stages.apiReaderArticle.ordinalPatchHistory = {
                 ...require('./lib/protocol-codec').recordHeader('reader-ordinal-history', 'reader-ordinal-history'),
                 reason: 'operator-correction-supersedes-ordinal-completion',
                 compilations: structuredClone(readerResult.ordinalPatchCompilations || []),
-                previousCompletionProof: previous?.ordinalCompletionProof || null,
+                previousCompletionProof: previousOperatorCompletionProof || null,
                 previousStage: previous ? {
                     articleSha256: previous.articleSha256,
                     planSha256: previous.planSha256,
