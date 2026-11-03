@@ -198,10 +198,6 @@ function retainedAcquisition(pdf) {
         provenanceStatement: 'PDF bytes predate the network receipt system and are retained local crawler input.',
         openreviewResponseBytes: null };
 }
-function receiptProof(receiptFile, receiptSha256) {
-    const loaded = readStableFile(receiptFile, 'PDF acquisition receipt', 1024 * 1024);
-    return { absolutePath: loaded.absolute, fileSha256: loaded.sha256, selfSha256: receiptSha256 };
-}
 function posterReceiptAcquisition({ record, authority, authorityHandle, pdf, openreviewReceiptRoot, alternateReceiptRoot }) {
     const openRoot = plannedDirectory(openreviewReceiptRoot, 'OpenReview receipt root');
     const alternateRoot = plannedDirectory(alternateReceiptRoot, 'alternate receipt root');
@@ -212,26 +208,24 @@ function posterReceiptAcquisition({ record, authority, authorityHandle, pdf, ope
     if (!hasOpen && !hasAlternate) return retainedAcquisition(pdf);
     if (pdf.availability !== 'available') fail(`${record.forumId} 有 receipt 但没有可用的新抓 PDF`);
     if (hasOpen) {
-        const receipt = openreviewPdfApi.replayReceipt({ receiptFile: openFile, pdfFile: pdf.absolutePath,
-            record, authorityHandle });
+        const { receipt, proof } = openreviewPdfApi.replayReceiptEvidence({ receiptFile: openFile,
+            pdfFile: pdf.absolutePath, record, authorityHandle });
         if (receipt.forumId !== record.forumId || receipt.posterId !== record.posterId
             || receipt.recordBindingSha256 !== record.recordBindingSha256
             || receipt.pdf.absolutePath !== pdf.absolutePath || receipt.pdf.bytes !== pdf.bytes
             || receipt.pdf.sha256 !== pdf.sha256) fail('OpenReview receipt 与选定的新抓 PDF authority 不一致');
-        return { receipt: receiptProof(openFile, receipt.receiptSha256), sourceKind: OPENREVIEW_SOURCE_KIND,
+        return { receipt: proof, sourceKind: OPENREVIEW_SOURCE_KIND,
             versionRelation: OPENREVIEW_VERSION_RELATION, sourceTitle: null, sourceAuthors: null, sourceDoi: null,
             provenanceStatement: OPENREVIEW_PROVENANCE_STATEMENT, openreviewResponseBytes: true };
     }
-    const saved = alternatePdfApi.readReceipt(alternateFile);
-    const identity = alternatePdfApi.authenticateSourceIdentity({ snapshotFile: authority.snapshot.absolutePath,
-        forumId: record.forumId, expectedAuthoritySha256: saved.authoritySha256 });
-    const receipt = alternatePdfApi.replayReceipt({ receiptFile: alternateFile, pdfFile: pdf.absolutePath, identity });
+    const { receipt, proof } = alternatePdfApi.replayReceiptEvidence({ receiptFile: alternateFile,
+        pdfFile: pdf.absolutePath, snapshotFile: authority.snapshot.absolutePath, forumId: record.forumId });
     if (receipt.forumId !== record.forumId || receipt.posterId !== record.posterId
         || receipt.snapshotSha256 !== authority.snapshot.sha256
         || receipt.recordBindingSha256 !== record.recordBindingSha256
         || receipt.pdf.absolutePath !== pdf.absolutePath || receipt.pdf.bytes !== pdf.bytes
         || receipt.pdf.sha256 !== pdf.sha256) fail('备用 receipt 与选定的新抓 PDF authority 不一致');
-    return { receipt: receiptProof(alternateFile, receipt.receiptSha256), sourceKind: receipt.sourceKind,
+    return { receipt: proof, sourceKind: receipt.sourceKind,
         versionRelation: receipt.versionRelation, sourceTitle: receipt.sourceTitle,
         sourceAuthors: clone(receipt.sourceAuthors), sourceDoi: receipt.sourceDoi,
         provenanceStatement: receipt.provenanceStatement, openreviewResponseBytes: receipt.openreviewResponseBytes };
@@ -348,6 +342,10 @@ function matchesReceiptAuthority(receipt, posterBinding, metadata, family) {
         && record.recordBindingSha256 === receipt.recordBindingSha256
         && record.recordBindingSha256 === posterBinding.recordBindingSha256;
 }
+function checkReceiptEvidence(expected, evidence) {
+    if (evidence.proof.absolutePath !== expected.absolutePath || evidence.proof.fileSha256 !== expected.fileSha256
+        || evidence.proof.selfSha256 !== expected.selfSha256) fail('manifest 中 PDF 获取 receipt 的文件或内容 SHA 发生变化');
+}
 function validateAcquisition(value, paperId, pdf, posterBinding = null, metadata = null) {
     if (pdf.availability !== 'available') {
         if (value !== null) fail('不可用的本地 PDF 不得声明获取来源');
@@ -366,8 +364,6 @@ function validateAcquisition(value, paperId, pdf, posterBinding = null, metadata
             || !SHA_RE.test(String(value.receipt.selfSha256 || ''))) {
             fail('本地 PDF 的获取 receipt 描述符格式错误');
         }
-        const loaded = readStableFile(value.receipt.absolutePath, 'manifest PDF acquisition receipt', 1024 * 1024);
-        if (loaded.sha256 !== value.receipt.fileSha256) fail('manifest 中 PDF 获取 receipt 的文件 SHA 发生变化');
     }
     if (value.sourceKind === RETAINED_LOCAL_SOURCE_KIND) {
         if (value.receipt !== null || value.versionRelation !== null || value.sourceTitle !== null
@@ -381,7 +377,9 @@ function validateAcquisition(value, paperId, pdf, posterBinding = null, metadata
             || value.sourceTitle !== null || value.sourceAuthors !== null || value.sourceDoi !== null
             || value.provenanceStatement !== OPENREVIEW_PROVENANCE_STATEMENT
             || value.openreviewResponseBytes !== true) fail('OpenReview PDF 的获取描述符发生变化');
-        const receipt = openreviewPdfApi.readReceipt(value.receipt.absolutePath);
+        const evidence = openreviewPdfApi.readReceiptEvidence(value.receipt.absolutePath);
+        checkReceiptEvidence(value.receipt, evidence);
+        const { receipt } = evidence;
         const forumId = String(paperId).match(/^conference:icml:2026:openreview-forum-id:([A-Za-z0-9_-]{6,128})$/)?.[1];
         if (!forumId || path.basename(value.receipt.absolutePath) !== `openreview-${forumId}.json`
             || receipt.receiptSha256 !== value.receipt.selfSha256 || receipt.forumId !== forumId
@@ -389,6 +387,7 @@ function validateAcquisition(value, paperId, pdf, posterBinding = null, metadata
             || receipt.recordBindingSha256 !== posterBinding?.recordBindingSha256
             || receipt.pdf.absolutePath !== pdf.absolutePath || receipt.pdf.bytes !== pdf.bytes
             || receipt.pdf.sha256 !== pdf.sha256) fail('OpenReview 获取 receipt 与 manifest 绑定不一致');
+        evidence.assertUnchanged();
         return clone(value);
     }
     const forumId = String(paperId).match(/^conference:icml:2026:openreview-forum-id:([A-Za-z0-9_-]{6,128})$/)?.[1];
@@ -400,7 +399,9 @@ function validateAcquisition(value, paperId, pdf, posterBinding = null, metadata
         || value.provenanceStatement !== profile.provenanceStatement || value.openreviewResponseBytes !== false) {
         fail('备用 PDF 的获取描述符发生变化');
     }
-    const receipt = alternatePdfApi.readReceipt(value.receipt.absolutePath);
+    const evidence = alternatePdfApi.readReceiptEvidence(value.receipt.absolutePath);
+    checkReceiptEvidence(value.receipt, evidence);
+    const { receipt } = evidence;
     const family = protocols.hasValidHeader(receipt, alternatePdfApi.IMPORT_CONTRACT)
         ? alternatePdfApi.IMPORT_CONTRACT : alternatePdfApi.CONTRACT;
     if (path.basename(value.receipt.absolutePath) !== `alternate-${forumId}.json`
@@ -415,6 +416,7 @@ function validateAcquisition(value, paperId, pdf, posterBinding = null, metadata
         || receipt.openreviewResponseBytes !== value.openreviewResponseBytes) {
         fail('备用获取 receipt 与 manifest 绑定不一致');
     }
+    evidence.assertUnchanged();
     return clone(value);
 }
 function validateSource(source, paperId) {

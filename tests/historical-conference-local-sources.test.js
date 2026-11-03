@@ -137,6 +137,41 @@ test('现行来源清单保留嵌套旧收据，同时按同一原始快照核�
     fs.writeFileSync(proof.receiptFile, api.prettyBytes({ ...body, receiptSha256: openreviewApi.stableHash(body) }));
     assert.throws(() => build(f), /不同的格式/);
 });
+test('热建与冷核拒绝在原收据读取后替换成另一份规范收据', t => {
+    for (const cold of [false, true]) {
+        const f = fixture(t);
+        const { receipt, receiptFile } = writeOpenreviewReceipt(f, f.rawOnlyId);
+        const manifest = build(f);
+        const record = manifest.records.find(item => item.paperId.endsWith(`:${f.rawOnlyId}`));
+        const initial = fs.statSync(receiptFile);
+        const snapshot = fs.statSync(f.snapshotFile);
+        const { receiptSha256, ...body } = receipt;
+        body.fetchedAt = '2026-09-08T00:00:01.000Z';
+        const replacement = openreviewApi.normalizeReceipt({ ...body, receiptSha256: openreviewApi.stableHash(body) });
+        const replacementFile = receiptFile + '.replacement';
+        fs.writeFileSync(replacementFile, api.prettyBytes(replacement), { mode: 0o600 });
+        let openedReceipt = false, replaced = false;
+        const read = fs.readFileSync;
+        const hook = t.mock.method(fs, 'readFileSync', (target, ...args) => {
+            const value = read(target, ...args);
+            if (typeof target === 'number') {
+                const file = fs.fstatSync(target);
+                if (file.dev === initial.dev && file.ino === initial.ino) openedReceipt = true;
+                if (openedReceipt && !replaced && file.dev === snapshot.dev && file.ino === snapshot.ino) {
+                    fs.renameSync(replacementFile, receiptFile);
+                    replaced = true;
+                }
+            }
+            return value;
+        });
+        try {
+            assert.throws(() => cold ? api.validateSource(record.sources[0], record.paperId) : build(f),
+                /获取收据在核验期间发生变化/);
+            assert.equal(replaced, true);
+        } finally { hook.mock.restore(); }
+        assert.deepEqual(openreviewApi.readReceipt(receiptFile), replacement);
+    }
+});
 test('新增覆盖拒绝没有凭证的字节和与保留字节冲突的内容', t => {
     const f = fixture(t); fs.writeFileSync(path.join(f.icmlFreshPdfs, `${f.rawOnlyId}.pdf`), pdf(), { mode: 0o600 });
     assert.throws(() => build(f), /fresh runtime PDF has no acquisition receipt/);

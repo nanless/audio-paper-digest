@@ -139,10 +139,13 @@ function readStableFile(filename, label, maxBytes) {
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) {
             fail(`${label} is unsafe or too large`);
         }
-        const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
-        if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
-            || after.size !== opened.size) fail(`${label} 在读取过程中发生变化`);
-        return { filename: absolute, bytes, sha256: sha256(bytes) };
+        const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd); const closing = fs.lstatSync(absolute);
+        if (bytes.length !== opened.size || [after, closing].some(stat =>
+            stat.dev !== opened.dev || stat.ino !== opened.ino || stat.size !== opened.size
+            || stat.nlink !== opened.nlink || stat.mtimeMs !== opened.mtimeMs || stat.ctimeMs !== opened.ctimeMs)) {
+            fail(`${label} 在读取过程中发生变化`);
+        }
+        return { filename: absolute, bytes, sha256: sha256(bytes), dev: opened.dev, ino: opened.ino };
     } catch (error) {
         if (error instanceof HistoricalIcmlAlternatePdfSourceError) throw error;
         fail(`${label} 无法读取：${error.code || error.message}`);
@@ -400,7 +403,7 @@ function normalizeImportReceipt(value) {
     return clone(value);
 }
 
-function readReceipt(receiptFile) {
+function readReceiptEvidence(receiptFile) {
     const loaded = readStableFile(receiptFile, 'alternate PDF receipt', 1024 * 1024); let value;
     try {
         const text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes);
@@ -411,11 +414,22 @@ function readReceipt(receiptFile) {
     }
     const receipt = normalizeReceipt(value);
     if (!loaded.bytes.equals(prettyBytes(receipt))) fail('备用 PDF receipt 字节不是规范形式');
-    return receipt;
+    const proof = Object.freeze({ absolutePath: loaded.filename, fileSha256: loaded.sha256, selfSha256: receipt.receiptSha256 });
+    const assertUnchanged = () => {
+        const current = readStableFile(loaded.filename, 'alternate PDF receipt', 1024 * 1024);
+        if (current.dev !== loaded.dev || current.ino !== loaded.ino || !current.bytes.equals(loaded.bytes)) {
+            fail('获取收据在核验期间发生变化');
+        }
+    };
+    return Object.freeze({ receipt, proof, assertUnchanged });
 }
 
-function replayReceipt({ receiptFile, pdfFile, identity } = {}) {
-    const receipt = readReceipt(receiptFile);
+function readReceipt(receiptFile) {
+    return readReceiptEvidence(receiptFile).receipt;
+}
+
+function verifyLoadedReceipt(evidence, { pdfFile, identity }) {
+    const { receipt } = evidence;
     const root = posterApi.authorityHandleSnapshot(identity.authorityHandle, receipt.authoritySha256);
     const family = protocols.hasValidHeader(receipt, IMPORT_CONTRACT) ? IMPORT_CONTRACT : CONTRACT;
     if (root.authoritySha256 !== identity.authority.authoritySha256
@@ -432,7 +446,17 @@ function replayReceipt({ receiptFile, pdfFile, identity } = {}) {
     const pdf = readStableFile(pdfFile, 'sealed alternate PDF', MAX_PDF_BYTES);
     if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.bytes.length !== receipt.pdf.bytes
         || pdf.sha256 !== receipt.pdf.sha256) fail('封存的备用 PDF 与 receipt 不一致');
-    return receipt;
+    evidence.assertUnchanged();
+    return evidence;
+}
+function replayReceiptEvidence({ receiptFile, pdfFile, identity, snapshotFile, forumId } = {}) {
+    const evidence = readReceiptEvidence(receiptFile);
+    const authenticated = identity || authenticateSourceIdentity({ snapshotFile, forumId,
+        expectedAuthoritySha256: evidence.receipt.authoritySha256 });
+    return verifyLoadedReceipt(evidence, { pdfFile, identity: authenticated });
+}
+function replayReceipt(options) {
+    return replayReceiptEvidence(options).receipt;
 }
 
 function writeExclusive(filename, bytes) {
@@ -461,8 +485,8 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
         || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > MAX_REDIRECTS
         || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) fail('封存器参数非法');
     const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: false });
-    const oldReceipt = apply && fs.existsSync(paths.receiptFile) ? readReceipt(paths.receiptFile) : null;
-    const identity = authenticateSourceIdentity({ snapshotFile, forumId, expectedAuthoritySha256: oldReceipt?.authoritySha256 });
+    const original = apply && fs.existsSync(paths.receiptFile) ? readReceiptEvidence(paths.receiptFile) : null;
+    const identity = authenticateSourceIdentity({ snapshotFile, forumId, expectedAuthoritySha256: original?.receipt.authoritySha256 });
     if (apply) pathsFor({ pdfRoot, receiptRoot, forumId, create: true });
     const plan = { profileId: identity.profile.profileId, forumId: identity.profile.forumId,
         posterId: identity.profile.posterId, title: identity.profile.title, authors: clone(identity.profile.authors),
@@ -475,9 +499,9 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
         recordBindingSha256: identity.authorityRecord.recordBindingSha256,
         sourceIdentityBindingSha256: identity.sourceIdentityBindingSha256 };
     if (!apply) return { status: 'dry-run', ...plan };
-    if (fs.existsSync(paths.receiptFile)) {
-        return { status: 'recovered', ...plan, receipt: replayReceipt({ ...paths, identity }) };
-    }
+    if (original) return { status: 'recovered', ...plan,
+        receipt: verifyLoadedReceipt(original, { pdfFile: paths.pdfFile, identity }).receipt };
+    if (fs.existsSync(paths.receiptFile)) fail('获取收据在核验期间发生变化');
     const fetchPdf = dependencies.fetchPdf || (options => defaultFetchPdf(options, dependencies));
     const downloaded = await fetchPdf({ profile: clone(identity.profile), maxBytes, maxRedirects, timeoutMs });
     posterApi.authorityHandleSnapshot(identity.authorityHandle);
@@ -553,8 +577,8 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
         fail('导入封存器参数非法');
     }
     const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: false });
-    const oldReceipt = apply && fs.existsSync(paths.receiptFile) ? readReceipt(paths.receiptFile) : null;
-    const identity = authenticateSourceIdentity({ snapshotFile, forumId, expectedAuthoritySha256: oldReceipt?.authoritySha256 });
+    const original = apply && fs.existsSync(paths.receiptFile) ? readReceiptEvidence(paths.receiptFile) : null;
+    const identity = authenticateSourceIdentity({ snapshotFile, forumId, expectedAuthoritySha256: original?.receipt.authoritySha256 });
     if (identity.profile.forumId !== 'n1mAjfRDZ6') {
         fail('operator import is allowed only for the reviewed n1mAjfRDZ6 prior-preprint profile');
     }
@@ -571,9 +595,9 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
         recordBindingSha256: identity.authorityRecord.recordBindingSha256,
         sourceIdentityBindingSha256: identity.sourceIdentityBindingSha256 };
     if (!apply) return { status: 'dry-run', ...plan };
-    if (fs.existsSync(paths.receiptFile)) {
-        return { status: 'recovered', ...plan, receipt: replayReceipt({ ...paths, identity }) };
-    }
+    if (original) return { status: 'recovered', ...plan,
+        receipt: verifyLoadedReceipt(original, { pdfFile: paths.pdfFile, identity }).receipt };
+    if (fs.existsSync(paths.receiptFile)) fail('获取收据在核验期间发生变化');
     const imported = readStableFile(importFile, 'operator-provided alternate PDF', maxBytes);
     if (imported.bytes.length < 5 || imported.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
         fail('人工提供的备用来源不是有界 PDF');
@@ -608,5 +632,5 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
 module.exports = { CONTRACT, MAX_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, RECEIPT_NAME_RE,
     IMPORT_CONTRACT, IMPORT_METHOD,
     HistoricalIcmlAlternatePdfSourceError, stableHash, profileForForum, validateProfileUrl,
-    authenticateSourceIdentity, validPdfContentType, normalizeReceipt, readReceipt, replayReceipt,
+    authenticateSourceIdentity, validPdfContentType, normalizeReceipt, readReceipt, readReceiptEvidence, replayReceipt, replayReceiptEvidence,
     defaultFetchPdf, validateImportedPdf, sealImportedAlternatePdf, sealAlternatePdf };
