@@ -19,6 +19,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 [[ "$channel" == release || "$channel" == private-qa ]] || { echo "构建通道无效。" >&2; exit 2; }
+[[ "$channel" == release || "$install_requested" == 0 ]] || { echo "私有验收构建请在隔离环境中运行。--install 只安装正式通道。" >&2; exit 2; }
 # Replacing a live bundle can leave the existing process executing old code
 # against moved/deleted Web/Runtime resources. Never terminate it implicitly.
 assert_app_not_running() {
@@ -71,7 +72,7 @@ resources="$bundle/Contents/Resources"
 mkdir -p "$bundle/Contents/MacOS" "$resources/Runtime" "$resources/Shared" "$resources/Assets" "$work/Sources" "$work/Build"
 cp "$icon_source" "$resources/Assets/AppIcon.png"
 cp "$app_root/build.sh" "$work/Build/build.sh"
-cp "$app_root/build_resources.py" "$work/Build/build_resources.py"
+cp "$app_root/build_resources.py" "$app_root/finalize_build.py" "$work/Build/"
 echo "正在快照本次构建源码并编译原生 Mac 应用…"
 for source in "$app_root"/Sources/*.swift; do cp "$source" "$work/Sources/"; done
 sources=("$work"/Sources/*.swift)
@@ -165,53 +166,9 @@ PY
 plutil -lint "$bundle/Contents/Info.plist" > /dev/null
 codesign --force --sign - --timestamp=none --identifier com.nanless.PaperDigest "$bundle"
 codesign --verify --deep --strict "$bundle"
-target="$build_root/论文速递工作台.app"
-# A locally launched .build copy also needs its own resources until it exits.
-for active_pid in $(/usr/bin/pgrep -x PaperDigest || true); do
-  active_executable="$(/bin/ps -p "$active_pid" -o comm= || true)"
-  if [[ "$active_executable" == "$target/Contents/MacOS/PaperDigest" ]]; then
-    echo "当前构建目录中的论文速递工作台仍在运行（PID：$active_pid）；原构建未替换，新候选保留于：$bundle" >&2
-    exit 1
-  fi
-done
-if [[ -d "$target" ]]; then mv "$target" "$work/previous-build.app"; fi
-mv "$bundle" "$target"
-# Preserve evidence outside the signed bundle: signing changes the executable bytes.
-/usr/bin/python3 - "$target" "$app_root/.qa/builds" <<'PYHISTORY'
-import hashlib,json,pathlib,sys
-bundle,history=map(pathlib.Path,sys.argv[1:])
-metadata=bundle/'Contents/Resources/build-metadata.json'
-marker=json.loads(metadata.read_text())
-name=marker['builtAt'].replace(':','-').replace('+','_')
-destination=history/name
-destination.mkdir(parents=True,exist_ok=False)
-(destination/'build-metadata.json').write_bytes(metadata.read_bytes())
-binary=bundle/'Contents/MacOS/PaperDigest'
-record={'contract':'paper-digest-mac-signed-build-v1','builtAt':marker['builtAt'],'bundlePath':str(bundle),'sourceCommit':marker['sourceCommit'],'architecture':marker['architecture'],'signing':marker['signing'],'buildMetadataSHA256':hashlib.sha256(metadata.read_bytes()).hexdigest(),'binary':{'path':'Contents/MacOS/PaperDigest','bytes':binary.stat().st_size,'sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}}
-(destination/'signed-build.json').write_text(json.dumps(record,ensure_ascii=False,indent=2)+'\n')
-print('本次源码与已签名程序校验记录：'+str(destination))
-PYHISTORY
-echo "构建与签名检查通过：$target"
-echo "这是本机开发签名，尚未经过 Apple 公证。"
+finalize_args=("$work" "$app_root/.qa/builds")
 if [[ "$install_requested" == 1 ]]; then
-  assert_app_not_running
-  applications="$HOME/Applications"
-  mkdir -p "$applications"
-  destination="$applications/论文速递工作台.app"
-  installation="$(mktemp -d "$applications/.paper-digest-install.XXXXXX")"
-  cp -R "$target" "$installation/论文速递工作台.app"
-  codesign --verify --deep --strict "$installation/论文速递工作台.app"
-  if ! assert_app_not_running; then
-    rm -rf "$installation"
-    exit 1
-  fi
-  if [[ -e "$destination" ]]; then mv "$destination" "$installation/previous.app"; fi
-  if ! mv "$installation/论文速递工作台.app" "$destination"; then
-    if [[ -d "$installation/previous.app" ]]; then mv "$installation/previous.app" "$destination"; fi
-    echo "安装未完成，原安装已保留。" >&2; exit 1
-  fi
-  rm -rf "$installation"
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$destination"
-  echo "已安装：$destination"
+  finalize_args+=(--applications "$HOME/Applications")
 fi
+/usr/bin/python3 "$work/Build/finalize_build.py" "${finalize_args[@]}"
 rm -rf "$work"

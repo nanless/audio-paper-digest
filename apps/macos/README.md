@@ -106,7 +106,7 @@ npm run install:app
 
 部分界面测试可通过 `PD_MAC_BROWSER` 指定浏览器；完整 `npm test` 仍含直接使用 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` 的入口，单独安装 Playwright Chromium 或设置该变量不能替代这一前提。科学排版测试需要按[样稿准备说明](../../prototypes/macos-research/README.md)准备公开 MiCLA PDF 和三张原图，校验值以受控样稿清单为准；这些本机测试资产不进入正式包。
 
-默认构建使用 `release` 通道，输出 `.build/论文速递工作台.app`，不捆绑论文样稿。`--channel private-qa` 用于含样稿的本机测试，不能作为正式发行包。构建会检查 Node 的版本、架构、最低系统、外部动态库依赖及对应许可。安装脚本检测到 `PaperDigest` 进程仍在运行时拒绝替换，不强制结束应用。
+默认构建使用 `release` 通道，输出 `.build/论文速递工作台.app`，不捆绑论文样稿。`--channel private-qa` 用于含样稿的本机测试，请在隔离资料目录中单独运行。该通道不接受 `--install`。构建会检查 Node 的版本、架构、最低系统、外部动态库依赖及对应许可。安装脚本检测到 `PaperDigest` 进程仍在运行时拒绝替换，不强制结束应用。
 
 应用标识 `com.nanless.PaperDigest`、可执行文件 `PaperDigest`、钥匙串服务及资料根 `~/Library/Application Support/PaperDigest/` 保持兼容。关于窗口提供随包第三方许可全文；更新运行时须同时按维护流程准备匹配许可，不能修改原许可正文来绕过版本检查。
 

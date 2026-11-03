@@ -86,5 +86,6 @@ node "$app_root/Tests/NativeAggregateRenderer.test.cjs"
 node "$app_root/Tests/SearchNavigationFocus.test.cjs"
 node "$app_root/Tests/PublishedHeadingMatch.test.cjs"
 bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/Branding.test.py"
+bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/FinalizeBuild.test.py"
 bash "$repo_root/scripts/python-runtime.sh" "$app_root/Tests/ReleasePackaging.test.py"
 echo '隔离自动测试完成；真实窗口、模型服务与 Zotero 归档仍须按验收矩阵分别核验。'
