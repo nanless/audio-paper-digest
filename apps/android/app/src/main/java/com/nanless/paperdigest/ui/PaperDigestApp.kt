@@ -55,8 +55,15 @@ internal fun JSONObject.rows(key:String):List<JSONObject> = optJSONArray(key)?.l
 internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList()
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun PaperDigestApp(controller: AppController) {
-    val state by controller.state.collectAsStateWithLifecycle()
+@Composable fun PaperDigestApp(nativeController: AppController) {
+    val state by nativeController.state.collectAsStateWithLifecycle()
+    val renderedEpoch = state.workspaceEpoch
+    val controller = remember(nativeController, renderedEpoch) {
+        if (renderedEpoch == null) nativeController else object : AppController by nativeController {
+            override suspend fun execute(command: String, payload: JSONObject): JSONObject =
+                nativeController.executeInWorkspace(command, payload, renderedEpoch)
+        }
+    }
     val scope = rememberCoroutineScope(); val context = LocalContext.current
     val librarySearchMemo=remember(controller){CachedGuideSearchMemo()}
     val websiteIndex=rememberWebsiteLibraryIndex(state.papers,state.websiteTaxonomy)
@@ -90,12 +97,12 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
         if(next=="aggregates")controller.enterAggregateView()
         routeRevision++;route=next
     }
-    val readingViewOwner=remember(controller){Any()}
-    DisposableEffect(controller,route,state.selectedPaperId) {
-        controller.readingViewVisible(readingViewOwner,route=="reader"&&state.selectedPaperId!=null)
-        onDispose{controller.readingViewVisible(readingViewOwner,false)}
+    val readingViewOwner=remember(nativeController){Any()}
+    DisposableEffect(nativeController,route,state.selectedPaperId) {
+        nativeController.readingViewVisible(readingViewOwner,route=="reader"&&state.selectedPaperId!=null)
+        onDispose{nativeController.readingViewVisible(readingViewOwner,false)}
     }
-    DisposableEffect(controller){onDispose{controller.retireAggregateView()}}
+    DisposableEffect(nativeController){onDispose{nativeController.retireAggregateView()}}
     val action: Action = action@{ command,payload ->
         val viewSensitive=command.startsWith("aggregate.")||command.startsWith("ui.")||command in setOf("paper.open","storage.openPackage","pdf.studySource.open")
         if(viewSensitive&&(renderedRouteRevision!=routeRevision||(route=="aggregates"&&renderedAggregateLease!=controller.captureAggregateView())))return@action
