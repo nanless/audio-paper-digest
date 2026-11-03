@@ -129,6 +129,13 @@ function validateFeedback(feedback, plan, paper) {
     validatedContexts.set(bound, { plan, paper, bytes: originalBytes.get(feedback) });
     return bound;
 }
+function withReadOnlySavedFactReview(bound, callback) {
+    if (!accepted.has(bound)) fail('原反馈未核验');
+    const context = validatedContexts.get(bound);
+    const file = require('node:path').join(daily.factFeedbackDirectory(context.plan), bound.proof.feedbackSha256 + '.json');
+    if (daily.stableHash(readFeedback(file)) !== bound.proof.feedbackSha256) fail('原反馈文件不同');
+    return require('./analysis-stop-control').withModelRequestsForbidden(() => scope.run(bound, callback));
+}
 function withFactReview(bound, callback) {
     if (!accepted.has(bound)) fail('反馈尚未在锁内核验');
     const context = validatedContexts.get(bound);
@@ -495,4 +502,4 @@ function validateRepairedClaims(stage, text, paperId) {
     if ([...checkedClaims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, READER_SCOPE_MODEL_REJECTED, READER_PRIMARY_REQUIRED, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
-    withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withOriginalCoreContext, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, withReadOnlyReaderCompletion, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };
+    withReadOnlySavedFactReview, withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withOriginalCoreContext, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, withReadOnlyReaderCompletion, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };

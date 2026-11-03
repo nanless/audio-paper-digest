@@ -60,7 +60,6 @@ function applyBoundedFactPatch(original, record, feedback, source, tableProjecti
         expected.set(range.path, value); allowed.push(range.path);
     }
     if (allEdits.length > 32) fail('总替换范围超过有界上限');
-    const originalTables = signedTables.readerTableSlots(original);
     for (const proof of record.tableCorrections || []) {
         const bindingOnly = proof.bindingOnly === true;
         if (!exact(proof, ['path', 'sectionPath', bindingOnly ? 'bindingOnly' : 'claimIndex', 'oldTableSha256', 'sourceTableOrdinal', 'sourceDomSha256', 'sourceTableSha256'])
@@ -88,10 +87,16 @@ function applyBoundedFactPatch(original, record, feedback, source, tableProjecti
     if (allowed.length !== replacements.length || allowed.some(p => !replacements.some(r => r.path === p))
         || replacements.some(r => !isDeepStrictEqual(r.value, expected.get(r.path)))) fail('补丁改变了获准逐字范围之外内容');
     const result = repair.applyReaderPatch(original, record.patch, allowed);
+    const canCompareSourceQuoteSlots = !(record.tableCorrections || []).length
+        && require('./daily-reader-signed-correction').authenticatedTableProjection(
+            tableProjectionHandle, original, record, source);
+    const slots = canCompareSourceQuoteSlots
+        ? signedTables.unchangedSourceQuoteTableSlots(original, result) : null;
     if (!isDeepStrictEqual(result, record.draft) || isDeepStrictEqual(result, original)
         || !isDeepStrictEqual(result.formulaBindings, original.formulaBindings)
         || !isDeepStrictEqual(result.figurePlacements, original.figurePlacements)
-        || signedTables.readerTableSlots(result).length !== originalTables.length) fail('不得改变公式、原图、表数量或声明范围之外内容');
+        || (slots?.after ?? signedTables.readerTableSlots(result)).length
+            !== (slots?.before ?? signedTables.readerTableSlots(original)).length) fail('不得改变公式、原图、表数量或声明范围之外内容');
     const markers = value => [...JSON.stringify(value).matchAll(/\[\[(?:FIGURE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]/g)].map(m => m[0]);
     if (!isDeepStrictEqual(markers(result), markers(original))) fail('不得改变既有图表术语标记的顺序和身份');
     return result;

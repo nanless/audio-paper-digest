@@ -732,7 +732,10 @@ function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPoi
                 ||path.resolve(ref.path)!==path.join(dir,files.at(-1))||!read(ref.path,ref.sha256).value)
                 fail('superseded completion pointer differs','run');
         }else if(ref!==null&&ref!==undefined)fail('operator claims absent ordinary completion','run');
-        operator.validateSavedCompletion(paper);
+        const signed = require('./daily-reader-signed-correction');
+        if (signed.isCurrentBatchRoot(stage?.legacyBatchRoot))
+            signed.validateSavedCurrentBatchCorrection(paper, actualRun, runFile);
+        else operator.validateSavedCompletion(paper);
         return null;
     }
     if(!files.length){

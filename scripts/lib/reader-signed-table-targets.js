@@ -27,6 +27,29 @@ function readerTableSlots(draft) {
     }
     return slots;
 }
+// Compare the original source-quote table surface without using a normalized
+// draft as an edit target or as evidence for a table-binding replacement.
+function unchangedSourceQuoteTableSlots(original, patched) {
+    const before = structuredClone(original), after = structuredClone(patched);
+    const normalize = require('../deep-analyzer').normalizeReaderSourceQuoteTableMarkers;
+    if (!normalize(before) || !normalize(after)) return null;
+    const rawSurface = draft => draft.sections.map(({ body }) => {
+        const markdown = extract(body).map(table => ({
+            line: table.startLine, markdown: table.markdown
+        }));
+        const markers = [...body.matchAll(/\[\[TABLE_\d+\]\]/g)].map(match => ({
+            line: body.slice(0, match.index).split('\n').length - 1, marker: match[0]
+        }));
+        return [...markdown, ...markers].sort((a, b) => a.line - b.line)
+            .map(({ markdown, marker }) => markdown ?? marker);
+    });
+    if (!isDeepStrictEqual(rawSurface(original), rawSurface(patched))
+        || !isDeepStrictEqual(original.tableBindings, patched.tableBindings)
+        || !isDeepStrictEqual(before.tableBindings, original.tableBindings)
+        || !isDeepStrictEqual(after.tableBindings, patched.tableBindings))
+        fail('仅允许核对原表原文与表标记完全不变的来源引文表');
+    return { before: readerTableSlots(before), after: readerTableSlots(after) };
+}
 function renderBinding(binding, artifacts) {
     const tables = require('./reader-tables');
     if (binding?.selection) return tables.renderReaderTableSelection(binding, artifacts);
@@ -124,4 +147,4 @@ function renderSignedTableTarget(record, proof, source) {
     }
     return { tableIndex: binding.tableIndex, markdown, binding };
 }
-module.exports = { readerTableSlots, resolveSignedOriginalTable, signedTableReplacementMatches, renderSignedTableTarget };
+module.exports = { readerTableSlots, unchangedSourceQuoteTableSlots, resolveSignedOriginalTable, signedTableReplacementMatches, renderSignedTableTarget };
