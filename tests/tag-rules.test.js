@@ -24,14 +24,14 @@ test('运行时按词表生成可用标签、任务与方法分类和精简标�
     const runtime = createTagRules({ registryPath });
     assert.equal(runtime.projectionContract, TAG_PROMPT_TEXT_CONTRACT);
     assert.equal(runtime.selectionContract, TAG_SELECTION_CONTRACT);
-    assert.equal(runtime.selectionContract, 'paper-tag-selection-v2');
+    assert.equal(runtime.selectionContract, 'paper-tag-selection');
     assert.equal(LEGACY_TAG_SELECTION_CONTRACT, 'paper-taxonomy-selection-v1');
     assert.equal(isSupportedTagSelectionContract(runtime.selectionContract), true);
     assert.equal(isSupportedTagSelectionContract(LEGACY_TAG_SELECTION_CONTRACT), true);
     assert.equal(isSupportedTagSelectionContract('paper-tag-selection-v1'), false);
     assert.equal(isSupportedTagSelectionContract(null), false);
     assert.equal(runtime.flatCompatContract, TAG_FLAT_COMPAT_CONTRACT);
-    assert.equal(runtime.flatCompatContract, 'paper-tag-flat-tags-v2');
+    assert.equal(runtime.flatCompatContract, 'paper-tag-flat-tags');
     assert.equal(LEGACY_TAG_FLAT_COMPAT_CONTRACT, 'paper-taxonomy-flat-tags-compat-v1');
     assert.match(runtime.projectionSha256, /^[a-f0-9]{64}$/);
     assert.ok(runtime.allowedTags.has('#众包评测'));
@@ -43,7 +43,7 @@ test('运行时按词表生成可用标签、任务与方法分类和精简标�
     assert.doesNotMatch(runtime.projection, /众包评估/);
 });
 
-test('标签提示保留 v1 全文字节，默认 v2 只更换版本和说明', () => {
+test('标签提示保留原全文，当前提示使用稳定名称', () => {
     const tagCatalog = {
         version: 'paper-taxonomy-v1', registrySha256: 'a'.repeat(64),
         facets: [{ id: 'task' }, { id: 'method' }],
@@ -65,13 +65,13 @@ test('标签提示保留 v1 全文字节，默认 v2 只更换版本和说明', 
     assert.equal(buildTagPromptText(tagCatalog, LEGACY_TAG_PROMPT_TEXT_CONTRACT), expectedV1);
     assert.equal(crypto.createHash('sha256').update(expectedV1).digest('hex'),
         'e16ddf3cea3935f48d3fab11c299c075c2ffe5734d29ce8cf792ac51d2d17d09');
-    const expectedV2 = expectedV1.replace('contract=paper-taxonomy-prompt-projection-v1',
-        'contract=paper-tag-prompt-text-v2').replace(
+    const expectedCurrent = expectedV1.replace('contract=paper-taxonomy-prompt-projection-v1',
+        'contract=paper-tag-prompt-text').replace(
         '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。',
         '只能选择以下已启用概念的中文首选标签。ID 用于区分概念；不要创建新标签，也不要改用同义词。');
-    assert.equal(buildTagPromptText(tagCatalog), expectedV2);
-    assert.equal(buildTagPromptText(tagCatalog, TAG_PROMPT_TEXT_CONTRACT), expectedV2);
-    assert.equal(TAG_PROMPT_TEXT_CONTRACT, 'paper-tag-prompt-text-v2');
+    assert.equal(buildTagPromptText(tagCatalog), expectedCurrent);
+    assert.equal(buildTagPromptText(tagCatalog, TAG_PROMPT_TEXT_CONTRACT), expectedCurrent);
+    assert.equal(TAG_PROMPT_TEXT_CONTRACT, 'paper-tag-prompt-text');
     for (const value of [null, '', false, 1, {}, [], 'paper-tag-prompt-text-v3']) {
         assert.throws(() => buildTagPromptText(tagCatalog, value), /标签提示版本必须为/);
     }

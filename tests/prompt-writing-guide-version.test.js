@@ -71,7 +71,11 @@ test('讲解增强保留机器章节、Reader来源声明及普通局部补丁�
     assert.equal(article.slice(article.indexOf('四种表格记录方式')), oldArticle.slice(oldArticle.indexOf('四种表格记录方式')));
     const repair = loadPrompt(registry.currentTextStagePromptPath('apiReaderRepair'));
     const oldRepair = block(evidence.readPromptEvidenceBytes(predecessors.apiReaderRepair.path).toString());
-    assert.equal(repair.slice(repair.indexOf('没有明确的原子操作时')), oldRepair.slice(oldRepair.indexOf('没有明确的原子操作时')));
+    const header = require('../scripts/lib/protocol-codec').recordHeader('reader-node-patch', 'reader-node-patch');
+    const originalPatch = oldRepair.slice(oldRepair.indexOf('没有明确的原子操作时'));
+    const expectedPatch = originalPatch.replace('{"version":1,', JSON.stringify(header).slice(0, -1) + ',');
+    assert.notEqual(expectedPatch, originalPatch);
+    assert.equal(repair.slice(repair.indexOf('没有明确的原子操作时')), expectedPatch);
     for (const text of [article, repair]) {
         const slash = String.fromCharCode(92);
         const token = text.split(/\s+/).find(word => word.split(slash).join('') === 'nn');

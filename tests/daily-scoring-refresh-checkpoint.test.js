@@ -51,22 +51,32 @@ function installSyntheticReader(paper, source) {
     const template = require('./valid-analysis-fixture').validLegacyApiAnalysisPaper(paper.arxivId);
     for (const key of Object.keys(template)) if (key.startsWith('apiReader') && key !== 'apiReaderResources')
         paper[key] = structuredClone(template[key]);
-    paper.apiReaderPlan.sections = [];
+    paper.apiReaderPlan.sections = [{ kind: 'background', heading: '初学者读者文章' }];
+
     paper.apiReaderPlanSha256 = deep.stableFingerprint(paper.apiReaderPlan);
     paper.apiReaderAuthors = require('../scripts/lib/reader-author-parser').resolveVerifiedReaderAuthors(paper, source);
     for (const [key, value] of Object.entries(template.analysisManifest.contracts))
         if (key.startsWith('apiReader')) paper.analysisManifest.contracts[key] = value;
+    const identities = require('../scripts/lib/reader-identity-format');
+    paper.analysisManifest.contracts.apiReaderAuthorIdentity = paper.apiReaderAuthors.identity.contract;
+    paper.analysisManifest.contracts.apiReaderResourceIdentity = paper.apiReaderResources.contract;
     const artifact = source.structuredArtifacts.payloadSha256;
     paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = artifact;
-    Object.assign(paper.analysisManifest.stages.openSourceScan, {
-        resourceEvidenceContract: 'api-reader-resource-identity-v1',
-        resourceEvidenceSha256: paper.apiReaderResources.identitySha256 });
+    identities.assignOpenSourceBinding(paper.analysisManifest.stages.openSourceScan, paper.apiReaderResources);
+    paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
     paper.analysisManifest.stages.apiReaderArticle = { ...template.analysisManifest.stages.apiReaderArticle,
         planSha256: paper.apiReaderPlanSha256, readerAuthorsSha256: deep.stableFingerprint(paper.apiReaderAuthors),
         readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
         resourceIdentitySha256: paper.apiReaderResources.identitySha256,
         sourceBindingsSourceTextSha256: paper.sourceSha256, structuredArtifactsSha256: artifact,
         reviewFeedbackSha256: null, refreshedAt: require('../scripts/utils').getBeijingISOString() };
+    const stage = paper.analysisManifest.stages.apiReaderArticle;
+    delete stage.readerAuthorIdentityContractVersion;
+    delete stage.resourceIdentityContractVersion;
+    const claims = require('../scripts/lib/reader-resource-claims-format');
+    paper.analysisManifest.contracts.readerResourceClaims = claims.header().contract;
+    Object.assign(stage, identities.stageFields(paper.apiReaderAuthors, paper.apiReaderResources), claims.stageFields());
+    assert.deepEqual(require('../scripts/analysis-engine').getIntegratedApiReaderRecordDiagnostics(paper), []);
     return paper;
 }
 async function setup(t) {
@@ -120,6 +130,24 @@ test('a later public entry resumes the saved scoring before any new model call',
     assert.equal(saved.scoringStageSha256, first.scoringStageSha256);
     assert.deepEqual(saved.parentPaper, first.parentPaper);
     assert.equal(saved.failures.length, 2);
+});
+
+test('原格式检查点按原字节核验，续跑不重新评分', async t => {
+    const f = await setup(t); f.options.maxRounds = 1;
+    await assert.rejects(entry.refreshApiReaders([f.id], f.options));
+    const payload = f.read(), receipt = payload.papers[0][checkpoint.FIELD];
+    const codec = require('../scripts/lib/protocol-codec');
+    assert.equal(codec.isCurrentHeader(receipt, checkpoint.CONTRACT), true);
+    const original = codec.historicalHeader(checkpoint.CONTRACT, 'sealed-scoring-awaiting-reader');
+    const { contract, schemaFingerprint, receiptSha256, ...fields } = receipt;
+    const body = { ...original, ...fields };
+    payload.papers[0][checkpoint.FIELD] = { ...body, receiptSha256: deep.stableFingerprint(body) };
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload));
+    await assert.rejects(entry.refreshApiReaders([f.id], f.options), /批量刷新失败/);
+    const saved = f.read().papers[0][checkpoint.FIELD];
+    assert.equal(saved.contract, original.contract);
+    assert.equal(Object.hasOwn(saved, 'schemaFingerprint'), false);
+    assert.deepEqual(f.calls, { score: 1, reader: 2 });
 });
 
 for (const [name, change] of [

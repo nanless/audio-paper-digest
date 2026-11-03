@@ -545,3 +545,60 @@ CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 
 **`verify-web.js` 的完整操作边界**
 
 Node 入口：`npm run verify:web -- --date DATE [--deploy OID]` 批量核对汇总页/单篇 HTTP 200、有限归一化后的最终 URL 及有限标题条件，写 data/current/web-verification-<date>.json；不比较准确论文标题、H1、canonical 或完整正文，具体条件见[收尾说明](../docs/maintenance.md#发布后网页核验与收尾)。`--deploy` 查 Pages workflow；`--wait` 轮询，`--json` 输出 JSONL（每轮部署快照+summary+最终结果），artifact 原子写并含 contract/schemaFingerprint/createdAt/partial/deploy。
+
+## 共享格式读取模块
+
+### 格式登记与原文件
+
+用格式名和结构指纹识别记录。核验原文件或 Git 对象时保留原字节。
+
+- `protocol_codec.py`
+- `original_file_evidence.py`
+- `git_file_bytes.py`
+- `lib/protocol-codec.js`
+- `lib/workflow-legacy-codec.js`
+- `lib/workflow-record-format.js`
+- `lib/strict-json.js`
+- `lib/git-file-bytes.js`
+- `lib/original-file-evidence.js`
+
+### 论文来源、评分和发布
+
+核对封存来源、分析质量、摘要、评分和发布记录的格式。会议来源修正和费用记录使用各自的登记规则。
+
+- `daily_source_format.py`
+- `analysis_quality_format.py`
+- `core_summary_format.py`
+- `scoring_record_format.py`
+- `blog_record_format.py`
+- `conference_source_correction_format.py`
+- `llm_usage_format.py`
+- `lib/daily-source-format.js`
+- `lib/source-input-format.js`
+- `lib/analysis-quality-format.js`
+- `lib/core-summary-format.js`
+- `lib/scoring-record-format.js`
+- `lib/blog-record-format.js`
+- `lib/conference-source-correction-format.js`
+- `lib/llm-usage-format.js`
+- `lib/prompt-legacy-codec.js`
+
+### 论文解读与原文证明
+
+识别解读草稿、正文、作者、资源、阶段、恢复记录和人工修正。PDF 引文核验重新读取封存原文。
+
+- `reader_record_format.py`
+- `reader_proof_format.py`
+- `reader_pdf_quote_projection.py`
+- `lib/reader-record-format.js`
+- `lib/reader-proof-format.js`
+- `lib/reader-resource-claims-format.js`
+- `lib/reader-candidate-format.js`
+- `lib/conference-reader-pdf-identity.js`
+- `lib/reader-identity-format.js`
+- `lib/daily-reader-signed-correction-format.js`
+- `lib/reader-ordinal-format.js`
+- `lib/reader-stage-protocols.js`
+- `lib/reader-section-format.js`
+- `lib/reader-diagnostic-format.js`
+- `lib/reader-content-mode.js`

@@ -711,3 +711,60 @@ Retains pass caches/checkpoints/costs. Pending activation blocks ordinary genera
 Checks workspace roles before npm production entries and again in shared direct Node/Python checks. The untracked `0600` role marker binds the repository real path to daily/history.
 
 `set` atomically binds/explicitly changes role; `exec` checks before startup. `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`, from environment or workspace `.env`, permits history commands in daily only and prints notice. Reverse use and realpath mismatch remain forbidden.
+
+## Shared format readers
+
+### Format registry and original files
+
+Identify records by format name and schema fingerprint. Verify the original bytes of saved files and Git objects.
+
+- `protocol_codec.py`
+- `original_file_evidence.py`
+- `git_file_bytes.py`
+- `lib/protocol-codec.js`
+- `lib/workflow-legacy-codec.js`
+- `lib/workflow-record-format.js`
+- `lib/strict-json.js`
+- `lib/git-file-bytes.js`
+- `lib/original-file-evidence.js`
+
+### Paper sources, scoring, and publication
+
+Check the formats of sealed sources, analysis quality, summaries, scores, and publication records. Conference corrections and usage records have their own format rules.
+
+- `daily_source_format.py`
+- `analysis_quality_format.py`
+- `core_summary_format.py`
+- `scoring_record_format.py`
+- `blog_record_format.py`
+- `conference_source_correction_format.py`
+- `llm_usage_format.py`
+- `lib/daily-source-format.js`
+- `lib/source-input-format.js`
+- `lib/analysis-quality-format.js`
+- `lib/core-summary-format.js`
+- `lib/scoring-record-format.js`
+- `lib/blog-record-format.js`
+- `lib/conference-source-correction-format.js`
+- `lib/llm-usage-format.js`
+- `lib/prompt-legacy-codec.js`
+
+### Paper explanations and source evidence
+
+Identify explanation drafts, articles, author and resource records, stages, recovery records, and manual corrections. Verify PDF quotations against the sealed source.
+
+- `reader_record_format.py`
+- `reader_proof_format.py`
+- `reader_pdf_quote_projection.py`
+- `lib/reader-record-format.js`
+- `lib/reader-proof-format.js`
+- `lib/reader-resource-claims-format.js`
+- `lib/reader-candidate-format.js`
+- `lib/conference-reader-pdf-identity.js`
+- `lib/reader-identity-format.js`
+- `lib/daily-reader-signed-correction-format.js`
+- `lib/reader-ordinal-format.js`
+- `lib/reader-stage-protocols.js`
+- `lib/reader-section-format.js`
+- `lib/reader-diagnostic-format.js`
+- `lib/reader-content-mode.js`

@@ -120,6 +120,60 @@
           }
         }
       ]
+    },
+    {
+      "name": "daily-scoring-refresh-checkpoint",
+      "currentVariant": "sealed-scoring-awaiting-reader",
+      "currentSchema": {
+        "binds": [
+          "sourceIdentity",
+          "parentPaperSha256",
+          "scoringStageSha256",
+          "outputAnalysisSha256",
+          "feedback"
+        ],
+        "rule": "read-only replay of actual saved materials; no additional scoring request"
+      },
+      "historical": [
+        {
+          "tag": "daily-scoring-refresh-checkpoint-v1",
+          "variant": "sealed-scoring-awaiting-reader"
+        }
+      ]
+    },
+    {
+      "name": "daily-scoring-refresh-preserved",
+      "currentVariant": "immutable-returned-score",
+      "currentSchema": {
+        "binds": [
+          "parentPaperSha256",
+          "paper"
+        ],
+        "rule": "read-only replay of actual saved materials; no additional scoring request"
+      },
+      "historical": [
+        {
+          "tag": "daily-scoring-refresh-checkpoint-v1-preserved",
+          "variant": "immutable-returned-score"
+        }
+      ]
+    },
+    {
+      "name": "daily-scoring-refresh-completion-materials",
+      "currentVariant": "immutable-completed-score-and-reader",
+      "currentSchema": {
+        "binds": [
+          "receipt",
+          "paper"
+        ],
+        "rule": "read-only replay of actual saved materials; no additional scoring request"
+      },
+      "historical": [
+        {
+          "tag": "daily-scoring-refresh-checkpoint-v1-completion-materials",
+          "variant": "immutable-completed-score-and-reader"
+        }
+      ]
     }
   ]
 }

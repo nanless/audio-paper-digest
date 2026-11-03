@@ -12,11 +12,7 @@ const crypto = require('node:crypto');
 const PROJECT = path.join(__dirname, '..');
 const history = require('../scripts/lib/prompt-history.js');
 const evidence = require('../scripts/lib/prompt-evidence.js');
-const {
-    PROMPT_FILE_VERSIONS,
-    promptFilePathForContract
-} = require('../scripts/lib/prompt-contracts.js');
-const { FROZEN_V1_PROMPT_FILES } = require('../scripts/lib/prompt-legacy-codec.js').compatibilityExports;
+const { PROMPT_FILE_VERSIONS } = require('../scripts/lib/prompt-contracts.js');
 const { IMPLEMENTATION_FILES } = require('../scripts/lib/conference-process.js');
 const RENDERER_IMPLEMENTATION_FILES = require('../scripts/lib/paper-page-staging.js').rendererImplementationFiles();
 
@@ -35,9 +31,8 @@ test('工作树无旧Prompt，Git原字节逐份按整文件SHA核验', () => {
 });
 
 test('声明的 SHA 就是当前文件时，解析器返回当前字节', () => {
-    for (const stage of Object.keys(FROZEN_V1_PROMPT_FILES)) {
-        const current = path.join(PROJECT, promptFilePathForContract(
-            stage, PROMPT_FILE_VERSIONS[stage].contract));
+    for (const [stage, { path: promptPath }] of Object.entries(PROMPT_FILE_VERSIONS)) {
+        const current = path.join(PROJECT, promptPath);
         const bytes = fs.readFileSync(current);
         const resolved = history.promptBytesForSha256(stage, sha256(bytes));
         assert.ok(resolved, `阶段 ${stage} 的当前字节没被解析出来`);

@@ -8,7 +8,21 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
-const CONTRACT = 'daily-scoring-refresh-checkpoint-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = 'daily-scoring-refresh-checkpoint';
+const PRESERVED = 'daily-scoring-refresh-preserved';
+const COMPLETED = 'daily-scoring-refresh-completion-materials';
+const currentHeader = name => codec.recordHeader(name, name);
+function associatedHeader(receipt, name, originalVariant) {
+    if (!codec.hasValidHeader(receipt, CONTRACT)) reject('评分检查点格式无效');
+    return codec.isCurrentHeader(receipt, CONTRACT) ? currentHeader(name)
+        : codec.historicalHeader(name, originalVariant);
+}
+function matchesAssociatedHeader(record, receipt, name, variant) {
+    return codec.hasValidHeader(record, name) && isDeepStrictEqual(
+        codec.recordHeader(record.contract, name, record.schemaFingerprint),
+        associatedHeader(receipt, name, variant));
+}
 const FIELD = 'dailyScoringRefreshCheckpoint';
 const CODE = 'DAILY_SCORING_REFRESH_PENDING';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -127,7 +141,7 @@ function verifyScoring(paper, receipt, source) {
 function readCheckpoint(paper, plan, source, feedback = '') {
     if (!hasCheckpoint(paper)) return null;
     const receipt = paper[FIELD], { receiptSha256, ...body } = receipt || {};
-    if (body.contract !== CONTRACT || body.paperId !== id(paper) || receiptSha256 !== stable(body)
+    if (!codec.hasValidHeader(body, CONTRACT) || body.paperId !== id(paper) || receiptSha256 !== stable(body)
         || body.feedback !== String(feedback).trim() || stable(body.parentPaper) !== body.parentPaperSha256
         || !Array.isArray(body.failures)) reject('原检查点、反馈或父稿身份不同');
     if (!isDeepStrictEqual(body.sourceIdentity, sourceIdentity(paper, plan, source))) reject('原来源运行改变');
@@ -195,12 +209,13 @@ function preservedCandidates(paper, options) {
         reject('保存稿目录不是规范真实目录');
     const consumed = new Set();
     for (const item of paper.dailyScoringRefreshHistory || []) {
-        if (item?.contract !== CONTRACT || item.status !== 'complete') reject('历史评分恢复记录无效');
+        if (!codec.hasValidHeader(item, CONTRACT) || item.status !== 'complete') reject('历史评分恢复记录无效');
         const reference = item.archive;
         if (!reference || path.dirname(reference.filename) !== path.join(directory, 'completed'))
             reject('历史完整评分材料缺少原私有归档');
         const bytes = privateRecoveryBytes(reference.filename), archived = JSON.parse(bytes);
-        if (sha(bytes) !== reference.sha256 || archived.contract !== `${CONTRACT}-completion-materials`
+        if (sha(bytes) !== reference.sha256 || !matchesAssociatedHeader(archived, archived.receipt, COMPLETED, 'immutable-completed-score-and-reader')
+            || codec.isCurrentHeader(item, CONTRACT) !== codec.isCurrentHeader(archived.receipt, CONTRACT)
             || archived.receipt.paperId !== id(paper) || stable(archived.receipt) !== item.receiptSha256
             || archived.receipt.parentPaperSha256 !== item.parentPaperSha256)
             reject('历史完整评分材料不同');
@@ -262,7 +277,7 @@ function preserveReturnedScoring(paper, parent, error) {
     Object.defineProperty(error, 'scoredPaper', { value: clone(paper), enumerable: false, configurable: true });
     try {
         error.scoringRefreshRecovery = { ...writePrivateRecord(recoveryPath(parent), {
-            contract: `${CONTRACT}-preserved`, parentPaperSha256: stable(parent), paper: clone(paper) }),
+            ...associatedHeader(paper[FIELD], PRESERVED, 'immutable-returned-score'), parentPaperSha256: stable(parent), paper: clone(paper) }),
         kind: 'scored-paper-not-raw-response' };
     } catch (failure) {
         error.scoringRefreshRecoveryFailed = true;
@@ -276,7 +291,7 @@ function readPreservedCheckpoint(parent, plan, source, feedback) {
     const filename = recoveryPath(parent);
     if (candidates.length !== 1 || candidates[0] !== filename) reject('保存稿父CAS改变或候选不唯一');
     const body = JSON.parse(privateRecoveryBytes(filename));
-    if (body.contract !== `${CONTRACT}-preserved` || body.parentPaperSha256 !== stable(parent)
+    if (!matchesAssociatedHeader(body, body.paper?.[FIELD], PRESERVED, 'immutable-returned-score') || body.parentPaperSha256 !== stable(parent)
         || body.paper?.[FIELD]?.parentPaperSha256 !== stable(parent)) reject('保存稿原父CAS不同');
     readCheckpoint(body.paper, plan, source, feedback);
     return body.paper;
@@ -284,7 +299,7 @@ function readPreservedCheckpoint(parent, plan, source, feedback) {
 function prepareCheckpoint(paper, parentPaper, plan, source, feedback, metadata) {
     if (hasCheckpoint(parentPaper) || typeof metadata?.scoringInputAnalysis !== 'string'
         || typeof metadata.scoringEvidenceContext !== 'string') reject('缺少真实评分回调输入');
-    const receipt = { contract: CONTRACT, paperId: id(paper), sourceIdentity: sourceIdentity(paper, plan, source),
+    const receipt = { ...currentHeader(CONTRACT), paperId: id(paper), sourceIdentity: sourceIdentity(paper, plan, source),
         parentPaper: clone(parentPaper), parentPaperSha256: stable(parentPaper),
         originalFailure: clone(failureFields(parentPaper)), feedback: String(feedback || '').trim(),
         inputAnalysis: metadata.scoringInputAnalysis, evidenceSha256: sha(metadata.scoringEvidenceContext),
@@ -315,14 +330,14 @@ function finishCheckpoint(paper, plan, source, feedback) {
     if (completed.digestStatus?.latestAttemptStatus === 'analysis_failed')
         completed.digestStatus = { ...completed.digestStatus, latestAttemptStatus: 'analyzed', error: null };
     delete completed[FIELD];
-    const material = { contract: `${CONTRACT}-completion-materials`, receipt, paper: clone(completed) };
+    const material = { ...associatedHeader(receipt, COMPLETED, 'immutable-completed-score-and-reader'), receipt, paper: clone(completed) };
     let archive;
     try {
         archive = writePrivateRecord(path.join(require('../config').FILES.dailyScoringRefreshRecoveryDir,
             'completed', `${sha(id(paper))}-${stable(material)}.json`), material);
     } catch (error) { error.scope = 'run'; error.retryable = false; throw error; }
     completed.dailyScoringRefreshHistory = [...(paper.dailyScoringRefreshHistory || []), {
-        contract: CONTRACT, status: 'complete', parentPaperSha256: receipt.parentPaperSha256,
+        ...codec.recordHeader(receipt.contract, CONTRACT, receipt.schemaFingerprint), status: 'complete', parentPaperSha256: receipt.parentPaperSha256,
         receiptSha256: stable(receipt), scoringStageSha256: receipt.scoringStageSha256,
         outputAnalysisSha256: receipt.outputAnalysisSha256, feedbackSha256: sha(receipt.feedback),
         completedAt: stage.refreshedAt, archive }];
