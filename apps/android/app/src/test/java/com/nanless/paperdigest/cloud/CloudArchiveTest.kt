@@ -4,6 +4,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 import java.lang.reflect.InvocationTargetException
+import okio.Buffer
 
 /** Official response shape, public default app path only; no account/key/network/user data. */
 class CloudArchiveTest {
@@ -35,6 +36,48 @@ class CloudArchiveTest {
         val failed="""<d:multistatus xmlns:d="DAV:"><d:response><d:href>/dav/PaperDigest/2026-10</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat><d:propstat><d:prop><d:displayname>unrelated success</d:displayname></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>""".toByteArray()
         rejected(failed)
     }
+    @Test fun personalSyncWritesOnlyItsOwnDeviceDocumentAndReadsItBack() = runTest {
+        val root = "/dav/PaperDigest/"
+        val directory = root + "personal-sync-v1/"
+        val own = directory + "$id.json"
+        val collections = mutableSetOf<String>()
+        var data: ByteArray? = null
+        val transport = CloudTransport { request, _ ->
+            val path = request.url.encodedPath
+            when (request.method) {
+                "MKCOL" -> CloudHTTP(if (collections.add(path)) 201 else 405, emptyMap(), byteArrayOf())
+                "PROPFIND" -> if (path !in collections) CloudHTTP(404, emptyMap(), byteArrayOf()) else {
+                    val members = listOf(path to true) +
+                        if (request.header("Depth") == "1" && data != null) listOf(own to false) else emptyList()
+                    CloudHTTP(207, emptyMap(), xml(members))
+                }
+                "GET" -> {
+                    assertEquals(own, path)
+                    CloudHTTP(if (data == null) 404 else 200, emptyMap(), data ?: byteArrayOf())
+                }
+                "PUT" -> {
+                    assertEquals(own, path)
+                    val buffer = Buffer()
+                    request.body!!.writeTo(buffer)
+                    data = buffer.readByteArray()
+                    CloudHTTP(201, emptyMap(), byteArrayOf())
+                }
+                else -> error("Unexpected WebDAV method")
+            }
+        }
+        val service = CloudArchive("PaperDigest", id, { CloudCredentials("fixture", "fixture") }, {},
+            transport, { 1792886400000L }, {}, 0)
+        assertTrue(service.personalDocuments().isEmpty())
+        val first = """{"first":true}""".toByteArray()
+        service.writePersonalDocument(first, null, false)
+        assertArrayEquals(first, service.personalDocuments().getValue(id))
+        assertTrue(runCatching { service.writePersonalDocument(byteArrayOf(3), null, true) }.isFailure)
+        assertArrayEquals(first, service.personalDocuments().getValue(id))
+        val next = """{"next":true}""".toByteArray()
+        service.writePersonalDocument(next, first, true)
+        assertArrayEquals(next, service.personalDocuments().getValue(id))
+    }
+
     @Test fun monthAndUuidAliasesKeepOneLevelCanonicalPathsAndDuplicateNormalizationIsNotCompletion() = runTest {
         val cases=listOf(
             xml(listOf(monthPath.dropLast(1) to true,(monthPath+id) to true)) to true,

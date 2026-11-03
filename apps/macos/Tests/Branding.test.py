@@ -22,8 +22,8 @@ class Branding(unittest.TestCase):
         check_app_branding(info, '论文速递工作台.app')
         self.assertEqual(info['CFBundleIdentifier'], 'com.nanless.PaperDigest')
         self.assertEqual(info['CFBundleExecutable'], 'PaperDigest')
-        self.assertEqual(info['CFBundleShortVersionString'], '1.3.0')
-        self.assertEqual(info['CFBundleVersion'], '5')
+        self.assertEqual(info['CFBundleShortVersionString'], '1.3.1')
+        self.assertEqual(info['CFBundleVersion'], '6')
 
     def test_actual_plist_missing_or_old_branding_is_rejected(self):
         original = plistlib.loads((APP / 'Info.plist').read_bytes())

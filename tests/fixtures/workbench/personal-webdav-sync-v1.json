@@ -1,0 +1,35 @@
+{
+  "00000000-0000-4000-8000-000000000001": {
+    "format": "paperdigest-personal-sync-v1",
+    "device": "00000000-0000-4000-8000-000000000001",
+    "revision": 1,
+    "records": {
+      "favorites": {
+        "arxiv:2601.00001": {"revision":1,"seen":{},"value":{"addedAt":"2026-11-02T00:00:00.000Z"}},
+        "arxiv:2601.00002": {"revision":1,"seen":{},"value":{"addedAt":null}}
+      },
+      "reading": {"arxiv:2601.00001":{"revision":1,"seen":{},"value":true}},
+      "notes": {"arxiv:2601.00001":{"revision":1,"seen":{},"value":{"text":"跨设备笔记","revision":1}}},
+      "annotations": {"arxiv:2601.00001":{"revision":1,"seen":{},"value":[{"id":"a-1"}]}},
+      "readingState": {"arxiv:2601.00001":{"revision":1,"seen":{},"value":{"pdfPage":4}}}
+    }
+  },
+  "00000000-0000-4000-8000-000000000002": {
+    "format": "paperdigest-personal-sync-v1",
+    "device": "00000000-0000-4000-8000-000000000002",
+    "revision": 1,
+    "records": {
+      "favorites": {
+        "arxiv:2601.00002": {
+          "revision":1,
+          "seen":{"00000000-0000-4000-8000-000000000001":1},
+          "value":null
+        }
+      },
+      "reading": {},
+      "notes": {},
+      "annotations": {},
+      "readingState": {}
+    }
+  }
+}

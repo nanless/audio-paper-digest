@@ -226,7 +226,7 @@ actor CloudCredentialSession {
             try local.pauseAutomatic(true)
             _ = try local.archivePending(); cloudLastError = nil; return ["retained": true]
         }
-        guard ["cloud.check", "cloud.upload", "cloud.list", "cloud.restore"].contains(command) else { throw DesktopError.message("不支持此云端操作") }
+        guard ["cloud.check", "cloud.upload", "cloud.list", "cloud.restore", "cloud.syncPersonal"].contains(command) else { throw DesktopError.message("不支持此云端操作") }
         cloudBusy = true; cloudLastError = nil; emit("cloud.changed")
         defer { cloudBusy = false; emit("cloud.changed") }
         let credentialTarget = CloudSessionCredentials.Target(destination: local.profile.destinationID, account: local.profile.account)
@@ -234,6 +234,28 @@ actor CloudCredentialSession {
         do {
             if command == "cloud.upload" { return try await uploadCloudSnapshot() }
             let service = try cloudService()
+            if command == "cloud.syncPersonal" {
+                guard payload.isEmpty else { throw DesktopError.message("同步入口只使用已保存的 WebDAV 连接") }
+                try await flushEdits()
+                let device = local.profile.destinationID.uuidString.lowercased()
+                return try await performCloudJob(command) {
+                    let before = self.store.snapshot()
+                    let remote = try await service.personalDocuments()
+                    let plan = try PersonalWebDavSync.plan(local: before, device: device, remote: remote)
+                    if let bytes = plan.upload {
+                        try await service.writePersonalDocument(bytes, expected: remote[device], directoryExists: !remote.isEmpty)
+                    }
+                    try Task.checkCancellation()
+                    let current = self.store.snapshot()
+                    guard try PersonalWebDavSync.unchanged(before, current) else {
+                        throw DesktopError.message("同步期间本机资料已编辑，请再同步一次")
+                    }
+                    let merged = PersonalWebDavSync.apply(plan, to: current)
+                    try self.store.restorePersonal(merged)
+                    self.emit("personal.synced")
+                    return ["favorites": (merged["favorites"] as? [String] ?? []).count, "conflicts": plan.conflicts]
+                }
+            }
             if command == "cloud.check" {
                 _ = try await performCloudJob(command) { try await service.probe(); return ["status": "complete"] }
                 try cloudConfirmCredential(target: credentialTarget, generation: credentialGeneration)

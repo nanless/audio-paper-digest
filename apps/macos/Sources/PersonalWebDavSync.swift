@@ -1,0 +1,237 @@
+import Foundation
+import CoreFoundation
+
+/// Peer documents use the same versioned JSON contract as Android.
+enum PersonalWebDavSync {
+    static let limit = 8 * 1024 * 1024
+    static let directory = "personal-sync-v1"
+    private static let format = "paperdigest-personal-sync-v1"
+    private static let baselineKey = "webDavSyncBaseline"
+    private static let fields = ["favorites", "reading", "notes", "annotations", "readingState"]
+    private static let sets = ["favorites", "reading"]
+    private static let maps = ["notes", "annotations", "readingState"]
+    typealias Object = [String: Any]
+    typealias Projection = [String: Object]
+
+    struct Plan {
+        let personal: Object
+        let upload: Data?
+        let conflicts: Int
+    }
+    private struct Edit {
+        let device: String
+        let revision: Int
+        let seen: [String: Int]
+        let value: Any
+    }
+
+    static func validDevice(_ id: String) -> Bool { UUID(uuidString: id)?.uuidString.lowercased() == id }
+    private static func validPaper(_ id: String) -> Bool {
+        !id.isEmpty && id.utf16.count <= 2048 && !id.hasPrefix("local:")
+    }
+    private static func invalid() -> DesktopError { .message("WebDAV 同步资料结构无效，已保留本机资料") }
+    private static func revision(_ raw: Any?) throws -> Int {
+        guard let raw = raw as? NSNumber, CFGetTypeID(raw) != CFBooleanGetTypeID(),
+              let number = raw as? Int, number > 0, number <= 9_007_199_254_740_991 else { throw invalid() }
+        return number
+    }
+    private static func encoded(_ value: Any) throws -> Data {
+        try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
+    }
+
+    private static func project(_ personal: Object) throws -> Projection {
+        var result: Projection = [:]
+        let favorites = try FavoriteCollections.editable(personal["favoriteCollections"])
+        let items = favorites["items"] as? [String: Object] ?? [:]
+        for field in sets {
+            var rows: Object = [:]
+            for id in (personal[field] as? [String] ?? []) where validPaper(id) {
+                if field == "reading" { rows[id] = true }
+                else { rows[id] = ["addedAt": items[id]?["addedAt"] ?? NSNull()] }
+            }
+            result[field] = rows
+        }
+        for field in maps {
+            result[field] = (personal[field] as? Object ?? [:]).filter { validPaper($0.key) }
+        }
+        return result
+    }
+    private static func hashes(_ projection: Projection) throws -> [String: [String: String]] {
+        try projection.mapValues { rows in try rows.mapValues { sha256(try encoded($0)) } }
+    }
+
+    @MainActor static func plan(local: Object, device: String, remote: [String: Data]) throws -> Plan {
+        guard validDevice(device), remote.count <= 24 else { throw invalid() }
+        var documents: [String: Object] = [:]
+        for (owner, bytes) in remote {
+            guard validDevice(owner), (1...limit).contains(bytes.count),
+                  let document = try JSONSerialization.jsonObject(with: bytes) as? Object,
+                  document["format"] as? String == format, document["device"] as? String == owner,
+                  let records = document["records"] as? [String: [String: Object]],
+                  Set(records.keys) == Set(fields) else { throw invalid() }
+            let version = try revision(document["revision"])
+            for (field, rows) in records {
+                guard rows.count <= 100_000 else { throw invalid() }
+                for (id, row) in rows {
+                    guard validPaper(id), try revision(row["revision"]) <= version,
+                          let seen = row["seen"] as? Object, seen.count <= 24, seen[owner] == nil,
+                          let value = row["value"] else { throw invalid() }
+                    for (peer, counter) in seen {
+                        guard validDevice(peer) else { throw invalid() }
+                        _ = try revision(counter)
+                    }
+                    if value is NSNull { continue }
+                    switch field {
+                    case "favorites":
+                        guard let item = value as? Object, item.count == 1,
+                              let date = item["addedAt"], date is NSNull || FavoriteCollections.validTime(date) else { throw invalid() }
+                    case "reading":
+                        guard let flag = value as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID(),
+                              flag.boolValue else { throw invalid() }
+                    case "annotations": guard value is [Object] else { throw invalid() }
+                    case "notes":
+                        guard let note = value as? Object, note["text"] is String,
+                              let rev = note["revision"] as? Int, (0..<Int(Int32.max)).contains(rev) else { throw invalid() }
+                    default: guard value is Object else { throw invalid() }
+                    }
+                }
+            }
+            documents[owner] = document
+        }
+        let previous = (local[baselineKey] as? Object).flatMap { $0["device"] as? String == device ? $0 : nil }
+        let observed = previous?["observed"] as? [String: Int] ?? [:]
+        for (peer, version) in observed where (documents[peer]?["revision"] as? Int ?? 0) < version {
+            throw DesktopError.message("云端同步记录缺失或回退，已保留本机资料")
+        }
+        for document in documents.values {
+            for rows in (document["records"] as! [String: [String: Object]]).values {
+                for row in rows.values {
+                    for (peer, version) in row["seen"] as! [String: Int] {
+                        guard (documents[peer]?["revision"] as? Int ?? 0) >= version else { throw invalid() }
+                    }
+                }
+            }
+        }
+        let baseline = previous?["hashes"] as? [String: [String: String]] ?? [:]
+        let projection = try project(local)
+        let currentHashes = try hashes(projection)
+        let own = documents[device]
+        let ownVersion = own?["revision"] as? Int ?? 0
+        var records = own?["records"] as? [String: [String: Object]] ??
+            Dictionary(uniqueKeysWithValues: fields.map { ($0, [:]) })
+        let next = ownVersion + 1
+        _ = try revision(next)
+        var seen = observed
+        seen.removeValue(forKey: device)
+        var changed = false
+        for field in fields {
+            var rows = records[field]!
+            let before = baseline[field] ?? [:]
+            let after = currentHashes[field] ?? [:]
+            for id in Set(before.keys).union(after.keys) where before[id] != after[id] {
+                let value = projection[field]?[id] ?? NSNull()
+                if ownVersion > (observed[device] ?? 0), let old = rows[id]?["value"],
+                   try encoded(old) == encoded(value) { continue }
+                rows[id] = ["revision": next, "seen": seen, "value": value]
+                changed = true
+            }
+            records[field] = rows
+        }
+        var upload: Data?
+        if changed {
+            let document: Object = ["format": format, "device": device, "revision": next, "records": records]
+            let bytes = try encoded(document)
+            guard bytes.count <= limit, documents.count < 24 || documents[device] != nil else {
+                throw DesktopError.message("WebDAV 同步资料或设备数量超过上限")
+            }
+            upload = bytes
+            documents[device] = document
+        }
+        var merged: Projection = [:]
+        var conflicts = 0
+        for field in fields {
+            var byPaper: [String: [Edit]] = [:]
+            for (owner, document) in documents {
+                let rows = (document["records"] as! [String: [String: Object]])[field]!
+                for (id, row) in rows {
+                    byPaper[id, default: []].append(Edit(device: owner, revision: row["revision"] as! Int,
+                        seen: row["seen"] as! [String: Int], value: row["value"]!))
+                }
+            }
+            var output: Object = [:]
+            for (id, edits) in byPaper {
+                let heads = edits.filter { a in !edits.contains { ($0.seen[a.device] ?? 0) >= a.revision } }
+                guard !heads.isEmpty else { throw invalid() }
+                let value: Any
+                if ["notes", "annotations"].contains(field),
+                   try Set(heads.map { try encoded($0.value) }).count > 1 {
+                    conflicts += 1
+                    value = projection[field]?[id] ?? NSNull()
+                } else if sets.contains(field), heads.contains(where: { $0.value is NSNull }) {
+                    value = NSNull()
+                } else if field == "favorites" {
+                    value = heads.map { $0.value as! Object }.min {
+                        ($0["addedAt"] as? String ?? "~") < ($1["addedAt"] as? String ?? "~")
+                    }!
+                } else {
+                    value = heads.max {
+                        ($0.revision, $0.device) < ($1.revision, $1.device)
+                    }!.value
+                }
+                if !(value is NSNull) { output[id] = value }
+            }
+            merged[field] = output
+        }
+        var result = local
+        for field in sets {
+            let localOnly = (local[field] as? [String] ?? []).filter { !validPaper($0) }
+            result[field] = (localOnly + Array(merged[field]!.keys)).sorted()
+        }
+        for field in maps {
+            let old = local[field] as? Object ?? [:]
+            var rows = merged[field]!.merging(old.filter { !validPaper($0.key) }) { first, _ in first }
+            if field == "notes" {
+                for (id, raw) in rows {
+                    guard var note = raw as? Object, let previous = old[id] as? Object,
+                          note["text"] as? String != previous["text"] as? String,
+                          let revision = note["revision"] as? Int, let previousRevision = previous["revision"] as? Int,
+                          revision <= previousRevision else { continue }
+                    guard previousRevision < Int(Int32.max) - 1 else { throw invalid() }
+                    note["revision"] = previousRevision + 1
+                    rows[id] = note
+                }
+            }
+            result[field] = rows
+        }
+        var favorites = try FavoriteCollections.editable(result["favoriteCollections"])
+        var items = favorites["items"] as! [String: Object]
+        let originalItems = try encoded(items)
+        let mergedFavorites = merged["favorites"]!
+        for id in (local["favorites"] as? [String] ?? []) where validPaper(id) && mergedFavorites[id] == nil {
+            items.removeValue(forKey: id)
+        }
+        for (id, value) in mergedFavorites {
+            var item = items[id] ?? ["folderIDs": [String]()]
+            item["addedAt"] = (value as! Object)["addedAt"]
+            items[id] = item
+        }
+        if try encoded(items) != originalItems { try FavoriteCollections.advance(&favorites) }
+        favorites["items"] = items
+        result["favoriteCollections"] = favorites
+        result[baselineKey] = ["device": device, "observed": documents.mapValues { $0["revision"] as! Int },
+                               "hashes": try hashes(project(result))]
+        try DesktopStore.validate(result)
+        return Plan(personal: result, upload: upload, conflicts: conflicts)
+    }
+
+    static func unchanged(_ before: Object, _ after: Object) throws -> Bool {
+        try (fields + ["favoriteCollections", baselineKey]).allSatisfy {
+            try encoded(before[$0] ?? NSNull()) == encoded(after[$0] ?? NSNull())
+        }
+    }
+    static func apply(_ plan: Plan, to current: Object) -> Object {
+        var result = current
+        for field in fields + ["favoriteCollections", baselineKey] { result[field] = plan.personal[field] }
+        return result
+    }
+}

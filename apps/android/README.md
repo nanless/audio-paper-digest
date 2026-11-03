@@ -4,7 +4,7 @@
 
 论文速递工作台是“论文速递”的 Android 原生客户端。它读取网站已发布的论文目录、图文导读、日更与会议汇总，支持原始 PDF、笔记、离线阅读、个人研究、Zotero 归档和坚果云备份。阅读和同步已有文章不会重新调用模型。
 
-此源码版本为 **1.3.5（构建号 13）**，公开安装包状态以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。支持 Android 9 / API 28 及以上系统，包含 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64` 四种架构。应用标识仍为 `com.nanless.paperdigest`，正式签名沿用旧版。安装、测试范围和发行状态见[验证说明](<../../docs/android-validation.md>)；全站分类、手机和宽窗口界面的本轮改进见[审改记录](../../docs/workbench-1.3.0-review.md)。
+此源码版本为 **1.3.6（构建号 14）**，公开安装包状态以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。支持 Android 9 / API 28 及以上系统，包含 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64` 四种架构。应用标识仍为 `com.nanless.paperdigest`，正式签名沿用旧版。安装、测试范围和发行状态见[验证说明](<../../docs/android-validation.md>)；全站分类、手机和宽窗口界面的本轮改进见[审改记录](../../docs/workbench-1.3.0-review.md)。
 
 ## 开始使用
 
@@ -97,3 +97,5 @@ Zotero Storage 空间不足时，可以明确确认改用本应用已配置的�
 安装和设备测试都必须明确指定一个序列号，也可通过 `ANDROID_SERIAL` 指定；未选择设备时直接停止，不会默认安装到旧模拟器。安装脚本仅定向该设备，先检查设备就绪，再核对模拟器名称 `PaperDigest_QA_API35` 或 `PaperDigest_QA_API28`；测试入口也只使用指定序列号。设备是否为空仍须执行者事先确认。请勿改用用户现有手机或研究模拟器，也不要向全部已连接设备派发测试。
 
 正式发行核对源码、版本、签名、四种架构、16 KiB 对齐、许可、资源，以及实际新装和覆盖升级。16 KiB 对齐是安装包中原生库的布局要求，不代表已经在所有设备上实测。签名私钥与口令在仓库和发行包之外保存。下载入口使用本仓库实际发布的 [GitHub Releases](https://github.com/nanless/audio-paper-digest/releases)。逐项功能与验证范围见[功能表](<../../docs/android-feature-parity.md>)。
+
+在论文库或连接设置点击 **一键同步 WebDAV**。两端使用同一个已保存的坚果云账号和目录。同步包括网站论文的收藏及收藏时间、待读、笔记、批注和阅读进度。两端各自改过同一条笔记或同一篇论文的批注时，原版本留在各自设备上。文件和研究历史可用完整备份保存。

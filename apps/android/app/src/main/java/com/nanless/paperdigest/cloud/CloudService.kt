@@ -200,6 +200,22 @@ class CloudService(
             }
         } finally { if(owned)endCredentialMutation(token) }
     }
+    internal suspend fun syncPersonal(
+        capture: suspend () -> JSONObject,
+        commit: suspend (JSONObject, PersonalWebDavSync.Plan) -> Unit
+    ): JSONObject = operation {
+        val original = capture()
+        val service = archive()
+        val device = destinationID
+        val remote = service.personalDocuments()
+        val plan = PersonalWebDavSync.plan(original, device, remote)
+        plan.upload?.let { service.writePersonalDocument(it, remote[device], remote.isNotEmpty()) }
+        coroutineContext.ensureActive()
+        commit(original, plan)
+        JSONObject().put("favorites", plan.personal.getJSONArray("favorites").length())
+            .put("conflicts", plan.conflicts)
+    }
+
     suspend fun archivePending(): JSONObject = operation {
         require(hasPending()) { "没有未完成材料" }; val folder = targetFolder(); BackupCodec.checkedDirectory(folder)
         val connection = File(folder, if (File(folder, "connection.json").exists()) "connection-${UUID.randomUUID()}.json" else "connection.json")

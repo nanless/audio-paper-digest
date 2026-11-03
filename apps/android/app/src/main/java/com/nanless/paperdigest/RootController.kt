@@ -1468,6 +1468,22 @@ class RootController private constructor(private val context: Context, private v
         "cloud.state" -> cloudView()
         "cloud.save" -> cloud.save(payload.getString("account"), payload.optString("folder", "PaperDigest"), payload.optBoolean("automatic"), payload.optInt("intervalHours", 24),cloudMutation)
         "cloud.check" -> runTask(command) { cloud.check() }
+        "cloud.syncPersonal" -> runTask(command) {
+            require(payload.length() == 0) { "同步入口只使用已保存的 WebDAV 连接" }
+            require(!personal.settings().optBoolean("offlineMode")) { "离线模式已开启" }
+            val result = cloud.syncPersonal(
+                capture = { maintenance.withLock { personal.snapshot() } },
+                commit = { before, plan -> maintenance.withLock {
+                    currentCoroutineContext().ensureActive()
+                    val current = personal.snapshot()
+                    require(PersonalWebDavSync.unchanged(before, current)) { "同步期间本机资料已编辑，请再同步一次" }
+                    personal.replaceValidated(PersonalWebDavSync.apply(current, plan))
+                } }
+            )
+            _state.update { it.copy(notice = "WebDAV 同步完成 · 收藏 ${result.getInt("favorites")} 篇" +
+                if (result.getInt("conflicts") > 0) " · ${result.getInt("conflicts")} 项编辑冲突，两端版本已保留" else "") }
+            result
+        }
         "cloud.upload" -> maintenance.withLock {
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("kind") == "cloud.upload" && it.optString("status") in listOf("queued", "running") }) { "已有备份任务，请先等待或停止后续传" }
             val id = UUID.randomUUID(); val work = OneTimeWorkRequestBuilder<CloudTransferWorker>().setId(id).setInputData(workDataOf("destinationID" to cloud.targetID, "workspaceEpoch" to dispatch.epoch))

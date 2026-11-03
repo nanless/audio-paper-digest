@@ -517,3 +517,23 @@ document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{if(b.dataset.
 for(const id of ['question','evidence-scope','range-from','range-to','pdf-chapter'])for(const event of ['input','change'])$(id).addEventListener(event,scheduleReading);
 $('splitter').addEventListener('pointerup',scheduleReading);$('splitter').addEventListener('keyup',scheduleReading);
 document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',scheduleReading));
+
+const syncPersonalButton = $('sync-personal');
+if (syncPersonalButton) syncPersonalButton.onclick = async () => {
+ syncPersonalButton.disabled = true;
+ try {
+  const cloud = await call('cloud.state');
+  if (!cloud.account) { await call('settings.open', {pane:'cloud'}); return; }
+  const result = await call('cloud.syncPersonal');
+  if (result.cancelled) return;
+  toast('WebDAV 同步完成 · 收藏 '+result.favorites+' 篇'+(result.conflicts?' · '+result.conflicts+' 项冲突，两端版本已保留':''));
+ } catch (e) { error(e); }
+ finally { syncPersonalButton.disabled = false; }
+};
+window.addEventListener('personal.synced', async () => {
+ try {
+  state.personal = await call('personal.snapshot');
+  updateFavoriteButton();
+  await library?.refresh();
+ } catch (e) { error(e); }
+});

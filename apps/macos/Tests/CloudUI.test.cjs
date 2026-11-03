@@ -23,6 +23,7 @@ async function fixture(options={}){
    if(command==='cloud.upload'&&__busyOnUpload){__state.busy=true;__state.activeJobID='native-upload-job';}
    if(__holdAction===command)return await new Promise((resolve,reject)=>{__actions.push(resolve);__heldRejects.push(reject);});
    if(command==='cloud.save'){Object.assign(__state,payload);return structuredClone(__state);}
+   if(command==='cloud.syncPersonal')return {favorites:3,conflicts:1};
    if(command==='cloud.check'){__state.credentialState='confirmed';return {};}
    if(command==='cloud.list')return {snapshots:structuredClone(__snapshots)};
    if(command==='cloud.deletePassword'){__state.credentialState='missing';__state.sessionPasswordAvailable=false;return {};}
@@ -45,6 +46,11 @@ async function settled(page){await page.waitForFunction(()=>!document.querySelec
 (async()=>{try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
  await one('first connection keeps the three actions in view and optional sections collapsed',async p=>{const last=await p.locator('#cloud-check').boundingBox();assert(last&&last.y+last.height<=610);assert.equal(await p.locator('#cloud-set-password').isVisible(),true);assert.equal(await p.locator('.cloud-advanced').getAttribute('open'),null);assert.equal(await p.locator('.cloud-rules').getAttribute('open'),null);assert.equal(await p.locator('.cloud-restore').getAttribute('open'),null);assert.equal(await p.locator('a').getAttribute('href'),'https://www.jianguoyun.com/#/settings/security');const before=await p.evaluate(()=>__calls.length);await p.locator('.cloud-advanced > summary').click();assert.equal(await p.locator('#cloud-automatic').isVisible(),true);assert.equal(await p.evaluate(()=>__calls.length),before);},{expandAdvanced:false});
+ await one('one-click WebDAV sync sends one personal sync command and shows actual results',async p=>{
+  await p.locator('#cloud-sync-personal').click();await settled(p);
+  assert.deepEqual(await p.evaluate(()=>__calls.filter(c=>c.command!=='cloud.state')),[{command:'cloud.syncPersonal',payload:{}}]);
+  assert.match(await p.locator('#cloud-message').innerText(),/收藏 3 篇.*1 项编辑冲突/);
+ });
  await one('mount and refresh read only local state, never probe credentials or network',async p=>{const calls=await p.evaluate(()=>__calls);assert(calls.length>=1);assert(calls.every(c=>c.command==='cloud.state'));assert.match(await p.locator('#cloud-status').innerText(),/未检查/);assert.equal(await p.locator('input[type=password]').count(),0);});
  await one('actual shared settings pane reveal preserves the live cloud controller and handlers',async p=>{await p.evaluate(async()=>{const {revealAccessiblePane}=await import('/dialogs.js');const host=document.querySelector('[data-setting-pane=cloud]');window.__oldCloudHost=host;host.hidden=true;revealAccessiblePane(host);});assert.equal(await p.evaluate(()=>__oldCloudHost.isConnected),false);await p.locator('#cloud-account').fill('retained@example.test');await p.evaluate(()=>__cloud.refresh());assert.equal(await p.locator('#cloud-account').inputValue(),'retained@example.test');await p.locator('#cloud-save').click();await settled(p);assert.equal(await p.evaluate(()=>__state.account),'retained@example.test');assert.equal(await p.locator('[data-cloud-root]').count(),1);});
  await one('honest complete-backup scope, size limits and stopped-app boundary are visible',async p=>{const text=await p.locator('[data-setting-pane=cloud]').innerText();for(const q of ['全部研究资料','512 MiB','750 MiB','钥匙串','退出应用'])assert(text.includes(q),q);assert.doesNotMatch(text,/无限|永久后台|云端同步成功/);});

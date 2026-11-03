@@ -100,6 +100,16 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
                 LazyColumn(Modifier.widthIn(max=920.dp).fillMaxHeight().testTag("library-results"),state=if(ready||fallback)scroll else loadingScroll,contentPadding=PaddingValues(horizontal=if(wide)24.dp else 18.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
                     item("library-heading"){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.headlineSmall);Text(if(filter=="全部")"${String.format("%,d",state.papers.size)} 篇论文 · 网站完整研究方向"else when(filter){"收藏"->"已收藏 ${scoped.size} 篇 · 分类与收藏时间";"待读"->"${scoped.size} 篇待读论文";else->"${scoped.size} 篇已有导读或原文"},style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)};Box{IconButton({tools=true}){Icon(Icons.Outlined.MoreHoriz,"论文库操作")};DropdownMenu(tools,{tools=false}){DropdownMenuItem({Text("同步已发布内容")},{tools=false;action("library.sync",JSONObject())},leadingIcon={Icon(Icons.Outlined.Sync,null)},enabled=!state.loading);DropdownMenuItem({Text("导入 PDF")},{tools=false;importPDF()},leadingIcon={Icon(Icons.Outlined.FileOpen,null)});DropdownMenuItem({Text("网站全部成果")},{tools=false;action("ui.resources",JSONObject())},leadingIcon={Icon(Icons.Outlined.Language,null)})}}}}
                     item("scope"){LazyRow(horizontalArrangement=Arrangement.spacedBy(7.dp)){items(listOf("全部","收藏","待读","离线")){choice->FilterChip(filter==choice,{onScope(choice)},label={Text(choice)})}}}
+                    item("personal-sync") {
+                        OutlinedButton({
+                            if (state.cloud.optString("account").isBlank()) action("ui.settings", obj("pane" to "坚果云"))
+                            else action("cloud.syncPersonal", JSONObject())
+                        }, enabled = !state.busy && !state.settings.optBoolean("offlineMode")) {
+                            Icon(Icons.Outlined.Sync, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("一键同步 WebDAV")
+                        }
+                    }
                     item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,placeholder={Text("论文、作者、编号或笔记")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({query=""}){Icon(Icons.Outlined.Close,"清除搜索")}},keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(imeAction=androidx.compose.ui.text.input.ImeAction.Search),keyboardActions=androidx.compose.foundation.text.KeyboardActions(onSearch={keyboard?.hide()}))}
                     item("controls"){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
                         if(!wide)OutlinedButton({directoryOpen=true},contentPadding=PaddingValues(horizontal=12.dp)){Icon(Icons.Outlined.AccountTree,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text(if(selectedDirections.isEmpty())"研究方向"else"方向 ${selectedDirections.size}")}

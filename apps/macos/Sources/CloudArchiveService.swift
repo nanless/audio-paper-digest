@@ -215,6 +215,44 @@ public actor CloudArchiveService {
         }
         return snapshots.sorted { $0.createdAt == $1.createdAt ? $0.reference.id.uuidString < $1.reference.id.uuidString : $0.createdAt > $1.createdAt }
     }
+    func personalDocuments() async throws -> [String: Data] {
+        try begin(); defer { end() }
+        let path = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
+        let response = try await request("PROPFIND", path: path, body: Self.propfind,
+            headers: ["Depth":"1", "Content-Type":"application/xml; charset=utf-8"],
+            limit: Self.listingLimit, accepted: [207,404])
+        if response.response.statusCode == 404 { return [:] }
+        let devices = try CloudDAVListing.personalDevices(response.data, path: path)
+        var result: [String: Data] = [:]
+        var total = 0
+        for id in devices {
+            let bytes = try await request("GET", path: path + id + ".json", limit: PersonalWebDavSync.limit, accepted: [200]).data
+            total += bytes.count
+            guard total <= 32 * 1024 * 1024 else { throw CloudError.oversizedResponse }
+            result[id] = bytes
+        }
+        return result
+    }
+
+    func writePersonalDocument(_ bytes: Data, expected: Data?, directoryExists: Bool) async throws {
+        try begin(); defer { end() }
+        let directory = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
+        guard (1...PersonalWebDavSync.limit).contains(bytes.count) else { throw CloudError.oversizedResponse }
+        if !directoryExists {
+            try await ensureCollection("/dav/\(folder)/")
+            try await ensureCollection(directory)
+        }
+        let path = directory + destinationID.uuidString.lowercased() + ".json"
+        guard try await optionalGet(path, limit: PersonalWebDavSync.limit) == expected else {
+            throw DesktopError.message("此设备的云端同步记录已变化，请重新同步")
+        }
+        _ = try await request("PUT", path: path, body: bytes, headers: ["Content-Type":"application/json"],
+                              limit: 64 * 1024, accepted: [200,201,204])
+        guard try await request("GET", path: path, limit: bytes.count, accepted: [200]).data == bytes else {
+            throw CloudError.integrity
+        }
+    }
+
     public func download(reference: SnapshotReference) async throws -> Data {
         try begin(); defer { end() }
         guard Self.validReference(reference) else { throw CloudError.invalidConfiguration }
@@ -473,6 +511,29 @@ private final class CloudDAVListing: NSObject, XMLParserDelegate {
         let members = try read(data)
         guard members.count == 1, members[0].collection, members[0].success,
               try collectionPath(checkedPath(members[0].href)) == path else { throw CloudArchiveService.CloudError.incompleteListing }
+    }
+    static func personalDevices(_ data: Data, path: String) throws -> [String] {
+        let members = try read(data)
+        guard members.count <= 25 else { throw CloudArchiveService.CloudError.incompleteListing }
+        var root = false, ids = Set<String>()
+        for member in members {
+            let raw = try checkedPath(member.href)
+            guard member.success else { throw CloudArchiveService.CloudError.incompleteListing }
+            if member.collection && collectionPath(raw) == path {
+                guard !root else { throw CloudArchiveService.CloudError.incompleteListing }
+                root = true
+                continue
+            }
+            guard !member.collection, raw.hasPrefix(path), raw.hasSuffix(".json") else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+            let id = String(raw.dropFirst(path.count).dropLast(5))
+            guard PersonalWebDavSync.validDevice(id), ids.insert(id).inserted else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+        }
+        guard root else { throw CloudArchiveService.CloudError.incompleteListing }
+        return ids.sorted()
     }
     static func parse(_ data: Data, path: String, month: String) throws -> [CloudArchiveService.SnapshotReference] {
         let members = try read(data)

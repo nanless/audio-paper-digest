@@ -168,7 +168,11 @@ import java.time.ZoneOffset
  Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true;retireList()},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true;retireList()},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
  Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null;password()}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&account.isNotBlank()&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存账号并填写应用密码…")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
  OutlinedButton(password,enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("填写或更换应用密码并检查…")}
- Text("3. 检查成功后，保存第一份备份",style=MaterialTheme.typography.titleMedium)
+ Text("3. 同步个人资料或保存完整备份",style=MaterialTheme.typography.titleMedium)
+ Button({action("cloud.syncPersonal",JSONObject())},enabled=!dirty&&!busy&&!state.settings.optBoolean("offlineMode")&&cloud.optString("account").isNotBlank()){
+     Text("一键同步 WebDAV")
+ }
+ Text("双向同步收藏、待读、笔记、批注和阅读进度。",style=MaterialTheme.typography.bodySmall)
  OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("重新检查连接与权限")}
  Text(if(cloud.optString("account").isBlank())"尚未配置账号"else when(cloud.optString("credentialState")){"present"->"应用密码已保存；以最近一次连接检查结果为准";"missing"->"尚未保存应用密码";else->"账号已保存，连接待检查"},style=MaterialTheme.typography.bodySmall)
  cloud.optString("lastError").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
