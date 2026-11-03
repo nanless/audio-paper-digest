@@ -49,7 +49,7 @@ export function mountCloud(app){
  </section>
  <section class="cloud-card" aria-label="同步个人资料"><h2>同步个人资料</h2>
  <p>在两端使用同一账号和目录，即可双向同步收藏、待读、笔记、批注和阅读进度。</p>
- <button id="cloud-sync-personal" type="button">一键同步 WebDAV</button>
+ <button id="cloud-sync-personal" type="button">同步收藏、笔记等个人资料</button>
  </section>
  <section class="cloud-card" aria-label="完整资料保存状态"><h2>备份全部研究资料</h2><p id="cloud-last"></p><p id="cloud-pending"></p>
  <div class="cloud-actions"><button id="cloud-sync-workspace" class="cloud-primary" type="button">同步全部研究资料</button><button id="cloud-upload" class="cloud-primary" type="button">立即保存全部资料</button><button id="cloud-cancel" type="button" disabled>取消当前传输</button><button id="cloud-archive-pending" type="button" hidden>保留快照并停止本次续传…</button><button id="cloud-reveal-transfers" type="button">在 Finder 查看保留的快照</button></div>

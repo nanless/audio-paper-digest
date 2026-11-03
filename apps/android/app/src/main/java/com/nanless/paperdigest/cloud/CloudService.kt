@@ -260,7 +260,7 @@ class CloudService(
             val sentID = readJSON(last, 64 * 1024).getJSONObject("reference").getString("id")
             val observed = HashSet<String>()
             val required = directory.listFiles().orEmpty().mapNotNull {
-                val matched = Regex("^(?:accepted|sent)-([a-f0-9-]{36})\.json$").matchEntire(it.name)
+                val matched = Regex("^(?:accepted|sent)-([a-f0-9-]{36})[.]json$").matchEntire(it.name)
                 matched?.groupValues?.get(1)
             }.toSet() + sentID
             var imported = 0
