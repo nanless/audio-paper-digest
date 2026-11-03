@@ -189,16 +189,27 @@ class SharedReaderSurfacePrimitiveTests(unittest.TestCase):
     def test_four_file_record_builder_rejects_bad_bytes_and_incomplete_names(self):
         root = Path('static/data/papers/2026-09-04/test')
         files = {root / name: b'{}\n' for name in publisher.RESEARCHER_SIDECAR_FILENAMES}
+        context_file = root / 'rethink-context.json'
+        files[context_file] = (json.dumps(
+            publisher._context_header(publisher.LEGACY_RESEARCH_CONTEXT_CONTRACT)) + '\n').encode('utf-8')
         before = copy.deepcopy(files)
-        legacy = publisher._workbench_sidecar_records(files, context_contract=publisher.LEGACY_RESEARCH_CONTEXT_CONTRACT)
+        legacy = publisher._workbench_sidecar_records(files, expected_context_header=publisher._context_header(publisher.LEGACY_RESEARCH_CONTEXT_CONTRACT))
         self.assertNotIn('contract', legacy['rethink-context.json'])
+        current = {**files, context_file: (json.dumps(
+            publisher._context_header(publisher.RESEARCH_CONTEXT_CONTRACT)) + '\n').encode('utf-8')}
+        publisher._workbench_sidecar_records(current, expected_context_header=publisher._context_header(publisher.RESEARCH_CONTEXT_CONTRACT))
+        original_explicit = publisher.public_protocols.historical_header(
+            'paper-research-context', 'explicit-source-abstract', None)
+        for different in (original_explicit, publisher._context_header(publisher.RESEARCH_CONTEXT_CONTRACT)):
+            with self.assertRaisesRegex(ValueError, '原格式头'):
+                publisher._workbench_sidecar_records(files, expected_context_header=different)
         for bad in (b'', b'{}', b'{}\r\n', b'\xff\n', b'x' * publisher.RESEARCHER_SIDECAR_MAX_BYTES + b'\n'):
-            broken = dict(files); broken[root / 'citation.json'] = bad
+            broken = dict(current); broken[root / 'citation.json'] = bad
             with self.subTest(raw=bad[:10]), self.assertRaises(ValueError):
-                publisher._workbench_sidecar_records(broken, context_contract=publisher.RESEARCH_CONTEXT_CONTRACT)
-        broken = dict(files); broken.pop(root / 'citation.bib')
+                publisher._workbench_sidecar_records(broken, expected_context_header=publisher._context_header(publisher.RESEARCH_CONTEXT_CONTRACT))
+        broken = dict(current); broken.pop(root / 'citation.bib')
         with self.assertRaises(ValueError):
-            publisher._workbench_sidecar_records(broken, context_contract=publisher.RESEARCH_CONTEXT_CONTRACT)
+            publisher._workbench_sidecar_records(broken, expected_context_header=publisher._context_header(publisher.RESEARCH_CONTEXT_CONTRACT))
         self.assertEqual(files, before)
 
     def test_review_protocol_reads_shared_presentation_leaf_and_changes_with_its_bytes(self):
@@ -215,8 +226,8 @@ class SharedReaderSurfacePrimitiveTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as directory:
                 isolated = Path(directory) / 'scripts'
                 for source in paths:
-                    if source.is_relative_to(scripts):
-                        target = isolated / source.relative_to(scripts)
+                    if source.is_relative_to(scripts.parent):
+                        target = isolated.parent / source.relative_to(scripts.parent)
                         target.parent.mkdir(parents=True, exist_ok=True)
                         target.write_bytes(source.read_bytes())
                 with mock.patch.object(publisher, '__file__', str(isolated / 'publish-to-blog.py')):

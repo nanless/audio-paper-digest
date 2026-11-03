@@ -18,6 +18,15 @@ SPEC.loader.exec_module(generator)
 FIXTURE = json.loads((ROOT / 'tests/fixtures/workbench/client-protocol-history.json').read_text())
 
 
+def copy_generator_inputs(root):
+    protocols = root / 'config/protocols'
+    protocols.mkdir(parents=True)
+    (root / 'apps').mkdir()
+    for catalog in (ROOT / 'config/protocols').glob('clients*.json'):
+        shutil.copyfile(catalog, protocols / catalog.name)
+    shutil.copyfile(ROOT / 'apps/public-protocol-api.js', root / 'apps/public-protocol-api.js')
+
+
 class ClientProtocolGenerationTest(unittest.TestCase):
     def test_complete_historical_schema_is_required_and_sha_bound(self):
         codec = Codec([FIXTURE['catalog']])
@@ -44,9 +53,8 @@ class ClientProtocolGenerationTest(unittest.TestCase):
 
     def test_private_native_catalog_changes_do_not_rewrite_frozen_public_registry(self):
         with tempfile.TemporaryDirectory(prefix='client-public-private-formats-') as temporary:
-            root=Path(temporary);(root/'config/protocols').mkdir(parents=True);(root/'apps').mkdir()
-            shutil.copyfile(ROOT/'config/protocols/clients.json',root/'config/protocols/clients.json')
-            shutil.copyfile(ROOT/'apps/public-protocol-api.js',root/'apps/public-protocol-api.js')
+            root=Path(temporary)
+            copy_generator_inputs(root)
             blog=root/'blog';prior_root=generator.ROOT
             try:
                 generator.ROOT=root;before=generator.rendered_sources(blog)
@@ -68,12 +76,8 @@ class ClientProtocolGenerationTest(unittest.TestCase):
     def test_actual_swift_reader_selects_both_complete_schemas_without_changing_old_header(self):
         with tempfile.TemporaryDirectory(prefix='client-protocol-history-') as temporary:
             root = Path(temporary)
-            (root / 'config/protocols').mkdir(parents=True)
-            (root / 'apps').mkdir()
-            actual = json.loads((ROOT / 'config/protocols/clients.json').read_text())
-            actual['protocols'].extend(FIXTURE['catalog']['protocols'])
-            (root / 'config/protocols/clients.json').write_text(json.dumps(actual))
-            shutil.copyfile(ROOT / 'apps/public-protocol-api.js', root / 'apps/public-protocol-api.js')
+            copy_generator_inputs(root)
+            (root / 'config/protocols/clients-history-fixture.json').write_text(json.dumps(FIXTURE['catalog']))
             prior_root = generator.ROOT
             try:
                 generator.ROOT = root

@@ -4068,7 +4068,7 @@ def _serialize_verified_workbench_sidecars(*, original_title, authors, citation_
     }
 
 
-def _workbench_sidecar_records(sidecars, *, context_contract):
+def _workbench_sidecar_records(sidecars, *, expected_context_header):
     """Validate and describe the same four serialized files for both identities."""
     if len(sidecars) != len(RESEARCHER_SIDECAR_FILENAMES) or {
             relative.name for relative in sidecars} != set(RESEARCHER_SIDECAR_FILENAMES):
@@ -4085,13 +4085,15 @@ def _workbench_sidecar_records(sidecars, *, context_contract):
         records[relative.name] = {'url': _researcher_public_url(relative),
                                   'sha256': hashlib.sha256(raw).hexdigest()}
     context_bytes = next(raw for relative,raw in sidecars.items() if relative.name == 'rethink-context.json')
-    context_header = json.loads(context_bytes.decode('utf-8'))
-    if not public_protocols.has_valid_header(context_header,'paper-research-context'):
+    context = json.loads(context_bytes.decode('utf-8'))
+    family = 'paper-research-context'
+    if not public_protocols.has_valid_header(context, family):
         raise PublishDataValidationError('上下文附属文件的原格式头或结构指纹不符。')
-    if public_protocols.format(context_contract,'paper-research-context',context_header.get('schemaFingerprint')) != 'legacy-inline-abstract':
-        records['rethink-context.json']['contract'] = context_contract
-        if 'schemaFingerprint' in context_header:
-            records['rethink-context.json']['schemaFingerprint'] = context_header['schemaFingerprint']
+    context_header = public_protocols.record_header(context['contract'], family, context.get('schemaFingerprint'))
+    if context_header != expected_context_header:
+        raise PublishDataValidationError('上下文附属文件的原格式头或结构指纹不符。')
+    if public_protocols.format(context['contract'], family, context.get('schemaFingerprint')) != 'legacy-inline-abstract':
+        records['rethink-context.json'].update(context_header)
     return records
 
 
@@ -4210,7 +4212,7 @@ def build_researcher_workbench_bundle(
         original_title=original_title, authors=authors, citation_id=citation_id,
         identity=identity, citation=citation, context=context, root=root,
     )
-    sidecar_records = _workbench_sidecar_records(sidecars, context_contract=context_contract)
+    sidecar_records = _workbench_sidecar_records(sidecars, expected_context_header=context_header)
     return {
         **_workbench_header_for_context(context_contract,context_schema_fingerprint),
         'readerTitle': reader_title,
@@ -4338,7 +4340,7 @@ def build_verified_conference_workbench_bundle(paper, date_str, *, paper_id,
     sidecars = _serialize_verified_workbench_sidecars(
         original_title=original_title, authors=clean_authors, citation_id=paper_id,
         identity=identity, citation=citation, context=context, root=root, source_kind='conference')
-    sidecar_records = _workbench_sidecar_records(sidecars, context_contract=context_contract)
+    sidecar_records = _workbench_sidecar_records(sidecars, expected_context_header=context_header)
     return {**_workbench_header_for_context(context_contract,context_schema_fingerprint), 'readerTitle': reader_title,
             'originalTitle': original_title, 'oneSentenceThesis': one_sentence,
             'abstractSha256': abstract_sha, 'identity': identity, 'authors': clean_authors,

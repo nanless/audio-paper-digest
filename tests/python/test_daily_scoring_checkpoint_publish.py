@@ -110,7 +110,8 @@ class DailyScoringCheckpointPublishTest(unittest.TestCase):
                 original = filename.read_bytes()
                 change(payload['papers'][0])
                 data.write_text(json.dumps(payload))
-                with self.assertRaisesRegex(PublishDataValidationError, '评分私有保存稿'):
+                rejection = '缺少精确 daily sealed fresh provenance' if index == 1 else '评分私有保存稿'
+                with self.assertRaisesRegex(PublishDataValidationError, rejection):
                     publisher.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
                 self.assertEqual(filename.read_bytes(), original)
 

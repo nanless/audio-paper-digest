@@ -86,7 +86,8 @@ class PdfLayoutExtractTest(unittest.TestCase):
             self.assertEqual(result["text"].count(PAGE_SEPARATOR), 2)
 
             audit = result["visualAudit"]
-            self.assertEqual(audit["contract"], "conference-pdf-visual-audit-v1")
+            from protocol_codec import is_current_header
+            self.assertTrue(is_current_header(audit, "conference-pdf-visual-audit"))
             self.assertEqual(len(audit["pages"]), 2)
             for page in audit["pages"]:
                 self.assertNotIn("pngBase64", page)
