@@ -168,9 +168,12 @@ function applyFetchSourceIntegrity(entry) {
     return entry;
 }
 
+const { declaresBoundedFetchSource, hasBoundedFetchSource, hasFetchCoverageStrategy, sourceArtifactFields,
+    sourceFieldsForBoundary, sourceHeaderForBoundary, isRecoveryContinuity } = require('./lib/daily-fetch-format');
+
 function getFetchSourcesSha256(checkpoint) {
     return stableContentSha256({
-        ...(checkpoint?.sourceContractVersion === 7 ? { fetchBoundary: checkpoint.fetchBoundary,
+        ...(hasBoundedFetchSource(checkpoint) ? { fetchBoundary: checkpoint.fetchBoundary,
             providers: Object.fromEntries(Object.entries(checkpoint.arxiv || {}).map(([id, entry]) => [id, entry?.health?.provider])),
             huggingfaceProvider: checkpoint.huggingface?.health?.provider } : {}),
         arxiv: Object.fromEntries(Object.entries(checkpoint?.arxiv || {}).sort(([a], [b]) => a.localeCompare(b))
@@ -231,14 +234,14 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false, expected
 
 function resolvePinnedFetchBoundary(blogRepo, now, checkpoint = null, publishedIds = null, options = {}) {
     const current = resolveDailyFetchBoundary(blogRepo, { ...options, until: new Date(now).toISOString() });
-    if (checkpoint?.sourceContractVersion !== 7 || !checkpoint.fetchBoundary) return current;
+    if (!hasBoundedFetchSource(checkpoint) || !checkpoint.fetchBoundary) return current;
     try { validateDailyFetchBoundary(checkpoint.fetchBoundary); } catch { return current; }
     const until = checkpoint.fetchBoundary.until;
     if (!Number.isFinite(Date.parse(until)) || Date.parse(until) > Date.parse(now)
             || getBeijingDateStringForInstant(until) !== getBeijingDateStringForInstant(now)
             || checkpoint.batchDate !== getBeijingDateStringForInstant(now)
             || Date.parse(checkpoint.batchStartedAt) !== Date.parse(until)) return current;
-    const pinned = resolveDailyFetchBoundary(blogRepo, { ...options, until });
+    const pinned = resolveDailyFetchBoundary(blogRepo, { ...options, until, replayBoundary: checkpoint.fetchBoundary });
     const published = publishedIds || readCommittedPublishedPaperIds(blogRepo);
     const expected = buildCandidateFingerprints(published, published, pinned);
     if (stableContentSha256(pinned) !== stableContentSha256(checkpoint.fetchBoundary)
@@ -246,7 +249,7 @@ function resolvePinnedFetchBoundary(blogRepo, now, checkpoint = null, publishedI
             || checkpoint.sourceConfigFingerprint !== expected.sourceConfigFingerprint
             || checkpoint.candidateFingerprint !== expected.candidateFingerprint
             || checkpoint.blogDedupFingerprint !== expected.blogDedupFingerprint
-            || checkpoint.coverageStrategy !== 'previous-digest-window-v1'
+            || !hasFetchCoverageStrategy(checkpoint)
             || checkpoint.pageSize !== DAILY_ARXIV_API_PAGE_SIZE
             || stableContentSha256(checkpoint.historicalDedupIds) !== stableContentSha256([...published].sort())) return current;
     return pinned;
@@ -254,7 +257,7 @@ function resolvePinnedFetchBoundary(blogRepo, now, checkpoint = null, publishedI
 
 function verifyPreviousFetchWitnessArchive(boundary) {
     if (!boundary.continuity) return true;
-    if (boundary.continuity.contract === 'daily-fetch-continuity-recovery-v1') {
+    if (isRecoveryContinuity(boundary.continuity)) {
         require('./lib/daily-fetch-witness-recovery').verifyBoundary(boundary);
         return true;
     }
@@ -282,9 +285,8 @@ function getBeijingDateStringForInstant(value) {
 function getSourceConfigFingerprint(fetchBoundary) {
     return stableHash({
         // v7：抓取必须覆盖上次日更至本批开始的范围；旧数量上限缓存不能证明补更完整。
-        sourceContractVersion: 7,
+        ...sourceFieldsForBoundary(fetchBoundary),
         fetchBoundary,
-        coverageStrategy: 'previous-digest-window-v1',
         arxivCategories: Config.ARXIV_CATEGORIES.map(({ id, priority }) => ({ id, priority })),
         arxiv: {
             explicitPageSize: DAILY_ARXIV_API_PAGE_SIZE,
@@ -306,7 +308,7 @@ function buildCandidateFingerprints(historicalExistingIds, publishedIds, fetchBo
     const blogDedupFingerprint = stableHash(Array.from(publishedIds || []).sort());
     const historyFingerprint = stableHash(Array.from(historicalExistingIds || []).sort());
     return {
-        ...(fetchBoundary ? { sourceContractVersion: 7, coverageStrategy: 'previous-digest-window-v1', pageSize: DAILY_ARXIV_API_PAGE_SIZE, fetchBoundary } : {}),
+        ...(fetchBoundary ? { ...sourceFieldsForBoundary(fetchBoundary), pageSize: DAILY_ARXIV_API_PAGE_SIZE, fetchBoundary } : {}),
         sourceConfigFingerprint,
         blogDedupFingerprint,
         candidateFingerprint: stableHash({ sourceConfigFingerprint, blogDedupFingerprint, historyFingerprint })
@@ -345,17 +347,20 @@ function loadFetchCheckpoint(today, candidateFingerprint, filePath = FETCH_CHECK
 }
 
 function saveFetchCheckpoint(checkpoint, filePath = FETCH_CHECKPOINT_FILE) {
-    if (checkpoint.sourceContractVersion === 7 && fs.existsSync(filePath)) {
+    if (hasBoundedFetchSource(checkpoint) && fs.existsSync(filePath)) {
         const previousBytes = fs.readFileSync(filePath);
         let previous;
         try { previous = JSON.parse(previousBytes); } catch { previous = null; }
-        if (previous?.sourceContractVersion !== 7) {
+        if (!hasBoundedFetchSource(previous)
+            || previous.fetchSourceFormat?.schemaFingerprint !== checkpoint.fetchSourceFormat?.schemaFingerprint) {
             const sha = crypto.createHash('sha256').update(previousBytes).digest('hex');
-            const preserved = path.join(path.dirname(filePath), `${path.basename(filePath, '.json')}-before-v7-${sha}.json`);
+            const preserved = path.join(path.dirname(filePath), `${path.basename(filePath, '.json')}-before-window-source-${sha}.json`);
             if (fs.existsSync(preserved)) {
                 if (!fs.readFileSync(preserved).equals(previousBytes)) throw new Error('旧抓取检查点的保留文件内容不符，停止写入新范围');
             } else writeFileAtomic(preserved, previousBytes);
-            if (!fs.readFileSync(preserved).equals(previousBytes)) throw new Error('旧抓取检查点保留后字节不符，停止写入新范围');
+            if (!fs.readFileSync(preserved).equals(previousBytes) || !fs.readFileSync(filePath).equals(previousBytes)) {
+                throw new Error('旧抓取检查点保留后字节不符，停止写入新范围');
+            }
         }
     }
     for (const entry of Object.values(checkpoint.arxiv || {})) applyFetchSourceIntegrity(entry);
@@ -369,27 +374,28 @@ function saveFetchCheckpoint(checkpoint, filePath = FETCH_CHECKPOINT_FILE) {
 
 function hasCompleteSourceHealth(sourceHealth, expectedCategoryIds = Config.ARXIV_CATEGORIES.map(c => c.id)) {
     const categories = sourceHealth?.arxiv?.categories;
-    if (!Array.isArray(categories)) return false;
+    if (!Array.isArray(categories) || (declaresBoundedFetchSource(sourceHealth) && !hasBoundedFetchSource(sourceHealth))) return false;
     const byId = new Map(categories.map(item => [item?.id, item]));
     if (byId.size !== expectedCategoryIds.length) return false;
     if (expectedCategoryIds.some(id => byId.get(id)?.ok !== true)) return false;
-    if (sourceHealth.sourceContractVersion === 7 && (expectedCategoryIds.some(id => !hasCoveredFetchBoundary(byId.get(id), sourceHealth.fetchBoundary, false, undefined, id))
+    if (hasBoundedFetchSource(sourceHealth) && (expectedCategoryIds.some(id => !hasCoveredFetchBoundary(byId.get(id), sourceHealth.fetchBoundary, false, undefined, id))
             || !hasCoveredFetchBoundary(sourceHealth.huggingface, sourceHealth.fetchBoundary, true))) return false;
     return sourceHealth?.huggingface?.ok === true;
 }
 
 function hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds = Config.ARXIV_CATEGORIES.map(c => c.id)) {
     return Boolean(checkpoint)
-        && (checkpoint.sourceContractVersion !== 7 || (checkpoint.coverageStrategy === 'previous-digest-window-v1'
+        && (!declaresBoundedFetchSource(checkpoint) || hasBoundedFetchSource(checkpoint))
+        && (!hasBoundedFetchSource(checkpoint) || (hasFetchCoverageStrategy(checkpoint)
             && checkpoint.pageSize === DAILY_ARXIV_API_PAGE_SIZE && Array.isArray(checkpoint.historicalDedupIds)))
         && expectedCategoryIds.every(id => checkpoint.arxiv?.[id]?.status === 'complete'
             && checkpoint.arxiv[id].health?.ok === true
-            && (checkpoint.sourceContractVersion !== 7 || hasCoveredFetchBoundary(checkpoint.arxiv[id].health, checkpoint.fetchBoundary, false,
+            && (!hasBoundedFetchSource(checkpoint) || hasCoveredFetchBoundary(checkpoint.arxiv[id].health, checkpoint.fetchBoundary, false,
                 checkpoint.arxiv[id].papers, id, checkpoint.historicalDedupIds))
             && hasValidFetchSourceIntegrity(checkpoint.arxiv[id]))
         && checkpoint.huggingface?.status === 'complete'
         && checkpoint.huggingface.health?.ok === true
-        && (checkpoint.sourceContractVersion !== 7 || hasCoveredFetchBoundary(checkpoint.huggingface.health, checkpoint.fetchBoundary, true))
+        && (!hasBoundedFetchSource(checkpoint) || hasCoveredFetchBoundary(checkpoint.huggingface.health, checkpoint.fetchBoundary, true))
         && hasValidFetchSourceIntegrity(checkpoint.huggingface)
         && checkpoint.fetchSourcesSha256 === getFetchSourcesSha256(checkpoint);
 }
@@ -400,7 +406,7 @@ function hasCrossProcessReusableFetchCheckpoint(
 ) {
     return hasCompleteFetchCheckpoint(checkpoint, expectedCategoryIds)
         && expectedCategoryIds.every(id => isReusableArxivCheckpoint(checkpoint.arxiv?.[id],
-            checkpoint.sourceContractVersion === 7 ? checkpoint.fetchBoundary : null, id, checkpoint.historicalDedupIds));
+            hasBoundedFetchSource(checkpoint) ? checkpoint.fetchBoundary : null, id, checkpoint.historicalDedupIds));
 }
 
 function isDefinitiveFilterDecision(decision) {
@@ -468,9 +474,9 @@ function loadResumableFilterForToday(today, expected = {}, files = {}) {
     let decisionsData = loadTodayJsonFile(decisionsFile, today);
     if (!rawCandidates || !Array.isArray(rawCandidates.papers)) return null;
     if (rawCandidates.rawPapersSha256 !== stableContentSha256(rawCandidates.papers)) return null;
-    if (expected.sourceContractVersion === 7 && (rawCandidates.sourceContractVersion !== 7
+    if (hasBoundedFetchSource(expected) && (!hasBoundedFetchSource(rawCandidates)
             || stableContentSha256(rawCandidates.fetchBoundary) !== stableContentSha256(expected.fetchBoundary)
-            || rawCandidates.sourceHealth?.sourceContractVersion !== 7
+            || !hasBoundedFetchSource(rawCandidates.sourceHealth)
             || stableContentSha256(rawCandidates.sourceHealth.fetchBoundary) !== stableContentSha256(expected.fetchBoundary))) return null;
     for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
         if (expected[key] !== undefined && rawCandidates[key] !== expected[key]) return null;
@@ -527,8 +533,8 @@ function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = nu
         return false;
     }
     if (!checkpoint || !hasCrossProcessReusableFetchCheckpoint(checkpoint)) return false;
-    if (checkpoint.sourceContractVersion === 7 && [filteredData, decisionsData, rawCandidates].some(data =>
-        data?.sourceContractVersion !== 7 || data.coverageStrategy !== checkpoint.coverageStrategy
+    if (hasBoundedFetchSource(checkpoint) && [filteredData, decisionsData, rawCandidates].some(data =>
+        !hasBoundedFetchSource(data) || data.coverageStrategy !== checkpoint.coverageStrategy
         || data.pageSize !== checkpoint.pageSize || stableContentSha256(data.fetchBoundary) !== stableContentSha256(checkpoint.fetchBoundary))) return false;
     const batchDates = [
         checkpoint.batchDate,
@@ -843,7 +849,7 @@ function writeFilterArtifacts({
         filterConfigFingerprint: stats.filterConfigFingerprint,
         candidateFingerprint: stats.candidateFingerprint,
         sourceConfigFingerprint: stats.sourceConfigFingerprint,
-        ...(stats.sourceContractVersion === 7 ? { sourceContractVersion: 7, coverageStrategy: stats.coverageStrategy, pageSize: stats.pageSize, fetchBoundary: stats.fetchBoundary } : {}),
+        ...sourceArtifactFields(stats),
         blogDedupFingerprint: stats.blogDedupFingerprint,
         batchDate: stats.batchDate,
         batchId: stats.batchId,
@@ -871,7 +877,7 @@ function writeFilterArtifacts({
         filterConfigFingerprint: stats.filterConfigFingerprint,
         candidateFingerprint: stats.candidateFingerprint,
         sourceConfigFingerprint: stats.sourceConfigFingerprint,
-        ...(stats.sourceContractVersion === 7 ? { sourceContractVersion: 7, coverageStrategy: stats.coverageStrategy, pageSize: stats.pageSize, fetchBoundary: stats.fetchBoundary } : {}),
+        ...sourceArtifactFields(stats),
         blogDedupFingerprint: stats.blogDedupFingerprint,
         batchDate: stats.batchDate,
         batchId: stats.batchId,
@@ -951,7 +957,7 @@ async function resumeFilterStage({
         throw new Error(`缓存候选的抓取来源不完整，禁止进入分析: ${getSourceFailures(sourceHealth).join('; ')}`);
     }
 
-    const archiveAnalyzedIds = baseFilterStats.sourceContractVersion === 7 ? new Set() : loadAnalyzedIdsFromArchive();
+    const archiveAnalyzedIds = hasBoundedFetchSource(baseFilterStats) ? new Set() : loadAnalyzedIdsFromArchive();
     const filteredNew = filtered.filter(paper => {
         const nid = normalizedId(paper);
         return !(archiveAnalyzedIds.has(nid) && paper.sources?.includes('huggingface'));
@@ -982,7 +988,7 @@ async function resumeFilterStage({
         filterConfigFingerprint: baseFilterStats.filterConfigFingerprint,
         candidateFingerprint: baseFilterStats.candidateFingerprint,
         sourceConfigFingerprint: baseFilterStats.sourceConfigFingerprint,
-        ...(baseFilterStats.sourceContractVersion === 7 ? { sourceContractVersion: 7, coverageStrategy: baseFilterStats.coverageStrategy, pageSize: baseFilterStats.pageSize, fetchBoundary: baseFilterStats.fetchBoundary } : {}),
+        ...sourceArtifactFields(baseFilterStats),
         blogDedupFingerprint: baseFilterStats.blogDedupFingerprint,
         stats: {
             ...baseFilterStats,
@@ -1394,8 +1400,8 @@ function prepareExplicitRefilter(today, expected, request) {
     for (const key of ['batchDate', 'batchId', 'rawPapersSha256', 'fetchSourcesSha256']) {
         if (original[key] !== raw[key]) throw new Error(`指定论文复筛的原决策 ${key} 不匹配；未请求模型`);
     }
-    for (const key of ['sourceContractVersion', 'coverageStrategy', 'pageSize']) {
-        if (original[key] !== raw[key]) throw new Error(`指定论文复筛的原决策 ${key} 不匹配；未请求模型`);
+    for (const key of ['sourceContractVersion', 'fetchSourceFormat', 'coverageStrategy', 'pageSize']) {
+        if (stableContentSha256(original[key] ?? null) !== stableContentSha256(raw[key] ?? null)) throw new Error(`指定论文复筛的原决策 ${key} 不匹配；未请求模型`);
     }
     if (raw.batchDate !== today || stableContentSha256(original.fetchBoundary) !== stableContentSha256(raw.fetchBoundary)) {
         throw new Error('指定论文复筛的日期或来源时间范围不匹配；未请求模型');
@@ -1581,7 +1587,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     let blogSkippedCount = 0;
     let skippedCount = 0;
     let sourceHealth = {
-        sourceContractVersion: 7,
+        ...sourceHeaderForBoundary(fetchBoundary),
         fetchBoundary,
         arxiv: { categories: [] },
         huggingface: {}
@@ -2050,7 +2056,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
 
         // ========== 第四步半：跳过已在归档中分析过的论文 ==========
         // 新补更流程不能把曾分析成功但尚未发布的论文排除。旧流程读取保持兼容。
-        const archiveAnalyzedIds = candidateFingerprints.sourceContractVersion === 7 ? new Set() : loadAnalyzedIdsFromArchive();
+        const archiveAnalyzedIds = hasBoundedFetchSource(candidateFingerprints) ? new Set() : loadAnalyzedIdsFromArchive();
         const beforeArchiveSkip = filtered.length;
         filteredNew = filtered.filter(paper => {
             const nid = normalizedId(paper);

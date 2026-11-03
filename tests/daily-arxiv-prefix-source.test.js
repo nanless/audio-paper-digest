@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { fetchCategoryPrefix, fetchDailyArxivCategory, hasVerifiedCategoryPrefix, hasEligibleOaiTrigger } = require('../scripts/lib/daily-arxiv-prefix-source');
-const boundary = { since: '2026-10-15T12:00:00.000Z', until: '2026-10-19T02:00:00.000Z',
+const boundary = { contract: 'daily-fetch-boundary-v1', since: '2026-10-15T12:00:00.000Z', until: '2026-10-19T02:00:00.000Z',
     identitySha256: 'a'.repeat(64), continuity: { required: true, witnesses: { arxiv: [
         { categoryId: 'eess.AS', status: 'expected', arxivId: '2610.00003', published: '2026-10-15T12:00:00Z' }
     ] } } };

@@ -55,7 +55,7 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 
 准备命令持有与日更相同的运行锁，只读取真实博客 Git 对象与已有来源，创建 `data/runtime/daily-fetch-witness-recoveries/<UUID>/` 中不可覆盖的私有材料；不抓取、不调用模型。它复用更早批次的原五文件完整资格，并核对新旧两批原生成清单、审查凭证、发布单父提交与精确差异、远端基线内的完整页面和引用集合。最新日批已有归档时直接拒绝，不能用旧窗口掩盖损坏归档。当前正式论文除派生 `parsed` 外有变化也拒绝。
 
-独立合同为 `daily-fetch-continuity-recovery-v1`：`lastDigestDate` 和去重仍属于最新正式发布，`sourceCheckpointDate` 单列真实较早来源日期。原精确起点取较早完整窗口的真实结束时间，实际起点进一步覆盖其各源旧见证；HuggingFace 没有旧精选时也以来源日期作为截止日。恢复引用、封存原字节 SHA/大小和实际发布基线全部进入生产边界身份，原 v1 路线不变。
+独立恢复使用 `daily-fetch-continuity-recovery` 及其结构指纹。`lastDigestDate` 和去重仍属于最新正式发布，`sourceCheckpointDate` 单列真实较早来源日期。原精确起点取较早完整窗口的真实结束时间，实际起点进一步覆盖其各源旧见证；HuggingFace 没有旧精选时也以来源日期作为截止日。恢复引用、封存原字节 SHA/大小和实际发布基线全部进入生产边界身份，普通续抓和已有旧格式恢复仍按各自原记录核验。
 
 准备之后，实际启动归档前还要再次检查。程序持有同一运行锁，比较登记时的材料与此时实际文件是否一致（CAS），然后创建与本次边界 SHA 绑定、不能覆盖的激活记录。材料已经变化时停止，不能覆盖新文件继续。
 
@@ -63,7 +63,7 @@ npm run digest:prepare -- YYYY-MM-DD --fetch-witness-recovery-manifest ABSOLUTE_
 
 重新启动后核验时，程序直接重读私有封存的全部材料，重新执行原检查，不依赖 `current` 或原日期归档仍存在。这就是本页所说的冷核。下一日核验已发布的恢复批次时，也要重放这条来源及激活链。私有材料变化、符号链接、额外成员或权限变化均拒绝，不缓存通过结论。
 
-执行者明确启用 `requirePreviouslyFetched: true` 时，边界仍先核验上一正式发布的五份文件证明，再从原抓取检查点为七类 arXiv 分别选取提交时间最新的已获取 ID，为 HuggingFace 精选选取真实 `hfSelectedAt` 最新的已获取 ID。同一时间的候选按规范化 ID 排序确定见证，避免续跑身份漂移。该模式没有完整的旧 v7 证明时直接失败，不能从页面编号、库内记录或月首猜测以前获取过哪些论文。
+执行者明确启用 `requirePreviouslyFetched: true` 时，边界仍先核验上一正式发布的五份文件证明，再从原抓取检查点为七类 arXiv 分别选取提交时间最新的已获取 ID，为 HuggingFace 精选选取真实 `hfSelectedAt` 最新的已获取 ID。同一时间的候选按规范化 ID 排序确定见证，避免续跑身份漂移。该模式没有上一批完整的抓取证明时直接失败，不能从页面编号、库内记录或月首猜测以前获取过哪些论文。
 
 新增 `boundary.continuity` 使用 `daily-fetch-continuity-v1`，记录 `required: true`、原精确起点 `originalSince`、旧检查点整个文件的 `archiveCheckpointSha256`、各来源的期望见证及 `overlapCutoffDate`，共同纳入原有边界身份 SHA。实际 `since` 取原起点、七类见证提交时间所在分钟、旧精选入选日北京时间零点中的最早时刻；HuggingFace 以单独的重叠截止日补抓。`lastDigestDate` 继续表示原正式发布日期，不能为了扩展范围改写它。普通模式的原有边界和身份计算保持兼容。
 

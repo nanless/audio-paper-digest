@@ -8,9 +8,12 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { readRegular, writeExact, strictJson } = require('./publication-file-primitives');
-const CONTRACT = 'daily-fetch-witness-recovery-v1';
-const CONTINUITY = 'daily-fetch-continuity-recovery-v1';
-const ACTIVATION = 'daily-fetch-witness-recovery-activation-v1';
+const CONTRACT = 'daily-fetch-witness-recovery';
+const REFERENCE = 'daily-fetch-witness-recovery-reference';
+const codec = require('./protocol-codec');
+const { BOUNDARY, RECOVERY_CONTINUITY: CONTINUITY, readHeader, isRecoveryContinuity,
+    hasBoundedFetchSource } = require('./daily-fetch-format');
+const ACTIVATION = 'daily-fetch-witness-recovery-activation';
 const SHA = /^[a-f0-9]{64}$/, OID = /^[a-f0-9]{40}$/;
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const stable = value => require('./daily-fetch-boundary').stableSha(value);
@@ -160,14 +163,17 @@ function verifyLostInput(manifest, canonicalRecord, dataRoot, latestDate) {
     }
 }
 function readManifest(reference) {
-    if (!keys(reference, ['contract', 'manifestPath', 'manifestSha256', 'manifestBytes']) || reference.contract !== CONTRACT
+    const referenceHeader = readHeader(reference, REFERENCE);
+    if (!keys(reference, [...Object.keys(referenceHeader), 'manifestPath', 'manifestSha256', 'manifestBytes'])
         || !path.isAbsolute(reference.manifestPath || '') || /[\x00-\x1f\x7f]/.test(reference.manifestPath || '') || !SHA.test(reference.manifestSha256 || '')
         || !Number.isSafeInteger(reference.manifestBytes) || reference.manifestBytes < 1) fail('恢复引用非法');
     const original = read(reference.manifestPath), m = original.value;
     if (original.sha256 !== reference.manifestSha256 || original.bytes.length !== reference.manifestBytes) fail('恢复清单原字节变化');
-    if (!keys(m, ['contract', 'version', 'runId', 'date', 'sourceCheckpointDate', 'latestDate', 'preparedAt',
+    const manifestHeader = readHeader(m, CONTRACT);
+    if (!keys(m, [...Object.keys(manifestHeader), 'runId', 'date', 'sourceCheckpointDate', 'latestDate', 'preparedAt',
         'dataRoot', 'blogRepo', 'blogHead', 'latest', 'source', 'records', 'originalInputReplay'])
-        || m.contract !== CONTRACT || m.version !== 1 || !/^[a-f0-9-]{36}$/.test(m.runId || '')
+        || Boolean(manifestHeader.schemaFingerprint) !== Boolean(referenceHeader.schemaFingerprint)
+        || !/^[a-f0-9-]{36}$/.test(m.runId || '')
         || !dateValid(m.date) || !dateValid(m.latestDate) || !dateValid(m.sourceCheckpointDate)
         || !(m.sourceCheckpointDate < m.latestDate && m.latestDate < m.date)
         || !path.isAbsolute(m.dataRoot || '') || !path.isAbsolute(m.blogRepo || '')
@@ -211,27 +217,33 @@ function replay(reference) {
     if (!prior?.until) fail('封存较早窗口未通过原五文件资格');
     return { ...state, prior, checkpointBytes: r.sourceCheckpoint.bytes };
 }
-function referenceFor(filename) { const r = read(filename); return { contract: CONTRACT, manifestPath: filename,
-    manifestSha256: r.sha256, manifestBytes: r.bytes.length }; }
-function buildContinuity(state) {
+function referenceFor(filename) {
+    const r = read(filename), manifestHeader = readHeader(r.value, CONTRACT);
+    const referenceHeader = manifestHeader.schemaFingerprint ? codec.recordHeader(REFERENCE, REFERENCE)
+        : codec.historicalHeader(REFERENCE, 'original-sealed-recovery-reference', null);
+    return { ...referenceHeader, manifestPath: filename, manifestSha256: r.sha256, manifestBytes: r.bytes.length };
+}
+function buildContinuity(state, header = codec.recordHeader(CONTINUITY, CONTINUITY)) {
     const { manifest: m, prior, reference } = state;
-    return { ...require('./daily-fetch-boundary').deriveContinuity(prior, m.sourceCheckpointDate),
-        contract: CONTINUITY, sourceCheckpointDate: m.sourceCheckpointDate, recovery: reference };
+    return { ...require('./daily-fetch-boundary').deriveContinuity(prior, m.sourceCheckpointDate, header),
+        sourceCheckpointDate: m.sourceCheckpointDate, recovery: reference };
 }
 function verifyBoundary(boundary) {
-    if (!keys(boundary, ['contract', 'lastDigestDate', 'since', 'until', 'continuity', 'provenance', 'identitySha256'])
-        || boundary.contract !== require('./daily-fetch-boundary').CONTRACT || !SHA.test(boundary.identitySha256 || '')) fail('外层生产边界身份非法');
+    const boundaryHeader = readHeader(boundary, BOUNDARY);
+    if (!keys(boundary, [...Object.keys(boundaryHeader), 'lastDigestDate', 'since', 'until', 'continuity', 'provenance', 'identitySha256'])
+        || !SHA.test(boundary.identitySha256 || '')) fail('外层生产边界身份非法');
     const { identitySha256, ...body } = boundary;
     const instant = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(v)
         && Number.isFinite(Date.parse(v)) && new Date(v).toISOString().replace('.000Z', 'Z') === v.replace('.000Z', 'Z');
     if (stable(body) !== identitySha256 || !instant(boundary.since) || !instant(boundary.until)
         || Date.parse(boundary.since) >= Date.parse(boundary.until)) fail('外层生产边界字节身份或时间非法');
     const c = boundary?.continuity;
-    if (!keys(c, ['contract', 'required', 'originalSince', 'archiveCheckpointSha256', 'witnesses', 'overlapCutoffDate',
-        'sourceCheckpointDate', 'recovery']) || c.contract !== CONTINUITY) fail('独立连续性合同非法');
+    const continuityHeader = readHeader(c, CONTINUITY);
+    if (!keys(c, [...Object.keys(continuityHeader), 'required', 'originalSince', 'archiveCheckpointSha256', 'witnesses', 'overlapCutoffDate',
+        'sourceCheckpointDate', 'recovery']) || Boolean(continuityHeader.schemaFingerprint) !== Boolean(boundaryHeader.schemaFingerprint)) fail('独立连续性合同非法');
     const state = replay(c.recovery), m = state.manifest;
     if (boundary.lastDigestDate !== m.latestDate || dateOf(boundary.until) !== m.date
-        || c.sourceCheckpointDate !== m.sourceCheckpointDate || !equal(c, buildContinuity(state))
+        || c.sourceCheckpointDate !== m.sourceCheckpointDate || !equal(c, buildContinuity(state, continuityHeader))
         || boundary.since !== require('./daily-fetch-boundary').overlapStart(c)
         || !equal(boundary.provenance, { blogHead: m.blogHead, indexPath: m.latest.indexPath,
             indexSha256: m.latest.indexSha256, papers: m.latest.papers,
@@ -242,11 +254,13 @@ function verifyBoundary(boundary) {
     }
     return state;
 }
-function resolveBoundary({ blogRepo, dataRoot, until, manifestPath, latest }) {
+function resolveBoundary({ blogRepo, dataRoot, until, manifestPath, latest, replayBoundary = null }) {
     const reference = referenceFor(manifestPath), state = replay(reference), m = state.manifest;
     if (path.resolve(blogRepo) !== m.blogRepo || path.resolve(dataRoot) !== m.dataRoot || !equal(latest, m.latest)
         || dateOf(until) !== m.date) fail('恢复清单不属于当前实际远端、目录或目标日期');
-    const c = buildContinuity(state), body = { contract: require('./daily-fetch-boundary').CONTRACT,
+    const header = replayBoundary ? readHeader(replayBoundary, BOUNDARY) : codec.recordHeader(BOUNDARY, BOUNDARY);
+    const c = buildContinuity(state, replayBoundary?.continuity ? readHeader(replayBoundary.continuity, CONTINUITY) : undefined);
+    const body = { ...header,
         lastDigestDate: m.latestDate, since: require('./daily-fetch-boundary').overlapStart(c), until, continuity: c,
         provenance: { blogHead: m.blogHead, indexPath: m.latest.indexPath, indexSha256: m.latest.indexSha256,
             papers: m.latest.papers, boundaryBasis: 'explicit-earlier-verified-fetch-overlap', recovery: reference,
@@ -256,8 +270,11 @@ function resolveBoundary({ blogRepo, dataRoot, until, manifestPath, latest }) {
     require('./daily-fetch-boundary').validateDailyFetchBoundary(result); return result;
 }
 function activationPath(state, boundary) { return path.join(state.directory, 'activations', `${boundary.identitySha256}.json`); }
-function activationValue(state, boundary) { return { contract: ACTIVATION, recoverySha256: state.reference.manifestSha256,
-    boundarySha256: boundary.identitySha256, date: state.manifest.date }; }
+function activationValue(state, boundary) {
+    const header = readHeader(boundary, BOUNDARY).schemaFingerprint
+        ? codec.recordHeader(ACTIVATION, ACTIVATION) : codec.historicalHeader(ACTIVATION, 'original-verified-recovery-activation', null);
+    return { ...header, recoverySha256: state.reference.manifestSha256, boundarySha256: boundary.identitySha256, date: state.manifest.date };
+}
 function verifyActivation(boundary) {
     const state = verifyBoundary(boundary), expected = activationValue(state, boundary);
     privateFile(activationPath(state, boundary), state.manifest.dataRoot);
@@ -265,11 +282,12 @@ function verifyActivation(boundary) {
     return state;
 }
 function activateBoundary(boundary, { blogRepo, dataRoot } = {}) {
-    if (boundary?.continuity?.contract !== CONTINUITY) return true;
+    if (!isRecoveryContinuity(boundary?.continuity)) return true;
     const state = verifyBoundary(boundary), m = state.manifest;
     if (path.resolve(blogRepo || m.blogRepo) !== m.blogRepo || path.resolve(dataRoot || m.dataRoot) !== m.dataRoot) fail('激活目录漂移');
     if (git(m.blogRepo, 'rev-parse', 'refs/remotes/origin/main').toString().trim() !== m.blogHead) fail('登记后的实际远端基线变化');
     const target = activationPath(state, boundary), expected = activationValue(state, boundary);
+    if (!expected.schemaFingerprint && !fs.existsSync(target)) fail('原格式边界必须保留既有激活记录，不能补签');
     if (!fs.existsSync(target) && fs.existsSync(path.join(m.dataRoot, 'archive', m.latestDate, 'fetch-checkpoint.json'))) {
         fail('首次激活前最新发布归档已经出现，不能以较早窗口掩盖');
     }
@@ -279,7 +297,7 @@ function activateBoundary(boundary, { blogRepo, dataRoot } = {}) {
         const cp = path.join(m.dataRoot, 'current', 'fetch-checkpoint.json');
         if (fs.existsSync(cp)) {
             const value = read(cp).value;
-            if (value.batchDate === m.date && value.sourceContractVersion === 7
+            if (value.batchDate === m.date && hasBoundedFetchSource(value)
                 && equal(value.fetchBoundary, boundary)) return true;
         }
         const current = path.join(m.dataRoot, 'current', 'deep-analysis-result.json');
@@ -331,7 +349,7 @@ async function prepare({ date, sourceCheckpointDate, blogRepo, dataRoot }) {
         const now = read(file); if (now.sha256 !== loaded[k].sha256 || now.bytes.length !== loaded[k].bytes.length) fail('封存期间原材料变化');
     }
     if (git(blogRepo, 'rev-parse', 'refs/remotes/origin/main').toString().trim() !== head) fail('封存期间远端引用变化');
-    const manifest = { contract: CONTRACT, version: 1, runId, date, sourceCheckpointDate, latestDate,
+    const manifest = { ...codec.recordHeader(CONTRACT, CONTRACT), runId, date, sourceCheckpointDate, latestDate,
         preparedAt: new Date().toISOString(), dataRoot, blogRepo, blogHead: head, latest, source, records,
         originalInputReplay: 'unavailable-original-bytes-not-restored' };
     const manifestPath = path.join(directory, 'manifest.json'); writeExact(manifestPath, encoded(manifest));

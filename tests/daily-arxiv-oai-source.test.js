@@ -9,8 +9,12 @@ const { fetchDailyOaiCategory, hasVerifiedOaiCoverage, parseOaiXml, SETS } = req
 const sort = x => Array.isArray(x) ? x.map(sort) : x && typeof x === 'object'
     ? Object.fromEntries(Object.keys(x).sort().map(k => [k, sort(x[k])])) : x;
 const sha = x => crypto.createHash('sha256').update(JSON.stringify(sort(x))).digest('hex');
-function boundary(witness = false) {
-    const b = { contract: 'daily-fetch-boundary-v1', lastDigestDate: '2026-10-19',
+const codec = require('../scripts/lib/protocol-codec');
+const { evidenceHeaderForBoundary, coverageHeaderForBoundary } = require('../scripts/lib/daily-fetch-format');
+function boundary(witness = false, current = false) {
+    const header = current ? codec.recordHeader('daily-fetch-boundary', 'daily-fetch-boundary')
+        : { contract: 'daily-fetch-boundary-v1' };
+    const b = { ...header, lastDigestDate: '2026-10-19',
         since: '2026-10-16T14:35:00.000Z', until: '2026-10-19T03:00:00.000Z' };
     if (witness) {
         b.continuity = { contract: 'daily-fetch-continuity-v1', required: true,
@@ -60,12 +64,12 @@ function setup(t, b = boundary(), transform = x => x, rows = ['2610.23539']) {
     fs.writeFileSync(rssPath, rss, { mode: 0o600, flag: 'wx' });
     const calls = [], deferrals = [];
     return { evidenceDir, calls, deferrals, announcementEvidence: {
-        contract: 'daily-arxiv-announcement-evidence-v1', categoryId: 'eess.AS', boundaryIdentity: b.identitySha256,
+        ...evidenceHeaderForBoundary(b, 'daily-arxiv-announcement-evidence'), categoryId: 'eess.AS', boundaryIdentity: b.identitySha256,
         url: 'https://rss.arxiv.org/rss/eess.AS', retrievedAt: '2026-10-20T03:00:00.000Z', filePath: rssPath,
         bytes: Buffer.byteLength(rss), sha256: rssHash
     }, triggerFailure: { categoryId: 'eess.AS', ok: false, failures: [{ error: 'HTTP 429' }],
-        provider: { boundaryIdentity: b.identitySha256, window: { since: b.since, until: b.until, covered: false, coverageContract: 'daily-arxiv-atom-prefix-coverage-v1' },
-            categoryPrefix: { contract: 'daily-arxiv-atom-prefix-coverage-v1', categoryId: 'eess.AS', boundaryIdentity: b.identitySha256,
+        provider: { boundaryIdentity: b.identitySha256, window: { since: b.since, until: b.until, covered: false, ...coverageHeaderForBoundary(b, 'daily-arxiv-atom-prefix-coverage') },
+            categoryPrefix: { ...evidenceHeaderForBoundary(b, 'daily-arxiv-atom-prefix-coverage'), categoryId: 'eess.AS', boundaryIdentity: b.identitySha256,
                 dateQueryFailure: { health: {
             categoryId: 'eess.AS', failures: [{ error: 'HTTP 429' }], provider: { boundaryIdentity: b.identitySha256,
                 window: { since: b.since, until: b.until, covered: false } } } } } } },
@@ -85,11 +89,15 @@ function setup(t, b = boundary(), transform = x => x, rows = ['2610.23539']) {
 }
 
 test('complete official-format streams use exact v1 time rather than header datestamp and cold replay actual XML', async t => {
-    const b = boundary(), opts = setup(t, b);
+    const b = boundary(false, true), opts = setup(t, b);
     const papers = await fetchDailyOaiCategory('eess.AS', b, [], opts);
     assert.equal(papers.length, 1); assert.equal(papers[0].published, '2026-10-16T14:35:04.000Z');
     assert.deepEqual(papers[0].authors, authors);
     assert.equal(papers._sourceHealth.coverageComplete, true);
+    assert.ok(papers._sourceHealth.provider.oai.schemaFingerprint);
+    const mixed = structuredClone(papers._sourceHealth);
+    mixed.provider.window.coverageSchemaFingerprint = '0'.repeat(64);
+    assert.equal(hasVerifiedOaiCoverage(mixed, b, 'eess.AS', papers), false);
     assert.equal(hasVerifiedOaiCoverage(papers._sourceHealth, b, 'eess.AS', papers), true);
     assert.equal(opts.calls.length, 4);
     for (const file of fs.readdirSync(opts.evidenceDir)) assert.equal(fs.statSync(path.join(opts.evidenceDir, file)).mode & 0o777, 0o600);

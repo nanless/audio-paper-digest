@@ -7,8 +7,10 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
-const CONTRACT = 'daily-arxiv-atom-prefix-coverage-v1';
-const OAI_CONTRACT = 'daily-arxiv-oai-coverage-v1';
+const CONTRACT = 'daily-arxiv-atom-prefix-coverage';
+const OAI_CONTRACT = 'daily-arxiv-oai-coverage';
+const OAI_CONTINUATION = 'daily-arxiv-oai-continuation';
+const { evidenceHeaderForBoundary, hasEvidenceHeader, coverageHeaderForBoundary, hasCoverageHeader } = require('./daily-fetch-format');
 const SHA256 = /^[a-f0-9]{64}$/;
 const prefixUrl = (category, start, size) => `https://export.arxiv.org/api/query?search_query=cat:${category}&sortBy=submittedDate&sortOrder=descending&start=${start}&max_results=${size}`;
 const sha = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -18,7 +20,7 @@ const sha = value => crypto.createHash('sha256').update(JSON.stringify(value)).d
 // this same check; legacy date-window providers retain their existing rules.
 function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health?.categoryId || health?.id, requireTrigger = true, expectedPapers, expectedExistingIds) {
     const provider = health?.provider, prefix = provider?.categoryPrefix;
-    if (provider?.oai || provider?.window?.coverageContract === OAI_CONTRACT) {
+    if (provider?.oai || hasCoverageHeader(provider?.window, boundary, OAI_CONTRACT)) {
         try {
             verifyOaiContinuationAnchor(health, boundary, expectedCategoryId,
                 expectedExistingIds ?? provider.oai?.existingIds);
@@ -28,11 +30,12 @@ function hasVerifiedCategoryPrefix(health, boundary, expectedCategoryId = health
             return false;
         }
     }
-    if (!prefix && provider?.window?.coverageContract === undefined) return true;
+    if (!prefix && provider?.window?.coverageContract === undefined
+        && !Object.hasOwn(provider?.window || {}, 'coverageSchemaFingerprint')) return true;
     try {
         const category = expectedCategoryId;
         const since = Date.parse(boundary.since);
-        if (provider.window.coverageContract !== CONTRACT || prefix?.contract !== CONTRACT
+        if (!hasCoverageHeader(provider.window, boundary, CONTRACT) || !hasEvidenceHeader(prefix, boundary, CONTRACT)
             || prefix.categoryId !== category || prefix.boundaryIdentity !== boundary.identitySha256
             || !Number.isFinite(since) || !Number.isSafeInteger(prefix.pageSize)
             || prefix.pageSize < 1 || prefix.pageSize > 2000 || !Array.isArray(prefix.pages)
@@ -93,12 +96,12 @@ async function fetchCategoryPrefix(categoryId, boundary, existingIds, options = 
     const request = options.requestFn || api.httpsRequestWithProxy;
     const old = new Set(Array.from(existingIds || [], normalizedId));
     const seen = new Set(), papers = [];
-    const health = { categoryId, source: 'arxiv-api-category-prefix', contract: CONTRACT,
+    const health = { categoryId, source: 'arxiv-api-category-prefix', ...evidenceHeaderForBoundary(boundary, CONTRACT),
         boundary: structuredClone(boundary), attempts: 0, successfulRequests: 0,
         failures: [], coverageComplete: false, ok: false, allFailed: false,
         provider: { boundaryIdentity: boundary.identitySha256,
-            window: { since: boundary.since, until: boundary.until, covered: false, coverageContract: CONTRACT },
-            categoryPrefix: { contract: CONTRACT, categoryId, boundaryIdentity: boundary.identitySha256,
+            window: { since: boundary.since, until: boundary.until, covered: false, ...coverageHeaderForBoundary(boundary, CONTRACT) },
+            categoryPrefix: { ...evidenceHeaderForBoundary(boundary, CONTRACT), categoryId, boundaryIdentity: boundary.identitySha256,
                 pageSize, pages: [], firstPageReplayed: false } } };
     const prefix = health.provider.categoryPrefix;
     if (witness) {
@@ -200,7 +203,7 @@ function hasEligibleOaiTrigger(health, boundary, categoryId) {
         && h.provider.window?.since === boundary.since && h.provider.window?.until === boundary.until
         && h.provider.window.covered === false;
     return health?.ok === false && sameBoundary(health) && limited(health)
-        && provider.window.coverageContract === CONTRACT && prefix?.contract === CONTRACT
+        && hasCoverageHeader(provider.window, boundary, CONTRACT) && hasEvidenceHeader(prefix, boundary, CONTRACT)
         && prefix.categoryId === categoryId && prefix.boundaryIdentity === boundary.identitySha256
         && sameBoundary(original) && limited(original);
 }
@@ -210,9 +213,9 @@ function originalOaiContinuationTrigger(health, boundary, categoryId, existingId
     const baseline = [...new Set(Array.from(existingIds || [], require('../utils').normalizedId))].sort();
     if (health?.ok !== false || !Array.isArray(health.failures) || !health.failures.length
         || health.categoryId !== categoryId || (health.id !== undefined && health.id !== categoryId)
-        || provider?.window?.coverageContract !== OAI_CONTRACT || provider.window.covered !== false
+        || !hasCoverageHeader(provider?.window, boundary, OAI_CONTRACT) || provider.window.covered !== false
         || provider.window.since !== boundary.since || provider.window.until !== boundary.until
-        || provider.boundaryIdentity !== boundary.identitySha256 || proof?.contract !== OAI_CONTRACT
+        || provider.boundaryIdentity !== boundary.identitySha256 || !hasEvidenceHeader(proof, boundary, OAI_CONTRACT)
         || proof.categoryId !== categoryId || proof.boundaryIdentity !== boundary.identitySha256
         || !isDeepStrictEqual(proof.boundary, boundary) || !isDeepStrictEqual(proof.existingIds, baseline)
         || !path.isAbsolute(proof.evidenceDir || '') || fs.realpathSync(proof.evidenceDir) !== proof.evidenceDir
@@ -276,9 +279,9 @@ function verifyOaiContinuationAnchor(health, boundary, categoryId, existingIds) 
             || stat.ctimeMs !== after.ctimeMs || bytes.length !== stat.size || named.isSymbolicLink()
             || named.dev !== stat.dev || named.ino !== stat.ino || named.nlink !== 1) throw new Error('OAI 延续锚点在读取时变化');
         const anchor = JSON.parse(bytes.toString('utf8'));
-        const expectedAnchor = { contract: 'daily-arxiv-oai-continuation-v1', categoryId,
+        const expectedAnchor = { ...evidenceHeaderForBoundary(boundary, OAI_CONTINUATION), categoryId,
             boundaryIdentity: boundary.identitySha256, previousFailure: proof.previousFailure };
-        if (anchor.contract !== 'daily-arxiv-oai-continuation-v1' || anchor.categoryId !== categoryId
+        if (!hasEvidenceHeader(anchor, boundary, OAI_CONTINUATION) || anchor.categoryId !== categoryId
             || anchor.boundaryIdentity !== boundary.identitySha256 || !anchor.previousFailure
             || !isDeepStrictEqual(anchor.previousFailure, proof.previousFailure)
             || !bytes.equals(Buffer.from(JSON.stringify(expectedAnchor, null, 2) + '\n'))) throw new Error('OAI 延续锚点与当前历史指针不符');
@@ -288,7 +291,7 @@ function verifyOaiContinuationAnchor(health, boundary, categoryId, existingIds) 
 
 function writeOaiContinuationAnchor(health, descriptor, boundary, categoryId, existingIds) {
     health.provider.oai.previousFailure = descriptor;
-    const body = { contract: 'daily-arxiv-oai-continuation-v1', categoryId,
+    const body = { ...evidenceHeaderForBoundary(boundary, OAI_CONTINUATION), categoryId,
         boundaryIdentity: boundary.identitySha256, previousFailure: descriptor };
     require('./immutable-file').writeImmutableFile(path.join(health.provider.oai.evidenceDir, 'previous-oai-failure.json'),
         Buffer.from(JSON.stringify(body, null, 2) + '\n'), message => { throw new Error(message); });
@@ -352,7 +355,7 @@ async function fetchDailyArxivCategory(categoryId, boundary, existingIds, option
     };
     const previous = options.triggerFailure;
     if (options.officialOaiRecovery === true && (previous?.provider?.oai
-        || previous?.provider?.window?.coverageContract === OAI_CONTRACT)) {
+        || hasCoverageHeader(previous?.provider?.window, boundary, OAI_CONTRACT))) {
         let continuation;
         try { continuation = archiveOaiFailure(previous, boundary, categoryId, existingIds); }
         catch (cause) {

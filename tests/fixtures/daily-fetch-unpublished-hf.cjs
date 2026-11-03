@@ -23,11 +23,14 @@ assert.equal(engine.isSuccessfulAnalysisRecord(analyzed), true);
 fs.writeFileSync(path.join(config.ARCHIVE_DIR, '2026-10-03', 'deep-analysis-result.json'), JSON.stringify({ papers: [analyzed] }));
 const provider = { boundaryIdentity: 'a'.repeat(64), window: { covered: true } };
 const sourceHealth = { arxiv: { categories: config.ARXIV_CATEGORIES.map(category => ({ id: category.id, ok: true, provider })) }, huggingface: { ok: true, provider } };
+const fetchBoundary = { contract: 'daily-fetch-boundary-v1', lastDigestDate: '2026-10-03',
+    since: '2026-10-01T00:00:00.000Z', until: '2026-10-10T14:00:00.000Z' };
+fetchBoundary.identitySha256 = api.stableContentSha256(fetchBoundary);
 async function main() {
     try {
         const result = await api.resumeFilterStage({
             allPapers: [paper], allPapersFiltered: [paper], sourceHealth,
-            baseFilterStats: { sourceContractVersion: 7, batchDate: '2026-10-10', batchStartedAt: '2026-10-10T22:00:00+08:00' },
+            baseFilterStats: { ...api.buildCandidateFingerprints(new Set(), new Set(), fetchBoundary), batchDate: '2026-10-10', batchStartedAt: '2026-10-10T22:00:00+08:00' },
             initialDecisions: { [paper.arxivId]: { related: true, inputSha256: buildFilterInputSha256(paper),
                 filterModel: 'local-test-only', filterPromptHash: 'b'.repeat(64), batchDate: '2026-10-10' } },
             filterModel: 'local-test-only', filterPromptHash: 'b'.repeat(64), today: '2026-10-10'

@@ -158,7 +158,7 @@ function validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifac
 
 function getFetchSourcesSha256(checkpoint) {
     return stableContentSha256({
-        ...(checkpoint?.sourceContractVersion === 7 ? { fetchBoundary: checkpoint.fetchBoundary,
+        ...(hasBoundedFetchSource(checkpoint) ? { fetchBoundary: checkpoint.fetchBoundary,
             providers: Object.fromEntries(Object.entries(checkpoint.arxiv || {}).map(([id, entry]) => [id, entry?.health?.provider])),
             huggingfaceProvider: checkpoint.huggingface?.health?.provider } : {}),
         arxiv: Object.fromEntries(Object.entries(checkpoint?.arxiv || {}).sort(([a], [b]) => a.localeCompare(b))
@@ -252,10 +252,15 @@ function validatePapersDatabase(filePath = Config.FILES.papers) {
     return issues;
 }
 
+const { declaresBoundedFetchSource, hasBoundedFetchSource, hasFetchCoverageStrategy } = require('./lib/daily-fetch-format');
+
 function validateSourceHealth(filePath, sourceHealth, issues) {
     if (!sourceHealth || typeof sourceHealth !== 'object') return;
     const categories = sourceHealth.arxiv?.categories;
-    if (sourceHealth.sourceContractVersion === 7) {
+    if (declaresBoundedFetchSource(sourceHealth) && !hasBoundedFetchSource(sourceHealth)) {
+        addIssue(issues, filePath, '来源健康记录的格式或结构指纹与实际抓取边界不一致');
+    }
+    if (hasBoundedFetchSource(sourceHealth)) {
         for (const category of Array.isArray(categories) ? categories : []) {
             if (category?.ok === true && !hasCoveredFetchBoundary(category, sourceHealth.fetchBoundary)) {
                 addIssue(issues, filePath, `来源 ${category.id} 未证明完整补更范围`);
@@ -291,9 +296,13 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false, expected
 }
 
 function validateFetchBoundary(filePath, data, issues) {
-    if (!isPlainObject(data) || data.sourceContractVersion !== 7) return;
+    if (!isPlainObject(data) || !declaresBoundedFetchSource(data)) return;
+    if (!hasBoundedFetchSource(data)) {
+        addIssue(issues, filePath, '补更来源格式或结构指纹与实际抓取边界不一致');
+        return;
+    }
     const boundary = data.fetchBoundary;
-    if (data.coverageStrategy !== 'previous-digest-window-v1' || data.pageSize !== 100) {
+    if (!hasFetchCoverageStrategy(data) || data.pageSize !== 100) {
         addIssue(issues, filePath, 'v7 抓取必须绑定完整补更策略和每页 100 条的分页参数');
     }
     try { require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary); } catch (error) {
@@ -1553,7 +1562,7 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     const checkpoint = readJsonSafe(fetchPath, null);
     if (!isPlainObject(checkpoint)) return issues;
     for (const [artifactPath, artifact] of artifacts) {
-        if (checkpoint.sourceContractVersion === 7 && (artifact.sourceContractVersion !== 7
+        if (hasBoundedFetchSource(checkpoint) && (!hasBoundedFetchSource(artifact)
                 || artifact.coverageStrategy !== checkpoint.coverageStrategy || artifact.pageSize !== checkpoint.pageSize
                 || stableContentSha256(artifact.fetchBoundary) !== stableContentSha256(checkpoint.fetchBoundary))) {
             addIssue(issues, artifactPath, '补更范围必须与 v7 抓取检查点完全一致');
@@ -1582,10 +1591,10 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     }
 
     const raw = artifacts.find(([filePath]) => filePath === rawPath)?.[1];
-    if (checkpoint.sourceContractVersion === 7 && !raw) {
+    if (declaresBoundedFetchSource(checkpoint) && !raw) {
         addIssue(issues, rawPath || path.join(path.dirname(fetchPath), 'raw-candidates.json'),
             'v7 抓取检查点必须有同批次原始候选 raw-candidates.json，以核验补抓范围和来源健康状态');
-    } else if (checkpoint.sourceContractVersion === 7 && (raw.sourceHealth?.sourceContractVersion !== 7
+    } else if (hasBoundedFetchSource(checkpoint) && (!hasBoundedFetchSource(raw.sourceHealth)
             || stableContentSha256(raw.sourceHealth?.fetchBoundary) !== stableContentSha256(checkpoint.fetchBoundary))) {
         addIssue(issues, rawPath, '候选来源健康状态必须绑定同一 v7 补更范围');
     }
@@ -1606,7 +1615,7 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
 function hasCompleteSourceHealthForValidation(sourceHealth) {
     const categories = sourceHealth?.arxiv?.categories;
     if (!Array.isArray(categories)) return false;
-    if (sourceHealth?.sourceContractVersion === 7 && (categories.some(category => !hasCoveredFetchBoundary(category, sourceHealth.fetchBoundary))
+    if (hasBoundedFetchSource(sourceHealth) && (categories.some(category => !hasCoveredFetchBoundary(category, sourceHealth.fetchBoundary))
             || !hasCoveredFetchBoundary(sourceHealth.huggingface, sourceHealth.fetchBoundary, true))) return false;
     const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
     const byId = new Map(categories.map(category => [category?.id, category]));

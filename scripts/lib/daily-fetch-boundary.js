@@ -6,9 +6,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const YAML = require('yaml');
-const CONTRACT = 'daily-fetch-boundary-v1';
-const CONTINUITY_CONTRACT = 'daily-fetch-continuity-v1';
-const RECOVERY_CONTINUITY_CONTRACT = 'daily-fetch-continuity-recovery-v1';
+const codec = require('./protocol-codec');
+const { BOUNDARY: CONTRACT, CONTINUITY: CONTINUITY_CONTRACT, RECOVERY_CONTINUITY: RECOVERY_CONTINUITY_CONTRACT,
+    readHeader, isRecoveryContinuity, declaresBoundedFetchSource, hasBoundedFetchSource, hasFetchCoverageStrategy } = require('./daily-fetch-format');
 const CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'];
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function strictInstant(value) {
@@ -45,12 +45,13 @@ function overlapStart(continuity) {
 }
 function validateContinuity(boundary) {
     const c = boundary.continuity;
-    if (c?.contract === RECOVERY_CONTINUITY_CONTRACT) {
+    if (isRecoveryContinuity(c)) {
         require('./daily-fetch-witness-recovery').verifyBoundary(boundary);
         return;
     }
     const fail = () => { throw new Error('日更旧获取见证与受控重叠边界不一致'); };
-    if (!c || c.contract !== CONTINUITY_CONTRACT || c.required !== true
+    if (!codec.hasValidHeader(c, CONTINUITY_CONTRACT)
+        || (c.schemaFingerprint === undefined) !== (boundary.schemaFingerprint === undefined) || c.required !== true
         || Object.hasOwn(c, 'sourceCheckpointDate') || Object.hasOwn(c, 'recovery')
         || !/^[a-f0-9]{64}$/.test(c.archiveCheckpointSha256 || '')
         || !validDate(c.overlapCutoffDate || '') || c.overlapCutoffDate > boundary.lastDigestDate) fail();
@@ -86,7 +87,7 @@ function validateContinuity(boundary) {
     if (boundary.since !== overlapStart(c)) fail();
 }
 function validateDailyFetchBoundary(boundary) {
-    if (!boundary || boundary.contract !== CONTRACT || !validDate(boundary.lastDigestDate || '')) {
+    if (!boundary || !codec.hasValidHeader(boundary, CONTRACT) || !validDate(boundary.lastDigestDate || '')) {
         throw new Error('日更抓取边界缺少有效的上一已发布批次');
     }
     strictInstant(boundary.since); strictInstant(boundary.until);
@@ -177,7 +178,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
         directory = path.join(dataRoot, 'current'); cpPath = path.join(directory, 'fetch-checkpoint.json');
         if (!fs.existsSync(cpPath)) return null;
         const current = JSON.parse(fs.readFileSync(cpPath));
-        if (current.batchDate !== date || current.sourceContractVersion !== 7) return notPublished('当前检查点不是上一已发布日期的 v7 批次');
+        if (current.batchDate !== date || !hasBoundedFetchSource(current)) return notPublished('当前检查点不是上一已发布日期的 v7 批次');
         const deepPath = path.join(directory, 'deep-analysis-result.json');
         const manifestPath = path.join(directory, `blog-generation-manifest-${date}.json`);
         if (!fs.existsSync(deepPath) || !fs.existsSync(manifestPath)) return notPublished('当前批次没有关联上一已发布页面的分析结果和生成清单');
@@ -192,7 +193,8 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
         }
     }
     const cp = JSON.parse(fs.readFileSync(cpPath));
-    if (cp.sourceContractVersion !== 7) return null;
+    if (!declaresBoundedFetchSource(cp)) return null;
+    if (!hasBoundedFetchSource(cp)) throw new Error('上一已发布抓取窗口的来源格式或结构指纹无效');
     const read = name => { const filename = name === 'deep-analysis-result.json'
         ? archivedAnalysisFile(dataRoot, directory, date) : path.join(directory, name);
         return { filename, bytes: fs.readFileSync(filename) }; };
@@ -201,7 +203,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
     const fail = () => { throw new Error('上一已发布 v7 抓取窗口的来源或发布证明不完整，拒绝缩短补抓范围'); };
     try { validateDailyFetchBoundary(checkpoint.fetchBoundary); } catch { fail(); }
     const boundary = checkpoint.fetchBoundary;
-    if (boundary.continuity?.contract === RECOVERY_CONTINUITY_CONTRACT) {
+    if (isRecoveryContinuity(boundary.continuity)) {
         require('./daily-fetch-witness-recovery').verifyActivation(boundary);
     }
     const categories = CATEGORIES;
@@ -217,7 +219,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
             && (!hf || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt'));
     };
-    if (checkpoint.batchDate !== date || checkpoint.coverageStrategy !== 'previous-digest-window-v1'
+    if (checkpoint.batchDate !== date || !hasFetchCoverageStrategy(checkpoint)
         || !categories.every(id => covered(checkpoint.arxiv?.[id], false, id)) || !covered(checkpoint.huggingface, true)
         || Date.parse(checkpoint.batchStartedAt) !== Date.parse(boundary.until)) fail();
     const sources = stableSha({ fetchBoundary: boundary,
@@ -227,7 +229,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
             .map(([id, e]) => [id, { status: e.status, papersCount: e.papersCount, papersSha256: e.papersSha256 }])),
         huggingface: { status: checkpoint.huggingface.status, papersCount: checkpoint.huggingface.papersCount, papersSha256: checkpoint.huggingface.papersSha256 } });
     if (checkpoint.fetchSourcesSha256 !== sources || raw.fetchSourcesSha256 !== sources
-        || raw.sourceContractVersion !== 7 || filtered.sourceContractVersion !== 7 || filtered.status !== 'complete'
+        || !hasFetchCoverageStrategy(raw) || !hasFetchCoverageStrategy(filtered) || filtered.status !== 'complete'
         || raw.batchDate !== date || filtered.batchDate !== date || deep.batchDate !== date
         || stableSha(raw.fetchBoundary) !== stableSha(boundary) || stableSha(filtered.fetchBoundary) !== stableSha(boundary)
         || !Array.isArray(raw.papers) || raw.rawPapersSha256 !== stableSha(raw.papers)
@@ -266,7 +268,7 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
     return { until: boundary.until, checkpoint,
         archiveProofs: records.map(r => ({ file: path.basename(r.filename), sha256: hash(r.bytes) })) };
 }
-function deriveContinuity(prior, lastDigestDate) {
+function deriveContinuity(prior, lastDigestDate, header = codec.recordHeader(CONTINUITY_CONTRACT, CONTINUITY_CONTRACT)) {
     const cp = prior.checkpoint;
     const latest = (rows, field) => rows.map(p => {
         const arxivId = normalizedId(p), timestamp = p[field];
@@ -294,14 +296,14 @@ function deriveContinuity(prior, lastDigestDate) {
         huggingface = { status: 'expected', arxivId: witness.arxivId, selectedAt: witness.timestamp,
             cutoffDate: beijingDate(witness.timestamp) };
     }
-    return { contract: CONTINUITY_CONTRACT, required: true, originalSince: prior.until,
+    return { ...header, required: true, originalSince: prior.until,
         archiveCheckpointSha256: prior.archiveProofs.find(p => p.file === 'fetch-checkpoint.json').sha256,
         witnesses: { arxiv, huggingface }, overlapCutoffDate: huggingface.cutoffDate || lastDigestDate };
 }
 function validateDailyFetchContinuityCheckpoint(boundary, checkpointBytes) {
     validateDailyFetchBoundary(boundary);
     if (!boundary.continuity) return true;
-    if (boundary.continuity.contract === RECOVERY_CONTINUITY_CONTRACT) {
+    if (isRecoveryContinuity(boundary.continuity)) {
         const replay = require('./daily-fetch-witness-recovery').verifyBoundary(boundary);
         if (!Buffer.isBuffer(checkpointBytes) || !checkpointBytes.equals(replay.checkpointBytes)) {
             throw new Error('恢复旧获取见证与封存检查点的原字节不同');
@@ -313,18 +315,19 @@ function validateDailyFetchContinuityCheckpoint(boundary, checkpointBytes) {
     }
     const checkpoint = JSON.parse(checkpointBytes.toString('utf8'));
     if (checkpoint.batchDate !== boundary.lastDigestDate
-        || checkpoint.sourceContractVersion !== 7 || checkpoint.fetchBoundary?.until !== boundary.continuity.originalSince) {
+        || !hasBoundedFetchSource(checkpoint) || checkpoint.fetchBoundary?.until !== boundary.continuity.originalSince) {
         throw new Error('旧获取见证绑定了其他批次或结束时间');
     }
     const derived = deriveContinuity({ until: boundary.continuity.originalSince, checkpoint,
-        archiveProofs: boundary.provenance.archiveProofs }, boundary.lastDigestDate);
+        archiveProofs: boundary.provenance.archiveProofs }, boundary.lastDigestDate, readHeader(boundary.continuity, CONTINUITY_CONTRACT));
     if (stableSha(derived) !== stableSha(boundary.continuity)) {
         throw new Error('旧获取见证与原抓取检查点中的最新论文不一致');
     }
     return true;
 }
 function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__dirname, '../../data'),
-    requirePreviouslyFetched = false, fetchWitnessRecoveryManifest = null } = {}) {
+    requirePreviouslyFetched = false, fetchWitnessRecoveryManifest = null, replayBoundary = null } = {}) {
+    if (replayBoundary) validateDailyFetchBoundary(replayBoundary);
     if (typeof requirePreviouslyFetched !== 'boolean') throw new TypeError('requirePreviouslyFetched 必须是布尔值');
     strictInstant(until);
     const git = (...args) => execFileSync('git', ['-C', blogRepo, ...args], { maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -366,15 +369,17 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
     if (fetchWitnessRecoveryManifest !== null) {
         if (!requirePreviouslyFetched) throw new Error('显式旧获取见证恢复必须同时要求实际遇到旧见证');
         return require('./daily-fetch-witness-recovery').resolveBoundary({ blogRepo, dataRoot, until,
-            manifestPath: fetchWitnessRecoveryManifest, latest: { date, head, indexPath,
+            manifestPath: fetchWitnessRecoveryManifest, replayBoundary, latest: { date, head, indexPath,
                 indexSha256: hash(indexBytes), papers } });
     }
     const previous = verifiedPreviousWindow(dataRoot, date, papers, indexPath, hash(indexBytes));
     const prior = previous?.until ? previous : null;
     if (requirePreviouslyFetched && !prior) throw new Error('要求旧获取见证时必须有完整已发布 v7 抓取证明，不能从月首推测旧获取状态');
-    const continuity = requirePreviouslyFetched ? deriveContinuity(prior, date) : null;
+    const header = replayBoundary ? readHeader(replayBoundary, CONTRACT) : codec.recordHeader(CONTRACT, CONTRACT);
+    const continuity = requirePreviouslyFetched ? deriveContinuity(prior, date, replayBoundary?.continuity
+        ? readHeader(replayBoundary.continuity, CONTINUITY_CONTRACT) : undefined) : null;
     const since = continuity ? overlapStart(continuity) : prior ? prior.until : papers.map(p => p.conservativeSubmissionMonthStart).sort()[0];
-    const body = { contract: CONTRACT, lastDigestDate: date, since, until,
+    const body = { ...header, lastDigestDate: date, since, until,
         ...(continuity ? { continuity } : {}),
         provenance: { blogHead: head, indexPath, indexSha256: hash(indexBytes), papers,
             boundaryBasis: prior ? 'verified-previous-fetch-until' : 'month-derived-lower-bound',

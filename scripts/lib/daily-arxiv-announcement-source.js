@@ -7,7 +7,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { runDailyXmlPython } = require('./daily-xml-file-stdin');
 const PROJECT = path.resolve(__dirname, '../..');
-const CONTRACT = 'daily-arxiv-announcement-evidence-v1';
+const CONTRACT = 'daily-arxiv-announcement-evidence';
+const { evidenceHeaderForBoundary, hasEvidenceHeader } = require('./daily-fetch-format');
 const MAX_BYTES = 16 * 1024 * 1024;
 const SHA = /^[a-f0-9]{64}$/;
 const urlFor = category => `https://rss.arxiv.org/rss/${category}`;
@@ -129,10 +130,10 @@ function readEvidenceBytes(evidence, categoryId) {
 function replayDailyAnnouncement(evidence, boundary, categoryId) {
     require('../env-loader').requireExternalRuntime('daily-arxiv-announcement-source');
     validateInput(categoryId, boundary);
-    const fields = ['contract', 'categoryId', 'boundaryIdentity', 'url', 'retrievedAt', 'filePath', 'bytes', 'sha256'].sort();
+    const fields = [...Object.keys(evidenceHeaderForBoundary(boundary, CONTRACT)), 'categoryId', 'boundaryIdentity', 'url', 'retrievedAt', 'filePath', 'bytes', 'sha256'].sort();
     if (!evidence || Object.getPrototypeOf(evidence) !== Object.prototype
         || JSON.stringify(Object.keys(evidence).sort()) !== JSON.stringify(fields)
-        || evidence.contract !== CONTRACT || evidence.categoryId !== categoryId
+        || !hasEvidenceHeader(evidence, boundary, CONTRACT) || evidence.categoryId !== categoryId
         || evidence.boundaryIdentity !== boundary.identitySha256 || evidence.url !== urlFor(categoryId)
         || !SHA.test(evidence.sha256 || '') || !Number.isSafeInteger(evidence.bytes)
         || evidence.bytes < 1 || evidence.bytes > MAX_BYTES
@@ -169,7 +170,7 @@ async function fetchDailyAnnouncement(categoryId, boundary, options = {}) {
     const bytes = Buffer.isBuffer(response.data) ? response.data : Buffer.from(String(response.data), 'utf8');
     if (bytes.length < 1 || bytes.length > MAX_BYTES) throw new Error('Announcement response size is invalid');
     const digest = sha(bytes), filePath = path.join(directory, `rss-${categoryId}-${digest}.xml`);
-    const evidence = { contract: CONTRACT, categoryId, boundaryIdentity: boundary.identitySha256,
+    const evidence = { ...evidenceHeaderForBoundary(boundary, CONTRACT), categoryId, boundaryIdentity: boundary.identitySha256,
         url, retrievedAt, filePath, bytes: bytes.length, sha256: digest };
     try {
         const fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);

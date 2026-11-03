@@ -1664,7 +1664,7 @@ describe('显式数据路径与 v7 缺少候选的诊断', () => {
             fs.writeFileSync(filename, JSON.stringify(checkpoint));
             const raw = JSON.parse(fs.readFileSync(files.rawCandidates));
             Object.assign(raw, pipeline.buildCandidateFingerprints(new Set(), new Set(), boundary));
-            raw.sourceHealth.sourceContractVersion = 7;
+            Object.assign(raw.sourceHealth, require('../scripts/lib/daily-fetch-format').sourceHeaderForBoundary(boundary));
             raw.sourceHealth.fetchBoundary = boundary;
             raw.sourceHealth.arxiv.categories.forEach(entry => { entry.provider = provider; });
             raw.sourceHealth.huggingface.provider = checkpoint.huggingface.health.provider;

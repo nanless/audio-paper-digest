@@ -59,14 +59,13 @@ function fixture(t, { hfSelected = true } = {}) {
         ...(hfSelected ? { hfSelectedAt: '2026-10-03T00:00:00Z' } : {}) };
     const provider = { boundaryIdentity: old.identitySha256, window: { since: old.since, until: old.until, covered: true } };
     const entry = { status: 'complete', papers: [p], papersCount: 1, papersSha256: stable([p]), health: { ok: true, provider } };
-    const cp = { sourceContractVersion: 7, batchDate: '2026-10-03', batchStartedAt: old.until,
+    const cp = { batchDate: '2026-10-03', batchStartedAt: old.until,
         ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), historicalDedupIds: [],
         arxiv: Object.fromEntries(['eess.AS','cs.SD','eess.SP','cs.CL','cs.LG','cs.AI','cs.MM'].map(id => [id, entry])),
         huggingface: { ...entry, health: { ok: true, provider: { ...provider, cutoffDate: old.lastDigestDate,
             dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } } } };
     cp.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(cp);
-    const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), sourceContractVersion: 7,
-        batchDate: '2026-10-03', fetchBoundary: old, papers: [p], rawPapersSha256: stable([p]), fetchSourcesSha256: cp.fetchSourcesSha256 };
+    const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), batchDate: '2026-10-03', fetchBoundary: old, papers: [p], rawPapersSha256: stable([p]), fetchSourcesSha256: cp.fetchSourcesSha256 };
     const deep = { batchDate: '2026-10-03', papers: [p] }, archive = path.join(dataRoot, 'archive', '2026-10-03');
     put(path.join(archive, 'fetch-checkpoint.json'), cp); put(path.join(archive, 'raw-candidates.json'), raw);
     put(path.join(archive, 'filtered-papers.json'), { ...raw, status: 'complete' }); put(path.join(archive, 'deep-analysis-result.json'), deep);
@@ -99,6 +98,32 @@ test('独立恢复保留latest发布身份，真实较早五文件派生见证�
     assert.throws(() => boundary.validateDailyFetchBoundary(b), /封存恢复材料/); fs.writeFileSync(source, bytes);
     fs.unlinkSync(source); fs.symlinkSync(f.currentPath, source);
     assert.throws(() => boundary.validateDailyFetchBoundary(b), /不安全/);
+});
+test('保留原见证恢复清单与激活记录的字节域，同日直接重放', async t => {
+    const f = fixture(t), prepared = await f.prepare();
+    const { contract, schemaFingerprint, ...fields } = JSON.parse(fs.readFileSync(prepared.manifestPath));
+    const originalBytes = Buffer.from(JSON.stringify({ contract: 'daily-fetch-witness-recovery-v1', version: 1, ...fields }));
+    fs.writeFileSync(prepared.manifestPath, originalBytes);
+    const options = { dataRoot: f.dataRoot, until: '2026-10-05T04:00:00.000Z',
+        requirePreviouslyFetched: true, fetchWitnessRecoveryManifest: prepared.manifestPath };
+    const current = boundary.resolveDailyFetchBoundary(f.repo, options);
+    assert.equal(current.continuity.recovery.contract, 'daily-fetch-witness-recovery-v1');
+    const { contract: _boundary, schemaFingerprint: _boundarySha, identitySha256, continuity, ...body } = current;
+    const { contract: _continuity, schemaFingerprint: _continuitySha, ...continuityFields } = continuity;
+    const originalBody = { contract: 'daily-fetch-boundary-v1', ...body,
+        continuity: { contract: 'daily-fetch-continuity-recovery-v1', ...continuityFields } };
+    const original = { ...originalBody, identitySha256: stable(originalBody) };
+    assert.deepEqual(boundary.resolveDailyFetchBoundary(f.repo, { ...options, replayBoundary: original }), original);
+    assert.throws(() => recovery.activateBoundary(original, { blogRepo: f.repo, dataRoot: f.dataRoot }), /不能补签/);
+    const activation = path.join(path.dirname(prepared.manifestPath), 'activations', original.identitySha256 + '.json');
+    fs.mkdirSync(path.dirname(activation), { mode: 0o700 });
+    const activationBytes = Buffer.from(JSON.stringify({ contract: 'daily-fetch-witness-recovery-activation-v1',
+        recoverySha256: sha(originalBytes), boundarySha256: original.identitySha256, date: '2026-10-05' }, null, 2) + '\n');
+    fs.writeFileSync(activation, activationBytes, { mode: 0o600 });
+    recovery.verifyActivation(original);
+    recovery.activateBoundary(original, { blogRepo: f.repo, dataRoot: f.dataRoot });
+    assert.deepEqual(fs.readFileSync(activation), activationBytes);
+    assert.deepEqual(fs.readFileSync(prepared.manifestPath), originalBytes);
 });
 test('原current材料CAS漂移和科学正文变化不能激活；无精选截止日按source date', async t => {
     const f = fixture(t, { hfSelected: false }), p = await f.prepare();
@@ -139,11 +164,11 @@ test('下一日正常v1从已发布恢复批次继续，完整冷重放其原恢
                     matchedIds: [w.arxivId], encounterVerified: true } },
             continuity: { encounters: [{ arxivId: w.arxivId, [field]: w[field] }] } } };
     }
-    const cp = { sourceContractVersion: 7, batchDate: '2026-10-05', batchStartedAt: b.until, ...fingerprints,
+    const cp = { batchDate: '2026-10-05', batchStartedAt: b.until, ...fingerprints,
         historicalDedupIds: [...historical].sort(), arxiv: Object.fromEntries(b.continuity.witnesses.arxiv.map(w => [w.categoryId, entry(w, false)])),
         huggingface: entry(b.continuity.witnesses.huggingface, true) };
     cp.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(cp);
-    const raw = { ...fingerprints, sourceContractVersion: 7, batchDate: '2026-10-05', fetchBoundary: b,
+    const raw = { ...fingerprints, batchDate: '2026-10-05', fetchBoundary: b,
         papers: [newPaper], rawPapersSha256: stable([newPaper]), fetchSourcesSha256: cp.fetchSourcesSha256 };
     const archive = path.join(f.dataRoot, 'archive/2026-10-05'), deep = { batchDate: '2026-10-05', papers: [newPaper] };
     f.put(path.join(archive, 'fetch-checkpoint.json'), cp); f.put(path.join(archive, 'raw-candidates.json'), raw);

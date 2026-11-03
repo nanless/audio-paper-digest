@@ -1,0 +1,232 @@
+{
+  "protocols": [
+    {
+      "name": "daily-fetch-boundary",
+      "currentVariant": "published-date-window",
+      "currentSchema": {
+        "fields": [
+          "lastDigestDate",
+          "since",
+          "until",
+          "continuity",
+          "provenance",
+          "identitySha256"
+        ],
+        "identity": "original complete fields"
+      },
+      "historical": [
+        {
+          "tag": "daily-fetch-boundary-v1",
+          "variant": "original-published-date-window"
+        }
+      ]
+    },
+    {
+      "name": "daily-fetch-continuity",
+      "currentVariant": "retained-previous-fetch",
+      "currentSchema": {
+        "fields": [
+          "required",
+          "originalSince",
+          "archiveCheckpointSha256",
+          "witnesses",
+          "overlapCutoffDate"
+        ],
+        "identity": "original complete fields"
+      },
+      "historical": [
+        {
+          "tag": "daily-fetch-continuity-v1",
+          "variant": "original-retained-previous-fetch"
+        }
+      ]
+    },
+    {
+      "name": "daily-fetch-continuity-recovery",
+      "currentVariant": "earlier-verified-source-window",
+      "currentSchema": {
+        "fields": [
+          "required",
+          "originalSince",
+          "archiveCheckpointSha256",
+          "witnesses",
+          "overlapCutoffDate",
+          "sourceCheckpointDate",
+          "recovery"
+        ],
+        "identity": "original complete fields"
+      },
+      "historical": [
+        {
+          "tag": "daily-fetch-continuity-recovery-v1",
+          "variant": "original-earlier-verified-source-window"
+        }
+      ]
+    },
+    {
+      "name": "daily-fetch-source",
+      "currentVariant": "published-window-source",
+      "currentSchema": {
+        "fields": [
+          "coverageStrategy",
+          "pageSize",
+          "fetchBoundary"
+        ],
+        "identity": "original complete fields",
+        "coverageStrategy": "previous-digest-window"
+      },
+      "historical": [
+        {
+          "tag": 7,
+          "variant": "original-published-window-source",
+          "header": {
+            "sourceContractVersion": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-fetch-witness-recovery",
+      "currentVariant": "sealed-earlier-window",
+      "currentSchema": {
+        "fields": [
+          "runId",
+          "date",
+          "sourceCheckpointDate",
+          "latestDate",
+          "preparedAt",
+          "dataRoot",
+          "blogRepo",
+          "blogHead",
+          "latest",
+          "source",
+          "records",
+          "originalInputReplay"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-fetch-witness-recovery-v1",
+          "variant": "original-sealed-earlier-window",
+          "header": {
+            "contract": "daily-fetch-witness-recovery-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-fetch-witness-recovery-reference",
+      "currentVariant": "sealed-recovery-reference",
+      "currentSchema": {
+        "fields": [
+          "manifestPath",
+          "manifestSha256",
+          "manifestBytes"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-fetch-witness-recovery-v1",
+          "variant": "original-sealed-recovery-reference"
+        }
+      ]
+    },
+    {
+      "name": "daily-fetch-witness-recovery-activation",
+      "currentVariant": "verified-recovery-activation",
+      "currentSchema": {
+        "fields": [
+          "recoverySha256",
+          "boundarySha256",
+          "date"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-fetch-witness-recovery-activation-v1",
+          "variant": "original-verified-recovery-activation"
+        }
+      ]
+    },
+    {
+      "name": "daily-arxiv-atom-prefix-coverage",
+      "currentVariant": "source-bound",
+      "currentSchema": {
+        "fields": [
+          "categoryId",
+          "boundaryIdentity",
+          "pageSize",
+          "pages",
+          "dateQueryFailure"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-arxiv-atom-prefix-coverage-v1",
+          "variant": "original-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "daily-arxiv-oai-coverage",
+      "currentVariant": "source-bound",
+      "currentSchema": {
+        "fields": [
+          "categoryId",
+          "boundaryIdentity",
+          "boundary",
+          "evidenceDir",
+          "triggerFailure",
+          "existingIds",
+          "streams",
+          "replays"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-arxiv-oai-coverage-v1",
+          "variant": "original-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "daily-arxiv-oai-continuation",
+      "currentVariant": "source-bound",
+      "currentSchema": {
+        "fields": [
+          "categoryId",
+          "boundaryIdentity",
+          "previousFailure"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-arxiv-oai-continuation-v1",
+          "variant": "original-source-bound"
+        }
+      ]
+    },
+    {
+      "name": "daily-arxiv-announcement-evidence",
+      "currentVariant": "source-bound",
+      "currentSchema": {
+        "fields": [
+          "categoryId",
+          "boundaryIdentity",
+          "url",
+          "retrievedAt",
+          "filePath",
+          "bytes",
+          "sha256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-arxiv-announcement-evidence-v1",
+          "variant": "original-source-bound"
+        }
+      ]
+    }
+  ]
+}

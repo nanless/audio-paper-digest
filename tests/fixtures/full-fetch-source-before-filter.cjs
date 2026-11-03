@@ -123,13 +123,14 @@ async function main() {
         if (scenario.startsWith('resume-')) {
             const boundary = require('../../scripts/lib/daily-fetch-boundary').resolveDailyFetchBoundary(
                 config.PUBLISH_CONFIG.blogRepo, { until: new Date().toISOString() });
+            const source = require('../../scripts/lib/daily-fetch-format').sourceFieldsForBoundary(boundary);
             const failed = scenario === 'resume-failed';
-            const sourceHealth = { sourceContractVersion: 7, fetchBoundary: boundary,
+            const sourceHealth = { ...source, fetchBoundary: boundary,
                 arxiv: { categories: [{ id: 'cs.SD', ok: !failed,
                     provider: health(boundary, false).provider }] },
                 huggingface: health(boundary, true) };
             const paper = sourcePaper('huggingface', '2610.09999');
-            const original = Buffer.from(JSON.stringify({ sourceContractVersion: 7,
+            const original = Buffer.from(JSON.stringify({ ...source,
                 fetchBoundary: boundary, sourceHealth, papers: [paper] }));
             for (const key of ['rawCandidates', 'fetchCheckpoint', 'filterDecisions']) {
                 fs.writeFileSync(config.FILES[key], original);
@@ -137,7 +138,7 @@ async function main() {
             let error;
             try {
                 await pipeline.resumeFilterStage({ allPapers: [paper], allPapersFiltered: [paper],
-                    sourceHealth, baseFilterStats: { sourceContractVersion: 7 },
+                    sourceHealth, baseFilterStats: { ...source, fetchBoundary: boundary, pageSize: 100 },
                     initialDecisions: {}, filterModel: 'local-test', filterPromptHash: 'a'.repeat(64),
                     today: utils.getBeijingDateString() });
             } catch (caught) { error = caught; }
@@ -161,7 +162,7 @@ async function main() {
         assert.ok(error instanceof Error);
         const checkpoint = JSON.parse(fs.readFileSync(config.FILES.fetchCheckpoint));
         const raw = JSON.parse(fs.readFileSync(config.FILES.rawCandidates));
-        assert.equal(raw.sourceContractVersion, 7);
+        assert.equal(require('../../scripts/lib/daily-fetch-format').hasBoundedFetchSource(raw), true);
         assert.equal(raw.fetchBoundary.identitySha256, checkpoint.fetchBoundary.identitySha256);
         assert.equal(raw.fetchSourcesSha256, pipeline.getFetchSourcesSha256(checkpoint));
         assert.equal(raw.rawPapersSha256, pipeline.stableContentSha256(raw.papers));

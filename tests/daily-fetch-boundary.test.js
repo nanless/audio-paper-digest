@@ -49,7 +49,7 @@ test('只用已提交页面并按提交月份保守重叠，固定结束时间�
     const dataRoot = path.join(f.root, 'pending-data');
     const noCheckpoint = resolveDailyFetchBoundary(f.root, { until, dataRoot });
     fs.mkdirSync(path.join(dataRoot, 'current'), { recursive: true });
-    fs.writeFileSync(path.join(dataRoot, 'current/fetch-checkpoint.json'), JSON.stringify({ sourceContractVersion: 7, batchDate: '2026-10-10', status: 'partial' }));
+    fs.writeFileSync(path.join(dataRoot, 'current/fetch-checkpoint.json'), JSON.stringify({ batchDate: '2026-10-10', status: 'partial' }));
     const afterSave = resolveDailyFetchBoundary(f.root, { until, dataRoot });
     assert.equal(JSON.stringify(afterSave), JSON.stringify(noCheckpoint));
     assert.equal(afterSave.identitySha256, noCheckpoint.identitySha256);
@@ -84,8 +84,11 @@ test('已发布ID只读远端正式页字段，不读正文链接或未推送页
 
 test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回月首', t => {
     const f = createPublishedBlogRepo(t); const dataRoot = path.join(f.root, 'proofs');
-    const old = resolveDailyFetchBoundary(f.root, { until: '2026-10-03T01:00:00.000Z', dataRoot });
+    const currentShape = resolveDailyFetchBoundary(f.root, { until: '2026-10-03T01:00:00.000Z', dataRoot });
     const pipeline = require('../scripts/full-fetch.js');
+    const { contract, schemaFingerprint, identitySha256, ...fields } = currentShape;
+    const original = { contract: 'daily-fetch-boundary-v1', ...fields };
+    const old = { ...original, identitySha256: pipeline.stableContentSha256(original) };
     const { mergeAndDeduplicate } = require('../scripts/fetch-huggingface-papers.js');
     const stable = pipeline.stableContentSha256;
     const provider = { boundaryIdentity: old.identitySha256, window: { since: old.since, until: old.until, covered: true } };
@@ -94,13 +97,13 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
         { arxivId: '2610.09999v1', title: 'unselected', abstract: 'speech', categories: ['cs.SD'],
             published: '2026-10-02T03:00:00Z', hfSelectedAt: '2026-10-02T08:00:00+08:00' }];
     const entry = { status: 'complete', papers: sourcePapers, papersCount: sourcePapers.length, papersSha256: stable(sourcePapers), health: { ok: true, provider } };
-    const cp = { sourceContractVersion: 7, batchDate: '2026-10-03', batchStartedAt: old.until,
+    const cp = { batchDate: '2026-10-03', batchStartedAt: old.until,
         ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), historicalDedupIds: [],
         arxiv: Object.fromEntries(['eess.AS','cs.SD','eess.SP','cs.CL','cs.LG','cs.AI','cs.MM'].map(id => [id, entry])),
         huggingface: { ...entry, health: { ok: true, provider: { ...provider, cutoffDate: old.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } } } };
     cp.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(cp);
     const papers = mergeAndDeduplicate(sourcePapers, []);
-    const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), sourceContractVersion: 7, batchDate: '2026-10-03', fetchBoundary: old, papers, rawPapersSha256: stable(papers), fetchSourcesSha256: cp.fetchSourcesSha256 };
+    const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), batchDate: '2026-10-03', fetchBoundary: old, papers, rawPapersSha256: stable(papers), fetchSourcesSha256: cp.fetchSourcesSha256 };
     const selected = papers.filter(p => String(p.arxivId).replace(/v\d+$/, '') === '2610.00026');
     const filtered = { ...raw, papers: selected, status: 'complete' }; const deep = {
         batchDate: '2026-10-03', timestamp: '2026-10-05T12:00:00+08:00', papers: selected };

@@ -7,8 +7,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { runDailyXmlPython, isDailyXmlOperationalError } = require('./daily-xml-file-stdin');
-const CONTRACT = 'daily-arxiv-oai-coverage-v1';
-const PREFIX_CONTRACT = 'daily-arxiv-atom-prefix-coverage-v1';
+const CONTRACT = 'daily-arxiv-oai-coverage';
+const PREFIX_CONTRACT = 'daily-arxiv-atom-prefix-coverage';
+const { evidenceHeaderForBoundary, hasEvidenceHeader, coverageHeaderForBoundary, hasCoverageHeader } = require('./daily-fetch-format');
 const BASE_URL = 'https://oaipmh.arxiv.org/oai';
 const MAX_BYTES = 16 * 1024 * 1024;
 const MAX_PAGES = 10000;
@@ -97,8 +98,8 @@ function validateTrigger(trigger, boundary, categoryId) {
         && provider?.window?.since === boundary.since && provider.window.until === boundary.until
         && provider.window.covered === false;
     if (health?.ok !== false || !windowMatches(health?.provider) || !windowMatches(date?.provider)
-        || health.provider.window.coverageContract !== PREFIX_CONTRACT
-        || prefix?.contract !== PREFIX_CONTRACT || prefix.categoryId !== categoryId
+        || !hasCoverageHeader(health.provider.window, boundary, PREFIX_CONTRACT)
+        || !hasEvidenceHeader(prefix, boundary, PREFIX_CONTRACT) || prefix.categoryId !== categoryId
         || prefix.boundaryIdentity !== boundary.identitySha256
         || (health.categoryId || health.id) !== categoryId
         || (health.categoryId !== undefined && health.categoryId !== categoryId)
@@ -345,7 +346,7 @@ function replay(health, boundary, categoryId, expectedPapers, expectedExistingId
     require('../env-loader').requireExternalRuntime('daily-arxiv-oai-source');
     validateBoundary(categoryId, boundary);
     const proof = health?.provider?.oai;
-    if (proof?.contract !== CONTRACT || health.provider.window?.coverageContract !== CONTRACT
+    if (!hasEvidenceHeader(proof, boundary, CONTRACT) || !hasCoverageHeader(health.provider.window, boundary, CONTRACT)
         || proof.categoryId !== categoryId || proof.boundaryIdentity !== boundary.identitySha256
         || !same(proof.boundary, boundary) || health.provider.boundaryIdentity !== boundary.identitySha256
         || health.provider.window.since !== boundary.since || health.provider.window.until !== boundary.until
@@ -422,13 +423,13 @@ async function fetchDailyOaiCategory(categoryId, boundary, existingIds, options 
     const api = require('../fetch-papers'), { ARXIV_CONFIG } = require('../config');
     const scheduler = options.requestScheduler || require('./fetch-scheduler').createHostTaskScheduler();
     const request = options.requestFn || api.httpsRequestWithProxy;
-    const proof = { contract: CONTRACT, categoryId, boundaryIdentity: boundary.identitySha256,
+    const proof = { ...evidenceHeaderForBoundary(boundary, CONTRACT), categoryId, boundaryIdentity: boundary.identitySha256,
         boundary: structuredClone(boundary), evidenceDir, triggerFailure: structuredClone(options.triggerFailure),
         existingIds: [...new Set(Array.from(existingIds || [], normalizedId))].sort(), streams: { arXivRaw: [], arXiv: [] }, replays: {} };
-    const health = { categoryId, source: 'arxiv-oai-official', contract: CONTRACT, attempts: 0, successfulRequests: 0,
+    const health = { categoryId, source: 'arxiv-oai-official', ...evidenceHeaderForBoundary(boundary, CONTRACT), attempts: 0, successfulRequests: 0,
         failures: [], coverageComplete: false, ok: false, allFailed: false,
         provider: { boundaryIdentity: boundary.identitySha256,
-            window: { since: boundary.since, until: boundary.until, covered: false, coverageContract: CONTRACT }, oai: proof } };
+            window: { since: boundary.since, until: boundary.until, covered: false, ...coverageHeaderForBoundary(boundary, CONTRACT) }, oai: proof } };
     const sets = {};
     const runNonce = crypto.randomUUID();
     const fetchPage = async (prefix, index, token, replayPage = false) => {

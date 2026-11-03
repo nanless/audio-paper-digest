@@ -110,6 +110,17 @@ test('合法同日 v7 检查点固定原抓取终点；后续时钟变化不重�
     const original = resolveDailyFetchBoundary(blog.root, { until: boundary.until });
     const checkpoint = completeCheckpoint(original);
     assert.deepEqual(pipeline.resolvePinnedFetchBoundary(blog.root, '2026-10-10T15:00:00Z', checkpoint), original);
+    const { contract, schemaFingerprint, identitySha256, ...body } = original;
+    const oldBody = { contract: 'daily-fetch-boundary-v1', ...body };
+    const old = { ...oldBody, identitySha256: pipeline.stableContentSha256(oldBody) };
+    const oldCheckpoint = completeCheckpoint(old);
+    assert.equal(oldCheckpoint.sourceContractVersion, 7);
+    assert.equal(oldCheckpoint.coverageStrategy, 'previous-digest-window-v1');
+    const oldCheckpointBytes = JSON.stringify(oldCheckpoint);
+    assert.deepEqual(pipeline.resolvePinnedFetchBoundary(blog.root, '2026-10-10T15:00:00Z', oldCheckpoint), old);
+    assert.equal(JSON.stringify(oldCheckpoint), oldCheckpointBytes);
+    const mixed = { ...oldCheckpoint, fetchSourceFormat: checkpoint.fetchSourceFormat };
+    assert.equal(require('../scripts/lib/daily-fetch-format').hasBoundedFetchSource(mixed), false);
     const changed = structuredClone(checkpoint);
     changed.fetchBoundary.identitySha256 = 'f'.repeat(64);
     assert.notEqual(pipeline.resolvePinnedFetchBoundary(blog.root, '2026-10-10T15:00:00Z', changed).until, original.until);
@@ -129,9 +140,9 @@ test('新范围指纹拒绝旧数量上限检查点，旧文件字节仍保留',
     assert.deepEqual(fs.readFileSync(filename), original);
     const replacement = completeCheckpoint(actual);
     pipeline.saveFetchCheckpoint(replacement, filename);
-    const preserved = path.join(blog.root, `checkpoint-before-v7-${crypto.createHash('sha256').update(original).digest('hex')}.json`);
+    const preserved = path.join(blog.root, `checkpoint-before-window-source-${crypto.createHash('sha256').update(original).digest('hex')}.json`);
     assert.deepEqual(fs.readFileSync(preserved), original);
-    assert.equal(JSON.parse(fs.readFileSync(filename)).sourceContractVersion, 7);
+    assert.equal(require('../scripts/lib/daily-fetch-format').hasBoundedFetchSource(JSON.parse(fs.readFileSync(filename))), true);
 });
 test('超过100条且七来源完整的检查点通过；覆盖标记伪造或错范围不能通过', t => {
     const blog = blogFixture(t);
