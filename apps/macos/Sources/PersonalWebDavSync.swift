@@ -60,6 +60,12 @@ enum PersonalWebDavSync {
         try projection.mapValues { rows in try rows.mapValues { sha256(try encoded($0)) } }
     }
 
+    private static func favoriteTimeKey(_ value: Any?) -> String {
+        guard let date = value as? String, date.last == "Z" else { return "~" }
+        let fraction = date.dropFirst(19).dropLast().dropFirst()
+        return date.prefix(19) + "." + fraction + String(repeating: "0", count: 9 - fraction.count)
+    }
+
     @MainActor static func plan(local: Object, device: String, remote: [String: Data]) throws -> Plan {
         guard validDevice(device), remote.count <= 24 else { throw invalid() }
         var documents: [String: Object] = [:]
@@ -91,7 +97,8 @@ enum PersonalWebDavSync {
                     case "annotations": guard value is [Object] else { throw invalid() }
                     case "notes":
                         guard let note = value as? Object, note["text"] is String,
-                              let rev = note["revision"] as? Int, (0..<Int(Int32.max)).contains(rev) else { throw invalid() }
+                              let raw = note["revision"] as? NSNumber, CFGetTypeID(raw) != CFBooleanGetTypeID(),
+                              let rev = raw as? Int, (0..<Int(Int32.max)).contains(rev) else { throw invalid() }
                     default: guard value is Object else { throw invalid() }
                     }
                 }
@@ -100,8 +107,16 @@ enum PersonalWebDavSync {
         }
         let previous = (local[baselineKey] as? Object).flatMap { $0["device"] as? String == device ? $0 : nil }
         let observed = previous?["observed"] as? [String: Int] ?? [:]
-        for (peer, version) in observed where (documents[peer]?["revision"] as? Int ?? 0) < version {
-            throw DesktopError.message("云端同步记录缺失或回退，已保留本机资料")
+        let observedDigests = previous?["digests"] as? [String: String] ?? [:]
+        var digests = remote.mapValues { sha256($0) }
+        for (peer, version) in observed {
+            let current = documents[peer]?["revision"] as? Int ?? 0
+            guard current >= version else {
+                throw DesktopError.message("云端同步记录缺失或回退，已保留本机资料")
+            }
+            if current == version, let digest = observedDigests[peer], digest != digests[peer] {
+                throw DesktopError.message("云端同步记录版本未变但内容已更改，已保留本机资料")
+            }
         }
         for document in documents.values {
             for rows in (document["records"] as! [String: [String: Object]]).values {
@@ -128,6 +143,13 @@ enum PersonalWebDavSync {
             var rows = records[field]!
             let before = baseline[field] ?? [:]
             let after = currentHashes[field] ?? [:]
+            for (id, row) in rows where (row["revision"] as! Int) > (observed[device] ?? 0) {
+                let current = projection[field]?[id]
+                // A restored workspace or an interrupted upload may predate this same-device edit.
+                if (previous != nil || current != nil), try encoded(current ?? NSNull()) != encoded(row["value"]!) {
+                    throw DesktopError.message("同一设备有未确认的云端编辑，本机与云端资料均已保留")
+                }
+            }
             for id in Set(before.keys).union(after.keys) where before[id] != after[id] {
                 let value = projection[field]?[id] ?? NSNull()
                 if ownVersion > (observed[device] ?? 0), let old = rows[id]?["value"],
@@ -145,6 +167,7 @@ enum PersonalWebDavSync {
                 throw DesktopError.message("WebDAV 同步资料或设备数量超过上限")
             }
             upload = bytes
+            digests[device] = sha256(bytes)
             documents[device] = document
         }
         var merged: Projection = [:]
@@ -164,14 +187,18 @@ enum PersonalWebDavSync {
                 guard !heads.isEmpty else { throw invalid() }
                 let value: Any
                 if ["notes", "annotations"].contains(field),
-                   try Set(heads.map { try encoded($0.value) }).count > 1 {
+                   try Set(heads.map { edit in
+                       let text = field == "notes" ? (edit.value as? Object)?["text"] : nil
+                       return try encoded(text ?? edit.value)
+                   }).count > 1 {
                     conflicts += 1
                     value = projection[field]?[id] ?? NSNull()
                 } else if sets.contains(field), heads.contains(where: { $0.value is NSNull }) {
                     value = NSNull()
                 } else if field == "favorites" {
                     value = heads.map { $0.value as! Object }.min {
-                        ($0["addedAt"] as? String ?? "~") < ($1["addedAt"] as? String ?? "~")
+                        (favoriteTimeKey($0["addedAt"]), $0["addedAt"] as? String ?? "") <
+                        (favoriteTimeKey($1["addedAt"]), $1["addedAt"] as? String ?? "")
                     }!
                 } else {
                     value = heads.max {
@@ -192,12 +219,16 @@ enum PersonalWebDavSync {
             var rows = merged[field]!.merging(old.filter { !validPaper($0.key) }) { first, _ in first }
             if field == "notes" {
                 for (id, raw) in rows {
-                    guard var note = raw as? Object, let previous = old[id] as? Object,
-                          note["text"] as? String != previous["text"] as? String,
-                          let revision = note["revision"] as? Int, let previousRevision = previous["revision"] as? Int,
-                          revision <= previousRevision else { continue }
-                    guard previousRevision < Int(Int32.max) - 1 else { throw invalid() }
-                    note["revision"] = previousRevision + 1
+                    guard var note = raw as? Object, let revision = note["revision"] as? Int else { continue }
+                    let previous = old[id] as? Object
+                    let previousRevision = previous?["revision"] as? Int ?? 0
+                    let textChanged = (note["text"] as? String ?? "") != (previous?["text"] as? String ?? "")
+                    if textChanged && revision <= previousRevision {
+                        guard previousRevision < Int(Int32.max) - 1 else { throw invalid() }
+                        note["revision"] = previousRevision + 1
+                    } else if revision < previousRevision {
+                        note["revision"] = previousRevision
+                    }
                     rows[id] = note
                 }
             }
@@ -219,7 +250,7 @@ enum PersonalWebDavSync {
         favorites["items"] = items
         result["favoriteCollections"] = favorites
         result[baselineKey] = ["device": device, "observed": documents.mapValues { $0["revision"] as! Int },
-                               "hashes": try hashes(project(result))]
+                               "digests": digests, "hashes": try hashes(project(result))]
         try DesktopStore.validate(result)
         return Plan(personal: result, upload: upload, conflicts: conflicts)
     }

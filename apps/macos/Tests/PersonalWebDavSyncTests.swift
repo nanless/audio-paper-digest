@@ -58,6 +58,52 @@ import Foundation
         let resolved = try PersonalWebDavSync.plan(local: rightEdit.personal, device: android,
             remote: [mac:resolution.upload!,android:rightEdit.upload!])
         precondition(resolved.conflicts == 0 && text(resolved) == "合并稿")
+        func favorite(_ date: String) -> [String: Any] {
+            var value = local([a])
+            value["favoriteCollections"] = ["version":1, "revision":0, "folders":[[String:Any]](),
+                "items":[a:["addedAt":date, "folderIDs":[String]()]]]
+            return value
+        }
+        let exact = "2026-11-02T00:00:00Z"
+        let later = "2026-11-02T00:00:00.000000001Z"
+        let exactDoc = try PersonalWebDavSync.plan(local: favorite(exact), device: mac, remote: [:]).upload!
+        precondition(!FavoriteCollections.validTime(later + "\n"))
+        let laterDoc = try PersonalWebDavSync.plan(local: favorite(later), device: android, remote: [:]).upload!
+        let dated = try PersonalWebDavSync.plan(local: local(), device: android, remote: [mac:exactDoc, android:laterDoc])
+        let collection = dated.personal["favoriteCollections"] as! [String: Any]
+        let items = collection["items"] as! [String: [String: Any]]
+        precondition(items[a]?["addedAt"] as? String == exact)
+        do {
+            _ = try PersonalWebDavSync.plan(local: dated.personal, device: android, remote: [mac:exactDoc + Data([32]), android:laterDoc])
+            preconditionFailure("accepted a rewritten document at the same revision")
+        } catch let error as DesktopError {
+            guard case .message(let message) = error, message.contains("版本未变") else { throw error }
+        }
+        var legacy = local()
+        legacy["notes"] = [a:["text":"旧版笔记", "revision":0]]
+        let legacyDoc = try PersonalWebDavSync.plan(local: legacy, device: mac, remote: [:]).upload!
+        let adoptedLegacy = try PersonalWebDavSync.plan(local: local(), device: android, remote: [mac:legacyDoc])
+        precondition((adoptedLegacy.personal["notes"] as! [String:[String:Any]])[a]?["revision"] as? Int == 1)
+        var sameText = legacy
+        sameText["notes"] = [a:["text":"旧版笔记", "revision":3]]
+        let sameDoc = try PersonalWebDavSync.plan(local: sameText, device: android, remote: [:]).upload!
+        let adoptedSame = try PersonalWebDavSync.plan(local: local(), device: android, remote: [mac:legacyDoc, android:sameDoc])
+        precondition(adoptedSame.conflicts == 0 && text(adoptedSame) == "旧版笔记")
+        let booleanDoc = Data(String(decoding: legacyDoc, as: UTF8.self)
+            .replacingOccurrences(of: "\"revision\":0", with: "\"revision\":true").utf8)
+        precondition(booleanDoc != legacyDoc)
+        do {
+            _ = try PersonalWebDavSync.plan(local: local(), device: android, remote: [mac:booleanDoc])
+            preconditionFailure("accepted a boolean note revision")
+        } catch let error as DesktopError {
+            guard case .message(let message) = error, message.contains("结构无效") else { throw error }
+        }
+        do {
+            _ = try PersonalWebDavSync.plan(local: note(local(), "恢复的旧文"), device: mac, remote: [mac:legacyDoc])
+            preconditionFailure("overwrote a newer same-device note after restoring an older backup")
+        } catch let error as DesktopError {
+            guard case .message(let message) = error, message.contains("未确认") else { throw error }
+        }
         print("WebDAV 双端合并、取消收藏、研究资料与冲突测试通过")
     }
 }

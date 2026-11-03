@@ -6,6 +6,7 @@ import com.nanless.paperdigest.data.canonical
 import com.nanless.paperdigest.data.copy
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
 import java.util.UUID
 
 /** Each installation writes its own document. Observed revisions identify concurrent edits. */
@@ -65,7 +66,7 @@ internal object PersonalWebDavSync {
         require(validDevice(device) && remote.size <= 24)
         val documents = remote.mapValues { (owner, bytes) ->
             require(validDevice(owner) && bytes.size in 1..LIMIT)
-            val doc = JSONObject(bytes.toString(Charsets.UTF_8))
+            val doc = JSONObject(bytes.decodeToString(throwOnInvalidSequence = true))
             require(doc.getString("format") == FORMAT && doc.getString("device") == owner)
             val version = revision(doc.get("revision"))
             val records = doc.getJSONObject("records")
@@ -96,9 +97,15 @@ internal object PersonalWebDavSync {
         }
         val previous = local.optJSONObject(BASELINE)?.takeIf { it.optString("device") == device }
         val observed = previous?.getJSONObject("observed") ?: JSONObject()
+        val observedDigests = previous?.optJSONObject("digests") ?: JSONObject()
+        val digests = JSONObject()
+        remote.forEach { (id, bytes) -> digests.put(id, BackupCodec.hash(bytes)) }
         observed.keys().forEach { id ->
-            require((documents[id]?.getLong("revision") ?: 0L) >= observed.getLong(id)) {
-                "云端同步记录缺失或回退，已保留本机资料"
+            val current = documents[id]?.getLong("revision") ?: 0L
+            val version = observed.getLong(id)
+            require(current >= version) { "云端同步记录缺失或回退，已保留本机资料" }
+            require(current != version || !observedDigests.has(id) || observedDigests.getString(id) == digests.optString(id)) {
+                "云端同步记录版本未变但内容已更改，已保留本机资料"
             }
         }
         for (document in documents.values) {
@@ -128,6 +135,14 @@ internal object PersonalWebDavSync {
             val current = projection.getJSONObject(field)
             val previousHashes = baseline.optJSONObject(field) ?: JSONObject()
             val currentHashes = localHashes.getJSONObject(field)
+            rows.keys().forEach { id ->
+                val row = rows.getJSONObject(id)
+                if (row.getLong("revision") > observed.optLong(device) && (previous != null || current.has(id))) {
+                    require(canonical(current.opt(id) ?: JSONObject.NULL) == canonical(row.get("value"))) {
+                        "同一设备有未确认的云端编辑，本机与云端资料均已保留"
+                    }
+                }
+            }
             val ids = current.keys().asSequence().toSet() + previousHashes.keys().asSequence().toSet()
             for (id in ids) {
                 if (currentHashes.optString(id) == previousHashes.optString(id)) continue
@@ -143,6 +158,7 @@ internal object PersonalWebDavSync {
             require(own != null || remote.size < 24) { "同步设备数量超过上限" }
             val document = JSONObject().put("format", FORMAT).put("device", device).put("revision", next).put("records", records)
             upload = document.toString().toByteArray().also { require(it.size <= LIMIT) { "同步资料超过 8 MiB" } }
+            digests.put(device, BackupCodec.hash(upload))
             combined[device] = document
         }
         val merged = JSONObject()
@@ -160,12 +176,16 @@ internal object PersonalWebDavSync {
             for ((id, edits) in byPaper) {
                 val heads = edits.filter { a -> edits.none { b -> b.seen.optLong(a.device) >= a.revision } }
                 require(heads.isNotEmpty()) { "云端同步记录存在循环引用" }
-                val value = if (field in listOf("notes", "annotations") && heads.map { canonical(it.value) }.distinct().size > 1) {
+                val value = if (field in listOf("notes", "annotations") && heads.map { edit ->
+                    if (field == "notes" && edit.value is JSONObject) canonical(edit.value.getString("text")) else canonical(edit.value)
+                }.toSet().size > 1) {
                     conflicts++
                     projection.getJSONObject(field).opt(id) ?: JSONObject.NULL
                 } else if (field in sets && heads.any { it.value == JSONObject.NULL }) JSONObject.NULL
                 else if (field == "favorites") {
-                    heads.map { it.value as JSONObject }.minBy { it.optString("addedAt").takeUnless { date -> date == "null" || date.isBlank() } ?: "~" }
+                    heads.map { it.value as JSONObject }.minWith(compareBy<JSONObject> {
+                        if (it.isNull("addedAt")) Instant.MAX else FavoriteCollections.instant(it.getString("addedAt"))
+                    }.thenBy { it.optString("addedAt") })
                 } else heads.maxWith(compareBy<Edit> { it.revision }.thenBy { it.device }).value
                 if (value != JSONObject.NULL) result.put(id, value)
             }
@@ -184,11 +204,15 @@ internal object PersonalWebDavSync {
             old.keys().forEach { if (!validPaper(it)) rows.put(it, old.get(it)) }
             if (field == "notes") rows.keys().asSequence().toList().forEach { id ->
                 val oldNote = old.optJSONObject(id)
-                val note = rows.optJSONObject(id)
-                if (oldNote != null && note != null && oldNote.getString("text") != note.getString("text") &&
-                    note.getInt("revision") <= oldNote.getInt("revision")) {
-                    require(oldNote.getInt("revision") < Int.MAX_VALUE - 1) { "笔记版本已达上限" }
-                    rows.put(id, note.copy().put("revision", oldNote.getInt("revision") + 1))
+                val note = rows.getJSONObject(id)
+                val previousRevision = oldNote?.getInt("revision") ?: 0
+                val revision = note.getInt("revision")
+                val textChanged = note.getString("text") != (oldNote?.getString("text") ?: "")
+                if (textChanged && revision <= previousRevision) {
+                    require(previousRevision < Int.MAX_VALUE - 1) { "笔记版本已达上限" }
+                    rows.put(id, note.copy().put("revision", previousRevision + 1))
+                } else if (revision < previousRevision) {
+                    rows.put(id, note.copy().put("revision", previousRevision))
                 }
             }
             result.put(field, rows)
@@ -212,7 +236,7 @@ internal object PersonalWebDavSync {
         result.put("favoriteCollections", favorites)
         val observedNext = JSONObject()
         combined.forEach { (id, doc) -> observedNext.put(id, doc.getLong("revision")) }
-        result.put(BASELINE, JSONObject().put("device", device).put("observed", observedNext).put("hashes", hashes(project(result))))
+        result.put(BASELINE, JSONObject().put("device", device).put("observed", observedNext).put("digests", digests).put("hashes", hashes(project(result))))
         PersonalStore.validate(result)
         require(result.toString().toByteArray().size <= PersonalStore.MAX_BYTES)
         return Plan(result, upload, conflicts)

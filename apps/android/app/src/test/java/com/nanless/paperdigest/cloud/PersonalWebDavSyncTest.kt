@@ -61,6 +61,53 @@ class PersonalWebDavSyncTest {
         assertThrows(IllegalArgumentException::class.java) { PersonalWebDavSync.plan(after.personal, android, remote - mac) }
     }
 
+    @Test fun earliestUtcTimeWinsAndRewrittenPeerAtSameRevisionFails() {
+        fun favorite(date: String) = local(a).put("favoriteCollections", JSONObject(
+            """{"version":1,"revision":0,"folders":[],"items":{"$a":{"addedAt":"$date","folderIDs":[]}}}"""
+        ))
+        val exact = "2026-11-02T00:00:00Z"
+        val later = "2026-11-02T00:00:00.000000001Z"
+        val exactDoc = PersonalWebDavSync.plan(favorite(exact), mac, emptyMap()).upload!!
+        val laterDoc = PersonalWebDavSync.plan(favorite(later), android, emptyMap()).upload!!
+        val remote = mapOf(mac to exactDoc, android to laterDoc)
+        val dated = PersonalWebDavSync.plan(local(), android, remote)
+        assertEquals(exact, dated.personal.getJSONObject("favoriteCollections")
+            .getJSONObject("items").getJSONObject(a).getString("addedAt"))
+        val rejected = assertThrows(IllegalArgumentException::class.java) {
+            PersonalWebDavSync.plan(dated.personal, android, remote + (mac to (exactDoc + byteArrayOf(32))))
+        }
+        assertTrue(rejected.message.orEmpty().contains("版本未变"))
+    }
+
+    @Test fun importedLegacyNoteInvalidatesAnOpenEmptyEditor() {
+        val legacy = local()
+        legacy.getJSONObject("notes").put(a, JSONObject().put("revision", 0).put("text", "旧版笔记"))
+        val uploaded = PersonalWebDavSync.plan(legacy, mac, emptyMap()).upload!!
+        val adopted = PersonalWebDavSync.plan(local(), android, mapOf(mac to uploaded))
+        assertEquals(1, adopted.personal.getJSONObject("notes").getJSONObject(a).getInt("revision"))
+    }
+
+    @Test fun identicalNoteTextWithDifferentRevisionsIsNotAConflict() {
+        fun document(device: String, revision: Int) = local().let { root ->
+            root.getJSONObject("notes").put(a, JSONObject().put("revision", revision).put("text", "相同正文"))
+            PersonalWebDavSync.plan(root, device, emptyMap()).upload!!
+        }
+        val result = PersonalWebDavSync.plan(local(), android, mapOf(mac to document(mac, 1), android to document(android, 3)))
+        assertEquals(0, result.conflicts)
+        assertEquals("相同正文", result.personal.getJSONObject("notes").getJSONObject(a).getString("text"))
+    }
+
+    @Test fun oldRestoredWorkspaceCannotOverwriteAnUnobservedSameDeviceNote() {
+        val current = local().also { note(it, "已同步的新稿") }
+        val remote = mapOf(mac to PersonalWebDavSync.plan(current, mac, emptyMap()).upload!!)
+        val restored = local().also { note(it, "恢复的旧稿") }
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            PersonalWebDavSync.plan(restored, mac, remote)
+        }
+        assertTrue(failure.message.orEmpty().contains("未确认"))
+        assertEquals("恢复的旧稿", restored.getJSONObject("notes").getJSONObject(a).getString("text"))
+    }
+
     @Test fun independentlyEditedNotesStayOnBothPeersUntilAUserEditsAfterSeeingTheConflict() {
         val first = PersonalWebDavSync.plan(local(a).also { note(it, "原文") }, mac, emptyMap())
         val common = mapOf(mac to first.upload!!)
