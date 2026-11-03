@@ -12,7 +12,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 | Item | Supported configuration |
 |---|---|
-| Source version | 1.3.1, build 6; see the release page for available public packages |
+| Source version | 1.3.7, build 15; see the release page for available public packages |
 | Operating system | macOS 15 or later |
 | Processor | Apple Silicon, arm64; the current package does not contain both Intel and Apple Silicon architectures |
 | Signing | Local ad-hoc signing; not notarized by Apple |
