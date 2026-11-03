@@ -408,13 +408,8 @@ test('mock HTTP 服务器：200/404/标题不符/超时（离线 localhost）', 
             response.end('<html><title>完全不同的标题</title></html>');
             return;
         }
-        if (request.url.includes('-slow/')) {
-            setTimeout(() => {
-                response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-                response.end('<html><title>语音/音乐/音频论文速递</title></html>');
-            }, 400);
-            return;
-        }
+        // Leave this request unanswered so timeout behavior is independent of host load.
+        if (request.url.includes('-slow/')) return;
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         response.end('<html><title>语音/音乐/音频论文速递 2099-01-04</title></html>');
     });
@@ -422,7 +417,7 @@ test('mock HTTP 服务器：200/404/标题不符/超时（离线 localhost）', 
     t.after(() => new Promise(resolve => server.close(resolve)));
     const base = `http://127.0.0.1:${server.address().port}/posts`;
     const code = await verifyWeb.runVerifyWebCli([
-        '--date', date, '--timeout-ms', '100', '--json'
+        '--date', date, '--timeout-ms', '1500', '--json'
     ], {
         currentDir: dir,
         env: { PAPER_DIGEST_BLOG_URL: base },
