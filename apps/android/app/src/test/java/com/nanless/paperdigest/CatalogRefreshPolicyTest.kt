@@ -44,6 +44,17 @@ class CatalogRefreshPolicyTest {
         assertNull(policy.begin(online,true,Instant.ofEpochMilli(now).toString(),now+1))
         assertNotNull(policy.begin(online,false,null,now+1))
     }
+    @Test fun foregroundProbeCanCheckAFreshCatalogButRespectsOfflineAndFailureCooldown() {
+        val policy = CatalogRefreshPolicy()
+        val saved = Instant.ofEpochMilli(now).toString()
+        assertNull(policy.begin(online, true, saved, now))
+        assertNull(policy.begin(online.copy(offline = true), true, saved, now, probeDue = true))
+        assertNotNull(policy.begin(online, true, saved, now, probeDue = true))
+        assertNull(policy.begin(online, true, saved, now + 60_000, probeDue = true))
+        policy.completed()
+        assertNotNull(policy.begin(online, true, saved, now + 60_000, probeDue = true))
+    }
+
     @Test fun unrelatedSettingsDoNotChangeThePeriodicScheduleIdentity() {
         val settings=JSONObject().put("syncHours",12).put("offlineMode",false)
         val before=CatalogRefreshSettings.from(settings)

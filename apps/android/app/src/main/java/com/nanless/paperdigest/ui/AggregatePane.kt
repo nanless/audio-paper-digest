@@ -73,6 +73,9 @@ import org.json.JSONObject
                         }
                         if(aggregate.offlineMode)Text(if(aggregate.catalog==null)"尚无保存的网站目录。关闭离线模式后可同步内容。"else"离线模式 · 阅读已经保存的页面。",style=MaterialTheme.typography.bodySmall)
                         if(state.busy)Text("资料任务正在进行，可到任务页查看进度。",style=MaterialTheme.typography.bodySmall)
+                        if (!aggregate.offlineMode) state.catalogCheckedAt?.let {
+                            Text("最近检查 · " + aggregateLocalMoment(it), style = MaterialTheme.typography.bodySmall)
+                        }
                         Text("${displayed.size} 个页面匹配",style=MaterialTheme.typography.labelLarge)
                     }
                 }

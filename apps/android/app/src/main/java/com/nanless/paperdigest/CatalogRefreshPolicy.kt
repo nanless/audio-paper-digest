@@ -17,15 +17,15 @@ internal class CatalogRefreshPolicy(private val failureCooldownMillis: Long = 5 
     private var sequence = 0L
 
     @Synchronized
-    fun eligible(settings: CatalogRefreshSettings, hasCatalog: Boolean, syncedAt: String?, nowMillis: Long): Boolean {
-        if (settings.offline || !due(hasCatalog, syncedAt, settings.hours, nowMillis)) return false
+    fun eligible(settings: CatalogRefreshSettings, hasCatalog: Boolean, syncedAt: String?, nowMillis: Long, probeDue: Boolean = false): Boolean {
+        if (settings.offline || (!probeDue && !due(hasCatalog, syncedAt, settings.hours, nowMillis))) return false
         val previous = lastAttempt
         return previous == null || nowMillis < previous.atMillis || nowMillis - previous.atMillis >= failureCooldownMillis
     }
 
     @Synchronized
-    fun begin(settings: CatalogRefreshSettings, hasCatalog: Boolean, syncedAt: String?, nowMillis: Long): Long? {
-        if (!eligible(settings, hasCatalog, syncedAt, nowMillis)) return null
+    fun begin(settings: CatalogRefreshSettings, hasCatalog: Boolean, syncedAt: String?, nowMillis: Long, probeDue: Boolean = false): Long? {
+        if (!eligible(settings, hasCatalog, syncedAt, nowMillis, probeDue)) return null
         val attempt = Attempt(++sequence, nowMillis); lastAttempt = attempt
         return attempt.token
     }

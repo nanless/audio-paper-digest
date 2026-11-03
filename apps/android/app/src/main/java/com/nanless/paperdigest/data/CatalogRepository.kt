@@ -231,6 +231,12 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         return result
     }
 
+    internal suspend fun hasPublishedCatalogUpdate(): Boolean {
+        if (personal.settings().optBoolean("offlineMode")) return false
+        val index = read(SITE + "index.json", MAX_TOTAL)
+        return sha256(index) != snapshot.summary.optString("snapshotID")
+    }
+
     suspend fun sync(progress: (Int, Int, String) -> Unit = { _, _, _ -> }): JSONObject = syncMutex.withLock { withContext(Dispatchers.IO) {
         require(!personal.settings().optBoolean("offlineMode")) { "当前为离线模式，请先在设置中允许联网" }
         val index = read(SITE + "index.json", MAX_TOTAL)
@@ -578,7 +584,9 @@ class CatalogRepository(private val context: Context, private val personal: Pers
     private suspend fun read(url: String, limit: Int): ByteArray {
         fetchOverride?.let { return it(url, limit).also { b -> require(b.size <= limit) } }
         val safe = sameSite(url)
-        val response = publishedHttp.execute(Request.Builder().url(safe).build(), limit)
+        val request = Request.Builder().url(safe)
+        if (safe == SITE + "index.json") request.header("Cache-Control", "no-cache")
+        val response = publishedHttp.execute(request.build(), limit)
         require(response.code == 200) { "网站资料暂不可用，原资料保留" }
         return response.bytes
     }

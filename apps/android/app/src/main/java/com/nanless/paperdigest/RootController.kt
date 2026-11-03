@@ -2,6 +2,10 @@ package com.nanless.paperdigest
 
 import android.content.Context
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.SystemClock
 import androidx.work.*
 import com.nanless.paperdigest.cloud.*
 import com.nanless.paperdigest.data.*
@@ -128,6 +132,50 @@ class RootController private constructor(private val context: Context, private v
     private val articleReadJob=AtomicReference<Job?>(null)
     private val catalogSyncAdmission=Mutex()
     private val automaticCatalogPolicy=CatalogRefreshPolicy()
+    private val foregroundCatalogIntervalMillis = 60_000L
+    @Volatile private var lastCatalogCheckElapsed: Long? = null
+
+    private fun catalogProbeDue(): Boolean {
+        val last = lastCatalogCheckElapsed ?: return true
+        return SystemClock.elapsedRealtime() - last >= foregroundCatalogIntervalMillis
+    }
+
+    private fun catalogCheckCompleted() {
+        lastCatalogCheckElapsed = SystemClock.elapsedRealtime()
+        automaticCatalogPolicy.completed()
+        _state.update { it.copy(catalogCheckedAt = now()) }
+    }
+
+    private fun observeCatalogConnectivity() {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            private var validatedNetwork: Network? = null
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                    if (validatedNetwork == network) validatedNetwork = null
+                    return
+                }
+                if (validatedNetwork == network) return
+                validatedNetwork = network
+                lastCatalogCheckElapsed = null
+                automaticCatalogPolicy.completed()
+                exportScope.launch { scheduleAutomaticCatalogCheck() }
+            }
+
+            override fun onLost(network: Network) {
+                if (validatedNetwork == network) validatedNetwork = null
+            }
+        }
+        // The application owns this controller for the lifetime of the process.
+        runCatching { connectivity.registerDefaultNetworkCallback(callback) }
+        exportScope.launch {
+            while (isActive) {
+                delay(foregroundCatalogIntervalMillis)
+                scheduleAutomaticCatalogCheck()
+            }
+        }
+    }
     private val foregroundOperations=AtomicInteger(0)
     private val foregroundOwners=java.util.Collections.newSetFromMap(ConcurrentHashMap<Any,Boolean>())
     private val readingViewOwners=java.util.Collections.newSetFromMap(ConcurrentHashMap<Any,Boolean>())
@@ -163,9 +211,9 @@ class RootController private constructor(private val context: Context, private v
         return Triple(settings,summary.optString("snapshotID") !in setOf("","unsynced","bundled-sample")&&summary.optInt("paperCount")>0,summary.nullableString("syncedAt"))
     }
     private fun scheduleAutomaticCatalogCheck() {
-        if(!installBackground||foregroundOwners.isEmpty()||foregroundOperations.get()>0||active.isNotEmpty()||readingViewOwners.isNotEmpty()||articleReadJob.get()?.isCompleted==false)return
+        if(!installBackground||foregroundOwners.isEmpty()||foregroundOperations.get()>0||active.isNotEmpty()||readingViewOwners.isNotEmpty()||_state.value.aggregate.selected!=null||articleReadJob.get()?.isCompleted==false)return
         val input=automaticCatalogInputs()
-        if(!automaticCatalogPolicy.eligible(input.first,input.second,input.third,System.currentTimeMillis()))return
+        if(!automaticCatalogPolicy.eligible(input.first,input.second,input.third,System.currentTimeMillis(),catalogProbeDue()))return
         lateinit var work:Job
         work=exportScope.launch(start=CoroutineStart.LAZY){performAutomaticCatalogSync(1_500,work)}
         if(automaticCatalogJob.compareAndSet(null,work))work.start()else work.cancel()
@@ -183,12 +231,20 @@ class RootController private constructor(private val context: Context, private v
         try {
             if(initialDelayMillis>0)delay(initialDelayMillis)
             if(initialDelayMillis>0&&foregroundOwners.isEmpty())return@withContext false
-            if(foregroundOwners.isNotEmpty()&&readingViewOwners.isNotEmpty())return@withContext false
-            if(foregroundOperations.get()>0||active.isNotEmpty()||articleReadJob.get()?.isCompleted==false||publishedPreload.get()?.isCompleted==false)return@withContext false
+            if(foregroundOwners.isNotEmpty()&&(readingViewOwners.isNotEmpty()||_state.value.aggregate.selected!=null))return@withContext false
+            if(foregroundOperations.get()>0||active.isNotEmpty()||articleReadJob.get()?.isCompleted==false)return@withContext false
             if(!catalogSyncAdmission.tryLock())return@withContext false
             admitted=true
             val input=automaticCatalogInputs()
-            attempt=automaticCatalogPolicy.begin(input.first,input.second,input.third,System.currentTimeMillis())?:return@withContext false
+            val now = System.currentTimeMillis()
+            val probe = initialDelayMillis > 0 && catalogProbeDue()
+            val fullSync = CatalogRefreshPolicy.due(input.second,input.third,input.first.hours,now)
+            attempt=automaticCatalogPolicy.begin(input.first,input.second,input.third,now,probe)?:return@withContext false
+            if (!fullSync && !library.hasPublishedCatalogUpdate()) {
+                catalogCheckCompleted()
+                return@withContext true
+            }
+            drainBackground(publishedPreload)
             currentCoroutineContext().ensureActive()
             aggregateBrowser.pausePreviews();previewsPaused=true
             runTask("library.sync.automatic") { maintenance.withLock {
@@ -196,13 +252,13 @@ class RootController private constructor(private val context: Context, private v
                 require(!personal.settings().optBoolean("offlineMode")){"当前为离线模式"}
                 library.sync { _,_,message->_state.update{it.copy(notice=message)} }
             } }
-            automaticCatalogPolicy.completed()
+            catalogCheckCompleted()
             schedulePublishedPreload()
             true
         } catch(cancelled:CancellationException) {
             automaticCatalogPolicy.cancelled(attempt);throw cancelled
         } catch(_:Exception) {
-            _state.update{it.copy(notice="自动检查暂未完成，已保存的目录仍可阅读；可稍后重试同步。")}
+            _state.update{it.copy(notice="自动检查暂未完成，已保存的目录仍可阅读；联网恢复后会自动检查。")}
             false
         } finally {
             if(previewsPaused)aggregateBrowser.resumePreviews()
@@ -328,7 +384,7 @@ class RootController private constructor(private val context: Context, private v
         cloudCredentialBorrowing.attachDrain{zotero.cancelAndDrainBorrowed()}
         refresh()
         if (installBackground) CloudWorkerRuntime.install({ cloud }, { service, expected -> runTask("cloud.automatic") { service.upload(automatic = true, expectedDestinationID = expected) } })
-        if (installBackground) { scheduleCloud(cloud.state()); scheduleCatalog() }
+        if (installBackground) { scheduleCloud(cloud.state()); scheduleCatalog(); observeCatalogConnectivity() }
         exportScope.launch { try { reconcilePendingExports() } catch (_: Exception) { /* Independent pending-list error is already visible. */ } }
     }
 
@@ -492,7 +548,7 @@ class RootController private constructor(private val context: Context, private v
                     if(!catalogSyncAdmission.tryLock())JSONObject().put("status","sync-in-progress")
                     else try {
                         runTask(command) { maintenance.withLock { library.sync { _, _, message -> _state.update { it.copy(notice = message) } } } }
-                            .also{automaticCatalogPolicy.completed();schedulePublishedPreload()}
+                            .also{catalogCheckCompleted();schedulePublishedPreload()}
                     }finally{catalogSyncAdmission.unlock()}
                 }
                 "paper.open" -> openPaper(payload.getString("paperID"), payload.optBoolean("refresh"))

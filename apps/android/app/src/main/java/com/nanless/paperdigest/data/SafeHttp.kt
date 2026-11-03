@@ -66,7 +66,9 @@ class SafeHttp private constructor(private val proxy: String?, private val local
             if (publishedVpnActive != null) addInterceptor { chain ->
                 val request = chain.request()
                 val isPublisher = runCatching { CatalogRepository.sameSite(request.url.toString()) }.isSuccess
-                if (!isPublisher || request.method != "GET" || request.headers.size != 0) {
+                val publicHeaders = request.headers.size == 0 ||
+                    (request.headers.size == 1 && request.header("Cache-Control") == "no-cache")
+                if (!isPublisher || request.method != "GET" || !publicHeaders) {
                     throw IOException("仅允许读取官网公开资料")
                 }
                 chain.proceed(request)
