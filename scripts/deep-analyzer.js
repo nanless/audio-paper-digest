@@ -19398,6 +19398,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             enforceReaderResourceClaims(readerResourceClaimDraftFromArticle(readerResult.plan, readerResult.article),
                 verifiedReaderResources, rawTextForAnalysis);
             const previousOperatorReaderStage = structuredClone(analysisManifest.stages.apiReaderArticle);
+            const operatorSupersedes = require('./lib/daily-reader-operator-correction').hasOperatorProof(readerResult.operatorCorrectionProof);
+            const previousOperatorCompletionProof = operatorSupersedes && readerResult.ordinalPatchCompilations?.length
+                ? previousOperatorReaderStage?.ordinalCompletionProof
+                    || require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
+                : null;
             if (require('./lib/daily-reader-operator-correction').hasOperatorProof(readerResult.operatorCorrectionProof)
                 && !readerResult.ordinalPatchCompilations?.length
                 && (previousOperatorReaderStage?.ordinalCompletionProof || paper.readerRevisionHistory?.completionProof)) {
@@ -19525,7 +19530,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                         ...require('./lib/protocol-codec').recordHeader('reader-ordinal-history', 'reader-ordinal-history'),
                         reason: 'operator-correction-supersedes-ordinal-completion',
                         compilations: structuredClone(readerResult.ordinalPatchCompilations),
-                        previousCompletionProof: previous?.ordinalCompletionProof || null,
+                        previousCompletionProof: previousOperatorCompletionProof,
                         previousStage: previous ? {
                             articleSha256: previous.articleSha256,
                             planSha256: previous.planSha256,

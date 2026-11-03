@@ -677,7 +677,27 @@ function matchesArchivedOrdinaryCompletion(paper, attempts, actualRun, runFile) 
     }
     return false;
 }
-function readVerifiedCompletion(paper, planning=false){
+function verifiedSupersededCompletionPointer(paper) {
+    const revision = paper?.readerRevisionHistory;
+    if (revision?.completionProof === undefined) return null;
+    const manifest = paper?.analysisManifest, stage = manifest?.stages?.apiReaderArticle;
+    if (revision.contract !== 'daily-reader-revision-history-v1' || revision.reason !== 'stage-invalidated'
+        || !revision.completionProof?.path || !SHA.test(revision.completionProof.sha256 || '')
+        || manifest?.contracts?.readerTargetOrdinalPatch !== undefined
+        || stage?.ordinalCompletionProof !== undefined || stage?.ordinalPatchContract !== undefined
+        || stage?.ordinalPatchSchemaFingerprint !== undefined || stage?.ordinalPatchCompilations !== undefined
+        || stage?.ordinalPatchHistory !== undefined || stage?.operatorProvenance !== undefined)
+        fail('invalid superseded revision pointer context', 'run');
+    // The revision points to an older Reader, which did not use the current core feedback.
+    // Verify the actual index, original records, article/plan hashes and sealed source
+    // through the ordinary stage-absent branch, without replacing the live stage.
+    const stages = { ...manifest.stages };
+    delete stages.apiReaderArticle;
+    const checked = readVerifiedCompletion({ ...paper, analysisManifest: { ...manifest, stages } }, false, true);
+    if (!isDeepStrictEqual(checked, revision.completionProof)) fail('superseded revision pointer is unverified', 'run');
+    return checked;
+}
+function readVerifiedCompletion(paper, planning=false, returnVerifiedRevisionPointer=false){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
     const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchSchemaFingerprint!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
     if(!prov){if(marked)fail('completion marker lacks daily source','run');return null;}
@@ -761,7 +781,7 @@ function readVerifiedCompletion(paper, planning=false){
         if(revision?.contract==='daily-reader-revision-history-v1'
             &&revision?.completionProof?.path&&revision?.completionProof?.sha256){
             verifyRevisionPointer();
-            return null;
+            return returnVerifiedRevisionPointer ? structuredClone(revision.completionProof) : null;
         }
         fail('completion index/marker removed','run');
     }
@@ -824,4 +844,4 @@ function hasReplayedArchivedSignedFactRevision(paper) {
 }
 module.exports={isCombinedReaderFinalRejection,clearSupersededCompletionMarker,recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
-    hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
+    verifiedSupersededCompletionPointer,hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
