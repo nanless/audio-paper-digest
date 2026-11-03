@@ -305,7 +305,7 @@ public actor CloudArchiveService {
     private func end() { active = false; currentCheckpoint = nil }
     private func save(_ state: UploadCheckpoint) async throws {
         do { try await checkpointSink(state); currentCheckpoint = state }
-        catch { throw CloudError.checkpointStore }
+        catch { try Self.preserveCancellation(error); throw CloudError.checkpointStore }
     }
     private func ensureCollection(_ path: String) async throws {
         _ = try await request("MKCOL", path: path, limit: 64 * 1024, accepted: [201,405])
@@ -389,7 +389,7 @@ public actor CloudArchiveService {
     private func recordCooldown(_ until: Date) async throws {
         retryAfter = until
         var cooldownSaved = true
-        do { try await cooldownSink(until) } catch { cooldownSaved = false }
+        do { try await cooldownSink(until) } catch { try Self.preserveCancellation(error); cooldownSaved = false }
         if var state = currentCheckpoint { state.retryAfter = until; try await save(state) }
         guard cooldownSaved else { throw CloudError.checkpointStore }
     }
@@ -456,13 +456,17 @@ public actor CloudArchiveService {
         return manifest
     }
     private static func parseRetryAfter(_ value: String?, now: Date) -> Date {
-        if let value, let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 {
-            return now.addingTimeInterval(max(1,seconds))
-        }
-        if let value {
+        if let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty {
+            // Delay-seconds is decimal digits. Bound the resulting date to the
+            // same four-digit year range as the absolute HTTP date.
+            let maximum = Date(timeIntervalSince1970: 253_402_300_799)
+            if value.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
+               let seconds = UInt64(value), Double(seconds) <= maximum.timeIntervalSince(now) {
+                return now.addingTimeInterval(max(1, Double(seconds)))
+            }
             let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX"); formatter.timeZone = TimeZone(secondsFromGMT:0)
             formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-            if let date = formatter.date(from:value), date > now { return date }
+            if let date = formatter.date(from:value), date > now, date <= maximum { return date }
         }
         return now.addingTimeInterval(60)
     }

@@ -493,6 +493,16 @@ private actor CloudIndependentPublishGate {
             await dav.add(.init("PROPFIND","/dav/",status:403));try await rejects(.forbidden) { try await s.probe() }
             try require(await dav.records().count==1,"one actual HTTP403 response")
         }
+        await check("cancelled checkpoint save remains cancellation without sending an upload") {
+            let dav = CloudTestDAV()
+            let s = try CloudArchiveService(destinationID: UUID(), credentials: { .init(username:"fixture", password:"fixture") },
+                checkpointSink: { _ in throw CancellationError() }, transport: { try await dav.request($0, limit: $1) },
+                minimumRequestInterval: 0)
+            try await rejectsCancellation { _ = try await s.upload(encodedBackup: small) }
+            try require(await dav.records().isEmpty, "no upload sent after cancelled checkpoint")
+            try await s.probe()
+            try require(await dav.records().count == 1, "cancelled checkpoint releases the operation gate")
+        }
         await check("401 stops immediately and does not switch credentials or auto retry") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
             await dav.add(.init("PROPFIND","/dav/",status:401))
@@ -521,9 +531,11 @@ private actor CloudIndependentPublishGate {
             formatter.locale=Locale(identifier:"en_US_POSIX");formatter.timeZone=TimeZone(secondsFromGMT:0);formatter.dateFormat="EEE, dd MMM yyyy HH:mm:ss zzz"
             await dav.add(.init("PROPFIND","/dav/",status:503,headers:["Retry-After":formatter.string(from:until)]))
             try await rejects(.throttled(until)) { try await s.probe() }
-            let other=try service(dav,log,clock:clock)
-            await dav.add(.init("PROPFIND","/dav/",status:429,headers:["Retry-After":"invalid"]))
-            try await rejects(.throttled(clock.now().addingTimeInterval(60))) { try await other.probe() }
+            for value in ["invalid", "1e20", "1.5", "99999999999999999999", "1000000000000", ""] {
+                let other=try service(dav,log,clock:clock)
+                await dav.add(.init("PROPFIND","/dav/",status:429,headers:value.isEmpty ? [:] : ["Retry-After":value]))
+                try await rejects(.throttled(clock.now().addingTimeInterval(60))) { try await other.probe() }
+            }
         }
         await check("serial actor gate rejects overlapping operations across await without touching old versions") {
             let dav=CloudTestDAV(),log=CloudCheckpointLog(),s=try service(dav,log)
