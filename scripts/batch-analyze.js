@@ -309,8 +309,16 @@ async function main(options = {}) {
                 });
                 const grant = explicitRounds.get(normalizedId(paper));
                 // Reader恢复可直接刷新正文，不必调用整篇分析回调；新轮范围须覆盖整个恢复入口。
-                const recover = () => savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan, normalAnalyze,
-                    feedbacks.get(normalizedId(paper)), sourceOptions);
+                const recover = () => {
+                    if (!grant && !operatorManifestPath && !signedManifestPath
+                        && !options.analyzeFn && !options.analyzeBatch
+                        && !feedbacks.has(normalizedId(paper))) {
+                        const saved = dailyFreshSources.savedPaidFingerprintOperatorCheckpoint(dailySourcePlan, paper);
+                        if (saved) return saved;
+                    }
+                    return savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan, normalAnalyze,
+                        feedbacks.get(normalizedId(paper)), sourceOptions);
+                };
                 if (operatorManifestPath !== undefined && grant) throw new Error('人工修正不能混用收费重试授权');
                 return grant ? readerExplicitRound.withExplicitRound(paper, grant, recover) : recover();
             }

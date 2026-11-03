@@ -578,14 +578,14 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
 
 // Only the default locked daily analysis path can retry the exact prior
 // final-qualification failure before the writer considers new stage inputs.
-function savedOrdinaryReaderCheckpoint(plan, paper) {
+function savedOrdinaryReaderCheckpoint(plan, paper, paidFingerprint = false) {
     const rejection = '读者文章与论文来源及分析记录的对应关系未通过核验。';
     const engine = require('../analysis-engine.js');
     if (!engine.paperAnalysisLockHeld(paper) || paper.latestAnalysisAttemptError !== rejection
         || paper.error !== rejection || paper.latestAnalysisAttemptRetryable !== true
         || paper.latestAnalysisAttemptErrorCode !== null || paper.latestAnalysisAttemptErrorScope !== null
         || paper.latestAnalysisAttemptErrorCategory !== null || paper.latestAnalysisAttemptErrorStatus !== null
-        || Object.hasOwn(paper, require('./pending-fact-feedback').FIELD)
+        || (!paidFingerprint && Object.hasOwn(paper, require('./pending-fact-feedback').FIELD))
         || require('./daily-fact-review').current(paper.arxivId)
         || paper.analysisManifest?.stages?.apiReaderArticle?.status !== 'complete'
         || typeof paper.analysisCheckpoint !== 'string' || !paper.analysisCheckpoint.trim()
@@ -598,9 +598,22 @@ function savedOrdinaryReaderCheckpoint(plan, paper) {
     const paperSha = stableHash(paper);
     if (!stored || stableHash(stored) !== paperSha || !isPaperReusableForAnalysis(stored,lockedPlan)) return null;
     const ordinal = require('./reader-target-ordinal-patch');
-    if (!ordinal.hasArchivedOrdinaryCompletion(stored)) return null;
     const candidate = { ...structuredClone(stored), analysis:stored.analysisCheckpoint };
-    if (engine.getIncompleteAnalysisContentReason(candidate) !== null) return null;
+    if (paidFingerprint) {
+        const operator = require('./daily-reader-operator-correction');
+        if (!operator.hasPaidFingerprintCompletion(stored,lockedPlan.readerAttemptsDir)) return null;
+        if (operator.retainedPaidFingerprintInput(candidate) === null)
+            fail('已保存的格式指纹修正缺少原导读证明');
+        const pending = require('./pending-fact-feedback');
+        const original = pending.read(candidate,lockedPlan);
+        if (!original || !require('./saved-fact-feedback').coreOnlyFeedback(original.feedback)
+            || !pending.completed(candidate,lockedPlan))
+            fail('已保存的格式指纹修正仍缺原摘要事实义务的完整核验');
+    } else if (!ordinal.hasArchivedOrdinaryCompletion(stored)) return null;
+    if (engine.getIncompleteAnalysisContentReason(candidate) !== null) {
+        if (paidFingerprint) fail('已保存的格式指纹修正未通过整篇资格核验');
+        return null;
+    }
     const current = readCanonical();
     requireLockedDailyFreshSourceRecoveryPlan(current, { entryPlan:plan, paper });
     const latest = current.papers.find(item => normalizedId(item) === normalizedId(paper));
@@ -609,6 +622,10 @@ function savedOrdinaryReaderCheckpoint(plan, paper) {
     // The analysis engine owns all final checks and clears the latest error
     // only after this exact saved output has passed those checks again.
     return candidate;
+}
+
+function savedPaidFingerprintOperatorCheckpoint(plan, paper) {
+    return savedOrdinaryReaderCheckpoint(plan, paper, true);
 }
 
 function createDailyAnalyzeFn(plan, options = {}) {
@@ -639,7 +656,7 @@ function withDailyFreshAnalysisContext(plan, callback, options = {}) {
     return fresh.withFreshAnalysisContext(analysisIdentity(plan, options), callback);
 }
 
-module.exports = { factFeedbackDirectory, SOURCE_GENERATION, DailyFreshSourcePlanError, stableHash,
+module.exports = { savedPaidFingerprintOperatorCheckpoint, factFeedbackDirectory, SOURCE_GENERATION, DailyFreshSourcePlanError, stableHash,
     createDailyFreshSourcePlan, captureDailyFreshSources, readDailyFreshSource, isPaperBoundToPlan, isPaperReusableForAnalysis,
     prepareDailyPaper, createDailyAnalyzeFn, withDailyFreshAnalysisContext,
     dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan, requireLockedDailyFreshSourceRecoveryPlan, requireFinalDailyFreshSourceRecoveryPlan, prepareDailyFreshSourceRecoveryPayload,

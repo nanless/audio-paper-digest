@@ -19750,7 +19750,10 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     }
     delete paper.analysisCheckpoint;
     delete paper.analysisRecoveryImageManifest;
+    const dailyOperator = require('./lib/daily-reader-operator-correction');
+    const finalReaderInput = dailyOperator.retainedPaidFingerprintInput(paper);
     retainFinalTagCheckpoints(paper, analysisManifest);
+    if (finalReaderInput !== null) paper.analysisStageCheckpoints = { ...paper.analysisStageCheckpoints, apiReaderArticle: finalReaderInput };
     retainFinalFactReviewInputs(paper, analysisManifest);
     delete paper.latestAnalysisAttemptError;
     delete paper.latestAnalysisAttemptAt;

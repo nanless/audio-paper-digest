@@ -300,6 +300,15 @@ function sealPaidFingerprintCompletion(paper, readerInputAnalysis) {
     require('./publication-file-primitives').writeExact(file, JSON.stringify(fingerprintCompletion(paper, proof)) + '\n');
     validateSavedCompletion(paper);
 }
+function retainedPaidFingerprintInput(paper) {
+    const proof = paper.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance;
+    if (!hasOperatorProof(proof)) return null;
+    if (!/^[a-f0-9-]{36}$/.test(proof.runId || '')) throw new Error('Invalid operator source run');
+    const attempts = path.join(require('../config').FILES.dailyFreshSourceRunsDir, proof.runId, 'reader-attempts');
+    if (!hasPaidFingerprintCompletion(paper, attempts)) return null;
+    validateSavedCompletion(paper);
+    return paper.analysisStageCheckpoints.apiReaderArticle;
+}
 function validateSavedCompletion(paper) { return validateSavedCompletionUnchecked(paper, false); }
 function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
     const paperSha256 = require('./daily-fresh-source-plan').stableHash(paper);
@@ -403,5 +412,5 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
     if (daily.stableHash(paper) !== paperSha256) fail('paper/stage changed during read-only replay');
     return true;
 }
-module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,hasPaidFingerprintCompletion,sealPaidFingerprintCompletion,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
+module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,hasPaidFingerprintCompletion,sealPaidFingerprintCompletion,retainedPaidFingerprintInput,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
     inspectDailyOperatorTail,assertCompleteOperatorTail};
