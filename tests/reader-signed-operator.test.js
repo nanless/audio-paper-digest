@@ -7,6 +7,8 @@ const engine=require('../scripts/analysis-engine.js');
 const repair=require('../scripts/lib/reader-repair.js');
 const Config=require('../scripts/config.js');
 const fresh=require('../scripts/lib/fresh-analysis-context.js');
+const codec=require('../scripts/lib/protocol-codec');
+const signedFamily='reader-signed-operator';
 const {reconstructReaderDraftFromVerifiedArticle}=require('../scripts/lib/reader-signed-draft.js');
 const {prepareReaderOperatorPatchResult,applyReaderOperatorPatch,acceptReaderOperatorFactReview}=require('../scripts/lib/reader-signed-operator.js');
 
@@ -71,7 +73,7 @@ function setup(t, options={}) {
             paperLocked=true;try{return await cb();}finally{paperLocked=false;}}),reload,
         updateJsonFileLocked:engine.updateJsonFileLocked,
         updateRun:changes=>engine.updateJsonFileLocked(path.join(runDir,'run.json'),current=>({...current,...changes}))};
-    const apply=hooks=>engine.withFileLock(path.join(runDir,'.operation'),()=>applyReaderOperatorPatch(
+    const apply=(hooks,applyPatch=applyReaderOperatorPatch)=>engine.withFileLock(path.join(runDir,'.operation'),()=>applyPatch(
         {loaded:reload(),patchFile:'reviewed.json'},{...deps,...hooks}));
     const accept=(request,hooks)=>engine.withFileLock(path.join(runDir,'.operation'),()=>acceptReaderOperatorFactReview(
         {loaded:reload(),request},{...deps,isSuccessfulAnalysisRecord:()=>true,...hooks}));
@@ -104,7 +106,7 @@ test('真实解析器和共用保存核验会写入人工来源、保留 API 出
 });
 
 test('持久意图、输出、分析装入和运行 SHA 中断都能恢复，不需要 API，也不重复人工历史',async t=>{
-    for(const hook of ['afterIntent','afterOutput','afterAnalysis','afterRun']) {
+    for(const hook of ['afterReady','afterIntent','afterOutput','afterAnalysis','afterRun']) {
         const f=setup(t);
         await assert.rejects(f.apply({[hook]:()=>{throw new Error('injected interruption');}}),/injected/);
         const result=await f.apply(),paper=f.read('analysis').papers[0];
@@ -168,81 +170,86 @@ test('当前实现 SHA 不同时，归档的人工输出原样恢复', async t =
     }
 });
 
-test('只有意图没有输出的人工记录只拒绝变化过的输出 SHA，并用原实现恢复', async t => {
+test('新意图绑定封存输出，当前实现字节改变后仍按原输出续跑', async t => {
     const f = setup(t);
-    const originalFetch = global.fetch;
-    let fetchCalls = 0;
-    global.fetch = async () => { fetchCalls++; throw new Error('no network is authorized'); };
-    try {
-        await assert.rejects(f.apply({ afterIntent: () => { throw new Error('stop after durable intent'); } }),
-            { message: 'stop after durable intent' });
-        const patchBytes = fs.readFileSync(f.patchFile), patchSha256 = runner.sha256(patchBytes);
-        const archive = path.join(f.runDir, 'patches', 'signed-operator-archive', patchSha256);
-        const outputPath = path.join(archive, 'output.json');
-        assert.equal(fs.existsSync(outputPath), false);
-        const paths = [path.join(f.runDir, 'analysis.json'), path.join(f.runDir, 'run.json'), f.patchFile,
-            ...['before.json', 'request.json', 'intent.json'].map(name => path.join(archive, name))];
-        const originalFiles = new Map(paths.map(filename => [filename, fs.readFileSync(filename)]));
-        const before = JSON.parse(originalFiles.get(path.join(archive, 'before.json')));
-        const request = JSON.parse(originalFiles.get(path.join(archive, 'request.json')));
-        const intent = JSON.parse(originalFiles.get(path.join(archive, 'intent.json')));
-        const run = f.reload().run;
-        assert.equal(intent.patchFileSha256, patchSha256);
-        assert.equal(runner.sha256(originalFiles.get(path.join(archive, 'request.json'))), patchSha256);
-        assert.equal(intent.parentPaperSha256, request.parentPaperSha256);
-        assert.equal(intent.runIdentitySha256, run.identitySha256);
-        assert.equal(intent.sourceSnapshotSha256, f.sourceDetails.freshSourceDescriptor.sourceSnapshotSha256);
-        assert.equal(runner.stableHash(before), request.parentPaperSha256);
-        assert.equal(before.apiReaderArticleSha256, request.parentArticleSha256);
-        assert.equal(before.apiReaderPlanSha256, request.parentPlanSha256);
-        assert.equal(before.sourceSha256, request.sourceSha256);
+    await assert.rejects(f.apply({afterIntent: () => { throw new Error('stop after durable intent'); }}), /durable intent/);
+    const archive = path.join(f.runDir, 'patches', 'signed-operator-archive', runner.sha256(fs.readFileSync(f.patchFile)));
+    const intentFile = path.join(archive, 'intent.json'), readyFile = path.join(archive, 'ready-output.json');
+    const outputFile = path.join(archive, 'output.json');
+    const intentBytes = fs.readFileSync(intentFile), readyBytes = fs.readFileSync(readyFile);
+    const intent = JSON.parse(intentBytes), ready = JSON.parse(readyBytes);
+    assert.ok(codec.isCurrentHeader(intent, signedFamily));
+    assert.equal(intent.readyOutputFileSha256, runner.sha256(readyBytes));
+    assert.equal(intent.outputSha256, runner.stableHash(ready));
+    assert.equal(fs.existsSync(outputFile), false);
+    fs.writeFileSync(readyFile, Buffer.concat([readyBytes, Buffer.from(' ')]));
+    await assert.rejects(f.apply(), /prepared output bytes drift/);
+    assert.equal(fs.existsSync(outputFile), false);
+    assert.equal(f.read('analysis').status, 'complete');
+    fs.writeFileSync(readyFile, readyBytes);
 
-        const operatorPath = require.resolve('../scripts/lib/reader-signed-operator.js');
-        const originalRead = fs.readFileSync;
-        const originalBytes = originalRead(operatorPath);
-        const changedBytes = Buffer.concat([originalBytes, Buffer.from('\n// Offline fixture: changed implementation bytes.\n')]);
-        let sourceReads = 0;
-        fs.readFileSync = function(filename, options) {
-            if (filename !== operatorPath) return originalRead.apply(this, arguments);
-            sourceReads++;
-            const encoding = typeof options === 'string' ? options : options?.encoding;
-            return encoding ? changedBytes.toString(encoding) : Buffer.from(changedBytes);
-        };
-        try {
-            const candidate = await prepareReaderOperatorPatchResult({ parent: before, sourceDetails: f.sourceDetails,
-                run, request, patchFileSha256: patchSha256, appliedAt: intent.appliedAt });
-            assert.equal(candidate.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(changedBytes));
-            assert.notEqual(candidate.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
-            assert.equal(candidate.contract, 'reader-signed-operator-v1');
-            assert.equal(intent.contract, candidate.contract);
-            assert.equal(candidate.paperSha256, runner.stableHash(candidate.paper));
-            assert.equal(candidate.provenance.parentPaperSha256, request.parentPaperSha256);
-            assert.equal(candidate.provenance.patchFileSha256, patchSha256);
-            assert.equal(candidate.provenance.sourceSnapshotSha256, f.sourceDetails.freshSourceDescriptor.sourceSnapshotSha256);
-            assert.equal(candidate.provenance.appliedAt, intent.appliedAt);
-            assert.equal(f.valid(candidate.paper), true);
-            assert.notEqual(runner.stableHash(candidate), intent.outputSha256);
-            await assert.rejects(f.apply(), { message: 'Signed operator durable output drift' });
-            for (const [filename, bytes] of originalFiles) assert.deepEqual(fs.readFileSync(filename), bytes);
-            assert.equal(fs.existsSync(outputPath), false);
-            assert(sourceReads >= 2);
-        } finally {
-            fs.readFileSync = originalRead;
-        }
-        const result = await f.apply();
-        const restoredOutput = JSON.parse(fs.readFileSync(outputPath));
-        assert.equal(result.status, 'fact_review_pending');
-        assert.equal(result.newApiRequests, 0);
-        assert.equal(runner.stableHash(restoredOutput), intent.outputSha256);
-        assert.equal(restoredOutput.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
-        assert.equal(f.valid(f.read('analysis').papers[0]), true);
-        assert.equal(f.read('run').analysisSha256, runner.readRegularJson(path.join(f.runDir, 'analysis.json')).sha256);
-        for (const filename of paths.slice(2)) assert.deepEqual(fs.readFileSync(filename), originalFiles.get(filename));
-        assert.equal(fetchCalls, 0);
-    } finally {
-        global.fetch = originalFetch;
-    }
+    const operatorPath = require.resolve('../scripts/lib/reader-signed-operator.js');
+    const read = fs.readFileSync;
+    const newBytes = Buffer.concat([read(operatorPath), Buffer.from('\n// Simulated implementation change.\n')]);
+    t.mock.method(fs, 'readFileSync', (filename, options) => {
+        if (filename !== operatorPath) return read(filename, options);
+        const encoding = typeof options === 'string' ? options : options?.encoding;
+        return encoding ? newBytes.toString(encoding) : newBytes;
+    });
+    assert.notEqual(runner.sha256(fs.readFileSync(operatorPath)), ready.provenance.implementationIdentity['reader-signed-operator.js']);
+    const result = await f.apply();
+    assert.equal(result.newApiRequests, 0);
+    assert.equal(result.paperSha256, ready.paperSha256);
+    assert.deepEqual(fs.readFileSync(outputFile), readyBytes);
+    assert.deepEqual(fs.readFileSync(readyFile), readyBytes);
+    assert.deepEqual(fs.readFileSync(intentFile), intentBytes);
+    assert.equal(f.valid(f.read('analysis').papers[0]), true);
 });
+
+function originalSignedOperatorWriter() {
+    const {execFileSync}=require('node:child_process'), Module=require('node:module');
+    const filename=require.resolve('../scripts/lib/reader-signed-operator.js');
+    const bytes=execFileSync('git',['--no-lazy-fetch','--no-replace-objects','show',
+        '57fdac4014029c460841f6bb65e45e62b8292b99:scripts/lib/reader-signed-operator.js'],
+    {cwd:path.resolve(__dirname,'..')});
+    assert.equal(runner.sha256(bytes),'515b2f7d6940fb442295b3575ac03801bcd7faae3aad1a2ba07f3d17c10c31c9');
+    const original=new Module(filename,module);
+    original.filename=filename;original.paths=Module._nodeModulePaths(path.dirname(filename));
+    const ownRead=fs.readFileSync;
+    const nativeRequire=original.require.bind(original);
+    original.require=name=>name==='node:fs' ? {...fs,readFileSync(file,options){
+        if(file!==filename)return ownRead(file,options);
+        const encoding=typeof options==='string'?options:options?.encoding;
+        return encoding?bytes.toString(encoding):Buffer.from(bytes);
+    }} : nativeRequire(name);
+    original._compile(bytes.toString('utf8'),filename);
+    return original.exports.applyReaderOperatorPatch;
+}
+
+for (const hook of ['afterIntent', 'afterOutput']) {
+    test(`历史人工归档在 ${hook} 中断后保留原字节和原许可`, async t => {
+        const f=setup(t);
+        await assert.rejects(f.apply({[hook]:()=>{throw new Error('original interruption');}},
+            originalSignedOperatorWriter()),/original interruption/);
+        const archive=path.join(f.runDir,'patches','signed-operator-archive',runner.sha256(fs.readFileSync(f.patchFile)));
+        const original=new Map(fs.readdirSync(archive).map(name=>[name,fs.readFileSync(path.join(archive,name))]));
+        const intent=JSON.parse(original.get('intent.json'));
+        assert.equal(intent.contract,'reader-signed-operator-v1');
+        assert.equal(original.has('output.json'),hook==='afterOutput');
+        if (hook==='afterIntent') {
+            await assert.rejects(f.apply(), /Signed operator durable output drift/);
+            assert.equal(fs.existsSync(path.join(archive,'output.json')),false);
+            assert.equal(f.read('analysis').status,'complete');
+        } else {
+            const output=JSON.parse(original.get('output.json')),result=await f.apply();
+            assert.equal(result.newApiRequests,0);
+            assert.equal(result.paperSha256,output.paperSha256);
+            assert.equal(result.status,'fact_review_pending');
+        }
+        for (const [name,bytes] of original) assert.deepEqual(fs.readFileSync(path.join(archive,name)),bytes);
+        assert.equal(fs.existsSync(path.join(archive,'ready-output.json')),false);
+    });
+}
 
 test('父记录过期、来源/草稿/节点非法、非法追加或正式检查失败时，分析与归档保持不变',async t=>{
     for(const mutate of [f=>{f.request.parentPaperSha256='0'.repeat(64);},

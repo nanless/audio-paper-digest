@@ -581,6 +581,21 @@
         "originalEvidence": "exact-python-canonical-sha"
       },
       "historical": []
+    },
+    {
+      "name": "reader-signed-operator",
+      "currentVariant": "sealed-local-patch-and-prepared-output",
+      "currentSchema": {
+        "authority": "exact-parent-source-and-request",
+        "pendingOutput": "immutable-file-sha-and-value-sha",
+        "newApiRequests": 0
+      },
+      "historical": [
+        {
+          "tag": "reader-signed-operator-v1",
+          "variant": "original-local-patch"
+        }
+      ]
     }
   ]
 }

@@ -6,7 +6,17 @@ const crypto = require('node:crypto');
 const runner = require('./fresh-rewrite-run.js');
 const repair = require('./reader-repair.js');
 const { reconstructReaderDraftFromVerifiedArticle } = require('./reader-signed-draft.js');
-const CONTRACT = 'reader-signed-operator-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = 'reader-signed-operator';
+const currentHeader = () => codec.recordHeader(CONTRACT, CONTRACT);
+function actualHeader(value) {
+    if (!codec.hasValidHeader(value, CONTRACT)) throw new Error('Signed operator archive format differs');
+    return codec.recordHeader(value.contract, CONTRACT, value.schemaFingerprint);
+}
+function sameHeader(value, expected) {
+    return codec.hasValidHeader(value, CONTRACT)
+        && require('node:util').isDeepStrictEqual(actualHeader(value), expected);
+}
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const validSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const sameKeys = (value, keys) => value && !Array.isArray(value)
@@ -54,15 +64,19 @@ function withOperatorSourceScope(run, paper, sourceDetails, callback) {
         sourceExpectations: loaded.run.sourceExpectations }, () => callback(verified));
 }
 
-async function prepareReaderOperatorPatchResult({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }) {
+async function prepareReaderOperatorPatchResult(input) {
+    return prepareReaderOperatorPatchResultWithHeader(input, currentHeader());
+}
+
+async function prepareReaderOperatorPatchResultWithHeader({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }, header) {
     validateReaderOperatorPatchRequest(request, run); checkParent(parent, request);
     if (!validSha(patchFileSha256) || !Number.isFinite(Date.parse(appliedAt))) throw new Error('Invalid operator execution audit');
     return withOperatorSourceScope(run, parent, sourceDetails, verified =>
         prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sourceDetails: verified, run,
-            request, patchFileSha256, appliedAt }));
+            request, patchFileSha256, appliedAt }, header));
 }
 
-async function prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }) {
+async function prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }, header) {
     const draftRecovery = reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails, runId: run.runId });
     const allowedPaths = request.patch.replacements.map(item => item?.path).filter(pointer =>
         /^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?$/.test(pointer || ''));
@@ -70,7 +84,7 @@ async function prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sour
         { availableFigureOrdinals: parent.apiReaderFigures.map(figure => figure.ordinal) });
     if (repair.hashDraft(draft) === draftRecovery.proof.draftSha256) throw new Error('Signed operator patch must change an existing node');
     const deep = require('../deep-analyzer.js');
-    const patchExecutionRecord = { contract: CONTRACT, executionKind: 'operator', runId: run.runId,
+    const patchExecutionRecord = { ...header, executionKind: 'operator', runId: run.runId,
         paperId: request.paperId, parentPaperSha256: request.parentPaperSha256,
         parentArticleSha256: request.parentArticleSha256, parentPlanSha256: request.parentPlanSha256,
         sourceSha256: request.sourceSha256, sourceSnapshotSha256: draftRecovery.proof.sourceSnapshotSha256,
@@ -82,7 +96,7 @@ async function prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sour
         structuredClone(parent), sourceDetails, draft, patchExecutionRecord
     );
     if (!require('../analysis-engine.js').hasValidIntegratedApiReaderRecords(paper)) throw new Error('Operator output failed production sealing');
-    return { contract: CONTRACT, provenance: patchExecutionRecord, paper, paperSha256: runner.stableHash(paper) };
+    return { ...header, provenance: patchExecutionRecord, paper, paperSha256: runner.stableHash(paper) };
 }
 
 function readPrivate(filename, json = true) {
@@ -94,6 +108,11 @@ function readPrivate(filename, json = true) {
         const bytes = fs.readFileSync(fd);
         return { bytes, value: json ? JSON.parse(bytes.toString('utf8')) : bytes.toString('utf8'), sha256: sha(bytes) };
     } finally { fs.closeSync(fd); }
+}
+
+function optionalPrivate(filename) {
+    try { return readPrivate(filename); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
 function immutable(filename, value) {
@@ -130,56 +149,93 @@ async function applyReaderOperatorPatch({ loaded, patchFile }, deps) {
         const sourceDetails = deps.readFreshSource(runDir, original, current.run);
         if (!sourceDetails) throw new Error('Signed operator requires sealed source');
         const directory = path.join(runDir, 'patches', 'signed-operator-archive', requestFile.sha256);
-        let output, intent, before;
-        try {
-            runner.assertSafeDirectory(directory);
-            intent = readPrivate(path.join(directory, 'intent.json')).value;
+        const intentFile = path.join(directory, 'intent.json');
+        const readyFile = path.join(directory, 'ready-output.json');
+        const outputFile = path.join(directory, 'output.json');
+        let intent, before, ready, stored;
+        try { runner.assertSafeDirectory(directory); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        const savedIntent = optionalPrivate(intentFile);
+        const parent = current.analysis.papers.find(paper => runner.paperId(paper) === request.paperId);
+        let header, output;
+        if (savedIntent) {
+            intent = savedIntent.value;
+            header = actualHeader(intent);
+            const isCurrent = codec.isCurrentHeader(intent, CONTRACT);
+            const fields = [...Object.keys(header), 'patchFileSha256', 'parentPaperSha256',
+                'runIdentitySha256', 'sourceSnapshotSha256', 'appliedAt', 'outputSha256',
+                ...(isCurrent ? ['readyOutputFileSha256'] : [])];
             before = readPrivate(path.join(directory, 'before.json')).value;
-            if (intent.contract !== CONTRACT || intent.patchFileSha256 !== requestFile.sha256
+            if (!sameKeys(intent, fields) || intent.patchFileSha256 !== requestFile.sha256
                 || intent.parentPaperSha256 !== request.parentPaperSha256
                 || intent.runIdentitySha256 !== current.run.identitySha256
                 || intent.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor.sourceSnapshotSha256
+                || !Number.isFinite(Date.parse(intent.appliedAt)) || !validSha(intent.outputSha256)
                 || readPrivate(path.join(directory, 'request.json')).sha256 !== requestFile.sha256) {
                 throw new Error('Signed operator intent/request drift');
             }
             checkParent(before, request);
             withOperatorSourceScope(current.run, before, sourceDetails, () =>
                 reconstructReaderDraftFromVerifiedArticle({ paper: before, sourceDetails, runId: run.runId }));
-            try { output = readPrivate(path.join(directory, 'output.json')).value; }
-            catch (error) { if (error.code !== 'ENOENT') throw error; }
-        } catch (error) { if (error.code !== 'ENOENT') throw error; }
-        const parent = current.analysis.papers.find(paper => runner.paperId(paper) === request.paperId);
-        if (!intent) {
+            stored = optionalPrivate(outputFile);
+            if (isCurrent) {
+                ready = readPrivate(readyFile);
+                if (!validSha(intent.readyOutputFileSha256) || ready.sha256 !== intent.readyOutputFileSha256
+                    || (stored && !stored.bytes.equals(ready.bytes))) {
+                    throw new Error('Signed operator prepared output bytes drift');
+                }
+            }
+            output = (stored || ready)?.value;
+            if (!output) {
+                // Original intent-only archives may recover only the exact
+                // original hash. Current code cannot substitute new digests.
+                checkParent(parent, request);
+                output = await prepareReaderOperatorPatchResultWithHeader({ parent: before, sourceDetails, run: current.run,
+                    request, patchFileSha256: requestFile.sha256, appliedAt: intent.appliedAt }, header);
+            }
+        } else {
             checkParent(parent, request);
-            // 归档之前，正文和插图的校验必须全部通过。
-            output = await prepareReaderOperatorPatchResult({ parent, sourceDetails, run: current.run,
-                request, patchFileSha256: requestFile.sha256, appliedAt: deps.now() });
             before = parent;
+            header = currentHeader();
+            if (optionalPrivate(outputFile)) throw new Error('Signed operator output exists without its intent');
+            const orphan = optionalPrivate(readyFile);
+            // A pre-intent crash never upgrades raw JSON into a permit. The
+            // original writer recomputes and compares any unbound ready bytes.
+            output = await prepareReaderOperatorPatchResult({ parent, sourceDetails, run: current.run,
+                request, patchFileSha256: requestFile.sha256,
+                appliedAt: orphan ? orphan.value.provenance?.appliedAt : deps.now() });
             runner.assertSafeDirectory(directory, true);
             immutable(path.join(directory, 'before.json'), before);
             immutable(path.join(directory, 'request.json'), requestFile.bytes);
-            intent = { contract: CONTRACT, patchFileSha256: requestFile.sha256,
+            ready = immutable(readyFile, output);
+            if (deps.afterReady) await deps.afterReady();
+            intent = { ...header, patchFileSha256: requestFile.sha256,
                 parentPaperSha256: request.parentPaperSha256, runIdentitySha256: current.run.identitySha256,
                 sourceSnapshotSha256: sourceDetails.freshSourceDescriptor.sourceSnapshotSha256,
-                appliedAt: output.provenance.appliedAt, outputSha256: runner.stableHash(output) };
-            immutable(path.join(directory, 'intent.json'), intent);
+                appliedAt: output.provenance.appliedAt, outputSha256: runner.stableHash(output),
+                readyOutputFileSha256: ready.sha256 };
+            immutable(intentFile, intent);
             if (deps.afterIntent) await deps.afterIntent();
         }
-        if (!output) {
-            checkParent(parent, request);
-            output = await prepareReaderOperatorPatchResult({ parent: before, sourceDetails, run: current.run,
-                request, patchFileSha256: requestFile.sha256, appliedAt: intent.appliedAt });
-        }
         if (runner.stableHash(output) !== intent.outputSha256
-            || output.contract !== CONTRACT || output.paperSha256 !== runner.stableHash(output.paper)
+            || !sameHeader(output, header) || !sameHeader(output.provenance, header)
+            || output.paperSha256 !== runner.stableHash(output.paper)
+            || output.provenance.appliedAt !== intent.appliedAt
             || output.provenance.parentPaperSha256 !== request.parentPaperSha256
             || output.provenance.patchFileSha256 !== requestFile.sha256
             || output.provenance.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor.sourceSnapshotSha256
             || !withOperatorSourceScope(current.run, output.paper, sourceDetails,
                 () => require('../analysis-engine.js').hasValidIntegratedApiReaderRecords(output.paper))) throw new Error('Signed operator durable output drift');
-        immutable(path.join(directory, 'output.json'), output);
+        if (ready && readPrivate(readyFile).sha256 !== ready.sha256) {
+            throw new Error('Signed operator prepared output bytes drift');
+        }
+        const installedOutput = immutable(outputFile, (stored || ready)?.bytes || output);
         if (deps.afterOutput) await deps.afterOutput();
         if (readPrivate(filename).sha256 !== requestFile.sha256) throw new Error('Signed operator patch bytes changed');
+        if (readPrivate(outputFile).sha256 !== installedOutput.sha256
+            || (ready && readPrivate(readyFile).sha256 !== ready.sha256)) {
+            throw new Error('Signed operator durable output bytes drift');
+        }
         const analysisPath = path.join(runDir, 'analysis.json');
         const installed = deps.updateJsonFileLocked(analysisPath, analysis => {
             const record = analysis.papers.find(paper => runner.paperId(paper) === request.paperId);

@@ -10813,7 +10813,7 @@ async function inspectSavedConferenceReaderCompletion(paper, { executionId, exec
 async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, operatorRevisionRecord) {
     const previousStage = structuredClone(paper.analysisManifest?.stages?.apiReaderArticle);
     const parentAnalysis = paper.analysis;
-    if (operatorRevisionRecord?.contract !== 'reader-signed-operator-v1' || operatorRevisionRecord.executionKind !== 'operator'
+    if (!require('./lib/protocol-codec').hasValidHeader(operatorRevisionRecord, 'reader-signed-operator') || operatorRevisionRecord.executionKind !== 'operator'
         || operatorRevisionRecord.newApiRequests !== 0 || !require('./analysis-engine.js').hasValidIntegratedApiReaderRecords(paper)
         || operatorRevisionRecord.parentPaperSha256 !== stableFingerprint(paper)
         || operatorRevisionRecord.parentArticleSha256 !== paper.apiReaderArticleSha256
