@@ -22,6 +22,8 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
+import protocol_codec
+
 
 if __name__ == '__main__':
     from runtime_guard import require_external_runtime
@@ -29,8 +31,8 @@ if __name__ == '__main__':
     raise SystemExit('此模块只供日更正常发布器内部调用。')
 
 
-REF_CONTRACT = 'daily-render-observation-ref-v1'
-RECORD_CONTRACT = 'daily-hugo-render-observation-v1'
+REF_CONTRACT = 'daily-render-observation-ref'
+RECORD_CONTRACT = 'daily-hugo-render-observation'
 CONFIG_NAMES = ('hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json',
                 'config.yaml', 'config.yml', 'config.toml', 'config.json')
 _CURRENT = contextvars.ContextVar('daily_hugo_capture_session', default=None)
@@ -847,7 +849,8 @@ def _persist_store(root, date, manifest, blobs):
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
-    return {'contract': REF_CONTRACT, 'path': date + '/' + name + '/manifest.json', 'sha256': _sha(raw)}
+    return {**protocol_codec.record_header(REF_CONTRACT, REF_CONTRACT),
+            'path': date + '/' + name + '/manifest.json', 'sha256': _sha(raw)}
 
 
 @_operation({'open', 'captured'})
@@ -871,7 +874,7 @@ def persist_review_observation(session, *, final_binding):
     coverage = {'primaryHtml': {'expectedCount': count, 'capturedCount': len(session._candidate['pages']),
                                'completeForDeclaredSourceSet': True}}
     coverage.update({key: 'not_checked' for key in _NOT_CHECKED})
-    manifest = {'contract': RECORD_CONTRACT, 'version': 1,
+    manifest = {**protocol_codec.record_header(RECORD_CONTRACT, RECORD_CONTRACT),
         'purpose': 'normal-review-same-render-observation', **copy.deepcopy(final),
         'publicationMode': binding['publicationMode'], 'reviewedFiles': final['files'],
         'copiedSources': session._copies, 'pages': session._candidate['pages'],
@@ -1057,8 +1060,12 @@ def _validate_ref(*, observation_root, ref, expected, limits=DEFAULT_LIMITS):
     expected = _final(expected)
     if ref is None:
         return None
-    if not isinstance(ref, dict) or set(ref) != {'contract', 'path', 'sha256'} or ref['contract'] != REF_CONTRACT:
+    if not protocol_codec.has_valid_header(ref, REF_CONTRACT):
         _fail('Invalid render observation reference', 'invalid')
+    ref_header = protocol_codec.record_header(ref['contract'], REF_CONTRACT, ref.get('schemaFingerprint'))
+    if set(ref) != set(ref_header) | {'path', 'sha256'}:
+        _fail('Invalid render observation reference', 'invalid')
+    original = 'schemaFingerprint' not in ref_header
     path = _relative(ref['path'])
     parts = path.split('/')
     if len(parts) != 3 or parts[0] != expected['date'] or parts[-1] != 'manifest.json':
@@ -1075,11 +1082,16 @@ def _validate_ref(*, observation_root, ref, expected, limits=DEFAULT_LIMITS):
     if _sha(raw) != ref['sha256']:
         _fail('Observation manifest SHA mismatch', 'invalid')
     manifest = _json_load(raw)
-    required = {'contract', 'version', 'purpose', 'date', 'publicationScope', 'generationManifestSha256',
+    required = {'purpose', 'date', 'publicationScope', 'generationManifestSha256',
         'baseHead', 'reviewProtocolFingerprint', 'reviewedAt', 'publicationMode', 'reviewedFiles',
         'copiedSources', 'pages', 'render', 'sitePolicy', 'knownInputsBefore', 'knownInputsAfter',
         'unknownInputs', 'inputBinding', 'fullInputSnapshot', 'coverage'}
-    if not isinstance(manifest, dict) or set(manifest) != required or manifest['contract'] != RECORD_CONTRACT or type(manifest['version']) is not int or manifest['version'] != 1:
+    record_tag = 'version' if original else 'contract'
+    if not protocol_codec.has_valid_header(manifest, RECORD_CONTRACT, record_tag):
+        _fail('Invalid render observation manifest contract', 'invalid')
+    record_header = protocol_codec.record_header(manifest[record_tag], RECORD_CONTRACT,
+                                                  manifest.get('schemaFingerprint'))
+    if set(manifest) != required | set(record_header):
         _fail('Invalid render observation manifest contract', 'invalid')
     if manifest['purpose'] != 'normal-review-same-render-observation' or manifest['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance'):
         _fail('Invalid render observation purpose/mode', 'invalid')

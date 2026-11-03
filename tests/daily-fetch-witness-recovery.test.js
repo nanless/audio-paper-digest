@@ -19,7 +19,7 @@ function portable(v) {
     if (Array.isArray(v)) return ['array', v.map(portable)];
     return ['object', Object.keys(v).sort().map(k => [k, portable(v[k])])];
 }
-function fixture(t, { hfSelected = true } = {}) {
+function fixture(t, { hfSelected = true, inputReferenceHeader = null } = {}) {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'witness-recovery-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
     const repo = path.join(root, 'blog'), dataRoot = path.join(root, 'data'); fs.mkdirSync(repo); fs.mkdirSync(dataRoot);
@@ -74,7 +74,8 @@ function fixture(t, { hfSelected = true } = {}) {
     const latestPaper = { arxivId: '2610.00027', analysis: 'original text', parsed: { score: 1 } };
     const original = JSON.stringify({ batchDate: '2026-10-04', papers: [latestPaper] });
     publish('2026-10-04', latestPaper.arxivId, [{ ...latestPaper, normalizedArxivId: latestPaper.arxivId }],
-        { contract: 'generation-input-source-reference-v1', version: 1, path: currentPath, sha256: sha(original), bytes: Buffer.byteLength(original) });
+        { ...(inputReferenceHeader || { contract: 'generation-input-source-reference-v1', version: 1 }),
+            path: currentPath, sha256: sha(original), bytes: Buffer.byteLength(original) });
     put(currentPath, { batchDate: '2026-10-04', papers: [{ ...latestPaper, parsed: { score: 2 } }] });
     return { root, repo, dataRoot, git, put, cp, archive, currentPath, publish, sourcePaper: p, prepare: () => recovery.prepare({
         date: '2026-10-05', sourceCheckpointDate: '2026-10-03', blogRepo: repo, dataRoot }) };
@@ -98,6 +99,14 @@ test('独立恢复保留latest发布身份，真实较早五文件派生见证�
     assert.throws(() => boundary.validateDailyFetchBoundary(b), /封存恢复材料/); fs.writeFileSync(source, bytes);
     fs.unlinkSync(source); fs.symlinkSync(f.currentPath, source);
     assert.throws(() => boundary.validateDailyFetchBoundary(b), /不安全/);
+});
+test('见证恢复接受稳定输入来源引用并拒绝错误的结构指纹', async t => {
+    const family = 'generation-input-source-reference';
+    const current = require('../scripts/lib/protocol-codec').recordHeader(family, family);
+    const f = fixture(t, { inputReferenceHeader: current });
+    assert.ok((await f.prepare()).manifestPath);
+    const corrupt = fixture(t, { inputReferenceHeader: { ...current, schemaFingerprint: '0'.repeat(64) } });
+    await assert.rejects(corrupt.prepare(), /原完整输入字节失配/);
 });
 test('保留原见证恢复清单与激活记录的字节域，同日直接重放', async t => {
     const f = fixture(t), prepared = await f.prepare();

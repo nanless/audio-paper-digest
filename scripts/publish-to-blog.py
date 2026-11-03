@@ -9323,7 +9323,7 @@ def _validate_api_reader_resource_identity(paper):
             raise PublishDataValidationError(f'资源记录 resources[{index}] 的类型或来源不符合要求。')
         if 'authenticatedPdfFootnoteEvidence' in resource:
             proof = resource['authenticatedPdfFootnoteEvidence']
-            if not isinstance(proof, dict) or proof.get('contract') != 'reader-authenticated-pdf-footnote-evidence-v1' \
+            if not public_protocols.has_valid_header(proof, 'reader-authenticated-pdf-footnote-evidence') \
                     or resource.get('origin') != 'paper_source' \
                     or proof.get('originalUrl') != resource.get('originalUrl') \
                     or proof.get('sourceTextSha256') != paper.get('sourceSha256') \
@@ -11162,7 +11162,7 @@ def _paper_fresh_run_id(paper):
     ) else None
 
 
-GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT = 'generation-input-source-reference-v1'
+GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT = 'generation-input-source-reference'
 
 
 def build_generation_input_source_reference(data_file):
@@ -11190,8 +11190,8 @@ def build_generation_input_source_reference(data_file):
     resolved_input_path = candidate.resolve()
     input_file_bytes = resolved_input_path.read_bytes()
     return {
-        'contract': GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT,
-        'version': 1,
+        **public_protocols.record_header(GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT,
+                                         GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT),
         'path': str(resolved_input_path),
         'sha256': hashlib.sha256(input_file_bytes).hexdigest(),
         'bytes': len(input_file_bytes),
@@ -11211,15 +11211,17 @@ def validate_generation_input_source_reference(manifest, target_date):
     reference = manifest.get('inputSourceReference')
     if reference is None:
         return None
-    expected_keys = {'contract', 'version', 'path', 'sha256', 'bytes'}
+    family = GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT
+    tag = 'version' if isinstance(reference, dict) and 'version' in reference else 'contract'
+    if not public_protocols.has_valid_header(reference, family, tag):
+        raise PublishDataValidationError('generation 输入来源引用缺失或格式非法')
+    header = public_protocols.record_header(reference[tag], family, reference.get('schemaFingerprint'))
     if (
-            not isinstance(reference, dict) or set(reference) != expected_keys
-            or reference.get('contract') != GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT
-            or reference.get('version') != 1
+            set(reference) != set(header) | {'path', 'sha256', 'bytes'}
             or not isinstance(reference.get('path'), str)
             or not Path(reference['path']).is_absolute()
             or not re.fullmatch(r'[0-9a-f]{64}', str(reference.get('sha256') or ''))
-            or not isinstance(reference.get('bytes'), int)
+            or type(reference.get('bytes')) is not int
             or reference['bytes'] < 0
     ):
         raise PublishDataValidationError('generation 输入来源引用缺失或格式非法')

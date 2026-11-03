@@ -259,6 +259,83 @@
           }
         }
       ]
+    },
+    {
+      "name": "daily-render-observation-ref",
+      "currentVariant": "review-owned-render-reference",
+      "currentSchema": {
+        "fields": [
+          "path",
+          "sha256"
+        ],
+        "authority": "read-only-observation"
+      },
+      "historical": [
+        {
+          "tag": "daily-render-observation-ref-v1",
+          "variant": "review-owned-render-reference"
+        }
+      ]
+    },
+    {
+      "name": "daily-hugo-render-observation",
+      "currentVariant": "same-invocation-mechanical-render",
+      "currentSchema": {
+        "fields": [
+          "purpose",
+          "date",
+          "publicationScope",
+          "generationManifestSha256",
+          "baseHead",
+          "reviewProtocolFingerprint",
+          "reviewedAt",
+          "publicationMode",
+          "reviewedFiles",
+          "copiedSources",
+          "pages",
+          "render",
+          "sitePolicy",
+          "knownInputsBefore",
+          "knownInputsAfter",
+          "unknownInputs",
+          "inputBinding",
+          "fullInputSnapshot",
+          "coverage"
+        ],
+        "authority": "mechanical-observation-only"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "same-invocation-mechanical-render",
+          "header": {
+            "contract": "daily-hugo-render-observation-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "generation-input-source-reference",
+      "currentVariant": "exact-selected-json-file",
+      "currentSchema": {
+        "fields": [
+          "path",
+          "sha256",
+          "bytes"
+        ],
+        "authority": "actual-regular-file-and-source-gate"
+      },
+      "historical": [
+        {
+          "tag": 1,
+          "variant": "exact-selected-json-file",
+          "header": {
+            "contract": "generation-input-source-reference-v1",
+            "version": 1
+          }
+        }
+      ]
     }
   ]
 }

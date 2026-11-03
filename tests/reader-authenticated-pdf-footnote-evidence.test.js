@@ -6,6 +6,7 @@ const api = require('../scripts/lib/reader-authenticated-pdf-footnote-evidence')
 const sourceApi = require('../scripts/lib/conference-source-context');
 const deep = require('../scripts/deep-analyzer');
 const { stableHash } = require('../scripts/lib/conference-analysis-adapter');
+const codec = require('../scripts/lib/protocol-codec');
 const sha256 = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
 const URL = 'https://github.com/example/release';
 const program = path.resolve(__dirname, '../scripts/reader_authenticated_pdf_footnote_evidence.py');
@@ -52,14 +53,27 @@ test('真实PDF上标/同号脚注正常导出并用全新认证句柄冷重放�
     assert.throws(() => api.withVerifiedSource({ ...f.handle }, () => {}), /真实认证/);
     const cold = sourceApi.buildConferenceSourceContext({ planHandle: f.planHandle, paperId: f.paperId, sourceRoot: f.sourceRoot });
     api.withVerifiedSource(cold, () => {
-        for (const resource of resources) assert.equal(api.assertEvidence(resource), true);
+        for (const resource of resources) {
+            assert.ok(codec.isCurrentHeader(resource.authenticatedPdfFootnoteEvidence, api.CONTRACT));
+            assert.equal(api.assertEvidence(resource), true);
+            const original = structuredClone(resource);
+            const { contract, schemaFingerprint, evidenceSha256, ...fields } = original.authenticatedPdfFootnoteEvidence;
+            const body = { ...codec.historicalHeader(api.CONTRACT, 'exact-source-owner-and-pdf-footnote-glyphs'), ...fields };
+            original.authenticatedPdfFootnoteEvidence = { ...body, evidenceSha256: stableHash(body) };
+            const before = structuredClone(original);
+            assert.equal(api.assertEvidence(original), true);
+            assert.deepEqual(original, before);
+        }
         for (const mutate of [r => { r.type = 'model'; }, r => { r.originalUrl += '-other'; },
             r => { r.sourceQuote = 'wrong quote'; },
             r => { r.authenticatedPdfFootnoteEvidence.pdfFootnote.marker = '2'; },
             r => { r.authenticatedPdfFootnoteEvidence.pdfFootnote.statementMarker.bbox[0]++; },
+            r => { r.authenticatedPdfFootnoteEvidence.schemaFingerprint = '0'.repeat(64); },
+            r => { r.authenticatedPdfFootnoteEvidence.extractorImplementationSha256 = '0'.repeat(64); },
+            r => { r.authenticatedPdfFootnoteEvidence.evidenceSha256 = '0'.repeat(64); },
             r => { r.authenticatedPdfFootnoteEvidence.pdfSha256 = '0'.repeat(64); }]) {
             const changed = structuredClone(resources[0]); mutate(changed);
-            assert.throws(() => api.assertEvidence(changed), /不一致|变化/);
+            assert.throws(() => api.assertEvidence(changed), /不一致|变化|格式未知/);
         }
         const file = path.join(f.sourceRoot, f.member.pdfFile), before = fs.readFileSync(file);
         try { fs.appendFileSync(file, '\nchanged source'); assert.throws(() => api.deriveCandidates(), /SHA|变化|不一致/); }
@@ -98,6 +112,9 @@ test('新生成资源经来源证明绑定多个facet，可达性仍独立核验
         assert.equal(JSON.stringify(original), before); assert.equal(JSON.stringify(identity), proofBefore);
         assert.equal(requests, 1, 'source correction performs no reachability or model request');
         assert.equal(deep.replayVerifiedReaderResourceIdentity(proposal.identity, f.source.sourceText), proposal.identity);
+        assert.ok(proposal.identity.resources.every(resource =>
+            !codec.isCurrentHeader(resource.authenticatedPdfFootnoteEvidence, api.CONTRACT)));
+        assert.deepEqual(api.deriveCorrectedIdentity(identity, f.source.sourceText).identity, identity);
         assert.equal(original.resources[0].type, 'third_party');
         assert.equal(Object.hasOwn(original.resources[0], 'authenticatedPdfFootnoteEvidence'), false);
         const conflict = structuredClone(original); conflict.resources.push({ ...originalResource, status: 200, availability: 'available' });

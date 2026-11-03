@@ -172,6 +172,32 @@ class CaptureTest(unittest.TestCase):
         with self.assertRaises(capture.CaptureError):
             capture.persist_review_observation(session, final_binding=self.final)
 
+    def test_original_and_current_ref_must_match_their_exact_manifest_format(self):
+        from protocol_codec import historical_header, is_current_header
+
+        with self.scope() as session:
+            self.captured(session)
+            current = capture.persist_review_observation(session, final_binding=self.final)
+        self.assertTrue(is_current_header(current, capture.REF_CONTRACT))
+        manifest_path = self.store / current['path']
+        original_bytes = manifest_path.read_bytes()
+        manifest = json.loads(original_bytes)
+        self.assertTrue(is_current_header(manifest, capture.RECORD_CONTRACT))
+        original_ref = {**historical_header(capture.REF_CONTRACT, 'review-owned-render-reference', None),
+                        'path': current['path'], 'sha256': current['sha256']}
+        with self.assertRaisesRegex(capture.CaptureError, 'manifest contract'):
+            capture.validate_ref(observation_root=self.store, ref=original_ref, expected=self.final)
+        manifest.pop('schemaFingerprint')
+        manifest.update(historical_header(capture.RECORD_CONTRACT, 'same-invocation-mechanical-render', None))
+        raw = capture._json_bytes(manifest) + b'\n'
+        manifest_path.write_bytes(raw)
+        original_ref['sha256'] = sha(raw)
+        self.assertIsNotNone(capture.validate_ref(observation_root=self.store, ref=original_ref, expected=self.final))
+        self.assertEqual(manifest_path.read_bytes(), raw)
+        with self.assertRaisesRegex(capture.CaptureError, 'manifest contract'):
+            capture.validate_ref(observation_root=self.store,
+                                 ref={**current, 'sha256': sha(raw)}, expected=self.final)
+
     def test_unsupported_is_only_none_route(self):
         self.binding['layoutPlan'] = {'status': 'unsupported', 'reason': 'standalone layout'}
         with self.scope() as session:

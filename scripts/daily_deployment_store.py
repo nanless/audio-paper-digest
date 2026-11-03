@@ -740,11 +740,21 @@ def _binding_relations(value, snapshot):
     for field in ('targetsSha256', 'recordSha256', 'reviewedFileSetSha256', 'primarySourceSetSha256'):
         _hex(target[field])
     _id(target['reviewedFileCount'])
-    _keys(target['observationRef'], ('contract', 'path', 'sha256'))
-    if target['observationRef']['contract'] != 'daily-render-observation-ref-v1':
+    observation_ref = target['observationRef']
+    if type(observation_ref) is not dict:
         _fail('invalid_record', 'record_shape')
-    _hex(target['observationRef']['sha256'])
-    path = target['observationRef']['path']
+    if observation_ref.get('contract') == 'daily-render-observation-ref':
+        _keys(observation_ref, ('contract', 'schemaFingerprint', 'path', 'sha256'))
+        # The restricted deployment store cannot load another module.
+        # Keep this exact approved fingerprint in sync with the shared catalog.
+        if observation_ref['schemaFingerprint'] != '0d76178713fcca26dea934f39be0ae0d53ca75bedc318732e2fb2b089cd2e00d':
+            _fail('invalid_record', 'record_shape')
+    else:
+        _keys(observation_ref, ('contract', 'path', 'sha256'))
+        if observation_ref['contract'] != 'daily-render-observation-ref-v1':
+            _fail('invalid_record', 'record_shape')
+    _hex(observation_ref['sha256'])
+    path = observation_ref['path']
     if type(path) is not str or not path.startswith(normal['date'] + '/') or not path.endswith('/manifest.json') or '..' in path.split('/') or path.startswith('/'):
         _fail('invalid_record', 'record_shape')
     _text(path, _p('text_bytes'))

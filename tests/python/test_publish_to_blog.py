@@ -9440,6 +9440,20 @@ body
                     str(archived.resolve()),
                 )
             replay_daily.assert_called_once_with(str(archived.resolve()), '2026-07-10')
+            family = 'generation-input-source-reference'
+            codec = publish_to_blog.public_protocols
+            self.assertTrue(codec.is_current_header(reference, family))
+            original = {key: reference[key] for key in ('path', 'sha256', 'bytes')}
+            original.update(codec.historical_header(family, 'exact-selected-json-file', None))
+            with mock.patch.object(publish_to_blog, 'validate_daily_fresh_sources_for_publish'):
+                self.assertEqual(publish_to_blog.validate_generation_input_source_reference(
+                    {'inputSourceReference': original}, '2026-07-10'), str(archived.resolve()))
+                for bad in ({**reference, 'schemaFingerprint': '0' * 64},
+                            {**original, 'schemaFingerprint': reference['schemaFingerprint']},
+                            {**reference, 'bytes': True}):
+                    with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '格式非法'):
+                        publish_to_blog.validate_generation_input_source_reference(
+                            {'inputSourceReference': bad}, '2026-07-10')
             archived.write_text('{"papers": [{"changed": true}]}\n', encoding='utf-8')
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError, '字节或 SHA-256 已漂移',

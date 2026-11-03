@@ -146,8 +146,11 @@ function verifyPublication(repo, observed, manifestRecord, receiptRecord) {
 }
 function verifyLostInput(manifest, canonicalRecord, dataRoot, latestDate) {
     const ref = manifest.inputSourceReference;
-    if (!keys(ref, ['contract', 'version', 'path', 'sha256', 'bytes'])
-        || ref.contract !== 'generation-input-source-reference-v1' || ref.version !== 1
+    const family = 'generation-input-source-reference';
+    const tag = ref && Object.hasOwn(ref, 'version') ? 'version' : 'contract';
+    if (!codec.hasValidHeader(ref, family, tag)) fail('不属于原完整输入字节失配');
+    const header = codec.recordHeader(ref[tag], family, ref.schemaFingerprint);
+    if (!keys(ref, [...Object.keys(header), 'path', 'sha256', 'bytes'])
         || ref.path !== path.join(dataRoot, 'current', 'deep-analysis-result.json')
         || !SHA.test(ref.sha256 || '') || !Number.isSafeInteger(ref.bytes) || ref.bytes < 1
         || (ref.sha256 === canonicalRecord.sha256 && ref.bytes === canonicalRecord.bytes.length)) fail('不属于原完整输入字节失配');

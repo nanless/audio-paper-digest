@@ -559,6 +559,19 @@
           "variant": "source-bound-complete-cell-proof"
         }
       ]
+    },
+    {
+      "name": "reader-authenticated-pdf-footnote-evidence",
+      "currentVariant": "exact-source-owner-and-pdf-footnote-glyphs",
+      "currentSchema": {
+        "purpose": "exact-source-owner-and-pdf-footnote-glyphs"
+      },
+      "historical": [
+        {
+          "tag": "reader-authenticated-pdf-footnote-evidence-v1",
+          "variant": "exact-source-owner-and-pdf-footnote-glyphs"
+        }
+      ]
     }
   ]
 }

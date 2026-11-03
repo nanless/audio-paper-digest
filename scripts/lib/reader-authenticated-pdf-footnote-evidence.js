@@ -3,14 +3,26 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const crypto = require('node:crypto'), { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
+const formats = require('./protocol-codec');
 const scope = new AsyncLocalStorage();
-const CONTRACT = 'reader-authenticated-pdf-footnote-evidence-v1';
+const CONTRACT = 'reader-authenticated-pdf-footnote-evidence';
+const CURRENT_HEADER = formats.recordHeader(CONTRACT, CONTRACT);
+const ORIGINAL_HEADER = formats.historicalHeader(CONTRACT, 'exact-source-owner-and-pdf-footnote-glyphs');
 const CORRECTION_CONTRACT = 'reader-authenticated-pdf-footnote-identity-correction-v1';
 const EXTRACTION_CONTRACT = 'reader-authenticated-pdf-footnote-extraction-v1';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const canonical = value => Array.isArray(value) ? value.map(canonical)
     : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const stable = value => sha(JSON.stringify(canonical(value)));
+function evidenceHeader(value) {
+    if (!formats.hasValidHeader(value, CONTRACT)) throw sourceFailure('PDF 脚注证明格式未知');
+    return formats.recordHeader(value.contract, CONTRACT, value.schemaFingerprint);
+}
+function encodeEvidence(proof, header) {
+    const { contract, schemaFingerprint, evidenceSha256, ...fields } = proof;
+    const body = { ...header, ...fields };
+    return { ...body, evidenceSha256: stable(body) };
+}
 const SHA = /^[a-f0-9]{64}$/u;
 const program = path.resolve(__dirname, '../reader_authenticated_pdf_footnote_evidence.py');
 
@@ -84,13 +96,13 @@ function deriveCandidates(sourceText) {
         const marker = String(candidate.marker);
         const start = state.source.sourceText.slice(index - marker.length, index) === marker ? index - marker.length : index;
         const sourceQuote = state.source.sourceText.slice(start, index + url.length);
-        const body = { contract: CONTRACT, paperId: state.source.paperId, sourceIdentity: state.source.sourceIdentity,
+        const body = { paperId: state.source.paperId, sourceIdentity: state.source.sourceIdentity,
             sourceSnapshotSha256: state.source.sourceSnapshotSha256, sourceTextSha256: sha(state.source.sourceText),
             structuredArtifactsSha256: state.source.structuredArtifactsSha256, pdfSha256: state.source.pdfSha256,
             originalUrl: url, sourceQuote, sourceQuoteSha256: sha(sourceQuote),
             extraction: document.backend, extractorImplementationSha256: state.extractorSha256,
             pdfFootnote: candidate };
-        const proof = { ...body, evidenceSha256: stable(body) };
+        const proof = encodeEvidence(body, CURRENT_HEADER);
         for (const type of candidate.resourceFacets) result.push({ type, url, sourceToken: url, line: sourceQuote,
             authenticatedPdfFootnoteEvidence: proof });
     }
@@ -102,12 +114,13 @@ function assertEvidence(resource, sourceText) {
     const state = checkedState(sourceText);
     if (!state) throw sourceFailure('已保存的 PDF 脚注证明缺少真实来源作用域');
     const proof = resource?.authenticatedPdfFootnoteEvidence;
-    if (!proof || proof.contract !== CONTRACT || resource.origin !== 'paper_source'
+    if (!proof || resource.origin !== 'paper_source'
         || resource.sourceQuote !== proof.sourceQuote || resource.sourceQuoteSha256 !== proof.sourceQuoteSha256) {
         throw sourceFailure('资源类型或原引文与 PDF 脚注证明不一致');
     }
+    const header = evidenceHeader(proof);
     const matches = deriveCandidates(state.source.sourceText).filter(candidate => candidate.url === resource.originalUrl
-        && candidate.type === resource.type && isDeepStrictEqual(candidate.authenticatedPdfFootnoteEvidence, proof));
+        && candidate.type === resource.type && isDeepStrictEqual(encodeEvidence(candidate.authenticatedPdfFootnoteEvidence, header), proof));
     if (matches.length !== 1) throw sourceFailure('已保存脚注证明的编号、归属、URL、坐标或来源已变化');
     boundary(() => state.source.assertUnchanged());
     return true;
@@ -156,8 +169,16 @@ function deriveCorrectedIdentity(originalIdentity, sourceText) {
             || (original.availability === 'temporarily_unreachable' && (original.retryable !== true
                 || !(original.status === null || [408, 425, 429].includes(original.status)
                     || Number.isInteger(original.status) && original.status >= 500)))) throw sourceFailure('原引文或原可达状态不符合其声明');
-        for (const candidate of same) {
-            const proof = candidate.authenticatedPdfFootnoteEvidence;
+        // An existing correction or fixed preflight is replayed in its own
+        // evidence domain. The correction format issued before this migration
+        // uses the original domain when the original resource had no proof.
+        const originalHeaders = originals.filter(({ resource }) => Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence'))
+            .map(({ resource }) => evidenceHeader(resource.authenticatedPdfFootnoteEvidence));
+        const header = originalHeaders[0] || ORIGINAL_HEADER;
+        if (originalHeaders.some(other => !isDeepStrictEqual(other, header))) throw sourceFailure('同一原 URL 的脚注证明格式不一致');
+        const correctedEvidence = same.map(candidate => encodeEvidence(candidate.authenticatedPdfFootnoteEvidence, header));
+        for (const [index, candidate] of same.entries()) {
+            const proof = correctedEvidence[index];
             resources.push({ ...structuredClone(preserved(original)), type: candidate.type, origin: 'paper_source',
                 sourceQuote: proof.sourceQuote, sourceQuoteSha256: proof.sourceQuoteSha256,
                 authenticatedPdfFootnoteEvidence: structuredClone(proof) });
@@ -167,7 +188,7 @@ function deriveCorrectedIdentity(originalIdentity, sourceText) {
             originalTypes: originals.map(entry => entry.resource.type),
             originalSourceQuoteSha256s: originals.map(entry => entry.resource.sourceQuoteSha256),
             originalUrl: original.originalUrl, resourceFacets: same.map(candidate => candidate.type),
-            evidenceSha256: same[0].authenticatedPdfFootnoteEvidence.evidenceSha256,
+            evidenceSha256: correctedEvidence[0].evidenceSha256,
             retainedReachabilitySha256: stable(preserved(original)) });
     }
     const identityBody = { ...structuredClone(body), resources };
