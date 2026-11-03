@@ -96,6 +96,9 @@ public actor CloudArchiveService {
         var info: SnapshotInfo { .init(reference: reference, createdAt: createdAt, encodedBytes: encodedBytes, sha256: sha256, chunkCount: chunks.count) }
     }
     private let folder: String
+    private let fullSync: Bool
+    private var scope: String { fullSync ? folder + "/full-sync-v1" : folder }
+    private var scopePath: String { "/dav/" + scope + "/" }
     private let destinationID: UUID
     private let credentials: @Sendable () async throws -> Credentials
     private let checkpointSink: CheckpointSink
@@ -120,9 +123,10 @@ public actor CloudArchiveService {
                     try await Task.sleep(for: .seconds(seconds))
                 }, minimumRequestInterval: TimeInterval = 3.1,
                 initialRetryAfter: Date? = nil,
-                cooldownSink: @escaping @Sendable (Date) async throws -> Void = { _ in }) throws {
+                cooldownSink: @escaping @Sendable (Date) async throws -> Void = { _ in },
+                fullSync: Bool = false) throws {
         guard Self.validFolder(folder), minimumRequestInterval.isFinite, minimumRequestInterval >= 0, transport != nil || minimumRequestInterval >= 3.1 else { throw CloudError.invalidConfiguration }
-        self.folder = folder; self.destinationID = destinationID
+        self.folder = folder; self.destinationID = destinationID; self.fullSync = fullSync
         self.credentials = credentials; self.checkpointSink = checkpointSink
         self.retryAfter = initialRetryAfter; self.cooldownSink = cooldownSink
         self.transport = transport ?? { request, limit in try await CloudBoundedRequest.perform(request, limit: limit) }
@@ -149,7 +153,7 @@ public actor CloudArchiveService {
         var state: UploadCheckpoint
         if let checkpoint {
             guard ClientProtocols.hasValidHeader(checkpoint.contract,fingerprint:checkpoint.schemaFingerprint,"paperdigest-cloud-transfer"), checkpoint.destinationID == destinationID,
-                  checkpoint.folder == folder, Self.validReference(checkpoint.reference), checkpoint.encodedBytes == data.count,
+                  checkpoint.folder == scope, Self.validReference(checkpoint.reference), checkpoint.encodedBytes == data.count,
                   checkpoint.sha256 == Self.hash(data), checkpoint.chunks == chunks,
                   Set(checkpoint.verifiedChunkIndices).count == checkpoint.verifiedChunkIndices.count,
                   checkpoint.verifiedChunkIndices.allSatisfy({ chunks.indices.contains($0) }),
@@ -158,7 +162,7 @@ public actor CloudArchiveService {
             if let cooldown = checkpoint.retryAfter, cooldown > now() { retryAfter = max(retryAfter ?? cooldown, cooldown) }
         } else {
             let createdAt = Self.canonicalDate(now())
-            state = .init(contract: ClientProtocols.contract("paperdigest-cloud-transfer"), schemaFingerprint: ClientProtocols.schemaFingerprint("paperdigest-cloud-transfer"), destinationID: destinationID, folder: folder,
+            state = .init(contract: ClientProtocols.contract("paperdigest-cloud-transfer"), schemaFingerprint: ClientProtocols.schemaFingerprint("paperdigest-cloud-transfer"), destinationID: destinationID, folder: scope,
                           reference: .init(month: Self.month(createdAt), id: UUID()), createdAt: createdAt,
                           encodedBytes: data.count, sha256: Self.hash(data), chunks: chunks,
                           verifiedChunkIndices: [], manifestVerified: false, retryAfter: nil)
@@ -178,7 +182,8 @@ public actor CloudArchiveService {
         let manifest = Manifest(contract: snapshotHeader["contract"] as! String, schemaFingerprint: snapshotHeader["schemaFingerprint"] as? String, reference: state.reference, createdAt: state.createdAt,
                                 encodedBytes: state.encodedBytes, sha256: state.sha256, chunks: state.chunks)
         try await ensureCollection("/dav/\(folder)/")
-        try await ensureCollection("/dav/\(folder)/\(state.reference.month)/")
+        if fullSync { try await ensureCollection(scopePath) }
+        try await ensureCollection(scopePath + state.reference.month + "/")
         // UUID paths are unique. Resume may encounter the directory created before a lost reply.
         try await ensureCollection(base)
         if let completed = try await optionalGet(base + "manifest.json", limit: Self.manifestLimit) {
@@ -221,11 +226,14 @@ public actor CloudArchiveService {
     func listIdentities(month: String) async throws -> [(info: SnapshotInfo, manifestSHA: String)] {
         try begin(); defer { end() }
         guard Self.validMonth(month) else { throw CloudError.invalidConfiguration }
-        let path = "/dav/\(folder)/\(month)/"
+        let path = scopePath + month + "/"
         let response = try await request("PROPFIND", path: path, body: Self.propfind,
                                          headers: ["Depth":"1", "Content-Type":"application/xml; charset=utf-8"],
                                          limit: Self.listingLimit, accepted: [207,404])
-        if response.response.statusCode == 404 { return [] }
+        if response.response.statusCode == 404 {
+            if fullSync { throw CloudError.incompleteListing }
+            return []
+        }
         let references = try CloudDAVListing.parse(response.data, path: path, month: month)
         var snapshots: [(info: SnapshotInfo, manifestSHA: String)] = []
         // A partial UUID directory has no manifest and is deliberately not success.
@@ -237,6 +245,16 @@ public actor CloudArchiveService {
         }
         return snapshots.sorted { $0.info.createdAt == $1.info.createdAt ? $0.info.reference.id.uuidString < $1.info.reference.id.uuidString : $0.info.createdAt > $1.info.createdAt }
     }
+    func fullSyncMonths() async throws -> [String] {
+        try begin(); defer { end() }
+        guard fullSync else { throw CloudError.invalidConfiguration }
+        let result = try await request("PROPFIND", path: scopePath, body: Self.propfind,
+            headers: ["Depth": "1", "Content-Type": "application/xml; charset=utf-8"],
+            limit: Self.listingLimit, accepted: [207,404])
+        if result.response.statusCode == 404 { return [] }
+        return try CloudDAVListing.months(result.data, path: scopePath)
+    }
+
     func personalDocuments() async throws -> [String: Data] {
         try begin(); defer { end() }
         let path = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
@@ -404,7 +422,7 @@ public actor CloudArchiveService {
         if var state = currentCheckpoint { state.retryAfter = until; try await save(state) }
         guard cooldownSaved else { throw CloudError.checkpointStore }
     }
-    private func snapshotPath(_ reference: SnapshotReference) -> String { "/dav/\(folder)/\(reference.month)/\(reference.id.uuidString.lowercased())/" }
+    private func snapshotPath(_ reference: SnapshotReference) -> String { scopePath + "\(reference.month)/\(reference.id.uuidString.lowercased())/" }
     private static func validFolder(_ value: String) -> Bool {
         guard value.utf8.count >= 1, value.utf8.count <= 64, !value.contains(".."), value.lowercased() != "zotero",
               let first = value.utf8.first, (65...90).contains(first) || (97...122).contains(first) || (48...57).contains(first) else { return false }
@@ -561,6 +579,28 @@ private final class CloudDAVListing: NSObject, XMLParserDelegate {
         let members = try read(data)
         guard members.count == 1, members[0].collection, members[0].success,
               try collectionPath(checkedPath(members[0].href)) == path else { throw CloudArchiveService.CloudError.incompleteListing }
+    }
+    static func months(_ data: Data, path: String) throws -> [String] {
+        let members = try read(data)
+        var root = false
+        var months = Set<String>()
+        for member in members {
+            let actual = try collectionPath(checkedPath(member.href))
+            guard member.success, member.collection, actual.hasPrefix(path) else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+            if actual == path {
+                guard !root else { throw CloudArchiveService.CloudError.incompleteListing }
+                root = true
+            } else {
+                let month = String(actual.dropFirst(path.count).dropLast())
+                guard CloudArchiveService.validMonth(month), months.insert(month).inserted else {
+                    throw CloudArchiveService.CloudError.incompleteListing
+                }
+            }
+        }
+        guard root else { throw CloudArchiveService.CloudError.incompleteListing }
+        return months.sorted()
     }
     static func personalDevices(_ data: Data, path: String) throws -> [String] {
         let members = try read(data)

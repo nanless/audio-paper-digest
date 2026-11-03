@@ -164,7 +164,7 @@ public enum BackupCodec {
         public let sourceDirectory:String
         public let historicalRoots:[String]
     }
-    public static func collect(sourceDirectory:URL) throws -> Payload {
+    public static func collect(sourceDirectory:URL, include: (String) -> Bool = { _ in true }) throws -> Payload {
         let root=try PrivateStoragePaths.checkedDirectory(sourceDirectory)
         let fm=FileManager.default
         var enumerationError:Error?
@@ -180,7 +180,7 @@ public enum BackupCodec {
             guard actual.hasPrefix(prefix) else{throw PrivateStoragePaths.StorageError.invalid("备份枚举逃逸")}
             let relative=String(actual.dropFirst(prefix.count))
             _=try PrivateStoragePaths.checkedFile(relative:relative,directory:root)
-            if isLocalOnlyKey(relative) { continue } // metadata checked, secret bytes never read
+            if isLocalOnlyKey(relative) || !include(relative) { continue } // metadata checked, secret bytes never read
             let bytes=try PrivateStoragePaths.boundedData(file,limit:maxDecodedBytes-total)
             total+=bytes.count
             files.append(Entry(path:relative,sha256:PrivateStoragePaths.sha256(bytes),data:bytes))

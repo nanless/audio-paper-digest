@@ -254,6 +254,8 @@ import UniformTypeIdentifiers
         guard try await documentConfirmation(alert,access:access,kinds:[.help]) == .alertFirstButtonReturn else{throw DesktopOperationCancelled("已取消恢复")}
         try requireDocumentContext(access,kinds:[.help])
         try Task.checkCancellation()
+        // Retained cloud originals remain available after restoring an older workspace.
+        try cloudLocalStore().invalidateFullSyncReceipts()
         try fm.moveItem(at:directory,to:old)
         do{try fm.moveItem(at:stage,to:directory)}catch{try? fm.moveItem(at:old,to:directory);throw error}
         do{

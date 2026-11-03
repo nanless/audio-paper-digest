@@ -116,13 +116,13 @@ class ExportService(private val context: Context, private val store: PersonalSto
         require(selectedSession == null || sessions.isNotEmpty()) { "所选研究不属于当前论文" }
         val materials = sessions.map { original ->
             val session = original.copy()
-            if (ClientProtocols.isContract(session.opt("inputContract"), "android-study-input") && session.optString("status") == "completed") study.verifySaved(session)
+            if (!session.optBoolean("syncedHistory") && ClientProtocols.isContract(session.opt("inputContract"), "android-study-input") && session.optString("status") == "completed") study.verifySaved(session)
             // Carry exact original bytes; another platform must validate its own known contract before adoption.
             val id = session.getString("id"); UUID.fromString(id)
             val originals = JSONObject()
             val capturePattern = Regex(Regex.escape(id) + "-response-capture-[a-f0-9-]{36}\\.(?:bin|json)")
             val captureFiles = File(store.directory, "ModelUsage").listFiles()?.filter { capturePattern.matches(it.name) }?.sortedBy { it.name }.orEmpty()
-            val suffixes = listOf("input.json", "response.bin", "response.json") + captureFiles.map { it.name.removePrefix("$id-") }
+            val suffixes = listOf("input.json", "response.bin", "response.json", "response.raw", "usage.json") + captureFiles.map { it.name.removePrefix("$id-") }
             suffixes.forEach { suffix ->
                 val file = File(store.directory, "ModelUsage/$id-$suffix")
                 if (file.isFile) {

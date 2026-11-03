@@ -47,6 +47,7 @@ private data class SessionNoteDraft(val identity:SessionNoteIdentity,val session
   Column(Modifier.heightIn(max=260.dp).verticalScroll(rememberScrollState()).padding(horizontal=20.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
    SelectionContainer{Text(session.optString("question").ifBlank{"原问题未记录"},style=MaterialTheme.typography.titleMedium)}
    Text("${jobStatus(session.optString("status"))} · ${sessionModelLabel(session)}",style=MaterialTheme.typography.bodySmall)
+   if (session.optBoolean("syncedHistory")) Text("来自另一台设备的原研究记录。当前设备可阅读和导出，原派发与核验留在原设备。", style=MaterialTheme.typography.bodySmall)
    Text(sessionEvidenceLabel(session),style=MaterialTheme.typography.bodySmall)
     SavedStudySourceLinks(session,state.busy,action)
    Text("${sessionUsageLabel(session)} · ${sessionChargeLabel(session)}",style=MaterialTheme.typography.bodySmall)

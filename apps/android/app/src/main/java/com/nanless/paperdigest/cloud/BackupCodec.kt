@@ -68,7 +68,7 @@ object BackupCodec {
         require(value.split('/').none { it.isEmpty() || it == "." || it == ".." }) { "研究资料路径越界" }
     }
     fun checkedRoot(value: String) { require(value.startsWith('/') && value != "/") { "原研究目录无效" }; checkedPath(value.drop(1)) }
-    private fun alias(value: String): String {
+    internal fun alias(value: String): String {
         val nfc = Normalizer.normalize(value, Normalizer.Form.NFC)
         return if (nfc.all { it.code < 128 }) nfc.lowercase(Locale.ROOT) else UCharacter.foldCase(nfc, true)
     }
@@ -109,8 +109,30 @@ object BackupCodec {
         val keys = HashSet<String>(); roots.forEach { checkedRoot(it); require(keys.add(alias(it))) { "旧目录别名重复" } }
         keys.forEach { path -> var prefix = ""; path.split('/').filter { it.isNotEmpty() }.dropLast(1).forEach { prefix += "/$it"; require(prefix !in keys) { "旧目录相互包含" } } }
     }
+    internal fun mergeVerifiedAliases(current: File, incoming: Staged) {
+        val local = File(current, ROOTS_FILE)
+        val staged = checkedFile(incoming.directory, ROOTS_FILE)
+        val combined = ((if (local.exists()) roots(checkedFile(current, ROOTS_FILE).readBytes()) else emptyList()) +
+            roots(staged.readBytes())).distinct().filter { it != current.absolutePath }
+        validateRoots(listOf(current.absolutePath) + combined)
+        if (combined.isNotEmpty()) atomicJSON(local, ClientProtocols.record("paperdigest-storage-aliases", JSONObject().put("roots", JSONArray(combined))))
+    }
+
     fun capture(root: File, output: File): Captured = capture(root, output) {}
-    fun capture(root: File, output: File, check: () -> Unit): Captured {
+    fun capture(root: File, output: File, check: () -> Unit): Captured =
+        captureSelected(root, output, null, { true }, check)
+
+    internal fun captureSelection(root: File, output: File, personal: JSONObject, include: (String) -> Boolean, check: () -> Unit): Captured {
+        validatePersonal(personal)
+        val projected = Files.createTempFile(output.parentFile.toPath(), ".sync-personal-", ".json").toFile()
+        try {
+            privateFile(projected)
+            projected.writeText(personal.toString())
+            return captureSelected(root, output, projected, include, check)
+        } finally { projected.delete() }
+    }
+
+    private fun captureSelected(root: File, output: File, personal: File?, include: (String) -> Boolean, check: () -> Unit): Captured {
         check()
         checkedDirectory(root); require(!output.canonicalPath.startsWith(root.canonicalPath + "/")) { "快照不能递归保存到研究目录内" }
         val entries = ArrayList<Pair<String, File>>(); val paths = Paths(); var total = 0L
@@ -121,11 +143,12 @@ object BackupCodec {
             if (Files.isDirectory(p, NOFOLLOW_LINKS)) return@forEach
             require(Files.isRegularFile(p, NOFOLLOW_LINKS)) { "备份不能包含特殊文件" }
             val relative = root.toPath().relativize(p).toString().replace(File.separatorChar, '/')
-            if (isLocalOnlyIntegrityPath(relative)) return@forEach
-            paths.add(relative); total += Files.size(p); require(total <= MAX_DECODED && entries.size < MAX_ENTRIES) { "完整备份超过512MiB或100000项" }; entries += relative to p.toFile()
+            if (isLocalOnlyIntegrityPath(relative) || !include(relative)) return@forEach
+            val source = if (relative == "personal.json" && personal != null) personal else p.toFile()
+            paths.add(relative); total += source.length(); require(total <= MAX_DECODED && entries.size < MAX_ENTRIES) { "完整备份超过512MiB或100000项" }; entries += relative to source
         } }
         paths.finish(); require(entries.any { it.first == "personal.json" }) { "研究资料缺少personal.json" }
-        validatePersonal(JSONObject(checkedFile(root, "personal.json").readText()))
+        validatePersonal(JSONObject((personal ?: checkedFile(root, "personal.json")).readText()))
         entries.firstOrNull { it.first == ROOTS_FILE }?.let { validateRoots(listOf(root.absolutePath) + roots(it.second.readBytes()).filter { r -> r != root.absolutePath }) }
         output.parentFile?.mkdirs(); val temporary = File(output.parentFile, ".${output.name}-${UUID.randomUUID()}")
         try {
@@ -148,10 +171,10 @@ object BackupCodec {
             }
             // Detect edits during streaming, not just during the initial enumeration.
             val verified = stage(temporary.inputStream(), output.parentFile!!, check)
-            try { require(verified.entries.map { it.path }.toSet() == entries.map { it.first }.toSet()); verified.entries.forEach { check(); require(checkedHash(checkedFile(root, it.path), check) == it.sha256) { "采集期间研究文件已变化" } } } finally { verified.directory.deleteRecursively() }
+            try { require(verified.entries.map { it.path }.toSet() == entries.map { it.first }.toSet()); verified.entries.forEach { check(); require(checkedHash(if (it.path == "personal.json" && personal != null) personal else checkedFile(root, it.path), check) == it.sha256) { "采集期间研究文件已变化" } } } finally { verified.directory.deleteRecursively() }
             FileOutputStream(temporary, true).use { it.fd.sync() }
             val encodedSHA = checkedHash(temporary, check); val encodedBytes = temporary.length()
-            val currentPaths = Files.walk(root.toPath()).use { walk -> walk.peek { check() }.filter { Files.isRegularFile(it, NOFOLLOW_LINKS) }.map { root.toPath().relativize(it).toString().replace(File.separatorChar, '/') }.toArray().map { it as String }.filterNot(::isLocalOnlyIntegrityPath).toSet() }
+            val currentPaths = Files.walk(root.toPath()).use { walk -> walk.peek { check() }.filter { Files.isRegularFile(it, NOFOLLOW_LINKS) }.map { root.toPath().relativize(it).toString().replace(File.separatorChar, '/') }.toArray().map { it as String }.filter { !isLocalOnlyIntegrityPath(it) && include(it) }.toSet() }
             require(currentPaths == entries.map { it.first }.toSet()) { "采集期间研究目录已变化" }
             check()
             require(!output.exists()) { "不会覆盖已有快照" }; Files.move(temporary.toPath(), output.toPath(), ATOMIC_MOVE)

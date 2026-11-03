@@ -217,6 +217,108 @@ class CloudService(
             .put("conflicts", plan.conflicts)
     }
 
+    internal suspend fun syncFull(
+        workspaceEpoch: String,
+        capture: suspend (File) -> BackupCodec.Captured,
+        merge: suspend (BackupCodec.Staged) -> Int
+    ): JSONObject = operation {
+        val activeContext = coroutineContext
+        val check = { activeContext.ensureActive() }
+        val directory = fullSyncFolder(destinationID)
+        val outbox = File(directory, "pending.paperdigest")
+        val checkpointFile = File(directory, "checkpoint.json")
+        val captureIdentity = File(directory, "capture.json")
+        val last = File(directory, "last-sent.json")
+        val service = archive(fullSync = true)
+        try {
+            if (!outbox.exists()) {
+                require(!checkpointFile.exists()) { "待同步快照缺失，原续传记录已保留" }
+                BackupCodec.atomicJSON(captureIdentity, JSONObject().put("workspaceEpoch", workspaceEpoch))
+                val captured = capture(outbox)
+                BackupCodec.requireNormalCapture(captured)
+                require(captured.file == outbox)
+            }
+            val file = BackupCodec.checkedFile(directory, outbox.name)
+            val sha = BackupCodec.hash(file, check)
+            val old = if (checkpointFile.exists()) CloudCheckpoint.parse(readJSON(checkpointFile, 4 * 1024 * 1024)) else null
+            var sent = false
+            if (old != null || !last.exists() || readJSON(last, 64 * 1024).optString("sha256") != sha) {
+                val stage = BackupCodec.stage(file.inputStream(), directory, check)
+                try { BackupCodec.requirePortableInventory(stage.entries) } finally { stage.directory.deleteRecursively() }
+                val manifest = service.upload(file, old)
+                val final = CloudCheckpoint.parse(readJSON(checkpointFile, 4 * 1024 * 1024))
+                require(final.manifest == manifest && final.manifestVerified && final.verified == manifest.chunks.indices.toSet())
+                BackupCodec.atomicJSON(File(directory, "sent-${manifest.reference.id}.json"), manifest.info().put("workspaceEpoch", if (captureIdentity.exists()) readJSON(captureIdentity, 64 * 1024).getString("workspaceEpoch") else ""))
+                BackupCodec.atomicJSON(last, manifest.info())
+                sent = true
+            }
+            // Retire the checkpoint first. A crash between deletions still
+            // leaves the original outbox and the durable completed receipt.
+            if (checkpointFile.exists()) require(checkpointFile.delete())
+            require(file.delete())
+            if (captureIdentity.exists()) require(captureIdentity.delete())
+            val sentID = readJSON(last, 64 * 1024).getJSONObject("reference").getString("id")
+            val observed = HashSet<String>()
+            val required = directory.listFiles().orEmpty().mapNotNull {
+                val matched = Regex("^(?:accepted|sent)-([a-f0-9-]{36})\.json$").matchEntire(it.name)
+                matched?.groupValues?.get(1)
+            }.toSet() + sentID
+            var imported = 0
+            var conflicts = 0
+            for (month in service.fullSyncMonths()) for (identity in service.listIdentities(month)) {
+                check()
+                val id = identity.reference.id
+                require(observed.add(id)) { "云端返回了重复的同步版本" }
+                val accepted = File(directory, "accepted-$id.json")
+                val previous = File(directory, "sent-$id.json")
+                if (previous.exists()) {
+                    val receipt = readJSON(previous, 64 * 1024)
+                    require(receipt.getString("sha256") == identity.sha256) { "原云端同步版本已变化" }
+                    if (receipt.optString("workspaceEpoch") == workspaceEpoch) continue
+                }
+                val prior = if (accepted.exists()) readJSON(accepted, 64 * 1024) else null
+                if (prior != null) {
+                    require(prior.getString("manifestSHA256") == identity.manifestSHA256) { "原云端同步版本已变化" }
+                    if (prior.optString("workspaceEpoch") == workspaceEpoch) continue
+                }
+                val retained = File(controlRoot, "archived-$id")
+                if (!retained.exists()) require(retained.mkdir())
+                BackupCodec.checkedDirectory(retained); BackupCodec.privateDirectory(retained)
+                val original = File(retained, "snapshot.paperdigest")
+                if (!original.exists()) {
+                    val partial = File(directory, ".download-${UUID.randomUUID()}")
+                    try {
+                        service.download(identity.reference, partial, identity)
+                        require(partial.length() == identity.encodedBytes && BackupCodec.hash(partial, check) == identity.sha256)
+                        Files.move(partial.toPath(), original.toPath(), ATOMIC_MOVE)
+                    } finally { partial.delete() }
+                }
+                val staged = BackupCodec.stage(BackupCodec.checkedFile(retained, original.name).inputStream(), directory, check)
+                try {
+                    require(staged.encodedSHA256 == identity.sha256 && staged.encodedBytes == identity.encodedBytes)
+                    val count = merge(staged)
+                    conflicts += count
+                    BackupCodec.atomicJSON(accepted, identity.info().put("conflicts", maxOf(count, prior?.optInt("conflicts") ?: 0)).put("workspaceEpoch", workspaceEpoch))
+                    imported++
+                    if (count == 0 && (prior?.optInt("conflicts") ?: 0) == 0) retained.deleteRecursively()
+                } finally { staged.directory.deleteRecursively() }
+            }
+            require(observed.containsAll(required)) { "未能重新核对已见过的云端版本，原资料仍在本机" }
+            JSONObject().put("uploaded", sent).put("snapshots", imported).put("artifactConflicts", conflicts)
+        } finally {
+            // Both archive scopes persist the same account request pacing.
+            // The ordinary archive must reload it after a full sync.
+            cached = null
+        }
+    }
+
+    private fun fullSyncFolder(id: String): File {
+        val directory = File(controlRoot, "full-sync-$id")
+        if (!directory.exists()) require(directory.mkdir())
+        BackupCodec.checkedDirectory(directory); BackupCodec.privateDirectory(directory)
+        return directory
+    }
+
     suspend fun archivePending(): JSONObject = operation {
         require(hasPending()) { "没有未完成材料" }; val folder = targetFolder(); BackupCodec.checkedDirectory(folder)
         val connection = File(folder, if (File(folder, "connection.json").exists()) "connection-${UUID.randomUUID()}.json" else "connection.json")
@@ -243,19 +345,27 @@ class CloudService(
         } finally { stage.directory.deleteRecursively() }
         return file
     }
-    private fun archive(): CloudArchive {
-        cached?.takeIf { it.first == destinationID }?.let { return it.second }
+    private fun archive(fullSync: Boolean = false): CloudArchive {
+        if (!fullSync) cached?.takeIf { it.first == destinationID }?.let { return it.second }
         val id = destinationID; val folder = profile.getString("folder"); val account = profile.getString("account"); require(account.isNotEmpty()) { "请先保存坚果云账号" }
         return CloudArchive(folder, id, credentials = {
             try { val password = vault.load("cloud.$id") ?: throw CloudFailure("credentialsUnavailable"); credentialState = "present"; CloudCredentials(account, password) }
             catch (e: CancellationException) { throw e } catch (e: Exception) { coroutineContext.ensureActive(); credentialState = "unavailable"; throw CloudFailure("credentialsUnavailable") }
         }, saveCheckpoint = { cp ->
-            require(destinationID == id && cp.destinationID == id && cp.folder == folder)
-            val original = pending() ?: error("原续传记录缺失")
-            require(cp.manifest.sha256 == original.getString("sha256") && cp.manifest.encodedBytes == original.getLong("encodedBytes"))
-            original.optJSONObject("checkpoint")?.let { oldJSON -> val old = CloudCheckpoint.parse(oldJSON); require(old.manifest == cp.manifest) { "不能更换原远端版本" } }
-            BackupCodec.atomicJSON(File(targetFolder(), "pending.json"), original.put("checkpoint", cp.json()))
-        }, transport = transport, now = now, sleep = sleep, loadTraffic = { val file = File(controlRoot, "traffic-$id.json"); if (file.exists()) readJSON(file, 128 * 1024) else JSONObject() }, saveTraffic = { BackupCodec.atomicJSON(File(controlRoot, "traffic-$id.json"), it) }).also { cached = id to it }
+            require(destinationID == id && cp.destinationID == id)
+            if (fullSync) {
+                require(cp.folder == "$folder/full-sync-v1")
+                val file = File(fullSyncFolder(id), "checkpoint.json")
+                if (file.exists()) require(CloudCheckpoint.parse(readJSON(file, 4 * 1024 * 1024)).manifest == cp.manifest)
+                BackupCodec.atomicJSON(file, cp.json())
+            } else {
+                require(cp.folder == folder)
+                val original = pending() ?: error("原续传记录缺失")
+                require(cp.manifest.sha256 == original.getString("sha256") && cp.manifest.encodedBytes == original.getLong("encodedBytes"))
+                original.optJSONObject("checkpoint")?.let { oldJSON -> val old = CloudCheckpoint.parse(oldJSON); require(old.manifest == cp.manifest) { "不能更换原远端版本" } }
+                BackupCodec.atomicJSON(File(targetFolder(), "pending.json"), original.put("checkpoint", cp.json()))
+            }
+        }, transport = transport, now = now, sleep = sleep, loadTraffic = { val file = File(controlRoot, "traffic-$id.json"); if (file.exists()) readJSON(file, 128 * 1024) else JSONObject() }, saveTraffic = { BackupCodec.atomicJSON(File(controlRoot, "traffic-$id.json"), it) }, fullSync = fullSync).also { if (!fullSync) cached = id to it }
     }
     companion object {
         private fun validateProfile(o: JSONObject) {

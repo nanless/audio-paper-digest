@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.zotero
 
+import com.nanless.paperdigest.cloud.BackupCodec
 import com.nanless.paperdigest.data.*
 import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.secret.SecretStore
@@ -178,9 +179,40 @@ class ZoteroService(
             require(!Files.isSymbolicLink(profile.toPath()));JsonFiles.write(profile,c);state()
         }} finally{endCredentialMutation(token)}
     }
+    private fun syncedArchiveHistory(): JSONArray {
+        val history = File(researchRoot, "SyncedArchiveHistory")
+        if (!history.isDirectory || Files.isSymbolicLink(history.toPath())) return JSONArray()
+        val records = linkedMapOf<String, JSONObject>()
+        for (snapshot in history.listFiles().orEmpty().filter { BackupCodec.validSHA(it.name) && it.isDirectory && !Files.isSymbolicLink(it.toPath()) }.sortedBy { it.name }) {
+            val mac = LegacyMacArchiveHistory.read(snapshot).getJSONArray("records")
+            for (index in 0 until mac.length()) {
+                val row = mac.getJSONObject(index)
+                records.putIfAbsent("mac:" + BackupCodec.hash(row.toString().toByteArray()), JSONObject()
+                    .put("platform", "Mac").put("title", row.optString("title")).put("status", row.optString("reportedStatus")))
+            }
+            for (relativeRoot in listOf("ZoteroArchives", "ZoteroDavArchives")) {
+                val directory = File(snapshot, relativeRoot)
+                if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) continue
+                for (candidate in directory.listFiles().orEmpty().sortedBy { it.name }) {
+                    runCatching {
+                        val id = UUID.fromString(candidate.name).toString()
+                        require(id == candidate.name)
+                        val raw = JsonFiles.read(BackupCodec.checkedFile(snapshot, "$relativeRoot/$id/journal.json"), 8L * 1024 * 1024)
+                        val row = JSONObject(raw.toString(Charsets.UTF_8))
+                        require(row.getString("id") == id)
+                        records.putIfAbsent("android:" + BackupCodec.hash(raw), JSONObject()
+                            .put("platform", "Android").put("title", row.optString("paperID", id)).put("status", row.optString("status")))
+                    }
+                }
+            }
+            if (records.size >= 200) break
+        }
+        return JSONArray(records.values.take(200))
+    }
+
     fun state():JSONObject {
         val c=connection()
-        val result=JSONObject().put("macHistory", LegacyMacArchiveHistory.read(researchRoot)).put("libraryType",c.optString("libraryType","users")).put("libraryID",c.optString("libraryID")).put("collection",c.optString("collection"))
+        val result=JSONObject().put("syncedArchiveHistory", syncedArchiveHistory()).put("macHistory", LegacyMacArchiveHistory.read(researchRoot)).put("libraryType",c.optString("libraryType","users")).put("libraryID",c.optString("libraryID")).put("collection",c.optString("collection"))
             .put("attachmentBackend",backend(c)).put("davBaseURL",c.optString("davBaseURL")).put("davUsername",c.optString("davUsername")).put("davDestinationID",c.optString("davDestinationID")).put("davAccountID",c.optString("davAccountID"))
             .put("prepared",prepared ?: JSONObject.NULL).put("busy",busy)
             .put("journals",JSONArray(records.listFiles()?.filter{it.isDirectory}?.mapNotNull{dir->runCatching{readJournal(dir.name).apply{remove("bibliography");remove("roles")}}.getOrNull()}?.sortedByDescending{it.optString("createdAt")}?:emptyList<JSONObject>()))

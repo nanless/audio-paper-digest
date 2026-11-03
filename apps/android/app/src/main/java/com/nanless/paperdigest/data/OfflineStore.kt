@@ -130,7 +130,7 @@ class OfflineStore(private val root: File) {
         .put("sourceVersion", manifest.opt("sourceVersion") ?: JSONObject.NULL).put("revisionSHA256", manifest.getString("articleRevisionSHA256")).put("pdfSHA256", manifest.opt("pdfSHA256") ?: "")
         .put("files", manifest.getJSONArray("files").length()).put("bytes", manifest.getJSONArray("files").objects().sumOf { it.getLong("bytes") }).put("createdAt", manifest.getString("createdAt")).put("status", "verified").put("hasPDF", nullable(manifest, "pdfSHA256") != null)
     private fun verify(id: String): JSONObject = verifyAt(location(id), id)
-    private fun verifyAt(folder: File, id: String): JSONObject {
+    internal fun verifyAt(folder: File, id: String): JSONObject {
         BackupCodec.checkedDirectory(folder)
         val manifest = OfflineFoundationJSON.parse(JsonFiles.read(BackupCodec.checkedFile(folder, "manifest.json"), 2 * 1024 * 1024L))
         val version = manifest.getString("contract")

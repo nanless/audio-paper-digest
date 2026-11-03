@@ -15,7 +15,7 @@ export function mountZotero(app) {
     dialog.innerHTML = `<form method="dialog"><header><span class="zotero-z">Z</span><button value="cancel" class="icon-button" aria-label="关闭归档">×</button></header><h1>存入 Zotero</h1><p class="dialog-subtitle">保存原文、网站导读与自己的研究。</p><div class="archive-paper"><div><h2 id="archive-title">当前论文</h2><p id="archive-identity"></p></div></div><label class="archive-option"><input type="checkbox" checked disabled><span>书目与原始元数据<small>保留用户条目字段，另存完整来源记录</small></span></label><label class="archive-option"><input id="archive-pdf" type="checkbox"><span>原始 PDF<small id="archive-pdf-detail"></small></span></label><label class="archive-option"><input id="archive-guide" type="checkbox"><span>图文导读<small id="archive-guide-detail"></small></span></label><label class="archive-option"><input id="archive-note" type="checkbox"><span>个人研究笔记<small id="archive-note-detail"></small></span></label><div class="archive-destination"></div><div class="archive-connection"></div><footer><button value="cancel" class="secondary-button">关闭</button><button id="archive-connect" type="button"></button></footer></form>`;
     document.body.append(dialog);
   }
-  settingsPane.innerHTML = `<h1>Zotero 论文归档</h1><p>把论文、原始 PDF、导读和所选笔记存入本机 Zotero。工作台整体备份请在左侧“WebDAV 备份”配置。</p><ol class="zotero-setup-steps"><li><strong>打开 Zotero Desktop</strong>，在其设置中开启本地 API（允许其他应用连接）。Mac 无需填写服务器地址或 Web API 密钥。</li><li><strong>点击“检查本机连接”</strong>，确认客户端与文库可用。曾经授权过，可选择“检查已保存许可”。</li><li><strong>点击“请求写入授权”</strong>，由你在 Zotero 弹窗确认；然后打开一篇论文、选择分类并归档。</li></ol><div class="settings-group"><div><span>本机客户端</span><span id="zotero-version-status">尚未检查</span></div><div><span>写入权限</span><span id="zotero-auth-status">尚未授权</span></div></div><p class="settings-help">读取分类不需要写入许可。连接时，Zotero 会显示原生授权窗口。持续允许授予此应用对全部可编辑文库的写入权限；每次归档仍只处理你选择的论文和分类。</p><div class="zotero-buttons"><button id="zotero-refresh" class="secondary-button">检查本机连接</button><button id="zotero-authorize" class="primary-button">请求写入授权…</button><button id="zotero-open-archive" class="secondary-button">归档当前论文</button></div><p id="zotero-settings-result" role="status"></p><div id="zotero-pending"></div><div id="zotero-recent"></div>`;
+  settingsPane.innerHTML = `<h1>Zotero 论文归档</h1><p>把论文、原始 PDF、导读和所选笔记存入本机 Zotero。工作台整体备份请在左侧“WebDAV 备份”配置。</p><ol class="zotero-setup-steps"><li><strong>打开 Zotero Desktop</strong>，在其设置中开启本地 API（允许其他应用连接）。Mac 无需填写服务器地址或 Web API 密钥。</li><li><strong>点击“检查本机连接”</strong>，确认客户端与文库可用。曾经授权过，可选择“检查已保存许可”。</li><li><strong>点击“请求写入授权”</strong>，由你在 Zotero 弹窗确认；然后打开一篇论文、选择分类并归档。</li></ol><div class="settings-group"><div><span>本机客户端</span><span id="zotero-version-status">尚未检查</span></div><div><span>写入权限</span><span id="zotero-auth-status">尚未授权</span></div></div><p class="settings-help">读取分类不需要写入许可。连接时，Zotero 会显示原生授权窗口。持续允许授予此应用对全部可编辑文库的写入权限；每次归档仍只处理你选择的论文和分类。</p><div class="zotero-buttons"><button id="zotero-refresh" class="secondary-button">检查本机连接</button><button id="zotero-authorize" class="primary-button">请求写入授权…</button><button id="zotero-open-archive" class="secondary-button">归档当前论文</button></div><p id="zotero-settings-result" role="status"></p><div id="zotero-pending"></div><div id="zotero-recent"></div><section><h2>其他设备的归档历史</h2><button id="zotero-synced-history" type="button" class="secondary-button">查看已同步的归档</button><div id="zotero-synced-records" role="status"></div></section>`;
   if (!$('zotero-ui-style')) {
     const style = document.createElement('style'); style.id = 'zotero-ui-style';
     style.textContent = '.zotero-buttons{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0}.zotero-destination{display:grid;gap:8px;margin:16px 0;font-size:12px}.zotero-destination select,.zotero-destination input{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}.zotero-destination label{display:grid;gap:5px}.zotero-step-list{list-style:none;padding:0;margin:12px 0;font-size:12px}.zotero-step-list li{padding:6px 0;border-bottom:1px solid var(--line)}.zotero-step-list small{display:block;color:var(--muted);margin-top:3px}.zotero-step-list .failed{color:var(--red)}.zotero-pending-row{padding:10px 0;border-top:1px solid var(--line);font-size:12px}.zotero-pending-row p{margin-bottom:6px}.zotero-status-text{font-size:12px;line-height:1.7;margin:12px 0}';
@@ -104,6 +104,28 @@ export function mountZotero(app) {
     $('zotero-recent').innerHTML = recent.length ? '<h2>最近归档</h2>' + recent.map((a,i) => row(a,i,'重新回读核验')).join('') : '';
     document.querySelectorAll('#zotero-pending [data-zotero-resume],#zotero-recent [data-zotero-resume]').forEach(button => { button.onclick = () => resume(button.dataset.zoteroResume); });
   }
+  $('zotero-synced-history').onclick = async () => {
+    const button = $('zotero-synced-history'), container = $('zotero-synced-records');
+    button.disabled = true;
+    container.textContent = '正在读取本机保存的原件…';
+    try {
+      const value = await app.call('zotero.syncedHistory', {});
+      const rows = Array.isArray(value.records) ? value.records : [];
+      container.replaceChildren();
+      for (const record of rows) {
+        const row = document.createElement('p');
+        row.className = 'zotero-pending-row';
+        row.textContent = `${record.title} · ${record.origin} · ${record.reportedComplete ? '原记录标为已完成' : '原记录待完成或待核验'}`;
+        container.append(row);
+      }
+      const note = document.createElement('p');
+      note.textContent = rows.length ? '这些记录可只读查看。继续归档请回到创建记录的设备。' : '本机暂无已同步的归档历史。';
+      if (value.unreadableCount) note.textContent += ` ${value.unreadableCount} 份原件暂不可读，文件仍保留。`;
+      if (value.truncated) note.textContent += ' 此处显示前 200 条。';
+      container.append(note);
+    } catch (error) { container.textContent = error?.message || String(error); }
+    finally { button.disabled = false; }
+  };
   async function refresh() {
     try {
       status = await app.call('zotero.status', {});

@@ -102,8 +102,8 @@ struct CloudRestoreSelection {
         if let backup = profile.lastBackup { state["lastBackup"] = ["month": backup.month, "id": backup.id.uuidString, "createdAt": backup.createdAt, "encodedBytes": backup.encodedBytes] }
         return state
     }
-    func cloudService() throws -> CloudArchiveService {
-        if let cloudArchive { return cloudArchive }
+    func cloudService(fullSync: Bool = false) throws -> CloudArchiveService {
+        if !fullSync, let cloudArchive { return cloudArchive }
         let local = try cloudLocalStore(), profile = local.profile
         guard !profile.account.isEmpty else { throw DesktopError.message("请先保存坚果云账号") }
         let target = CloudSessionCredentials.Target(destination: profile.destinationID, account: profile.account)
@@ -122,13 +122,14 @@ struct CloudRestoreSelection {
         let service = try CloudArchiveService(folder: profile.folder, destinationID: profile.destinationID,
             credentials: { try await access.credentials() }, checkpointSink: { [weak self] checkpoint in
                 guard let owner = self else { throw DesktopError.message("应用已退出，未保存续传记录") }
-                try await owner.saveCloudCheckpoint(checkpoint, destinationID: profile.destinationID)
+                try await owner.saveCloudCheckpoint(checkpoint, destinationID: profile.destinationID, fullSync: fullSync)
             }, transport: cloudServiceTransportOverride, minimumRequestInterval: cloudServiceTransportOverride == nil ? 3.1 : 0,
             initialRetryAfter: profile.retryAfter, cooldownSink: { [weak self] until in
                 guard let owner = self else { throw DesktopError.message("应用已退出，未保存云端重试时间") }
                 try await owner.saveCloudCooldown(until, destinationID: profile.destinationID)
-            })
-        cloudArchive = service; return service
+            }, fullSync: fullSync)
+        if !fullSync { cloudArchive = service }
+        return service
     }
     func cloudCredentialContextCurrent(target: CloudSessionCredentials.Target, generation: UUID) -> Bool {
         guard !terminationPending, cloudSessionCredentials.generation == generation,
@@ -148,8 +149,8 @@ struct CloudRestoreSelection {
         try cloudLocalStore().recordCooldown(until, destinationID: destinationID)
         emit("cloud.changed")
     }
-    func saveCloudCheckpoint(_ checkpoint: CloudArchiveService.UploadCheckpoint, destinationID: UUID) throws {
-        try cloudLocalStore().saveCheckpoint(checkpoint, destinationID: destinationID, sha256: checkpoint.sha256)
+    func saveCloudCheckpoint(_ checkpoint: CloudArchiveService.UploadCheckpoint, destinationID: UUID, fullSync: Bool = false) throws {
+        try cloudLocalStore().saveCheckpoint(checkpoint, destinationID: destinationID, sha256: checkpoint.sha256, fullSync: fullSync)
         if let job = cloudActiveJobID {
             recordProgress(id: job, update: ["phase": "cloud-readback", "message": checkpoint.manifestVerified ? "云端完整清单已回读" : "逐块上传并回读核验", "completed": checkpoint.verifiedChunkIndices.count, "total": checkpoint.chunks.count])
         }
@@ -164,6 +165,20 @@ struct CloudRestoreSelection {
     func dispatchCloud(_ command: String, payload: [String: Any]) async throws -> [String: Any] {
         if command == "cloud.state" { return try cloudState() }
         try requireMainContextAvailable()
+        if command == "cloud.syncAll" {
+            guard payload.isEmpty, !cloudBusy else { throw CloudArchiveService.CloudError.busy }
+            var results: [String: Any] = [:]
+            for (key, operation) in [("workspace", "cloud.syncWorkspace"), ("personal", "cloud.syncPersonal")] {
+                do {
+                    results[key] = try await dispatchCloud(operation, payload: [:])
+                } catch is CancellationError { throw CancellationError() }
+                catch let cancelled as DesktopOperationCancelled { throw cancelled }
+                catch {
+                    results[key] = ["error": error.localizedDescription]
+                }
+            }
+            return results
+        }
         if command == "cloud.revealTransfers" {
             NSWorkspace.shared.activateFileViewerSelecting([try cloudLocalStore().root]); return ["opened": true]
         }
@@ -243,13 +258,36 @@ struct CloudRestoreSelection {
             try local.pauseAutomatic(true)
             _ = try local.archivePending(); cloudLastError = nil; return ["retained": true]
         }
-        guard ["cloud.check", "cloud.upload", "cloud.list", "cloud.restore", "cloud.syncPersonal"].contains(command) else { throw DesktopError.message("不支持此云端操作") }
+        guard ["cloud.check", "cloud.upload", "cloud.list", "cloud.restore", "cloud.syncPersonal", "cloud.syncWorkspace"].contains(command) else { throw DesktopError.message("不支持此云端操作") }
         cloudBusy = true; cloudLastError = nil; emit("cloud.changed")
         defer { cloudBusy = false; emit("cloud.changed") }
         let credentialTarget = CloudSessionCredentials.Target(destination: local.profile.destinationID, account: local.profile.account)
         let credentialGeneration = cloudSessionCredentials.generation
         do {
             if command == "cloud.upload" { return try await uploadCloudSnapshot() }
+            if command == "cloud.syncWorkspace" {
+                guard payload.isEmpty else { throw DesktopError.message("同步入口只使用已保存的 WebDAV 连接") }
+                let service = try cloudService(fullSync: true)
+                return try await performCloudJob(command) {
+                    let validateWorkspace: () async throws -> Void = {
+                        try await self.flushEdits(syncCommit: true)
+                        try Task.checkCancellation()
+                        try self.requireMainContextAvailable()
+                        guard self.jobs.keys.allSatisfy({ $0 == self.cloudActiveJobID }), !self.maintenanceBusy else {
+                            throw DesktopError.message("请等当前研究任务结束再同步资料；原始资料已保留")
+                        }
+                        guard self.cloudCredentialContextCurrent(target: credentialTarget, generation: credentialGeneration) else {
+                            throw CloudArchiveService.CloudError.credentialsUnavailable
+                        }
+                    }
+                    let result = try await FullWebDavWorkspace.run(directory: self.directory, store: self.store,
+                        local: local, service: service, beforeCapture: validateWorkspace, beforeReceive: validateWorkspace,
+                        exclusive: { self.maintenanceBusy = $0 })
+                    try self.cloudConfirmCredential(target: credentialTarget, generation: credentialGeneration)
+                    self.emit("personal.synced")
+                    return ["status": "complete", "files": result.files, "conflicts": result.conflicts]
+                }
+            }
             let service = try cloudService()
             if command == "cloud.syncPersonal" {
                 guard payload.isEmpty else { throw DesktopError.message("同步入口只使用已保存的 WebDAV 连接") }

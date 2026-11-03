@@ -12,7 +12,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 
 | Item | Supported configuration |
 |---|---|
-| Source version | 1.3.7, build 15; see the release page for available public packages |
+| Source version | 1.4.0, build 16; see the release page for available public packages |
 | Operating system | macOS 15 or later |
 | Processor | Apple Silicon, arm64; the current package does not contain both Intel and Apple Silicon architectures |
 | Signing | Local ad-hoc signing; not notarized by Apple |
@@ -120,4 +120,4 @@ AppKit provides native windows, WebKit lays out explanations, and PDFKit display
 
 Further documentation, in Chinese: [data and recovery](../../docs/mac-app-data.md), [validation scope](../../docs/mac-app-validation.md), and [release operations](../../docs/mac-app-release.md).
 
-In the library or WebDAV settings, click **一键同步 WebDAV** on either device. Use the same saved Nutstore account and folder on both devices. Sync covers favorites and their dates, the reading list, notes, annotations, and reading progress for published papers. Concurrent edits to one note or annotation set are kept on their respective devices until you reconcile them. Use the full backup for files and research history.
+In the library, choose **一键同步 WebDAV**. Use the same saved Nutstore account and folder on both devices. The action synchronizes personal reading data separately from PDFs, saved offline guides, research originals, exports, and archive history. Either part can be retried from settings. A retry after interruption uses the original pending snapshot. Full backup and restore remain separate actions. If the same record or path has different contents, the workbench keeps the local version and the other device’s original. Imported archive history is read-only. Resume an archive from the device that created it.

@@ -103,7 +103,7 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
                     item("personal-sync") {
                         OutlinedButton({
                             if (state.cloud.optString("account").isBlank()) action("ui.settings", obj("pane" to "坚果云"))
-                            else action("cloud.syncPersonal", JSONObject())
+                            else action("cloud.syncWorkspace", JSONObject())
                         }, enabled = !state.busy && !state.settings.optBoolean("offlineMode")) {
                             Icon(Icons.Outlined.Sync, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
