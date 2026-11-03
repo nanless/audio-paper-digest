@@ -7014,6 +7014,66 @@ def _api_reader_markdown_tables(article):
     return tables
 
 
+def _source_quoted_codec_display_cells(paper, binding, table):
+    """Recognize one codec spelling only from an exact sealed source row."""
+    raw, shown = r'G.711 μ\mu-law', 'G.711 μ-law'
+    if (binding.get('sourceType') != 'source_quotes' or table['header'].count('Condition') != 1
+            or not isinstance(paper.get('freshRewriteProvenance'), dict)):
+        return {}
+    column = table['header'].index('Condition')
+    candidates = [(i, row) for i, row in enumerate(table['rows'], 1)
+                  if len(row) == len(table['header']) and row[column] == raw]
+    if len(candidates) != 1:
+        return {}
+    row_number, row = candidates[0]
+    line_block = '\n'.join(row)
+    quotes = [record['quote'] for record in binding.get('sourceQuotes', [])
+              if isinstance(record, dict) and set(record) == {'quote', 'sourceQuoteSha256'}
+              and isinstance(record['quote'], str) and 12 <= len(record['quote']) <= 4000
+              and record['sourceQuoteSha256'] == _javascript_string_sha256(record['quote'])
+              and re.search(r'(?:^|\n)' + re.escape(line_block) + r'(?:\n|$)', record['quote'])]
+    if not quotes:
+        return {}
+    proof = paper['freshRewriteProvenance']
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(r'[a-f0-9-]{36}', run_id):
+        return {}
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    source, _ = _daily_fresh_read_bundle_source_identity(
+        Path(DAILY_FRESH_SOURCE_RUNS_DIR).resolve() / run_id, paper_id, proof, paper)
+    source_path, size, digest, maximum = source['files'][0]
+    content = _daily_fresh_read_private_file(source_path, 'daily source codec display', maximum)
+    if len(content) != size or _daily_fresh_sha256(content) != digest:
+        raise PublishDataValidationError('来源编码器名称的显示核验发现来源字节变化。')
+    source_text = content.decode('utf-8')
+    if not any(quote in source_text for quote in quotes):
+        return {}
+    return {(row_number, column): shown}
+
+
+def _project_source_quoted_codec_display(article, paper):
+    saved = _api_reader_markdown_tables(paper['apiReaderArticle'])
+    tables = extract_markdown_tables(article)
+    lines = article.split('\n')
+    for binding in paper['apiReaderPlan']['tableBindings']:
+        index = binding['tableIndex'] - 1
+        cells = _source_quoted_codec_display_cells(paper, binding, saved[index])
+        for (row, column), displayed in cells.items():
+            line_index = tables[index]['start_line'] + row + 1
+            line = lines[line_index]
+            pipes = list(re.finditer(r'(?<!\\)\|', line))
+            if column + 1 >= len(pipes):
+                raise PublishDataValidationError('来源编码器名称的显示列缺失。')
+            start, end = pipes[column].end(), pipes[column + 1].start()
+            original = line[start:end]
+            if original.strip() != saved[index]['rows'][row - 1][column]:
+                raise PublishDataValidationError('来源编码器名称的保存字节与显示投影输入不符。')
+            leading = original[:len(original) - len(original.lstrip())]
+            trailing = original[len(original.rstrip()):]
+            lines[line_index] = line[:start] + leading + displayed + trailing + line[end:]
+    return '\n'.join(lines)
+
+
 def _project_bound_source_cell_math_display(article, plan):
     """Change only verified artifact-cell view text; preserve saved Reader bytes."""
     tables = extract_markdown_tables(article)
@@ -9051,6 +9111,16 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
             if len(seen) != expected_cells:
                 raise PublishDataValidationError(f'第 {index} 个表格仍有单元格缺少来源记录。')
         elif binding.get('sourceType') == 'source_quotes':
+            codec_cells = _source_quoted_codec_display_cells(paper, binding, saved_rendered_table)
+            codec_raw = r'G.711 μ\mu-law'
+            saved_has_codec = any(codec_raw in row for row in saved_rendered_table['rows'])
+            if saved_has_codec and (rendered['header'], rendered['rows']) != (
+                    saved_rendered_table['header'], saved_rendered_table['rows']):
+                expected = [row.copy() for row in saved_rendered_table['rows']]
+                for (row, column), displayed in codec_cells.items():
+                    expected[row - 1][column] = displayed
+                if not codec_cells or rendered['header'] != saved_rendered_table['header'] or rendered['rows'] != expected:
+                    raise PublishDataValidationError('来源编码器名称显示不能改变同一表中的其他原值。')
             if set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}, required | {'authenticatedPdfTableEvidence'}) or binding.get('sourceTableOrdinal') is not None \
                     or binding.get('cellBindings') != [] \
                     or not isinstance(binding.get('sourceQuotes'), list) \
@@ -10139,6 +10209,8 @@ def _api_reader_payload(paper):
     if integrated:
         rendered_article = _normalize_api_reader_display_artifacts(rendered_article)
         rendered_article = _project_bound_source_cell_math_display(rendered_article, plan)
+        if r'G.711 μ\mu-law' in rendered_article:
+            rendered_article = _project_source_quoted_codec_display(rendered_article, paper)
     if figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
         rendered_article = render_ephemeral_api_reader_figures(rendered_article, figures)
     for asset in figure_assets:
@@ -17312,6 +17384,9 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
             failure_kind = record.get('failureKind') or (
                 'content' if record.get('completed', True) else 'pending'
             )
+            if failure_kind == 'content' and item.suffix.lower() != '.md' and not record.get('issues'):
+                # 关联页面未通过时，资产可能还未获得自己的核验结果。
+                failure_kind = 'pending'
             if failure_kind == 'content':
                 # 旧检查点把图片下载的绝对超时判成了内容失败。
                 # 用当前的分类器重新判定它们记录的问题，
