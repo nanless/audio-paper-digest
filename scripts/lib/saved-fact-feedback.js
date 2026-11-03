@@ -259,6 +259,11 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
         'apiReaderArticle', feedbackSha256);
     const before = protectedReaderUpstream(target);
+    const beforeImages = target.analysisManifest?.stages;
+    const deferredImageDownload = beforeImages?.imageDownload?.status === 'pending'
+        && beforeImages.imageDownload.reason === 'deferred_until_legacy_image_supplement'
+        && beforeImages.imageSupplement === undefined
+        ? structuredClone(beforeImages.imageDownload) : null;
     const checkpointKey = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
     const originalPersist = paper[checkpointKey];
     Object.defineProperty(target, checkpointKey, {
@@ -295,7 +300,27 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
                 naturalResourceProse: options.naturalResourceProse === true
             })));
 
-    if (daily.stableHash(protectedReaderUpstream(result)) !== daily.stableHash(before)) {
+    const after = protectedReaderUpstream(result);
+    const stages = result?.analysisManifest?.stages;
+    const imageDownload = stages?.imageDownload, imageSupplement = stages?.imageSupplement;
+    if (deferredImageDownload && imageDownload?.status === 'skipped'
+        && imageSupplement?.status === 'skipped'
+        && imageDownload.reason === 'api_reader_v3_official_figures_bound'
+        && imageSupplement.reason === imageDownload.reason
+        && imageDownload.fingerprint === deferredImageDownload.fingerprint
+        && imageDownload.attempted === 0 && imageDownload.downloaded === 0
+        && Array.isArray(imageDownload.outcomes) && imageDownload.outcomes.length === 0
+        && imageSupplement.officialFigureCount === result.apiReaderFigures?.length
+        && imageSupplement.officialFiguresSha256 === daily.stableHash(result.apiReaderFigures)
+        && typeof imageSupplement.updatedAt === 'string'
+        && after.analysisManifest.updatedAt === imageSupplement.updatedAt) {
+        // The normal official-image finalizer stamps the enclosing manifest
+        // along with its own stage. Compare every other protected field.
+        if (Object.hasOwn(before.analysisManifest, 'updatedAt'))
+            after.analysisManifest.updatedAt = before.analysisManifest.updatedAt;
+        else delete after.analysisManifest.updatedAt;
+    }
+    if (daily.stableHash(after) !== daily.stableHash(before)) {
         const error = new Error('独立Reader纠错改变了原主文、摘要、评分、阶段或费用历史');
         error.code = 'READER_RETURN_PROTECTION_REJECTED'; error.retryable = false; throw error;
     }
