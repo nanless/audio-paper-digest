@@ -4,7 +4,13 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage();
-const CONTRACT = 'daily-reader-operator-correction-batch-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = 'daily-reader-operator-correction-batch';
+const PROOF = 'daily-reader-operator-correction';
+const EDIT = 'reader-human-source-edit';
+const hasOperatorProof = value => codec.hasValidHeader(value, PROOF);
+const operatorProofTags = new Set(codec.registeredHeaders(PROOF).map(header => header.contract));
+const hasOperatorProofMarker = value => operatorProofTags.has(value?.contract);
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const id = paper => require('../utils').normalizedId({arxivId:paper?.arxivId||paper?.paper_id||paper?.paperId});
 function read(file) {
@@ -26,7 +32,7 @@ function unchanged(snapshot) {
 }
 function replay(record, candidate) {
     const repair = require('./reader-repair');
-    if (record.contract !== 'reader-human-source-edit-v1' || record.notLlmResponse !== true
+    if (!codec.hasValidHeader(record, EDIT) || record.notLlmResponse !== true
         || repair.hashDraft(candidate.identity) !== path.basename(record.baselineCandidateFile,'.json')
         || record.baselineDraftSha256 !== repair.hashDraft(candidate.payload.draft)
         || !repair.parseRepairableDraft(record.draft) || !Array.isArray(record.patch?.replacements)
@@ -106,7 +112,7 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
     const tail = inspectDailyOperatorTail(plan, papers, factFeedbacks);
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
     within(filename,root); const manifest = read(filename), m = manifest.value;
-    if (m.contract !== CONTRACT || m.runId !== plan.runId || m.batchDate !== plan.batchDate
+    if (!codec.hasValidHeader(m, CONTRACT) || m.runId !== plan.runId || m.batchDate !== plan.batchDate
         || typeof m.authorization !== 'string' || !m.authorization.trim()
         || !Array.isArray(m.correctionFiles) || !m.correctionFiles.length)
         throw new Error('Explicit operator correction manifest is invalid');
@@ -154,7 +160,7 @@ function current(paper, identity) {
         || ['runId','sourceSha256','structuredArtifactsSha256','sourceSnapshotSha256',
             'sourceGeneration','sourceManifestSha256'].some(k=>identity.freshAnalysis?.[k]!==record.sourceDescriptor[k]))
         throw new Error('Operator correction current source or input changed');
-    const proof = { contract:'daily-reader-operator-correction-v1',executionKind:'operator',
+    const proof = { ...codec.recordHeader(PROOF, PROOF), executionKind:'operator',
         newReaderApiRequests:0,runId:context.runId,paperId:id(paper),batchDate:active.manifest.value.batchDate,
         authorization:active.manifest.value.authorization,manifestFile:active.manifest.file,
         manifestSha256:active.manifest.sha256,correctionFile:record.file.file,correctionSha256:record.file.sha256,
@@ -193,7 +199,7 @@ function validateSavedCompletion(paper) {
     const fail = message => { throw new Error(`Daily operator completion refused: ${message}`); };
     if (stage?.status !== 'complete' || stage.executionKind !== 'operator' || stage.model !== 'operator-local'
         || stage.protocol !== 'local_operator' || stage.newReaderApiRequests !== 0
-        || proof?.contract !== 'daily-reader-operator-correction-v1' || proof.executionKind !== 'operator'
+        || !hasOperatorProof(proof) || proof.executionKind !== 'operator'
         || proof.newReaderApiRequests !== 0 || proof.paperId !== id(paper)
         || !/^[a-f0-9]{64}$/.test(proof.currentInputIdentitySha256 || '')) fail('actual local execution/provenance missing');
     const daily = require('./daily-fresh-source-plan'), fresh = require('./fresh-analysis-context');
@@ -209,7 +215,7 @@ function validateSavedCompletion(paper) {
     if (proof.runId !== plan.runId || proof.batchDate !== plan.batchDate || !daily.isPaperBoundToPlan(paper, plan)) fail('actual daily plan differs');
     const manifest = take(proof.manifestFile, proof.manifestSha256);
     const record = take(proof.correctionFile, proof.correctionSha256);
-    if (manifest.contract !== CONTRACT || manifest.runId !== plan.runId || manifest.batchDate !== plan.batchDate
+    if (!codec.hasValidHeader(manifest, CONTRACT) || manifest.runId !== plan.runId || manifest.batchDate !== plan.batchDate
         || typeof manifest.authorization !== 'string' || !manifest.authorization.trim() || manifest.authorization !== proof.authorization
         || !Array.isArray(manifest.correctionFiles) || !manifest.correctionFiles.length || manifest.correctionFiles.length > 15
         || new Set(manifest.correctionFiles.map(file => path.resolve(file))).size !== manifest.correctionFiles.length
@@ -277,5 +283,5 @@ function validateSavedCompletion(paper) {
     if (daily.stableHash(paper) !== paperSha256) fail('paper/stage changed during read-only replay');
     return true;
 }
-module.exports={CONTRACT,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
+module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
     inspectDailyOperatorTail,assertCompleteOperatorTail};

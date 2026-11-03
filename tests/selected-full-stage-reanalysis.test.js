@@ -101,6 +101,8 @@ async function createSample(t, { fullSource = true, quantitativeSource = false, 
         {},
         signed.paper.analysis,
     ).analysisManifest;
+    Object.assign(paper.analysisManifest,
+        require('../scripts/lib/analysis-quality-format').manifestHeader(validManifest));
     paper.analysisManifest.contracts = {
         ...validManifest.contracts,
         ...paper.analysisManifest.contracts,

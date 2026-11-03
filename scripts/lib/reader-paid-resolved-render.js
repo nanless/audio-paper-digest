@@ -1,4 +1,5 @@
 'use strict';
+const codec = require('./protocol-codec');
 const { isUsageEventFormat } = require('./llm-usage-format');
 
 
@@ -11,7 +12,7 @@ const paidFigureScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const paidRenderScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const OLD_RENDERER_COMMIT = 'e2a275a87ee1c277e69d0be2d0978c53e00d4ede';
 const CURRENT_SIGNED_RENDERER_COMMIT = '314aa43c282db28ce2465edcffd76b41936df9dd';
-const CONTRACT = 'reader-paid-resolved-render-v1';
+const CONTRACT = 'reader-paid-resolved-render';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const hash = value => require('./reader-repair').hashDraft(value);
 const stable = value => sha(JSON.stringify((function order(item) {
@@ -208,7 +209,7 @@ async function rerenderPaidResolvedReader(paperId, options) {
                 modelImagePreflightEvidenceSha256: hash(payload.ephemeralImageEvidence),
                 providerImageExclusions: payload.providerImageExclusions || [] }, {
                 readerResources: old.apiReaderResources,
-                execution: { ...stage, paidResolvedRender: { contract: CONTRACT, originalRendererCommit: OLD_RENDERER_COMMIT,
+                execution: { ...stage, paidResolvedRender: { ...codec.recordHeader(CONTRACT, CONTRACT), originalRendererCommit: OLD_RENDERER_COMMIT,
                     originalIdentitySha256: checked.identitySha, originalEnvelopeSha256: options.expectedEnvelopeSha256,
                     originalRawDraftSha256: sha(payload.rawDraft), originalArticleSha256: original.articleSha256,
                     originalPlanSha256: original.planSha256, originalAttempts: 1, originalFullAttempts: 1,
@@ -447,7 +448,7 @@ async function currentSignedPaidResolvedRender(paperId, options, previewOnly) {
                         providerImageExclusions: payload.providerImageExclusions || [] }, {
                         preserveReaderUpstream: true, readerAuthors: old.apiReaderAuthors, readerResources: old.apiReaderResources,
                         execution: { ...originalStage, paidCurrentSignedRender: {
-                            contract: 'reader-current-signed-paid-render-v1', originalRendererCommit: CURRENT_SIGNED_RENDERER_COMMIT,
+                            ...codec.recordHeader('reader-current-signed-paid-render', 'reader-current-signed-paid-render'), originalRendererCommit: CURRENT_SIGNED_RENDERER_COMMIT,
                             originalIdentitySha256: checked.identitySha, originalEnvelopeFile: options.resolvedFile,
                             originalEnvelopeSha256: options.expectedEnvelopeSha256, originalNormalizedDraftSha256: sha(payload.rawDraft),
                             originalArticleSha256: old.apiReaderArticleSha256, originalPlanSha256: old.apiReaderPlanSha256,

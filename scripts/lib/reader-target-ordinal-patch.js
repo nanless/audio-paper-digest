@@ -462,7 +462,7 @@ function readVerifiedCompletion(paper){
     if(!/^\d{4}\.\d{4,5}$/.test(canonical(paper)))fail('actual daily source lacks canonical paper ID','run');
     const attempts=path.join(require('../config').FILES.dailyFreshSourceRunsDir,prov.runId,'reader-attempts'),dir=completionDirectory(attempts),files=completionFiles(dir,paper);
     const operator=require('./daily-reader-operator-correction'),history=stage?.ordinalPatchHistory;
-    const operatorCompletion=stage?.operatorProvenance?.contract==='daily-reader-operator-correction-v1'
+    const operatorCompletion=operator.hasOperatorProofMarker(stage?.operatorProvenance)
         ||history?.reason==='operator-correction-supersedes-ordinal-completion'
         ||(!files.length&&operator.hasRetainedOrdinalCandidate(paper,attempts));
     if(operatorCompletion){

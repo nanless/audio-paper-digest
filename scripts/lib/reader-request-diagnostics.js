@@ -210,7 +210,14 @@ function latestCoreSummaryDiagnosticId(root, expectedIdentity) {
     });
 }
 // New metadata recovery evidence only; no content/request allowance.
-const VERSION_METADATA_PROOF = 'reader-paid-version-metadata-proof-v1';
+const versionMetadataCodec = require('./protocol-codec');
+const VERSION_METADATA_PROOF = 'reader-paid-version-metadata-proof';
+const currentMetadataHeader = () => versionMetadataCodec.recordHeader(VERSION_METADATA_PROOF, VERSION_METADATA_PROOF);
+const validMetadataHeader = value => versionMetadataCodec.hasValidHeader(value, VERSION_METADATA_PROOF);
+const metadataHeader = value => {
+    vmNeed(validMetadataHeader(value), 'metadata proof format is unknown');
+    return versionMetadataCodec.recordHeader(value.contract, VERSION_METADATA_PROOF, value.schemaFingerprint);
+};
 const VM_FILE = /^[a-f0-9-]{36}\.json$/;
 const vmHash = value => require('../deep-analyzer').stableFingerprint(value);
 const vmCanonical = value => String(value || '').replace(/v\d+$/, '');
@@ -306,7 +313,7 @@ function prepareReaderVersionMetadataOrigin({ directory: directoryPath, paper, i
     vmNeed(operation, 'origin raw is not the complete unsupported-version family');
     const fees = vmPair(usageFiles, { identity, stage: 'apiReaderArticle', contentAttempt: payload.attempts,
         outputSha256: operation.rawSha256, disposition: 'rejected' });
-    const origin = { contract: VERSION_METADATA_PROOF, kind: 'original_paid_full', paperId: identity.paperId,
+    const origin = { ...currentMetadataHeader(), kind: 'original_paid_full', paperId: identity.paperId,
         sourceDescriptor: bound.source.freshSourceDescriptor, logicalIdentity: vmLogical(identity),
         wholeSha256: sha(paper.analysisCheckpoint || paper.analysis || ''), rawSha256: operation.rawSha256,
         candidateFile: path.resolve(candidateFile), candidateEnvelopeSha256: candidate.sha256,
@@ -315,8 +322,10 @@ function prepareReaderVersionMetadataOrigin({ directory: directoryPath, paper, i
         newPermissions: 0, newRequests: 0 };
     const target = vmOriginFile(directoryPath, identity.paperId, operation.rawSha256, true);
     if (fs.existsSync(target)) {
-        vmNeed(vmHash(vmRead(target).value) === vmHash(origin), 'a different origin already exists');
-        return { file: target, sha256: vmRead(target).sha256 };
+        const saved = vmRead(target);
+        const { contract, schemaFingerprint, ...body } = origin;
+        vmNeed(vmHash(saved.value) === vmHash({ ...metadataHeader(saved.value), ...body }), 'a different origin already exists');
+        return { file: target, sha256: saved.sha256 };
     }
     return write(path.dirname(target), path.basename(target), origin);
 }
@@ -325,7 +334,7 @@ function readReaderVersionMetadataOrigin({ directory: directoryPath, paper, iden
     vmNeed(path.resolve(directoryPath) === path.resolve(bound.attempts), 'origin directory differs');
     const record = vmRead(vmOriginFile(directoryPath, identity.paperId, sha(rawDraft))), origin = record.value;
     const bytes = Buffer.from(origin.candidateRawBase64 || '', 'base64'), envelope = JSON.parse(bytes);
-    vmNeed(origin.contract === VERSION_METADATA_PROOF && origin.kind === 'original_paid_full'
+    vmNeed(validMetadataHeader(origin) && origin.kind === 'original_paid_full'
         && origin.rawSha256 === sha(rawDraft) && sha(bytes) === origin.candidateEnvelopeSha256
         && envelope.payload.rawDraft === rawDraft && vmHash(origin.sourceDescriptor) === vmHash(bound.source.freshSourceDescriptor)
         && vmHash(origin.logicalIdentity) === vmHash(vmLogical(identity))
@@ -375,7 +384,7 @@ function buildReaderVersionMetadataRecoveryProof({ directory: directoryPath, pap
     vmNeed(replayed === repairedRaw && req.atomicOperation.kind === repair.READER_VERSION_METADATA_KIND, 'ACK does not reproduce the exact version-only result');
     const fees = vmPair([...transportRecords, ...dispositionRecords], { identity, stage: 'apiReaderRepair',
         contentAttempt: req.contentAttempt, outputSha256: res.value.outputTextSha256, disposition: 'accepted', unitId: sha(req.id), inputSha256: bodySha256 });
-    return { contract: VERSION_METADATA_PROOF, origin, identity, request: { file: requestFile, sha256: request.sha256 },
+    return { ...currentMetadataHeader(), origin, identity, request: { file: requestFile, sha256: request.sha256 },
         response: { file: response.path, sha256: response.sha256 }, fees,
         beforeRawSha256: sha(req.rawDraft), afterRawSha256: sha(replayed), operation: req.atomicOperation,
         contentAttempt: req.contentAttempt, newContentResponses: 1, newFullResponses: 0 };
@@ -405,32 +414,35 @@ function vmIndexFile(attempts, paper, create) {
     return path.join(vmSubdirectory(attempts, 'version-metadata-completion-index', create), vmCanonical(paper.arxivId) + '.json');
 }
 function vmStageCore(stage) {
-    const { versionMetadataRecoveryContract, versionMetadataRecoveryProof, ...core } = stage || {};
+    const { versionMetadataRecoveryContract, versionMetadataRecoverySchemaFingerprint, versionMetadataRecoveryProof, ...core } = stage || {};
     return core;
 }
 function sealReaderVersionMetadataCompletion(paper, pending) {
     const bound = vmSource(paper, pending.identity, true), stage = paper.analysisManifest.stages.apiReaderArticle;
     const filename = vmRegistryFile(bound.attempts, paper, true);
+    const pendingHeader = metadataHeader(pending);
     let registry;
     if (fs.existsSync(filename)) {
         registry = vmRead(filename);
         const { refreshedAt: oldAt, ...oldCore } = registry.value.stageCore;
         const { refreshedAt: newAt, ...newCore } = vmStageCore(stage);
-        vmNeed(vmHash(oldCore) === vmHash(newCore) && vmHash(registry.value.pending) === vmHash(pending), 'existing completion stage differs');
+        vmNeed(vmHash(metadataHeader(registry.value)) === vmHash(pendingHeader)
+            && vmHash(oldCore) === vmHash(newCore) && vmHash(registry.value.pending) === vmHash(pending), 'existing completion stage differs');
         // Reuse the actual first finalization time after a failed outer save.
         stage.refreshedAt = oldAt;
     } else {
-        const record = { contract: VERSION_METADATA_PROOF, paperId: paper.arxivId,
+        const record = { ...pendingHeader, paperId: paper.arxivId,
             sourceDescriptor: bound.source.freshSourceDescriptor, pending,
             articleSha256: sha(paper.apiReaderArticle), planSha256: vmHash(paper.apiReaderPlan), stageCore: vmStageCore(stage) };
         write(path.dirname(filename), path.basename(filename), record);
         registry = vmRead(filename);
     }
-    stage.versionMetadataRecoveryContract = VERSION_METADATA_PROOF;
+    stage.versionMetadataRecoveryContract = pendingHeader.contract;
+    if (pendingHeader.schemaFingerprint) stage.versionMetadataRecoverySchemaFingerprint = pendingHeader.schemaFingerprint;
     stage.versionMetadataRecoveryProof = { file: filename, sha256: registry.sha256 };
-    paper.analysisManifest.contracts.readerVersionMetadataRecovery = VERSION_METADATA_PROOF;
+    paper.analysisManifest.contracts.readerVersionMetadataRecovery = pendingHeader.contract;
     const indexFile = vmIndexFile(bound.attempts, paper, true);
-    const index = { contract: VERSION_METADATA_PROOF, kind: 'stable_source_paper_completion_index', paperId: paper.arxivId,
+    const index = { ...pendingHeader, kind: 'stable_source_paper_completion_index', paperId: paper.arxivId,
         sourceDescriptor: bound.source.freshSourceDescriptor, origin: pending.origin,
         completion: { file: filename, sha256: registry.sha256 } };
     if (fs.existsSync(indexFile)) vmNeed(vmHash(vmRead(indexFile).value) === vmHash(index),
@@ -441,42 +453,44 @@ function validateReaderVersionMetadataCompletion(paper) {
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
     const marker = paper.analysisManifest?.contracts?.readerVersionMetadataRecovery;
     if (!isFreshSourceProvenance(paper.freshRewriteProvenance)) {
-        vmNeed(!marker && !stage?.versionMetadataRecoveryContract && !stage?.versionMetadataRecoveryProof,
+        vmNeed(!marker && !stage?.versionMetadataRecoveryContract && !stage?.versionMetadataRecoverySchemaFingerprint && !stage?.versionMetadataRecoveryProof,
             'metadata recovery cannot move outside its daily source');
         return true;
     }
     const attempts = path.join(require('../config').FILES.dailyFreshSourceRunsDir, paper.freshRewriteProvenance.runId, 'reader-attempts');
     if (!fs.existsSync(attempts)) {
-        vmNeed(!marker && !stage?.versionMetadataRecoveryContract && !stage?.versionMetadataRecoveryProof, 'metadata registry directory is missing');
+        vmNeed(!marker && !stage?.versionMetadataRecoveryContract && !stage?.versionMetadataRecoverySchemaFingerprint && !stage?.versionMetadataRecoveryProof, 'metadata registry directory is missing');
         return true;
     }
     const indexFile = vmIndexFile(attempts, paper, false);
     if (!fs.existsSync(indexFile)) {
-        vmNeed(!marker && !stage?.versionMetadataRecoveryContract && !stage?.versionMetadataRecoveryProof,
+        vmNeed(!marker && !stage?.versionMetadataRecoveryContract && !stage?.versionMetadataRecoverySchemaFingerprint && !stage?.versionMetadataRecoveryProof,
             'completion marker/proof has no immutable registry');
         return true;
     }
     const bound = vmSource(paper);
     const index = vmRead(indexFile).value;
-    vmNeed(index.contract === VERSION_METADATA_PROOF && index.kind === 'stable_source_paper_completion_index'
+    vmNeed(validMetadataHeader(index) && index.kind === 'stable_source_paper_completion_index'
         && index.paperId === paper.arxivId && vmHash(index.sourceDescriptor) === vmHash(bound.source.freshSourceDescriptor)
         && path.dirname(index.completion?.file || '') === vmSubdirectory(attempts, 'version-metadata-completions', false)
         && /^[a-f0-9]{64}$/.test(index.completion.sha256 || ''), 'stable paper/source index differs');
     const filename = index.completion.file;
     const registry = vmRead(filename, index.completion.sha256), record = registry.value, locator = stage?.versionMetadataRecoveryProof;
-    vmNeed(marker === VERSION_METADATA_PROOF && stage?.versionMetadataRecoveryContract === VERSION_METADATA_PROOF
+    vmNeed(marker === index.contract && stage?.versionMetadataRecoveryContract === index.contract
+        && stage?.versionMetadataRecoverySchemaFingerprint === index.schemaFingerprint
         && locator?.file === filename && locator.sha256 === registry.sha256, 'completion proof/marker was removed or changed');
-    vmNeed(record.contract === VERSION_METADATA_PROOF && record.paperId === paper.arxivId
+    vmNeed(vmHash(metadataHeader(record)) === vmHash(metadataHeader(index)) && record.paperId === paper.arxivId
         && path.basename(filename) === vmCanonical(paper.arxivId) + '-' + record.articleSha256 + '.json'
         && vmHash(record.sourceDescriptor) === vmHash(bound.source.freshSourceDescriptor)
         && record.articleSha256 === sha(paper.apiReaderArticle) && record.articleSha256 === stage.articleSha256
         && record.planSha256 === vmHash(paper.apiReaderPlan) && record.planSha256 === stage.planSha256
         && vmHash(record.stageCore) === vmHash(vmStageCore(stage)), 'normal final source/article/plan/stage differs');
     const pending = record.pending;
+    vmNeed(vmHash(metadataHeader(pending)) === vmHash(metadataHeader(index)), 'pending proof format differs from immutable index');
     vmNeed(pending.origin.file === vmOriginFile(bound.attempts, paper.arxivId, pending.beforeRawSha256), 'cold origin fixed path differs');
     const origin = vmRead(pending.origin.file, pending.origin.sha256);
     const envelopeBytes = Buffer.from(origin.value.candidateRawBase64, 'base64'), envelope = JSON.parse(envelopeBytes);
-    vmNeed(origin.value.contract === VERSION_METADATA_PROOF && origin.value.kind === 'original_paid_full'
+    vmNeed(validMetadataHeader(origin.value) && origin.value.kind === 'original_paid_full'
         && sha(envelopeBytes) === origin.value.candidateEnvelopeSha256
         && require('./reader-repair').isCandidateEnvelope(envelope)
         && envelope.payloadSha256 === require('./reader-repair').hashDraft(envelope.payload)
@@ -529,7 +543,7 @@ function validateReaderVersionMetadataCompletion(paper) {
 function validateReaderVersionMetadataPublicationCompletion(paper) {
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
     const hasMarker = Boolean(paper.analysisManifest?.contracts?.readerVersionMetadataRecovery
-        || stage?.versionMetadataRecoveryContract || stage?.versionMetadataRecoveryProof);
+        || stage?.versionMetadataRecoveryContract || stage?.versionMetadataRecoverySchemaFingerprint || stage?.versionMetadataRecoveryProof);
     const provenance = paper.freshRewriteProvenance;
     const fresh = require('./fresh-analysis-context'), Config = require('../config');
     const safeRunId = /^[a-f0-9-]{36}$/.test(provenance?.runId || '');

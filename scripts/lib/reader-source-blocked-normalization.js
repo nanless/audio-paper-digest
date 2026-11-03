@@ -1,8 +1,9 @@
 'use strict';
+const normalizationCodec = require('./protocol-codec');
 
 // A blocked normalization is a failed recovery input, never a validated article.
 const { isDeepStrictEqual } = require('node:util');
-const CONTRACT = 'reader-source-blocked-normalization-v1';
+const CONTRACT = 'reader-source-blocked-normalization';
 const SOURCE_CODE = 'reader_source_table_unrenderable';
 const hash = value => require('./reader-repair').hashDraft(value);
 
@@ -60,12 +61,12 @@ function readSourceTableNormalizationError(error, draft, artifacts) {
         if (!issues.some(issue => issue.path === supplied.path && issue.sourceTableOrdinal === supplied.sourceTableOrdinal
             && (supplied.bindingPath === undefined || supplied.bindingPath === issue.bindingPath))) return null;
     }
-    return { contract: CONTRACT, draft: structuredClone(draft), draftSha256: hash(draft),
+    return { ...normalizationCodec.recordHeader(CONTRACT, CONTRACT), draft: structuredClone(draft), draftSha256: hash(draft),
         artifactsSha256: hash(artifacts), blockingIssues: issues };
 }
 
 function assertBlockedNormalizationResult(value, artifacts) {
-    if (!value || value.contract !== CONTRACT || hash(value.draft) !== value.draftSha256
+    if (!normalizationCodec.hasValidHeader(value, CONTRACT) || hash(value.draft) !== value.draftSha256
         || hash(artifacts) !== value.artifactsSha256 || !Array.isArray(value.blockingIssues)) {
         throw new Error('来源阻塞归一化记录的草稿或来源身份不同');
     }

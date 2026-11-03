@@ -148,14 +148,14 @@ describe('标签规则的运行时分析集成', () => {
         ].sort());
         assert.match(fields.tagCatalogSha256, /^[a-f0-9]{64}$/);
         assert.match(fields.tagPromptSha256, /^[a-f0-9]{64}$/);
-        assert.strictEqual(fields.tagPromptContract, 'paper-tag-prompt-text-v2');
+        assert.strictEqual(fields.tagPromptContract, 'paper-tag-prompt-text');
         const rules = require('../scripts/lib/tag-rules.js');
         assert.strictEqual(fields.tagCatalogVersion, rules.getDefaultTagRules().registryVersion);
         const legacyPrompt = rules.buildTagPromptText(rules.getDefaultTagRules().tagCatalog,
             rules.LEGACY_TAG_PROMPT_TEXT_CONTRACT);
         const legacySha = require('node:crypto').createHash('sha256').update(legacyPrompt).digest('hex');
         assert.notStrictEqual(fields.tagPromptSha256, legacySha);
-        assert.strictEqual(fields.tagSelectionContract, 'paper-tag-selection-v2');
+        assert.strictEqual(fields.tagSelectionContract, 'paper-tag-selection');
         const input = validAnalysisText();
         const evidence = deep.buildStageEvidenceContext('revision', input, 'speech evidence');
         assert.notStrictEqual(
@@ -2813,7 +2813,7 @@ primary_task_tag: #音视频生成
         }), /figureOrdinal 非法或重复/);
         assert.throws(
             () => parseApiReaderArticleResult(JSON.stringify(payload), { requiredVersion: 3 }),
-            /禁止降级生成/
+            /禁止降低格式要求/
         );
     });
 
@@ -2996,7 +2996,7 @@ primary_task_tag: #音视频生成
             { authors: ['甲'] },
             { text: 'HTML source bytes', readerAuthors: authors }
         );
-        assert.strictEqual(boundAuthors.identity.contract, 'api-reader-author-identity-v1');
+        assert.strictEqual(boundAuthors.identity.contract, 'api-reader-author-identity');
         assert.strictEqual(boundAuthors.identity.authors[0].nameBinding.sourceKind, 'html_dom');
         assert.strictEqual(
             boundAuthors.identity.authors[0].affiliationBindings[0].association,
@@ -3234,6 +3234,7 @@ primary_task_tag: #音视频生成
             } }
         };
         assert.strictEqual(hasCompleteApiReaderFigureBinding({
+            apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3' },
             apiReaderFigures: boundFigures
         }, boundManifest), true);
         const emptyFigures = [];
@@ -3245,14 +3246,17 @@ primary_task_tag: #音视频生成
             } }
         };
         assert.strictEqual(hasCompleteApiReaderFigureBinding({
+            apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3' },
             apiReaderFigures: emptyFigures
         }, emptyFigureManifest), true);
         emptyFigureManifest.stages.apiReaderArticle.figureCount = 1;
         assert.strictEqual(hasCompleteApiReaderFigureBinding({
+            apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3' },
             apiReaderFigures: emptyFigures
         }, emptyFigureManifest), false);
         boundManifest.stages.apiReaderArticle.figuresSha256 = '0'.repeat(64);
         assert.strictEqual(hasCompleteApiReaderFigureBinding({
+            apiReaderPlan: { version: 3, contract: 'beginner-researcher-v3' },
             apiReaderFigures: boundFigures
         }, boundManifest), false);
         assert.match(
@@ -5755,7 +5759,8 @@ has_dataset: 否
                 const hash = original.apply(this, args);
                 const update = hash.update;
                 hash.update = function (value, ...rest) {
-                    if (typeof value === 'string' && value.includes('"planVersion"')) {
+                    if (typeof value === 'string' && value.startsWith('{') && value.includes('"promptTemplateSha256"')
+                        && (value.includes('"planVersion"') || value.includes('"readerProtocols"'))) {
                         payload = JSON.parse(value);
                     }
                     return update.call(this, value, ...rest);
@@ -5780,7 +5785,7 @@ has_dataset: 否
         );
         // 新请求使用 v10；旧记录继续按其声明版本计算指纹。
         const freshPayload = capture({ version: 1, stages: {} });
-        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v11');
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/current/api-reader-article.md')
@@ -5857,7 +5862,7 @@ has_dataset: 否
         );
         // 新请求使用 v8；旧记录继续按其声明版本计算指纹。
         const fresh = capture({ version: 1, stages: {} });
-        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v8');
+        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text');
         assert.strictEqual(
             fresh.payload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256(

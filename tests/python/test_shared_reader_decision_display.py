@@ -185,8 +185,8 @@ class SharedReaderDecisionDisplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             isolated = Path(directory) / 'scripts'
             for filename in paths:
-                if filename.is_relative_to(scripts):
-                    output = isolated / filename.relative_to(scripts)
+                if filename.is_relative_to(scripts.parent):
+                    output = isolated.parent / filename.relative_to(scripts.parent)
                     output.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(filename, output)
             with mock.patch.object(publisher, '__file__', str(isolated / 'publish-to-blog.py')):

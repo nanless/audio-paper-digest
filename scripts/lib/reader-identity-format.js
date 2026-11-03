@@ -7,9 +7,10 @@ const fields = Object.freeze({ authors: 'readerAuthorIdentityContractVersion', r
 const soloFields = Object.freeze({ authors: 'readerAuthorIdentityProtocol', resources: 'readerResourceIdentityProtocol' });
 const manifestFields = Object.freeze({ authors: 'apiReaderAuthorIdentity', resources: 'apiReaderResourceIdentity' });
 function family(role) { if (!families[role]) throw new Error('Reader identity role is unknown'); return families[role]; }
-function header(role, value = null) {
+function header(role, ...records) {
     const name = family(role);
-    if (value === null) return codec.recordHeader(codec.contract(name), name);
+    if (!records.length) return codec.recordHeader(codec.contract(name), name);
+    const [value] = records;
     if (!codec.hasValidHeader(value, name)) throw new Error('Reader identity header is unknown or mixed');
     return codec.recordHeader(value.contract, name, value.schemaFingerprint);
 }

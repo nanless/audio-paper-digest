@@ -116,7 +116,13 @@ class ScientificPublication(unittest.TestCase):
  def test_other_numeric_columns_remain_strict_and_full_publication_source_binding_subgate(self):
   original=self.project();other_tokens={t for row in self.table['rows']for col in [0,2,3]for t in pub._api_reader_numeric_tokens(row[col])}
   self.assertTrue(other_tokens.issubset(original['tokens']))
-  pub._validate_api_reader_source_bindings(paper)
+  # Test the table/formula gate with the real four-file source check. This
+  # paid draft was never finalized, so it cannot pass full Reader replay.
+  contracts=paper['analysisManifest']['contracts']
+  with mock.patch.dict(contracts,apiReaderArticle=plan['contract']), mock.patch.object(
+      pub,'_daily_fresh_validate_bundle',wraps=pub._daily_fresh_read_bundle_source_identity) as source:
+   pub._validate_api_reader_source_bindings(paper)
+   self.assertGreater(source.call_count,0)
   self.assertEqual(stage['status'],original_status)
   self.assertNotEqual(stage['status'],'complete')
 

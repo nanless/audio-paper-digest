@@ -44,7 +44,8 @@ class ReaderAuthorReplayBatchTest(unittest.TestCase):
                 self.bundle()
         batches = self.author_payloads[1:]
         self.assertEqual([len(x['items']) for x in batches], [8, 1])
-        self.assertTrue(all(x['contract'] == 'reader-author-replay-batch-v1' for x in batches))
+        self.assertTrue(all({key: value for key, value in x.items() if key != 'items'}
+                            == publisher._READER_AUTHOR_BATCH_HEADER for x in batches))
         self.assertEqual(self.runtime.read_bytes(), before)
 
     def test_function_returns_only_after_all_real_items_pass(self):
@@ -97,8 +98,12 @@ class ReaderAuthorReplayBatchTest(unittest.TestCase):
     def test_empty_oversized_unknown_shape_and_forged_flags_reject(self):
         self.bundle()
         single = self.author_payloads[0]
-        valid = {'contract': 'reader-author-replay-batch-v1', 'items': [single]}
+        valid = {**publisher._READER_AUTHOR_BATCH_HEADER, 'items': [single]}
+        publisher._run_reader_author_source_replay(publisher._daily_fresh_compact_json_bytes({
+            'contract': 'reader-author-replay-batch-v1', 'items': [single],
+        }), ['original batch wire'])
         mutations = [
+            {**valid, 'schemaFingerprint': '0' * 64},
             {**valid, 'items': []},
             {**valid, 'items': [single]*9},
             {**valid, 'verified': True},
@@ -147,17 +152,19 @@ require(cli);
 
     def test_python_byte_bound_flush_and_original_large_single_fallback(self):
         seen = []
+        max_bytes = len(publisher._READER_AUTHOR_BATCH_PREFIX) + 2 + 146
         def transport(raw, ids):
             seen.append((raw, list(ids)))
         with mock.patch.object(publisher, '_run_reader_author_source_replay', side_effect=transport), \
-                mock.patch.object(publisher, '_READER_AUTHOR_BATCH_MAX_BYTES', 200):
+                mock.patch.object(publisher, '_READER_AUTHOR_BATCH_MAX_BYTES', max_bytes):
             with publisher._reader_author_replay_batch_scope():
                 for index in range(3):
                     self.assertTrue(publisher._defer_sealed_reader_author_replay(
                         json.dumps({'value': 'x'*50}).encode(), str(index)))
-                self.assertFalse(publisher._defer_sealed_reader_author_replay(b'x'*201, 'large'))
+                self.assertFalse(publisher._defer_sealed_reader_author_replay(b'x'*(max_bytes + 1), 'large'))
+        self.assertEqual([len(ids) for _, ids in seen], [2, 1])
         for raw, ids in seen:
-            self.assertLessEqual(len(raw), 200)
+            self.assertLessEqual(len(raw), max_bytes)
             self.assertEqual(len(json.loads(raw)['items']), len(ids))
 
     def test_nested_scope_and_exception_never_leak_unverified_work(self):

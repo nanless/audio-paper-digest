@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const Config = require('../scripts/config');
 const { validAnalysisPaper } = require('./valid-analysis-fixture');
 const { productionV6GenerationFields, productionV6ReceiptFields,
-    llmApiProductionGenerationFields, llmApiProductionReceiptFields } = require('./production-v6-publication-fixture');
+    llmApiProductionGenerationFields, llmApiProductionReceiptFields } = require('./formal-publication-fixture');
 const { publishedPapersFingerprint, assertPublishedBlogReceipt } = require('../scripts/lib/published-blog-receipt');
 
 function paper(id = '2607.12345', extra = {}) {

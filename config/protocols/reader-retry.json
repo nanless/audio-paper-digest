@@ -3,36 +3,390 @@
     {
       "name": "reader-recovery-diagnostics-revision",
       "currentVariant": "bound-candidate-transition",
-      "currentSchema": {"identity": "candidate-source-scope-and-archived-parent", "preservesCounts": true},
-      "historical": [{"tag": "reader-recovery-diagnostics-revision-v1", "variant": "bound-candidate-transition"}]
+      "currentSchema": {
+        "identity": "candidate-source-scope-and-archived-parent",
+        "preservesCounts": true
+      },
+      "historical": [
+        {
+          "tag": "reader-recovery-diagnostics-revision-v1",
+          "variant": "bound-candidate-transition"
+        }
+      ]
     },
     {
       "name": "reader-implementation-repair-allowance",
       "currentVariant": "single-bound-repair",
-      "currentSchema": {"identity": "exact-revision-audit-and-original-candidate", "maximumAdditionalRepairs": 1},
-      "historical": [{"tag": "reader-implementation-repair-allowance-v1", "variant": "single-bound-repair"}]
+      "currentSchema": {
+        "identity": "exact-revision-audit-and-original-candidate",
+        "maximumAdditionalRepairs": 1
+      },
+      "historical": [
+        {
+          "tag": "reader-implementation-repair-allowance-v1",
+          "variant": "single-bound-repair"
+        }
+      ]
     },
     {
       "name": "reader-explicit-transport-continuation",
       "currentVariant": "single-physical-continuation",
-      "currentSchema": {"identity": "original-round-grant-and-candidate-bytes", "maximumAdditionalPhysicalRequests": 1},
-      "historical": [{"tag": "reader-explicit-transport-continuation-v1", "variant": "single-physical-continuation"}]
+      "currentSchema": {
+        "identity": "original-round-grant-and-candidate-bytes",
+        "maximumAdditionalPhysicalRequests": 1
+      },
+      "historical": [
+        {
+          "tag": "reader-explicit-transport-continuation-v1",
+          "variant": "single-physical-continuation"
+        }
+      ]
     },
     {
       "name": "reader-consumed-transport-paid-anchor",
       "currentVariant": "original-consumed-response",
-      "currentSchema": {"identity": "exact-consumed-sidecar-and-actual-paid-response", "newBudget": 0},
-      "historical": [{"tag": "reader-consumed-transport-paid-anchor-v1", "variant": "original-consumed-response"}]
+      "currentSchema": {
+        "identity": "exact-consumed-sidecar-and-actual-paid-response",
+        "newBudget": 0
+      },
+      "historical": [
+        {
+          "tag": "reader-consumed-transport-paid-anchor-v1",
+          "variant": "original-consumed-response"
+        }
+      ]
     },
     {
       "name": "reader-implementation-repair-lineage",
       "currentVariant": "previously-issued-lineage",
-      "currentSchema": {"purpose": "reject-additional-implementation-grants", "authority": "none"},
-      "historical": [{"tag": "reader-implementation-repair-lineage-v1", "variant": "previously-issued-lineage"}]
+      "currentSchema": {
+        "purpose": "reject-additional-implementation-grants",
+        "authority": "none"
+      },
+      "historical": [
+        {
+          "tag": "reader-implementation-repair-lineage-v1",
+          "variant": "previously-issued-lineage"
+        }
+      ]
     },
-    {"name": "reader-explicit-paid-retry-round", "currentVariant": "bound-paid-window", "currentSchema": {"purpose": "exact original candidate, source, request ledger and fixed allowance"}, "historical": [{"tag": "reader-explicit-paid-retry-round-v1", "variant": "bound-paid-window"}]},
-    {"name": "reader-explicit-parent-local-repair", "currentVariant": "single-local-child", "currentSchema": {"purpose": "exact exhausted parent receipt and one local repair"}, "historical": [{"tag": "reader-explicit-parent-local-repair-v1", "variant": "single-local-child"}]},
-    {"name": "reader-explicit-parent-recovery", "currentVariant": "bounded-parent-chain", "currentSchema": {"purpose": "exact parent ancestry and cumulative allowance"}, "historical": [{"tag": "reader-explicit-parent-recovery-v1", "variant": "bounded-parent-chain"}]},
-    {"name": "reader-parent-recovery-plan", "currentVariant": "planning-only", "currentSchema": {"purpose": "candidate-bound plan with no requests or installs"}, "historical": [{"tag": "reader-parent-recovery-plan-v1", "variant": "planning-only"}]}
+    {
+      "name": "reader-explicit-paid-retry-round",
+      "currentVariant": "bound-paid-window",
+      "currentSchema": {
+        "purpose": "exact original candidate, source, request ledger and fixed allowance"
+      },
+      "historical": [
+        {
+          "tag": "reader-explicit-paid-retry-round-v1",
+          "variant": "bound-paid-window"
+        }
+      ]
+    },
+    {
+      "name": "reader-explicit-parent-local-repair",
+      "currentVariant": "single-local-child",
+      "currentSchema": {
+        "purpose": "exact exhausted parent receipt and one local repair"
+      },
+      "historical": [
+        {
+          "tag": "reader-explicit-parent-local-repair-v1",
+          "variant": "single-local-child"
+        }
+      ]
+    },
+    {
+      "name": "reader-explicit-parent-recovery",
+      "currentVariant": "bounded-parent-chain",
+      "currentSchema": {
+        "purpose": "exact parent ancestry and cumulative allowance"
+      },
+      "historical": [
+        {
+          "tag": "reader-explicit-parent-recovery-v1",
+          "variant": "bounded-parent-chain"
+        }
+      ]
+    },
+    {
+      "name": "reader-parent-recovery-plan",
+      "currentVariant": "planning-only",
+      "currentSchema": {
+        "purpose": "candidate-bound plan with no requests or installs"
+      },
+      "historical": [
+        {
+          "tag": "reader-parent-recovery-plan-v1",
+          "variant": "planning-only"
+        }
+      ]
+    },
+    {
+      "name": "reader-paid-version-metadata-proof",
+      "currentVariant": "source-bound-original-response-and-correction",
+      "currentSchema": {
+        "authority": "exact-origin-and-one-paid-metadata-only-response"
+      },
+      "historical": [
+        {
+          "tag": "reader-paid-version-metadata-proof-v1",
+          "variant": "source-bound-original-response-and-correction"
+        }
+      ]
+    },
+    {
+      "name": "reader-candidate-normalization",
+      "currentVariant": "candidate-cas-audit",
+      "currentSchema": {
+        "purpose": "candidate-cas-audit",
+        "requestAuthorization": false
+      },
+      "historical": [
+        {
+          "tag": "reader-candidate-normalization-v1",
+          "variant": "candidate-cas-audit"
+        }
+      ]
+    },
+    {
+      "name": "reader-source-blocked-normalization",
+      "currentVariant": "exact-source-issue-replay",
+      "currentSchema": {
+        "purpose": "exact-source-issue-replay",
+        "requestAuthorization": false
+      },
+      "historical": [
+        {
+          "tag": "reader-source-blocked-normalization-v1",
+          "variant": "exact-source-issue-replay"
+        }
+      ]
+    },
+    {
+      "name": "reader-malformed-previous-draft-diagnostic",
+      "currentVariant": "diagnostic-only",
+      "currentSchema": {
+        "purpose": "diagnostic-only",
+        "requestAuthorization": false
+      },
+      "historical": [
+        {
+          "tag": "reader-malformed-previous-draft-diagnostic-v1",
+          "variant": "diagnostic-only"
+        }
+      ]
+    },
+    {
+      "name": "reader-next-request-plan",
+      "currentVariant": "planning-only",
+      "currentSchema": {
+        "purpose": "planning-only",
+        "requestAuthorization": false
+      },
+      "historical": [
+        {
+          "tag": "reader-next-request-plan-v1",
+          "variant": "planning-only"
+        }
+      ]
+    },
+    {
+      "name": "reader-paid-response-replay",
+      "currentVariant": "exact-historical-paid-response",
+      "currentSchema": {
+        "purpose": "exact-historical-paid-response",
+        "originalPaidRecords": "immutable"
+      },
+      "historical": [
+        {
+          "tag": "reader-paid-response-replay-v1",
+          "variant": "exact-historical-paid-response"
+        }
+      ]
+    },
+    {
+      "name": "reader-paid-resolved-render",
+      "currentVariant": "exact-original-renderer-and-paid-response",
+      "currentSchema": {
+        "purpose": "exact-original-renderer-and-paid-response",
+        "originalPaidRecords": "immutable"
+      },
+      "historical": [
+        {
+          "tag": "reader-paid-resolved-render-v1",
+          "variant": "exact-original-renderer-and-paid-response"
+        }
+      ]
+    },
+    {
+      "name": "reader-current-signed-paid-render",
+      "currentVariant": "exact-signed-renderer-and-paid-response",
+      "currentSchema": {
+        "purpose": "exact-signed-renderer-and-paid-response",
+        "originalPaidRecords": "immutable"
+      },
+      "historical": [
+        {
+          "tag": "reader-current-signed-paid-render-v1",
+          "variant": "exact-signed-renderer-and-paid-response"
+        }
+      ]
+    },
+    {
+      "name": "reader-resource-input-admission",
+      "currentVariant": "source-bound-substantive-resource-change",
+      "currentSchema": {
+        "purpose": "source-bound-substantive-resource-change",
+        "originalPaidRecords": "immutable"
+      },
+      "historical": [
+        {
+          "tag": "reader-resource-input-admission-v1",
+          "variant": "source-bound-substantive-resource-change"
+        }
+      ]
+    },
+    {
+      "name": "reader-saved-feedback-input-continuity",
+      "currentVariant": "exact-paid-input-with-combined-feedback",
+      "currentSchema": {
+        "purpose": "exact-paid-input-with-combined-feedback",
+        "originalPaidRecords": "immutable"
+      },
+      "historical": [
+        {
+          "tag": "reader-saved-feedback-input-continuity-v1",
+          "variant": "exact-paid-input-with-combined-feedback"
+        }
+      ]
+    },
+    {
+      "name": "reader-compatible-candidate-replay",
+      "currentVariant": "verified-paid-candidate",
+      "currentSchema": {
+        "purpose": "verified-paid-candidate",
+        "newPaidAuthority": false
+      },
+      "historical": [
+        {
+          "tag": "reader-compatible-candidate-replay-v1",
+          "variant": "verified-paid-candidate"
+        }
+      ]
+    },
+    {
+      "name": "reader-unsent-empty-failure-history",
+      "currentVariant": "preserved-unsent-transport-history",
+      "currentSchema": {
+        "purpose": "preserved-unsent-transport-history",
+        "newPaidAuthority": false
+      },
+      "historical": [
+        {
+          "tag": "reader-unsent-empty-failure-history-v1",
+          "variant": "preserved-unsent-transport-history"
+        }
+      ]
+    },
+    {
+      "name": "reader-failed-bundle-resource-replay",
+      "currentVariant": "source-bound-failed-bundle",
+      "currentSchema": {
+        "purpose": "source-bound-failed-bundle",
+        "newPaidAuthority": false
+      },
+      "historical": [
+        {
+          "tag": "reader-failed-bundle-resource-replay-v1",
+          "variant": "source-bound-failed-bundle"
+        }
+      ]
+    },
+    {
+      "name": "reader-parent-upstream-preflight",
+      "currentVariant": "parent-upstream-identity",
+      "currentSchema": {
+        "purpose": "parent-upstream-identity",
+        "newPaidAuthority": false
+      },
+      "historical": [
+        {
+          "tag": "reader-parent-upstream-preflight-v1",
+          "variant": "parent-upstream-identity"
+        }
+      ]
+    },
+    {
+      "name": "reader-unfunded-diagnostic-state-restoration",
+      "currentVariant": "unchanged-paid-budget",
+      "currentSchema": {
+        "purpose": "unchanged-paid-budget",
+        "newPaidAuthority": false
+      },
+      "historical": [
+        {
+          "tag": "reader-unfunded-diagnostic-state-restoration-v1",
+          "variant": "unchanged-paid-budget"
+        }
+      ]
+    },
+    {
+      "name": "daily-reader-operator-correction-batch",
+      "currentVariant": "entire-current-failed-set",
+      "currentSchema": {
+        "purpose": "entire-current-failed-set",
+        "modelRequests": 0
+      },
+      "historical": [
+        {
+          "tag": "daily-reader-operator-correction-batch-v1",
+          "variant": "entire-current-failed-set"
+        }
+      ]
+    },
+    {
+      "name": "daily-reader-operator-correction",
+      "currentVariant": "zero-request-completion",
+      "currentSchema": {
+        "purpose": "zero-request-completion",
+        "modelRequests": 0
+      },
+      "historical": [
+        {
+          "tag": "daily-reader-operator-correction-v1",
+          "variant": "zero-request-completion"
+        }
+      ]
+    },
+    {
+      "name": "reader-human-source-edit",
+      "currentVariant": "bounded-existing-node-patch",
+      "currentSchema": {
+        "purpose": "bounded-existing-node-patch",
+        "modelRequests": 0
+      },
+      "historical": [
+        {
+          "tag": "reader-human-source-edit-v1",
+          "variant": "bounded-existing-node-patch"
+        }
+      ]
+    },
+    {
+      "name": "reader-author-replay-batch",
+      "currentVariant": "bounded-private-author-replay",
+      "currentSchema": {
+        "maxItems": 8,
+        "maxBytes": 33554432,
+        "authority": "private-original-source-replay"
+      },
+      "historical": [
+        {
+          "tag": "reader-author-replay-batch-v1",
+          "variant": "bounded-private-author-replay"
+        }
+      ]
+    }
   ]
 }

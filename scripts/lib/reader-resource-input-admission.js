@@ -1,10 +1,11 @@
 'use strict';
+const codec = require('./protocol-codec');
 const { isUsageEventFormat } = require('./llm-usage-format');
 
 // A real resource-fact change may start one normal new-input candidate. Old candidates and fees stay intact.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
-const CONTRACT = 'reader-resource-input-admission-v1';
+const CONTRACT = 'reader-resource-input-admission';
 const accepted = new WeakMap();
 const metadata = new Set(['failureCode', 'error', 'errorCode', 'errorMessage', 'checkedAt', 'fetchedAt', 'verifiedAt', 'durationMs', 'retryable']);
 const factFields = new Set(['availability', 'status', 'finalUrl', 'redirects']);
@@ -132,7 +133,8 @@ function contextOccurs(request, replay, feedback) {
 }
 function receiptProof(receipt, source, expectedScope) {
     const proof = receipt.proof, repair = require('./reader-repair');
-    if (receipt.contract !== CONTRACT || receipt.scopeSha256 !== expectedScope || proof?.contract !== CONTRACT
+    if (!codec.hasValidHeader(receipt, CONTRACT) || receipt.scopeSha256 !== expectedScope || !codec.hasValidHeader(proof, CONTRACT)
+        || receipt.contract !== proof.contract || receipt.schemaFingerprint !== proof.schemaFingerprint
         || proof.scopeSha256 !== expectedScope || proof.identitySha256 !== hash(receipt.identity)
         || proof.inputFingerprint !== receipt.identity.inputFingerprint || scope(receipt.identity) !== expectedScope
         || proof.sourceSha256 !== sha(source.text) || proof.sourceDescriptorSha256 !== hash(source.freshSourceDescriptor)
@@ -173,7 +175,7 @@ async function prepareResourceInputAdmission(options) {
     if (previous) {
         const receipt = previous.value;
         const original = receiptProof(receipt, source, scopeSha256);
-        if (receipt.contract !== CONTRACT || receipt.scopeSha256 !== scopeSha256
+        if (!codec.hasValidHeader(receipt, CONTRACT) || receipt.scopeSha256 !== scopeSha256
             || !isDeepStrictEqual(resourceFacts(receipt.resources, source.text), resourceFacts(currentResources, source.text)))
             throw new Error('The one resource-input admission is already used for different resource facts');
         if (receipt.resources.identitySha256 !== currentResources.identitySha256)
@@ -247,7 +249,7 @@ async function prepareResourceInputAdmission(options) {
     if (matches.length !== 1) return null;
     const match = matches[0], current = await replayIdentity(currentResources, options.reviewFeedback);
     if (!isDeepStrictEqual(current.identity, targetIdentity)) throw new Error('Current transition input was not rebuilt by production');
-    const proof = { contract: CONTRACT, scopeSha256, sourceSha256: sha(source.text), sourceDescriptorSha256: hash(source.freshSourceDescriptor),
+    const proof = { ...codec.recordHeader(CONTRACT, CONTRACT), scopeSha256, sourceSha256: sha(source.text), sourceDescriptorSha256: hash(source.freshSourceDescriptor),
         upstreamSha256: require('./reader-failed-bundle-resource-replay').upstreamIdentity(paper),
         oldIdentitySha256: hash(match.request.value.identity), oldInputFingerprint: match.request.value.identity.inputFingerprint,
         identitySha256: hash(targetIdentity), inputFingerprint: targetIdentity.inputFingerprint,
@@ -285,7 +287,7 @@ function commitResourceInputAdmission(handle, paper, source) {
         [handle.proof.usageFile, handle.proof.usageSha256], [handle.proof.candidateFile, handle.proof.candidateEnvelopeSha256]]) read(file, expected);
     const root = path.dirname(state.file); fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     if (fs.lstatSync(root).isSymbolicLink()) throw new Error('Input admission directory must be real');
-    const receipt = { contract: CONTRACT, scopeSha256: handle.proof.scopeSha256, identity: handle.identity,
+    const receipt = { ...codec.recordHeader(CONTRACT, CONTRACT), scopeSha256: handle.proof.scopeSha256, identity: handle.identity,
         resources: handle.resources, budget: handle.proof.budget, proof: handle.proof };
     const temporary = state.file + '.' + crypto.randomUUID() + '.tmp';
     const fd = fs.openSync(temporary, 'wx', 0o600);

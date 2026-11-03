@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const protocolCodec = require('./lib/protocol-codec');
 // 从简单 spec 生成账号池无关的 operator 修正清单/记录。
 // spec: { paperId, replacements: [{ path, value }], notes? }
 // dry/write 共核完整尾集和候选材料；完整当前输入/付费身份未核。
@@ -86,11 +87,11 @@ function buildSpecPreview({ paper, draft, spec, found, sourceDescriptor }) {
         oldSha256: hashDraft(nodeAt(draft, item.path)),
         value: item.value
     }));
-    const patch = { version: 1, draftSha256: hashDraft(draft), replacements };
+    const patch = { ...protocolCodec.recordHeader('reader-node-patch', 'reader-node-patch'), draftSha256: hashDraft(draft), replacements };
     const finalDraft = repair.applyReaderPatch(JSON.parse(JSON.stringify(draft)), patch, replacements.map(item => item.path));
     const paperId = utils.normalizedId({ arxivId: paper.arxivId || paper.paper_id || paper.paperId });
     const record = {
-        contract: 'reader-human-source-edit-v1', notLlmResponse: true,
+        ...protocolCodec.recordHeader('reader-human-source-edit', 'reader-human-source-edit'), notLlmResponse: true,
         runId: null, batchDate: null, paperId, arxivId: paper.arxivId || paper.paper_id,
         baselineCandidateFile: path.resolve(found.absolutePath),
         baselineCandidateEnvelopeSha256: found.envelopeSha256,
@@ -164,7 +165,7 @@ function main(argv = process.argv.slice(2)) {
             correctionFiles.push(recordFile);
         }
         const manifest = {
-            contract: 'daily-reader-operator-correction-batch-v1', runId: plan.runId, batchDate: plan.batchDate,
+            ...protocolCodec.recordHeader('daily-reader-operator-correction-batch', 'daily-reader-operator-correction-batch'), runId: plan.runId, batchDate: plan.batchDate,
             authorization: built[0].spec.authorization || '用户明确要求人工处理当前日更失败论文（零请求本地修正）',
             correctionFiles
         };

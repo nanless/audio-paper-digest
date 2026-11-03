@@ -8100,7 +8100,9 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
     }
     const qualityView = restoreApiReaderInjectionMarkers(article, repairedPlan, repairedFigures || []);
     const quality = validateReaderEditorialQuality(qualityView, repairedPlan.sections);
-    const compileFormat = require('./lib/reader-record-format').compilationOptionsForSavedPlan(repairedPlan);
+    const planFormat = require('./lib/reader-record-format');
+    const compileFormat = planFormat.storedPlanFormat(repairedPlan) === planFormat.COMPACT
+        ? { compileCurrent: false } : planFormat.compilationOptionsForSavedPlan(repairedPlan);
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityView, compileFormat);
     if (qualityMetrics.blockingIssueCount > 0) {
         throw new Error('文章文字规范化后仍未通过表达质量检查，不能更新文章与计划的绑定记录。');
@@ -9904,7 +9906,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 .malformedPreviousDraftDiagnostic({ raw: previousDraft,
                     jsonText: typeof previousDraft === 'string' ? extractJsonObjectText(previousDraft) : '',
                     candidate, repairContext, originalPromptChars: prompt.length,
-                    contextMaxChars: API_READER_CONTEXT_MAX_CHARS });
+                    contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
+                    promptPath: currentTextStagePromptPath('apiReaderArticle') });
             if (diagnostic !== null) {
                 // Send-only view: never replace the retained raw response or candidate.
                 previousDraftPromptView = diagnostic;
@@ -10440,6 +10443,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     }
     const existingReaderResourceBody = existingReaderResources && {
         contract: existingReaderResources.contract,
+        ...(Object.hasOwn(existingReaderResources, 'schemaFingerprint')
+            ? { schemaFingerprint: existingReaderResources.schemaFingerprint } : {}),
         sourceTextSha256: existingReaderResources.sourceTextSha256,
         resources: existingReaderResources.resources
     };
@@ -11066,6 +11071,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const existingReaderResources = paper.apiReaderResources;
     const existingReaderResourceBody = existingReaderResources && {
         contract: existingReaderResources.contract,
+        ...(Object.hasOwn(existingReaderResources, 'schemaFingerprint')
+            ? { schemaFingerprint: existingReaderResources.schemaFingerprint } : {}),
         sourceTextSha256: existingReaderResources.sourceTextSha256,
         resources: existingReaderResources.resources
     };
@@ -11155,12 +11162,11 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     if (generated.metadataRecoveryProof) require('./lib/reader-request-diagnostics')
         .sealReaderVersionMetadataCompletion(paper, generated.metadataRecoveryProof);
     if (readerResult.ordinalPatchCompilations?.length
-        || (options.execution?.operatorProvenance?.contract === 'daily-reader-operator-correction-v1'
+        || (require('./lib/daily-reader-operator-correction').hasOperatorProof(options.execution?.operatorProvenance)
             && previousOrdinalProof)) {
         // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
         // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
-        const operatorSupersedes = options.execution?.operatorProvenance?.contract
-            === 'daily-reader-operator-correction-v1';
+        const operatorSupersedes = require('./lib/daily-reader-operator-correction').hasOperatorProof(options.execution?.operatorProvenance);
         if (operatorSupersedes) {
             const previous = previousReaderStage;
             manifest.stages.apiReaderArticle.ordinalPatchHistory = {
@@ -11190,7 +11196,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         delete manifest.contracts.readerTargetOrdinalPatch;
     }
     if (replacesOrdinalCompletion
-        || manifest.stages.apiReaderArticle.operatorProvenance?.contract === 'daily-reader-operator-correction-v1') {
+        || require('./lib/daily-reader-operator-correction').hasOperatorProof(manifest.stages.apiReaderArticle.operatorProvenance)) {
         require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
     }
     return paper;
@@ -19328,7 +19334,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             enforceReaderResourceClaims(readerResourceClaimDraftFromArticle(readerResult.plan, readerResult.article),
                 verifiedReaderResources, rawTextForAnalysis);
             const previousOperatorReaderStage = structuredClone(analysisManifest.stages.apiReaderArticle);
-            if (readerResult.operatorCorrectionProof?.contract === 'daily-reader-operator-correction-v1'
+            if (require('./lib/daily-reader-operator-correction').hasOperatorProof(readerResult.operatorCorrectionProof)
                 && !readerResult.ordinalPatchCompilations?.length
                 && (previousOperatorReaderStage?.ordinalCompletionProof || paper.readerRevisionHistory?.completionProof)) {
                 throw new Error('Zero-record operator replacement of an ordinary completion requires the authenticated Reader-only refresh finalizer');
@@ -19450,7 +19456,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 // 人工修正改写了正文：旧的序号完成证明只对旧稿成立，保留成历史证据，
                 // 本次阶段由 operatorProvenance 绑定新稿，不再拿旧完成记录做冷核重放。
                 const previous = previousOperatorReaderStage;
-                if (readerResult.operatorCorrectionProof?.contract === 'daily-reader-operator-correction-v1') {
+                if (require('./lib/daily-reader-operator-correction').hasOperatorProof(readerResult.operatorCorrectionProof)) {
                     analysisManifest.stages.apiReaderArticle.ordinalPatchHistory = {
                         ...require('./lib/protocol-codec').recordHeader('reader-ordinal-history', 'reader-ordinal-history'),
                         reason: 'operator-correction-supersedes-ordinal-completion',
@@ -19474,7 +19480,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
                 }
             }
-            if (analysisManifest.stages.apiReaderArticle.operatorProvenance?.contract === 'daily-reader-operator-correction-v1') {
+            if (require('./lib/daily-reader-operator-correction').hasOperatorProof(analysisManifest.stages.apiReaderArticle.operatorProvenance)) {
                 require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
             }
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);

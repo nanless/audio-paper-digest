@@ -1,11 +1,12 @@
 'use strict';
+const codec = require('./protocol-codec');
 const { isUsageEventFormat } = require('./llm-usage-format');
 
 // Reuse a byte-proven paid input when the same two saved fact packets acquired
 // a combined display. This authorizes neither a new input nor another response.
 const fs = require('node:fs'), path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
-const CONTRACT = 'reader-saved-feedback-input-continuity-v1';
+const CONTRACT = 'reader-saved-feedback-input-continuity';
 const accepted = new WeakMap();
 const repair = require('./reader-repair');
 const hash = repair.hashDraft, sha = repair.shaText;
@@ -120,7 +121,7 @@ async function prepareSavedReaderInputContinuity(options) {
     for (const edge of [...(paidResolution.proof.archivedMigrationEdges || []),
         ...(paidResolution.proof.paidMigrationFrontiers || [])]) snapshots.push({
         file: path.join(options.directory, edge.archivedName), sha256: edge.oldEnvelopeSha256 });
-    const proof = { contract: CONTRACT, scopeSha256: authority.scopeSha256, inputFingerprint: replay.identity.inputFingerprint,
+    const proof = { ...codec.recordHeader(CONTRACT, CONTRACT), scopeSha256: authority.scopeSha256, inputFingerprint: replay.identity.inputFingerprint,
         identitySha256: hash(replay.identity), oldIdentitySha256: hash(match.request.value.identity),
         parentProof: authority.parentProof, childProof: authority.childProof, evidenceSnapshots: snapshots,
         compatibleCandidateReplay: paidResolution.proof,

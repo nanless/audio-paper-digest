@@ -1,4 +1,5 @@
 'use strict';
+const normalizationCodec = require('./protocol-codec');
 // Diagnostic preparation from the actual normal-loop state, never a success,
 // candidate-selection proof or additional request allowance.
 const { AsyncLocalStorage } = require('node:async_hooks');
@@ -59,7 +60,7 @@ function buildReaderNextRequestPlan(state) {
         blocker = { code: 'READER_FULL_REQUEST_FORBIDDEN', reason: 'local_only_scope',
             message: '当前恢复范围只允许原余额内的局部修复；实际准备将请求全文，已在提示词、用量记录和传输前停止。' };
     }
-    return freeze({ contract: 'reader-next-request-plan-v1', notFinalPreflight: true,
+    return freeze({ ...normalizationCodec.recordHeader('reader-next-request-plan', 'reader-next-request-plan'), notFinalPreflight: true,
         notRequestAuthorization: true, paperId: state.paperId,
         identitySha256: state.identitySha256, candidateSha256: state.candidateSha256 || null,
         phase: budgetStop ? 'budget_stop' : state.phase || 'prepared_route',

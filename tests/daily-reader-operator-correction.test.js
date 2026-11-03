@@ -56,7 +56,7 @@ test('真实两稿的人工入口只读原源和账，精确重建并拒越权',
  }
  const files=records.map((record,index)=>path.join(root,index+'.json')),manifestFile=path.join(root,'manifest.json');
  const reset=()=>{records.forEach((record,index)=>fs.writeFileSync(files[index],JSON.stringify(record),{mode:0o600}));
-  fs.writeFileSync(manifestFile,JSON.stringify({contract:operator.CONTRACT,runId:plan.runId,batchDate:plan.batchDate,
+  fs.writeFileSync(manifestFile,JSON.stringify({...require('../scripts/lib/protocol-codec').recordHeader(operator.CONTRACT, operator.CONTRACT),runId:plan.runId,batchDate:plan.batchDate,
    authorization:'Explicit human source correction preserving the original ledger.',correctionFiles:files}),{mode:0o600});};reset();
  const run=callback=>daily.withDailyFreshAnalysisContext(plan,()=>operator.withCorrections(manifestFile,plan,papers,callback));
  await t.test('正常scope重建完整人工稿，所有费用次数NP原样，修改返回副本不能修改原档',async()=>{

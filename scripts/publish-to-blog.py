@@ -11684,7 +11684,10 @@ def _contains_supplementary_model_character(value):
 _READER_AUTHOR_REPLAY_BATCH = contextvars.ContextVar('reader_author_replay_batch', default=None)
 _READER_AUTHOR_BATCH_MAX_ITEMS = 8
 _READER_AUTHOR_BATCH_MAX_BYTES = 32 * 1024 * 1024
-_READER_AUTHOR_BATCH_PREFIX = b'{"contract":"reader-author-replay-batch-v1","items":['
+_READER_AUTHOR_BATCH_HEADER = public_protocols.record_header('reader-author-replay-batch', 'reader-author-replay-batch')
+_READER_AUTHOR_BATCH_PREFIX = (
+    json.dumps(_READER_AUTHOR_BATCH_HEADER, separators=(',', ':')).encode('ascii')[:-1] + b',"items":['
+)
 
 
 def _flush_reader_author_replay_batch(state):

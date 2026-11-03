@@ -6,12 +6,19 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
+import sys
 import tempfile
 import types
 import unittest
 
 ROOT = Path(os.environ.get('TEST_ORDINAL_PROJECT_ROOT', Path(__file__).resolve().parents[2]))
 SOURCE = Path(os.environ.get('TEST_ORDINAL_PUBLISHER_SOURCE', ROOT / 'scripts/publish-to-blog.py'))
+sys.path.insert(0, str(ROOT / 'scripts'))
+import reader_record_format
+import protocol_codec
+from daily_source_format import is_daily_source_run
+from protocol_codec import historical_header
 
 class PublicationPatchCache(unittest.TestCase):
     def setUp(self):
@@ -21,7 +28,11 @@ class PublicationPatchCache(unittest.TestCase):
         self.run_id = 'ab5efe37-e8fd-4561-9c88-bf0564ec94d2'
         self.run = self.root / self.run_id
         self.run.mkdir()
-        (self.run / 'run.json').write_text(json.dumps({'contract': 'daily-fresh-source-run-v1'}))
+        (self.run / 'run.json').write_text(json.dumps({
+            **historical_header('daily-fresh-source-run', 'sealed-official-source-set'),
+            'runId': self.run_id, 'batchDate': '2026-10-27', 'batchId': 'synthetic-cache-routing',
+            'paperIds': ['2610.34477'], 'sourceSetSha256': '0' * 64, 'sourceExpectations': {},
+        }))
         script = self.root / 'scripts'
         (script / 'lib').mkdir(parents=True)
         for name in ['deep-analyzer.js', 'lib/reader-resource-claims-replay-cli.js', 'lib/reader-resource-binding.js']:
@@ -31,16 +42,20 @@ class PublicationPatchCache(unittest.TestCase):
             self.calls.append((args, kwargs))
             return types.SimpleNamespace(stdout='{"verified":true}', returncode=0, timed_out=False, output_truncated=False)
         stable = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-        self.namespace = {'Path': Path, 're': re, 'json': json, 'os': os, 'tempfile': tempfile, 'shutil': shutil,
+        self.namespace = {'Path': Path, 're': re, 'json': json, 'os': os, 'stat': stat,
+            'tempfile': tempfile, 'shutil': shutil, 'reader_formats': reader_record_format,
+            'public_protocols': protocol_codec,
+            'is_daily_source_run': is_daily_source_run,
             'DAILY_FRESH_SOURCE_RUNS_DIR': self.root, 'SHARED_SCRIPTS_DIR': script,
             '_READER_RESOURCE_CLAIM_REPLAY_CACHE': set(), 'PublishDataValidationError': ValueError,
             '_stable_json_sha256': stable, '_javascript_string_sha256': lambda text: hashlib.sha256(text.encode()).hexdigest(),
             '_sha256_file': lambda path: hashlib.sha256(path.read_bytes()).hexdigest(),
             '_daily_fresh_compact_json_bytes': lambda value: json.dumps(value).encode(), '_run_bounded_subprocess': fake_replay}
         tree = ast.parse(SOURCE.read_text())
-        names = {'_has_source_bound_reader_patch_completion', '_validate_reader_resource_claim_source_replay'}
+        names = {'_daily_fresh_read_private_file', '_has_source_bound_reader_patch_completion',
+                 '_validate_reader_resource_claim_source_replay'}
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
-        self.assertEqual(len(functions), 2)
+        self.assertEqual(len(functions), len(names))
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(SOURCE), 'exec'), self.namespace)
         self.paper = {'arxivId': '2610.34477v1', 'sourceSha256': hashlib.sha256(b'actual-test-text').hexdigest(),
             'freshRewriteProvenance': {'runId': self.run_id}, 'analysisManifest': {'contracts': {'apiReaderArticle': 'beginner-researcher-v3'}, 'stages': {'apiReaderArticle': {}}},

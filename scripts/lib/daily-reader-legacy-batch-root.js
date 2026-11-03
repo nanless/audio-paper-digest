@@ -1,4 +1,5 @@
 'use strict';
+const operatorCodec = require('./protocol-codec');
 // Read-only authentication of the original failed-paper -> paid draft -> batch
 // operator root. This is deliberately separate from retired API-paid readers.
 const fs = require('node:fs'), path = require('node:path');
@@ -73,7 +74,8 @@ function validateLegacyBatchRoot({ descriptor, paper, plan, source, normalProduc
     if (!stage || stage.status !== 'complete' || stage.executionKind !== 'operator'
         || stage.model !== 'operator-local' || stage.protocol !== 'local_operator'
         || stage.newReaderApiRequests !== 0 || stage.operatorHistory !== undefined || stage.originApiStage !== undefined
-        || proof?.contract !== 'daily-reader-operator-correction-v1' || proof.executionKind !== 'operator'
+        || !operatorCodec.hasValidHeader(proof, 'daily-reader-operator-correction')
+        || operatorCodec.isCurrentHeader(proof, 'daily-reader-operator-correction') || proof.executionKind !== 'operator'
         || proof.newReaderApiRequests !== 0 || proof.runId !== plan?.runId || proof.batchDate !== plan.batchDate
         || proof.paperId !== id(paper) || !/^[a-f0-9]{64}$/.test(stage.fingerprint || '')) fail('须为真实原批次operator根，不能伪造API或新历史');
     if (!require('./saved-fact-feedback').completedReaderUpstream(paper, plan)) fail('当前完整上游未通过正常资格');
@@ -94,7 +96,8 @@ function validateLegacyBatchRoot({ descriptor, paper, plan, source, normalProduc
     const manifest = read(proof.manifestFile, proof.manifestSha256);
     const record = read(proof.correctionFile, proof.correctionSha256);
     const authorization = read(descriptor.authorizationFile, descriptor.authorizationFileSha256);
-    if (manifest.contract !== 'daily-reader-operator-correction-batch-v1'
+    if (!operatorCodec.hasValidHeader(manifest, 'daily-reader-operator-correction-batch')
+        || operatorCodec.isCurrentHeader(manifest, 'daily-reader-operator-correction-batch')
         || manifest.runId !== plan.runId || manifest.batchDate !== plan.batchDate || manifest.authorization !== proof.authorization
         || authorization.contract !== 'daily-reader-operator-user-authorization-v1' || authorization.approved !== true
         || authorization.runId !== plan.runId || authorization.batchDate !== plan.batchDate

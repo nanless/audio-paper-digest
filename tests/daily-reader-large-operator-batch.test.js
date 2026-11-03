@@ -29,7 +29,7 @@ test('大型人工收尾按完整原封存入选集计算十百分比，绝不�
         assert.equal(operator.largeBatchCorrectionLimit(plan, papers), limit);
         assert.equal(operator.largeBatchCorrectionLimit(plan, papers.slice().reverse()), limit);
         const filename = path.join(root, `oversized-${size}.json`);
-        fs.writeFileSync(filename, JSON.stringify({ contract: operator.CONTRACT,
+        fs.writeFileSync(filename, JSON.stringify({ ...require('../scripts/lib/protocol-codec').recordHeader(operator.CONTRACT, operator.CONTRACT),
             runId: plan.runId, batchDate: plan.batchDate, authorization: 'Synthetic bound test.',
             correctionFiles: Array.from({ length: limit + 1 }, (_, i) => path.join(root, `absent-${i}.json`))
         }), { mode: 0o600 });

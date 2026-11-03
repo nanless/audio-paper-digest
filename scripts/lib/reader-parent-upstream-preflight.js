@@ -1,7 +1,8 @@
 'use strict';
+const retryCodec = require('./protocol-codec');
 const { isDeepStrictEqual } = require('node:util');
 const accepted = new WeakMap();
-const CONTRACT = 'reader-parent-upstream-preflight-v1';
+const CONTRACT = 'reader-parent-upstream-preflight';
 const TEXT_STAGES = Object.freeze(['openSourceScan', 'revision', 'tableRepair', 'methodRepair',
     'structureRepair', 'tagSelection', 'coreSummaryRepair']);
 function parentIdentity(paper) {
@@ -53,7 +54,7 @@ function inspectSavedReaderParentUpstream(paper, source) {
     const deep = require('../deep-analyzer'), clone = structuredClone(paper);
     const manifest = clone.analysisManifest;
     const before = require('./daily-fresh-source-plan').stableHash(paper);
-    const proof = { contract: CONTRACT, paperId: paper.arxivId, paperSha256: before,
+    const proof = { ...retryCodec.recordHeader(CONTRACT, CONTRACT), paperId: paper.arxivId, paperSha256: before,
         sourceDescriptorSha256: repair.hashDraft(actual.freshSourceDescriptor),
         upstreamFactReviewSha256: repair.hashDraft(facts.current(paper.arxivId)?.proof || null) };
     if (!require('./completed-reader-upstream').completedReaderUpstream(paper, actual)) {

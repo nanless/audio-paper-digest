@@ -243,7 +243,9 @@ for(const c of fixture.cases)test('SYNTHETIC actual normal Reader loop/finalizer
   // Only final figure availability is mocked; all source/science/Reader parsing
   // and normal finalizer remain real. This is not publication qualification.
   test.mock.method(require(path.join(workspace,'scripts/lib/reader-paid-resolved-render')),'reuseVerifiedPaidResolvedFigures',()=>[]);
-  await deep.finalizeApiReaderRefresh(f.paper,details,result,{execution:{executionKind:'synthetic_protocol_test',model:f.identity.model.model,protocol:f.identity.model.protocol,attempts:result.attempts,fullAttempts:result.fullAttempts,transportFailures:result.transportFailures},readerResources:f.paper.apiReaderResources,preserveReaderUpstream:true});
+  const mode=require(path.join(workspace,'scripts/lib/reader-content-mode'));
+  assert.equal(mode.modeOf(result),'source-only');
+  await deep.finalizeApiReaderRefresh(f.paper,details,result,{execution:{executionKind:'synthetic_protocol_test',...mode.fields(mode.modeOf(result)),model:f.identity.model.model,protocol:f.identity.model.protocol,attempts:result.attempts,fullAttempts:result.fullAttempts,transportFailures:result.transportFailures},readerResources:f.paper.apiReaderResources,preserveReaderUpstream:true});
   assert.ok(f.paper.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof);assert.equal(ordinal.hasActiveCompletion(f.paper),true,'successful retired candidate still has an active source-bound completion');console.log('ordinary normal '+c.paperId+' finalizer+stable-index complete');
   const changed=structuredClone(f.paper);delete changed.analysisManifest.contracts.readerTargetOrdinalPatch;
   delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchContract;delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchSchemaFingerprint;delete changed.analysisManifest.stages.apiReaderArticle.ordinalPatchCompilations;delete changed.analysisManifest.stages.apiReaderArticle.ordinalCompletionProof;

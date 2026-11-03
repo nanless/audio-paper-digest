@@ -1,4 +1,5 @@
 'use strict';
+const codec = require('./protocol-codec');
 const { isUsageEventFormat } = require('./llm-usage-format');
 
 
@@ -7,7 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { READER_SECTION_KINDS: API_READER_KINDS } = require('./reader-draft-order');
-const CONTRACT = 'reader-paid-response-replay-v1';
+const CONTRACT = 'reader-paid-response-replay';
 const HISTORICAL_NORMALIZER = Object.freeze({
     gitHead: '4572334a9e47f133fe32b5df370e839536766d0e',
     deepFileSha256: '45660a796b8eca7b7d9d24b725d643905981df88d51f5ade350f5d9bd89b480a',
@@ -203,7 +204,7 @@ function replayPaidReaderResponse(directory, old, identity, options) {
     const review = require('./daily-fact-review').reviewFeedback('apiReaderArticle', identity.paperId);
     if (!active || !active.feedback.readerFeedback?.trim() || !review || !req.prompt.includes(review))
         fail('必须保留同一次已公验事实反馈');
-    return { draft, rawDraft: raw, proof: { contract: CONTRACT, historicalNormalizer: HISTORICAL_NORMALIZER, tableCoverageCompatibility, usageEventId: event.eventId,
+    return { draft, rawDraft: raw, proof: { ...codec.recordHeader(CONTRACT, CONTRACT), historicalNormalizer: HISTORICAL_NORMALIZER, tableCoverageCompatibility, usageEventId: event.eventId,
         outputTextSha256: sha(raw), usageFileSha256: options.usageFileSha256,
         repairDiagnosticId: req.id, repairRequestSha256: options.repairRequestSha256,
         repairResponseSha256: options.repairResponseSha256, originalEnvelopeSha256: old.envelopeSha256,

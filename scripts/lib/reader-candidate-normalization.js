@@ -1,4 +1,5 @@
 'use strict';
+const normalizationCodec = require('./protocol-codec');
 // A deterministic draft preparation write, never a response, attempt or success.
 // The original envelope and transition are immutable; all paid/budget/history
 // fields come from the actual CAS parent, not from a caller's draft snapshot.
@@ -6,7 +7,7 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const { isDeepStrictEqual } = require('node:util');
 const repair = require('./reader-repair');
 const { writeExact, readRegular } = require('./publication-file-primitives');
-const CONTRACT = 'reader-candidate-normalization-v1';
+const CONTRACT = 'reader-candidate-normalization';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function failure(cause) {
     if (cause?.code === 'READER_NORMALIZATION_CAS_CHANGED') return cause;
@@ -29,7 +30,7 @@ function persist({ directory, identity, snapshot }) {
             || !Array.isArray(payload.draftOrderMappings)) throw new Error('Normalization snapshot is not a failed draft');
         const archive = path.join(directory, 'normalizations'), prefix = checked.envelopeSha256 + '-' + repair.hashDraft(payload.draft);
         writeExact(path.join(archive, checked.envelopeSha256 + '.parent.json'), parent.bytes);
-        const transition = { contract: CONTRACT, notLlmResponse: true, notSuccess: true,
+        const transition = { ...normalizationCodec.recordHeader(CONTRACT, CONTRACT), notLlmResponse: true, notSuccess: true,
             identitySha256: repair.hashDraft(identity), parentEnvelopeSha256: checked.envelopeSha256,
             beforeDraftSha256: repair.hashDraft(checked.envelope.payload.draft), afterDraftSha256: repair.hashDraft(payload.draft),
             beforePayloadSha256: checked.envelope.payloadSha256, afterPayloadSha256: repair.hashDraft(payload) };
@@ -38,7 +39,7 @@ function persist({ directory, identity, snapshot }) {
         const after = repair.readFailedCandidateEnvelope(directory, identity);
         if (!after || !isDeepStrictEqual(after.envelope.payload, payload)) throw new Error('Saved normalized candidate differs from CAS result');
         ownedEnvelopeSha256 = after.envelopeSha256;
-        writeExact(path.join(archive, prefix + '.applied.json'), Buffer.from(JSON.stringify({ contract: CONTRACT,
+        writeExact(path.join(archive, prefix + '.applied.json'), Buffer.from(JSON.stringify({ ...normalizationCodec.recordHeader(CONTRACT, CONTRACT),
             transitionSha256: sha(Buffer.from(JSON.stringify(transition) + '\n')), envelopeSha256: after.envelopeSha256 }) + '\n'));
         return after;
     } catch (cause) {

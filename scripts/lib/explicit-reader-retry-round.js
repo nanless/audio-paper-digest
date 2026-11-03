@@ -204,6 +204,11 @@ function beginExplicitRound(directory, identity, recovered, paper) {
         const matching = fs.readdirSync(root).filter(n => /^[a-f0-9-]{36}\.json$/.test(n))
             .map(n => JSON.parse(fs.readFileSync(path.join(root, n))))
             .filter(receipt => receipt.grant?.identitySha256 === identityHash);
+        for (const receipt of matching) {
+            if (!['prepared', 'active'].includes(receipt.status)) continue;
+            if (!isBaseRound(receipt)) throw new Error('Reader 新轮回执格式不合法');
+            assertGrant(receipt.grant);
+        }
         const parentIds = new Set(matching.filter(receipt => (isLocalGrant(receipt.grant) || isParentGrant(receipt.grant))
             && ['prepared', 'active'].includes(receipt.status))
             .map(receipt => {

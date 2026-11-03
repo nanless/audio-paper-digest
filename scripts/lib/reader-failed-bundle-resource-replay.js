@@ -1,6 +1,7 @@
 'use strict';
+const retryCodec = require('./protocol-codec');
 const { isDeepStrictEqual } = require('node:util');
-const CONTRACT = 'reader-failed-bundle-resource-replay-v1';
+const CONTRACT = 'reader-failed-bundle-resource-replay';
 const handles = new WeakMap();
 function upstreamIdentity(paper) {
     const daily = require('./daily-fresh-source-plan');
@@ -59,7 +60,7 @@ function prepareRecoveryReaderResources(paper, source, options = {}) {
         }
     }
     const currentUpstreamSha256 = upstreamIdentity(paper);
-    const proof = { contract: CONTRACT, paperId: require('../utils').normalizedId(paper),
+    const proof = { ...retryCodec.recordHeader(CONTRACT, CONTRACT), paperId: require('../utils').normalizedId(paper),
         sourceSha256: paper.sourceSha256, sourceDescriptorSha256: daily.stableHash(source.freshSourceDescriptor),
         upstreamSha256: currentUpstreamSha256, resourceEvidenceSha256: stage.resourceEvidenceSha256,
         packetSha256: daily.stableHash(packet), openSourceScanFingerprint: stage.fingerprint };

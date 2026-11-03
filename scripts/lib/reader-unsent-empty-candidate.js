@@ -1,4 +1,5 @@
 'use strict';
+const retryCodec = require('./protocol-codec');
 const { isUsageEventFormat } = require('./llm-usage-format');
 
 // A failed request that provably never started transport cannot replace an
@@ -7,7 +8,7 @@ const { isUsageEventFormat } = require('./llm-usage-format');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scope = new AsyncLocalStorage();
-const CONTRACT = 'reader-unsent-empty-failure-history-v1';
+const CONTRACT = 'reader-unsent-empty-failure-history';
 const uuid = /^[a-f0-9-]{36}\.json$/;
 const hash = value => require('./reader-repair').hashDraft(value);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -88,7 +89,7 @@ function validateHistory(directory, identity, payload) {
         histories.set(history.envelopeSha256,history);
     }
     for (const history of histories.values()) {
-        if (history.contract !== CONTRACT || history.inputFingerprint !== identity.inputFingerprint
+        if (!retryCodec.hasValidHeader(history, CONTRACT) || history.inputFingerprint !== identity.inputFingerprint
             || !require('./reader-compatible-candidate-replay').sameInput(history.identity, identity)
             || !new RegExp(`^${hash(history.identity)}\\.unsent-[a-f0-9-]{36}\\.json$`).test(history.archivedName || '')
             || !Array.isArray(history.blockedUsage) || !history.blockedUsage.length) fail('history identity differs');
@@ -197,7 +198,7 @@ function withRecovery(directory, identity, callback) {
     // failure. Each original file still needs its own earlier unsent witness.
     if (empty.some(item => !blocked.some(record => record.at <= fs.statSync(item.filename).mtimeMs)))
         fail('empty candidate predates unsent requests');
-    const histories=empty.map(item=>({ contract:CONTRACT, identity:structuredClone(item.envelope.identity),
+    const histories=empty.map(item=>({ ...retryCodec.recordHeader(CONTRACT, CONTRACT), identity:structuredClone(item.envelope.identity),
         inputFingerprint:identity.inputFingerprint, envelopeSha256:item.envelopeSha256,
         transportFailures:item.envelope.payload.transportFailures,
         archivedName:hash(item.envelope.identity)+'.unsent-'+crypto.randomUUID()+'.json',

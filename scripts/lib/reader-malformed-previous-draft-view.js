@@ -1,12 +1,13 @@
 'use strict';
+const normalizationCodec = require('./protocol-codec');
 const crypto = require('node:crypto');
-const CONTRACT = 'reader-malformed-previous-draft-diagnostic-v1';
+const CONTRACT = 'reader-malformed-previous-draft-diagnostic';
 const MAX_DIAGNOSTIC_CHARS = 8192;
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 // A send-only diagnostic projection. The caller retains the complete raw and
 // must already have selected an ordinary full request under its existing limits.
 function malformedPreviousDraftDiagnostic({ raw, jsonText, candidate, repairContext,
-    originalPromptChars, contextMaxChars }) {
+    originalPromptChars, contextMaxChars, promptPath }) {
     if (candidate !== null || repairContext !== null || typeof raw !== 'string' || !raw.length
         || typeof jsonText !== 'string' || !jsonText.length
         || !Number.isSafeInteger(originalPromptChars) || !Number.isSafeInteger(contextMaxChars)
@@ -32,6 +33,14 @@ function malformedPreviousDraftDiagnostic({ raw, jsonText, candidate, repairCont
         && /[\uDC00-\uDFFF]/.test(raw[index]) && /[\uD800-\uDBFF]/.test(raw[index - 1]) ? index - 1 : index;
     const boundaryEnd = index => index > 0 && index < raw.length
         && /[\uD800-\uDBFF]/.test(raw[index - 1]) && /[\uDC00-\uDFFF]/.test(raw[index]) ? index + 1 : index;
+    const currentPath = require('./prompt-contracts').currentTextStagePromptPath('apiReaderArticle');
+    if (promptPath !== undefined && promptPath !== currentPath
+        && !require('./prompt-legacy-codec').legacyPromptPaths('apiReaderArticle').includes(promptPath)) {
+        throw new Error('Reader 无法识别诊断所用的提示词路径');
+    }
+    const header = promptPath === undefined || promptPath === currentPath
+        ? normalizationCodec.recordHeader(CONTRACT, CONTRACT)
+        : normalizationCodec.historicalHeader(CONTRACT, 'diagnostic-only');
     const note = '以下仅是无法解析旧响应的有界逐字诊断材料，不是完整 JSON 草稿、合格正文或局部补丁目标。完整原响应仍按原字节保留，不能从摘录补造成功稿。请依据本次完整原文证据与原规则重新输出合法完整 JSON；摘录不是论文事实证据。';
     for (let budget = 4096; budget >= 64; budget = Math.floor(budget / 2)) {
         const ranges = [{ kind: 'head', start: 0, end: Math.min(raw.length, Math.floor(budget / 4)) },
@@ -43,7 +52,7 @@ function malformedPreviousDraftDiagnostic({ raw, jsonText, candidate, repairCont
             const start = boundaryStart(range.start), end = boundaryEnd(range.end);
             return { kind: range.kind, startUtf16: start, endUtf16: end, text: raw.slice(start, end) };
         });
-        const diagnostic = { contract: CONTRACT, diagnosticOnly: true, completeRawRetained: true,
+        const diagnostic = { ...header, diagnosticOnly: true, completeRawRetained: true,
             rawSha256: sha(raw), rawUtf16Length: raw.length, rawUtf8Bytes: Buffer.byteLength(raw),
             parsedSliceSha256: sha(jsonText), parsedSliceStartUtf16: jsonStart,
             nativeParseError: parseError, errorPositionUtf16: errorPosition,

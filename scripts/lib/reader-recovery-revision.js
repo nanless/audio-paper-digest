@@ -221,7 +221,7 @@ function restoreUnfundedDiagnosticFailureState(directory, identity, payload) {
     if (!checked || hashDraft(checked.envelope.payload) !== hashDraft(payload)) throw new Error('Diagnostic candidate changed before state recovery');
     const restored = { ...structuredClone(payload), ...originalState };
     restored.diagnosticFailureStateRestorations = [...(restored.diagnosticFailureStateRestorations || []), {
-        contract: 'reader-unfunded-diagnostic-state-restoration-v1', restoredAt: new Date().toISOString(),
+        ...require('./protocol-codec').recordHeader('reader-unfunded-diagnostic-state-restoration', 'reader-unfunded-diagnostic-state-restoration'), restoredAt: new Date().toISOString(),
         identitySha256: hashDraft(identity), migrationAuditSha256: hashDraft(last),
         originalFailureState: originalState, previousEnvelopeSha256: checked.envelopeSha256,
         archiveChain: chain.map(edge => ({ archivedName: path.basename(edge.file), originalEnvelopeSha256: edge.sha256,
@@ -645,9 +645,9 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options, assert
             if (blocked) normalized = blocked;
             else if (!readTableBindingOrderError(error)) throw error;
         }
-        if (normalized?.contract === sourceBlocked.CONTRACT) {
+        if (require('./protocol-codec').hasValidHeader(normalized, sourceBlocked.CONTRACT)) {
             const blocked = sourceBlocked.assertBlockedNormalizationResult(normalized, currentSource?.structuredArtifacts);
-            updated.blockedSourceTableNormalization = { contract: sourceBlocked.CONTRACT,
+            updated.blockedSourceTableNormalization = { ...require('./protocol-codec').recordHeader(sourceBlocked.CONTRACT, sourceBlocked.CONTRACT),
                 inputDraftSha256: hashDraft(updated.draft), outputDraftSha256: blocked.draftSha256,
                 blockingIssuesSha256: hashDraft(blocked.blockingIssues), artifactsSha256: blocked.artifactsSha256 };
             updated.draft = blocked.draft;

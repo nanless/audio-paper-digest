@@ -1294,7 +1294,8 @@ test('恢复回放共用生产草稿规范化，输入和生成器状态在正�
         resultBody.body = resultBody.body.replace(/\| 比较条件[\s\S]*?仅支持当前口径 \|/, '[[TABLE_2]]');
         blockedDraft.tableBindings[1] = { tableIndex: 2, completeTable: { sourceTableOrdinal: 1 } };
         const failed = options.normalizeReplayDraft(blockedDraft, []);
-        assert.equal(failed.contract, 'reader-source-blocked-normalization-v1');
+        assert.deepEqual({ contract: failed.contract, schemaFingerprint: failed.schemaFingerprint },
+            recordHeader('reader-source-blocked-normalization', 'reader-source-blocked-normalization'));
         assert.equal(failed.blockingIssues[0].path, '/tableBindings/1');
         assert.equal(failed.blockingIssues[1].path, '/sections/7/body');
         const changedBeforeOrder = structuredClone(blockedDraft);

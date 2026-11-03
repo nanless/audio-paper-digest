@@ -91,6 +91,22 @@ test('尚有次数及错误原稿 SHA 均拒，原文件不动', async t => {
         assert.equal(sha(fs.readFileSync(f.file)), f.grant.envelopeSha256);
     }));
 });
+test('普通恢复拒绝同身份的损坏子轮，不把祖先重新当成唯一活跃轮', async t => {
+    const f = setup(t);
+    await f.locked(() => {
+        const next = retry.withExplicitRound(paper, f.grant, () =>
+            retry.beginExplicitRound(directory, f.identity, f.payload, paper));
+        const parentFile = next.explicitReaderRetryRound.receiptFile;
+        const before = fs.readFileSync(parentFile);
+        const child = { ...f.grant, ...recordHeader(retry.LOCAL_REPAIR_CONTRACT, retry.LOCAL_REPAIR_CONTRACT),
+            schemaFingerprint: '0'.repeat(64), roundId: crypto.randomUUID(), parentRoundId: f.grant.roundId };
+        const childFile = path.join(path.dirname(parentFile), child.roundId + '.json');
+        fs.writeFileSync(childFile, JSON.stringify({ ...recordHeader(retry.CONTRACT, retry.CONTRACT),
+            status: 'prepared', grant: child }), { mode: 0o600 });
+        assert.throws(() => retry.beginExplicitRound(directory, f.identity, next, paper), /许可的内容或预算/);
+        assert.deepEqual(fs.readFileSync(parentFile), before);
+    });
+});
 test('无来源上下文、无规范锁和错当前正文授权都不能安装', async t => {
     const f = setup(t);
     assert.throws(() => retry.withExplicitRound(paper, f.grant, () => {}), /完整封存日更来源/);

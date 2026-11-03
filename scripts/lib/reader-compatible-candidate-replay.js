@@ -1,11 +1,12 @@
 'use strict';
+const retryCodec = require('./protocol-codec');
 const { isUsageEventFormat } = require('./llm-usage-format');
 
 // Read-only resolution of a genuinely ambiguous diagnostic migration. No new budget.
 const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
-const CONTRACT = 'reader-compatible-candidate-replay-v1';
+const CONTRACT = 'reader-compatible-candidate-replay';
 const IMPLEMENTATION_FIELDS = new Set(['parserImplementationSha256', 'editorialImplementationSha256',
     'mechanicalContractSha256', 'tableCompilerSha256', 'repairImplementationSha256',
     'sourceDiagnosticsImplementationSha256', 'draftOrderImplementationSha256', 'draftOrderContract']);
@@ -150,7 +151,7 @@ function restoredMigrationAncestor(directory, child) {
         .find(item => item.identitySha256 === repair.hashDraft(child.identity));
     if (!record) return null;
     const fields = ['noProgress','failureSignature','validationFailureStreak','validationFailureSignature'];
-    if (record.contract !== 'reader-unfunded-diagnostic-state-restoration-v1'
+    if (!retryCodec.hasValidHeader(record, 'reader-unfunded-diagnostic-state-restoration')
         || !Array.isArray(record.archiveChain) || !record.archiveChain.length || record.archiveChain.length > 32
         || record.migrationAuditSha256 !== repair.hashDraft(child.payload.readerRecoveryRevisions?.at(-1))
         || fields.some(key => !isDeepStrictEqual(child.payload[key], record.originalFailureState?.[key])))
@@ -291,7 +292,7 @@ function archivedMigrationGraph(directory, compatible, normalizeReplayDraft, pai
                 const normalized = normalizeReplayDraft(structuredClone(parent.payload.draft),
                     structuredClone(parent.payload.issues), structuredClone(parent.payload.imageEvidence || []));
                 const draft = normalized?.draft || normalized;
-                if (normalized?.contract === sourceBlocked.CONTRACT || repair.hashDraft(draft) !== audit.outputDraftSha256)
+                if (retryCodec.hasValidHeader(normalized, sourceBlocked.CONTRACT) || repair.hashDraft(draft) !== audit.outputDraftSha256)
                     throw new Error('Reader archived migration draft cannot be deterministically replayed');
             }
             const existing = nodes.find(node => node.name === parent.name);
@@ -383,7 +384,7 @@ function replayRepair(request, response, payload, source, normalizeReplayDraft, 
         normalized = sourceBlocked.readSourceTableNormalizationError(error, output, source.structuredArtifacts);
         if (!normalized) throw error;
     }
-    const blocked = normalized?.contract === sourceBlocked.CONTRACT
+    const blocked = retryCodec.hasValidHeader(normalized, sourceBlocked.CONTRACT)
         ? sourceBlocked.assertBlockedNormalizationResult(normalized, source.structuredArtifacts) : null;
     const draft = normalized?.draft || normalized;
     if (blocked) {
@@ -408,7 +409,7 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
     if (!currentSource || repair.shaText(currentSource.text) !== identity.sourceSha256
         || !isDeepStrictEqual(fresh.freshAnalysisIdentity(identity.paperId), identity.freshAnalysis)) return null;
     const dominance = requireLatestPaidResponse ? null : migrationDominance(compatible);
-    if (dominance) return { selected: dominance.selected, proof: { contract: CONTRACT, mode: 'verified-migration-descendant',
+    if (dominance) return { selected: dominance.selected, proof: { ...retryCodec.recordHeader(CONTRACT, CONTRACT), mode: 'verified-migration-descendant',
         selectedIdentitySha256: repair.hashDraft(dominance.selected.identity), edges: dominance.edges,
         retainedAttempts: dominance.selected.payload.attempts, retainedFullAttempts: dominance.selected.payload.fullAttempts,
         retainedTransportFailures: dominance.selected.payload.transportFailures || 0 }, assertUnchanged() {
@@ -458,7 +459,7 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
     }
     if (matches.length !== 1) return null;
     const match = matches[0];
-    const proof = { contract: CONTRACT, mode: 'latest-real-paid-response', selectedIdentitySha256: repair.hashDraft(match.selected.identity),
+    const proof = { ...retryCodec.recordHeader(CONTRACT, CONTRACT), mode: 'latest-real-paid-response', selectedIdentitySha256: repair.hashDraft(match.selected.identity),
         selectedEnvelopeSha256: match.selected.envelopeSha256, selectedPayloadSha256: repair.hashDraft(match.selected.payload),
         requestFileName: path.basename(match.requestFile), requestSha256: match.request.sha256,
         responseFileName: path.basename(match.responseFile), responseSha256: match.response.sha256,
