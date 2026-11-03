@@ -69,7 +69,33 @@ function isCurrentBatchRoot(value) {
         && Object.keys(value).sort().join(',') === 'contract,operatorProvenanceSha256'
         && /^[a-f0-9]{64}$/.test(value.operatorProvenanceSha256 || '');
 }
+const CURRENT_ROOT_INTERRUPTION = '日更签名Reader人工修正拒绝：当前原批次父稿或来源改变';
+function signedParentView(record, paper, plan, feedback) {
+    if (!isCurrentBatchRoot(record.legacyBatchRoot)) return paper;
+    const declared = record.parentPaper;
+    if (!declared || daily.stableHash(declared) !== record.parentPaperSha256)
+        fail('当前批次原父快照摘要不同');
+    if (isDeepStrictEqual(declared, paper)) return structuredClone(declared);
+    const pending = require('./pending-fact-feedback').read(paper, plan);
+    if (!pending || !isDeepStrictEqual(pending.proof, facts.proofFor(feedback))
+        || Object.hasOwn(declared, 'analysisFactReviewObligation')
+        || paper.latestAnalysisAttemptError !== CURRENT_ROOT_INTERRUPTION
+        || paper.latestAnalysisAttemptRetryable !== false
+        || typeof paper.latestAnalysisAttemptAt !== 'string' || !Number.isFinite(Date.parse(paper.latestAnalysisAttemptAt))
+        || ['Code', 'Category', 'Status', 'Scope'].some(key => paper['latestAnalysisAttemptError' + key] !== null))
+        fail('当前批次原父稿或精确中断义务不同');
+    const view = { ...paper };
+    for (const field of ['analysisFactReviewObligation', 'latestAnalysisAttemptError', 'latestAnalysisAttemptAt',
+        'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable', 'latestAnalysisAttemptErrorCategory',
+        'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']) {
+        if (Object.hasOwn(declared, field)) view[field] = declared[field];
+        else delete view[field];
+    }
+    if (!isDeepStrictEqual(view, declared)) fail('当前批次原父稿除精确中断义务外有变化');
+    return structuredClone(declared);
+}
 function readCurrentBatchRoot(record, paper, plan, source) {
+    paper = structuredClone(paper);
     const rootStage = paper.analysisManifest?.stages?.apiReaderArticle, proof = rootStage?.operatorProvenance;
     if (!isCurrentBatchRoot(record.legacyBatchRoot) || record.normalProducerProof !== undefined
         || !require('./protocol-codec').isCurrentHeader(proof, 'daily-reader-operator-correction')
@@ -133,6 +159,62 @@ function readLegacyRoot(record, paper, plan, source) {
     if (ref.file !== proof.originalCandidateFile || ref.sha256 !== proof.originalCandidateEnvelopeSha256) fail('旧批次根不能换原active付费档');
     return checked;
 }
+function preDispatchRetryParent(record, paper, plan, feedback) {
+    const retry = record.preDispatchRetry;
+    if (retry === undefined) return paper;
+    if (!format.isFact(record) || !retry || typeof retry !== 'object' || Array.isArray(retry)
+        || Object.keys(retry).sort().join(',') !== 'feedbackFile,feedbackFileSha256,manifestFile,manifestSha256,recordFile,recordSha256'
+        || paper.analysisFactReviewObligation
+        || paper.latestAnalysisAttemptError !== '事实反馈绑定检查未通过：新Reader反馈遗漏旧Reader事实约束'
+        || paper.latestAnalysisAttemptErrorCode !== 'DAILY_FACT_REVIEW_INTEGRITY'
+        || paper.latestAnalysisAttemptRetryable !== false
+        || paper.latestAnalysisAttemptErrorCategory !== null || paper.latestAnalysisAttemptErrorStatus !== null
+        || paper.latestAnalysisAttemptErrorScope !== null
+        || typeof paper.latestAnalysisAttemptAt !== 'string' || !Number.isFinite(Date.parse(paper.latestAnalysisAttemptAt))) fail('原派发前拒绝记录不同');
+    const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
+    const pin = (file, expected) => {
+        if (typeof file !== 'string' || !path.isAbsolute(file)
+            || !/^[a-f0-9]{64}$/.test(expected || '')) fail('原派发前文件身份无效');
+        within(file, root);
+        const snapshot = read(file);
+        if (snapshot.sha256 !== expected) fail('原派发前文件SHA不同');
+        return snapshot.value;
+    };
+    const manifest = pin(retry.manifestFile, retry.manifestSha256);
+    const prior = pin(retry.recordFile, retry.recordSha256);
+    const rejected = pin(retry.feedbackFile, retry.feedbackFileSha256);
+    if (!format.isFact(prior) || !format.sameFormat(manifest, prior)
+        || manifest.runId !== plan.runId || manifest.batchDate !== plan.batchDate
+        || typeof manifest.authorization !== 'string' || !manifest.authorization.trim()
+        || !Array.isArray(manifest.correctionFiles)
+        || manifest.correctionFiles.filter(file => file === retry.recordFile).length !== 1
+        || prior.paperId !== record.paperId || prior.runId !== record.runId || prior.batchDate !== record.batchDate
+        || prior.preDispatchRetry !== undefined || prior.parentPaper?.latestAnalysisAttemptError !== undefined
+        || prior.parentPaper?.analysisFactReviewObligation !== undefined
+        || prior.parentPaperSha256 !== daily.stableHash(prior.parentPaper)
+        || prior.parentArticleSha256 !== record.parentArticleSha256 || prior.parentPlanSha256 !== record.parentPlanSha256
+        || prior.feedbackSha256 !== daily.stableHash(rejected)
+        || !isDeepStrictEqual(prior.sourceFiles, record.sourceFiles)
+        || !isDeepStrictEqual(prior.sourceDescriptor, record.sourceDescriptor)
+        || !isDeepStrictEqual(candidateRef(prior), candidateRef(record))) fail('原派发前清单、父稿或付费档不同');
+    const omitRebinding = value => Object.fromEntries(Object.entries(value).filter(([key]) =>
+        !['parentPaper', 'parentPaperSha256', 'feedbackSha256', 'preDispatchRetry'].includes(key)));
+    if (!isDeepStrictEqual(omitRebinding(prior), omitRebinding(record))) fail('派发前重试不能修改原获准补丁');
+    const normalized = { ...paper };
+    for (const field of ['Error','At','ErrorCode','Retryable','ErrorCategory','ErrorStatus','ErrorScope'])
+        delete normalized['latestAnalysisAttempt' + field];
+    if (!isDeepStrictEqual(normalized, prior.parentPaper)) fail('派发前重试只能具有原拒绝元数据差异');
+    facts.validateFeedback(rejected, plan, prior.parentPaper);
+    const saved = require('./saved-fact-feedback').readSavedFeedback(prior.parentPaper, plan);
+    if (!saved || !saved.feedback.readerFeedback?.trim()) fail('原派发前缺少继承反馈');
+    const retains = (child, old) => child.readerFeedback.includes(old.readerFeedback)
+        && old.rejectedReaderClaims.every(claim => child.rejectedReaderClaims.includes(claim))
+        && old.sourceQuotes.every(quote => child.sourceQuotes.includes(quote));
+    const inherited = [saved.feedback, saved.readerFeedback].filter(Boolean);
+    if (inherited.every(old => retains(rejected, old))
+        || inherited.some(old => !retains(feedback, old))) fail('派发前重试没有精确纠正遗漏的约束');
+    return prior.parentPaper;
+}
 function assertParent(record, paper, plan, feedback) {
     if (!format.header(record) || record.paperId !== require('../utils').normalizedId(paper)
         || record.runId !== plan.runId || record.batchDate !== plan.batchDate
@@ -143,8 +225,9 @@ function assertParent(record, paper, plan, feedback) {
         || !isDeepStrictEqual(record.sourceFiles, feedback.sourceFiles)) fail('完整父稿、正文、计划、来源或事实包CAS不一致');
     readerOnly(feedback, paper);
     if (format.isFact(record) && !isDeepStrictEqual(record.parentPaper, paper)) fail('事实修正须保留完整当前父稿快照');
-    if (paper.latestAnalysisAttemptError || paper.analysisFactReviewObligation
-        || !require('../analysis-engine').isSuccessfulAnalysisRecord(paper)
+    const qualificationParent = preDispatchRetryParent(record, paper, plan, feedback);
+    if (qualificationParent.latestAnalysisAttemptError || paper.analysisFactReviewObligation
+        || !require('../analysis-engine').isSuccessfulAnalysisRecord(qualificationParent)
         || !require('./saved-fact-feedback').completedReaderUpstream(paper, plan)) fail('父稿须为真实已完成的同源整篇');
 }
 function applyBoundedTextPatch(original, record) {
@@ -522,15 +605,17 @@ async function prepare(filename, plan, papers, feedbacks, selectedIds) {
         const paper = papers.find(p => require('../utils').normalizedId(p) === record.paperId);
         const feedback = feedbacks.get(record.paperId);
         if (!paper || !feedback || records.has(record.paperId) || !format.sameFormat(record, m)) fail('目标、事实反馈缺失、重复或合同混用');
-        facts.validateFeedback(feedback, plan, paper); assertParent(record, paper, plan, feedback);
-        if (!isDeepStrictEqual(record.sourceDescriptor, daily.readDailyFreshSource(plan, paper).freshSourceDescriptor)) fail('原四文件来源描述不同');
+        facts.validateFeedback(feedback, plan, paper);
+        const parentView = signedParentView(record, paper, plan, feedback);
+        assertParent(record, parentView, plan, feedback);
+        if (!isDeepStrictEqual(record.sourceDescriptor, daily.readDailyFreshSource(plan, parentView).freshSourceDescriptor)) fail('原四文件来源描述不同');
         const ref = candidateRef(record);
         let checked = record.legacyBatchRoot === undefined
             ? require('./reader-paid-resolved-render').readResolvedFile(plan.readerAttemptsDir, ref.file, ref.sha256) : null;
-        await daily.withDailyFreshAnalysisContext(plan, () => require('../analysis-engine').withPaperAnalysisLock(paper, () => daily.withDailyFreshPaperSource(plan, structuredClone(paper), source =>
-            require('./fresh-analysis-context').withFreshPaperContext(paper, () => {
-                if (!checked) checked = readLegacyRoot(record, paper, plan, source);
-                const parsed = verifyRoundtrip(record, paper, source, checked, plan, feedback);
+        await daily.withDailyFreshAnalysisContext(plan, () => require('../analysis-engine').withPaperAnalysisLock(paper, () => daily.withDailyFreshPaperSource(plan, structuredClone(parentView), source =>
+            require('./fresh-analysis-context').withFreshPaperContext(parentView, () => {
+                if (!checked) checked = readLegacyRoot(record, parentView, plan, source);
+                const parsed = verifyRoundtrip(record, parentView, source, checked, plan, feedback);
                 if (feedback.rejectedReaderClaims.some(claim => parsed.article.includes(claim))) fail('补丁未消除严格反馈的原错误句');
             }),
         { fetchFigure: () => fail('人工修正禁止下载新像素') })));
@@ -550,17 +635,24 @@ async function finalize(handle, paper, persist) {
     if (!item || !require('../analysis-engine').paperAnalysisLockHeld(paper)) fail('缺少原预检句柄或真实论文锁');
     unchanged(active.manifest); unchanged(item.snapshot); item.checked.assertUnchanged();
     const { record, feedback, checked } = item, plan = active.plan;
-    assertParent(record, paper, plan, feedback);
+    const parentView = signedParentView(record, paper, plan, feedback);
+    const currentRoot = isCurrentBatchRoot(record.legacyBatchRoot);
+    const liveBefore = currentRoot ? daily.stableHash(paper) : null;
+    assertParent(record, parentView, plan, feedback);
     const fresh = require('./fresh-analysis-context'), direct = require('./direct-rewrite-analysis-context');
     const source = direct.getDirectRewriteSource(paper), context = direct.getDirectRewriteAnalysisContext();
     if (!fresh.isDailyFreshSourceScope() || context?.runId !== plan.runId
         || !isDeepStrictEqual(source, daily.readDailyFreshSource(plan, paper))) fail('当前正常四来源作用域不同');
-    return fresh.withFreshPaperContext(paper, async () => {
-        const parsed = verifyRoundtrip(record, paper, source, checked, plan, feedback), original = structuredClone(paper);
-        const parent = require('./saved-fact-feedback').readSavedFeedback(paper, plan);
-        const bound = facts.validateFeedback(feedback, plan, paper);
-        const execute = () => facts.withReaderFactReview(bound, paper, async () => {
+    return fresh.withFreshPaperContext(parentView, async () => {
+        const parsed = verifyRoundtrip(record, parentView, source, checked, plan, feedback), original = structuredClone(parentView);
+        const parent = require('./saved-fact-feedback').readSavedFeedback(parentView, plan);
+        const bound = facts.validateFeedback(feedback, plan, parentView);
+        const execute = () => facts.withReaderFactReview(bound, parentView, async () => {
+            if (currentRoot && daily.stableHash(paper) !== liveBefore) fail('锁内正式父稿已改变');
+            const registered = currentRoot && persist
+                ? daily.stableHash({ ...paper, analysisFactReviewObligation: bound.proof }) : liveBefore;
             if (persist) require('./pending-fact-feedback').register(paper, plan, feedback);
+            if (currentRoot && daily.stableHash(paper) !== registered) fail('锁内事实登记改变了正式父稿');
             const stage = original.analysisManifest.stages.apiReaderArticle;
             const ref = candidateRef(record), legacy = legacyRootReplays.get(parsed);
             const provenance = { ...format.header(record), executionKind: 'operator', newReaderApiRequests: 0,
@@ -574,7 +666,9 @@ async function finalize(handle, paper, persist) {
                 afterDraftSha256: repair.hashDraft(record.draft), retainedAttempts: checked.envelope.payload.attempts,
                 retainedFullAttempts: checked.envelope.payload.fullAttempts, retainedNoProgress: checked.envelope.payload.noProgress,
                 feedbackSha256: bound.proof.feedbackSha256 };
-            const target = structuredClone(paper);
+            const target = structuredClone(currentRoot ? original : paper);
+            if (persist && currentRoot)
+                target.analysisFactReviewObligation = structuredClone(paper.analysisFactReviewObligation);
             const result = await direct.withDirectRewriteAnalysisSource({ ...context,
                 materializeReaderFigures: figures => reuseFigures(figures, original, checked.envelope),
                 downloadPrimaryImage: () => fail('人工修正禁止下载新像素') }, () => require('../deep-analyzer').finalizeApiReaderRefresh(target, source,
@@ -636,6 +730,7 @@ async function finalize(handle, paper, persist) {
             const complete = () => require('./completed-bound-fact-feedback').hasCompletedBoundFactFeedbackStages(
                 completionView, feedback, plan);
             if (!(persist ? complete() : previewCompletions.run(bound, complete))) fail('当前来源绑定的事实反馈尚未完成');
+            if (currentRoot && daily.stableHash(paper) !== registered) fail('锁内正式父稿已改变');
             unchanged(active.manifest); unchanged(item.snapshot); checked.assertUnchanged(); return result;
         });
         if (!parent) return execute();
