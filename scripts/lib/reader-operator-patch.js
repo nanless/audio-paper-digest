@@ -6,7 +6,21 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const repair = require('./reader-repair.js');
 const content = require('./reader-content-mode');
-const CONTRACT = 'reader-operator-patch-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = 'reader-operator-patch';
+const INTENT = 'reader-operator-patch-intent';
+function patchHeaders(intent) {
+    if (intent === undefined) return { outer: codec.recordHeader(INTENT, INTENT), audit: codec.recordHeader(CONTRACT, CONTRACT) };
+    if (!codec.hasValidHeader(intent, INTENT) || !codec.hasValidHeader(intent.audit, CONTRACT)
+        || Object.hasOwn(intent, 'schemaFingerprint') !== Object.hasOwn(intent.audit, 'schemaFingerprint')) {
+        throw new Error('人工补丁准备记录的格式或指纹不符');
+    }
+    const outer = codec.recordHeader(intent.contract, INTENT, intent.schemaFingerprint);
+    if (!exactKeys(intent, [...Object.keys(outer), 'audit', 'afterPayloadSha256'])) {
+        throw new Error('人工补丁准备记录的字段不符');
+    }
+    return { outer, audit: codec.recordHeader(intent.audit.contract, CONTRACT, intent.audit.schemaFingerprint) };
+}
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const isSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const same = (a, b) => repair.hashDraft(a) === repair.hashDraft(b);
@@ -182,6 +196,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         if (auditEntry) {
             assertSafeDirectory(archiveDir);
             const intent = readPrivate(path.join(archiveDir, 'intent.json')).value;
+            patchHeaders(intent);
             if (!same(intent.audit, auditEntry) || intent.afterPayloadSha256 !== repair.hashDraft(payload)
                 || auditEntry.afterDraftSha256 !== repair.hashDraft(payload.draft)
                 || readPrivate(path.join(archiveDir, 'before.json')).sha256 !== auditEntry.oldEnvelopeSha256
@@ -202,22 +217,25 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         // 只有生产解析器可以判定草稿是否通过。这里不保存它返回的文章，
         // 本次操作仍不会生成成功凭证。
         deps.parseApiReaderArticleResult(JSON.stringify(draft), options);
-        const audit = { contract: CONTRACT, runId: run.runId, paperId: request.paperId,
+        let intent;
+        try {
+            assertSafeDirectory(archiveDir);
+            intent = readPrivate(path.join(archiveDir, 'intent.json')).value;
+        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        const headers = patchHeaders(intent);
+        const audit = { ...headers.audit, runId: run.runId, paperId: request.paperId,
             candidateIdentitySha256: request.candidateIdentitySha256, patchFileSha256: requestFile.sha256,
             sourceSha256: request.sourceSha256, reason: request.reason,
             beforeDraftSha256: repair.hashDraft(payload.draft), afterDraftSha256: repair.hashDraft(draft),
             oldPayloadSha256: before.value.payloadSha256, oldEnvelopeSha256: before.sha256,
             archive: path.relative(runDir, archiveDir), appliedAt: deps.now() };
-        let intent;
-        try {
-            assertSafeDirectory(archiveDir);
-            intent = readPrivate(path.join(archiveDir, 'intent.json')).value;
-            if (!same({ ...intent.audit, appliedAt: audit.appliedAt }, audit)) throw new Error('人工补丁准备记录中的修改记录与本次修改不同');
-        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (intent && !same({ ...intent.audit, appliedAt: audit.appliedAt }, audit)) {
+            throw new Error('人工补丁准备记录中的修改记录与本次修改不同');
+        }
         const committedAudit = intent?.audit || audit;
         const updated = { ...payload, draft, rawDraft: JSON.stringify(draft), status: 'failed',
             operatorPatches: [...(payload.operatorPatches || []), committedAudit] };
-        const expectedIntent = { contract: CONTRACT, audit: committedAudit, afterPayloadSha256: repair.hashDraft(updated) };
+        const expectedIntent = { ...headers.outer, audit: committedAudit, afterPayloadSha256: repair.hashDraft(updated) };
         if (intent && !same(intent, expectedIntent)) throw new Error('人工补丁的准备记录与本次准备保存的补丁记录不同');
         if (Buffer.byteLength(JSON.stringify({ ...repair.candidateEnvelopeHeader(), identity,
             payload: updated, payloadSha256: repair.hashDraft(updated) })) > 20 * 1024 * 1024) {

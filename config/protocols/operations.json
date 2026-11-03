@@ -281,6 +281,50 @@
           "variant": "reference-only-explanations"
         }
       ]
+    },
+    {
+      "name": "reader-operator-patch",
+      "currentVariant": "sealed-bounded-edit-audit",
+      "currentSchema": {
+        "fields": [
+          "runId",
+          "paperId",
+          "candidateIdentitySha256",
+          "patchFileSha256",
+          "sourceSha256",
+          "reason",
+          "beforeDraftSha256",
+          "afterDraftSha256",
+          "oldPayloadSha256",
+          "oldEnvelopeSha256",
+          "archive",
+          "appliedAt"
+        ],
+        "authority": "actual-candidate-and-original-patch-required"
+      },
+      "historical": [
+        {
+          "tag": "reader-operator-patch-v1",
+          "variant": "sealed-bounded-edit-audit"
+        }
+      ]
+    },
+    {
+      "name": "reader-operator-patch-intent",
+      "currentVariant": "immutable-bounded-edit-intent",
+      "currentSchema": {
+        "fields": [
+          "audit",
+          "afterPayloadSha256"
+        ],
+        "authority": "actual-candidate-and-original-patch-required"
+      },
+      "historical": [
+        {
+          "tag": "reader-operator-patch-v1",
+          "variant": "immutable-bounded-edit-intent"
+        }
+      ]
     }
   ]
 }

@@ -91,6 +91,30 @@ test('运维补丁只保存失败的候选，保留全部预算，并归档原�
     assert.equal(fs.readFileSync(path.join(f.runDir, 'analysis.json'), 'utf8'), JSON.stringify(f.loaded.analysis));
 });
 
+test('原人工补丁准备记录可以续跑，保留原字节并拒绝错误的结构指纹', async t => {
+    const f = fixture(t);
+    await assert.rejects(f.apply({ afterArchive: () => { throw new Error('before candidate save'); } }), /before candidate save/);
+    const filename = path.join(f.runDir, 'patches', 'operator-archive', runner.sha256(fs.readFileSync(f.filename)), 'intent.json');
+    const current = JSON.parse(fs.readFileSync(filename, 'utf8'));
+    const codec = require('../scripts/lib/protocol-codec');
+    assert.ok(codec.isCurrentHeader(current, 'reader-operator-patch-intent'));
+    assert.ok(codec.isCurrentHeader(current.audit, 'reader-operator-patch'));
+    const before = fs.readFileSync(f.candidateFile);
+    fs.writeFileSync(filename, JSON.stringify({ ...current, schemaFingerprint: '0'.repeat(64) }));
+    await assert.rejects(f.apply(), /格式或指纹/);
+    assert.deepEqual(fs.readFileSync(f.candidateFile), before);
+    const { contract, schemaFingerprint, ...fields } = current.audit;
+    const audit = { contract: 'reader-operator-patch-v1', ...fields };
+    const draft = repair.applyReaderPatch(f.draft, f.request.patch, ['/sections/0/body']);
+    const after = { ...f.payload, draft, rawDraft: JSON.stringify(draft), status: 'failed', operatorPatches: [audit] };
+    const original = JSON.stringify({ contract: 'reader-operator-patch-v1', audit, afterPayloadSha256: repair.hashDraft(after) });
+    fs.writeFileSync(filename, original);
+    assert.equal((await f.apply()).alreadyApplied, false);
+    assert.equal((await f.apply()).alreadyApplied, true);
+    assert.equal(fs.readFileSync(filename, 'utf8'), original);
+    assert.deepEqual(repair.loadFailedCandidate(f.candidateDir, f.identity), after);
+});
+
 test('候选保存前后崩溃都从同一份审计记录续跑，计数器不变', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.candidateFile);
     await assert.rejects(f.apply({ afterArchive: () => { throw new Error('simulated crash after archive'); } }), /simulated crash/);
