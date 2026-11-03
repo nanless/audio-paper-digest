@@ -309,6 +309,38 @@ function retainedPaidFingerprintInput(paper) {
     validateSavedCompletion(paper);
     return paper.analysisStageCheckpoints.apiReaderArticle;
 }
+// The paid ordinal compiler can leave complete-table declarations which
+// ordinary source normalization expands before the active candidate is saved.
+function matchesPaidOrdinalEndpoint(last, payload, record, paper, source) {
+    const repair = require('./reader-repair');
+    if (!last?.after || repair.hashDraft(payload.draft) !== record.baselineDraftSha256) return false;
+    if (isDeepStrictEqual(last.after, payload.draft)) return true;
+    const [mapping] = Array.isArray(payload.draftOrderMappings) ? payload.draftOrderMappings : [];
+    if (payload.draftOrderMappings?.length !== 1 || !codec.hasValidHeader(mapping, 'reader-draft-order')
+        || mapping.changed !== true || mapping.inputSha256 !== repair.hashDraft(last.after)
+        || mapping.outputSha256 !== record.baselineDraftSha256
+        || !Array.isArray(payload.imageEvidence)
+        || sha(source.text) !== source.freshSourceDescriptor.sourceSha256
+        || source.structuredArtifacts?.payloadSha256 !== source.freshSourceDescriptor.structuredArtifactsSha256)
+        return false;
+    const deep = require('../deep-analyzer');
+    deep.replayVerifiedReaderResourceIdentity(paper.apiReaderResources, source.text);
+    const ready = payload.imageEvidence.filter(image => image?.kind === 'figure' && image.status === 'ready');
+    if (ready.some(image => !Number.isSafeInteger(image.ordinal) || image.ordinal < 1
+        || !/^[a-f0-9]{64}$/.test(image.sha256 || '') || image.sourceSha256 !== image.sha256)
+        || new Set(ready.map(image => image.ordinal)).size !== ready.length) return false;
+    const state = {}, draftOrderMappings = [];
+    try {
+        deep.normalizeApiReaderRecoveryDraftForSource(structuredClone(last.after), [], {
+            paperId: paper.arxivId, sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+            pixelFigureOrdinals: ready.map(image => image.ordinal), draftOrderMappings
+        }, state);
+    } catch {
+        return false;
+    }
+    return isDeepStrictEqual(state.draft, payload.draft)
+        && isDeepStrictEqual(draftOrderMappings, payload.draftOrderMappings);
+}
 function validateSavedCompletion(paper) { return validateSavedCompletionUnchecked(paper, false); }
 function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
     const paperSha256 = require('./daily-fresh-source-plan').stableHash(paper);
@@ -386,8 +418,8 @@ function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
             for (const entry of records) lastPaid = require('./reader-target-ordinal-patch').replay({ paper, identity: entry.identity,
                 directory: plan.readerAttemptsDir, requestId: entry.requestId, pins: entry.pins });
             const deep = require('../deep-analyzer');
-            if (records.length && (!lastPaid || !isDeepStrictEqual(lastPaid.after, payload.draft)
-                || repair.hashDraft(lastPaid.after) !== record.baselineDraftSha256)) fail('last paid compilation differs from the original candidate');
+            if (records.length && !matchesPaidOrdinalEndpoint(lastPaid, payload, record, paper, source))
+                fail('last paid compilation differs from the original candidate');
             const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
                 arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
                 requireIntegratedTables: true, minimumIntegratedTables: 2,
