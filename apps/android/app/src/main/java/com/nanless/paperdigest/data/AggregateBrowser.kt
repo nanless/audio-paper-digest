@@ -181,7 +181,7 @@ internal class AggregateBrowser(private val port:AggregateBrowsePort,private val
                         synchronized(lock) {
                             if (ready(token, stamp, epoch)) lastUnchangedCheck = identity to now
                         }
-                        response("website-document")
+                        cachedResult
                     } else adopt(token, stamp, epoch, descriptor, fresh, false)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
