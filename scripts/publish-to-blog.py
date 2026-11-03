@@ -3113,7 +3113,20 @@ def _api_reader_author_display(paper, api_reader):
         if separator:
             skipped.append(index)
         else:
-            authors.append(copy.deepcopy(author))
+            displayed = copy.deepcopy(author)
+            footnote_text = 'Equal contribution, Core contributors, Work done while at Meta'
+            for position, (affiliation, affiliation_binding) in enumerate(zip(
+                    author['affiliations'], bound['affiliationBindings'])):
+                if (affiliation.endswith(footnote_text)
+                        and affiliation_binding.get('sourceKind') == 'html_dom'
+                        and isinstance(paper.get('freshRewriteProvenance'), dict)):
+                    institution = affiliation.removesuffix(footnote_text)
+                    source_text = _read_daily_publication_source_text(paper)
+                    marked = (f'Affiliation:\u00a0{institution}*Equal contribution, '
+                              '†Core contributors, ‡Work done while at Meta')
+                    if institution and source_text.splitlines().count(marked) == 1:
+                        displayed['affiliations'][position] = institution
+            authors.append(displayed)
     note = ''
     if skipped:
         note = (f'原作者元数据中有 {len(skipped)} 项仅为分隔标点，未列为作者；'
@@ -7034,21 +7047,25 @@ def _source_quoted_codec_display_cells(paper, binding, table):
               and re.search(r'(?:^|\n)' + re.escape(line_block) + r'(?:\n|$)', record['quote'])]
     if not quotes:
         return {}
+    source_text = _read_daily_publication_source_text(paper)
+    if not any(quote in source_text for quote in quotes):
+        return {}
+    return {(row_number, column): shown}
+
+
+def _read_daily_publication_source_text(paper):
     proof = paper['freshRewriteProvenance']
     run_id = proof.get('runId')
     if not isinstance(run_id, str) or not re.fullmatch(r'[a-f0-9-]{36}', run_id):
-        return {}
+        raise PublishDataValidationError('来源展示核验缺少封存运行身份。')
     paper_id = _daily_fresh_normalized_paper_id(paper)
     source, _ = _daily_fresh_read_bundle_source_identity(
         Path(DAILY_FRESH_SOURCE_RUNS_DIR).resolve() / run_id, paper_id, proof, paper)
     source_path, size, digest, maximum = source['files'][0]
-    content = _daily_fresh_read_private_file(source_path, 'daily source codec display', maximum)
+    content = _daily_fresh_read_private_file(source_path, 'daily publication source display', maximum)
     if len(content) != size or _daily_fresh_sha256(content) != digest:
-        raise PublishDataValidationError('来源编码器名称的显示核验发现来源字节变化。')
-    source_text = content.decode('utf-8')
-    if not any(quote in source_text for quote in quotes):
-        return {}
-    return {(row_number, column): shown}
+        raise PublishDataValidationError('来源展示核验发现封存文本字节变化。')
+    return content.decode('utf-8')
 
 
 def _project_source_quoted_codec_display(article, paper):
