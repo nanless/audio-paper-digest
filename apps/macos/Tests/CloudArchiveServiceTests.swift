@@ -133,46 +133,63 @@ private actor CloudTestDAV {
         }.joined()+"</d:multistatus>").utf8)
     }
 }
-/// A personal record is mutable only when the request's conditional header
-/// still matches the origin at PUT time.
+/// Simulates a DAV server that never returns ETag.
 private actor CloudPersonalDAV {
-    private var bytes: Data?
-    private let tag: String?
-    private let competingWrite: Data?
-    private(set) var requests: [String] = []
-    private(set) var condition: String?
-    init(bytes: Data?, tag: String?, competingWrite: Data? = nil) {
-        self.bytes = bytes; self.tag = tag; self.competingWrite = competingWrite
+    static let owner = "a1072b74-b9ad-4e09-9079-96b116bfcc4b"
+    static let root = "/dav/PaperDigest/"
+    static let legacy = root + "personal-sync-v1/"
+    static let revisions = root + "personal-sync-revisions-v1/"
+    private var directories: Set<String> = [root]
+    private var files: [String: Data] = [:]
+    private(set) var writes: [String] = []
+    private var lostReply = false
+
+    func record(_ data: Data, path: String) {
+        files[path] = data
+        let components = path.split(separator: "/")
+        for end in 2..<components.count { directories.insert("/" + components.prefix(end).joined(separator: "/") + "/") }
     }
+    func emptyBucket(_ bucket: Int) {
+        let owner = Self.revisions + Self.owner + "/"
+        directories.formUnion([Self.revisions, owner, owner + String(bucket) + "/"])
+    }
+    func loseReply() { lostReply = true }
     func request(_ request: URLRequest, _ limit: Int) throws -> CloudArchiveService.Response {
         let method = request.httpMethod ?? "GET"
-        guard let url = request.url, url.host == "dav.jianguoyun.com",
-              url.path.contains("/personal-sync-v1/") else { throw CloudTestError(message: "Unsafe fixture request") }
-        requests.append(method)
+        guard let url = request.url, url.host == "dav.jianguoyun.com", url.path.hasPrefix(Self.root.dropLast()) else {
+            throw CloudTestError(message: "Unsafe fixture request")
+        }
+        let path = URLComponents(url: url, resolvingAgainstBaseURL: false)!.path
         let status: Int, data: Data
         switch method {
+        case "PROPFIND":
+            if directories.contains(path) {
+                let children = request.value(forHTTPHeaderField: "Depth") == "0" ? [] :
+                    directories.filter { $0 != path && $0.hasPrefix(path) && !$0.dropFirst(path.count).dropLast().contains("/") }.sorted().map { ($0, true) } +
+                    files.keys.filter { $0.hasPrefix(path) && !$0.dropFirst(path.count).contains("/") }.sorted().map { ($0, false) }
+                status = 207; data = CloudTestDAV.xml([(path, true)] + children)
+            } else { status = 404; data = Data() }
+        case "MKCOL":
+            status = directories.insert(path).inserted ? 201 : 405; data = Data()
         case "GET":
-            status = bytes == nil ? 404 : 200; data = bytes ?? Data()
+            status = files[path] == nil ? 404 : 200; data = files[path] ?? Data()
         case "PUT":
-            let match = request.value(forHTTPHeaderField: "If-Match")
-            let create = request.value(forHTTPHeaderField: "If-None-Match")
-            condition = match ?? create
-            if let competingWrite {
-                bytes = competingWrite
-                status = 412
-            } else if bytes == nil ? create == "*" && match == nil : match != nil && match == tag && create == nil {
-                bytes = request.httpBody
-                status = 204
-            } else {
-                status = 412
+            guard path.hasPrefix(Self.revisions), request.value(forHTTPHeaderField: "If-None-Match") == "*",
+                  request.value(forHTTPHeaderField: "If-Match") == nil, let body = request.httpBody else {
+                throw CloudTestError(message: "Attempted mutable personal write")
             }
+            writes.append(path)
+            if files[path] == nil {
+                files[path] = body
+                if lostReply { lostReply = false; throw CloudArchiveService.CloudError.transport }
+                status = 201
+            } else { status = 412 }
             data = Data()
         default: throw CloudTestError(message: "Unexpected fixture verb")
         }
-        let headers = tag.map { ["ETag": $0] } ?? [:]
-        return .init(data: data, response: HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        return .init(data: data, response: HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])!)
     }
-    func material() -> Data? { bytes }
+    func material(_ path: String) -> Data? { files[path] }
 }
 
 #if PAPER_DIGEST_TESTS
@@ -715,50 +732,86 @@ private actor CloudIndependentPublishGate {
         }
         #endif
         func personalService(_ server: CloudPersonalDAV) throws -> CloudArchiveService {
-            try CloudArchiveService(destinationID: UUID(), credentials: { .init(username: "fixture", password: "fixture") },
+            try CloudArchiveService(destinationID: UUID(uuidString: CloudPersonalDAV.owner)!,
+                credentials: { .init(username: "fixture", password: "fixture") },
                 checkpointSink: { _ in }, transport: { try await server.request($0, $1) }, minimumRequestInterval: 0)
         }
-        let earlier = Data("old private record fixture".utf8), later = Data("new private record fixture".utf8)
-        await check("personal record creation is conditional and reads back exact bytes") {
-            let server = CloudPersonalDAV(bytes: nil, tag: nil)
-            try await personalService(server).writePersonalDocument(later, expected: nil, directoryExists: true)
-            let condition = await server.condition, requests = await server.requests
-            try require(condition == "*" && requests == ["GET", "PUT", "GET"], "create guard and GET readback")
-            try require(await server.material() == later, "new content preserved")
+        func document(_ revision: Int, legacy: Any? = nil, value: String = "") throws -> Data {
+            var object: [String: Any] = ["format": "paperdigest-personal-sync-v1", "device": CloudPersonalDAV.owner,
+                "revision": revision, "fixture": value]
+            object["legacySHA256"] = legacy
+            return try JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
         }
-        await check("personal record replacement uses exact strong ETag and reads back") {
-            let tag = #""strong-revision""#
-            let server = CloudPersonalDAV(bytes: earlier, tag: tag)
-            try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true)
-            let condition = await server.condition, requests = await server.requests
-            try require(condition == tag && requests == ["GET", "PUT", "GET"], "update guard and GET readback")
-            try require(await server.material() == later, "updated content preserved")
+        func revisionPath(_ bytes: Data) throws -> String {
+            let revision = try PersonalWebDavSync.RemoteRevision(device: CloudPersonalDAV.owner, bytes: bytes)
+            return CloudPersonalDAV.revisions + revision.device + "/" + String(revision.bucket) + "/" + revision.filename
         }
-        await check("missing, weak, malformed and unsupported personal ETags never issue PUT") {
-            let oversizedTag = "\"" + String(repeating: "a", count: 1023) + "\""
-            let unsafeTags: [String?] = [nil, #"W/"weak""#, "not-quoted", #""tag","another""#, #""非 ASCII""#, oversizedTag]
-            for tag in unsafeTags {
-                let server = CloudPersonalDAV(bytes: earlier, tag: tag)
-                try await rejects(.personalDocumentUnsafe) { try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true) }
-                try require(await server.requests == ["GET"], "unsafe validator did not write")
-                try require(await server.material() == earlier, "old bytes remain")
+        let legacyPath = CloudPersonalDAV.legacy + CloudPersonalDAV.owner + ".json"
+        await check("personal revision updates without ETag and keeps the exact legacy bytes") {
+            let earlier = try document(256)
+            let later = try document(257, legacy: sha256(earlier))
+            let server = CloudPersonalDAV()
+            await server.record(earlier, path: legacyPath)
+            let service = try personalService(server)
+            let original = try await service.personalDocuments()
+            try require(original.heads[CloudPersonalDAV.owner] == earlier, "legacy read")
+            try await service.writePersonalDocument(later, observed: original)
+            let expectedPath = try revisionPath(later)
+            let writes = await server.writes
+            try require(writes == [expectedPath] && expectedPath.contains("/1/"), "conditional create uses canonical bucket")
+            try require(await server.material(legacyPath) == earlier, "legacy bytes remain")
+            let current = try await service.personalDocuments()
+            try require(current.heads[CloudPersonalDAV.owner] == later, "latest exact bytes remain")
+        }
+        await check("personal lost reply retries an identical create and reads the original back") {
+            let later = try document(1, legacy: NSNull())
+            let server = CloudPersonalDAV()
+            let service = try personalService(server)
+            let empty = try await service.personalDocuments()
+            await server.loseReply()
+            try await rejects(.transport) { try await service.writePersonalDocument(later, observed: empty) }
+            let observed = try await service.personalDocuments()
+            try require(observed.heads[CloudPersonalDAV.owner] == later, "lost reply is discoverable")
+            try await service.writePersonalDocument(later, observed: empty)
+            let expectedPath = try revisionPath(later)
+            try require(await server.writes == [expectedPath], "retry verifies the already written immutable resource")
+        }
+        await check("personal same-device fork preserves both copies and fails closed on read") {
+            let a = try document(1, legacy: NSNull(), value: "first")
+            let b = try document(1, legacy: NSNull(), value: "second")
+            let server = CloudPersonalDAV()
+            let service = try personalService(server)
+            let empty = try await service.personalDocuments()
+            try await service.writePersonalDocument(a, observed: empty)
+            try await rejects(.personalDocumentChanged) { try await service.writePersonalDocument(b, observed: empty) }
+            let pathA = try revisionPath(a), pathB = try revisionPath(b)
+            try require(await server.material(pathA) == a, "first branch preserved")
+            try require(await server.material(pathB) == b, "second branch preserved")
+            try await rejects(.personalDocumentChanged) { _ = try await service.personalDocuments() }
+        }
+        await check("personal revision is pinned to exact legacy bytes and rejects stale writers") {
+            let earlier = try document(1)
+            let later = try document(2, legacy: sha256(earlier))
+            let server = CloudPersonalDAV()
+            await server.record(earlier, path: legacyPath)
+            await server.record(later, path: try revisionPath(later))
+            let service = try personalService(server)
+            for revision in 1...3 {
+                await server.record(try document(revision, value: "stale client"), path: legacyPath)
+                try await rejects(.personalDocumentChanged) { _ = try await service.personalDocuments() }
             }
         }
-        await check("personal update detects changed preflight material before PUT") {
-            let server = CloudPersonalDAV(bytes: later, tag: #""current""#)
-            try await rejects(.personalDocumentChanged) { try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true) }
-            try require(await server.requests == ["GET"], "changed material did not write")
-        }
-        await check("personal creation and update surface a competing write without readback success") {
-            let competing = Data("other device update".utf8)
-            for initial in [nil, earlier] as [Data?] {
-                let tag = #""preflight""#
-                let server = CloudPersonalDAV(bytes: initial, tag: tag, competingWrite: competing)
-                try await rejects(.personalDocumentChanged) { try await personalService(server).writePersonalDocument(later, expected: initial, directoryExists: true) }
-                let condition = await server.condition, requests = await server.requests
-                try require(condition == (initial == nil ? "*" : tag) && requests == ["GET", "PUT"], "412 retires guarded write")
-                try require(await server.material() == competing, "competing material remains intact")
-            }
+        await check("personal empty newer bucket falls back and content hash mismatch fails closed") {
+            let earlier = try document(256, legacy: NSNull())
+            let server = CloudPersonalDAV()
+            let path = try revisionPath(earlier)
+            await server.record(earlier, path: path)
+            await server.emptyBucket(1)
+            let service = try personalService(server)
+            let current = try await service.personalDocuments()
+            try require(current.heads[CloudPersonalDAV.owner] == earlier, "uncommitted bucket cannot hide current head")
+            await server.record(try document(256, legacy: NSNull(), value: "tampered"), path: path)
+            try await rejects(.integrity) { _ = try await service.personalDocuments() }
         }
         await check("probe and list cooldowns survive rebuilding the local profile and service") {
             for status in [429, 503] {

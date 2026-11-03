@@ -13,6 +13,11 @@ import java.util.UUID
 internal object PersonalWebDavSync {
     const val LIMIT = 8 * 1024 * 1024
     const val DIRECTORY = "personal-sync-v1"
+    const val REVISIONS_DIRECTORY = "personal-sync-revisions-v1"
+    const val MAX_REVISION = 9_007_199_254_740_991L
+    const val REVISIONS_PER_BUCKET = 256
+    const val MAX_BUCKETS = 748
+    const val LEGACY_DIGEST = "legacySHA256"
     private const val FORMAT = "paperdigest-personal-sync-v1"
     private const val BASELINE = "webDavSyncBaseline"
     private val fields = listOf("favorites", "reading", "notes", "annotations", "readingState")
@@ -26,9 +31,18 @@ internal object PersonalWebDavSync {
     private fun revision(value: Any): Long {
         val number = value as? Number ?: error("WebDAV 同步版本无效")
         val revision = number.toLong()
-        require(revision in 1..9_007_199_254_740_991L && revision.toDouble() == number.toDouble()) { "WebDAV 同步版本无效" }
+        require(revision in 1..MAX_REVISION && revision.toDouble() == number.toDouble()) { "WebDAV 同步版本无效" }
         return revision
     }
+
+    fun documentRevision(bytes: ByteArray, owner: String): Long {
+        require(validDevice(owner) && bytes.size in 1..LIMIT)
+        val document = JSONObject(bytes.decodeToString(throwOnInvalidSequence = true))
+        require(document.getString("format") == FORMAT && document.getString("device") == owner)
+        return revision(document.get("revision"))
+    }
+
+    fun bucket(revision: Long): Long = (revision - 1) / REVISIONS_PER_BUCKET
 
     private fun project(personal: JSONObject): JSONObject = JSONObject().also { output ->
         for (field in fields) {
@@ -154,7 +168,9 @@ internal object PersonalWebDavSync {
         var upload: ByteArray? = null
         if (changed) {
             require(own != null || remote.size < 24) { "同步设备数量超过上限" }
-            val document = JSONObject().put("format", FORMAT).put("device", device).put("revision", next).put("records", records)
+            val legacyDigest = own?.opt(LEGACY_DIGEST) ?: remote[device]?.let(BackupCodec::hash) ?: JSONObject.NULL
+            val document = JSONObject().put("format", FORMAT).put("device", device).put("revision", next)
+                .put("records", records).put(LEGACY_DIGEST, legacyDigest)
             upload = document.toString().toByteArray().also { require(it.size <= LIMIT) { "同步资料超过 8 MiB" } }
             digests.put(device, BackupCodec.hash(upload))
             combined[device] = document

@@ -5,6 +5,10 @@ import CoreFoundation
 enum PersonalWebDavSync {
     static let limit = 8 * 1024 * 1024
     static let directory = "personal-sync-v1"
+    static let revisionDirectory = "personal-sync-revisions-v1"
+    static let revisionsPerBucket = 256
+    static let bucketLimit = 748
+    static let deviceLimit = 24
     private static let format = "paperdigest-personal-sync-v1"
     private static let baselineKey = "webDavSyncBaseline"
     private static let fields = ["favorites", "reading", "notes", "annotations", "readingState"]
@@ -17,6 +21,42 @@ enum PersonalWebDavSync {
         let personal: Object
         let upload: Data?
         let conflicts: Int
+    }
+    struct RemoteRevision {
+        let device: String
+        let number: Int
+        let digest: String
+
+        var bucket: Int { (number - 1) / revisionsPerBucket }
+        var filename: String { "\(device)-\(number)-\(digest).json" }
+
+        init?(filename: String) {
+            guard filename.hasSuffix(".json"), filename.utf8.count >= 108 else { return nil }
+            let device = String(filename.prefix(36))
+            let fields = filename.dropFirst(36).dropLast(5).split(separator: "-", omittingEmptySubsequences: false)
+            guard fields.count == 3, fields[0].isEmpty, Self.validDevice(device),
+                  let number = Int(fields[1]), String(number) == fields[1],
+                  (1...9_007_199_254_740_991).contains(number),
+                  PrivateStoragePaths.validSHA(String(fields[2])) else { return nil }
+            self.device = device
+            self.number = number
+            self.digest = String(fields[2])
+        }
+
+        init(device: String, bytes: Data) throws {
+            self.device = device
+            self.number = try PersonalWebDavSync.documentHeader(bytes, device: device).revision
+            self.digest = sha256(bytes)
+        }
+
+        private static func validDevice(_ id: String) -> Bool { PersonalWebDavSync.validDevice(id) }
+    }
+
+    static func documentHeader(_ bytes: Data, device: String) throws -> (revision: Int, legacySHA256: Any?) {
+        guard validDevice(device), (1...limit).contains(bytes.count),
+              let document = try JSONSerialization.jsonObject(with: bytes) as? Object,
+              document["format"] as? String == format, document["device"] as? String == device else { throw invalid() }
+        return (try revision(document["revision"]), document["legacySHA256"])
     }
     private struct Edit {
         let device: String
@@ -67,7 +107,7 @@ enum PersonalWebDavSync {
     }
 
     @MainActor static func plan(local: Object, device: String, remote: [String: Data]) throws -> Plan {
-        guard validDevice(device), remote.count <= 24 else { throw invalid() }
+        guard validDevice(device), remote.count <= deviceLimit else { throw invalid() }
         var documents: [String: Object] = [:]
         for (owner, bytes) in remote {
             guard validDevice(owner), (1...limit).contains(bytes.count),
@@ -80,7 +120,7 @@ enum PersonalWebDavSync {
                 guard rows.count <= 100_000 else { throw invalid() }
                 for (id, row) in rows {
                     guard validPaper(id), try revision(row["revision"]) <= version,
-                          let seen = row["seen"] as? Object, seen.count <= 24, seen[owner] == nil,
+                          let seen = row["seen"] as? Object, seen.count <= deviceLimit, seen[owner] == nil,
                           let value = row["value"] else { throw invalid() }
                     for (peer, counter) in seen {
                         guard validDevice(peer) else { throw invalid() }
@@ -161,9 +201,10 @@ enum PersonalWebDavSync {
         }
         var upload: Data?
         if changed {
-            let document: Object = ["format": format, "device": device, "revision": next, "records": records]
+            let legacy: Any = own?["legacySHA256"] ?? (remote[device].map { sha256($0) as Any } ?? NSNull())
+            let document: Object = ["format": format, "device": device, "revision": next, "records": records, "legacySHA256": legacy]
             let bytes = try encoded(document)
-            guard bytes.count <= limit, documents.count < 24 || documents[device] != nil else {
+            guard bytes.count <= limit, documents.count < deviceLimit || documents[device] != nil else {
                 throw DesktopError.message("WebDAV 同步资料或设备数量超过上限")
             }
             upload = bytes

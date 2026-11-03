@@ -1,12 +1,14 @@
 package com.nanless.paperdigest.cloud
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
+import com.nanless.paperdigest.data.PersonalStore
+
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 import java.lang.reflect.InvocationTargetException
 import okio.Buffer
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** Official response shape, public default app path only; no account/key/network/user data. */
 class CloudArchiveTest {
@@ -38,107 +40,140 @@ class CloudArchiveTest {
         val failed="""<d:multistatus xmlns:d="DAV:"><d:response><d:href>/dav/PaperDigest/2026-10</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat><d:propstat><d:prop><d:displayname>unrelated success</d:displayname></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>""".toByteArray()
         rejected(failed)
     }
-    @Test fun personalSyncWritesOnlyItsOwnDeviceDocumentAndReadsItBack() = runTest {
-        val root = "/dav/PaperDigest/"
-        val directory = root + "personal-sync-v1/"
-        val own = directory + "$id.json"
-        val collections = mutableSetOf<String>()
-        var data: ByteArray? = null
-        var rejectWrite = false
-        var etag: String? = "\"fixture\""
-        var putCount = 0
-        val transport = CloudTransport { request, _ ->
-            val path = request.url.encodedPath
-            when (request.method) {
-                "MKCOL" -> CloudHTTP(if (collections.add(path)) 201 else 405, emptyMap(), byteArrayOf())
-                "PROPFIND" -> if (path !in collections) CloudHTTP(404, emptyMap(), byteArrayOf()) else {
-                    val members = listOf(path to true) +
-                        if (request.header("Depth") == "1" && data != null) listOf(own to false) else emptyList()
-                    CloudHTTP(207, emptyMap(), xml(members))
+    private val personalRoot = "/dav/PaperDigest/"
+    private val legacyRoot = personalRoot + "personal-sync-v1/"
+    private val revisionRoot = personalRoot + "personal-sync-revisions-v1/"
+
+    private fun personalDocument(revision: Long, payload: String, legacy: Any? = null) =
+        JSONObject().put("format", "paperdigest-personal-sync-v1").put("device", id).put("revision", revision)
+            .put("payload", payload).apply { if (legacy != null) put("legacySHA256", legacy) }.toString().toByteArray()
+
+    private fun revisionPath(revision: Long, body: ByteArray) =
+        "$revisionRoot$id/${PersonalWebDavSync.bucket(revision)}/$id-$revision-${BackupCodec.hash(body)}.json"
+
+    private inner class PersonalDAV {
+        val collections = mutableSetOf(personalRoot)
+        val objects = mutableMapOf<String, ByteArray>()
+        val puts = mutableListOf<String>()
+        var loseWriteResponse = false
+        var createRace = false
+
+        fun service(owner: String = id) = CloudArchive("PaperDigest", owner, { CloudCredentials("fixture", "fixture") }, {},
+            CloudTransport { request, _ ->
+                val path = request.url.encodedPath
+                when (request.method) {
+                    "MKCOL" -> CloudHTTP(if (collections.add(path)) 201 else 405, emptyMap(), byteArrayOf())
+                    "PROPFIND" -> if (path !in collections) CloudHTTP(404, emptyMap(), byteArrayOf()) else {
+                        val members = mutableListOf(path to true)
+                        if (request.header("Depth") == "1") {
+                            members += collections.filter { it != path && it.startsWith(path) && '/' !in it.removePrefix(path).removeSuffix("/") }.map { it to true }
+                            members += objects.keys.filter { it.startsWith(path) && '/' !in it.removePrefix(path) }.map { it to false }
+                        }
+                        CloudHTTP(207, emptyMap(), xml(members))
+                    }
+                    "GET" -> CloudHTTP(if (path in objects) 200 else 404, emptyMap(), objects[path] ?: byteArrayOf())
+                    "PUT" -> {
+                        assertTrue(path.startsWith(revisionRoot))
+                        assertEquals("*", request.header("If-None-Match"))
+                        assertNull(request.header("If-Match"))
+                        val buffer = Buffer()
+                        request.body!!.writeTo(buffer)
+                        puts += path
+                        objects[path] = buffer.readByteArray()
+                        if (loseWriteResponse) throw java.io.IOException("fixture disconnected after saving")
+                        CloudHTTP(if (createRace) 412 else 201, emptyMap(), byteArrayOf())
+                    }
+                    else -> error("Unexpected WebDAV method")
                 }
-                "GET" -> {
-                    assertEquals(own, path)
-                    CloudHTTP(if (data == null) 404 else 200, etag?.let { mapOf("eTaG" to it) }.orEmpty(), data ?: byteArrayOf())
-                }
-                "PUT" -> {
-                    assertEquals(own, path)
-                    putCount++
-                    if (data == null) assertEquals("*", request.header("If-None-Match"))
-                    else assertEquals("\"fixture\"", request.header("If-Match"))
-                    if (rejectWrite) return@CloudTransport CloudHTTP(412, emptyMap(), byteArrayOf())
-                    val buffer = Buffer()
-                    request.body!!.writeTo(buffer)
-                    data = buffer.readByteArray()
-                    CloudHTTP(201, emptyMap(), byteArrayOf())
-                }
-                else -> error("Unexpected WebDAV method")
-            }
-        }
-        val service = CloudArchive("PaperDigest", id, { CloudCredentials("fixture", "fixture") }, {},
-            transport, { 1792886400000L }, {}, 0)
-        assertTrue(service.personalDocuments().isEmpty())
-        val first = """{"first":true}""".toByteArray()
-        service.writePersonalDocument(first, null, false)
-        assertArrayEquals(first, service.personalDocuments().getValue(id))
-        assertTrue(runCatching { service.writePersonalDocument(byteArrayOf(3), null, true) }.isFailure)
-        assertArrayEquals(first, service.personalDocuments().getValue(id))
-        val next = """{"next":true}""".toByteArray()
-        for (badTag in listOf(null, "W/\"fixture\"", "malformed")) {
-            etag = badTag
-            val failure = runCatching { service.writePersonalDocument(next, first, true) }.exceptionOrNull()
-            assertTrue(failure?.message.orEmpty().contains("版本标记"))
-            assertEquals(1, putCount)
-        }
-        etag = "\"fixture\""
-        rejectWrite = true
-        val rejected = runCatching { service.writePersonalDocument(next, first, true) }.exceptionOrNull()
-        assertTrue(rejected?.message.orEmpty().contains("已变化"))
-        assertArrayEquals(first, service.personalDocuments().getValue(id))
-        rejectWrite = false
-        service.writePersonalDocument(next, first, true)
-        assertArrayEquals(next, service.personalDocuments().getValue(id))
+            }, { 1792886400000L }, {}, 0)
     }
 
-    @Test fun onlyOneWriterCanReplaceTheSameObservedPersonalDocument() = runTest {
-        val old = "initial".toByteArray()
-        var bytes = old
-        var tag = "\"one\""
-        var initialReads = 0
-        val bothRead = CompletableDeferred<Unit>()
-        val transport = CloudTransport { request, _ ->
-            when (request.method) {
-                "GET" -> {
-                    val response = CloudHTTP(200, mapOf("ETag" to tag), bytes)
-                    if (initialReads < 2) {
-                        initialReads++
-                        if (initialReads == 2) bothRead.complete(Unit)
-                        bothRead.await()
-                    }
-                    response
-                }
-                "PUT" -> {
-                    if (request.header("If-Match") != tag) CloudHTTP(412, emptyMap(), byteArrayOf())
-                    else {
-                        val body = Buffer()
-                        request.body!!.writeTo(body)
-                        bytes = body.readByteArray()
-                        tag = "\"two\""
-                        CloudHTTP(204, emptyMap(), byteArrayOf())
-                    }
-                }
-                else -> error("Unexpected WebDAV method")
-            }
+    @Test fun noEtagMigratesWithoutMutatingLegacyAndReadsLatestAcrossBuckets() = runTest {
+        val dav = PersonalDAV()
+        val legacy = personalDocument(255, "old")
+        val legacyPath = "$legacyRoot$id.json"
+        dav.collections += legacyRoot
+        dav.objects[legacyPath] = legacy
+        val client = dav.service()
+        val before = client.personalDocuments()
+        assertArrayEquals(legacy, before.heads.getValue(id))
+        val pin = BackupCodec.hash(legacy)
+        val first = personalDocument(256, "favorite", pin)
+        client.writePersonalDocument(first, before)
+        val observed = client.personalDocuments()
+        assertArrayEquals(first, observed.heads.getValue(id))
+        val second = personalDocument(257, "note", pin)
+        dav.createRace = true // Another identical creation reaches the server first.
+        client.writePersonalDocument(second, observed)
+        dav.collections += "$revisionRoot$id/2/" // An interrupted writer only created this collection.
+        assertArrayEquals(second, client.personalDocuments().heads.getValue(id))
+        assertEquals(listOf(revisionPath(256, first), revisionPath(257, second)), dav.puts)
+        assertArrayEquals(legacy, dav.objects.getValue(legacyPath))
+        dav.objects[legacyPath] = personalDocument(256, "an old client wrote again")
+        assertTrue(runCatching { client.personalDocuments() }.isFailure)
+        assertArrayEquals(second, dav.objects.getValue(revisionPath(257, second)))
+    }
+
+    @Test fun immutablePersonalRetryAndForkDoNotOverwriteAnyOriginal() = runTest {
+        val dav = PersonalDAV()
+        val client = dav.service()
+        val empty = client.personalDocuments()
+        assertTrue(empty.heads.isEmpty())
+        val first = personalDocument(1, "Mac edit", JSONObject.NULL)
+        val second = personalDocument(1, "Android edit", JSONObject.NULL)
+        dav.loseWriteResponse = true
+        assertTrue(runCatching { client.writePersonalDocument(first, empty) }.isFailure)
+        dav.loseWriteResponse = false
+        client.writePersonalDocument(first, empty)
+        assertEquals(1, dav.puts.size)
+        assertArrayEquals(first, client.personalDocuments().heads.getValue(id))
+        client.writePersonalDocument(second, empty)
+        assertEquals(2, dav.puts.size)
+        assertArrayEquals(first, dav.objects.getValue(revisionPath(1, first)))
+        assertArrayEquals(second, dav.objects.getValue(revisionPath(1, second)))
+        assertTrue(runCatching { client.personalDocuments() }.isFailure)
+        dav.objects.remove(revisionPath(1, second))
+        dav.objects[revisionPath(1, first)] = second
+        assertTrue(runCatching { client.personalDocuments() }.isFailure)
+    }
+
+    @Test fun noEtagPeerChangesApplyInBothDirectionsAfterReadingLegacyDocuments() = runTest {
+        val dav = PersonalDAV()
+        val other = "00000000-0000-4000-8000-000000000002"
+        val originalPaper = "arxiv:2610.00001"
+        val temporaryPaper = "arxiv:2610.00002"
+        val mac = dav.service()
+        val android = dav.service(other)
+        suspend fun sync(client: CloudArchive, owner: String, local: JSONObject): JSONObject {
+            val observed = client.personalDocuments()
+            val plan = PersonalWebDavSync.plan(local, owner, observed.heads)
+            plan.upload?.let { client.writePersonalDocument(it, observed) }
+            assertEquals(0, plan.conflicts)
+            return plan.personal
         }
-        fun service() = CloudArchive("PaperDigest", id, { CloudCredentials("fixture", "fixture") }, {},
-            transport, { 1792886400000L }, {}, 0)
-        val first = "Mac edit".toByteArray()
-        val second = "Android edit".toByteArray()
-        val a = async { runCatching { service().writePersonalDocument(first, old, true) } }
-        val b = async { runCatching { service().writePersonalDocument(second, old, true) } }
-        val results = listOf(a.await(), b.await())
-        assertEquals(1, results.count { it.isSuccess })
-        assertTrue(results.single { it.isFailure }.exceptionOrNull()?.message.orEmpty().contains("已变化"))
-        assertArrayEquals(if (results[0].isSuccess) first else second, bytes)
+        val existing = PersonalStore.initial().put("favorites", JSONArray().put(originalPaper))
+        val initial = PersonalWebDavSync.plan(existing, id, emptyMap()).upload!!
+        val legacy = JSONObject(initial.decodeToString()).apply { remove("legacySHA256") }.toString().toByteArray()
+        dav.collections += legacyRoot
+        dav.objects["$legacyRoot$id.json"] = legacy
+        var onMac = sync(mac, id, existing)
+        var onAndroid = sync(android, other, PersonalStore.initial())
+        onAndroid.getJSONArray("favorites").put(temporaryPaper)
+        onAndroid = sync(android, other, onAndroid)
+        onMac = sync(mac, id, onMac)
+        assertEquals(temporaryPaper, onMac.getJSONArray("favorites").getString(1))
+        onMac.getJSONObject("notes").put(temporaryPaper, JSONObject().put("revision", 1).put("text", "temporary Mac note"))
+        onMac = sync(mac, id, onMac)
+        onAndroid = sync(android, other, onAndroid)
+        assertEquals("temporary Mac note", onAndroid.getJSONObject("notes").getJSONObject(temporaryPaper).getString("text"))
+        onAndroid.put("favorites", JSONArray().put(originalPaper))
+        onMac.getJSONObject("notes").remove(temporaryPaper)
+        onAndroid = sync(android, other, onAndroid)
+        onMac = sync(mac, id, onMac)
+        onAndroid = sync(android, other, onAndroid)
+        assertEquals(JSONArray().put(originalPaper).toString(), onMac.getJSONArray("favorites").toString())
+        assertFalse(onAndroid.getJSONObject("notes").has(temporaryPaper))
+        assertArrayEquals(legacy, dav.objects.getValue("$legacyRoot$id.json"))
     }
 
     @Test fun monthAndUuidAliasesKeepOneLevelCanonicalPathsAndDuplicateNormalizationIsNotCompletion() = runTest {

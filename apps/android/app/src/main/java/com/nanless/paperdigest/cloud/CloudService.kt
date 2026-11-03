@@ -209,8 +209,8 @@ class CloudService(
         val service = archive()
         val device = destinationID
         val remote = service.personalDocuments()
-        val plan = PersonalWebDavSync.plan(original, device, remote)
-        plan.upload?.let { service.writePersonalDocument(it, remote[device], remote.isNotEmpty()) }
+        val plan = PersonalWebDavSync.plan(original, device, remote.heads)
+        plan.upload?.let { service.writePersonalDocument(it, remote) }
         coroutineContext.ensureActive()
         commit(original, plan)
         JSONObject().put("favorites", plan.personal.getJSONArray("favorites").length())

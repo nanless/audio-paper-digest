@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.cloud
 
+import com.nanless.paperdigest.data.CatalogRepository
 import com.nanless.paperdigest.data.PersonalStore
 import com.nanless.paperdigest.data.OfflineStore
 import com.nanless.paperdigest.data.canonical
@@ -145,9 +146,17 @@ internal object FullWorkspaceMerge {
             remote.optJSONObject("personalPapers")?.let { supplied ->
                 supplied.keys().forEach { id ->
                     val original = supplied.getJSONObject(id)
+                    val kind = original.getString("sourceKind")
+                    // Published metadata can include device-local reading fields. The
+                    // catalog still owns these public records; retain their raw bytes
+                    // in the snapshot without assigning a local PDF or counting a conflict.
+                    if (kind != "local" && !id.startsWith("local:") &&
+                        original.optString("blogURL").let { it.isNotBlank() && runCatching { CatalogRepository.sameSite(it) }.isSuccess }) {
+                        return@forEach
+                    }
                     val hash = id.removePrefix("local:")
                     val path = "Imports/$hash.pdf"
-                    if (!id.startsWith("local:") || !BackupCodec.validSHA(hash) || rejected.contains(path) ||
+                    if (kind != "local" || !id.startsWith("local:") || !BackupCodec.validSHA(hash) || rejected.contains(path) ||
                         entries.none { it.path == path && it.sha256 == hash }) {
                         rejected += "paper/$id"
                     } else {

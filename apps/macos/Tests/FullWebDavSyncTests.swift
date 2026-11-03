@@ -107,6 +107,26 @@ private actor SyncDAVFixture {
             return try seed(root, source: source)
         }
         guard roots.count == 2 else { throw TestFailure.fixture }
+        let catalogRoot = sandbox.appendingPathComponent("catalog-local")
+        let peerCatalogRoot = sandbox.appendingPathComponent("catalog-peer")
+        for root in [catalogRoot, peerCatalogRoot] {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        }
+        let catalog = try DesktopStore(directory: catalogRoot)
+        let peerCatalog = try DesktopStore(directory: peerCatalogRoot)
+        let paperID = "arxiv:2610.40738"
+        let row: [String: Any] = ["id": paperID, "title": "Local catalog title", "sourceKind": "arxiv",
+            "blogURL": "https://nanless.github.io/audio-paper-digest-blog/posts/catalog-paper/"]
+        var peerRow = row
+        peerRow["title"] = "Peer catalog title"
+        try catalog.rememberPaper(row)
+        try peerCatalog.rememberPaper(peerRow)
+        let peerPayload = try FullWebDavWorkspace.capture(directory: peerCatalogRoot)
+        let catalogResult = try FullWebDavWorkspace.merge(peerPayload, directory: catalogRoot, store: catalog)
+        let catalogPapers = catalog.snapshot()["personalPapers"] as? [String: [String: Any]]
+        guard catalogResult.conflicts == 0, catalogPapers?[paperID]?["title"] as? String == row["title"] as? String else {
+            throw TestFailure.fixture
+        }
         let dav = SyncDAVFixture()
         let pairs = try roots.map { root in try configuration(root, folder: "PaperDigest", account: "fixture", password: "fixture",
             transport: { try await dav.request($0, limit: $1) }) }

@@ -238,54 +238,118 @@ class CloudArchive(
             result.sortedWith(compareByDescending<Triple<Long, String, T>> { it.first }.thenBy { it.second }).map { it.third }
         }
     }
-    internal suspend fun personalDocuments(): Map<String, ByteArray> = operation {
-        val directory = "/dav/$folder/${PersonalWebDavSync.DIRECTORY}/"
-        val response = requestResponse("PROPFIND", directory, PROP,
-            mapOf("Depth" to "1", "Content-Type" to "application/xml; charset=utf-8"), setOf(207, 404), LISTING)
-        if (response.status == 404) return@operation emptyMap()
-        val members = listing(response.body)
-        require(members.any { it.path == directory && it.collection } && members.size <= 25)
-        var total = 0L
-        members.filter { it.path != directory }.associate { member ->
-            require(!member.collection && member.path.startsWith(directory))
-            val name = member.path.removePrefix(directory)
-            val id = name.removeSuffix(".json")
-            require(name == "$id.json" && PersonalWebDavSync.validDevice(id))
-            val bytes = request("GET", member.path, accepted = setOf(200), limit = PersonalWebDavSync.LIMIT)
-            total += bytes.size
-            require(total <= 32L * 1024 * 1024) { "云端同步资料超过读取上限" }
-            id to bytes
+    internal data class PersonalDocuments(val heads: Map<String, ByteArray>, val directories: Set<String>)
+
+    internal suspend fun personalDocuments(): PersonalDocuments = operation {
+        val legacyRoot = "/dav/$folder/${PersonalWebDavSync.DIRECTORY}/"
+        val revisionRoot = "/dav/$folder/${PersonalWebDavSync.REVISIONS_DIRECTORY}/"
+        val directories = mutableSetOf<String>()
+
+        suspend fun children(directory: String, maxCount: Int, allowMissing: Boolean = false): List<Member> {
+            val response = requestResponse("PROPFIND", directory, PROP,
+                mapOf("Depth" to "1", "Content-Type" to "application/xml; charset=utf-8"), setOf(207, 404), LISTING)
+            if (response.status == 404 && allowMissing) return emptyList()
+            if (response.status != 207) throw CloudFailure("incompleteListing")
+            val members = listing(response.body)
+            require(members.any { it == Member(directory, true) } && members.size <= maxCount + 1)
+            require(members.all { it.path.startsWith(directory) && '/' !in it.path.removePrefix(directory).removeSuffix("/") })
+            directories += directory
+            return members.filter { it.path != directory }
         }
+
+        val legacy = children(legacyRoot, 24, allowMissing = true).associate { member ->
+            val name = member.path.removePrefix(legacyRoot)
+            val owner = name.removeSuffix(".json")
+            require(!member.collection && name == "$owner.json" && PersonalWebDavSync.validDevice(owner))
+            owner to member.path
+        }
+        val immutable = children(revisionRoot, 24, allowMissing = true).associate { member ->
+            val owner = member.path.removePrefix(revisionRoot).removeSuffix("/")
+            require(member.collection && PersonalWebDavSync.validDevice(owner))
+            owner to member.path
+        }
+        val owners = legacy.keys + immutable.keys
+        require(owners.size <= 24) { "同步设备数量超过上限" }
+        if (directories.isNotEmpty()) directories += "/dav/$folder/"
+        var total = 0L
+        val heads = owners.sorted().associateWith { owner ->
+            val old = legacy[owner]?.let { request("GET", it, accepted = setOf(200), limit = PersonalWebDavSync.LIMIT) }
+            val oldVersion = old?.let {
+                require(!JSONObject(it.decodeToString(throwOnInvalidSequence = true)).has(PersonalWebDavSync.LEGACY_DIGEST))
+                PersonalWebDavSync.documentRevision(it, owner)
+            } ?: 0L
+            var next = old
+            immutable[owner]?.let { ownerDirectory ->
+                val buckets = children(ownerDirectory, PersonalWebDavSync.MAX_BUCKETS).map { member ->
+                    val label = member.path.removePrefix(ownerDirectory).removeSuffix("/")
+                    val index = label.toLongOrNull()
+                    require(member.collection && index != null && label == index.toString() &&
+                        index in 0 until PersonalWebDavSync.MAX_BUCKETS)
+                    index to member.path
+                }.sortedByDescending { it.first }
+                for ((offset, bucket) in buckets.withIndex()) {
+                    require(offset <= 4) { "云端同步版本目录不完整，已保留本机资料" }
+                    val (index, directory) = bucket
+                    val byRevision = mutableMapOf<Long, Pair<String, String>>()
+                    for (member in children(directory, PersonalWebDavSync.REVISIONS_PER_BUCKET)) {
+                        val name = member.path.removePrefix(directory)
+                        require(!member.collection && name.startsWith("$owner-") && name.endsWith(".json"))
+                        val parts = name.removePrefix("$owner-").removeSuffix(".json").split('-')
+                        val version = parts.firstOrNull()?.toLongOrNull()
+                        require(parts.size == 2 && version != null && version in 1..PersonalWebDavSync.MAX_REVISION &&
+                            parts[0] == version.toString() && PersonalWebDavSync.bucket(version) == index && BackupCodec.validSHA(parts[1]))
+                        require(byRevision.put(version, parts[1] to member.path) == null) {
+                            "同一设备的云端同步版本有不同原件，已保留本机资料"
+                        }
+                    }
+                    if (byRevision.isEmpty()) continue
+                    val latest = byRevision.keys.max()
+                    val (digest, path) = byRevision.getValue(latest)
+                    val bytes = request("GET", path, accepted = setOf(200), limit = PersonalWebDavSync.LIMIT)
+                    require(BackupCodec.hash(bytes) == digest && PersonalWebDavSync.documentRevision(bytes, owner) == latest) {
+                        "云端同步版本的内容与文件名不一致，已保留本机资料"
+                    }
+                    val legacyDigest = JSONObject(bytes.decodeToString(throwOnInvalidSequence = true)).opt(PersonalWebDavSync.LEGACY_DIGEST)
+                    require(latest > oldVersion && legacyDigest == (old?.let(BackupCodec::hash) ?: JSONObject.NULL)) {
+                        "旧客户端的云端同步原件已变化，已保留本机和云端资料"
+                    }
+                    next = bytes
+                    break
+                }
+            }
+            next?.also { bytes ->
+                total += bytes.size
+                require(total <= 32L * 1024 * 1024) { "云端同步资料超过读取上限" }
+            }
+        }.mapNotNull { (owner, bytes) -> bytes?.let { owner to it } }.toMap()
+        PersonalDocuments(heads, directories)
     }
 
-    internal suspend fun writePersonalDocument(bytes: ByteArray, expected: ByteArray?, directoryExists: Boolean) = operation {
-        require(bytes.size in 1..PersonalWebDavSync.LIMIT)
-        val directory = "/dav/$folder/${PersonalWebDavSync.DIRECTORY}/"
-        if (!directoryExists) {
-            for (path in listOf("/dav/$folder/", directory)) {
-                request("MKCOL", path, accepted = setOf(201, 405))
-                requireCollection(request("PROPFIND", path, PROP,
-                    mapOf("Depth" to "0", "Content-Type" to "application/xml; charset=utf-8"), setOf(207), LISTING), path)
-            }
+    internal suspend fun writePersonalDocument(bytes: ByteArray, observed: PersonalDocuments) = operation {
+        val revision = PersonalWebDavSync.documentRevision(bytes, destinationID)
+        val previous = observed.heads[destinationID]?.let { PersonalWebDavSync.documentRevision(it, destinationID) } ?: 0L
+        val digest = JSONObject(bytes.decodeToString(throwOnInvalidSequence = true)).get(PersonalWebDavSync.LEGACY_DIGEST)
+        val expectedDigest = observed.heads[destinationID]?.let {
+            JSONObject(it.decodeToString(throwOnInvalidSequence = true)).opt(PersonalWebDavSync.LEGACY_DIGEST) ?: BackupCodec.hash(it)
+        } ?: JSONObject.NULL
+        require(revision == previous + 1 && digest == expectedDigest) { "同步版本已变化，请重新同步" }
+        val folderPath = "/dav/$folder/"
+        val revisionRoot = "$folderPath${PersonalWebDavSync.REVISIONS_DIRECTORY}/"
+        val owner = "$revisionRoot$destinationID/"
+        val bucketIndex = PersonalWebDavSync.bucket(revision)
+        require(bucketIndex < PersonalWebDavSync.MAX_BUCKETS) { "此设备的云端同步版本超过目录上限，已保留本机资料" }
+        val bucket = "$owner$bucketIndex/"
+        for (directory in listOf(folderPath, revisionRoot, owner, bucket).filterNot(observed.directories::contains)) {
+            request("MKCOL", directory, accepted = setOf(201, 405))
+            requireCollection(request("PROPFIND", directory, PROP,
+                mapOf("Depth" to "0", "Content-Type" to "application/xml; charset=utf-8"), setOf(207), LISTING), directory)
         }
-        val path = "$directory$destinationID.json"
-        val original = requestResponse("GET", path, accepted = setOf(200, 404), limit = PersonalWebDavSync.LIMIT)
-        val changed = "此设备的云端同步记录已变化，请重新同步"
-        require(if (expected == null) original.status == 404 else original.status == 200 && original.body.contentEquals(expected)) { changed }
-        val headers = mutableMapOf("Content-Type" to "application/json")
-        if (original.status == 404) {
-            headers["If-None-Match"] = "*"
-        } else {
-            val etag = original.headers.entries.firstOrNull { it.key.equals("ETag", true) }?.value
-            require(etag != null && etag.length in 2..1024 && etag.first() == '"' && etag.last() == '"' &&
-                etag.substring(1, etag.lastIndex).all { it.code in 0x21..0x7e && it != '"' }) {
-                "WebDAV 服务未提供可安全更新的版本标记，本机资料已保留"
-            }
-            headers["If-Match"] = etag
-        }
-        val written = requestResponse("PUT", path, bytes, headers, setOf(200, 201, 204, 412))
-        require(written.status != 412) { changed }
-        if (!request("GET", path, accepted = setOf(200), limit = bytes.size).contentEquals(bytes)) throw CloudFailure("integrity")
+        val path = "$bucket$destinationID-$revision-${BackupCodec.hash(bytes)}.json"
+        val existing = optionalGet(path, PersonalWebDavSync.LIMIT)
+        if (existing == null) {
+            request("PUT", path, bytes, mapOf("If-None-Match" to "*", "Content-Type" to "application/json"), setOf(200, 201, 204, 412))
+            if (!request("GET", path, accepted = setOf(200), limit = PersonalWebDavSync.LIMIT).contentEquals(bytes)) throw CloudFailure("integrity")
+        } else if (!existing.contentEquals(bytes)) throw CloudFailure("integrity")
     }
 
     suspend fun download(reference: CloudReference, target: File, expected: CloudSnapshotIdentity? = null): CloudManifest = operation {

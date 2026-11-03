@@ -296,9 +296,9 @@ struct CloudRestoreSelection {
                 return try await performCloudJob(command) {
                     let before = self.store.snapshot()
                     let remote = try await service.personalDocuments()
-                    let plan = try PersonalWebDavSync.plan(local: before, device: device, remote: remote)
+                    let plan = try PersonalWebDavSync.plan(local: before, device: device, remote: remote.heads)
                     if let bytes = plan.upload {
-                        try await service.writePersonalDocument(bytes, expected: remote[device], directoryExists: !remote.isEmpty)
+                        try await service.writePersonalDocument(bytes, observed: remote)
                     }
                     try Task.checkCancellation()
                     try await self.flushEdits(syncCommit: true)

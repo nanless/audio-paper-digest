@@ -4,7 +4,7 @@
 
 论文速递工作台是“论文速递”的 Android 原生客户端。它读取网站已发布的论文目录、图文导读、日更与会议汇总，支持原始 PDF、笔记、离线阅读、个人研究、Zotero 归档和坚果云备份。阅读和同步已有文章不会重新调用模型。
 
-此源码版本为 **1.4.0（构建号 16）**，公开安装包状态以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。支持 Android 9 / API 28 及以上系统，包含 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64` 四种架构。应用标识仍为 `com.nanless.paperdigest`，正式签名沿用旧版。安装、测试范围和发行状态见[验证说明](<../../docs/android-validation.md>)；全站分类、手机和宽窗口界面的本轮改进见[审改记录](../../docs/workbench-1.3.0-review.md)。
+此源码版本为 **1.4.1（构建号 17）**，公开安装包状态以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。支持 Android 9 / API 28 及以上系统，包含 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64` 四种架构。应用标识仍为 `com.nanless.paperdigest`，正式签名沿用旧版。安装、测试范围和发行状态见[验证说明](<../../docs/android-validation.md>)；全站分类、手机和宽窗口界面的本轮改进见[审改记录](../../docs/workbench-1.3.0-review.md)。
 
 ## 开始使用
 

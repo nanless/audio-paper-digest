@@ -58,13 +58,12 @@ public actor CloudArchiveService {
     }
     public enum CloudError: Error, LocalizedError, Sendable, Equatable {
         case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing, localOnlySecret, selectionChanged
-        case personalDocumentChanged, personalDocumentUnsafe
+        case personalDocumentChanged
         case credentialsUnavailable, authentication, forbidden, transport, redirect, oversizedResponse, busy, checkpointStore
         case httpStatus(Int), throttled(Date)
         public var errorDescription: String? {
             switch self {
             case .personalDocumentChanged: return "此设备的云端同步记录已变化，请重新同步"
-            case .personalDocumentUnsafe: return "WebDAV 服务未提供可安全更新的版本标记，本机资料已保留"
             case .selectionChanged: return "云端版本清单已变化，请重新读取该月份后选择要恢复的版本"
             case .invalidConfiguration: return "坚果云配置无效；请使用单级英文目录和应用专用密码"
             case .invalidBackup: return "研究备份无效或超过完整备份上限（原资料512MiB、编码750MiB）"
@@ -255,57 +254,128 @@ public actor CloudArchiveService {
         return try CloudDAVListing.months(result.data, path: scopePath)
     }
 
-    func personalDocuments() async throws -> [String: Data] {
-        try begin(); defer { end() }
-        let path = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
-        let response = try await request("PROPFIND", path: path, body: Self.propfind,
-            headers: ["Depth":"1", "Content-Type":"application/xml; charset=utf-8"],
-            limit: Self.listingLimit, accepted: [207,404])
-        if response.response.statusCode == 404 { return [:] }
-        let devices = try CloudDAVListing.personalDevices(response.data, path: path)
-        var result: [String: Data] = [:]
-        var total = 0
-        for id in devices {
-            let bytes = try await request("GET", path: path + id + ".json", limit: PersonalWebDavSync.limit, accepted: [200]).data
-            total += bytes.count
-            guard total <= 32 * 1024 * 1024 else { throw CloudError.oversizedResponse }
-            result[id] = bytes
-        }
-        return result
+    struct PersonalDocuments: Sendable {
+        let heads: [String: Data]
+        let revisionRootExists: Bool
+        let buckets: [String: Set<Int>]
     }
 
-    func writePersonalDocument(_ bytes: Data, expected: Data?, directoryExists: Bool) async throws {
+    func personalDocuments() async throws -> PersonalDocuments {
         try begin(); defer { end() }
-        let directory = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
-        guard (1...PersonalWebDavSync.limit).contains(bytes.count) else { throw CloudError.oversizedResponse }
-        if !directoryExists {
+        let legacyPath = "/dav/\(folder)/\(PersonalWebDavSync.directory)/"
+        let revisionPath = "/dav/\(folder)/\(PersonalWebDavSync.revisionDirectory)/"
+        let legacy = try await personalListing(legacyPath, allowMissing: true)
+        let listing = try await personalListing(revisionPath, allowMissing: true)
+        let devices = try legacy.map { try CloudDAVListing.personalDevices($0, path: legacyPath) } ?? []
+        let revised = try listing.map { try CloudDAVListing.personalCollections($0, path: revisionPath) } ?? []
+        guard revised.allSatisfy(PersonalWebDavSync.validDevice) else { throw CloudError.incompleteListing }
+        let owners = Set(devices).union(revised)
+        guard owners.count <= PersonalWebDavSync.deviceLimit else { throw CloudError.incompleteListing }
+        let legacyDevices = Set(devices), revisedDevices = Set(revised)
+        var result: [String: Data] = [:]
+        var buckets: [String: Set<Int>] = [:]
+        var total = 0
+        for owner in owners.sorted() {
+            var head: Data?
+            var number = 0
+            if legacyDevices.contains(owner) {
+                let bytes = try await request("GET", path: legacyPath + owner + ".json",
+                    limit: PersonalWebDavSync.limit, accepted: [200]).data
+                let header = try PersonalWebDavSync.documentHeader(bytes, device: owner)
+                guard header.legacySHA256 == nil else { throw CloudError.integrity }
+                number = header.revision
+                head = bytes
+            }
+            if revisedDevices.contains(owner) {
+                let path = revisionPath + owner + "/"
+                guard let data = try await personalListing(path) else { throw CloudError.incompleteListing }
+                let names = try CloudDAVListing.personalCollections(data, path: path)
+                let numbers = try names.map { name -> Int in
+                    guard let bucket = Int(name), (0..<PersonalWebDavSync.bucketLimit).contains(bucket),
+                          String(bucket) == name else { throw CloudError.incompleteListing }
+                    return bucket
+                }
+                buckets[owner] = Set(numbers)
+                for (index, bucket) in numbers.sorted(by: >).enumerated() {
+                    guard index <= 4 else { throw CloudError.incompleteListing }
+                    let path = path + String(bucket) + "/"
+                    guard let data = try await personalListing(path) else { throw CloudError.incompleteListing }
+                    let history = try CloudDAVListing.personalRevisions(data, path: path, owner: owner, bucket: bucket)
+                    guard let latest = history.max(by: { $0.number < $1.number }) else { continue }
+                    let bytes = try await request("GET", path: path + latest.filename,
+                        limit: PersonalWebDavSync.limit, accepted: [200]).data
+                    let header = try PersonalWebDavSync.documentHeader(bytes, device: owner)
+                    guard Self.hash(bytes) == latest.digest, header.revision == latest.number else { throw CloudError.integrity }
+                    if let legacy = head {
+                        guard latest.number > number, header.legacySHA256 as? String == Self.hash(legacy) else {
+                            throw CloudError.personalDocumentChanged
+                        }
+                    } else {
+                        guard header.legacySHA256 is NSNull else { throw CloudError.personalDocumentChanged }
+                    }
+                    head = bytes
+                    break
+                }
+            }
+            guard let head else { continue } // A first upload may stop after creating its directory.
+            total += head.count
+            guard total <= 32 * 1024 * 1024 else { throw CloudError.oversizedResponse }
+            result[owner] = head
+        }
+        return PersonalDocuments(heads: result, revisionRootExists: listing != nil, buckets: buckets)
+    }
+
+    private func personalListing(_ path: String, allowMissing: Bool = false) async throws -> Data? {
+        let response = try await request("PROPFIND", path: path, body: Self.propfind,
+            headers: ["Depth": "1", "Content-Type": "application/xml; charset=utf-8"], limit: Self.listingLimit,
+            accepted: allowMissing ? [207,404] : [207])
+        return response.response.statusCode == 404 ? nil : response.data
+    }
+
+    func writePersonalDocument(_ bytes: Data, observed: PersonalDocuments) async throws {
+        try begin(); defer { end() }
+        let directory = "/dav/\(folder)/\(PersonalWebDavSync.revisionDirectory)/"
+        let owner = destinationID.uuidString.lowercased()
+        let revision = try PersonalWebDavSync.RemoteRevision(device: owner, bytes: bytes)
+        let header = try PersonalWebDavSync.documentHeader(bytes, device: owner)
+        let expectedRevision: Int
+        let expectedAnchor: String?
+        if let current = observed.heads[owner] {
+            let prior = try PersonalWebDavSync.documentHeader(current, device: owner)
+            expectedRevision = prior.revision + 1
+            expectedAnchor = prior.legacySHA256 == nil ? Self.hash(current) : prior.legacySHA256 as? String
+        } else {
+            expectedRevision = 1
+            expectedAnchor = nil
+        }
+        guard revision.bucket < PersonalWebDavSync.bucketLimit, revision.number == expectedRevision,
+              expectedAnchor.map({ header.legacySHA256 as? String == $0 }) ?? (header.legacySHA256 is NSNull)
+        else { throw CloudError.personalDocumentChanged }
+        if !observed.revisionRootExists {
             try await ensureCollection("/dav/\(folder)/")
             try await ensureCollection(directory)
         }
-        let path = directory + destinationID.uuidString.lowercased() + ".json"
-        let current = try await request("GET", path: path, limit: PersonalWebDavSync.limit, accepted: [200,404])
-        let missing = current.response.statusCode == 404
-        guard (missing ? nil : current.data) == expected else { throw CloudError.personalDocumentChanged }
-        var headers = ["Content-Type": "application/json"]
-        if missing {
-            headers["If-None-Match"] = "*"
+        let ownerPath = directory + owner + "/"
+        let bucketPath = ownerPath + String(revision.bucket) + "/"
+        if observed.buckets[owner] == nil { try await ensureCollection(ownerPath) }
+        if observed.buckets[owner]?.contains(revision.bucket) != true { try await ensureCollection(bucketPath) }
+        let path = bucketPath + revision.filename
+        let existing = try await request("GET", path: path, limit: PersonalWebDavSync.limit, accepted: [200,404])
+        if existing.response.statusCode == 200 {
+            guard existing.data == bytes else { throw CloudError.integrity }
         } else {
-            guard let tag = current.response.value(forHTTPHeaderField: "ETag"),
-                  Self.strongETag(tag) else { throw CloudError.personalDocumentUnsafe }
-            headers["If-Match"] = tag
+            // The content-addressed name never aliases another edit, including
+            // when a server ignores the conditional header.
+            _ = try await request("PUT", path: path, body: bytes,
+                headers: ["Content-Type": "application/json", "If-None-Match": "*"],
+                limit: 64 * 1024, accepted: [200,201,204,412])
+            guard try await request("GET", path: path, limit: bytes.count, accepted: [200]).data == bytes else {
+                throw CloudError.integrity
+            }
         }
-        let written = try await request("PUT", path: path, body: bytes, headers: headers,
-                                        limit: 64 * 1024, accepted: [200,201,204,412])
-        guard written.response.statusCode != 412 else { throw CloudError.personalDocumentChanged }
-        guard try await request("GET", path: path, limit: bytes.count, accepted: [200]).data == bytes else {
-            throw CloudError.integrity
-        }
-    }
-
-    private static func strongETag(_ value: String) -> Bool {
-        let bytes = value.utf8
-        guard (2...1024).contains(bytes.count), bytes.first == 0x22, bytes.last == 0x22 else { return false }
-        return bytes.dropFirst().dropLast().allSatisfy { $0 == 0x21 || (0x23...0x7E).contains($0) }
+        guard let listing = try await personalListing(bucketPath) else { throw CloudError.incompleteListing }
+        let revisions = try CloudDAVListing.personalRevisions(listing, path: bucketPath, owner: owner, bucket: revision.bucket)
+        guard revisions.contains(where: { $0.filename == revision.filename }) else { throw CloudError.incompleteListing }
     }
 
     public func download(reference: SnapshotReference) async throws -> Data {
@@ -624,6 +694,51 @@ private final class CloudDAVListing: NSObject, XMLParserDelegate {
         }
         guard root else { throw CloudArchiveService.CloudError.incompleteListing }
         return ids.sorted()
+    }
+    static func personalCollections(_ data: Data, path: String) throws -> [String] {
+        let members = try read(data)
+        var root = false, names = Set<String>()
+        for member in members {
+            let raw = try collectionPath(checkedPath(member.href))
+            guard member.success, member.collection, raw.hasPrefix(path) else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+            if raw == path {
+                guard !root else { throw CloudArchiveService.CloudError.incompleteListing }
+                root = true
+                continue
+            }
+            let name = String(raw.dropFirst(path.count).dropLast())
+            guard !name.isEmpty, !name.contains("/"), names.insert(name).inserted else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+        }
+        guard root else { throw CloudArchiveService.CloudError.incompleteListing }
+        return names.sorted()
+    }
+    static func personalRevisions(_ data: Data, path: String, owner: String, bucket: Int) throws -> [PersonalWebDavSync.RemoteRevision] {
+        let members = try read(data)
+        var root = false
+        var revisions: [PersonalWebDavSync.RemoteRevision] = []
+        var slots = Set<Int>()
+        for member in members {
+            let raw = try checkedPath(member.href)
+            guard member.success else { throw CloudArchiveService.CloudError.incompleteListing }
+            if member.collection && collectionPath(raw) == path {
+                guard !root else { throw CloudArchiveService.CloudError.incompleteListing }
+                root = true
+                continue
+            }
+            guard !member.collection, raw.hasPrefix(path),
+                  let revision = PersonalWebDavSync.RemoteRevision(filename: String(raw.dropFirst(path.count))),
+                  revision.device == owner, revision.bucket == bucket else {
+                throw CloudArchiveService.CloudError.incompleteListing
+            }
+            guard slots.insert(revision.number).inserted else { throw CloudArchiveService.CloudError.personalDocumentChanged }
+            revisions.append(revision)
+        }
+        guard root else { throw CloudArchiveService.CloudError.incompleteListing }
+        return revisions
     }
     static func parse(_ data: Data, path: String, month: String) throws -> [CloudArchiveService.SnapshotReference] {
         let members = try read(data)

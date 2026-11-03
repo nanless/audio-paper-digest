@@ -67,6 +67,16 @@ import Foundation
             files: (captured.files.filter { $0.path != "personal.json" } + [personalEntry]).sorted { $0.path < $1.path })
     }
 
+    private static func publishedCatalogRecord(_ record: Object, id: String) -> Bool {
+        guard !id.hasPrefix("local:"), record["sourceKind"] as? String != "local",
+              let value = record["blogURL"] as? String, let url = URLComponents(string: value),
+              url.scheme == "https", url.host?.lowercased() == "nanless.github.io", url.port == nil,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+              url.path.hasPrefix("/audio-paper-digest-blog/"), !url.path.contains("\\"),
+              !url.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return false }
+        return true
+    }
+
     static func merge(_ payload: BackupCodec.Payload, directory: URL, store: DesktopStore, retainedFolder: URL? = nil, payloadSHA: String? = nil) throws -> Result {
         try BackupCodec.validate(payload)
         try BackupCodec.requirePortable(payload)
@@ -148,6 +158,9 @@ import Foundation
         var current = store.snapshot()
         var papers = current["personalPapers"] as? [String: Object] ?? [:]
         for (id, record) in remote["personalPapers"] as? [String: Object] ?? [:] {
+            // Website display metadata is already owned by the site catalog.
+            // The verified snapshot keeps the peer's bytes without replacing a local catalog row.
+            if publishedCatalogRecord(record, id: id) { continue }
             var record = record
             if record["sourceKind"] as? String == "local" {
                 guard let sha = record["pdfSHA"] as? String, PrivateStoragePaths.validSHA(sha),
