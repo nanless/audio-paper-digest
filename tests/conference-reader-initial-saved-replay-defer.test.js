@@ -22,7 +22,7 @@ function fixture(t,changes={}) {
  const loadConferenceAnalysis=({executionId})=>{const directory=path.join(analysisRoot,executionId),a=readJsonRecord(path.join(directory,'analysis.json')),r=readJsonRecord(path.join(directory,'run.json')),s=readJsonRecord(path.join(directory,'source.json'));return {directory,analysis:a.value,run:r.value,source:s.value,analysisFileSha256:a.sha256,runFileSha256:r.sha256,sourceFileSha256:s.sha256}};
  const parent=loadConferenceAnalysis({executionId:parentId});
  write(path.join(directory,'analysis.json'),{status:'partial',generation:1,papers:[paper],readerRevisionProgress:{attempts:1,failures:[{code:'CONTENT'}]}});write(path.join(directory,'run.json'),{status:'source_ready',paperId:'p',executionId:childId});fs.copyFileSync(path.join(parentDirectory,'source.json'),path.join(directory,'source.json'));
- const revision={contract:'ordinary',mode:'reader-only',maxAttempts:3,readerReviewMaintenance:feedback};write(path.join(directory,'reader-revision.json'),revision);
+ const revision={contract:'conference-reader-source-revision-v1',version:1,mode:'reader-only',maxAttempts:3,readerReviewMaintenance:feedback};write(path.join(directory,'reader-revision.json'),revision);
  const loadConferenceReaderRevision=()=>({...loadConferenceAnalysis({executionId:childId}),revision,readerReview:{locator:feedback},parent:loadConferenceAnalysis({executionId:parentId})});
  const member={paperId:'p',executionId:childId,parentExecutionId:parentId,parentCAS:{analysisFileSha256:parent.analysisFileSha256,runFileSha256:parent.runFileSha256,sourceFileSha256:parent.sourceFileSha256}};
  const batch={m:{members:[member],manifestSha256:'manifest'},analysisRoot,p:{state:'state',progress:'progress',adoption:'none'}};
@@ -47,9 +47,9 @@ function fixture(t,changes={}) {
   if(id==='node:path')return path;
   throw Error('unexpected require '+id);
  };
- const g={module:{exports:{}},require:requireFake,fs,path,Map,Set,Object,Math,Date,structuredClone,setImmediate,stable,analysisContext:context,stableHash:stable,sha256:sha,jsonBytes:v=>Buffer.from(JSON.stringify(v)),clone:structuredClone,
+ const g={codec:require('../scripts/lib/protocol-codec'),module:{exports:{}},require:requireFake,fs,path,Map,Set,Object,Math,Date,structuredClone,setImmediate,stable,analysisContext:context,stableHash:stable,sha256:sha,jsonBytes:v=>Buffer.from(JSON.stringify(v)),clone:structuredClone,
   readJsonRecord,loadConferenceAnalysis,loadConferenceReaderRevision,verifyPlanAuthority,
-  prepareConferenceAnalysis:()=>events.push('prepare-existing'),readerRevisionExecutionId:()=>childId,conferencePaperLockOptions:()=>({}),
+  prepareConferenceAnalysis:()=>events.push('prepare-existing'),readerRevisionExecutionId:()=>childId,resolveReaderRevisionExecutionId:()=>childId,conferencePaperLockOptions:()=>({}),
   replaceJson:(file,value,expected)=>{assert.equal(readJsonRecord(file).sha256,expected);events.push('CAS-save');write(file,value)},
   sealCompletedRun:()=>{events.push('seal');const f=path.join(directory,'run.json'),v=readJsonRecord(f).value;write(f,{...v,status:'complete'});},
   effectiveMember:(_b,m)=>m,stageMaintenanceSavedMembers:async()=>new Set(),progressFor:()=>({value:progress,sha256:'progress-sha'}),check:(v,m)=>{if(!v)throw Error(m)},

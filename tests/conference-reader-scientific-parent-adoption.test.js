@@ -4,12 +4,12 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const src=fs.readFileSync(path.join(__dirname,'../scripts/lib/conference-reader-review-maintenance.js'),'utf8');
 const code=src.slice(src.indexOf('function scientificParentReplayRequired('),src.indexOf('function readScientificParentReplay('));
 function fixture(){
- const loaded={revision:{contract:'ordinary'},run:{executionId:'child'},analysisFileSha256:'initial-analysis',
+ const loaded={revision:{contract:'conference-reader-source-revision-v1',version:1},run:{executionId:'child'},analysisFileSha256:'initial-analysis',
   parent:{run:{executionId:'parent'},analysis:{papers:[{local:true}]}}};
  const batch={m:{batchId:'batch',manifestSha256:'manifest'}},member={paperId:'paper'},scientificParentReplayHandles=new WeakMap();
  const actual={value:{items:{paper:{analysisRunId:'parent'}}}},controls={stateChecks:0,scopes:0,childIdentityReads:0};
  const api=vm.runInNewContext(code+'\n({scientificParentReplayRequired,withScientificParentReplay})',{
-  scientificParentReplayHandles,check:(value,message)=>assert.ok(value,message),adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),
+  codec:require("../scripts/lib/protocol-codec"),sourceCorrectionFormat:require("../scripts/lib/conference-source-correction-format"),scientificParentReplayHandles,check:(value,message)=>assert.ok(value,message),adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),
   assertCurrentBatch:()=>{controls.stateChecks++;return actual},require:()=>({CORRECTION:'conference-reader-operator-correction-v1',isSourceCorrectionRecord:paper=>paper.local===true,
    withVerifiedMaintenanceScientificParent:(handle,callback)=>{assert.ok(scientificParentReplayHandles.get(handle));controls.scopes++;controls.childIdentityReads++;return callback()}})});
  return{...api,loaded,batch,member,actual,controls};
