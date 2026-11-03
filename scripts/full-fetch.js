@@ -22,7 +22,7 @@ const { DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 }
 const { fetchDailyArxivCategory, hasVerifiedCategoryPrefix } = require('./lib/daily-arxiv-prefix-source');
 const { isDailyXmlOperationalError } = require('./lib/daily-xml-file-stdin');
 const { KEYWORD_PREFILTER_PROFILE } = require('./lib/keyword-prefilter.js');
-const { FILTER_SCOPE_EVIDENCE_VERSION, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
+const { FILTER_SCOPE_CONFIGURATION_IDENTITY, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
     createHostTaskScheduler,
     getAdaptiveHostCooldownMs
@@ -135,7 +135,7 @@ function getFilterConfigFingerprint(filterPromptHash = getFilterPromptHash()) {
         decisionContractProfile: Config.FILTER_CONFIG.decisionContractProfile,
         keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
         keywordPrefilterProfile: KEYWORD_PREFILTER_PROFILE,
-        scopeEvidenceVersion: FILTER_SCOPE_EVIDENCE_VERSION
+        scopeEvidenceVersion: FILTER_SCOPE_CONFIGURATION_IDENTITY
     });
 }
 

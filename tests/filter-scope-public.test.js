@@ -93,7 +93,7 @@ test('scope windows preserve complete mathematical Unicode code points and bind 
     const evidence = await scope.captureFilterScopeEvidence(candidate, batchDate, officialSources({ text: 0, pdf: 0 }, text));
     assert.equal(evidence.text.isWellFormed(), true);
     assert.ok(evidence.text.length <= scope.MAX_SCOPE_CHARACTERS);
-    assert.equal(evidence.selectionVersion, 'official-modality-scope-codepoints-v2');
+    assert.equal(evidence.selectionProfile, 'codepoint-safe-excerpt');
     assert.equal(evidence.selectedTextSha256, crypto.createHash('sha256').update(evidence.text).digest('hex'));
     scope.assertFilterScopeEvidence(candidate, evidence, batchDate);
     const corrupt = { ...evidence, text: evidence.text + '\ud835' };
@@ -105,13 +105,37 @@ test('unaffected scope selection retains its input version and safely samples va
     const candidate = paper('2610.90092');
     const evidence = await scope.captureFilterScopeEvidence(candidate, batchDate,
         officialSources({ text: 0, pdf: 0 }, 'audio and speech '.repeat(11000)));
-    assert.equal(evidence.selectionVersion, 'official-modality-scope-v1');
+    assert.equal(evidence.selectionProfile, 'unchanged-excerpt');
     for (let prefix = 0; prefix < 12; prefix++) {
         const text = 'x'.repeat(prefix) + '𝐱𝛽 audio speech '.repeat(12000);
         const selected = scope.selectScopeText(text);
         assert.equal(selected.isWellFormed(), true, `prefix ${prefix}`);
         assert.ok(selected.length <= scope.MAX_SCOPE_CHARACTERS);
     }
+});
+test('旧范围证明和已有封存来源可按原字节复用', async t => {
+    fixture(t);
+    const candidate = paper('2610.90093');
+    const counts = { text: 0, pdf: 0 };
+    const overrides = officialSources(counts);
+    const current = await scope.captureFilterScopeEvidence(candidate, batchDate, overrides);
+    const root = Config.FILES.freshArxivFetchedSourcesDir;
+    const previousRoot = path.join(root, 'filter-scope-v1');
+    fs.renameSync(path.join(root, 'filter-scope'), previousRoot);
+    const originalRoot = path.join(previousRoot, batchDate, path.basename(current.rootDir));
+    const { schemaFingerprint, selectionProfile, ...fields } = current;
+    const original = { ...fields, contract: 'official-modality-scope-v1', rootDir: originalRoot,
+        selectionVersion: 'official-modality-scope-v1' };
+    const before = treeSnapshot(previousRoot);
+    assert.equal(scope.assertFilterScopeEvidence(candidate, original, batchDate), original);
+    assert.throws(() => scope.assertFilterScopeEvidence(candidate, { ...original, schemaFingerprint }, batchDate), /来源证明/);
+    assert.throws(() => scope.assertFilterScopeEvidence(candidate, { ...original, selectionVersion: 'wrong' }, batchDate), /来源四文件/);
+    const reused = await scope.captureFilterScopeEvidence(candidate, batchDate, overrides);
+    assert.equal(reused.rootDir, originalRoot);
+    assert.equal(reused.selectionProfile, selectionProfile);
+    assert.equal(reused.schemaFingerprint, schemaFingerprint);
+    assert.deepEqual(counts, { text: 1, pdf: 1 });
+    assert.deepEqual(treeSnapshot(previousRoot), before);
 });
 function options(overrides, decisionFn, initialDecisions) {
     return { batchSize: 2, delayBetweenBatches: 0, decisionMetadata: { batchDate, filterModel: 'local-test-model', filterPromptHash: require('../scripts/full-fetch.js').getFilterPromptHash() },

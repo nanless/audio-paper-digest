@@ -141,6 +141,40 @@
           }
         }
       ]
+    },
+    {
+      "name": "official-modality-scope",
+      "currentVariant": "unicode-safe-official-excerpt",
+      "currentSchema": {
+        "source": [
+          "candidateInputSha256",
+          "rootDir",
+          "arxivId",
+          "generation",
+          "sourceManifestSha256",
+          "textSha256",
+          "pdfSha256",
+          "runtimeSha256",
+          "officialUrl",
+          "source"
+        ],
+        "excerpt": [
+          "batchDate",
+          "text",
+          "selectedTextSha256",
+          "selectionProfile"
+        ],
+        "selectionProfiles": [
+          "unchanged-excerpt",
+          "codepoint-safe-excerpt"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "official-modality-scope-v1",
+          "variant": "unicode-safe-official-excerpt"
+        }
+      ]
     }
   ]
 }

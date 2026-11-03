@@ -2,7 +2,7 @@
 
 历史更新与日更、会议共用386项九维词表和多级路径展示。文章只列实际所选概念及祖先导航，祖先不写入直接标签，总目录保留完整。`history:publication` 在规划、生成、审查、激活和推送前核对站点双份词表目录及原快照；缺少本批SHA时先完成受控同步，不能让旧来源记录被重签或新标签被静默隐藏。详见[统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
 
-`history:publication` 发布当前[全历史重写流程](history-rewrite.md)生成的页面。它读取 `historical-direct-rewrite-plan-v5`、对应执行记录、`historical-direct-aggregate-projection-v3`、完整单篇暂存页和 `historical-direct-aggregate-v2` 汇总，逐项核对实际文件。它不读取日更正式分析，不生成日更 schema-v3 凭证，旧私有发布文件仅供兼容核验，不能作为当前来源证明。
+`history:publication` 发布[全历史重写流程](history-rewrite.md)生成的页面。程序读取冻结的重写计划、对应执行记录、汇总范围证明、完整单篇暂存页和汇总，逐项核对保存的文件。历史和日更各有独立的输入与发布凭证。读到已经签发的旧记录时，程序按该记录的原格式复验。
 
 全历史发布在当前工作区进行，发布前停止其他日更、会议和历史发布任务，同步代码与博客最新远端 `main`，按 [AGENTS.md](../AGENTS.md) 核对角色、基线和任务范围。入口已经存在，不表示某次历史现场已完成重写或发布。
 
@@ -60,14 +60,14 @@ npm run history:publication -- plan --apply \
   --publication-id UUID \
   --plan-file /absolute/path/direct-plan.json \
   --registry-file /absolute/path/direct-registry.json \
-  --projection-file /absolute/path/direct-aggregate-projection-v3.json \
+  --projection-file /absolute/path/direct-aggregate-projection.json \
   --visual-disposition /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
 
 npm run history:publication -- generate --apply \
   --publication-id UUID \
   --plan-file /absolute/path/direct-plan.json \
   --registry-file /absolute/path/direct-registry.json \
-  --projection-file /absolute/path/direct-aggregate-projection-v3.json \
+  --projection-file /absolute/path/direct-aggregate-projection.json \
   --visual-disposition /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
 
 npm run history:publication -- review --apply --publication-id UUID
@@ -85,9 +85,11 @@ npm run history:publication -- status --publication-id UUID
 
 正常 Reader 若保存 `authenticatedPdfTableEvidence`，生成与发布须通过共用的只读来源桥重放原 PDF、原表引文和行列单位证明。历史的 arXiv 与保留会议 PDF 都使用本次真实直改来源身份，不伪装日更封存目录或官方会议执行。来源文件、快照、稿件或表绑定变化会使原证明失效；不从页面提交的 PDF 路径或布尔声明授予能力，详见[表绑定数据协议](data-format.md)。
 
-历史审查生成独立的 `historical-semantic-multimodal-v1` 凭证。模型审查前，程序先核对逐文件 SHA、front matter、标签协议、链接协议及特殊来源的非会议终稿披露；之后执行真实 Hugo 构建检查，再由独立 Python 协调器通过发布公共模型接口审查逐页文本分块及存在图片时的图文关系。它不能复用或冒充日更 schema-v3 凭证。
+历史审查生成独立的图文审查凭证，使用稳定名称 `historical-semantic-multimodal`。模型审查前，程序先核对逐文件 SHA、front matter、标签协议、链接协议及特殊来源的非会议终稿披露；之后执行真实 Hugo 构建检查，再由独立 Python 协调器通过发布公共模型接口审查逐页文本分块及存在图片时的图文关系。审查结果只适用于本次历史发布。
 
 `PD_HISTORY_REVIEW_CONCURRENCY` 默认 5，范围 1–5。历史 Python 审查只保留一个不超过并发数的活动页面窗口，读完本轮已结束结果后再补新页；普通内容拒稿继续其余页面，最后汇总为 blocked，不能签通过凭证。结构化 `scope=run` 错误先保存失败记录，再抛出异常并停止补新页，等待已经开始的页面结束。历史、日更和会议共享普通拒稿保留审计、运行级故障停止新派发的原则，具体异常分类由各发布适配器核验。
+
+新写的发布计划、生成清单、审查记录、安装记录和推送回执使用稳定名称和结构指纹。读取已有记录时，程序按它原来的格式重新计算文件摘要。如果本次主动重审需要用新格式替换旧凭证，程序先按旧文件的 SHA-256 保存一份原件，再核对它没有变化，最后才替换工作文件。
 
 每个通过的分块和页面保存可恢复的检查点。失败尝试（`attempt`）完整保留，不作为通过记录。每次运行中，每个实际派发的审查单元最多调用一次审查器，请求层仍保留自己的重试限制。
 

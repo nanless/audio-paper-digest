@@ -57,7 +57,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 仅命中泛多模态词、未明确声音模态的候选会交给模型判断，并在任何付费筛选请求前取得全部这类候选的官方材料；取得或核验失败时停止，已保存的完整材料可核验后复用。摘要达到80字只满足本地预筛的长度条件，不证明它列全了论文模态。人工流程不因此新增联网。`filterScopeEvidence` 保存四个来源文件的核验信息、选取的实际原文和内容 SHA；这份证据也进入决定的输入 SHA。恢复和数据校验会重新读取核验，不能只信保存的 SHA 字段。材料只帮助模型判断实际输入、输出和评测模态，不直接把论文标为相关，也不改写原始候选。
 
-范围证据的片段端点和字符预算不得切断数学字母等补充平面 Unicode 字符。只有需要纠正这类端点的片段使用 `official-modality-scope-codepoints-v2` 选取版本，并由真实片段重算输入 SHA；字节未变的选取沿用原版本和已有筛选决定。官方来源原字节、原决定、请求及费用不因截取修复而改签或清零。
+范围证据的片段端点和字符预算不得切断数学字母等补充平面 Unicode 字符。新记录用 `selectionProfile` 区分端点是否经过调整，并由真实片段重算输入 SHA。已有筛选决定按原记录格式复验，完整保留原输入指纹。官方来源原字节、原决定、请求及费用不因截取修复而改签或清零。
 
 ### `filtered-papers.json`
 
@@ -182,7 +182,7 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 日更分析和恢复入口将 `analysis-batch-retry-diagnostics-v1` 写入正式结果的 `stats.analysisBatchRetry`，绑定日期、当前封存来源引用 SHA 和本次论文范围 SHA。`digest:status` 只展示仍对应当前日期、来源和范围的诊断；后续修正已改变失败集合时，旧人工建议不能继续显示为就绪。Reader 刷新另以 `0600` 保存 `data/runtime/analysis-batch-reports/<runId>.json`，使用 `analysis-batch-diagnostics-v1`，记录本次固定论文集合、封存来源引用、轮次、失败和未启动项。两者均声明 `diagnosticOnly=true`、`newApiRequestsAuthorized=false`，不能补签成功或解锁费用。
 
-`manualHandoff` 使用 `analysis-batch-manual-handoff-v1`，包含 `eligible`、`status`、`reason`、逐项 `attempts`/`noProgressRounds`/错误作用域及预算状态，以及 `eligibleIds`、`blockedIds`、`budgetExhaustedIds`。阶段完成与正文/草稿 SHA 的实质变化才算进展，时间、次数、费用变化不算。`ready` 只表示少量持续失败达到建议阈值；`newApiRequestsAuthorized=false`，失败仍是失败，额度仍按原账。服务故障、不可重试和耗尽项保留原阻断，不授予发布资格，见 [统一恢复规则](three-workflows.md#全批轮次与失败集合)。
+`manualHandoff` 使用稳定名称 `analysis-batch-manual-handoff` 和结构指纹，包含 `eligible`、`status`、`reason`、逐项 `attempts`/`noProgressRounds`/错误作用域及预算状态，以及 `eligibleIds`、`blockedIds`、`budgetExhaustedIds`。阶段完成与正文/草稿 SHA 的实质变化才算进展，时间、次数、费用变化不算。`ready` 只表示少量持续失败达到建议阈值；`newApiRequestsAuthorized=false`，失败仍是失败，额度仍按原账。服务故障、不可重试和耗尽项保留原阻断，不授予发布资格，见 [统一恢复规则](three-workflows.md#全批轮次与失败集合)。
 
 ## 正式分析结果与发布正文
 
