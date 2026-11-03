@@ -117,6 +117,7 @@ from tag_catalog import (
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
+    is_strict_append_only_catalog,
     resolve_compatible_proof_catalog,
 )
 from tag_presentation import render_tag_hierarchy_markdown
@@ -3925,7 +3926,7 @@ def export_tag_catalog_files(blog_repo=None):
 
 def build_flat_tag_compat_metadata(
         parsed, *, required=False, flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT,
-        flat_tag_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA):
+        flat_tag_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA, saved_tag_registry=None):
     """保留 Hugo 的 tags 字段，并记录当前词表中标签的含义和层级。
 
     旧记录维护时可以缺少当前标签选择记录；required 为 True 时必须提供有效记录。
@@ -3951,12 +3952,14 @@ def build_flat_tag_compat_metadata(
         if required:
             raise PublishDataValidationError('新页面缺少通过当前词表检查的标签选择记录。')
         return None
+    proof_catalog = _PAGE_TAG_CATALOG
     if validation.get('registryVersion') != tag_catalog_identity(_PAGE_TAG_CATALOG) \
             or validation.get('registrySha256') != _PAGE_TAG_CATALOG['registrySha256']:
         original = resolve_compatible_proof_catalog(
             validation.get('registrySha256'), _PAGE_TAG_CATALOG)
         if original is None or validation.get('registryVersion') != tag_catalog_identity(original):
             raise PublishDataValidationError('页面的标签选择记录与当前词表版本或 SHA 不一致。')
+        proof_catalog = original
         from utils import _validate_tag_selection
         original_selection = _validate_tag_selection(original, parsed.get('tags'),
             parsed.get('primaryTaskTag'), parsed.get('primaryMethodTag'))
@@ -3967,6 +3970,16 @@ def build_flat_tag_compat_metadata(
             parsed.get('primaryTaskTag'), parsed.get('primaryMethodTag'))
         if not validation['valid']:
             raise PublishDataValidationError('页面的旧标签选择未通过当前纯追加词表的校验。')
+    display_catalog = _PAGE_TAG_CATALOG
+    if saved_tag_registry is not None and saved_tag_registry != (
+            tag_catalog_identity(display_catalog), display_catalog['registrySha256']):
+        version, digest = saved_tag_registry
+        archived = resolve_compatible_proof_catalog(digest, _PAGE_TAG_CATALOG)
+        if (archived is None or version != tag_catalog_identity(archived)
+                or (digest != proof_catalog['registrySha256']
+                    and not is_strict_append_only_catalog(proof_catalog, archived))):
+            raise PublishDataValidationError('页面声明的旧词表与原标签选择或归档字节不一致。')
+        display_catalog = archived
     tags = parsed.get('tags')
     concept_ids = validation.get('conceptIds')
     if not isinstance(tags, list) or not isinstance(concept_ids, list) \
@@ -3997,8 +4010,8 @@ def build_flat_tag_compat_metadata(
     return {
         **flat_header,
         'selectionContract': selection_header['contract'],
-        'registryVersion': tag_catalog_identity(_PAGE_TAG_CATALOG),
-        'registrySha256': _PAGE_TAG_CATALOG['registrySha256'],
+        'registryVersion': tag_catalog_identity(display_catalog),
+        'registrySha256': display_catalog['registrySha256'],
         'primaryTaskId': primary_task_id,
         'primaryMethodId': primary_method_id,
         'primaryTask': primary_task,
@@ -4087,6 +4100,7 @@ def build_researcher_workbench_bundle(
         api_reader_payload=None, require_reader=False,
         flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT,
         flat_tag_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA,
+        saved_tag_registry=None,
         context_contract=RESEARCH_CONTEXT_CONTRACT,
         context_schema_fingerprint=_CURRENT_CONTEXT_SCHEMA):
     """生成论文页的基本信息及四份同站点附属文件。
@@ -4150,7 +4164,8 @@ def build_researcher_workbench_bundle(
     )
     tag_metadata = build_flat_tag_compat_metadata(
         parsed_analysis, flat_tag_contract=flat_tag_contract,
-        flat_tag_schema_fingerprint=flat_tag_schema_fingerprint)
+        flat_tag_schema_fingerprint=flat_tag_schema_fingerprint,
+        saved_tag_registry=saved_tag_registry)
     primary_method = tag_metadata['primaryMethod'] if tag_metadata else None
     rank_bucket = _validated_workbench_text(
         parsed_analysis.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
@@ -4443,6 +4458,14 @@ def _page_flat_tag_fingerprint(frontmatter):
             else _CURRENT_CONTEXT_SCHEMA)
 
 
+def _page_saved_tag_registry(frontmatter):
+    for prefix in ('paper_digest_tags_', 'paper_digest_taxonomy_'):
+        if prefix + 'contract' in frontmatter:
+            return (frontmatter.get(prefix + 'registry_version'),
+                    frontmatter.get(prefix + 'registry_sha256'))
+    return None
+
+
 def _page_context_contract(frontmatter):
     """读取页面附属文件记录中的上下文格式；旧记录按原格式核对。"""
     sidecars = frontmatter.get('paper_digest_sidecars')
@@ -4493,6 +4516,7 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         api_reader_payload=api_reader_payload, require_reader=True,
         flat_tag_contract=flat_tag_contract,
         flat_tag_schema_fingerprint=_page_flat_tag_fingerprint(frontmatter),
+        saved_tag_registry=_page_saved_tag_registry(frontmatter),
         context_contract=_page_context_contract(frontmatter),
         context_schema_fingerprint=_page_context_fingerprint(frontmatter),
     )
@@ -11782,14 +11806,17 @@ def _has_source_bound_reader_patch_completion(paper):
     manifest = paper.get('analysisManifest') or {}
     contracts = manifest.get('contracts') or {}
     stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
-    if (stage.get('operatorProvenance') or {}).get('contract') == 'daily-reader-operator-correction-v1' \
+    operator_tag = (stage.get('operatorProvenance') or {}).get('contract')
+    if any(header['contract'] == operator_tag for header in
+            public_protocols.registered_headers('daily-reader-operator-correction')) \
             or (stage.get('ordinalPatchHistory') or {}).get('reason') == 'operator-correction-supersedes-ordinal-completion':
         return True
     if 'apiReaderFactFeedbackCorrection' in paper \
             or 'factReviewClaimLocationCorrection' in stage \
             or any(key in contracts for key in ('readerTargetOrdinalPatch', 'readerVersionMetadataRecovery')) \
             or any(key in stage for key in ('ordinalPatchContract', 'ordinalPatchSchemaFingerprint', 'ordinalPatchCompilations',
-                'ordinalCompletionProof', 'versionMetadataRecoveryContract', 'versionMetadataRecoveryProof')):
+                'ordinalCompletionProof', 'versionMetadataRecoveryContract',
+                'versionMetadataRecoverySchemaFingerprint', 'versionMetadataRecoveryProof')):
         return True
     provenance = paper.get('freshRewriteProvenance') or {}
     run_id = provenance.get('runId')
@@ -15734,6 +15761,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
     workbench_paper_ids = set()
     workbench_flat_contracts = {}
     workbench_flat_fingerprints = {}
+    workbench_saved_tag_registries = {}
     workbench_context_contracts = {}
     workbench_context_fingerprints = {}
     for record in manifest.get('files') or []:
@@ -15780,6 +15808,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                     raise PublishDataValidationError('同一篇论文对应多个页面，无法确定附属文件属于哪个页面。')
                 workbench_flat_contracts[paper_id] = _page_flat_tag_contract(page_frontmatter)
                 workbench_flat_fingerprints[paper_id] = _page_flat_tag_fingerprint(page_frontmatter)
+                workbench_saved_tag_registries[paper_id] = _page_saved_tag_registry(page_frontmatter)
                 workbench_context_contracts[paper_id] = _page_context_contract(page_frontmatter)
                 workbench_context_fingerprints[paper_id] = _page_context_fingerprint(page_frontmatter)
     if not paper_ids:
@@ -15827,6 +15856,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                 api_reader_payload=api_reader_payload, require_reader=True,
                 flat_tag_contract=workbench_flat_contracts[paper_id],
                 flat_tag_schema_fingerprint=workbench_flat_fingerprints[paper_id],
+                saved_tag_registry=workbench_saved_tag_registries[paper_id],
                 context_contract=workbench_context_contracts[paper_id],
                 context_schema_fingerprint=workbench_context_fingerprints[paper_id],
             )
@@ -16161,6 +16191,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             api_reader_payload=api_reader_payload, require_reader=True,
             flat_tag_contract=_page_flat_tag_contract(matching_frontmatter[0]),
             flat_tag_schema_fingerprint=_page_flat_tag_fingerprint(matching_frontmatter[0]),
+            saved_tag_registry=_page_saved_tag_registry(matching_frontmatter[0]),
             context_contract=_page_context_contract(matching_frontmatter[0]),
             context_schema_fingerprint=_page_context_fingerprint(matching_frontmatter[0]),
         )

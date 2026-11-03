@@ -3380,6 +3380,50 @@ title: "Score rows"
             self.assertEqual(publish_to_blog.render_paper_tag_hierarchy(
                 dict(parsed, tagValidation=invalid)), '')
 
+    def test_saved_workbench_replays_real_archived_page_tag_registry(self):
+        # The registry and four concept IDs are from published arXiv 2610.06057v1.
+        digest = '0a0847314ab2059d95efac33376414498e598a1f02a1486869bee0efc481d1f7'
+        version = 'paper-tag-catalog-v2'
+        paper = llm_api_publication_fixture()
+        paper['parsed'].update({
+            'tags': ['#文本到语音', '#基准设计', '#基准测试', '#语音质量评估'],
+            'primaryTaskTag': '#文本到语音',
+            'primaryMethodTag': '#基准设计',
+            'tagValidation': {
+                'valid': True, 'errors': [], 'registryVersion': version,
+                'registrySha256': digest, 'primaryTaskId': 'task.tts',
+                'primaryMethodId': 'method.benchmark-design',
+                'conceptIds': ['task.tts', 'method.benchmark-design', 'artifact.benchmark',
+                               'task.speech-quality'],
+            },
+        })
+        date = '2026-10-11'
+        historical = publish_to_blog.build_researcher_workbench_bundle(
+            paper, date, require_reader=True,
+            flat_tag_contract=publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT,
+            context_contract=publish_to_blog.public_protocols.historical_header(
+                'paper-research-context', 'explicit-source-abstract', None)['contract'],
+            saved_tag_registry=(version, digest),
+        )
+        current = publish_to_blog.build_researcher_workbench_bundle(paper, date, require_reader=True)
+        self.assertEqual(historical['tagMetadata']['registryVersion'], version)
+        self.assertEqual(historical['tagMetadata']['registrySha256'], digest)
+        self.assertNotEqual(current['tagMetadata']['registrySha256'], digest)
+        self.assertNotEqual(current['sidecarRecords'], historical['sidecarRecords'])
+        markdown = '---\n' + publish_to_blog._researcher_workbench_frontmatter(historical) + '---\n'
+        frontmatter, _ = publish_to_blog._parse_frontmatter_content('paper.md', markdown)
+        frontmatter['description'] = historical['oneSentenceThesis']
+        frontmatter['paper_digest_arxiv_id'] = historical['identity']['baseId']
+        self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, date))
+        for field, replacement in (
+                ('registry_sha256', 'a' * 64),
+                ('registry_version', 'paper-tag-catalog'),
+                ('concepts', [])):
+            with self.subTest(field=field):
+                modified = {**frontmatter, 'paper_digest_tags_' + field: replacement}
+                with self.assertRaises(PublishDataValidationError):
+                    publish_to_blog._validate_researcher_workbench_frontmatter(modified, paper, date)
+
     def test_current_tag_selection_keeps_flat_tags_and_adds_explicit_compat_metadata(self):
         paper = llm_api_publication_fixture()
         paper['parsed'].update({
