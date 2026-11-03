@@ -108,7 +108,7 @@ function cliFixture(t, env, state) {
         'scripts/utils.js', 'scripts/config.js', 'scripts/lib/active-time-budget.js',
         'scripts/lib/analysis-section-titles.js', 'scripts/lib/filter-decision.js',
         'scripts/lib/tag-rules.js', 'scripts/lib/tag-catalog.js', 'scripts/lib/protocol-codec.js',
-        'scripts/lib/strict-json.js', 'config/tag-catalog.json']) {
+        'scripts/lib/strict-json.js', 'scripts/lib/git-file-bytes.js', 'config/tag-catalog.json']) {
         fs.mkdirSync(path.dirname(path.join(root, filename)), { recursive: true });
         fs.copyFileSync(path.join(__dirname, '..', filename), path.join(root, filename));
     }

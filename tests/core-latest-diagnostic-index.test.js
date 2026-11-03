@@ -101,7 +101,9 @@ test('missing original chain under explicit conference replay is nonretryable be
     let calls = 0;
     // Scope-shape negative fixture only; no PDF authority or qualification is issued.
     await assert.rejects(context.withConferenceAnalysisSource({ executionId, executionDir, paperId,
-        sourceDetails: { source: 'conference_pdf_text', sourceId: paperId, text: source } }, () =>
+        sourceDetails: { source: 'conference_pdf_text', sourceId: paperId, text: source,
+            structuredArtifacts: require('../scripts/lib/protocol-codec').recordHeader(
+                'conference-reader-weak-artifacts', 'conference-reader-weak-artifacts') } }, () =>
         deep.repairCoreSummarySection({ id: paperId }, baseline, source, source, {
             replayLatestCoreSummaryDiagnostic: true,
             callModelFn: () => { calls++; throw Error('forbidden request'); }

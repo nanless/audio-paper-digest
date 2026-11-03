@@ -16,7 +16,8 @@ function fixture(t) {
         images: [{kind:'external_url', mediaType:'image/png', url:`https://arxiv.org/html/${id}v1/${name}`}] }));
     const source = { paperId: `arxiv:${id}`, source:'html', sourceId:id, text,
         structuredArtifacts:{ figures, tables:[], formulas:[], payloadSha256: sha('sealed figures') } };
-    const plan = { sections:[{kind:'result',heading:'来源核对'}], figurePlacements:[1,2].map(n => ({
+    const plan = { ...require('../scripts/lib/reader-stage-protocols').header('article'),
+        sections:[{kind:'result',heading:'来源核对'}], figurePlacements:[1,2].map(n => ({
         figureOrdinal:n,targetKind:'result',marker:`[[FIGURE_${n}]]`})) };
     const result = deep.injectApiReaderFigures({plan,article:'### 来源核对\n\n[[FIGURE_1]]\n\n[[FIGURE_2]]'}, source.structuredArtifacts, id);
     const paper = { arxivId:id,authors:['Source Author'], sourceSha256:sha(text),

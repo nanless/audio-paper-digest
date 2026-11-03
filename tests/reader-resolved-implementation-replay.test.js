@@ -127,6 +127,7 @@ test('真实生成入口复验resolved完整稿零模型通过，解析拒绝不
         structuredArtifactsSha256: example.sourceDetails.structuredArtifacts.payloadSha256 };
     sample.context.sourceExpectations = { [sample.oldIdentity.paperId]: expectation };
     fs.writeFileSync(path.join(sample.context.runDir, 'run.json'), JSON.stringify({version:1,contract:'daily-fresh-source-run-v1',
+        batchDate:'2026-10-27',batchId:'synthetic-resolved-replay',sourceSetSha256:require('../scripts/lib/reader-repair').hashDraft(sample.context.sourceExpectations),
         runId:sample.context.runId,paperIds:[sample.oldIdentity.paperId],sourceExpectations:sample.context.sourceExpectations}),{mode:0o600});
     const options = { sourceText:example.sourceDetails.text,structuredArtifacts:example.sourceDetails.structuredArtifacts,
         readerAttemptsDir:sample.directory, readerMaterializeFigures:async()=>[], readerRecordDisposition() {} };

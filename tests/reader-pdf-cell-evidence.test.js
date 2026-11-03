@@ -91,6 +91,11 @@ test('运行时启动脚本、PATH及虚拟环境选择变化必须重新提取'
         fs.copyFileSync(path.join(__dirname, '../scripts', name), path.join(scripts, name));
     }
     fs.copyFileSync(path.join(__dirname, '../scripts/lib/reader-pdf-cell-evidence.js'), path.join(library, 'reader-pdf-cell-evidence.js'));
+    for (const name of ['daily-source-format.js', 'protocol-codec.js', 'strict-json.js']) {
+        fs.copyFileSync(path.join(__dirname, '../scripts/lib', name), path.join(library, name));
+    }
+    fs.mkdirSync(path.join(root, 'config'), { recursive: true });
+    fs.cpSync(path.join(__dirname, '../config/protocols'), path.join(root, 'config/protocols'), { recursive: true });
     fs.writeFileSync(path.join(library, 'reader-repair.js'), "exports.hashDraft = value => require('node:crypto').createHash('sha256').update(JSON.stringify(value)).digest('hex');");
     const runId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     const sourceRoot = path.join(root, 'sources');

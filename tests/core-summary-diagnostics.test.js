@@ -222,7 +222,8 @@ test('会议摘要沿认证来源保存和零请求重放，会议/执行/全文
         sourceSha256: sha256(sourceText), title: '规范会议摘要诊断',
         analysisManifest: { sourceAcquisition: { sourceSha256: sha256(sourceText) } } };
     const details = { source: 'conference_pdf_text', sourceId: id, text: sourceText,
-        structuredArtifacts: { payloadSha256: 'c'.repeat(64) } };
+        structuredArtifacts: { ...require('../scripts/lib/protocol-codec').recordHeader(
+            'conference-reader-weak-artifacts', 'conference-reader-weak-artifacts'), payloadSha256: 'c'.repeat(64) } };
     const identity = { executionId, executionDir, paperId: id, sourceDetails: details };
     const run = (callback, scope = identity) => conference.withConferenceAnalysisSource(scope, callback);
     let calls = 0;
@@ -280,7 +281,8 @@ for (const historicalConference of [true, false]) {
             : { directPaperId: id, arxivId: '2610.90009', title: '历史arXiv摘要' };
         const details = { source: historicalConference ? 'conference_pdf_text' : 'html',
             sourceId: historicalConference ? id : '2610.90009v3', text: sourceText,
-            structuredArtifacts: { payloadSha256: 'c'.repeat(64) } };
+            structuredArtifacts: { ...require('../scripts/lib/protocol-codec').recordHeader(
+            'conference-reader-weak-artifacts', 'conference-reader-weak-artifacts'), payloadSha256: 'c'.repeat(64) } };
         const runId = '99999999-9999-4999-8999-999999999999';
         const scope = { runId, route: historicalConference ? 'conference-local-pdf' : 'arxiv-fresh-fetch',
             paperId: id, sourceDetails: details, sourceSha256: sha256(sourceText),

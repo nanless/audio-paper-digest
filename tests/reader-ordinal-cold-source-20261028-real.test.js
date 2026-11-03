@@ -68,7 +68,7 @@ test('actual 35497 inside/outside fresh ALS retains identical article, plan and 
   old.require=function(name){const value=originalRequire(name);return name==='./reader-repair'
    ?{...value,REPAIR_VERSION:require(path.join(workspace,'scripts/lib/reader-legacy-records.json')).originalIdentityFields.repairVersion}:value;};
   const bytes=Buffer.from(fixture.previousPublicImplementation.rawBase64,'base64');assert.equal(sha(bytes),fixture.previousPublicImplementation.sha256);assert.equal(sha(bytes),'3b5d4ee3228a146e1634c712f340c39e0fdaf94c5b1d69e98371c696a3691d66');old._compile(bytes.toString('utf8'),filename);
-  assert.throws(()=>old.exports.validateCompletion(p),/cold compiler\/parser\/final display differs/);
+  assert.throws(()=>old.exports.validateCompletion(p),/cold compiler\/parser\/final display differs|ordinary completion cannot leave canonical daily source/);
  }
  const reason=engine.getIncompleteAnalysisContentReason(p);assert.equal(reason,null,reason);assert.equal(engine.isSuccessfulAnalysisRecord(p),true);
  daily.withDailyFreshAnalysisContext(plan,()=>fresh.withFreshPaperContext(p,()=>{assert.equal(ordinal.validateCompletion(p),true);assert.deepEqual(engine.getIntegratedApiReaderRecordDiagnostics(p),[]);}));

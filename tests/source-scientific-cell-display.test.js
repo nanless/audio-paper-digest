@@ -26,7 +26,8 @@ const negative = [
 test('whole-cell scientific duplicates preserve both literal coefficients, exponent signs and precision', () => {
     for (const [raw, displayText] of positive) {
         assert.deepEqual(math.strictSourceCellMathDisplay(raw), {
-            contract: 'source-cell-math-display-v1', kind: 'scientific-notation-duplicate',
+            ...require('../scripts/lib/protocol-codec').recordHeader('source-cell-math-display', 'source-cell-math-display'),
+            kind: 'scientific-notation-duplicate',
             sourceText: raw, sourceTextSha256: sha(raw), displayText });
         assert.equal(math.strictSourceCellMathDisplay(displayText), null);
     }

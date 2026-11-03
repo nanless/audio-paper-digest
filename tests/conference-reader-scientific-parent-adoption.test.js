@@ -10,8 +10,12 @@ function fixture(){
  const actual={value:{items:{paper:{analysisRunId:'parent'}}}},controls={stateChecks:0,scopes:0,childIdentityReads:0};
  const api=vm.runInNewContext(code+'\n({scientificParentReplayRequired,withScientificParentReplay})',{
   codec:require("../scripts/lib/protocol-codec"),sourceCorrectionFormat:require("../scripts/lib/conference-source-correction-format"),scientificParentReplayHandles,check:(value,message)=>assert.ok(value,message),adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),
-  assertCurrentBatch:()=>{controls.stateChecks++;return actual},require:()=>({CORRECTION:'conference-reader-operator-correction-v1',isSourceCorrectionRecord:paper=>paper.local===true,
-   withVerifiedMaintenanceScientificParent:(handle,callback)=>{assert.ok(scientificParentReplayHandles.get(handle));controls.scopes++;controls.childIdentityReads++;return callback()}})});
+  assertCurrentBatch:()=>{controls.stateChecks++;return actual},require:name=>{
+   if(name==='./conference-reader-operator-correction')return require('../scripts/lib/conference-reader-operator-correction');
+   assert.equal(name,'./conference-source-resource-correction');
+   return {isSourceCorrectionRecord:paper=>paper.local===true,
+    withVerifiedMaintenanceScientificParent:(handle,callback)=>{assert.ok(scientificParentReplayHandles.get(handle));controls.scopes++;controls.childIdentityReads++;return callback()}};
+  }});
  return{...api,loaded,batch,member,actual,controls};
 }
 test('pre-adopt普通付费续跑允许原child attempt/checkpoint推进，不新增严格child全analysis锁（合成边界）',()=>{

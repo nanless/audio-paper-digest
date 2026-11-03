@@ -97,14 +97,15 @@ test('真实publication.status→control用producer身份匹配，保留不同�
         assert.equal(combined.publication.planSha256, transaction.planSha256, 'legacy字段仍指发布事务');
         assert.equal(combined.publication.publicationPlanSha256, transaction.planSha256);
         assert.equal(combined.publication.rewritePlanSha256, f.plan.planSha256);
-        assert.equal(combined.publication.version, 1);
+        assert.equal(require('../scripts/lib/protocol-codec').isCurrentHeader(
+            combined.publication, 'historical-direct-publication-status'), true);
         assert.equal(combined.publication.complete, false);
         assert.equal(combined.publication.phase, 'planned');
         assert.equal(combined.completion.complete, false);
         assert.ok(combined.completion.blockers.some(item => item.code === 'historical-publication-incomplete'));
         assert.ok(combined.completion.blockers.some(item => item.code === 'execution-not-started'));
         assert.equal(combined.completion.blockers.some(item => item.code === 'historical-publication-plan-mismatch'), false);
-        assert.deepEqual(fs.readFileSync(written.filename), original, '状态读取不改旧v1计划字节');
+        assert.deepEqual(fs.readFileSync(written.filename), original, '状态读取保留原计划字节');
     }
 });
 

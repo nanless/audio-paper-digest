@@ -52,7 +52,7 @@ test('正常生成的复合失败稿第二次仍为小节补丁，提示不要�
             assert.match(prompt, /所有图表公式、术语标记与绑定原样保留/);
             assert.match(prompt, /事实、表格模式、字数与来源问题留下一轮/);
             assert.match(prompt, /最终完整质量及来源校验全部保留/);
-            assert.match(prompt, /reader-section-index-groups-v1/);
+            assert.match(prompt, /"contract":"reader-section-index-groups"/);
             assert.match(prompt, /不要回传body、kind、完整sections或其他根字段/);
             const fallbackDraft = structuredClone(sample.draft);
             fallbackDraft.sections[0].body3 = '原未知正文';

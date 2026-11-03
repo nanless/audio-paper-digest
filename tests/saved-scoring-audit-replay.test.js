@@ -36,9 +36,10 @@ async function fixture(t) {
         }) });
     const details = daily.readDailyFreshSource(plan, { arxivId: paperId });
     const descriptor = details.freshSourceDescriptor;
-    const provenance = { contract: fresh.CONTRACT, runId: plan.runId, sourceSha256: descriptor.sourceSha256,
-        structuredArtifactsSha256: descriptor.structuredArtifactsSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
-        sourceGeneration: 1, sourceManifestSha256: descriptor.sourceManifestSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
+    const provenanceOwner = { analysisManifest: {} };
+    await daily.withDailyFreshAnalysisContext(plan, () =>
+        fresh.attachFreshSourceRecord(provenanceOwner, provenanceOwner.analysisManifest, details));
+    const provenance = provenanceOwner.freshRewriteProvenance;
     const core = '## 核心摘要\n保留原科学内容。', output = `${core}\n原评分输出。`;
     const stage = { status: 'complete', attempts: 1, model: 'fixture-model', protocol: 'openai_responses',
         updatedAt: '2026-10-23T00:00:02.000Z', outputAnalysisSha256: sha(output),

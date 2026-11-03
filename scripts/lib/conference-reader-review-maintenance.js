@@ -1948,8 +1948,8 @@ function readReaderMaintenanceSourceLineage({executionId}) {
 function scientificParentReplayRequired(loaded,batch,member) {
     const parent=loaded.parent.analysis.papers[0];
     const sourceParent=require('./conference-source-resource-correction').isSourceCorrectionRecord(parent);
-    const operatorParent=parent.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance?.contract
-        ===require('./conference-reader-operator-correction').CORRECTION;
+    const operatorParent=require('./conference-reader-operator-correction').hasOperatorProvenance(
+        parent.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance);
     if(!codec.hasValidHeader(loaded.revision, 'conference-reader-source-revision')||(!sourceParent&&!operatorParent))return false;
     const state=assertCurrentBatch(batch).value,item=state.items[member.paperId];
     if(item?.analysisRunId===loaded.parent.run.executionId)return false;

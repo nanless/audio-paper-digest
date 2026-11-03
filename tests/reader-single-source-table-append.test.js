@@ -37,7 +37,9 @@ function fixture(){
   binding:{operation:'append_one_exact_binding',path:'/tableBindings/1',newBinding:binding,newBindingSha256:hash(binding)},
   sourceWindow:{startCodePoint:Array.from('Synthetic prefix.\n').length,endCodePoint:Array.from('Synthetic prefix.\n'+window).length,text:window,sha256:sha(window)},
   shapeBefore:{sections:14,tables:1,bindings:1,figures:4,formulas:0},shapeAfter:{sections:14,tables:2,bindings:2,figures:4,formulas:0}};
- const record={contract:operator.CORRECTION,notLlmResponse:true,version:2,correctionKind:'single-source-table-append-v2',
+ const memberFamily='conference-reader-operator-correction';
+ const record={...require('../scripts/lib/protocol-codec').historicalHeader(memberFamily,'original-table-member'),
+  notLlmResponse:true,correctionKind:'single-source-table-append-v2',
   baselineCandidateFile:candidatePath,baselineDraftSha256:hash(draft),draft:after,tableAppend:{spec,specSha256:hash(spec)}};
  return {spec,specSha256:hash(spec),packageBytes,pdfBytes,draft,after,envelope,record};
 }

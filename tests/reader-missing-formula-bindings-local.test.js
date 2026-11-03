@@ -5,6 +5,7 @@ const repair = require('../scripts/lib/reader-repair');
 
 function createMissingFormulaBindingsSample() {
     const draft = {
+        version: 3,
         sections: [
             { kind: 'component', body: '[[FORMULA_1]]' },
             { kind: 'training', body: '导读\n\n[[FORMULA_7]]\n\n解释' }

@@ -8721,7 +8721,7 @@ function readVerifiedConferenceReaderPrompts(paper, sourceText, identity = null)
 }
 function apiReaderOperatorExecution(proof) {
     const conference = require('./lib/conference-reader-operator-correction');
-    return proof?.contract === conference.CORRECTION
+    return conference.hasOperatorProvenance(proof)
         ? conference.execution(proof)
         : require('./lib/daily-reader-operator-correction').execution(proof);
 }

@@ -22,6 +22,7 @@ test('real saved repair shares its evidence budget with the full PDF supplement 
     // The real, separately verified PDF projection is a transport fixture here;
     // this test grants no source or publication capability.
     t.mock.method(pdf, 'document', () => structuredClone(fixture.pdfDocument));
+    t.mock.method(pdf, 'originalRequestDocument', () => structuredClone(fixture.pdfDocument));
     const original = evidence();
     assert.equal(original.length, fixture.originalEvidenceChars);
     assert.equal(sha(original), fixture.originalEvidenceSha256);

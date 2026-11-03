@@ -549,7 +549,7 @@ describe('validate-data-files', () => {
         assert.match(issues, /自动 API production 缺少 Reader v3 完整绑定/);
     });
 
-    it('validate:data 拒绝缺失或未绑定 current v3 的核心摘要完成阶段', () => {
+    it('validate:data 拒绝缺失或未绑定的当前核心摘要完成阶段', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-core-summary-gate-'));
         const resultFile = path.join(dir, 'deep-analysis-result.json');
         const paper = completeAnalysisPaper('2607.00012');
@@ -570,7 +570,7 @@ describe('validate-data-files', () => {
         fs.writeFileSync(resultFile, JSON.stringify({ papers: [shallow] }));
         // The semantic contract remains strict independently of source lookup.
         assert.match(validateCoreSummarySemanticContract(shallow.analysis),
-            /核心摘要未达到 core-summary-detailed-v3.*中文字符不足/);
+            /核心摘要未达到 详细摘要规则.*中文字符不足/);
         // This temporary paper has no authenticated sealed source. Final stage
         // validation must reject that missing authority, rather than invent one.
         assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),

@@ -46,7 +46,7 @@ async function applyCorrection({ batchHandle, analysisRoot, executionId, planHan
         const loaded = adapter.loadGrantedConferenceRecovery({ analysisRoot, executionId });
         if (loaded.analysis.status === 'complete') {
             const paper = loaded.analysis.papers[0];
-            if (paper.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance?.contract !== corrections.CORRECTION) {
+            if (!corrections.hasOperatorProvenance(paper.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance)) {
                 fail('已有完成稿不是这项真实人工修正');
             }
             corrections.assertSavedBatchMember(batchHandle, paper);

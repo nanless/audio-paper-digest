@@ -2,6 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), zlib = require('node:zlib');
 const crypto = require('node:crypto'), Module = require('node:module');
+const { execFileSync } = require('node:child_process');
 const stop = require('../scripts/lib/analysis-stop-control');
 const axes = require('../scripts/lib/experiment-source-setting-axes');
 const bytes = fs.readFileSync(path.join(__dirname, 'fixtures/upstream-tail-three-20261027-real.json.gz'));
@@ -12,8 +13,21 @@ function compile(source, settingModule) {
     const filename = path.resolve(__dirname, '../scripts/analysis-contract.js');
     const compiled = new Module(filename, module);
     compiled.filename = filename; compiled.paths = Module._nodeModulePaths(path.dirname(filename));
-    if (settingModule) compiled.require = name => name === './lib/experiment-source-setting-axes.js'
-        ? settingModule : Module.prototype.require.call(compiled, name);
+    if (settingModule) compiled.require = name => {
+        if (name === './lib/experiment-source-setting-axes.js') return settingModule;
+        if (name === '../manual/scripts/manual-v5-tutorial-payload.js') {
+            const original = execFileSync('git', ['--no-lazy-fetch', '--no-replace-objects', 'cat-file', 'blob',
+                '505bc7f3d57fcf743a6ae91b4754295c4e3a00e8'], { cwd: path.resolve(__dirname, '..') });
+            assert.equal(sha(original), '9facf006ef4cecad6d106a5aa4bc95d455af2231285c4149214a2aabc988098e');
+            const originalFilename = path.resolve(__dirname, name);
+            const originalModule = new Module(originalFilename, compiled);
+            originalModule.filename = originalFilename;
+            originalModule.paths = Module._nodeModulePaths(path.dirname(originalFilename));
+            originalModule._compile(original.toString('utf8'), originalFilename);
+            return originalModule.exports;
+        }
+        return Module.prototype.require.call(compiled, name);
+    };
     compiled._compile(source + '\nmodule.exports.boundIdentity=sourceBackedIdentityColumns;'
         + 'module.exports.quantitative=coreSummaryQuantitativeResultState;'
         + 'module.exports.retrieval=typeof hasSourceBoundTextVideoComparison === "function" ? hasSourceBoundTextVideoComparison : () => false;', filename);

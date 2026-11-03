@@ -2,9 +2,13 @@
 // Synthetic lifecycle/CAS boundaries only. The real before/after source replay
 // is archived separately; none of these mocks grants scientific qualification.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),Module=require('node:module'),vm=require('node:vm');
-const ROOT=process.cwd(),CORRECTION='conference-reader-operator-correction-v1';
+const ROOT=process.cwd(),protocols=require('../scripts/lib/protocol-codec');
+const provenanceFamily='conference-reader-operator-provenance';
+const operator=require('../scripts/lib/conference-reader-operator-correction');
+const originalProvenance=protocols.historicalHeader(provenanceFamily,'sealed-operator-reader',null);
+const currentProvenance=protocols.recordHeader(provenanceFamily,provenanceFamily);
 function operatorFixture(){
- const paper={id:'synthetic-paper',analysisManifest:{stages:{apiReaderArticle:{operatorProvenance:{contract:CORRECTION,processId:'process',executionId:'parent'}}}}};
+ const paper={id:'synthetic-paper',analysisManifest:{stages:{apiReaderArticle:{operatorProvenance:{...originalProvenance,processId:'process',executionId:'parent'}}}}};
  const original={paperId:paper.id,analysisRunId:'parent',analysisProof:{analysisSha256:'analysis',completionReceiptSha256:'receipt',sourceSnapshotSha256:'snapshot'},readerOperatorAdoption:{original:'retained'}};
  const loaded={analysis:{papers:[paper]},analysisFileSha256:'analysis',run:{executionId:'parent',completionReceipt:{receiptSha256:'receipt'},sourceSnapshotSha256:'snapshot'}};
  let valid=true,checks=0;const handle=Object.freeze({}),bound={parent:paper,child:{id:paper.id,newReader:true},executionId:'child',processId:'process',baselineItem:original,assertUnchanged(){checks++;if(!valid)throw Error('actual child/source/adoption CAS changed');}};
@@ -29,8 +33,8 @@ test('wrong current child/process, changed old parent CAS/baseline, altered cano
 });
 function lifecycle(){
  const src=fs.readFileSync(path.join(ROOT,'scripts/lib/conference-reader-review-maintenance.js'),'utf8'),code=src.slice(src.indexOf('function scientificParentReplayRequired('),src.indexOf('function readScientificParentReplay('));
- const loaded={revision:{contract:'conference-reader-source-revision-v1',version:1},run:{executionId:'child'},parent:{run:{executionId:'parent'},analysis:{papers:[{analysisManifest:{stages:{apiReaderArticle:{operatorProvenance:{contract:CORRECTION}}}}}]}}},batch={m:{batchId:'batch',manifestSha256:'manifest'}},member={paperId:'paper'},handles=new WeakMap(),state={value:{items:{paper:{analysisRunId:'parent'}}}},counts={operator:0,source:0};
- const api=vm.runInNewContext(code+'\n({withScientificParentReplay})',{codec:require("../scripts/lib/protocol-codec"),sourceCorrectionFormat:require("../scripts/lib/conference-source-correction-format"),scientificParentReplayHandles:handles,check:(x,m)=>assert.ok(x,m),adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),assertCurrentBatch:()=>state,require:name=>name==='./conference-reader-operator-correction'?{CORRECTION,withVerifiedMaintenanceReaderParent:(handle,callback)=>{assert(handles.get(handle));counts.operator++;return callback();}}:{isSourceCorrectionRecord:()=>false,withVerifiedMaintenanceScientificParent:()=>{counts.source++;throw Error('wrong source branch');}}});
+ const loaded={revision:{contract:'conference-reader-source-revision-v1',version:1},run:{executionId:'child'},parent:{run:{executionId:'parent'},analysis:{papers:[{analysisManifest:{stages:{apiReaderArticle:{operatorProvenance:{...currentProvenance}}}}}]}}},batch={m:{batchId:'batch',manifestSha256:'manifest'}},member={paperId:'paper'},handles=new WeakMap(),state={value:{items:{paper:{analysisRunId:'parent'}}}},counts={operator:0,source:0};
+ const api=vm.runInNewContext(code+'\n({withScientificParentReplay})',{codec:require("../scripts/lib/protocol-codec"),sourceCorrectionFormat:require("../scripts/lib/conference-source-correction-format"),scientificParentReplayHandles:handles,check:(x,m)=>assert.ok(x,m),adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),assertCurrentBatch:()=>state,require:name=>name==='./conference-reader-operator-correction'?{CORRECTION:operator.CORRECTION,hasOperatorProvenance:operator.hasOperatorProvenance,withVerifiedMaintenanceReaderParent:(handle,callback)=>{assert(handles.get(handle));counts.operator++;return callback();}}:{isSourceCorrectionRecord:()=>false,withVerifiedMaintenanceScientificParent:()=>{counts.source++;throw Error('wrong source branch');}}});
  return{api,loaded,batch,member,state,counts};
 }
 test('pre-adopt operator parent retains normal attempt path; only actual adopted ordinary child mints operator scope, grants do not',()=>{

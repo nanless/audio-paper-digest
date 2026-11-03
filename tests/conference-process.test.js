@@ -2011,7 +2011,7 @@ require(${JSON.stringify(path.join(__dirname, '..', 'scripts/lib/conference-read
     };
     for (const [name] of variants.slice(1, -1)) {
         if (name === 'page-current') continue;
-        assert.match(formats[name].error, specificErrors[name] || /不能混用|格式版本不受支持|格式版本不一致/);
+        assert.match(formats[name].error, specificErrors[name] || /不能混用|格式版本不受支持|格式版本不一致|格式声明无效/);
     }
     for (const saved of originalPageFiles) assert.deepEqual(fs.readFileSync(saved.filename), saved.bytes);
     assert.deepEqual(fs.readFileSync(path.join(aggregateDirectory, 'manifest.json')), originalAggregateBytes);

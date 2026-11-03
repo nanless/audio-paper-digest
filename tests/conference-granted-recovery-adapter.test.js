@@ -13,7 +13,7 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 const { recoveryFixtureIdentity, registerRecoveryFixture } = require('./helpers/conference-recovery-grant-fixture');
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture');
 
-async function fixture(t, { invalidCore = false, scoringMode = false, scoringFailed = false, coreRejected = false, tagProofCase = null } = {}) {
+async function fixture(t, { invalidCore = false, scoringMode = false, scoringFailed = false, coreRejected = false, tagProofCase = null, deferGrant = false } = {}) {
     const f = productionPlanFixture(t), identity = recoveryFixtureIdentity(f.paperId);
     const analysisRoot = path.join(f.root, 'data/runtime/conference-analysis-executions');
     const input = { analysisRoot, parentExecutionId: identity.parentExecutionId,
@@ -93,12 +93,13 @@ async function fixture(t, { invalidCore = false, scoringMode = false, scoringFai
         adapter.replaceJson(path.join(failed.directory, 'analysis.json'), changed, failed.analysisFileSha256);
         failed = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: failedExecutionId });
     }
-    const grant = registerRecoveryFixture({ analysisRoot, parentExecutionId: identity.parentExecutionId, failedExecutionId, paperId: f.paperId });
+    const registerGrant = () => registerRecoveryFixture({ analysisRoot, parentExecutionId: identity.parentExecutionId, failedExecutionId, paperId: f.paperId });
+    const grant = deferGrant ? null : registerGrant();
     // The new regressions below use the real tag proof reader for every grant
     // entry and final gate. Only the pre-existing synthetic bootstrap uses the
     // orchestration double, before the tested recovery operation starts.
     if (tagProofCase) post.readOriginalTagProof = oldRead;
-    return { ...f, ...input, failedExecutionId, failed, grant, engine, operations };
+    return { ...f, ...input, failedExecutionId, failed, grant, registerGrant, engine, operations };
 }
 
 test('正常分析从真实父词表恢复未完成标签，但新稿仍须通过自己的完整标签证明', async t => {
@@ -445,7 +446,7 @@ test('旧核心复验的十二节/上游保护和真实存储异常不能降为�
 
 
 test('真实核心诊断三文件经生产原核心阶段签发，捕获后可冷重入且旧文件不改', async t => {
-    const f = await fixture(t, { coreRejected: true });
+    const f = await fixture(t, { coreRejected: true, deferGrant: true });
     const filename = require.resolve('../scripts/deep-analyzer'), raw = fs.readFileSync(filename, 'utf8');
     const begin = raw.indexOf('    let coreSummaryRepairStage = prepareTextRecoveryStage(');
     const end = raw.indexOf('    // 评分前，先核对资源链接', begin);
@@ -479,6 +480,7 @@ test('真实核心诊断三文件经生产原核心阶段签发，捕获后可�
     const response = '## 核心摘要\n' + actualDeep.extractSectionByTitle(prepared.inputAnalysis, '核心摘要');
     diagnostics.saveCoreSummaryResponse(record, response);
     diagnostics.saveCoreSummaryDisposition(record, { status: 'rejected', outputTextSha256: hash(response) });
+    const grant = f.registerGrant();
     const originalFiles = Object.fromEntries(['analysis.json','run.json','source.json','reader-revision.json']
         .map(name => [name, fs.readFileSync(path.join(f.failed.directory,name))]));
     let replayCalls = 0, downstreamCalls = 0;
@@ -494,9 +496,9 @@ test('真实核心诊断三文件经生产原核心阶段签发，捕获后可�
         return { success: false, result: paper, error: 'new downstream fixture incomplete', retryable: false };
     } };
     const request = { analysisRoot: f.analysisRoot, parentExecutionId: f.parentExecutionId,
-        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: f.grant.handle };
+        failedExecutionId: f.failedExecutionId, planHandle: f.planHandle, sourceRoot: f.sourceRoot, grantHandle: grant.handle };
     await assert.rejects(adapter.refreshConferenceGrantedRecovery(request, { engine, deep: operations }), /new downstream fixture incomplete/);
-    const id = grants.readRecoveryGrantMember(f.grant.handle, f.paperId).expectedExecutionId;
+    const id = grants.readRecoveryGrantMember(grant.handle, f.paperId).expectedExecutionId;
     const seedFile = path.join(f.analysisRoot,id,'recovery-seed.json'), seedBytes = fs.readFileSync(seedFile);
     assert.equal(JSON.parse(seedBytes).paidCoreReplay, record.id);
     adapter.loadGrantedConferenceRecovery({ analysisRoot: f.analysisRoot, executionId: id });

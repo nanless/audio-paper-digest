@@ -112,10 +112,10 @@ module.exports.createScoringReplaySampleStage = function(sample) {
  outputCoreSummarySha256:crypto.createHash('sha256').update(extractSectionByTitle(sample.output,'核心摘要')).digest('hex'),
  evidenceSelectionVersion:EVIDENCE_SELECTION_VERSION,evidenceMaxChars:SCORING_EVIDENCE_MAX_CHARS,
  evidenceSha256:crypto.createHash('sha256').update(evidence).digest('hex'),
- scoringContract:SCORING_AUDIT_CONTRACT,resourceNormalizationContract:SCORING_RESOURCE_NORMALIZATION_CONTRACT,
- requestFormatContract:SCORING_REQUEST_FORMAT_CONTRACT,capRulesVersion:SCORING_CAP_RULES_VERSION,
+ ...scoringFormat.currentStageFields(),
  ...(resolveAuxiliaryRequestPolicy('scoringAudit')?{auxiliaryRequestPolicy:resolveAuxiliaryRequestPolicy('scoringAudit')} : {}),
- stabilityResolution:{contract:SCORING_STABILITY_RESOLUTION_CONTRACT,status:'not_required',threshold:SCORING_STABILITY_THRESHOLD},
+ stabilityResolution:{...require('./lib/protocol-codec').recordHeader('api-scoring-stability-resolution',
+ 'api-scoring-stability-resolution'),status:'not_required',threshold:SCORING_STABILITY_THRESHOLD},
  audit,auditSha256:stableFingerprint(audit),outputAnalysisSha256:crypto.createHash('sha256').update(sample.output).digest('hex')};
 };
 module.exports.executeScoringReplaySample = async function(paper, rawTextForAnalysis, latestIdentity) {
