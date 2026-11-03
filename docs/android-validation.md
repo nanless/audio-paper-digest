@@ -2,7 +2,7 @@
 
 ## 当前源码与已发行版本
 
-Mac 和 Android 的当前源码统一为 **1.3.7（构建号 15）**。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+Mac 和 Android 的当前源码统一为 **1.4.0（构建号 16）**。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
 
 ## 1.3.3 安卓阅读排版修复版
 
