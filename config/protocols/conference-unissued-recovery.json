@@ -1,0 +1,102 @@
+{
+  "protocols": [
+    {
+      "name": "conference-reader-unissued-preflight-recovery",
+      "currentVariant": "one-probe-receipt",
+      "currentSchema": {
+        "fields": [
+          "manifestSha256",
+          "manifestFileSha256",
+          "paperId",
+          "executionId",
+          "parentCAS",
+          "before",
+          "oldMemberProgressFileSha256",
+          "newPreflightFileSha256",
+          "oldIdentitySha256",
+          "newIdentitySha256",
+          "normalProbeInvocations",
+          "status",
+          "receiptSha256"
+        ],
+        "optional": [
+          "resumedSavedPreflightFileSha256",
+          "normalProbeInvocationsThisResume"
+        ],
+        "statuses": [
+          "reader-only-ready",
+          "still-requires-scoring"
+        ],
+        "binding": "actual-parent-and-archived-preflight"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-unissued-preflight-recovery-v1",
+          "variant": "one-probe-receipt"
+        }
+      ]
+    },
+    {
+      "name": "conference-unissued-resource-scoring-admission",
+      "currentVariant": "source-bound-admission",
+      "currentSchema": {
+        "fields": [
+          "purpose",
+          "processId",
+          "batchId",
+          "manifestSha256",
+          "manifestFileSha256",
+          "memberSha256",
+          "executionId",
+          "paperId",
+          "parentExecutionId",
+          "parentCAS",
+          "sourceSnapshotSha256",
+          "reviewFeedbackSha256",
+          "originalRecoveryReceiptFileSha256",
+          "newPreflightFileSha256",
+          "originalFiveFileSha256",
+          "originalFailureFileSha256",
+          "mode",
+          "maxAttempts",
+          "admissionSha256"
+        ],
+        "purpose": "normal-scoring-and-reader-only",
+        "maxAttempts": 3
+      },
+      "historical": [
+        {
+          "tag": "conference-unissued-resource-scoring-admission-v1",
+          "variant": "source-bound-admission",
+          "header": {
+            "contract": "conference-unissued-resource-scoring-admission-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "conference-unissued-scoring-pre-request-readmission",
+      "currentVariant": "zero-request-observation",
+      "currentSchema": {
+        "fields": [
+          "executionId",
+          "paperId",
+          "analysisFileSha256",
+          "runFileSha256",
+          "originalProgressSha256",
+          "admissionFileSha256",
+          "scoringRequestsObserved",
+          "historicalTemporaryUsageRecords"
+        ],
+        "authority": "private-same-paper-lock-observation-only"
+      },
+      "historical": [
+        {
+          "tag": "conference-unissued-scoring-pre-request-readmission-v1",
+          "variant": "zero-request-observation"
+        }
+      ]
+    }
+  ]
+}

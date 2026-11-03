@@ -55,6 +55,32 @@ test('真实一次重探仍需评分只登记首次模式准入，不签revision
  const y=setup(t);y.onProbe(()=>y.write(path.join(y.dir,'intent.json'),{changed:true}));await assert.rejects(y.run(),/zero-attempt CAS/);
 });
 
+test('历史一次探测回执和评分准入按原字节重放，错误指纹停止',async t=>{
+ const x=setup(t);x.setAvailable(false);assert.equal(await x.run(),true);
+ const dir=path.join(x.batch.p.root,'unissued-preflight-recoveries',x.member.executionId);
+ const receiptFile=path.join(dir,'receipt.json'),admissionFile=path.join(dir,'scoring-admission.json');
+ const {contract:receiptContract,schemaFingerprint:receiptFingerprint,receiptSha256,...receipt}=realAdapter.readJsonRecord(receiptFile).value;
+ const {contract:admissionContract,schemaFingerprint:admissionFingerprint,admissionSha256,...admission}=realAdapter.readJsonRecord(admissionFile).value;
+ assert.deepEqual({contract:receiptContract,schemaFingerprint:receiptFingerprint},recordHeader(receiptContract,receiptContract));
+ assert.deepEqual({contract:admissionContract,schemaFingerprint:admissionFingerprint},recordHeader(admissionContract,admissionContract));
+ const originalReceipt={contract:'conference-reader-unissued-preflight-recovery-v1',...receipt};
+ x.write(receiptFile,{...originalReceipt,receiptSha256:stable(originalReceipt)});
+ const originalAdmission={contract:'conference-unissued-resource-scoring-admission-v1',version:1,...admission,
+  originalRecoveryReceiptFileSha256:realAdapter.readJsonRecord(receiptFile).sha256};
+ x.write(admissionFile,{...originalAdmission,admissionSha256:stable(originalAdmission)});
+ const receiptBytes=fs.readFileSync(receiptFile),admissionBytes=fs.readFileSync(admissionFile);
+ x.forbidProbe();assert.equal(await x.run(),true);assert.equal(x.getProbes(),1);
+ assert.deepEqual(fs.readFileSync(receiptFile),receiptBytes);
+ assert.deepEqual(fs.readFileSync(admissionFile),admissionBytes);
+ fs.writeFileSync(admissionFile,Buffer.concat([admissionBytes,Buffer.from('\n')]));
+ await assert.rejects(x.run(),/admission bytes differ from its original format/);
+ const invalid={contract:admissionContract,schemaFingerprint:'0'.repeat(64),...admission,
+  originalRecoveryReceiptFileSha256:originalAdmission.originalRecoveryReceiptFileSha256};
+ x.write(admissionFile,{...invalid,admissionSha256:stable(invalid)});
+ await assert.rejects(x.run(),/admission differs from actual source\/parent\/feedback receipt/);
+ assert.equal(x.getProbes(),1);
+});
+
 // These added proofs are synthetic ownership markers, never actual PDF evidence.
 test('正常first probe与旧receipt重入的所有mode投影都留在同一child scope',async t=>{const x=setup(t);x.setInterrupt();await assert.rejects(x.run(),/synthetic crash/);assert.equal(await x.run(),true);assert.equal(await x.run(),true);assert.equal(x.getProbes(),1);});
 test('真实写入顺序中断后的saved snapshot只源重放，不二probe或覆写旧七文件',async t=>{const x=setup(t);x.setSnapshotInterrupt();await assert.rejects(x.run(),/after snapshot/);const recovery=path.join(x.batch.p.root,'unissued-preflight-recoveries',x.member.executionId),file=path.join(recovery,'new-preflight.json');const original=realAdapter.readJsonRecord(file);assert.equal(fs.existsSync(path.join(recovery,'receipt.json')),false);const names=fs.readdirSync(path.join(recovery,'before')),hashes=names.map(name=>realAdapter.readJsonRecord(path.join(recovery,'before',name)).sha256);x.forbidProbe();assert.equal(await x.run(),true);assert.equal(x.getProbes(),1);assert.equal(realAdapter.readJsonRecord(file).sha256,original.sha256);for(let i=0;i<names.length;i++)assert.equal(realAdapter.readJsonRecord(path.join(recovery,'before',names[i])).sha256,hashes[i]);const receipt=realAdapter.readJsonRecord(path.join(recovery,'receipt.json')).value;assert.equal(receipt.status,'reader-only-ready');assert.equal(receipt.resumedSavedPreflightFileSha256,original.sha256);assert.equal(receipt.normalProbeInvocations,1);assert.equal(receipt.normalProbeInvocationsThisResume,0);assert.equal(fs.existsSync(path.join(x.dir,'reader-revision.json')),false);});
