@@ -1,8 +1,12 @@
 # Android 验证说明
 
+## 当前源码与已发行版本
+
+Mac 和 Android 的当前源码统一为 **1.3.7（构建号 15）**。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+
 ## 1.3.3 安卓阅读排版修复版
 
-源码版本为 **1.3.3（构建号 11）**，针对自动同步、导读打开速度、DNS 和阅读器异常退出、手机正文排版进行修复。新增紧凑排版和阅读页字号操作见 [1.3.3 审改记录](android-1.3.3-review.md)，自动同步与异常恢复的前序范围见 [1.3.2 审改记录](android-1.3.2-review.md)，正式安装包是否公开以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。该修复版独立更新安卓；Mac 保持 1.3.0，不能把安卓的新增测试记成 Mac 重新验收。
+当时的源码版本为 **1.3.3（构建号 11）**，针对自动同步、导读打开速度、DNS 和阅读器异常退出、手机正文排版进行修复。新增紧凑排版和阅读页字号操作见 [1.3.3 审改记录](android-1.3.3-review.md)，自动同步与异常恢复的前序范围见 [1.3.2 审改记录](android-1.3.2-review.md)，正式安装包是否公开以 [GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)为准。该修复版独立更新安卓；Mac 保持 1.3.0，不能把安卓的新增测试记成 Mac 重新验收。
 
 ## 1.3.0 既有联合发行记录
 
