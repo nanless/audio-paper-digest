@@ -78,7 +78,7 @@ class UtilsTagRulesTests(unittest.TestCase):
         self.assertEqual(parsed['tagValidation'], {
             'valid': True,
             'errors': [],
-            'registryVersion': 'paper-tag-catalog-v2',
+            'registryVersion': 'paper-tag-catalog',
             'registrySha256': load_tag_catalog()['registrySha256'],
             'primaryTaskId': 'task.asr',
             'primaryMethodId': 'method.transformer',

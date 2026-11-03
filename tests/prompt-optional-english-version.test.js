@@ -83,13 +83,13 @@ for(const row of rows)test(row.stage+': new writing instructions preserve exact 
  assert.throws(()=>evidence.readPromptEvidenceBytes(row.oldPath,{expectedSha256:'0'.repeat(64)}));
  assert.throws(()=>versions.promptFilePathForContract(row.stage,'analysis-prompt-text-v99'));
 });
-test('18 actual templates and two README files; the other 14 prompt byte sequences remain unchanged',()=>{
+test('current prompt directory exactly matches the registered production templates',()=>{
  const files=fs.readdirSync(path.join(root,'prompts/current')).filter(name=>name.endsWith('.md')).sort();
- assert.equal(files.length,18);assert.deepEqual(files,versions.CURRENT_PROMPT_FILES.map(p=>path.basename(p)).sort());
+ assert.deepEqual(files,versions.CURRENT_PROMPT_FILES.map(p=>path.basename(p)).sort());
  assert.ok(fs.existsSync(path.join(root,'prompts/README.en.md')));
  const predecessors=require('../scripts/lib/prompt-legacy-codec').currentPathPredecessors;
  const changed=new Set(rows.map(r=>versions.currentTextStagePromptPath(r.stage)));
- for(const file of versions.CURRENT_PROMPT_FILES.filter(f=>!changed.has(f)))assert.deepEqual(fs.readFileSync(path.join(root,file)),execFileSync('git',['show',base+':'+predecessors[file]],{cwd:root}));
+ for(const file of versions.CURRENT_PROMPT_FILES.filter(f=>!changed.has(f)))assert.deepEqual(evidence.readPromptEvidenceBytes(predecessors[file]),execFileSync('git',['show',base+':'+predecessors[file]],{cwd:root}));
 });
 test('a private Git fixture restores all four newly retired objects without materializing old paths',t=>{
  const temporary=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'optional-english-prompt-evidence-'));

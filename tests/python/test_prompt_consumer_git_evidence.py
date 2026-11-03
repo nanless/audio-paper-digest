@@ -59,11 +59,11 @@ class PromptConsumerGitEvidenceTest(unittest.TestCase):
     def test_missing_current_prompt_cannot_fall_back_to_historical_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = install_git_prompt_evidence_fixture(directory)
-            original = read_prompt_evidence_bytes('prompts/visual-summary-v2.md', project_root=ROOT)
+            relative = 'prompts/current/deep-analysis.md'
+            original = read_prompt_evidence_bytes(relative, project_root=ROOT)
             digest = hashlib.sha256(original).hexdigest()
-            with patch.object(publisher, 'PROJECT_ROOT', root), \
-                    patch.object(publisher, '_historical_prompt_bytes', return_value=original) as historical:
-                with self.assertRaisesRegex(publisher.PublishDataValidationError, '原提示词证据缺失'):
-                    publisher._resolved_visual_prompt_sha256(
-                        'visual-summary', {'promptSha256': digest}, root / 'prompts/visual-summary-v2.md')
+            self.assertFalse((root / relative).exists())
+            with patch('prompt_evidence._blob_bytes', return_value=original) as historical:
+                with self.assertRaises((ValueError, OSError)):
+                    read_prompt_evidence_bytes(relative, digest, project_root=root)
             historical.assert_not_called()

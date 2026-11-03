@@ -46,7 +46,7 @@ test('核心v7只纠正表格比较的取证说明，保留原首围栏其余字
     assert.deepEqual(history.promptBytesForSha256('coreSummaryRepair', oldSha), old);
     const templates = fs.readdirSync(path.join(root, 'prompts/current')).filter(f => f.endsWith('.md')
         && !['README.md', 'README.en.md'].includes(f));
-    assert.equal(templates.length, 18); assert.equal(registry.CURRENT_PROMPT_FILES.length, 18);
+    assert.deepEqual(templates.sort(), registry.CURRENT_PROMPT_FILES.map(file => path.basename(file)).sort());
 });
 
 test('真实封存同表不同方法行的同指标比较不应被Prompt错误限制为同行', () => {

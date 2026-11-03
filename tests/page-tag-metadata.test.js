@@ -8,7 +8,7 @@ const contract = 'paper-taxonomy-flat-tags-compat-v1';
 
 test('页面标签识别支持当前字段及原样旧字段，不读取正文中的字段', () => {
     for (const family of ['tags', 'taxonomy']) {
-        for (const version of ['paper-tag-flat-tags-v2', contract]) {
+        for (const version of ['paper-tag-flat-tags', 'paper-tag-flat-tags-v2', contract]) {
             const bytes = page(`paper_digest_${family}_contract: "${version}"`);
             const original = Buffer.from(bytes);
             assert.equal(hasPageTagMetadata(bytes), true);
