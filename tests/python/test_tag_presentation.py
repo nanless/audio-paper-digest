@@ -5,7 +5,7 @@ from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from tag_catalog import load_tag_catalog
+from tag_catalog import load_tag_catalog, tag_catalog_identity
 from tag_presentation import (build_tag_hierarchy, render_tag_hierarchy_markdown,
                              TAG_HIERARCHY_START, TAG_HIERARCHY_END,
                              mask_verified_tag_hierarchy_for_quality)
@@ -16,7 +16,7 @@ class TagPresentationTest(unittest.TestCase):
         self.catalog = load_tag_catalog()
         self.ids = ['task.av-speech-separation', 'method.transformer', 'research_focus.robustness']
         by_id = {node['id']: node for node in self.catalog['concepts']}
-        self.metadata = {'registryVersion': self.catalog['version'], 'registrySha256': self.catalog['registrySha256'],
+        self.metadata = {'registryVersion': tag_catalog_identity(self.catalog), 'registrySha256': self.catalog['registrySha256'],
             'concepts': [{'id': cid, 'facet': by_id[cid]['facet'], 'label': by_id[cid]['preferredLabel']['zh']}
                          for cid in self.ids]}
 

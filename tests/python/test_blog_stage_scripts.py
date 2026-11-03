@@ -49,6 +49,8 @@ assemble_manual_review = load_script(
 with project_env_scope():
     publish_module = load_script('publish-to-blog.py')
 
+from manual_agent_policy import current_review_statement_fields, current_review_subagent_fields
+
 
 class BlogStageEntryTest(unittest.TestCase):
     def test_dynamic_publisher_loader_resolves_manual_compatibility_once(self):
@@ -191,7 +193,7 @@ class BlogStageEntryTest(unittest.TestCase):
                 __import__('json').dumps(manifest), encoding='utf-8',
             )
             common_subagent = {
-                'version': 2, 'modelPolicy': 'manual-agents-sol-high-v2',
+                **current_review_subagent_fields(),
                 'singleFileOnly': True, 'isolatedContext': True,
                 'model': 'gpt-6.1-sol', 'reasoningEffort': 'high',
             }
@@ -228,8 +230,8 @@ class BlogStageEntryTest(unittest.TestCase):
                     encoding='utf-8',
                 )
             )
-            self.assertEqual(output['version'], 4)
-            self.assertEqual(output['modelPolicy'], 'manual-agents-sol-high-v2')
+            self.assertEqual({key: output[key] for key in current_review_statement_fields()},
+                             current_review_statement_fields())
             deleted = next(item for item in output['files'] if item.get('deleted'))
             self.assertIsNone(deleted['sha256'])
             self.assertEqual(deleted['checks'], {'deletionVerified': True})
@@ -262,7 +264,7 @@ class BlogStageEntryTest(unittest.TestCase):
                 'notes': '2607.00001：核对 Conformer 方法、WER 7.1% 结果和公开测试边界。',
                 'issues': [],
                 'reviewSubagent': {
-                    'version': 2, 'modelPolicy': 'manual-agents-sol-high-v2',
+                    **current_review_subagent_fields(),
                     'taskName': 'single-review-2607-00001',
                     'paperId': paper_id, 'singleFileOnly': True,
                     'isolatedContext': True, 'model': 'gpt-6.1-sol',
@@ -282,8 +284,8 @@ class BlogStageEntryTest(unittest.TestCase):
                     ]), contextlib.redirect_stdout(io.StringIO()):
                 assemble_manual_review.main()
             payload = __import__('json').loads(output_path.read_text(encoding='utf-8'))
-            self.assertEqual(payload['version'], 4)
-            self.assertEqual(payload['modelPolicy'], 'manual-agents-sol-high-v2')
+            self.assertEqual({key: payload[key] for key in current_review_statement_fields()},
+                             current_review_statement_fields())
             self.assertEqual(payload['publicationScope'], scope)
             self.assertEqual(len(payload['files']), 1)
             self.assertEqual(batch_output.read_text(encoding='utf-8'), '{"batch":"untouched"}')

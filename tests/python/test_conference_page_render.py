@@ -19,6 +19,7 @@ SPEC.loader.exec_module(MODULE)
 # 从仓库根按点分路径单跑（python -m unittest tests.python.<模块>）时，tests/python
 # 不在 sys.path 上；补一条引导，让三种运行方式都能导入这个平级 helper。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tag_catalog import tag_catalog_identity, resolve_append_only_proof_catalog
 from project_env_isolation import isolate_module_environment  # noqa: E402
 
 # 本模块的用例会走真实入口，入口经 log_setup 读 .env 并写 os.environ。
@@ -84,7 +85,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         catalog = MODULE.load_tag_catalog()
         by_id = {item['id']: item for item in catalog['concepts']}
         leaf = next(item for item in catalog['concepts'] if item['broaderId'] is not None)
-        record = {'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
+        record = {'registryVersion': tag_catalog_identity(catalog), 'registrySha256': catalog['registrySha256'],
                   'concepts': [{'id': leaf['id'], 'facet': leaf['facet'],
                                 'label': leaf['preferredLabel']['zh']}]}
         packet = {'tagPresentationBatch': {'catalog': catalog, 'records': [record, copy.deepcopy(record)]}}
@@ -277,7 +278,7 @@ class ConferencePageRenderTest(unittest.TestCase):
             packet['taxonomy']['flatCompatContract'] = contract
             original = copy.deepcopy(packet)
             page = MODULE.render_packet(packet)['markdown']
-            self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', page)
+            self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags"', page)
             self.assertIn('**研究分类**', page)
             self.assertIn('/papers/?concept=task.asr', page)
             self.assertNotRegex(page, r'(?m)^标签：')
@@ -307,7 +308,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         assignment['concepts'].append({'id': 'research_focus.robustness', 'facet': 'research_focus',
                                        'preferredLabel': {'zh': '鲁棒性', 'en': 'Robustness'}})
         stage = paper['analysisManifest']['stages']['taxonomySeal']
-        stage.update(registrySha256=old_sha, registryVersion=original_catalog['version'],
+        stage.update(registrySha256=old_sha, registryVersion=tag_catalog_identity(original_catalog),
                      conceptIds=list(assignment['conceptIds']), projectionContract=TAG_PROMPT_TEXT_CONTRACT,
                      projectionSha256=tag_prompt_text_sha256(original_catalog, TAG_PROMPT_TEXT_CONTRACT))
         saved = copy.deepcopy(packet)
@@ -364,7 +365,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         result = MODULE.render_packet(packet)
         self.assertIn(f'paper_digest_tags_registry_sha256: "{current["registrySha256"]}"', result['markdown'])
         self.assertEqual(packet, original)
-        self.assertIsNone(MODULE.resolve_append_only_proof_catalog(old_sha, current))
+        self.assertIsNone(resolve_append_only_proof_catalog(old_sha, current))
         for mutation in ('projection', 'checkpoint', 'binding', 'chain', 'selection', 'archive', 'catalog'):
             bad = copy.deepcopy(packet)
             old_stage = bad['paper']['analysisManifest']['stages']['taxonomySeal']
@@ -449,7 +450,7 @@ class ConferencePageRenderTest(unittest.TestCase):
                                                     'apiReaderResourceIdentity': 'api-reader-resource-identity-v1',
                                                     'taxonomy': 'paper-taxonomy-selection-v1'},
                                       'stages': {
-                                          'taxonomySeal': {'status': 'complete', 'registryVersion': catalog['version'],
+                                          'taxonomySeal': {'status': 'complete', 'registryVersion': tag_catalog_identity(catalog),
                                                            'registrySha256': catalog['registrySha256'],
                                                            'primaryTaskId': 'task.asr',
                                                            'primaryMethodId': 'method.transformer',
@@ -465,6 +466,8 @@ class ConferencePageRenderTest(unittest.TestCase):
                                                                'sourceBindingsSha256': plan['sourceBindingsSha256'],
                                                                'structuredArtifactsSha256': '2' * 64,
                                                                'readerAuthorsSha256': stable_sha(authors),
+                                                               'readerAuthorIdentityContractVersion': authors['identity']['contract'],
+                                                               'resourceIdentityContractVersion': resources['contract'],
                                                                'readerAuthorIdentitySha256': authors['identitySha256'],
                                                                'resourceIdentitySha256': resources['identitySha256'],
                                                                'resourceCount': 0}}}}
@@ -475,7 +478,7 @@ class ConferencePageRenderTest(unittest.TestCase):
                 'publication': publication,
                 'taxonomy': {'status': 'assigned', 'paperId': paper_id, 'primaryTaskId': 'task.asr',
                              'primaryMethodId': 'method.transformer', 'conceptIds': ['task.asr', 'method.transformer'],
-                             'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
+                             'registryVersion': tag_catalog_identity(catalog), 'registrySha256': catalog['registrySha256'],
                              'selectionContract': 'paper-taxonomy-selection-v1',
                              'flatCompatContract': 'paper-taxonomy-flat-tags-compat-v1', 'concepts': concepts}}
 
@@ -491,7 +494,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertEqual(paper['analysis'], old_text)
         self.assertEqual(stage['outputAnalysisSha256'], old_sha)
         paper['analysis'] = old_text.replace('## 毒舌点评\n', '## 论文评价\n')
-        with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
+        with self.assertRaisesRegex(ValueError, '评分要求'):
             MODULE.render_packet(packet)
         stage['outputAnalysisSha256'] = hashlib.sha256(paper['analysis'].encode()).hexdigest()
         self.assertEqual(MODULE.render_packet(packet)['markdown'], old_page)
@@ -510,7 +513,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         paper['analysis'] = paper['analysis'].replace('## 论文评价\n', '```md\n## 论文评价\n```\n')
         paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = (
             hashlib.sha256(paper['analysis'].encode()).hexdigest())
-        with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
+        with self.assertRaisesRegex(ValueError, '评分要求'):
             MODULE.render_packet(packet)
 
     def test_generic_identity_and_unavailable_structure_are_rendered_without_arxiv(self):
@@ -519,10 +522,10 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertNotIn('paper_digest_arxiv_id', result['markdown'])
         self.assertNotIn('arxiv.org', result['markdown'].lower())
         self.assertIn('表格、公式和论文图片均不可用', result['markdown'])
-        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', result['markdown'])
+        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags"', result['markdown'])
         self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v3"', result['markdown'])
         self.assertIn('paper_digest_api_reader_source_binding_contract: "api-reader-source-bindings-v4"', result['markdown'])
-        self.assertIn('paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"', result['markdown'])
+        self.assertIn('paper_digest_api_reader_decision_projection: "api-reader-decision-projection"', result['markdown'])
         self.assertIn('paper_digest_conference_record_url: "https://ieeexplore.ieee.org/document/100"', result['markdown'])
         self.assertIn('创新 1.7/2', result['markdown'])
         self.assertIn('## 👥 作者与机构', result['markdown'])
@@ -531,7 +534,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertIn('可达状态仅表示本次链接检查结果', result['markdown'])
         self.assertIn('## ⚖️ 评分明细', result['markdown'])
         self.assertEqual(len(result['assets']), 4)
-        self.assertTrue(all(asset['path'].startswith('static/data/papers/') for asset in result['assets']))
+        self.assertTrue(all(asset['path'].startswith('static/client/papers/') for asset in result['assets']))
 
     def test_short_proceedings_profile_is_visible_without_abstract_downgrade(self):
         packet = self.packet()
@@ -624,10 +627,10 @@ class ConferencePageRenderTest(unittest.TestCase):
 
     def test_reader_scoring_tag_selection_and_official_urls_fail_closed(self):
         packet = self.packet(); packet['paper']['apiReaderPlan']['sourceBindingsContract'] = 'api-reader-source-bindings-v3'
-        with self.assertRaisesRegex(ValueError, 'source-bindings-v4'):
+        with self.assertRaisesRegex(ValueError, '来源绑定声明'):
             MODULE.render_packet(packet)
         packet = self.packet(); packet['paper']['analysisManifest']['stages']['scoringAudit']['scoringContract'] = 'legacy'
-        with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
+        with self.assertRaisesRegex(ValueError, '评分要求'):
             MODULE.render_packet(packet)
         packet = self.packet(); packet['taxonomy']['registrySha256'] = 'b' * 64
         with self.assertRaisesRegex(ValueError, '会议论文的标签选择记录与分析阶段记录的协议、词表或所选标签不一致，或标签阶段尚未完成。'):
@@ -690,7 +693,7 @@ class ConferencePageRenderTest(unittest.TestCase):
             target[field.removeprefix('stage.')] = value
             with self.subTest(field=field, value=value):
                 self.assertFalse(MODULE.scoring_stability_is_resolved(bad_stage))
-                with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
+                with self.assertRaisesRegex(ValueError, '评分要求'):
                     MODULE.render_packet(bad)
 
     def test_scoring_stability_requires_finite_base_scores(self):

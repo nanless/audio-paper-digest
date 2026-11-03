@@ -201,7 +201,7 @@ process.stdout.write(JSON.stringify(buildFormulaEvidenceRecord(JSON.parse(fs.rea
         self.assertEqual(len([asset for asset in rendered["assets"]
                               if asset['path'].startswith('static/images/')]), 1)
         self.assertEqual(len([asset for asset in rendered["assets"]
-                              if asset['path'].startswith('static/data/papers/')]), 4)
+                              if asset['path'].startswith('static/client/papers/')]), 4)
         asset = rendered["assets"][0]
         self.assertRegex(asset["path"], r"^static/images/conference/icassp-2026/[a-f0-9]{12}/figure-1\.png$")
         self.assertEqual(asset["base64"], structures["formulas"][0]["sourceExpression"]["crop"]["base64"])

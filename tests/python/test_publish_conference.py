@@ -14,6 +14,8 @@ sys.path.insert(0, str(SCRIPT.parent))
 # 从仓库根按点分路径单跑（python -m unittest tests.python.<模块>）时，tests/python
 # 不在 sys.path 上；补一条引导，让三种运行方式都能导入这个平级 helper。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tag_catalog import tag_catalog_identity
+from protocol_codec import record_header
 from project_env_isolation import (  # noqa: E402
     isolate_module_environment, restore_environment_after,
 )
@@ -73,7 +75,7 @@ class ConferencePublishTests(unittest.TestCase):
         publisher = M.load_publish_to_blog()
         self.tag_catalog = publisher._PAGE_TAG_CATALOG
         snapshot = publisher.build_tag_catalog_snapshot(self.tag_catalog)
-        versions = {'contract': publisher.TAG_CATALOG_VERSIONS_CONTRACT,
+        versions = {**record_header(publisher.TAG_CATALOG_VERSIONS_CONTRACT, 'paper-tag-catalog-versions'),
                     'currentSha256': snapshot['registrySha256'], 'snapshots': [snapshot]}
         for prefix in ('data', 'static/data'):
             for name, value in [('tag-catalog-snapshot.json', snapshot),
@@ -111,7 +113,7 @@ class ConferencePublishTests(unittest.TestCase):
         if data is None:
             data = ('---\ntitle: test\n'
                     f'paper_digest_tags_registry_sha256: "{self.tag_catalog["registrySha256"]}"\n'
-                    f'paper_digest_tags_registry_version: "{self.tag_catalog["version"]}"\n'
+                    f'paper_digest_tags_registry_version: "{tag_catalog_identity(self.tag_catalog)}"\n'
                     '---\n正文\n').encode()
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +140,7 @@ class ConferencePublishTests(unittest.TestCase):
 
     def test_catalog_guard_rejects_mixed_prefix_partial_duplicate_and_bad_identity(self):
         sha = self.tag_catalog['registrySha256']
-        version = self.tag_catalog['version']
+        version = tag_catalog_identity(self.tag_catalog)
         cases = [
             f'paper_digest_tags_registry_sha256: "{sha}"\n'
             f'paper_digest_taxonomy_registry_version: "{version}"\n',
@@ -164,7 +166,7 @@ class ConferencePublishTests(unittest.TestCase):
         record = self.record(data=(
             "---\n"
             f"paper_digest_tags_registry_sha256: '{self.tag_catalog['registrySha256']}'\n"
-            f"paper_digest_tags_registry_version: '{self.tag_catalog['version']}'\n"
+            f"paper_digest_tags_registry_version: '{tag_catalog_identity(self.tag_catalog)}'\n"
             "---\n正文\n").encode())
         self.assertEqual(len(M.validate_conference_tag_catalogs(self.repo, [record, record])), 1)
 
@@ -849,7 +851,7 @@ class ConferencePublishTests(unittest.TestCase):
         directory = M.publication_dir(conference_id, process_id)
         M.write_exact(directory / 'generation.json', M.json_bytes(old))
         reviewer = FakeReviewer()
-        gate = {'status': 'passed', 'contract': M.GATE_CONTRACT,
+        gate = {'status': 'passed', **M.mechanical_gate_header(),
                 'implementationSha256': M.gate_fingerprint(),
                 'pages': [{'path': record['path'], 'sourceSha256': record['sourceSha256']}
                           for record in previous['files']]}
@@ -1006,13 +1008,13 @@ class PreContentReviewV2ReceiptTest(ConferencePublishTests):
 
     def v2_generation(self):
         page = self.record()
-        body = {'version': 2, 'conferenceId': 'uai-2026',
+        body = {'contract': 'conference-blog-generation-v1', 'version': 2, 'conferenceId': 'uai-2026',
                 'processId': '2d881273-2bbb-4c38-a56f-465daa8a5a43',
                 'baseHead': self.base['head'], 'files': [page], 'imageFiles': []}
         return {**body, 'generationSha256': M.stable(body)}
 
     def v2_receipt(self, generation, *, content_review='absent', pages='closed'):
-        gate = {'status': 'passed', 'contract': M.GATE_CONTRACT,
+        gate = {'status': 'passed', **M.mechanical_gate_header(),
                 'implementationSha256': M.gate_fingerprint()}
         if pages == 'closed':
             gate['pages'] = [{'path': r['path'], 'sourceSha256': r['sourceSha256']}
