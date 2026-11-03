@@ -23,6 +23,8 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
+1.4.0 的双端 WebDAV 全资料同步、坚果云测试和正式安装包验收见[1.4.0 记录](workbench-1.4.0-review.md)。
+
 1.3.0 的分类浏览、两端界面、正式包、升级与公开下载范围，见[1.3.0 记录](workbench-1.3.0-review.md)。其他版本的验收保留各自的时间、环境和范围，不能据此推定当前包重新完成了全部真实服务测试。
 
 ### 查应用实现、备份与存档
@@ -92,7 +94,7 @@
 
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
-- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)。
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
 

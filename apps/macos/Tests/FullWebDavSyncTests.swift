@@ -166,7 +166,10 @@ private actor SyncDAVFixture {
         }
         switch args[1] {
         case "seed":
-            _ = try seed(root, source: mac)
+            let directory = try seed(root, source: mac)
+            let export = directory.appendingPathComponent("Exports/macos-full-sync.txt")
+            try fm.createDirectory(at: export.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("Mac full-sync original\n".utf8).write(to: export, options: .withoutOverwriting)
             print("LIVE MAC SEEDED")
         case "sync":
             let directory = try verifiedWorkspace(root)
@@ -179,7 +182,10 @@ private actor SyncDAVFixture {
             let result = try await run(directory, context)
             print("LIVE MAC SYNC files=\(result.files) conflicts=\(result.conflicts)")
         case "verify":
-            try verify(verifiedWorkspace(root), source: mac, fixture: fixture)
+            let directory = try verifiedWorkspace(root)
+            try verify(directory, source: mac, fixture: fixture)
+            let export = try PrivateStoragePaths.checkedFile(relative: "Exports/android-full-sync.txt", directory: directory)
+            guard try PrivateStoragePaths.boundedData(export, limit: 4096) == Data("Android full-sync original\n".utf8) else { throw TestFailure.fixture }
             print("LIVE MAC VERIFIED")
         default: throw TestFailure.unsafeLiveArguments
         }
