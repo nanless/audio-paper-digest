@@ -81,6 +81,31 @@ test('历史一次探测回执和评分准入按原字节重放，错误指纹�
  assert.equal(x.getProbes(),1);
 });
 
+test('reader-only续跑拒绝重新计算SHA的错误探测次数、未知字段和不完整的续跑字段',async t=>{
+ const x=setup(t);assert.equal(await x.run(),true);
+ const recovery=path.join(x.batch.p.root,'unissued-preflight-recoveries',x.member.executionId);
+ const receiptFile=path.join(recovery,'receipt.json');
+ const childPreflight=path.join(x.dir,'reader-resource-preflight.json');
+ const preflightBytes=fs.readFileSync(childPreflight);
+ const {receiptSha256,...receipt}=realAdapter.readJsonRecord(receiptFile).value;
+ assert.equal(receipt.status,'reader-only-ready');
+ x.forbidProbe();
+ for(const change of [
+  {normalProbeInvocations:0},
+  {unrecognized:true},
+  {normalProbeInvocationsThisResume:0},
+  {resumedSavedPreflightFileSha256:receipt.newPreflightFileSha256},
+  {resumedSavedPreflightFileSha256:'0'.repeat(64),normalProbeInvocationsThisResume:0},
+  {resumedSavedPreflightFileSha256:receipt.newPreflightFileSha256,normalProbeInvocationsThisResume:1},
+ ]){
+  const malformed={...receipt,...change};
+  x.write(receiptFile,{...malformed,receiptSha256:stable(malformed)});
+  await assert.rejects(x.run(),/unissued recovery receipt (has unexpected or missing fields|requires one original probe)/);
+  assert.deepEqual(fs.readFileSync(childPreflight),preflightBytes);
+  assert.equal(x.getProbes(),1);
+ }
+});
+
 // These added proofs are synthetic ownership markers, never actual PDF evidence.
 test('正常first probe与旧receipt重入的所有mode投影都留在同一child scope',async t=>{const x=setup(t);x.setInterrupt();await assert.rejects(x.run(),/synthetic crash/);assert.equal(await x.run(),true);assert.equal(await x.run(),true);assert.equal(x.getProbes(),1);});
 test('真实写入顺序中断后的saved snapshot只源重放，不二probe或覆写旧七文件',async t=>{const x=setup(t);x.setSnapshotInterrupt();await assert.rejects(x.run(),/after snapshot/);const recovery=path.join(x.batch.p.root,'unissued-preflight-recoveries',x.member.executionId),file=path.join(recovery,'new-preflight.json');const original=realAdapter.readJsonRecord(file);assert.equal(fs.existsSync(path.join(recovery,'receipt.json')),false);const names=fs.readdirSync(path.join(recovery,'before')),hashes=names.map(name=>realAdapter.readJsonRecord(path.join(recovery,'before',name)).sha256);x.forbidProbe();assert.equal(await x.run(),true);assert.equal(x.getProbes(),1);assert.equal(realAdapter.readJsonRecord(file).sha256,original.sha256);for(let i=0;i<names.length;i++)assert.equal(realAdapter.readJsonRecord(path.join(recovery,'before',names[i])).sha256,hashes[i]);const receipt=realAdapter.readJsonRecord(path.join(recovery,'receipt.json')).value;assert.equal(receipt.status,'reader-only-ready');assert.equal(receipt.resumedSavedPreflightFileSha256,original.sha256);assert.equal(receipt.normalProbeInvocations,1);assert.equal(receipt.normalProbeInvocationsThisResume,0);assert.equal(fs.existsSync(path.join(x.dir,'reader-revision.json')),false);});

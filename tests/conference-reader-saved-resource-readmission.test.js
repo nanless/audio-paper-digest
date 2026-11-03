@@ -9,7 +9,7 @@ const stable=x=>sha(JSON.stringify(sorted(x))),SHA=/^[a-f0-9]{64}$/u;
 const check=(v,m)=>{if(!v)throw Error(m);};
 const self=(x,k)=>{const {[k]:signature,...body}=x;check(signature===stable(body),'self hash '+k);};
 const source=fs.readFileSync(path.join(ROOT,'scripts/lib/conference-reader-review-maintenance.js'),'utf8');
-const start=source.indexOf('function readSavedResourceReadmission('),end=source.indexOf('function savedResourceReaderContext(',start);
+const start=source.indexOf('function validateUnissuedPreflightReceipt('),end=source.indexOf('function savedResourceReaderContext(',start);
 assert.ok(start>=0&&end>start,'private readmission functions must be present in actual implementation');
 const code=source.slice(start,end);
 function protectedScience(p){const stages=structuredClone(p.analysisManifest?.stages||{}),checkpoints=structuredClone(p.analysisStageCheckpoints||{});for(const k of ['apiReaderArticle','imageSupplement','openSourceScan'])delete stages[k];delete checkpoints.apiReaderArticle;return {analysis:p.analysis,analysisCheckpoint:p.analysisCheckpoint,parsed:p.parsed,scoringAudit:p.scoringAudit,sourceSha256:p.sourceSha256,stages,checkpoints};}

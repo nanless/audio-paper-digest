@@ -359,6 +359,21 @@ function firstReadmittedResourceThreeImageReaderSuccess(loaded,stage) {
         'saved readmitted three-image Reader needs original stop/binding first-success history');
     return true;
 }
+function validateUnissuedPreflightReceipt(receipt) {
+    const family='conference-reader-unissued-preflight-recovery';
+    check(codec.hasValidHeader(receipt,family),'unissued recovery receipt has an unknown format');
+    const header=codec.recordHeader(receipt.contract,family,receipt.schemaFingerprint);
+    const resumed=Object.hasOwn(receipt,'resumedSavedPreflightFileSha256');
+    const keys=[...Object.keys(header),'manifestSha256','manifestFileSha256','paperId','executionId','parentCAS','before',
+        'oldMemberProgressFileSha256','newPreflightFileSha256','oldIdentitySha256','newIdentitySha256',
+        'normalProbeInvocations','status','receiptSha256',
+        ...(resumed?['resumedSavedPreflightFileSha256','normalProbeInvocationsThisResume']:[])];
+    check(same(Object.keys(receipt).sort(),keys.sort()),'unissued recovery receipt has unexpected or missing fields');
+    check(receipt.normalProbeInvocations===1&&['reader-only-ready','still-requires-scoring'].includes(receipt.status)
+        &&(!resumed||(receipt.resumedSavedPreflightFileSha256===receipt.newPreflightFileSha256
+            &&receipt.normalProbeInvocationsThisResume===0)),
+        'unissued recovery receipt requires one original probe and an exact resume binding');
+}
 function readSavedResourceReadmission(loaded,paper,batch,member) {
     assertCurrentBatch(batch);
     const records=new Map(),pinnedRead=filename=>{const record=read(filename);records.set(filename,record.sha256);return record;};
@@ -391,20 +406,10 @@ function readSavedResourceReadmission(loaded,paper,batch,member) {
     check(same(fs.readdirSync(directory).sort(),['before','new-preflight.json','receipt.json']),
         'saved readmission requires exact original recovery directory');
     const row=pinnedRead(path.join(directory,'receipt.json')),r=row.value;self(r,'receiptSha256');
-    check(codec.hasValidHeader(r,'conference-reader-unissued-preflight-recovery'),'saved readmission unknown receipt format');
-    const receiptHeader=codec.recordHeader(r.contract,'conference-reader-unissued-preflight-recovery',r.schemaFingerprint);
-    const receiptKeys=[...Object.keys(receiptHeader),'manifestSha256','manifestFileSha256','paperId','executionId','parentCAS','before',
-        'oldMemberProgressFileSha256','newPreflightFileSha256','oldIdentitySha256','newIdentitySha256',
-        'normalProbeInvocations','status','receiptSha256',
-        ...(Object.hasOwn(r,'resumedSavedPreflightFileSha256')?['resumedSavedPreflightFileSha256','normalProbeInvocationsThisResume']:[])];
-    check(same(Object.keys(r).sort(),receiptKeys.sort()),'saved readmission unknown receipt fields');
-    check(r.status==='reader-only-ready'
-        &&r.normalProbeInvocations===1&&r.executionId===member.executionId&&r.paperId===member.paperId
+    validateUnissuedPreflightReceipt(r);
+    check(r.status==='reader-only-ready'&&r.executionId===member.executionId&&r.paperId===member.paperId
         &&r.manifestSha256===batch.m.manifestSha256&&r.manifestFileSha256===batch.manifestFileSha256
-        &&same(r.parentCAS,member.parentCAS)
-        &&(!Object.hasOwn(r,'resumedSavedPreflightFileSha256')
-            ?!Object.hasOwn(r,'normalProbeInvocationsThisResume')
-            :r.resumedSavedPreflightFileSha256===r.newPreflightFileSha256&&r.normalProbeInvocationsThisResume===0),
+        &&same(r.parentCAS,member.parentCAS),
         'saved readmission requires actual original reader-only one-probe receipt');
     const names=['analysis.json','intent.json','reader-resource-preflight.json','run.json','source.json'];
     const beforeDirectory=path.join(directory,'before');
@@ -1479,8 +1484,8 @@ function unissuedScoringFiles(batch,member) {
 function readUnissuedScoringReceipt(batch,member,parent) {
     const p=unissuedScoringFiles(batch,member),row=read(p.receipt),r=row.value;
     self(r,'receiptSha256');
-    check(codec.hasValidHeader(r,'conference-reader-unissued-preflight-recovery')&&r.status==='still-requires-scoring'
-        &&r.normalProbeInvocations===1&&r.executionId===member.executionId&&r.paperId===member.paperId
+    validateUnissuedPreflightReceipt(r);
+    check(r.status==='still-requires-scoring'&&r.executionId===member.executionId&&r.paperId===member.paperId
         &&r.manifestSha256===batch.m.manifestSha256&&r.manifestFileSha256===batch.manifestFileSha256
         &&same(r.parentCAS,member.parentCAS),'unissued scoring requires actual original one-probe receipt');
     const names=['analysis.json','intent.json','reader-resource-preflight.json','run.json','source.json'];
@@ -2244,8 +2249,8 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
         let receipt;
         if(fs.existsSync(receiptFile)) {
             const row=read(receiptFile);self(row.value,'receiptSha256');receipt=row.value;
-            check(codec.hasValidHeader(receipt,'conference-reader-unissued-preflight-recovery')
-                &&receipt.manifestSha256===batch.m.manifestSha256&&receipt.manifestFileSha256===batch.manifestFileSha256
+            validateUnissuedPreflightReceipt(receipt);
+            check(receipt.manifestSha256===batch.m.manifestSha256&&receipt.manifestFileSha256===batch.manifestFileSha256
                 &&receipt.executionId===selected.executionId&&receipt.paperId===member.paperId
                 &&same(receipt.parentCAS,member.parentCAS),'unissued recovery receipt belongs to another parent/obligation');
             const restored=read(newFile);check(restored.sha256===receipt.newPreflightFileSha256,'unissued new preflight snapshot changed');
