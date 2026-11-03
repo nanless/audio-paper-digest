@@ -11,7 +11,7 @@ function fixture(mode = 'scoring-and-reader') {
     const code = fs.readFileSync(file, 'utf8');
     const start = code.indexOf('function projectReaderResourceScan('), end = code.indexOf('function projectMainCheckpoint(', start);
     const text = 'Original sealed conference source', sourceSha256 = sha(text);
-    const resources = { identitySha256: 'b'.repeat(64), fixtureOnly: true };
+    const resources = { contract: 'api-reader-resource-identity-v1', identitySha256: 'b'.repeat(64), fixtureOnly: true };
     const scan = { status: 'complete', resourceEvidenceContract: 'api-reader-resource-identity-v1', resourceEvidenceSha256: 'a'.repeat(64), unchangedEvidence: 'original' };
     const parent = { id: 'conference:test:paper', source: 'conference', sourceSha256,
         analysis: 'Exact scored main', parsed: { score: 7 }, apiReaderResources: structuredClone(resources),
@@ -37,6 +37,7 @@ function fixture(mode = 'scoring-and-reader') {
         isDeepStrictEqual: (a, b) => isDeepStrictEqual(structuredClone(a), structuredClone(b)),
         fail: message => { throw Error(message); }, read: name => { assert.equal(name, '/fixture/child/reader-resource-preflight.json'); return preflight; },
         require(name) {
+            if (name === './reader-identity-format') return require('../scripts/lib/reader-identity-format');
             if (name === './conference-analysis-context') return { getConferenceAnalysisContext: () => context };
             if (name === '../deep-analyzer') return { replayVerifiedReaderResourceIdentity(value, supplied) { replayCount++; assert.deepEqual(value, raw.apiReaderResources); assert.equal(supplied, text); } };
             if (name === './conference-source-context') return { readerPdfSourceForContext: value => { assert.equal(value, pdf); return { assertUnchanged() { if (!sourceOkay) throw Error('source drift'); } }; } };

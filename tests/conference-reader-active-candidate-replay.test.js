@@ -26,7 +26,8 @@ function fixture(t, identityOverrides = {}) {
         completedAt: '2026-10-16T00:00:00.000Z', papers: [paper] }, parent.analysisFileSha256);
     adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: parentId }));
     parent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: parentId });
-    const executionId = adapter.readerRevisionExecutionId(parentId, parent.analysisFileSha256);
+    const originalRevisionHeader = { contract: 'conference-reader-source-revision-v1', version: 1 };
+    const executionId = adapter.readerRevisionExecutionId(parentId, parent.analysisFileSha256, originalRevisionHeader);
     adapter.prepareConferenceAnalysis({ analysisRoot, executionId, planHandle: f.planHandle,
         sourceRoot: f.sourceRoot, paperId: f.paperId });
     let child = adapter.loadConferenceAnalysis({ analysisRoot, executionId });
@@ -34,7 +35,7 @@ function fixture(t, identityOverrides = {}) {
     const resources = { ...resourcesBody, identitySha256: deep.stableFingerprint(resourcesBody) };
     const preflight = Buffer.from(JSON.stringify(resources));
     fs.writeFileSync(path.join(child.directory, 'reader-resource-preflight.json'), preflight, { mode: 0o600 });
-    const body = { contract: 'conference-reader-source-revision-v1', version: 1, executionId, parentExecutionId: parentId,
+    const body = { ...originalRevisionHeader, executionId, parentExecutionId: parentId,
         parentAnalysisFileSha256: parent.analysisFileSha256, parentRunFileSha256: parent.runFileSha256,
         paperId: f.paperId, sourceSnapshotSha256: parent.run.sourceSnapshotSha256, mode: 'reader-only', maxAttempts: 3,
         resourcePreflightFileSha256: sha(preflight), seededAnalysisSha256: 'a'.repeat(64) };

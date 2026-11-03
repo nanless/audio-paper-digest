@@ -25,6 +25,7 @@ function fixture(){
  const env={path,scientificParentReplay,sourceLineageRecords,isDeepStrictEqual:same,clone:structuredClone,
   fail:message=>{throw Error(message)},isSourceCorrectionRecord:paper=>!!paper.conferenceSourceCorrection,
   require:name=>{
+   if(name==='./protocol-codec')return require('../scripts/lib/protocol-codec');
    if(name==='../config')return{FILES:{conferenceAnalysisDir:'/analysis'}};
    if(name==='./conference-analysis-adapter')return adapter;
    if(name==='./analysis-stop-control')return{withModelRequestsForbidden:callback=>{controls.modelForbidden++;return callback()}};

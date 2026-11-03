@@ -45,8 +45,10 @@ function initial(f, parentId, childId) {
 }
 function manifest(f, members, mutate = () => {}, grantId = crypto.randomUUID()) {
     const state = adapter.readJsonRecord(path.join(f.grant.processDirectory, 'state.json'));
-    const body = { ...clone(f.grant.manifest), version: 3, grantId,
+    const header = require('../scripts/lib/protocol-codec').recordHeader(grants.CONTRACT, 'conference-recovery-grant');
+    const body = { ...clone(f.grant.manifest), ...header, grantId,
         baselineStateFileSha256: state.sha256, baselineGeneration: state.value.generation, members: clone(members) };
+    delete body.version;
     delete body.manifestSha256; mutate(body); body.inventorySha256 = api.stableHash(body.members);
     const value = { ...body, manifestSha256: api.stableHash(body) };
     const manifestPath = path.join(f.grant.repositoryRoot, grantId + '.json'); write(manifestPath, value);
@@ -84,12 +86,13 @@ async function mixed(t) {
     state.items[ordinary.paperId] = clone(ordinary.grant.state.items[ordinary.paperId]); state.generation++; saveState(f, state);
     const material = grants.recoveryWindowMaterials(f.analysisRoot, prior.child.run.executionId);
     const continued = { ...member(f, f.parentExecutionId, prior.child.run.executionId), continuation: {
-        contract: grants.CONTINUATION, grantId: prior.authority.grantId, grantSha256: prior.authority.grantSha256,
+        ...require('../scripts/lib/protocol-codec').recordHeader(grants.CONTINUATION, 'conference-recovery-window-continuation'),
+        grantId: prior.authority.grantId, grantSha256: prior.authority.grantSha256,
         materialsSha256: material.materialsSha256, ledgerFileSha256: material.ledgerFileSha256 } };
     t.after(() => { post.readOriginalTagProof = originalProofReader; });
     return { f, prior, ordinary, state, members: [continued, initial(f, ordinary.parentExecutionId, ordinary.failedExecutionId)] };
 }
-test('v3真实混合成员共用opaque恢复入口，新账独立且旧材料逐字保留', async t => {
+test('新登记的混合成员共用opaque恢复入口，新账独立且旧材料逐字保留', async t => {
     const { f, prior, ordinary, members } = await mixed(t), m = manifest(f, members);
     const old = grants.recoveryWindowMaterials(f.analysisRoot, prior.child.run.executionId);
     const handle = grants.openRecoveryGrant({ ...m.options, install: true });
