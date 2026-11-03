@@ -12,11 +12,12 @@ const pdfPath = 'scripts/lib/reader-pdf-cell-evidence.js';
 const pdfWorkerPath = 'scripts/reader_pdf_cell_evidence.py';
 const dependencies = [analysisPath, pdfPath, pdfWorkerPath];
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
-// The registered worker change translates sealed-source headers at the
-// transport boundary. DOM-only replay still runs the original Git module.
+// Only these reviewed transport changes are accepted. The DOM-only replay
+// still loads the original PDF and Markdown code from verified Git bytes.
 const transportChanges = new Map([
     [pdfPath, ['ff5451ac0c88a4c4784c6731105a99b95d18d952280a41e60eca257ab4f55db2',
-        '91fbe48eb3e43ffd902ca0be1b81e1acb9e53252f28a894e98c3d092f87694a8']],
+        '91fbe48eb3e43ffd902ca0be1b81e1acb9e53252f28a894e98c3d092f87694a8',
+        'a074a66a3561c65017b9dea50fa911d74dd062d122219a4cb915ecdd5d1a4874']],
     [pdfWorkerPath, ['0ed8b2df8869d62e05b97c14ef7fc4a49436898378556428de4292e2cd387da3',
         'b3d42c339796790212d5b64750e93962927ee4c1a417a5c399be8af497c0de23']]
 ]);
@@ -26,7 +27,7 @@ function matchesRuntime(record) {
     if (record.path === analysisPath) return true;
     const actual = hash(fs.readFileSync(path.join(repository, record.path)));
     const registered = transportChanges.get(record.path);
-    return actual === record.sha256 || registered?.[0] === record.sha256 && actual === registered[1];
+    return actual === record.sha256 || registered?.[0] === record.sha256 && registered.slice(1).includes(actual);
 }
 function loadOriginalPdfDom(record) {
     const filename = path.join(repository, record.path);

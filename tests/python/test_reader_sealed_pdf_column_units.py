@@ -20,6 +20,25 @@ def fixture(mean_sd=False,internal_gap=False,duplicate_bottom=False):
     return raw,table,matrix,[quote]
 
 class PdfColumnUnitsTests(unittest.TestCase):
+    def test_stable_projection_retains_exact_original_pdf_proof_and_digest(self):
+        from protocol_codec import is_current_header
+        from reader_pdf_column_unit_projection import project_pdf_bytes
+        raw, table, view, quotes = fixture()
+        original = rule.prove_pdf_bytes(raw, [table], view, quotes)
+        projected = project_pdf_bytes(raw, [table], view, quotes)
+        self.assertTrue(is_current_header(projected, 'reader-pdf-column-unit-projection'))
+        self.assertEqual(projected['originalProof'], original)
+        self.assertEqual(projected['originalEvidenceSha256'], original['evidenceSha256'])
+        from unittest.mock import patch
+        with patch('reader_pdf_column_unit_projection.prove_pdf_bytes',
+                   return_value={**original, 'evidenceSha256': '0' * 64}):
+            with self.assertRaisesRegex(RuntimeError, 'digest differs'):
+                project_pdf_bytes(raw, [table], view, quotes)
+        altered = copy.deepcopy(view)
+        altered[1][1] = '99.999'
+        with self.assertRaises(ValueError):
+            project_pdf_bytes(raw, [table], altered, quotes)
+
     def test_full_literal_geometry_only_assigns_its_real_columns(self):
         raw,table,view,quotes=fixture();proof=rule.prove_pdf_bytes(raw,[table],view,quotes)
         self.assertEqual(proof['contract'],rule.CONTRACT);self.assertEqual(len(proof['cells']),9)

@@ -3,9 +3,12 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
+const formats = require('./protocol-codec');
 const CONTRACT = 'reader-sealed-pdf-column-units-v1';
 const root = path.resolve(__dirname, '../..');
-const program = path.join(root, 'scripts/reader_sealed_pdf_column_units.py');
+const PROJECTION = 'reader-pdf-column-unit-projection';
+const program = path.join(root, 'scripts/reader_pdf_column_unit_projection.py');
+const domProgram = path.join(root, 'scripts/reader_sealed_pdf_column_units.py');
 const quoteProgram = path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py');
 const literalProgram = path.join(root, 'scripts/reader_sealed_pdf_literal_column_units.py');
 const geometryProgram = path.join(root, 'scripts/reader_authenticated_pdf_hierarchical_table.py');
@@ -28,7 +31,8 @@ function deriveBundle(expectation, view, quotes) {
         || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(run)) throw new Error('Column units require the actual daily sealed source root');
     return require('./fresh-analysis-context').withVerifiedBundleReaderAuthorFiles(expectation, source => {
         const api = require('./fresh-arxiv-rewrite-source'), before = api.readFreshArxivRewriteSource(expectation);
-        const files = [program, quoteProgram, literalProgram, geometryProgram], implementation = files.map(file => sha(fs.readFileSync(file)));
+        const files = [domProgram, quoteProgram, literalProgram, geometryProgram], implementation = files.map(file => sha(fs.readFileSync(file)));
+        const projectionSha256 = sha(fs.readFileSync(program));
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sealed-pdf-column-units-')); fs.chmodSync(directory, 0o700);
         let fd;
         try {
@@ -36,14 +40,21 @@ function deriveBundle(expectation, view, quotes) {
             fs.writeFileSync(filename, JSON.stringify({ pdfBase64: before.pdf.toString('base64'), pdfSha256: sha(before.pdf),
                 tables: source.structuredArtifacts.tables, view, quotes }), { mode: 0o600 });
             fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-            const result = JSON.parse(require('./reader-pdf-extraction-scope').runPdfExtractor(program, fd, files.slice(1)));
+            const result = JSON.parse(require('./reader-pdf-extraction-scope').runPdfExtractor(program, fd, files));
             const after = api.readFreshArxivRewriteSource(expectation);
-            if (result.contract !== CONTRACT || !isDeepStrictEqual(before.manifest, after.manifest)
+            const fields = ['contract', 'schemaFingerprint', 'eligible', ...(result?.eligible === true
+                ? ['originalEvidenceSha256', 'originalProof'] : ['reason'])];
+            if (!formats.isCurrentHeader(result, PROJECTION) || typeof result.eligible !== 'boolean'
+                || !isDeepStrictEqual(Object.keys(result).sort(), fields.sort())
+                || !isDeepStrictEqual(before.manifest, after.manifest)
                 || before.sourceManifestSha256 !== after.sourceManifestSha256
                 || !isDeepStrictEqual(before.runtimeDetails, after.runtimeDetails)
+                || sha(fs.readFileSync(program)) !== projectionSha256
                 || files.some((file,index) => sha(fs.readFileSync(file)) !== implementation[index])) throw new Error('Column unit source or implementation changed');
             if (!result.eligible) return null;
-            const proof = result.evidence;
+            const proof = result.originalProof;
+            if (!/^[a-f0-9]{64}$/.test(result.originalEvidenceSha256 || '')
+                || proof?.evidenceSha256 !== result.originalEvidenceSha256) throw new Error('Original PDF column proof digest differs');
             if (proof?.contract === LITERAL_CONTRACT) {
                 if (proof.valueOrigin !== 'sealed_pdf' || proof.sourceBasis !== 'independent-complete-pdf-grid'
                     || proof.pdfSha256 !== sha(before.pdf) || proof.viewSha256 !== stable(view)

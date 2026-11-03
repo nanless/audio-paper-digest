@@ -9,6 +9,8 @@ const extractors = new Map([
     [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py'), []],
     [path.join(root, 'scripts/reader_sealed_pdf_column_units.py'),
         [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]],
+    [path.join(root, 'scripts/reader_pdf_column_unit_projection.py'),
+        [path.join(root, 'scripts/protocol_codec.py'), path.join(root, 'config/protocols/reader-retry.json')]],
     [path.join(root, 'scripts/reader_authenticated_pdf_hierarchical_table.py'),
         [path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py')]],
     [path.join(root, 'scripts/reader_authenticated_pdf_footnote_evidence.py'), []]

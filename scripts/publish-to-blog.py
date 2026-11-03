@@ -8788,7 +8788,7 @@ def _reader_dom_column_unit_coverage(paper, rendered, binding):
 
 def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
     """Only a replayed full PDF matrix can assign a bare value its column unit."""
-    from reader_sealed_pdf_column_units import prove_pdf_bytes
+    from reader_pdf_column_unit_projection import project_pdf_bytes
     saved_quotes = binding.get('sealedPdfQuoteEvidence')
     if not isinstance(saved_quotes, list) or not saved_quotes:
         return set()
@@ -8814,18 +8814,10 @@ def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
     pdf_bytes = _daily_fresh_read_private_file(source_dir / 'source.pdf',
         '列单位来源 PDF', 64 * 1024 * 1024)
     try:
-        actual = prove_pdf_bytes(pdf_bytes, artifacts['tables'],
-            [rendered['header']] + rendered['rows'], [item['quote'] for item in saved_quotes])
+        actual = project_pdf_bytes(pdf_bytes, artifacts['tables'],
+            [rendered['header']] + rendered['rows'], [item['quote'] for item in saved_quotes])['originalProof']
     except ValueError:
-        # The normal Reader CLI retains the original DOM/PDF projection first,
-        # then derives a complete independent PDF grid for literal headers and
-        # conditions. Publication must replay that same strict source path.
-        from reader_sealed_pdf_literal_column_units import prove_pdf_bytes as prove_literal_pdf_bytes
-        try:
-            actual = prove_literal_pdf_bytes(pdf_bytes, [rendered['header']] + rendered['rows'],
-                [item['quote'] for item in saved_quotes])
-        except ValueError:
-            return set()
+        return set()
     return {(row + 1, column['column'], token, column['unit'])
             for column in actual['units'] for row, value in enumerate(column['values'])
             for token in _api_reader_numeric_tokens(value)}
@@ -14974,6 +14966,7 @@ def generation_template_fingerprint():
         'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
         'reader_pdf_quote_projection.py': script_dir / 'reader_pdf_quote_projection.py',
         'reader_sealed_pdf_column_units.py': script_dir / 'reader_sealed_pdf_column_units.py',
+        'reader_pdf_column_unit_projection.py': script_dir / 'reader_pdf_column_unit_projection.py',
         'reader_sealed_pdf_literal_column_units.py': script_dir / 'reader_sealed_pdf_literal_column_units.py',
         'reader_grouped_vector_column_units.py': script_dir / 'reader_grouped_vector_column_units.py',
         'lib/validation-rules.json': script_dir / 'lib' / 'validation-rules.json',

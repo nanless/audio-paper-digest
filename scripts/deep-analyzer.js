@@ -9020,6 +9020,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/pdf-layout.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'pdf-layout-extract.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_column_units.py'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_pdf_column_unit_projection.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_literal_column_units.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_quote_evidence.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_pdf_quote_projection.py'), 'utf8'),

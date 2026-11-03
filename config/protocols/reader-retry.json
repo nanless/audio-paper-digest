@@ -572,6 +572,15 @@
           "variant": "exact-source-owner-and-pdf-footnote-glyphs"
         }
       ]
+    },
+    {
+      "name": "reader-pdf-column-unit-projection",
+      "currentVariant": "actual-pdf-complete-grid-with-original-proof",
+      "currentSchema": {
+        "purpose": "actual-pdf-complete-grid-with-original-proof",
+        "originalEvidence": "exact-python-canonical-sha"
+      },
+      "historical": []
     }
   ]
 }
