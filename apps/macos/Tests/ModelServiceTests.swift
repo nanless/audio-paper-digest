@@ -10,7 +10,7 @@ import Darwin
         var checks=0
         func expect(_ value:Bool,_ message:String)throws{checks+=1;if !value{throw DesktopError.message("TEST: "+message)}}
         do {
-            guard CommandLine.arguments.count==3 else{throw DesktopError.message("requires mock URL and test resources")}
+            guard CommandLine.arguments.count==4 else{throw DesktopError.message("requires mock URL, test resources and usage schema fingerprint")}
             let server=CommandLine.arguments[1],resources=URL(fileURLWithPath:CommandLine.arguments[2])
             let store=try DesktopStore(directory:directory)
             try store.updateSettings(["endpoint":server+"/good/v1","model":"desktop-local-test","protocol":"auto","maxTokens":2048,"dailyRequests":50])
@@ -223,7 +223,7 @@ import Darwin
             // Real shared transport journal links each logical request to its start and terminal events.
             var journal:[[String:Any]]=[]
             for file in try FileManager.default.contentsOfDirectory(at:usage,includingPropertiesForKeys:nil) where file.pathExtension=="json" {
-                if let value=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any],value["version"] as? String=="llm-usage-v1" {journal.append(value)}
+                if let value=try JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any],value["contract"] as? String=="llm-usage",value["schemaFingerprint"] as? String==CommandLine.arguments[3],value["version"]==nil {journal.append(value)}
             }
             try expect(!journal.isEmpty,"actual transport journal exists")
             try expect(journal.allSatisfy{($0["runId"] as? String)?.count==36 && ($0["unitId"] as? String)?.count==64},"actual journal keeps normalized session and unit identities")

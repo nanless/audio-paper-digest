@@ -18,7 +18,7 @@ const rows=[
   return original(input);
  };},rows);
  const url=`http://127.0.0.1:${server.address().port}`;await page.goto(url);await page.waitForSelector('#aggregate-index [data-aggregate-open]');assert.equal(await page.locator('#library-title').innerText(),'日更速递');assert.equal(await page.locator('[data-aggregate-mode=aggregates]').getAttribute('aria-pressed'),'true');assert.match(await page.locator('#aggregate-index').innerText(),/往日日更/);
- assert.deepEqual(await page.locator('[aria-label="网站成果"] [data-view]').evaluateAll(nodes=>nodes.map(n=>n.dataset.view)),['today','library','conference','pages']);
+ assert.deepEqual(await page.locator('[aria-label="网站成果"] [data-view]').evaluateAll(nodes=>nodes.map(n=>n.dataset.view)),['today','library','directions','conference','pages']);
  await page.locator('[data-view=conference]').first().click();assert.deepEqual(await page.locator('[data-aggregate-open]').allTextContents(),['会议目录','会议总览','会议专题']);
  assert.equal(await page.locator('.connection-introduction').isVisible(),true);await page.locator('[data-connect=cloud]').click();await page.locator('[data-connect=zotero]').click();assert.deepEqual(await page.evaluate(()=>__calls.filter(c=>c.command==='settings.open').map(c=>c.payload)),[{pane:'cloud'},{pane:'zotero'}]);assert.equal(await page.evaluate(()=>__calls.some(c=>/^(model\.|zotero\.|cloud\.)/.test(c.command))),false);
  await page.locator('[data-dismiss-setup]').click();await page.reload();await page.waitForSelector('#aggregate-index [data-aggregate-open]');assert.equal(await page.locator('.connection-introduction').isVisible(),false);console.log('PASS first use: website order, historical daily, conference hierarchy, passive reminder and local dismissal');

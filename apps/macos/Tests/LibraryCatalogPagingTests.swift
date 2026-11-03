@@ -12,7 +12,7 @@ private actor PagingTransport {
         }
         files["/blog/index.json"]=try JSONSerialization.data(withJSONObject:["contract":"paper-search-index-manifest-v1","recordCount":rows.count,"totalBytes":bytesTotal,"shards":shards],options:.sortedKeys)
     }
-    func read(_ url:URL)throws->Data{guard let data=files[url.path] else{throw DesktopError.message("Synthetic fixture has no such resource")};return data}
+    func read(_ url:URL)throws->Data{guard let data=files[url.path] else{throw LibraryService.ServiceError.httpStatus(404)};return data}
 }
 @main struct LibraryCatalogPagingTests {
     static func main()async throws {

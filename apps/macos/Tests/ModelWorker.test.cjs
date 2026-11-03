@@ -7,8 +7,8 @@ const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'ModelWorkerTests-'));
 const resources=path.join(temporary,'Resources');fs.mkdirSync(path.join(resources,'Runtime'),{recursive:true});
 fs.symlinkSync(process.execPath,path.join(resources,'Runtime/node'));
 fs.copyFileSync(path.join(app,'llm-worker.cjs'),path.join(resources,'llm-worker.cjs'));
-for(const relative of execFileSync('/usr/bin/git',['-C',repo,'ls-files','-z','--','scripts','config']).toString().split('\0').filter(Boolean)){
- if(relative.split('/').some(p=>p.startsWith('.env'))||!fs.statSync(path.join(repo,relative)).isFile())continue;
+for(const relative of execFileSync('/usr/bin/git',['-C',repo,'ls-files','-z','--cached','--others','--exclude-standard','--','scripts','config']).toString().split('\0').filter(Boolean)){
+ if(relative.split('/').some(p=>p.startsWith('.env'))||!fs.statSync(path.join(repo,relative),{throwIfNoEntry:false})?.isFile())continue;
  const target=path.join(resources,'Shared',relative);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(repo,relative),target);
 }
 const binary=path.join(temporary,'ModelServiceTests');
@@ -35,7 +35,8 @@ const server=http.createServer(async(req,res)=>{
 });
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const address=`http://127.0.0.1:${server.address().port}`;
- const child=spawn(binary,[address,resources],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'},stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',d=>stdout+=d);child.stderr.on('data',d=>stderr+=d);const code=await new Promise(r=>child.on('close',r));
+ const usageFingerprint=require(path.join(repo,"scripts/lib/protocol-codec")).schemaFingerprint("llm-usage");
+ const child=spawn(binary,[address,resources,usageFingerprint],{env:{PATH:'/usr/bin:/bin',LANG:'en_US.UTF-8'},stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',d=>stdout+=d);child.stderr.on('data',d=>stderr+=d);const code=await new Promise(r=>child.on('close',r));
  process.stdout.write(stdout);if(stderr)process.stderr.write(stderr);assert.equal(code,0,'native model service tests failed');
  fs.mkdirSync(path.join(temporary,'inherited-ledger'));const inherited=spawn(process.execPath,[path.join(resources,'llm-worker.cjs')],{cwd:fs.realpathSync(temporary),env:{PATH:'/usr/bin:/bin',PD_OPENAI_RESPONSES_STREAM:'1',PD_OPENAI_RESPONSES_REASONING_EFFORT:'high'},stdio:['pipe','pipe','pipe']});let inheritedOut='';inherited.stdout.on('data',d=>inheritedOut+=d);inherited.stdin.end(JSON.stringify({config:{endpoint:address+'/inherited/v1',model:'inherited-fixture',protocol:'responses',key:'test-only-not-a-real-key'},messages:[{role:'user',content:'isolated defaults'}],usageDirectory:fs.realpathSync(path.join(temporary,'inherited-ledger')),runID:'00000000-0000-4000-8000-000000000001',paperID:'test:inherited'}));assert.equal(await new Promise(r=>inherited.on('close',r)),0);assert.equal(JSON.parse(inheritedOut).okay,true,JSON.parse(inheritedOut).error?.message);const inheritedRequest=requests.find(r=>r.url.startsWith('/inherited/'));assert.equal(inheritedRequest.body.stream,undefined);assert.equal(inheritedRequest.body.reasoning,undefined,'app default cannot inherit production reasoning settings');
  assert.equal(requests.filter(r=>r.url.startsWith('/good/')).length,7,'reuse avoids duplicate request, regeneration/check/paper boundaries issue once');

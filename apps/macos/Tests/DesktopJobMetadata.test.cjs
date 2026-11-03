@@ -5,7 +5,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const {chromium}=require('playwright');
 const {installFixture,primary,repo}=require('./DesktopUI.test.cjs');
 const resources=path.join(repo,'apps/macos/Resources'),output=path.join(repo,'apps/macos/.qa/job-metadata');fs.mkdirSync(output,{recursive:true});
-const snapshot=new Map(fs.readdirSync(resources).filter(name=>/\.(html|css|js)$/.test(name)).map(name=>[name,fs.readFileSync(path.join(resources,name))]));
+const snapshot=new Map(fs.readdirSync(resources,{recursive:true}).filter(name=>/\.(html|css|js)$/.test(name)).map(name=>[name,fs.readFileSync(path.join(resources,name))]));
 const server=http.createServer((request,response)=>{
  let name;try{name=decodeURIComponent(request.url.split('?')[0]);}catch{response.writeHead(400);return response.end();}
  let bytes,relative=name==='/'?'index.html':name.slice(1);

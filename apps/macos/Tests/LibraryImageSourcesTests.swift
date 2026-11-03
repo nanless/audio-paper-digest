@@ -9,6 +9,7 @@ actor PublishedImageFixture {
     init(_ files:[String:Data]){self.files=files}
     func read(_ url:URL,_ limit:Int)throws->Data {
         requests.append(url.absoluteString)
+        if url.path.hasSuffix("/client/index.json"){throw LibraryService.ServiceError.httpStatus(404)}
         guard let data=files[url.absoluteString],data.count<=limit else{throw LibraryService.ServiceError.network("isolated published fixture unavailable")}
         return data
     }

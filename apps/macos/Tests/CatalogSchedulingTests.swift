@@ -17,7 +17,8 @@ private actor CatalogHeldTransport {
     }
     func release(){released=true;let old=waiting;waiting=[];for c in old{c.resume()}}
     func read(_ url:URL,_ limit:Int)async throws->Data {
-        guard url.scheme=="https",url.host=="fixture.example",let data=files[url.path] else{throw DesktopError.message("Unexpected synthetic URL")}
+        guard url.scheme=="https",url.host=="fixture.example" else{throw DesktopError.message("Unexpected synthetic URL")}
+        guard let data=files[url.path] else{throw LibraryService.ServiceError.httpStatus(404)}
         calls+=1
         if url.path=="/blog/index.json"{started=true;if !released{await withCheckedContinuation{waiting.append($0)}}}
         try Task.checkCancellation()

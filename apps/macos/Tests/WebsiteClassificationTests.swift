@@ -4,9 +4,9 @@ import CryptoKit
 actor WebsiteTransport {
     var files:[String:Data];var requests:[String]=[]
     init(_ files:[String:Data]){self.files=files}
-    func read(_ url:URL)throws->Data{requests.append(url.path);guard let data=files[url.path] else{throw LibraryService.ServiceError.network("Explicit public fixture unavailable: \(url.path)")};return data}
+    func read(_ url:URL)throws->Data{requests.append(url.path);guard let data=files[url.path] else{throw LibraryService.ServiceError.httpStatus(404)};return data}
     func remove(_ path:String){files.removeValue(forKey:path)}
-    func count(_ suffix:String)->Int{requests.filter{$0.hasSuffix(suffix)}.count}
+    func count(_ path:String)->Int{requests.filter{$0==path}.count}
 }
 @main struct WebsiteClassificationTests {
     static var checks=0
@@ -28,7 +28,7 @@ actor WebsiteTransport {
         try expect(records[0]["tagCatalogSha256"] as? String==row["tagCatalogSha256"] as? String,"original issue SHA not replaced by current")
         try expect(records[0]["score"] as? String==row["score"] as? String && (records[0]["citation"] as? [String:Any])?["authors"] as? [String]==(row["citation"] as? [String:Any])?["authors"] as? [String],"per-guide query original score and citation authors retained")
         try expect(assets["snapshotContentSHA256"] as? String==sha(snapshotBytes)&&assets["versionsContentSHA256"] as? String==sha(versionsBytes),"paired display source bytes independently recorded")
-        let snapshotRequests=await transport.count("tag-catalog-snapshot.json"),versionRequests=await transport.count("tag-catalog-versions.json");try expect(snapshotRequests==1 && versionRequests==1,"only one paired download per catalog sync")
+        let snapshotRequests=await transport.count(base.path+"/data/tag-catalog-snapshot.json"),versionRequests=await transport.count(base.path+"/data/tag-catalog-versions.json");try expect(snapshotRequests==1 && versionRequests==1,"only one paired download per catalog sync")
         let tail=try await library.handle(command:"library.list",payload:["offset":1]);try expect(tail["websiteTaxonomy"]==nil,"large display assets sent only on first page")
         let cold=try service(root,transport),coldResponse=try await cold.handle(command:"library.list",payload:[:]);try expect((coldResponse["websiteTaxonomy"] as? [String:Any])?["snapshotContentSHA256"] as? String==sha(snapshotBytes),"official assets survive cold cache loading")
         await transport.remove((base.path+"/")+"data/tag-catalog-versions.json");_ = try await library.sync();let fallback=try await library.handle(command:"library.list",payload:[:]);try expect((fallback["papers"] as? [[String:Any]])?.count==1 && fallback["websiteTaxonomy"] is [String:Any],"failed update keeps papers and previous paired assets")
