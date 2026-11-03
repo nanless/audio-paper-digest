@@ -313,6 +313,184 @@
           }
         }
       ]
+    },
+    {
+      "name": "historical-direct-semantic-review",
+      "currentVariant": "result",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "generationSha256",
+          "reviewProtocolFingerprint",
+          "semanticProtocol",
+          "results",
+          "resultSetSha256",
+          "passed",
+          "semanticReviewSha256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-semantic-review-v1",
+          "variant": "original-result",
+          "header": {
+            "contract": "historical-direct-semantic-review-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-semantic-review-protocol",
+      "currentVariant": "settings",
+      "currentSchema": {
+        "fields": [
+          "model",
+          "secondaryModel",
+          "endpointSha256",
+          "implementationSha256",
+          "promptSha256",
+          "textReview",
+          "imageReview",
+          "budgets",
+          "protocolSha256"
+        ],
+        "textReview": "publish-to-blog.llm-review-post-chunks",
+        "imageReview": "publish-to-blog.multimodal-review-images"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-semantic-review-protocol-v1",
+          "variant": "original-settings",
+          "header": {
+            "contract": "historical-direct-semantic-review-protocol-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-semantic-review-request",
+      "currentVariant": "request",
+      "currentSchema": {
+        "fields": [
+          "publicationId",
+          "generationSha256",
+          "reviewProtocolFingerprint",
+          "semanticProtocol",
+          "blogRepo",
+          "bundleRoot",
+          "files",
+          "fileSetSha256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-semantic-review-request-v1",
+          "variant": "original-request",
+          "header": {
+            "contract": "historical-direct-semantic-review-request-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-semantic-review-checkpoint",
+      "currentVariant": "checkpoint",
+      "currentSchema": {
+        "fields": [
+          "identity",
+          "unit",
+          "index",
+          "inputSha256",
+          "protocol",
+          "result",
+          "checkpointSha256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-semantic-review-checkpoint-v1",
+          "variant": "original-checkpoint",
+          "header": {
+            "contract": "historical-direct-semantic-review-checkpoint-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-semantic-review-progress",
+      "currentVariant": "progress",
+      "currentSchema": {
+        "fields": [
+          "completed",
+          "total",
+          "path",
+          "outcome"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-semantic-review-progress-v1",
+          "variant": "original-progress",
+          "header": {
+            "contract": "historical-direct-semantic-review-progress-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-daily-icml-poster-binding",
+      "currentVariant": "frozen-page-and-poster",
+      "currentSchema": {
+        "fields": [
+          "mapping",
+          "page",
+          "poster",
+          "summary",
+          "bindingSha256"
+        ],
+        "proof": "actual source file, original poster snapshot and complete digest"
+      },
+      "historical": [
+        {
+          "tag": "historical-daily-icml-poster-binding-v2",
+          "variant": "original-frozen-page-and-poster",
+          "header": {
+            "contract": "historical-daily-icml-poster-binding-v2",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-icml-local-forum-pdf",
+      "currentVariant": "frozen-forum-pdf",
+      "currentSchema": {
+        "fields": [
+          "posterId",
+          "forumId",
+          "absolutePath",
+          "bytes",
+          "sha256",
+          "authoritySha256",
+          "recordBindingSha256",
+          "descriptorSha256"
+        ],
+        "proof": "actual source file, original poster snapshot and complete digest"
+      },
+      "historical": [
+        {
+          "tag": "historical-icml-local-forum-pdf-v1",
+          "variant": "original-frozen-forum-pdf",
+          "header": {
+            "contract": "historical-icml-local-forum-pdf-v1",
+            "version": 1
+          }
+        }
+      ]
     }
   ]
 }

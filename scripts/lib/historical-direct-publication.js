@@ -29,7 +29,9 @@ const COMMIT_CONTRACT = 'historical-direct-publication-commit';
 const PUBLICATION_CONTRACT = 'historical-direct-publication-remote';
 const VISUAL_DISPOSITION_CONTRACT = 'historical-direct-visual-disposition';
 const STATUS_CONTRACT = 'historical-direct-publication-status';
-const VERSION = 1;
+const SEMANTIC_REVIEW = 'historical-direct-semantic-review';
+const SEMANTIC_PROTOCOL = SEMANTIC_REVIEW + '-protocol';
+const SEMANTIC_REQUEST = SEMANTIC_REVIEW + '-request';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const GIT_OID_RE = /^[a-f0-9]{40,64}$/;
@@ -68,7 +70,7 @@ function savedHeader(value, family) {
     if (!protocols.hasValidHeader(value, family)) fail(`未登记或不完整的发布格式：${family}`);
     return protocols.recordHeader(value.contract, family, value.schemaFingerprint);
 }
-function preparedHeaders(filename, intentFamily, resultFamily, originalVariant) {
+function preparedHeaders(filename, intentFamily, resultFamily, originalVariant, originalParent) {
     if (!fs.existsSync(filename)) {
         return { intentHeader: currentHeader(intentFamily), resultHeader: currentHeader(resultFamily) };
     }
@@ -77,7 +79,7 @@ function preparedHeaders(filename, intentFamily, resultFamily, originalVariant) 
     if (protocols.isCurrentHeader(saved, intentFamily)) {
         return { intentHeader, resultHeader: currentHeader(resultFamily) };
     }
-    if (saved.schemaFingerprint !== undefined) fail('保存的准备记录没有可用的原凭证重放规则');
+    if (saved.schemaFingerprint !== undefined || !originalParent) fail('保存的准备记录没有可用的原凭证重放规则');
     return { intentHeader, resultHeader: protocols.historicalHeader(resultFamily, originalVariant, null) };
 }
 function reviewMode(receipt) {
@@ -118,7 +120,7 @@ function readRegular(filename, maximum = MAX_ARTIFACT_BYTES) {
 }
 function strictJsonFile(filename, label) {
     const loaded = readRegular(filename, 128 * 1024 * 1024); let value;
-    try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes)); }
+    try { value = require('./strict-json').strictJson(loaded.bytes, label); }
     catch { fail(`${label} 必须是有效的 UTF-8 JSON`); }
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} 必须是对象，且不能是数组`);
     return { value, fileSha256: loaded.sha256, bytes: loaded.bytes };
@@ -513,6 +515,7 @@ function writePlan({ outputRoot, plan }) {
         if (!readRegular(filename).bytes.equals(bytes)) fail('现有发布 ID 已绑定内容不同的计划');
         return { status: 'recovered', directory, filename, plan: normalized };
     }
+    if (!protocols.isCurrentHeader(normalized, PLAN_CONTRACT)) fail('新发布计划必须使用当前发布格式');
     writeExact(filename, bytes); return { status: 'planned', directory, filename, plan: normalized };
 }
 function loadPlan({ outputRoot, publicationId }) {
@@ -540,7 +543,7 @@ function generate({ outputRoot, publicationId, authorityOptions, blogRepo, remot
         baselineSha256: record.baselineSha256, sha256: record.sha256 }));
     const originalIntentPath = path.join(generationDirectory(loaded.directory), 'intent.json');
     const { intentHeader, resultHeader } = preparedHeaders(originalIntentPath,
-        GENERATION_INTENT_CONTRACT, GENERATION_CONTRACT, 'original-verified-generation');
+        GENERATION_INTENT_CONTRACT, GENERATION_CONTRACT, 'original-verified-generation', loaded.plan.schemaFingerprint === undefined);
     const body = { ...resultHeader, publicationId, planSha256: loaded.plan.planSha256,
         planFileSha256: loaded.fileSha256, authorityProofSha256: loaded.plan.authorityProofSha256,
         baseHead: state.head, remoteName: state.remoteName, remoteIdentitySha256: state.remoteIdentitySha256,
@@ -625,14 +628,15 @@ function semanticReviewProtocol() {
     });
     const implementationSha256 = stableHash(implementationFiles.map(filename => ({ filename,
         sha256: sha256(fs.readFileSync(path.join(root, filename))) })));
-    const body = { contract: 'historical-direct-semantic-review-protocol-v1', version: 1,
+    const format = protocols.declaredSchema(SEMANTIC_PROTOCOL, SEMANTIC_PROTOCOL);
+    const body = { ...currentHeader(SEMANTIC_PROTOCOL),
         model: String(process.env.PAPER_ANALYZER_MODEL || ''),
         secondaryModel: String(process.env.PAPER_ANALYZER_SECONDARY_MODEL || ''),
         endpointSha256: sha256(Buffer.from(String(process.env.PAPER_ANALYZER_ENDPOINT || ''))),
         implementationSha256,
         promptSha256: sha256(fs.readFileSync(promptImplementation)),
-        textReview: 'publish-to-blog.llm-review-post-chunks-v1',
-        imageReview: 'publish-to-blog.multimodal-review-images-v1',
+        textReview: format.textReview,
+        imageReview: format.imageReview,
         budgets: {
             chunkChars: Math.min(16000, Math.max(4000, Number.parseInt(process.env.PD_BLOG_REVIEW_CHUNK_CHARS || '8000', 10) || 8000)),
             maxTokens: Math.min(16000, Math.max(1000, Number.parseInt(process.env.PD_BLOG_REVIEW_MAX_TOKENS || '4000', 10) || 4000)),
@@ -747,7 +751,7 @@ function historicalReviewConcurrency() {
     return Number(raw);
 }
 function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
-    const request = { contract: 'historical-direct-semantic-review-request-v1', version: VERSION,
+    const request = { ...currentHeader(SEMANTIC_REQUEST),
         publicationId: loadedPlan.plan.publicationId, generationSha256: generation.manifest.generationSha256,
         reviewProtocolFingerprint: protocol, semanticProtocol: semanticReviewProtocol(), blogRepo: path.resolve(blogRepo),
         bundleRoot: path.resolve(generation.root, 'bundle'), files: generation.manifest.files.map(item => ({ path: item.path, sha256: item.sha256 })) };
@@ -757,6 +761,7 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
     else if (!readRegular(requestPath).bytes.equals(prettyBytes(request))) {
         // 请求元数据按批次保存。替换请求记录时，保留本次发布目录中
         // 按页面内容标识保存的检查点。
+        preserveOriginalRecord(requestPath, SEMANTIC_REQUEST);
         atomicReplace(requestPath, prettyBytes(request));
     }
     const outputPath = path.join(loadedPlan.directory, 'semantic-review.json');
@@ -772,7 +777,7 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
     if (result.error || result.signal || result.status !== 0) fail(`页面内容审查子进程失败：${result.error?.message || result.signal || result.status}`);
     const loaded = strictJsonFile(outputPath, '页面内容审查凭证'); const value = loaded.value;
     const body = clone(value); delete body.semanticReviewSha256;
-    if (value.contract !== 'historical-direct-semantic-review-v1' || value.version !== VERSION
+    if (!protocols.isCurrentHeader(value, SEMANTIC_REVIEW)
         || value.publicationId !== loadedPlan.plan.publicationId || value.generationSha256 !== generation.manifest.generationSha256
         || value.reviewProtocolFingerprint !== protocol || stableHash(value.semanticProtocol) !== stableHash(request.semanticProtocol)
         || !Array.isArray(value.results) || value.resultSetSha256 !== stableHash(value.results)
@@ -822,15 +827,17 @@ function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', ap
         generationSha256: generation.manifest.generationSha256, generationFileSha256: generation.fileSha256,
         baseHead: state.head, remoteName: state.remoteName, remoteIdentitySha256: state.remoteIdentitySha256,
         remoteMainOid: state.remoteOid, reviewProtocolFingerprint: protocol, strictReview: true,
-        reviewMode: 'historical-semantic-multimodal', files, fileSetSha256: stableHash(files), hugoGate,
+        reviewMode: reviewMode(currentHeader(REVIEW_CONTRACT)), files, fileSetSha256: stableHash(files), hugoGate,
         semanticReview: { semanticReviewSha256: semantic.receipt.semanticReviewSha256,
             semanticReviewFileSha256: semantic.fileSha256 || null, semanticProtocol: semantic.receipt.semanticProtocol,
             pageResults: semantic.receipt.results, pageResultSetSha256: semantic.receipt.resultSetSha256 },
         reviewedAt: dependencies.now?.() || new Date().toISOString() };
     if (!iso(body.reviewedAt)) fail('审查时间无效'); const receipt = seal(body, 'reviewSha256');
     if (!apply) return { status: 'dry-run', receipt };
-    if (fs.existsSync(filename)) atomicReplace(filename, prettyBytes(receipt));
-    else writeExact(filename, prettyBytes(receipt));
+    if (fs.existsSync(filename)) {
+        preserveOriginalRecord(filename, REVIEW_CONTRACT);
+        atomicReplace(filename, prettyBytes(receipt));
+    } else writeExact(filename, prettyBytes(receipt));
     return { status: 'reviewed', receipt, filename };
 }
 function loadReview(loadedPlan) {
@@ -868,6 +875,15 @@ function loadReview(loadedPlan) {
         fail('审查凭证的字段或 SHA 已变化');
     }
     return { receipt: value, fileSha256: loaded.fileSha256 };
+}
+
+function preserveOriginalRecord(filename, family) {
+    const saved = strictJsonFile(filename, '即将替换的原发布记录');
+    savedHeader(saved.value, family);
+    if (protocols.isCurrentHeader(saved.value, family)) return;
+    const archival = path.join(path.dirname(filename), 'original-formats', `${path.basename(filename)}-${saved.fileSha256}.json`);
+    writeExact(archival, saved.bytes);
+    if (!readRegular(filename).bytes.equals(saved.bytes)) fail('原发布记录在保全后发生变化');
 }
 
 function atomicReplace(filename, bytes, mode = 0o600) {
@@ -1027,7 +1043,10 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
             exactDeltaSha256: loaded.plan.exactDeltaSha256 };
         const reboundIntent = seal(reboundIntentBody, 'intentSha256');
         if (!apply) return { status: 'dry-run', intent: reboundIntent, deltaCount: delta.length };
-        atomicReplace(path.join(loaded.directory, 'activation', 'intent.json'), prettyBytes(reboundIntent));
+        const intentFilename = path.join(loaded.directory, 'activation', 'intent.json');
+        preserveOriginalRecord(intentFilename, ACTIVATION_INTENT_CONTRACT);
+        preserveOriginalRecord(existingReceipt, ACTIVATION_CONTRACT);
+        atomicReplace(intentFilename, prettyBytes(reboundIntent));
         const reboundBody = { ...currentHeader(ACTIVATION_CONTRACT), publicationId,
             intentSha256: reboundIntent.intentSha256, planSha256: loaded.plan.planSha256,
             generationSha256: generation.manifest.generationSha256,
@@ -1050,7 +1069,7 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
     }
     if (reviewReceipt.receipt.baseHead !== state.head) fail('安装页面时的博客基线与审查记录不同');
     const { intentHeader, resultHeader } = preparedHeaders(recoveryIntentPath,
-        ACTIVATION_INTENT_CONTRACT, ACTIVATION_CONTRACT, 'original-verified-installation');
+        ACTIVATION_INTENT_CONTRACT, ACTIVATION_CONTRACT, 'original-verified-installation', reviewReceipt.receipt.schemaFingerprint === undefined);
     const intentBody = { ...intentHeader, publicationId,
         planSha256: loaded.plan.planSha256, generationSha256: generation.manifest.generationSha256,
         reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: state.head, exactDeltaSha256: loaded.plan.exactDeltaSha256 };
@@ -1201,6 +1220,7 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
         if (commitReceipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
             || commitReceipt.activationSha256 !== activation.receipt.activationSha256) {
             commitReceipt = seal(commitBody, 'commitSha256');
+            preserveOriginalRecord(commitPath, COMMIT_CONTRACT);
             atomicReplace(commitPath, prettyBytes(commitReceipt));
         }
     }
@@ -1291,7 +1311,7 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
 module.exports = {
     PLAN_CONTRACT, GENERATION_CONTRACT, REVIEW_CONTRACT, ACTIVATION_INTENT_CONTRACT, ACTIVATION_CONTRACT,
     COMMIT_CONTRACT, PUBLICATION_CONTRACT, VISUAL_DISPOSITION_CONTRACT, STATUS_CONTRACT,
-    VERSION, UUID_RE, HistoricalDirectPublicationError, stableHash, safeRelative, validatePublishedTagCatalogs,
+    UUID_RE, HistoricalDirectPublicationError, stableHash, safeRelative, validatePublishedTagCatalogs,
     normalizeVisualDisposition, buildVisualDisposition, historicalSourceVersionProof, loadDirectAuthority,
     buildPlan, validatePlan, writePlan, loadPlan, generate, loadGeneration, reviewProtocolImplementationFiles, reviewProtocolFingerprint,
     semanticReviewProtocol, historicalReviewConcurrency, defaultSemanticReview,

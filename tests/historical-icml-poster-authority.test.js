@@ -94,6 +94,13 @@ test('复核直接冻结的子页面 poster，不保留历史正文', t => {
     assert.equal(JSON.stringify(binding).includes('[paper]'), false);
     assert.equal(api.replayDailyPageBinding({ binding, authorityHandle: handle,
         blogRoot: f.blogRoot, page: f.direct }).bindingSha256, binding.bindingSha256);
+    const { contract, schemaFingerprint, bindingSha256, ...fields } = binding;
+    const oldBody = { contract: 'historical-daily-icml-poster-binding-v2', version: 2, ...fields };
+    const old = { ...oldBody, bindingSha256: api.stableHash(oldBody) };
+    assert.deepEqual(api.replayDailyPageBinding({ binding: old, authorityHandle: handle,
+        blogRoot: f.blogRoot, page: f.direct }), old);
+    const mixed = { ...oldBody, schemaFingerprint };
+    assert.throws(() => api.normalizeDailyPageBinding({ ...mixed, bindingSha256: api.stableHash(mixed) }), /无法识别/);
 });
 
 test('tau-Voice 使用一个冻结的摘要小节、精确的子页面 URL 和一个 poster', t => {
@@ -132,6 +139,10 @@ test('本地 forum-ID PDF 描述符绑定授权、身份、路径和精确字节
     assert.equal(api.normalizePdfDescriptor(descriptor).descriptorSha256, descriptor.descriptorSha256);
     assert.equal(api.replayLocalForumPdfDescriptor({ descriptor, authorityHandle: handle,
         pdfRoot: f.pdfRoot }).descriptorSha256, descriptor.descriptorSha256);
+    const { contract, schemaFingerprint, descriptorSha256, ...fields } = descriptor;
+    const oldBody = { contract: 'historical-icml-local-forum-pdf-v1', version: 1, ...fields };
+    const old = { ...oldBody, descriptorSha256: api.stableHash(oldBody) };
+    assert.deepEqual(api.replayLocalForumPdfDescriptor({ descriptor: old, authorityHandle: handle, pdfRoot: f.pdfRoot }), old);
     fs.appendFileSync(filename, 'drift');
     assert.throws(() => api.replayLocalForumPdfDescriptor({ descriptor, authorityHandle: handle,
         pdfRoot: f.pdfRoot }), /no longer replays/);

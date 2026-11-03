@@ -121,6 +121,36 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         assert.equal(plan.exactDelta.length, 1);
         assert.equal(api.writePlan({ outputRoot, plan }).status, 'planned');
         assert.equal(api.writePlan({ outputRoot, plan }).status, 'recovered');
+        const protocols = require('../scripts/lib/protocol-codec');
+        assert.equal(protocols.isCurrentHeader(plan, api.PLAN_CONTRACT), true);
+        const originalRoot = path.join(root, 'original-runtime');
+        const originalDirectory = path.join(originalRoot, publicationId);
+        const originalGeneration = path.join(originalDirectory, 'generation');
+        fs.mkdirSync(originalGeneration, { recursive: true });
+        const sorted = value => Array.isArray(value) ? value.map(sorted)
+            : value && typeof value === 'object'
+                ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted(value[key])])) : value;
+        const asBytes = value => Buffer.from(JSON.stringify(sorted(value), null, 2) + '\n');
+        const { contract, schemaFingerprint, planSha256, ...originalPlanFields } = plan;
+        const originalPlanBody = { contract: 'historical-direct-publication-plan-v1', version: 1, ...originalPlanFields };
+        const originalPlan = { ...originalPlanBody, planSha256: api.stableHash(originalPlanBody) };
+        const originalPlanBytes = asBytes(originalPlan);
+        fs.writeFileSync(path.join(originalDirectory, 'plan.json'), originalPlanBytes);
+        const oldOptions = { outputRoot: originalRoot, publicationId, authorityOptions: {}, blogRepo, apply: true };
+        const currentGeneration = api.generate({ ...oldOptions, apply: false }, deps).manifest;
+        const { contract: _generationContract, schemaFingerprint: _generationFingerprint, generationSha256, ...generationFields } = currentGeneration;
+        const oldGenerationBody = { contract: 'historical-direct-publication-generation-v1', version: 1, ...generationFields };
+        const oldGeneration = { ...oldGenerationBody, generationSha256: api.stableHash(oldGenerationBody) };
+        const oldIntentBody = { contract: 'historical-direct-publication-generation-v1-intent', version: 1,
+            publicationId, planSha256: originalPlan.planSha256, generationSha256: oldGeneration.generationSha256,
+            fileSetSha256: oldGeneration.fileSetSha256 };
+        const oldIntentBytes = asBytes({ ...oldIntentBody, intentSha256: api.stableHash(oldIntentBody) });
+        const oldIntentFilename = path.join(originalGeneration, 'intent.json');
+        fs.writeFileSync(oldIntentFilename, oldIntentBytes);
+        assert.deepEqual(api.generate(oldOptions, deps).manifest, oldGeneration);
+        assert.deepEqual(fs.readFileSync(oldIntentFilename), oldIntentBytes);
+        assert.deepEqual(fs.readFileSync(path.join(originalDirectory, 'plan.json')), originalPlanBytes);
+        assert.deepEqual(api.loadGeneration(api.loadPlan(oldOptions)).manifest, oldGeneration);
         assert.equal(api.generate({ outputRoot, publicationId, authorityOptions: {}, blogRepo, apply: true }, deps).status, 'generated');
         assert.equal(api.generate({ outputRoot, publicationId, authorityOptions: {}, blogRepo, apply: true }, deps).status, 'generated');
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
@@ -130,6 +160,10 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         const reviewFile = path.join(outputRoot, publicationId, 'review.json');
         const currentReviewBytes = fs.readFileSync(reviewFile);
         const legacy = JSON.parse(currentReviewBytes);
+        delete legacy.schemaFingerprint;
+        legacy.contract = 'historical-direct-publication-review-v1';
+        legacy.version = 1;
+        legacy.reviewMode = 'historical-semantic-multimodal-v1';
         legacy.reviewProtocolFingerprint = hash('9');
         delete legacy.reviewSha256;
         legacy.reviewSha256 = api.stableHash(legacy);
@@ -140,7 +174,10 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         assert.deepEqual(fs.readFileSync(reviewFile), legacyBytes, 'cold legacy reads must not re-sign or save');
         fs.writeFileSync(reviewFile, JSON.stringify({ ...legacy, reviewProtocolFingerprint: hash('8') }));
         assert.throws(() => api.loadReview(loadedPlan), /字段或 SHA/);
-        fs.writeFileSync(reviewFile, currentReviewBytes);
+        fs.writeFileSync(reviewFile, legacyBytes);
+        assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
+        const archivedReview = path.join(path.dirname(reviewFile), 'original-formats', `review.json-${sha(legacyBytes)}.json`);
+        assert.deepEqual(fs.readFileSync(archivedReview), legacyBytes);
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-reviewed');
         deps.hugoVersion = 'hugo v0.protocol-change';
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');

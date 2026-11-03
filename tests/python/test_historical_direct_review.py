@@ -232,6 +232,15 @@ class HistoricalDirectReviewTests(unittest.TestCase):
             self.assertTrue(result['passed'])
             self.assertEqual(first.calls, 2)
             self.assertEqual(len(list(checkpoints.glob('*.json'))), 3)
+            original_files = {}
+            for filename in checkpoints.glob('*.json'):
+                body = json.loads(filename.read_bytes())
+                body.pop('schemaFingerprint')
+                body.pop('checkpointSha256')
+                body.update(contract='historical-direct-semantic-review-checkpoint-v1', version=1)
+                original = {**body, 'checkpointSha256': MODULE.stable(body)}
+                filename.write_text(json.dumps(original), encoding='utf-8')
+                original_files[filename] = filename.read_bytes()
 
             replay = FakePublisher(fail=True)
             with mock.patch.object(MODULE, 'load_publish_to_blog', return_value=replay):
@@ -257,6 +266,38 @@ class HistoricalDirectReviewTests(unittest.TestCase):
             self.assertEqual(changed['reviewProtocolFingerprint'], 'f' * 64)
             self.assertEqual(changed['semanticProtocol']['model'], 'changed-model')
             self.assertEqual(json.loads(output.read_text()), changed)
+            for field in ('contract', 'version', 'protocolSha256'):
+                changed_body.pop(field, None)
+            settings = MODULE.declared_schema(MODULE.PROTOCOL_CONTRACT, MODULE.PROTOCOL_CONTRACT)
+            changed_body.update(MODULE.current_header(MODULE.PROTOCOL_CONTRACT))
+            changed_body.update(textReview=settings['textReview'], imageReview=settings['imageReview'])
+            current_protocol = {**changed_body, 'protocolSha256': MODULE.stable(changed_body)}
+            request.update(MODULE.current_header(MODULE.REQUEST_CONTRACT))
+            request.pop('version')
+            request['semanticProtocol'] = current_protocol
+            request_path.write_text(json.dumps(request), encoding='utf-8')
+            previous = json.loads(output.read_bytes())
+            previous.pop('schemaFingerprint')
+            previous.pop('semanticReviewSha256')
+            previous.update(contract='historical-direct-semantic-review-v1', version=1)
+            previous = {**previous, 'semanticReviewSha256': MODULE.stable(previous)}
+            output.write_text(json.dumps(previous), encoding='utf-8')
+            previous_bytes = output.read_bytes()
+            current = FakePublisher(fail=True)
+            with mock.patch.object(MODULE, 'load_publish_to_blog', return_value=current):
+                migrated = MODULE.run(request_path, output, checkpoints, 2)
+            self.assertTrue(migrated['passed'])
+            self.assertEqual(current.calls, 0)
+            self.assertTrue(MODULE.is_current_header(migrated, MODULE.CONTRACT))
+            previous_sha = MODULE.hashlib.sha256(previous_bytes).hexdigest()
+            archived = output.parent / 'original-formats' / f'{output.name}-{previous_sha}.json'
+            self.assertEqual(archived.read_bytes(), previous_bytes)
+            self.assertEqual({f: f.read_bytes() for f in original_files}, original_files)
+            request['schemaFingerprint'] = '0' * 64
+            request_path.write_text(json.dumps(request), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, '格式不受支持'):
+                MODULE.run(request_path, output, checkpoints, 2)
+            request.update(MODULE.current_header(MODULE.REQUEST_CONTRACT))
 
             changed_content = content.replace('正文足够长', '新内容已修改')
             (bundle / relative).write_text(changed_content, encoding='utf-8')

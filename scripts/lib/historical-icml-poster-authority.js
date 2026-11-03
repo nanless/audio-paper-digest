@@ -7,13 +7,12 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const protocols = require('./protocol-codec');
 
 const CONTRACT = 'historical-icml-official-poster-snapshot-v1';
 const VERSION = 1;
-const DAILY_BINDING_CONTRACT = 'historical-daily-icml-poster-binding-v2';
-const DAILY_BINDING_VERSION = 2;
-const PDF_DESCRIPTOR_CONTRACT = 'historical-icml-local-forum-pdf-v1';
-const PDF_DESCRIPTOR_VERSION = 1;
+const DAILY_BINDING_CONTRACT = 'historical-daily-icml-poster-binding';
+const PDF_DESCRIPTOR_CONTRACT = 'historical-icml-local-forum-pdf';
 const SOURCE_KIND = 'retained-local-icml-miniconf-raw-snapshot';
 const DIRECT_PAGE_MAPPING = 'frozen-daily-page-official-poster';
 const SUMMARY_SECTION_MAPPING = 'frozen-daily-summary-section-official-poster';
@@ -320,10 +319,15 @@ function summarySectionBinding({ blogRoot, summaryPage, childPage, blogBasePath 
             sha256: sha256(sectionBytes) } } };
 }
 
+function readHeader(value, family) {
+    if (!protocols.hasValidHeader(value, family)) fail(`无法识别 ICML 来源凭证的格式：${family}`);
+    return protocols.recordHeader(value.contract, family, value.schemaFingerprint);
+}
+
 function normalizeDailyPageBinding(value) {
-    exact(value, ['contract', 'version', 'mapping', 'page', 'poster', 'summary', 'bindingSha256'], 'daily ICML binding');
-    if (value.contract !== DAILY_BINDING_CONTRACT || value.version !== DAILY_BINDING_VERSION
-        || ![DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING].includes(value.mapping)) fail('每日 ICML 绑定的契约非法');
+    const header = readHeader(value, DAILY_BINDING_CONTRACT);
+    exact(value, [...Object.keys(header), 'mapping', 'page', 'poster', 'summary', 'bindingSha256'], 'daily ICML binding');
+    if (![DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING].includes(value.mapping)) fail('每日 ICML 绑定的契约非法');
     exact(value.page, ['pageKey', 'pagePath', 'pageContentSha256', 'scope'], 'daily ICML binding page');
     const page = normalizePage(value.page, null, 'daily ICML binding page');
     exact(value.poster, ['posterId', 'forumId', 'officialUrl', 'openreviewUrl', 'authoritySha256',
@@ -351,14 +355,17 @@ function normalizeDailyPageBinding(value) {
         }
         summary = clone(value.summary);
     }
-    const body = { contract: DAILY_BINDING_CONTRACT, version: DAILY_BINDING_VERSION, mapping: value.mapping,
+    const body = { ...header, mapping: value.mapping,
         page, poster: clone(value.poster), summary };
     if (!validSha(value.bindingSha256) || value.bindingSha256 !== stableHash(body)) fail('每日 ICML 绑定的自校验 SHA 非法');
     return { ...body, bindingSha256: value.bindingSha256 };
 }
 
-function bindDailyPage({ authorityHandle, blogRoot, page, summaryPage = null,
-    blogBasePath = '/audio-paper-digest-blog' } = {}) {
+function bindDailyPage(options = {}) {
+    return buildDailyPageBinding(options, protocols.recordHeader(DAILY_BINDING_CONTRACT, DAILY_BINDING_CONTRACT));
+}
+function buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage = null,
+    blogBasePath = '/audio-paper-digest-blog' } = {}, header) {
     replayPosterAuthority(authorityHandle);
     if (typeof blogBasePath !== 'string' || !/^\/[A-Za-z0-9._/-]*[A-Za-z0-9._-]$/u.test(blogBasePath)
         || blogBasePath.includes('//') || blogBasePath.includes('..')) fail('blogBasePath 非法');
@@ -374,7 +381,7 @@ function bindDailyPage({ authorityHandle, blogRoot, page, summaryPage = null,
         posterId = recovered.posterId; summary = recovered.summary; mapping = SUMMARY_SECTION_MAPPING;
     }
     const record = lookupByPoster(authorityHandle, posterId); const authority = handleData(authorityHandle).authority;
-    const body = { contract: DAILY_BINDING_CONTRACT, version: DAILY_BINDING_VERSION, mapping, page: child,
+    const body = { ...header, mapping, page: child,
         poster: { posterId: record.posterId, forumId: record.forumId, officialUrl: record.officialUrl,
             openreviewUrl: record.openreviewUrl, authoritySha256: authority.authoritySha256,
             recordBindingSha256: record.recordBindingSha256 }, summary };
@@ -384,17 +391,18 @@ function bindDailyPage({ authorityHandle, blogRoot, page, summaryPage = null,
 function replayDailyPageBinding({ binding, authorityHandle, blogRoot, page, summaryPage = null,
     blogBasePath = '/audio-paper-digest-blog' } = {}) {
     const normalized = normalizeDailyPageBinding(binding);
-    const rebuilt = bindDailyPage({ authorityHandle, blogRoot, page, summaryPage, blogBasePath });
+    const rebuilt = buildDailyPageBinding({ authorityHandle, blogRoot, page, summaryPage, blogBasePath },
+        readHeader(normalized, DAILY_BINDING_CONTRACT));
     if (stableHash(rebuilt) !== stableHash(normalized)) fail('每日 ICML 绑定无法再重放');
     return normalized;
 }
 
 function normalizePdfDescriptor(value) {
-    exact(value, ['contract', 'version', 'posterId', 'forumId', 'absolutePath', 'bytes', 'sha256',
+    const header = readHeader(value, PDF_DESCRIPTOR_CONTRACT);
+    exact(value, [...Object.keys(header), 'posterId', 'forumId', 'absolutePath', 'bytes', 'sha256',
         'authoritySha256', 'recordBindingSha256', 'descriptorSha256'], 'ICML local PDF descriptor');
     const body = { ...clone(value) }; delete body.descriptorSha256;
-    if (value.contract !== PDF_DESCRIPTOR_CONTRACT || value.version !== PDF_DESCRIPTOR_VERSION
-        || !/^[1-9]\d*$/u.test(value.posterId) || !FORUM_ID_RE.test(value.forumId)
+    if (!/^[1-9]\d*$/u.test(value.posterId) || !FORUM_ID_RE.test(value.forumId)
         || !path.isAbsolute(value.absolutePath) || !Number.isSafeInteger(value.bytes) || value.bytes < 5
         || !validSha(value.sha256) || !validSha(value.authoritySha256) || !validSha(value.recordBindingSha256)
         || !validSha(value.descriptorSha256) || stableHash(body) !== value.descriptorSha256) {
@@ -403,7 +411,10 @@ function normalizePdfDescriptor(value) {
     return clone(value);
 }
 
-function verifyLocalForumPdf({ authorityHandle, pdfRoot, posterId = null, forumId = null } = {}) {
+function verifyLocalForumPdf(options = {}) {
+    return buildLocalForumPdfDescriptor(options, protocols.recordHeader(PDF_DESCRIPTOR_CONTRACT, PDF_DESCRIPTOR_CONTRACT));
+}
+function buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId = null, forumId = null } = {}, header) {
     replayPosterAuthority(authorityHandle);
     if ((posterId === null) === (forumId === null)) fail('请恰好提供一个 posterId 或 forumId');
     const record = posterId !== null ? lookupByPoster(authorityHandle, posterId) : lookupByForum(authorityHandle, forumId);
@@ -412,7 +423,7 @@ function verifyLocalForumPdf({ authorityHandle, pdfRoot, posterId = null, forumI
     const loaded = readStableFile(filename, 'ICML local forum PDF', MAX_PDF_BYTES);
     if (loaded.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail('ICML 本地 forum 文件不是 PDF');
     const authority = handleData(authorityHandle).authority;
-    const body = { contract: PDF_DESCRIPTOR_CONTRACT, version: PDF_DESCRIPTOR_VERSION,
+    const body = { ...header,
         posterId: record.posterId, forumId: record.forumId, absolutePath: filename,
         bytes: loaded.bytes.length, sha256: loaded.sha256, authoritySha256: authority.authoritySha256,
         recordBindingSha256: record.recordBindingSha256 };
@@ -421,14 +432,14 @@ function verifyLocalForumPdf({ authorityHandle, pdfRoot, posterId = null, forumI
 
 function replayLocalForumPdfDescriptor({ descriptor, authorityHandle, pdfRoot } = {}) {
     const normalized = normalizePdfDescriptor(descriptor);
-    const rebuilt = verifyLocalForumPdf({ authorityHandle, pdfRoot, posterId: normalized.posterId });
+    const rebuilt = buildLocalForumPdfDescriptor({ authorityHandle, pdfRoot, posterId: normalized.posterId },
+        readHeader(normalized, PDF_DESCRIPTOR_CONTRACT));
     if (stableHash(rebuilt) !== stableHash(normalized)) fail('ICML local PDF descriptor no longer replays');
     return normalized;
 }
 
 module.exports = {
-    CONTRACT, VERSION, DAILY_BINDING_CONTRACT, DAILY_BINDING_VERSION, PDF_DESCRIPTOR_CONTRACT,
-    PDF_DESCRIPTOR_VERSION, SOURCE_KIND, DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING,
+    CONTRACT, VERSION, DAILY_BINDING_CONTRACT, PDF_DESCRIPTOR_CONTRACT, SOURCE_KIND, DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING,
     HistoricalIcmlPosterAuthorityError, stableHash, loadPosterAuthority, normalizeAuthority,
     authorityHandleSnapshot, replayPosterAuthority, lookupByPoster, lookupByForum,
     bindDailyPage, normalizeDailyPageBinding, replayDailyPageBinding,

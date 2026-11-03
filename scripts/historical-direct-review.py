@@ -18,9 +18,25 @@ from publish_common import (classify_review_failure,
                             unchanged_content_rejection_blocks_retry,
                             interpret_readonly_text_unit)
 
-CONTRACT = 'historical-direct-semantic-review-v1'
-CHECKPOINT_CONTRACT = 'historical-direct-semantic-review-checkpoint-v1'
+from protocol_codec import declared_schema, has_valid_header, is_current_header, record_header
+from publication_activation import read as read_publication_file, write as write_publication_file
+
+CONTRACT = 'historical-direct-semantic-review'
+CHECKPOINT_CONTRACT = CONTRACT + '-checkpoint'
+PROTOCOL_CONTRACT = CONTRACT + '-protocol'
+REQUEST_CONTRACT = CONTRACT + '-request'
+PROGRESS_CONTRACT = CONTRACT + '-progress'
 SHA_RE = re.compile(r'^[a-f0-9]{64}$')
+
+
+def current_header(family):
+    return record_header(family, family)
+
+
+def saved_header(value, family):
+    if not has_valid_header(value, family):
+        raise ValueError(f'页面内容审查格式不受支持：{family}')
+    return record_header(value['contract'], family, value.get('schemaFingerprint'))
 
 
 def stable(value):
@@ -77,7 +93,7 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
         value = read_json(candidate)
         body = dict(value)
         declared = body.pop('checkpointSha256', None)
-        if (value.get('contract') != CHECKPOINT_CONTRACT or value.get('version') != 1
+        if (not has_valid_header(value, CHECKPOINT_CONTRACT)
                 or value.get('identity') != identity or value.get('unit') != unit
                 or value.get('index') != index
                 or not isinstance(value.get('inputSha256'), str)
@@ -102,7 +118,7 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
             saved = read_json(candidate)
             body = dict(saved)
             declared = body.pop('checkpointSha256', None)
-            if (saved.get('contract') != CHECKPOINT_CONTRACT or saved.get('version') != 1
+            if (not has_valid_header(saved, CHECKPOINT_CONTRACT)
                     or saved.get('identity') != identity or saved.get('unit') != unit
                     or saved.get('index') != index or saved.get('inputSha256') != input_sha
                     or declared != stable(body) or not isinstance(saved.get('protocol'), dict)
@@ -137,7 +153,7 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
     if result['passed'] is False and not blocking(result['issues']):
         result['issues'].append({'severity': 'error', 'type': 'protocol',
                                  'description': '页面审查未通过，但结果没有列出阻断问题'})
-    body = {'contract': CHECKPOINT_CONTRACT, 'version': 1, 'identity': identity,
+    body = {**current_header(CHECKPOINT_CONTRACT), 'identity': identity,
             'unit': unit, 'index': index, 'inputSha256': input_sha,
             'protocol': protocol, 'result': result}
     checkpoint_record = {**body, 'checkpointSha256': stable(body)}
@@ -172,7 +188,7 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
         value = read_json(candidate)
         body = dict(value)
         declared = body.pop('checkpointSha256', None)
-        if (value.get('contract') != CHECKPOINT_CONTRACT or value.get('unit') != 'page'
+        if (not has_valid_header(value, CHECKPOINT_CONTRACT) or value.get('unit') != 'page'
                 or value.get('identity') != relative
                 or not isinstance(value.get('inputSha256'), str)
                 or not isinstance(value.get('protocol'), dict)
@@ -217,7 +233,7 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
                         and image_result['passed'], 'issues': issues}
     result['resultSha256'] = stable(result)
     if result['passed']:
-        body = {'contract': CHECKPOINT_CONTRACT, 'version': 1, 'identity': relative,
+        body = {**current_header(CHECKPOINT_CONTRACT), 'identity': relative,
                 'unit': 'page', 'index': 0, 'inputSha256': actual_sha,
                 'protocol': protocol, 'result': result}
         atomic_json(page_checkpoint, {**body, 'checkpointSha256': stable(body)})
@@ -225,20 +241,23 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
 
 
 def validate_semantic_protocol(value):
-    expected = {'contract', 'version', 'model', 'secondaryModel', 'endpointSha256',
+    header = saved_header(value, PROTOCOL_CONTRACT)
+    expected = {*header, 'model', 'secondaryModel', 'endpointSha256',
                 'implementationSha256', 'promptSha256', 'textReview', 'imageReview',
                 'budgets', 'protocolSha256'}
     budget_fields = {'chunkChars', 'maxTokens', 'timeoutSeconds', 'maxRetries',
                      'temperature', 'imageMaxBytes', 'pageConcurrency'}
-    if (not isinstance(value, dict) or set(value) != expected
-            or value.get('contract') != 'historical-direct-semantic-review-protocol-v1'
-            or value.get('version') != 1 or not isinstance(value.get('model'), str)
+    if (set(value) != expected or not isinstance(value.get('model'), str)
             or not isinstance(value.get('secondaryModel'), str)
             or any(not SHA_RE.fullmatch(str(value.get(field, ''))) for field in
                    ('endpointSha256', 'implementationSha256', 'promptSha256'))
             or not isinstance(value.get('budgets'), dict)
             or set(value['budgets']) != budget_fields):
         raise ValueError('页面内容审查规则的格式、版本、模型或预算字段无效')
+    if 'schemaFingerprint' in header:
+        schema = declared_schema(value['contract'], PROTOCOL_CONTRACT, value['schemaFingerprint'])
+        if any(value[field] != schema[field] for field in ('textReview', 'imageReview')):
+            raise ValueError('页面内容审查方式与结构声明不一致')
     body = dict(value)
     declared = body.pop('protocolSha256')
     if declared != stable(body):
@@ -275,7 +294,7 @@ def review_pages_bounded(module, pages, staged, checkpoints, protocol, concurren
             for result in completed:
                 results.append(result)
                 print(json.dumps({
-                    'contract': 'historical-direct-semantic-review-progress-v1',
+                    **current_header(PROGRESS_CONTRACT),
                     'completed': len(results), 'total': len(pages),
                     'path': result['path'],
                     'outcome': 'passed' if result['passed'] else 'blocked',
@@ -289,15 +308,17 @@ def review_pages_bounded(module, pages, staged, checkpoints, protocol, concurren
 
 def run(request_path, output_path, checkpoint_root, concurrency):
     request = read_json(request_path)
-    expected = {'contract', 'version', 'publicationId', 'generationSha256',
+    header = saved_header(request, REQUEST_CONTRACT)
+    expected = {*header, 'publicationId', 'generationSha256',
                 'reviewProtocolFingerprint', 'semanticProtocol', 'blogRepo',
                 'bundleRoot', 'files', 'fileSetSha256'}
-    if (set(request) != expected or request['contract'] != 'historical-direct-semantic-review-request-v1'
-            or request['version'] != 1 or not SHA_RE.fullmatch(request['generationSha256'])
+    if (set(request) != expected or not SHA_RE.fullmatch(request['generationSha256'])
             or not SHA_RE.fullmatch(request['reviewProtocolFingerprint'])
             or stable(request['files']) != request['fileSetSha256']):
         raise ValueError('页面内容审查请求的字段、格式、版本或 SHA 无效')
     validate_semantic_protocol(request['semanticProtocol'])
+    if is_current_header(request, REQUEST_CONTRACT) != is_current_header(request['semanticProtocol'], PROTOCOL_CONTRACT):
+        raise ValueError('审查请求与规则不属于同一记录格式')
     if request['semanticProtocol']['budgets']['pageConcurrency'] != concurrency:
         raise ValueError('页面审查并发数与请求中已绑定的规则不同')
     blog_repo = Path(request['blogRepo']).resolve(strict=True)
@@ -329,7 +350,7 @@ def run(request_path, output_path, checkpoint_root, concurrency):
         results = review_pages_bounded(module, pages, staged, checkpoints,
                                        request['semanticProtocol'], concurrency)
     results.sort(key=lambda item: item['path'])
-    body = {'contract': CONTRACT, 'version': 1, 'publicationId': request['publicationId'],
+    body = {**current_header(CONTRACT), 'publicationId': request['publicationId'],
             'generationSha256': request['generationSha256'],
             'reviewProtocolFingerprint': request['reviewProtocolFingerprint'],
             'semanticProtocol': request['semanticProtocol'], 'results': results,
@@ -338,7 +359,16 @@ def run(request_path, output_path, checkpoint_root, concurrency):
     receipt = {**body, 'semanticReviewSha256': stable(body)}
     if receipt['passed']:
         if output.exists():
-            if read_json(output) != receipt:
+            previous = read_publication_file(output)
+            value = json.loads(previous.decode('utf-8'))
+            saved_header(value, CONTRACT)
+            if value != receipt:
+                if not is_current_header(value, CONTRACT):
+                    original_sha = hashlib.sha256(previous).hexdigest()
+                    archive = output.parent / 'original-formats' / f'{output.name}-{original_sha}.json'
+                    write_publication_file(archive, previous)
+                    if read_publication_file(output) != previous:
+                        raise ValueError('原页面审查凭证在保全后发生变化')
                 atomic_json(output, receipt)
         else:
             atomic_json(output, receipt)
