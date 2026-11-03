@@ -252,7 +252,7 @@ def safe_relative(value, label):
     is_asset = path.parts[:3] == ('static', 'images', 'conference') and len(path.parts) == 6 \
         and path.suffix == '.png' and re.fullmatch(r'[a-f0-9]{12}', path.parts[4] or '') \
         and re.fullmatch(r'figure-\d+\.png', path.parts[5] or '')
-    is_sidecar = path.parts[:3] == ('static', 'data', 'papers') and len(path.parts) == 6 \
+    is_sidecar = path.parts[:3] in {('static', 'data', 'papers'), ('static', 'client', 'papers')} and len(path.parts) == 6 \
         and re.fullmatch(r'\d{4}-\d{2}-\d{2}', path.parts[3]) \
         and re.fullmatch(r'conference-[a-f0-9]{24}', path.parts[4]) \
         and path.parts[5] in CONFERENCE_WORKBENCH_NAMES

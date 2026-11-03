@@ -11,8 +11,14 @@ const tagCatalogApi = require('./tag-catalog.js');
 const io = require('./historical-conference-page-projections.js');
 const { writeImmutableFile } = require('./immutable-file.js');
 const { hasPageTagMetadata } = require('./page-tag-metadata.js');
-const CONTRACT = 'historical-direct-tag-supplement-v2';
-const LEGACY_CONTRACT = 'historical-direct-taxonomy-supplement-v1';
+const codec = require('./protocol-codec');
+const CONTRACT = 'historical-direct-tag-supplement';
+const LEGACY_CONTRACT = codec.historicalContract(CONTRACT, 'taxonomy-tags');
+const header = (suffix = '') => codec.recordHeader(CONTRACT + suffix, CONTRACT + suffix);
+function recordVariant(record) {
+    return codec.hasValidHeader(record, CONTRACT)
+        ? codec.format(record.contract, CONTRACT, record.schemaFingerprint) : null;
+}
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(`历史页面标签补充记录被拒绝：${message}`); };
 
@@ -107,8 +113,8 @@ async function buildSupplement(options) {
         } catch (error) { failures.push({ paperId: item.paperId, pagePaths: selectedPages.map(p => p.pagePath), error: String(error.message) }); }
         if (options.onProgress && (attempted % 50 === 0 || options.limit === attempted)) options.onProgress({ attempted, paperCount: authenticated.length, pageCount: Object.keys(records).length, failures: failures.length });
     }
-    const supplement = { contract: CONTRACT, records };
-    const report = { contract: `${CONTRACT}-report`, planSha256: plan.planSha256, planFileSha256,
+    const supplement = { ...header(), records };
+    const report = { ...header('-report'), planSha256: plan.planSha256, planFileSha256,
         executionRegistrySha256: registry.registrySha256, registryFileSha256, registrySha256: tagCatalog.registrySha256,
         rendererImplementationSha256: renderer, attempted, authenticated, failures,
         paperCount: authenticated.length, pageCount: Object.keys(records).length,
@@ -124,4 +130,4 @@ function writeImmutable(directory, name, value) {
     return { filename, fileSha256: digest(bytes) };
 }
 
-module.exports = { CONTRACT, LEGACY_CONTRACT, pageBody, classify, readPlanRegistry, buildSupplement, writeImmutable };
+module.exports = { CONTRACT, LEGACY_CONTRACT, header, recordVariant, pageBody, classify, readPlanRegistry, buildSupplement, writeImmutable };

@@ -221,7 +221,7 @@ test('合并诊断在约定上是只读的，并报告容量和各项内容', ()
             pidProbe: () => false,
             nowMs: Date.parse('2026-09-12T00:00:00.000Z')
         });
-        assert.equal(result.contract, 'conference-workspace-diagnostic-v1');
+        assert.equal(result.contract, 'conference-workspace-diagnostic');
         assert.equal(result.readOnly, true);
         assert.equal(result.repositories.length, 3);
         assert.equal(result.env.duplicateCount, 1);
@@ -267,8 +267,9 @@ test('工作区盘点读取实际新版完成凭证，仍不声明已经发布',
     const directory = path.join(files.conferenceProcessDir, result.processId);
     const stateBytes = fs.readFileSync(path.join(directory, 'state.json'));
     const receiptBytes = fs.readFileSync(path.join(directory, 'completion-receipt.json'));
-    assert.equal(JSON.parse(stateBytes).contract, 'conference-process-v2');
-    assert.equal(JSON.parse(receiptBytes).contract, 'conference-process-completion-receipt-v2');
+    const codec = require('../scripts/lib/protocol-codec');
+    assert.ok(codec.isCurrentHeader(JSON.parse(stateBytes), 'conference-process'));
+    assert.ok(codec.isCurrentHeader(JSON.parse(receiptBytes), 'conference-process-completion-receipt'));
     const report = workspace.inspectProcessStates({ processRoot: files.conferenceProcessDir });
     assert.equal(report.counts.validated_complete, 1);
     assert.equal(report.counts.invalid, 0);

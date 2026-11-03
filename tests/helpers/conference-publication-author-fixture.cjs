@@ -36,7 +36,8 @@ const H=adapter.stableHash, sha=value=>crypto.createHash('sha256').update(value)
         decisionName: 'included.json', artifact });
     filter.applyDecision({ filterRoot: path.join(root, 'filters'), filterId,
         decisionHandle: filter.loadDecisionHandle(decisionFile), owner: 'filter-reviewer', now: stamp });
-    const tagCatalogPath = path.join(root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n');
+    const tagCatalogPath = path.join(root, 'taxonomy.json');
+    fs.copyFileSync(path.join(__dirname, '../../config/tag-catalog.json'), tagCatalogPath);
     const files = { conferenceDiscoveryCatalogDir: path.join(root, 'conference-discovery-catalogs'),
         conferenceDiscoveryReportDir: path.join(root, 'conference-discovery-reports'), conferenceFiltersDir: path.join(root, 'filters'),
         conferenceStagingSpecsDir: path.join(root, 'specs'), conferenceStagingSourceDir: path.join(root, 'conference-staging-sources'),
@@ -64,10 +65,11 @@ Object.assign(paper.analysisManifest.stages.apiReaderArticle,{readerAuthorsSha25
 const analysis={...loaded.analysis,status:'complete',completedAt:stamp,papers:[paper]};fs.writeFileSync(path.join(loaded.directory,'analysis.json'),JSON.stringify(analysis,null,2)+'\n');
 adapter.sealCompletedRun(adapter.loadConferenceAnalysis({analysisRoot:files.conferenceAnalysisDir,executionId}));loaded=adapter.loadConferenceAnalysis({analysisRoot:files.conferenceAnalysisDir,executionId});
 const authors=paper.apiReaderAuthors.authors;
-const catalog = require('../../scripts/lib/tag-catalog.js').loadTagCatalog();
+const catalogApi = require('../../scripts/lib/tag-catalog.js');
+const catalog = catalogApi.loadTagCatalog();
 const catalogIdentity = 'paper_digest_tags_contract: "paper-tag-flat-tags-v2"\n'
     + `paper_digest_tags_registry_sha256: "${catalog.registrySha256}"\n`
-    + `paper_digest_tags_registry_version: "${catalog.version}"\n`;
+    + `paper_digest_tags_registry_version: "${catalogApi.tagCatalogIdentity(catalog)}"\n`;
 const markdown='---\npaper_digest_paper_id: "'+paperId+'"\npaper_digest_source_kind: conference\npaper_digest_conference_id: "odyssey-2026"\n'+catalogIdentity+'---\n\n## 👥 作者与机构\n\n'+authors.map(a=>'- '+a.name+'：'+a.affiliations.join('；')).join('\n')+'\n\n## 正文\n\nFixture\n';
 const pageBody={status:'complete',paperId,analysisExecutionId:executionId,analysisSha256:loaded.analysisFileSha256,completionReceiptSha256:loaded.run.completionReceipt.receiptSha256,sourceSnapshotSha256:loaded.run.sourceSnapshotSha256,authors,contentSha256:sha(markdown),pagePath:'content/posts/fixture.md',assets:[]};
 const manifest={...pageBody,manifestSha256:H(pageBody)},pageDir=path.join(files.conferencePageStagingDir,'fixture');fs.mkdirSync(pageDir);fs.writeFileSync(path.join(pageDir,'manifest.json'),JSON.stringify(manifest));fs.writeFileSync(path.join(pageDir,'page.md'),markdown);

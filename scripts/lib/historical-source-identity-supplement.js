@@ -7,8 +7,12 @@ const io = require('./historical-conference-page-projections.js');
 const supplements = require('./historical-direct-tag-supplement.js');
 const alternate = require('./historical-icml-alternate-pdf-source.js');
 const { hasPageTagMetadata } = require('./page-tag-metadata.js');
-const CONTRACT = 'historical-source-identity-supplement-v2';
-const LEGACY_CONTRACT = 'historical-source-identity-supplement-v1';
+const { isDeepStrictEqual } = require('node:util');
+const codec = require('./protocol-codec');
+const CONTRACT = 'historical-source-identity-supplement';
+const REPORT = CONTRACT + '-report';
+const LEGACY_CONTRACT = codec.historicalContract(CONTRACT, 'original-taxonomy-status');
+const currentHeader = () => codec.recordHeader(CONTRACT, CONTRACT);
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');
 const fail = m => { throw new Error(`Historical source identity rejected: ${m}`); };
 
@@ -53,19 +57,19 @@ function pdfVersionDisclosure({paperId,sourceId,manifest,sourceManifestSha256,pd
     return {pdfVersionBinding,sourceVersionWarning:`封存文本来自 ${sourceId}；实际 PDF 链接 ${pdfRequestedUrl} 未指定版本。已确认属于同一论文，但尚未确认 PDF 对应 v${match[2]}。`};
 }
 
-function identityRecordFor(item, page, bytes, source, options, plan, planFileSha256, contract) {
+function identityRecordFor(item, page, bytes, source, options, plan, planFileSha256, header) {
     if (digest(bytes) !== page.pageContentSha256) fail('frozen page SHA changed');
     if (source.paperId !== item.paperId) fail('source/page identity differs');
-    const body = { contract, paperId:item.paperId, runId:options.runId, planSha256:plan.planSha256,
+    const body = { ...header, paperId:item.paperId, runId:options.runId, planSha256:plan.planSha256,
         planFileSha256, pageKey:page.pageKey, pageSha256:digest(bytes),
         bodySha256:digest(supplements.pageBody(bytes)), source, identityStatus:'verified',
         evidenceType:'sealed-source-identity-only', sourceProofSha256:runner.stableHash(source),
-        [contract === LEGACY_CONTRACT ? 'taxonomyStatus' : 'tagStatus']:'not-classified-by-identity-proof' };
+        [header.contract === LEGACY_CONTRACT ? 'taxonomyStatus' : 'tagStatus']:'not-classified-by-identity-proof' };
     return {...body,proofSha256:runner.stableHash(body)};
 }
 
 function identityRecord(item, page, bytes, source, options, plan, planFileSha256) {
-    return identityRecordFor(item, page, bytes, source, options, plan, planFileSha256, CONTRACT);
+    return identityRecordFor(item, page, bytes, source, options, plan, planFileSha256, currentHeader());
 }
 
 function publicSourceURL(paperId) {
@@ -83,7 +87,10 @@ function sourceIdentity(item, config, generation = 1) {
         const stored = fresh.readFreshArxivRewriteSource({ rootDir: config.FILES.freshArxivFetchedSourcesDir, arxivId: item.route.arxivId, generation });
         if (stored.arxivId !== item.route.arxivId || stored.generation !== generation || item.paperId !== 'arxiv:' + item.route.arxivId) fail('arXiv identity differs');
         const details = stored.runtimeDetails || runner.fallbackArxivDetails(stored);
-        const binding = planApi.normalizeFreshArxivSourceBinding(item, { contract: planApi.FRESH_ARXIV_SOURCE_CONTRACT,
+        const bindingTag = stored.manifest.contract === fresh.CONTRACT ? planApi.FRESH_ARXIV_SOURCE_CONTRACT
+            : codec.historicalContract(planApi.FRESH_ARXIV_SOURCE_CONTRACT, 'source-binding');
+        const binding = planApi.normalizeFreshArxivSourceBinding(item, {
+            ...codec.recordHeader(bindingTag, planApi.FRESH_ARXIV_SOURCE_CONTRACT),
             paperId: item.paperId, arxivId: item.route.arxivId, generation,
             textSha256: stored.manifest.text.responseSha256, pdfSha256: stored.manifest.pdf.responseSha256, sourceManifestSha256: stored.sourceManifestSha256 });
         const version=pdfVersionDisclosure({paperId:item.paperId,sourceId:details.sourceId,manifest:stored.manifest,
@@ -121,14 +128,15 @@ function sourceIdentity(item, config, generation = 1) {
 }
 
 const rejectSaved = message => { throw new Error(`来源身份补充记录被拒绝：${message}`); };
-function knownContract(contract) {
-    if (![CONTRACT, LEGACY_CONTRACT].includes(contract)) rejectSaved('格式标识不受支持。');
-    return contract;
+function knownHeader(record, family = CONTRACT) {
+    if (!codec.hasValidHeader(record, family)) rejectSaved('格式标识不受支持。');
+    return codec.recordHeader(record.contract, family, record.schemaFingerprint);
 }
 function validateSavedRecords(value, options, plan, planFileSha256) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || !value.records || typeof value.records !== 'object' || Array.isArray(value.records)) rejectSaved('保存的页面记录格式无效。');
-    const contract = knownContract(value.contract);
+    const header = knownHeader(value);
+    const isTaxonomy = header.contract === LEGACY_CONTRACT;
     const pages = new Map(plan.queue.flatMap(item => item.pages.map(page => [page.pagePath, { item, page }])));
     for (const [pagePath, record] of Object.entries(value.records)) {
         if (!record || typeof record !== 'object' || Array.isArray(record)) rejectSaved('保存的单页身份记录格式无效。');
@@ -146,17 +154,17 @@ function validateSavedRecords(value, options, plan, planFileSha256) {
         const hasCurrent = Object.hasOwn(record, 'tagStatus');
         const hasLegacy = Object.hasOwn(record, 'taxonomyStatus');
         if (hasCurrent && hasLegacy) rejectSaved('身份记录不能混用新旧标签状态字段。');
-        if (record.contract !== contract || contract === CONTRACT && hasLegacy || contract === LEGACY_CONTRACT && hasCurrent) {
+        if (!isDeepStrictEqual(knownHeader(record), header) || (!isTaxonomy && hasLegacy) || (isTaxonomy && hasCurrent)) {
             rejectSaved('身份记录的标签状态字段或格式与总文件不一致。');
         }
-        const status = contract === CONTRACT ? record.tagStatus : record.taxonomyStatus;
+        const status = isTaxonomy ? record.taxonomyStatus : record.tagStatus;
         if (status !== 'not-classified-by-identity-proof' || record.identityStatus !== 'verified'
             || record.evidenceType !== 'sealed-source-identity-only' || record.paperId !== item.paperId
             || record.source?.paperId !== item.paperId || record.pageKey !== page.pageKey
             || record.runId !== options.runId || record.planSha256 !== plan.planSha256
             || record.planFileSha256 !== planFileSha256) rejectSaved('身份、标签状态、页面或计划绑定不一致。');
     }
-    return contract;
+    return header;
 }
 function savedIdentityFor(options, config, plan, planFileSha256) {
     const root = config.FILES.historicalSourceIdentitySupplementDir;
@@ -178,22 +186,25 @@ function savedIdentityFor(options, config, plan, planFileSha256) {
         .map(name => ({ name, loaded: io.readStableJson(path.join(directory, name), '原身份补充检查点') }));
     if (!hasHistory) {
         for (const checkpoint of checkpoints) {
-            const contract = validateSavedRecords(checkpoint.loaded.value, options, plan, planFileSha256);
-            if (contract !== CONTRACT) rejectSaved('只有旧格式的部分检查点，不能继续生成；请保留原文件并使用新的运行标识。');
+            validateSavedRecords(checkpoint.loaded.value, options, plan, planFileSha256);
+            if (!codec.isCurrentHeader(checkpoint.loaded.value, CONTRACT)) rejectSaved('只有旧格式的部分检查点，不能继续生成；请保留原文件并使用新的运行标识。');
         }
         return null;
     }
     const history = io.readStableJson(historyPath, '原身份补充总文件');
     const report = io.readStableJson(reportPath, '原身份补充报告');
     if (report.value.supplementSha256 !== runner.stableHash(history.value)) rejectSaved('报告与原身份总文件的内容摘要不一致。');
-    const contract = validateSavedRecords(history.value, options, plan, planFileSha256);
-    if (report.value.contract !== contract + '-report' || report.value.planSha256 !== plan.planSha256) {
+    const header = validateSavedRecords(history.value, options, plan, planFileSha256);
+    const reportHeader = knownHeader(report.value, REPORT);
+    if (codec.format(reportHeader.contract, REPORT, reportHeader.schemaFingerprint)
+            !== codec.format(header.contract, CONTRACT, header.schemaFingerprint)
+        || report.value.planSha256 !== plan.planSha256) {
         rejectSaved('报告格式或原计划绑定不一致。');
     }
-    for (const checkpoint of checkpoints) if (validateSavedRecords(checkpoint.loaded.value, options, plan, planFileSha256) !== contract) {
+    for (const checkpoint of checkpoints) if (!isDeepStrictEqual(validateSavedRecords(checkpoint.loaded.value, options, plan, planFileSha256), header)) {
         rejectSaved('检查点与完整身份总文件的格式不一致。');
     }
-    return { contract, history, report, checkpoints };
+    return { header, reportHeader, history, report, checkpoints };
 }
 function reuseSavedIdentity(saved, result, checkpoints) {
     const bytesFor = value => Buffer.from(JSON.stringify(value, null, 2) + '\n');
@@ -226,7 +237,8 @@ async function buildIdentitySupplement(options) {
     ]; else if (options.limit) selected = selected.slice(0,options.limit);
     planApi.verifySelectedHistoricalIdentityLinks(selected, options.blogRoot);
     const saved = savedIdentityFor(options, config, plan, planFileSha256);
-    const contract = saved ? saved.contract : CONTRACT;
+    const header = saved ? saved.header : currentHeader();
+    const reportHeader = saved ? saved.reportHeader : codec.recordHeader(REPORT, REPORT);
     const checkpoints = new Map();
     runner.sourcePrerequisiteSnapshot({ sourceRoot:config.FILES.freshArxivFetchedSourcesDir,plan,generation:1,selected,required:true });
     const records = {}, failures = []; let papers = 0, attempted = 0;
@@ -241,7 +253,7 @@ async function buildIdentitySupplement(options) {
                 const loaded = io.readStableFile(file,'identity frozen page');
                 if (loaded.fileSha256 !== page.pageContentSha256) fail('frozen page SHA changed');
                 if (hasPageTagMetadata(loaded.bytes)) continue;
-                projections.push([page.pagePath,identityRecordFor(item,page,loaded.bytes,source,options,plan,planFileSha256,contract)]);
+                projections.push([page.pagePath,identityRecordFor(item,page,loaded.bytes,source,options,plan,planFileSha256,header)]);
             }
             const replay = sourceIdentity(item,config,1);
             if (runner.stableHash(source)!==runner.stableHash(replay)) fail('source changed while projecting identity');
@@ -249,13 +261,13 @@ async function buildIdentitySupplement(options) {
             papers += projections.length ? 1 : 0;
         } catch(error) { failures.push({paperId:item.paperId,error:String(error.message)}); }
         if (attempted % 50 === 0 || attempted === selected.length) {
-            const checkpoint = { contract, records: structuredClone(records) };
+            const checkpoint = { ...header, records: structuredClone(records) };
             checkpoints.set(`checkpoint-${String(attempted).padStart(6, '0')}.json`, checkpoint);
             if (!saved) options.onProgress?.({attempted,paperCount:papers,pageCount:Object.keys(records).length,failures:failures.length},checkpoint);
         }
     }
-    const supplement = {contract,records};
-    const report = {contract:contract+'-report',planSha256:plan.planSha256,selected:selected.length,
+    const supplement = {...header,records};
+    const report = {...reportHeader,planSha256:plan.planSha256,selected:selected.length,
         paperCount:papers,pageCount:Object.keys(records).length,failures,supplementSha256:runner.stableHash(supplement)};
     const result = {supplement,report};
     return saved ? reuseSavedIdentity(saved, result, checkpoints) : result;

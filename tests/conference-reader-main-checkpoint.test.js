@@ -37,7 +37,7 @@ function fixture() {
     const actualRequire = require('node:module').createRequire(file);
     const h = require('node:vm').runInNewContext(source.slice(start, end)
         + '\n({projectMainCheckpoint, CHECKPOINT_FAILURE_FIELDS})', {
-        sha, clone: structuredClone,
+        sha, clone: structuredClone, codec: actualRequire('./protocol-codec'),
         isDeepStrictEqual: (left, right) => isDeepStrictEqual(structuredClone(left), structuredClone(right)),
         fail: message => { throw new Error(message); },
         require(name) {

@@ -40,8 +40,8 @@ test('缓存必须绑定来源、词表、指纹、注入的引文和独立审�
     const text = evidence.repeat(3),bundle = sn.buildSourceEvidenceSnippets(text),source = { text, source: { paperId: 'arxiv:2601.00001', textSha256: sha(text), pdfSha256: 'a'.repeat(64) } };
     const modelResponseText = JSON.stringify({ ...raw, concepts: raw.concepts.map(c => ({ id: c.id, evidenceId: bundle.snippets[0].id, rationale: c.rationale })) });
     const injected = sn.fillConceptQuotesFromSnippets(modelResponseText,bundle),decision = api.parseTagSelectionResponse(injected.responseText,runtime,bundle.projection,text);
-    const reviewProof = { contract:api.CONTRACT+'-review',decisionSha256:hash(decision),sourceTextSha256:source.source.textSha256,evidenceSha256:bundle.evidenceSha256,registrySha256:runtime.registrySha256,response:{accepted:true,issues:[]} };
-    const body = { contract:api.CONTRACT,fingerprint:'fp',source:source.source,registrySha256:runtime.registrySha256,modelResponseText,modelResponseSha256:sha(modelResponseText),responseText:injected.responseText,responseSha256:sha(injected.responseText),quoteSelections:injected.selections,reviewProof,reviewProofSha256:hash(reviewProof),...decision };
+    const reviewProof = { ...api.header('-review'),decisionSha256:hash(decision),sourceTextSha256:source.source.textSha256,evidenceSha256:bundle.evidenceSha256,registrySha256:runtime.registrySha256,response:{accepted:true,issues:[]} };
+    const body = { ...api.header(''),fingerprint:'fp',source:source.source,registrySha256:runtime.registrySha256,modelResponseText,modelResponseSha256:sha(modelResponseText),responseText:injected.responseText,responseSha256:sha(injected.responseText),quoteSelections:injected.selections,reviewProof,reviewProofSha256:hash(reviewProof),...decision };
     const record = { ...body, proofSha256:hash(body) },options = { fingerprint:'fp',runtime,bundle,source };
     assert.equal(api.validateCachedTagSelection(record,options).primaryTaskId,raw.primaryTaskId);
     assert.throws(() => api.validateCachedTagSelection(record,{...options,fingerprint:'other-model-route'}),/保存的分类结果与本次指纹、来源或词表不一致/);
@@ -64,7 +64,7 @@ test('部分配额检查点不占用最终文件名，续跑后能得到更大�
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-tag-resume-')));
  try {
   const selected=[{paperId:'arxiv:2601.00001'},{paperId:'arxiv:2601.00002'}];
-  const first={contract:require('../scripts/lib/historical-direct-tag-supplement.js').CONTRACT,records:{'one.md':{paperId:selected[0].paperId}}};
+  const first={...require('../scripts/lib/historical-direct-tag-supplement.js').header(),records:{'one.md':{paperId:selected[0].paperId}}};
   const partial=api.persistRunResult(root,selected,first,[selected[0]],[],{paperId:selected[1].paperId,status:'account-pool-exhausted'});
   assert.equal(partial.state,'partial');assert.equal(partial.processed,1);assert.deepEqual(partial.remainingPaperIds,[selected[1].paperId]);
   assert.equal(fs.existsSync(path.join(root,'tag-history.json')),false);
@@ -81,7 +81,7 @@ test('并行完成度不足时报告真实缺口，不假定已完成前缀',()=
  const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-tag-parallel-')));
  try {
-  const selected=['a','b','c'].map(paperId=>({paperId})),supplement={contract:require('../scripts/lib/historical-direct-tag-supplement.js').CONTRACT,records:{}};
+  const selected=['a','b','c'].map(paperId=>({paperId})),supplement={...require('../scripts/lib/historical-direct-tag-supplement.js').header(),records:{}};
   const partial=api.persistRunResult(root,selected,supplement,[selected[2]],[],{status:'operator-stopped'});
   assert.deepEqual(partial.remainingPaperIds,['a','b']);assert.equal(partial.processed,1);
   assert.throws(()=>api.persistRunResult(root,selected,supplement,[selected[2],selected[2]],[],{status:'operator-stopped'}),/已处理论文重复，或包含本次所选集合之外的论文/);
@@ -220,11 +220,11 @@ test('真实的来源分类提示词会走到选择、独立审核和第二轮�
         const files = fixture.fs.readdirSync(fixture.options.outputDirectory);
         const decision = JSON.parse(fixture.fs.readFileSync(fixture.path.join(fixture.options.outputDirectory,
             files.find(name => name.startsWith('decision-'))), 'utf8'));
-        assert.equal(fixture.api.CONTRACT, 'historical-source-tag-classification-v2');
+        assert.equal(fixture.api.CONTRACT, 'historical-source-tag-classification');
         assert.equal(decision.contract, fixture.api.CONTRACT);
         assert.equal(decision.reviewProof.contract, fixture.api.CONTRACT + '-review');
         assert.equal(result.report.contract, fixture.api.CONTRACT + '-report');
-        assert.equal(result.supplement.contract, 'historical-direct-tag-supplement-v2');
+        assert.equal(result.supplement.contract, 'historical-direct-tag-supplement');
         assert.equal(result.supplement.records[fixture.pagePath].evidenceType, 'source-only-tags');
         assert.equal(result.supplement.records[fixture.pagePath].classificationContract, decision.contract);
         assert.equal(files.includes('taxonomy-history.json'), false);
@@ -312,6 +312,8 @@ test('真实的来源分类拒绝保存的提示词 SHA 不匹配和错代请求
             const { proofSha256, ...wrongGeneration } = JSON.parse(decisionBytes);
             const hash = require('../scripts/lib/historical-direct-rewrite-runner.js').stableHash;
             wrongGeneration.contract = fixture.api.LEGACY_CONTRACT;
+            delete wrongGeneration.schemaFingerprint;
+            delete wrongGeneration.reviewProof.schemaFingerprint;
             wrongGeneration.reviewProof.contract = fixture.api.LEGACY_CONTRACT + '-review';
             wrongGeneration.reviewProofSha256 = hash(wrongGeneration.reviewProof);
             fixture.fs.writeFileSync(fixture.path.join(output, decisionName),
@@ -350,7 +352,8 @@ test('真实的未覆盖响应保留原状态，显式续跑排除最初已处�
     assert.equal(result.report.failures[0].error, '当前词表没有覆盖适用类别：' + reason);
     assert.match(fixture.calls[0].prompt, /"status":"not-covered-by-current-tag-catalog"/);
     const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
-    const checkpoint = { contract: fixture.api.CONTRACT + '-checkpoint', processed: 1,
+    const checkpoint = { ...fixture.api.header('-checkpoint'), checkpointScheduling: 'completion-set',
+        processedPaperIds: [fixture.item.paperId], processed: 1,
         decisions: [], failures: result.report.failures, supplement: result.supplement };
     const checkpointFile = fixture.path.join(fixture.options.outputDirectory,
         'checkpoint-000001-' + runner.stableHash(checkpoint).slice(0, 16) + '.json');
@@ -364,6 +367,13 @@ test('真实的未覆盖响应保留原状态，显式续跑排除最初已处�
     assert.deepEqual(selection.paperIds, []);
     assert.deepEqual(selection.resumeProvenance.processedPaperIds, ['arxiv:2601.00001']);
     assert.deepEqual(fixture.fs.readFileSync(checkpointFile), originalBytes);
+    const originalSelection = JSON.parse(fixture.fs.readFileSync(fixture.path.join(fixture.options.outputDirectory, 'selection.json'), 'utf8'));
+    const verifyCheckpoint = record => fixture.api.validateResumeCheckpoint(record, originalSelection, {
+        planSha256: originalSelection.planSha256, registrySha256: originalSelection.registrySha256,
+        filename: 'checkpoint-000001-' + runner.stableHash(record).slice(0, 16) + '.json'
+    });
+    assert.throws(() => verifyCheckpoint({ ...checkpoint, checkpointScheduling: 'completion-set-v1' }), /完整性不符合要求/);
+    assert.throws(() => verifyCheckpoint({ ...checkpoint, schemaFingerprint: '0'.repeat(64) }), /完整性不符合要求/);
     const wrongStatus = structuredClone(checkpoint);
     wrongStatus.failures[0].status = 'not-covered-by-current-taxonomy';
     const wrongCheckpointFile = fixture.path.join(fixture.options.outputDirectory,
@@ -470,7 +480,7 @@ test('既有分类缓存导出也会重新核验旧计划的正文身份', async
     let f;
     f=await sourceClassificationFixture(t,call=>call.maxTokens===3000?'{"accepted":true,"issues":[]}':f.normalResponse);
     const result=await f.run();
-    const checkpoint={contract:f.api.CONTRACT+'-checkpoint',processed:1,decisions:result.report.decisions,
+    const checkpoint={...f.api.header('-checkpoint'),checkpointScheduling:'completion-set',processedPaperIds:[f.item.paperId],processed:1,decisions:result.report.decisions,
         failures:result.report.failures,supplement:result.supplement};
     const checkpointName='checkpoint-000001-'+require('../scripts/lib/historical-direct-rewrite-runner.js').stableHash(checkpoint).slice(0,16)+'.json';
     f.fs.writeFileSync(f.path.join(f.options.outputDirectory,checkpointName),JSON.stringify(checkpoint),{mode:0o600});

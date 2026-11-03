@@ -224,6 +224,7 @@ test('共用仓库保留代码和模型检查点两种资源类型，并绑定�
     );
     const codeOnlyBody = {
         contract: identity.contract,
+        schemaFingerprint: identity.schemaFingerprint,
         sourceTextSha256: identity.sourceTextSha256,
         resources: identity.resources.filter(resource => resource.type === 'code')
     };
@@ -282,6 +283,7 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
     );
     const noCodeIdentityBody = {
         contract: identity.contract,
+        schemaFingerprint: identity.schemaFingerprint,
         sourceTextSha256: identity.sourceTextSha256,
         resources: identity.resources.filter(resource => resource.type !== 'code')
     };
@@ -415,6 +417,7 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
     });
     const dependencyIdentityBody = {
         contract: identity.contract,
+        schemaFingerprint: identity.schemaFingerprint,
         sourceTextSha256: identity.sourceTextSha256,
         resources: [
             ...identity.resources,
@@ -428,6 +431,7 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
     };
     const codeAvailableIdentityBody = {
         contract: identity.contract,
+        schemaFingerprint: identity.schemaFingerprint,
         sourceTextSha256: identity.sourceTextSha256,
         resources: [
             ...identity.resources,
@@ -487,6 +491,7 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
     };
     const unavailableModelIdentityBody = {
         contract: identity.contract,
+        schemaFingerprint: identity.schemaFingerprint,
         sourceTextSha256: identity.sourceTextSha256,
         resources: [...identity.resources, unavailableModel]
     };
@@ -538,6 +543,7 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
     };
     const datasetStatusIdentityBody = {
         contract: identity.contract,
+        schemaFingerprint: identity.schemaFingerprint,
         sourceTextSha256: identity.sourceTextSha256,
         resources: [...identity.resources, datasetStatusResource]
     };
@@ -1122,7 +1128,7 @@ test('第二轮审查有噪声时，多轮评分的共识仍然可以复核', ()
         stabilityWarning: true,
         finalScore: 7.2, auditSha256: hash,
         stabilityResolution: {
-            contract: deep.SCORING_STABILITY_RESOLUTION_CONTRACT,
+            ...require('../scripts/lib/protocol-codec').recordHeader(deep.SCORING_STABILITY_RESOLUTION_CONTRACT, deep.SCORING_STABILITY_RESOLUTION_CONTRACT),
             status: 'resolved',
             method: 'multi_pass_consensus',
             firstAuditScore: 7, secondAuditScore: 7.2, thirdAuditScore: 7.2,

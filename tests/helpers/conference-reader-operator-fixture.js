@@ -110,7 +110,8 @@ async function fixture(t, { historical = false, rawSchema = false, tableRestorat
     const patched = structuredClone(restored); patched.sections[0].body = '人工局部更正原始说明。'.repeat(30) + (tableRestoration ? '\n\n'+restored.sections[0].body : '');
     const recordRoot = path.join(registered.processDirectory, 'reader-operator-corrections'); fs.mkdirSync(recordRoot, { mode: 0o700 });
     const correctionFile = path.join(recordRoot, 'correction.json'), manifestPath = path.join(recordRoot, 'manifest.json');
-    const record = { contract: api.CORRECTION, notLlmResponse: true, paperId: f.paperId, executionId: loaded.run.executionId,
+    const codec = require('../../scripts/lib/protocol-codec');
+    const record = { ...codec.recordHeader(api.CORRECTION, api.CORRECTION), notLlmResponse: true, paperId: f.paperId, executionId: loaded.run.executionId,
         sourceSha256: member.sourceSha256, sourceSnapshotSha256: member.sourceSnapshotSha256,
         analysisFileSha256: loaded.analysisFileSha256, runFileSha256: loaded.runFileSha256, sourceFileSha256: loaded.sourceFileSha256,
         appliedAt: '2026-10-17T12:00:00.000Z', baselineCandidateFile: candidateFile,
@@ -120,14 +121,16 @@ async function fixture(t, { historical = false, rawSchema = false, tableRestorat
     write(correctionFile, record);
     if (rawSchema) {
         const last = JSON.parse(fs.readFileSync(path.join(loaded.directory, 'reader-grant-budget.json'))).requests.at(-1);
-        Object.assign(record, { version: 1, correctionKind: api.PAID_RAW_JSON_SCHEMA,
+        delete record.schemaFingerprint;
+        Object.assign(record, codec.historicalHeader(api.CORRECTION, 'original-explicit-existing-or-raw'),
+            { correctionKind: codec.historicalContract(api.PAID_RAW_JSON_SCHEMA, 'paid-original-schema-replay'),
             rawJsonSchemaCorrection: { originalRawSha256: repair.shaText(payload.rawDraft), originalVersion: 4,
                 projectedDraftSha256: repair.hashDraft(projected), requestId: last.id, responseFileSha256: last.responseFileSha256 } });
         write(correctionFile, record);
     }
     if (tableRestoration) {
         const source = require('../../scripts/lib/conference-source-context').readerPdfSourceForContext(pdf);
-        record.declaredTablePlaceholderRestoration = { contract: api.DECLARED_TABLE_RESTORATION,
+        record.declaredTablePlaceholderRestoration = { ...codec.recordHeader(api.DECLARED_TABLE_RESTORATION, api.DECLARED_TABLE_RESTORATION),
             sourceTextSha256: member.sourceSha256, pdfSha256: source.pdfSha256,
             originalBindingsSha256: repair.hashDraft(projected.tableBindings), restoredDraftSha256: repair.hashDraft(restored),
             tables: syntheticTables.map((markdown,index) => ({ tableIndex: index+1, marker: `[[TABLE_${index+1}]]`,
@@ -141,10 +144,10 @@ async function fixture(t, { historical = false, rawSchema = false, tableRestorat
         lastFailure: structuredClone(loaded.analysis.readerRevisionProgress.failures.at(-1)) });
     const saveState = () => { state.stateSha256 = processApi.stateDigest(state); processApi.assertState(state); write(path.join(registered.processDirectory, 'state.json'), state); };
     saveState();
-    const manifest = { contract: api.CONTRACT, version: 1, processId: member.processId, grantId: member.grantId,
+    const manifest = { ...require('../../scripts/lib/protocol-codec').recordHeader(api.CONTRACT, api.CONTRACT), processId: member.processId, grantId: member.grantId,
         grantSha256: member.grantSha256, authorization: 'Synthetic explicit human fixture only; no production permission',
         stateFileSha256: repair.shaText(fs.readFileSync(path.join(registered.processDirectory, 'state.json'))), correctionFiles: [correctionFile] };
-    if (historical) manifest.normalHistoryAdmission = { contract: api.HISTORICAL_NORMAL_TERMINAL, members: [{
+    if (historical) manifest.normalHistoryAdmission = { ...codec.recordHeader(api.HISTORICAL_NORMAL_TERMINAL, api.HISTORICAL_NORMAL_TERMINAL), members: [{
         paperId: f.paperId, executionId: loaded.run.executionId, priorExecutionId: failedExecutionId,
         currentMaterialsSha256: grants.recoveryWindowMaterials(analysisRoot, loaded.run.executionId).materialsSha256,
         priorMaterialsSha256: grants.recoveryWindowMaterials(analysisRoot, failedExecutionId).materialsSha256 }] };

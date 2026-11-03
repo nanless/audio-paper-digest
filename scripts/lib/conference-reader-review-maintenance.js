@@ -1959,7 +1959,7 @@ function withScientificParentReplay(loaded,batch,member,callback) {
     const handle=Object.freeze({});
     scientificParentReplayHandles.set(handle,{loaded,batch,member});
     const operator=require('./conference-reader-operator-correction');
-    return loaded.parent.analysis.papers[0].analysisManifest?.stages?.apiReaderArticle?.operatorProvenance?.contract===operator.CORRECTION
+    return operator.hasOperatorProvenance(loaded.parent.analysis.papers[0].analysisManifest?.stages?.apiReaderArticle?.operatorProvenance)
         ?operator.withVerifiedMaintenanceReaderParent(handle,callback)
         :require('./conference-source-resource-correction').withVerifiedMaintenanceScientificParent(handle,callback);
 }

@@ -216,7 +216,8 @@ class TocRecordsTests(IcmcTestCase):
 class ExtractMetadataTests(IcmcTestCase):
     def test_normal_页码区间到下一篇的前一页最后一篇到卷末(self):
         result = icmc.extract_metadata(self.fixture_pdf(), "https://icmc/index", "https://icmc/combined.pdf")
-        self.assertEqual(result["pageMap"]["contract"], "icmc-combined-proceedings-page-map-v1")
+        self.assertEqual(result["pageMap"]["contract"], "icmc-combined-proceedings-page-map")
+        self.assertRegex(result["pageMap"]["schemaFingerprint"], r"^[a-f0-9]{64}$")
         self.assertEqual(result["pageMap"]["sourcePages"], SOURCE_PAGES)
         self.assertEqual(
             [(item["id"], item["startPage"], item["endPage"]) for item in result["pageMap"]["papers"]],
@@ -260,7 +261,7 @@ class SplitPapersTests(IcmcTestCase):
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
             with fitz.open(target) as sliced:
                 self.assertEqual(sliced.page_count, pages)
-                self.assertEqual(sliced.metadata.get("producer"), "audio-paper-digest-icmc-split-v1")
+        self.assertEqual(sliced.metadata.get("producer"), "audio-paper-digest-icmc-split")
 
     def test_boundary_重跑不改已切出的字节(self):
         source = self.fixture_pdf()

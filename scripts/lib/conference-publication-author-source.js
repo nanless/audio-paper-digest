@@ -36,7 +36,7 @@ function readReceipt(file) {
     } finally { fs.closeSync(fd); }
 }
 function loadPublicationExtractionSnapshot(sourceRoot, receiptName, receipt, item) {
-    if (receipt.extractor?.version !== '2.3.0') {
+    if (!require('./protocol-codec').hasValidHeader(receipt.extractor, 'conference-retained-pdf-extractor', 'version')) {
         return extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(sourceRoot, receiptName, { replay: false }));
     }
     // Retain the original extraction identity, as normal source-upgrade replay

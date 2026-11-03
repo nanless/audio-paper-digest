@@ -179,11 +179,11 @@ test('页面对应记录与计划的输入检查拒绝旧 v3/v4 及格式无效�
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
     const legacyV3 = { contract: 'merged-good-historical-local-data-v3', version: 3,
         scope: current.scope, inputs: current.inputs, summary: current.summary, entries: current.entries };
-    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV3), /带范围限制的 v5 本地来源目录未通过检查/);
-    assert.throws(() => planApi.normalizeCatalog(legacyV3), /当前带范围限制的 v5 本地来源目录未通过检查/);
+    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV3), /范围受限的本地来源目录未通过检查/);
+    assert.throws(() => planApi.normalizeCatalog(legacyV3), /当前范围受限的本地来源目录未通过检查/);
     const legacyV4 = structuredClone(current); legacyV4.contract = 'merged-good-historical-local-data-v4'; legacyV4.version = 4;
-    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV4), /带范围限制的 v5 本地来源目录未通过检查/);
-    assert.throws(() => planApi.normalizeCatalog(legacyV4), /当前带范围限制的 v5 本地来源目录未通过检查/);
+    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV4), /范围受限的本地来源目录未通过检查/);
+    assert.throws(() => planApi.normalizeCatalog(legacyV4), /当前范围受限的本地来源目录未通过检查/);
     const cases = [
         value => { delete value.scopeBinding; },
         value => { value.inputs.unshift({ path: '/tmp/legacy-arxiv-good-data.json',
@@ -195,8 +195,8 @@ test('页面对应记录与计划的输入检查拒绝旧 v3/v4 及格式无效�
     ];
     for (const mutate of cases) {
         const legacy = structuredClone(current); mutate(legacy);
-        assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacy), /带范围限制的 v5 本地来源目录未通过检查/);
-        assert.throws(() => planApi.normalizeCatalog(legacy), /当前带范围限制的 v5 本地来源目录未通过检查/);
+        assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacy), /范围受限的本地来源目录未通过检查/);
+        assert.throws(() => planApi.normalizeCatalog(legacy), /当前范围受限的本地来源目录未通过检查/);
     }
 });
 

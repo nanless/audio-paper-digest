@@ -387,7 +387,9 @@ test('直接汇总接受完整的当日分组，并生成绑定来源代次的 M
     assert.match(aggregate.markdown, /paper_digest_tags_registry_sha256: "[a-f0-9]{64}"/);
     assert.match(aggregate.markdown, /站点标签页同时显示历史标签与新标签/);
     assert.match(aggregate.markdown, /每篇导读均依据原文重新撰写/);
-    assert.match(aggregate.markdown, /paper_digest_reader_quality: "reader-facing-v3"/);
+    const qualityHeader = require('../scripts/lib/protocol-codec').recordHeader('reader-facing-page', 'reader-facing-page');
+    assert.ok(aggregate.markdown.includes(`paper_digest_reader_quality: "${qualityHeader.contract}"`));
+    assert.ok(aggregate.markdown.includes(`paper_digest_reader_quality_schema_fingerprint: "${qualityHeader.schemaFingerprint}"`));
     assert.match(aggregate.markdown, /## ⚡ 今日概览[\s\S]*## 📋 论文列表/);
     assert.match(aggregate.markdown, /英文题目：\*\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)\*/);
     assert.match(aggregate.markdown, /评分：[\s\S]*排名：前50% \| 文档类型：方法研究 \| \[arXiv 原文\]\(https:\/\/arxiv\.org\/abs\/2608\.00001\)[\s\S]*👥 \*\*作者与机构\*\*/);

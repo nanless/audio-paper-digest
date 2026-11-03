@@ -42,7 +42,7 @@ test('历史原请求/响应和grant账本必须逐字闭合；改响应不能�
 
 test('原付费完整raw版本4私有机械投影到3，原null候选/原响应/计数不变，默认入口不开放',async t=>{
  const f=await fixture(t,{historical:true,rawSchema:true});const original=fs.readFileSync(f.candidateFile);const c=JSON.parse(original);assert.equal(c.payload.draft,null);
- const h=api.openCorrectionBatch(f.options);await api.withCorrection(h,{executionId:f.loaded.run.executionId,planHandle:f.planHandle,sourceRoot:f.sourceRoot},()=>{const value=api.current(f.loaded.analysis.papers[0],f.identity);assert.equal(value.payload.draft.version,3);assert.equal(value.proof.beforeDraftSha256,repair.hashDraft(null));assert.deepEqual(value.proof.rawJsonSchemaCorrection,f.record.rawJsonSchemaCorrection);assert.equal(value.proof.correctionKind,api.PAID_RAW_JSON_SCHEMA);assert.equal(value.payload.attempts,2);});
+ const h=api.openCorrectionBatch(f.options);await api.withCorrection(h,{executionId:f.loaded.run.executionId,planHandle:f.planHandle,sourceRoot:f.sourceRoot},()=>{const value=api.current(f.loaded.analysis.papers[0],f.identity);assert.equal(value.payload.draft.version,3);assert.equal(value.proof.beforeDraftSha256,repair.hashDraft(null));assert.deepEqual(value.proof.rawJsonSchemaCorrection,f.record.rawJsonSchemaCorrection);assert.equal(value.proof.correctionKind,f.record.correctionKind);assert.equal(value.payload.attempts,2);});
  assert.deepEqual(fs.readFileSync(f.candidateFile),original);assert.throws(()=>api.replay(f.record,c),/结构子类型/);
 });
 

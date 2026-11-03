@@ -138,7 +138,7 @@ require(GUARD_VALUE).assertNoPendingReaderReviewMaintenance=({processDirectory,a
             if name == 'legacy-blog':
                 publisher = new.load_publish_to_blog()
                 snapshot = publisher.build_tag_catalog_snapshot(publisher._PAGE_TAG_CATALOG)
-                versions = {'contract': publisher.TAG_CATALOG_VERSIONS_CONTRACT,
+                versions = {**new.current_header('paper-tag-catalog-versions'),
                             'currentSha256': snapshot['registrySha256'], 'snapshots': [snapshot]}
                 for prefix in ('data', 'static/data'):
                     for filename, value in [('tag-catalog-snapshot.json', snapshot),

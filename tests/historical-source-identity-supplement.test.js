@@ -51,7 +51,7 @@ test('身份结果绑定精确的冻结整文件和 RawContent，但绝不参与
  assert.equal(r.sourceProofSha256,runner.stableHash(source));
  const {proofSha256,...body}=r; assert.equal(proofSha256,runner.stableHash(body));
  assert.equal(r.identityStatus,'verified'); assert.equal(r.evidenceType,'sealed-source-identity-only');
- assert.equal(r.contract,'historical-source-identity-supplement-v2');
+ assert.equal(r.contract,'historical-source-identity-supplement');
  assert.equal(r.tagStatus,'not-classified-by-identity-proof');
  assert.equal(Object.hasOwn(r,'taxonomyStatus'),false);
  for(const key of ['concepts','primaryTaskId','primaryMethodId','canonicalAnalysisSha256']) assert.equal(Object.hasOwn(r,key),false);
@@ -129,7 +129,8 @@ test('新旧状态字段同值或空值也拒绝，未知和错代记录不能�
   [true,r=>{r.tagStatus=null;},/不能混用新旧标签状态字段/],
   [false,r=>{r.taxonomyStatus=r.tagStatus;delete r.tagStatus;},/标签状态字段或格式与总文件不一致/],
   [true,r=>{r.tagStatus=r.taxonomyStatus;delete r.taxonomyStatus;},/标签状态字段或格式与总文件不一致/],
-  [false,r=>{r.contract='historical-source-identity-supplement-unknown';},/标签状态字段或格式与总文件不一致/],
+  [false,r=>{r.contract='historical-source-identity-supplement-unknown';},/格式标识不受支持/],
+  [false,r=>{r.schemaFingerprint='0'.repeat(64);},/格式标识不受支持/],
   [false,r=>{r.tagStatus=null;},/身份、标签状态、页面或计划绑定不一致/]
  ];
  for(const [original,change,reason] of cases){

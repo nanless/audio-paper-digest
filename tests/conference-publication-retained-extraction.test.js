@@ -30,7 +30,14 @@ function fixture(t) {
         sourceProof:{receiptSha256:original.receiptSha256} };
     const save = receipt => { const {receiptSha256,...body}=receipt; receipt.receiptSha256=stable(body);
         item.sourceProof.receiptSha256=receipt.receiptSha256; write(file,receipt);return receipt; };
-    const legacy = structuredClone(original);legacy.extractor.version='2.3.0';
+    const codec = require('../scripts/lib/protocol-codec');
+    const legacy = structuredClone(original);
+    delete legacy.schemaFingerprint;
+    Object.assign(legacy, codec.historicalHeader('conference-pdf-extraction-receipt', 'raw-input-output-bindings'));
+    delete legacy.extractor.contract;
+    delete legacy.extractor.schemaFingerprint;
+    delete legacy.extractor.implementationSha256;
+    Object.assign(legacy.extractor, codec.historicalHeader('conference-retained-pdf-extractor', 'retained-prior-implementation'));
     const originals = new Map(Object.values(generated.names).map(name=>[name,fs.readFileSync(path.join(root,name))]));
     return {root,generated,file,original,item,save,legacy,originals,
         restore(){for(const[name,bytes]of originals)fs.writeFileSync(path.join(root,name),bytes);},
@@ -43,7 +50,7 @@ test('current extraction remains strict; explicit original 2.3.0 uses existing r
     // This synthetic old-format header exercises compatibility only. A separate
     // real 1336/18 native replay is recorded in the task's private O evidence.
     f.save(f.legacy);const before=f.snapshot();
-    assert.throws(()=>extraction.loadExtractionHandle(f.root,f.generated.receiptName,{replay:false}),/名称、版本/);
+    assert.throws(()=>extraction.loadExtractionHandle(f.root,f.generated.receiptName,{replay:false}),/名称、版本|extractor.*字段|format header invalid/);
     const retained=load(f.root,f.generated.receiptName,f.legacy,f.item);
     assert.equal(retained.verification.receiptSha256,f.legacy.receiptSha256);
     assert.equal(retained.verification.textSha256,current.verification.textSha256);

@@ -15,7 +15,7 @@ function fixture(t) {
 function expectedFiles(f) {
     const source = processApi.sourceNames(f.paperId, f.context.authority.implementationSha256);
     const shared = processApi.namesFor(f.context);
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.context.authority), processApi.CONTRACT);
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.context.authority), processApi.processIdentityDomain());
     return {
         metadata: path.join(f.files.conferenceStagingSourceDir, source.metadata),
         pdf: path.join(f.files.conferenceStagingSourceDir, source.pdf),
@@ -109,6 +109,7 @@ test('会议不可变写保留竞争胜者、旧半文件和权限限制', t => 
     const partial = path.join(root, 'old-partial.json'); fs.writeFileSync(partial, '{"contract":', { mode: 0o600 });
     assert.throws(() => processApi.exactFile(partial, payload)); assert.equal(fs.readFileSync(partial, 'utf8'), '{"contract":');
     const publicFile = path.join(root, 'public.json'); fs.writeFileSync(publicFile, payload, { mode: 0o644 });
+    fs.chmodSync(publicFile, 0o644);
     assert.throws(() => processApi.exactFile(publicFile, payload), /0600/); assert.equal(fs.statSync(publicFile).mode & 0o777, 0o644);
 });
 

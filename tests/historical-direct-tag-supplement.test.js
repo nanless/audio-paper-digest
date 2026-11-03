@@ -54,7 +54,7 @@ test('规范词表不匹配和猜测主标签都直接失败', () => {
 });
 test('不可变输出在字节相同时复用，拒绝覆盖', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tag-immutable-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    assert.equal(api.CONTRACT, 'historical-direct-tag-supplement-v2');
+    assert.equal(api.CONTRACT, 'historical-direct-tag-supplement');
     assert.equal(api.LEGACY_CONTRACT, 'historical-direct-taxonomy-supplement-v1');
     const first = api.writeImmutable(root, 'supplement.json', { a: 1 });
     assert.equal(fs.statSync(first.filename).mode & 0o777, 0o600);

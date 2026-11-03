@@ -75,7 +75,7 @@ test('原Git源码生成的会议账本、运行与计划按原header及真实�
             selectedMemberSetSha256: proof.selectedMemberSetSha256 }, shards: [{ shardId: 'all', paperIds: [paperId] }] });
     assert.deepEqual(plan.normalizePlan(oldPlan), oldPlan);
     assert.throws(() => plan.normalizePlan({ ...oldPlan, version: oldPlan.version + 1 }), /不属于支持的组合/);
-    assert.throws(() => plan.normalizePlan({ ...oldPlan, schemaFingerprint: codec.schemaFingerprint('conference-run-plan') }), /包含未允许的字段/);
+    assert.throws(() => plan.normalizePlan({ ...oldPlan, schemaFingerprint: codec.schemaFingerprint('conference-run-plan') }), /不属于支持的组合/);
     const forgedLedger = { ...oldLedger, contract: ledger.CONTRACT };
-    assert.throws(() => ledger.validateLedger(forgedLedger), /schemaFingerprint/);
+    assert.throws(() => ledger.validateLedger(forgedLedger), /标签与结构指纹/);
 });

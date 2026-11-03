@@ -224,6 +224,7 @@ test(
         const ids = ['a', 'b', 'c', 'd'],
             selection = { paperIds: ids };
         const checkpoint = {
+            contract: classify.LEGACY_CONTRACT + '-checkpoint',
             checkpointScheduling: 'completion-set-v1',
             processedPaperIds: ['a', 'c'],
             processed: 2,
@@ -243,7 +244,8 @@ test(
         const fifty = Array.from({ length: 53 },(_, i) => 'p' + i),
             done = fifty.filter((_, i) => i !== 2 && i !== 3 && i !== 5);
         const big = {
-            checkpointScheduling: 'completion-set-v1',
+            ...classify.header('-checkpoint'),
+            checkpointScheduling: 'completion-set',
             processedPaperIds: done,
             processed: 50,
             decisions: done.map(paperId => ({ paperId })),

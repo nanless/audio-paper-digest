@@ -628,7 +628,7 @@ function previousProjectionHarness() {
             if (name === './conference-analysis-adapter') return { loadConferenceAnalysis: () => loaded,
                 registeredReaderRevisionExecutionIds: () => ['next-child'],readJsonRecord:()=>({value:controls.child?.revision||{}}), loadConferenceReaderRevision: () => controls.child };
             if (name === 'node:fs') return { existsSync: filename => controls.childExists
-                && (filename.endsWith('analysis.json') || controls.childRevision !== false) };
+                && (!filename.endsWith('reader-revision.json') || controls.childRevision !== false) };
             if (name === './conference-process-recovery') return { MAX_ATTEMPTS: 3 };
             if (name === './conference-process') return { assertState: () => {} };
             if (name === './analysis-stop-control') return stop;

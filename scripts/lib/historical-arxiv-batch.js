@@ -12,8 +12,8 @@ const crosswalkApi = require('./page-source-crosswalk.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const primaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 
-const RECORD_CONTRACT = 'historical-arxiv-failure-handoff-batch-record-v2';
-const VERSION = 2;
+const codec = require('./protocol-codec');
+const RECORD_CONTRACT = 'historical-arxiv-failure-handoff-batch-record';
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
@@ -103,7 +103,7 @@ function attemptDirectory(root, crosswalkId) {
 }
 
 function writeAttemptRecord(root, record) {
-    const body = { contract: RECORD_CONTRACT, version: VERSION, ...record };
+    const body = codec.record(RECORD_CONTRACT, record);
     const sealed = { ...body, recordSha256: crosswalkApi.stableHash(body) };
     const directory = attemptDirectory(root, record.crosswalkId);
     const name = `arxiv-failure-handoff-${record.arxivId.replace('.', '-')}-${record.attemptId}.json`;
@@ -215,5 +215,5 @@ async function runSingleHintBatch({ crosswalkRoot, authorityRoot, handoffRoot, h
         crosswalkVerified: final.completion.verified, crosswalkTotal: final.completion.total, exitCode: failures.length ? 1 : 0 };
 }
 
-module.exports = { RECORD_CONTRACT, VERSION, assertHandoffMatchesCrosswalk, selectedGroups, reusableAuthorityName,
+module.exports = { assertHandoffMatchesCrosswalk, selectedGroups, reusableAuthorityName,
     attemptDirectory, writeAttemptRecord, loadSelectedHandoffs, runSingleHintBatch };

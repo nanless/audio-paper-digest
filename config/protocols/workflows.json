@@ -6554,6 +6554,459 @@
           "variant": "zero-request-core-source-proof"
         }
       ]
+    },
+    {
+      "name": "conference-reader-operator-batch",
+      "currentVariant": "exact-stopped-grant-members",
+      "currentSchema": {
+        "provenanceFormat": {
+          "contract": "conference-reader-operator-provenance",
+          "schemaFingerprint": "c649fc05609051bfbf068ea1cecb4c7a79106816f9056ca0ee6af7dd46f34440"
+        },
+        "receiptFormat": {
+          "contract": "conference-reader-operator-receipt",
+          "schemaFingerprint": "b5b5d6fef8e5cc200940cc7d89725f79a00c3f8a131e2b0cdc8b25211a654a94"
+        },
+        "resourceScanRecoveryFormat": {
+          "contract": "conference-reader-resource-scan-recovery",
+          "schemaFingerprint": "299d64a8e9b250386c395f9c9ef0d24277284a31cc0c4efddf771750495b8d3b"
+        },
+        "authority": "actual registered grant and exact complete stopped failure set; operator instructions required"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-operator-batch-v1",
+          "variant": "exact-stopped-grant-members",
+          "header": {
+            "contract": "conference-reader-operator-batch-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "conference-reader-operator-provenance",
+      "currentVariant": "sealed-operator-reader",
+      "currentSchema": {
+        "authority": "actual bound local correction, original request/response and preserved fees and attempt counts"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-operator-correction-v1",
+          "variant": "sealed-operator-reader",
+          "header": {
+            "contract": "conference-reader-operator-correction-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "conference-reader-operator-receipt",
+      "currentVariant": "immutable-correction-evidence",
+      "currentSchema": {
+        "authority": "canonical original before/after/source and full scientific, Reader and budget replay"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-operator-receipt-v1",
+          "variant": "immutable-correction-evidence",
+          "header": {
+            "contract": "conference-reader-operator-receipt-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "conference-reader-operator-correction",
+      "currentVariant": "bounded-source-correction",
+      "currentSchema": {
+        "authority": "actual batch complete membership, original failed paper, source and CAS",
+        "kinds": [
+          "existing-nodes",
+          "paid-raw-json-schema",
+          "single-source-table-append"
+        ],
+        "budget": "zero requests"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-operator-correction-v1",
+          "variant": "original-implicit-member"
+        },
+        {
+          "tag": 1,
+          "variant": "original-explicit-existing-or-raw",
+          "header": {
+            "contract": "conference-reader-operator-correction-v1",
+            "version": 1
+          }
+        },
+        {
+          "tag": 2,
+          "variant": "original-table-member",
+          "header": {
+            "contract": "conference-reader-operator-correction-v1",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "paid-raw-json-schema",
+      "currentVariant": "paid-original-schema-replay",
+      "currentSchema": {
+        "authority": "only actual original member and independently authenticated source and content"
+      },
+      "historical": [
+        {
+          "tag": "paid-raw-json-schema-v1",
+          "variant": "paid-original-schema-replay"
+        }
+      ]
+    },
+    {
+      "name": "single-source-table-append",
+      "currentVariant": "exactly-one-authenticated-table",
+      "currentSchema": {
+        "authority": "only actual original member and independently authenticated source and content"
+      },
+      "historical": [
+        {
+          "tag": "single-source-table-append-v2",
+          "variant": "exactly-one-authenticated-table"
+        }
+      ]
+    },
+    {
+      "name": "historical-normal-terminal",
+      "currentVariant": "original-normal-paid-chain",
+      "currentSchema": {
+        "authority": "complete actually failed original Reader source/window and real fee evidence",
+        "restriction": "no request or publication authority"
+      },
+      "historical": [
+        {
+          "tag": "historical-normal-terminal-v1",
+          "variant": "original-normal-paid-chain"
+        }
+      ]
+    },
+    {
+      "name": "declared-table-placeholder-restoration",
+      "currentVariant": "exact-two-source-tables",
+      "currentSchema": {
+        "authority": "exact two original placeholders and same real PDF evidence",
+        "restriction": "no request or publication authority"
+      },
+      "historical": [
+        {
+          "tag": "declared-table-placeholder-restoration-v1",
+          "variant": "exact-two-source-tables"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "accepted decision and request fingerprint, source, review and response digests",
+        "hashDomain": "full-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification-review",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "independent decision review and source, catalog and evidence digests",
+        "hashDomain": "full-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2-review",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1-review",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification-report",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "complete or partial run result and member coverage",
+        "hashDomain": "full-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2-report",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1-report",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification-checkpoint",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "sealed supplement and either partial report or processed member results",
+        "hashDomain": "full-record-with-actual-header",
+        "checkpointScheduling": "completion-set"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2-checkpoint",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1-checkpoint",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification-selection",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "plan and catalog digests, ordered paper IDs and optional resume evidence",
+        "hashDomain": "full-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2-selection",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1-selection",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification-attempt",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "selection prompt digest, request fingerprint and original response bytes",
+        "hashDomain": "full-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2-attempt",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1-attempt",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification-review-attempt",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "review prompt digest and original response bytes",
+        "hashDomain": "full-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2-review-attempt",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1-review-attempt",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-classification-checkpoint-export-report",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "purpose": "checkpoint and selection digests and complete exported coverage",
+        "hashDomain": "full-record-with-actual-header"
+      },
+      "historical": [
+        {
+          "tag": "historical-source-tag-classification-v2-checkpoint-export-report",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-source-taxonomy-classification-v1-checkpoint-export-report",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-tag-checkpoint-scheduling",
+      "currentVariant": "completion-set",
+      "currentSchema": {
+        "memberOrdering": "selected-paper-order",
+        "coverage": "accepted-and-failed-member-set"
+      },
+      "historical": [
+        {
+          "tag": "completion-set-v1",
+          "variant": "completion-set",
+          "header": {
+            "checkpointScheduling": "completion-set-v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "conference-reader-main-checkpoint-recovery",
+      "currentVariant": "verified-original-scoring-checkpoint",
+      "currentSchema": {
+        "authority": "exact operator declaration and original failed paper with complete scoring and no original images"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-main-checkpoint-recovery-v1",
+          "variant": "verified-original-scoring-checkpoint"
+        }
+      ]
+    },
+    {
+      "name": "conference-reader-resource-scan-recovery",
+      "currentVariant": "verified-child-preflight-attachment",
+      "currentSchema": {
+        "authority": "retained child preflight, active paid candidate and exact scientific upstream; zero requests"
+      },
+      "historical": [
+        {
+          "tag": "conference-reader-resource-scan-recovery-v1",
+          "variant": "verified-child-preflight-attachment"
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-tag-supplement",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "record": "page-path keyed records, each bound to actual page, body, vocabulary and source or page evidence"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-tag-supplement-v2",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-direct-taxonomy-supplement-v1",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-direct-tag-supplement-report",
+      "currentVariant": "stable-tags",
+      "currentSchema": {
+        "record": "plan, ordered selection, applied page and remaining counts"
+      },
+      "historical": [
+        {
+          "tag": "historical-direct-tag-supplement-v2-report",
+          "variant": "catalog-tags"
+        },
+        {
+          "tag": "historical-direct-taxonomy-supplement-v1-report",
+          "variant": "taxonomy-tags"
+        }
+      ]
+    },
+    {
+      "name": "historical-arxiv-failure-handoff-batch-record",
+      "currentVariant": "sealed-attempt-report",
+      "currentSchema": {
+        "identityFields": [
+          "crosswalkId",
+          "attemptId",
+          "arxivId",
+          "handoffName",
+          "handoffFileSha256",
+          "handoffSha256",
+          "handoffGeneration"
+        ],
+        "resultFields": [
+          "authorityName",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "requestedPageKeys",
+          "completedPageKeys",
+          "remainingPageKeys",
+          "error"
+        ],
+        "integrity": "stableHash of actual header and complete body"
+      },
+      "historical": [
+        {
+          "tag": "historical-arxiv-failure-handoff-batch-record-v2",
+          "variant": "sealed-attempt-report",
+          "header": {
+            "contract": "historical-arxiv-failure-handoff-batch-record-v2",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "historical-source-identity-supplement",
+      "currentVariant": "stable-tag-status",
+      "currentSchema": {
+        "fields": [
+          "records or per-page plan/source/identity/tag status plus complete proof digest"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "historical-source-identity-supplement-v2",
+          "variant": "original-tag-status"
+        },
+        {
+          "tag": "historical-source-identity-supplement-v1",
+          "variant": "original-taxonomy-status"
+        }
+      ]
+    },
+    {
+      "name": "historical-source-identity-supplement-report",
+      "currentVariant": "stable-tag-status",
+      "currentSchema": {
+        "fields": [
+          "planSha256",
+          "selected",
+          "paperCount",
+          "pageCount",
+          "failures",
+          "supplementSha256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "historical-source-identity-supplement-v2-report",
+          "variant": "original-tag-status"
+        },
+        {
+          "tag": "historical-source-identity-supplement-v1-report",
+          "variant": "original-taxonomy-status"
+        }
+      ]
     }
   ]
 }

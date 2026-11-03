@@ -307,14 +307,7 @@ test('混合失败集合按真实最后grant续原窗口，新普通维护走当
     const originalRelease = structuredClone(old.retryReleases), calls = [];
     const context = { authority: state.authority, members: Object.keys(state.items).map(paperId => ({ paperId })), files: f.deps.files };
     const childId = adapter.readerRevisionExecutionId(parentId, fresh.analysisProof.analysisSha256);
-    // Only the advisory legacy-path lookup is doubled as absent. The real
-    // registered source chain remains intact and must still be authenticated.
-    const originalLegacyId = adapter.readerRevisionExecutionId;
-    adapter.readerRevisionExecutionId = (executionId, analysisSha256) => executionId === f.parentExecutionId
-        ? api.deterministicUuid('absent advisory legacy path', executionId, analysisSha256)
-        : originalLegacyId(executionId, analysisSha256);
-    t.after(() => { adapter.readerRevisionExecutionId = originalLegacyId; });
-    const revisionBody = { contract: adapter.READER_REVISION_CONTRACT, version: 1, executionId: childId,
+    const revisionBody = { ...require('../scripts/lib/protocol-codec').recordHeader(adapter.READER_REVISION_CONTRACT, adapter.READER_REVISION_CONTRACT), executionId: childId,
         parentExecutionId: parentId, parentAnalysisFileSha256: fresh.analysisProof.analysisSha256,
         parentRunFileSha256: hash('new parent run'), paperId: newId, sourceSnapshotSha256: fresh.analysisProof.sourceSnapshotSha256,
         seededAnalysisSha256: hash('new seed'), mode: 'reader-only', maxAttempts: 3 };
@@ -325,6 +318,9 @@ test('混合失败集合按真实最后grant续原窗口，新普通维护走当
         prepareShared: async () => ({ planHandle: f.planHandle, sourceCacheRoot: f.sourceRoot,
             sealed: Object.values(state.items).map(item => ({ paperId: item.paperId, proof: item.sourceProof })) }),
         adapter: { ...adapter,
+            resolveReaderRevisionExecutionId: input => input.parentExecutionId === parentId
+                ? adapter.readerRevisionExecutionId(parentId, input.parentAnalysisFileSha256)
+                : adapter.resolveReaderRevisionExecutionId(input),
             loadConferenceAnalysis: input => input.executionId === parentId
                 ? { analysisFileSha256: fresh.analysisProof.analysisSha256 }
                 : adapter.loadConferenceAnalysis(input),

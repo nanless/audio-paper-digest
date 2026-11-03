@@ -117,7 +117,7 @@ else:
         assignment = {
             'status': 'assigned',
             'paperId': f'arxiv:{paper["arxivId"]}',
-            'registryVersion': renderer.load_publish_to_blog()._PAGE_TAG_CATALOG['version'],
+            'registryVersion': renderer.load_publish_to_blog().tag_catalog_identity(renderer.load_publish_to_blog()._PAGE_TAG_CATALOG),
             'registrySha256': renderer.load_publish_to_blog()._PAGE_TAG_CATALOG['registrySha256'],
             'primaryTaskId': 'task.localization',
             'primaryMethodId': 'method.transformer',
@@ -176,7 +176,7 @@ else:
             'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
         })
         self.assertIn('paper_digest_direct_paper_id:', result['markdown'])
-        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', result['markdown'])
+        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags"', result['markdown'])
         self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
         self.assertIn('conference:icassp:2026:icassp-arnumber:100', result['markdown'])
         self.assertIn('**研究分类**', result['markdown'])
