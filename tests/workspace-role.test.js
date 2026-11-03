@@ -16,6 +16,9 @@ test('工作区标记是私有的、精确的、按角色授权的，只在显�
     const dir = root();
     assert.throws(() => role.readWorkspaceRole(dir), /工作区角色标记缺失/);
     const daily = role.writeWorkspaceRole('daily', { root: dir });
+    const protocol = require('../scripts/lib/protocol-codec.js');
+    const header = protocol.recordHeader(role.CONTRACT, 'paper-digest-workspace-role');
+    assert.deepEqual(daily, { ...header, role: 'daily', workspaceRealpath: dir });
     assert.equal(daily.role, 'daily');
     assert.equal(daily.workspaceRealpath, dir);
     if (process.platform !== 'win32') {
@@ -25,6 +28,32 @@ test('工作区标记是私有的、精确的、按角色授权的，只在显�
     assert.throws(() => role.requireWorkspaceRole('history', dir), /只允许 role=history/);
     assert.throws(() => role.writeWorkspaceRole('history', { root: dir }), /显式 --force/);
     assert.equal(role.writeWorkspaceRole('history', { root: dir, force: true }).role, 'history');
+});
+
+test('独立角色入口按原样读取历史标记，并以当前格式报告状态', t => {
+    const { execFileSync } = require('node:child_process');
+    const dir = root();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const original = { contract: 'paper-digest-workspace-role-v1', version: 1,
+        role: 'daily', workspaceRealpath: dir };
+    const bytes = JSON.stringify(original);
+    const marker = role.markerPath(dir);
+    fs.writeFileSync(marker, bytes, { mode: 0o600 });
+    const scripts = path.join(dir, 'scripts');
+    fs.mkdirSync(scripts);
+    const cli = path.join(scripts, 'workspace-role.js');
+    fs.copyFileSync(require.resolve('../scripts/workspace-role.js'), cli);
+    const status = JSON.parse(execFileSync(process.execPath, [cli, 'status'], { encoding: 'utf8' }));
+    assert.deepEqual(status, { contract: role.CONTRACT, schemaFingerprint: role.SCHEMA_FINGERPRINT,
+        role: original.role, workspaceRealpath: dir });
+    assert.deepEqual(role.readWorkspaceRole(dir), original);
+    assert.deepEqual(role.writeWorkspaceRole('daily', { root: dir }), original);
+    assert.equal(fs.readFileSync(marker, 'utf8'), bytes);
+    for (const malformed of [{ ...status, version: 1 }, { ...status, schemaFingerprint: '0'.repeat(64) },
+        { ...original, schemaFingerprint: status.schemaFingerprint }, { ...original, version: true }]) {
+        fs.writeFileSync(marker, JSON.stringify(malformed));
+        assert.throws(() => role.readWorkspaceRole(dir), /字段、协议、角色/);
+    }
 });
 
 test('复制来的标记不能授权另一个真实路径，除非显式强制指定', () => {
@@ -48,7 +77,7 @@ test('角色未知、标记多出字段、文件权限过宽或根目录是符�
     const value = JSON.parse(fs.readFileSync(marker));
     fs.writeFileSync(marker, JSON.stringify({ ...value, extra: true }));
     fs.chmodSync(marker, 0o600);
-    assert.throws(() => role.readWorkspaceRole(dir), /字段结构、contract、version、role/);
+    assert.throws(() => role.readWorkspaceRole(dir), /字段、协议、角色/);
     fs.writeFileSync(marker, JSON.stringify(value));
     fs.chmodSync(marker, 0o644);
     if (process.platform !== 'win32') assert.throws(() => role.readWorkspaceRole(dir), /0600/);

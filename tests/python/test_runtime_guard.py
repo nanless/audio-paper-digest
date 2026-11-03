@@ -91,6 +91,36 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
                     require_external_runtime(
                         'history-inventory.py', root, enforce_workspace_role=True)
 
+    def test_python_accepts_current_node_marker_and_rejects_mixed_headers(self):
+        import json
+        import tempfile
+        from protocol_codec import record_header
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            output = subprocess.check_output(
+                ['node', '-e',
+                 "console.log(JSON.stringify(require('./scripts/workspace-role.js')"
+                 ".writeWorkspaceRole('daily', {root: process.argv[1]})))", str(root)],
+                cwd=ROOT, text=True,
+            )
+            written = json.loads(output)
+            name = 'paper-digest-workspace-role'
+            self.assertEqual(written, {**record_header(name, name),
+                                       'role': 'daily', 'workspaceRealpath': str(root)})
+            self.assertEqual(require_workspace_role('daily', root), written)
+            marker = root / '.paper-digest-workspace-role.json'
+            for changed in (
+                {**written, 'version': 1},
+                {**written, 'schemaFingerprint': '0' * 64},
+                {**written, 'contract': 'paper-digest-workspace-role-v1'},
+                {'contract': 'paper-digest-workspace-role-v1', 'version': True,
+                 'role': 'daily', 'workspaceRealpath': str(root)},
+            ):
+                marker.write_text(json.dumps(changed), encoding='utf-8')
+                with self.assertRaisesRegex(ExternalRuntimeRequired, '字段、协议、角色'):
+                    require_workspace_role('daily', root)
+
 
     def test_cross_role_switch_allows_daily_running_history_only(self):
         import json

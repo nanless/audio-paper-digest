@@ -13,6 +13,10 @@ class ExternalRuntimeRequired(RuntimeError):
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE_ROLE_MARKER = '.paper-digest-workspace-role.json'
+# Keep startup checks usable before the project dependencies are loaded.
+WORKSPACE_ROLE_CONTRACT = 'paper-digest-workspace-role'
+WORKSPACE_ROLE_SCHEMA_FINGERPRINT = '989795fa59ca556c11cd6a83a0c97e2cd68e03a7f2f12b5a0607fd75b698be78'
+ORIGINAL_WORKSPACE_ROLE_CONTRACT = 'paper-digest-workspace-role-v1'
 CROSS_ROLE_ENV = 'PD_WORKSPACE_ALLOW_CROSS_ROLE'
 CROSS_ROLE_VALUE = '1'
 
@@ -102,13 +106,17 @@ def require_workspace_role(required_role, project_root=PROJECT_ROOT):
         value = json.loads(raw.decode('utf-8'))
     except (OSError, ValueError) as exc:
         raise ExternalRuntimeRequired(f'工作区角色标记读取失败或 JSON 无法解析: {exc}') from exc
-    if (not isinstance(value, dict)
-            or set(value) != {'contract', 'version', 'role', 'workspaceRealpath'}
-            or value.get('contract') != 'paper-digest-workspace-role-v1'
-            or value.get('version') != 1
-            or value.get('role') not in {'daily', 'history'}
+    fields = set(value) if isinstance(value, dict) else set()
+    current = (fields == {'contract', 'schemaFingerprint', 'role', 'workspaceRealpath'}
+               and value['contract'] == WORKSPACE_ROLE_CONTRACT
+               and value['schemaFingerprint'] == WORKSPACE_ROLE_SCHEMA_FINGERPRINT)
+    original = (fields == {'contract', 'version', 'role', 'workspaceRealpath'}
+                and value['contract'] == ORIGINAL_WORKSPACE_ROLE_CONTRACT
+                and value['version'] == 1 and not isinstance(value['version'], bool))
+    if ((not current and not original)
+            or value.get('role') not in ('daily', 'history')
             or value.get('workspaceRealpath') != str(root)):
-        raise ExternalRuntimeRequired('工作区角色标记的字段结构、contract、version、role 或 workspaceRealpath 路径与当前工作区不符。')
+        raise ExternalRuntimeRequired('工作区角色标记的字段、协议、角色或 workspaceRealpath 路径与当前工作区不符。')
     if value['role'] != required_role:
         # realpath 校验在上面已完成；开关不碰它。
         if not _allows_cross_role(value['role'], required_role, root):

@@ -1,0 +1,24 @@
+{
+  "protocols": [
+    {
+      "name": "paper-digest-workspace-role",
+      "currentVariant": "realpath-bound",
+      "currentSchema": {
+        "fields": {
+          "role": "daily-or-history",
+          "workspaceRealpath": "actual-workspace-realpath"
+        }
+      },
+      "historical": [
+        {
+          "tag": "paper-digest-workspace-role-v1",
+          "variant": "realpath-bound",
+          "header": {
+            "contract": "paper-digest-workspace-role-v1",
+            "version": 1
+          }
+        }
+      ]
+    }
+  ]
+}

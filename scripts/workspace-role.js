@@ -5,8 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const CONTRACT = 'paper-digest-workspace-role-v1';
-const VERSION = 1;
+// This entry point runs before the project dependencies are loaded.
+const CONTRACT = 'paper-digest-workspace-role';
+const SCHEMA_FINGERPRINT = '989795fa59ca556c11cd6a83a0c97e2cd68e03a7f2f12b5a0607fd75b698be78';
+const ORIGINAL_CONTRACT = 'paper-digest-workspace-role-v1';
 const ROLES = Object.freeze(['daily', 'history']);
 const MARKER_NAME = '.paper-digest-workspace-role.json';
 const CROSS_ROLE_ENV = 'PD_WORKSPACE_ALLOW_CROSS_ROLE';
@@ -27,13 +29,21 @@ function markerPath(root) {
 
 function validateMarker(value, root) {
     const realRoot = workspaceRoot(root);
-    if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join(',') !== 'contract,role,version,workspaceRealpath'
-        || value.contract !== CONTRACT || value.version !== VERSION
+    const fields = value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.keys(value).sort().join(',') : '';
+    const current = fields === 'contract,role,schemaFingerprint,workspaceRealpath'
+        && value.contract === CONTRACT && value.schemaFingerprint === SCHEMA_FINGERPRINT;
+    const original = fields === 'contract,role,version,workspaceRealpath'
+        && value.contract === ORIGINAL_CONTRACT && value.version === 1;
+    if ((!current && !original)
         || !ROLES.includes(value.role) || value.workspaceRealpath !== realRoot) {
-        throw new Error('工作区角色标记的字段结构、contract、version、role 或 workspaceRealpath 路径与当前工作区不符。');
+        throw new Error('工作区角色标记的字段、协议、角色或 workspaceRealpath 路径与当前工作区不符。');
     }
     return Object.freeze({ ...value });
+}
+
+function currentMarker({ role, workspaceRealpath }) {
+    return { contract: CONTRACT, schemaFingerprint: SCHEMA_FINGERPRINT, role, workspaceRealpath };
 }
 
 function readWorkspaceRole(root = path.resolve(__dirname, '..')) {
@@ -84,7 +94,7 @@ function writeWorkspaceRole(role, options = {}) {
             throw new Error(`工作区已设为 ${current?.role || 'invalid'}；切换角色必须显式 --force`);
         }
     }
-    const marker = { contract: CONTRACT, version: VERSION, role, workspaceRealpath: root };
+    const marker = currentMarker({ role, workspaceRealpath: root });
     const temp = path.join(root, `.${MARKER_NAME}.${process.pid}.${Date.now()}.tmp`);
     let fd;
     try {
@@ -179,11 +189,11 @@ async function main(argv = process.argv.slice(2)) {
     }
     const options = parseCli(argv);
     if (options.action === 'status') {
-        console.log(JSON.stringify(readWorkspaceRole()));
+        console.log(JSON.stringify(currentMarker(readWorkspaceRole())));
         return;
     }
     if (options.action === 'set') {
-        console.log(JSON.stringify(writeWorkspaceRole(options.role, { force: options.force })));
+        console.log(JSON.stringify(currentMarker(writeWorkspaceRole(options.role, { force: options.force }))));
         return;
     }
     requireWorkspaceRole(options.role);
@@ -210,5 +220,5 @@ if (require.main === module) {
     main().catch(error => { console.error(`[workspace-role] ${error.message}`); process.exitCode = 1; });
 }
 
-module.exports = { CONTRACT, VERSION, ROLES, MARKER_NAME, CROSS_ROLE_ENV, workspaceRoot, markerPath,
+module.exports = { CONTRACT, SCHEMA_FINGERPRINT, ROLES, MARKER_NAME, CROSS_ROLE_ENV, workspaceRoot, markerPath,
     validateMarker, readWorkspaceRole, writeWorkspaceRole, requireWorkspaceRole, parseCli, main };
