@@ -67,6 +67,14 @@ class RootController private constructor(private val context: Context, private v
     private val exportDestinationVerifier: ExportDestinationVerifier = { uri, sha, bytes -> verifyExportDestination(uri, sha, bytes) }
     private val maintenance = Mutex()
     private val dispatch = WorkspaceDispatch(File(context.noBackupFilesDir.canonicalFile, "PaperDigestDevice"))
+    private val workspaceAdmission = Any()
+    private class WorkspacePhase(val installing: Boolean)
+    @Volatile private var workspacePhase = WorkspacePhase(false)
+    private fun workspaceActionEpoch(expectedEpoch: String? = null): String = synchronized(workspaceAdmission) {
+        if (workspacePhase.installing) throw AppFailure("restoreInProgress", "正在恢复研究资料，请等恢复完成后再操作")
+        expectedEpoch?.let(dispatch::requireCurrent)
+        dispatch.epoch
+    }
     private val cloudCredentialBorrowing=CloudCredentialBorrowing{dispatch.epoch}
     private data class MigrationConsent(val grant:CloudDavGrant,val binding:CloudCredentialBinding,val epoch:String,val target:com.nanless.paperdigest.zotero.webdav.ZoteroDavTarget)
     private val migrationConsents=ConcurrentHashMap<String,MigrationConsent>()
@@ -74,7 +82,8 @@ class RootController private constructor(private val context: Context, private v
     private val modelCredentialRevision = ModelCredentialRevision()
     private val freshStudies = FreshStudyGate<FreshStudyIntent>()
     private val active = ConcurrentHashMap<String, Job>()
-    private val restores = ConcurrentHashMap<String, BackupCodec.Staged>()
+    private data class RestorePreparation(val staged: BackupCodec.Staged, val workspaceEpoch: String)
+    private val restores = ConcurrentHashMap<String, RestorePreparation>()
     private val _state = MutableStateFlow(UiState())
     override val state: StateFlow<UiState> = _state
     /** Application lifetime work. A screen awaiting a result never owns the producer. */
@@ -110,22 +119,44 @@ class RootController private constructor(private val context: Context, private v
             }
             snapshot
         }
-        override suspend fun restore(staged: BackupCodec.Staged) = maintenance.withLock {
+        override suspend fun restore(staged: BackupCodec.Staged) = restore(staged) {}
+
+        suspend fun restore(staged: BackupCodec.Staged, admit: () -> Unit) = maintenance.withLock {
+            admit()
             if (installBackground) reconcileCloudTransfers()
             require(active.isEmpty()) { "请先结束当前任务再恢复完整资料" }
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("status") in listOf("queued", "running") }) { "请先停止或完成已排队的任务，再恢复研究资料" }
-            currentCoroutineContext().ensureActive()
-            exportAttempts.clear()
-            retainedAccess.retireAll(); retainedConfirmationClear()
-            pdf.clearSessionPasswords()
-            leaveAggregateView();aggregateBrowser.invalidatePreviews()
-            dispatch.rotate();cloudCredentialBorrowing.workspaceRestored();migrationConsents.clear();zotero.workspaceRestored();preparedReadings.clear()
             val restoreContext = currentCoroutineContext()
-            RestorePolicy.install(staged, research, initialize = { personal.reload(); personal.retireRestoredDispatch(); library.reload() }, check = { restoreContext.ensureActive() })
-            offlineReading = null
-            generation.incrementAndGet()
-            _state.update { it.copy(selectedPaperId = null, article = null, pdfDocument = null, pdfMode = false, pdfSelection = null, pdfPage = 1) }
-            refresh()
+            restoreContext.ensureActive()
+            synchronized(workspaceAdmission) { workspacePhase = WorkspacePhase(true) }
+            try {
+                exportAttempts.clear()
+                retainedAccess.retireAll(); retainedConfirmationClear()
+                pdf.clearSessionPasswords()
+                leaveAggregateView(); aggregateBrowser.invalidatePreviews()
+                cloudCredentialBorrowing.workspaceRestored()
+                migrationConsents.clear()
+                zotero.workspaceRestored()
+                preparedReadings.clear()
+
+                var firstInitialization = true
+                RestorePolicy.install(staged, research, initialize = {
+                    // The installer reuses this callback to reload the old directory on rollback.
+                    val adopting = firstInitialization
+                    firstInitialization = false
+                    personal.reload()
+                    if (adopting) personal.retireRestoredDispatch()
+                    library.reload()
+                    // A rejected staged tree must not retire its own retry token.
+                    if (adopting) dispatch.rotate()
+                }, check = { restoreContext.ensureActive() })
+                offlineReading = null
+                generation.incrementAndGet()
+                _state.update { it.copy(selectedPaperId = null, article = null, pdfDocument = null, pdfMode = false, pdfSelection = null, pdfPage = 1) }
+                refresh(publishingRestore = true)
+            } finally {
+                synchronized(workspaceAdmission) { workspacePhase = WorkspacePhase(false) }
+            }
         }
     }
     val cloud = CloudService(research, File(context.noBackupFilesDir.canonicalFile, "PaperDigestCloud"), secrets, workspace, scheduleChanged = { scheduleCloud(it) }, borrowing=cloudCredentialBorrowing)
@@ -418,12 +449,17 @@ class RootController private constructor(private val context: Context, private v
         exportScope.launch { try { reconcilePendingExports() } catch (_: Exception) { /* Independent pending-list error is already visible. */ } }
     }
 
-    private fun refresh() {
+    private fun refresh(publishingRestore: Boolean = false) {
+        val phase = workspacePhase
+        if (phase.installing && !publishingRestore) return
+        val viewEpoch = dispatch.epoch
         aggregateBrowser.observeNativeState()
         val p = personal.snapshot()
         val papers = library.papers()
         val zoteroView = zoteroPresentation(p)
         _state.update {
+            // A snapshot copied before a restore must not acquire the new view identity.
+            if (workspacePhase !== phase || dispatch.epoch != viewEpoch) return@update it
             val current = papers.firstOrNull { paper -> paper.id == it.selectedPaperId }
             val article = it.article?.let { old ->
                 if (offlineReading == null && old.catalogEpoch != library.epoch()) old.copy(isStale = true, notices = (old.notices + "目录已重新同步，此导读仍是原保存版本，尚未重新核对网页修订。").distinct()) else old
@@ -442,7 +478,7 @@ class RootController private constructor(private val context: Context, private v
             }
             val viewed = offlineReading?.takeIf { old -> old.paper.id == it.selectedPaperId }?.paper ?: it.viewedPaper?.takeIf { old -> old.id == it.selectedPaperId } ?: current
             val reading = it.copy(papers = papers, websiteTaxonomy = library.websiteTaxonomy(), viewedPaper = viewed, article = article, pdfReceipt = receipt)
-            reading.copy(readingMaterialID = readingID(reading), personal = p, settings = p.getJSONObject("settings").copy(), jobs = mergedJobs(p.getJSONArray("jobs").objects()),
+            reading.copy(workspaceEpoch = viewEpoch, readingMaterialID = readingID(reading), personal = p, settings = p.getJSONObject("settings").copy(), jobs = mergedJobs(p.getJSONArray("jobs").objects()),
             sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(p), zotero = zotero.projectCredentialState(zoteroView), catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
     }
     private fun paper(id: String): Paper = library.papers().firstOrNull { it.id == id } ?: throw AppFailure("missing", "论文不在已保存资料库中")
@@ -541,7 +577,24 @@ class RootController private constructor(private val context: Context, private v
         }
     }
 
-    override suspend fun execute(command: String, payload: JSONObject): JSONObject {
+    override suspend fun execute(command: String, payload: JSONObject): JSONObject =
+        executeForWorkspace(command, payload, null)
+
+    override suspend fun executeInWorkspace(command: String, payload: JSONObject, expectedEpoch: String): JSONObject =
+        executeForWorkspace(command, payload, expectedEpoch)
+
+    private suspend fun executeForWorkspace(command: String, payload: JSONObject, expectedEpoch: String?): JSONObject {
+        // Capture before waiting for foreground priority or a credential lease.
+        val passivePosition = command == "personal.reading" || command == "personal.studyScroll"
+        val dispatchAtStart = try {
+            workspaceActionEpoch(expectedEpoch)
+        } catch (error: Exception) {
+            if (passivePosition) return JSONObject().put("status", "not-adopted")
+            throw error
+        }
+        if (command == "app.restore.commit" || command == "cloud.restore.commit") {
+            requireRestorePreparation(payload.getString("restoreID"), dispatchAtStart)
+        }
         // A pending credential mutation must not wait behind maintenance and then silently acquire a new lease.
         if (command in setOf("model.fresh.prepare", "model.fresh.check.prepare", "model.fresh.commit")) modelCredentialRevision.ready()
         if(command in setOf("settings.save","app.restore.commit","cloud.restore.commit"))cancelPublishedPreload()
@@ -554,7 +607,9 @@ class RootController private constructor(private val context: Context, private v
         if (command == "library.search") return withContext(Dispatchers.IO) { maintenance.withLock { library.searchCached(payload.getString("query")) } }
         val current = _state.value
         val access = ReadingAccess(current.selectedPaperId, generation.get(), current.pdfDocument?.sha256, current.pdfSelection, current.pdfPage, readingID(current))
-        val dispatchAtStart = dispatch.epoch
+        if (command == "app.restore.commit" || command == "cloud.restore.commit") {
+            requireRestorePreparation(payload.getString("restoreID"), dispatchAtStart)
+        }
         val cloudMutation=when {
             command=="cloud.save"&&cloud.credentialsTargetWouldChange(payload.getString("account"),payload.optString("folder","PaperDigest"))->cloud.beginCredentialMutation()
             command in setOf("app.restore.commit","cloud.restore.commit","zotero.migration.revoke")->cloud.beginCredentialMutation()
@@ -624,6 +679,7 @@ class RootController private constructor(private val context: Context, private v
                 }
                 "pdf.page" -> {
                     maintenance.withLock {
+                        dispatch.requireCurrent(dispatchAtStart)
                         requireReading(access, true)
                         if (payload.has("paperID")) require(payload.getString("paperID") == access.owner) { "页码回调属于其他论文" }
                         if (payload.has("pdfSHA")) require(payload.getString("pdfSHA") == access.pdfSHA) { "页码回调属于其他版本原文" }
@@ -632,15 +688,17 @@ class RootController private constructor(private val context: Context, private v
                         updateReading(access, true) { it.copy(pdfPage = page, pdfSelection = null) }; JSONObject().put("page", page)
                     }
                 }
-                "personal.setList" -> maintenance.withLock { personal.setList(payload.getString("key"), payload.getJSONArray("ids").strings()); JSONObject().put("saved", true) }
-                "personal.list.edit" -> maintenance.withLock { personal.editList(payload.getString("key"),payload.getString("action"),FavoriteCollections.paperIDs(payload.getJSONArray("ids"))) }
-                "personal.favorite.edit" -> maintenance.withLock { personal.editFavorites(payload) }
-                "personal.note" -> maintenance.withLock { personal.saveNote(payload.getString("paperID"), payload.getString("text"), payload.getInt("baseRevision")) }
+                "personal.setList" -> maintenance.withLock { dispatch.requireCurrent(dispatchAtStart); personal.setList(payload.getString("key"), payload.getJSONArray("ids").strings()); JSONObject().put("saved", true) }
+                "personal.list.edit" -> maintenance.withLock { dispatch.requireCurrent(dispatchAtStart); personal.editList(payload.getString("key"),payload.getString("action"),FavoriteCollections.paperIDs(payload.getJSONArray("ids"))) }
+                "personal.favorite.edit" -> maintenance.withLock { dispatch.requireCurrent(dispatchAtStart); personal.editFavorites(payload) }
+                "personal.note" -> maintenance.withLock { dispatch.requireCurrent(dispatchAtStart); personal.saveNote(payload.getString("paperID"), payload.getString("text"), payload.getInt("baseRevision")) }
                 "personal.reading" -> maintenance.withLock {
+                    if (dispatch.epoch != dispatchAtStart) return@withLock JSONObject().put("status", "not-adopted")
                     val id = payload.getString("paperID"); val old = personal.snapshot().getJSONObject("readingState").optJSONObject(id)?.copy() ?: JSONObject()
                     listOf("question", "mode", "scope", "guideScroll", "from", "to", "split", "pdfOpen", "scroll", "fromPage", "toPage", "chapter").forEach { if (payload.has(it)) old.put(it, payload.get(it)) }; personal.saveReading(id, old); JSONObject().put("saved", true)
                 }
                 "personal.studyScroll" -> maintenance.withLock {
+                    if (dispatch.epoch != dispatchAtStart) return@withLock JSONObject().put("status", "not-adopted")
                     val id = payload.getString("sessionID")
                     val original = personal.snapshot().getJSONArray("sessions").objects().filter { it.opt("id") == id }.singleOrNull()
                         ?: error("原研究不存在或身份重复，未保存另一条记录的位置")
@@ -650,9 +708,9 @@ class RootController private constructor(private val context: Context, private v
                     personal.saveReading(identity.owner, mergedStudyAnswerScroll(old, original, payload.getString("binding"), offset))
                     JSONObject().put("saved", true)
                 }
-                "pdf.highlight" -> highlight(payload, access)
-                "pdf.removeAnnotation" -> annotationChange(payload, true, access)
-                "personal.annotationNote" -> annotationChange(payload, false, access)
+                "pdf.highlight" -> highlight(payload, access, dispatchAtStart)
+                "pdf.removeAnnotation" -> annotationChange(payload, true, access, dispatchAtStart)
+                "personal.annotationNote" -> annotationChange(payload, false, access, dispatchAtStart)
                 "storage.list" -> JSONObject().put("packages", JSONArray(offline.list()))
                 "storage.capacity" -> maintenance.withLock { capacity.summary() }
                 "storage.cleanup.prepare" -> maintenance.withLock { capacity.cleanupPrepare(exportDestinationVerifier) }
@@ -733,20 +791,30 @@ class RootController private constructor(private val context: Context, private v
                     JSONObject().put("valid", true)
                 }
                 "export.save" -> savePendingExport(payload)
-                "app.restore.prepare" -> runTask(command) {
+                "app.restore.prepare" -> runTask(command, gate = { dispatch.requireCurrent(dispatchAtStart) }) {
                     val uri = Uri.parse(payload.getString("uri")); require(uri.scheme == "content")
                     val operation = currentCoroutineContext()
                     val staged = context.contentResolver.openInputStream(uri)?.use { BackupCodec.stage(it, research.parentFile!!) { operation.ensureActive() } } ?: error("无法打开备份")
-                    restoreToken(staged)
+                    restoreToken(staged, dispatchAtStart)
                 }
                 "app.restore.commit", "cloud.restore.commit" -> {
-                    val id = payload.getString("restoreID"); val staged = restores[id] ?: error("恢复确认已失效，请重新选择备份")
-                    workspace.restore(staged); restores.remove(id)
-                    JSONObject().put("restored", true).put("sha256", staged.encodedSHA256).put("message", "研究资料已恢复；本机连接和实际派发计数保留，恢复前副本仍在本机")
+                    val id = payload.getString("restoreID")
+                    val preparation = requireRestorePreparation(id, dispatchAtStart)
+                    workspace.restore(preparation.staged) {
+                        dispatch.requireCurrent(dispatchAtStart)
+                        dispatch.requireCurrent(preparation.workspaceEpoch)
+                        require(restores[id] === preparation) { "恢复确认已失效，请重新选择备份" }
+                    }
+                    restores.remove(id, preparation)
+                    JSONObject().put("restored", true).put("sha256", preparation.staged.encodedSHA256)
+                        .put("message", "研究资料已恢复；本机连接和实际派发计数保留，恢复前副本仍在本机")
                 }
-                "restore.discard" -> { restores.remove(payload.getString("restoreID"))?.directory?.deleteRecursively(); JSONObject().put("cancelled", true) }
+                "restore.discard" -> maintenance.withLock {
+                    restores.remove(payload.getString("restoreID"))?.staged?.directory?.deleteRecursively()
+                    JSONObject().put("cancelled", true)
+                }
                 else -> when {
-                    command.startsWith("cloud.") || command.startsWith("retained.") -> cloudCommand(command, payload,cloudMutation)
+                    command.startsWith("cloud.") || command.startsWith("retained.") -> cloudCommand(command, payload, dispatchAtStart, cloudMutation)
                     command.startsWith("zotero.migration.") -> migrationCommand(command,payload)
                     command.startsWith("zotero.") -> {
                         val bound = payload.copy()
@@ -1106,12 +1174,12 @@ class RootController private constructor(private val context: Context, private v
         }
     }
     override fun importPdfs(uris: List<Uri>): Deferred<JSONObject> {
+        val epoch = workspaceActionEpoch()
         val selectedUris = uris.toList() // Synchronous picker handoff; no Activity/Compose scope owns this copy.
         require(selectedUris.isNotEmpty() && selectedUris.all { it.scheme == "content" }) { "请通过系统文件选择器选择 PDF" }
         val current = _state.value
         val initial = ReadingAccess(current.selectedPaperId, generation.get(), current.pdfDocument?.sha256,
             current.pdfSelection, current.pdfPage, current.readingMaterialID)
-        val epoch = dispatch.epoch
         val ticket = pdfBatchSequence.incrementAndGet()
         lateinit var task: Deferred<JSONObject>
         task = exportScope.async(start = CoroutineStart.LAZY) {
@@ -1321,7 +1389,8 @@ class RootController private constructor(private val context: Context, private v
         require(selection.documentSHA256 == d.sha256 && selection.pages.all { it in 1..d.pageCount } && selection.text.length <= 100000)
         _state.update { it.copy(pdfSelection = selection.takeIf { s -> s.text.isNotBlank() && s.pages.isNotEmpty() }) }
     }
-    private suspend fun highlight(payload: JSONObject, access: ReadingAccess): JSONObject = maintenance.withLock {
+    private suspend fun highlight(payload: JSONObject, access: ReadingAccess, workspaceEpoch: String): JSONObject = maintenance.withLock {
+        dispatch.requireCurrent(workspaceEpoch)
         requireReading(access, true); require(_state.value.pdfSelection == access.selection) { "原文选区已经变化，未保存另一段文字" }
         val d = _state.value.pdfDocument ?: error("PDF 尚未打开"); val p = selected(); val selection = _state.value.pdfSelection ?: error("请先选择实际 PDF 文字")
         val receipt = _state.value.pdfReceipt.copy()
@@ -1333,7 +1402,8 @@ class RootController private constructor(private val context: Context, private v
         personal.replaceAnnotations(p.id, personal.annotations(p.id) + complete)
         JSONObject().put("saved", true).put("groupID", annotation.id).put("marks", JSONArray(marks))
     }
-    private suspend fun annotationChange(payload: JSONObject, remove: Boolean, access: ReadingAccess): JSONObject = maintenance.withLock {
+    private suspend fun annotationChange(payload: JSONObject, remove: Boolean, access: ReadingAccess, workspaceEpoch: String): JSONObject = maintenance.withLock {
+        dispatch.requireCurrent(workspaceEpoch)
         requireReading(access)
         val p = selected(); val id = payload.getString("id"); val entry = personal.annotations(p.id).firstOrNull { it.optString("id") == id } ?: error("批注不存在或属于其他论文")
         if (payload.has("paperID")) require(payload.getString("paperID") == p.id)
@@ -1443,8 +1513,17 @@ class RootController private constructor(private val context: Context, private v
             JSONObject().put("opened", true).put("page", page).put("sha256", hash)
         }
     }
-    private fun restoreToken(staged: BackupCodec.Staged): JSONObject {
-        val id = UUID.randomUUID().toString(); restores[id] = staged
+    private fun requireRestorePreparation(id: String, workspaceEpoch: String): RestorePreparation {
+        dispatch.requireCurrent(workspaceEpoch)
+        val preparation = restores[id] ?: error("恢复确认已失效，请重新选择备份")
+        dispatch.requireCurrent(preparation.workspaceEpoch)
+        return preparation
+    }
+
+    private fun restoreToken(staged: BackupCodec.Staged, workspaceEpoch: String): JSONObject {
+        dispatch.requireCurrent(workspaceEpoch)
+        val id = UUID.randomUUID().toString()
+        restores[id] = RestorePreparation(staged, workspaceEpoch)
         return JSONObject().put("restoreID", id).put("fileCount", staged.entries.size).put("sha256", staged.encodedSHA256).put("message", "完整备份已通过逐文件校验。恢复后将回到此快照；保留本机连接、实际派发计数和恢复前副本。")
     }
     private fun retireBorrowedMigrationViews(){
@@ -1497,17 +1576,18 @@ class RootController private constructor(private val context: Context, private v
         "zotero.migration.revoke"->{JSONObject().put("revoked",true).put("message","本次坚果云存档授权已撤销，已有材料与断点保留")}
         else->error("未知存档操作")
     }
-    private suspend fun cloudCommand(command: String, payload: JSONObject,cloudMutation:CloudCredentialMutation?=null): JSONObject = when (command) {
+    private suspend fun cloudCommand(command: String, payload: JSONObject, workspaceEpoch: String, cloudMutation: CloudCredentialMutation?): JSONObject = when (command) {
         "cloud.state" -> cloudView()
         "cloud.save" -> cloud.save(payload.getString("account"), payload.optString("folder", "PaperDigest"), payload.optBoolean("automatic"), payload.optInt("intervalHours", 24),cloudMutation)
         "cloud.check" -> runTask(command) { cloud.check() }
-        "cloud.syncPersonal" -> runTask(command) {
+        "cloud.syncPersonal" -> runTask(command, gate = { dispatch.requireCurrent(workspaceEpoch) }) {
             require(payload.length() == 0) { "同步入口只使用已保存的 WebDAV 连接" }
             require(!personal.settings().optBoolean("offlineMode")) { "离线模式已开启" }
             val result = cloud.syncPersonal(
-                capture = { maintenance.withLock { personal.snapshot() } },
+                capture = { maintenance.withLock { dispatch.requireCurrent(workspaceEpoch); personal.snapshot() } },
                 commit = { before, plan -> maintenance.withLock {
                     currentCoroutineContext().ensureActive()
+                    dispatch.requireCurrent(workspaceEpoch)
                     val current = personal.snapshot()
                     require(PersonalWebDavSync.unchanged(before, current)) { "同步期间本机资料已编辑，请再同步一次" }
                     personal.replaceValidated(PersonalWebDavSync.apply(current, plan))
@@ -1518,12 +1598,13 @@ class RootController private constructor(private val context: Context, private v
             result
         }
         "cloud.upload" -> maintenance.withLock {
+            dispatch.requireCurrent(workspaceEpoch)
             val profile = cloud.state()
             require(profile.optString("account").isNotBlank()) { "请先保存坚果云账号" }
             require(profile.optString("credentialState") !in setOf("missing", "unavailable")) { "请先安全保存坚果云应用密码" }
             reconcileCloudTransfers()
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("kind") == "cloud.upload" && it.optString("status") in listOf("queued", "running") }) { "已有备份任务，请先等待或停止后续传" }
-            val id = UUID.randomUUID(); val work = OneTimeWorkRequestBuilder<CloudTransferWorker>().setId(id).setInputData(workDataOf("destinationID" to cloud.targetID, "workspaceEpoch" to dispatch.epoch))
+            val id = UUID.randomUUID(); val work = OneTimeWorkRequestBuilder<CloudTransferWorker>().setId(id).setInputData(workDataOf("destinationID" to cloud.targetID, "workspaceEpoch" to workspaceEpoch))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresStorageNotLow(true).build()).build()
             val row = JSONObject().put("id", id.toString()).put("kind", command).put("paperID", "")
                 .put("status", "queued").put("createdAt", now()).put("message", "等待网络可用后继续原快照备份")
@@ -1544,10 +1625,13 @@ class RootController private constructor(private val context: Context, private v
         "cloud.list" -> cloudSelections.list(payload.getString("month"))
         "cloud.restore.prepare" -> {
             val selectionID = payload.getString("selectionID")
-            runTask(command, gate = { cloudSelections.requireSelection(selectionID) }) {
+            runTask(command, gate = {
+                dispatch.requireCurrent(workspaceEpoch)
+                cloudSelections.requireSelection(selectionID)
+            }) {
                 val operation = currentCoroutineContext()
                 val prepared = cloudSelections.prepare(selectionID) { operation.ensureActive() }
-                restoreToken(prepared.staged).put("reference", prepared.manifest.reference.json())
+                restoreToken(prepared.staged, workspaceEpoch).put("reference", prepared.manifest.reference.json())
             }
         }
         "cloud.archivePending" -> cloud.archivePending()

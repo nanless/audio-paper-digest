@@ -94,7 +94,7 @@ object FavoriteCollections {
             val item=items.getJSONObject(key);Item(if(item.isNull("addedAt"))null else item.getString("addedAt"),strings(item.getJSONArray("folderIDs")).toSet())
         },false)
     }
-    private fun editable(personal:JSONObject):JSONObject {
+    internal fun editable(personal:JSONObject):JSONObject {
         validateOptional(personal)
         val existing=personal.optJSONObject(KEY)
         if(existing!=null&&!knownHeader(existing))

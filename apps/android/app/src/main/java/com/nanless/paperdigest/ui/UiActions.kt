@@ -45,6 +45,7 @@ data class UiState(
     val catalogSummary: JSONObject = JSONObject(),
     val storageWarning: String? = null,
     val aggregate: AggregateBrowseState = AggregateBrowseState(),
+    val workspaceEpoch: String? = null,
 )
 
 enum class SecretKind { MODEL, ZOTERO, ZOTERO_DAV, CLOUD }
@@ -64,6 +65,9 @@ interface AppController {
     val state: StateFlow<UiState>
     /** Returns only actual service results. Unknown commands must fail visibly. */
     suspend fun execute(command: String, payload: JSONObject = JSONObject()): JSONObject
+    /** A rendered workspace may veto an old UI action; this grants no additional permission. */
+    suspend fun executeInWorkspace(command: String, payload: JSONObject, expectedEpoch: String): JSONObject =
+        execute(command, payload)
     /** Native-only capability; the expected view token can reject a stale tap, never select a file. */
     suspend fun prepareOriginalPdfOutput(expectedReadingMaterialID: String): PdfOriginalSnapshot =
         throw IllegalStateException("当前原文输出入口不可用，请重新打开原文后重试")

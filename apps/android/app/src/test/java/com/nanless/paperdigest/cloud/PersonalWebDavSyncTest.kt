@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.cloud
 
+import com.nanless.paperdigest.data.PersonalStore
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -106,6 +107,17 @@ class PersonalWebDavSyncTest {
         }
         assertTrue(failure.message.orEmpty().contains("未确认"))
         assertEquals("恢复的旧稿", restored.getJSONObject("notes").getJSONObject(a).getString("text"))
+    }
+
+    @Test fun newWorkspaceCreatesCurrentCollectionAndKeepsItOnTheNextSync() {
+        val current = PersonalStore.initial().put("favorites", JSONArray(listOf(a)))
+        val first = PersonalWebDavSync.plan(current, android, emptyMap())
+        val metadata = first.personal.getJSONObject("favoriteCollections")
+        assertTrue(metadata.has("contract"))
+        assertFalse(metadata.has("version"))
+        val repeated = PersonalWebDavSync.plan(first.personal, android, mapOf(android to first.upload!!))
+        assertNull(repeated.upload)
+        assertEquals(a, repeated.personal.getJSONArray("favorites").getString(0))
     }
 
     @Test fun independentlyEditedNotesStayOnBothPeersUntilAUserEditsAfterSeeingTheConflict() {

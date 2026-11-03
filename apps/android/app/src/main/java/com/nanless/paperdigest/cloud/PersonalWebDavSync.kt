@@ -35,9 +35,7 @@ internal object PersonalWebDavSync {
             val rows = JSONObject()
             if (field in sets) {
                 val ids = personal.optJSONArray(field) ?: JSONArray()
-                val favorites = personal.optJSONObject("favoriteCollections")
-                if (field == "favorites") require(favorites == null || favorites.getInt("version") == 1) { "请升级后再同步收藏" }
-                val items = favorites?.optJSONObject("items")
+                val items = if (field == "favorites") FavoriteCollections.editable(personal).getJSONObject("items") else null
                 for (i in 0 until ids.length()) {
                     val id = ids.getString(i)
                     if (validPaper(id)) rows.put(id, if (field == "reading") true else
@@ -217,8 +215,7 @@ internal object PersonalWebDavSync {
             }
             result.put(field, rows)
         }
-        val favorites = result.optJSONObject("favoriteCollections") ?: JSONObject()
-            .put("version", 1).put("revision", 0).put("items", JSONObject()).put("folders", JSONArray())
+        val favorites = FavoriteCollections.editable(result)
         val items = favorites.getJSONObject("items")
         val mergedFavorites = merged.getJSONObject("favorites")
         val oldItems = canonical(items)
