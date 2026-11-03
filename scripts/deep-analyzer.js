@@ -17789,6 +17789,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     }
     if (!fullStageReanalysis) require('./lib/primary-local-validation-replay').replaySaved(paper,
         directSource || conferenceSource || require('./lib/model-text-sanitization').currentModelInputSource(paper), module.exports);
+    let replayCombinedReaderOnly = false;
     const combinedFacts = require('./lib/daily-fact-review').current(arxivId);
     if (!fullStageReanalysis && combinedFacts?.feedback?.primaryFeedback?.trim()
         && combinedFacts.feedback.readerFeedback?.trim() && !combinedFacts.readerOnly
@@ -17801,8 +17802,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             supersedeOrdinalCompletionBeforeInvalidation(paper, paper.analysisManifest, 'apiReaderArticle');
         } else if (!current) {
             const original = ordinal.recoverCombinedFeedbackCompletionStage(paper);
-            if (original) supersedeOrdinalCompletionBeforeInvalidation(
-                paper, { stages: { apiReaderArticle: original } }, 'apiReaderArticle');
+            if (original) {
+                supersedeOrdinalCompletionBeforeInvalidation(
+                    paper, { stages: { apiReaderArticle: original } }, 'apiReaderArticle');
+                replayCombinedReaderOnly = ordinal.isCombinedReaderFinalRejection(paper);
+            }
         }
     }
     const completedCoreRecoveryActive = !fullStageReanalysis && prepareCompletedCoreRecovery(paper,
@@ -19330,7 +19334,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         let readerGenerationCompleted = false;
         try {
             paper.apiReaderResources = verifiedReaderResources;
-            generatedReaderResult = await generateApiReaderArticleDetailed(
+            const generateReader = () => generateApiReaderArticleDetailed(
                 paper, analysis, apiReaderEvidenceContext, {
                     naturalResourceProse,
                     ...(options.resolvedReaderCandidate !== undefined ? { resolvedReaderCandidate: options.resolvedReaderCandidate, resolvedReaderCandidateParent } : {}),
@@ -19339,6 +19343,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     reviewFeedback: require('./lib/daily-fact-review').reviewFeedback('apiReaderArticle', arxivId)
                 }
             );
+            generatedReaderResult = await (replayCombinedReaderOnly
+                ? require('./lib/analysis-stop-control').withModelRequestsForbidden(generateReader) : generateReader());
             readerGenerationCompleted = true;
             const injectedReaderResult = injectApiReaderFigures(
                 generatedReaderResult,
@@ -19539,6 +19545,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 }
             }
             const dailyOperator = require('./lib/daily-reader-operator-correction');
+            require('./lib/reader-target-ordinal-patch').clearSupersededCompletionMarker(paper);
             if (dailyOperator.hasOperatorProof(analysisManifest.stages.apiReaderArticle.operatorProvenance)) {
                 dailyOperator.sealPaidFingerprintCompletion(paper, analysis);
                 require('./lib/reader-target-ordinal-patch').validateCompletion(paper);

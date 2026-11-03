@@ -421,15 +421,40 @@ function sealCompletion(paper,result){
     // changing the snapshot after it was written.
     return ref;
 }
+function isCombinedReaderFinalRejection(paper) {
+    return paper.latestAnalysisAttemptError === '读者文章与论文来源及分析记录的对应关系未通过核验。'
+        && paper.latestAnalysisAttemptErrorCode === null
+        && paper.latestAnalysisAttemptErrorScope === null
+        && paper.latestAnalysisAttemptRetryable === true;
+}
+
+function clearSupersededCompletionMarker(paper) {
+    const stage = paper.analysisManifest?.stages?.apiReaderArticle;
+    const contracts = paper.analysisManifest?.contracts;
+    if (stage?.status !== 'complete' || stage.ordinalCompletionProof || stage.ordinalPatchContract
+        || stage.ordinalPatchSchemaFingerprint || stage.ordinalPatchCompilations || stage.ordinalPatchHistory
+        || stage.executionKind === 'operator'
+        || contracts?.readerTargetOrdinalPatch === undefined
+        || paper.readerRevisionHistory?.contract !== 'daily-reader-revision-history-v1'
+        || paper.readerRevisionHistory.reason !== 'stage-invalidated') return false;
+    // Evaluate the actual pointer and original records before changing the live marker.
+    const view = { ...paper, analysisManifest: { ...paper.analysisManifest, contracts: { ...contracts } } };
+    delete view.analysisManifest.contracts.readerTargetOrdinalPatch;
+    if (readVerifiedCompletion(view) !== null) return false;
+    delete contracts.readerTargetOrdinalPatch;
+    return true;
+}
+
 function recoverCombinedFeedbackCompletionStage(paper) {
     const engine = require('../analysis-engine'), facts = require('./daily-fact-review');
     const fresh = require('./fresh-analysis-context'), deep = require('../deep-analyzer');
     const manifest = paper.analysisManifest, primary = manifest?.stages?.primaryAnalysis;
     const active = facts.current(canonical(paper));
     if (manifest?.stages?.apiReaderArticle || paper.readerRevisionHistory
-        || paper.latestAnalysisAttemptError !== 'Reader ordinal patch refused: completion index/marker removed'
-        || paper.latestAnalysisAttemptErrorCode !== 'READER_TARGET_ORDINAL_REJECTED'
-        || paper.latestAnalysisAttemptErrorScope !== 'run' || paper.latestAnalysisAttemptRetryable !== false
+        || (!isCombinedReaderFinalRejection(paper)
+            && !(paper.latestAnalysisAttemptError === 'Reader ordinal patch refused: completion index/marker removed'
+                && paper.latestAnalysisAttemptErrorCode === 'READER_TARGET_ORDINAL_REJECTED'
+                && paper.latestAnalysisAttemptErrorScope === 'run' && paper.latestAnalysisAttemptRetryable === false))
         || !engine.paperAnalysisLockHeld(paper) || !fresh.isDailyFreshSourceScope()
         || !active?.feedback?.primaryFeedback?.trim() || !active.feedback.readerFeedback?.trim()
         || active.readerOnly || active.coreOnly || active.scoringOnly
@@ -445,7 +470,24 @@ function recoverCombinedFeedbackCompletionStage(paper) {
         && snapshot.replacementFingerprint === active.proof.feedbackSha256
         && deep.validateStaleAnalysisSnapshot(snapshot)
         && sha(snapshot.payload.analysisCheckpoint) === active.proof.coreAnalysisSha256);
-    if (snapshots.length !== 1) return null;
+    if (!snapshots.length || new Set(snapshots.map(snapshot => snapshot.payload.analysisCheckpoint)).size !== 1) return null;
+    if (isCombinedReaderFinalRejection(paper)) {
+        const reviewSha = sha(facts.reviewFeedback('apiReaderArticle', canonical(paper)));
+        const bundles = (paper.apiReaderFailedBundleHistory || []).filter(bundle => {
+            const result = bundle?.stages?.apiReaderArticle;
+            return bundle?.sourceSha256 === paper.sourceSha256 && result?.status === 'complete'
+                && require('./reader-content-mode').is(result, 'source-only')
+                && result.attempts === 1
+                && result.reviewFeedbackSha256 === reviewSha && isDeepStrictEqual(result.factReview, active.proof)
+                && result.articleSha256 === bundle.fields?.apiReaderArticleSha256
+                && result.planSha256 === bundle.fields?.apiReaderPlanSha256
+                && typeof bundle.fields?.apiReaderArticle === 'string'
+                && sha(bundle.fields.apiReaderArticle) === result.articleSha256
+                && bundle.fields.apiReaderPlan && stableSha(bundle.fields.apiReaderPlan) === result.planSha256;
+        });
+        if (!bundles.length || new Set(bundles.map(bundle =>
+            stableSha(bundle.fields))).size !== 1) return null;
+    }
     fresh.assertFreshPaper(paper);
     const directory = path.join(require('../config').FILES.dailyFreshSourceRunsDir,
         paper.freshRewriteProvenance.runId, 'reader-attempts');
@@ -780,6 +822,6 @@ function replayNormalCompletion(paper,{source,last,saved}){
 function hasReplayedArchivedSignedFactRevision(paper) {
     return readVerifiedCompletion(paper)?.signedFactRevision === true;
 }
-module.exports={recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
+module.exports={isCombinedReaderFinalRejection,clearSupersededCompletionMarker,recoverCombinedFeedbackCompletionStage,hasReplayedArchivedSignedFactRevision,CONTRACT,COMPILATION_CONTRACT,TEMPLATE_SHA,requestHeader:format.wireHeader,eligible,prepare,requestContract,renderPrompt,bindDiagnostic,
     recordRequestWitness,parseAck,compileReaderTargetOrdinalPatch:compileAgainst,hasActiveCompletion:paper=>{const checked=readVerifiedCompletion(paper,true);return Boolean(checked&&!checked.archivedOrdinary);},
     hasArchivedOrdinaryCompletion:paper=>readVerifiedCompletion(paper)?.archivedOrdinary===true,compile,seal,replay,attachOrigin,attachSavedOrigin,sealCompletion,validateCompletion};
