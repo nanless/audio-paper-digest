@@ -34,7 +34,22 @@ import org.json.JSONObject
  val scope=rememberCoroutineScope();val context=LocalContext.current
  val keyboardVisible=WindowInsets.ime.getBottom(LocalDensity.current)>0
  val active=state.jobs.firstOrNull{it.optString("kind") in setOf("zotero.migration.preview","zotero.migration.confirm")&&it.optString("status")=="running"}
- fun close(){if(!busy)scope.launch{try{preview?.optString("previewID")?.takeIf{it.isNotBlank()}?.let{controller.execute("zotero.migration.discard",obj("previewID" to it))}}finally{closed()}}}
+ fun close() {
+  if (busy) return
+  scope.launch {
+   try {
+    preview?.optString("previewID")?.takeIf { it.isNotBlank() }?.let {
+     controller.execute("zotero.migration.discard", obj("previewID" to it))
+    }
+   } catch (cancelled: CancellationException) {
+    throw cancelled
+   } catch (_: Exception) {
+    // The dialog can still close after replacement has retired its preview.
+   } finally {
+    closed()
+   }
+  }
+ }
  fun retire(){val old=preview;previewJSON=null;details=false;old?.optString("previewID")?.takeIf{it.isNotBlank()}?.let{id->scope.launch{runCatching{controller.execute("zotero.migration.discard",obj("previewID" to id))}}}}
  fun baseURL():String{
   val uri=java.net.URI(root.trim());require(uri.scheme=="https"&&uri.host=="dav.jianguoyun.com"&&uri.port in setOf(-1,443)&&uri.rawUserInfo==null&&uri.rawQuery==null&&uri.rawFragment==null&&uri.rawPath.endsWith("/zotero/")){"请填写 Zotero 客户端正在使用的 HTTPS 附件目录，并保留末尾 /zotero/"}
@@ -61,7 +76,15 @@ import org.json.JSONObject
   }
   error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
   if(busy){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在核对或继续原材料；请等当前操作停止。")
-   active?.optString("id")?.takeIf{it.isNotBlank()}?.let{id->TextButton({scope.launch{controller.execute("jobs.cancel",obj("id" to id))}}){Text("取消并保留断点")}}
+   active?.optString("id")?.takeIf { it.isNotBlank() }?.let { id ->
+    TextButton({
+     scope.launch {
+      try { controller.execute("jobs.cancel", obj("id" to id)) }
+      catch (cancelled: CancellationException) { throw cancelled }
+      catch (failure: Exception) { error = failure.message ?: "暂时无法取消，请查看任务状态" }
+     }
+    }) { Text("取消并保留断点") }
+   }
   }
   if(completed)Text("所有所选材料已按真实存档结果核验。Zotero 客户端是否已下载打开，仍需在客户端另行检查。")
  }},confirmButton={

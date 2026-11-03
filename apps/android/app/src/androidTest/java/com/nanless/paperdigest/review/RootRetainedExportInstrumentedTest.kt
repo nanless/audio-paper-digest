@@ -13,6 +13,7 @@ import com.nanless.paperdigest.RootController
 import com.nanless.paperdigest.cloud.BackupCodec
 import com.nanless.paperdigest.data.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
@@ -214,6 +215,165 @@ class RootRetainedExportInstrumentedTest {
             assertEquals(0, root.personal.snapshot().getJSONArray("sessions").length())
         } finally { f.close() }
     }
+    @Test fun noteWaitingBeforeWorkspaceReplacementCannotWriteAtTheSameRevisionAfterward() = runBlocking {
+        val f = Fixture()
+        try {
+            val root = f.root()
+            val paperID = "synthetic-note-owner"
+            val payload = JSONObject().put("paperID", paperID).put("text", "旧界面尚待保存").put("baseRevision", 1)
+            root.personal.saveNote(paperID, "恢复前正文", 0)
+            val maintenance = field<Mutex>(root, "maintenance")
+            val dispatch = field<WorkspaceDispatch>(root, "dispatch")
+            maintenance.lock()
+            val waiting = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { root.execute("personal.note", payload) }.exceptionOrNull()
+            }
+            try {
+                assertFalse(waiting.isCompleted)
+                // Recreate the critical section of replacement with the same note revision.
+                val restored = root.personal.snapshot()
+                restored.getJSONObject("notes").getJSONObject(paperID).put("text", "已恢复的正文")
+                dispatch.rotate()
+                root.personal.replaceValidated(restored)
+            } finally {
+                maintenance.unlock()
+            }
+            val error = withTimeout(10_000) { waiting.await() }
+            assertNotNull(error)
+            assertTrue(error!!.message.orEmpty().contains("恢复前"))
+            val actual = root.personal.snapshot().getJSONObject("notes").getJSONObject(paperID)
+            assertEquals("已恢复的正文", actual.getString("text"))
+            assertEquals(1, actual.getInt("revision"))
+        } finally { f.close() }
+    }
+
+    @Test fun anotherPreparedBackupCannotReplaceNewEditsAfterTheFirstRestore() = runBlocking {
+        val f = Fixture()
+        try {
+            val root = f.root()
+            f.destination.file.writeBytes(f.capture.file.readBytes())
+            val prepare = JSONObject().put("uri", f.uri.toString())
+            val first = root.execute("app.restore.prepare", prepare).getString("restoreID")
+            val stale = root.execute("app.restore.prepare", prepare).getString("restoreID")
+            assertNotEquals(first, stale)
+            assertTrue(root.execute("app.restore.commit", JSONObject().put("restoreID", first)).getBoolean("restored"))
+            root.execute("personal.note", JSONObject().put("paperID", "synthetic-new-edit")
+                .put("text", "第一次恢复后新增的笔记").put("baseRevision", 0))
+            val before = File(f.research, "personal.json").readBytes()
+            val error = runCatching {
+                root.execute("app.restore.commit", JSONObject().put("restoreID", stale))
+            }.exceptionOrNull()
+            assertNotNull(error)
+            assertTrue(error!!.message.orEmpty().contains("恢复前"))
+            assertArrayEquals(before, File(f.research, "personal.json").readBytes())
+            assertTrue(root.execute("restore.discard", JSONObject().put("restoreID", stale)).getBoolean("cancelled"))
+            assertEquals(f.capture.sha256, BackupCodec.hash(f.destination.file))
+        } finally { f.close() }
+    }
+
+    @Test fun activeRestoreRejectsAnOldEditWhileTheRealInstallWaitsToPublishItsEpoch() = runBlocking {
+        val f = Fixture()
+        try {
+            val root = f.root()
+            val paper = "synthetic-held-install"
+            root.personal.saveNote(paper, "快照正文", 0)
+            BackupCodec.capture(f.research, f.destination.file)
+            val handle = root.execute("app.restore.prepare", JSONObject().put("uri", f.uri.toString()))
+                .getString("restoreID")
+            val before = root.personal.snapshot()
+            before.getJSONObject("notes").getJSONObject(paper).put("text", "恢复前正文")
+            root.personal.replaceValidated(before)
+            val dispatch = field<WorkspaceDispatch>(root, "dispatch")
+            val oldEpoch = dispatch.epoch
+            val install = async(Dispatchers.IO, start = CoroutineStart.LAZY) {
+                root.execute("app.restore.commit", JSONObject().put("restoreID", handle))
+            }
+            synchronized(dispatch) {
+                install.start()
+                // The real installer can rename/reload its candidate tree, but its final
+                // synchronized epoch rotation waits here until this test releases the monitor.
+                val deadline = android.os.SystemClock.elapsedRealtime() + 10_000L
+                while (root.personal.note(paper).getString("text") != "快照正文") {
+                    check(android.os.SystemClock.elapsedRealtime() < deadline) { "没有到达实际恢复安装边界" }
+                    Thread.sleep(5)
+                }
+                assertEquals(oldEpoch, dispatch.epoch)
+                assertFalse(install.isCompleted)
+                val error = runBlocking {
+                    withTimeout(2_000) {
+                        runCatching {
+                            root.execute("personal.note", JSONObject().put("paperID", paper)
+                                .put("baseRevision", 1).put("text", "安装中旧界面提交"))
+                        }.exceptionOrNull()
+                    }
+                }
+                assertNotNull(error)
+                assertTrue(error!!.message.orEmpty().contains("正在恢复"))
+            }
+            assertTrue(withTimeout(10_000) { install.await() }.getBoolean("restored"))
+            assertNotEquals(oldEpoch, dispatch.epoch)
+            assertEquals("快照正文", root.personal.note(paper).getString("text"))
+            assertEquals(1, root.personal.note(paper).getInt("revision"))
+        } finally { f.close() }
+    }
+
+    @Test fun aFailedInstallKeepsTheOriginalPreparationUsableAfterRestoringItsExactBytes() = runBlocking {
+        val f = Fixture()
+        try {
+            val root = f.root()
+            f.destination.file.writeBytes(f.capture.file.readBytes())
+            val handle = root.execute("app.restore.prepare", JSONObject().put("uri", f.uri.toString()))
+                .getString("restoreID")
+            val dispatch = field<WorkspaceDispatch>(root, "dispatch")
+            val oldEpoch = dispatch.epoch
+            val handles = field<ConcurrentHashMap<String, Any>>(root, "restores")
+            val stage = field<BackupCodec.Staged>(handles.getValue(handle), "staged")
+            val candidate = File(stage.directory, "personal.json")
+            val original = candidate.readBytes()
+            val before = File(f.research, "personal.json").readBytes()
+            candidate.appendText("\n")
+            val confirmation = JSONObject().put("restoreID", handle)
+            assertTrue(runCatching { root.execute("app.restore.commit", confirmation) }.isFailure)
+            assertEquals(oldEpoch, dispatch.epoch)
+            assertArrayEquals(before, File(f.research, "personal.json").readBytes())
+            assertTrue(candidate.isFile)
+            candidate.writeBytes(original)
+            assertTrue(root.execute("app.restore.commit", confirmation).getBoolean("restored"))
+            assertNotEquals(oldEpoch, dispatch.epoch)
+            assertEquals(f.capture.sha256, BackupCodec.hash(f.destination.file))
+        } finally { f.close() }
+    }
+
+    @Test fun aDisposedAnswerCannotSaveIntoTheRestoredCopyOfTheSameStudy() = runBlocking {
+        val f = Fixture()
+        try {
+            val root = f.root()
+            val session = JSONObject().put("id", "synthetic-restored-answer")
+                .put("paperID", "synthetic-position-owner").put("answer", "同一份已保存的回答")
+            root.personal.appendSession(session)
+            val identity = requireNotNull(studyAnswerPositionIdentity(session))
+            val originalPosition = JSONObject().put("sessionID", identity.sessionID)
+                .put("binding", identity.binding).put("scroll", 27)
+            assertTrue(root.execute("personal.studyScroll", originalPosition).getBoolean("saved"))
+            val renderedEpoch = requireNotNull(root.state.value.workspaceEpoch)
+            BackupCodec.capture(f.research, f.destination.file)
+            val handle = root.execute("app.restore.prepare", JSONObject().put("uri", f.uri.toString()))
+                .getString("restoreID")
+            root.execute("app.restore.commit", JSONObject().put("restoreID", handle))
+            val restoredEpoch = requireNotNull(root.state.value.workspaceEpoch)
+            assertNotEquals(renderedEpoch, restoredEpoch)
+
+            val latePosition = originalPosition.copy().put("scroll", 90)
+            val before = File(f.research, "personal.json").readBytes()
+            val rejected = root.executeInWorkspace("personal.studyScroll", latePosition, renderedEpoch)
+            assertEquals("not-adopted", rejected.getString("status"))
+            assertArrayEquals(before, File(f.research, "personal.json").readBytes())
+            assertEquals(27, savedStudyAnswerScroll(root.personal.snapshot(), session))
+            assertTrue(root.executeInWorkspace("personal.studyScroll", latePosition, restoredEpoch).getBoolean("saved"))
+            assertEquals(90, savedStudyAnswerScroll(root.personal.snapshot(), session))
+        } finally { f.close() }
+    }
+
     private fun <T> field(value: Any, name: String): T {
         @Suppress("UNCHECKED_CAST") return value.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(value) as T
     }

@@ -36,7 +36,7 @@ import org.json.JSONObject
 @Composable internal fun SavedStudyAnswerDocument(state: UiState, session: JSONObject, html: String, action: Action) {
     val identity = studyAnswerPositionIdentity(session)
     if (identity == null) { StaticDocument(html, state.settings.optInt("font", 18)); return }
-    key(identity.binding) { BoundStudyAnswerDocument(state, session, identity, html, action) }
+    key(state.workspaceEpoch, identity.binding) { BoundStudyAnswerDocument(state, session, identity, html, action) }
 }
 
 @Composable private fun BoundStudyAnswerDocument(
