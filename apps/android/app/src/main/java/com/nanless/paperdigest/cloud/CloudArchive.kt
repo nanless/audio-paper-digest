@@ -243,11 +243,22 @@ class CloudArchive(
             }
         }
         val path = "$directory$destinationID.json"
-        val original = optionalGet(path, PersonalWebDavSync.LIMIT)
-        require(if (expected == null) original == null else original?.contentEquals(expected) == true) {
-            "此设备的云端同步记录已变化，请重新同步"
+        val original = requestResponse("GET", path, accepted = setOf(200, 404), limit = PersonalWebDavSync.LIMIT)
+        val changed = "此设备的云端同步记录已变化，请重新同步"
+        require(if (expected == null) original.status == 404 else original.status == 200 && original.body.contentEquals(expected)) { changed }
+        val headers = mutableMapOf("Content-Type" to "application/json")
+        if (original.status == 404) {
+            headers["If-None-Match"] = "*"
+        } else {
+            val etag = original.headers.entries.firstOrNull { it.key.equals("ETag", true) }?.value
+            require(etag != null && etag.length in 2..1024 && etag.first() == '"' && etag.last() == '"' &&
+                etag.substring(1, etag.lastIndex).all { it.code in 0x21..0x7e && it != '"' }) {
+                "WebDAV 服务未提供可安全更新的版本标记，本机资料已保留"
+            }
+            headers["If-Match"] = etag
         }
-        request("PUT", path, bytes, mapOf("Content-Type" to "application/json"), setOf(200, 201, 204))
+        val written = requestResponse("PUT", path, bytes, headers, setOf(200, 201, 204, 412))
+        require(written.status != 412) { changed }
         if (!request("GET", path, accepted = setOf(200), limit = bytes.size).contentEquals(bytes)) throw CloudFailure("integrity")
     }
 

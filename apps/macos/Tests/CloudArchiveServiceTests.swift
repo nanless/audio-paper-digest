@@ -133,6 +133,48 @@ private actor CloudTestDAV {
         }.joined()+"</d:multistatus>").utf8)
     }
 }
+/// A personal record is mutable only when the request's conditional header
+/// still matches the origin at PUT time.
+private actor CloudPersonalDAV {
+    private var bytes: Data?
+    private let tag: String?
+    private let competingWrite: Data?
+    private(set) var requests: [String] = []
+    private(set) var condition: String?
+    init(bytes: Data?, tag: String?, competingWrite: Data? = nil) {
+        self.bytes = bytes; self.tag = tag; self.competingWrite = competingWrite
+    }
+    func request(_ request: URLRequest, _ limit: Int) throws -> CloudArchiveService.Response {
+        let method = request.httpMethod ?? "GET"
+        guard let url = request.url, url.host == "dav.jianguoyun.com",
+              url.path.contains("/personal-sync-v1/") else { throw CloudTestError(message: "Unsafe fixture request") }
+        requests.append(method)
+        let status: Int, data: Data
+        switch method {
+        case "GET":
+            status = bytes == nil ? 404 : 200; data = bytes ?? Data()
+        case "PUT":
+            let match = request.value(forHTTPHeaderField: "If-Match")
+            let create = request.value(forHTTPHeaderField: "If-None-Match")
+            condition = match ?? create
+            if let competingWrite {
+                bytes = competingWrite
+                status = 412
+            } else if bytes == nil ? create == "*" && match == nil : match != nil && match == tag && create == nil {
+                bytes = request.httpBody
+                status = 204
+            } else {
+                status = 412
+            }
+            data = Data()
+        default: throw CloudTestError(message: "Unexpected fixture verb")
+        }
+        let headers = tag.map { ["ETag": $0] } ?? [:]
+        return .init(data: data, response: HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!)
+    }
+    func material() -> Data? { bytes }
+}
+
 #if PAPER_DIGEST_TESTS
 private final class CloudInterceptProtocol: URLProtocol, @unchecked Sendable {
     struct Reply: Sendable { let status: Int; let headers: [String:String]; let chunks: [Data]; let redirect: Bool }
@@ -639,6 +681,52 @@ private actor CloudIndependentPublishGate {
             try require(CloudInterceptProtocol.recorded().first?.value(forHTTPHeaderField:"Cookie")==nil,"ephemeral request does not add cookie")
         }
         #endif
+        func personalService(_ server: CloudPersonalDAV) throws -> CloudArchiveService {
+            try CloudArchiveService(destinationID: UUID(), credentials: { .init(username: "fixture", password: "fixture") },
+                checkpointSink: { _ in }, transport: { try await server.request($0, $1) }, minimumRequestInterval: 0)
+        }
+        let earlier = Data("old private record fixture".utf8), later = Data("new private record fixture".utf8)
+        await check("personal record creation is conditional and reads back exact bytes") {
+            let server = CloudPersonalDAV(bytes: nil, tag: nil)
+            try await personalService(server).writePersonalDocument(later, expected: nil, directoryExists: true)
+            let condition = await server.condition, requests = await server.requests
+            try require(condition == "*" && requests == ["GET", "PUT", "GET"], "create guard and GET readback")
+            try require(await server.material() == later, "new content preserved")
+        }
+        await check("personal record replacement uses exact strong ETag and reads back") {
+            let tag = #""strong-revision""#
+            let server = CloudPersonalDAV(bytes: earlier, tag: tag)
+            try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true)
+            let condition = await server.condition, requests = await server.requests
+            try require(condition == tag && requests == ["GET", "PUT", "GET"], "update guard and GET readback")
+            try require(await server.material() == later, "updated content preserved")
+        }
+        await check("missing, weak, malformed and unsupported personal ETags never issue PUT") {
+            let oversizedTag = "\"" + String(repeating: "a", count: 1023) + "\""
+            let unsafeTags: [String?] = [nil, #"W/"weak""#, "not-quoted", #""tag","another""#, #""非 ASCII""#, oversizedTag]
+            for tag in unsafeTags {
+                let server = CloudPersonalDAV(bytes: earlier, tag: tag)
+                try await rejects(.personalDocumentUnsafe) { try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true) }
+                try require(await server.requests == ["GET"], "unsafe validator did not write")
+                try require(await server.material() == earlier, "old bytes remain")
+            }
+        }
+        await check("personal update detects changed preflight material before PUT") {
+            let server = CloudPersonalDAV(bytes: later, tag: #""current""#)
+            try await rejects(.personalDocumentChanged) { try await personalService(server).writePersonalDocument(later, expected: earlier, directoryExists: true) }
+            try require(await server.requests == ["GET"], "changed material did not write")
+        }
+        await check("personal creation and update surface a competing write without readback success") {
+            let competing = Data("other device update".utf8)
+            for initial in [nil, earlier] as [Data?] {
+                let tag = #""preflight""#
+                let server = CloudPersonalDAV(bytes: initial, tag: tag, competingWrite: competing)
+                try await rejects(.personalDocumentChanged) { try await personalService(server).writePersonalDocument(later, expected: initial, directoryExists: true) }
+                let condition = await server.condition, requests = await server.requests
+                try require(condition == (initial == nil ? "*" : tag) && requests == ["GET", "PUT"], "412 retires guarded write")
+                try require(await server.material() == competing, "competing material remains intact")
+            }
+        }
         print("CloudArchiveService: \(passed) passed, \(failures.count) failed")
         if !failures.isEmpty { exit(1) }
     }

@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.cloud
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
@@ -42,6 +44,9 @@ class CloudArchiveTest {
         val own = directory + "$id.json"
         val collections = mutableSetOf<String>()
         var data: ByteArray? = null
+        var rejectWrite = false
+        var etag: String? = "\"fixture\""
+        var putCount = 0
         val transport = CloudTransport { request, _ ->
             val path = request.url.encodedPath
             when (request.method) {
@@ -53,10 +58,14 @@ class CloudArchiveTest {
                 }
                 "GET" -> {
                     assertEquals(own, path)
-                    CloudHTTP(if (data == null) 404 else 200, emptyMap(), data ?: byteArrayOf())
+                    CloudHTTP(if (data == null) 404 else 200, etag?.let { mapOf("eTaG" to it) }.orEmpty(), data ?: byteArrayOf())
                 }
                 "PUT" -> {
                     assertEquals(own, path)
+                    putCount++
+                    if (data == null) assertEquals("*", request.header("If-None-Match"))
+                    else assertEquals("\"fixture\"", request.header("If-Match"))
+                    if (rejectWrite) return@CloudTransport CloudHTTP(412, emptyMap(), byteArrayOf())
                     val buffer = Buffer()
                     request.body!!.writeTo(buffer)
                     data = buffer.readByteArray()
@@ -74,8 +83,62 @@ class CloudArchiveTest {
         assertTrue(runCatching { service.writePersonalDocument(byteArrayOf(3), null, true) }.isFailure)
         assertArrayEquals(first, service.personalDocuments().getValue(id))
         val next = """{"next":true}""".toByteArray()
+        for (badTag in listOf(null, "W/\"fixture\"", "malformed")) {
+            etag = badTag
+            val failure = runCatching { service.writePersonalDocument(next, first, true) }.exceptionOrNull()
+            assertTrue(failure?.message.orEmpty().contains("版本标记"))
+            assertEquals(1, putCount)
+        }
+        etag = "\"fixture\""
+        rejectWrite = true
+        val rejected = runCatching { service.writePersonalDocument(next, first, true) }.exceptionOrNull()
+        assertTrue(rejected?.message.orEmpty().contains("已变化"))
+        assertArrayEquals(first, service.personalDocuments().getValue(id))
+        rejectWrite = false
         service.writePersonalDocument(next, first, true)
         assertArrayEquals(next, service.personalDocuments().getValue(id))
+    }
+
+    @Test fun onlyOneWriterCanReplaceTheSameObservedPersonalDocument() = runTest {
+        val old = "initial".toByteArray()
+        var bytes = old
+        var tag = "\"one\""
+        var initialReads = 0
+        val bothRead = CompletableDeferred<Unit>()
+        val transport = CloudTransport { request, _ ->
+            when (request.method) {
+                "GET" -> {
+                    val response = CloudHTTP(200, mapOf("ETag" to tag), bytes)
+                    if (initialReads < 2) {
+                        initialReads++
+                        if (initialReads == 2) bothRead.complete(Unit)
+                        bothRead.await()
+                    }
+                    response
+                }
+                "PUT" -> {
+                    if (request.header("If-Match") != tag) CloudHTTP(412, emptyMap(), byteArrayOf())
+                    else {
+                        val body = Buffer()
+                        request.body!!.writeTo(body)
+                        bytes = body.readByteArray()
+                        tag = "\"two\""
+                        CloudHTTP(204, emptyMap(), byteArrayOf())
+                    }
+                }
+                else -> error("Unexpected WebDAV method")
+            }
+        }
+        fun service() = CloudArchive("PaperDigest", id, { CloudCredentials("fixture", "fixture") }, {},
+            transport, { 1792886400000L }, {}, 0)
+        val first = "Mac edit".toByteArray()
+        val second = "Android edit".toByteArray()
+        val a = async { runCatching { service().writePersonalDocument(first, old, true) } }
+        val b = async { runCatching { service().writePersonalDocument(second, old, true) } }
+        val results = listOf(a.await(), b.await())
+        assertEquals(1, results.count { it.isSuccess })
+        assertTrue(results.single { it.isFailure }.exceptionOrNull()?.message.orEmpty().contains("已变化"))
+        assertArrayEquals(if (results[0].isSuccess) first else second, bytes)
     }
 
     @Test fun monthAndUuidAliasesKeepOneLevelCanonicalPathsAndDuplicateNormalizationIsNotCompletion() = runTest {

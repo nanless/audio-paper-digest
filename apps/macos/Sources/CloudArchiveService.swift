@@ -57,10 +57,13 @@ public actor CloudArchiveService {
     }
     public enum CloudError: Error, LocalizedError, Sendable, Equatable {
         case invalidConfiguration, invalidBackup, invalidCheckpoint, integrity, incompleteListing, localOnlySecret, selectionChanged
+        case personalDocumentChanged, personalDocumentUnsafe
         case credentialsUnavailable, authentication, forbidden, transport, redirect, oversizedResponse, busy, checkpointStore
         case httpStatus(Int), throttled(Date)
         public var errorDescription: String? {
             switch self {
+            case .personalDocumentChanged: return "此设备的云端同步记录已变化，请重新同步"
+            case .personalDocumentUnsafe: return "WebDAV 服务未提供可安全更新的版本标记，本机资料已保留"
             case .selectionChanged: return "云端版本清单已变化，请重新读取该月份后选择要恢复的版本"
             case .invalidConfiguration: return "坚果云配置无效；请使用单级英文目录和应用专用密码"
             case .invalidBackup: return "研究备份无效或超过完整备份上限（原资料512MiB、编码750MiB）"
@@ -247,14 +250,29 @@ public actor CloudArchiveService {
             try await ensureCollection(directory)
         }
         let path = directory + destinationID.uuidString.lowercased() + ".json"
-        guard try await optionalGet(path, limit: PersonalWebDavSync.limit) == expected else {
-            throw DesktopError.message("此设备的云端同步记录已变化，请重新同步")
+        let current = try await request("GET", path: path, limit: PersonalWebDavSync.limit, accepted: [200,404])
+        let missing = current.response.statusCode == 404
+        guard (missing ? nil : current.data) == expected else { throw CloudError.personalDocumentChanged }
+        var headers = ["Content-Type": "application/json"]
+        if missing {
+            headers["If-None-Match"] = "*"
+        } else {
+            guard let tag = current.response.value(forHTTPHeaderField: "ETag"),
+                  Self.strongETag(tag) else { throw CloudError.personalDocumentUnsafe }
+            headers["If-Match"] = tag
         }
-        _ = try await request("PUT", path: path, body: bytes, headers: ["Content-Type":"application/json"],
-                              limit: 64 * 1024, accepted: [200,201,204])
+        let written = try await request("PUT", path: path, body: bytes, headers: headers,
+                                        limit: 64 * 1024, accepted: [200,201,204,412])
+        guard written.response.statusCode != 412 else { throw CloudError.personalDocumentChanged }
         guard try await request("GET", path: path, limit: bytes.count, accepted: [200]).data == bytes else {
             throw CloudError.integrity
         }
+    }
+
+    private static func strongETag(_ value: String) -> Bool {
+        let bytes = value.utf8
+        guard (2...1024).contains(bytes.count), bytes.first == 0x22, bytes.last == 0x22 else { return false }
+        return bytes.dropFirst().dropLast().allSatisfy { $0 == 0x21 || (0x23...0x7E).contains($0) }
     }
 
     public func download(reference: SnapshotReference) async throws -> Data {
