@@ -105,6 +105,65 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             'executionBinding': execution, 'executionBindingSha256': hashlib.sha256(self.canonical(execution)).hexdigest(),
             'fullExecutionClosure': 'not_established'}
 
+    def attempt_header(self, intent, name):
+        from protocol_codec import record_header
+        if 'version' in intent:
+            return record_header(name + '-v1', name)
+        return record_header(name, name)
+
+    def test_restricted_policy_headers_match_shared_catalogue(self):
+        from protocol_codec import record_header
+        import daily_observed_projection as owner
+        leaf = self.leaf()
+        for kind, current, fingerprint, original in leaf._p('protocol_headers'):
+            with self.subTest(kind=kind):
+                self.assertEqual(leaf._protocol_header(kind), record_header(current, current))
+                self.assertEqual(leaf._protocol_header(kind, historical=True), record_header(original, current))
+                if kind in ('status', 'outcome'):
+                    self.assertEqual(owner._deployment_fallback_header(kind), record_header(current, current))
+
+    def test_previous_writer_store_replays_original_bytes_and_advances_without_mixing_attempt_headers(self):
+        from types import ModuleType
+        project = Path(__file__).resolve().parents[2]
+        original = subprocess.run(
+            ['git', 'show', 'd0b1d8b5a9444c2a0929bb31bae7f7a0ed2829a3:scripts/daily_deployment_store.py'],
+            cwd=project, check=True, capture_output=True, timeout=5).stdout
+        self.assertEqual(hashlib.sha256(original).hexdigest(),
+                         'd4796fcf5af0c5a77cd437b83cd2295d913193daca97a4498b2ceafe04c15042')
+        previous = ModuleType('_original_deployment_store_test')
+        exec(compile(original, 'original-deployment-store.py', 'exec'), previous.__dict__)
+        current = self.leaf()
+        with mock.patch.object(self, 'leaf', return_value=previous):
+            old_intent, old_handle = previous.reserve(self.root, self.selector)
+            old_binding = self.bind_data(old_intent, old_handle)
+            old_terminal = self.terminal(old_intent, old_binding, state='metadata_observed')
+            previous.finish(old_handle, old_terminal)
+        old_dir = self.directory(old_intent)
+        original_files = {file: file.read_bytes() for file in old_dir.iterdir()}
+        original_controls = {file: file.read_bytes() for file in
+                             (old_dir.parent.parent / 'counter.json', old_dir.parent.parent / 'index.json')}
+        status = current.read_status(self.root, self.selector)
+        self.assertTrue(status['indexConsistent'])
+        self.assertEqual(status['lastObserved']['recordSha256'], old_terminal['recordSha256'])
+        self.assertEqual({file: file.read_bytes() for file in original_controls}, original_controls)
+        intent, handle = current.reserve(self.root, self.selector)
+        self.assertEqual(intent['sequence'], old_intent['sequence'] + 1)
+        self.assertEqual(intent['schemaFingerprint'], current._protocol_header('intent')['schemaFingerprint'])
+        terminal = self.terminal(intent)
+        fields = {key: value for key, value in terminal.items()
+                  if key not in ('contract', 'schemaFingerprint', 'recordSha256')}
+        for header in (current._protocol_header('result', historical=True),
+                       {**current._protocol_header('result'), 'schemaFingerprint': '0' * 64}):
+            wrong = self.hashed({**header, **fields}, 'recordSha256')
+            with self.assertRaises(current.DeploymentStoreError):
+                current.finish(handle, wrong)
+        current.finish(handle, terminal)
+        self.assertEqual({file: file.read_bytes() for file in old_dir.iterdir()}, original_files)
+        status = current.read_status(self.root, self.selector)
+        self.assertTrue(status['indexConsistent'])
+        self.assertEqual(status['latestAttempt']['recordSha256'], terminal['recordSha256'])
+        self.assertEqual(status['lastObserved']['recordSha256'], old_terminal['recordSha256'])
+
     def bind_data(self, intent, handle):
         # Full schema does not make these invented bytes scientific or published facts.
         sha = 'a' * 64
@@ -149,7 +208,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         repository = {'repositoryId': 1214235086, 'fullName': 'nanless/audio-paper-digest-blog',
             'workflowId': 262722446, 'workflowPath': '.github/workflows/hugo.yaml', 'branch': 'main',
             'environment': 'github-pages', 'policySha256': sha, 'localRepositoryMapping': 'verified'}
-        binding = self.hashed({'contract': 'daily-deployment-input-binding-v1', 'version': 1,
+        binding = self.hashed({**self.attempt_header(intent, 'daily-deployment-input-binding'),
             'attemptId': intent['attemptId'], 'sequence': intent['sequence'], 'selector': self.selector,
             'normalBinding': normal, 'publicationBinding': publication, 'targetBinding': target_binding,
             'localBinding': local, 'repositoryPolicy': repository,
@@ -164,7 +223,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             'remoteNow', 'currentEligibility', 'sourceRecoveryEligibility', 'browserExecution', 'finalAcceptance'), 'not_checked')
         coverage.update(localPublication='observed_before_after' if binding else 'not_verified',
                         deploymentMetadata='observed' if success else 'not_available')
-        return self.hashed({'contract': 'daily-deployment-metadata-observation-v1', 'version': 1,
+        return self.hashed({**self.attempt_header(intent, 'daily-deployment-metadata-observation'),
             'attemptId': intent['attemptId'], 'sequence': intent['sequence'], 'selector': self.selector,
             'intentSha256': intent['intentSha256'],
             'bindingSha256': binding['bindingSha256'] if binding is not None else None,

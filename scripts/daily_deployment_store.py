@@ -12,13 +12,24 @@ import uuid
 
 POLICY_NAMES = ('POLICY',)
 POLICY = (
-    ('intent_contract', 'daily-deployment-intent-v1'),
-    ('binding_contract', 'daily-deployment-input-binding-v1'),
-    ('result_contract', 'daily-deployment-metadata-observation-v1'),
-    ('index_contract', 'daily-deployment-index-v1'),
-    ('counter_contract', 'daily-deployment-sequence-v1'),
-    ('status_contract', 'daily-deployment-local-status-v1'),
-    ('outcome_contract', 'daily-deployment-attempt-outcome-v1'),
+    # Pinned wire headers. Keep the catalogue parity test in sync.
+    # This restricted leaf must not import application modules or read config.
+    ('protocol_headers', (
+        ('intent', 'daily-deployment-intent',
+         'a035197bdf3ace2a8b9401341de9f897c0aa8982a1816e0ea8a9b368dcf2d9c1', 'daily-deployment-intent-v1'),
+        ('binding', 'daily-deployment-input-binding',
+         'f710068d3d94ffd0c22c14e4cac8040a8f07478b8c5eeb3be783ec346f57c86b', 'daily-deployment-input-binding-v1'),
+        ('result', 'daily-deployment-metadata-observation',
+         '25e49d02c0c9e21ab4a6b1a574fe5a7519241469232cc60244a20ccf0fd50894', 'daily-deployment-metadata-observation-v1'),
+        ('index', 'daily-deployment-index',
+         'd68f9431b4c9bf973fc812f1885c8dda3183cba1541320a320a6991d1d987fb8', 'daily-deployment-index-v1'),
+        ('counter', 'daily-deployment-sequence',
+         'b9f85a0c3d1d2a4b688e9523cc534b4db8a80612a7eb776c1782eda2efcc29ab', 'daily-deployment-sequence-v1'),
+        ('status', 'daily-deployment-local-status',
+         '09c198d25e6a3e658212f5ed70f2c662022a5ad9e42ea2779a3404f0e4c3d668', 'daily-deployment-local-status-v1'),
+        ('outcome', 'daily-deployment-attempt-outcome',
+         'f62646531a8680943b2ce2310b62dbe6ad576892df07df282f0ec578b66d0651', 'daily-deployment-attempt-outcome-v1'),
+    )),
     ('intent_bytes', 8192), ('binding_bytes', 65536), ('snapshot_bytes', 2097152),
     ('result_bytes', 2097152), ('control_bytes', 65536), ('store_items', 10000), ('primary_pages', 512),
     ('store_bytes', 134217728), ('text_bytes', 8192), ('json_depth', 32),
@@ -34,12 +45,12 @@ POLICY = (
         'record_binding', 'record_hash', 'sequence_conflict', 'index_update',
         'intent_bytes', 'binding_bytes', 'snapshot_bytes', 'result_bytes',
         'store_items', 'store_bytes')),
-    ('intent_keys', ('contract', 'version', 'attemptId', 'sequence', 'selector',
+    ('intent_keys', ('attemptId', 'sequence', 'selector',
                     'requestedAt', 'scope', 'parentAttemptId', 'intentSha256')),
-    ('binding_keys', ('contract', 'version', 'attemptId', 'sequence', 'selector',
+    ('binding_keys', ('attemptId', 'sequence', 'selector',
         'normalBinding', 'publicationBinding', 'targetBinding', 'localBinding',
         'repositoryPolicy', 'snapshot', 'bindingSha256')),
-    ('result_keys', ('contract', 'version', 'attemptId', 'sequence', 'selector',
+    ('result_keys', ('attemptId', 'sequence', 'selector',
         'intentSha256', 'bindingSha256', 'startedAt', 'finishedAt', 'status',
         'bindingVerified', 'metadata', 'partial', 'fullE05', 'implementationObservation',
         'coverage', 'issues', 'capabilities', 'recordSha256')),
@@ -623,9 +634,28 @@ def _check_hash(value, field):
         _fail('invalid_record', 'record_hash')
 
 
+def _protocol_header(kind, *, historical=False):
+    for key, name, fingerprint, original in _p('protocol_headers'):
+        if key == kind:
+            return ({'contract': original, 'version': 1} if historical else
+                    {'contract': name, 'schemaFingerprint': fingerprint})
+    raise RuntimeError('Unknown deployment protocol')
+
+
+def _record_format(value, kind, fields):
+    header = _protocol_header(kind)
+    if type(value) is dict and set(value) == set(fields) | header.keys():
+        if all(value[key] == expected for key, expected in header.items()):
+            return 'current'
+    original = _protocol_header(kind, historical=True)
+    if type(value) is dict and set(value) == set(fields) | original.keys():
+        if value['contract'] == original['contract'] and type(value['version']) is int and value['version'] == original['version']:
+            return 'original'
+    return None
+
+
 def _intent(value, selector, directory):
-    if (set(value) != set(_p('intent_keys')) or value['contract'] != _p('intent_contract')
-            or type(value['version']) is not int or value['version'] != 1
+    if (_record_format(value, 'intent', _p('intent_keys')) is None
             or value['selector'] != selector or not _seq(value['sequence'])
             or type(value['attemptId']) is not str or value['attemptId'] != directory
             or not re.fullmatch(str(value['sequence']) + '-[0-9a-f]{32}', directory)
@@ -958,8 +988,8 @@ def _collector_metadata(value, commit):
 
 
 def _binding(value, intent, snapshot_raw):
-    if (set(value) != set(_p('binding_keys')) or value['contract'] != _p('binding_contract')
-            or type(value['version']) is not int or value['version'] != 1):
+    format_name = _record_format(value, 'binding', _p('binding_keys'))
+    if format_name is None or format_name != _record_format(intent, 'intent', _p('intent_keys')):
         _fail('invalid_record', 'record_shape')
     for name in ('attemptId', 'sequence', 'selector'):
         if value[name] != intent[name] or type(value[name]) is not type(intent[name]):
@@ -974,8 +1004,8 @@ def _binding(value, intent, snapshot_raw):
 
 
 def _result(value, intent, binding):
-    if (set(value) != set(_p('result_keys')) or value['contract'] != _p('result_contract')
-            or type(value['version']) is not int or value['version'] != 1
+    format_name = _record_format(value, 'result', _p('result_keys'))
+    if (format_name is None or format_name != _record_format(intent, 'intent', _p('intent_keys'))
             or value['status'] not in _p('states') or value['partial'] is not True or value['fullE05'] is not False
             or type(value['bindingVerified']) is not bool):
         _fail('invalid_record', 'record_shape')
@@ -1110,7 +1140,7 @@ def _reference(row, terminal=False):
             'intentSha256': intent['intentSha256']}
 
 
-def _index(rows, selector, revision):
+def _index(rows, selector, revision, *, historical=False):
     latest, terminal, observed = None, None, None
     for row in rows:
         latest = _reference(row)
@@ -1118,7 +1148,7 @@ def _index(rows, selector, revision):
             terminal = _reference(row, True)
             if row['result']['status'] == 'metadata_observed' and row['result']['bindingVerified']:
                 observed = _reference(row, True)
-    return {'contract': _p('index_contract'), 'version': 1, 'selector': selector,
+    return {**_protocol_header('index', historical=historical), 'selector': selector,
             'revision': revision, 'latestAttempt': latest, 'latestTerminal': terminal, 'lastObserved': observed}
 
 
@@ -1133,8 +1163,7 @@ def _counter(scope, rows):
         if rows or not scope.created_lock:
             _fail('invalid_record', 'sequence_conflict')
         return raw, 1
-    if (set(value) != {'contract', 'version', 'selector', 'nextSequence'}
-            or value['contract'] != _p('counter_contract') or type(value['version']) is not int or value['version'] != 1
+    if (_record_format(value, 'counter', ('selector', 'nextSequence')) is None
             or value['selector'] != scope.selector or type(value['nextSequence']) is not int
             or not 1 <= value['nextSequence'] <= _p('sequence_max') + 1
             or (rows and value['nextSequence'] <= rows[-1]['intent']['sequence'])):
@@ -1146,8 +1175,7 @@ def _old_index(scope, rows):
     raw, old = _control(scope, 'index.json')
     if old is None:
         return raw, None
-    if (set(old) != {'contract', 'version', 'selector', 'revision', 'latestAttempt', 'latestTerminal', 'lastObserved'}
-            or old['contract'] != _p('index_contract') or type(old['version']) is not int or old['version'] != 1
+    if (_record_format(old, 'index', ('selector', 'revision', 'latestAttempt', 'latestTerminal', 'lastObserved')) is None
             or old['selector'] != scope.selector or type(old['revision']) is not int
             or not 1 <= old['revision'] <= _p('sequence_max')):
         _fail('invalid_record', 'record_shape')
@@ -1216,12 +1244,12 @@ def reserve(root, selector):
             counter_raw, sequence = _counter(scope, rows)
             if sequence > _p('sequence_max'):
                 _fail('limit_exceeded', 'store_items')
-            counter = {'contract': _p('counter_contract'), 'version': 1,
+            counter = {**_protocol_header('counter'),
                        'selector': selector, 'nextSequence': sequence + 1}
             _publish(scope.fd, 'counter.json', _canonical(counter, _p('control_bytes')),
                      replace=True, expected=counter_raw, aggregate=scope.budget)
             attempt_id = str(sequence) + '-' + uuid.uuid4().hex
-            intent = _hashed({'contract': _p('intent_contract'), 'version': 1,
+            intent = _hashed({**_protocol_header('intent'),
                 'attemptId': attempt_id, 'sequence': sequence, 'selector': selector,
                 'requestedAt': _now(), 'scope': 'deployment_metadata_only',
                 'parentAttemptId': None}, 'intentSha256')
@@ -1284,7 +1312,7 @@ def _caps():
 
 
 def _outcome(intent, ref):
-    return {'contract': _p('outcome_contract'), 'version': 1, 'selector': intent['selector'],
+    return {**_protocol_header('outcome'), 'selector': intent['selector'],
         'attemptId': intent['attemptId'], 'sequence': intent['sequence'], 'recording': 'recorded',
         'resultRef': ref, 'issues': [], 'partial': True, 'fullE05': False, 'capabilities': _caps()}
 
@@ -1325,7 +1353,7 @@ def finish(handle, result):
 
 
 def _empty(selector):
-    return {'contract': _p('status_contract'), 'version': 1, 'status': 'not_recorded',
+    return {**_protocol_header('status'), 'status': 'not_recorded',
         'selector': selector, 'observedAt': _now(), 'latestAttempt': None, 'lastObserved': None,
         'indexConsistent': True, 'partial': True, 'fullE05': False,
         'coverage': {'recordIntegrity': 'checked', 'currentInputs': 'not_checked',
@@ -1351,7 +1379,8 @@ def read_status(root, selector):
             rows = _scan(scope)
             _counter(scope, rows)
             _raw, old = _old_index(scope, rows)
-            expected = _index(rows, selector, old['revision'] if old is not None else 1)
+            expected = _index(rows, selector, old['revision'] if old is not None else 1,
+                              historical=old is not None and old['contract'] == _protocol_header('index', historical=True)['contract'])
             result['indexConsistent'] = old == expected
             if rows:
                 latest = rows[-1]

@@ -260,7 +260,8 @@ class DailyDeploymentObservationIntegrationTest(unittest.TestCase):
         return value, directory
 
     def recorded(self, outcome, status, *, state='metadata_observed', normals=4):
-        self.assertEqual(outcome['contract'], 'daily-deployment-attempt-outcome-v1')
+        self.assertEqual({name: outcome[name] for name in ('contract', 'schemaFingerprint')},
+                         self.owner()._deployment_fallback_header('outcome'))
         self.assertEqual(outcome['recording'], 'recorded', (outcome, self.events))
         self.assertEqual(outcome['issues'], [])
         result, directory = self.stored_result(outcome)

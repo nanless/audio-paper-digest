@@ -1,0 +1,202 @@
+{
+  "protocols": [
+    {
+      "name": "daily-deployment-intent",
+      "currentVariant": "reservation",
+      "currentSchema": {
+        "fields": [
+          "attemptId",
+          "sequence",
+          "selector",
+          "requestedAt",
+          "scope",
+          "parentAttemptId",
+          "intentSha256"
+        ],
+        "hashField": "intentSha256",
+        "hashDomain": "original-complete-record-excluding-hash-field"
+      },
+      "historical": [
+        {
+          "tag": "daily-deployment-intent-v1",
+          "variant": "reservation",
+          "header": {
+            "contract": "daily-deployment-intent-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-deployment-input-binding",
+      "currentVariant": "attempt-snapshot",
+      "currentSchema": {
+        "fields": [
+          "attemptId",
+          "sequence",
+          "selector",
+          "normalBinding",
+          "publicationBinding",
+          "targetBinding",
+          "localBinding",
+          "repositoryPolicy",
+          "snapshot",
+          "bindingSha256"
+        ],
+        "hashField": "bindingSha256",
+        "hashDomain": "original-complete-record-excluding-hash-field",
+        "attemptDomain": "same-format-as-immutable-intent"
+      },
+      "historical": [
+        {
+          "tag": "daily-deployment-input-binding-v1",
+          "variant": "attempt-snapshot",
+          "header": {
+            "contract": "daily-deployment-input-binding-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-deployment-metadata-observation",
+      "currentVariant": "partial-metadata",
+      "currentSchema": {
+        "fields": [
+          "attemptId",
+          "sequence",
+          "selector",
+          "intentSha256",
+          "bindingSha256",
+          "startedAt",
+          "finishedAt",
+          "status",
+          "bindingVerified",
+          "metadata",
+          "partial",
+          "fullE05",
+          "implementationObservation",
+          "coverage",
+          "issues",
+          "capabilities",
+          "recordSha256"
+        ],
+        "hashField": "recordSha256",
+        "hashDomain": "original-complete-record-excluding-hash-field",
+        "attemptDomain": "same-format-as-immutable-intent",
+        "authority": "metadata-only-no-publication-or-source-grant"
+      },
+      "historical": [
+        {
+          "tag": "daily-deployment-metadata-observation-v1",
+          "variant": "partial-metadata",
+          "header": {
+            "contract": "daily-deployment-metadata-observation-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-deployment-index",
+      "currentVariant": "navigation",
+      "currentSchema": {
+        "fields": [
+          "selector",
+          "revision",
+          "latestAttempt",
+          "latestTerminal",
+          "lastObserved"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-deployment-index-v1",
+          "variant": "navigation",
+          "header": {
+            "contract": "daily-deployment-index-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-deployment-sequence",
+      "currentVariant": "monotonic-sequence",
+      "currentSchema": {
+        "fields": [
+          "selector",
+          "nextSequence"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "daily-deployment-sequence-v1",
+          "variant": "monotonic-sequence",
+          "header": {
+            "contract": "daily-deployment-sequence-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-deployment-local-status",
+      "currentVariant": "local-status",
+      "currentSchema": {
+        "fields": [
+          "status",
+          "selector",
+          "observedAt",
+          "latestAttempt",
+          "lastObserved",
+          "indexConsistent",
+          "partial",
+          "fullE05",
+          "coverage",
+          "issues",
+          "capabilities"
+        ],
+        "authority": "metadata-only-no-publication-or-source-grant"
+      },
+      "historical": [
+        {
+          "tag": "daily-deployment-local-status-v1",
+          "variant": "local-status",
+          "header": {
+            "contract": "daily-deployment-local-status-v1",
+            "version": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-deployment-attempt-outcome",
+      "currentVariant": "persistence-outcome",
+      "currentSchema": {
+        "fields": [
+          "selector",
+          "attemptId",
+          "sequence",
+          "recording",
+          "resultRef",
+          "issues",
+          "partial",
+          "fullE05",
+          "capabilities"
+        ],
+        "authority": "metadata-only-no-publication-or-source-grant"
+      },
+      "historical": [
+        {
+          "tag": "daily-deployment-attempt-outcome-v1",
+          "variant": "persistence-outcome",
+          "header": {
+            "contract": "daily-deployment-attempt-outcome-v1",
+            "version": 1
+          }
+        }
+      ]
+    }
+  ]
+}

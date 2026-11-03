@@ -88,6 +88,13 @@ _LOCAL_UNKNOWN = (
     'Fresh compilation binds three fixed Git sources; full Python execution closure and stdlib generated closures are not established',
     'Original environment loading and publication locks retain their existing local effects; this diagnostic grants no publication or Source capability')
 
+# Fail-closed return paths may run before the restricted store is available.
+_DEPLOYMENT_FALLBACK_HEADERS = (
+    ('outcome', 'daily-deployment-attempt-outcome',
+     'f62646531a8680943b2ce2310b62dbe6ad576892df07df282f0ec578b66d0651'),
+    ('status', 'daily-deployment-local-status',
+     '09c198d25e6a3e658212f5ed70f2c662022a5ad9e42ea2779a3404f0e4c3d668'),
+)
 _DEPLOYMENT_FILES = ('github_pages_deployment.py', 'daily_deployment_store.py')
 _DEPLOYMENT_IMPORTS = (
     ('base64', 'datetime', 'hashlib', 'http.client', 'json', 're', 'socket', 'ssl',
@@ -300,7 +307,7 @@ def _policy_sha():
                               _LOCAL_RAW_FIELDS, _LOCAL_DELTA_FIELDS, _LOCAL_CAPABILITIES,
                               _LOCAL_COVERAGE, _LOCAL_UNKNOWN,
                               _DEPLOYMENT_FILES, _DEPLOYMENT_IMPORTS,
-                              _DEPLOYMENT_NOT_CHECKED, _DEPLOYMENT_METADATA_ISSUES)))
+                              _DEPLOYMENT_NOT_CHECKED, _DEPLOYMENT_METADATA_ISSUES, _DEPLOYMENT_FALLBACK_HEADERS)))
 
 
 def _implementation(profile_raw):
@@ -1660,7 +1667,14 @@ def _deployment_take(selector, owner, stage):
         _fail('deployment_result', ('blocked', 'normal', 'normal_rejected', stage))
 
 
-def _deployment_binding(intent, snapshot, policy):
+def _deployment_fallback_header(kind):
+    for key, name, fingerprint in _DEPLOYMENT_FALLBACK_HEADERS:
+        if key == kind:
+            return {'contract': name, 'schemaFingerprint': fingerprint}
+    raise RuntimeError('Unknown deployment fallback format')
+
+
+def _deployment_binding(intent, snapshot, policy, header):
     targets, git = snapshot['reviewedTargets'], snapshot['gitBinding']
     try:
         raw = b''.join(_json_parts(snapshot, 2 * 1024 * 1024))
@@ -1668,7 +1682,7 @@ def _deployment_binding(intent, snapshot, policy):
         if len(error.args) == 2 and error.args[0] == 'limit_exceeded':
             _fail('deployment_result', ('blocked', 'limits', 'limit_exceeded', 'snapshot_bytes'))
         raise
-    binding = {'contract': 'daily-deployment-input-binding-v1', 'version': 1,
+    binding = {**header,
         **{name: intent[name] for name in ('attemptId', 'sequence', 'selector')},
         'normalBinding': snapshot['normalBinding'], 'publicationBinding': snapshot['publicationBinding'],
         'targetBinding': {name: targets[name] for name in ('contract', 'version', 'targetsSha256',
@@ -1694,8 +1708,8 @@ def _deployment_compare(first, final):
     return all(first[name] == final[name] for name in names)
 
 
-def _deployment_record(intent, binding, metadata, implementation, status, verified, issues):
-    result = {'contract': 'daily-deployment-metadata-observation-v1', 'version': 1,
+def _deployment_record(intent, binding, metadata, implementation, status, verified, issues, header):
+    result = {**header,
         **{name: intent[name] for name in ('attemptId', 'sequence', 'selector', 'intentSha256')},
         'bindingSha256': binding['bindingSha256'] if binding is not None else None,
         'startedAt': intent['requestedAt'], 'finishedAt': _deployment_now(), 'status': status,
@@ -1712,7 +1726,7 @@ def _deployment_record(intent, binding, metadata, implementation, status, verifi
 
 def _deployment_outcome(selector, issue, *, error=None, intent=None, recording='not_saved', result_ref=None):
     # Only private store exceptions supply bounded persistence facts; no raw error text.
-    return {'contract': 'daily-deployment-attempt-outcome-v1', 'version': 1, 'selector': selector,
+    return {**_deployment_fallback_header('outcome'), 'selector': selector,
         'attemptId': (error.attempt_id if error is not None else intent['attemptId'] if intent else None),
         'sequence': (error.sequence if error is not None else intent['sequence'] if intent else None),
         'recording': error.recording if error is not None else recording,
@@ -1732,7 +1746,7 @@ def _deployment_work(bundle, selector, owner, implementation, root, intent, hand
     phase = 'initial'
     try:
         snapshot, policy = _deployment_take(selector, owner, 'initial')
-        binding = _deployment_binding(intent, snapshot, policy)
+        binding = _deployment_binding(intent, snapshot, policy, store._protocol_header('binding'))
         _deployment_stable(bundle, implementation, root)
         phase = 'bind'
         store.bind(handle, binding, snapshot)
@@ -1742,7 +1756,7 @@ def _deployment_work(bundle, selector, owner, implementation, root, intent, hand
         phase = 'final'
         final_owner = blog_entry_loader.load_publish_to_blog()
         final_snapshot, final_policy = _deployment_take(selector, final_owner, 'final')
-        final_binding = _deployment_binding(intent, final_snapshot, final_policy)
+        final_binding = _deployment_binding(intent, final_snapshot, final_policy, store._protocol_header('binding'))
         _deployment_stable(bundle, implementation, root)
         if not _deployment_compare(binding, final_binding):
             _fail('deployment_result', ('stale', 'binding', 'stale', 'inputs_changed'))
@@ -1757,7 +1771,8 @@ def _deployment_work(bundle, selector, owner, implementation, root, intent, hand
         try:
             _deployment_stable(bundle, implementation, root)
             interrupted = _deployment_record(intent, binding, metadata, implementation,
-                'interrupted', False, [{'domain': 'operation', 'code': 'interrupted', 'reason': 'control_exception'}])
+                'interrupted', False, [{'domain': 'operation', 'code': 'interrupted', 'reason': 'control_exception'}],
+                store._protocol_header('result'))
             store.finish(handle, interrupted)
         except BaseException:
             pass
@@ -1774,7 +1789,8 @@ def _deployment_work(bundle, selector, owner, implementation, root, intent, hand
             status = 'blocked'
             issues = [{'domain': 'normal', 'code': 'normal_rejected',
                        'reason': 'final' if phase == 'final' else 'initial'}]
-    result = _deployment_record(intent, binding, metadata, implementation, status, verified, issues)
+    result = _deployment_record(intent, binding, metadata, implementation, status, verified, issues,
+                                store._protocol_header('result'))
     outcome = None
     try:
         _deployment_stable(bundle, implementation, root)
@@ -1853,7 +1869,7 @@ def read_daily_deployment_observation(date_str, *, include_id=None):
         if (type(error) is ValueError and len(error.args) == 2 and error.args[0] == 'deployment_argument'
                 and error.args[1] in ('date', 'include_id')):
             issue = {'domain': 'selection', 'code': 'invalid_argument', 'reason': error.args[1]}
-        return {'contract': 'daily-deployment-local-status-v1', 'version': 1, 'status': 'unavailable',
+        return {**_deployment_fallback_header('status'), 'status': 'unavailable',
             'selector': selector, 'observedAt': _deployment_now(), 'latestAttempt': None, 'lastObserved': None,
             'indexConsistent': False, 'partial': True, 'fullE05': False,
             'coverage': {'recordIntegrity': 'not_available', 'currentInputs': 'not_checked',
