@@ -4928,7 +4928,7 @@ def _validate_experiment_table_evidence_depth(
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|'
-        r'未改善|没有改善|无效|负面|负结果|暴露短板|跨零|落后|损失|回退|'
+        r'未改善|没有改善|无效|性能回落|回落至|负面|负结果|暴露短板|跨零|落后|损失|回退|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
         results,
         re.I,
