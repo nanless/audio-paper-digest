@@ -160,6 +160,21 @@ if(require.main===module)(async()=>{
     assert.ok(!(await page.locator('#note-status').innerText()).includes('已保存'));assert.ok(!(await page.evaluate(()=>__fixture.personal.notes['arxiv:2610.27491'].text)).includes('Unsaved'));
     await page.evaluate(()=>__fixture.failNote=false);await page.locator('#note-editor').fill('Recovered fixture note');await page.waitForFunction(()=>__fixture.personal.notes['arxiv:2610.27491'].text==='Recovered fixture note');
   });
+  await check('synced Android research answer appears in the open Mac analysis view',async()=>{
+    await page.locator('#tab-analysis').click();
+    await page.evaluate(()=>{
+      __fixture.personal.sessions.push({
+        id:'aca3ed27-3e6c-4d9f-8bba-44bd60799fff',paperID:'arxiv:2610.27491',
+        kind:'study',status:'completed',question:'跨端研究问题',answer:'安卓原研究回答',
+        syncedHistory:true,source:{kind:'guide'}
+      });
+      window.dispatchEvent(new Event('personal.synced'));
+    });
+    await page.waitForFunction(()=>document.querySelector('#analysis-result iframe')?.contentDocument?.body?.textContent.includes('安卓原研究回答'));
+    assert.match(await page.locator('#analysis-result .session-card header').innerText(),/同步历史/);
+    await page.evaluate(()=>{__fixture.personal.sessions=[];window.dispatchEvent(new Event('personal.synced'));});
+    await page.locator('#tab-note').click();
+  });
   await check('post-sync flush writes newly changed reading fields without rewriting untouched progress',async()=>{
     const result=await page.evaluate(async()=>{
       await paperDigestFlushPendingNote();
