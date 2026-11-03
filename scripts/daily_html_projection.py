@@ -16,6 +16,8 @@ if __name__ == '__main__':
 
 PROFILE = 'daily-static-html-projection-v1'
 PROFILE_V2 = 'daily-static-html-projection-v2'
+CURRENT_PROFILE = 'daily-static-html-projection'
+CURRENT_PROFILE_FINGERPRINT = 'ae53f55be53d088ec169f39fe03caed4e5376acfb0cb1a4e1b827da65b274fe3'
 _WS = '\t\n\f\r '
 _VOID = frozenset('area base br col embed hr img input link meta param source track wbr'.split())
 _BLOCK = frozenset(('address article aside blockquote caption dd details div dl dt figcaption '
@@ -167,10 +169,10 @@ class _Budget:
         assert self.used >= 0
 
 
-def _shell(raw, version):
-    return {'contract': PROFILE if version == 1 else PROFILE_V2, 'version': version,
+def _shell(raw, header, isolated_spaces):
+    return {**header,
         'payload': {'identity': {'canonical': '', 'title': '', 'h1': ''},
-                    'bodyEvents': [], 'refs': [], 'coverage': dict(_COVERAGE if version == 1 else _COVERAGE_V2)},
+                    'bodyEvents': [], 'refs': [], 'coverage': dict(_COVERAGE_V2 if isolated_spaces else _COVERAGE)},
         'payloadSha256': '0' * 64,
         'evidence': {'rawHtmlSha256': hashlib.sha256(raw).hexdigest(), 'rawHtmlBytes': len(raw)},
         'stats': {'nodes': 0, 'maxDepth': 0, 'attrs': 0, 'textBytes': 0, 'events': 0,
@@ -178,11 +180,12 @@ def _shell(raw, version):
 
 
 class _Projection(HTMLParser):
-    def __init__(self, raw, expected, limits, version):
+    def __init__(self, raw, expected, limits, header, isolated_spaces):
         super().__init__(convert_charrefs=True)
         self.limits = limits
-        self.version = version
-        self.result = _shell(raw, version)
+        self.isolated_spaces = isolated_spaces
+        self.header = header
+        self.result = _shell(raw, header, isolated_spaces)
         self.payload = self.result['payload']
         self.stats = self.result['stats']
         # Reserve fixed envelope and maximum possible numeric widths up front.
@@ -343,10 +346,10 @@ class _Projection(HTMLParser):
                     for position in range(inner_start, i):
                         char = text[position]
                         if char in _WS:
-                            if (self.version != 2 or char != ' ' or position == inner_start
+                            if (not self.isolated_spaces or char != ' ' or position == inner_start
                                     or position + 1 == i or text[position - 1] == ' '):
                                 _fail('unsupported_math', 'whitespace')
-                        if not (0x21 <= ord(char) <= 0x7E or self.version == 2 and char == ' '):
+                        if not (0x21 <= ord(char) <= 0x7E or self.isolated_spaces and char == ' '):
                             _fail('unsupported_math', 'non_ascii')
                         if char in '<>&':
                             _fail('unsupported_math', 'html_sensitive')
@@ -670,8 +673,7 @@ class _Projection(HTMLParser):
             domain = ref['domain']
             assert type(ref['domainIndex']) is int and ref['domainIndex'] == counts[domain]
             counts[domain] += 1
-        self.result['payloadSha256'] = _hash_json({key: self.result[key]
-                                                 for key in ('contract', 'version', 'payload')})
+        self.result['payloadSha256'] = _hash_json({**self.header, 'payload': self.payload})
         for _ in range(8):
             size = _json_size(self.result)
             if size > self.limits.max_output_bytes:
@@ -684,7 +686,7 @@ class _Projection(HTMLParser):
         return self.result
 
 
-def _project_daily_html(html_bytes, expected_canonical, limits, version):
+def _project_daily_html(html_bytes, expected_canonical, limits, header, isolated_spaces):
     if type(html_bytes) is not bytes:
         _fail('invalid_argument', 'input_type')
     if type(expected_canonical) is not str:
@@ -714,7 +716,7 @@ def _project_daily_html(html_bytes, expected_canonical, limits, version):
     if text.startswith('\ufeff'):
         _fail('invalid_html_structure', 'control_character')
     _measure(text)
-    parser = _Projection(html_bytes, expected_canonical, limits, version)
+    parser = _Projection(html_bytes, expected_canonical, limits, header, isolated_spaces)
     try:
         parser.feed(text)
         return parser.finish()
@@ -726,9 +728,15 @@ def _project_daily_html(html_bytes, expected_canonical, limits, version):
 
 def project_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
     """Retain the fixed v1 no-whitespace surface; results convey no qualification."""
-    return _project_daily_html(html_bytes, expected_canonical, limits, 1)
+    return _project_daily_html(html_bytes, expected_canonical, limits, {'contract': PROFILE, 'version': 1}, False)
 
 
 def project_daily_html_v2(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
     """Fixed v2 exact literals with isolated internal spaces, never TeX normalization."""
-    return _project_daily_html(html_bytes, expected_canonical, limits, 2)
+    return _project_daily_html(html_bytes, expected_canonical, limits, {'contract': PROFILE_V2, 'version': 2}, True)
+
+
+def project_current_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
+    # Project exact math literals in the current fingerprinted format.
+    return _project_daily_html(html_bytes, expected_canonical, limits,
+        {'contract': CURRENT_PROFILE, 'schemaFingerprint': CURRENT_PROFILE_FINGERPRINT}, True)

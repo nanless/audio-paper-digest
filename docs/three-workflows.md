@@ -187,7 +187,7 @@ Reader 批量刷新默认使用配置并发5和总轮数3，分别可用 `--conc
 
 纯解析器采用有限 HTML 合同：页面须有唯一标题、H1、canonical 和 `div.post-content`，正文保留元素顺序、词间空白、代码原文、表格边界及链接和图片属性。正文引用单独编号，导航增加引用不会改变正文摘要；正文链接地址改变则会改变摘要。当前 v2 数学规则只保留单一原文本节点内的 ASCII 裸定界字面，允许内部各位置的孤立单空格，逐字保留且不解析 TeX。首尾空格、连续空格、换行等其他空白、跨节点公式和未支持的浏览器解析形状明确返回 `unsupported`，不能删去问题部分后宣称整页可用。该有限合同不保证所有现有主题和 Reader 页面均可解析，也不保证构建器对所有允许字面都保持不变。
 
-两个内部读取接口现统一使用固定 v2：静态摘要合同为 `daily-observed-static-page-set-v2`，已审目标合同为 `daily-reviewed-primary-targets-v2`，解析 profile 为 `daily-static-html-projection-v2`。接口参数及字段结构保留，接受范围、版本、静态摘要域和实现指纹明确改变；旧 v1 摘要不能跨版本充当相等证明，不自动回退。纯解析入口 `project_daily_html()` 仍保留原 v1 无空白规则，新增固定入口 `project_daily_html_v2()`；它们都不能跳过正常凭证链。原观察引用、来源及已审文件集合按原身份核验，不重写或补签旧记录。
+两个内部读取接口分别返回 `daily-observed-static-page-set` 和 `daily-reviewed-primary-targets`，并附上各自的格式指纹。现行解析入口 `project_current_daily_html()` 使用 `daily-static-html-projection`。它保留原有的公式规则和资源引用顺序。旧解析入口保留原有空白规则及摘要，仅供历史核验。新旧摘要使用各自原有的字段，不能互作相等证明。以上接口均须通过正常凭证检查；程序不会改写或重新签发历史记录。
 
 读取器限制页数、HTML 总字节、累计节点、事件、引用、投影字节和最终摘要大小；超过限制返回阻断结果。`projection_available` 仅表示这些已保存 HTML 的有限静态摘要可用，生产构建、完整公开资产、当前科学资格、部署、线上 GET 与浏览器执行仍为 `not_checked`。原观察的 `bodyProjection: not_checked` 保留，派生摘要另行报告静态观察，不能改写原记录。实现指纹绑定本次固定解析源码、读取器启动及前后观察，不声称完整 Python 执行闭包或排除了中间变化后恢复。
 

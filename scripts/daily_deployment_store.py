@@ -61,7 +61,11 @@ POLICY = (
     ('normal_keys', ('date', 'publicationMode', 'publicationScope', 'generationManifestSha256',
                      'receiptSha256', 'reviewBaseHead', 'reviewProtocolFingerprint', 'reviewedAt')),
     ('publication_keys', ('baseOid', 'commitOid', 'headOid', 'branch', 'recordedRemote', 'localRemoteConfigurationMatch')),
-    ('target_binding_keys', ('contract', 'version', 'targetsSha256', 'recordSha256', 'reviewedFileSetSha256',
+    ('target_headers', (('daily-reviewed-primary-targets', '90cb9fce654e68792895caee5db036a6ff91ba72467a026673273495ed3c535f'),
+                        ('daily-reviewed-primary-targets-v2', 2))),
+    ('target_profiles', (('daily-static-html-projection', 'ae53f55be53d088ec169f39fe03caed4e5376acfb0cb1a4e1b827da65b274fe3'),
+                         ('daily-static-html-projection-v2', None))),
+    ('target_binding_keys', ('targetsSha256', 'recordSha256', 'reviewedFileSetSha256',
                             'reviewedFileCount', 'primarySourceSetSha256', 'observationRef', 'profile')),
     ('local_binding_keys', ('contextObservationSha256', 'refPhysicalIdentitySha256', 'deltaObservationSha256',
                            'reviewedFileSetSha256', 'reviewedFileFactsSha256', 'implementationBindingSha256')),
@@ -70,11 +74,11 @@ POLICY = (
     ('snapshot_keys', ('contract', 'version', 'status', 'selector', 'normalBinding', 'reviewedTargets',
                       'publicationBinding', 'gitBinding', 'implementationBinding', 'inputBinding',
                       'fullInputSnapshot', 'observationCoverage', 'coverage', 'unknownInputs', 'capabilities', 'recordSha256')),
-    ('target_keys', ('contract', 'version', 'status', 'selector', 'normalBinding', 'observationRef', 'profile',
+    ('target_keys', ('status', 'selector', 'normalBinding', 'observationRef', 'profile',
                     'implementationObservation', 'primaryPages', 'reviewedSitePolicy', 'reviewedFileSetSha256',
                     'reviewedFileCount', 'primarySourceSetSha256', 'changes', 'inputBinding', 'fullInputSnapshot',
                     'observationCoverage', 'coverage', 'unknownInputs', 'targetsSha256', 'recordSha256')),
-    ('target_hash_keys', ('contract', 'version', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
+    ('target_hash_keys', ('selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
                          'reviewedFileCount', 'primarySourceSetSha256', 'primaryPages', 'changes', 'profile', 'coverage')),
     ('collector_keys', ('status', 'metadataOutcome', 'partial', 'fullE05', 'requestedCommit',
                        'policy', 'selection', 'workflowSource', 'jobs', 'deployment', 'artifacts', 'requests',
@@ -737,12 +741,28 @@ def _implementation_check(value):
         _fail('invalid_record', 'record_hash')
 
 
-def _binding_relations(value, snapshot):
+def _target_header(value, fields, attempt_format):
+    if type(value) is not dict:
+        _fail('invalid_record', 'record_shape')
+    (name, fingerprint), (original, version) = _p('target_headers')
+    if (attempt_format == 'current' and value.get('contract') == name
+            and value.get('schemaFingerprint') == fingerprint):
+        header = {'contract': name, 'schemaFingerprint': fingerprint}
+    elif (value.get('contract') == original and type(value.get('version')) is int
+            and value['version'] == version):
+        header = {'contract': original, 'version': version}
+    else:
+        _fail('invalid_record', 'record_shape')
+    _keys(value, (*header, *fields))
+    return header
+
+
+def _binding_relations(value, snapshot, attempt_format):
     normal, publication = value['normalBinding'], value['publicationBinding']
     target, local, policy = value['targetBinding'], value['localBinding'], value['repositoryPolicy']
     _keys(normal, _p('normal_keys'))
     _keys(publication, _p('publication_keys'))
-    _keys(target, _p('target_binding_keys'))
+    target_header = _target_header(target, _p('target_binding_keys'), attempt_format)
     _keys(local, _p('local_binding_keys'))
     _keys(policy, _p('repository_keys'))
     if normal['date'] != value['selector']['date'] or normal['publicationMode'] not in ('llm_api_production', 'legacy_v5_maintenance'):
@@ -767,9 +787,6 @@ def _binding_relations(value, snapshot):
     if type(remote['name']) is not str or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]{0,127}', remote['name']) or remote['oid'] != publication['commitOid']:
         _fail('invalid_record', 'record_binding')
     _time(remote['verifiedAt'])
-    if target['contract'] != 'daily-reviewed-primary-targets-v2':
-        _fail('invalid_record', 'record_shape')
-    _version(target['version'], 2)
     for field in ('targetsSha256', 'recordSha256', 'reviewedFileSetSha256', 'primarySourceSetSha256'):
         _hex(target[field])
     _id(target['reviewedFileCount'])
@@ -791,8 +808,13 @@ def _binding_relations(value, snapshot):
     if type(path) is not str or not path.startswith(normal['date'] + '/') or not path.endswith('/manifest.json') or '..' in path.split('/') or path.startswith('/'):
         _fail('invalid_record', 'record_shape')
     _text(path, _p('text_bytes'))
-    _keys(target['profile'], ('contract', 'fingerprint'))
-    if target['profile']['contract'] != 'daily-static-html-projection-v2':
+    current_profile, original_profile = _p('target_profiles')
+    profile, fingerprint = current_profile if 'schemaFingerprint' in target_header else original_profile
+    profile_header = {'contract': profile}
+    if fingerprint is not None:
+        profile_header['schemaFingerprint'] = fingerprint
+    _keys(target['profile'], (*profile_header, 'fingerprint'))
+    if any(target['profile'][key] != expected for key, expected in profile_header.items()):
         _fail('invalid_record', 'record_shape')
     _hex(target['profile']['fingerprint'])
     for sha in local.values():
@@ -814,7 +836,8 @@ def _binding_relations(value, snapshot):
     _check_hash(snapshot, 'recordSha256')
     _caps_check(snapshot['capabilities'])
     actual = snapshot['reviewedTargets']
-    _keys(actual, _p('target_keys'))
+    if _target_header(actual, _p('target_keys'), attempt_format) != target_header:
+        _fail('invalid_record', 'record_binding')
     pages = actual['primaryPages']
     if type(pages) is not list or len(pages) > _p('primary_pages'):
         _fail('invalid_record', 'record_shape')
@@ -827,7 +850,7 @@ def _binding_relations(value, snapshot):
     if actual['selector'] != value['selector'] or actual['normalBinding'] != normal or actual['status'] != 'reviewed_targets_observed':
         _fail('invalid_record', 'record_binding')
     _check_hash(actual, 'recordSha256')
-    projected = {}
+    projected = dict(target_header)
     for name in _p('target_hash_keys'):
         projected[name] = actual[name]
     if _digest(projected) != actual['targetsSha256']:
@@ -1009,7 +1032,7 @@ def _binding(value, intent, snapshot_raw):
         if type(value[name]) is not dict:
             _fail('invalid_record', 'record_shape')
     _check_hash(value, 'bindingSha256')
-    _binding_relations(value, _parse(snapshot_raw, _p('snapshot_bytes')))
+    _binding_relations(value, _parse(snapshot_raw, _p('snapshot_bytes')), format_name)
 
 
 def _result(value, intent, binding):

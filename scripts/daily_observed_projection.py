@@ -25,10 +25,15 @@ import blog_entry_loader
 import path_config
 
 
-CONTRACT = 'daily-observed-static-page-set-v2'
-TARGET_CONTRACT = 'daily-reviewed-primary-targets-v2'
-PROFILE = 'daily-static-html-projection-v2'
-VERSION = 2
+CONTRACT = 'daily-observed-static-page-set'
+TARGET_CONTRACT = 'daily-reviewed-primary-targets'
+PROFILE = 'daily-static-html-projection'
+# Pinned with the pure parser and restricted deployment store. Catalogue parity is tested.
+_STATIC_FINGERPRINTS = (
+    (CONTRACT, '7592d7d57606c73f50a74b28d328a972b686e2631ac891a6ca4c2ac0ce74c9e0'),
+    (TARGET_CONTRACT, '90cb9fce654e68792895caee5db036a6ff91ba72467a026673273495ed3c535f'),
+    (PROFILE, 'ae53f55be53d088ec169f39fe03caed4e5376acfb0cb1a4e1b827da65b274fe3'),
+)
 _HERE = Path(__file__).resolve().parent
 _OWNER_FILE = _HERE / 'daily_observed_projection.py'
 _PROFILE_FILE = _HERE / 'daily_html_projection.py'
@@ -298,7 +303,7 @@ def _loaded_code_sha():
 
 
 def _policy_sha():
-    return _json_sha(_frozen((CONTRACT, TARGET_CONTRACT, PROFILE, VERSION, _LIMITS, _IMPORTS,
+    return _json_sha(_frozen((CONTRACT, TARGET_CONTRACT, PROFILE, _STATIC_FINGERPRINTS, _LIMITS, _IMPORTS,
                               _IMPORTED_CALLABLES, _NOT_CHECKED, _UNKNOWN,
                               _TARGET_UNKNOWN, _TARGET_TEXT_BYTES, _TARGET_MAX_FILES,
                               _URL_UNRESERVED, _URL_LITERAL_PATH,
@@ -363,8 +368,10 @@ def _compile_profile(raw):
     module = ModuleType('_daily_static_projection_snapshot')
     exec(compile(raw, 'daily_html_projection.py', 'exec', dont_inherit=True, optimize=0),
          module.__dict__)
-    entry = getattr(module, 'project_daily_html_v2', None)
-    if (getattr(module, 'PROFILE_V2', None) != PROFILE or not isinstance(entry, FunctionType)
+    entry = getattr(module, 'project_current_daily_html', None)
+    if (getattr(module, 'CURRENT_PROFILE', None) != PROFILE
+            or getattr(module, 'CURRENT_PROFILE_FINGERPRINT', None) != _static_header(PROFILE)['schemaFingerprint']
+            or not isinstance(entry, FunctionType)
             or entry.__globals__ is not module.__dict__):
         _fail('unsupported_implementation', 'profile_contract')
     return module
@@ -376,6 +383,13 @@ def _expected(receipt):
         'reviewProtocolFingerprint', 'reviewedAt', 'publicationMode')},
         'files': [{key: row.get(key) for key in ('path', 'deleted', 'sha256')}
                   for row in receipt['files']]}
+
+
+def _static_header(contract):
+    for name, fingerprint in _STATIC_FINGERPRINTS:
+        if name == contract:
+            return {'contract': name, 'schemaFingerprint': fingerprint}
+    _fail('invalid', 'profile_result_contract')
 
 
 def _domain_refs(refs, domain):
@@ -390,7 +404,7 @@ def _domain_refs(refs, domain):
 
 def _refs_sha(refs, domain):
     prefix = b'{"contract":' + json.dumps(PROFILE).encode() + b',"domain":' + json.dumps(domain).encode()
-    # Canonical sort order is contract,domain,refs,version: finish version after array.
+    # Canonical sort order is contract,domain,refs,schemaFingerprint.
     digest = hashlib.sha256()
     used = 0
     for piece in (prefix, b',"refs":['):
@@ -403,7 +417,7 @@ def _refs_sha(refs, domain):
         for part in _json_parts(ref, 32 * 1024 * 1024 - used):
             digest.update(part)
             used += len(part)
-    suffix = b'],"version":' + str(VERSION).encode('ascii') + b'}'
+    suffix = b'],"schemaFingerprint":' + json.dumps(_static_header(PROFILE)['schemaFingerprint']).encode('ascii') + b'}'
     if used + len(suffix) > 32 * 1024 * 1024:
         _fail('limit_exceeded', 'json_bytes')
     digest.update(suffix)
@@ -411,7 +425,7 @@ def _refs_sha(refs, domain):
 
 
 def _body_sha(payload):
-    # Canonical order: bodyEvents,bodyRefs,contract,version.
+    # Canonical order: bodyEvents,bodyRefs,contract,schemaFingerprint.
     digest = hashlib.sha256()
     prefix = b'{"bodyEvents":'
     digest.update(prefix)
@@ -429,7 +443,7 @@ def _body_sha(payload):
         for part in _json_parts(ref, 32 * 1024 * 1024 - used):
             used += len(part)
             digest.update(part)
-    suffix = b'],"contract":' + json.dumps(PROFILE).encode('ascii') + b',"version":' + str(VERSION).encode('ascii') + b'}'
+    suffix = b'],"contract":' + json.dumps(PROFILE).encode('ascii') + b',"schemaFingerprint":' + json.dumps(_static_header(PROFILE)['schemaFingerprint']).encode('ascii') + b'}'
     if used + len(suffix) > 32 * 1024 * 1024:
         _fail('limit_exceeded', 'json_bytes')
     digest.update(suffix)
@@ -441,12 +455,12 @@ def _page_summary(page, projection):
     return {'sourcePath': page['sourcePath'], 'sourceSha256': page['sourceSha256'],
             'canonicalUrl': page['permalink'], 'actualOutputPath': page['html']['actualOutputPath'],
             'htmlSha256': page['html']['sha256'], 'htmlBytes': page['html']['bytes'],
-            'identitySha256': _json_sha({'contract': PROFILE, 'version': VERSION,
+            'identitySha256': _json_sha({**_static_header(PROFILE),
                                         'identity': payload['identity']}),
             'bodyProjectionSha256': _body_sha(payload),
             'postContentRefsSha256': _refs_sha(payload['refs'], 'post_content'),
             'outsideStaticRefsSha256': _refs_sha(payload['refs'], 'html_body_outside_post_content'),
-            'staticRefsSha256': _json_sha({'contract': PROFILE, 'version': VERSION, 'refs': payload['refs']}),
+            'staticRefsSha256': _json_sha({**_static_header(PROFILE), 'refs': payload['refs']}),
             'projectionPayloadSha256': projection['payloadSha256'], 'stats': projection['stats']}
 
 
@@ -597,7 +611,7 @@ def _targets_metadata(expected, manifest, pages, *, result_limit):
 
 
 def _targets_result(projected, metadata, reviewed_at):
-    result = {'contract': TARGET_CONTRACT, 'version': VERSION, 'status': 'reviewed_targets_observed',
+    result = {**_static_header(TARGET_CONTRACT), 'status': 'reviewed_targets_observed',
               'selector': projected['selector'], 'normalBinding': {**projected['normalBinding'], 'reviewedAt': reviewed_at},
               'observationRef': projected['observationRef'], 'profile': projected['profile'],
               'implementationObservation': projected['implementationObservation'],
@@ -608,7 +622,7 @@ def _targets_result(projected, metadata, reviewed_at):
               'observationCoverage': projected['observationCoverage'],
               'coverage': {**projected['coverage'], 'publicationGit': 'not_checked'},
               'unknownInputs': projected['unknownInputs'] + list(_TARGET_UNKNOWN)}
-    target_keys = ('contract', 'version', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
+    target_keys = (*_static_header(TARGET_CONTRACT), 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
                    'reviewedFileCount', 'primarySourceSetSha256', 'primaryPages', 'changes', 'profile', 'coverage')
     result['targetsSha256'] = _json_sha({key: result[key] for key in target_keys}, dict(_LIMITS)['result'])
     result['recordSha256'] = _json_sha(result, dict(_LIMITS)['result'])
@@ -624,11 +638,11 @@ def _issue(status, code, reason, source=None, *, contract=CONTRACT):
     issue = {'code': code, 'reason': reason}
     if source is not None:
         issue['sourcePath'] = source
-    return _safe_result({'contract': contract, 'version': VERSION, 'status': status, 'issues': [issue]})
+    return _safe_result({**_static_header(contract), 'status': status, 'issues': [issue]})
 
 
 def _not_recorded(*, contract=CONTRACT):
-    return {'contract': contract, 'version': VERSION, 'status': 'not_recorded',
+    return {**_static_header(contract), 'status': 'not_recorded',
             'normalQualification': 'not_checked'}
 
 
@@ -1417,7 +1431,7 @@ def _read_locked(owner, date, include_id, *, targets=False, local_publication=Fa
         if min(kwargs.values()) < 1:
             _fail('limit_exceeded', 'aggregate_projection')
         try:
-            projected = module.project_daily_html_v2(raw, expected_canonical=page['permalink'],
+            projected = module.project_current_daily_html(raw, expected_canonical=page['permalink'],
                                                      limits=module.ProjectionLimits(**kwargs))
         except module.ProjectionError as exc:
             if local_publication:
@@ -1425,7 +1439,8 @@ def _read_locked(owner, date, include_id, *, targets=False, local_publication=Fa
             return _issue('unsupported' if exc.code in ('unsupported_html', 'unsupported_math') else 'blocked',
                           exc.code, exc.reason, page['sourcePath'], contract=contract)
         if (type(projected) is not dict or projected.get('contract') != PROFILE
-                or type(projected.get('version')) is not int or projected['version'] != VERSION):
+                or 'version' in projected
+                or projected.get('schemaFingerprint') != _static_header(PROFILE)['schemaFingerprint']):
             _fail('invalid', 'profile_result_contract')
         stats = projected['stats']
         for budget, stat in (('nodes', 'nodes'), ('events', 'events'), ('refs', 'refs'),
@@ -1443,9 +1458,9 @@ def _read_locked(owner, date, include_id, *, targets=False, local_publication=Fa
         summary = _page_summary(page, projected)
         result_pages.append(summary)
         del projected
-    result = {'contract': CONTRACT, 'version': VERSION, 'status': 'projection_available',
+    result = {**_static_header(CONTRACT), 'status': 'projection_available',
               'selector': {'workflow': 'daily', 'date': date, 'includeId': include_id},
-              'profile': {'contract': PROFILE, 'fingerprint': _json_sha(implementation)},
+              'profile': {**_static_header(PROFILE), 'fingerprint': _json_sha(implementation)},
               'implementationObservation': implementation,
               'normalBinding': {'date': date, 'publicationMode': receipt['publicationMode'],
                   'publicationScope': receipt.get('publicationScope'),
@@ -1685,7 +1700,7 @@ def _deployment_binding(intent, snapshot, policy, header):
     binding = {**header,
         **{name: intent[name] for name in ('attemptId', 'sequence', 'selector')},
         'normalBinding': snapshot['normalBinding'], 'publicationBinding': snapshot['publicationBinding'],
-        'targetBinding': {name: targets[name] for name in ('contract', 'version', 'targetsSha256',
+        'targetBinding': {name: targets[name] for name in (*_static_header(TARGET_CONTRACT), 'targetsSha256',
             'recordSha256', 'reviewedFileSetSha256', 'reviewedFileCount', 'primarySourceSetSha256',
             'observationRef', 'profile')},
         'localBinding': {'contextObservationSha256': git['context2ObservationSha256'],

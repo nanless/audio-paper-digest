@@ -194,7 +194,40 @@ class DailyDeploymentStoreTest(unittest.TestCase):
         self.assertEqual(status['latestAttempt']['recordSha256'], terminal['recordSha256'])
         self.assertEqual(status['lastObserved']['recordSha256'], old_terminal['recordSha256'])
 
-    def bind_data(self, intent, handle):
+    def test_existing_stable_attempt_accepts_exact_original_target_without_rewriting(self):
+        from protocol_codec import record_header
+        leaf = self.leaf()
+        intent, handle = leaf.reserve(self.root, self.selector)
+        binding = self.bind_data(intent, handle, historical_target=True)
+        path = self.directory(intent) / 'local-snapshot.json'
+        raw = path.read_bytes()
+        target = json.loads(raw)['reviewedTargets']
+        self.assertEqual(target['version'], 2)
+        self.assertNotIn('schemaFingerprint', target)
+        leaf.finish(handle, self.terminal(intent, binding))
+        self.assertTrue(leaf.read_status(self.root, self.selector)['indexConsistent'])
+        self.assertEqual(path.read_bytes(), raw)
+
+        for name in ('daily-reviewed-primary-targets', 'daily-static-html-projection'):
+            kind = 'target_headers' if name.endswith('targets') else 'target_profiles'
+            tag, fingerprint = leaf._p(kind)[0]
+            self.assertEqual({'contract': tag, 'schemaFingerprint': fingerprint}, record_header(name, name))
+        family = 'daily-reviewed-primary-targets'
+        header = record_header(family, family)
+        for invalid, outer in (({**header, 'version': 2}, 'current'),
+                               ({**header, 'schemaFingerprint': '0' * 64}, 'current'),
+                               (header, 'original')):
+            with self.assertRaises(leaf.DeploymentStoreError):
+                leaf._target_header(invalid, (), outer)
+
+    def bind_data(self, intent, handle, *, historical_target=False):
+        from protocol_codec import record_header
+        historical_target = historical_target or 'version' in intent
+        family = 'daily-reviewed-primary-targets'
+        profile_family = 'daily-static-html-projection'
+        target_header = record_header(family + '-v2' if historical_target else family, family)
+        profile_header = record_header(profile_family + '-v2' if historical_target else profile_family, profile_family)
+        profile_header.pop('version', None)
         # Full schema does not make these invented bytes scientific or published facts.
         sha = 'a' * 64
         normal = {'date': self.selector['date'], 'publicationMode': 'legacy_v5_maintenance',
@@ -205,8 +238,8 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             'branch': 'refs/heads/main', 'recordedRemote': {'name': 'origin', 'oid': 'b' * 40,
                 'verifiedAt': normal['reviewedAt']}, 'localRemoteConfigurationMatch': 'verified'}
         ref = {'contract': 'daily-render-observation-ref-v1', 'path': '2026-09-07/mechanical/manifest.json', 'sha256': sha}
-        profile = {'contract': 'daily-static-html-projection-v2', 'fingerprint': sha}
-        target = {'contract': 'daily-reviewed-primary-targets-v2', 'version': 2, 'status': 'reviewed_targets_observed',
+        profile = {**profile_header, 'fingerprint': sha}
+        target = {**target_header, 'status': 'reviewed_targets_observed',
             'selector': self.selector, 'normalBinding': normal, 'observationRef': ref, 'profile': profile,
             'implementationObservation': {}, 'primaryPages': [], 'reviewedSitePolicy': {},
             'reviewedFileSetSha256': sha, 'reviewedFileCount': 1, 'primarySourceSetSha256': sha,
@@ -215,7 +248,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             'inputBinding': 'observed_before_after', 'fullInputSnapshot': 'not_established',
             'observationCoverage': {}, 'coverage': {},
             'unknownInputs': ['MECHANICAL DATA ONLY; NO NORMAL OR SOURCE QUALIFICATION']}
-        keys = ('contract', 'version', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
+        keys = (*target_header, 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
                 'reviewedFileCount', 'primarySourceSetSha256', 'primaryPages', 'changes', 'profile', 'coverage')
         target['targetsSha256'] = hashlib.sha256(self.canonical({key: target[key] for key in keys})).hexdigest()
         target = self.hashed(target, 'recordSha256')
@@ -230,7 +263,7 @@ class DailyDeploymentStoreTest(unittest.TestCase):
             'fullInputSnapshot': 'not_established', 'observationCoverage': {}, 'coverage': {},
             'unknownInputs': ['MECHANICAL DATA ONLY'], 'capabilities': self.caps()}, 'recordSha256')
         raw = self.canonical(snapshot)
-        target_binding = {key: target[key] for key in ('contract', 'version', 'targetsSha256', 'recordSha256',
+        target_binding = {key: target[key] for key in (*target_header, 'targetsSha256', 'recordSha256',
             'reviewedFileSetSha256', 'reviewedFileCount', 'primarySourceSetSha256', 'observationRef', 'profile')}
         local = {'contextObservationSha256': sha, 'refPhysicalIdentitySha256': sha,
             'deltaObservationSha256': sha, 'reviewedFileSetSha256': sha, 'reviewedFileFactsSha256': sha,
@@ -994,7 +1027,7 @@ print('imported')
                 snapshot = copy.deepcopy(saved_snapshot)
                 target = snapshot['reviewedTargets']
                 target['primaryPages'] = pages
-                keys = ('contract', 'version', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
+                keys = ('contract', 'schemaFingerprint', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
                         'reviewedFileCount', 'primarySourceSetSha256', 'primaryPages', 'changes', 'profile', 'coverage')
                 target['targetsSha256'] = hashlib.sha256(self.canonical({key: target[key] for key in keys})).hexdigest()
                 target.pop('recordSha256')

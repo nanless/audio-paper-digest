@@ -56,14 +56,14 @@ class DailyMathProjectionIntegrationTest(unittest.TestCase):
         before = self.case.inventory()
         projection = self.targets.read(projection=True)
         self.assertEqual(projection['status'], 'projection_available', projection)
-        self.assertEqual(projection['contract'], 'daily-observed-static-page-set-v2')
-        self.assertEqual(projection['version'], 2)
+        self.assertEqual(projection['contract'], 'daily-observed-static-page-set')
+        self.assertRegex(projection['schemaFingerprint'], r'^[a-f0-9]{64}$')
         targets = self.targets.read()
         self.assertEqual(targets['status'], 'reviewed_targets_observed', targets)
-        self.assertEqual(targets['contract'], 'daily-reviewed-primary-targets-v2')
-        self.assertEqual(targets['version'], 2)
+        self.assertEqual(targets['contract'], 'daily-reviewed-primary-targets')
+        self.assertRegex(targets['schemaFingerprint'], r'^[a-f0-9]{64}$')
         for result in (projection, targets):
-            self.assertEqual(result['profile']['contract'], 'daily-static-html-projection-v2')
+            self.assertEqual(result['profile']['contract'], 'daily-static-html-projection')
         self.assertEqual(self.case.inventory(), before)
         self.assertEqual(len(self.fixture.actual_builds), 1, 'Consumption must not rebuild')
         pure = importlib.import_module('daily_html_projection')
@@ -73,27 +73,30 @@ class DailyMathProjectionIntegrationTest(unittest.TestCase):
             with self.assertRaises(pure.ProjectionError) as error:
                 pure.project_daily_html(raw, expected_canonical=row['permalink'])
             self.assertEqual(error.exception.code, 'unsupported_math')
-            projected = pure.project_daily_html_v2(raw, expected_canonical=row['permalink'])
-            self.assertEqual(projected['contract'], 'daily-static-html-projection-v2')
-            self.assertEqual(projected['version'], 2)
+            projected = pure.project_current_daily_html(raw, expected_canonical=row['permalink'])
+            self.assertEqual(projected['contract'], 'daily-static-html-projection')
+            self.assertRegex(projected['schemaFingerprint'], r'^[a-f0-9]{64}$')
+            from protocol_codec import record_header
+            header = record_header('daily-static-html-projection', 'daily-static-html-projection')
+            self.assertEqual({key: projected[key] for key in header}, header)
             payload = projected['payload']
             all_math.extend(event for event in payload['bodyEvents'] if event[0] == 'math')
             summary = summaries[row['sourcePath']]
             self.assertEqual(summary['projectionPayloadSha256'], projected['payloadSha256'])
             self.assertEqual(summary['identitySha256'], target_fixture.sha(target_fixture.canonical({
-                'contract': 'daily-static-html-projection-v2', 'version': 2,
+                **header,
                 'identity': payload['identity']})))
             self.assertEqual(payload['refs'], [])
             self.assertEqual(summary['bodyProjectionSha256'], target_fixture.sha(target_fixture.canonical({
-                'contract': 'daily-static-html-projection-v2', 'version': 2,
+                **header,
                 'bodyEvents': payload['bodyEvents'], 'bodyRefs': []})))
             for domain, field in (('post_content', 'postContentRefsSha256'),
                                   ('html_body_outside_post_content', 'outsideStaticRefsSha256')):
                 self.assertEqual(summary[field], target_fixture.sha(target_fixture.canonical({
-                    'contract': 'daily-static-html-projection-v2', 'version': 2,
+                    **header,
                     'domain': domain, 'refs': []})))
             self.assertEqual(summary['staticRefsSha256'], target_fixture.sha(target_fixture.canonical({
-                'contract': 'daily-static-html-projection-v2', 'version': 2, 'refs': []})))
+                **header, 'refs': []})))
         self.assertEqual(all_math, [
             ['math', 'inline', '\\(u + v\\)'],
             ['math', 'display', '\\[\\alpha + \\beta\\]'],
@@ -122,9 +125,9 @@ class DailyMathProjectionIntegrationTest(unittest.TestCase):
                 before = len(parsed)
                 result = self.targets.read(projection=projection)
                 self.assertEqual(result['status'], status, result)
-                self.assertEqual(result['contract'], 'daily-observed-static-page-set-v2' if projection
-                                 else 'daily-reviewed-primary-targets-v2')
-                self.assertEqual(result['version'], 2)
+                self.assertEqual(result['contract'], 'daily-observed-static-page-set' if projection
+                                 else 'daily-reviewed-primary-targets')
+                self.assertRegex(result['schemaFingerprint'], r'^[a-f0-9]{64}$')
                 self.assertEqual(result['issues'][0]['code'], code)
                 if reason is not None:
                     self.assertEqual(result['issues'][0]['reason'], reason)

@@ -1,0 +1,125 @@
+{
+  "protocols": [
+    {
+      "name": "daily-static-html-projection",
+      "currentVariant": "exact-isolated-space-math",
+      "currentSchema": {
+        "fields": [
+          "payload",
+          "payloadSha256",
+          "evidence",
+          "stats"
+        ],
+        "hashFields": [
+          "contract",
+          "payload",
+          "schemaFingerprint"
+        ],
+        "math": "registered-delimiters-single-node-ascii-isolated-internal-space-exact"
+      },
+      "historical": [
+        {
+          "tag": "daily-static-html-projection-v1",
+          "variant": "exact-no-space-math",
+          "header": {
+            "contract": "daily-static-html-projection-v1",
+            "version": 1
+          }
+        },
+        {
+          "tag": "daily-static-html-projection-v2",
+          "variant": "exact-isolated-space-math",
+          "header": {
+            "contract": "daily-static-html-projection-v2",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-observed-static-page-set",
+      "currentVariant": "reviewed-saved-html",
+      "currentSchema": {
+        "fields": [
+          "status",
+          "selector",
+          "profile",
+          "implementationObservation",
+          "normalBinding",
+          "observationRef",
+          "pages",
+          "reviewedMarkdownSetSha256",
+          "observedPageSetSha256",
+          "inputBinding",
+          "fullInputSnapshot",
+          "observationCoverage",
+          "coverage",
+          "unknownInputs"
+        ],
+        "profile": "daily-static-html-projection",
+        "inputs": "normal-review-receipt-and-actual-saved-html"
+      },
+      "historical": [
+        {
+          "tag": "daily-observed-static-page-set-v2",
+          "variant": "reviewed-saved-html",
+          "header": {
+            "contract": "daily-observed-static-page-set-v2",
+            "version": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "daily-reviewed-primary-targets",
+      "currentVariant": "primary-reviewed-markdown",
+      "currentSchema": {
+        "fields": [
+          "status",
+          "selector",
+          "normalBinding",
+          "observationRef",
+          "profile",
+          "implementationObservation",
+          "primaryPages",
+          "reviewedSitePolicy",
+          "reviewedFileSetSha256",
+          "reviewedFileCount",
+          "primarySourceSetSha256",
+          "changes",
+          "inputBinding",
+          "fullInputSnapshot",
+          "observationCoverage",
+          "coverage",
+          "unknownInputs",
+          "targetsSha256",
+          "recordSha256"
+        ],
+        "targetHashFields": [
+          "contract",
+          "schemaFingerprint",
+          "selector",
+          "reviewedSitePolicy",
+          "reviewedFileSetSha256",
+          "reviewedFileCount",
+          "primarySourceSetSha256",
+          "primaryPages",
+          "changes",
+          "profile",
+          "coverage"
+        ],
+        "profile": "daily-static-html-projection"
+      },
+      "historical": [
+        {
+          "tag": "daily-reviewed-primary-targets-v2",
+          "variant": "primary-reviewed-markdown",
+          "header": {
+            "contract": "daily-reviewed-primary-targets-v2",
+            "version": 2
+          }
+        }
+      ]
+    }
+  ]
+}

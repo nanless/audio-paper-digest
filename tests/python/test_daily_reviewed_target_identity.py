@@ -15,7 +15,7 @@ import daily_observed_projection as owner
 
 
 POLICY = {'origin': 'https://example.test', 'basePath': '/research/base/'}
-CONTRACT = 'daily-reviewed-primary-targets-v2'
+CONTRACT = 'daily-reviewed-primary-targets'
 
 
 def digest(value):
@@ -173,7 +173,7 @@ class DailyReviewedTargetIdentityTest(unittest.TestCase):
             with mock.patch.object(owner.blog_entry_loader, 'load_publish_to_blog', return_value=normal):
                 result = owner.read_daily_reviewed_targets('2026-10-23')
                 legacy = owner.read_daily_observed_projection('2026-10-23')
-            self.assertEqual(result, {'contract': CONTRACT, 'version': 2,
+            self.assertEqual(result, {**owner._static_header(CONTRACT),
                 'status': 'not_recorded', 'normalQualification': 'not_checked'})
             self.assertEqual(legacy['contract'], owner.CONTRACT)
         with mock.patch.object(owner.blog_entry_loader, 'load_publish_to_blog',
@@ -181,7 +181,7 @@ class DailyReviewedTargetIdentityTest(unittest.TestCase):
             result = owner.read_daily_reviewed_targets('2026-10-23')
             legacy = owner.read_daily_observed_projection('2026-10-23')
         self.assertEqual(result['contract'], CONTRACT)
-        self.assertEqual(result['version'], 2)
+        self.assertRegex(result['schemaFingerprint'], r'^[a-f0-9]{64}$')
         self.assertEqual(result['status'], 'blocked')
         self.assertEqual(legacy['contract'], owner.CONTRACT)
         self.assertNotIn('private', json.dumps(result))
@@ -213,12 +213,12 @@ class DailyReviewedTargetIdentityTest(unittest.TestCase):
         metadata = owner._targets_metadata(expected, manifest, pages, result_limit=2 * 1024 * 1024)
         projected = {'selector': {'workflow': 'daily', 'date': '2026-10-23', 'includeId': None},
             'normalBinding': {'date': '2026-10-23'}, 'observationRef': {'sha256': 'e' * 64},
-            'profile': {'contract': owner.PROFILE, 'fingerprint': 'f' * 64},
+            'profile': {**owner._static_header(owner.PROFILE), 'fingerprint': 'f' * 64},
             'implementationObservation': {}, 'pages': [{'sourcePath': pages[0]['sourcePath']}],
             'inputBinding': 'observed_before_after', 'fullInputSnapshot': 'not_established',
             'observationCoverage': {}, 'coverage': {'staticProjection': 'observed'}, 'unknownInputs': []}
         result = owner._targets_result(projected, metadata, expected['reviewedAt'])
-        keys = ('contract', 'version', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
+        keys = ('contract', 'schemaFingerprint', 'selector', 'reviewedSitePolicy', 'reviewedFileSetSha256',
                 'reviewedFileCount', 'primarySourceSetSha256', 'primaryPages', 'changes', 'profile', 'coverage')
         self.assertEqual(result['targetsSha256'], digest({key: result[key] for key in keys}))
         self.assertEqual(result['recordSha256'], digest({key: value for key, value in result.items()
