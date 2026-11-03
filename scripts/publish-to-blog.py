@@ -223,6 +223,11 @@ TAG_CATALOG_SNAPSHOT_CONTRACT = public_protocols.contract('paper-tag-catalog-sna
 LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT = public_protocols.historical_contract('paper-tag-catalog-snapshot','legacy-public-concept-hierarchy')
 TAG_CATALOG_VERSIONS_CONTRACT = public_protocols.contract('paper-tag-catalog-versions')
 LEGACY_TAG_CATALOG_VERSIONS_CONTRACT = public_protocols.historical_contract('paper-tag-catalog-versions','legacy-sha-keyed-snapshot-set')
+# Published site files retain the format understood by deployed Hugo and browser readers.
+SITE_TAG_CATALOG_SNAPSHOT_CONTRACT = public_protocols.historical_contract(
+    'paper-tag-catalog-snapshot', 'public-concept-hierarchy')
+SITE_TAG_CATALOG_VERSIONS_CONTRACT = public_protocols.historical_contract(
+    'paper-tag-catalog-versions', 'sha-keyed-snapshot-set')
 TAG_PRESENTATION_POLICY_CONTRACT = public_protocols.contract('paper-tag-presentation-policy')
 LEGACY_TAG_PRESENTATION_POLICY_CONTRACT = public_protocols.historical_contract('paper-tag-presentation-policy','legacy-display-catalog')
 TAG_DISPLAY_POLICY_PATH = PROJECT_ROOT / 'config' / 'tag-display-policy.json'
@@ -3654,7 +3659,8 @@ def _read_approved_tag_display_policy():
 def tag_catalog_file_contents(blog_repo=None):
     """准备新版显示文件和词表归档，保留原快照对象及旧文件的字节。"""
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
-    current = _validate_tag_catalog_snapshot(build_tag_catalog_snapshot())
+    current = _validate_tag_catalog_snapshot(
+        build_tag_catalog_snapshot(snapshot_contract=SITE_TAG_CATALOG_SNAPSHOT_CONTRACT))
     versions = {}
     archive_bytes = {}
     new_archive_paths = [repo / prefix / 'tag-catalog-history'
@@ -3732,12 +3738,15 @@ def tag_catalog_file_contents(blog_repo=None):
     retain(current)
     display, policy_assets = _select_tag_display_version(
         repo, current, versions, approved_raw=_read_approved_tag_display_policy())
-    catalog = {**public_protocols.record_header(TAG_CATALOG_VERSIONS_CONTRACT,'paper-tag-catalog-versions'),
+    catalog = {**public_protocols.record_header(SITE_TAG_CATALOG_VERSIONS_CONTRACT,'paper-tag-catalog-versions'),
                'currentSha256': display['registrySha256'],
                'snapshots': [versions[sha] for sha in sorted(versions)]}
+    display_header = public_protocols.record_header(
+        SITE_TAG_CATALOG_SNAPSHOT_CONTRACT, 'paper-tag-catalog-snapshot')
     assets = dict(policy_assets)
     for prefix in ('data', 'static/data'):
-        assets[f'{prefix}/tag-catalog-snapshot.json'] = tag_catalog_snapshot_bytes(_build_tag_catalog_display_snapshot(display))
+        assets[f'{prefix}/tag-catalog-snapshot.json'] = tag_catalog_snapshot_bytes(
+            _build_tag_catalog_display_snapshot(display, target_header=display_header))
         assets[f'{prefix}/tag-catalog-versions.json'] = tag_catalog_snapshot_bytes(catalog)
         for sha, snapshot in sorted(versions.items()):
             relative = f'{prefix}/tag-catalog-history/{sha}.json'
