@@ -11,7 +11,7 @@ const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 test('布尔值或未绑定真实原paid的normal producer声明不能授权兼容', () => {
     for (const proof of [true, false, null, {}, { contract: 'reader-observed-current-producer-replay-v1', mode: 'observed-current-replay' }]) {
-        assert.throws(() => signed.verifyRoundtrip({ contract: signed.CONTRACT, normalProducerProof: proof }, {}, {}, {}), /normal producer证明/);
+        assert.throws(() => signed.verifyRoundtrip({ ...require('../scripts/lib/protocol-codec').recordHeader(signed.CONTRACT, signed.CONTRACT), normalProducerProof: proof }, {}, {}, {}), /normal producer证明/);
     }
 });
 
@@ -33,7 +33,7 @@ test('真实LID原生成器兼容只释放同一中文词替换，原五表/绑�
         draft.figurePlacements[2] = JSON.parse(JSON.stringify(old).replaceAll('最后一行', '倒数第二行'));
         const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
         const blob = execFileSync('git', ['rev-parse', `${commit}:scripts/deep-analyzer.js`], { encoding: 'utf8' }).trim();
-        const record = { contract: signed.CONTRACT, runId: plan.runId, baselineDraftSha256: repair.hashDraft(baseline),
+        const record = { ...require('../scripts/lib/protocol-codec').recordHeader(signed.CONTRACT, signed.CONTRACT), runId: plan.runId, baselineDraftSha256: repair.hashDraft(baseline),
             literalCorrections: [{ from: '最后一行', to: '倒数第二行', count: 1 }], draft,
             normalProducerProof: { contract: 'reader-observed-current-producer-replay-v1', mode: 'observed-current-replay',
                 producerCommit: commit, producerBlobOid: blob,

@@ -780,6 +780,31 @@
         {"tag": "reader-historical-draft-normalizer-replay-v1", "variant": "original-git-object"},
         {"tag": "reader-historical-draft-normalizer-replay-v2", "variant": "original-markdown-closure"}
       ]
+    },
+    {
+      "name": "daily-reader-signed-terminology-correction",
+      "currentVariant": "single-chinese-term",
+      "currentSchema": {
+        "scope": "one bounded Chinese terminology substitution in an authenticated signed Reader",
+        "authority": ["complete parent CAS", "current sealed source", "actual paid ancestor", "exact rejected claim"],
+        "preserves": ["tables", "formulas", "figures", "attempts", "fees"]
+      },
+      "historical": [
+        {"tag": "daily-reader-signed-correction-v1", "variant": "single-chinese-term"}
+      ]
+    },
+    {
+      "name": "daily-reader-signed-fact-correction",
+      "currentVariant": "existing-node-fact-ranges",
+      "currentSchema": {
+        "scope": "one to eight existing nodes and exact rejected sentence ranges",
+        "authority": ["full parent snapshot and CAS", "current sealed source", "paid ancestor", "complete operator history"],
+        "tableCorrections": "only same complete original DOM table with verified cell bindings",
+        "preserves": ["formulas", "figures", "attempts", "fees"]
+      },
+      "historical": [
+        {"tag": "daily-reader-signed-correction-v2", "variant": "existing-node-fact-ranges"}
+      ]
     }
   ]
 }

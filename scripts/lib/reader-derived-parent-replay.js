@@ -65,7 +65,7 @@ function orderedProjection(before, after) {
 }
 function scopedPrunedTables(draft, record, parent, current, source) {
     const result = new Map();
-    if (!record || record.contract !== 'daily-reader-signed-correction-v2'
+    if (!require('./daily-reader-signed-correction-format').isFact(record)
         || !same(record.parentPaper, parent) || record.parentPaperSha256 !== daily.stableHash(parent)
         || record.parentArticleSha256 !== parent.apiReaderArticleSha256 || record.parentPlanSha256 !== parent.apiReaderPlanSha256) return result;
     const targets = require('./reader-signed-table-targets'), extract = require('../analysis-contract').extractMarkdownTables;

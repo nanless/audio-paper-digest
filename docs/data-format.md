@@ -100,7 +100,7 @@ Reader 子阶段的 `reviewFeedbackSha256` 对应实际签发时父包与子包�
 
 独立 `coreFeedbackFiles` 必须只含核心摘要反馈。公共选定入口在论文锁内保存原包后单独进入核心单节范围，不把同一包伪装成主文父包。没有主文反馈的旧核心记录也按原单节范围恢复；核心阶段逐字保护其余十二节，后续正常评分和必要 Reader 可随新摘要更新。原包缺失、被修改或来源不符时停止，不能降为全篇重写。 `coreInputRecoveryHistory` 仅记录核心恢复入口误删阶段后的受控恢复，绑定真实原文件 SHA、当前失败整对象 SHA、原反馈及失败清单；原失败、未完成义务和费用保留。它不授予新的主文请求或重新签发旧阶段。
 
-已签名日更 Reader 的 `daily-reader-signed-correction-v2` 记录保存完整当前 `parentPaper`、四源和退休付费稿身份，以及受拒原句内的精确范围补丁；真实旧人工修正按 `operatorHistory` 逐项重放。原 API 阶段和次数不变，新阶段明确记为零新请求的 operator。正文、计划及图注由正常装配器派生；不直接写成功标记，完整规则见[签名稿修正](reader-explicit-retry.md#已签稿的有界事实修正-v2)。
+已签名日更 Reader 的 `daily-reader-signed-fact-correction` 记录保存完整当前 `parentPaper`、四源和退休付费稿身份，以及受拒原句内的精确范围补丁；真实旧人工修正按 `operatorHistory` 逐项重放。原 API 阶段和次数不变，新阶段明确记为零新请求的 operator。正文、计划及图注由正常装配器派生；不直接写成功标记，完整规则见[签名稿修正](reader-explicit-retry.md#已签稿的事实修正)。
 
 解读失败候选只供恢复，不能作为成功分析或发布依据。新版表格数量诊断使用 `code=reader_table_count_insufficient`、`requiredCount` 和 `actualCount`。计数必须是安全整数，满足 `requiredCount >= 1`、`0 <= actualCount < requiredCount`；带该错误代码却缺少有效计数时，不得从说明文字补出计数。`diagnosticOnly: true` 的记录仅供参考，不触发修复动作。旧保存诊断只由限定的兼容读取处理，不能让新的自然语言报错决定修复动作。通用草稿哈希及已有恢复身份的计算规则不变。
 

@@ -3,7 +3,8 @@
 const { isDeepStrictEqual } = require('node:util');
 const repair = require('./reader-repair');
 const signedTables = require('./reader-signed-table-targets');
-const CONTRACT = 'daily-reader-signed-correction-v2';
+const format = require('./daily-reader-signed-correction-format');
+const CONTRACT = format.FACT;
 const fail = message => { throw new Error(`签名Reader事实范围拒绝：${message}`); };
 const exact = (value, keys) => value && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
 function nodeAt(draft, pointer) {
@@ -17,7 +18,7 @@ function nodeAt(draft, pointer) {
 }
 const tables = draft => require('../analysis-contract').extractMarkdownTables(draft.sections.map(s => s.body).join('\n\n'));
 function applyBoundedFactPatch(original, record, feedback, source, tableProjectionHandle) {
-    if (record.contract !== CONTRACT || !require('./saved-fact-feedback').readerOnlyFeedback(feedback)) fail('须为v2及严格Reader-only事实包');
+    if (!format.isFact(record) || !require('./saved-fact-feedback').readerOnlyFeedback(feedback)) fail('须使用事实修正格式和仅限解读长文的事实反馈');
     const replacements = record.patch?.replacements, ranges = record.rangeCorrections;
     if (!Array.isArray(replacements) || replacements.length < 1 || replacements.length > 8
         || !Array.isArray(ranges) || !ranges.length || ranges.length > 8

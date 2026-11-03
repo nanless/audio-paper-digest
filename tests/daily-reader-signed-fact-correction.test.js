@@ -12,7 +12,7 @@ function sample() {
     const claimStart = body.indexOf(claim), start = claimStart + claim.indexOf(from);
     const value = body.slice(0, start) + to + body.slice(start + from.length);
     const result = structuredClone(draft); result.sections[0].body = value;
-    const record = { contract: signed.FACT_CONTRACT, parentPaper: { apiReaderArticle: body }, draft: result, tableCorrections: [],
+    const record = { ...require('../scripts/lib/protocol-codec').recordHeader(signed.FACT_CONTRACT, signed.FACT_CONTRACT), parentPaper: { apiReaderArticle: body }, draft: result, tableCorrections: [],
         rangeCorrections: [{ path: '/sections/0/body', oldSha256: repair.hashDraft(body),
             edits: [{ claimIndex: 0, claimStart, start, end: start + from.length, from, to }] }],
         patch: { version: 1, draftSha256: repair.hashDraft(draft), replacements: [
@@ -122,7 +122,7 @@ test('真实FO v1历史/父稿/原付费档重放后，才允许内存v2已证�
     const feedback = { ...JSON.parse(fs.readFileSync(path.join(daily.factFeedbackDirectory(plan), previous.feedbackSha256 + '.json'))),
         rejectedReaderClaims: [claim] };
     const parentFile = path.join(path.dirname(previous.correctionFile), '2610.16202.original-parent.json');
-    const record = { contract: signed.FACT_CONTRACT, paperId: '2610.16202', runId: plan.runId, batchDate: plan.batchDate,
+    const record = { ...require('../scripts/lib/protocol-codec').recordHeader(signed.FACT_CONTRACT, signed.FACT_CONTRACT), paperId: '2610.16202', runId: plan.runId, batchDate: plan.batchDate,
         parentPaper: structuredClone(paper), sourceFiles: old.sourceFiles, sourceDescriptor: old.sourceDescriptor,
         retiredCandidateFile: old.retiredCandidateFile, retiredCandidateEnvelopeSha256: old.retiredCandidateEnvelopeSha256,
         baselineDraftSha256: repair.hashDraft(old.draft), historyParents: [{ parentFile, parentFileSha256: facts.sha(fs.readFileSync(parentFile)) }],
@@ -172,7 +172,7 @@ test('真实四篇来源绑定ranges仅内存正常重放；HE显式current兼�
         }
         const feedback = { coreFeedback: '', rejectedCoreClaims: [], readerFeedback: '实际隔离审查已逐字核对封存来源，本例仅内存验证范围和normal重放，不是新反馈安装或全尾资格。',
             rejectedReaderClaims: suggestion.claims.map(c => c.renderedCurrentClaim) };
-        const record = { contract: signed.FACT_CONTRACT, paperId: id, runId: plan.runId, batchDate: plan.batchDate,
+        const record = { ...require('../scripts/lib/protocol-codec').recordHeader(signed.FACT_CONTRACT, signed.FACT_CONTRACT), paperId: id, runId: plan.runId, batchDate: plan.batchDate,
             parentPaper: structuredClone(paper), sourceFiles: suggestion.sourceFiles, sourceDescriptor: suggestion.sourceDescriptor,
             retiredCandidateFile: suggestion.retiredCandidate.file, retiredCandidateEnvelopeSha256: suggestion.retiredCandidate.sha256,
             baselineDraftSha256: repair.hashDraft(baseline), draft, rangeCorrections, tableCorrections: [],

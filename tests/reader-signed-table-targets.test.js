@@ -49,7 +49,7 @@ function fixture() {
     const feedback = { readerFeedback: '修正旧句并完整恢复同一来源表的缺行。', primaryFeedback: '', coreFeedback: '',
         tagFeedback: '', scoringFeedback: '', rejectedReaderClaims: ['保持原句。', old.markdown],
         rejectedPrimaryClaims: [], rejectedCoreClaims: [], rejectedTagClaims: [], rejectedScoringClaims: [] };
-    const record = { contract: patch.CONTRACT, parentPaper, draft: result,
+    const record = { ...require('../scripts/lib/protocol-codec').recordHeader(patch.CONTRACT, patch.CONTRACT), parentPaper, draft: result,
         rangeCorrections: [{ path: '/sections/0/body', oldSha256: repair.hashDraft(draft.sections[0].body),
             edits: [{ claimIndex: 0, claimStart: 0, start: 0, end: 2, from: '保持', to: '修正' }] }],
         tableCorrections: [{ path: '/tableBindings/1', sectionPath: '/sections/1/body', claimIndex: 1,

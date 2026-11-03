@@ -13,7 +13,7 @@ function fixture(t) {
     const old = { paperId: '2609.99991', sourceSha256: 'a'.repeat(64), inputFingerprint: 'b'.repeat(64),
         freshAnalysis: { runId: 'original-run', paperId: '2609.99991', sourceSha256: 'a'.repeat(64) },
         model: { model: 'original-model', maxTokens: 48000 }, maxAttempts: 6, repairMaxTokens: 16000,
-        contentMode: 'reader-source-first-v1', readerRecoveryEpochSha256: 'c'.repeat(64),
+        contentMode: 'reader-source-only-v1', readerRecoveryEpochSha256: 'c'.repeat(64),
         promptSha256: 'd'.repeat(64), repairPromptSha256: 'e'.repeat(64), parserImplementationSha256: 'f'.repeat(64) };
     const current = { ...structuredClone(old), promptSha256: '1'.repeat(64), repairPromptSha256: '2'.repeat(64),
         parserImplementationSha256: '3'.repeat(64) };

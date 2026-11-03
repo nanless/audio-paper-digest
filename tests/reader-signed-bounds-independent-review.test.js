@@ -19,7 +19,7 @@ function repeatedClaimFixture(uniqueQuoted) {
     for (const edit of edits) { next += body.slice(cursor, edit.start) + edit.to; cursor = edit.end; }
     next += body.slice(cursor);
     const draft = structuredClone(original); draft.sections[0].body = next;
-    const record = { contract: patch.CONTRACT, parentPaper: { apiReaderArticle: uniqueQuoted
+    const record = { ...require('../scripts/lib/protocol-codec').recordHeader(patch.CONTRACT, patch.CONTRACT), parentPaper: { apiReaderArticle: uniqueQuoted
         ? '图中实际有 7 个框。另一图有 7 个框。原文例句：“图中实际有七个框。”'
         : '图中实际有 7 个框。原文例句：“图中实际有七个框。”' }, draft,
     rangeCorrections: [{ path: '/sections/0/body', oldSha256: repair.hashDraft(body), edits }], tableCorrections: [],

@@ -28,6 +28,7 @@ async function replay(extra={},coreIssue=null) {
   'node:fs':realFs,'node:crypto':crypto,'node:util':require('node:util'),
   'node:net':{Socket:function(){}},'node:tls':{},'node:http':{},'node:https':{},'node:http2':{},
   '../env-loader':{requireExternalRuntime(){calls.push('runtime');}},
+  './reader-content-mode':require('../scripts/lib/reader-content-mode'),
   './conference-source-resource-correction':{isSourceCorrectionRecord(){return false;},
    async withSavedPublicationPaper(value,callback){calls.push('actual-source-scope-fixture');return callback(value);}},
   './reader-request-diagnostics':{validateReaderVersionMetadataPublicationCompletion(value){return assertLegacyNoPatchLineage(value,'metadata-legacy-no-lineage');}},

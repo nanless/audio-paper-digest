@@ -6,6 +6,20 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const signed = require('../scripts/lib/daily-reader-signed-correction');
 const repair = require('../scripts/lib/reader-repair');
+test('签名稿清单与成员须使用同一登记格式，旧格式按原声明识别', () => {
+    const codec = require('../scripts/lib/protocol-codec');
+    const format = require('../scripts/lib/daily-reader-signed-correction-format');
+    const terminology = codec.recordHeader(format.TERMINOLOGY, format.TERMINOLOGY);
+    const fact = codec.recordHeader(format.FACT, format.FACT);
+    const originalFact = codec.historicalHeader(format.FACT, 'existing-node-fact-ranges');
+    assert.equal(format.isTerminology(terminology), true);
+    assert.equal(format.isFact(originalFact), true);
+    assert.equal(format.sameFormat(fact, { ...fact, paperId: '2610.00001' }), true);
+    assert.equal(format.sameFormat(fact, terminology), false);
+    assert.equal(format.sameFormat(fact, originalFact), false);
+    assert.equal(format.header({ ...originalFact, schemaFingerprint: fact.schemaFingerprint }), null);
+    assert.equal(format.header({ contract: fact.contract }), null);
+});
 function sample() {
     const draft = { sections: [{ body: '等氼回归用于校准，数值0.169与原图保持。' }],
         figurePlacements: [{ figureOrdinal: 4, focusPoints: ['比较等氼校准曲线'] }] };

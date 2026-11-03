@@ -55,7 +55,7 @@ Math.random = () => 0;
 const originalSetTimeout = global.setTimeout;
 global.setTimeout = (callback, milliseconds, ...args) => originalSetTimeout(callback,
     milliseconds >= 10000 ? 0 : milliseconds, ...args);
-const versions = require('../../scripts/lib/prompt-text-versions');
+const versions = require('../../scripts/lib/prompt-contracts');
 const newPromptPath = versions.LLM_FILTER_PROMPT_PATH;
 const oldPromptPath = 'prompts/filter-v2.md';
 versions.LLM_FILTER_PROMPT_PATH = oldPromptPath;

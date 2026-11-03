@@ -108,11 +108,11 @@ test('真实新正文写入分支与落盘后普通恢复指纹一致，不丢�
     const loaded = new Module(filename, module);
     loaded.filename = filename;
     loaded.paths = Module._nodeModulePaths(path.dirname(filename));
-    loaded._compile(code + `\nmodule.exports.__writeResourceFingerprint = function(analysisManifest, apiReaderEvidenceContext, sourceDetails, readerCapabilityPolicy, arxivId, naturalResourceProse) {\n${writeCode}\nreturn apiReaderWriteFingerprint;\n};`, filename);
+    loaded._compile(code + `\nmodule.exports.__writeResourceFingerprint = function(analysisManifest, apiReaderEvidenceContext, sourceDetails, readerCapabilityPolicy, arxivId, naturalResourceProse) {\nconst readerResult = { draftOrderMappings: [] };\n${writeCode}\nreturn apiReaderWriteFingerprint;\n};`, filename);
     const manifest = { version: 1, stages: {} };
     const fingerprint = loaded.exports.__writeResourceFingerprint(manifest, '', { structuredArtifacts: null }, null, '2609.12345', true);
     deep.markRecoveryStage(manifest, 'apiReaderArticle', 'complete', {
-        fingerprint, ...prose.fields(true), attempts: 1, model: 'muse-spark-1.3-contributor'
+        fingerprint, ...prose.fields(true), readerProtocols: require('../scripts/lib/reader-stage-protocols').currentPipeline(), attempts: 1, model: 'muse-spark-1.3-contributor'
     });
     const saved = JSON.parse(JSON.stringify(manifest));
     const restored = loaded.exports.__writeResourceFingerprint(saved, '', { structuredArtifacts: null }, null, '2609.12345', false);

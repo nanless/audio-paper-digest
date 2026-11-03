@@ -74,7 +74,8 @@ test('current compiled Reader passes normal engine qualification and cannot borr
     paper.analysisManifest.contracts.apiReaderSourceBindings = rendered.plan.sourceBindingsContract;
     for (const key of protocols.flatFields) delete stage[key];
     stage.qualityMetrics = parsed.qualityMetrics;
-    Object.assign(stage, protocols.stageFields(rendered.plan, parsed.qualityMetrics));
+    Object.assign(stage, protocols.stageFields(rendered.plan, parsed.qualityMetrics),
+        require('../scripts/lib/reader-content-mode').fields('source-only'));
     const { contract: oldAuthor, ...authorBody } = paper.apiReaderAuthors.identity;
     paper.apiReaderAuthors.identity = { ...identities.header('authors'), ...authorBody };
     paper.apiReaderAuthors.identitySha256 = hash(paper.apiReaderAuthors.identity);
