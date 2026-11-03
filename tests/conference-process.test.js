@@ -1114,7 +1114,9 @@ test('会议迁移先完成全批正常后处理，再按失败集合刷新并�
     const children = new Map();
     const deps = { ...f.deps, maxRounds: 3,
         processPaper: () => assert.fail('completed source must use bounded revision'),
-        adapter: { refreshConferenceReader: async ({ parentExecutionId, reusePaidCoreDiagnostics }) => {
+        adapter: { resolveReaderRevisionExecutionId: ({ parentExecutionId, parentAnalysisFileSha256 }) =>
+            adapter.readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256),
+        refreshConferenceReader: async ({ parentExecutionId, reusePaidCoreDiagnostics }) => {
             assert.equal(reusePaidCoreDiagnostics, true, 'only explicit retryFailed dispatch supplies paid-core replay');
             assert.equal(events.filter(value => value.startsWith('stage-parent')).length, 3);
             const item = Object.values(original.items).find(value => value.analysisRunId === parentExecutionId);
@@ -1122,7 +1124,8 @@ test('会议迁移先完成全批正常后处理，再按失败集合刷新并�
             const attempts = (calls.get(item.paperId) || 0) + 1; calls.set(item.paperId, attempts);
             if (item.paperId === f.members[1].paperId && attempts === 1) throw new Error('Reader first round failed');
             const child = adapter.readerRevisionExecutionId(parentExecutionId, item.analysisProof.analysisSha256);
-            const body = { contract: adapter.READER_REVISION_CONTRACT, version: 1, executionId: child,
+            const revisionHeader = require('../scripts/lib/protocol-codec').recordHeader(adapter.READER_REVISION_CONTRACT, 'conference-reader-source-revision');
+            const body = { ...revisionHeader, executionId: child,
                 parentExecutionId, parentAnalysisFileSha256: item.analysisProof.analysisSha256,
                 parentRunFileSha256: H(parentExecutionId), paperId: item.paperId,
                 sourceSnapshotSha256: item.analysisProof.sourceSnapshotSha256,
@@ -1205,6 +1208,7 @@ test('仅后处理完整收集失败并迁移凭证，禁止模型且不进入�
 
 test('会议未创建任何 child 时重验修复后的原父稿，零模型恢复且保留原分析证明', async t => {
     const migration = require('../scripts/migrate-conference-process');
+    const adapter = require('../scripts/lib/conference-analysis-adapter');
     const f = fixture(t), options = { apply: true, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,
         processPaper: async (_c, _s, item) => success(item) });
@@ -1217,7 +1221,9 @@ test('会议未创建任何 child 时重验修复后的原父稿，零模型恢�
     let staged = 0, verified = 0;
     const result = await migration.migrateAndRun({ ...options, fromProcessId: first.processId, retryFailed: true }, {
         dependencies: { ...f.deps,
-            adapter: { loadConferenceAnalysis: ({ executionId }) => {
+            adapter: { resolveReaderRevisionExecutionId: ({ parentExecutionId, parentAnalysisFileSha256 }) =>
+                adapter.readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256),
+            loadConferenceAnalysis: ({ executionId }) => {
                 assert.equal(executionId, parent.analysisRunId); return { analysisFileSha256: parent.analysisProof.analysisSha256 };
             }, verifyPlanAuthority: () => { verified += 1; },
             refreshConferenceReader: () => assert.fail('no paid child may be created when normal parent validation now passes') },

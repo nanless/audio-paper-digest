@@ -72,7 +72,7 @@ test('真实封存来源里有旧模板碰撞时，绑定与验收拒绝旧结�
         }) });
     const papers = ids.map(arxivId => {
         const descriptor = daily.readDailyFreshSource(plan, { arxivId }).freshSourceDescriptor;
-        const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+        const proof = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
             sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
             sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
             sourceOnly: true, oldGeneratedTextIncluded: false };

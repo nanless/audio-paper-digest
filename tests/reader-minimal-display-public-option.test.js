@@ -70,7 +70,7 @@ async function fixture(t) {
         paper.sourceSha256 = descriptor.sourceSha256;
         paper.analysisManifest.sourceAcquisition = { ...paper.analysisManifest.sourceAcquisition,
             sourceSha256: descriptor.sourceSha256 };
-        paper.freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+        paper.freshRewriteProvenance = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
             sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
             sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
             sourceOnly: true, oldGeneratedTextIncluded: false };
@@ -139,7 +139,7 @@ test('公共刷新经真实分析器与生成器使用精简显示到模型前�
     }
     const source = daily.readDailyFreshSource(plan, paper);
     const descriptor = source.freshSourceDescriptor;
-    paper.freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+    paper.freshRewriteProvenance = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
         sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
         sourceSha256: descriptor.sourceSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
         sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceOnly: true, oldGeneratedTextIncluded: false };

@@ -33,7 +33,7 @@ test('日更当前校验会复核已保存的 TXT/PDF 配对和来源', async t 
                 url: `https://arxiv.org/pdf/${requested}.pdf`, fetchedAt: '2026-09-07T00:00:01.000Z' })
         }) });
     const source = daily.readDailyFreshSource(plan, { arxivId: id });
-    const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId, sourceGeneration: 1,
+    const proof = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId, sourceGeneration: 1,
         sourceManifestSha256: source.freshSourceDescriptor.sourceManifestSha256,
         sourceSha256: source.freshSourceDescriptor.sourceSha256,
         sourceSnapshotSha256: source.freshSourceDescriptor.sourceSnapshotSha256,

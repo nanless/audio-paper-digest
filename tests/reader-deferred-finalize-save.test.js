@@ -96,7 +96,7 @@ test('真实 Reader 刷新装图失败保留付费稿，中央保存成功后才
     canonical.apiReaderResources = { ...resourceBody, identitySha256: deep.stableFingerprint(resourceBody) };
     canonical.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = canonical.apiReaderResources.identitySha256;
     canonical.analysisManifest.sourceAcquisition = { sourceSha256: descriptor.sourceSha256 };
-    canonical.freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+    canonical.freshRewriteProvenance = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
         sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
         sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,

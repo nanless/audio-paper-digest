@@ -58,7 +58,7 @@ function mockBatch(label, seen) {
         const plan = daily.requireDailyFreshSourceRecoveryPlan(saved);
         const descriptor = daily.readDailyFreshSource(plan, saved.papers[0]).freshSourceDescriptor;
         saved.papers[0].sourceSha256 = descriptor.sourceSha256;
-        saved.papers[0].freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+        saved.papers[0].freshRewriteProvenance = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
             sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
             sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
             sourceOnly: true, oldGeneratedTextIncluded: false };
@@ -176,7 +176,7 @@ test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷�
         sourceSha256: descriptor.sourceSha256
     };
     complete.freshRewriteProvenance = {
-        contract: 'fresh-source-analysis-v1', runId: plan.runId,
+        ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
         sourceGeneration: descriptor.sourceGeneration,
         sourceManifestSha256: descriptor.sourceManifestSha256,
         sourceSha256: descriptor.sourceSha256,
@@ -251,7 +251,7 @@ test('日更 Reader 接受稿在装图和中央保存失败后保留，成功保
     canonical.apiReaderResources = structuredClone(signed.paper.apiReaderResources);
     assert.equal(canonical.apiReaderResources.sourceTextSha256, descriptor.sourceSha256);
     canonical.analysisManifest.sourceAcquisition = { sourceSha256: descriptor.sourceSha256 };
-    canonical.freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+    canonical.freshRewriteProvenance = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
         sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
         sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,

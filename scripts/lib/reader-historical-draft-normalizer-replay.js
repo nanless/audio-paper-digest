@@ -8,10 +8,44 @@ const { loadHistoricalMarkdownClosure } = require('./reader-historical-markdown-
 const analysisPath = 'scripts/analysis-contract.js';
 const repository = path.resolve(__dirname, '../..');
 const normalizerPath = 'scripts/lib/reader-draft-order.js';
-const dependencies = ['scripts/analysis-contract.js', 'scripts/lib/reader-pdf-cell-evidence.js',
-    'scripts/reader_pdf_cell_evidence.py'];
+const pdfPath = 'scripts/lib/reader-pdf-cell-evidence.js';
+const pdfWorkerPath = 'scripts/reader_pdf_cell_evidence.py';
+const dependencies = [analysisPath, pdfPath, pdfWorkerPath];
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+// The registered worker change translates sealed-source headers at the
+// transport boundary. DOM-only replay still runs the original Git module.
+const transportChanges = new Map([
+    [pdfPath, ['ff5451ac0c88a4c4784c6731105a99b95d18d952280a41e60eca257ab4f55db2',
+        '91fbe48eb3e43ffd902ca0be1b81e1acb9e53252f28a894e98c3d092f87694a8']],
+    [pdfWorkerPath, ['0ed8b2df8869d62e05b97c14ef7fc4a49436898378556428de4292e2cd387da3',
+        'b3d42c339796790212d5b64750e93962927ee4c1a417a5c399be8af497c0de23']]
+]);
+const pdfBuiltins = new Set(['node:fs', 'node:path', 'node:crypto', 'node:child_process', 'node:async_hooks', 'node:util']);
 class UnsupportedHistoricalDependencyError extends Error {}
+function matchesRuntime(record) {
+    if (record.path === analysisPath) return true;
+    const actual = hash(fs.readFileSync(path.join(repository, record.path)));
+    const registered = transportChanges.get(record.path);
+    return actual === record.sha256 || registered?.[0] === record.sha256 && actual === registered[1];
+}
+function loadOriginalPdfDom(record) {
+    const filename = path.join(repository, record.path);
+    const compiled = new Module(filename, module);
+    compiled.filename = filename;
+    compiled.require = spec => {
+        if (!pdfBuiltins.has(spec)) throw new UnsupportedHistoricalDependencyError('Historical PDF dependency is unverified');
+        return require(spec);
+    };
+    compiled._compile(record.bytes.toString('utf8'), filename);
+    const { supported, displayCell, displayMatrix } = compiled.exports;
+    return Object.freeze({
+        supported, displayCell, displayMatrix,
+        withArtifacts(artifacts, _paperId, callback) {
+            if ((artifacts?.tables || []).some(supported)) throw new UnsupportedHistoricalDependencyError('Historical replay accepts DOM tables only');
+            return callback();
+        }
+    });
+}
 function git(args) {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
     Object.assign(env, { GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0',
@@ -54,10 +88,7 @@ function resolveHistoricalNormalizer(expectedSha256) {
         const program = object(commit, normalizerPath);
         if (program.sha256 !== expectedSha256) continue;
         const runtime = dependencies.map(file => object(commit, file));
-        // PDF routines still require whole-file equality. The Markdown dependency
-        // executes only an exact pure closure taken from this original Git blob.
-        if (runtime.some(record => record.path !== analysisPath
-            && hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)) continue;
+        if (runtime.some(record => !matchesRuntime(record))) continue;
         const markdown = loadHistoricalMarkdownClosure(runtime.find(record => record.path === analysisPath));
         if (!markdown) continue;
         const tableProgram = object(commit, 'scripts/lib/reader-tables.js');
@@ -72,7 +103,7 @@ function replayHistoricalDraftNormalizer(draft, requestIdentity, source, expecte
         || !source.structuredArtifacts || (draft.tableBindings || []).some(binding => Object.hasOwn(binding || {}, 'selection'))) return null;
     const selected = resolveHistoricalNormalizer(requestIdentity.draftOrderImplementationSha256);
     if (!selected || requestIdentity.tableCompilerSha256 !== selected.tableProgram.sha256) return null;
-    const pdf = require('./reader-pdf-cell-evidence');
+    const pdf = loadOriginalPdfDom(selected.runtime.find(record => record.path === pdfPath));
     // Historical PDF extraction/runtime evidence needs its own protocol; this replay is pure DOM only.
     if ((source.structuredArtifacts.tables || []).some(table => pdf.supported(table))) return null;
     const filename = path.join(repository, normalizerPath), compiled = new Module(filename, module);
@@ -110,7 +141,7 @@ function replayHistoricalDraftNormalizer(draft, requestIdentity, source, expecte
         outputDraftSha256: expectedSavedDraftSha256, markdownClosure: selected.markdown.proof,
         dependencies: [...selected.runtime, selected.tableProgram].map(({ path, blobOid, sha256 }) => ({ path, blobOid, sha256 })) };
     return { proof, assertUnchanged() {
-        for (const record of selected.runtime) if (record.path !== analysisPath && hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)
+        for (const record of selected.runtime) if (!matchesRuntime(record))
             throw new Error('Historical normalizer dependency changed before migration');
         for (const record of [selected.program, ...selected.runtime, selected.tableProgram]) if (object(selected.commit, record.path).sha256 !== record.sha256)
             throw new Error('Historical normalizer Git object changed before migration');
@@ -134,7 +165,7 @@ function assertHistoricalNormalizerProof(proof) {
         if (!allowed.includes(record.path)) throw new Error('Historical dependency path is not trusted');
         const actual = object(proof.gitCommitOid, record.path);
         if (actual.blobOid !== record.blobOid || actual.sha256 !== record.sha256
-            || dependencies.includes(record.path) && record.path !== analysisPath && hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)
+            || dependencies.includes(record.path) && !matchesRuntime(actual))
             throw new Error('Historical dependency bytes changed before migration');
         if (record.path === analysisPath) {
             const markdown = loadHistoricalMarkdownClosure(actual);

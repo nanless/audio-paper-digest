@@ -422,8 +422,8 @@ for (const mode of ['deep', 'batch']) {
         assert.deepEqual(resultPaper.paidResponseHistory, sample.paper.paidResponseHistory);
         assert.equal(resultPaper.analysisManifest.contracts.readerResourceClaims,
             analyzer.API_READER_RESOURCE_CLAIMS_CONTRACT);
-        assert.equal(resultPaper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion,
-            analyzer.API_READER_RESOURCE_CLAIMS_CONTRACT);
+        assert.deepEqual(resultPaper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsProtocol,
+            require('../scripts/lib/reader-resource-claims-format').header());
         assert.ok(resultPaper.analysisStaleSnapshots.some(snapshot => snapshot.payload.stages.apiReaderArticle));
         assert.deepEqual(resultPaper.analysisManifest.stages.apiReaderArticle.factReview, child.proof);
         assert.equal(resultPaper.analysisManifest.stages.apiReaderArticle.signedRevisionDisplayContract,
@@ -1235,7 +1235,7 @@ test('原Reader-only来源失败稿仅恢复真实同身份候选，预算6/2不
             const invoke = () => saved.analyzeWithRecoveredFeedback(paper, sample.plan,
                 () => assert.fail('不扩大到整篇主分析'));
             await assert.rejects(invoke(), { code: 'READER_SOURCE_RECOVERY_CANDIDATE_MISSING' });
-            assert.equal(identity.contentMode, 'reader-source-only-v1');
+            assert.equal(require('../scripts/lib/reader-content-mode').is(identity, 'source-only'), true);
             const draft = structuredClone(require('./reader-signed-draft-fixture').fixture({ noFigures: true }).draft);
             draft.sections[0].body = '不完整的原失败稿';
             const failed = { status: 'failed', draft, rawDraft: JSON.stringify(draft), issues: [],
@@ -1375,7 +1375,7 @@ test('只读身份回放预备返回真正生产normalizer，不取图或请求�
         readerCallModel: async () => { requests++; assert.fail('只读准备不得调用模型'); },
         readerMaterializeFigures: async () => { materializations++; assert.fail('只读准备不得取图'); }
     });
-    assert.equal(prepared.identity.contentMode, 'reader-source-only-v1');
+    assert.equal(require('../scripts/lib/reader-content-mode').is(prepared.identity, 'source-only'), true);
     assert.equal(typeof prepared.normalizeReplayDraft, 'function');
     const evidence = [{ kind: 'figure', ordinal: 1, status: 'ready', sha256: 'c'.repeat(64),
         url: sample.sourceDetails.structuredArtifacts.figures[0].images[0].url }];

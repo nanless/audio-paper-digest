@@ -923,7 +923,7 @@ npm run conference:migrate-process -- --apply \
   --concurrency 3
 ```
 
-当前 `conference-recovery-grant-v1` 的单个窗口固定为最多 3 轮，每篇 Reader 跨全部新轮累计最多 6 次内容响应，其中完整长文最多 2 次；传输尝试上限为 2。不是每轮重新分配 6 次，也不是任务的总付费授权上限。
+每个独立恢复窗口最多运行 3 轮，每篇 Reader 跨全部新轮累计最多 6 次内容响应，其中完整长文最多 2 次；传输尝试上限为 2。不是每轮重新分配 6 次，也不是任务的总付费授权上限。
 
 清单须引用真实持续授权、原 process 基线文件 SHA、完整失败集合、每篇原完成父稿与失败子稿及候选的文件 CAS、全文与来源快照 SHA。它不适用于新来源、新成员或日更四源清单。
 
@@ -945,19 +945,19 @@ npm run conference:migrate-process -- --apply \
 
 当前窗口耗尽后，由执行者按真实进展选择下一步：能复用原稿则正常复验，少量明确事实问题可来源绑定修正，确需新付费则在持续授权下登记后续窗口，不再询问。
 
-后续清单沿用 `contract: conference-recovery-grant-v1`，显式使用 `version: 2`；每个成员的 `parentExecutionId` 仍指向真实原完成父稿，`childExecutionId` 必须是前许可为该篇唯一派生的最新失败窗口，不能重选最早失败稿。
+新建清单使用 `conference-recovery-grant` 及其结构指纹。用 `recordHeader(name, name)` 从 [格式登记读取器](../scripts/lib/protocol-codec.js) 取得声明，其中 `name` 为清单的格式名。每个成员的 `parentExecutionId` 仍指向真实原完成父稿，`childExecutionId` 必须是前许可为该篇唯一派生的最新失败窗口，不能重选最早失败稿。
 
 先正常采纳已完成而尚未进入 process 的子稿，再以停稳状态的物理 SHA 和完整剩余失败集合登记，不能从尚含完成待采纳项的失败集合中挑子集。
 
-每个 v2 成员必须附 `continuation: {contract: "conference-recovery-window-continuation-v1", grantId, grantSha256, materialsSha256, ledgerFileSha256}`。
+每个延续成员必须附 `continuation`，其中包含 `conference-recovery-window-continuation` 的格式声明，以及 `grantId`、`grantSha256`、`materialsSha256`、`ledgerFileSha256`。用同一读取器取得延续对象的格式声明。
 
 其中 grant 字段属于前许可；`materialsSha256` 由 `recoveryWindowMaterials(analysisRoot, childExecutionId)` 对前窗口全部原文件计算，覆盖账本、原请求响应、活跃及退休候选、迁移和诊断、资产；`ledgerFileSha256` 是前 Reader 账本的物理 SHA，确无 Reader 账时才为 `null`。
 
-常规 `recordCAS` 仍绑定原完成父稿与最新失败稿。登记核对原 process 最后实际派发的许可，拒绝同一最新失败的平行新增登记、在途请求、材料缺失或变化；旧 v1 不接受延续字段，已有追加历史不能再用 v1 回退到旧失败稿。
+常规 `recordCAS` 仍绑定原完成父稿与最新失败稿。登记核对原 process 最后实际派发的许可，拒绝同一最新失败的平行新增登记、在途请求、材料缺失或变化；早期只支持初次追加的清单仍按原格式读取，已有追加历史不能据此退回旧失败稿。
 
-#### v3 如何覆盖两类失败的完整集合
+#### 怎样在一份清单中登记两类失败
 
-实际剩余集合同时包含普通修订失败和原追加窗口失败时，使用显式 `version: 3`，仍精确覆盖整个停稳失败集合，不拆成两份许可。
+实际剩余集合同时包含普通修订失败和原追加窗口失败时，用同一份新清单登记。等在途任务结束后，再核对清单是否恰好覆盖全部剩余失败项。
 
 每个成员必须明确带 `continuation`：延续项使用上述原严格对象；初次项写 `null`，并以 `initialMaterialsSha256` 绑定该普通失败子运行的完整材料树。
 
@@ -965,7 +965,7 @@ npm run conference:migrate-process -- --apply \
 
 有旧许可历史时，当前父稿必须是已真实采纳的完成grant子稿，分析、来源、完成凭证和原修订记录全部对应；不能回退祖父稿。
 
-v1/v2的历史含义及额度不变，v3不新增调度入口，仍由同一不透明登记能力恢复、独立记账并阻止平行授窗。
+登记程序继续识别只支持初次追加、只支持延续以及同时支持两类成员的旧清单，按原规则复验其范围、次数和费用。新清单沿用同一入口，单独记账。同一个失败稿只能按其最新登记窗口继续。
 
 执行命令仍为同一 `--retry-failed --recovery-manifest`。新窗口拥有独立的 3 轮及 Reader 6/2/传输2账，不修改前窗口任何计数、连续失败、候选、阶段或费用；重启恢复同一新 UUID，不再次授额。
 

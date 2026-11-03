@@ -52,7 +52,7 @@ async function sourceBoundPaper(plan, id) {
         readerAuthorsSha256: stableSha256(reader.apiReaderAuthors),
         resourceIdentitySha256: reader.apiReaderResources.identitySha256
     });
-    const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId, sourceGeneration: 1,
+    const proof = { ...require('../scripts/lib/daily-source-format').currentHeader('fresh-source-analysis'), runId: plan.runId, sourceGeneration: 1,
         sourceManifestSha256: source.freshSourceDescriptor.sourceManifestSha256,
         sourceSha256: sourceSha, sourceSnapshotSha256: source.freshSourceDescriptor.sourceSnapshotSha256,
         structuredArtifactsSha256: source.freshSourceDescriptor.structuredArtifactsSha256,
