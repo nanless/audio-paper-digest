@@ -12,7 +12,12 @@ import androidx.work.*
 class CloudTransferWorker(context: Context, parameters: WorkerParameters): CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
         val expectedDestination = inputData.getString("destinationID") ?: return Result.failure()
-        return try { setForeground(notification()); val controller=(applicationContext as PaperDigestApplication).awaitController(); controller.performCloudUpload(id.toString(), inputData.getString("workspaceEpoch") ?: return Result.failure(), expectedDestination); Result.success() }
+        val workspaceEpoch = inputData.getString("workspaceEpoch") ?: return Result.failure()
+        return try {
+            val controller = (applicationContext as PaperDigestApplication).awaitController()
+            controller.performCloudUpload(id.toString(), workspaceEpoch, expectedDestination) { setForeground(notification()) }
+            Result.success()
+        }
         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (_: Exception) { Result.failure() }
     }

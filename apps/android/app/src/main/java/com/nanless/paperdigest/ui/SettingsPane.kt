@@ -157,6 +157,9 @@ import java.time.ZoneOffset
  LaunchedEffect(actualContext){retireList()}
  DisposableEffect(listGate){onDispose{listGate.invalidate()}}
  var saving by remember{mutableStateOf(false)};val busy=cloud.optBoolean("busy")||saving||state.busy;val pending=cloud.optJSONObject("pending");val scope=rememberCoroutineScope()
+ val transferID=cloud.optString("activeJobID")
+ val configured=cloud.optString("account").isNotBlank()&&cloud.optString("credentialState") !in setOf("missing","unavailable")
+ val targetChanged=account.trim()!=cloud.optString("account")||folder!=cloud.optString("folder","PaperDigest")
  Text("WebDAV 备份（坚果云）",style=MaterialTheme.typography.titleLarge)
  Text("把工作台的论文、笔记和研究记录备份到坚果云。服务器地址已内置，只需账号和第三方应用密码。")
  val browser=androidx.compose.ui.platform.LocalUriHandler.current
@@ -166,7 +169,7 @@ import java.time.ZoneOffset
  Text("保存全部研究空间。独立目录与 Zotero 附件同步分开；资料上限 512 MiB，编码快照上限 750 MiB。自动任务由 Android 调度，可能延后；强制停止应用后不会继续。")
  OutlinedTextField(account,{account=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("坚果云账号")},enabled=!busy,singleLine=true);OutlinedTextField(folder,{folder=it;dirty=true;retireList()},Modifier.fillMaxWidth(),label={Text("备份目录")},supportingText={Text("例如 PaperDigest；不能使用 Zotero 的附件目录。")},enabled=!busy,singleLine=true)
  Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true;retireList()},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true;retireList()},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
- Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null;password()}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&account.isNotBlank()&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text("保存账号并填写应用密码…")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
+ Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null;if(targetChanged)password()}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&account.isNotBlank()&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text(if(targetChanged)"保存账号并填写应用密码…" else "保存备份设置")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
  OutlinedButton(password,enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("填写或更换应用密码并检查…")}
  Text("3. 同步个人资料或保存完整备份",style=MaterialTheme.typography.titleMedium)
  Button({action("cloud.syncPersonal",JSONObject())},enabled=!dirty&&!busy&&!state.settings.optBoolean("offlineMode")&&cloud.optString("account").isNotBlank()){
@@ -175,10 +178,12 @@ import java.time.ZoneOffset
  Text("双向同步收藏、待读、笔记、批注和阅读进度。",style=MaterialTheme.typography.bodySmall)
  OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("重新检查连接与权限")}
  Text(if(cloud.optString("account").isBlank())"尚未配置账号"else when(cloud.optString("credentialState")){"present"->"应用密码已保存；以最近一次连接检查结果为准";"missing"->"尚未保存应用密码";else->"账号已保存，连接待检查"},style=MaterialTheme.typography.bodySmall)
- cloud.optString("lastError").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
  if(pending!=null)Text(if(pending.optBoolean("damaged"))"未完成材料损坏或缺少检查点。可原样保留，但不能保证完整恢复。" else "有未完成的同一快照：${pending.optLong("fileCount")} 文件 / ${pending.optLong("encodedBytes")} 字节。继续不会创建新版本。")
- Button({action("cloud.upload",JSONObject())},enabled=!dirty&&!busy&&pending?.optBoolean("damaged")!=true){Text(if(pending==null)"保存完整快照" else "继续保存同一快照")}
- if(busy&&cloud.optString("activeJobID").isNotEmpty())OutlinedButton({action("jobs.cancel",obj("id" to cloud.optString("activeJobID")))}){Text("取消当前传输（保留续传）")}
+ Button({action("cloud.upload",JSONObject())},enabled=configured&&transferID.isEmpty()&&!dirty&&!busy&&pending?.optBoolean("damaged")!=true){Text(if(pending==null)"保存完整快照" else "继续保存同一快照")}
+ if(transferID.isNotEmpty()){
+  Text(if(cloud.optString("transferStatus")=="queued")"备份等待系统调度或网络可用。" else "正在保存完整快照。")
+  OutlinedButton({action("jobs.cancel",obj("id" to transferID))}){Text("取消备份（保留续传）")}
+ }
  if(pending!=null)TextButton({confirm=true},enabled=!busy&&!dirty){Text("保留快照并停止本次续传…")}
  cloud.optJSONObject("lastBackup")?.let{Text("最近完整保存：${it.optString("createdAt")} · ${it.optLong("encodedBytes")} 字节",style=MaterialTheme.typography.bodySmall)};if(cloud.optBoolean("automaticPaused"))Text("自动备份已暂停：请检查上述原因后显式重新启用。",color=MaterialTheme.colorScheme.error)
  HorizontalDivider();Text("已保存版本",style=MaterialTheme.typography.titleMedium);Text("版本按 UTC 月份归档，时间显示为本机时区。列表不会自动联网；目标或月份变化后请重新读取。")

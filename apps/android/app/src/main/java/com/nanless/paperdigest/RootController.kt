@@ -17,6 +17,7 @@ import com.nanless.paperdigest.ui.*
 import com.nanless.paperdigest.zotero.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
@@ -109,6 +110,7 @@ class RootController private constructor(private val context: Context, private v
             snapshot
         }
         override suspend fun restore(staged: BackupCodec.Staged) = maintenance.withLock {
+            if (installBackground) reconcileCloudTransfers()
             require(active.isEmpty()) { "请先结束当前任务再恢复完整资料" }
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("status") in listOf("queued", "running") }) { "请先停止或完成已排队的任务，再恢复研究资料" }
             currentCoroutineContext().ensureActive()
@@ -349,7 +351,34 @@ class RootController private constructor(private val context: Context, private v
         },publish={value->_state.update{it.copy(aggregate=value)}},commitReading={live,commit->pdfAdmission.withLock{live()&&commit()}},openLinkedPaper={paper,live->openPaper(paper.id,admissionGuard=live)})
     }
     private val cloudSelections = CloudRestoreSelections(cloud) { CloudSelectionContext(cloud.targetID, dispatch.epoch) }
-    private fun cloudView(): JSONObject = cloud.state().put("selectionContext", cloudSelections.contextToken())
+    private fun cloudView(snapshot: JSONObject = personal.snapshot()): JSONObject {
+        val result = cloud.state().put("selectionContext", cloudSelections.contextToken())
+        val transfers = snapshot.getJSONArray("jobs").objects().filter { row ->
+            row.optString("kind") in setOf("cloud.upload", "cloud.automatic") &&
+                row.optString("status") in setOf("queued", "running")
+        }
+        val transfer = transfers.firstOrNull { it.optString("status") == "running" } ?: transfers.firstOrNull()
+        if (transfer != null) result.put("activeJobID", transfer.getString("id")).put("transferStatus", transfer.getString("status"))
+        return result
+    }
+
+    /** Called under maintenance. A job row alone cannot authorize a new upload. */
+    private suspend fun reconcileCloudTransfers() {
+        val manager = WorkManager.getInstance(context)
+        val jobs = personal.snapshot().getJSONArray("jobs").objects()
+        for (row in jobs) {
+            val kind = row.optString("kind")
+            val id = row.optString("id")
+            if (kind !in setOf("cloud.upload", "cloud.automatic") ||
+                row.optString("status") !in setOf("queued", "running") || active.containsKey(id)) continue
+            val workID = runCatching { UUID.fromString(id) }.getOrNull()
+            val work = if (kind == "cloud.upload" && workID != null) manager.getWorkInfoByIdFlow(workID).first() else null
+            if (work == null || work.state.isFinished) {
+                personal.upsertJob(row.copy().put("status", "interrupted").put("endedAt", now())
+                    .put("message", "系统备份任务已结束或不存在。原材料保留，可重新选择继续备份。"))
+            }
+        }
+    }
     private val zotero = ZoteroService(research, secrets, ZoteroMaterialProvider { options ->
         maintenance.withLock {
             val bound = readingRequests[options.getString("readingRequestID")] ?: error("存档准备已失效，请重新核验当前阅读材料")
@@ -413,7 +442,7 @@ class RootController private constructor(private val context: Context, private v
             val viewed = offlineReading?.takeIf { old -> old.paper.id == it.selectedPaperId }?.paper ?: it.viewedPaper?.takeIf { old -> old.id == it.selectedPaperId } ?: current
             val reading = it.copy(papers = papers, websiteTaxonomy = library.websiteTaxonomy(), viewedPaper = viewed, article = article, pdfReceipt = receipt)
             reading.copy(readingMaterialID = readingID(reading), personal = p, settings = p.getJSONObject("settings").copy(), jobs = mergedJobs(p.getJSONArray("jobs").objects()),
-            sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(), zotero = zotero.projectCredentialState(zoteroView), catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
+            sessions = p.getJSONArray("sessions").objects(), cloud = cloudView(p), zotero = zotero.projectCredentialState(zoteroView), catalogSyncedAt = library.summary().nullableString("syncedAt"), catalogSummary = library.summary(), storageWarning = personal.startupPersistenceWarning, busy = active.isNotEmpty(), offlinePaperIDs = library.offlinePaperIDs()) }
     }
     private fun paper(id: String): Paper = library.papers().firstOrNull { it.id == id } ?: throw AppFailure("missing", "论文不在已保存资料库中")
     private fun selected(): Paper = offlineReading?.takeIf { it.paper.id == _state.value.selectedPaperId }?.paper ?: _state.value.viewedPaper?.takeIf { it.id == _state.value.selectedPaperId } ?: paper(_state.value.selectedPaperId ?: throw AppFailure("missing", "请先选择论文"))
@@ -543,7 +572,7 @@ class RootController private constructor(private val context: Context, private v
         try {
             _state.update { it.copy(error = null, notice = null) }
             val result = when (command) {
-                "app.bootstrap" -> { refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; JSONObject().put("ready", true) }
+                "app.bootstrap" -> { if (installBackground) maintenance.withLock { reconcileCloudTransfers() }; refresh(); val z = zotero.execute("zotero.state", JSONObject()); _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }; JSONObject().put("ready", true) }
                 "library.sync" -> {
                     if(!catalogSyncAdmission.tryLock())JSONObject().put("status","sync-in-progress")
                     else try {
@@ -1014,15 +1043,18 @@ class RootController private constructor(private val context: Context, private v
         catch (e: Exception) { personal.upsertJob(studyJob(row, personal.session(id)).put("status", if (e is CancellationException) "cancelled" else "failed").put("endedAt", now()).put("message", "研究未完成；可能已有实际消费，请检查记录，未自动重发")); throw e }
         finally { active.remove(id); refresh() }
     }
-    suspend fun performCloudUpload(id: String, workspaceEpoch: String, expectedDestinationID: String) {
+    suspend fun performCloudUpload(id: String, workspaceEpoch: String, expectedDestinationID: String, enterForeground: suspend () -> Unit = {}) {
         val job = currentCoroutineContext()[Job]!!
         val row = maintenance.withLock {
             dispatch.requireCurrent(workspaceEpoch)
             val original = personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id }?.copy() ?: error("备份任务不存在")
+            require(!active.containsKey(id)) { "原备份任务正在运行" }
+            require(original.optString("kind") == "cloud.upload" && original.optString("status") in setOf("queued", "running")) { "原备份任务已结束" }
             personal.upsertJob(original.put("status", "running").put("startedAt", now())); active[id] = job; original
         }
         try {
             refresh()
+            enterForeground()
             withContext(CoroutineName(id)) { cloud.upload(expectedDestinationID = expectedDestinationID) }
             val latest = personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id } ?: row
             personal.upsertJob(latest.put("status", "completed").put("endedAt", now()).put("message", "原快照所有分块及完成清单已回读核验"))
@@ -1485,11 +1517,27 @@ class RootController private constructor(private val context: Context, private v
             result
         }
         "cloud.upload" -> maintenance.withLock {
+            val profile = cloud.state()
+            require(profile.optString("account").isNotBlank()) { "请先保存坚果云账号" }
+            require(profile.optString("credentialState") !in setOf("missing", "unavailable")) { "请先安全保存坚果云应用密码" }
+            reconcileCloudTransfers()
             require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("kind") == "cloud.upload" && it.optString("status") in listOf("queued", "running") }) { "已有备份任务，请先等待或停止后续传" }
             val id = UUID.randomUUID(); val work = OneTimeWorkRequestBuilder<CloudTransferWorker>().setId(id).setInputData(workDataOf("destinationID" to cloud.targetID, "workspaceEpoch" to dispatch.epoch))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresStorageNotLow(true).build()).build()
-            personal.upsertJob(JSONObject().put("id", id.toString()).put("kind", command).put("paperID", "").put("status", "queued").put("createdAt", now()).put("message", "等待网络可用后继续原快照备份"))
-            WorkManager.getInstance(context).enqueueUniqueWork("paperdigest-cloud-manual-${cloud.targetID}", ExistingWorkPolicy.KEEP, work)
+            val row = JSONObject().put("id", id.toString()).put("kind", command).put("paperID", "")
+                .put("status", "queued").put("createdAt", now()).put("message", "等待网络可用后继续原快照备份")
+            personal.upsertJob(row)
+            // Confirm the same UUID before reporting success. Activity cancellation must not
+            // turn an already-enqueued request into a second, independently dispatched one.
+            withContext(NonCancellable) {
+                try {
+                    WorkManager.getInstance(context).enqueue(work).await()
+                } catch (error: Exception) {
+                    personal.upsertJob(row.copy().put("status", "interrupted").put("endedAt", now())
+                        .put("message", "系统未确认接收备份任务。原材料保留，可重新选择继续备份。"))
+                    throw AppFailure("backupQueue", "系统未确认接收备份任务，请重试。")
+                }
+            }
             JSONObject().put("queued", true).put("jobID", id.toString()).put("message", "备份已加入后台任务，完整回读通过后才会标为完成")
         }
         "cloud.list" -> cloudSelections.list(payload.getString("month"))

@@ -67,4 +67,15 @@ class CloudCardsInstrumentedTest {
   compose.onNodeWithText("撤销未保存更改").performScrollTo().performClick();compose.waitForIdle()
   compose.onNodeWithText("校验并准备恢复…").assertDoesNotExist();assertEquals(1,fake.requests.size);assertTrue(fake.actions.isEmpty())
  }
+ @Test fun queuedBackupOffersCancellationForTheSameJobBeforeAnyTransferStarts(){
+  val fake=Fake()
+  fake.state.value=fake.state.value.copy(cloud=cloud("context-A").put("activeJobID","synthetic-queued").put("transferStatus","queued"))
+  show(fake)
+  compose.onNodeWithText("保存完整快照").performScrollTo().assertIsNotEnabled()
+  compose.onNodeWithText("备份等待系统调度或网络可用。").assertExists()
+  compose.onNodeWithText("取消备份（保留续传）").performScrollTo().performClick()
+  assertEquals("jobs.cancel",fake.actions.single().first)
+  assertEquals("synthetic-queued",fake.actions.single().second.getString("id"))
+ }
+
 }
