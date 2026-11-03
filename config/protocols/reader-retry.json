@@ -596,6 +596,20 @@
           "variant": "original-local-patch"
         }
       ]
+    },
+    {
+      "name": "reader-operator-fact-review",
+      "currentVariant": "bound-independent-report-and-exact-pending-paper",
+      "currentSchema": {
+        "purpose": "bound-independent-report-and-exact-pending-paper",
+        "verdict": "pass"
+      },
+      "historical": [
+        {
+          "tag": "reader-operator-fact-review-v1",
+          "variant": "bound-independent-report-and-exact-pending-paper"
+        }
+      ]
     }
   ]
 }

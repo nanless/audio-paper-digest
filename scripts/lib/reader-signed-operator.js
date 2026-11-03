@@ -8,6 +8,7 @@ const repair = require('./reader-repair.js');
 const { reconstructReaderDraftFromVerifiedArticle } = require('./reader-signed-draft.js');
 const codec = require('./protocol-codec');
 const CONTRACT = 'reader-signed-operator';
+const FACT_REVIEW = 'reader-operator-fact-review';
 const currentHeader = () => codec.recordHeader(CONTRACT, CONTRACT);
 function actualHeader(value) {
     if (!codec.hasValidHeader(value, CONTRACT)) throw new Error('Signed operator archive format differs');
@@ -300,16 +301,23 @@ async function acceptReaderOperatorFactReview({ loaded, request }, deps) {
             withOperatorSourceScope(current.run, parent, source, () =>
                 reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails: source, runId: run.runId }));
             const accepted = structuredClone(parent);
+            const header = codec.recordHeader(FACT_REVIEW, FACT_REVIEW);
             accepted.readerFactReview = { ...parent.readerFactReview, status: 'complete',
-                contract: 'reader-operator-fact-review-v1', parentPaperSha256: request.parentPaperSha256,
+                ...header, parentPaperSha256: request.parentPaperSha256,
                 sourceSha256: request.sourceSha256, reportFile: request.reportFile, reportSha256: request.reportSha256,
                 reviewer: request.reviewer, verdict: 'pass', acceptedAt: deps.now() };
-            receipt = { contract: 'reader-operator-fact-review-v1', requestSha256: runner.stableHash(request),
+            receipt = { ...header, requestSha256: runner.stableHash(request),
                 sourceSnapshotSha256: source.freshSourceDescriptor.sourceSnapshotSha256,
                 beforePaperSha256: request.parentPaperSha256, afterPaperSha256: runner.stableHash(accepted), paper: accepted };
             runner.assertSafeDirectory(directory, true); immutable(filename, receipt);
         }
-        if (receipt.contract !== 'reader-operator-fact-review-v1' || receipt.requestSha256 !== runner.stableHash(request)
+        const review = receipt.paper?.readerFactReview;
+        if (!codec.hasValidHeader(receipt, FACT_REVIEW) || !codec.hasValidHeader(review, FACT_REVIEW)
+            || review.contract !== receipt.contract || review.schemaFingerprint !== receipt.schemaFingerprint
+            || review.status !== 'complete' || review.executionKind !== 'operator'
+            || ['parentPaperSha256', 'articleSha256', 'planSha256', 'sourceSha256', 'reportFile',
+                'reportSha256', 'reviewer', 'verdict'].some(key => review[key] !== request[key])
+            || receipt.requestSha256 !== runner.stableHash(request)
             || receipt.sourceSnapshotSha256 !== source.freshSourceDescriptor.sourceSnapshotSha256
             || receipt.beforePaperSha256 !== request.parentPaperSha256 || receipt.afterPaperSha256 !== runner.stableHash(receipt.paper)
             || receipt.paper.apiReaderArticleSha256 !== request.articleSha256

@@ -75,7 +75,7 @@ function setup(t, options={}) {
         updateRun:changes=>engine.updateJsonFileLocked(path.join(runDir,'run.json'),current=>({...current,...changes}))};
     const apply=(hooks,applyPatch=applyReaderOperatorPatch)=>engine.withFileLock(path.join(runDir,'.operation'),()=>applyPatch(
         {loaded:reload(),patchFile:'reviewed.json'},{...deps,...hooks}));
-    const accept=(request,hooks)=>engine.withFileLock(path.join(runDir,'.operation'),()=>acceptReaderOperatorFactReview(
+    const accept=(request,hooks,acceptReview=acceptReaderOperatorFactReview)=>engine.withFileLock(path.join(runDir,'.operation'),()=>acceptReview(
         {loaded:reload(),request},{...deps,isSuccessfulAnalysisRecord:()=>true,...hooks}));
     const withSource=callback=>fresh.withFreshAnalysisContext({runDir,runId:f.runId,
         sourceExpectations:run.sourceExpectations},callback);
@@ -223,14 +223,14 @@ function originalSignedOperatorWriter() {
         return encoding?bytes.toString(encoding):Buffer.from(bytes);
     }} : nativeRequire(name);
     original._compile(bytes.toString('utf8'),filename);
-    return original.exports.applyReaderOperatorPatch;
+    return original.exports;
 }
 
 for (const hook of ['afterIntent', 'afterOutput']) {
     test(`历史人工归档在 ${hook} 中断后保留原字节和原许可`, async t => {
         const f=setup(t);
         await assert.rejects(f.apply({[hook]:()=>{throw new Error('original interruption');}},
-            originalSignedOperatorWriter()),/original interruption/);
+            originalSignedOperatorWriter().applyReaderOperatorPatch),/original interruption/);
         const archive=path.join(f.runDir,'patches','signed-operator-archive',runner.sha256(fs.readFileSync(f.patchFile)));
         const original=new Map(fs.readdirSync(archive).map(name=>[name,fs.readFileSync(path.join(archive,name))]));
         const intent=JSON.parse(original.get('intent.json'));
@@ -346,6 +346,7 @@ test('显式绑定 SHA 的独立事实验收恢复为完成，并保留文章、
     const result=await f.accept(request,{isSuccessfulAnalysisRecord:paper=>paper.arxivId===f.paper.arxivId
         ? engine.hasValidIntegratedApiReaderRecords(paper) : true}),after=f.read('analysis').papers[0];
     assert.equal(result.status,'complete');assert.equal(after.readerFactReview.status,'complete');
+    assert.ok(codec.isCurrentHeader(after.readerFactReview, 'reader-operator-fact-review'));
     assert.equal(after.apiReaderArticle,before.apiReaderArticle);assert.deepEqual(after.apiReaderPlan,before.apiReaderPlan);
     assert.deepEqual(after.analysisManifest,before.analysisManifest);
     assert.equal(after.readerFactReview.reportSha256,request.reportSha256);
@@ -360,6 +361,24 @@ test('事实凭证和分析装入中断能以精确报告恢复，不重复改�
         await assert.rejects(f.accept(request,{[hook]:()=>{throw new Error('fact interruption');}}),/interruption/);
         assert.equal((await f.accept(request)).status,'complete');
     }
+});
+
+test('原事实审查回执原字节恢复，混用新旧审查格式时拒绝',async t=>{
+    const f=setup(t);await f.apply();const request=reportRequest(f);
+    await assert.rejects(f.accept(request,{afterFactReceipt:()=>{throw new Error('original fact interruption');}},
+        originalSignedOperatorWriter().acceptReaderOperatorFactReview),/original fact interruption/);
+    const file=path.join(f.runDir,'patches','signed-fact-reviews',request.reportSha256,request.paperId+'.json');
+    const bytes=fs.readFileSync(file),receipt=JSON.parse(bytes);
+    assert.equal(receipt.contract,'reader-operator-fact-review-v1');
+    const changed=structuredClone(receipt),family='reader-operator-fact-review';
+    Object.assign(changed.paper.readerFactReview,codec.recordHeader(family,family));
+    changed.afterPaperSha256=runner.stableHash(changed.paper);
+    fs.writeFileSync(file,JSON.stringify(changed));
+    await assert.rejects(f.accept(request),/durable receipt drift/);
+    assert.equal(f.read('analysis').papers[0].readerFactReview.status,'pending');
+    fs.writeFileSync(file,bytes);
+    assert.equal((await f.accept(request)).status,'complete');
+    assert.deepEqual(fs.readFileSync(file),bytes);
 });
 
 test('事实验收拒绝过期论文、报告哈希不符、跨运行、路径穿越、不安全模式和报告竞争',async t=>{

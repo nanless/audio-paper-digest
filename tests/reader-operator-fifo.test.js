@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const RUN_ID = '11111111-2222-4333-8444-555555555555';
 const PAPER_ID = '2609.03107';
@@ -28,9 +28,38 @@ function requestFor(moduleName) {
             parentArticleSha256: 'c'.repeat(64), parentPlanSha256: 'd'.repeat(64) };
 }
 
+function runFileProbe(code) {
+    return new Promise((resolve, reject) => {
+        const processHandle = spawn(process.execPath, ['-e', code], {
+            cwd: path.resolve(__dirname, '..'), stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let stdout = '', stderr = '', ready = false, expired = '';
+        const deadline = phase => setTimeout(() => {
+            expired = phase;
+            processHandle.kill('SIGKILL');
+        }, phase === 'startup' ? 15000 : 3000);
+        let timer = deadline('startup');
+        processHandle.stdout.setEncoding('utf8').on('data', text => {
+            stdout += text;
+            if (!ready && stdout.includes('READY\n')) {
+                ready = true;
+                clearTimeout(timer);
+                timer = deadline('file probe');
+            }
+        });
+        processHandle.stderr.setEncoding('utf8').on('data', text => { stderr += text; });
+        processHandle.once('error', error => { clearTimeout(timer); reject(error); });
+        processHandle.once('close', status => {
+            clearTimeout(timer);
+            if (expired) reject(new Error(`Reader operator ${expired} timed out`));
+            else resolve({ status, stdout, stderr });
+        });
+    });
+}
+
 for (const [moduleName, entry] of entries) {
     for (const kind of ['fifo', 'regular', 'symlink']) {
-        test(`${moduleName} 公开入口核验 ${kind} 文件且不阻塞`, t => {
+        test(`${moduleName} 公开入口核验 ${kind} 文件且不阻塞`, async t => {
             const rootDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-operator-file-'));
             t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
             const runDir = path.join(rootDir, RUN_ID);
@@ -52,17 +81,14 @@ for (const [moduleName, entry] of entries) {
             const code = `
                 const api = require(${JSON.stringify(path.resolve(__dirname, '../scripts/lib', `${moduleName}.js`))});
                 let locks = 0;
-                api[${JSON.stringify(entry)}](${JSON.stringify({ loaded, patchFile: 'input.json' })}, {
+                process.stdout.write('READY\\n', () => api[${JSON.stringify(entry)}](${JSON.stringify({ loaded, patchFile: 'input.json' })}, {
                     rootDir: ${JSON.stringify(rootDir)},
                     withPaperAnalysisLock() { locks += 1; throw new Error('FILE_VALIDATED'); }
                 }).then(() => process.exit(2), error => {
                     process.stdout.write('RESULT:' + JSON.stringify({ message: error.message, code: error.code, locks }) + '\\n');
-                });
+                }));
             `;
-            const result = spawnSync(process.execPath, ['-e', code], {
-                cwd: path.resolve(__dirname, '..'), encoding: 'utf8', timeout: 3000
-            });
-            assert.equal(result.error, undefined, result.error?.message);
+            const result = await runFileProbe(code);
             assert.equal(result.status, 0, result.stderr);
             const line = result.stdout.split('\n').find(value => value.startsWith('RESULT:'));
             assert.ok(line, result.stdout);
