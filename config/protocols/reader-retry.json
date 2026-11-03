@@ -610,6 +610,39 @@
           "variant": "bound-independent-report-and-exact-pending-paper"
         }
       ]
+    },
+    {
+      "name": "reader-human-paid-draft-fingerprint-edit",
+      "currentVariant": "exact-paid-current-header-replay",
+      "currentSchema": {
+        "fields": [
+          "notLlmResponse",
+          "paperId",
+          "runId",
+          "batchDate",
+          "baselineCandidateFile",
+          "baselineCandidateEnvelopeSha256",
+          "baselineDraftSha256",
+          "sourceDescriptor",
+          "rawDraftSha256",
+          "correctedRawSha256",
+          "wholeSha256",
+          "currentInputIdentity",
+          "feeFiles"
+        ],
+        "scope": "one-malformed-current-fingerprint-token-no-body-changes-no-new-requests"
+      },
+      "historical": []
+    },
+    {
+      "name": "reader-paid-draft-fingerprint-completion",
+      "currentVariant": "paper-run-indexed-operator-completion",
+      "currentSchema": {
+        "fields": ["paperId", "runId", "sourceSha256", "correctionSha256", "candidateSha256",
+          "inputIdentitySha256", "wholeSha256", "articleSha256", "planSha256"],
+        "authority": "cold-replay-of-original-paid-header-only"
+      },
+      "historical": []
     }
   ]
 }

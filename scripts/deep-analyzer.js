@@ -9296,7 +9296,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         .filter(item => Number.isInteger(item.ordinal));
     // 只读提前检查同身份候选。纯文本/DOM 仍失败且预算确实用完时，不先下载图片。
     // 不复用旧像素事实；新实现已能接受的候选仍进入下方原下载及完整校验。
-    const operatorCorrection = require('./lib/daily-reader-operator-correction').current(paper,identity)
+    const operatorCorrection = require('./lib/daily-reader-operator-correction').current(paper,identity,analysis)
         || require('./lib/conference-reader-operator-correction').current(paper, identity);
     const inputProofOnly = options[READER_SAVED_REQUEST_INPUT_PROOF] === true;
     const savedProofImageLimit = inputProofOnly && figureEvidenceEntries.length > 1
@@ -11197,8 +11197,9 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     if (replacesOrdinalCompletion) {
         delete manifest.contracts.readerTargetOrdinalPatch;
     }
-    if (replacesOrdinalCompletion
-        || require('./lib/daily-reader-operator-correction').hasOperatorProof(manifest.stages.apiReaderArticle.operatorProvenance)) {
+    const dailyOperator = require('./lib/daily-reader-operator-correction');
+    if (replacesOrdinalCompletion || dailyOperator.hasOperatorProof(manifest.stages.apiReaderArticle.operatorProvenance)) {
+        dailyOperator.sealPaidFingerprintCompletion(paper, analysis);
         require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
     }
     return paper;
@@ -19521,7 +19522,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     analysisManifest.stages.apiReaderArticle.ordinalCompletionProof = proof;
                 }
             }
-            if (require('./lib/daily-reader-operator-correction').hasOperatorProof(analysisManifest.stages.apiReaderArticle.operatorProvenance)) {
+            const dailyOperator = require('./lib/daily-reader-operator-correction');
+            if (dailyOperator.hasOperatorProof(analysisManifest.stages.apiReaderArticle.operatorProvenance)) {
+                dailyOperator.sealPaidFingerprintCompletion(paper, analysis);
                 require('./lib/reader-target-ordinal-patch').validateCompletion(paper);
             }
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);

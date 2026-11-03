@@ -575,7 +575,8 @@ function readVerifiedCompletion(paper, planning=false){
         &&!stage?.ordinalPatchHistory&&!Object.hasOwn(paper,'readerRevisionHistory')
         &&!Object.hasOwn(paper,'apiReaderArticle')&&!Object.hasOwn(paper,'apiReaderPlan');
     const explicitOperator=operator.hasOperatorProofMarker(stage?.operatorProvenance)
-        ||history?.reason==='operator-correction-supersedes-ordinal-completion';
+        ||history?.reason==='operator-correction-supersedes-ordinal-completion'
+        ||(!unfinishedPlanning && operator.hasPaidFingerprintCompletion(paper,attempts));
     const retainedCandidate=!explicitOperator&&!unfinishedPlanning&&!files.length
         &&operator.hasRetainedOrdinalCandidate(paper,attempts);
     if(retainedCandidate&&!marked&&matchesArchivedOrdinaryCompletion(paper,attempts,actualRun,runFile))

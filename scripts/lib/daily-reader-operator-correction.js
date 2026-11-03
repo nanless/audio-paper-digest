@@ -8,6 +8,8 @@ const codec = require('./protocol-codec');
 const CONTRACT = 'daily-reader-operator-correction-batch';
 const PROOF = 'daily-reader-operator-correction';
 const EDIT = 'reader-human-source-edit';
+const PAID_FINGERPRINT_EDIT = 'reader-human-paid-draft-fingerprint-edit';
+const PAID_FINGERPRINT_COMPLETION = 'reader-paid-draft-fingerprint-completion';
 const hasOperatorProof = value => codec.hasValidHeader(value, PROOF);
 const operatorProofTags = new Set(codec.registeredHeaders(PROOF).map(header => header.contract));
 const hasOperatorProofMarker = value => operatorProofTags.has(value?.contract);
@@ -30,7 +32,72 @@ function within(file, root) {
 function unchanged(snapshot) {
     if (read(snapshot.file).sha256 !== snapshot.sha256) throw new Error('Operator correction source bytes changed');
 }
+function nearFingerprint(before, expected) {
+    if (typeof before !== 'string' || !/^[a-f0-9]{56,63}$/.test(before)) return false;
+    if (before.slice(0, 16) !== expected.slice(0, 16) || before.slice(-16) !== expected.slice(-16)) return false;
+    let previous = Array.from({ length: expected.length + 1 }, (_, index) => index);
+    for (let row = 1; row <= before.length; row++) {
+        const current = [row];
+        for (let column = 1; column <= expected.length; column++)
+            current.push(Math.min(previous[column] + 1, current[column - 1] + 1,
+                previous[column - 1] + Number(before[row - 1] !== expected[column - 1])));
+        previous = current;
+    }
+    return previous[expected.length] <= 8;
+}
+function replayPaidFingerprint(record, candidate) {
+    const repair = require('./reader-repair');
+    const payload = candidate.payload, raw = payload.rawDraft;
+    const fields = ['contract','schemaFingerprint','notLlmResponse','paperId','runId','batchDate',
+        'baselineCandidateFile','baselineCandidateEnvelopeSha256','baselineDraftSha256','sourceDescriptor',
+        'rawDraftSha256','correctedRawSha256','wholeSha256','currentInputIdentity','feeFiles'];
+    if (Object.keys(record).sort().join(',') !== fields.sort().join(',')
+        || record.notLlmResponse !== true || payload.status !== 'failed' || payload.draft !== null
+        || !Number.isSafeInteger(payload.attempts) || !Number.isSafeInteger(payload.fullAttempts)
+        || payload.attempts < payload.fullAttempts || payload.fullAttempts < 1
+        || payload.explicitReaderRetryRound || payload.ordinalPatchCompilations?.length
+        || typeof raw !== 'string' || Buffer.byteLength(raw) > 16 * 1024 * 1024
+        || sha(raw) !== record.rawDraftSha256
+        || record.baselineDraftSha256 !== repair.hashDraft(null)
+        || !/^[a-f0-9]{64}$/.test(record.wholeSha256 || '')
+        || !payload.issues?.some(issue => issue.path === null
+            && issue.message === '读者文章格式头未登记或字段混用')
+        || repair.hashDraft(candidate.identity) !== path.basename(record.baselineCandidateFile,'.json'))
+        throw new Error('Operator paid fingerprint original or scope differs');
+    const strictJson = require('./publication-file-primitives').strictJson;
+    const parsed = strictJson(Buffer.from(raw), 'original paid Reader JSON');
+    const expected = codec.recordHeader('reader-draft', 'reader-draft');
+    const member = repair.readTopLevelMembers(raw).find(item => item.name === 'schemaFingerprint');
+    if (!member || parsed.contract !== expected.contract || !nearFingerprint(parsed.schemaFingerprint, expected.schemaFingerprint)
+        || raw.slice(member.valueStart, member.valueEnd) !== JSON.stringify(parsed.schemaFingerprint))
+        throw new Error('Operator paid fingerprint is not a bounded malformed current header');
+    const corrected = raw.slice(0, member.valueStart) + JSON.stringify(expected.schemaFingerprint) + raw.slice(member.valueEnd);
+    const draft = strictJson(Buffer.from(corrected), 'corrected paid Reader JSON');
+    if (sha(corrected) !== record.correctedRawSha256 || !repair.parseRepairableDraft(draft)
+        || !isDeepStrictEqual(draft, { ...parsed, ...expected }))
+        throw new Error('Operator paid fingerprint replacement changes content or shape');
+    require('./reader-request-diagnostics').validatePaidDraftFingerprintFees(record.feeFiles, candidate, record.rawDraftSha256);
+    return draft;
+}
+function isPaidFingerprintRecord(record) { return codec.hasValidHeader(record, PAID_FINGERPRINT_EDIT); }
+function assertPaidFingerprintContext(record, candidate, paper, whole, currentIdentity = record.currentInputIdentity) {
+    if (!isPaidFingerprintRecord(record)) return;
+    // This adapter is part of the two implementation hashes. The original
+    // paid logical input and all other format/prompt/source fields are fixed.
+    const implementationFields = new Set(['parserImplementationSha256', 'repairImplementationSha256']);
+    const unchangedInput = identity => Object.fromEntries(Object.entries(identity).filter(([key]) => !implementationFields.has(key)));
+    if (!currentIdentity || !isDeepStrictEqual(currentIdentity, record.currentInputIdentity)
+        || [...implementationFields].some(key =>
+            !/^[a-f0-9]{64}$/.test(currentIdentity[key] || ''))
+        || typeof whole !== 'string' || record.wholeSha256 !== sha(whole)
+        || !isDeepStrictEqual(unchangedInput(currentIdentity), unchangedInput(candidate.identity))
+        || paper.analysisManifest?.stages?.apiReaderArticle?.ordinalCompletionProof
+        || paper.readerRevisionHistory?.completionProof)
+        throw new Error('Operator paid fingerprint original whole, input, or retained ordinal history differs');
+}
 function replay(record, candidate) {
+    if (isPaidFingerprintRecord(record)) return replayPaidFingerprint(record, candidate);
+
     const repair = require('./reader-repair');
     if (!codec.hasValidHeader(record, EDIT) || record.notLlmResponse !== true
         || repair.hashDraft(candidate.identity) !== path.basename(record.baselineCandidateFile,'.json')
@@ -139,6 +206,7 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
         if (!isDeepStrictEqual(r.sourceDescriptor,source.freshSourceDescriptor)
             || env.envelope.identity.sourceSha256 !== source.freshSourceDescriptor.sourceSha256)
             throw new Error('Operator correction does not match all four official sealed sources');
+        assertPaidFingerprintContext(r, env.envelope, paper, paper.analysisCheckpoint || paper.analysis);
         const draft = replay(r,env.envelope);
         records.set(paperId,{file,baseline,record:r,sourceDescriptor:source.freshSourceDescriptor,
             original:env.envelope,draft});
@@ -147,7 +215,7 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
     assertCompleteOperatorTail(inspectDailyOperatorTail(plan, papers, factFeedbacks), [...records.keys()]);
     return scope.run({manifest,records},callback);
 }
-function current(paper, identity) {
+function current(paper, identity, readerInputAnalysis) {
     const active = scope.getStore(), record = active?.records.get(id(paper));
     if (!record) return null;
     const fresh = require('./fresh-analysis-context'), context = fresh.getFreshAnalysisContext();
@@ -160,6 +228,12 @@ function current(paper, identity) {
         || ['runId','sourceSha256','structuredArtifactsSha256','sourceSnapshotSha256',
             'sourceGeneration','sourceManifestSha256'].some(k=>identity.freshAnalysis?.[k]!==record.sourceDescriptor[k]))
         throw new Error('Operator correction current source or input changed');
+    assertPaidFingerprintContext(record.record, record.original, paper, readerInputAnalysis, identity);
+    const fingerprintRecovery = isPaidFingerprintRecord(record.record);
+    if (fingerprintRecovery) {
+        if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) throw new Error('Paid fingerprint replay requires the paper lock');
+        replay(record.record, record.original);
+    }
     const proof = { ...codec.recordHeader(PROOF, PROOF), executionKind:'operator',
         newReaderApiRequests:0,runId:context.runId,paperId:id(paper),batchDate:active.manifest.value.batchDate,
         authorization:active.manifest.value.authorization,manifestFile:active.manifest.file,
@@ -193,7 +267,41 @@ function hasRetainedOrdinalCandidate(paper, directory) {
             && original.payload.ordinalPatchCompilations?.length > 0;
     });
 }
-function validateSavedCompletion(paper) {
+function fingerprintCompletionFile(paper, attempts) {
+    const paperId = id(paper);
+    if (!/^\d{4}\.\d{4,5}$/.test(paperId)) throw new Error('Invalid paid fingerprint completion paper ID');
+    return path.join(attempts, 'paid-draft-fingerprint-completions', paperId + '.json');
+}
+function hasPaidFingerprintCompletion(paper, attempts) {
+    try { fs.lstatSync(fingerprintCompletionFile(paper, attempts)); return true; }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+function fingerprintCompletion(paper, proof) {
+    return { ...codec.recordHeader(PAID_FINGERPRINT_COMPLETION, PAID_FINGERPRINT_COMPLETION),
+        paperId: id(paper), runId: proof.runId, sourceSha256: paper.sourceSha256,
+        correctionSha256: proof.correctionSha256, candidateSha256: proof.originalCandidateEnvelopeSha256,
+        inputIdentitySha256: proof.currentInputIdentitySha256,
+        wholeSha256: sha(paper.analysisStageCheckpoints.apiReaderArticle),
+        articleSha256: paper.apiReaderArticleSha256, planSha256: paper.apiReaderPlanSha256 };
+}
+function sealPaidFingerprintCompletion(paper, readerInputAnalysis) {
+    const active = scope.getStore()?.records.get(id(paper));
+    if (!active || !isPaidFingerprintRecord(active.record)) return;
+    const proof = paper.analysisManifest?.stages?.apiReaderArticle?.operatorProvenance;
+    if (!require('../analysis-engine').paperAnalysisLockHeld(paper) || proof?.correctionSha256 !== active.file.sha256)
+        throw new Error('Paid fingerprint completion requires the exact operator scope and lock');
+    assertPaidFingerprintContext(active.record, active.original, paper, readerInputAnalysis);
+    const checkpoints = paper.analysisStageCheckpoints || {};
+    if (Object.hasOwn(checkpoints, 'apiReaderArticle') && checkpoints.apiReaderArticle !== readerInputAnalysis)
+        throw new Error('Paid fingerprint completion cannot replace a different saved Reader input');
+    paper.analysisStageCheckpoints = { ...checkpoints, apiReaderArticle: readerInputAnalysis };
+    validateSavedCompletionUnchecked(paper, true);
+    const file = fingerprintCompletionFile(paper, path.dirname(active.baseline.file));
+    require('./publication-file-primitives').writeExact(file, JSON.stringify(fingerprintCompletion(paper, proof)) + '\n');
+    validateSavedCompletion(paper);
+}
+function validateSavedCompletion(paper) { return validateSavedCompletionUnchecked(paper, false); }
+function validateSavedCompletionUnchecked(paper, sealingFingerprint) {
     const paperSha256 = require('./daily-fresh-source-plan').stableHash(paper);
     const stage = paper?.analysisManifest?.stages?.apiReaderArticle, proof = stage?.operatorProvenance;
     const fail = message => { throw new Error(`Daily operator completion refused: ${message}`); };
@@ -249,6 +357,18 @@ function validateSavedCompletion(paper) {
     if (records.length && (!require('./protocol-codec').hasValidHeader(history, 'reader-ordinal-history')
         || history.reason !== 'operator-correction-supersedes-ordinal-completion'
         || !isDeepStrictEqual(history.compilations, records))) fail('original ordinal compilation history differs');
+    if (isPaidFingerprintRecord(record)) {
+        assertPaidFingerprintContext(record, original, paper, paper.analysisStageCheckpoints?.apiReaderArticle);
+        if (!sealingFingerprint) {
+            const file = fingerprintCompletionFile(paper, plan.readerAttemptsDir);
+            within(file, plan.readerAttemptsDir);
+            const completion = read(file);
+            if (!codec.hasValidHeader(completion.value, PAID_FINGERPRINT_COMPLETION)
+                || !isDeepStrictEqual(completion.value, fingerprintCompletion(paper, proof))) fail('durable fingerprint completion differs');
+            snapshots.push(completion);
+        }
+        if (repair.hashDraft(record.currentInputIdentity) !== proof.currentInputIdentitySha256) fail('paid header input identity differs');
+    }
     const draft = replay(record, original);
     if (repair.hashDraft(draft) !== proof.afterDraftSha256) fail('bounded patch endpoint differs');
     require('./analysis-stop-control').withModelRequestsForbidden(() => daily.withDailyFreshAnalysisContext(plan,
@@ -283,5 +403,5 @@ function validateSavedCompletion(paper) {
     if (daily.stableHash(paper) !== paperSha256) fail('paper/stage changed during read-only replay');
     return true;
 }
-module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
+module.exports={CONTRACT,hasOperatorProof,hasOperatorProofMarker,withCorrections,current,execution,replay,hasRetainedOrdinalCandidate,hasPaidFingerprintCompletion,sealPaidFingerprintCompletion,validateSavedCompletion,isCurrentFailedPaper,largeBatchCorrectionLimit,
     inspectDailyOperatorTail,assertCompleteOperatorTail};

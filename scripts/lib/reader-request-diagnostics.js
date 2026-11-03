@@ -584,6 +584,17 @@ function validateReaderVersionMetadataPublicationCompletion(paper) {
             validateReaderVersionMetadataCompletion(paper))))))));
 }
 
-module.exports = { validateReaderVersionMetadataPublicationCompletion, findReaderVersionMetadataOrigin, prepareReaderVersionMetadataOrigin, readReaderVersionMetadataOrigin, buildReaderVersionMetadataRecoveryProof, sealReaderVersionMetadataCompletion, validateReaderVersionMetadataCompletion, beginReaderRepairDiagnostic, saveReaderRepairResponse,
+function validatePaidDraftFingerprintFees(fees, candidate, rawSha256) {
+    // The stable-header case follows one already-completed full request. It
+    // cannot grant transport recovery, a model ACK, or another attempt.
+    vmNeed(Array.isArray(fees) && fees.length === 3
+        && fees.every(row => row && Object.keys(row).sort().join(',') === 'file,sha256'
+            && /^[a-f0-9]{64}$/.test(row.sha256 || ''))
+        && new Set(fees.map(row => path.resolve(row.file))).size === 3, 'explicit original paid header fee files differ');
+    return vmPair(fees, { identity: candidate.identity, stage: 'apiReaderArticle',
+        contentAttempt: candidate.payload.attempts, outputSha256: rawSha256, disposition: 'rejected' });
+}
+
+module.exports = { validatePaidDraftFingerprintFees, validateReaderVersionMetadataPublicationCompletion, findReaderVersionMetadataOrigin, prepareReaderVersionMetadataOrigin, readReaderVersionMetadataOrigin, buildReaderVersionMetadataRecoveryProof, sealReaderVersionMetadataCompletion, validateReaderVersionMetadataCompletion, beginReaderRepairDiagnostic, saveReaderRepairResponse,
     beginCoreSummaryDiagnostic, saveCoreSummaryResponse, saveCoreSummaryDisposition,
     readCoreSummaryDiagnostic, latestCoreSummaryDiagnosticId };
