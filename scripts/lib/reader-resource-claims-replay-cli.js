@@ -130,7 +130,8 @@ globalThis.fetch = deny;
             input.paper, { sourceText });
         if (response.coreSummaryIssue !== null) throw new Error(
             'Publication core summary stage did not pass normal source replay: ' + response.coreSummaryIssue);
-        response.publicationReplay = { contract: 'publication-one-invocation-source-replay-v1',
+        response.publicationReplay = { ...require('./protocol-codec').recordHeader(
+            'publication-one-invocation-source-replay', 'publication-one-invocation-source-replay'),
             inputSha256: crypto.createHash('sha256').update(inputBytes).digest('hex') };
     }
     writeOutput(JSON.stringify(response));

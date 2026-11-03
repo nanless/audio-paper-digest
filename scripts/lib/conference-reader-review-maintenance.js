@@ -220,8 +220,13 @@ function neutralReaderUpstreamView(parent,paper,resources) {
     check(before!==after,'saved upstream difference is not a resource projection');
     expected.parsed=require('../utils').parseAnalysis(expected.analysis);
     score.outputAnalysisSha256=after;
+    const codec=require('./protocol-codec'), synchronizationFamily='reader-resource-availability-sync';
+    const savedSynchronization=paper.analysisManifest?.stages?.scoringAudit?.resourceAvailabilitySynchronizations?.at(-1);
+    check(codec.hasValidHeader(savedSynchronization,synchronizationFamily),'saved neutral resource synchronization format is unknown');
+    const synchronizationHeader=codec.recordHeader(savedSynchronization.contract,synchronizationFamily,
+        savedSynchronization.schemaFingerprint);
     score.resourceAvailabilitySynchronizations=[...(score.resourceAvailabilitySynchronizations||[]),{
-        contract:'reader-resource-availability-sync-v1',executionKind:'deterministic_resource_projection',
+        ...synchronizationHeader,executionKind:'deterministic_resource_projection',
         sourceSha256:parent.sourceSha256,resourceIdentitySha256:resources.identitySha256,
         beforeAnalysisSha256:before,afterAnalysisSha256:after,originalScoringOutputAnalysisSha256:before,
         checkpointChanges:[],newApiRequests:0}];

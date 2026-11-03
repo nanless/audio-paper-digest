@@ -10,6 +10,10 @@ function fixture(mode = 'scoring-and-reader') {
     const file = require.resolve('../scripts/lib/conference-reader-operator-correction');
     const code = fs.readFileSync(file, 'utf8');
     const start = code.indexOf('function projectReaderResourceScan('), end = code.indexOf('function projectMainCheckpoint(', start);
+    const headerStart = code.indexOf('function operatorHeaderForBatch('), headerEnd = code.indexOf('const SINGLE_TABLE_APPEND', headerStart);
+    const codec = require('../scripts/lib/protocol-codec');
+    const CONTRACT = 'conference-reader-operator-batch', PROVENANCE = 'conference-reader-operator-provenance';
+    const RECEIPT = 'conference-reader-operator-receipt', RESOURCE_SCAN_RECOVERY = 'conference-reader-resource-scan-recovery';
     const text = 'Original sealed conference source', sourceSha256 = sha(text);
     const resources = { contract: 'api-reader-resource-identity-v1', identitySha256: 'b'.repeat(64), fixtureOnly: true };
     const scan = { status: 'complete', resourceEvidenceContract: 'api-reader-resource-identity-v1', resourceEvidenceSha256: 'a'.repeat(64), unchangedEvidence: 'original' };
@@ -25,6 +29,7 @@ function fixture(mode = 'scoring-and-reader') {
         parent: { run: { status: 'complete', executionId: 'parent' }, analysis: { status: 'complete', papers: [parent] },
             analysisFileSha256: 'e'.repeat(64), runFileSha256: 'f'.repeat(64) } },
         pdf, row: { record: { paperId: raw.id, executionId: 'child', sourceSha256 } },
+        batch: { manifest: { value: codec.recordHeader(CONTRACT, CONTRACT) } },
         beforeRun: { executionId: 'child' }, beforeAnalysis: { readerRevisionProgress: {} }, candidate: { identity: { paperId: raw.id } } };
     if (mode === 'scoring-and-reader') active.beforeAnalysis.readerRevisionProgress.scoringCheckpoint = {
         revisionSha256: revision.revisionSha256, sourceSha256, resourceIdentitySha256: resources.identitySha256,
@@ -32,8 +37,10 @@ function fixture(mode = 'scoring-and-reader') {
     const context = { paperId: raw.id, executionId: 'child', executionDir: active.loaded.directory, readerPdfSourceHandle: pdf };
     const preflight = { sha256: revision.resourcePreflightFileSha256, value: structuredClone(resources) };
     let reason = null, sourceOkay = true, replayCount = 0, gateCount = 0;
-    const project = require('node:vm').runInNewContext(code.slice(start, end) + '\nprojectReaderResourceScan', {
-        path, sha, checkpointStable: stable, hash: stable, clone: structuredClone,
+    const project = require('node:vm').runInNewContext(
+        code.slice(headerStart, headerEnd) + code.slice(start, end) + '\nprojectReaderResourceScan', {
+        path, sha, codec, CONTRACT, PROVENANCE, RECEIPT, RESOURCE_SCAN_RECOVERY,
+        checkpointStable: stable, hash: stable, clone: structuredClone,
         isDeepStrictEqual: (a, b) => isDeepStrictEqual(structuredClone(a), structuredClone(b)),
         fail: message => { throw Error(message); }, read: name => { assert.equal(name, '/fixture/child/reader-resource-preflight.json'); return preflight; },
         require(name) {

@@ -34,7 +34,7 @@ test('正式公开长文生成无像素时只清独立图标记，不发额外�
     assert.doesNotMatch(result.article, /\[\[FIGURE_1\]\]/);
     assert.equal(result.attempts, 1);
     assert.equal(result.fullAttempts, 1);
-    assert.ok(result.draftOrderMappings.some(item => item.contract === 'reader-no-figure-marker-cleanup-v1'));
+    assert.ok(result.draftOrderMappings.some(item => require('../scripts/lib/protocol-codec').isCurrentHeader(item, 'reader-no-figure-marker-cleanup')));
     assert.equal(draft.sections[7].body, originalBody);
 });
 
@@ -100,5 +100,5 @@ test('已耗尽候选机械清理仍不合格时保存新草稿而不增加请�
     for (const key of ['attempts', 'fullAttempts', 'transportFailures', 'noProgress']) {
         assert.equal(after[key], before[key]);
     }
-    assert.ok(after.draftOrderMappings.some(item => item.contract === 'reader-no-figure-marker-cleanup-v1'));
+    assert.ok(after.draftOrderMappings.some(item => require('../scripts/lib/protocol-codec').isCurrentHeader(item, 'reader-no-figure-marker-cleanup')));
 });

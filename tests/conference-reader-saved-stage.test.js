@@ -25,6 +25,17 @@ test('pure neutral private view exactly reverses real normal shared resource syn
  assert.deepEqual(result.paper.analysisManifest.stages.scoringAudit,parent.analysisManifest.stages.scoringAudit);
  assert.equal(result.projection.newApiRequests,undefined);assert.deepEqual(child,before);
 });
+test('neutral private view retains a registered original receipt and rejects mixed headers',()=>{
+ const {parent,child,resources}=fixture(),codec=require(path.join(ROOT,'scripts/lib/protocol-codec'));
+ const list=child.analysisManifest.stages.scoringAudit.resourceAvailabilitySynchronizations;
+ const {contract,schemaFingerprint,...body}=list[0];
+ list[0]={...codec.historicalHeader('reader-resource-availability-sync','exact-original-and-updated-analysis'),...body};
+ const original=structuredClone(child);
+ assert.equal(m.exports.__pureView(parent,child,resources).paper.analysis,parent.analysis);
+ assert.deepEqual(child,original);
+ list[0].schemaFingerprint=schemaFingerprint;
+ assert.throws(()=>m.exports.__pureView(parent,child,resources),/synchronization format/);
+});
 test('pure neutral private view rejects scientific body score tags stage receipt checkpoint and resource drift',()=>{
  for(const mutate of [x=>x.child.analysis+='invented result',x=>x.child.parsed.score='9.9',x=>x.child.parsed.tagValidation={forged:true},
   x=>x.child.analysisManifest.stages.scoringAudit.audit.total=9.9,

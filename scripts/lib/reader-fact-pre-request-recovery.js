@@ -1,4 +1,5 @@
 'use strict';
+const codec = require('./protocol-codec');
 const { isUsageEventFormat } = require('./llm-usage-format');
 
 // An explicitly bound, zero-request configuration failure can retain its real
@@ -9,7 +10,7 @@ const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual: equal } = require('node:util');
 const scope = new AsyncLocalStorage();
-const CONTRACT = 'reader-fact-pre-request-recovery-v1';
+const CONTRACT = 'reader-fact-pre-request-recovery';
 const COVERAGE_ERROR = '事实局部修订的错误原句存在重复或未获准位置，未发送模型请求';
 const SEED_ERROR = 'Reader事实局部修订缺少当前已核完整签名稿，不能回退source-only生成';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -91,9 +92,11 @@ function validateUsage(events, parent, proof) {
 }
 function withVerifiedReaderFactPreRequestRecovery(recordFile, callback) {
     const record = read(recordFile);
-    const keys = ['contract', 'paperId', 'parentFile', 'parentFileSha256', 'parentPaperSha256',
+    if (!codec.hasValidHeader(record, CONTRACT)) fail('record shape differs');
+    const header = codec.recordHeader(record.contract, CONTRACT, record.schemaFingerprint);
+    const keys = [...Object.keys(header), 'paperId', 'parentFile', 'parentFileSha256', 'parentPaperSha256',
         'failureBeforeFile', 'failureBeforeFileSha256', 'failureLogFile', 'failureLogFileSha256'];
-    if (!record || Object.keys(record).sort().join(',') !== keys.sort().join(',') || record.contract !== CONTRACT
+    if (Object.keys(record).sort().join(',') !== keys.sort().join(',')
         || !/^\d{4}\.\d{4,5}$/.test(record.paperId)
         || keys.filter(key => key.endsWith('Sha256')).some(key => !/^[a-f0-9]{64}$/.test(record[key] || ''))) fail('record shape differs');
     const data = read(record.parentFile, record.parentFileSha256);

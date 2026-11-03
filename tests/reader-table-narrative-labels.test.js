@@ -70,7 +70,7 @@ test('正常生成器在语言检查前移除表格标签，一次响应即可�
     assert.equal(calls, 1);
     assert.equal(result.attempts, 1);
     assert.equal(result.fullAttempts, 1);
-    assert.ok(result.draftOrderMappings.some(mapping => mapping.contract === 'reader-table-narrative-labels-v1'));
+    assert.ok(result.draftOrderMappings.some(mapping => require('../scripts/lib/protocol-codec').isCurrentHeader(mapping, 'reader-table-narrative-labels')));
     assert.equal(JSON.stringify(draft), original);
     assert.ok(!result.article.includes('表前说明：'));
 });

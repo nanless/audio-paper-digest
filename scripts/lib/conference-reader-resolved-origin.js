@@ -246,8 +246,9 @@ function replayLocalPatch(handle, record) {
     assertOriginalPaidOrigin(handle, record.originalPaidOrigin);
     // Data-only adapter for the existing pure verifier's identity basename.
     // This path is never opened, created, renamed or installed as an active file.
-    return require('./daily-reader-operator-correction').replay({ ...record,
-        contract: 'reader-human-source-edit-v1',
+    const { contract, schemaFingerprint, ...patchInput } = record;
+    return require('./daily-reader-operator-correction').replay({
+        ...require('./protocol-codec').recordHeader('reader-human-source-edit', 'reader-human-source-edit'), ...patchInput,
         baselineCandidateFile: path.join(value.directory, hash(value.selected.identity) + '.json')
     }, structuredClone(value.selected));
 }

@@ -3083,7 +3083,7 @@ function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
     const patch = { version: 1, draftSha256: hashDraft(draft), replacements: targets.map(target => ({
         path: target.path, oldSha256: target.oldSha256, value: target.expectedCleanupValue })) };
     const cleaned = applyReaderPatch(draft, patch, targets.map(target => target.path), { availableFigureOrdinals });
-    return { draft: cleaned, mapping: { contract: 'reader-no-figure-marker-cleanup-v1',
+    return { draft: cleaned, mapping: { ...require('./protocol-codec').recordHeader('reader-no-figure-marker-cleanup', 'reader-no-figure-marker-cleanup'),
         changed: true, inputSha256: hashDraft(draft), outputSha256: hashDraft(cleaned),
         paths: targets.map(target => target.path), contentValidated: false } };
 }

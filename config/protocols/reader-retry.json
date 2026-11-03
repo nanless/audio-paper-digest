@@ -387,6 +387,99 @@
           "variant": "bounded-private-author-replay"
         }
       ]
+    },
+    {
+      "name": "reader-fact-pre-request-recovery",
+      "currentVariant": "exact-zero-request-failure-and-paid-parent",
+      "currentSchema": {
+        "purpose": "exact-zero-request-failure-and-paid-parent"
+      },
+      "historical": [
+        {
+          "tag": "reader-fact-pre-request-recovery-v1",
+          "variant": "exact-zero-request-failure-and-paid-parent"
+        }
+      ]
+    },
+    {
+      "name": "daily-reader-fact-table-claim-location",
+      "currentVariant": "exact-failed-candidate-and-source-table-location",
+      "currentSchema": {
+        "purpose": "exact-failed-candidate-and-source-table-location"
+      },
+      "historical": [
+        {
+          "tag": "daily-reader-fact-table-claim-location-v1",
+          "variant": "exact-failed-candidate-and-source-table-location"
+        }
+      ]
+    },
+    {
+      "name": "reader-table-narrative-labels",
+      "currentVariant": "narrative-label-normalization-only",
+      "currentSchema": {
+        "purpose": "narrative-label-normalization-only"
+      },
+      "historical": [
+        {
+          "tag": "reader-table-narrative-labels-v1",
+          "variant": "narrative-label-normalization-only"
+        }
+      ]
+    },
+    {
+      "name": "reader-no-figure-marker-cleanup",
+      "currentVariant": "no-figure-placeholder-cleanup-only",
+      "currentSchema": {
+        "purpose": "no-figure-placeholder-cleanup-only"
+      },
+      "historical": [
+        {
+          "tag": "reader-no-figure-marker-cleanup-v1",
+          "variant": "no-figure-placeholder-cleanup-only"
+        }
+      ]
+    },
+    {
+      "name": "publication-one-invocation-source-replay",
+      "currentVariant": "one-private-source-worker-invocation",
+      "currentSchema": {
+        "purpose": "one-private-source-worker-invocation"
+      },
+      "historical": [
+        {
+          "tag": "publication-one-invocation-source-replay-v1",
+          "variant": "one-private-source-worker-invocation"
+        }
+      ]
+    },
+    {
+      "name": "reader-resource-availability-sync",
+      "currentVariant": "exact-original-and-updated-analysis",
+      "currentSchema": {
+        "purpose": "exact-original-and-updated-analysis",
+        "newApiRequests": 0
+      },
+      "historical": [
+        {
+          "tag": "reader-resource-availability-sync-v1",
+          "variant": "exact-original-and-updated-analysis"
+        }
+      ]
+    },
+    {
+      "name": "reader-resource-identity-rebind",
+      "currentVariant": "same-source-current-resource-identity",
+      "currentSchema": {
+        "purpose": "same-source-current-resource-identity",
+        "newApiRequests": 0
+      },
+      "historical": [
+        {
+          "tag": "reader-resource-identity-rebind-v1",
+          "variant": "same-source-current-resource-identity"
+        }
+      ]
     }
   ]
 }

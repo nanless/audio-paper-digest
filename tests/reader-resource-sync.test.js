@@ -190,7 +190,8 @@ test('Reader 资源可用性刷新只重新绑定身份，保留已签名字节�
     assert.match(result.analysisStageCheckpoints.apiReaderArticle,/demo=available\(HTTP 200\)/);
     const rebind=result.analysisManifest.stages.scoringAudit.resourceAvailabilitySynchronizations[0]
         .readerResourceIdentityRebind;
-    assert.deepEqual(rebind,{contract:'reader-resource-identity-rebind-v1',previousIdentitySha256,
+    assert.deepEqual(rebind,{...require('../scripts/lib/protocol-codec').recordHeader(
+        'reader-resource-identity-rebind','reader-resource-identity-rebind'),previousIdentitySha256,
         currentIdentitySha256:result.apiReaderResources.identitySha256,resourceCount:1});
 });
 

@@ -252,8 +252,10 @@ function replay(record, candidate) {
     if (correctionMemberKind(record) !== EXISTING_NODES || record.declaredTablePlaceholderRestoration !== undefined) fail('结构子类型不能使用公开纯v1 replay取得来源权限');
     // The daily export is a pure patch verifier; its daily admission/scope is
     // deliberately never called and no fresh/arXiv identity is manufactured.
-    return require('./daily-reader-operator-correction').replay({ ...record,
-        contract: 'reader-human-source-edit-v1' }, candidate);
+    const { contract, schemaFingerprint, ...patchInput } = record;
+    return require('./daily-reader-operator-correction').replay({
+        ...codec.recordHeader('reader-human-source-edit', 'reader-human-source-edit'), ...patchInput
+    }, candidate);
 }
 // This is admission to local editing, not an additional Reader allowance. Count
 // independent, source-bound normal executions with retained content, never a

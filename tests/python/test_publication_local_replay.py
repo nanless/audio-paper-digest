@@ -32,7 +32,7 @@ class PublicationLocalReplayTests(unittest.TestCase):
         self.calls.append((json.loads(raw), kwargs))
         response = {'verified': True, 'resources': [], 'coreSummaryIssue': None,
                     'tableEvidence': {'fixture': 'real-worker-result'},
-                    'publicationReplay': {'contract': 'publication-one-invocation-source-replay-v1',
+                    'publicationReplay': {**replay.record_header('publication-one-invocation-source-replay', 'publication-one-invocation-source-replay'),
                                           'inputSha256': hashlib.sha256(raw).hexdigest()}}
         return SimpleNamespace(stdout=json.dumps(response), stderr='', returncode=0,
                                timed_out=False, output_truncated=False)

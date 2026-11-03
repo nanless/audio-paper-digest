@@ -15,6 +15,7 @@ import stat
 import time
 import weakref
 from publish_common import PublishDataValidationError
+from protocol_codec import record_header
 
 ROOT = Path(__file__).resolve().parent
 POLICY = json.loads((ROOT / 'publication_replay_policy.json').read_text())
@@ -209,7 +210,8 @@ def publication_replay_scope(paper, source_text, publication_evidence=None, *, p
             or 'coreSummaryIssue' not in response \
             or response['coreSummaryIssue'] is not None \
             or response.get('publicationReplay') != {
-                'contract': 'publication-one-invocation-source-replay-v1', 'inputSha256': _sha(payload)}:
+                **record_header('publication-one-invocation-source-replay', 'publication-one-invocation-source-replay'),
+                'inputSha256': _sha(payload)}:
         raise ValueError('同次出版的来源、资源或核心阶段未通过正常重放')
     value = {'paper': paper, 'paperSha256': _paper_pin(paper), 'sourceText': source_text,
              'publicationEvidence': publication_evidence, 'response': response,

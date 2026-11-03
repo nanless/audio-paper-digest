@@ -1,11 +1,12 @@
 'use strict';
+const codec = require('./protocol-codec');
 
 const crypto = require('node:crypto');
 const { parseAnalysis } = require('../utils.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
 const { scoringAuditBindsFinalAnalysis, hasValidIntegratedApiReaderRecords } = require('../analysis-engine.js');
 const { paperSourceQuoteBindsOriginalUrl } = require('./reader-resource-binding.js');
-const CONTRACT = 'reader-resource-availability-sync-v1';
+const CONTRACT = 'reader-resource-availability-sync';
 const sha = text => crypto.createHash('sha256').update(String(text)).digest('hex');
 const identityBody = identity => { const { identitySha256, ...body } = identity || {}; return body; };
 const protectedReaderKeys = ['apiReaderArticle','apiReaderPlan','apiReaderFigures','apiReaderAuthors','apiReaderResources',
@@ -27,7 +28,7 @@ function readerResourceIdentityRebind(paper, manifest, resources) {
         throw new Error('读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。');
     }
     return {
-        contract: 'reader-resource-identity-rebind-v1',
+        ...codec.recordHeader('reader-resource-identity-rebind', 'reader-resource-identity-rebind'),
         previousIdentitySha256: stage.resourceIdentitySha256,
         currentIdentitySha256: resources.identitySha256,
         resourceCount: resources.resources.length
@@ -127,7 +128,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails, options = {
             stages.imageSupplement.inputAnalysisSha256 = stages.scoringAudit.outputAnalysisSha256;
         }
     } else throw new Error('评分审查与最终正文之间的哈希对应关系不符合要求，不能同步资源状态。');
-    const provenance = { contract: CONTRACT, executionKind: 'deterministic_resource_projection',
+    const provenance = { ...codec.recordHeader(CONTRACT, CONTRACT), executionKind: 'deterministic_resource_projection',
         sourceSha256: paper.sourceSha256, resourceIdentitySha256: resources.identitySha256,
         beforeAnalysisSha256: beforeSha256, afterAnalysisSha256: afterSha256,
         originalScoringOutputAnalysisSha256: scoringBefore, checkpointChanges, newApiRequests: 0,

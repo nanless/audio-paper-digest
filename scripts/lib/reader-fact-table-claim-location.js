@@ -1,4 +1,5 @@
 'use strict';
+const codec = require('./protocol-codec');
 // An erroneous global table prohibition can be narrowed to its actual location.
 // The original feedback, model input, pending proof and candidate stay intact.
 const { isFreshSourceProvenance } = require('./daily-source-format');
@@ -7,7 +8,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual: equal } = require('node:util');
 const daily = require('./daily-fresh-source-plan');
 const repair = require('./reader-repair');
-const CONTRACT = 'daily-reader-fact-table-claim-location-v1';
+const CONTRACT = 'daily-reader-fact-table-claim-location';
 const FIELD = 'apiReaderFactFeedbackCorrection';
 const STAGE_FIELD = 'factReviewClaimLocationCorrection';
 const scope = new AsyncLocalStorage(), prepared = new WeakMap();
@@ -174,7 +175,7 @@ function replayPaidRequest(record, sourceText) {
     need(equal(paid, record.candidateEnvelope.payload.draft), '原真实付费补丁和正常引文映射不能重放当前完整候选');
 }
 function verifyRecord(record, paper, plan, draft) {
-    need(record?.contract === CONTRACT && record.paperId === id(paper) && record.runId === plan.runId
+    need(codec.hasValidHeader(record, CONTRACT) && record.paperId === id(paper) && record.runId === plan.runId
         && record.batchDate === plan.batchDate && daily.stableHash(record.parentPaper) === record.parentPaperSha256
         && sha(record.candidateBytes) === record.candidateSha256
         && equal(JSON.parse(record.candidateBytes), record.candidateEnvelope)
@@ -209,8 +210,12 @@ function verifyRecord(record, paper, plan, draft) {
         return inspected;
     });
 }
-function pointerFor(record) { return { contract: CONTRACT, paperId: record.paperId,
-    runId: record.runId, recordSha256: daily.stableHash(record), feedbackSha256: record.pendingProof.feedbackSha256 }; }
+function pointerFor(record) {
+    need(codec.hasValidHeader(record, CONTRACT), '更正记录格式未知');
+    return { ...codec.recordHeader(record.contract, CONTRACT, record.schemaFingerprint),
+        paperId: record.paperId, runId: record.runId, recordSha256: daily.stableHash(record),
+        feedbackSha256: record.pendingProof.feedbackSha256 };
+}
 function prepare({ paper, plan, candidateFile, claimIndex, wrongSectionIndex, keeperSectionIndex, wrongTableIndex, keeperTableIndex, formalFileSha256 }) {
     const formal = read(require('../config').FILES.deepAnalysisResult);
     need(sha(formal) === formalFileSha256 && equal(JSON.parse(formal).papers.find(value => id(value) === id(paper)), paper), '当前正式完整父稿CAS不符');
@@ -225,7 +230,7 @@ function prepare({ paper, plan, candidateFile, claimIndex, wrongSectionIndex, ke
     need(path.dirname(path.resolve(candidateFile)) === path.resolve(plan.readerAttemptsDir)
         && path.basename(candidateFile) === repair.hashDraft(envelope.identity) + '.json', '候选必须为该运行实际active文件');
     const sections = sectionsOf(paper);
-    const record = { contract: CONTRACT, paperId: id(paper), runId: plan.runId, batchDate: plan.batchDate,
+    const record = { ...codec.recordHeader(CONTRACT, CONTRACT), paperId: id(paper), runId: plan.runId, batchDate: plan.batchDate,
         parentPaper: structuredClone(paper), parentPaperSha256: daily.stableHash(paper), formalFileSha256,
         pendingProof: structuredClone(paper.analysisFactReviewObligation), sourceFiles: structuredClone(paper.analysisFactReviewObligation.sourceFiles),
         feedbackBytes: read(feedbackFile).toString('utf8'), feedbackFileSha256: sha(read(feedbackFile)),
@@ -270,7 +275,7 @@ function readInstalled(paper, plan) {
     if (!exists) { need(!marker && !stage, '更正标记缺少真实归档索引'); return null; }
     safeDirectory(directory(plan));
     const pointer = JSON.parse(read(filename));
-    need(pointer.contract === CONTRACT && /^[a-f0-9]{64}$/.test(pointer.recordSha256 || '')
+    need(codec.hasValidHeader(pointer, CONTRACT) && /^[a-f0-9]{64}$/.test(pointer.recordSha256 || '')
         && equal(pointer, marker), '索引与实际paper指针不同');
     const record = JSON.parse(read(path.join(directory(plan), pointer.recordSha256 + '.record.json')));
     need(equal(pointerFor(record), pointer), '更正记录SHA或原反馈不同');
@@ -406,12 +411,20 @@ async function replaySavedCorrection(paper, source, { reviewFeedback } = {}) {
         const content = require('./reader-content-mode');
         const mode = content.modeOf(saved.identity);
         need(mode, '已付候选缺少受支持的实际Reader模式');
-        const execution = { ...structuredClone(record.parentPaper.analysisManifest.stages.apiReaderArticle),
+        const previous = structuredClone(record.parentPaper.analysisManifest.stages.apiReaderArticle);
+        // The parent record remains archived verbatim. The new finalizer writes
+        // its own protocol groups, so do not carry the old flat declarations.
+        for (const key of [...require('./reader-stage-protocols').flatFields,
+            'readerAuthorIdentityContractVersion', 'resourceIdentityContractVersion',
+            'readerAuthorIdentityProtocol', 'readerResourceIdentityProtocol', 'readerResourceClaimsContractVersion']) {
+            delete previous[key];
+        }
+        const execution = { ...previous,
             fingerprint: deep.buildApiReaderExecutionFingerprint(base, evidence, actualSource.structuredArtifacts),
             ...content.fields(mode), attempts: saved.payload.attempts, fullAttempts: saved.payload.fullAttempts,
             transportFailures: saved.payload.transportFailures, model: saved.identity.model.model,
             reviewFeedbackSha256: sha(reviewFeedback || ''),
-            savedClaimLocationReplay: { contract: CONTRACT, candidateIdentitySha256: record.candidateIdentitySha256,
+            savedClaimLocationReplay: { ...codec.recordHeader(CONTRACT, CONTRACT), candidateIdentitySha256: record.candidateIdentitySha256,
                 candidateSha256: record.candidateSha256, originalInputFingerprint: saved.identity.inputFingerprint,
                 originalReaderRecoveryEpochSha256: saved.identity.readerRecoveryEpochSha256,
                 newReaderApiRequests: 0, figureEvidence: 'reused-original-signed-ephemeral-metadata' }

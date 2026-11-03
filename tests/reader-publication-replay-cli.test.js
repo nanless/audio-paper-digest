@@ -29,6 +29,7 @@ async function replay(extra={},coreIssue=null) {
   'node:net':{Socket:function(){}},'node:tls':{},'node:http':{},'node:https':{},'node:http2':{},
   '../env-loader':{requireExternalRuntime(){calls.push('runtime');}},
   './reader-content-mode':require('../scripts/lib/reader-content-mode'),
+  './protocol-codec':require('../scripts/lib/protocol-codec'),
   './conference-source-resource-correction':{isSourceCorrectionRecord(){return false;},
    async withSavedPublicationPaper(value,callback){calls.push('actual-source-scope-fixture');return callback(value);}},
   './reader-request-diagnostics':{validateReaderVersionMetadataPublicationCompletion(value){return assertLegacyNoPatchLineage(value,'metadata-legacy-no-lineage');}},
@@ -47,7 +48,7 @@ async function replay(extra={},coreIssue=null) {
 test('严格同次出版模式沿原正常表语义、资源与核心函数一次返回绑定真实输入的结果',async()=>{
  const result=await replay();assert.equal(result.exitCode,0,JSON.stringify(result.response));assert.equal(result.response.verified,true);
  assert.equal(result.response.coreSummaryIssue,null);assert.deepEqual(result.response.resources,[]);
- assert.deepEqual(result.response.publicationReplay,{contract:'publication-one-invocation-source-replay-v1',inputSha256:result.inputSha256});
+ assert.deepEqual(result.response.publicationReplay,{...require('../scripts/lib/protocol-codec').recordHeader('publication-one-invocation-source-replay','publication-one-invocation-source-replay'),inputSha256:result.inputSha256});
  assert.deepEqual(result.calls,['runtime','actual-source-scope-fixture','metadata-legacy-no-lineage','ordinal-legacy-no-lineage','claim-location-legacy-no-lineage','table-semantics','resource-claims','resources','normal-core-stage']);
 });
 test('真实正常核心失败仍拒绝，不从已完成声明或自报JSON产生出版证明',async()=>{

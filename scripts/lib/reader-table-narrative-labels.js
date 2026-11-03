@@ -48,7 +48,7 @@ function normalizeReaderTableNarrativeLabels(draft) {
                 length: span.prefix.length, removedSha256: sha(span.prefix), tableIndex: span.tableIndex });
         }
     }
-    return removals.length ? { contract: 'reader-table-narrative-labels-v1', changed: true, beforeDraftSha256,
+    return removals.length ? { ...require('./protocol-codec').recordHeader('reader-table-narrative-labels', 'reader-table-narrative-labels'), changed: true, beforeDraftSha256,
         afterDraftSha256: sha(JSON.stringify(draft)), removals } : null;
 }
 

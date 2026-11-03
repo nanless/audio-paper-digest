@@ -96,8 +96,13 @@ test('科学父cap只为ordinary来源纠正父生效，非纠正与原grant路�
  const scientificParentReplayHandles=new WeakMap();let scopes=0;
  const run=vm.runInNewContext(fn+'\nwithScientificParentReplay',{scientificParentReplayHandles,
   scientificParentReplayRequired:loaded=>loaded.revision.contract==='ordinary'&&loaded.parent.analysis.papers[0].local===true,
-  adapter:()=>({READER_REVISION_CONTRACT:'ordinary'}),require:()=>({CORRECTION:'conference-reader-operator-correction-v1',isSourceCorrectionRecord:paper=>!!paper.local,
-   withVerifiedMaintenanceScientificParent:(token,callback)=>{assert.ok(scientificParentReplayHandles.get(token));scopes++;return callback()}})});
+  require:name=>{
+   if(name==='./conference-reader-operator-correction')return {
+    hasOperatorProvenance:require('../scripts/lib/conference-reader-operator-correction').hasOperatorProvenance};
+   assert.equal(name,'./conference-source-resource-correction');
+   return {withVerifiedMaintenanceScientificParent:(token,callback)=>{
+    assert.ok(scientificParentReplayHandles.get(token));scopes++;return callback();}};
+  }});
  const mk=(contract,local)=>({revision:{contract},parent:{analysis:{papers:[{local}]}}});
  assert.equal(run(mk('grant',true),{}, {},()=>1),1);assert.equal(run(mk('ordinary',false),{},{},()=>2),2);assert.equal(scopes,0);
  assert.equal(run(mk('ordinary',true),{},{},()=>3),3);assert.equal(scopes,1);
