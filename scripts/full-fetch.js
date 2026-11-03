@@ -19,7 +19,7 @@ const { formatAnalysisStatus, formatAnalysisCount, formatAnalysisSources } = req
 const path = require('path');
 const crypto = require('crypto');
 const { DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
-const { fetchDailyArxivCategory, hasVerifiedCategoryPrefix } = require('./lib/daily-arxiv-prefix-source');
+const { fetchDailyArxivCategory, hasVerifiedCategoryPrefix, verifyFailedAnnouncementSource } = require('./lib/daily-arxiv-prefix-source');
 const { isDailyXmlOperationalError } = require('./lib/daily-xml-file-stdin');
 const { KEYWORD_PREFILTER_PROFILE } = require('./lib/keyword-prefilter.js');
 const { FILTER_SCOPE_CONFIGURATION_IDENTITY, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
@@ -1316,13 +1316,14 @@ function parseFullFetchArgs(argv = []) {
             if (options[key]) throw new Error(`参数不得重复：${flag}`);
             options[key] = true; index -= 1; continue;
         }
-        if (!value || !['--date', '--refilter', '--refilter-reason', '--fetch-witness-recovery-manifest'].includes(flag)) {
-            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--official-oai-recovery] [--fetch-witness-recovery-manifest ABSOLUTE_PATH] [--refilter ARXIV_ID --refilter-reason 复核原因]');
+        if (!value || !['--date', '--refilter', '--refilter-reason', '--fetch-witness-recovery-manifest', '--official-announcement-cutoff'].includes(flag)) {
+            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--official-oai-recovery] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH] [--refilter ARXIV_ID --refilter-reason 复核原因]');
         }
         if (flag === '--refilter') (options.refilterIds ||= []).push(value);
         else {
             const key = flag === '--date' ? 'date' : flag === '--fetch-witness-recovery-manifest'
-                ? 'fetchWitnessRecoveryManifest' : 'refilterReason';
+                ? 'fetchWitnessRecoveryManifest' : flag === '--official-announcement-cutoff'
+                    ? 'officialAnnouncementCutoff' : 'refilterReason';
             if (options[key] !== undefined) throw new Error(`参数不得重复：${flag}`);
             options[key] = value;
         }
@@ -1344,6 +1345,7 @@ function parseFullFetchArgs(argv = []) {
             throw new Error('旧获取见证恢复须保留完整连续性核验，不能与指定复筛混用');
         }
     }
+    validateAnnouncementRestartOptions(options);
     validateRefilterOptions(options);
     return options;
 }
@@ -1511,8 +1513,62 @@ async function runFullFetch(options = {}) {
     }
 }
 
+function validateAnnouncementRestartOptions(options) {
+    if (options.officialAnnouncementCutoff === undefined) return;
+    const cutoff = options.officialAnnouncementCutoff;
+    if (!options.date || options.requirePreviouslyFetched !== true || options.officialOaiRecovery !== true
+            || options.refilterIds !== undefined || options.refilterReason !== undefined
+            || options.fetchWitnessRecoveryManifest !== undefined || typeof cutoff !== 'string'
+            || !Number.isFinite(Date.parse(cutoff)) || new Date(cutoff).toISOString() !== cutoff) {
+        throw new Error('公告截止恢复须使用当日日期、完整连续性和官方 OAI，并提供标准 UTC 时间；不能与其他恢复混用');
+    }
+}
+
+function validateFailedAnnouncementRound(checkpoint, raw, today, previous, fingerprints, publishedIds) {
+    const entries = checkpoint?.arxiv, categories = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const terminal = entry => ['complete', 'failed'].includes(entry?.status) && hasValidFetchSourceIntegrity(entry);
+    const matching = row => row?.batchDate === today
+        && stableContentSha256(row.fetchBoundary) === stableContentSha256(previous)
+        && ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']
+            .every(key => row[key] === fingerprints[key]);
+    const suppliedCategories = entries && Object.keys(entries);
+    if (!matching(checkpoint) || !hasFetchCoverageStrategy(checkpoint)
+            || !suppliedCategories?.length
+            || suppliedCategories.some(id => !categories.includes(id) || !terminal(entries[id]))
+            || (checkpoint.huggingface != null && !terminal(checkpoint.huggingface))
+            || !Array.isArray(checkpoint.categoryOrder)
+            || checkpoint.categoryOrder.length !== categories.length
+            || new Set(checkpoint.categoryOrder).size !== categories.length
+            || checkpoint.categoryOrder.some(id => !categories.includes(id))
+            || checkpoint.fetchSourcesSha256 !== getFetchSourcesSha256(checkpoint)
+            || stableContentSha256(checkpoint.historicalDedupIds) !== stableContentSha256([...publishedIds].sort())) {
+        throw new Error('公告截止恢复要求完整保存且身份有效的当日来源检查点');
+    }
+    const staleAnnouncements = {};
+    for (const id of suppliedCategories) {
+        const entry = entries[id];
+        if (entry.status === 'failed') {
+            const evidence = verifyFailedAnnouncementSource(entry.health, previous, id, publishedIds);
+            if (evidence) staleAnnouncements[id] = evidence;
+        }
+    }
+    if (!Object.keys(staleAnnouncements).length) {
+        throw new Error('公告截止恢复缺少真实双429后的官方公告时间失败');
+    }
+    if (raw && (!matching(raw) || raw.batchId !== checkpoint.batchId
+            || raw.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256
+            || stableContentSha256(raw.sourceHealth?.fetchBoundary) !== stableContentSha256(previous)
+            || !hasRequiredSourceFailure(raw.sourceHealth)
+            || !Array.isArray(raw.papers) || raw.rawPapersSha256 !== stableContentSha256(raw.papers))) {
+        throw new Error('公告截止恢复不能重用来源已完整或身份不符的原候选文件');
+    }
+    return { arxiv: Object.fromEntries(categories.map(id => [id, entries[id]?.status ?? 'absent'])),
+        huggingface: checkpoint.huggingface?.status ?? 'absent', staleAnnouncements };
+}
+
 async function runFullFetchBody(options = {}, auditContext = {}) {
     const refilterRequest = validateRefilterOptions(options);
+    validateAnnouncementRestartOptions(options);
     let batchStartedAt = getBeijingISOString();
     let batchDate = batchStartedAt.slice(0, 10);
     if (options.date !== undefined) {
@@ -1532,13 +1588,31 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     const existingIds = new Set(historicalDedupIds);
     const historicalExistingIds = new Set(historicalDedupIds);
     console.log(`正式已发布独立论文页共 ${existingIds.size} 篇；库内未发布记录仍参加补更筛选\n`);
-    const fetchBoundary = resolvePinnedFetchBoundary(blogRepo, batchStartedAt,
-        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds, {
-            requirePreviouslyFetched: options.requirePreviouslyFetched === true,
-            fetchWitnessRecoveryManifest: options.fetchWitnessRecoveryManifest
-        });
+    const boundaryOptions = {
+        requirePreviouslyFetched: options.requirePreviouslyFetched === true,
+        fetchWitnessRecoveryManifest: options.fetchWitnessRecoveryManifest
+    };
+    let fetchBoundary = resolvePinnedFetchBoundary(blogRepo, batchStartedAt,
+        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds, boundaryOptions);
     verifyPreviousFetchWitnessArchive(fetchBoundary);
-    if (fetchBoundary.continuity?.contract === 'daily-fetch-continuity-recovery-v1') {
+    let announcementRestart;
+    if (options.officialAnnouncementCutoff !== undefined) {
+        const previous = fetchBoundary, cutoff = options.officialAnnouncementCutoff;
+        if (getBeijingDateStringForInstant(cutoff) !== today) throw new Error('公告截止必须仍属于同一北京时间日更');
+        fetchBoundary = resolveDailyFetchBoundary(blogRepo, { ...boundaryOptions, until: cutoff });
+        verifyPreviousFetchWitnessArchive(fetchBoundary);
+        const originalFingerprints = buildCandidateFingerprints(historicalExistingIds, publishedIds, previous);
+        announcementRestart = await require('./lib/daily-announcement-restart').prepareAnnouncementRestart({
+            cutoff, previous, boundary: fetchBoundary, checkpointPath: FETCH_CHECKPOINT_FILE, rawPath: RAW_CANDIDATES_FILE,
+            downstreamPaths: [FILTER_DECISIONS_FILE, FILTERED_FILE, RESULT_FILE, LEGACY_RESULT_FILE],
+            archiveRoot: path.join(Config.DATA_DIR, 'runtime', 'daily-announcement-restarts', today),
+            categories: Config.ARXIV_CATEGORIES, requestScheduler: createProductionArxivRequestScheduler(),
+            validatePrevious: (checkpoint, raw) => validateFailedAnnouncementRound(
+                checkpoint, raw, today, previous, originalFingerprints, publishedIds)
+        });
+        console.log(`官方公告截止恢复：原截止 ${previous.until} 已保全，新抓取截止 ${cutoff}；所有来源重新完整抓取。`);
+    }
+    if (isRecoveryContinuity(fetchBoundary.continuity)) {
         await require('./lib/daily-fetch-witness-recovery').activateBoundary(fetchBoundary, {
             dataRoot: Config.DATA_DIR, blogRepo
         });
@@ -1706,7 +1780,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             [supplementCategories[i], supplementCategories[j]] = [supplementCategories[j], supplementCategories[i]];
         }
         const initialCategoryOrder = [...coreCategories, ...supplementCategories].map(category => category.id);
-        let fetchCheckpoint = loadFetchCheckpoint(today, candidateFingerprints.candidateFingerprint) || {
+        let fetchCheckpoint = (!announcementRestart && loadFetchCheckpoint(today, candidateFingerprints.candidateFingerprint)) || {
             timestamp: batchStartedAt,
             batchStartedAt,
             batchDate,
@@ -1714,6 +1788,8 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             ...candidateFingerprints,
             historicalDedupIds,
             categoryOrder: initialCategoryOrder,
+            ...(announcementRestart ? { officialAnnouncementRestart: { manifestFile: announcementRestart.manifestFile,
+                manifestSha256: announcementRestart.manifestSha256 } } : {}),
             arxiv: {},
             huggingface: null
         };
@@ -1723,6 +1799,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         if (stableHash(fetchCheckpoint.historicalDedupIds) !== stableHash(historicalDedupIds)) {
             throw new Error('抓取记录中的历史去重列表与本次计算的去重列表不一致，不能混用。');
         }
+        announcementRestart?.assertCurrent();
         saveFetchCheckpoint(fetchCheckpoint);
         for (const warning of sourceAcquisitionPolicy.preflightWarnings({ date: batchDate })) {
             if (warning.level === 'warn') console.warn(`⚠️ 抓取预检: ${warning.message}`);
@@ -1786,6 +1863,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                         requestScheduler: arxivRequestScheduler,
                         strategyState: arxivStrategyState,
                         officialOaiRecovery: options.officialOaiRecovery === true,
+                        announcementEvidence: announcementRestart?.announcements.get(category.id),
                         triggerFailure: cachedCategory?.status === 'failed' ? cachedCategory.health : undefined,
                         createOaiEvidenceDir: () => path.join(Config.DATA_DIR, 'runtime', 'daily-oai-source-runs',
                             batchId, crypto.randomUUID(), category.id)

@@ -10,7 +10,7 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--official-oai-recovery] [--fetch-witness-recovery-manifest ABSOLUTE_PATH]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals] [--official-oai-recovery] [--official-announcement-cutoff UTC] [--fetch-witness-recovery-manifest ABSOLUTE_PATH]
 
 运行 LLM/API 抓取、筛选、深度分析和博客审查。已退役整批 Manual 写作链；
 单篇受控人工修正与独立审查仍可用于三个流程的失败恢复。
@@ -72,6 +72,7 @@ shift
 start_stage="fetch"
 no_visuals_option_seen=0
 official_oai_recovery=0
+official_announcement_cutoff=""
 fetch_witness_recovery_manifest=""
 if [ "${PD_DAILY_API_MODE:-1}" != "1" ]; then
   echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
@@ -105,6 +106,14 @@ while [ "$#" -gt 0 ]; do
       fi
       official_oai_recovery=1
       shift
+      ;;
+    --official-announcement-cutoff)
+      if [ -n "$official_announcement_cutoff" ] || [ "$#" -lt 2 ] || [[ "$2" == --* ]] || [ -z "$2" ]; then
+        echo "--official-announcement-cutoff 须提供且只提供一次标准 UTC 时间。" >&2
+        exit 2
+      fi
+      official_announcement_cutoff="$2"
+      shift 2
       ;;
     --fetch-witness-recovery-manifest)
       if [ -n "$fetch_witness_recovery_manifest" ] || [ "$#" -lt 2 ]; then
@@ -143,6 +152,10 @@ esac
 
 if [ "$official_oai_recovery" -eq 1 ] && [ "$start_index" -ne 1 ]; then
   echo "--official-oai-recovery 仅适用于抓取阶段。" >&2
+  exit 2
+fi
+if [ -n "$official_announcement_cutoff" ] && { [ "$start_index" -ne 1 ] || [ "$official_oai_recovery" -ne 1 ] || [ -n "$fetch_witness_recovery_manifest" ]; }; then
+  echo "--official-announcement-cutoff 仅适用于官方 OAI 抓取恢复，不能与旧见证恢复混用。" >&2
   exit 2
 fi
 if [ -n "$fetch_witness_recovery_manifest" ] && [ "$start_index" -ne 1 ]; then
@@ -187,6 +200,7 @@ run_stage() {
 if [ "$start_index" -eq 1 ]; then
   fetch_options=(--require-previously-fetched)
   if [ "$official_oai_recovery" -eq 1 ]; then fetch_options+=(--official-oai-recovery); fi
+  if [ -n "$official_announcement_cutoff" ]; then fetch_options+=(--official-announcement-cutoff "$official_announcement_cutoff"); fi
   if [ -n "$fetch_witness_recovery_manifest" ]; then
     fetch_options+=(--fetch-witness-recovery-manifest "$fetch_witness_recovery_manifest")
   fi

@@ -226,6 +226,28 @@ function originalOaiContinuationTrigger(health, boundary, categoryId, existingId
     return proof.triggerFailure;
 }
 
+function verifyFailedAnnouncementSource(health, boundary, categoryId, existingIds) {
+    const message = 'Announcement XML replay failed: ValueError: Official announcement RSS: stale/future announcement publication or build date';
+    if (!health?.failures?.some(row => row.error === message)) return null;
+    originalOaiContinuationTrigger(health, boundary, categoryId, existingIds);
+    const proof = health.provider.oai;
+    if (proof.announcement || proof.streams?.arXivRaw?.length !== 0 || proof.streams?.arXiv?.length !== 0) {
+        throw new Error('原公告时间失败必须发生在 OAI 正式分页之前');
+    }
+    const prefix = `rss-${categoryId}-`;
+    const names = fs.readdirSync(proof.evidenceDir).filter(name => name.startsWith(prefix));
+    if (names.length !== 1 || !/^[a-f0-9]{64}\.xml$/.test(names[0].slice(prefix.length))) {
+        throw new Error('原公告时间失败缺少唯一的实际官方 RSS 字节');
+    }
+    const filePath = path.join(proof.evidenceDir, names[0]);
+    const raw = require('./publication-file-primitives').readRegular(filePath, 16 * 1024 * 1024);
+    if (!raw.bytes.length || raw.sha256 !== names[0].slice(prefix.length, -4)
+            || (fs.lstatSync(filePath).mode & 0o777) !== 0o600) {
+        throw new Error('原公告时间失败的实际 RSS 文件身份或字节不符');
+    }
+    return { filePath, sha256: raw.sha256, bytes: raw.bytes.length };
+}
+
 function verifyPreviousOaiFailures(descriptor, boundary, categoryId, existingIds) {
     const visited = new Set();
     while (descriptor !== undefined) {
@@ -322,7 +344,8 @@ async function fetchDailyArxivCategory(categoryId, boundary, existingIds, option
         try {
             evidenceDir = options.createOaiEvidenceDir?.();
             const result = await require('./daily-arxiv-oai-source').fetchDailyOaiCategory(categoryId, boundary, existingIds,
-                { evidenceDir, requestScheduler: options.requestScheduler, triggerFailure });
+                { evidenceDir, requestScheduler: options.requestScheduler, triggerFailure,
+                    announcementEvidence: options.announcementEvidence });
             returnedHealth = result._sourceHealth;
             if (previousFailure) writeOaiContinuationAnchor(returnedHealth, previousFailure, boundary, categoryId, existingIds);
             return result;
@@ -405,4 +428,4 @@ async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options
     }
 }
 
-module.exports = { CONTRACT, fetchCategoryPrefix, fetchDailyArxivCategory, hasVerifiedCategoryPrefix, hasEligibleOaiTrigger };
+module.exports = { CONTRACT, fetchCategoryPrefix, fetchDailyArxivCategory, hasVerifiedCategoryPrefix, hasEligibleOaiTrigger, verifyFailedAnnouncementSource };

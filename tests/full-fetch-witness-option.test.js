@@ -57,3 +57,13 @@ test('日更 shell 不拆开带空格恢复路径，拒绝非抓取阶段及不�
         assert.doesNotMatch(result.stdout, /论文速递阶段:/);
     }
 });
+
+test('公告截止恢复须显式绑定当日连续性和官方 OAI', () => {
+    const cutoff = '2026-11-03T05:00:00.000Z';
+    const args = ['--date', '2026-11-03', '--require-previously-fetched', '--official-oai-recovery'];
+    assert.equal(parseFullFetchArgs([...args, '--official-announcement-cutoff', cutoff]).officialAnnouncementCutoff, cutoff);
+    assert.throws(() => parseFullFetchArgs(['--official-announcement-cutoff', cutoff]), /公告截止恢复/);
+    assert.throws(() => parseFullFetchArgs([...args, '--official-announcement-cutoff', '2026-11-03']), /公告截止恢复/);
+    assert.throws(() => parseFullFetchArgs([...args, '--official-announcement-cutoff', cutoff,
+        '--fetch-witness-recovery-manifest', '/original.json']), /公告截止恢复/);
+});
