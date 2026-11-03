@@ -448,6 +448,106 @@ function validateCompletion(paper){
             fail('cold completion paper/run/source/records changed during replay','run');
     }
 }
+// A retained unresolved candidate is a hint, not proof that the article
+// was produced by an operator. Test the exact archived ordinary article only
+// when that hint would otherwise refuse it. This creates no new success,
+// request, or usage record and leaves the ordinary Reader gates in force.
+function matchesArchivedOrdinaryCompletion(paper, attempts, actualRun, runFile) {
+    const stage = paper.analysisManifest?.stages?.apiReaderArticle;
+    if (stage?.status !== 'complete' || stage.executionKind !== undefined
+        || stage.operatorProvenance !== undefined || stage.ordinalPatchHistory !== undefined
+        || stage.newReaderApiRequests !== undefined || !Number.isSafeInteger(stage.attempts)
+        || stage.attempts < 1 || stage.attempts > 6
+        || !require('./reader-content-mode').is(stage, 'source-only')) return false;
+    const daily = require('./daily-fresh-source-plan'), fresh = require('./fresh-analysis-context');
+    const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({
+        ...actualRun, runDir: path.dirname(runFile)
+    }));
+    if (!daily.isPaperBoundToPlan(paper, plan)) return false;
+    const paperSha = stableSha(paper);
+    for (const name of fs.readdirSync(attempts)) {
+        if (!/^[a-f0-9]{64}\.[a-f0-9-]{36}\.resolved\.json$/.test(name)) continue;
+        const filename = path.join(attempts, name);
+        const initial = read(filename);
+        const identity = initial.value?.identity;
+        if (identity?.paperId !== paper.arxivId || identity.freshAnalysis?.runId !== plan.runId
+            || identity.sourceSha256 !== paper.sourceSha256
+            || !require('./reader-content-mode').is(identity, 'source-only')) continue;
+        const checked = require('./reader-recovery-revision').readFullResolvedReaderForReadOnlyInspection(
+            attempts, filename, initial.sha256);
+        const {payload} = checked.envelope;
+        if (payload.attempts !== stage.attempts || ![1,2].includes(payload.fullAttempts)
+            || payload.fullAttempts > payload.attempts || payload.transportFailures !== 0
+            || payload.noProgress !== 0 || payload.failureSignature !== '' || payload.issues.length
+            || payload.ordinalPatchCompilations?.length || payload.readerRecoveryRevisions?.length
+            || !Array.isArray(payload.draftOrderMappings) || payload.draftOrderMappings.length > 2
+            || new Set(payload.draftOrderMappings.map(mapping => mapping?.contract)).size !== payload.draftOrderMappings.length
+            || payload.draftOrderMappings.some(mapping => {
+                const codec = require('./protocol-codec'), draftSha = repair.hashDraft(payload.draft);
+                return !(codec.hasValidHeader(mapping, 'reader-draft-order') && mapping.outputSha256 === draftSha
+                    || codec.hasValidHeader(mapping, 'reader-table-narrative-labels') && mapping.changed === true
+                        && SHA.test(mapping.beforeDraftSha256) && SHA.test(mapping.afterDraftSha256)
+                        && Array.isArray(mapping.removals) && mapping.removals.length > 0
+                    || mapping?.contract === 'reader-source-quote-whitespace-v1' && mapping.changed === true
+                        && mapping.sourceTextSha256 === identity.sourceSha256
+                        && SHA.test(mapping.beforeDraftSha256) && SHA.test(mapping.afterDraftSha256)
+                        && Array.isArray(mapping.quotes) && mapping.quotes.length > 0
+                        && mapping.quotes.every(quote => Number.isSafeInteger(quote.bindingIndex)
+                            && quote.bindingIndex >= 0 && Number.isSafeInteger(quote.quoteIndex) && quote.quoteIndex >= 0
+                            && SHA.test(quote.beforeSha256) && SHA.test(quote.afterSha256)));
+            })
+            || payload.explicitReaderRetryRound
+            || payload.implementationRepairAllowanceProof || payload.implementationRepairAllowanceLineage
+            || payload.metadataRecoveryProof || !payload.draft || typeof payload.rawDraft !== 'string'
+            || !isDeepStrictEqual(JSON.parse(payload.rawDraft), payload.draft)
+            || !Array.isArray(payload.imageEvidence) || !Array.isArray(paper.apiReaderFigures)
+            || payload.imageEvidence.length !== stage.imageEvidenceCount
+            || stableSha(payload.imageEvidence) !== stage.imageEvidenceSha256
+            || repair.hashDraft(payload.ephemeralImageEvidence) !== stage.modelImagePreflightEvidenceSha256
+            || stableSha(payload.providerImageExclusions || []) !== stage.providerImageExclusionSha256
+            || Object.entries({ model: identity.model?.model, protocol: identity.model?.protocol,
+                temperature: identity.model?.temperature, maxTokens: identity.model?.maxTokens,
+                maxResponseBytes: identity.model?.maxResponseBytes, repairMaxTokens: identity.repairMaxTokens,
+                repairTemperature: identity.repairTemperature, promptTemplateSha256: identity.promptSha256,
+                repairPromptTemplateSha256: identity.repairPromptSha256,
+                sourceBindingsSourceTextSha256: identity.sourceSha256 }).some(([key,value]) =>
+                value === undefined || stage[key] !== value)) continue;
+        const source = savedSourceScope(paper,identity,attempts);
+        if (stage.structuredArtifactsSha256 !== source.structuredArtifacts?.payloadSha256
+            || paper.apiReaderFigures.some(figure => payload.imageEvidence.filter(image =>
+                image.kind === 'figure' && image.status === 'ready' && image.ordinal === figure.ordinal
+                && image.url === figure.url && image.sha256 === figure.assetSha256
+                && image.sourceSha256 === image.sha256).length !== 1)) continue;
+        const matches = require('./analysis-stop-control').withModelRequestsForbidden(() =>
+            daily.withDailyFreshAnalysisContext(plan, () => fresh.withFreshPaperContext(paper, () => {
+                if (!isDeepStrictEqual(identity.freshAnalysis,fresh.freshAnalysisIdentity(paper.arxivId))) return false;
+                const deep = require('../deep-analyzer');
+                const evidence = deep.buildApiReaderEvidenceContext('',source.text,source.structuredArtifacts,paper.arxivId);
+                const parsed = deep.parseApiReaderArticleResult(payload.rawDraft, {
+                    arxivId: paper.arxivId, ...require('./reader-record-format').compilationOptionsForSavedPlan(paper.apiReaderPlan),
+                    availableFigureOrdinals: payload.imageEvidence.filter(image => image.kind === 'figure' && image.status === 'ready')
+                        .map(image => image.ordinal), requireIntegratedTables: true,
+                    minimumIntegratedTables: require('./reader-contract').readerRequirements({version:3,
+                        availableTableCount:[...evidence.matchAll(/^TABLE_(\d+):/gm)].length}).minimumTables,
+                    requireSourceBindings: true, allowDeterministicQuoteRepair: true, allowDeterministicUnsupportedClaimPruning: true,
+                    enforceResourceAvailabilityClaims: true,
+                    verifiedResourceIdentity: deep.replayVerifiedReaderResourceIdentity(paper.apiReaderResources,source.text),
+                    sourceText: source.text, structuredArtifacts: source.structuredArtifacts
+                });
+                const final = deep.replayApiReaderFinalDisplay(parsed,source,paper.apiReaderFigures,paper.arxivId);
+                return final.article === paper.apiReaderArticle && sha(final.article) === stage.articleSha256
+                    && stage.articleSha256 === paper.apiReaderArticleSha256
+                    && isDeepStrictEqual(final.plan,paper.apiReaderPlan) && stableSha(final.plan) === stage.planSha256
+                    && stage.planSha256 === paper.apiReaderPlanSha256
+                    && isDeepStrictEqual(final.figures,paper.apiReaderFigures) && stableSha(final.figures) === stage.figuresSha256;
+            })));
+        checked.assertUnchanged();
+        if (stableSha(paper) !== paperSha || !isDeepStrictEqual(source,savedSourceScope(paper,identity,attempts)))
+            fail('archived ordinary completion changed during replay','run');
+        if (matches) return true;
+    }
+    return false;
+}
 function readVerifiedCompletion(paper, planning=false){
     const stage=paper?.analysisManifest?.stages?.apiReaderArticle,prov=paper?.freshRewriteProvenance;
     const marked=paper?.analysisManifest?.contracts?.readerTargetOrdinalPatch!==undefined||stage?.ordinalPatchContract!==undefined||stage?.ordinalPatchSchemaFingerprint!==undefined||stage?.ordinalPatchCompilations!==undefined||stage?.ordinalCompletionProof!==undefined;
@@ -469,7 +569,8 @@ function readVerifiedCompletion(paper, planning=false){
         &&!Object.hasOwn(paper,'apiReaderArticle')&&!Object.hasOwn(paper,'apiReaderPlan');
     const operatorCompletion=operator.hasOperatorProofMarker(stage?.operatorProvenance)
         ||history?.reason==='operator-correction-supersedes-ordinal-completion'
-        ||(!unfinishedPlanning&&!files.length&&operator.hasRetainedOrdinalCandidate(paper,attempts));
+        ||(!unfinishedPlanning&&!files.length&&operator.hasRetainedOrdinalCandidate(paper,attempts)
+            &&(marked||!matchesArchivedOrdinaryCompletion(paper,attempts,actualRun,runFile)));
     if(operatorCompletion){
         if(marked)fail('operator completion retains ordinary completion markers','run');
         const ref=history?.previousCompletionProof;
