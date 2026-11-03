@@ -67,7 +67,8 @@ async function installFixture(page, initial={}) {
         case 'pdf.outline':return {chapters:[]};
         case 'pdf.close':case 'pdf.frame':case 'app.external':return {};
         case 'settings.save':if(b.failSettings)throw Error('Fixture settings disk failure');Object.assign(b.settings,payload);return copy(b.settings);
-        case 'cloud.state':return {account:'',folder:'PaperDigest',automatic:false,intervalHours:24,credentialState:'unknown',busy:false};
+        case 'cloud.state':return {account:b.cloudAccount||'',folder:'PaperDigest',automatic:false,intervalHours:24,credentialState:'unknown',busy:false};
+        case 'cloud.syncAll':return {workspace:{files:2,conflicts:1},personal:{error:'模拟个人资料写入被拒绝'}};
         case 'zotero.status':return {running:true,version:'10.0.6',writesSupported:true,authorized:false,remember:false,archives:[]};
         case 'zotero.collections':return [];
         case 'jobs.list':return copy({jobs:b.jobs||[]});
@@ -98,6 +99,14 @@ if(require.main===module)(async()=>{
   const page=await browser.newPage({viewport:{width:1440,height:960}}), pageErrors=[];page.setDefaultTimeout(10000);page.on('pageerror',e=>pageErrors.push(e.message));await installFixture(page);await page.goto(base);
   await page.waitForSelector('[data-library-open="arxiv:2610.27491"]');
   await check('PDF is never opened by bootstrap',async()=>assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='pdf.open').length),0));
+  await check('one-click full sync reports independent research success and personal failure',async()=>{
+    await page.evaluate(()=>__fixture.cloudAccount='fixture@example.test');
+    await page.locator('#sync-personal').click();
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('模拟个人资料写入被拒绝'));
+    assert.match(await page.locator('#toast').innerText(),/研究资料新增 2 个文件.*1 项原件可在 Finder 核对/);
+    assert.equal(await page.evaluate(()=>__calls.filter(c=>c.command==='cloud.syncAll').length),1);
+    await page.waitForFunction(()=>!document.querySelector('#sync-personal').disabled);
+  });
   await page.locator('[data-library-open="arxiv:2610.27491"]').click();await page.waitForFunction(()=>document.querySelector('#guide-frame')?.contentDocument?.querySelectorAll('table').length===4);
   const guide=()=>page.frameLocator('#guide-frame');
   await check('real seed: one title, four complete formulas, three SHA-checked scientific images, four original tables',async()=>{
@@ -150,6 +159,21 @@ if(require.main===module)(async()=>{
     await page.evaluate(()=>__fixture.failNote=true);await page.locator('#note-editor').fill('Unsaved fixture edit');await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Fixture note disk failure'));
     assert.ok(!(await page.locator('#note-status').innerText()).includes('已保存'));assert.ok(!(await page.evaluate(()=>__fixture.personal.notes['arxiv:2610.27491'].text)).includes('Unsaved'));
     await page.evaluate(()=>__fixture.failNote=false);await page.locator('#note-editor').fill('Recovered fixture note');await page.waitForFunction(()=>__fixture.personal.notes['arxiv:2610.27491'].text==='Recovered fixture note');
+  });
+  await check('synced Android research answer appears in the open Mac analysis view',async()=>{
+    await page.locator('#tab-analysis').click();
+    await page.evaluate(()=>{
+      __fixture.personal.sessions.push({
+        id:'aca3ed27-3e6c-4d9f-8bba-44bd60799fff',paperID:'arxiv:2610.27491',
+        kind:'study',status:'completed',question:'跨端研究问题',answer:'安卓原研究回答',
+        syncedHistory:true,source:{kind:'guide'}
+      });
+      window.dispatchEvent(new Event('personal.synced'));
+    });
+    await page.waitForFunction(()=>document.querySelector('#analysis-result iframe')?.contentDocument?.body?.textContent.includes('安卓原研究回答'));
+    assert.match(await page.locator('#analysis-result .session-card header').innerText(),/同步历史/);
+    await page.evaluate(()=>{__fixture.personal.sessions=[];window.dispatchEvent(new Event('personal.synced'));});
+    await page.locator('#tab-note').click();
   });
   await check('post-sync flush writes newly changed reading fields without rewriting untouched progress',async()=>{
     const result=await page.evaluate(async()=>{

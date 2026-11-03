@@ -75,7 +75,7 @@ class StudyService private constructor(private val store: PersonalStore, private
         }
         val historicalFingerprint=sha256(canonical(oldIdentity).toByteArray())
         if (!force) {
-            val same = store.snapshot().getJSONArray("sessions").objects().filter { it.optString("fingerprint") in setOf(fingerprint,historicalFingerprint) }
+            val same = store.snapshot().getJSONArray("sessions").objects().filter { !it.optBoolean("syncedHistory") && it.optString("fingerprint") in setOf(fingerprint,historicalFingerprint) }
             val existing = same.firstOrNull { it.optString("status") == "completed" }
             if (existing != null) return@withLock verifySaved(existing).put("reused", true)
             val floorIDs = RequestContinuity.read(store.directory).map { it.id }.toSet()
@@ -101,6 +101,7 @@ class StudyService private constructor(private val store: PersonalStore, private
         val prepared = lock.withLock {
             UUID.fromString(id)
             val session = store.session(id) ?: throw AppFailure("missing", "研究任务不存在")
+            requireLocalStudy(session)
             if (session.optString("status") == "completed") return@withContext verifySaved(session)
             if (session.optBoolean("requestIssued")) return@withContext recoverSavedLocked(id)
             require(session.optString("status") == "prepared" && !session.optBoolean("requestIssued")) { "这次请求已发出或中断，请先核对保存结果，不会自动重发" }
@@ -214,6 +215,7 @@ class StudyService private constructor(private val store: PersonalStore, private
         UUID.fromString(id)
         require(id !in inFlight) { "原请求仍在执行，请待其结束再核验保存结果" }
         val original = store.session(id) ?: throw AppFailure("missing", "原研究记录不存在")
+        requireLocalStudy(original)
         if (original.optString("status") == "completed") return verifySaved(original).put("recovered", true)
         require(androidStudySessionHeader(original) && original.optBoolean("requestIssued") && original.optString("status") in listOf("pending", "failed", "cancelled", "interrupted")) { "此记录不是可核验的原 Android 已派发研究" }
         val startedAt = original.getString("startedAt")
@@ -254,7 +256,12 @@ class StudyService private constructor(private val store: PersonalStore, private
         return verifySaved(candidate).put("recovered", true)
     }
 
+    private fun requireLocalStudy(session: JSONObject) {
+        require(!session.optBoolean("syncedHistory")) { "同步的研究记录只能查看，不能在本机重新派发或核验为本机结果" }
+    }
+
     fun verifySaved(session: JSONObject): JSONObject {
+        requireLocalStudy(session)
         val id = session.getString("id"); UUID.fromString(id)
         val input = JsonFiles.read(File(usage, "$id-input.json"), 8 * 1024 * 1024L)
         val response = JsonFiles.read(File(usage, "$id-response.bin"), 16 * 1024 * 1024L)

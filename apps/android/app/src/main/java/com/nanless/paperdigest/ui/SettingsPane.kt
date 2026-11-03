@@ -171,11 +171,11 @@ import java.time.ZoneOffset
  Row{Text("自动完整备份",Modifier.weight(1f));Switch(automatic,{automatic=it;dirty=true;retireList()},enabled=!busy)};OutlinedTextField(interval,{interval=it.filter(Char::isDigit);dirty=true;retireList()},label={Text("备份间隔（6–168 小时）")},enabled=!busy)
  Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({retireList();val submitted=obj("account" to account,"folder" to folder,"automatic" to automatic,"intervalHours" to interval.toIntOrNull());saving=true;scope.launch{try{controller.execute("cloud.save",submitted);if(account==submitted.optString("account")&&folder==submitted.optString("folder")&&automatic==submitted.optBoolean("automatic")&&interval==submitted.optString("intervalHours"))dirty=false;error=null;if(targetChanged)password()}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!busy&&account.isNotBlank()&&CloudArchive.validFolder(folder)&&(interval.toIntOrNull()?:0)in 6..168){Text(if(targetChanged)"保存账号并填写应用密码…" else "保存备份设置")};TextButton({retireList();account=cloud.optString("account");folder=cloud.optString("folder","PaperDigest");automatic=cloud.optBoolean("automatic");interval=cloud.optInt("intervalHours",24).toString();dirty=false},enabled=dirty&&!busy){Text("撤销未保存更改")}}
  OutlinedButton(password,enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("填写或更换应用密码并检查…")}
- Text("3. 同步个人资料或保存完整备份",style=MaterialTheme.typography.titleMedium)
- Button({action("cloud.syncPersonal",JSONObject())},enabled=!dirty&&!busy&&!state.settings.optBoolean("offlineMode")&&cloud.optString("account").isNotBlank()){
+ Text("3. 双向同步或保存完整备份",style=MaterialTheme.typography.titleMedium)
+ Button({action("cloud.syncWorkspace",JSONObject())},enabled=!dirty&&!busy&&!state.settings.optBoolean("offlineMode")&&cloud.optString("account").isNotBlank()){
      Text("一键同步 WebDAV")
  }
- Text("双向同步收藏、待读、笔记、批注和阅读进度。",style=MaterialTheme.typography.bodySmall)
+ Text("双向同步收藏、待读、笔记、批注、阅读进度及原始研究资料。相互冲突的原件可从资料设置的保留快照导出。",style=MaterialTheme.typography.bodySmall)
  OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("重新检查连接与权限")}
  Text(if(cloud.optString("account").isBlank())"尚未配置账号"else when(cloud.optString("credentialState")){"present"->"应用密码已保存；以最近一次连接检查结果为准";"missing"->"尚未保存应用密码";else->"账号已保存，连接待检查"},style=MaterialTheme.typography.bodySmall)
  if(pending!=null)Text(if(pending.optBoolean("damaged"))"未完成材料损坏或缺少检查点。可原样保留，但不能保证完整恢复。" else "有未完成的同一快照：${pending.optLong("fileCount")} 文件 / ${pending.optLong("encodedBytes")} 字节。继续不会创建新版本。")

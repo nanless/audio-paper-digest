@@ -182,7 +182,7 @@ import Darwin
                   let id=candidate["id"] as? String else{return false}
             return (try? exportEvidence(sessionID:id,paperID:paperID)["available"] as? Bool)==true
         }
-        if !force && !check, let previous=sessions.last(where:{$0["status"] as? String=="complete"&&sameStoredInput($0)}) {
+        if !force && !check, let previous=sessions.last(where:{$0["status"] as? String=="complete" && $0["syncedHistory"] as? Bool != true && sameStoredInput($0)}) {
             var copy=previous; copy["reused"]=true; return copy
         }
         let today=String(ISO8601DateFormatter().string(from:Date()).prefix(10))
@@ -288,7 +288,7 @@ import Darwin
                 let payload=try JSONSerialization.data(withJSONObject:envelope.filter{$0.key != "mac"},options:.sortedKeys)
                 let key=try responseIntegrityKey(create:false)
                 guard HMAC<SHA256>.isValidAuthenticationCode(mac,authenticating:payload,using:key),
-                      let original=store.session(id),let fingerprint=original["fingerprint"] as? String,
+                      let original=store.session(id),original["syncedHistory"] as? Bool != true,let fingerprint=original["fingerprint"] as? String,
                       saved["fingerprint"] as? String==fingerprint,
                       let inputSHA=original["inputSHA256"] as? String,saved["inputSHA256"] as? String==inputSHA,
                       ["complete","failed"].contains(saved["status"] as? String ?? ""),saved["requestIssued"] as? Bool==true else{throw DesktopError.message("恢复材料与原请求不符")}

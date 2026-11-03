@@ -85,7 +85,7 @@ actor DesktopStorage {
         }
         let manifest=Manifest(id:identifier,paperID:paperID,title:paper["titleZh"] as? String ?? paper["title"] as? String ?? paperID,createdAt:ISO8601DateFormatter().string(from:Date()),blogURL:blog,sourceURL:source,sourceVersion:article["sourceVersion"] as? String,articleRevisionSHA256:revision,articleContentSHA256:contentHash,pdfURL:pdf?["sourceURL"] as? String,pdfSHA256:pdfHash,paperContentSHA256:paperHash,files:entries)
         try write(try JSONEncoder().encode(manifest),staging.appendingPathComponent("manifest.json"))
-        _=try verifyDirectory(staging,expectedID:identifier)
+        _=try Self.verifyDirectory(staging,expectedID:identifier)
         try FileManager.default.moveItem(at:staging,to:target)
         var result=try verifyPackage(id:identifier);result["reused"]=false;return result
     }
@@ -99,7 +99,7 @@ actor DesktopStorage {
     }
     func verifyPackage(id:String) throws->[String:Any] {
         guard PrivateStoragePaths.validSHA(id) else{throw StorageError.invalid("离线包身份无效")}
-        let manifest=try verifyDirectory(directory.appendingPathComponent("Offline/"+id),expectedID:id)
+        let manifest=try Self.verifyDirectory(directory.appendingPathComponent("Offline/"+id),expectedID:id)
         return ["id":id,"paperID":manifest.paperID,"title":manifest.title,"sourceVersion":manifest.sourceVersion ?? "","revisionSHA256":manifest.articleRevisionSHA256,"pdfSHA256":manifest.pdfSHA256 ?? "","files":manifest.files.count,"bytes":manifest.files.reduce(0){$0+$1.bytes},"createdAt":manifest.createdAt,"status":"verified","directory":directory.appendingPathComponent("Offline/"+id).path,"hasPDF":manifest.pdfSHA256 != nil]
     }
     /// Read an actual self-contained package. This is a reading snapshot, never a publication/model capability.
@@ -108,7 +108,7 @@ actor DesktopStorage {
         let folder=directory.appendingPathComponent("Offline/"+id)
         let manifestFile=try PrivateStoragePaths.checkedFile(relative:"manifest.json",directory:folder)
         let originalManifest=try PrivateStoragePaths.boundedData(manifestFile,limit:2*1024*1024)
-        let manifest=try verifyDirectory(folder,expectedID:id)
+        let manifest=try Self.verifyDirectory(folder,expectedID:id)
         let captured=try JSONDecoder().decode(Manifest.self,from:originalManifest)
         guard try Self.json(Self.object(manifest))==Self.json(Self.object(captured)) else{throw StorageError.invalid("离线清单在开始读取时变化，请重试")}
         let paperFile=try PrivateStoragePaths.checkedFile(relative:"paper.json",directory:folder),articleFile=try PrivateStoragePaths.checkedFile(relative:"article.json",directory:folder)
@@ -138,7 +138,7 @@ actor DesktopStorage {
             result["pdf"]=pdf
         }
         // Re-read and re-hash the actual package before exposing any result; summary JSON is not a capability.
-        _=try verifyDirectory(folder,expectedID:id)
+        _=try Self.verifyDirectory(folder,expectedID:id)
         guard try PrivateStoragePaths.boundedData(manifestFile,limit:2*1024*1024)==originalManifest else{throw StorageError.invalid("离线包在读取期间变化，未安装到当前阅读空间")}
         return result
     }
@@ -259,7 +259,10 @@ actor DesktopStorage {
         guard let seed,path.hasPrefix(seed.path+"/") else{throw StorageError.invalid("种子路径越界")}
         return try PrivateStoragePaths.checkedFile(relative:String(path.dropFirst(seed.path.count+1)),directory:seed)
     }
-    private func verifyDirectory(_ folder:URL,expectedID:String)throws->Manifest {
+    static func validateSynchronizedPackage(_ folder: URL, id: String) throws {
+        _ = try verifyDirectory(folder, expectedID: id)
+    }
+    private static func verifyDirectory(_ folder:URL,expectedID:String)throws->Manifest {
         _=try PrivateStoragePaths.checkedDirectory(folder)
         let manifestFile=try PrivateStoragePaths.checkedFile(relative:"manifest.json",directory:folder),bytes=try PrivateStoragePaths.boundedData(manifestFile,limit:2*1024*1024),manifest=try JSONDecoder().decode(Manifest.self,from:bytes)
         guard ClientProtocols.hasValidHeader(manifest.contract,fingerprint:manifest.schemaFingerprint,"paperdigest-offline-package"),manifest.id==expectedID,!manifest.paperID.isEmpty,Self.https(manifest.blogURL),Self.https(manifest.sourceURL),PrivateStoragePaths.validSHA(manifest.articleRevisionSHA256),manifest.files.count>=2,manifest.files.count<=35 else{throw StorageError.invalid("离线包清单合同无效")}
@@ -271,7 +274,7 @@ actor DesktopStorage {
                   (entry.role=="paper" && entry.path=="paper.json") || (entry.role=="article" && entry.path=="article.json") || (entry.role=="pdf" && entry.path=="original.pdf") || (entry.role=="image" && entry.path=="resources/"+entry.sha256+".bin"),
                   entry.sourceURL.map(Self.https)==true else{throw StorageError.invalid("离线包文件角色、来源或大小无效")}
             let file=try PrivateStoragePaths.checkedFile(relative:entry.path,directory:folder)
-            guard try size(file)==entry.bytes,try PrivateStoragePaths.sha256File(file)==entry.sha256 else{throw StorageError.invalid("离线包文件SHA或大小损坏，原包保留")}
+            guard try file.resourceValues(forKeys: [.fileSizeKey]).fileSize == entry.bytes,try PrivateStoragePaths.sha256File(file)==entry.sha256 else{throw StorageError.invalid("离线包文件SHA或大小损坏，原包保留")}
         }
         guard names.contains("paper.json"),names.contains("article.json"),manifest.files.filter({$0.role=="pdf"}).count==(manifest.pdfSHA256==nil ? 0:1),manifest.pdfSHA256==nil || manifest.files.contains(where:{$0.role=="pdf" && $0.path=="original.pdf" && $0.sha256==manifest.pdfSHA256}) else{throw StorageError.invalid("离线包缺少实际材料")}
         let articleFile=try PrivateStoragePaths.checkedFile(relative:"article.json",directory:folder),paperFile=try PrivateStoragePaths.checkedFile(relative:"paper.json",directory:folder)

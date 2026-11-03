@@ -329,6 +329,9 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         case "pdf.selection":return selectionSource
         case "pdf.openExternal":if let file=currentPDFPath{NSWorkspace.shared.open(file)};return [:]
         case "archive.materials":return try await runJob(command,payload:payload){_ in try await self.archiveMaterials(payload)}
+        case "zotero.syncedHistory":
+            guard payload.isEmpty else { throw DesktopError.message("同步历史只读取本机保存的原件") }
+            return SyncedArchiveHistory.read(directory: directory)
         case "zotero.open":
             guard let key=payload["key"] as? String,key.range(of:"^[A-Z0-9]{8}$",options:.regularExpression) != nil else{throw DesktopError.message("Zotero 条目身份无效")}
             NSWorkspace.shared.open(URL(string:"zotero://select/library/items/\(key)")!);return [:]
@@ -366,7 +369,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     func runJob(_ command:String,payload:[String:Any],identifier:String=UUID().uuidString,material:[String:Any]?=nil,operation:@escaping(@escaping @Sendable([String:Any])->Void) async throws->[String:Any]) async throws->[String:Any] {
         guard !terminationPending,!maintenanceBusy else{throw DesktopError.message("正在退出或整理资料，未启动新任务")}
         let isZotero=command.hasPrefix("zotero."),isCloud=command.hasPrefix("cloud.")
-        let cloudTitle=["cloud.syncPersonal":"同步个人资料到 WebDAV","cloud.check":"检查坚果云连接","cloud.upload":"备份完整研究空间","cloud.list":"读取云端备份版本","cloud.restore":"恢复云端研究空间"][command] ?? "坚果云资料"
+        let cloudTitle=["cloud.syncPersonal":"同步个人资料到 WebDAV","cloud.syncWorkspace":"同步全部研究资料到 WebDAV","cloud.check":"检查坚果云连接","cloud.upload":"备份完整研究空间","cloud.list":"读取云端备份版本","cloud.restore":"恢复云端研究空间"][command] ?? "坚果云资料"
         var row:[String:Any]=["id":identifier,"command":command,"paperID":(isZotero || isCloud || command=="aggregates.document") ? "":currentPaperID,"title":isCloud ? cloudTitle:isZotero ? (command=="zotero.resume" ? "继续 Zotero 归档":"Zotero 操作"):(currentPaper["titleZh"] ?? currentPaper["title"] ?? command),"status":"running","startedAt":ISO8601DateFormatter().string(from:Date()),"message":"正在执行"]
         if command=="aggregates.document"{row["title"]="读取网站汇总"}
         if isCloud {

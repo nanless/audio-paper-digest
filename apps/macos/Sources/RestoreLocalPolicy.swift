@@ -29,7 +29,7 @@ enum RequestBudgetContinuity {
         _ = try union([record.requests]); return record.requests
     }
     static func fromSessions(_ sessions: [[String: Any]]) throws -> [Issued] {
-        try sessions.filter { $0["requestIssued"] as? Bool == true }.map {
+        try sessions.filter { $0["requestIssued"] as? Bool == true && $0["syncedHistory"] as? Bool != true }.map {
             guard let id = $0["id"] as? String, let started = $0["startedAt"] as? String else { throw DesktopError.message("原已派发请求缺少身份或时间，未清零使用记录") }
             return Issued(id: id, startedAt: started)
         }

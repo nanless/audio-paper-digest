@@ -150,8 +150,10 @@ class CloudArchive(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val minimumInterval: Long = 3100,
     private val loadTraffic: () -> JSONObject = { JSONObject() },
-    private val saveTraffic: (JSONObject) -> Unit = {}
+    private val saveTraffic: (JSONObject) -> Unit = {},
+    private val fullSync: Boolean = false
 ) {
+    private val archiveFolder = if (fullSync) "$folder/full-sync-v1" else folder
     private val lock = Mutex(); private var checkpoint: CloudCheckpoint? = null
     private val times = ArrayList<Long>(); private var retryAt = 0L
     init {
@@ -169,11 +171,12 @@ class CloudArchive(
         require(file.isFile && file.length() in 1..BackupCodec.MAX_ENCODED)
         val hash = BackupCodec.hash(file); val chunks = chunks(file); require(BackupCodec.hash(file) == hash) { "原待传快照已变化" }
         val created = (now() / 1000) * 1000
-        var cp = old ?: CloudCheckpoint(destinationID, folder, CloudManifest(CloudReference(CloudManifest.month(created), UUID.randomUUID().toString()), created, file.length(), hash, chunks))
-        require(cp.destinationID == destinationID && cp.folder == folder && cp.manifest.encodedBytes == file.length() && cp.manifest.sha256 == hash && cp.manifest.chunks == chunks) { "续传记录不属于原快照或目标" }
+        var cp = old ?: CloudCheckpoint(destinationID, archiveFolder, CloudManifest(CloudReference(CloudManifest.month(created), UUID.randomUUID().toString()), created, file.length(), hash, chunks))
+        require(cp.destinationID == destinationID && cp.folder == archiveFolder && cp.manifest.encodedBytes == file.length() && cp.manifest.sha256 == hash && cp.manifest.chunks == chunks) { "续传记录不属于原快照或目标" }
         retryAt = maxOf(retryAt, cp.retryAfter ?: 0); checkpoint = cp; persist(cp)
         val base = path(cp.manifest.reference)
-        for (directory in listOf("/dav/$folder/", "/dav/$folder/${cp.manifest.reference.month}/", base)) {
+        val parents = if (fullSync) listOf("/dav/$folder/", "/dav/$archiveFolder/") else listOf("/dav/$folder/")
+        for (directory in parents + listOf("/dav/$archiveFolder/${cp.manifest.reference.month}/", base)) {
             request("MKCOL", directory, accepted = setOf(201, 405)); requireCollection(request("PROPFIND", directory, PROP, mapOf("Depth" to "0", "Content-Type" to "application/xml; charset=utf-8"), setOf(207), LISTING), directory)
         }
         val existingManifest = optionalGet(base + "manifest.json", MANIFEST)
@@ -194,13 +197,35 @@ class CloudArchive(
         if (CloudManifest.parse(actual, cp.manifest.reference) != cp.manifest) throw CloudFailure("integrity")
         cp = cp.copy(manifestVerified = true, retryAfter = null); persist(cp); cp.manifest
     }
+    internal suspend fun fullSyncMonths(): List<String> = operation {
+        require(fullSync)
+        val base = "/dav/$archiveFolder/"
+        val response = requestResponse("PROPFIND", base, PROP, mapOf("Depth" to "1", "Content-Type" to "application/xml; charset=utf-8"), setOf(207, 404), LISTING)
+        if (response.status == 404) return@operation emptyList()
+        val members = listing(response.body)
+        if (members.size >= 750 || members.none { it.path == base && it.collection }) throw CloudFailure("incompleteListing")
+        members.filter { it.path != base }.map { member ->
+            if (!member.collection || !member.path.startsWith(base)) throw CloudFailure("incompleteListing")
+            val month = member.path.removePrefix(base).removeSuffix("/")
+            try {
+                require(member.path == "$base$month/")
+                CloudReference(month, UUID(0, 0).toString())
+            } catch (_: IllegalArgumentException) { throw CloudFailure("incompleteListing") }
+            month
+        }.sorted()
+    }
     suspend fun list(month: String): List<CloudManifest> = listMapped(month) { manifest, _ -> manifest }
     suspend fun listIdentities(month: String): List<CloudSnapshotIdentity> = listMapped(month, CloudSnapshotIdentity::observed)
     private suspend fun <T> listMapped(month: String, observed: (CloudManifest, ByteArray) -> T): List<T> = operation {
-        CloudReference(month, UUID(0, 0).toString()); val directory = "/dav/$folder/$month/"
+        CloudReference(month, UUID(0, 0).toString()); val directory = "/dav/$archiveFolder/$month/"
         val response = requestResponse("PROPFIND", directory, PROP, mapOf("Depth" to "1", "Content-Type" to "application/xml; charset=utf-8"), setOf(207, 404), LISTING)
-        if (response.status == 404) emptyList() else {
-            val members = listing(response.body); require(members.any { it.path == directory && it.collection }) { "月份列表缺少根目录" }
+        if (response.status == 404) {
+            if (fullSync) throw CloudFailure("incompleteListing")
+            emptyList()
+        } else {
+            val members = listing(response.body)
+            if (fullSync && members.size >= 750) throw CloudFailure("incompleteListing")
+            require(members.any { it.path == directory && it.collection }) { "月份列表缺少根目录" }
             val refs = members.filter { it.path != directory }.mapNotNull { m ->
                 if (!m.path.startsWith(directory)) throw CloudFailure("incompleteListing")
                 val tail = m.path.removePrefix(directory)
@@ -306,7 +331,7 @@ class CloudArchive(
     }
     private fun traffic() { try { saveTraffic(JSONObject().put("times", JSONArray(times)).put("retryAfter", retryAt)) } catch (e: Exception) { throw CloudFailure("checkpointStore") } }
     private suspend fun coolDown(until: Long) { retryAt = until; traffic(); checkpoint?.let { persist(it.copy(retryAfter = until)) } }
-    private fun path(ref: CloudReference) = "/dav/$folder/${ref.month}/${ref.id}/"
+    private fun path(ref: CloudReference) = "/dav/$archiveFolder/${ref.month}/${ref.id}/"
     companion object {
         private const val MANIFEST = 128 * 1024; private const val LISTING = 4 * 1024 * 1024
         private val PROP = "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/></d:prop></d:propfind>".toByteArray()

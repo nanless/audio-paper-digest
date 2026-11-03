@@ -27,7 +27,7 @@ object RequestContinuity {
         return runCatching { LocalDateTime.parse(value.take(19), DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss").withResolverStyle(ResolverStyle.STRICT)); Instant.parse(value); true }.getOrDefault(false)
     }
     fun sessions(personal: JSONObject): List<Issued> {
-        val a = personal.getJSONArray("sessions"); return (0 until a.length()).map { a.getJSONObject(it) }.filter { it.opt("requestIssued") == true }.map { Issued(it.getString("id"), it.getString("startedAt")) }
+        val a = personal.getJSONArray("sessions"); return (0 until a.length()).map { a.getJSONObject(it) }.filter { !it.optBoolean("syncedHistory") && it.opt("requestIssued") == true }.map { Issued(it.getString("id"), it.getString("startedAt")) }
     }
     fun read(directory: File, check: () -> Unit = {}): List<Issued> {
         val file = File(directory, FILE); if (!file.exists()) { require(!Files.isSymbolicLink(file.toPath())); return emptyList() }

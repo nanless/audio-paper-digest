@@ -49,10 +49,10 @@ export function mountCloud(app){
  </section>
  <section class="cloud-card" aria-label="同步个人资料"><h2>同步个人资料</h2>
  <p>在两端使用同一账号和目录，即可双向同步收藏、待读、笔记、批注和阅读进度。</p>
- <button id="cloud-sync-personal" type="button">一键同步 WebDAV</button>
+ <button id="cloud-sync-personal" type="button">同步收藏、笔记等个人资料</button>
  </section>
  <section class="cloud-card" aria-label="完整资料保存状态"><h2>备份全部研究资料</h2><p id="cloud-last"></p><p id="cloud-pending"></p>
- <div class="cloud-actions"><button id="cloud-upload" class="cloud-primary" type="button">立即保存全部资料</button><button id="cloud-cancel" type="button" disabled>取消当前传输</button><button id="cloud-archive-pending" type="button" hidden>保留快照并停止本次续传…</button><button id="cloud-reveal-transfers" type="button">在 Finder 查看保留的快照</button></div>
+ <div class="cloud-actions"><button id="cloud-sync-workspace" class="cloud-primary" type="button">同步全部研究资料</button><button id="cloud-upload" class="cloud-primary" type="button">立即保存全部资料</button><button id="cloud-cancel" type="button" disabled>取消当前传输</button><button id="cloud-archive-pending" type="button" hidden>保留快照并停止本次续传…</button><button id="cloud-reveal-transfers" type="button">在 Finder 查看保留的快照</button></div>
  <details><summary>中断与恢复说明</summary><p>明确停止本次续传时，原传输材料和检查点原样保留在本机，云端半成品不会自动删除。经过校验的完整 snapshot.paperdigest 文件可通过“文件→恢复个人资料…”取回当时研究资料；损坏或缺少的材料须手工核对，不能保证可恢复。新连接会另建版本，不冒充原续传。</p></details>
  </section>
  <details class="cloud-card cloud-advanced"><summary>自动备份与密码管理</summary>
@@ -90,6 +90,7 @@ export function mountCloud(app){
   for(const id of ['cloud-session-password','cloud-clear-session-password','cloud-set-password','cloud-delete-password','cloud-check','cloud-sync-personal','cloud-upload','cloud-list'])$(id).disabled=busy||!!dirty.size||!configured;
   $('cloud-clear-session-password').disabled=busy||!!dirty.size||!configured||state.sessionPasswordAvailable!==true;
   $('cloud-month').disabled=busy;
+  $('cloud-sync-workspace').disabled=busy||!!dirty.size||!state.account;
   $('cloud-archive-pending').textContent=damaged?'原样保留损坏材料并停止本次续传…':'保留快照并停止本次续传…';$('cloud-archive-pending').hidden=!state.pending;$('cloud-archive-pending').disabled=busy||!!dirty.size||!state.pending;$('cloud-reveal-transfers').disabled=submitting;
   $('cloud-cancel').disabled=!(busy&&typeof state.activeJobID==='string'&&state.activeJobID)||cancelPending;
   for(const button of pane.querySelectorAll('[data-cloud-restore]'))button.disabled=busy||!!dirty.size;
@@ -120,6 +121,7 @@ export function mountCloud(app){
    if(result?.cancelled===true){message=typeof result.message==='string'&&result.message?result.message:'已取消本次云端操作；原快照和已完成步骤保留。';await refresh();return;}
    if(after)after(result);
    if(command==='cloud.upload')message='传输操作已结束，完整备份状态以实际回读结果为准。';
+   else if(command==='cloud.syncWorkspace')message='研究资料同步完成 · 新增 '+result.files+' 个文件'+(result.conflicts?' · '+result.conflicts+' 项须核对，云端原件可在 Finder 查看':'');
    else if(command==='cloud.syncPersonal')message='WebDAV 同步完成 · 收藏 '+result.favorites+' 篇'+(result.conflicts?' · '+result.conflicts+' 项编辑冲突，两端版本已保留':'');
    else if(command==='cloud.restore')message='恢复操作已结束，请核对当前资料及原生窗口提示。';
    else if(command==='cloud.list')message='版本读取操作已结束，请查看当前月份的实际结果。';
@@ -155,7 +157,7 @@ export function mountCloud(app){
   }catch(e){if(!disposed&&token===action)localError=e?.message||String(e);}
   finally{if(!disposed&&token===action){submitting=false;paint();}}
  };
- for(const [id,command]of [['cloud-session-password','cloud.setSessionPassword'],['cloud-clear-session-password','cloud.clearSessionPassword'],['cloud-set-password','cloud.setPassword'],['cloud-delete-password','cloud.deletePassword'],['cloud-check','cloud.check'],['cloud-sync-personal','cloud.syncPersonal'],['cloud-upload','cloud.upload']])$(id).onclick=()=>perform(command);
+ for(const [id,command]of [['cloud-session-password','cloud.setSessionPassword'],['cloud-clear-session-password','cloud.clearSessionPassword'],['cloud-set-password','cloud.setPassword'],['cloud-delete-password','cloud.deletePassword'],['cloud-check','cloud.check'],['cloud-sync-personal','cloud.syncPersonal'],['cloud-sync-workspace','cloud.syncWorkspace'],['cloud-upload','cloud.upload']])$(id).onclick=()=>perform(command);
  $('cloud-archive-pending').onclick=()=>{if(state.pending)return perform('cloud.archivePending');};
  $('cloud-reveal-transfers').onclick=()=>perform('cloud.revealTransfers');
  $('cloud-cancel').onclick=async()=>{

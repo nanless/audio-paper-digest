@@ -1580,10 +1580,29 @@ class RootController private constructor(private val context: Context, private v
         "cloud.state" -> cloudView()
         "cloud.save" -> cloud.save(payload.getString("account"), payload.optString("folder", "PaperDigest"), payload.optBoolean("automatic"), payload.optInt("intervalHours", 24),cloudMutation)
         "cloud.check" -> runTask(command) { cloud.check() }
-        "cloud.syncPersonal" -> runTask(command, gate = { dispatch.requireCurrent(workspaceEpoch) }) {
+        "cloud.syncPersonal", "cloud.syncWorkspace" -> runTask(command, gate = { dispatch.requireCurrent(workspaceEpoch) }) {
             require(payload.length() == 0) { "同步入口只使用已保存的 WebDAV 连接" }
             require(!personal.settings().optBoolean("offlineMode")) { "离线模式已开启" }
-            val result = cloud.syncPersonal(
+            var workspaceFailed = false
+            var personalFailed = false
+            val full = if (command == "cloud.syncWorkspace") try { cloud.syncFull(workspaceEpoch,
+                capture = { output -> maintenance.withLock {
+                    dispatch.requireCurrent(workspaceEpoch)
+                    val operation = currentCoroutineContext()
+                    BackupCodec.captureSelection(research, output, FullWorkspaceMerge.capturePersonal(personal.snapshot()), FullWorkspaceMerge::includes) { operation.ensureActive() }
+                } },
+                merge = { incoming -> maintenance.withLock {
+                    dispatch.requireCurrent(workspaceEpoch)
+                    val operation = currentCoroutineContext()
+                    val owner = operation[CoroutineName]?.name
+                    require(active.keys.none { it != owner }) { "请等待其他研究任务完成，再合并原件" }
+                    val conflicts = FullWorkspaceMerge.merge(research, personal, incoming) { operation.ensureActive() }
+                    library.reload()
+                    conflicts
+                } }
+            ) } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { workspaceFailed = true; null } else null
+            val result = try { cloud.syncPersonal(
                 capture = { maintenance.withLock { dispatch.requireCurrent(workspaceEpoch); personal.snapshot() } },
                 commit = { before, plan -> maintenance.withLock {
                     currentCoroutineContext().ensureActive()
@@ -1592,9 +1611,25 @@ class RootController private constructor(private val context: Context, private v
                     require(PersonalWebDavSync.unchanged(before, current)) { "同步期间本机资料已编辑，请再同步一次" }
                     personal.replaceValidated(PersonalWebDavSync.apply(current, plan))
                 } }
-            )
-            _state.update { it.copy(notice = "WebDAV 同步完成 · 收藏 ${result.getInt("favorites")} 篇" +
-                if (result.getInt("conflicts") > 0) " · ${result.getInt("conflicts")} 项编辑冲突，两端版本已保留" else "") }
+            ) } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (command != "cloud.syncWorkspace") throw error
+                personalFailed = true
+                JSONObject().put("favorites", personal.snapshot().getJSONArray("favorites").length()).put("conflicts", 0)
+            }
+            result.put("workspaceSynced", full != null).put("personalSynced", !personalFailed)
+
+            val artifactConflicts = full?.getInt("artifactConflicts") ?: 0
+            if (full != null) result.put("uploaded", full.getBoolean("uploaded")).put("snapshots", full.getInt("snapshots")).put("artifactConflicts", artifactConflicts)
+            val summary = when {
+                workspaceFailed && personalFailed -> "WebDAV 同步未完成，原资料已保留"
+                workspaceFailed -> "收藏和笔记已同步，研究资料待重试"
+                personalFailed -> "研究资料已同步，收藏和笔记待重试"
+                else -> "WebDAV 同步完成"
+            }
+            _state.update { it.copy(notice = "$summary · 收藏 ${result.getInt("favorites")} 篇" +
+                (if (result.getInt("conflicts") > 0) " · ${result.getInt("conflicts")} 项编辑冲突，两端版本已保留" else "") +
+                (if (artifactConflicts > 0) " · $artifactConflicts 项原件冲突，可在资料设置中导出保留快照" else "")) }
             result
         }
         "cloud.upload" -> maintenance.withLock {

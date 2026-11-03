@@ -66,7 +66,7 @@ import Foundation
         var next = profile
         let account = account.trimmingCharacters(in: .whitespacesAndNewlines)
         if account != next.account || folder != next.folder {
-            guard try !hasPendingMaterials() else { throw DesktopError.message("原快照尚未完成，请先续传或原样保留材料，再更换账号或目录") }
+            guard try !hasPendingMaterials(), try !hasPendingMaterials(fullSync: true) else { throw DesktopError.message("原快照尚未完成，请先续传或原样保留材料，再更换账号或目录") }
             next.destinationID = UUID(); next.lastBackup = nil; next.lastAttemptAt = nil; next.automaticPaused = nil; next.retryAfter = nil
         }
         next.account = account; next.folder = folder; next.automatic = automatic; next.intervalHours = intervalHours
@@ -90,15 +90,18 @@ import Foundation
         var next = profile; next.automaticPaused = paused
         try write(next, relative: "profile.json"); profile = next
     }
-    private func pendingFolder(_ id: UUID) throws -> URL {
-        let relative = id.uuidString
+    private func pendingPath(_ id: UUID, fullSync: Bool) -> String {
+        fullSync ? "full-sync-pending-" + id.uuidString : id.uuidString
+    }
+    private func pendingFolder(_ id: UUID, fullSync: Bool = false) throws -> URL {
+        let relative = pendingPath(id, fullSync: fullSync)
         let folder = root.appendingPathComponent(relative, isDirectory: true)
         if FileManager.default.fileExists(atPath: folder.path) { _ = try PrivateStoragePaths.checkedDirectory(folder) }
         else { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
         return folder
     }
-    func pending() throws -> Pending? {
-        let relative = profile.destinationID.uuidString + "/pending.json"
+    func pending(fullSync: Bool = false) throws -> Pending? {
+        let relative = pendingPath(profile.destinationID, fullSync: fullSync) + "/pending.json"
         let file = root.appendingPathComponent(relative)
         guard FileManager.default.fileExists(atPath: file.path) else {
             if (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true { throw DesktopError.message("云备份控制文件不能是链接") }
@@ -113,28 +116,42 @@ import Foundation
         }
         return value
     }
-    func hasPendingMaterials() throws -> Bool {
-        let folder = root.appendingPathComponent(profile.destinationID.uuidString, isDirectory: true)
+    func hasPendingMaterials(fullSync: Bool = false) throws -> Bool {
+        let folder = root.appendingPathComponent(pendingPath(profile.destinationID, fullSync: fullSync), isDirectory: true)
         guard FileManager.default.fileExists(atPath: folder.path) else { return false }
         _ = try PrivateStoragePaths.checkedDirectory(folder)
         let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
         return names.contains("pending.json") || names.contains("snapshot.paperdigest")
     }
-    func prepare(_ payload: BackupCodec.Payload) throws -> Pending {
-        guard try !hasPendingMaterials() else { throw DesktopError.message("请先续传或原样保留未完成材料；不会覆盖原快照") }
+    func prepare(_ payload: BackupCodec.Payload, fullSync: Bool = false) throws -> Pending {
+        guard try !hasPendingMaterials(fullSync: fullSync) else { throw DesktopError.message("请先续传或原样保留未完成材料；不会覆盖原快照") }
         let bytes = try BackupCodec.encode(payload)
         let next = Pending(contract: ClientProtocols.contract("paperdigest-cloud-pending"), schemaFingerprint: ClientProtocols.schemaFingerprint("paperdigest-cloud-pending"), destinationID: profile.destinationID,
                            createdAt: ISO8601DateFormatter().string(from: Date()), fileCount: payload.files.count,
                            encodedBytes: bytes.count, sha256: PrivateStoragePaths.sha256(bytes), checkpoint: nil)
-        let folder = try pendingFolder(profile.destinationID)
+        if fullSync {
+            let fm = FileManager.default
+            let stage = root.appendingPathComponent(".full-sync-stage-" + UUID().uuidString, isDirectory: true)
+            try fm.createDirectory(at: stage, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            defer { try? fm.removeItem(at: stage) }
+            let snapshot = stage.appendingPathComponent("snapshot.paperdigest")
+            let record = stage.appendingPathComponent("pending.json")
+            try bytes.write(to: snapshot, options: .atomic)
+            try encoder.encode(next).write(to: record, options: .atomic)
+            for file in [snapshot, record] { try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+            let target = root.appendingPathComponent(pendingPath(profile.destinationID, fullSync: true), isDirectory: true)
+            try fm.moveItem(at: stage, to: target)
+            return next
+        }
+        let folder = try pendingFolder(profile.destinationID, fullSync: fullSync)
         try bytes.write(to: folder.appendingPathComponent("snapshot.paperdigest"), options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: folder.appendingPathComponent("snapshot.paperdigest").path)
-        try write(next, relative: profile.destinationID.uuidString + "/pending.json")
+        try write(next, relative: pendingPath(profile.destinationID, fullSync: fullSync) + "/pending.json")
         return next
     }
-    func bytes(for pending: Pending) throws -> Data {
+    func bytes(for pending: Pending, fullSync: Bool = false) throws -> Data {
         guard pending.destinationID == profile.destinationID else { throw DesktopError.message("云目标已变化，未读取其他目标的快照") }
-        let file = try PrivateStoragePaths.checkedFile(relative: profile.destinationID.uuidString + "/snapshot.paperdigest", directory: root)
+        let file = try PrivateStoragePaths.checkedFile(relative: pendingPath(profile.destinationID, fullSync: fullSync) + "/snapshot.paperdigest", directory: root)
         let bytes = try PrivateStoragePaths.boundedData(file, limit: BackupCodec.maxEncodedBytes)
         guard bytes.count == pending.encodedBytes, PrivateStoragePaths.sha256(bytes) == pending.sha256 else {
             throw DesktopError.message("原续传快照字节已变化，未上传不同材料")
@@ -146,11 +163,11 @@ import Foundation
         try BackupCodec.requirePortable(payload)
         return bytes
     }
-    func saveCheckpoint(_ checkpoint: CloudArchiveService.UploadCheckpoint, destinationID: UUID, sha256: String) throws {
-        guard profile.destinationID == destinationID, var old = try pending(), old.sha256 == sha256 else {
+    func saveCheckpoint(_ checkpoint: CloudArchiveService.UploadCheckpoint, destinationID: UUID, sha256: String, fullSync: Bool = false) throws {
+        guard profile.destinationID == destinationID, var old = try pending(fullSync: fullSync), old.sha256 == sha256 else {
             throw DesktopError.message("云目标或原快照已变化，未覆盖续传记录")
         }
-        guard checkpoint.destinationID == destinationID, checkpoint.folder == profile.folder,
+        guard checkpoint.destinationID == destinationID, checkpoint.folder == scopedFolder(fullSync),
               checkpoint.sha256 == old.sha256, checkpoint.encodedBytes == old.encodedBytes else {
             throw DesktopError.message("云续传回执与原快照不符")
         }
@@ -160,26 +177,63 @@ import Foundation
             }
         }
         old.checkpoint = checkpoint
-        try write(old, relative: destinationID.uuidString + "/pending.json")
+        try write(old, relative: pendingPath(destinationID, fullSync: fullSync) + "/pending.json")
     }
-    func complete(_ info: CloudArchiveService.SnapshotInfo, destinationID: UUID, keepAutomaticPaused: Bool = false) throws {
-        guard profile.destinationID == destinationID, let pending = try pending(),
+    private func scopedFolder(_ fullSync: Bool) -> String { fullSync ? profile.folder + "/full-sync-v1" : profile.folder }
+    func complete(_ info: CloudArchiveService.SnapshotInfo, destinationID: UUID, keepAutomaticPaused: Bool = false, fullSync: Bool = false) throws {
+        guard profile.destinationID == destinationID, let pending = try pending(fullSync: fullSync),
               pending.sha256 == info.sha256, pending.encodedBytes == info.encodedBytes,
               let checkpoint = pending.checkpoint, checkpoint.manifestVerified,
-              checkpoint.destinationID == destinationID, checkpoint.folder == profile.folder,
+              checkpoint.destinationID == destinationID, checkpoint.folder == scopedFolder(fullSync),
               checkpoint.reference == info.reference, checkpoint.createdAt == info.createdAt,
               checkpoint.chunks.count == info.chunkCount,
               Set(checkpoint.verifiedChunkIndices) == Set(checkpoint.chunks.indices) else { throw DesktopError.message("云端完成回执没有完整绑定原快照") }
-        var next = profile
-        next.automaticPaused = keepAutomaticPaused
-        next.lastBackup = Completed(month: info.reference.month, id: info.reference.id, createdAt: ISO8601DateFormatter().string(from: info.createdAt), encodedBytes: info.encodedBytes)
-        try write(next, relative: "profile.json"); profile = next
+        if fullSync {
+            try write(FullSyncUpload(sha256: info.sha256, reference: info.reference), relative: "full-sync-uploaded-" + destinationID.uuidString + ".json")
+        } else {
+            var next = profile
+            next.automaticPaused = keepAutomaticPaused
+            next.lastBackup = Completed(month: info.reference.month, id: info.reference.id, createdAt: ISO8601DateFormatter().string(from: info.createdAt), encodedBytes: info.encodedBytes)
+            try write(next, relative: "profile.json"); profile = next
+        }
         // Remote manifest and every stored chunk have already been read back.
         // A cleanup failure keeps a resumable local record, never fakes success.
-        let folder = try pendingFolder(destinationID)
+        let folder = try pendingFolder(destinationID, fullSync: fullSync)
         let finished = root.appendingPathComponent("completed-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.moveItem(at: folder, to: finished)
         try? FileManager.default.removeItem(at: finished)
+    }
+    struct FullSyncUpload: Codable, Equatable {
+        let sha256: String
+        let reference: CloudArchiveService.SnapshotReference?
+    }
+    func lastFullSyncUpload() throws -> FullSyncUpload? {
+        let relative = "full-sync-uploaded-" + profile.destinationID.uuidString + ".json"
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent(relative).path) else { return nil }
+        let file = try PrivateStoragePaths.checkedFile(relative: relative, directory: root)
+        let bytes = try PrivateStoragePaths.boundedData(file, limit: 1024)
+        let decoder = JSONDecoder()
+        let record: FullSyncUpload
+        if let current = try? decoder.decode(FullSyncUpload.self, from: bytes) { record = current }
+        else { record = .init(sha256: try decoder.decode(String.self, from: bytes), reference: nil) }
+        guard PrivateStoragePaths.validSHA(record.sha256) else { throw DesktopError.message("全资料同步回执无效") }
+        return record
+    }
+    func fullSyncInbox() throws -> URL {
+        let folder = root.appendingPathComponent("全资料同步-" + profile.destinationID.uuidString, isDirectory: true)
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        }
+        return try PrivateStoragePaths.checkedDirectory(folder)
+    }
+    func fullSyncGeneration() throws -> String {
+        let relative = "full-sync-generation.json"
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent(relative).path) else { return "initial" }
+        let file = try PrivateStoragePaths.checkedFile(relative: relative, directory: root)
+        return try JSONDecoder().decode(String.self, from: PrivateStoragePaths.boundedData(file, limit: 1024))
+    }
+    func invalidateFullSyncReceipts() throws {
+        try write(UUID().uuidString, relative: "full-sync-generation.json")
     }
     func archivePending() throws -> URL {
         guard try hasPendingMaterials() else { throw DesktopError.message("当前没有未完成的云端快照") }

@@ -89,6 +89,14 @@ import kotlinx.coroutines.launch
   OutlinedButton({action("zotero.resume",obj("journalID" to j.optString("id")))},enabled=!busy&&!dirty&&!hasMigrationChild){Text(if(j.optString("status")=="completed")"重新逐项回读" else "沿原断点继续")}
   ZoteroMigrationEntry(j,state,controller,action,enabled=!busy&&!dirty)
  }}}}
+ val syncedHistory = z.rows("syncedArchiveHistory")
+ if (syncedHistory.isNotEmpty()) {
+  Text("同步的归档历史", style=MaterialTheme.typography.titleLarge)
+  Text("原记录只读。核验和续传需使用原设备及其连接许可。", style=MaterialTheme.typography.bodySmall)
+  syncedHistory.forEach { row ->
+   Text("${row.optString("title")} · ${row.optString("platform")} · ${jobStatus(row.optString("status"))}")
+  }
+ }
  z.optJSONObject("macHistory")?.let{history->
   val oldRecords=history.rows("records")
   if(oldRecords.isNotEmpty()||history.optInt("unreadableCount")>0){

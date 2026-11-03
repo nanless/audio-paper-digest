@@ -25,7 +25,7 @@ class PersonalStore(val directory: File) {
             }
         }
         value.getJSONArray("sessions").objects().forEach {
-            if (it.optString("status") == "pending") {
+            if (!it.optBoolean("syncedHistory") && it.optString("status") == "pending") {
                 interruptionChanged = true
                 it.put("status", "interrupted").put("charge", "unknown").put("error", "请求可能已经产生费用，不会自动重发")
             }
@@ -47,7 +47,7 @@ class PersonalStore(val directory: File) {
     @Synchronized fun retireRestoredDispatch() = mutate { o ->
         o.getJSONArray("jobs").objects().forEach { if (it.optString("status") in listOf("queued", "running")) it.put("status", "interrupted").put("message", "这是恢复的历史任务，未授予本机自动派发权限") }
         o.getJSONArray("sessions").objects().forEach { s ->
-            if (s.optString("status") in listOf("prepared", "pending")) s.put("status", "interrupted").put("charge", if (s.optBoolean("requestIssued")) "unknown" else "not-issued").put("error", "恢复的原始记录已保留，不会自动重新发出请求")
+            if (!s.optBoolean("syncedHistory") && s.optString("status") in listOf("prepared", "pending")) s.put("status", "interrupted").put("charge", if (s.optBoolean("requestIssued")) "unknown" else "not-issued").put("error", "恢复的原始记录已保留，不会自动重新发出请求")
         }
     }
     @Synchronized fun replaceValidated(replacement: JSONObject) {
@@ -56,6 +56,12 @@ class PersonalStore(val directory: File) {
         val committed = replacement.copy().also(::validate)
         val encoded = encodedForWrite(committed)
         JsonFiles.write(file, encoded); value = committed; startupPersistenceWarning = null
+    }
+    @Synchronized internal fun mergeSyncedResearch(merge: (JSONObject) -> Int): Int {
+        val current = value.copy()
+        val conflicts = merge(current)
+        if (canonical(value) != canonical(current)) replaceValidated(current)
+        return conflicts
     }
     @Synchronized private fun mutate(block: (JSONObject) -> Unit) {
         val replacement = value.copy()
