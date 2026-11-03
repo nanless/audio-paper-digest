@@ -9428,7 +9428,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     // 已授权的正文重做会作废旧序号链：历史仍留在完成文件与 readerRevisionHistory 中，
     // 但不再把旧编译带进新一次 Reader，也不触发旧链的全基线拦截。
-    ordinalPatchCompilations = paper.readerRevisionHistory?.contract === 'daily-reader-revision-history-v1'
+    // 人工修正仍须重放本次清单绑定的原候选。重做历史只接替旧完成稿，
+    // 不能把本次候选实际使用的付费编译一并丢掉。
+    ordinalPatchCompilations = !operatorCorrection
+        && paper.readerRevisionHistory?.contract === 'daily-reader-revision-history-v1'
         ? [] : (recovered?.ordinalPatchCompilations || []);
     // 人工修正只改本次解析输入：活动候选仍是原稿，ordinal 来源衔接必须绑原稿，
     // 否则会拿修正稿去和活动候选比对而被判成来源不符。
