@@ -1,0 +1,89 @@
+{
+  "protocols": [
+    {
+      "name": "rotated-crop-top-left-points",
+      "currentVariant": "rotated-cropped-top-left-points",
+      "currentSchema": {
+        "units": "physical-PDF-points",
+        "origin": "rotated-crop-top-left"
+      },
+      "historical": [
+        {
+          "tag": "rotated-crop-top-left-points-v1",
+          "variant": "rotated-cropped-top-left-points"
+        }
+      ]
+    },
+    {
+      "name": "pdf-user-space-unrotated",
+      "currentVariant": "original-unrotated-pdf-user-space",
+      "currentSchema": {
+        "units": "physical-PDF-points",
+        "origin": "original-unrotated-page-user-space"
+      },
+      "historical": [
+        {
+          "tag": "pdf-user-space-unrotated-v1",
+          "variant": "original-unrotated-pdf-user-space"
+        }
+      ]
+    },
+    {
+      "name": "android-jetpack-pdf-selection",
+      "currentVariant": "native-jetpack-text-selection",
+      "currentSchema": {
+        "source": "actual-platform-PDF-selection"
+      },
+      "historical": [
+        {
+          "tag": "android-jetpack-pdf-selection-v1",
+          "variant": "native-jetpack-text-selection"
+        }
+      ]
+    },
+    {
+      "name": "android-pdfbox-physical-pages",
+      "currentVariant": "physical-page-text",
+      "currentSchema": {
+        "source": "actual-PDFBox-text-extraction",
+        "pageNumbers": "one-based-physical-PDF-pages"
+      },
+      "historical": [
+        {
+          "tag": "android-pdfbox-physical-pages-v1",
+          "variant": "physical-page-text"
+        }
+      ]
+    },
+    {
+      "name": "portable-pdf-user-space",
+      "currentVariant": "imported-portable-annotation-coordinates",
+      "currentSchema": {
+        "source": "original-portable-annotation"
+      },
+      "historical": [
+        {
+          "tag": "portable-pdf-user-space-v1",
+          "variant": "imported-portable-annotation-coordinates"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-pdf-annotations",
+      "currentVariant": "exact-original-pdf-annotation-file",
+      "currentSchema": {
+        "fields": [
+          "sha256",
+          "annotations"
+        ],
+        "scope": "annotations-must-bind-exact-original-PDF-bytes"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-pdf-annotations-v1",
+          "variant": "exact-original-pdf-annotation-file"
+        }
+      ]
+    }
+  ]
+}

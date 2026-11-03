@@ -96,8 +96,10 @@ struct NativeTaskPage {
     static func aggregateSource(_ job: [String: Any]) -> (id: String, title: String, kind: String, manifest: String, shard: String, row: String)? {
         guard job["command"] as? String == "aggregates.document",
               let value = job["aggregateSource"] as? [String: Any],
-              Set(value.keys) == ["contract", "id", "title", "kind", "manifestSHA256", "shardSHA256", "normalizedRowSHA256"],
-              value["contract"] as? String == "aggregate-task-source-v1",
+              ClientProtocols.hasValidHeader(value,"aggregate-task-source"),
+              Set(value.keys) == (try? ClientProtocols.recordKeys(value["contract"],"aggregate-task-source",
+                fields:["id","title","kind","manifestSHA256","shardSHA256","normalizedRowSHA256"],
+                fingerprints:value["schemaFingerprint"] as? String)),
               let id = identifier(value["id"]), id.hasPrefix("page:/"), id.count > 6,
               let title = text(value["title"], limit: 512),
               let kind = value["kind"] as? String, ["daily", "conference", "page"].contains(kind),

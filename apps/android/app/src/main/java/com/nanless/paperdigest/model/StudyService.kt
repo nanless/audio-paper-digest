@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.model
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import com.nanless.paperdigest.data.*
 import com.nanless.paperdigest.cloud.RequestContinuity
 import com.nanless.paperdigest.cloud.BackupCodec
@@ -46,11 +48,34 @@ class StudyService private constructor(private val store: PersonalStore, private
         val config = validatedConfig(store.settings())
         val messages = JSONArray().put(JSONObject().put("role", "system").put("content", INSTRUCTIONS))
             .put(JSONObject().put("role", "user").put("content", "研究问题：\n$question\n\n来源身份：\n${canonical(source)}\n\n实际证据：\n$evidence"))
-        val identity = JSONObject().put("contract", "android-study-v1").put("extractor", source.optString("extractor", "published-html-mathml-v1"))
+        val identity = ClientProtocols.record("android-study").put("extractor", source.optString("extractor", "published-html-mathml"))
             .put("kind", "study").put("paperID", paperID).put("question", question).put("messages", messages).put("source", source).put("config", config)
         val fingerprint = sha256(canonical(identity).toByteArray())
+        val originalHeader=ClientProtocols.historicalHeader("android-study","exact-request-identity",null)
+        val oldSource = source.copy()
+        val extractor = source.optString("extractor")
+        val previousVariant = when (extractor) {
+            "android-pdfbox-physical-pages" -> "physical-page-text"
+            "android-jetpack-pdf-selection" -> "native-jetpack-text-selection"
+            "published-html-mathml" -> "preserved-published-html-formula-structure"
+            "published-markdown" -> "original-published-markdown"
+            "fixed-check" -> "connection-check-no-paper-material"
+            else -> null
+        }
+        if (previousVariant != null) {
+            oldSource.put("extractor",ClientProtocols.historicalContract(extractor,previousVariant))
+        }
+        val oldMessages=JSONArray(messages.toString())
+        oldMessages.getJSONObject(1).put("content","研究问题：\n$question\n\n来源身份：\n${canonical(oldSource)}\n\n实际证据：\n$evidence")
+        val oldIdentity=identity.copy().also {
+            it.remove("schemaFingerprint")
+            it.put("contract",originalHeader.getString("contract"))
+                .put("source",oldSource).put("messages",oldMessages)
+                .put("extractor",oldSource.optString("extractor",ClientProtocols.historicalContract("published-html-mathml","preserved-published-html-formula-structure")))
+        }
+        val historicalFingerprint=sha256(canonical(oldIdentity).toByteArray())
         if (!force) {
-            val same = store.snapshot().getJSONArray("sessions").objects().filter { it.optString("fingerprint") == fingerprint }
+            val same = store.snapshot().getJSONArray("sessions").objects().filter { it.optString("fingerprint") in setOf(fingerprint,historicalFingerprint) }
             val existing = same.firstOrNull { it.optString("status") == "completed" }
             if (existing != null) return@withLock verifySaved(existing).put("reused", true)
             val floorIDs = RequestContinuity.read(store.directory).map { it.id }.toSet()
@@ -62,11 +87,11 @@ class StudyService private constructor(private val store: PersonalStore, private
             if (issued.isNotEmpty()) return@withLock recoverSavedLocked(issued.single().getString("id")).put("reused", true)
         }
         val id = UUID.randomUUID().toString()
-        val sealed = JSONObject().put("contract", "android-study-input-v1").put("config", config).put("messages", messages).put("source", source).put("fingerprint", fingerprint).put("identity", identity)
+        val sealed = ClientProtocols.record("android-study-input").put("config", config).put("messages", messages).put("source", source).put("fingerprint", fingerprint).put("identity", identity)
         val bytes = canonical(sealed).toByteArray()
         JsonFiles.write(File(usage, "$id-input.json"), bytes)
         val session = JSONObject().put("id", id).put("kind", "study").put("paperID", paperID).put("question", question).put("source", source.copy())
-            .put("model", config.getString("model")).put("fingerprint", fingerprint).put("inputSHA256", sha256(bytes)).put("inputContract", "android-study-input-v1")
+            .put("model", config.getString("model")).put("fingerprint", fingerprint).put("inputSHA256", sha256(bytes)).put("inputContract", sealed.getString("contract")).put("inputSchemaFingerprint",sealed.getString("schemaFingerprint"))
             .put("status", "prepared").put("charge", "not-issued").put("createdAt", now()).put("requestIssued", false)
         store.appendSession(session)
         session
@@ -83,11 +108,12 @@ class StudyService private constructor(private val store: PersonalStore, private
             val inputBytes = JsonFiles.read(File(usage, "$id-input.json"), 8 * 1024 * 1024L)
             require(sha256(inputBytes) == session.getString("inputSHA256")) { "封存输入已变化，未调用模型" }
             val input = JSONObject(inputBytes.toString(Charsets.UTF_8))
+            verifiedInputConfig(session,input)
             val config = validatedConfig(input.getJSONObject("config"))
             val current = validatedConfig(store.settings())
             require(canonical(current) == canonical(config)) { "模型连接或输出设置已变化，旧准备任务不会取得当前密钥；请保留原记录并明确新建研究。" }
             // A known broken response vault is a pre-request fault, not a reason to pay and fail later.
-            authenticate(JSONObject().put("contract", "android-response-vault-preflight-v1"), create = true)
+            authenticate(ClientProtocols.record("android-response-vault-preflight"), create = true)
             val key = loadKey()?.takeIf { it.isNotBlank() } ?: throw AppFailure("credentialsUnavailable", "请先保存本机模型 API key")
             val proxy = config.nullableString("httpProxy")
             if (config.getString("model").lowercase().startsWith("muse-spark-")) {
@@ -155,7 +181,7 @@ class StudyService private constructor(private val store: PersonalStore, private
             JsonFiles.write(File(usage, "$id-response.bin"), response.bytes)
             val responseSHA = sha256(response.bytes)
             session.put("responseSHA256", responseSHA).put("httpStatus", response.code).put("endedAt", now())
-            val receipt = JSONObject().put("contract", "android-model-response-v1").put("sessionID", id).put("inputSHA256", session.getString("inputSHA256")).put("sha256", responseSHA).put("httpStatus", response.code).put("startedAt", session.getString("startedAt")).put("receivedAt", session.getString("endedAt"))
+            val receipt = ClientProtocols.record("android-model-response").put("sessionID", id).put("inputSHA256", session.getString("inputSHA256")).put("sha256", responseSHA).put("httpStatus", response.code).put("startedAt", session.getString("startedAt")).put("receivedAt", session.getString("endedAt"))
             receipt.put("hmacSHA256", authenticate(receipt, create = false))
             JsonFiles.write(File(usage, "$id-response.json"), receipt)
             val parsed = runCatching { decodeResponse(response.bytes, config.optBoolean("responsesStream")) }.getOrNull()
@@ -189,7 +215,7 @@ class StudyService private constructor(private val store: PersonalStore, private
         require(id !in inFlight) { "原请求仍在执行，请待其结束再核验保存结果" }
         val original = store.session(id) ?: throw AppFailure("missing", "原研究记录不存在")
         if (original.optString("status") == "completed") return verifySaved(original).put("recovered", true)
-        require(original.optString("inputContract") == "android-study-input-v1" && original.optBoolean("requestIssued") && original.optString("status") in listOf("pending", "failed", "cancelled", "interrupted")) { "此记录不是可核验的原 Android 已派发研究" }
+        require(androidStudySessionHeader(original) && original.optBoolean("requestIssued") && original.optString("status") in listOf("pending", "failed", "cancelled", "interrupted")) { "此记录不是可核验的原 Android 已派发研究" }
         val startedAt = original.getString("startedAt")
         val issued = RequestContinuity.read(store.directory).firstOrNull { it.id == id }
         require(issued != null && issued.startedAt == startedAt) { "缺少对应原派发事实或时间冲突，未重新签发" }
@@ -222,7 +248,7 @@ class StudyService private constructor(private val store: PersonalStore, private
         val before = File(usage, "$id-before-response-recovery-$beforeSHA.json")
         if (before.exists()) require(JsonFiles.read(before).contentEquals(beforeBytes)) { "原恢复前会话快照已变化" } else JsonFiles.write(before, beforeBytes)
         candidate.remove("error")
-        candidate.put("savedResponseRecovery", JSONObject().put("contract", "android-saved-response-recovery-v1").put("priorSessionSHA256", beforeSHA)
+        candidate.put("savedResponseRecovery", ClientProtocols.record("android-saved-response-recovery").put("priorSessionSHA256", beforeSHA)
             .put("priorStatus", original.getString("status")).put("responseReceiptSHA256", sha256(receiptBytes)).put("recoveredAt", now()))
         store.appendSession(candidate)
         return verifySaved(candidate).put("recovered", true)
@@ -236,7 +262,7 @@ class StudyService private constructor(private val store: PersonalStore, private
         val receipt = JSONObject(JsonFiles.read(File(usage, "$id-response.json"), 1024 * 1024L).toString(Charsets.UTF_8))
         val signature = receipt.getString("hmacSHA256")
         receipt.remove("hmacSHA256")
-        require(receipt.getString("contract") == "android-model-response-v1" && receipt.getString("sessionID") == id && receipt.getString("inputSHA256") == sha256(input) && receipt.getString("sha256") == sha256(response) && receipt.getInt("httpStatus") in 200..299 && MessageDigest.isEqual(signature.toByteArray(), authenticate(receipt, false).toByteArray())) { "已保存响应的本机完整性记录不符" }
+        require(ClientProtocols.hasValidHeader(receipt,"android-model-response") && receipt.getString("sessionID") == id && receipt.getString("inputSHA256") == sha256(input) && receipt.getString("sha256") == sha256(response) && receipt.getInt("httpStatus") in 200..299 && MessageDigest.isEqual(signature.toByteArray(), authenticate(receipt, false).toByteArray())) { "已保存响应的本机完整性记录不符" }
         val sealed = JSONObject(input.toString(Charsets.UTF_8))
         val config = verifiedInputConfig(session, sealed)
         val raw = decodeResponse(response, config.optBoolean("responsesStream"))
@@ -248,7 +274,7 @@ class StudyService private constructor(private val store: PersonalStore, private
 
     private fun verifiedInputConfig(session: JSONObject, sealed: JSONObject): JSONObject {
         val identity = sealed.getJSONObject("identity")
-        require(sealed.getString("contract") == "android-study-input-v1" && sealed.getString("fingerprint") == session.getString("fingerprint") && sha256(canonical(identity).toByteArray()) == session.getString("fingerprint") && identity.getString("paperID") == session.getString("paperID") && identity.getString("question") == session.getString("question") && canonical(identity.getJSONObject("source")) == canonical(session.getJSONObject("source")) && canonical(identity.getJSONArray("messages")) == canonical(sealed.getJSONArray("messages")) && canonical(identity.getJSONObject("config")) == canonical(sealed.getJSONObject("config"))) { "研究会话与原始输入身份不符" }
+        require(androidStudyInputHeaders(sealed,session) && sealed.getString("fingerprint") == session.getString("fingerprint") && sha256(canonical(identity).toByteArray()) == session.getString("fingerprint") && identity.getString("paperID") == session.getString("paperID") && identity.getString("question") == session.getString("question") && canonical(identity.getJSONObject("source")) == canonical(session.getJSONObject("source")) && canonical(identity.getJSONArray("messages")) == canonical(sealed.getJSONArray("messages")) && canonical(identity.getJSONObject("config")) == canonical(sealed.getJSONObject("config"))) { "研究会话与原始输入身份不符" }
         val config = sealed.getJSONObject("config")
         require(session.getString("model") == config.getString("model")) { "原研究模型与封存输入不符" }
         return config
@@ -263,12 +289,12 @@ class StudyService private constructor(private val store: PersonalStore, private
         val manifests = usage.listFiles()?.filter { pattern.matches(it.name) } ?: error("原响应目录无法读取")
         require(manifests.size <= 10000) { "原响应捕捉版本数量超过可完整核对范围" }
         val complete = ArrayList<Pair<File, ByteArray>>()
-        val keys = setOf("contract", "sessionID", "inputSHA256", "captureID", "startedAt", "requestIssued", "status", "httpStatus", "byteCount", "sha256", "updatedAt", "hmacSHA256")
+        val keys = setOf("sessionID", "inputSHA256", "captureID", "startedAt", "requestIssued", "status", "httpStatus", "byteCount", "sha256", "updatedAt", "hmacSHA256")
         for (manifest in manifests) {
             val bytes = JsonFiles.read(manifest, 1024 * 1024L); val record = JSONObject(bytes.toString(Charsets.UTF_8))
             val captureID = pattern.matchEntire(manifest.name)!!.groupValues[1]
-            require(UUID.fromString(captureID).toString() == captureID && record.keys().asSequence().toSet() == keys)
-            require(record.getString("contract") == "android-http-response-capture-v1" && record.getString("sessionID") == id && record.getString("inputSHA256") == original.getString("inputSHA256") && record.getString("captureID") == captureID) { "原响应捕捉身份冲突" }
+            require(UUID.fromString(captureID).toString() == captureID && record.keys().asSequence().toSet() == ClientProtocols.recordKeys(record.opt("contract"), "android-http-response-capture", keys, record.opt("schemaFingerprint") as? String))
+            require(ClientProtocols.hasValidHeader(record,"android-http-response-capture") && record.getString("sessionID") == id && record.getString("inputSHA256") == original.getString("inputSHA256") && record.getString("captureID") == captureID) { "原响应捕捉身份冲突" }
             val signature = record.getString("hmacSHA256"); val unsigned = record.copy().also { it.remove("hmacSHA256") }
             require(BackupCodec.validSHA(signature) && MessageDigest.isEqual(signature.toByteArray(), authenticate(unsigned, create = false).toByteArray())) { "原响应捕捉签名不符，未重新签发" }
             if (record.getString("status") == "body-complete") {
@@ -296,12 +322,12 @@ class StudyService private constructor(private val store: PersonalStore, private
         val receipt = if (exists(receiptFile)) {
             val prior = JSONObject(JsonFiles.read(receiptFile, 1024 * 1024L).toString(Charsets.UTF_8)); val signature = prior.getString("hmacSHA256")
             val unsigned = prior.copy().also { it.remove("hmacSHA256") }
-            require(prior.getString("contract") == "android-model-response-v1" && prior.getString("sessionID") == id && prior.getString("inputSHA256") == original.getString("inputSHA256") && prior.getString("startedAt") == original.getString("startedAt") && prior.getString("sha256") == responseSHA && prior.getInt("httpStatus") == httpStatus && RequestContinuity.validTime(prior.getString("receivedAt")) && MessageDigest.isEqual(signature.toByteArray(), authenticate(unsigned, create = false).toByteArray())) { "已存在原回执与完整捕捉冲突，未覆盖" }
+            require(ClientProtocols.hasValidHeader(prior,"android-model-response") && prior.getString("sessionID") == id && prior.getString("inputSHA256") == original.getString("inputSHA256") && prior.getString("startedAt") == original.getString("startedAt") && prior.getString("sha256") == responseSHA && prior.getInt("httpStatus") == httpStatus && RequestContinuity.validTime(prior.getString("receivedAt")) && MessageDigest.isEqual(signature.toByteArray(), authenticate(unsigned, create = false).toByteArray())) { "已存在原回执与完整捕捉冲突，未覆盖" }
             null
         } else {
-            JSONObject().put("contract", "android-model-response-v1").put("sessionID", id).put("inputSHA256", original.getString("inputSHA256"))
+            ClientProtocols.record("android-model-response").put("sessionID", id).put("inputSHA256", original.getString("inputSHA256"))
                 .put("sha256", responseSHA).put("httpStatus", httpStatus).put("startedAt", original.getString("startedAt")).put("receivedAt", receivedAt)
-                .put("capturePromotion", JSONObject().put("contract", "android-body-complete-capture-promotion-v1").put("captureID", capture.getString("captureID"))
+                .put("capturePromotion", ClientProtocols.record("android-body-complete-capture-promotion").put("captureID", capture.getString("captureID"))
                     .put("manifestSHA256", sha256(manifestBytes)).put("promotedAt", now()))
                 .also { it.put("hmacSHA256", authenticate(it, create = false)) }
         }

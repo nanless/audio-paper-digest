@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.zotero
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import com.nanless.paperdigest.cloud.BackupCodec
 import com.nanless.paperdigest.data.*
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavTarget
@@ -53,7 +55,7 @@ internal class ZoteroStorageMigrationStore(private val researchRoot: File, priva
     fun captureParent(id: String): MigrationParent {
         directory(researchRoot); directory(records); val file = header(id); val dirKey = attrs(file.parentFile).fileKey() ?: error("原存档目录身份缺失")
         val before = attrs(file); val bytes = read(file); same(file, before); val j = JSONObject(bytes.toString(Charsets.UTF_8))
-        require(j.optString("contract") == "paperdigest-zotero-web-v1" && j.getString("id") == id && j.optString("attachmentBackend", "storage") == "storage" && j.getString("libraryType") == "users") { "只可从原个人文库 Storage 存档迁移" }
+        require(ClientProtocols.hasValidHeader(j,ZoteroJournalFormats.journal) && j.getString("id") == id && j.optString("attachmentBackend", "storage") == "storage" && j.getString("libraryType") == "users") { "只可从原个人文库 Storage 存档迁移" }
         require(listOf("id", "destinationID", "libraryType", "libraryID", "collection", "paperID", "identity", "planSHA", "parentKey").all { j.opt(it) is String })
         require(j.optJSONObject("bibliography") != null && j.optJSONObject("options") != null && listOf("includePDF", "includeGuide", "includeAnalysis", "includeNote").all { j.getJSONObject("options").opt(it) is Boolean })
         require(j.optString("paperID").isNotBlank() && ZoteroService.validKey(j.getString("parentKey")) && j.getString("planSHA").matches(Regex("[a-f0-9]{64}")))
@@ -66,7 +68,7 @@ internal class ZoteroStorageMigrationStore(private val researchRoot: File, priva
             require(a.isRegularFile && a.fileKey() != null && a.size() == r.getLong("bytes") && a.size() in 1..512L*1024*1024 && BackupCodec.hash(source) == r.getString("sha256")); same(source, a)
             MigrationParent.Material(source, a.fileKey()!!, a.size(), a.lastModifiedTime().toMillis(), r.getString("sha256"))
         }
-        val originalPlan = JSONObject().put("contract", "paperdigest-zotero-plan-v1").put("destinationID", j.getString("destinationID")).put("libraryType", j.getString("libraryType")).put("libraryID", j.getString("libraryID")).put("collection", j.optString("collection")).put("paperID", j.getString("paperID")).put("identity", j.getString("identity")).put("bibliography", j.getJSONObject("bibliography")).put("roles", JSONArray(rows.map { r -> JSONObject().put("role", r.getString("role")).put("title", r.getString("title")).put("contentType", r.getString("contentType")).put("sha256", r.getString("sha256")).put("note", r.getBoolean("note")) }))
+        val originalPlan = ZoteroJournalFormats.planHeader(j).put("destinationID", j.getString("destinationID")).put("libraryType", j.getString("libraryType")).put("libraryID", j.getString("libraryID")).put("collection", j.optString("collection")).put("paperID", j.getString("paperID")).put("identity", j.getString("identity")).put("bibliography", j.getJSONObject("bibliography")).put("roles", JSONArray(rows.map { r -> JSONObject().put("role", r.getString("role")).put("title", r.getString("title")).put("contentType", r.getString("contentType")).put("sha256", r.getString("sha256")).put("note", r.getBoolean("note")) }))
         require(j.getString("planSHA") == sha256(canonical(originalPlan).toByteArray())) { "原 Storage 计划身份不符" }
         require(attrs(file.parentFile).fileKey() == dirKey); same(file, before)
         return MigrationParent(issuer, id, bytes, sha256(bytes), dirKey, before.fileKey() ?: error("原记录身份缺失"), facts)
@@ -142,20 +144,20 @@ internal class ZoteroStorageMigrationStore(private val researchRoot: File, priva
         if (Files.exists(control.toPath(), NOFOLLOW_LINKS)) {
             directory(control)
             if (Files.exists(linkFile.toPath(), NOFOLLOW_LINKS)) {
-                val link = JSONObject(read(BackupCodec.checkedFile(control, "$id.json")).toString(Charsets.UTF_8)); val child = link.getString("childID"); uuid(child)
+                val link = JSONObject(read(BackupCodec.checkedFile(control, "$id.json")).toString(Charsets.UTF_8)); require(ClientProtocols.hasValidHeader(link,"paperdigest-storage-migration-link")&&link.getString("parentJournalID")==id); val child = link.getString("childID"); uuid(child)
                 val opened = openChild(child); require(opened.origin.getString("parentJournalID") == id && opened.origin.getString("parentJournalSHA256") == link.getString("parentJournalSHA256")); return child
             }
         }
         val orphaned = publishedChildIDs(id); require(orphaned.size <= 1) { "同一原存档存在多个迁移记录，请保留原件核对" }
         return orphaned.singleOrNull()?.also { openChild(it) }
     }
-    private fun planSHA(parent: JSONObject, target: ZoteroDavTarget, rows: List<JSONObject>): String = sha256(canonical(JSONObject().put("davTarget", target.binding()).put("attachmentBackend", "webdav").put("contract", "paperdigest-zotero-plan-v1").put("destinationID", parent.getString("destinationID")).put("libraryType", parent.getString("libraryType")).put("libraryID", parent.getString("libraryID")).put("collection", parent.optString("collection")).put("paperID", parent.getString("paperID")).put("identity", parent.getString("identity")).put("bibliography", parent.getJSONObject("bibliography")).put("roles", JSONArray(rows.map { r -> JSONObject().put("role", r.getString("role")).put("title", r.getString("title")).put("contentType", r.getString("contentType")).put("sha256", r.getString("sha256")).put("note", r.getBoolean("note")) }))).toByteArray())
+    private fun planSHA(parent: JSONObject, target: ZoteroDavTarget, rows: List<JSONObject>, originalJournal:JSONObject?=null): String = sha256(canonical(ZoteroJournalFormats.planHeader(originalJournal).put("davTarget", target.binding()).put("attachmentBackend", "webdav").put("destinationID", parent.getString("destinationID")).put("libraryType", parent.getString("libraryType")).put("libraryID", parent.getString("libraryID")).put("collection", parent.optString("collection")).put("paperID", parent.getString("paperID")).put("identity", parent.getString("identity")).put("bibliography", parent.getJSONObject("bibliography")).put("roles", JSONArray(rows.map { r -> JSONObject().put("role", r.getString("role")).put("title", r.getString("title")).put("contentType", r.getString("contentType")).put("sha256", r.getString("sha256")).put("note", r.getBoolean("note")) }))).toByteArray())
     fun create(parent: MigrationParent, target: ZoteroDavTarget, observations: List<MigrationApiObservation>, check: () -> Unit): MigrationChild = locked {
         check(); requireParent(parent); val old = parent.header(); require(target.userID == old.getString("libraryID"))
         childForParent(parent.id)?.let { id ->
             val child = openChild(id); require(target.matches(child.origin.getJSONObject("target"))) { "此原记录已有另一迁移目标，未创建新计划" }
             val link = File(control, "${parent.id}.json")
-            if (!Files.exists(link.toPath(), NOFOLLOW_LINKS)) { beforeLinkPublish(); publishFile(link, JSONObject().put("contract", "paperdigest-storage-migration-link-v1").put("parentJournalID", parent.id).put("parentJournalSHA256", parent.sha256).put("childID", id)) }
+            if (!Files.exists(link.toPath(), NOFOLLOW_LINKS)) { beforeLinkPublish(); publishFile(link, ClientProtocols.record("paperdigest-storage-migration-link").put("parentJournalID", parent.id).put("parentJournalSHA256", parent.sha256).put("childID", id)) }
             return@locked child
         }
         require(observations.map { it.key }.toSet() == old.getJSONArray("roles").objects().map { it.getString("key") }.toSet())
@@ -173,14 +175,18 @@ internal class ZoteroStorageMigrationStore(private val researchRoot: File, priva
             val observation = observations.single { it.key == original.getString("key") }
             original.copy().also { r -> listOf("davJournalID", "davVerification", "uploadTransferred", "verifiedAt", "version").forEach(r::remove); r.put("created", observation.exists).put("status", "prepared"); observation.version?.let { r.put("version", it) } }
         }
-        val origin = JSONObject().put("contract", "paperdigest-storage-migration-origin-v1").put("childID", id).put("parentJournalID", parent.id).put("parentJournalSHA256", parent.sha256).put("parentPlanSHA256", old.getString("planSHA")).put("target", target.binding()).put("baseURL", target.root.removeSuffix("zotero/")).put("username", target.username).put("observations", JSONArray(observations.map { it.json() }))
+        val origin = ClientProtocols.record("paperdigest-storage-migration-origin").put("childID", id).put("parentJournalID", parent.id).put("parentJournalSHA256", parent.sha256).put("parentPlanSHA256", old.getString("planSHA")).put("target", target.binding()).put("baseURL", target.root.removeSuffix("zotero/")).put("username", target.username).put("observations", JSONArray(observations.map { it.json() }))
         origin.put("sourceMaterialTimes",JSONArray(rows.mapIndexed{i,r->val observed=observations.single{it.key==r.getString("key")};JSONObject().put("role",r.getString("role")).put("key",r.getString("key")).put("sourceObservedMtimeMillis",parent.materialFacts[i].mtime).put("copyInitialMtimeMillis",attrs(File(staging,"material-$i")).lastModifiedTime().toMillis()).put("apiObservedWireMtimeMillis",observed.mtime?:JSONObject.NULL)}))
         val originBytes = origin.toString(2).toByteArray(); writeNew(File(staging, "source-journal.json"), parent.bytes){own(File(staging,"source-journal.json"),it)}; writeNew(File(staging, "migration-origin.json"), originBytes){own(File(staging,"migration-origin.json"),it)}
-        val child = old.copy().also { j -> listOf("completedAt", "error", "davTarget").forEach(j::remove); j.put("id", id).put("createdAt", now()).put("status", "prepared").put("attachmentBackend", "webdav").put("davTarget", target.binding()).put("roles", JSONArray(rows)).put("planSHA", planSHA(old, target, rows)).put("migrationOriginSHA256", sha256(originBytes)).put("migrationParentID", parent.id) }
+        val child = old.copy().also { j ->
+            listOf("completedAt", "error", "davTarget", "contract", "schemaFingerprint").forEach(j::remove)
+            val currentHeader=ClientProtocols.record(ZoteroJournalFormats.journal)
+            currentHeader.keys().forEach{key->j.put(key,currentHeader.get(key))}
+             j.put("id", id).put("createdAt", now()).put("status", "prepared").put("attachmentBackend", "webdav").put("davTarget", target.binding()).put("roles", JSONArray(rows)).put("planSHA", planSHA(old, target, rows)).put("migrationOriginSHA256", sha256(originBytes)).put("migrationParentID", parent.id) }
         writeNew(File(staging, "journal.json"), child.toString(2).toByteArray()){own(File(staging,"journal.json"),it)}; check(); requireParent(parent); require(attrs(staging).fileKey() == stageKey)
         com.nanless.paperdigest.zotero.webdav.DavFiles.syncDirectory(staging)
         val final = File(records, id); require(!Files.exists(final.toPath(), NOFOLLOW_LINKS)); Files.move(staging.toPath(), final.toPath(), ATOMIC_MOVE); com.nanless.paperdigest.zotero.webdav.DavFiles.syncDirectory(records)
-        beforeLinkPublish(); publishFile(File(control, "${parent.id}.json"), JSONObject().put("contract", "paperdigest-storage-migration-link-v1").put("parentJournalID", parent.id).put("parentJournalSHA256", parent.sha256).put("childID", id))
+        beforeLinkPublish(); publishFile(File(control, "${parent.id}.json"), ClientProtocols.record("paperdigest-storage-migration-link").put("parentJournalID", parent.id).put("parentJournalSHA256", parent.sha256).put("childID", id))
         check(); requireParent(parent); openChild(id)
         }catch(e:Throwable){failure=e;throw e}
         finally{
@@ -190,12 +196,12 @@ internal class ZoteroStorageMigrationStore(private val researchRoot: File, priva
         }
     }
     fun openChild(id: String): MigrationChild {
-        val file = header(id); val child = JSONObject(read(file).toString(Charsets.UTF_8)); require(child.optString("contract") == "paperdigest-zotero-web-v1" && child.getString("id") == id)
+        val file = header(id); val child = JSONObject(read(file).toString(Charsets.UTF_8)); require(ClientProtocols.hasValidHeader(child,ZoteroJournalFormats.journal) && child.getString("id") == id)
         val originFile = BackupCodec.checkedFile(file.parentFile, "migration-origin.json"); val originBytes = read(originFile); require(sha256(originBytes) == child.getString("migrationOriginSHA256")); val origin = JSONObject(originBytes.toString(Charsets.UTF_8))
-        require(origin.getString("contract") == "paperdigest-storage-migration-origin-v1" && origin.getString("childID") == id); val parent = captureParent(origin.getString("parentJournalID")); require(parent.sha256 == origin.getString("parentJournalSHA256"))
+        require(ClientProtocols.hasValidHeader(origin,"paperdigest-storage-migration-origin") && origin.getString("childID") == id); val parent = captureParent(origin.getString("parentJournalID")); require(parent.sha256 == origin.getString("parentJournalSHA256"))
         require(BackupCodec.hash(BackupCodec.checkedFile(file.parentFile, "source-journal.json")) == parent.sha256)
         val old = parent.header(); require(listOf("destinationID", "libraryType", "libraryID", "collection", "options").all { canonical(child.opt(it)) == canonical(old.opt(it)) }) { "迁移子记录更换了原文库或选择" }; require(child.getString("migrationParentID") == parent.id && child.getString("parentKey") == old.getString("parentKey") && child.getString("paperID") == old.getString("paperID") && child.getString("identity") == old.getString("identity") && canonical(child.getJSONObject("bibliography")) == canonical(old.getJSONObject("bibliography")) && roleIdentity(child) == roleIdentity(old))
-        val binding = origin.getJSONObject("target"); val target = ZoteroDavTarget.native("users", old.getString("libraryID"), origin.getString("baseURL"), origin.getString("username"), binding.getString("destinationID"), binding.getString("accountID")); require(target.matches(binding) && target.matches(child.getJSONObject("davTarget")) && child.getString("attachmentBackend") == "webdav" && child.getString("planSHA") == planSHA(old, target, child.getJSONArray("roles").objects()))
+        val binding = origin.getJSONObject("target"); val target = ZoteroDavTarget.native("users", old.getString("libraryID"), origin.getString("baseURL"), origin.getString("username"), binding.getString("destinationID"), binding.getString("accountID")); require(target.matches(binding) && target.matches(child.getJSONObject("davTarget")) && child.getString("attachmentBackend") == "webdav" && child.getString("planSHA") == planSHA(old, target, child.getJSONArray("roles").objects(),child))
         child.getJSONArray("roles").objects().forEachIndexed { i, row -> require(row.getString("file") == "material-$i"); val material = BackupCodec.checkedFile(file.parentFile, "material-$i"); require(material.length() == row.getLong("bytes") && BackupCodec.hash(material) == row.getString("sha256")) }
         requireParent(parent); return MigrationChild(issuer, id, child, origin, target)
     }

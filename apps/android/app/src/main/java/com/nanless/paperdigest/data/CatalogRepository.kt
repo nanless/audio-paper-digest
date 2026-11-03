@@ -350,7 +350,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         require(paper.blogURL.isNotEmpty()) { "本地导入论文没有网站导读，可打开 PDF 后创建本机研究" }
         val file = File(directory, "articles/${sha256(paper.blogURL.toByteArray())}.json")
         val previous = if (file.isFile) Article.fromJson(JSONObject(JsonFiles.read(file, 100 * 1024 * 1024L).toString(Charsets.UTF_8))) else null
-        val parserCurrent = previous?.let { it.markdown != null || it.mathMLContract == "published-html-mathml-v1" } ?: false
+        val parserCurrent = previous?.let { it.markdown != null || ClientProtocols.isContract(it.mathMLContract,"published-html-mathml") } ?: false
         val sourceMatches = previous?.let { it.paperID == paper.id && it.blogURL == paper.blogURL && it.sourceURL == (paper.sourceURL ?: paper.blogURL) && it.pdfURL == paper.pdfURL && it.sourceVersion == paper.sourceVersion } ?: false
         if (!refresh && previous != null && parserCurrent && sourceMatches && previous.completeOffline && previous.catalogEpoch == epoch() && age(previous.fetchedAt) < 21600 && resourcesValid(previous)) return@withContext hydrateReading(previous)
         if (previous != null && parserCurrent && sourceMatches) onReadable(hydrateReading(previous.copy(isStale = true,
@@ -551,7 +551,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
         }
         val seeded = Article(paper.id, htmlBytes.toString(Charsets.UTF_8), sample.getString("articleMarkdown"), paper.sourceURL!!, paper.blogURL,
             sha256(htmlBytes), now(), paper.sourceVersion, true, listOf("应用内已发布样稿，尚未核对网站当前修订；可联网刷新导读。"), false, paper.citation, resources, "bundled-sample",
-            JSONObject().put("contract", "android-bundled-research-context-v1").put("sampleOnly", true).put("paperID", paper.id).put("abstract", sample.getString("abstract")).put("summary", primary.optString("summary")), pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml-v1")
+            ClientProtocols.record("android-bundled-research-context").put("sampleOnly", true).put("paperID", paper.id).put("abstract", sample.getString("abstract")).put("summary", primary.optString("summary")), pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml")
         return seeded.copy(original = seeded.json().put("citationSidecar", validatedSidecar(sample.getJSONObject("citation"), paper, false)))
     }
     private fun resourcesValid(article: Article): Boolean = article.resources.all { r -> r.localPath != null && r.sha256 != null && runCatching { StoragePaths.resolve(r.localPath, personal.directory, r.sha256, 16 * 1024 * 1024L); true }.getOrDefault(false) }
@@ -703,7 +703,7 @@ class CatalogRepository(private val context: Context, private val personal: Pers
             sanitize(body, paper.blogURL)
             require(body.select("img").size <= 32) { "单篇科学图超过32张" }
             val html = body.html()
-            return PublishedSourceWarning.present(Article(paper.id, html, articlePlainText(body), paper.sourceURL ?: paper.blogURL, paper.blogURL, sha256(html.toByteArray()), now(), paper.sourceVersion, false, emptyList(), false, citation, catalogEpoch = epoch, pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml-v1"))
+            return PublishedSourceWarning.present(Article(paper.id, html, articlePlainText(body), paper.sourceURL ?: paper.blogURL, paper.blogURL, sha256(html.toByteArray()), now(), paper.sourceVersion, false, emptyList(), false, citation, catalogEpoch = epoch, pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml"))
         }
         fun articlePlainText(body: Element): String {
             val copy = body.clone()

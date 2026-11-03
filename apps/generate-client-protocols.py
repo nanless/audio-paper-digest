@@ -49,6 +49,8 @@ def rendered_sources(blog_repo=None):
             'paper-research-context': {'citationFormat': 'researcher-sidecars', 'workbenchFormat': 'researcher-workbench'},
             'paper-tag-flat-tags': {'selectionFormat': 'paper-tag-selection'},
             'paperdigest-retained-capture-export-proof': {'historyFormat': 'paperdigest-retained-capture-export-history'},
+            'paperdigest-zotero-web': {'planFormat': 'paperdigest-zotero-plan'},
+            'android-study-input': {'identityFormat': 'android-study'},
             'paperdigest-mac-study-input': {'identityFormat': 'paperdigest-mac-study-identity'},
             'paperdigest-mac-study-identity': {'extractorFormat': 'paperdigest-mac-pdf-extractor'},
         }.get(name, {})
@@ -106,6 +108,11 @@ def rendered_sources(blog_repo=None):
                   '})(typeof globalThis!==\'undefined\'?globalThis:this,function(){\n'
                   + runtime + '\nreturn createPublicProtocolApi(' + canonical(public) + ');\n});\n')
     outputs[ROOT / 'apps/macos/Resources/website-tags/protocol-registry.js'] = javascript
+    bridge = {name: entries[name] for name in ('published-aggregate-document', 'reader-source-notice-snapshot')}
+    outputs[ROOT / 'apps/macos/Resources/native-bridge-protocols.js'] = (
+        '// Generated from the native bridge protocol catalog; do not edit.\n'
+        + runtime + '\nexport const NativeBridgeProtocols = createPublicProtocolApi('
+        + canonical(bridge) + ');\n')
     if blog_repo is not None:
         outputs[blog_repo / 'assets/js/protocol-registry.js'] = javascript
         # This is the actual canonical public table's byte hash, not the hash

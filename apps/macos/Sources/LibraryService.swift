@@ -527,10 +527,10 @@ actor LibraryService {
         var previous: Article?
         if let data = try? Data(contentsOf: cache), let cached = try? JSONDecoder().decode(Article.self, from: data), cached.paperID == paperID { previous = cached }
         if !refresh, var cached = previous {
-            if cached.markdown==nil,cached.mathMLContract != "published-html-mathml-v1"{cached.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
+            if cached.markdown==nil,!ClientProtocols.isContract(cached.mathMLContract,"published-html-mathml"){cached.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
             let missing = !resourcesVerified(cached)
             if missing { cached.completeOffline = false }
-            let parserCurrent=cached.markdown != nil || cached.mathMLContract=="published-html-mathml-v1"
+            let parserCurrent=cached.markdown != nil || ClientProtocols.isContract(cached.mathMLContract,"published-html-mathml")
             let current = parserCurrent && Self.sourceMatches(cached, paper: paper) && cached.catalogEpoch == snapshot.validationEpoch && Self.age(cached.fetchedAt) <= 6 * 3600
             if current && (!downloadImages || !missing), cached.isStale != true { return Self.presentSourceWarning(cached) }
             if cached.isStale == true, cached.catalogEpoch == snapshot.validationEpoch, cached.expectedSourceVersion == paper.sourceVersion, Self.age(cached.validationAttemptedAt) < 300 { return Self.presentSourceWarning(cached) }
@@ -546,7 +546,7 @@ actor LibraryService {
             guard var old = previous ?? (try? seedArticle(paper)) else { throw error }
             old.isStale = true; old.cacheStatus = "stale"; old.validationAttemptedAt = Self.now(); old.expectedSourceVersion = paper.sourceVersion; old.catalogEpoch = snapshot.validationEpoch
             old.completeOffline = old.completeOffline && resourcesVerified(old)
-            if old.markdown==nil,old.mathMLContract != "published-html-mathml-v1"{old.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
+            if old.markdown==nil,!ClientProtocols.isContract(old.mathMLContract,"published-html-mathml"){old.notices.append("这份旧HTML缓存未经过公式结构保真读取，部分MathML可能缺失；原稿保留，请联网重新读取网站导读。")}
             old.notices = Array(Set(old.notices + ["网站当前修订复验失败，正在读取先前保存的旧导读；获取于\(old.fetchedAt)，旧来源版本\(old.sourceVersion ?? "未标版本")，目录期待版本\(paper.sourceVersion ?? "未标版本")。\(error.localizedDescription)"])).sorted()
             if previous != nil { try atomicWrite(try JSONEncoder().encode(old), to: cache) }
             return Self.presentSourceWarning(old)
@@ -692,11 +692,11 @@ actor LibraryService {
         if let citation = object["citation"] as? [String: Any] {
             result.citationSidecar = try Self.validatedSidecar(JSONSerialization.data(withJSONObject: citation), paper: paper, context: false)
         }
-        let context: [String: Any] = ["contract": "desktop-bundled-research-context-v1", "origin": "bundled-published-sample", "sampleOnly": true,
+        let context = try ClientProtocols.record("desktop-bundled-research-context",fields:[ "origin": "bundled-published-sample", "sampleOnly": true,
                                       "sourceContract": object["contract"] ?? NSNull(), "paperID": paper.id, "sourceURL": paper.sourceURL ?? paper.blogURL,
                                       "blogURL": paper.blogURL, "sourceVersion": paper.sourceVersion ?? "", "originalTitle": paper.title, "readerTitle": paper.titleZh,
                                       "authors": primary["authors"] ?? [], "abstract": object["abstract"] ?? NSNull(),
-                                      "oneSentenceThesis": primary["summary"] ?? NSNull(), "assessment": ["score": primary["score"] ?? NSNull(), "primaryTask": primary["task"] ?? "", "primaryMethod": primary["method"] ?? "", "tags": primary["tags"] ?? []]]
+                                      "oneSentenceThesis": primary["summary"] ?? NSNull(), "assessment": ["score": primary["score"] ?? NSNull(), "primaryTask": primary["task"] ?? "", "primaryMethod": primary["method"] ?? "", "tags": primary["tags"] ?? []]])
         result.researchContext = try JSONValue.from(context)
         return result
     }
@@ -1046,7 +1046,7 @@ actor LibraryService {
         return presentSourceWarning(Article(paperID: paper.id, html: html, markdown: nil, plainText: try articlePlainText(body), citation: citation,
                        resources: images, sourceURL: paper.sourceURL ?? paper.blogURL, pdfURL: paper.pdfURL, sourceVersion: paper.sourceVersion,
                        fetchedAt: now(), revisionSHA256: sha256(Data(html.utf8)), completeOffline: false,
-                       notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"],mathMLContract:"published-html-mathml-v1"),blogURL:pageURL.absoluteString)
+                       notices: ["兼容读取现有网站正文；PDF页内定位仅在真实匹配后提供。"],mathMLContract:"published-html-mathml"),blogURL:pageURL.absoluteString)
     }
 
     private static func sanitize(_ root: XMLElement, pageURL: URL) throws {

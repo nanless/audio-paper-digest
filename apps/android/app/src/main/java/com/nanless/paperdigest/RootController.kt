@@ -906,10 +906,10 @@ class RootController private constructor(private val context: Context, private v
         val p = if (command == "model.check") null else selected()
         val source = JSONObject().put("paperID", p?.id ?: "configuration-check").put("sourceVersion", p?.sourceVersion ?: "").put("sourceURL", p?.sourceURL ?: p?.blogURL ?: "")
         val evidence: String
-        if (p == null) { evidence = "这是一项最小连接检查，不包含论文或私人资料。"; source.put("kind", "connection-check").put("extractor", "fixed-check-v1") }
+        if (p == null) { evidence = "这是一项最小连接检查，不包含论文或私人资料。"; source.put("kind", "connection-check").put("extractor", "fixed-check") }
         else {
             when (val kind = payload.optString("evidenceKind", "guide")) {
-                "guide" -> { val a = _state.value.article; require(a != null && a.paperID == p.id) { "请先读取当前导读" }; ReadingSourceBinding.requireArticle(p, a); evidence = if (a.markdown != null || a.html.isBlank()) a.plainText else CatalogRepository.articlePlainText(org.jsoup.Jsoup.parseBodyFragment(a.html).body()); source.put("sourceVersion", a.sourceVersion ?: "").put("sourceURL", a.sourceURL).put("kind", "published-guide").put("revision", a.revisionSHA256).put("isStale", a.isStale).put("includesImages", false).put("notices", JSONArray(a.notices + "本次仅采用导读文字与公式结构，不包含科学图的像素内容。" )).put("extractor", if (a.markdown != null) "published-markdown-v1" else a.mathMLContract ?: "legacy-published-html-unverified") }
+                "guide" -> { val a = _state.value.article; require(a != null && a.paperID == p.id) { "请先读取当前导读" }; ReadingSourceBinding.requireArticle(p, a); evidence = if (a.markdown != null || a.html.isBlank()) a.plainText else CatalogRepository.articlePlainText(org.jsoup.Jsoup.parseBodyFragment(a.html).body()); source.put("sourceVersion", a.sourceVersion ?: "").put("sourceURL", a.sourceURL).put("kind", "published-guide").put("revision", a.revisionSHA256).put("isStale", a.isStale).put("includesImages", false).put("notices", JSONArray(a.notices + "本次仅采用导读文字与公式结构，不包含科学图的像素内容。" )).put("extractor", if (a.markdown != null) "published-markdown" else a.mathMLContract ?: "legacy-published-html-unverified") }
                 "selection" -> { val selection = access.selection ?: error("请先在 PDF 中选择实际文字"); val d = _state.value.pdfDocument ?: error("PDF 尚未打开"); require(selection.documentSHA256 == d.sha256 && selection.text.isNotBlank()); evidence = selection.text; source.put("kind", "pdf-selection").put("pages", JSONArray(selection.pages)).put("pdfSHA", d.sha256).put("extractor", selection.extractor) }
                 "page", "range", "full", "chapter" -> {
                     val d = _state.value.pdfDocument ?: error("请先打开 PDF")
@@ -917,7 +917,7 @@ class RootController private constructor(private val context: Context, private v
                     val from = when (kind) { "full" -> 1; "page" -> access.pdfPage; "chapter" -> chapter!!.page; else -> payload.getInt("fromPage") }
                     val to = when (kind) { "full" -> d.pageCount; "page" -> from; "chapter" -> chapter!!.endPage; else -> payload.getInt("toPage") }
                     val e = pdf.evidence(d, from, to); require(e.missingTextPages.size < e.pages.size) { "这些页面没有可提取文字，不能将空文本当完整论文分析" }
-                    evidence = e.text; source.put("kind", e.kind).put("pages", JSONArray(e.pages)).put("missingTextPages", JSONArray(e.missingTextPages)).put("allPagesHaveExtractableText", e.missingTextPages.isEmpty()).put("includesImages", false).put("textExtractionNotice", "本次为原PDF文字提取，不含图像；部分数学字体或版面可能无法完整映射，请核对原PDF。").put("pdfSHA", d.sha256).put("extractor", "android-pdfbox-physical-pages-v1")
+                    evidence = e.text; source.put("kind", e.kind).put("pages", JSONArray(e.pages)).put("missingTextPages", JSONArray(e.missingTextPages)).put("allPagesHaveExtractableText", e.missingTextPages.isEmpty()).put("includesImages", false).put("textExtractionNotice", "本次为原PDF文字提取，不含图像；部分数学字体或版面可能无法完整映射，请核对原PDF。").put("pdfSHA", d.sha256).put("extractor", "android-pdfbox-physical-pages")
                     chapter?.let { source.put("kind", "pdf-chapter").put("chapter", it.index).put("chapterTitle", it.title) }
                 }
                 else -> error("证据范围尚不支持")

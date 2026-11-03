@@ -12,6 +12,28 @@ import java.util.UUID
 /** Read-only provenance, NOT response/fee authentication or permission to issue a request.
  * Hashes the original bytes before parsing; never rewrites a restored input or requires device HMAC.
  */
+internal fun androidStudySessionHeader(session: JSONObject): Boolean {
+    val header = JSONObject().put("contract", session.opt("inputContract"))
+    if (session.has("inputSchemaFingerprint")) header.put("schemaFingerprint", session.get("inputSchemaFingerprint"))
+    return ClientProtocols.hasValidHeader(header, "android-study-input")
+}
+
+internal fun androidStudyInputHeaders(sealed: JSONObject, session: JSONObject): Boolean {
+    val identity = sealed.optJSONObject("identity") ?: return false
+    if (!ClientProtocols.hasValidHeader(sealed, "android-study-input") ||
+        !ClientProtocols.hasValidHeader(identity, "android-study")) return false
+    val current = sealed.has("schemaFingerprint")
+    if (current != identity.has("schemaFingerprint")) return false
+    if (current) {
+        val identityHeader = ClientProtocols.recordHeader(identity.get("contract"), "android-study", identity.getString("schemaFingerprint"))
+        val declaration = ClientProtocols.declaredSchema(sealed.get("contract"), "android-study-input", sealed.getString("schemaFingerprint"))
+        if (canonical(identityHeader) != canonical(declaration.getJSONObject("identityFormat"))) return false
+    }
+    if (!session.has("inputContract")) return !current && !session.has("inputSchemaFingerprint")
+    return androidStudySessionHeader(session) && session.opt("inputContract") == sealed.opt("contract") &&
+        session.opt("inputSchemaFingerprint") == sealed.opt("schemaFingerprint")
+}
+
 private const val MAC_STUDY_INPUT="paperdigest-mac-study-input"
 private const val MAC_STUDY_IDENTITY="paperdigest-mac-study-identity"
 private const val MAC_STUDY_EXTRACTOR="paperdigest-mac-pdf-extractor"
@@ -44,7 +66,7 @@ fun readSavedStudyInput(session: JSONObject, researchRoot: File): SavedStudySour
     val file = BackupCodec.checkedFile(researchRoot, "ModelUsage/$id-input.json")
     val bytes = JsonFiles.read(file, 8L * 1024 * 1024)
     val input = verifiedSavedStudyInput(session, bytes) ?: error("Invalid original input")
-    val android = JSONObject(bytes.toString(Charsets.UTF_8)).opt("contract") == "android-study-input-v1"
+    val android = ClientProtocols.hasValidHeader(JSONObject(bytes.toString(Charsets.UTF_8)), "android-study-input")
     input.copy(originalResponseBinding = readOriginalStudyResponse(session, researchRoot, input, android))
 } catch (_: Exception) { null }
 
@@ -84,7 +106,7 @@ private fun readOriginalStudyResponse(session: JSONObject, root: File, input: Sa
             if (bytes.isNotEmpty()) declared = true
         } else {
             val capture = json(bytes)
-            require(capture.get("contract") == "android-http-response-capture-v1" &&
+            require(ClientProtocols.hasValidHeader(capture, "android-http-response-capture") &&
                 capture.get("sessionID") == id && capture.get("inputSHA256") == input.inputSHA && capture.get("captureID") == captureID)
             val count = capture.get("byteCount")
             require(count is Number && count.toLong() >= 0 && count.toDouble() == count.toLong().toDouble())
@@ -97,7 +119,7 @@ private fun readOriginalStudyResponse(session: JSONObject, root: File, input: Sa
     val binding = JSONObject().put("record", session).put("inputSHA256", input.inputSHA)
         .put("receiptSHA256", sha256(receiptBytes)).put("captures", captures)
     when {
-        receipt.get("contract")=="android-model-response-v1" -> {
+        ClientProtocols.hasValidHeader(receipt, "android-model-response") -> {
             require(android)
             val body = read(bodyName, 16L * 1024 * 1024)
             val bodySHA = sha256(body)
@@ -165,7 +187,7 @@ private fun verifyStudyInput(session: JSONObject, bytes: ByteArray): SavedStudyS
     }
     val fingerprint = session.get("fingerprint") as String
     require(BackupCodec.validSHA(fingerprint) && sealed.get("fingerprint") == fingerprint)
-    val android = sealed.opt("contract") == "android-study-input-v1"
+    val android = ClientProtocols.hasValidHeader(sealed, "android-study-input")
     val sourceHeader = if (android) canonical(source) else desktopStudyJSON(source)
     val prefix = "研究问题：\n$question\n\n来源身份：\n$sourceHeader\n\n实际证据：\n"
     val user = messages.getJSONObject(1).getString("content")
@@ -173,16 +195,16 @@ private fun verifyStudyInput(session: JSONObject, bytes: ByteArray): SavedStudyS
     val evidence = user.substring(prefix.length)
     require(evidence.isNotBlank() && evidence.toByteArray(Charsets.UTF_8).size <= 1024 * 1024)
     if (android) {
-        require(sealed.keys().asSequence().toSet() == setOf("contract", "config", "messages", "source", "fingerprint", "identity"))
-        require(!session.has("inputContract") || session.get("inputContract") == "android-study-input-v1")
+        require(androidStudyInputHeaders(sealed,session))
+        require(sealed.keys().asSequence().toSet() == ClientProtocols.recordKeys(sealed.get("contract"),"android-study-input",setOf("config","messages","source","fingerprint","identity"),sealed.opt("schemaFingerprint") as? String))
         val identity = sealed.getJSONObject("identity")
-        require(identity.keys().asSequence().toSet() == setOf("contract", "extractor", "kind", "paperID", "question", "messages", "source", "config"))
-        require(identity.get("contract") == "android-study-v1" && identity.get("kind") == "study")
+        require(identity.keys().asSequence().toSet() == ClientProtocols.recordKeys(identity.get("contract"),"android-study",setOf("extractor","kind","paperID","question","messages","source","config"),identity.opt("schemaFingerprint") as? String))
+        require(identity.get("kind") == "study")
         require(identity.get("paperID") == owner && identity.get("question") == question)
         require(canonical(identity.getJSONObject("source")) == canonical(source))
         require(canonical(identity.getJSONArray("messages")) == canonical(messages))
         require(canonical(identity.getJSONObject("config")) == canonical(config))
-        require(identity.get("extractor") == source.optString("extractor", "published-html-mathml-v1"))
+        require(identity.get("extractor") == source.optString("extractor", if(sealed.has("schemaFingerprint")) "published-html-mathml" else ClientProtocols.historicalContract("published-html-mathml","preserved-published-html-formula-structure")))
         require(sha256(canonical(identity).toByteArray(Charsets.UTF_8)) == fingerprint)
         require(source.get("kind") in setOf("pdf-selection", "pdf-range", "pdf-document", "pdf-chapter"))
     } else {

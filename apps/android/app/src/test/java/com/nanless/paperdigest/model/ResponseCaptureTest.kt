@@ -209,7 +209,7 @@ class ResponseCaptureTest {
             val reopened = StudyService(restoredStore, { keys++; error("Recovery must not read a current API key") }, HostCapturePublication) { _, _, _, _ -> requests++; error("Recovery must not call HTTP") }
             val result = reopened.recoverSaved(id)
             assertEquals("completed", result.getString("status")); assertTrue(result.getBoolean("recovered")); assertArrayEquals(raw, File(f.root, "ModelUsage/$id-response.bin").readBytes())
-            assertEquals("android-body-complete-capture-promotion-v1", JSONObject(File(f.root, "ModelUsage/$id-response.json").readText()).getJSONObject("capturePromotion").getString("contract"))
+            assertTrue(com.nanless.paperdigest.protocols.ClientProtocols.isCurrentHeader(JSONObject(File(f.root, "ModelUsage/$id-response.json").readText()).getJSONObject("capturePromotion"),"android-body-complete-capture-promotion"))
             assertEquals(0, keys); assertEquals(0, requests); assertEquals(1, f.server.requestCount); assertEquals(1, f.count())
             originals.forEach { (file, bytes) -> assertArrayEquals(bytes, file.readBytes()) }
             assertEquals("completed", reopened.verifySaved(result).getString("status")); assertTrue(reopened.recoverSaved(id).getBoolean("recovered")); assertEquals(0, keys); assertEquals(0, requests)

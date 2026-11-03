@@ -193,7 +193,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         let citationText=String(data:try JSONEncoder().encode(article.citationSidecar),encoding:.utf8) ?? ""
         let contextText=String(data:try JSONEncoder().encode(article.researchContext),encoding:.utf8) ?? ""
         try expect(citationText.contains("Oki Electric") && citationText.contains("Kohei Yamamoto"), "seed citation keeps actual author affiliation metadata")
-        try expect(contextText.contains("desktop-bundled-research-context-v1") && contextText.contains("abstract") && !contextText.contains("paper-research-context-v2"), "seed abstract context truthfully uses own bundled contract")
+        try expect(contextText.contains("desktop-bundled-research-context") && contextText.contains("abstract") && !contextText.contains("paper-research-context-v2"), "seed abstract context truthfully uses own bundled contract")
         let pdf = try await library.downloadPDF(for: "arxiv:2610.27491")
         try expect(pdf.sha256 == "01eea46037406eeb43c63141637968503eb2d6559eb3e399c198090e3864153c" && pdf.bytes == 489533, "actual 13-page seed PDF bytes verified")
         try expect(pdf.filePath.hasPrefix(folder.path+"/PublishedLibrary/pdf/"),"bundled PDF copied into private support directory for Zotero")

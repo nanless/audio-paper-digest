@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.pdf
 
 import android.content.Context
+import com.nanless.paperdigest.protocols.ClientProtocols
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.AtomicFile
@@ -169,9 +170,9 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
     /** Validates a prospective central annotation without writing a sidecar or personal state. */
     suspend fun prepareAnnotation(document: PdfDocumentRef, selection: PdfSelection, note: String): PdfAnnotation = withContext(Dispatchers.IO) {
         checked(document)
-        require(selection.coordinateSystem=="rotated-crop-top-left-points-v1" && selection.documentSHA256 == document.sha256 && selection.pages.isNotEmpty() && selection.pages.distinct().size==selection.pages.size && selection.pages.all { it in 1..document.pageCount } && selection.text.isNotBlank()) { "批注不属于此版本原文" }
+        require(ClientProtocols.isContract(selection.coordinateSystem,"rotated-crop-top-left-points") && selection.documentSHA256 == document.sha256 && selection.pages.isNotEmpty() && selection.pages.distinct().size==selection.pages.size && selection.pages.all { it in 1..document.pageCount } && selection.text.isNotBlank()) { "批注不属于此版本原文" }
         require(note.length <= 20000 && selection.text.length <= 100000 && selection.bounds.isNotEmpty()) { "批注过长或没有可核对的页面坐标" }
-        require(selection.extractor in listOf("android-pdfbox-physical-pages-v1","android-jetpack-pdf-selection-v1")) { "批注提取来源未声明" }
+        require(knownNativeExtractor(selection.extractor)) { "批注提取来源未声明" }
         for (b in selection.bounds) require(b.page in selection.pages && listOf(b.left,b.top,b.right,b.bottom).all { it.isFinite() } && b.left >= 0 && b.top >= 0 && b.right > b.left && b.bottom > b.top) { "批注页面坐标无效" }
         val annotation = PdfAnnotation(UUID.randomUUID().toString(), selection, note, Instant.now().toString())
         portableMarks(document,annotation) // checks actual crop, rotation and physical page before the single central commit
@@ -197,7 +198,7 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
                 val rawPage=mark.get("page");require(rawPage is Number && rawPage.toDouble().isFinite() && rawPage.toDouble()==rawPage.toInt().toDouble()) { "中央标注物理页无效" }
                 val page=rawPage.toInt();require(page in 1..document.pageCount) { "中央标注物理页超出原文" }
                 val id=mark.getString("id");val group=mark.optString("groupID").ifBlank{id};require(id.isNotEmpty() && group.isNotEmpty() && id.length<=256 && group.length<=256) { "中央标注身份无效" }
-                require(!mark.has("coordinateSystem") || mark.getString("coordinateSystem")=="pdf-user-space-unrotated-v1") { "中央标注坐标系统不兼容，原记录保留" }
+                require(!mark.has("coordinateSystem") || ClientProtocols.isContract(mark.getString("coordinateSystem"),"pdf-user-space-unrotated")) { "中央标注坐标系统不兼容，原记录保留" }
                 val rect=parsePortableRect(mark.getString("rect"))
                 val p=pdf.getPage(page-1);val crop=p.cropBox
                 require(rect.x>=crop.lowerLeftX-.01f && rect.y>=crop.lowerLeftY-.01f && rect.x+rect.width<=crop.upperRightX+.01f && rect.y+rect.height<=crop.upperRightY+.01f) { "中央标注超出真实原文裁切范围" }
@@ -205,7 +206,7 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
                 val bounds=PdfCoordinates.toDisplaySpace(page,rect,geometry)
                 val text=mark.optString("text");val note=mark.optString("comment",mark.optString("note"));val createdAt=mark.getString("createdAt")
                 require(text.length<=100000 && note.length<=20000) { "中央标注内容过长" };Instant.parse(createdAt)
-                val extractor=mark.optString("extractor").ifEmpty{"portable-pdf-user-space-v1"}
+                val extractor=mark.optString("extractor").ifEmpty{"portable-pdf-user-space"}
                 PdfAnnotation(group,PdfSelection(document.sha256,text,listOf(page),listOf(bounds),extractor=extractor),note,createdAt)
             }
             projected.groupBy{it.id}.map { (_,parts) ->
@@ -225,7 +226,7 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
     }
     /** One PDFKit-compatible entry per actual rectangle; preserves the Android group sidecar. */
     suspend fun portableMarks(document: PdfDocumentRef, annotation: PdfAnnotation): List<JSONObject> = withContext(Dispatchers.IO) {
-        require(annotation.selection.documentSHA256==document.sha256 && annotation.selection.coordinateSystem=="rotated-crop-top-left-points-v1")
+        require(annotation.selection.documentSHA256==document.sha256 && ClientProtocols.isContract(annotation.selection.coordinateSystem,"rotated-crop-top-left-points"))
         loadDocument(document).use { pdf ->
             annotation.selection.bounds.mapIndexed { index,b ->
                 require(b.page in 1..document.pageCount)
@@ -233,7 +234,7 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
                 val geometry=PdfPageGeometry(crop.lowerLeftX,crop.lowerLeftY,crop.width,crop.height,((p.rotation%360)+360)%360)
                 val rect=PdfCoordinates.toUserSpace(b,geometry)
                 require(rect.x>=crop.lowerLeftX-0.01f && rect.y>=crop.lowerLeftY-0.01f && rect.x+rect.width<=crop.upperRightX+0.01f && rect.y+rect.height<=crop.upperRightY+0.01f) { "标注超出原文裁切范围，未导出错误坐标" }
-                JSONObject().put("id",annotation.id+"-"+index).put("groupID",annotation.id).put("text",annotation.selection.text).put("comment",annotation.note).put("page",b.page).put("rect",String.format(java.util.Locale.ROOT,"{{%.6f, %.6f}, {%.6f, %.6f}}",rect.x,rect.y,rect.width,rect.height)).put("pdfSHA",document.sha256).put("createdAt",annotation.createdAt).put("coordinateSystem","pdf-user-space-unrotated-v1").put("extractor",annotation.selection.extractor)
+                JSONObject().put("id",annotation.id+"-"+index).put("groupID",annotation.id).put("text",annotation.selection.text).put("comment",annotation.note).put("page",b.page).put("rect",String.format(java.util.Locale.ROOT,"{{%.6f, %.6f}, {%.6f, %.6f}}",rect.x,rect.y,rect.width,rect.height)).put("pdfSHA",document.sha256).put("createdAt",annotation.createdAt).put("coordinateSystem","pdf-user-space-unrotated").put("extractor",annotation.selection.extractor)
             }
         }
     }
@@ -253,22 +254,26 @@ class PdfRepository(context: Context, researchRoot: File = File(context.noBackup
             current.map { if(it.id==id)it.copy(note=note) else it }.also { writeAnnotationsNow(document,it) }
         }
     }
+    private fun knownNativeExtractor(raw: String): Boolean =
+        ClientProtocols.isContract(raw,"android-pdfbox-physical-pages") ||
+            ClientProtocols.isContract(raw,"android-jetpack-pdf-selection")
+
     private fun writeAnnotationsNow(document:PdfDocumentRef,all:List<PdfAnnotation>) {
         val array=JSONArray()
         for(a in all)array.put(JSONObject().put("id",a.id).put("documentSHA256",a.selection.documentSHA256).put("text",a.selection.text).put("coordinateSystem",a.selection.coordinateSystem).put("extractor",a.selection.extractor).put("pages",JSONArray(a.selection.pages)).put("bounds",JSONArray(a.selection.bounds.map { b -> JSONObject().put("page",b.page).put("left",b.left).put("top",b.top).put("right",b.right).put("bottom",b.bottom) })).put("note",a.note).put("createdAt",a.createdAt))
         val file=AtomicFile(File(annotations,document.sha256+".json"));val out=file.startWrite()
-        try{out.write(JSONObject().put("contract","paperdigest-pdf-annotations-v1").put("sha256",document.sha256).put("annotations",array).toString().toByteArray());file.finishWrite(out)}catch(e:Throwable){file.failWrite(out);throw e}
+        try{out.write(ClientProtocols.record("paperdigest-pdf-annotations").put("sha256",document.sha256).put("annotations",array).toString().toByteArray());file.finishWrite(out)}catch(e:Throwable){file.failWrite(out);throw e}
     }
     suspend fun loadAnnotations(document: PdfDocumentRef): List<PdfAnnotation> = withContext(Dispatchers.IO) { checked(document);synchronized(annotationLock) { loadAnnotationsNow(document) } }
     private fun loadAnnotationsNow(document: PdfDocumentRef): List<PdfAnnotation> {
         val file=File(annotations,document.sha256+".json");require(!java.nio.file.Files.isSymbolicLink(file.toPath())) { "批注文件不能是链接" };if(!file.exists())return emptyList()
         require(file.length() <= 16*1024*1024) { "批注文件过大，未覆盖" }
-        val root=JSONObject(file.readText());require(root.getString("contract")=="paperdigest-pdf-annotations-v1" && root.getString("sha256")==document.sha256)
+        val root=JSONObject(file.readText());require(ClientProtocols.hasValidHeader(root,"paperdigest-pdf-annotations") && root.getString("sha256")==document.sha256)
         val array=root.getJSONArray("annotations")
-        val result=(0 until array.length()).map { i -> val a=array.getJSONObject(i);val pages=a.getJSONArray("pages");val bounds=a.getJSONArray("bounds");require(a.optString("coordinateSystem")=="rotated-crop-top-left-points-v1") { "批注坐标系统未声明，原文件保留" };PdfAnnotation(a.getString("id"),PdfSelection(a.getString("documentSHA256"),a.getString("text"),(0 until pages.length()).map{pages.getInt(it)},(0 until bounds.length()).map{n->val b=bounds.getJSONObject(n);PdfSelectionBounds(b.getInt("page"),b.getDouble("left").toFloat(),b.getDouble("top").toFloat(),b.getDouble("right").toFloat(),b.getDouble("bottom").toFloat())},extractor=a.getString("extractor")),a.getString("note"),a.getString("createdAt")) }
+        val result=(0 until array.length()).map { i -> val a=array.getJSONObject(i);val pages=a.getJSONArray("pages");val bounds=a.getJSONArray("bounds");require(ClientProtocols.isContract(a.optString("coordinateSystem"),"rotated-crop-top-left-points")) { "批注坐标系统未声明，原文件保留" };PdfAnnotation(a.getString("id"),PdfSelection(a.getString("documentSHA256"),a.getString("text"),(0 until pages.length()).map{pages.getInt(it)},(0 until bounds.length()).map{n->val b=bounds.getJSONObject(n);PdfSelectionBounds(b.getInt("page"),b.getDouble("left").toFloat(),b.getDouble("top").toFloat(),b.getDouble("right").toFloat(),b.getDouble("bottom").toFloat())},coordinateSystem=a.getString("coordinateSystem"),extractor=a.getString("extractor")),a.getString("note"),a.getString("createdAt")) }
         require(result.map{it.id}.distinct().size==result.size) { "批注身份重复，原文件保留" }
         for(a in result){
-            require(a.selection.documentSHA256==document.sha256 && a.selection.text.isNotBlank() && a.selection.text.length<=100000 && a.selection.extractor in listOf("android-pdfbox-physical-pages-v1","android-jetpack-pdf-selection-v1") && a.note.length<=20000 && a.selection.pages.isNotEmpty() && a.selection.pages.distinct().size==a.selection.pages.size && a.selection.pages.all{it in 1..document.pageCount}) { "批注来源或页码无效，原文件保留" }
+            require(a.selection.documentSHA256==document.sha256 && a.selection.text.isNotBlank() && a.selection.text.length<=100000 && knownNativeExtractor(a.selection.extractor) && a.note.length<=20000 && a.selection.pages.isNotEmpty() && a.selection.pages.distinct().size==a.selection.pages.size && a.selection.pages.all{it in 1..document.pageCount}) { "批注来源或页码无效，原文件保留" }
             UUID.fromString(a.id);Instant.parse(a.createdAt)
             for(b in a.selection.bounds)require(b.page in a.selection.pages && listOf(b.left,b.top,b.right,b.bottom).all{it.isFinite()} && b.left>=0 && b.top>=0 && b.right>=b.left && b.bottom>=b.top) { "批注坐标无效，原文件保留" }
         }

@@ -23,7 +23,7 @@ data class PublishedAggregateCatalog(val snapshotSHA256:String,val sourceRecordC
 object PublishedAggregateReader {
     const val SITE="https://nanless.github.io/audio-paper-digest-blog/"
     data class Shard(val url:String,val bytes:Int,val sha256:String,val recordCount:Int)
-    data class Manifest(val recordCount:Int,val totalBytes:Int,val shards:List<Shard>)
+    data class Manifest(val recordCount:Int,val totalBytes:Int,val shards:List<Shard>,val rowEncoding:String)
     fun sha(bytes:ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it.toInt() and 255)}
     fun validSHA(value:String)=value.matches(Regex("[a-f0-9]{64}"))
     fun pageURL(value:String):String {
@@ -38,7 +38,10 @@ object PublishedAggregateReader {
         require(ClientProtocols.hasValidHeader(value,"paper-search-index-manifest"));val descriptors=value.getJSONArray("shards");require(descriptors.length() in 1..128)
         val seen=mutableSetOf<String>();val shards=(0 until descriptors.length()).map{i->val d=descriptors.getJSONObject(i);val s=Shard(d.getString("url"),strictInt(d,"bytes"),d.getString("sha256"),strictInt(d,"recordCount"));require(s.url.matches(Regex("search-index/part-[0-9]{4,}-[a-f0-9]{12}\\.json"))&&validSHA(s.sha256)&&s.url.endsWith("-${s.sha256.take(12)}.json")&&s.bytes in 1..1024*1024&&s.recordCount>0&&seen.add(s.url));s}
         val count=strictInt(value,"recordCount");val total=strictInt(value,"totalBytes");require(count>0&&total in 1..64*1024*1024&&shards.sumOf{it.bytes.toLong()}==total.toLong()&&shards.sumOf{it.recordCount.toLong()}==count.toLong())
-        return Manifest(count,total,shards)
+        val rowEncodingFamily="foundation-sorted-keys-json"
+        val rowEncoding=if(value.opt("contract")=="paper-search-index-manifest")ClientProtocols.contract(rowEncodingFamily)
+            else ClientProtocols.historicalContract(rowEncodingFamily,"original-row-canonical-byte-encoding")
+        return Manifest(count,total,shards,rowEncoding)
     }
     private fun strings(row:JSONObject,key:String):List<String> = row.optJSONArray(key)?.let{a->(0 until a.length()).map{a.getString(it)}}?:emptyList()
     fun normalizedRow(row:JSONObject):ByteArray=OfflineFoundationJSON.encode(row)
@@ -48,7 +51,7 @@ object PublishedAggregateReader {
             for(i in 0 until rows.length()){check();sourceRows++;val row=rows.getJSONObject(i);val pageType=row.getString("pageType");val kind=if(pageType=="daily-summary")"daily" else pageType;val url=pageURL(row.getString("permalink"));require(pages.add(url)){"目录页面地址重复"};if(kind=="paper")continue
                 require(kind in setOf("daily","conference","page")){"非论文类型尚不支持"};val title=row.getString("title");require(title.isNotBlank());val date=row.optString("date");val scope=row.optString("conferenceScope").takeIf{row.has("conferenceScope")&&!row.isNull("conferenceScope")};require(scope==null||kind=="conference"&&scope in setOf("task","overview"))
                 row.optJSONObject("citation")?.optString("pageUrl")?.takeIf{it.isNotEmpty()}?.let{require(pageURL(it)==url)}
-                val source=AggregateSource(snapshot,shard.sha256,shard.bytes,shard.url,i,sha(normalizedRow(row)),"foundation-sorted-keys-json-v1")
+                val source=AggregateSource(snapshot,shard.sha256,shard.bytes,shard.url,i,sha(normalizedRow(row)),m.rowEncoding)
                 result+=PublishedAggregate("page:"+URI(url).rawPath,kind,scope,title,row.optString("titleZh",title),row.optString("summary"),date,date.takeUnless{it.isEmpty()||it.startsWith("0001-01-01")},strings(row,"categories"),strings(row,"tags"),url,source)
             }
         }

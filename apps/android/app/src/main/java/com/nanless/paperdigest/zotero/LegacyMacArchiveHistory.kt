@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.zotero
 
 import com.nanless.paperdigest.data.JsonFiles
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.data.PublishedUtf8
 import com.nanless.paperdigest.data.sha256
 import org.json.JSONArray
@@ -16,7 +17,7 @@ object LegacyMacArchiveHistory {
 
     fun read(researchRoot: File): JSONObject {
         val records = JSONArray()
-        val result = JSONObject().put("contract", "mac-local-archive-history-v1")
+        val result = ClientProtocols.record("mac-local-archive-history")
             .put("records", records).put("unreadableCount", 0)
         // The caller resolves only its OS-provided base before appending the
         // controlled research child. Do not erase child links by canonicalizing.

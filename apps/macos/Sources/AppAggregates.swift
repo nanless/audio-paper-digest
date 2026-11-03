@@ -105,10 +105,10 @@ extension PaperDigestApp {
         let title = descriptor.titleZh.isEmpty ? descriptor.title : descriptor.titleZh
         row["paperID"] = ""
         row["title"] = title
-        row["aggregateSource"] = ["contract": "aggregate-task-source-v1", "id": descriptor.id,
+        row["aggregateSource"] = try ClientProtocols.record("aggregate-task-source",fields:["id": descriptor.id,
             "title": title, "kind": descriptor.kind.rawValue,
             "manifestSHA256": descriptor.source.manifestSHA256, "shardSHA256": descriptor.source.shardSHA256,
-            "normalizedRowSHA256": descriptor.source.normalizedRowSHA256]
+            "normalizedRowSHA256": descriptor.source.normalizedRowSHA256])
         try store.upsertJob(row)
         emit("jobs.changed")
     }

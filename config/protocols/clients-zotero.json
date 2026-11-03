@@ -1,0 +1,190 @@
+{
+  "protocols": [
+    {
+      "name": "paperdigest-zotero-webdav",
+      "currentVariant": "durable-webdav-attachment-journal",
+      "currentSchema": {
+        "fields": [
+          "id",
+          "createdAt",
+          "plan",
+          "planSHA256",
+          "phase",
+          "status",
+          "attempts"
+        ],
+        "state": "append-and-update-original-attachment-attempts",
+        "integrity": "actual-immutable-plan-canonical-sha256-and-journal-byte-cas",
+        "authority": "verified-attachment-plan-and-current-credential-lease-required"
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-zotero-webdav-v1",
+          "variant": "durable-webdav-attachment-journal"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-zotero-plan",
+      "currentVariant": "bound-zotero-target-and-original-materials",
+      "currentSchema": {
+        "fields": [
+          "destinationID",
+          "libraryType",
+          "libraryID",
+          "collection",
+          "paperID",
+          "identity",
+          "bibliography",
+          "roles"
+        ],
+        "optional": [
+          "davTarget",
+          "attachmentBackend"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-zotero-plan-v1",
+          "variant": "bound-zotero-target-and-original-materials"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-zotero-web",
+      "currentVariant": "durable-zotero-archive-journal",
+      "currentSchema": {
+        "fields": [
+          "id",
+          "createdAt",
+          "status",
+          "destinationID",
+          "libraryType",
+          "libraryID",
+          "collection",
+          "options",
+          "notices",
+          "paperID",
+          "identity",
+          "planSHA",
+          "bibliography",
+          "parentKey",
+          "parentVerified",
+          "roles",
+          "attachmentBackend"
+        ],
+        "optional": [
+          "davTarget",
+          "migrationOriginSHA256",
+          "migrationParentID",
+          "completedAt",
+          "error"
+        ],
+        "planFormat": {
+          "contract": "paperdigest-zotero-plan",
+          "schemaFingerprint": "3bd89c88265933e5c55dd0e3be1aed67f38d08b82af97295fb526960fa64254d"
+        }
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-zotero-web-v1",
+          "variant": "durable-zotero-archive-journal"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-storage-migration-origin",
+      "currentVariant": "verified-parent-and-target",
+      "currentSchema": {
+        "fields": [
+          "childID",
+          "parentJournalID",
+          "parentJournalSHA256",
+          "parentPlanSHA256",
+          "target",
+          "baseURL",
+          "username",
+          "observations",
+          "sourceMaterialTimes"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-storage-migration-origin-v1",
+          "variant": "verified-parent-and-target"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-storage-migration-link",
+      "currentVariant": "parent-child-journal-link",
+      "currentSchema": {
+        "fields": [
+          "parentJournalID",
+          "parentJournalSHA256",
+          "childID"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-storage-migration-link-v1",
+          "variant": "parent-child-journal-link"
+        }
+      ]
+    },
+    {
+      "name": "zotero-storage-adoption",
+      "currentVariant": "verified-original-storage-attachment",
+      "currentSchema": {
+        "fields": [
+          "parentJournalSHA256",
+          "apiVersion",
+          "md5",
+          "mtime",
+          "bytes",
+          "sha256"
+        ],
+        "scope": "native-verified-original-attachment-and-current-credential-lease"
+      },
+      "historical": [
+        {
+          "tag": "zotero-storage-adoption-v1",
+          "variant": "verified-original-storage-attachment"
+        }
+      ]
+    },
+    {
+      "name": "paper-digest-source-metadata",
+      "currentVariant": "mac-source-metadata-attachment",
+      "currentSchema": {
+        "fields": [
+          "identity",
+          "identityStatus",
+          "bibliography"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "paper-digest-source-metadata-v1",
+          "variant": "mac-source-metadata-attachment"
+        }
+      ]
+    },
+    {
+      "name": "mac-local-archive-history",
+      "currentVariant": "read-only-original-archive-projection",
+      "currentSchema": {
+        "fields": [
+          "records",
+          "unreadableCount"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "mac-local-archive-history-v1",
+          "variant": "read-only-original-archive-projection"
+        }
+      ]
+    }
+  ]
+}

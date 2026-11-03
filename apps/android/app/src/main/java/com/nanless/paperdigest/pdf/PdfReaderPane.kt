@@ -266,13 +266,13 @@ class DigestPdfFragment:PdfViewerFragment(){
         pdfView.addOnSelectionChangedListener(object:PdfView.OnSelectionChangedListener{
             override fun onSelectionChanged(newSelection:Selection?){
                 val ref=reference ?: return
-                if(newSelection==null){if(hadNativeSelection){hadNativeSelection=false;selected?.invoke(PdfSelection(ref.sha256,"",emptyList(),emptyList(),extractor="android-jetpack-pdf-selection-v1"))};return}
+                if(newSelection==null){if(hadNativeSelection){hadNativeSelection=false;selected?.invoke(PdfSelection(ref.sha256,"",emptyList(),emptyList(),extractor="android-jetpack-pdf-selection"))};return}
                 if(newSelection is TextSelection && newSelection.text.isNotBlank()){
-                    if(newSelection.text.length>100000){hadNativeSelection=false;selected?.invoke(PdfSelection(ref.sha256,"",emptyList(),emptyList(),extractor="android-jetpack-pdf-selection-v1"));failed?.invoke("选区超过10万字符，请缩小选择或按页段解析");return}
+                    if(newSelection.text.length>100000){hadNativeSelection=false;selected?.invoke(PdfSelection(ref.sha256,"",emptyList(),emptyList(),extractor="android-jetpack-pdf-selection"));failed?.invoke("选区超过10万字符，请缩小选择或按页段解析");return}
                     hadNativeSelection=true
                     val boxes=newSelection.bounds.map{PdfSelectionBounds(it.pageNum+1,it.left,it.top,it.right,it.bottom)}
-                    if(boxes.isNotEmpty() && boxes.all{it.page in 1..ref.pageCount})selected?.invoke(PdfSelection(ref.sha256,newSelection.text.toString(),boxes.map{it.page}.distinct(),boxes,extractor="android-jetpack-pdf-selection-v1"))
-                }else if(hadNativeSelection){hadNativeSelection=false;selected?.invoke(PdfSelection(ref.sha256,"",emptyList(),emptyList(),extractor="android-jetpack-pdf-selection-v1"))}
+                    if(boxes.isNotEmpty() && boxes.all{it.page in 1..ref.pageCount})selected?.invoke(PdfSelection(ref.sha256,newSelection.text.toString(),boxes.map{it.page}.distinct(),boxes,extractor="android-jetpack-pdf-selection"))
+                }else if(hadNativeSelection){hadNativeSelection=false;selected?.invoke(PdfSelection(ref.sha256,"",emptyList(),emptyList(),extractor="android-jetpack-pdf-selection"))}
             }
         })
     }

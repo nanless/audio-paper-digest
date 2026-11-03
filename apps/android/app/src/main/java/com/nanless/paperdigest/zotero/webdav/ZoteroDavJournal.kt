@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.zotero.webdav
 
 import com.nanless.paperdigest.data.JsonFiles
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONObject
 import java.io.File
 import java.nio.ByteBuffer
@@ -76,10 +77,11 @@ internal class DavJournal(val files:DavFiles,val id:String,val dir:File,private 
     fun checkDirectory(){files.check();DavFiles.directory(dir);davRequire(DavFiles.attrs(dir).fileKey()==directoryKey,"path")}
     val path get()=files.named(dir,"journal.json")
     fun read():JSONObject {checkDirectory();val current=DavFiles.read(path,256*1024);davRequire(current.contentEquals(snapshot),"journalChanged");return JSONObject(strictText(current)).also(::validate)}
-    fun update(change:(JSONObject)->Unit){val old=read();val immutable=canonical(old.getJSONObject("plan"));change(old);validate(old);davRequire(canonical(old.getJSONObject("plan"))==immutable,"journalChanged");val data=old.toString().toByteArray();davRequire(data.size<=256*1024,"limit");files.check();davRequire(DavFiles.read(path,256*1024).contentEquals(snapshot),"journalChanged");files.writeAtomic(path,data);checkDirectory();snapshot=DavFiles.read(path,256*1024);davRequire(snapshot.contentEquals(data),"storage")}
+    fun update(change:(JSONObject)->Unit){val old=read();val immutable=canonical(old.getJSONObject("plan"));val originalHeader=header(old);change(old);validate(old);davRequire(canonical(old.getJSONObject("plan"))==immutable&&header(old)==originalHeader,"journalChanged");val data=old.toString().toByteArray();davRequire(data.size<=256*1024,"limit");files.check();davRequire(DavFiles.read(path,256*1024).contentEquals(snapshot),"journalChanged");files.writeAtomic(path,data);checkDirectory();snapshot=DavFiles.read(path,256*1024);davRequire(snapshot.contentEquals(data),"storage")}
     companion object {
+        private fun header(j:JSONObject)=canonical(ClientProtocols.recordHeader(j.get("contract"),"paperdigest-zotero-webdav",j.opt("schemaFingerprint") as? String))
         private fun validate(j:JSONObject){
-            davRequire(j.opt("contract")=="paperdigest-zotero-webdav-v1"&&j.opt("id") is String&&validUUID(j.getString("id"))&&j.opt("planSHA256") is String,"journalChanged")
+            davRequire(ClientProtocols.hasValidHeader(j,"paperdigest-zotero-webdav")&&j.opt("id") is String&&validUUID(j.getString("id"))&&j.opt("planSHA256") is String,"journalChanged")
             shaField(j.getString("planSHA256"));davRequire(j.opt("phase") in setOf("prepared","zip-put-planned","prop-put-planned","api-patch-planned","api-verified","completed")&&j.opt("status") in setOf("prepared","running","verified","failed","cancelled"),"journalChanged")
             for(k in listOf("baseVersion","verifiedApiVersion"))if(j.has(k))davRequire(strictLong(j.opt(k))!=null,"journalChanged")
             for(k in listOf("zipVerified","propVerified"))if(j.has(k))davRequire(j.opt(k) is Boolean,"journalChanged")
@@ -87,9 +89,9 @@ internal class DavJournal(val files:DavFiles,val id:String,val dir:File,private 
             for(i in 0 until a.length()){val t=a.getJSONObject(i);davRequire(listOf("id","apiRevision","davRevision").all{t.opt(it) is String&&validUUID(t.getString(it))}&&strictLong(t.opt("epoch"),false)!=null&&t.opt("status") in setOf("running","verified","failed","cancelled"),"journalChanged");for(k in listOf("startedAt","endedAt"))if(t.has(k))davRequire(t.opt(k) is String&&runCatching{java.time.Instant.parse(t.getString(k))}.isSuccess,"journalChanged")}
         }
         fun create(files:DavFiles,id:String,dir:File,plan:JSONObject):DavJournal{
-            val body=JSONObject().put("contract","paperdigest-zotero-webdav-v1").put("id",checkedUUID(id)).put("createdAt",java.time.Instant.now().toString()).put("plan",plan).put("planSHA256",davHash(canonical(plan).toByteArray())).put("phase","prepared").put("status","prepared").put("attempts",org.json.JSONArray())
+            val body=ClientProtocols.record("paperdigest-zotero-webdav").put("id",checkedUUID(id)).put("createdAt",java.time.Instant.now().toString()).put("plan",plan).put("planSHA256",davHash(canonical(plan).toByteArray())).put("phase","prepared").put("status","prepared").put("attempts",org.json.JSONArray())
             val bytes=body.toString().toByteArray();val path=files.named(dir,"journal.json");files.createBytes(path,bytes);return DavJournal(files,id,dir,bytes)
         }
-        fun reopen(files:DavFiles,id:String):DavJournal {val dir=files.child(id);val data=DavFiles.read(files.named(dir,"journal.json"),256*1024);val raw=JSONObject(strictText(data));validate(raw);davRequire(raw.getString("contract")=="paperdigest-zotero-webdav-v1"&&raw.getString("id")==id&&raw.getString("planSHA256")==davHash(canonical(raw.getJSONObject("plan")).toByteArray()),"journalChanged");return DavJournal(files,id,dir,data)}
+        fun reopen(files:DavFiles,id:String):DavJournal {val dir=files.child(id);val data=DavFiles.read(files.named(dir,"journal.json"),256*1024);val raw=JSONObject(strictText(data));validate(raw);davRequire(raw.getString("id")==id&&raw.getString("planSHA256")==davHash(canonical(raw.getJSONObject("plan")).toByteArray()),"journalChanged");return DavJournal(files,id,dir,data)}
     }
 }

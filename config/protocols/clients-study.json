@@ -87,6 +87,154 @@
           "variant": "authenticated-installed-response-envelope"
         }
       ]
+    },
+    {
+      "name": "android-study",
+      "currentVariant": "exact-request-identity",
+      "currentSchema": {
+        "fields": [
+          "extractor",
+          "kind",
+          "paperID",
+          "question",
+          "messages",
+          "source",
+          "config"
+        ],
+        "binding": "original-request-and-response-material-only"
+      },
+      "historical": [
+        {
+          "tag": "android-study-v1",
+          "variant": "exact-request-identity"
+        }
+      ]
+    },
+    {
+      "name": "android-study-input",
+      "currentVariant": "sealed-request-input",
+      "currentSchema": {
+        "fields": [
+          "config",
+          "messages",
+          "source",
+          "fingerprint",
+          "identity"
+        ],
+        "binding": "original-request-and-response-material-only",
+        "identityFormat": {
+          "contract": "android-study",
+          "schemaFingerprint": "ca5c7f70720e37901fb6fc538cb66d1b7c1c58e37e5780858c708ea387b8b746"
+        }
+      },
+      "historical": [
+        {
+          "tag": "android-study-input-v1",
+          "variant": "sealed-request-input"
+        }
+      ]
+    },
+    {
+      "name": "android-model-response",
+      "currentVariant": "authenticated-response",
+      "currentSchema": {
+        "fields": [
+          "sessionID",
+          "inputSHA256",
+          "sha256",
+          "httpStatus",
+          "startedAt",
+          "receivedAt",
+          "hmacSHA256"
+        ],
+        "binding": "original-request-and-response-material-only",
+        "optional": [
+          "capturePromotion"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "android-model-response-v1",
+          "variant": "authenticated-response"
+        }
+      ]
+    },
+    {
+      "name": "android-http-response-capture",
+      "currentVariant": "authenticated-original-capture",
+      "currentSchema": {
+        "fields": [
+          "sessionID",
+          "inputSHA256",
+          "captureID",
+          "startedAt",
+          "requestIssued",
+          "status",
+          "httpStatus",
+          "byteCount",
+          "sha256",
+          "updatedAt",
+          "hmacSHA256"
+        ],
+        "binding": "original-request-and-response-material-only"
+      },
+      "historical": [
+        {
+          "tag": "android-http-response-capture-v1",
+          "variant": "authenticated-original-capture"
+        }
+      ]
+    },
+    {
+      "name": "android-saved-response-recovery",
+      "currentVariant": "saved-response-adoption",
+      "currentSchema": {
+        "fields": [
+          "priorSessionSHA256",
+          "priorStatus",
+          "responseReceiptSHA256",
+          "recoveredAt"
+        ],
+        "binding": "original-request-and-response-material-only"
+      },
+      "historical": [
+        {
+          "tag": "android-saved-response-recovery-v1",
+          "variant": "saved-response-adoption"
+        }
+      ]
+    },
+    {
+      "name": "android-body-complete-capture-promotion",
+      "currentVariant": "capture-promotion",
+      "currentSchema": {
+        "fields": [
+          "captureID",
+          "manifestSHA256",
+          "promotedAt"
+        ],
+        "binding": "original-request-and-response-material-only"
+      },
+      "historical": [
+        {
+          "tag": "android-body-complete-capture-promotion-v1",
+          "variant": "capture-promotion"
+        }
+      ]
+    },
+    {
+      "name": "android-response-vault-preflight",
+      "currentVariant": "response-integrity-key-preflight",
+      "currentSchema": {
+        "fields": [],
+        "binding": "original-request-and-response-material-only"
+      },
+      "historical": [
+        {
+          "tag": "android-response-vault-preflight-v1",
+          "variant": "response-integrity-key-preflight"
+        }
+      ]
     }
   ]
 }

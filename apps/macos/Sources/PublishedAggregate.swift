@@ -133,6 +133,9 @@ enum PublishedAggregateReader {
     }
     static func read(manifest raw:Data,siteBase:URL=site,shardBytes:(Shard)throws->Data)throws->PublishedAggregateCatalog {
         let m=try manifest(raw),snapshot=sha(raw)
+        let rowEncodingFamily="foundation-sorted-keys-json"
+        let rowEncoding=m.contract=="paper-search-index-manifest" ? ClientProtocols.contract(rowEncodingFamily)
+            : try ClientProtocols.historicalContract(rowEncodingFamily,variant:"original-row-canonical-byte-encoding")
         var result:[PublishedAggregate]=[],pages=Set<String>(),rowsSeen=0
         for shard in m.shards {
             try Task.checkCancellation()
@@ -154,7 +157,7 @@ enum PublishedAggregateReader {
                 try require(explicitScope==nil || kind == .conference && ["overview","task"].contains(explicitScope!),"会议范围字段无效")
                 let citation=row["citation"] as? [String:Any]
                 if let declared=citation?["pageUrl"] as? String,!declared.isEmpty {try require(try pageURL(declared,siteBase:siteBase)==url,"汇总声明地址与原页面不一致")}
-                let source=PublishedAggregate.Source(manifestSHA256:snapshot,shardSHA256:shard.sha256,shardBytes:shard.bytes,shardURL:shard.url,rowIndex:position,normalizedRowSHA256:sha(try normalizedRow(row)),normalizedRowAlgorithm:"foundation-sorted-keys-json-v1")
+                let source=PublishedAggregate.Source(manifestSHA256:snapshot,shardSHA256:shard.sha256,shardBytes:shard.bytes,shardURL:shard.url,rowIndex:position,normalizedRowSHA256:sha(try normalizedRow(row)),normalizedRowAlgorithm:rowEncoding)
                 result.append(PublishedAggregate(id:"page:"+URLComponents(url:url,resolvingAgainstBaseURL:false)!.percentEncodedPath,kind:kind,conferenceScope:explicitScope,title:title,titleZh:row["titleZh"] as? String ?? title,summary:row["summary"] as? String ?? "",rawDate:rawDate,displayDate:displayDate,categories:row["categories"] as? [String] ?? [],tags:row["tags"] as? [String] ?? [],sourceURL:url.absoluteString,source:source))
             }
         }

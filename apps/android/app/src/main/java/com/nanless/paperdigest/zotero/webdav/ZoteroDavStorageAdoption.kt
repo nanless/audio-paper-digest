@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.zotero.webdav
 
+import com.nanless.paperdigest.protocols.ClientProtocols
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -15,14 +16,20 @@ internal class ZoteroDavStorageAdoption private constructor(
  private val current: () -> Unit,
 ) {
  fun requireCurrent(){current()}
- fun binding():JSONObject=JSONObject().put("contract","zotero-storage-adoption-v1").put("parentJournalSHA256",parentJournalSHA256).put("apiVersion",item.version).put("md5",item.md5).put("mtime",item.mtime).put("bytes",bytes).put("sha256",sha256)
+ fun binding():JSONObject=body(ClientProtocols.record("zotero-storage-adoption"))
+ private fun body(header:JSONObject):JSONObject=header.put("parentJournalSHA256",parentJournalSHA256).put("apiVersion",item.version).put("md5",item.md5).put("mtime",item.mtime).put("bytes",bytes).put("sha256",sha256)
  fun wireMtime(material:ZoteroDavAttachment,nativeTarget:ZoteroDavTarget):Long {
   current();davRequire(canonical(nativeTarget.binding())==target&&canonical(material.descriptor())==descriptor&&material.sourceSHA256==sha256,"stale")
   return item.mtime?:throw ZoteroDavFailure("apiMetadata")
  }
  fun requireFile(md5:String,count:Long,fileSHA:String){current();davRequire(md5==item.md5&&count==bytes&&fileSHA==sha256,"sourceChanged")}
  fun requirePlan(plan:JSONObject,nativeTarget:ZoteroDavTarget){
-  current();davRequire(canonical(nativeTarget.binding())==target&&canonical(plan.getJSONObject("attachment"))==descriptor&&canonical(plan.optJSONObject("storageAdoption"))==canonical(binding()),"stale")
+  current()
+  val saved=plan.getJSONObject("storageAdoption")
+  val family="zotero-storage-adoption"
+  davRequire(ClientProtocols.hasValidHeader(saved,family),"stale")
+  val original=ClientProtocols.recordHeader(saved.get("contract"),family,saved.opt("schemaFingerprint") as? String)
+  davRequire(canonical(nativeTarget.binding())==target&&canonical(plan.getJSONObject("attachment"))==descriptor&&canonical(saved)==canonical(body(original)),"stale")
   val file=plan.getJSONObject("file");davRequire(file.getLong("bytes")==bytes&&file.getString("sha256")==sha256&&file.getString("md5")==item.md5&&file.getLong("mtime")==item.mtime,"sourceChanged")
  }
  fun requireItem(observed:ZoteroDavApiPort.Item){current();davRequire(observed==item,"conflict")}

@@ -177,7 +177,7 @@ class OfflineStore(private val root: File) {
         article.put("resources", JSONArray(mapped)).put("offlineMode", true).put("offlinePackageID", id).put("cacheStatus", "offline").put("websiteFreshness", "not-checked")
         if (!article.has("blogURL")) article.put("blogURL", manifest.getString("blogURL"))
         val notices = article.optJSONArray("notices")?.strings().orEmpty().toMutableList(); notices += "正在阅读离线原始快照，未联网核对后续修订、移除或撤稿，不代表网站最新内容。"
-        if (nullable(article, "markdown").isNullOrEmpty() && nullable(article, "mathMLContract") != "published-html-mathml-v1") notices += "旧离线HTML未经过公式结构保真读取，部分MathML可能缺失；原包不变，请对照原始PDF核对。"
+        if (nullable(article, "markdown").isNullOrEmpty() && !ClientProtocols.isContract(nullable(article, "mathMLContract"),"published-html-mathml")) notices += "旧离线HTML未经过公式结构保真读取，部分MathML可能缺失；原包不变，请对照原始PDF核对。"
         article.put("notices", JSONArray(notices.distinct().sorted())); paper.put("offlineMode", true).put("offlinePackageID", id)
         // Display projection embeds original images; the protected article.json remains unchanged.
         val sources = mapped.associateBy { it.getString("sourceURL") }; val doc = Jsoup.parseBodyFragment(article.getString("html"))

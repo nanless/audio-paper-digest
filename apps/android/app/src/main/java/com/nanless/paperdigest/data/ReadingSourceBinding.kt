@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import org.json.JSONObject
 import org.json.JSONArray
 import java.security.MessageDigest
@@ -91,13 +93,13 @@ object ReadingSourceBinding {
                 else -> error("所选私人材料包含不支持的原始类型")
             }
         }
-        text("paperdigest-selected-roles-v1"); visit(root, 0)
+        text(ClientProtocols.schemaFingerprint("paperdigest-selected-roles")); visit(root, 0)
         return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
     }
 
     /** Currentness projections do not change the underlying source identity. */
     fun token(paper: Paper, article: Article?, receipt: JSONObject, epoch: String, opened: Long, offlineID: String?): String =
-        sha256(canonical(JSONObject().put("contract", "paperdigest-reading-materials-v1")
+        sha256(canonical(ClientProtocols.record("paperdigest-reading-materials")
             .put("workspace", epoch).put("opened", opened).put("offlinePackageID", offlineID ?: JSONObject.NULL)
             .put("paper", paper.json()).put("article", article?.let {
                 JSONObject().put("paperID", it.paperID).put("blogURL", it.blogURL).put("sourceURL", it.sourceURL)

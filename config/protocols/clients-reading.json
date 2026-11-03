@@ -174,6 +174,219 @@
           }
         }
       ]
+    },
+    {
+      "name": "published-html-mathml",
+      "currentVariant": "preserved-published-html-formula-structure",
+      "currentSchema": {
+        "source": "sanitized-original-published-html-and-mathml"
+      },
+      "historical": [
+        {
+          "tag": "published-html-mathml-v1",
+          "variant": "preserved-published-html-formula-structure"
+        }
+      ]
+    },
+    {
+      "name": "published-markdown",
+      "currentVariant": "original-published-markdown",
+      "currentSchema": {
+        "source": "published-markdown-text"
+      },
+      "historical": [
+        {
+          "tag": "published-markdown-v1",
+          "variant": "original-published-markdown"
+        }
+      ]
+    },
+    {
+      "name": "fixed-check",
+      "currentVariant": "connection-check-no-paper-material",
+      "currentSchema": {
+        "source": "native-fixed-connection-check"
+      },
+      "historical": [
+        {
+          "tag": "fixed-check-v1",
+          "variant": "connection-check-no-paper-material"
+        }
+      ]
+    },
+    {
+      "name": "aggregate-task-source",
+      "currentVariant": "original-published-aggregate-row",
+      "currentSchema": {
+        "fields": [
+          "id",
+          "title",
+          "kind",
+          "manifestSHA256",
+          "shardSHA256",
+          "normalizedRowSHA256"
+        ],
+        "scope": "display-context-only"
+      },
+      "historical": [
+        {
+          "tag": "aggregate-task-source-v1",
+          "variant": "original-published-aggregate-row"
+        }
+      ]
+    },
+    {
+      "name": "foundation-sorted-keys-json",
+      "currentVariant": "original-row-canonical-byte-encoding",
+      "currentSchema": {
+        "encoding": "native-foundation-compatible-sorted-json",
+        "scope": "same-original-index-row"
+      },
+      "historical": [
+        {
+          "tag": "foundation-sorted-keys-json-v1",
+          "variant": "original-row-canonical-byte-encoding"
+        }
+      ]
+    },
+    {
+      "name": "reader-source-notice-snapshot",
+      "currentVariant": "original-reading-source-notices",
+      "currentSchema": {
+        "fields": [
+          "paperID",
+          "revisionSHA256",
+          "notices"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "reader-source-notice-snapshot-v1",
+          "variant": "original-reading-source-notices"
+        }
+      ]
+    },
+    {
+      "name": "desktop-bundled-research-context",
+      "currentVariant": "bundled-published-sample-context",
+      "currentSchema": {
+        "fields": [
+          "origin",
+          "sampleOnly",
+          "sourceContract",
+          "paperID",
+          "sourceURL",
+          "blogURL",
+          "sourceVersion",
+          "originalTitle",
+          "readerTitle",
+          "authors",
+          "abstract",
+          "oneSentenceThesis",
+          "assessment"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "desktop-bundled-research-context-v1",
+          "variant": "bundled-published-sample-context"
+        }
+      ]
+    },
+    {
+      "name": "android-bundled-research-context",
+      "currentVariant": "bundled-published-sample-context",
+      "currentSchema": {
+        "fields": [
+          "sampleOnly",
+          "paperID",
+          "abstract",
+          "summary"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "android-bundled-research-context-v1",
+          "variant": "bundled-published-sample-context"
+        }
+      ]
+    },
+    {
+      "name": "published-citation-page",
+      "currentVariant": "actual-reading-page-witness",
+      "currentSchema": {
+        "fields": [
+          "paper",
+          "pageURL",
+          "pageSHA256",
+          "pageBytes",
+          "articleRevisionSHA256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "published-citation-page-v1",
+          "variant": "actual-reading-page-witness"
+        }
+      ]
+    },
+    {
+      "name": "published-citation-original",
+      "currentVariant": "individual-citation-original",
+      "currentSchema": {
+        "fields": [
+          "binding",
+          "filename",
+          "format",
+          "mime",
+          "sourceURL",
+          "bytes",
+          "sha256",
+          "validatedAt",
+          "validationScope",
+          "bundleHashVerified",
+          "publishedSHA256"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "published-citation-original-v1",
+          "variant": "individual-citation-original"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-reading-materials",
+      "currentVariant": "process-local-reading-material-binding",
+      "currentSchema": {
+        "fields": [
+          "workspace",
+          "opened",
+          "offlinePackageID",
+          "paper",
+          "article",
+          "pdf"
+        ]
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-reading-materials-v1",
+          "variant": "process-local-reading-material-binding"
+        }
+      ]
+    },
+    {
+      "name": "paperdigest-selected-roles",
+      "currentVariant": "process-local-material-selection-domain",
+      "currentSchema": {
+        "fields": []
+      },
+      "historical": [
+        {
+          "tag": "paperdigest-selected-roles-v1",
+          "variant": "process-local-material-selection-domain"
+        }
+      ]
     }
   ]
 }

@@ -232,9 +232,16 @@ actor ZoteroService {
         try validate(input)
         if let previous, previous.serverID != current.serverID { throw ServiceError.serverChanged }
         let parentPayload = try await bibliographyPayload(input)
-        let materials = try [sourceMetadataMaterial(input)] + materialsFor(input, expectedSHA256: previous?.materialSHA256)
-        let fingerprint = try requestFingerprint(input, materials: materials)
-        if let previous, previous.fingerprint != fingerprint { throw ServiceError.invalid("重试材料已变化，请新建归档") }
+        let attachments = try materialsFor(input, expectedSHA256: previous?.materialSHA256)
+        var materials = try [sourceMetadataMaterial(input)] + attachments
+        var fingerprint = try requestFingerprint(input, materials: materials)
+        if let previous, previous.fingerprint != fingerprint {
+            let historical = try [sourceMetadataMaterial(input, historical: true)] + attachments
+            let originalFingerprint = try requestFingerprint(input, materials: historical)
+            guard previous.fingerprint == originalFingerprint else { throw ServiceError.invalid("重试材料已变化，请新建归档") }
+            materials = historical
+            fingerprint = originalFingerprint
+        }
         if let previous, previous.personalLibraryBinding == nil {
             return try await verifyLegacyReadOnly(previous, materials: materials)
         }
@@ -719,11 +726,15 @@ actor ZoteroService {
         let actual = try Data(contentsOf: file, options: .mappedIfSafe)
         guard actual.count == material.data.count, Self.sha256(actual) == material.sha256 else { throw ServiceError.verification("附件实际字节") }
     }
-    private func sourceMetadataMaterial(_ input: ArchiveRequest) throws -> Material {
+    private func sourceMetadataMaterial(_ input: ArchiveRequest, historical: Bool = false) throws -> Material {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let bibliography = try JSONSerialization.jsonObject(with: encoder.encode(input.bibliography))
-        let source: [String: Any] = ["identity": input.identity, "identityStatus": input.identity.hasPrefix("page:") ? "page-only-unverified" : "source-identifier",
-                                   "bibliography": bibliography, "contract": "paper-digest-source-metadata-v1"]
+        let family = "paper-digest-source-metadata"
+        let header = historical ? try ClientProtocols.historicalHeader(family, variant: "mac-source-metadata-attachment", fingerprints: nil)
+            : try ClientProtocols.record(family)
+        let source = header.merging(["identity": input.identity,
+            "identityStatus": input.identity.hasPrefix("page:") ? "page-only-unverified" : "source-identifier",
+            "bibliography": bibliography]) { original, _ in original }
         return Material(role: "source-metadata", filename: "source-metadata.json", contentType: "application/json",
                         data: try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys, .prettyPrinted]))
     }

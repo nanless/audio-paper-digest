@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.data
 
+import com.nanless.paperdigest.protocols.ClientProtocols
+
 import com.nanless.paperdigest.cloud.BackupCodec
 import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
@@ -75,7 +77,7 @@ class HttpResponseCapture private constructor(
     } catch (_: CloneNotSupportedException) { BackupCodec.hash(bodyFile) }
 
     private fun persist(actualFileHash: Boolean = false) {
-        val record = JSONObject().put("contract", "android-http-response-capture-v1")
+        val record = ClientProtocols.record("android-http-response-capture")
             .put("sessionID", sessionID).put("inputSHA256", inputSHA256).put("captureID", captureID)
             .put("startedAt", startedAt ?: JSONObject.NULL).put("requestIssued", issued).put("status", status)
             .put("httpStatus", httpStatus ?: JSONObject.NULL).put("byteCount", count)

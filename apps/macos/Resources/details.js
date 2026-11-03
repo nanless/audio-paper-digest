@@ -1,3 +1,4 @@
+import {NativeBridgeProtocols} from './native-bridge-protocols.js';
 import {mountStorage} from './storage-ui.js';
 import {mountHelp,mountExport} from './detail-content.js';
 import {mountZotero} from './zotero-ui.js';
@@ -48,7 +49,7 @@ function mountArchive(paper){
  return zotero.openArchive();
 }
 function mountSourceNotices(context,snapshot){
- if(snapshot?.contract!=='reader-source-notice-snapshot-v1'||snapshot.paperID!==context?.paperID||snapshot.revisionSHA256!==context?.revision||!Array.isArray(snapshot.notices)||!snapshot.notices.length||snapshot.notices.some(x=>typeof x!=='string'||!x.trim()))throw new Error('来源说明与本窗口导读身份不符');
+ if(!NativeBridgeProtocols.hasValidHeader(snapshot,'reader-source-notice-snapshot')||snapshot.paperID!==context?.paperID||snapshot.revisionSHA256!==context?.revision||!Array.isArray(snapshot.notices)||!snapshot.notices.length||snapshot.notices.some(x=>typeof x!=='string'||!x.trim()))throw new Error('来源说明与本窗口导读身份不符');
  const container=$('detail-content'),section=document.createElement('section');section.className='native-source-notices';
  const heading=document.createElement('h1');heading.textContent='导读来源说明';
  const identity=document.createElement('p');identity.className='dialog-subtitle';identity.textContent=context.title||context.paperID;

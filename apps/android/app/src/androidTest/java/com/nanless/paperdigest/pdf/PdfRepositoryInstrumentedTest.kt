@@ -68,7 +68,7 @@ class PdfRepositoryInstrumentedTest {
                 selection.bounds.zip(projected.selection.bounds).forEach{(a,b)->assertEquals(a.page,b.page);assertEquals(a.left,b.left,.002f);assertEquals(a.top,b.top,.002f);assertEquals(a.right,b.right,.002f);assertEquals(a.bottom,b.bottom,.002f)}
                 val mac=JSONObject(portable.first().toString()).apply{remove("extractor");remove("coordinateSystem");remove("groupID")}
                 val macProjected=repo.projectPortableAnnotations(document,listOf(mac)).single()
-                assertEquals(mac.getString("id"),macProjected.id);assertEquals("portable-pdf-user-space-v1",macProjected.selection.extractor)
+                assertEquals(mac.getString("id"),macProjected.id);assertEquals("portable-pdf-user-space",macProjected.selection.extractor)
                 val separateBlank=listOf(JSONObject(mac.toString()).put("groupID"," "),JSONObject(mac.toString()).put("id",mac.getString("id")+"-independent").put("groupID"," ").put("text","Independent restored annotation"))
                 assertEquals(separateBlank.map{it.getString("id")},repo.projectPortableAnnotations(document,separateBlank).map{it.id})
                 assertTrue(separateBlank.all{it.getString("groupID")==" "}) // projection never rewrites preserved records
@@ -78,7 +78,7 @@ class PdfRepositoryInstrumentedTest {
                 try{repo.projectPortableAnnotations(document,listOf(mac,JSONObject(mac.toString())));fail("duplicate central ids must reject")}catch(_:IllegalArgumentException){}
                 assertTrue(File(root,"PdfAnnotations").listFiles().orEmpty().isEmpty())
                 assertEquals(selection.bounds.size,portable.size)
-                for(mark in portable){assertEquals(document.sha256,mark.getString("pdfSHA"));assertEquals(page.page,mark.getInt("page"));assertEquals(annotation.id,mark.getString("groupID"));assertEquals("pdf-user-space-unrotated-v1",mark.getString("coordinateSystem"))}
+                for(mark in portable){assertEquals(document.sha256,mark.getString("pdfSHA"));assertEquals(page.page,mark.getInt("page"));assertEquals(annotation.id,mark.getString("groupID"));assertEquals("pdf-user-space-unrotated",mark.getString("coordinateSystem"))}
                 val numbers=Regex("-?[0-9]+(?:\\.[0-9]+)?").findAll(portable.first().getString("rect")).map{it.value.toFloat()}.toList()
                 assertEquals(77f,numbers[0],0.02f);assertEquals(153f,numbers[1],0.02f);assertTrue(numbers[2]>0f);assertTrue(numbers[3]>0f)
             }

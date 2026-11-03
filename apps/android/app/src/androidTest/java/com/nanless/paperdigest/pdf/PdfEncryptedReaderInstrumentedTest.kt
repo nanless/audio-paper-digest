@@ -49,7 +49,7 @@ class PdfEncryptedReaderInstrumentedTest {
    val field=compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetSelection) and hasText("Native encrypted reader evidence",substring=true));val text=field.fetchSemanticsNode().config[SemanticsProperties.EditableText].text;val start=text.indexOf("Native");assertTrue(start>=0);field.performTextInputSelection(TextRange(start,start+6));compose.onNodeWithText("采用选区").assertIsEnabled().performClick()
    compose.waitUntil(10000){selected?.text=="Native"};assertEquals(doc.sha256,selected!!.documentSHA256);assertTrue(selected!!.bounds.isNotEmpty())
    compose.onNodeWithText("保存标注").assertIsEnabled().performClick();compose.onNodeWithText("我的批注（可留空）").performTextInput("synthetic encrypted coordinate note");compose.onNodeWithText("保存在本机").performClick();compose.waitUntil(10000){saves==1}
-   assertTrue(marks.value.isNotEmpty());marks.value.forEach{assertEquals(doc.sha256,it.getString("pdfSHA"));assertEquals("pdf-user-space-unrotated-v1",it.getString("coordinateSystem"));assertEquals("Native",it.getString("text"))}
+   assertTrue(marks.value.isNotEmpty());marks.value.forEach{assertEquals(doc.sha256,it.getString("pdfSHA"));assertEquals("pdf-user-space-unrotated",it.getString("coordinateSystem"));assertEquals("Native",it.getString("text"))}
    assertFalse(File(root,"Research/PdfAnnotations/${doc.sha256}.json").exists());assertArrayEquals(original,File(doc.localPath).readBytes());compose.runOnIdle{showing.value=false};compose.waitForIdle()
   }finally{compose.runOnIdle{showing.value=false};compose.waitForIdle();repo.clearSessionPasswords();root.deleteRecursively()}
  }

@@ -27,9 +27,56 @@ class StudyServiceTest {
         assertEquals("actual-model", done.getString("actualModel")); assertFalse(done.getBoolean("costKnown"))
         assertArrayEquals(bytes, File(store.directory, "ModelUsage/${done.getString("id")}-response.bin").readBytes())
         val input = File(store.directory, "ModelUsage/${done.getString("id")}-input.json").readText()
-        assertFalse(input.contains("synthetic-fixture-key")); assertTrue(input.contains("android-study-input-v1"))
+        assertFalse(input.contains("synthetic-fixture-key")); assertTrue(com.nanless.paperdigest.protocols.ClientProtocols.isCurrentHeader(JSONObject(input),"android-study-input"))
         assertTrue(service.prepare("local:test", "方法是什么", "[p.1] 实际论文材料", source()).getBoolean("reused"))
         assertEquals(1, calls)
+    }
+    @Test fun originalLegacyInputAndSignedResponseStillReuseWithoutDispatch() = runBlocking {
+        val store=store()
+        var calls=0
+        val service=StudyService(store,{"fixture"}) { _,_,_,_ ->
+            calls++
+            HttpBytes(200, emptyMap(), response().toString().toByteArray())
+        }
+        val question="原格式"
+        val evidence="[p.1] 原材料"
+        val id=service.prepare("local:test",question,evidence,source()).getString("id")
+        val session=service.run(id)
+        val directory=File(store.directory,"ModelUsage")
+        val input=File(directory,"$id-input.json")
+        val responseFile=File(directory,"$id-response.json")
+        val legacyInput=JSONObject(input.readText()).also {
+            it.remove("schemaFingerprint")
+            it.put("contract","android-study-input-v1")
+        }
+        val identity=legacyInput.getJSONObject("identity").also {
+            it.remove("schemaFingerprint")
+            it.put("contract","android-study-v1")
+        }
+        val fingerprint=sha256(canonical(identity).toByteArray())
+        val inputBytes=canonical(legacyInput.put("fingerprint",fingerprint)).toByteArray()
+        val inputSHA=sha256(inputBytes)
+        input.writeBytes(inputBytes)
+        session.remove("inputSchemaFingerprint")
+        session.put("inputContract","android-study-input-v1").put("fingerprint",fingerprint).put("inputSHA256",inputSHA)
+        store.appendSession(session)
+        val receipt=JSONObject(responseFile.readText()).also {
+            it.remove("schemaFingerprint")
+            it.remove("hmacSHA256")
+            it.put("contract","android-model-response-v1").put("inputSHA256",inputSHA)
+        }
+        val key=File(directory,"response-integrity.android.key").readBytes()
+        val signer=javax.crypto.Mac.getInstance("HmacSHA256")
+        signer.init(javax.crypto.spec.SecretKeySpec(key,"HmacSHA256"))
+        val signature=signer.doFinal(canonical(receipt).toByteArray()).joinToString("") { "%02x".format(it.toInt() and 255) }
+        val responseBytes=canonical(receipt.put("hmacSHA256",signature)).toByteArray()
+        responseFile.writeBytes(responseBytes)
+        val reused=service.prepare("local:test",question,evidence,source().put("extractor","android-pdfbox-physical-pages"))
+        assertEquals(id,reused.getString("id"))
+        assertTrue(reused.getBoolean("reused"))
+        assertEquals(1,calls)
+        assertArrayEquals(inputBytes,input.readBytes())
+        assertArrayEquals(responseBytes,responseFile.readBytes())
     }
     @Test fun truncationKeepsResponseCountsIssuedAndNeverAutomaticallyRetries() = runBlocking {
         val store = store(); var calls = 0

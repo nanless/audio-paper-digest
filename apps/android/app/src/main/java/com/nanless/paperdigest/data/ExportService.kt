@@ -116,7 +116,7 @@ class ExportService(private val context: Context, private val store: PersonalSto
         require(selectedSession == null || sessions.isNotEmpty()) { "所选研究不属于当前论文" }
         val materials = sessions.map { original ->
             val session = original.copy()
-            if (session.optString("inputContract") == "android-study-input-v1" && session.optString("status") == "completed") study.verifySaved(session)
+            if (ClientProtocols.isContract(session.opt("inputContract"), "android-study-input") && session.optString("status") == "completed") study.verifySaved(session)
             // Carry exact original bytes; another platform must validate its own known contract before adoption.
             val id = session.getString("id"); UUID.fromString(id)
             val originals = JSONObject()

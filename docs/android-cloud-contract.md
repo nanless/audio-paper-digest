@@ -198,7 +198,7 @@ maxTokens timeoutMs dailyRequests
 
 Android新模型请求也必须先封存精确输入并持久化pending/requestIssued记录，后发网络；同一次发起和终态使用同一事件ID。中断/未知费用保留未知，不自动重发付费请求，不把token估算为实际费用，复用结果不再加一次真实调用。原用量事件、完整provider usage、实际模型/协议、截断及失败响应、父会话、起止时间和金额未知状态都必须保留。Mac 的请求与账本实现见 [llm-worker.cjs](<../apps/macos/llm-worker.cjs>)及其调用的共享模块；Android 使用独立 Kotlin 实现，保持同样的记录与恢复规则。
 
-历史 `desktop-study-v3/v4` 指纹覆盖论文身份、实际 messages、model/endpoint/protocol、问题、证据、来源和输出预算；v4 另含 stream/reasoning，并绑定 `extractor=pdfkit-physical-pages-v1`。Android 使用实际提取器身份，不重新编码或重签旧输入。Mac 的 `exportEvidence` 按其支持的合同验证指纹；外端或未知合同作为历史保留，只有双方明确支持并通过原材料核验时才可导出相应证据或复用。
+新建模型输入封存实际论文身份、请求消息、模型和连接协议、证据范围及输出预算，并带结构指纹。Mac 的旧 `desktop-study-v3` 和 `desktop-study-v4` 继续按各自的原字段重算。其中 `desktop-study-v4` 还绑定流式选项和推理强度。Android 的旧研究记录同样按原请求、原提取器和原响应签名核验。跨端读取核对保存的实际原件，安装时的完整性密钥留在原设备。来源或结构未知的记录仍保留，不能凭显示信息重新签名或发出请求。
 
 ## 9. 笔记、标注、论文和离线来源
 

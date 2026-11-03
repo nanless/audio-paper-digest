@@ -40,7 +40,7 @@ struct ReaderSourceNoticeSnapshot:Equatable {
     func requireCurrent(paperID:String,article:[String:Any])throws {
         guard (try? Self(paperID:paperID,article:article))==self else{throw ReaderSourceNoticeError.changed}
     }
-    var json:[String:Any] {[
-        "contract":"reader-source-notice-snapshot-v1","paperID":paperID,"revisionSHA256":revisionSHA256,"notices":notices
-    ]}
+    var json:[String:Any] {try! ClientProtocols.record("reader-source-notice-snapshot",fields:[
+        "paperID":paperID,"revisionSHA256":revisionSHA256,"notices":notices
+    ])}
 }

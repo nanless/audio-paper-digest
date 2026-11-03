@@ -74,6 +74,8 @@ async function check(label,width,height,hostile=false){
  }catch(error){results.push({label,passed:false,error:error.stack,remoteRequests,remoteTransport});console.error('FAIL '+label+': '+error.stack);}finally{await page.close();}
 }
 (async()=>{try{
+ const {NativeBridgeProtocols}=await import(require('node:url').pathToFileURL(path.join(mac,'Resources/native-bridge-protocols.js')).href);
+ Object.assign(doc,NativeBridgeProtocols.record('published-aggregate-document'));
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
  await check('UI-only-local-icon-small-and-partial',1080,660);await check('UI-only-local-icon-large-and-partial',1440,900);await check('data-only-image-policy-rejects-remote-and-script',1080,800,true);
 }finally{

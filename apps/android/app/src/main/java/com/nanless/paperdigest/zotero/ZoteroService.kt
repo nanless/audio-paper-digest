@@ -1,6 +1,7 @@
 package com.nanless.paperdigest.zotero
 
 import com.nanless.paperdigest.data.*
+import com.nanless.paperdigest.protocols.ClientProtocols
 import com.nanless.paperdigest.secret.SecretStore
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavBackend
 import com.nanless.paperdigest.zotero.webdav.ZoteroDavTarget
@@ -451,7 +452,23 @@ class ZoteroService(
         }
         val plan=planSHA(c,source.paperID,source.identity,source.bibliography,source.materials.map{m->JSONObject().put("role",m.role).put("title",m.title).put("contentType",m.contentType).put("sha256",m.sha256).put("note",m.noteHTML!=null)})
         val journals=records.listFiles()?.filter{it.isDirectory}?.mapNotNull{runCatching{readJournal(it.name)}.getOrNull()}?:emptyList()
-        journals.firstOrNull{prior->runCatching{planSHA(prior,prior.getString("paperID"),prior.getString("identity"),prior.getJSONObject("bibliography"),prior.getJSONArray("roles").objects().map{r->JSONObject().put("role",r.getString("role")).put("title",r.getString("title")).put("contentType",r.getString("contentType")).put("sha256",r.getString("sha256")).put("note",r.getBoolean("note"))})==plan}.getOrDefault(false)}?.let{prior->
+        journals.firstNotNullOfOrNull { prior ->
+            runCatching {
+                val roles=prior.getJSONArray("roles").objects().map { role ->
+                    JSONObject().put("role",role.getString("role")).put("title",role.getString("title"))
+                        .put("contentType",role.getString("contentType")).put("sha256",role.getString("sha256"))
+                        .put("note",role.getBoolean("note"))
+                }
+                val paper=prior.getString("paperID")
+                val identity=prior.getString("identity")
+                val bibliography=prior.getJSONObject("bibliography")
+                if (planSHA(prior,paper,identity,bibliography,roles)==plan) prior to roles else null
+            }.getOrNull()
+        }?.let{(prior,originalRoles)->
+            require(planSHA(prior,prior.getString("paperID"),prior.getString("identity"),
+                prior.getJSONObject("bibliography"),originalRoles,prior)==prior.getString("planSHA")) {
+                "原存档的计划身份不符，保留原件"
+            }
             val id=prior.getString("id");val roles=prior.getJSONArray("roles")
             for(i in 0 until roles.length()){val role=roles.getJSONObject(i);require(role.getString("file")=="material-$i");val file=File(records,"$id/${role.getString("file")}");require(file.isFile&&hash(file)==role.getString("sha256")){"原存档的材料已损坏，未改用新条目掩盖；请保留记录并恢复原备份"}}
             if(backend(c)=="webdav")ensureDavSealed(prior,c)
@@ -468,7 +485,7 @@ class ZoteroService(
                 val reusable=parentPrior?.takeIf{backend(c)=="storage"||it.optString("identity")==source.identity}?.getJSONArray("roles")?.objects()?.firstOrNull{old->old.optString("status")=="verified"&&old.optString("role")==m.role&&old.optString("sha256")==m.sha256&&old.optString("title")==m.title&&old.optString("contentType")==m.contentType&&old.optBoolean("note")== (m.noteHTML!=null)}
                 roles.put(JSONObject().put("created",reusable!=null).put("role",m.role).put("title",m.title).put("contentType",m.contentType).put("sha256",m.sha256).put("file",target.name).put("bytes",target.length()).put("note",m.noteHTML!=null).put("key",reusable?.getString("key")?:newKey()).put("status",if(reusable!=null)"verified" else "prepared").apply{if(backend(c)=="webdav"&&reusable!=null)put("davJournalID",reusable.getString("davJournalID"))})
             }
-            val journal=JSONObject().put("contract","paperdigest-zotero-web-v1").put("id",id).put("createdAt",now()).put("status","prepared")
+            val journal=ClientProtocols.record(ZoteroJournalFormats.journal).put("id",id).put("createdAt",now()).put("status","prepared")
                 .put("destinationID",c.getString("destinationID")).put("libraryType",c.getString("libraryType")).put("libraryID",c.getString("libraryID")).put("collection",c.optString("collection"))
                 .put("options",actualOptions.copy()).put("notices",JSONArray(source.notices)).put("paperID",source.paperID).put("identity",source.identity).put("planSHA",plan).put("bibliography",source.bibliography.copy()).put("parentKey",parentPrior?.getString("parentKey")?:newKey()).put("parentVerified",parentPrior!=null).put("roles",roles)
             journal.put("attachmentBackend",backend(c))
@@ -499,8 +516,8 @@ class ZoteroService(
     private fun publishPrepared(value:JSONObject):JSONObject=synchronized(workerGate){requireCredentialCurrent();prepared=value;value}
     private fun noticeStrings(j:JSONObject):List<String> = j.optJSONArray("notices")?.let{a->(0 until a.length()).mapNotNull{a.opt(it) as? String}}?:emptyList()
     private fun preparedResult(j:JSONObject)=JSONObject().put("notices",JSONArray(noticeStrings(j))).put("preparedID",j.getString("id")).put("journalID",j.getString("id")).put("paperID",j.getString("paperID")).put("roles",JSONArray(j.getJSONArray("roles").toString())).put("libraryType",j.getString("libraryType")).put("libraryID",j.getString("libraryID")).put("attachmentBackend",backend(j))
-    private fun planSHA(c:JSONObject,paperID:String,identity:String,bibliography:JSONObject,roles:List<JSONObject>)=sha256(canonical(JSONObject().apply{if(backend(c)=="webdav")put("davTarget",c.optJSONObject("davTarget")?:targetBinding(c)).put("attachmentBackend","webdav")}.put("contract","paperdigest-zotero-plan-v1").put("destinationID",c.getString("destinationID")).put("libraryType",c.getString("libraryType")).put("libraryID",c.getString("libraryID")).put("collection",c.optString("collection")).put("paperID",paperID).put("identity",identity).put("bibliography",bibliography).put("roles",JSONArray(roles))).toByteArray())
-    private fun readJournal(id:String):JSONObject {require(UUID.fromString(id).toString()==id);return JSONObject(JsonFiles.read(File(records,"$id/journal.json")).toString(Charsets.UTF_8)).also{require(it.getString("contract")=="paperdigest-zotero-web-v1"&&it.getString("id")==id)}}
+    private fun planSHA(c:JSONObject,paperID:String,identity:String,bibliography:JSONObject,roles:List<JSONObject>,originalJournal:JSONObject?=null)=sha256(canonical(ZoteroJournalFormats.planHeader(originalJournal).apply{if(backend(c)=="webdav")put("davTarget",c.optJSONObject("davTarget")?:targetBinding(c)).put("attachmentBackend","webdav")}.put("destinationID",c.getString("destinationID")).put("libraryType",c.getString("libraryType")).put("libraryID",c.getString("libraryID")).put("collection",c.optString("collection")).put("paperID",paperID).put("identity",identity).put("bibliography",bibliography).put("roles",JSONArray(roles))).toByteArray())
+    private fun readJournal(id:String):JSONObject {require(UUID.fromString(id).toString()==id);return JSONObject(JsonFiles.read(File(records,"$id/journal.json")).toString(Charsets.UTF_8)).also{require(ClientProtocols.hasValidHeader(it,ZoteroJournalFormats.journal)&&it.getString("id")==id)}}
     private fun save(j:JSONObject){JsonFiles.write(File(records,"${j.getString("id")}/journal.json"),j)}
     private suspend fun archive(id:String):JSONObject {
         if(migrationStore.isChild(id))return archiveMigrationChild(id)

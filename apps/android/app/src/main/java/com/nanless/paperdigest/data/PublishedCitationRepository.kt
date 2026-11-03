@@ -64,7 +64,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
             require(sha256(witness.raw)==witness.hash){"实际发布页面字节已变化"}
             val replay=replayPage(paper,article,witness.raw)
             require(article.html==replay.html&&article.markdown==replay.markdown){"引用页面只能绑定尚未hydrate且逐字一致的真实导读正文"}
-            val proof=JSONObject().put("contract",PAGE_CONTRACT).put("paper",paperIdentity(paper)).put("pageURL",page.sourceURL)
+            val proof=ClientProtocols.record(PAGE_CONTRACT).put("paper",paperIdentity(paper)).put("pageURL",page.sourceURL)
                 .put("pageSHA256",witness.hash).put("pageBytes",witness.raw.size).put("articleRevisionSHA256",replay.revisionSHA256)
             requireCurrent();currentCoroutineContext().ensureActive();storeImmutable(checked("pages",witness.hash+".html"),witness.raw)
             requireCurrent();currentCoroutineContext().ensureActive()
@@ -113,7 +113,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
             currentCoroutineContext().ensureActive();requireCurrent();checkRoot()
             val hash=sha256(raw)
             if(old!=null){require(old.sha256==hash){"同一发布链接返回了不同引用字节；原文件保留，未把新文件冒充原已核版本。"};return@withLock old}
-            val record=JSONObject().put("contract",ORIGINAL_CONTRACT).put("binding",binding).put("filename",format.filename).put("format",format.route).put("mime",format.mime)
+            val record=ClientProtocols.record(ORIGINAL_CONTRACT).put("binding",binding).put("filename",format.filename).put("format",format.route).put("mime",format.mime)
                 .put("sourceURL",address).put("bytes",raw.size).put("sha256",hash).put("validatedAt",now())
                 .put("validationScope","same-site-direct-link;reading-page-owner-version-revision;single-format-content")
                 .put("bundleHashVerified",false).put("publishedSHA256",JSONObject.NULL)
@@ -128,7 +128,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
     private fun boundPage(paper:Paper,article:Article):ByteArray {
         ReadingSourceBinding.requireArticle(paper,article);ReadingSourceBinding.requireCitation(paper,article.citation);checkRoot()
         val proof=article.original?.optJSONObject(PAGE_FIELD)?.copy()?:throw AppFailure("citationUnavailable","这份旧导读没有封存真实引用下载页面；请显式刷新导读后再导出引用，其他研究资料仍可正常使用。")
-        require(proof.optString("contract")==PAGE_CONTRACT&&canonical(proof.getJSONObject("paper"))==canonical(paperIdentity(paper))&&proof.getString("pageURL")==pageURL(paper.blogURL)&&proof.getString("articleRevisionSHA256")==article.revisionSHA256){"引用页面与实际阅读论文或修订不一致"}
+        require(ClientProtocols.hasValidHeader(proof,PAGE_CONTRACT)&&canonical(proof.getJSONObject("paper"))==canonical(paperIdentity(paper))&&proof.getString("pageURL")==pageURL(paper.blogURL)&&proof.getString("articleRevisionSHA256")==article.revisionSHA256){"引用页面与实际阅读论文或修订不一致"}
         val hash=proof.getString("pageSHA256");require(validSHA(hash))
         val raw=JsonFiles.read(checked("pages",hash+".html"),MAX_PAGE.toLong())
         require(raw.size.toLong()==strictCount(proof,"pageBytes")&&sha256(raw)==hash){"原引用下载页面的保存字节已变化"}
@@ -161,7 +161,7 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
     }
     private fun readOriginal(receipt:File,binding:JSONObject,address:String,format:Format):Original {
         val record=StrictJson.parse(PublishedUtf8.decode(JsonFiles.read(receipt,65536)))
-        require(record.getString("contract")==ORIGINAL_CONTRACT&&canonical(record.getJSONObject("binding"))==canonical(binding)&&record.getString("sourceURL")==address&&record.getString("format")==format.route&&record.getString("filename")==format.filename&&record.getString("mime")==format.mime&&record.get("bundleHashVerified")==false&&record.has("publishedSHA256")&&record.isNull("publishedSHA256")&&record.getString("validationScope")=="same-site-direct-link;reading-page-owner-version-revision;single-format-content"){"引用原件保存记录身份不符"}
+        require(ClientProtocols.hasValidHeader(record,ORIGINAL_CONTRACT)&&canonical(record.getJSONObject("binding"))==canonical(binding)&&record.getString("sourceURL")==address&&record.getString("format")==format.route&&record.getString("filename")==format.filename&&record.getString("mime")==format.mime&&record.get("bundleHashVerified")==false&&record.has("publishedSHA256")&&record.isNull("publishedSHA256")&&record.getString("validationScope")=="same-site-direct-link;reading-page-owner-version-revision;single-format-content"){"引用原件保存记录身份不符"}
         val date=record.get("validatedAt");require(date is String&&date.endsWith("Z"));java.time.Instant.parse(date)
         val hash=record.getString("sha256");require(validSHA(hash));val bytes=JsonFiles.read(checked("raw",hash+"."+format.filename.substringAfterLast('.')),MAX_CITATION.toLong())
         require(sha256(bytes)==hash&&bytes.size.toLong()==strictCount(record,"bytes")){"已保存引用原件已变化，未重新生成或静默换用其他文件"}
@@ -180,8 +180,8 @@ class PublishedCitationRepository(researchDirectory:File,private val read:suspen
     private fun storeImmutable(file:File,raw:ByteArray){checkRoot();if(file.exists())require(JsonFiles.read(file,maxOf(MAX_PAGE,MAX_CITATION).toLong()).contentEquals(raw)){"已封存引用材料发生冲突，旧字节保留"}else JsonFiles.write(file,raw);checkRoot()}
     companion object {
         const val PAGE_FIELD="publishedCitationPage"
-        private const val PAGE_CONTRACT="published-citation-page-v1"
-        private const val ORIGINAL_CONTRACT="published-citation-original-v1"
+        private const val PAGE_CONTRACT="published-citation-page"
+        private const val ORIGINAL_CONTRACT="published-citation-original"
         private const val MAX_PAGE=8*1024*1024
         private const val MAX_CITATION=1024*1024
         private val locks=ConcurrentHashMap<String,Mutex>()

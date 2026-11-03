@@ -1,5 +1,7 @@
 package com.nanless.paperdigest.ui
 
+import com.nanless.paperdigest.data.androidStudySessionHeader
+
 import org.json.JSONObject
 import java.math.BigInteger
 import java.math.BigDecimal
@@ -91,11 +93,11 @@ private fun recordedPurpose(session:JSONObject):RecordedPurpose {
  val owner=text(session,"paperID")?:return RecordedPurpose.UNKNOWN
  val declaredContract=session.has("inputContract")
  val inputContract=if(declaredContract)text(session,"inputContract")?:return RecordedPurpose.UNKNOWN else null
- if(declaredContract&&inputContract!="android-study-input-v1")return RecordedPurpose.UNKNOWN
+ if(declaredContract&&!androidStudySessionHeader(session))return RecordedPurpose.UNKNOWN
  val kind=text(session,"kind");val source=session.optJSONObject("source");val sourceKind=source?.let{text(it,"kind")}
- if(kind=="study"&&owner=="configuration-check"&&sourceKind=="connection-check"&&text(session,"inputContract")=="android-study-input-v1")return RecordedPurpose.CHECK
+ if(kind=="study"&&owner=="configuration-check"&&sourceKind=="connection-check"&&androidStudySessionHeader(session))return RecordedPurpose.CHECK
  if(kind=="connection-check"&&owner.isEmpty()&&sourceKind=="connection-check"&&!declaredContract)return RecordedPurpose.CHECK
- if(kind=="study"&&owner.isNotEmpty()&&owner!="configuration-check"&&!sourceKind.isNullOrBlank()&&sourceKind!="connection-check"&&(inputContract==null||inputContract=="android-study-input-v1"))return RecordedPurpose.RESEARCH
+ if(kind=="study"&&owner.isNotEmpty()&&owner!="configuration-check"&&!sourceKind.isNullOrBlank()&&sourceKind!="connection-check"&&(inputContract==null||androidStudySessionHeader(session)))return RecordedPurpose.RESEARCH
  return RecordedPurpose.UNKNOWN
 }
 /** Strict task attribution requires its actual own ID, owner and request purpose, without a current-paper fallback. */
@@ -144,4 +146,4 @@ internal fun canAppendSavedSession(session:JSONObject):Boolean {
  return sessionOwnerConsistent(session)&&owner.isNotBlank()&&owner!="configuration-check"&&text(session,"kind")!="connection-check"&&session.optJSONObject("source")?.let{text(it,"kind")}!="connection-check"&&text(session,"status") in setOf("complete","completed")&&sessionAnswer(session).isNotBlank()
 }
 internal fun noteFromSession(session:JSONObject):String="\n\n## 原研究记录 · ${text(session,"createdAt")?.takeIf{it.isNotBlank()}?:"时间未记录"}\n\n问题：${text(session,"question").orEmpty()}\n\n${sessionAnswer(session)}\n\n${sessionEvidenceLabel(session)}\n原记录 ID：${text(session,"id").orEmpty()}\n实际输入 SHA：${text(session,"inputSHA256")?.takeIf{it.isNotBlank()}?:"未记录"}\n"
-internal fun canRecoverSession(session:JSONObject):Boolean=session.optString("inputContract")=="android-study-input-v1"&&session.optBoolean("requestIssued")&&session.optString("status") in setOf("pending","failed","cancelled","interrupted")
+internal fun canRecoverSession(session:JSONObject):Boolean=androidStudySessionHeader(session)&&session.optBoolean("requestIssued")&&session.optString("status") in setOf("pending","failed","cancelled","interrupted")

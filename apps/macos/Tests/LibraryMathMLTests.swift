@@ -12,7 +12,7 @@ import WebKit
 actor MathMLFixtureTransport {
  var files:[String:Data]
  init(_ files:[String:Data]){self.files=files}
- func read(_ url:URL,_ limit:Int)throws->Data {guard let data=files[url.absoluteString],data.count<=limit else{throw LibraryService.ServiceError.network("isolated fixture unavailable")};return data}
+ func read(_ url:URL,_ limit:Int)throws->Data {if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)};guard let data=files[url.absoluteString],data.count<=limit else{throw LibraryService.ServiceError.network("isolated fixture unavailable")};return data}
  func put(_ address:String,_ data:Data?){files[address]=data}
 }
 
@@ -154,7 +154,7 @@ actor MathMLFixtureTransport {
   let library=try LibraryService(dataDirectory:folder,siteBaseURL:URL(string:base)!,transport:{url,limit in try await transport.read(url,limit)})
   _=try await library.sync()
   let article=try await library.article(for:identity),expected=try math(formulas.joined()).map{signature($0)}
-  try expect(article.completeOffline && article.mathMLContract=="published-html-mathml-v1","new scientific HTML cache records actual preservation contract")
+  try expect(article.completeOffline && article.mathMLContract=="published-html-mathml","new scientific HTML cache records actual preservation contract")
   try expect(try math(article.html).map{signature($0)}==expected,"second image-localization HTML parse retains all four original formula trees")
   try expect(article.html.contains("data:image/png;base64,") && article.html.contains("retained value"),"formula preservation and image embedding/table rendering work together")
   let reopened=try await library.article(for:identity)
@@ -163,7 +163,7 @@ actor MathMLFixtureTransport {
   var legacy=try JSONSerialization.jsonObject(with:Data(contentsOf:cache)) as! [String:Any];legacy.removeValue(forKey:"mathMLContract");legacy["html"]="<p>old HTML tidy lost formulas</p>";legacy["revisionSHA256"]=hash(Data("legacy-fixture".utf8));try JSONSerialization.data(withJSONObject:legacy).write(to:cache)
   let revisions=folder.appendingPathComponent("PublishedLibrary/article-revisions/"+hash(Data(p.blogURL.utf8))),oldFiles=try FileManager.default.contentsOfDirectory(at:revisions,includingPropertiesForKeys:nil).reduce(into:[String:Data]()){result,url in result[url.lastPathComponent]=try? Data(contentsOf:url)}
   let renewed=try await library.article(for:identity)
-  try expect(renewed.mathMLContract=="published-html-mathml-v1" && (try math(renewed.html)).map{signature($0)}==expected,"legacy cache without scientific-parser witness rereads source rather than blessing old loss")
+  try expect(renewed.mathMLContract=="published-html-mathml" && (try math(renewed.html)).map{signature($0)}==expected,"legacy cache without scientific-parser witness rereads source rather than blessing old loss")
   for (name,data) in oldFiles{try expect(try Data(contentsOf:revisions.appendingPathComponent(name))==data,"existing scientific revision bytes remain unchanged")}
   let revisionValues=try FileManager.default.contentsOfDirectory(at:revisions,includingPropertiesForKeys:nil).map{try JSONSerialization.jsonObject(with:Data(contentsOf:$0)) as! [String:Any]}
   try expect(revisionValues.contains{$0["mathMLContract"]==nil && $0["html"] as? String=="<p>old HTML tidy lost formulas</p>"},"old lossy cache preserved as a distinct historical revision")

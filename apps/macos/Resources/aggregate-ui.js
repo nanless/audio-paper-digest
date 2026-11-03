@@ -1,3 +1,4 @@
+import {NativeBridgeProtocols} from './native-bridge-protocols.js';
 const labels={daily:'日更汇总',conference:'会议汇总与专题',page:'网站页面'};
 const text=(tag,value,className)=>{const node=document.createElement(tag);node.textContent=String(value??'');if(className)node.className=className;return node;};
 const button=(label,action)=>{const node=text('button',label);node.type='button';node.onclick=action;return node;};
@@ -92,7 +93,7 @@ export function mountAggregates(app,{open,onBack,onPaper,prepareBody=input=>inpu
  }
  function render(value,request,session,{hydrate=true,scrollY=null}={}){
   if(!current(request,session))return false;
-  if(value?.contract!=='published-aggregate-document-v1'||value.descriptor?.id!==session.id||value.sessionID!==session.sessionID||typeof value.displayHTML!=='string')throw new Error('汇总正文回执与当前页面不一致');
+  if(!NativeBridgeProtocols.hasValidHeader(value,'published-aggregate-document')||value.descriptor?.id!==session.id||value.sessionID!==session.sessionID||typeof value.displayHTML!=='string')throw new Error('汇总正文回执与当前页面不一致');
   const revision=++displayRevision;activeDocument=value;
   if(app.state.nativeAggregateHost===true){freshPane();nativeValue={value,request,session};nativeSavedValue=nativeValue;nativeLayout().then(accepted=>{if(accepted)cacheReadPreview(value,request,session,revision);if(hydrate)hydrateImages(value,request,session,revision);}).catch(error=>{if(current(request,session))failure(error,session.id,request);});return true;}
   // Pure local display derivation; original receipt/raw/body/image identities are never rewritten.

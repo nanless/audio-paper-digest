@@ -29,7 +29,7 @@ class PublishedHtmlMathInstrumentedTest {
   assertEquals(original.select("a[href]").map{it.attr("href")},body.select("a[href]").map{it.attr("href")})
   // These are genuinely missing assets: no invented image pixels or unsafe source network loading.
   assertTrue(body.select("img[src]").isEmpty())
-  assertEquals(before,article.json().toString());assertEquals("published-html-mathml-v1",article.mathMLContract)
+  assertEquals(before,article.json().toString());assertEquals("published-html-mathml",article.mathMLContract)
  }
  @Test fun htmlMathOnlyTransformsTextAndKeepsCodeAttributesAndOriginalMathAnnotation()=runBlocking {
   val source="<p id='plain' data-formula='\\(attribute\\)'>Text \\(x+y\\) end.</p><pre>\\[code\\]</pre><code>\$code\$</code><p title='\$title\$'>title stays</p><table data-original='yes'><tr><td>original</td></tr></table><math id='old'><semantics><mi>u</mi><annotation encoding='application/x-tex'>u+v</annotation></semantics></math>"

@@ -6,7 +6,7 @@ data class PdfChapter(val index:Int,val title:String,val page:Int,val endPage:In
 
 data class PdfDocumentRef(val id: String, val localPath: String, val sha256: String, val pageCount: Int, val displayName: String)
 data class PdfSelectionBounds(val page: Int, val left: Float, val top: Float, val right: Float, val bottom: Float)
-data class PdfSelection(val documentSHA256: String, val text: String, val pages: List<Int>, val bounds: List<PdfSelectionBounds>, val coordinateSystem: String = "rotated-crop-top-left-points-v1", val extractor: String = "android-pdfbox-physical-pages-v1")
+data class PdfSelection(val documentSHA256: String, val text: String, val pages: List<Int>, val bounds: List<PdfSelectionBounds>, val coordinateSystem: String = "rotated-crop-top-left-points", val extractor: String = "android-pdfbox-physical-pages")
 data class PdfTextSpan(val start: Int, val end: Int, val bounds: PdfSelectionBounds)
 data class PdfPageText(val page: Int, val text: String, val width: Float, val height: Float, val spans: List<PdfTextSpan>)
 data class PdfSearchMatch(val page: Int, val start: Int, val end: Int, val text: String, val bounds: List<PdfSelectionBounds>)
